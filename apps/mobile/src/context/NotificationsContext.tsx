@@ -40,6 +40,7 @@ import {
   showIncomingNativeCall,
   subscribeNativeCallActions,
 } from "../sip/callkeep";
+import { startIosForegroundActiveHeartbeat } from "../sip/iosForegroundActiveHeartbeat";
 import {
   subscribeTelecomActions,
   terminateTelecomCall,
@@ -1057,6 +1058,9 @@ export function NotificationsProvider({
   });
 
   const deviceIdRef = useRef<string | null>(null);
+  // iOS foreground-active heartbeat reads the current token via this ref
+  // (see src/sip/iosForegroundActiveHeartbeat.ts). iOS-only; no-op on Android.
+  const fgHeartbeatTokenRef = useRef<string | null>(null);
   const diagSessionIdRef = useRef<string | null>(null);
   const lastRegStateRef = useRef<string>("idle");
   const lastCallStateRef = useRef<string>("idle");
@@ -1066,6 +1070,20 @@ export function NotificationsProvider({
   const consumedInviteActionRef = useRef<Set<string>>(new Set());
   const [pendingIncomingAction, setPendingIncomingAction] =
     useState<ParsedIncomingCallAction | null>(null);
+
+  // iOS-only: run the foreground-active heartbeat so the server skips the VoIP
+  // push while the app is open — preventing the native CallKit screen / ring /
+  // no-audio conflict on top of the in-app Connect incoming screen. Android:
+  // startIosForegroundActiveHeartbeat is a hard no-op (Platform.OS gate).
+  useEffect(() => {
+    fgHeartbeatTokenRef.current = token ?? null;
+  }, [token]);
+  useEffect(() => {
+    return startIosForegroundActiveHeartbeat({
+      getToken: () => fgHeartbeatTokenRef.current,
+      getDeviceId: () => deviceIdRef.current,
+    });
+  }, []);
 
   // Tracks inviteId currently shown to prevent duplicates
   const shownInviteIdRef = useRef<string | null>(null);
@@ -1197,6 +1215,11 @@ export function NotificationsProvider({
       extra?: Record<string, unknown>,
       delayMs = 1400,
     ) => {
+      // The ring resolved to a non-answer terminal state (expired, missed,
+      // caller hung up, answered-elsewhere, register/INVITE failure). Release
+      // any prewarmed inbound mic. Idempotent: a no-op if an answered call
+      // already consumed/released it (released by the JsSIP terminal handlers).
+      sip.releasePrewarmedMedia("ring_ended");
       emitAnswerFlowEvent("CALL_ENDED_UI_SHOWN", invite, {
         message,
         delayMs,
@@ -1205,7 +1228,7 @@ export function NotificationsProvider({
       setIncomingUiPhase("ended", invite, message);
       scheduleIncomingUiReset(invite?.id || null, delayMs);
     },
-    [emitAnswerFlowEvent, scheduleIncomingUiReset, setIncomingUiPhase],
+    [emitAnswerFlowEvent, scheduleIncomingUiReset, setIncomingUiPhase, sip],
   );
 
   const waitForPbxAnswer = useCallback(
@@ -1583,6 +1606,19 @@ export function NotificationsProvider({
       );
     });
   }, [incomingInvite?.id, sip.registrationState]);
+
+  // Phase 1 / Option 2A — Android-only inbound-answer mic prewarm.
+  // Pre-acquire the mic as soon as a ring is shown so JsSIP `answer()` can skip
+  // its internal getUserMedia (cuts the 200-OK → ICE-gathering delay). No-op off
+  // Android (guarded inside the SIP client) and best-effort. We deliberately do
+  // NOT release in this effect's cleanup: the cleanup also fires on the answer
+  // transition (incomingInvite clears), and stopping the tracks there would cut
+  // the live call's mic. Release is funneled through showEndedState /
+  // handleDeclineInvite and the JsSIP session terminal handlers instead.
+  useEffect(() => {
+    if (!incomingInvite?.id) return;
+    sip.prewarmInboundMedia();
+  }, [incomingInvite?.id, sip]);
 
   useEffect(() => {
     setCallFlowInviteId(incomingInvite?.id ?? null);
@@ -3517,6 +3553,33 @@ export function NotificationsProvider({
       }
     };
 
+    // iOS-only backend fallback. When the app is foreground and the server gate
+    // intentionally SKIPPED the VoIP push (see the foreground-active heartbeat),
+    // the two push-cache recoveries above find nothing — the invite only ever
+    // arrived over SIP. Fetch the authoritative pending invite from the backend
+    // so the Connect incoming screen shows and the normal answer flow works.
+    // We deliberately do NOT call showIncomingNativeCall here: foreground stays
+    // Connect-screen-only (no native CallKit). Android is unaffected — its native
+    // cache path already populates the recoveries above.
+    const tryRecoverFromBackend = async (): Promise<boolean> => {
+      if (Platform.OS !== "ios") return false;
+      const tkn = tokenRef.current;
+      if (!tkn) return false;
+      try {
+        const pendingRaw = await getPendingInvites(tkn).catch(() => []);
+        const pending = filterFreshInvites(pendingRaw as CallInvite[]);
+        const invite = pending.find(
+          (inv) => inv?.id && !suppressedIncomingInviteIdsRef.current.has(String(inv.id)),
+        );
+        if (!invite?.id) return false;
+        console.log("[Notif] SIP ringing recovered invite via backend getPendingInvites inviteId=", invite.id);
+        safeSetInvite(invite);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     // Retry schedule in ms. Covers the native-write (~50-200ms after SIP
     // INVITE) and BG-task (~500-1500ms) windows. Caps at ~3s total — by
     // then SIP's own dialog timeout will surface a call-failed state.
@@ -3531,8 +3594,11 @@ export function NotificationsProvider({
         if (cancelled) return;
         const recoveredFromStorage = await tryRecoverFromStorage();
         if (recoveredFromStorage) return;
+        if (cancelled) return;
+        const recoveredFromBackend = await tryRecoverFromBackend();
+        if (recoveredFromBackend) return;
       }
-      console.warn('[Notif] SIP ringing safety net gave up — neither native cache nor AsyncStorage produced an invite');
+      console.warn('[Notif] SIP ringing safety net gave up — neither native cache, AsyncStorage, nor backend produced an invite');
     })();
 
     return () => {
@@ -3738,6 +3804,9 @@ export function NotificationsProvider({
       if (declineKey !== "decline:") {
         inviteActionInFlightRef.current.add(declineKey);
       }
+
+      // User declined the ring — release any prewarmed inbound mic. Idempotent.
+      sip.releasePrewarmedMedia("declined");
 
       try {
         dismissNativeIncomingUi(callId || invite?.id);
@@ -4790,6 +4859,28 @@ export function NotificationsProvider({
   // retryPushTokenRegistration is stable (useCallback with [token] dep)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, retryPushTokenRegistration]);
+
+  // ── iOS foreground-active heartbeat — REMOVED 2026-07-07 ──────────────────
+  // A heartbeat to /mobile/foreground-active used to live here, gating the
+  // backend's APNs VoIP-push send (sendApnsVoipPushesForIncomingCallApi) off
+  // while the app was foregrounded. It caused a real incoming-call outage and
+  // was removed (see git history for the old effect body). Root cause: the
+  // in-app Connect incoming-call screen (IncomingCallScreen) is ONLY ever
+  // mounted by `safeSetInvite()` inside the APNs VoIP-push `onIncoming`
+  // handler above — there is no code path on iOS that sets `incomingInvite`
+  // from the raw SIP INVITE arriving over the live JsSIP socket (unlike
+  // Android, which has the FCM `IncomingCall.ForegroundInvite` native event
+  // as a fallback). The ringtone alone still fires independently (jssip.ts
+  // calls startRingtone() straight off newRTCSession), which is why pinging
+  // that endpoint produced "ringtone plays but no screen — neither native nor
+  // in-app" while foregrounded: skipping the VoIP push also skipped the ONLY
+  // thing that populates `incomingInvite`, so neither CallKit NOR the in-app
+  // screen ever appeared. Re-adding this safely requires first constructing a
+  // CallInvite from the live SIP session/headers and routing it into
+  // `safeSetInvite` the same way onIncoming does, gated to
+  // iOS-foreground-active — a real feature, not a quick re-enable.
+  // The backend endpoint (/mobile/foreground-active) and gate remain deployed
+  // but are now permanently inert since nothing calls them anymore.
 
   // ── Registration / call state telemetry ───────────────────────────────────
 
