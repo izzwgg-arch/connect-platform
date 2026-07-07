@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Linking, NativeModules, Platform, StyleSheet, View } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { CommonActions, NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
+import { CommonActions, NavigationContainer, StackActions, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
 import { useTheme } from '../context/ThemeContext';
@@ -23,6 +23,7 @@ import type { CallDirection, CallState } from '../types';
 import { findCallModalNavigator } from './callStackNav';
 import { getCallReturnTab, recordFocusedRoute } from './callOrigin';
 import { shouldShowIncomingCallCover } from './incomingCallCover';
+import { OngoingCallBanner } from '../components/call/OngoingCallBanner';
 import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 import { useFullScreenCallPermissionPrompt } from '../hooks/useFullScreenCallPermissionPrompt';
 import { useBatteryOptimizationPrompt } from '../hooks/useBatteryOptimizationPrompt';
@@ -122,6 +123,10 @@ function TabsWrapper() {
 
   const returnToDefaultTab = () => {
     try {
+      // Captured before the background/lock refs are cleared below — used to
+      // decide whether we can pop the modal (foreground) or must full-reset
+      // (lock-screen / background answer).
+      const cameFromBackground = !!answeredFromBackgroundRef.current;
       // IMPORTANT ORDERING: if the call was answered from the background /
       // lock screen, move the Android task back to background FIRST, then
       // reset the navigation stack. Reversing these (navigate-then-move)
@@ -167,6 +172,33 @@ function TabsWrapper() {
       // contacts, messages, ...) instead of always the dialer.
       const returnTab = getCallReturnTab();
       const stack = appStackNav();
+
+      // Fix 7: for a FOREGROUND-initiated call (e.g. an outbound callback from
+      // the Voicemail list) where ActiveCall is sitting directly on top of
+      // Tabs, pop ONLY the ActiveCall modal. A full CommonActions.reset (below)
+      // rebuilds the Tabs navigator, which remounts the origin tab's FlatList
+      // and snaps its scroll position back to the top. Popping keeps the
+      // still-mounted tab — and its scroll position / expanded voicemail —
+      // exactly where the user left it. The lock-screen / background-answer
+      // cases fall through to the reset path (they rely on the task-back +
+      // origin-tab rebuild handled above).
+      if (!cameFromBackground) {
+        try {
+          const st = stack.getState?.();
+          const routes = st?.routes ?? [];
+          const top = routes[routes.length - 1];
+          const beneath = routes[routes.length - 2];
+          if (top?.name === 'ActiveCall' && beneath?.name === 'Tabs') {
+            stack.dispatch(StackActions.pop(1));
+            console.log('[ANSWER_FLOW] POPPED_ACTIVE_CALL_PRESERVE_TAB', returnTab);
+            logCallFlow('NAVIGATE_BACK_TO_ORIGIN_TAB', {
+              extra: { source: 'returnToDefaultTab:pop', tab: returnTab },
+            });
+            return;
+          }
+        } catch {}
+      }
+
       stack.dispatch(
         CommonActions.reset({
           index: 0,
@@ -284,12 +316,31 @@ function TabsWrapper() {
     answering,
     incomingUiPhase: incomingCallUiState.phase,
   });
+
+  // Ongoing-call banner (Fix 2): shown when the user has minimized a live call
+  // (there's an ongoing call AND the ActiveCall screen is not focused — i.e.
+  // the tabs are visible). `useIsFocused()` here reflects the AppStack "Tabs"
+  // route, so it's false while ActiveCall / IncomingCall is presented on top.
+  const tabsFocused = useIsFocused();
+  const bannerSession = callSessions.activeCall ?? callSessions.heldCalls[0] ?? null;
+  const hasOngoingCall = callSessions.hasAnyOngoingCall || callState === 'connected';
+  const showOngoingBanner = tabsFocused && hasOngoingCall && !coverTabs;
+  const bannerName =
+    bannerSession?.remoteName?.trim() || bannerSession?.remoteNumber || 'Ongoing call';
+  const bannerConnectedAt = bannerSession?.answeredAt ?? null;
+
   return (
     <>
       <TabNavigator />
       {coverTabs ? (
         <View pointerEvents="none" style={styles.incomingCallCover} />
       ) : null}
+      <OngoingCallBanner
+        visible={showOngoingBanner}
+        name={bannerName}
+        connectedAt={bannerConnectedAt}
+        onPress={() => navigateOnce('ActiveCall')}
+      />
     </>
   );
 }
