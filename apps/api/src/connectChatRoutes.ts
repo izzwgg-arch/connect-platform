@@ -44,7 +44,7 @@ import {
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { probeChatMedia } from "./chatMediaProbe";
-import { denoiseVoiceNote, isVoiceNoteUpload } from "./chatVoiceNoteDenoise";
+import { denoiseVoiceNote, isVoiceNoteUpload, isVoiceNoteFilename } from "./chatVoiceNoteDenoise";
 import { isConnectChatMessageMine } from "./connectChatMessageMine";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -1211,6 +1211,21 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
     if (!fileBuf || fileBuf.length === 0) return reply.status(400).send({ error: "file_required" });
     mimeType = inferMimeFromFilename(originalFilename, mimeType);
+    // Both mobile (ChatTab.tsx) and the portal composer always name voice
+    // notes `voice-note-<timestamp>.<ext>` and record real AAC-in-MP4 audio on
+    // every platform. iOS's native networking layer, however, sometimes
+    // reports a non-standard Content-Type for that upload part instead of the
+    // "audio/mp4" the app explicitly declares — e.g. the legacy
+    // "audio/x-m4a" tag, or occasionally the container's own "video/mp4" UTI
+    // even though the track is audio-only. Since the filename convention is
+    // fully within our control, force the canonical MIME for anything
+    // matching it: this keeps iOS byte-for-byte aligned with Android (no
+    // MIME_NOT_ALLOWED rejections) and guarantees the attachment is always
+    // classified/stored as audio — never misrendered client-side as a video
+    // player.
+    if (isVoiceNoteFilename(originalFilename)) {
+      mimeType = "audio/mp4";
+    }
     if (!isAllowedChatMime(mimeType)) return reply.status(400).send({ error: "MIME_NOT_ALLOWED" });
 
     const maxB = maxBytesForThread(part.thread.type === "SMS");
