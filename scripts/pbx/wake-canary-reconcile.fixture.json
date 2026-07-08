@@ -1,0 +1,90 @@
+{
+  "_comment": "READ-ONLY demonstration fixture for wake-canary-reconcile.mjs. Mirrors known production facts (T2/110 is the proven canary) plus representative edge cases. NOT live data. Run: node scripts/pbx/wake-canary-reconcile.mjs dry-run --fixture scripts/pbx/wake-canary-reconcile.fixture.json --now 2026-07-01T00:00:00.000Z",
+  "extensions": [
+    {
+      "_case": "proven canary — stays enabled",
+      "tenantId": "tnt_gesheft_t2", "tenantName": "Tenant T2", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "2", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t2_110", "extNumber": "110", "extStatus": "ACTIVE", "ownerUserId": "user_110",
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": [{ "active": true, "deactivatedAt": null, "lastSeenAt": "2026-06-30T18:00:00.000Z" }]
+    },
+    {
+      "_case": "desk-only — no owner, no devices → excluded",
+      "tenantId": "tnt_gesheft_t2", "tenantName": "Tenant T2", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "2", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t2_111", "extNumber": "111", "extStatus": "ACTIVE", "ownerUserId": null,
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": []
+    },
+    {
+      "_case": "new mobile ext — fresh active device, not yet keyed → ENABLE",
+      "tenantId": "tnt_gesheft_t2", "tenantName": "Tenant T2", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "2", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t2_112", "extNumber": "112", "extStatus": "ACTIVE", "ownerUserId": "user_112",
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": [{ "active": true, "deactivatedAt": null, "lastSeenAt": "2026-06-29T10:00:00.000Z" }]
+    },
+    {
+      "_case": "another tenant mobile ext → ENABLE",
+      "tenantId": "tnt_other_t8", "tenantName": "Tenant T8", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "8", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t8_101", "extNumber": "101", "extStatus": "ACTIVE", "ownerUserId": "user_801",
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": [{ "active": true, "deactivatedAt": null, "lastSeenAt": "2026-06-30T09:00:00.000Z" }]
+    },
+    {
+      "_case": "deprovisioned — provisionStatus DISABLED but owned key exists → DISABLE",
+      "tenantId": "tnt_other_t8", "tenantName": "Tenant T8", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "8", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t8_102", "extNumber": "102", "extStatus": "ACTIVE", "ownerUserId": "user_802",
+      "pbxLinkPresent": true, "provisionStatus": "DISABLED", "isSuspended": false,
+      "devices": [{ "active": false, "deactivatedAt": "2026-06-01T00:00:00.000Z", "lastSeenAt": "2026-05-15T00:00:00.000Z" }]
+    },
+    {
+      "_case": "stale-only active device, no owner → excluded (no false positive)",
+      "tenantId": "tnt_other_t8", "tenantName": "Tenant T8", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "8", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t8_103", "extNumber": "103", "extStatus": "ACTIVE", "ownerUserId": null,
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": [{ "active": true, "deactivatedAt": null, "lastSeenAt": "2026-01-01T00:00:00.000Z" }]
+    },
+    {
+      "_case": "tenant WebRTC disabled → excluded",
+      "tenantId": "tnt_deskonly_t3", "tenantName": "Tenant T3", "tenantWebrtcEnabled": false,
+      "pbxTenantId": "3", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t3_125", "extNumber": "125", "extStatus": "ACTIVE", "ownerUserId": "user_303",
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": [{ "active": true, "deactivatedAt": null, "lastSeenAt": "2026-06-30T00:00:00.000Z" }]
+    },
+    {
+      "_case": "missing PBX tenant mapping → SKIP_NEEDS_REVIEW",
+      "tenantId": "tnt_unmapped_t5", "tenantName": "Tenant T5", "tenantWebrtcEnabled": true,
+      "pbxTenantId": null, "pbxTenantLinkStatus": null,
+      "extensionId": "ext_t5_200", "extNumber": "200", "extStatus": "ACTIVE", "ownerUserId": "user_505",
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": [{ "active": true, "deactivatedAt": null, "lastSeenAt": "2026-06-30T00:00:00.000Z" }]
+    },
+    {
+      "_case": "manually-created key on an ineligible desk ext → SKIP_NEEDS_REVIEW (never clear non-owned)",
+      "tenantId": "tnt_gesheft_t2", "tenantName": "Tenant T2", "tenantWebrtcEnabled": true,
+      "pbxTenantId": "2", "pbxTenantLinkStatus": "LINKED",
+      "extensionId": "ext_t2_500", "extNumber": "500", "extStatus": "ACTIVE", "ownerUserId": null,
+      "pbxLinkPresent": true, "provisionStatus": "PROVISIONED", "isSuspended": false,
+      "devices": []
+    }
+  ],
+  "astdb": {
+    "value": {
+      "T2_110": "1",
+      "T8_102": "1",
+      "T8_199": "1",
+      "T2_500": "1"
+    },
+    "owner": {
+      "T2_110": "connect-mobile",
+      "T8_102": "connect-mobile",
+      "T8_199": "connect-mobile"
+    }
+  }
+}
