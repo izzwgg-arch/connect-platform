@@ -55,7 +55,7 @@ export async function denoiseVoiceNote(input: Buffer): Promise<Buffer | null> {
         "-i",
         inPath,
         "-af",
-        "highpass=f=80,afftdn=nr=10:nf=-25",
+        "highpass=f=80,afftdn=nr=10:nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
         "-c:a",
         "aac",
         "-b:a",
