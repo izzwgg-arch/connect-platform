@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -95,6 +95,34 @@ function MobileDataPrefetcher() {
   return null;
 }
 
+// iOS VoIP cold-launch crash guard. When a fully-killed iPhone is woken by a
+// VoIP push, iOS boots the React Native bridge in the BACKGROUND to deliver it.
+// Mounting react-navigation (react-native-screens) in that state aborted the
+// process during bridge init/teardown -- an RCTCxxBridge ensureOnJavaScriptThread
+// assertion reached via RNSScreenView notifyWillDisappear -- BEFORE the native
+// PushKit handler could report the call to CallKit, so the phone never rang and
+// iOS eventually stopped relaunching the app. We defer mounting the navigator
+// until the app is/has been active. The native PushKit -> CallKit report
+// (plugins/withIosVoipPush.js) still rings the phone, and the providers above
+// (SIP / CallKeep / Notifications) stay mounted so the call can still be answered.
+// Once mounted we never unmount (a symmetric teardown would hit the same crash),
+// so this only affects the iOS background cold-launch. Android is untouched and
+// every normal foreground launch mounts immediately, exactly as before.
+function DeferredRootNavigator() {
+  const [mounted, setMounted] = React.useState(
+    () => Platform.OS !== 'ios' || AppState.currentState !== 'background',
+  );
+  useEffect(() => {
+    if (mounted) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') setMounted(true);
+    });
+    return () => sub.remove();
+  }, [mounted]);
+  if (!mounted) return null;
+  return <RootNavigator />;
+}
+
 export default function App() {
   useEffect(() => {
     ensureCallFlowAppStateHook();
@@ -119,7 +147,7 @@ export default function App() {
                   <SipProvider>
                     <CallSessionProvider>
                       <NotificationsProvider>
-                        <RootNavigator />
+                        <DeferredRootNavigator />
                         <AppAlertHost />
                         <CallFlowDebugOverlay />
                       </NotificationsProvider>

@@ -55,11 +55,13 @@ const config: ExpoConfig = {
   owner: 'izz8457s-organization',
   version: appVersion,
   runtimeVersion,
+  // OTA updates are DISABLED by owner directive — the app must always run the
+  // JS bundle embedded in the APK, never a downloaded update. This prevents a
+  // stale cached OTA from shadowing the shipped bundle (observed 2026-07-01,
+  // where a cached OTA overrode a freshly-built embedded fix). Ship code only
+  // via a new build, never via expo-updates.
   updates: {
-    enabled: true,
-    url: `https://u.expo.dev/${easProjectId}`,
-    checkAutomatically: 'ON_ERROR_RECOVERY',
-    fallbackToCacheTimeout: 0,
+    enabled: false,
   },
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
@@ -78,6 +80,10 @@ const config: ExpoConfig = {
 
   ios: {
     supportsTablet: false,
+    // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
+    // on-device. iOS can skip swapping the binary when CFBundleVersion is
+    // unchanged, which looks like "nothing changed" after reinstalling.
+    buildNumber: '6',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
@@ -85,6 +91,37 @@ const config: ExpoConfig = {
       NSContactsUsageDescription:
         'Connect needs access to your phone contacts so you can import them into the app and call them quickly.',
       UIBackgroundModes: ['voip', 'remote-notification', 'audio'],
+      // App Store compliance: encryption export declaration. The app uses only
+      // standard HTTPS/TLS and OS-provided crypto (exempt), so this is false and
+      // avoids the manual "export compliance" prompt on every TestFlight/App
+      // Store build. If custom/non-exempt encryption is ever added, revisit this.
+      ITSAppUsesNonExemptEncryption: false,
+    },
+    // App Store compliance: privacy manifest (required by Apple for apps that use
+    // "required reason" APIs). Covers the common APIs pulled in by Expo/RN.
+    // NSPrivacyTracking=false and empty tracking domains: the app does not track.
+    privacyManifests: {
+      NSPrivacyTracking: false,
+      NSPrivacyTrackingDomains: [],
+      NSPrivacyCollectedDataTypes: [],
+      NSPrivacyAccessedAPITypes: [
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+          NSPrivacyAccessedAPITypeReasons: ['CA92.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+          NSPrivacyAccessedAPITypeReasons: ['C617.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+          NSPrivacyAccessedAPITypeReasons: ['35F9.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryDiskSpace',
+          NSPrivacyAccessedAPITypeReasons: ['E174.1'],
+        },
+      ],
     },
   },
   android: {
@@ -151,6 +188,15 @@ const config: ExpoConfig = {
     // No-op on Android. See plugins/withIosVoipPush.js for the full contract
     // and post-prebuild checklist (Apple VoIP cert, worker APNs VoIP path).
     './plugins/withIosVoipPush',
+    // iOS-only: bundles a silent WAV CallKit can use as its own ringtoneSound
+    // so "Connect Default" ringtone preference doesn't double up with
+    // CallKit's native ring. See plugins/withIosSilentRingtone.js.
+    './plugins/withIosSilentRingtone',
+    // iOS-only: bundles the REAL Connect ringtone (.caf) so CallKit itself
+    // plays it in the background/killed case (JS not running). RNCallKeep
+    // persists it to NSUserDefaults so cold launches read it. See
+    // plugins/withIosConnectRingtone.js.
+    './plugins/withIosConnectRingtone',
     'expo-secure-store',
     'expo-task-manager',
     [
