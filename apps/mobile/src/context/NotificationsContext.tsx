@@ -84,6 +84,7 @@ import {
   flightEndCall,
   flightRecord,
 } from "../diagnostics/CallFlightRecorder";
+import { uploadAndClearIosRingLog } from "../diagnostics/iosRingLog";
 import {
   MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
   MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS,
@@ -2131,6 +2132,27 @@ export function NotificationsProvider({
           answerTappedAt;
         timingsRef.current[`answer_${invite.id}`] = answerTappedAt;
 
+        // COWORK cold-answer fix - iOS killed/background ONLY. Android + warm
+        // iOS are byte-for-byte unchanged: earlyColdAcceptSent stays false for
+        // them and every branch that uses it is gated on it. On a swipe-killed
+        // iOS launch the original INVITE went to the now-dead, JsSIP-rotated
+        // contact, so no local session arrives and the extension leg dies (~5s)
+        // BEFORE the normal accept (which only fires after the invite-wait grace)
+        // can trigger the server Mode-B re-delivery. We fire the backend ACCEPT
+        // now so Mode-B re-INVITEs our FRESH contact immediately and the re-INVITE
+        // lands during the invite-wait below. The claim is idempotent server-side
+        // and Mode-B is one-shot, so the accept(s) further down safely no-op.
+        let earlyColdAcceptSent = false;
+        if (Platform.OS === "ios" && AppState.currentState !== "active") {
+          earlyColdAcceptSent = true;
+          void respondInvite(
+            authToken,
+            invite.id,
+            "ACCEPT",
+            deviceIdRef.current || undefined,
+          ).catch(() => undefined);
+        }
+
         // ══════════════════════════════════════════════════════════════════
         // CRITICAL PATH — launch SIP register→answer chain IMMEDIATELY.
         //
@@ -2505,7 +2527,17 @@ export function NotificationsProvider({
           .catch(() => false);
 
         let backendClaimed = false;
-        if (!inviteReady) {
+        if (!inviteReady && earlyColdAcceptSent) {
+          // Cold iOS: the backend ACCEPT (Mode-B trigger) already went out at
+          // tap time above. Don't re-claim - just wait for the re-delivered
+          // INVITE to our fresh contact. Only reachable on iOS killed/background.
+          backendClaimed = true;
+          answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
+          consumedInviteActionRef.current.add(acceptKey);
+          inviteReady = await sip
+            .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
+            .catch(() => false);
+        } else if (!inviteReady) {
           const t2_claimStart = Date.now();
           console.log('[ANSWER_PIPELINE] CLAIM_START (requeue path)', JSON.stringify({
             inviteId: invite.id,
@@ -4348,6 +4380,9 @@ export function NotificationsProvider({
     });
     if (token) {
       flightDrainQueue();
+    }
+    if (token) {
+      void uploadAndClearIosRingLog({ apiBaseUrl: API_BASE, token });
     }
   }, [token]);
 
