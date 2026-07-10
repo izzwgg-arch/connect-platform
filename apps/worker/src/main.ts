@@ -2553,7 +2553,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           continue;
         }
 
-        const existing = await findAutopayPeriodInvoice(setting.tenantId, schedule);
+        let existing = await findAutopayPeriodInvoice(setting.tenantId, schedule);
         const paidCoverage = await findPaidBillingPeriodCoverage({
           tenantId: setting.tenantId,
           periodStart,
@@ -2581,31 +2581,48 @@ async function runMonthlyBillingAutomation(): Promise<void> {
         }
 
         if (!existing) {
-          await (db as any).billingEventLog.create({
-            data: {
-              tenantId: setting.tenantId,
-              runId: run.id,
-              type: "autopay_missing_invoice_on_due_date",
-              message: "CRITICAL: Connect autopay due date reached but no invoice exists for this billing period. Manual intervention required.",
-              metadata: {
-                scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
-                paymentDate: schedule.paymentDate,
-                periodStart: periodStart.toISOString(),
-                periodEnd: periodEnd.toISOString(),
+          // SELF-HEALING (cowork): the T-3 phase should have created this invoice.
+          // If it is missing at charge time, create it now and charge it instead of
+          // dropping the charge. paidCoverage above already ruled out a paid period.
+          try {
+            existing = await createWorkerBillingInvoice(setting, schedule, { skipInvoiceEmail: true });
+            await (db as any).billingEventLog.create({
+              data: {
+                tenantId: setting.tenantId,
+                invoiceId: existing.id,
+                runId: run.id,
+                type: "autopay_invoice_created_selfheal",
+                message: "Self-healing autopay: invoice was missing at charge time; created it, now charging.",
+                metadata: {
+                  invoiceNumber: existing.invoiceNumber,
+                  scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+                  paymentDate: schedule.paymentDate,
+                  source: "worker_selfheal_charge_time",
+                },
               },
-            },
-          }).catch(() => null);
-          await (db as any).alert.create({
-            data: {
-              tenantId: setting.tenantId,
-              severity: "HIGH",
-              category: "BILLING",
-              message: `Autopay blocked — no invoice for billing period ending ${schedule.paymentDate}`,
-              metadata: { runId: run.id, paymentDate: schedule.paymentDate },
-            },
-          }).catch(() => null);
-          results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "missing_invoice_on_due_date" });
-          continue;
+            }).catch(() => null);
+          } catch (healErr: any) {
+            await (db as any).billingEventLog.create({
+              data: {
+                tenantId: setting.tenantId,
+                runId: run.id,
+                type: "autopay_invoice_selfheal_failed",
+                message: healErr?.message ? String(healErr.message) : "autopay_invoice_selfheal_failed",
+                metadata: { scheduledChargeAt: schedule.scheduledChargeAt.toISOString(), paymentDate: schedule.paymentDate },
+              },
+            }).catch(() => null);
+            await (db as any).alert.create({
+              data: {
+                tenantId: setting.tenantId,
+                severity: "HIGH",
+                category: "BILLING",
+                message: `Autopay self-heal failed — could not create invoice for period ending ${schedule.paymentDate}`,
+                metadata: { runId: run.id, paymentDate: schedule.paymentDate, error: healErr?.message },
+              },
+            }).catch(() => null);
+            results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "selfheal_invoice_create_failed" });
+            continue;
+          }
         }
 
         const invoice = existing;
