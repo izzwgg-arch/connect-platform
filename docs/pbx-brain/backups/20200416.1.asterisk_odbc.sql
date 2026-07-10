@@ -1,1 +1,0 @@
-grant all on `ombutel`.* to `vitalpbx`@`localhost` identified by 'vitalpbx';

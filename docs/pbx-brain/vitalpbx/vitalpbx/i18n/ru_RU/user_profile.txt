@@ -1,7 +1,0 @@
-menu.user_profile = Профиль
-module.user_profile = Мой профиль
-user_profile = Профиль пользователя
-user_profile.general = {users.general}
-user_profile.settings = {users.settings}
-users_profiles.select_all = Выбрать все
-users_profiles.unselect_all = Снять все

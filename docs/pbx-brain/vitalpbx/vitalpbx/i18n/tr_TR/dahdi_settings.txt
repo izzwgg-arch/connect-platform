@@ -1,5 +1,0 @@
-dahdi_settings.general = Genel
-dahdi_settings.save = Kaydet
-dahdi_settings.tonezone = Ton Bölgesi
-dahdi_settings.tonezone.tooltip = Bütün kullanıcılar/grup üyeleri için varsayılan ton bölgesi 
-module.dahdi_settings = Telefon Ayarları

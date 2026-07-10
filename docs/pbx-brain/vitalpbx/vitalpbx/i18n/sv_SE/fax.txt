@@ -1,2 +1,0 @@
-fax.fax_process.fax_arrived = Ett fax har anlänt till {0} från {1}.
-fax.fax_process.subject_new_fax = PBX-faxtjänst - Nytt fax har anlänt

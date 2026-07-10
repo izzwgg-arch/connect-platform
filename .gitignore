@@ -52,3 +52,13 @@ tmp-link-repair-*.sql
 # diagnostic/temp folders (do not ship)
 _tmp_diag/
 _tmp_*/
+
+# Local server health reports (read-only diagnostics, never committed)
+_server_reports/
+
+# Ad-hoc debug artifacts (screenshots, logcat dumps, APKs, scratch scripts).
+# Not source, and large binaries here were bloating EAS Build uploads to
+# 700+ MB (EAS falls back to .gitignore rules when no .easignore exists).
+_latency_logs/
+docs/
+apps/portal/public/downloads/

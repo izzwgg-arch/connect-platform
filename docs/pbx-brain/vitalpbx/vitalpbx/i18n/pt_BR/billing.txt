@@ -1,2 +1,0 @@
-billing.app.sonata_billing = Tarifador
-billing.app.a2billing = A2Billing

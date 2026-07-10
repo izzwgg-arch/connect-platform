@@ -1,9 +1,0 @@
-{
-  "id-name" : "export_extensions",
-  "name" : "Export Extensions",
-  "author" : "Xorcom Ltd.",
-  "dependencies" : [
-	"class_of_service",
-	"extensions"
-  ]
-}

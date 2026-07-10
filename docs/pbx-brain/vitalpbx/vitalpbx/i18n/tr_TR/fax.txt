@@ -1,2 +1,0 @@
-fax.fax_process.fax_arrived = {1} den {0} için bir faks geldi
-fax.fax_process.subject_new_fax = PBX Faks Hizmeti - Yeni faks geldi

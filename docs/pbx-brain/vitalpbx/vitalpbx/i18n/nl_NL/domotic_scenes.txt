@@ -1,4 +1,0 @@
-domotic_scenes = Domotic Scenes
-domotic_scenes.general.tab = {vitalpbx.general}
-domotic_scenes.show_menu = Show menu with scenes
-module.domotic_scenes = {domotic_scenes}

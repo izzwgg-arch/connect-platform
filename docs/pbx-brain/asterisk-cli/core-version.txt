@@ -1,1 +1,0 @@
-Asterisk 20.18.2 built by root @ pbx on a x86_64 running Linux on 2026-03-06 18:44:22 UTC

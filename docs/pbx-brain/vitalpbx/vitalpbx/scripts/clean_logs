@@ -1,5 +1,0 @@
-#!/bin/sh
-
-find /var/log/asterisk/ -name "full.*" -type f -mtime +10 -delete
-find /var/log/asterisk/ -name "full-*" -type f -mtime +10 -delete
-find /var/log/asterisk/ -name "fail2ban.*" -type f -mtime +2 -delete

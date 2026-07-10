@@ -1,5 +1,0 @@
-dahdi_settings.general = Generale
-dahdi_settings.save = Salva
-dahdi_settings.tonezone = Zona di Tono
-dahdi_settings.tonezone.tooltip = Zona di tono predefinita per tutti gli utenti / colleghi
-module.dahdi_settings = Impostazioni di Telefonia

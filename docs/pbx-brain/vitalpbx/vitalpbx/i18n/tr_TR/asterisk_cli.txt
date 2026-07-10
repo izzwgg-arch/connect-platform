@@ -1,5 +1,0 @@
-asterisk_cli.commands_updated = Tüm komutlar başarıyla güncellendi.
-asterisk_cli.general = Genel
-asterisk_cli.input-cmd.placeholder = Buraya komut yazın!
-menu.asterisk_cli = Asterisk CLI
-module.asterisk_cli = Asterisk CLI
