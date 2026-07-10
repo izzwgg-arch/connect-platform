@@ -767,7 +767,14 @@ export default function VoicemailPage() {
   const canGoNext = totalCount > page * 100;
 
   async function markRead(vm: Voicemail, listened: boolean) {
-    await apiPatch(`/voice/voicemail/${vm.id}`, { listened });
+    const res = await apiPatch<{ ok?: boolean; readStateSkipped?: boolean }>(
+      `/voice/voicemail/${vm.id}`,
+      { listened },
+    );
+    // Read/unread belongs to the mailbox owner. When the caller holds the
+    // "see everybody's voicemails" permission but doesn't own this mailbox, the
+    // server refuses the change (readStateSkipped) — don't fake it in the UI.
+    if (res?.readStateSkipped) return;
     if (selected?.id === vm.id) setSelected({ ...selected, listened });
     setReloadKey((key) => key + 1);
   }
@@ -782,7 +789,13 @@ export default function VoicemailPage() {
   async function handlePlayed(vm: Voicemail) {
     if (vm.listened) return;
     try {
-      await apiPatch(`/voice/voicemail/${vm.id}`, { listened: true });
+      const res = await apiPatch<{ ok?: boolean; readStateSkipped?: boolean }>(
+        `/voice/voicemail/${vm.id}`,
+        { listened: true },
+      );
+      // Previewing someone else's mailbox (tenant-wide viewer) must not mark it
+      // read for the owner — the server signals this via readStateSkipped.
+      if (res?.readStateSkipped) return;
       if (selected?.id === vm.id) setSelected({ ...selected, listened: true });
       setReloadKey((key) => key + 1);
     } catch {

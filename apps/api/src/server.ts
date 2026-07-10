@@ -142,6 +142,7 @@ import {
   voicemailRowInOwnedScope,
   type VoicemailOwnedScope,
 } from "./voicemailResourceScope";
+import { computeVoicemailPatchUpdate } from "./voicemailAccessPolicy";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
@@ -16718,20 +16719,37 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
     listened: z.boolean().optional(),
     folder: z.enum(["inbox", "old", "urgent"]).optional(),
   }).parse(req.body || {});
-  const listened = body.listened ?? true;
-  const data: Record<string, any> = {};
-  if (body.listened !== undefined || body.folder === undefined) {
-    data.listened = listened;
-    data.readAt = listened ? (vm.readAt ?? new Date()) : null;
-  }
-  if (body.folder !== undefined) {
-    data.folder = body.folder;
-  }
-  await db.voicemail.update({
-    where: { id },
-    data,
+
+  // Read-state (listened/readAt) belongs to the mailbox owner, not to whoever
+  // happens to be allowed to view it. A tenant owner / tenant-wide viewer /
+  // super-admin previewing someone else's voicemail must NOT flip the
+  // read/unread state for the real owner — the message is only "read" once the
+  // extension's own user listens to it. Only when the acting user owns this
+  // mailbox do we persist listened/readAt. Folder moves remain allowed for
+  // anyone with access. Mirrors the owner carve-out in the DELETE handler.
+  let isOwnMailbox = false;
+  try {
+    const ownScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+    if (ownScope.ok) {
+      isOwnMailbox = voicemailRowInOwnedScope(vm, {
+        tenantIds: ownScope.tenantIds,
+        extensions: ownScope.extensions,
+      });
+    }
+  } catch { isOwnMailbox = false; }
+
+  const { data, readStateSkipped } = computeVoicemailPatchUpdate({
+    body,
+    currentReadAt: vm.readAt ?? null,
+    isOwnMailbox,
   });
-  return reply.send({ ok: true });
+  if (Object.keys(data).length > 0) {
+    await db.voicemail.update({
+      where: { id },
+      data,
+    });
+  }
+  return reply.send({ ok: true, readStateSkipped });
 });
 
 // ── DELETE /voice/voicemail/:id — soft-delete + best-effort PBX delete ───────
