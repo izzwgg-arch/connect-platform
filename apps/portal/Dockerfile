@@ -9,6 +9,7 @@ RUN apt-get update -y \
   && apt-get install -y --no-install-recommends openssl \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable \
+  && corepack prepare pnpm@10.30.2 --activate \
   && pnpm config set store-dir /pnpm/store
 
 FROM base AS deps
