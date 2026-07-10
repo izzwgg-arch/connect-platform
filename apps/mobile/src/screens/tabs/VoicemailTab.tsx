@@ -631,10 +631,22 @@ export function VoicemailTab() {
 
     const markListened = () => {
       if (!vm.listened) {
-        markVoicemailListened(token, vm.id, true).catch(() => undefined);
         markReadOverride([vm.id], true);
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
         patchVoicemailCache((row) => row.id === vm.id, { listened: true });
+        // If the server reports the read state was NOT persisted (the listener
+        // holds "see everybody's voicemails" but isn't this mailbox's owner),
+        // undo the optimistic flip so the previewer's screen matches the real
+        // owner's unread state.
+        markVoicemailListened(token, vm.id, true)
+          .then((res) => {
+            if (res?.readStateSkipped) {
+              markReadOverride([vm.id], false);
+              setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: false } : row));
+              patchVoicemailCache((row) => row.id === vm.id, { listened: false });
+            }
+          })
+          .catch(() => undefined);
       }
     };
 
@@ -760,10 +772,21 @@ export function VoicemailTab() {
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
     const next = !vm.listened;
-    markVoicemailListened(token, vm.id, next).catch(() => undefined);
+    const prev = vm.listened;
     markReadOverride([vm.id], next);
     setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: next } : row));
     patchVoicemailCache((row) => row.id === vm.id, { listened: next });
+    // Revert if the server refused to change read state (previewer isn't the
+    // mailbox owner) — read/unread belongs to the owning extension only.
+    markVoicemailListened(token, vm.id, next)
+      .then((res) => {
+        if (res?.readStateSkipped) {
+          markReadOverride([vm.id], prev);
+          setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: prev } : row));
+          patchVoicemailCache((row) => row.id === vm.id, { listened: prev });
+        }
+      })
+      .catch(() => undefined);
   }, [markReadOverride, patchVoicemailCache, token]);
 
   const markSelectedRead = useCallback(async () => {
@@ -774,7 +797,20 @@ export function VoicemailTab() {
     setRows((current) => current.map((row) => ids.includes(row.id) ? { ...row, listened: true } : row));
     patchVoicemailCache((row) => ids.includes(row.id), { listened: true });
     setSelectedIds([]);
-    await Promise.all(selected.map((vm) => markVoicemailListened(token, vm.id, true).catch(() => undefined)));
+    const results = await Promise.all(
+      selected.map(async (vm) => {
+        const res = await markVoicemailListened(token, vm.id, true).catch(() => undefined);
+        return { id: vm.id, skipped: !!res?.readStateSkipped };
+      }),
+    );
+    // Undo the optimistic read for any mailbox the caller doesn't own (server
+    // left it unread for the real owner).
+    const skippedIds = results.filter((r) => r.skipped).map((r) => r.id);
+    if (skippedIds.length > 0) {
+      markReadOverride(skippedIds, false);
+      setRows((current) => current.map((row) => skippedIds.includes(row.id) ? { ...row, listened: false } : row));
+      patchVoicemailCache((row) => skippedIds.includes(row.id), { listened: false });
+    }
   }, [markReadOverride, patchVoicemailCache, rows, selectedIds, token]);
 
   // Stop any playing voicemail before dialing so the callback audio isn't
