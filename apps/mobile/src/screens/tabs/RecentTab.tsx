@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   PanResponder,
+  Platform,
   TextInput,
   Modal,
   ScrollView,
@@ -609,8 +610,10 @@ export function RecentTab() {
         <FlatList
           data={timeline}
           keyExtractor={(item) => item.id}
-          bounces={false}
-          alwaysBounceVertical={false}
+          // iOS needs bounce enabled for pull-to-refresh; Android unchanged
+          // (see IOS_WORK_ANDROID_GUARDRAILS.md).
+          bounces={Platform.OS === 'ios'}
+          alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
           renderItem={({ item }) =>
             item.type === 'section' ? (

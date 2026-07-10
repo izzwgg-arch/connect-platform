@@ -22,6 +22,7 @@ import {
   View,
 } from 'react-native';
 import { Audio, InterruptionModeAndroid, ResizeMode, Video } from 'expo-av';
+import { playVoiceNoteSentTone, playVoiceNoteStartTone } from '../../audio/telephonyAudio';
 import {
   GestureHandlerRootView,
   PanGestureHandler,
@@ -515,6 +516,8 @@ type VoiceNotePlayer = {
   progress: number;
   durationMs: number | null;
   toggle: (id: string, url: string) => void;
+  /** Seek the currently-active note to a 0..1 fraction of its duration. */
+  seek: (id: string, fraction: number) => void;
 };
 const VoiceNotePlayerContext = createContext<VoiceNotePlayer | null>(null);
 
@@ -547,6 +550,7 @@ function useVoiceNotePlayerController(order: { id: string; url: string }[]): Voi
   }, [teardownSound]);
 
   const playId = useCallback(async (id: string, url: string) => {
+    console.log('[VOICE_NOTE_PLAY] playId id=' + id + ' url=' + url);
     await teardownSound();
     activeIdRef.current = id;
     setActiveId(id);
@@ -563,13 +567,38 @@ function useVoiceNotePlayerController(order: { id: string; url: string }[]): Voi
       shouldDuckAndroid: true,
       playThroughEarpieceAndroid: false,
     }).catch(() => undefined);
+    // iOS: AVPlayer cannot stream our signed download URL — the endpoint returns
+    // no HTTP Range support, so AVFoundation fails with error -11850. Download the
+    // note to a local cache file first and play THAT, mirroring the voicemail
+    // player (which already plays source=disk). Android streams the remote URL
+    // fine, so it is left completely unchanged.
+    let playUri = url;
+    if (Platform.OS === 'ios') {
+      try {
+        const safe = id.replace(/[^a-zA-Z0-9]/g, '');
+        const target = (FileSystem.cacheDirectory || '') + 'cc-voice-note-' + safe + '.m4a';
+        const info = await FileSystem.getInfoAsync(target).catch(() => null);
+        if (info && info.exists) {
+          playUri = target;
+        } else {
+          const dl = await FileSystem.downloadAsync(url, target);
+          playUri = dl.uri;
+        }
+      } catch (e) {
+        console.warn('[VOICE_NOTE_PLAY] ios cache download failed, using remote url: ' + (e instanceof Error ? e.message : String(e)));
+        playUri = url;
+      }
+      // A newer note may have started while we were downloading — bail out.
+      if (activeIdRef.current !== id) return;
+    }
     let sound: Audio.Sound;
     try {
       ({ sound } = await Audio.Sound.createAsync(
-        { uri: url },
+        { uri: playUri },
         { shouldPlay: true, progressUpdateIntervalMillis: 120 },
       ));
-    } catch {
+    } catch (e) {
+      console.warn('[VOICE_NOTE_PLAY] createAsync FAILED id=' + id + ' url=' + url + ' err=' + (e instanceof Error ? e.message : String(e)));
       if (activeIdRef.current === id) await stop();
       return;
     }
@@ -623,11 +652,23 @@ function useVoiceNotePlayerController(order: { id: string; url: string }[]): Voi
     await playId(id, url);
   }, [playId]);
 
+  const seek = useCallback(async (id: string, fraction: number) => {
+    const s = soundRef.current;
+    if (activeIdRef.current !== id || !s) return;
+    try {
+      const status = await s.getStatusAsync();
+      if (!status.isLoaded || !status.durationMillis) return;
+      const f = Math.max(0, Math.min(1, fraction));
+      await s.setPositionAsync(Math.round(f * status.durationMillis));
+      setProgress(f);
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => () => { void teardownSound(); }, [teardownSound]);
 
   return useMemo(
-    () => ({ activeId, playing, progress, durationMs, toggle }),
-    [activeId, playing, progress, durationMs, toggle],
+    () => ({ activeId, playing, progress, durationMs, toggle, seek }),
+    [activeId, playing, progress, durationMs, toggle, seek],
   );
 }
 
@@ -749,6 +790,27 @@ export function ChatTab() {
     const remoteIds = new Set(remoteMessages.map((m) => m.id));
     return [...remoteMessages, ...localMessages.filter((m) => m.threadId === activeThread?.id && !remoteIds.has(m.id))];
   }, [activeThread?.id, localMessages, remoteMessages]);
+
+  // Preload chat photos to a local disk cache (keyed by attachment id) as soon as
+  // the messages are known, so they are instant on open and never re-downloaded
+  // when the signed URL rotates. See CachedChatImage.
+  useEffect(() => {
+    const seen = new Set<string>();
+    for (const m of messages.slice(-40)) {
+      for (const a of m.attachments || []) {
+        const url = a.downloadUrl;
+        if (!url || seen.has(a.id)) continue;
+        const isImage =
+          a.mediaKind === 'image' || String(a.mimeType || '').toLowerCase().startsWith('image/');
+        if (!isImage) continue;
+        seen.add(a.id);
+        const target = chatImageCachePath(a);
+        FileSystem.getInfoAsync(target)
+          .then((info) => (info.exists ? undefined : FileSystem.downloadAsync(url, target)))
+          .catch(() => undefined);
+      }
+    }
+  }, [messages]);
 
   useEffect(() => {
     if (!activeThread || !token) return;
@@ -1142,6 +1204,10 @@ export function ChatTab() {
 
   const startRecording = useCallback(async () => {
     if (!activeThread || !token || recording) return;
+    // Connect "recording armed" cue. Played on press — before the recorder
+    // actually starts a few ms later — so it gives instant feedback and is not
+    // captured into the voice note itself.
+    playVoiceNoteStartTone();
     // Guard against a silently-stalled audio session: if any step hangs
     // (e.g. WebRTC/SIP still owns the mic), reject instead of hanging forever.
     const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
@@ -1353,6 +1419,10 @@ export function ChatTab() {
       }
       const uri = rec.getURI();
       if (!uri) return;
+      // Connect "message away" cue on release (only for a real, sent note —
+      // after the <600ms accidental-tap guard above). Audio mode was reset to
+      // playback just above, so this plays out of the loudspeaker.
+      playVoiceNoteSentTone();
       // Fire-and-forget: shows the bubble instantly and uploads in the
       // background so releasing the mic feels immediate.
       void commitVoiceNote(uri, durationMs);
@@ -1621,8 +1691,11 @@ export function ChatTab() {
             <FlatList
               data={filteredThreads}
               keyExtractor={(item) => item.id}
-              bounces={false}
-              alwaysBounceVertical={false}
+              // iOS needs the list to be able to bounce for pull-to-refresh to fire;
+              // Android's RefreshControl works without it. Gate on iOS so Android is
+              // byte-for-byte unchanged (see IOS_WORK_ANDROID_GUARDRAILS.md).
+              bounces={Platform.OS === 'ios'}
+              alwaysBounceVertical={Platform.OS === 'ios'}
               overScrollMode="never"
               refreshControl={<RefreshControl refreshing={manualRefreshing} onRefresh={refreshChat} tintColor={colors.primary} />}
               contentContainerStyle={styles.threadList}
@@ -1736,7 +1809,7 @@ export function ChatTab() {
             onRecordCancel={cancelRecording}
             recording={recording}
             compact={keyboardOpen}
-            bottomInset={Math.max(insets.bottom, 10)}
+            bottomInset={Platform.OS === 'ios' ? (keyboardOpen ? 10 : 12) : Math.max(insets.bottom, 10)}
           />
         </View>
       )}
@@ -2052,6 +2125,42 @@ const MessageBubble = memo(function MessageBubble({
   );
 });
 
+/** Local disk-cache path for a chat image, keyed by its attachment id so the
+ *  changing signed URL (?exp&sig) never busts the cache. */
+function chatImageCachePath(attachment: { id: string; mimeType?: string | null }): string {
+  const mime = String(attachment.mimeType || '').toLowerCase();
+  const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
+  const safe = String(attachment.id).replace(/[^a-zA-Z0-9]/g, '');
+  return (FileSystem.cacheDirectory || '') + 'cc-chat-img-' + safe + ext;
+}
+
+/** Chat image that renders from a local disk cache (keyed by attachment id) so
+ *  it is instant on every re-open regardless of signed-URL rotation. Falls back
+ *  to the remote URL on the very first view while it caches in the background. */
+function CachedChatImage({ attachment, style, resizeMode }: { attachment: ChatAttachment; style: any; resizeMode?: 'cover' | 'contain' }) {
+  const [uri, setUri] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const remote = attachment.downloadUrl || null;
+    if (!remote) { setUri(null); return; }
+    const target = chatImageCachePath(attachment);
+    (async () => {
+      try {
+        const info = await FileSystem.getInfoAsync(target).catch(() => null);
+        if (info && info.exists) { if (!cancelled) setUri(target); return; }
+        if (!cancelled) setUri(remote); // show remote immediately on first view
+        const dl = await FileSystem.downloadAsync(remote, target);
+        if (!cancelled && dl?.uri) setUri(dl.uri);
+      } catch {
+        if (!cancelled) setUri(remote);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [attachment.id, attachment.downloadUrl, attachment.mimeType]);
+  if (!uri) return <View style={style} />;
+  return <Image source={{ uri }} style={style} resizeMode={resizeMode} />;
+}
+
 function ImageGrid({
   attachments,
   mine,
@@ -2091,7 +2200,7 @@ function ImageGrid({
               shown.length >= 4 ? styles.imageCellHalf : null,
             ]}
           >
-            <Image source={{ uri: attachment.downloadUrl || undefined }} style={styles.imageBubble} resizeMode="cover" />
+            <CachedChatImage attachment={attachment} style={styles.imageBubble} resizeMode="cover" />
             {attachments.length > 4 && index === 3 ? (
               <View style={styles.imageOverflow}>
                 <Text style={styles.imageOverflowText}>+{attachments.length - 4}</Text>
@@ -2227,15 +2336,31 @@ function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: Ch
     player?.toggle(attachment.id, attachment.downloadUrl);
   }, [attachment.downloadUrl, attachment.id, player]);
 
+  // Tap anywhere on the progress track to scrub. If the note isn't the active
+  // one yet, a tap just starts it playing.
+  const trackWidthRef = useRef(0);
+  const onScrub = useCallback((locationX: number) => {
+    const w = trackWidthRef.current || 1;
+    const f = Math.max(0, Math.min(1, locationX / w));
+    if (isActive && player) player.seek(attachment.id, f);
+    else if (attachment.downloadUrl) player?.toggle(attachment.id, attachment.downloadUrl);
+  }, [attachment.downloadUrl, attachment.id, isActive, player]);
+
   return (
     <View style={[styles.voiceBubble, { backgroundColor: mine ? colors.primary : colors.surfaceElevated, borderColor: mine ? 'transparent' : colors.borderSubtle }]}>
       <TouchableOpacity onPress={toggle} style={[styles.voicePlay, { backgroundColor: mine ? 'rgba(255,255,255,0.22)' : colors.primaryMuted }]}>
         <Ionicons name={playing ? 'pause' : 'play'} size={18} color={mine ? '#fff' : colors.primary} />
       </TouchableOpacity>
       <View style={styles.voiceTrackWrap}>
-        <View style={[styles.voiceTrack, { backgroundColor: mine ? 'rgba(255,255,255,0.26)' : colors.border }]}>
+        <TouchableOpacity
+          activeOpacity={1}
+          hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }}
+          onLayout={(e) => { trackWidthRef.current = e.nativeEvent.layout.width; }}
+          onPress={(e) => onScrub(e.nativeEvent.locationX)}
+          style={[styles.voiceTrack, { backgroundColor: mine ? 'rgba(255,255,255,0.26)' : colors.border }]}
+        >
           <View style={[styles.voiceTrackFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: mine ? '#fff' : colors.primary }]} />
-        </View>
+        </TouchableOpacity>
         <Text style={[styles.voiceDuration, { color: mine ? 'rgba(255,255,255,0.78)' : colors.textTertiary }]}>{formatVoiceDuration(durationMs)}</Text>
       </View>
       {failed ? (

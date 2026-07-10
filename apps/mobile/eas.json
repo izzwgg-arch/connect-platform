@@ -64,6 +64,19 @@
         "EXPO_PUBLIC_VOICE_SIMULATE": "false",
         "EXPO_PUBLIC_LOG_LEVEL": "warn"
       }
+    },
+    "ios-test": {
+      "distribution": "internal",
+      "channel": "preview",
+      "credentialsSource": "remote",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "EXPO_PUBLIC_VOICE_SIMULATE": "false",
+        "EXPO_PUBLIC_LOG_LEVEL": "debug",
+        "EXPO_PUBLIC_CALL_FLOW_DEBUG_OVERLAY": "true"
+      }
     }
   },
   "submit": {

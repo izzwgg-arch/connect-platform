@@ -12,6 +12,13 @@ import './src/notifications/backgroundCallTask';
 // user answers (see sipPreRegisterHeadlessTask.ts).
 import './src/notifications/sipPreRegisterHeadlessTask';
 
+// SIP wake registrar (module-scope, NON-React-tree) — MUST be imported BEFORE
+// registerRootComponent so it is present the instant the runtime boots from an
+// INCOMING_CALL_WAKE push (swiped/killed). It drains the native wake buffer and
+// registers SIP on the shared sipClientSingleton — the same client SipContext
+// attaches to at answer. No Activity, no HeadlessJsTaskService, one UA.
+import './src/notifications/sipWakeRegistrar';
+
 import { registerRootComponent } from "expo";
 
 import App from "./App";

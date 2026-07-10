@@ -130,6 +130,42 @@ ${PATCH_BEGIN}
   if (callerName == nil || callerName.length == 0) { callerName = callerNumber; }
   NSString *handle = (callerNumber.length > 0) ? callerNumber : @"Unknown";
 
+  // CONNECT iOS ring-diagnostic breadcrumb (killed-safe). Best-effort and fully
+  // wrapped so it can never affect the CallKit report. Appends one JSON line to
+  // Documents/connect_ios_ring_log.jsonl, which JS uploads on the next app open
+  // (see apps/mobile/src/diagnostics/iosRingLog.ts).
+  @try {
+    NSArray *cbDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *cbPath = [[cbDocs firstObject] stringByAppendingPathComponent:@"connect_ios_ring_log.jsonl"];
+    UIApplicationState cbState = [UIApplication sharedApplication].applicationState;
+    NSString *cbStateStr = (cbState == UIApplicationStateActive) ? @"active" : ((cbState == UIApplicationStateBackground) ? @"background" : @"inactive");
+    NSDictionary *cbRnck = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"RNCallKeepSettings"];
+    NSString *cbRing = cbRnck[@"ringtoneSound"];
+    NSString *cbCaf = [[NSBundle mainBundle] pathForResource:@"connect-default-ringtone" ofType:@"caf"];
+    NSDictionary *cbRec = @{
+      @"ts": [NSString stringWithFormat:@"%f", [[NSDate date] timeIntervalSince1970]],
+      @"src": @"native",
+      @"stage": @"IOS_VOIP_PUSH_NATIVE",
+      @"appState": cbStateStr,
+      @"callId": (callId ? callId : @""),
+      @"ringtoneSound": (cbRing ? cbRing : @"<nil>"),
+      @"cafPresent": (cbCaf ? @"true" : @"false")
+    };
+    NSData *cbJson = [NSJSONSerialization dataWithJSONObject:cbRec options:0 error:nil];
+    if (cbJson != nil) {
+      NSMutableData *cbLine = [NSMutableData dataWithData:cbJson];
+      uint8_t cbNL = 0x0A;
+      [cbLine appendBytes:&cbNL length:1];
+      NSFileManager *cbFm = [NSFileManager defaultManager];
+      if (![cbFm fileExistsAtPath:cbPath]) {
+        [cbLine writeToFile:cbPath atomically:YES];
+      } else {
+        NSFileHandle *cbFh = [NSFileHandle fileHandleForWritingAtPath:cbPath];
+        if (cbFh != nil) { [cbFh seekToEndOfFile]; [cbFh writeData:cbLine]; [cbFh closeFile]; }
+      }
+    }
+  } @catch (NSException *cbEx) {}
+
   if (callId != nil && callId.length > 0) {
     NSString *uuid = ConnectDeterministicCallKitUUID(callId);
     [RNCallKeep reportNewIncomingCall:uuid

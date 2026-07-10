@@ -11,6 +11,22 @@ export const MOBILE_RINGTONE_STORAGE_KEY = "connect_mobile_incoming_ringtone";
  * No-op on iOS / when the bridge is unavailable.
  */
 function syncRingtoneToNative(id: MobileRingtoneId): void {
+  if (Platform.OS === "ios") {
+    // iOS: persist the choice into CallKit (RNCallKeep -> NSUserDefaults) so the
+    // pre-JS / cold-start VoIP push ring path plays the correct bundled sound,
+    // achieving parity with the Android native ring path. Lazy require avoids a
+    // circular import with src/sip/callkeep.ts.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const callkeep = require("../sip/callkeep");
+      if (typeof callkeep.applyIosRingtonePreference === "function") {
+        void callkeep.applyIosRingtonePreference(id);
+      }
+    } catch {
+      // non-critical
+    }
+    return;
+  }
   if (Platform.OS !== "android") return;
   try {
     const mod: any = (NativeModules as any)?.IncomingCallUi;

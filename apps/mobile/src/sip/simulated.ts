@@ -91,6 +91,9 @@ export class SimulatedSipClient implements SipClient {
     this.events.onCallState?.("ended");
   }
 
+  prewarmInboundMedia() {}
+  releasePrewarmedMedia(_reason: string) {}
+
   setMute() {}
   setSpeaker() {}
   hold() {}
@@ -129,6 +132,14 @@ export class SimulatedSipClient implements SipClient {
   }
 
   setActiveSession(_sessionId: string) {
+    return false;
+  }
+
+  isSessionAlive(_sessionId: string) {
+    return false;
+  }
+
+  transferSession(_sessionId: string, _target: string) {
     return false;
   }
 }

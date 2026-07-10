@@ -6,6 +6,7 @@ import {
   Linking,
   Modal,
   PanResponder,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -295,8 +296,10 @@ export function ContactTab() {
         <FlatList
           data={listItems}
           keyExtractor={(item) => item.id}
-          bounces={false}
-          alwaysBounceVertical={false}
+          // iOS needs bounce enabled for pull-to-refresh; Android unchanged
+          // (see IOS_WORK_ANDROID_GUARDRAILS.md).
+          bounces={Platform.OS === 'ios'}
+          alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} />}
           contentContainerStyle={styles.list}

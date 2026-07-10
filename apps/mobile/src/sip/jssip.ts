@@ -7,8 +7,8 @@ import type {
   SipSessionState,
 } from "./types";
 import type { ProvisioningBundle } from "../types";
-import { registerGlobals as registerWebRTCGlobals } from "react-native-webrtc";
-import { Platform, NativeModules } from "react-native";
+import { registerGlobals as registerWebRTCGlobals, mediaDevices } from "react-native-webrtc";
+import { Platform, NativeModules, DeviceEventEmitter } from "react-native";
 import JsSIP from "jssip";
 import {
   startRingback,
@@ -41,6 +41,16 @@ import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 import { getDnd } from "./dndStore";
 
 const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
+
+// [RUNTIME_PROOF / Step 0] Per-JS-runtime identity + counters. These are
+// module-scope, so each React runtime that evaluates this bundle gets its OWN
+// __JS_RUNTIME_TAG and resets these counters. If two DISTINCT __JS_RUNTIME_TAG
+// values (or registerGlobals count=1 logged twice with different tags) appear
+// in one PID, a duplicate React runtime booted (the 2026-06-19 regression).
+const __JS_RUNTIME_TAG = Math.random().toString(36).slice(2, 8);
+let __registerGlobalsCount = 0;
+let __uaCreateCount = 0;
+let __registeredOkCount = 0;
 
 /**
  * Bridge the inbound SIP-leg lifecycle to the native incoming-call service so
@@ -159,10 +169,31 @@ export class JsSipClient implements SipClient {
   private registerPromise: Promise<void> | null = null;
   /** Epoch ms of the most recent successful SIP REGISTER. */
   private registeredAtMs: number | null = null;
+  /** Epoch ms of the most recent inbound INVITE (newRTCSession, remote). */
+  private lastIncomingInviteAtMs = 0;
+  /**
+   * How long after an inbound INVITE the singleton UA is protected from
+   * teardown / replacement. A wake push can register this UA and receive the
+   * INVITE before SipContext mounts; when SipContext then mounts / the app
+   * foregrounds, its register / unregister paths must ATTACH to this UA rather
+   * than restart it (which abandons the SIP fork → "rings then voicemail").
+   * Covers the brief gap between an initial INVITE and a fork re-INVITE too.
+   */
+  private static readonly INVITE_ANSWER_WINDOW_MS = 20_000;
   private callStartedAt: number | null = null;
   /** Last outbound dial target (normalized) for flight-recorder correlation. */
   private lastOutboundDialTarget: string | null = null;
   private callDirection: "outbound" | "inbound" = "outbound";
+  /**
+   * Phase 1 / Option 2A — Android-only inbound-answer mic prewarm.
+   * Mic MediaStream acquired during the incoming ring so JsSIP `answer()`
+   * can skip its internal getUserMedia. Owned by this client and released on
+   * every terminal / no-answer path — never held after a call ends. At most
+   * one stream is warmed at a time (prewarm only fires when no session exists).
+   */
+  private prewarmedInboundStream: MediaStream | null = null;
+  /** Guards against overlapping getUserMedia prewarm acquisitions. */
+  private prewarmInFlight = false;
   private livePingInterval: ReturnType<typeof setInterval> | null = null;
   /** Timestamp when the session's `confirmed` event fired — used by ghost-dialog detection. */
   private sessionConfirmedAt: WeakMap<any, number> = new WeakMap();
@@ -263,7 +294,7 @@ export class JsSipClient implements SipClient {
       backendAccept: input.backendAccept ?? null,
       uiState: input.uiState ?? null,
       pushMeta: input.pushMeta ?? null,
-      forceRestart: input.forceRestart ?? null,
+      forceRestart: input.forceRestart ?? undefined,
       incomingSessionSnapshot: this.buildIncomingSessionSnapshot(
         {
           inviteId: input.inviteId,
@@ -297,14 +328,18 @@ export class JsSipClient implements SipClient {
       return this.registerPromise;
     }
 
-    // Never tear down the UA when an incoming SIP INVITE is in progress.
+    // Never tear down the UA during the inbound-INVITE answer window.
     // A force-restart would stop the UA and reject the pending INVITE.
-    // This guard fires regardless of forceRestart — the AppState "active"
-    // listener in SipContext triggers forceRestart when the user answers from
-    // the lock screen (bringing the app to foreground), which would otherwise
-    // kill the INVITE that just arrived.
-    if (this.ua && this.countLiveIncomingSessions() > 0) {
-      console.log('[SIP] Skipping re-register — live incoming session protects UA' + (forceRestart ? ' (force-restart suppressed)' : ''));
+    // This guard fires regardless of forceRestart — SipContext's mount
+    // auto-register, the AppState "active" listener (foreground), the wake
+    // handler and the reconnect orchestrator all funnel through here. When a
+    // wake push has already registered this singleton UA and the INVITE has
+    // arrived (or is about to re-deliver on a fork), any of those would
+    // otherwise clobber the UA holding the INVITE → the caller hears voicemail
+    // while the phone still rings. `inInviteAnswerWindow()` also covers the
+    // brief gap between an initial INVITE and its fork re-INVITE.
+    if (this.ua && this.inInviteAnswerWindow()) {
+      console.log('[SIP] register: attaching to existing UA — inbound INVITE window active' + (forceRestart ? ' (force-restart suppressed)' : ''));
       return;
     }
 
@@ -338,7 +373,9 @@ export class JsSipClient implements SipClient {
     // Register WebRTC globals (static import — avoids Metro bundler hoisting issues)
     try {
       registerWebRTCGlobals();
+      __registerGlobalsCount += 1;
       console.log('[SIP] WebRTC globals registered OK');
+      console.log(`[RUNTIME_PROOF] registerGlobals count=${__registerGlobalsCount} jsRuntimeTag=${__JS_RUNTIME_TAG}`);
     } catch (e) {
       console.warn('[SIP] WebRTC registerGlobals() failed:', e);
     }
@@ -373,6 +410,9 @@ export class JsSipClient implements SipClient {
     }
 
     this.ua = new (JsSIP as any).UA(uaConfig);
+    __uaCreateCount += 1;
+    (this.ua as any).__uaId = __uaCreateCount;
+    console.log(`[RUNTIME_PROOF] ua_created uaId=${__uaCreateCount} jsRuntimeTag=${__JS_RUNTIME_TAG}`);
 
     this.registerPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -390,7 +430,9 @@ export class JsSipClient implements SipClient {
       }, 20_000);
 
       this.ua.on("registered", () => {
+        __registeredOkCount += 1;
         console.log('[SIP] Registered successfully');
+        console.log(`[RUNTIME_PROOF] register_ok count=${__registeredOkCount} uaId=${(this.ua as any)?.__uaId} jsRuntimeTag=${__JS_RUNTIME_TAG}`);
         this.registeredAtMs = Date.now();
         this.events.onRegistrationState?.("registered");
         settle(() => resolve());
@@ -429,6 +471,15 @@ export class JsSipClient implements SipClient {
           e.session?.terminate?.({ status_code: 486, reason_phrase: "Busy Here" });
         } catch (err) {
           console.warn("[SIP][DND] failed to send 486 on DND INVITE:", err);
+        }
+        // A DND decline is still a missed call. The native FCM service records
+        // the pending missed-call entry (and posts the notification); nudge the
+        // JS drain so it lands in Recent promptly even while the app is already
+        // foreground (mount / AppState-active drains won't fire in that case).
+        try {
+          DeviceEventEmitter.emit("connect.dndMissed");
+        } catch {
+          /* non-fatal */
         }
         return;
       }
@@ -486,6 +537,10 @@ export class JsSipClient implements SipClient {
           ts: inviteArrivedAt,
         }));
         this.incomingSessions.push(e.session);
+        // Open the answer-window: protects this UA from teardown/replacement by
+        // a late SipContext mount / foreground re-register while the user is
+        // about to answer (see INVITE_ANSWER_WINDOW_MS / inInviteAnswerWindow).
+        this.lastIncomingInviteAtMs = Date.now();
         this.events.onIncomingInviteReceived?.({
           sessionId: sipSessionId,
           from: callerNumber,
@@ -615,6 +670,27 @@ export class JsSipClient implements SipClient {
 
   private countLiveIncomingSessions(): number {
     return this.incomingSessions.filter((s) => this.isSessionLive(s)).length;
+  }
+
+  /**
+   * True while an inbound INVITE is live OR arrived so recently a fork
+   * re-INVITE may still be in flight. During this window the singleton UA MUST
+   * NOT be stopped or replaced — the SIP INVITE (and the native incoming ring,
+   * which arrives on the same call) would be dropped, sending the caller to
+   * voicemail while the phone still rings. Used to make SipContext's mount /
+   * foreground / wake / reconnect register + logout_teardown unregister attach
+   * to this UA instead of restarting it.
+   */
+  private inInviteAnswerWindow(): boolean {
+    try {
+      if (this.countLiveIncomingSessions() > 0) return true;
+    } catch {
+      /* ignore */
+    }
+    return (
+      this.lastIncomingInviteAtMs > 0 &&
+      Date.now() - this.lastIncomingInviteAtMs < JsSipClient.INVITE_ANSWER_WINDOW_MS
+    );
   }
 
   private emitOutboundTrace(
@@ -769,6 +845,10 @@ export class JsSipClient implements SipClient {
         ICM.stop();
         audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
+        // No call remains — release the prewarmed mic if still held. Skipped
+        // while endedKeepRingtoneAlive (a ring-group fork ended but the ring
+        // continues), so the prewarm survives for the eventual answer.
+        this.releasePrewarmedMedia("session_ended");
       } else if (endedKeepRingtoneAlive) {
         console.log(
           "[MULTICALL] session_ended_cleanup keep_ringtone_alive — unanswered inbound fork end, leaving native ringtone to authoritative stop paths",
@@ -836,6 +916,10 @@ export class JsSipClient implements SipClient {
         ICM.stop();
         audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
+        // No call remains — release the prewarmed mic if still held. Skipped
+        // while keepRingtoneAlive (unanswered inbound fork cancel during an
+        // active ring), so the prewarm survives for the eventual answer.
+        this.releasePrewarmedMedia("session_failed");
       } else if (keepRingtoneAlive) {
         console.log(
           "[MULTICALL] session_failed_cleanup keep_ringtone_alive — unanswered inbound fork cancel, leaving native ringtone to authoritative stop paths",
@@ -1478,7 +1562,7 @@ export class JsSipClient implements SipClient {
     const age = Date.now() - ((newer as any)._inviteArrivedAt || Date.now());
     console.warn('[CALL_NATIVE] ghost_retry_answer — answering newer session, age(ms)=' + age);
     try {
-      newer.answer({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
+      newer.answer(this.buildAnswerOptions());
     } catch (err: any) {
       console.error('[CALL_NATIVE] ghost_retry_answer failed:', err?.message || err);
       // If the synchronous answer throws, the newer session will fire 'failed'
@@ -1707,6 +1791,15 @@ export class JsSipClient implements SipClient {
   }
 
   async unregister() {
+    // Answer-window guard: never tear down the UA while an inbound INVITE is
+    // live or just arrived. logout_teardown can fire spuriously on a cold
+    // wake-boot (auth token still loading), and that must not abandon the
+    // INVITE the user is about to answer. A genuine logout happens with no
+    // incoming call, so this does not block real sign-outs.
+    if (this.ua && this.inInviteAnswerWindow()) {
+      console.log('[SIP] unregister: suppressed — inbound INVITE window active (protecting UA)');
+      return;
+    }
     // Tag the UA as replaced so any async `disconnected` / `unregistered`
     // events fired by the closing WebSocket don't trigger the reconnect
     // orchestrator (via onSocketDisconnected). This is the user-initiated
@@ -1798,6 +1891,74 @@ export class JsSipClient implements SipClient {
     }
   }
 
+  /**
+   * Phase 1 / Option 2A — pre-acquire the inbound mic during the ring.
+   * Android-only, best-effort. On success the stream is later handed to JsSIP
+   * `answer()` (see {@link buildAnswerOptions}) so its internal getUserMedia is
+   * skipped, cutting the 200-OK → ICE-gathering delay. Any failure is swallowed:
+   * the normal answer path re-acquires the mic itself. Never grabs the mic
+   * while a call is live or when one is already warmed/in-flight.
+   */
+  prewarmInboundMedia(): void {
+    if (Platform.OS !== "android") return;
+    if (this.session) return; // only during a ring, never mid-call
+    if (this.prewarmedInboundStream || this.prewarmInFlight) return;
+    this.prewarmInFlight = true;
+    const startedAt = Date.now();
+    Promise.resolve()
+      .then(() => (mediaDevices as any).getUserMedia(VOICE_AUDIO_CONSTRAINTS))
+      .then((stream: MediaStream) => {
+        // A call may have started, or a release fired, while we were
+        // acquiring. Discard immediately so we never hold the mic outside
+        // an active ring.
+        if (this.session || !this.prewarmInFlight) {
+          try { stream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+          this.prewarmInFlight = false;
+          return;
+        }
+        this.prewarmedInboundStream = stream;
+        this.prewarmInFlight = false;
+        console.log("[SIP][prewarm] mic_acquired ms=" + (Date.now() - startedAt));
+      })
+      .catch((e: any) => {
+        this.prewarmInFlight = false;
+        console.warn("[SIP][prewarm] mic_acquire_failed: " + (e?.message || String(e)));
+      });
+  }
+
+  /**
+   * Release any prewarmed inbound mic stream and cancel an in-flight acquire.
+   * Idempotent and safe to call from any teardown path. JsSIP does NOT stop
+   * caller-supplied tracks itself, so this is the authoritative release for a
+   * prewarmed stream whether or not it was consumed by an answered call.
+   */
+  releasePrewarmedMedia(reason: string): void {
+    this.prewarmInFlight = false;
+    const stream = this.prewarmedInboundStream;
+    if (!stream) return;
+    this.prewarmedInboundStream = null;
+    try {
+      stream.getTracks().forEach((t) => t.stop());
+    } catch { /* ignore */ }
+    console.log("[SIP][prewarm] released reason=" + reason);
+  }
+
+  /**
+   * Build JsSIP `answer()` options, injecting the prewarmed mic stream when one
+   * is available so `answer()` skips its internal getUserMedia. We keep our
+   * reference to the stream so the session terminal handlers can release it.
+   * Falls back to internal getUserMedia (constraints only) when not prewarmed —
+   * this is what preserves the normal answer path if prewarm failed/was off.
+   */
+  private buildAnswerOptions(): { mediaConstraints: typeof VOICE_AUDIO_CONSTRAINTS; mediaStream?: MediaStream } {
+    const stream = this.prewarmedInboundStream;
+    if (stream) {
+      console.log("[SIP][prewarm] answer_using_prewarmed_stream");
+      return { mediaConstraints: VOICE_AUDIO_CONSTRAINTS, mediaStream: stream };
+    }
+    return { mediaConstraints: VOICE_AUDIO_CONSTRAINTS };
+  }
+
   async answer() {
     stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on answer
     ICM.start("audio");
@@ -1806,7 +1967,7 @@ export class JsSipClient implements SipClient {
     // Apply the right route immediately (BT if available, else earpiece)
     // — the previous unconditional `routeToEarpiece` ignored Bluetooth.
     setTimeout(() => audioRouteManager.noteCallConnected(), 150);
-    this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
+    this.session?.answer?.(this.buildAnswerOptions());
   }
 
   async waitForIncomingInvite(
@@ -2001,7 +2162,7 @@ export class JsSipClient implements SipClient {
           markCallLatency(inviteId ?? sid, "SIP_ANSWER_INVOKED", {
             sinceAnswerStartMs: answerInvokedAt - answerStartAt,
           });
-          session.answer({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
+          session.answer(this.buildAnswerOptions());
           const answerReturnedAt = Date.now();
           markCallLatency(inviteId ?? sid, "SIP_ANSWER_RETURNED", {
             answerInternalMs: answerReturnedAt - answerInvokedAt,
@@ -2092,6 +2253,7 @@ export class JsSipClient implements SipClient {
     // Also cancel any in-flight ghost poll — once the user has hung up we
     // do not want to auto-answer anything for this dialog's recovery.
     this.clearGhostPoll();
+    this.releasePrewarmedMedia("hangup");
     stopAllTelephonyAudio().catch(() => undefined);
     this.stopLivePing();
     await this.collectAndSubmitQualityReport("user_hangup").catch(() => {});

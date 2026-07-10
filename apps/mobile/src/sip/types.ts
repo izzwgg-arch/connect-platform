@@ -152,6 +152,17 @@ export type SipClient = {
   ) => Promise<boolean>;
   rejectIncoming: (match?: SipMatch) => Promise<boolean>;
   hangup: () => Promise<void>;
+  /**
+   * Android-only inbound-answer latency optimization (Phase 1 / Option 2A).
+   * Pre-acquire the mic MediaStream during the incoming ring so JsSIP's
+   * `answer()` can skip its internal getUserMedia (the bulk of the
+   * 200-OK → ICE-gathering delay). Best-effort: any failure is swallowed and
+   * the normal answer path (internal getUserMedia) still works. No-op off
+   * Android. Idempotent while a stream is already warmed/in-flight.
+   */
+  prewarmInboundMedia: () => void;
+  /** Release any prewarmed inbound mic stream. Idempotent; safe to call any time. */
+  releasePrewarmedMedia: (reason: string) => void;
   setMute: (mute: boolean) => void;
   setSpeaker: (speakerOn: boolean) => void;
   hold: () => void;
@@ -181,4 +192,8 @@ export type SipClient = {
   getSessionState: (sessionId: string) => SipSessionState | null;
   /** Switch the "active pointer" so legacy methods (hold/hangup/setMute) target this session. */
   setActiveSession: (sessionId: string) => boolean;
+  /** True iff a session with this id currently exists and is not ended. */
+  isSessionAlive: (sessionId: string) => boolean;
+  /** Blind-transfer a specific session to the given target (SIP REFER). */
+  transferSession: (sessionId: string, target: string) => boolean;
 };

@@ -20,7 +20,7 @@
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { API_BASE } from "../api/client";
 
-const PING_INTERVAL_MS = 15_000; // re-ping well within the server's 30s TTL
+const PING_INTERVAL_MS = 4_000; // re-ping well within the server's short TTL (~10s)
 
 type Opts = {
   /** Current auth JWT, or null/undefined if not signed in yet. */

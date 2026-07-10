@@ -46,6 +46,22 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   override fun initialize() {
     super.initialize()
     lastReactContext = WeakReference(reactApplicationContext)
+    // [RUNTIME_PROOF / Step 0] How many ReactContexts get initialized in this OS
+    // process. EXACTLY ONE across a full wake→answer cycle proves single-runtime;
+    // a second init here == the 2026-06-19 duplicate-runtime regression.
+    try {
+      val n = reactContextInitCount.incrementAndGet()
+      val pid = android.os.Process.myPid()
+      val ctxId = System.identityHashCode(reactApplicationContext)
+      val catalystId = try {
+        System.identityHashCode(reactApplicationContext.catalystInstance)
+      } catch (_: Throwable) {
+        0
+      }
+      Log.i(TAG, "[RUNTIME_PROOF] react_context_init count=$n pid=$pid reactCtx=$ctxId catalyst=$catalystId")
+    } catch (t: Throwable) {
+      Log.w(TAG, "[RUNTIME_PROOF] react_context_init log failed: ${t.message}")
+    }
     // Telecom events that fired while the React instance was still booting
     // are buffered by TelecomBridge — flush them now that JS is alive.
     try {
@@ -95,6 +111,8 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
 
   companion object {
     private const val TAG = "IncomingCallUiModule"
+    /** [RUNTIME_PROOF] Number of ReactContexts initialized in this OS process. */
+    private val reactContextInitCount = java.util.concurrent.atomic.AtomicInteger(0)
     private const val EVENT_INCOMING_CALL_FOREGROUND = "IncomingCall.ForegroundInvite"
     /**
      * Push-wake (Option 2) event. Fired by IncomingCallFirebaseService when an
@@ -175,22 +193,110 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
      */
     @JvmStatic
     fun emitSipWakeRegister(payload: WritableMap) {
+      // Extract the payload into a plain holder FIRST so that, whether we emit
+      // now or buffer for later, we never re-use a WritableMap that the bridge
+      // may have already consumed.
+      val pending = toPendingWake(payload)
       val ctx = lastReactContext?.get()
-      if (ctx == null) {
-        Log.w(TAG, "emitSipWakeRegister: no ReactApplicationContext cached yet — wake event dropped (JS not yet booted)")
+      val live = ctx != null && (try { ctx.hasActiveReactInstance() } catch (_: Throwable) { false })
+      if (live) {
+        try {
+          ctx!!.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(EVENT_SIP_WAKE_REGISTER, buildWakeMap(pending))
+          Log.i(TAG, "emitSipWakeRegister: dispatched $EVENT_SIP_WAKE_REGISTER to JS pbxCallId=${pending.pbxCallId}")
+          return
+        } catch (t: Throwable) {
+          Log.w(TAG, "emitSipWakeRegister emit failed, buffering instead: ${t.message}")
+        }
+      }
+      // React is not (yet) running, or the live emit threw: buffer the wake so
+      // it is NEVER dropped. The freshly-booted JS runtime pulls it via
+      // drainPendingWake() the instant its module-scope listener attaches
+      // (see src/notifications/sipWakeRegistrar.ts).
+      bufferWake(pending)
+    }
+
+    /**
+     * Single-slot native wake buffer (Layer 3). Holds the most recent
+     * INCOMING_CALL_WAKE payload that arrived while no live React context
+     * existed, so a killed/swiped app boot does not lose it. Newest replaces
+     * oldest; a duplicate pbxCallId is ignored so the same call can never be
+     * buffered (and therefore handled) twice.
+     */
+    private data class PendingWake(
+      val pbxCallId: String,
+      val toExtension: String,
+      val fromNumber: String,
+      val fromDisplay: String,
+      val tenantId: String,
+      val wakeRequestedAt: String,
+      val receivedAtMs: Double,
+      val appState: String,
+      val bufferedAtMs: Long,
+    )
+
+    @JvmStatic
+    @Volatile
+    private var pendingWake: PendingWake? = null
+
+    private fun toPendingWake(payload: com.facebook.react.bridge.ReadableMap): PendingWake {
+      fun s(key: String): String =
+        if (payload.hasKey(key) && !payload.isNull(key)) (payload.getString(key) ?: "") else ""
+      val recv = if (payload.hasKey("receivedAtMs") && !payload.isNull("receivedAtMs")) {
+        try { payload.getDouble("receivedAtMs") } catch (_: Throwable) { System.currentTimeMillis().toDouble() }
+      } else {
+        System.currentTimeMillis().toDouble()
+      }
+      return PendingWake(
+        pbxCallId = s("pbxCallId"),
+        toExtension = s("toExtension"),
+        fromNumber = s("fromNumber"),
+        fromDisplay = s("fromDisplay"),
+        tenantId = s("tenantId"),
+        wakeRequestedAt = s("wakeRequestedAt"),
+        receivedAtMs = recv,
+        appState = s("appState"),
+        bufferedAtMs = System.currentTimeMillis(),
+      )
+    }
+
+    private fun buildWakeMap(p: PendingWake): WritableMap {
+      val m = Arguments.createMap()
+      m.putString("pbxCallId", p.pbxCallId)
+      m.putString("toExtension", p.toExtension)
+      m.putString("fromNumber", p.fromNumber)
+      m.putString("fromDisplay", p.fromDisplay)
+      m.putString("tenantId", p.tenantId)
+      m.putString("wakeRequestedAt", p.wakeRequestedAt)
+      m.putDouble("receivedAtMs", p.receivedAtMs)
+      m.putString("appState", p.appState)
+      m.putBoolean("buffered", true)
+      return m
+    }
+
+    @JvmStatic
+    private fun bufferWake(pending: PendingWake) {
+      val existing = pendingWake
+      if (existing != null && existing.pbxCallId == pending.pbxCallId) {
+        Log.i(TAG, "bufferWake: duplicate pbxCallId=${pending.pbxCallId} already buffered — ignoring")
         return
       }
-      if (!ctx.hasActiveReactInstance()) {
-        Log.w(TAG, "emitSipWakeRegister: ReactContext has no active instance — wake event dropped (JS booting?)")
-        return
-      }
-      try {
-        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-          .emit(EVENT_SIP_WAKE_REGISTER, payload)
-        Log.i(TAG, "emitSipWakeRegister: dispatched $EVENT_SIP_WAKE_REGISTER to JS")
-      } catch (t: Throwable) {
-        Log.w(TAG, "emitSipWakeRegister failed: ${t.message}")
-      }
+      pendingWake = pending
+      Log.i(TAG, "bufferWake: WAKE_BUFFERED pbxCallId=${pending.pbxCallId} (React not ready; will flush on JS drain)")
+    }
+
+    /**
+     * Consume the buffered wake (if any) exactly once and clear it. Called by
+     * the JS module-scope registrar the moment it attaches, so a wake that was
+     * buffered before JS existed is delivered on cold/killed boot. Returns null
+     * when nothing is buffered.
+     */
+    @JvmStatic
+    fun consumePendingWake(): WritableMap? {
+      val p = pendingWake ?: return null
+      pendingWake = null
+      Log.i(TAG, "consumePendingWake: WAKE_FLUSHED pbxCallId=${p.pbxCallId} (delivering to JS)")
+      return buildWakeMap(p)
     }
 
     /**
@@ -331,6 +437,23 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   fun logLatency(line: String?) {
     if (line.isNullOrEmpty()) return
     Log.i("CALL_LATENCY_NATIVE", line)
+  }
+
+  /**
+   * Layer 3 bridge — pull the single buffered INCOMING_CALL_WAKE payload (if
+   * any) that arrived while no live React context existed. The JS module-scope
+   * registrar (src/notifications/sipWakeRegistrar.ts) calls this the instant it
+   * attaches on a cold/killed boot so the wake is delivered without an Activity
+   * and without a HeadlessJS task. Resolves null when nothing is buffered.
+   * Idempotent: the buffer is cleared on consume, so a second call returns null.
+   */
+  @ReactMethod
+  fun drainPendingWake(promise: Promise) {
+    try {
+      promise.resolve(consumePendingWake())
+    } catch (t: Throwable) {
+      promise.reject("drain_pending_wake_failed", t)
+    }
   }
 
   /**
@@ -988,6 +1111,22 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     } catch (t: Throwable) {
       Log.w(TAG, "canUseFullScreenIntent failed: ${t.message}")
       promise.resolve(true)
+    }
+  }
+
+  /**
+   * Drain (return + clear) the DND-suppressed missed calls the native FCM
+   * service recorded while the app was backgrounded/killed. Returns a JSON
+   * array string; JS parses it and appends each entry to local call history.
+   */
+  @ReactMethod
+  fun drainDndMissedCalls(promise: Promise) {
+    try {
+      val json = IncomingCallFirebaseService.drainDndMissedCalls(reactApplicationContext)
+      promise.resolve(json)
+    } catch (t: Throwable) {
+      Log.w(TAG, "drainDndMissedCalls failed: ${t.message}")
+      promise.resolve("[]")
     }
   }
 

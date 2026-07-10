@@ -16,7 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { playDtmfTone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
+import { playCallEndTone, playDtmfTone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
 import { useSip } from '../../context/SipContext';
 import { useIncomingNotifications } from '../../context/NotificationsContext';
 import { useCallSessions } from '../../context/CallSessionManager';
@@ -353,6 +353,10 @@ export function ActiveCallScreen() {
 
   const handleHangup = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    // Subtle Connect "call ended" cue. Fire-and-forget so it never delays the
+    // actual hangup; placed here so it plays on every hangup path (the branch
+    // below early-returns for multi-call).
+    playCallEndTone();
     if (Platform.OS === 'android') {
       clearAndroidLockScreenCallPresentation();
     }
@@ -491,9 +495,13 @@ export function ActiveCallScreen() {
           {statusLabel}
         </Text>
 
-        {/* Timer — only shown when connected */}
+        {/* Timer — only shown when connected. Anchored to the session's
+            answeredAt wall-clock timestamp (not a local counter) so leaving
+            and returning to this screen (backgrounding, navigating away)
+            never resets it back to zero. */}
         <CallTimer
           running={isConnected && !sip.onHold}
+          connectedAt={primarySession?.answeredAt ?? null}
           style={{ marginTop: 6, opacity: isConnected ? 1 : 0 }}
         />
 

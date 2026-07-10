@@ -27,6 +27,7 @@ import { OngoingCallBanner } from '../components/call/OngoingCallBanner';
 import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 import { useFullScreenCallPermissionPrompt } from '../hooks/useFullScreenCallPermissionPrompt';
 import { useBatteryOptimizationPrompt } from '../hooks/useBatteryOptimizationPrompt';
+import { useDndMissedCallDrain } from '../notifications/dndMissedCalls';
 
 function hasActiveOrPendingCall(
   callState: CallState,
@@ -84,6 +85,9 @@ function TabsWrapper() {
   //    background and calls keep ringing on aggressive OEMs.
   useFullScreenCallPermissionPrompt(true);
   useBatteryOptimizationPrompt(true);
+  // Fold DND-suppressed missed calls (recorded natively while the app was
+  // backgrounded/killed) into local call history so they appear in Recent.
+  useDndMissedCallDrain();
   // Multi-call guard: if another call is already active, new inbound INVITEs
   // are routed to the CallWaitingBanner inside ActiveCallScreen instead of
   // the full-screen IncomingCallScreen.

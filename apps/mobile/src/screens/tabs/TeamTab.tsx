@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, PanResponder, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, PanResponder, Platform, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -276,8 +276,10 @@ export function TeamTab() {
         <FlatList
           data={visible}
           keyExtractor={(item) => item.id}
-          bounces={false}
-          alwaysBounceVertical={false}
+          // iOS needs bounce enabled for pull-to-refresh; Android unchanged
+          // (see IOS_WORK_ANDROID_GUARDRAILS.md).
+          bounces={Platform.OS === 'ios'}
+          alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} />}
           contentContainerStyle={styles.list}

@@ -218,6 +218,28 @@ class AudioRouteManager {
     return this.currentRoute;
   }
 
+  /**
+   * Re-assert the currently-selected route to the native layer WITHOUT
+   * recomputing it.
+   *
+   * Why: on iOS every sound shares ONE AVAudioSession. When expo-av plays a
+   * short clip (e.g. the call-waiting beep) it re-activates that session and
+   * drops InCallManager's `setForceSpeakerphoneOn(true)` override — so the beep
+   * (and briefly the call) fall back to the earpiece even though the user is on
+   * speaker. Calling this right after the clip starts restores the speaker
+   * route so the clip and the call both come out where the user expects.
+   *
+   * No-op when no call is active. Only re-touches native routing when the
+   * current route is speaker (the only route expo-av actually disturbs on iOS);
+   * this avoids gratuitously poking Bluetooth/earpiece routing.
+   */
+  reassertRoute(reason: string): void {
+    if (!this.callActive) return;
+    if (Platform.OS === 'ios' && this.currentRoute !== 'speaker') return;
+    log('reassert', { route: this.currentRoute, reason });
+    this.applyRouteToNative(this.currentRoute);
+  }
+
   getUserOverride(): AudioRoute | null {
     return this.userOverride;
   }

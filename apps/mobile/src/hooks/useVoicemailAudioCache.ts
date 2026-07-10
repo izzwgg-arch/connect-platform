@@ -29,6 +29,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system";
 import { Audio } from "expo-av";
 import { buildVoicemailPreloadUri, buildVoicemailStreamUri } from "../api/client";
@@ -201,7 +202,13 @@ export function useVoicemailAudioCache(
       errorMetaRef.current.delete(vmId);
     };
 
-    const localUri = `${FileSystem.cacheDirectory ?? ""}vm-audio-${vmId}.raw`;
+    // iOS gets a distinct filename (and, below, a different source URL) from
+    // Android. The PBX's native raw/WAV49 recording — which Android's
+    // MediaPlayer decodes fine — fails on iOS's AVFoundation with
+    // "media format is not supported" (AVFoundationErrorDomain -11828). Using
+    // a different filename also guarantees a stale pre-fix `.raw` cache file
+    // already on a test device is never mistaken for valid iOS audio.
+    const localUri = `${FileSystem.cacheDirectory ?? ""}vm-audio-${vmId}${Platform.OS === "ios" ? ".mp3" : ".raw"}`;
 
     // Check if the file is already on disk from a previous session.
     // Require at least 512 bytes to guard against stale zero-byte / partial
@@ -249,15 +256,24 @@ export function useVoicemailAudioCache(
     };
 
     try {
-      // 1) Fast path: raw audio (skips the server-side ffmpeg transcode).
-      let sizeBytes = await attempt(buildVoicemailPreloadUri(tok, vmId));
+      // 1) Fast path: raw audio (skips the server-side ffmpeg transcode) —
+      //    Android only. Android's MediaPlayer decodes the PBX's native
+      //    raw/WAV49 recording directly. iOS's AVFoundation cannot (observed:
+      //    AVFoundationErrorDomain -11828 "media format is not supported" on
+      //    every cached-play attempt), so on iOS we go straight to the
+      //    transcoded MP3 stream below — the only format guaranteed to decode
+      //    there — instead of wasting a download on a file that can never play.
+      let sizeBytes = Platform.OS === "ios"
+        ? await attempt(buildVoicemailStreamUri(tok, vmId))
+        : await attempt(buildVoicemailPreloadUri(tok, vmId));
       if (sizeBytes === -2) return; // cancelled
 
-      // 2) If raw produced a tiny / non-audio body (recent voicemail whose raw
+      // 2) If that produced a tiny / non-audio body (recent voicemail whose
       //    file isn't ready), it would fail to decode and force a slow remote
       //    stream at play time. Re-fetch via the transcoded stream URL, which
       //    always returns real playable audio, so Play stays instant.
-      if (sizeBytes < MIN_AUDIO_BYTES) {
+      //    (No-op on iOS, which already used the transcoded URL above.)
+      if (sizeBytes < MIN_AUDIO_BYTES && Platform.OS !== "ios") {
         if (sizeBytes >= 0) {
           await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => undefined);
           console.warn(`[VOICEMAIL_AUDIO] preload_raw_too_small vmId=${vmId} sizeBytes=${sizeBytes} retrying=transcoded`);

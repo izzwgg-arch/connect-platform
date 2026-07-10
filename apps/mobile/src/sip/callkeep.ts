@@ -1,7 +1,39 @@
-import { NativeModules, Platform } from "react-native";
+import { AppState, NativeModules, Platform } from "react-native";
 import RNCallKeep from "react-native-callkeep";
 import { logCallFlow } from "../debug/callFlowDebug";
 import { deterministicCallKitUuid } from "./callkitUuid";
+import { getMobileIncomingRingtone, type MobileRingtoneId } from "../audio/ringtonePreferences";
+import { appendIosRingLog } from "../diagnostics/iosRingLog";
+
+// iOS ONLY: filename of the silent WAV bundled by
+// plugins/withIosSilentRingtone.js. Must stay in sync with
+// SILENT_RINGTONE_FILENAME there. Handing this to CallKit as its own
+// `ringtoneSound` mutes CallKit's native ring so the JS-managed "Connect
+// Default" ringtone (src/audio/telephonyAudio.ts) is the only audible sound,
+// without skipping the native CallKit report (still Apple-compliant) and
+// without touching the SIP/invite/answer pipeline. Unused on Android.
+const SILENT_RINGTONE_FILENAME = "connect-silent-ringtone.wav";
+
+// iOS ONLY: the REAL Connect ringtone as a CallKit-playable bundled sound file
+// (see plugins/withIosConnectRingtone.js). CallKit can only play a bundled file
+// - not JS - so this is what rings a backgrounded / force-quit iPhone with the
+// Connect ringtone. RNCallKeep persists this filename into NSUserDefaults on
+// setup() and reads it back at cold start (initCallKitProvider), so the choice
+// survives a fully killed launch with no JS involved.
+const CONNECT_RINGTONE_FILENAME = "connect-default-ringtone.caf";
+
+/** iOS ONLY: `ios.ringtoneSound` for the given preference — undefined for
+ *  "classic" so CallKit keeps using the phone's real system ringtone
+ *  (unchanged behavior); the silent file for "connect-default" so only the
+ *  JS ringtone is heard. Android callers never read this value. */
+function iosRingtoneSoundFor(preference: MobileRingtoneId): string | undefined {
+  // The silent file is intentionally retained (still bundled by
+  // plugins/withIosSilentRingtone.js) for reference / future foreground
+  // suppression use. The background/killed ring MUST be the real .caf because a
+  // warm-backgrounded device cannot play JS audio - CallKit itself must ring.
+  void SILENT_RINGTONE_FILENAME;
+  return preference === "connect-default" ? CONNECT_RINGTONE_FILENAME : undefined;
+}
 
 // ── iOS CallKit identity mapping ─────────────────────────────────────────────
 // CallKit (iOS) requires a valid RFC-4122 UUID for every call. The Connect
@@ -113,10 +145,16 @@ let configured = false;
 
 export async function setupNativeCalling() {
   if (configured) return;
+  // iOS ONLY: read the user's ringtone preference so the very first CallKit
+  // setup already has the right ringtoneSound. Android ignores this value
+  // (RNCallKeep only reads ios.ringtoneSound on iOS), so this is a no-op read
+  // there beyond the AsyncStorage lookup.
+  const preference = await getMobileIncomingRingtone().catch(() => "connect-default" as MobileRingtoneId);
   const options: any = {
     ios: {
       appName: "Connect Communications",
-      supportsVideo: false
+      supportsVideo: false,
+      ringtoneSound: iosRingtoneSoundFor(preference),
     },
     android: {
       alertTitle: "Phone account permission",
@@ -131,6 +169,28 @@ export async function setupNativeCalling() {
     configured = true;
   } catch {
     configured = false;
+  }
+}
+
+/**
+ * iOS ONLY: re-configure CallKit's own ringtone sound after the user changes
+ * the "Incoming Ringtone" setting mid-session (Settings screen calls this
+ * right after setMobileIncomingRingtone). Safe to call repeatedly — it just
+ * re-applies the CXProviderConfiguration. No-op on Android (RNCallKeep.setup
+ * is harmless to re-call there too, but nothing reads ios.ringtoneSound).
+ */
+export async function applyIosRingtonePreference(preference: MobileRingtoneId): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  try {
+    await RNCallKeep.setup({
+      ios: {
+        appName: "Connect Communications",
+        supportsVideo: false,
+        ringtoneSound: iosRingtoneSoundFor(preference),
+      },
+    } as any);
+  } catch (e) {
+    console.warn("[CallKeep] applyIosRingtonePreference failed:", String(e));
   }
 }
 
@@ -154,6 +214,7 @@ export function showIncomingNativeCall(callId: string, from: string) {
     extra: { from, source: "showIncomingNativeCall", uuid },
   });
   try {
+    void appendIosRingLog("IOS_JS_CALLKIT_REPORT", { callId, uuid, appState: AppState.currentState });
     RNCallKeep.displayIncomingCall(uuid, from, from, "number", false);
     console.log("[CALL_INCOMING] showIncomingNativeCall: displayIncomingCall returned");
     logCallFlow("CALLKEEP_DISPLAY_DONE", {

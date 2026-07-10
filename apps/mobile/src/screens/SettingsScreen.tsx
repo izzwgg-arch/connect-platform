@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +26,7 @@ import {
   setMobileIncomingRingtone,
   type MobileRingtoneId,
 } from '../audio/ringtonePreferences';
+import { applyIosRingtonePreference } from '../sip/callkeep';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
@@ -107,18 +109,19 @@ function SectionCard({ children }: { children: React.ReactNode }) {
 }
 
 export function SettingsScreen() {
-  const { colors, mode, setMode, isDark } = useTheme();
+  const { colors, mode, setMode } = useTheme();
   const { token, logout } = useAuth();
   const sip = useSip();
   const {
     callReadiness,
-    openBatteryOptimizationSettings,
+    requestBatteryOptimizationExclusion,
     requestNotificationPermission,
+    requestMicrophonePermission,
+    refreshDeviceReadiness,
     retryPushTokenRegistration,
   } = useIncomingNotifications();
 
   const [retryingPushToken, setRetryingPushToken] = useState(false);
-  const [batterySettingsOpened, setBatterySettingsOpened] = useState(false);
   const [incomingRingtone, setIncomingRingtoneId] =
     useState<MobileRingtoneId>(DEFAULT_MOBILE_RINGTONE_ID);
 
@@ -131,11 +134,24 @@ export function SettingsScreen() {
     }
   };
 
-  const handleOpenBatterySettings = async () => {
-    setBatterySettingsOpened(false);
-    await openBatteryOptimizationSettings();
-    // App returned from settings — show brief confirmation
-    setBatterySettingsOpened(true);
+  const handleFixBatteryOptimization = async () => {
+    // Fires the system Doze-exemption "Allow" dialog directly, then re-reads
+    // the real status. No fake "opened" flag — the row reflects the OS truth.
+    await requestBatteryOptimizationExclusion();
+  };
+
+  const handleRequestMicrophone = async () => {
+    await requestMicrophonePermission();
+  };
+
+  // Deep-links into this app's own page in the OS Settings app (iOS: the
+  // Connect page under Settings, with its "Notifications" row for sound /
+  // banner / badge controls scoped to just this app; Android: the app-info
+  // notification settings screen). This is the only App Store–safe way to
+  // expose per-app notification sound controls — third-party apps cannot
+  // present the system sound picker themselves.
+  const handleOpenNotificationSettings = () => {
+    Linking.openSettings().catch(() => {});
   };
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
@@ -144,10 +160,13 @@ export function SettingsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Always re-read the live OS permission/battery state on focus so the
+      // rows are never stale (independent of auth).
+      refreshDeviceReadiness().catch(() => {});
       if (!token) return;
       getVoiceExtension(token).then(setVoice).catch(() => {});
       getMobileIncomingRingtone().then(setIncomingRingtoneId).catch(() => {});
-    }, [token])
+    }, [token, refreshDeviceReadiness])
   );
 
   const handleLogout = () => {
@@ -168,15 +187,10 @@ export function SettingsScreen() {
     nav.navigate('QrProvision');
   };
 
-  const themeLabel = mode === 'dark' ? 'Dark' : mode === 'light' ? 'Light' : 'System';
+  const themeLabel = mode === 'dark' ? 'Dark' : 'Light';
 
   const cycleTheme = () => {
-    const next: Record<string, 'dark' | 'light' | 'system'> = {
-      dark: 'light',
-      light: 'system',
-      system: 'dark',
-    };
-    setMode(next[mode] ?? 'dark');
+    setMode(mode === 'dark' ? 'light' : 'dark');
   };
 
   const handleCycleIncomingRingtone = async () => {
@@ -185,6 +199,10 @@ export function SettingsScreen() {
     const nextId = options[(currentIndex + 1 + options.length) % options.length];
     await setMobileIncomingRingtone(nextId);
     setIncomingRingtoneId(nextId);
+    // iOS ONLY: re-apply CallKit's ringtoneSound immediately so the new
+    // preference takes effect on the very next call, not just after an app
+    // restart. No-op on Android.
+    void applyIosRingtonePreference(nextId);
   };
 
   return (
@@ -265,8 +283,9 @@ export function SettingsScreen() {
           <SettingRow
             icon="notifications-outline"
             label="Notifications"
+            subtitle="Change notification sounds for this app"
             iconColor={colors.warning}
-            onPress={() => {}}
+            onPress={handleOpenNotificationSettings}
           />
         </SectionCard>
 
@@ -296,34 +315,6 @@ export function SettingsScreen() {
         {Platform.OS === 'android' && (
           <>
             <SectionHeader title="Incoming Call Readiness" />
-
-            {/* Overall status banner */}
-            <View style={[
-              styles.readinessBanner,
-              {
-                backgroundColor: callReadiness.isFullyReady
-                  ? (isDark ? 'rgba(34,197,94,0.12)' : 'rgba(34,197,94,0.08)')
-                  : (isDark ? 'rgba(234,179,8,0.12)' : 'rgba(234,179,8,0.08)'),
-                borderColor: callReadiness.isFullyReady
-                  ? 'rgba(34,197,94,0.3)'
-                  : 'rgba(234,179,8,0.3)',
-              },
-            ]}>
-              <Ionicons
-                name={callReadiness.isFullyReady ? 'checkmark-circle' : 'warning'}
-                size={20}
-                color={callReadiness.isFullyReady ? colors.success : colors.warning}
-              />
-              <Text style={[typography.body, {
-                color: callReadiness.isFullyReady ? colors.success : colors.warning,
-                marginLeft: 10,
-                flex: 1,
-              }]}>
-                {callReadiness.isFullyReady
-                  ? 'Ready — calls will ring even when app is closed'
-                  : 'Action needed — incoming calls may not ring reliably'}
-              </Text>
-            </View>
 
             <SectionCard>
               {/* 1. Notification permission */}
@@ -415,31 +406,86 @@ export function SettingsScreen() {
                 );
               })()}
 
-              {/* 3. Battery optimization */}
-              <SettingRow
-                icon="battery-half-outline"
-                label="Battery Optimization"
-                subtitle={
-                  batterySettingsOpened
-                    ? "Settings opened — find Connect and set to 'Don\'t optimize'"
-                    : "Tap to open battery optimization settings"
-                }
-                iconColor={batterySettingsOpened ? colors.success : colors.warning}
-                onPress={handleOpenBatterySettings}
-                rightElement={
-                  <View style={[styles.statusChip, {
-                    backgroundColor: batterySettingsOpened ? colors.successMuted : colors.warningMuted,
-                  }]}>
-                    <Text style={[typography.labelSm, {
-                      color: batterySettingsOpened ? colors.success : colors.warning,
-                    }]}>
-                      {batterySettingsOpened ? '↩ Back' : '⚠ Check'}
-                    </Text>
-                  </View>
-                }
-              />
+              {/* 3. Battery optimization — REAL OS exemption state */}
+              {(() => {
+                const ignored = callReadiness.batteryOptimizationIgnored;
+                const isExempt = ignored === true;
+                const isOptimized = ignored === false;
+                const subtitle = isExempt
+                  ? 'Allowed — calls ring even in the background'
+                  : isOptimized
+                    ? 'Optimized — tap to allow background running'
+                    : 'Tap to allow Connect to run in the background';
+                const statusColor = isExempt
+                  ? colors.success
+                  : isOptimized
+                    ? colors.danger
+                    : colors.warning;
+                const chipBg = isExempt
+                  ? colors.successMuted
+                  : isOptimized
+                    ? colors.dangerMuted
+                    : colors.warningMuted;
+                const chipLabel = isExempt ? '✓ Allowed' : isOptimized ? '✗ Optimized' : '⚠ Check';
+                return (
+                  <SettingRow
+                    icon="battery-half-outline"
+                    label="Battery Optimization"
+                    subtitle={subtitle}
+                    iconColor={statusColor}
+                    // Only actionable when not already exempt.
+                    onPress={isExempt ? undefined : handleFixBatteryOptimization}
+                    rightElement={
+                      <View style={[styles.statusChip, { backgroundColor: chipBg }]}>
+                        <Text style={[typography.labelSm, { color: statusColor }]}>
+                          {chipLabel}
+                        </Text>
+                      </View>
+                    }
+                  />
+                );
+              })()}
 
-              {/* 4. SIP registration */}
+              {/* 4. Microphone permission — REAL RECORD_AUDIO grant state */}
+              {(() => {
+                const mic = callReadiness.microphonePermission;
+                const granted = mic === 'granted';
+                const denied = mic === 'denied';
+                const statusColor = granted
+                  ? colors.success
+                  : denied
+                    ? colors.danger
+                    : colors.warning;
+                const chipBg = granted
+                  ? colors.successMuted
+                  : denied
+                    ? colors.dangerMuted
+                    : colors.warningMuted;
+                return (
+                  <SettingRow
+                    icon="mic-outline"
+                    label="Microphone"
+                    subtitle={
+                      granted
+                        ? 'Granted — you can be heard on calls'
+                        : denied
+                          ? 'Not granted — tap to allow microphone'
+                          : 'Tap to check microphone access'
+                    }
+                    iconColor={statusColor}
+                    onPress={granted ? undefined : handleRequestMicrophone}
+                    rightElement={
+                      <View style={[styles.statusChip, { backgroundColor: chipBg }]}>
+                        <Text style={[typography.labelSm, { color: statusColor }]}>
+                          {granted ? '✓ Granted' : denied ? '✗ Denied' : '⚠ Check'}
+                        </Text>
+                      </View>
+                    }
+                  />
+                );
+              })()}
+
+              {/* 5. SIP registration */}
               <SettingRow
                 icon="wifi-outline"
                 label="SIP Registration"
@@ -542,14 +588,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
-  },
-  readinessBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 8,
   },
 });

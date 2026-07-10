@@ -35,7 +35,7 @@ import { useAuth } from "./AuthContext";
 // (mqt_native_modules) when the user answered a call from the home
 // screen and the call-waiting path ran. Static import avoids the broken
 // dynamic-import helper entirely.
-import { playCallWaitingBeep } from "../audio/telephonyAudio";
+import { playCallWaitingBeep, startCallWaitingAlert, stopCallWaitingAlert } from "../audio/telephonyAudio";
 import {
   getActiveAndHeldInvites,
   holdCallInvite,
@@ -327,6 +327,24 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
   // Register the SIP event listener once on mount. Listener is a thin trampoline
   // that reads the current ref — this means the listener identity is stable
   // while still dispatching to fresh handlers on each render.
+  // Call-waiting alert lifecycle: repeating beep (+ first vibrate) while an
+  // active connected call has ANOTHER call ringing. Auto-stops the instant the
+  // waiting call is answered/declined/ends or the active call ends — declarative
+  // so a forever-beeping timer can never leak.
+  useEffect(() => {
+    const activeId = state.activeCallId;
+    const active = activeId ? state.callsById[activeId] : null;
+    const hasWaiting = state.ringingCallIds.some(
+      (id) => id !== activeId && state.callsById[id]?.state === "ringing_inbound",
+    );
+    if (active && active.state === "active" && hasWaiting) {
+      startCallWaitingAlert();
+    } else {
+      stopCallWaitingAlert();
+    }
+  }, [state]);
+  useEffect(() => () => stopCallWaitingAlert(), []);
+
   useEffect(() => {
     const unregister = sip.registerMultiCallListener({
       onSessionAdded: (info) => onSipSessionAddedRef.current(info),
@@ -448,6 +466,11 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         }
       }
 
+      // Capture the pre-existing active call BEFORE we add the new session, so
+      // the call-waiting beep below checks the call already in progress.
+      const cwPrevActiveId = stateRef.current.activeCallId;
+      const cwPrevActive = cwPrevActiveId ? stateRef.current.callsById[cwPrevActiveId] : null;
+
       mutate("onSipSessionAdded:" + info.sessionId, (prev) => {
         const callsById = { ...prev.callsById, [appId]: session };
         let ringingCallIds = prev.ringingCallIds;
@@ -463,6 +486,25 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         }
         return { ...prev, callsById, ringingCallIds, activeCallId };
       });
+
+      // Call-waiting beep (SIP path): a NEW inbound session arrived while another
+      // call is already active/connected. The push/notification path has its own
+      // beep in registerInboundInvite; foreground SIP-INVITE second calls come
+      // through HERE instead, so mirror it. Deduped/rate-limited inside the audio
+      // fn, so it can't double-fire with the invite-path beep.
+      if (
+        session.state === "ringing_inbound" &&
+        cwPrevActive &&
+        cwPrevActive.id !== appId &&
+        cwPrevActive.state === "active"
+      ) {
+        logMulti("MULTICALL", "call_waiting_beep_sip", { callId: appId });
+        try {
+          playCallWaitingBeep().catch(() => undefined);
+        } catch {
+          /* best-effort — never block session registration */
+        }
+      }
     },
     [mutate, sip, sweepStaleCallSessions],
   );
@@ -917,7 +959,7 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
       // ringtone owns the audio.
       if (snap.activeCallId) {
         const active = snap.callsById[snap.activeCallId];
-        if (active && active.state === "connected") {
+        if (active && active.state === "active") {
           logMulti("MULTICALL", "call_waiting_beep", { callId });
           try {
             playCallWaitingBeep().catch(() => undefined);

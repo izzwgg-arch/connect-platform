@@ -11,8 +11,10 @@
  */
 
 import { Audio } from "expo-av";
-import { NativeModules, Platform } from "react-native";
+import { AppState, NativeModules, Platform, Vibration } from "react-native";
 import { getMobileIncomingRingtone } from "./ringtonePreferences";
+import { appendIosRingLog } from "../diagnostics/iosRingLog";
+import { audioRouteManager } from "./audioRouteManager";
 
 /**
  * Stop the Android native incoming-call ringtone played by
@@ -110,6 +112,107 @@ function buildDualToneWav(
   return `data:audio/wav;base64,${b64}`;
 }
 
+// ─── Connect UI sound effects (hang-up / voice-note) ──────────────────────────
+//
+// A small, deliberately-matched family of short UI sounds synthesised with the
+// same warm timbre (fundamental + soft 2nd/3rd harmonics) and the same gentle
+// percussive attack/exponential-decay envelope, all drawn from a C-major
+// pentatonic palette so they feel like they belong together:
+//   • hang-up      → descending two-note (call ended)
+//   • v-note start → single soft tick (recording armed)
+//   • v-note sent  → ascending two-note (message away)
+// Fully PCM-synthesised — no bundled audio assets required.
+
+type SfxNote = { freq: number; ms: number };
+
+function buildToneSequenceWav(notes: SfxNote[], volume = 0.5): string {
+  const totalMs = notes.reduce((s, n) => s + n.ms, 0);
+  const numSamples = Math.floor((SAMPLE_RATE * totalMs) / 1000);
+  const dataSize = numSamples * 2;
+  const bufferSize = 44 + dataSize;
+  const buf = new ArrayBuffer(bufferSize);
+  const view = new DataView(buf);
+
+  // RIFF/WAVE header (mono, 16-bit PCM) — identical layout to buildDualToneWav.
+  view.setUint8(0, 0x52); view.setUint8(1, 0x49); view.setUint8(2, 0x46); view.setUint8(3, 0x46);
+  writeUInt32LE(view, 4, bufferSize - 8);
+  view.setUint8(8, 0x57); view.setUint8(9, 0x41); view.setUint8(10, 0x56); view.setUint8(11, 0x45);
+  view.setUint8(12, 0x66); view.setUint8(13, 0x6d); view.setUint8(14, 0x74); view.setUint8(15, 0x20);
+  writeUInt32LE(view, 16, 16);
+  writeUInt16LE(view, 20, 1);
+  writeUInt16LE(view, 22, 1);
+  writeUInt32LE(view, 24, SAMPLE_RATE);
+  writeUInt32LE(view, 28, SAMPLE_RATE * 2);
+  writeUInt16LE(view, 32, 2);
+  writeUInt16LE(view, 34, 16);
+  view.setUint8(36, 0x64); view.setUint8(37, 0x61); view.setUint8(38, 0x74); view.setUint8(39, 0x61);
+  writeUInt32LE(view, 40, dataSize);
+
+  const amp = 32767 * volume;
+  let cursor = 0;
+  for (const note of notes) {
+    const noteSamples = Math.floor((SAMPLE_RATE * note.ms) / 1000);
+    // Raised-cosine attack (~8ms, capped at 30% of the note) then exponential
+    // decay to the note's end — soft enough to avoid clicks at boundaries.
+    const attackLen = Math.min(Math.floor(SAMPLE_RATE * 0.008), Math.floor(noteSamples * 0.3)) || 1;
+    for (let j = 0; j < noteSamples; j++) {
+      const t = j / SAMPLE_RATE;
+      let env: number;
+      if (j < attackLen) {
+        env = 0.5 - 0.5 * Math.cos((Math.PI * j) / attackLen);
+      } else {
+        const p = (j - attackLen) / Math.max(1, noteSamples - attackLen);
+        env = Math.exp(-3.2 * p);
+      }
+      const w = 2 * Math.PI * note.freq * t;
+      const timbre =
+        Math.sin(w) + 0.3 * Math.sin(2 * w) + 0.12 * Math.sin(3 * w);
+      const sample = Math.round(env * amp * 0.6 * timbre);
+      view.setInt16(44 + (cursor + j) * 2, Math.max(-32768, Math.min(32767, sample)), true);
+    }
+    cursor += noteSamples;
+  }
+
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+let _callEndWav: string | null = null;
+let _vnoteStartWav: string | null = null;
+let _vnoteSentWav: string | null = null;
+
+/** Subtle descending two-note "call ended" cue (G4 → C4). */
+export function playCallEndTone(): void {
+  if (!_callEndWav) {
+    _callEndWav = buildToneSequenceWav([
+      { freq: 392.0, ms: 90 },
+      { freq: 261.63, ms: 170 },
+    ], 0.5);
+  }
+  playOnce(_callEndWav, 0.5).catch(() => undefined);
+}
+
+/** Soft single-note tick when a voice note starts recording (A5). */
+export function playVoiceNoteStartTone(): void {
+  if (!_vnoteStartWav) {
+    _vnoteStartWav = buildToneSequenceWav([{ freq: 880.0, ms: 95 }], 0.42);
+  }
+  playOnce(_vnoteStartWav, 0.5).catch(() => undefined);
+}
+
+/** Bright ascending two-note "sent" cue when a voice note is released (E5 → C6). */
+export function playVoiceNoteSentTone(): void {
+  if (!_vnoteSentWav) {
+    _vnoteSentWav = buildToneSequenceWav([
+      { freq: 659.25, ms: 85 },
+      { freq: 1046.5, ms: 150 },
+    ], 0.5);
+  }
+  playOnce(_vnoteSentWav, 0.6).catch(() => undefined);
+}
+
 // ─── DTMF frequency table ─────────────────────────────────────────────────────
 
 const DTMF_FREQS: Record<string, [number, number]> = {
@@ -166,8 +269,19 @@ function androidStartIcmRingback(): boolean {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const m = require("react-native-incall-manager").default;
-    m.start({ media: "audio", ringback: "_DTMF_" });
-    return true;
+    // IMPORTANT: the SIP dial path already called InCallManager.start("audio")
+    // to enter MODE_IN_COMMUNICATION. InCallManager guards start() against
+    // re-entry (once audioManagerActivated is true, a second start() — even one
+    // that passes a `ringback` option — is a no-op), so passing ringback to
+    // start() here never actually played a tone. Use the dedicated
+    // startRingback() API instead, which plays the ringback on the already-active
+    // voice-call stream (audible + background-safe). Falls through to the expo-av
+    // cadence only if the native method is unavailable.
+    if (typeof m.startRingback === "function") {
+      m.startRingback("_DTMF_");
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -391,9 +505,40 @@ export async function startRingtone() {
   const isSuperseded = () => myGen !== ringtoneGeneration;
   ringtoneStopped = false;
   const ringtonePreference = await getMobileIncomingRingtone();
+  void appendIosRingLog("IOS_STARTRINGTONE", { pref: ringtonePreference, appState: AppState.currentState });
   if (isSuperseded()) return;
 
+  // iOS "classic" = give the ringtone back to the iPhone: showIncomingNativeCall
+  // (CallKit displayIncomingCall/reportNewIncomingCall) already makes the OS
+  // play the user's own chosen iPhone ringtone the instant the native incoming
+  // call UI appears. Also playing our synthesized double-ring tone on top of
+  // that would layer two audible ringtones at once — the same "double
+  // ringtone" bug already fixed for Android's native MediaPlayer path (see
+  // IncomingCallScreen.tsx). So for "classic" on iOS we play nothing here and
+  // let CallKit's native ring be the only sound. "connect-default" still needs
+  // the JS layer below since CallKit has no bundled Connect sound to fall
+  // back to.
+  if (ringtonePreference === "classic" && Platform.OS === "ios") {
+    // Foreground: the in-app incoming-call screen is shown and the native
+    // CallKit report is suppressed, so JS must provide the audible ring - fall
+    // through to the synthesized standard double-ring below. Background /
+    // CallKit-driven (app not active): CallKit plays the phone's system ring
+    // itself, so do NOT layer a second ring here.
+    if (AppState.currentState !== "active") {
+      return;
+    }
+  }
+
   if (ringtonePreference === "connect-default") {
+    // iOS background/killed: CallKit plays the bundled connect-default-ringtone.caf
+    // natively (plugins/withIosConnectRingtone.js). Playing the JS ringtone too
+    // double-rings with CallKit (two copies of the Connect tone, out of phase).
+    // Only ring from JS when foreground-active, where the native CallKit ring is
+    // suppressed and JS is the sole ring. Foreground + Android unchanged.
+    if (Platform.OS === "ios" && AppState.currentState !== "active") {
+      void appendIosRingLog("IOS_STARTRINGTONE_SUPPRESSED_BG", { pref: ringtonePreference, appState: AppState.currentState });
+      return;
+    }
     const sound = await playLooping(CONNECT_DEFAULT_RINGTONE_SOURCE as any, 0.95);
     if (isSuperseded() || ringtoneStopped) {
       // A newer stopAll / startRingtone has already superseded us. Unload the
@@ -450,46 +595,65 @@ export function playDtmfTone(digit: string): void {
   playOnce(uri, 0.6).catch(() => undefined);
 }
 
-// Call-waiting beep: short, low-volume 440Hz tone played twice with a 150ms
-// gap. Mirrors the North American "Subscriber Alerting Signal (SAS)" cadence
-// — ~300ms total. Volume is deliberately soft so it's audible without
-// stepping on the active-call conversation. Safe to invoke while a SIP
-// session is active; it uses expo-av which mixes with the WebRTC audio path.
+// Call-waiting alert: while another call is ringing during an active call, a
+// single longer, loud HIGH beep repeats every ~3.5s. The FIRST beep also fires a
+// short vibrate; the repeats are beep-only. Bracketed by startCallWaitingAlert()
+// / stopCallWaitingAlert() (driven by CallSessionManager). Safe during a live
+// SIP call; expo-av mixes with the WebRTC audio path.
 let _callWaitingBeepWav: string | null = null;
 function getCallWaitingBeepWav(): string {
   if (!_callWaitingBeepWav) {
-    // Single tone at 440 Hz for 120ms at low-ish amplitude.
-    _callWaitingBeepWav = buildDualToneWav(440, 440, 120, 0.25);
+    // A longer, bright high beep (~180ms) — high pitch so it isn't bassy.
+    _callWaitingBeepWav = buildDualToneWav(1400, 1400, 180, 0.36);
   }
   return _callWaitingBeepWav;
 }
 
-let _callWaitingBeepInFlight = false;
-export async function playCallWaitingBeep(): Promise<void> {
-  if (_callWaitingBeepInFlight) return;
-  _callWaitingBeepInFlight = true;
-  console.log("[AUDIO] playCallWaitingBeep");
+async function playOneCallWaitingBeep(): Promise<void> {
   try {
     const uri = getCallWaitingBeepWav();
-    const first = await playOnce(uri, 0.5);
-    // Auto-unload after ~300ms (120ms tone + buffer)
+    const beep = await playOnce(uri, 0.72);
+    // iOS: expo-av just re-activated the shared AVAudioSession, which drops the
+    // in-call speaker override. Re-assert the call's route immediately (and once
+    // more mid-beep) so the beep actually comes out the speaker when the user is
+    // on speakerphone instead of the earpiece. No-op unless a call is on speaker.
+    try { audioRouteManager.reassertRoute("call_waiting_beep"); } catch { /* ignore */ }
+    setTimeout(() => {
+      try { audioRouteManager.reassertRoute("call_waiting_beep_mid"); } catch { /* ignore */ }
+    }, 40);
     setTimeout(async () => {
-      try { await first?.stopAsync(); } catch { /* ignore */ }
-      try { await first?.unloadAsync(); } catch { /* ignore */ }
-    }, 300);
-    // 150ms gap, then second beep
-    setTimeout(async () => {
-      const second = await playOnce(uri, 0.5);
-      setTimeout(async () => {
-        try { await second?.stopAsync(); } catch { /* ignore */ }
-        try { await second?.unloadAsync(); } catch { /* ignore */ }
-      }, 300);
-    }, 270);
+      try { await beep?.stopAsync(); } catch { /* ignore */ }
+      try { await beep?.unloadAsync(); } catch { /* ignore */ }
+    }, 320);
   } catch {
     /* ignore — best-effort */
-  } finally {
-    // Release lock after the whole sequence (~700ms) so rapid double-invites
-    // don't stutter-play over themselves.
-    setTimeout(() => { _callWaitingBeepInFlight = false; }, 700);
   }
+}
+
+const CALL_WAITING_REPEAT_MS = 5000;
+let _callWaitingAlertTimer: ReturnType<typeof setInterval> | null = null;
+let _callWaitingAlertActive = false;
+
+/** Start the repeating call-waiting alert. First beep also vibrates; the repeats
+ *  are beep-only, every ~3.5s. Idempotent (a second call while active is a no-op). */
+export function startCallWaitingAlert(): void {
+  if (_callWaitingAlertActive) return;
+  _callWaitingAlertActive = true;
+  console.log("[AUDIO] startCallWaitingAlert");
+  try { Vibration.vibrate(220); } catch { /* ignore */ }
+  void playOneCallWaitingBeep();
+  _callWaitingAlertTimer = setInterval(() => { void playOneCallWaitingBeep(); }, CALL_WAITING_REPEAT_MS);
+}
+
+/** Stop the repeating call-waiting alert. Idempotent. */
+export function stopCallWaitingAlert(): void {
+  if (_callWaitingAlertTimer) { clearInterval(_callWaitingAlertTimer); _callWaitingAlertTimer = null; }
+  if (_callWaitingAlertActive) console.log("[AUDIO] stopCallWaitingAlert");
+  _callWaitingAlertActive = false;
+}
+
+// Back-compat one-shot entry point — now starts the repeating alert. Existing
+// call sites (the push/notification invite path) get the new behavior too.
+export async function playCallWaitingBeep(): Promise<void> {
+  startCallWaitingAlert();
 }

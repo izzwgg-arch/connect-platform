@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Appearance, ColorSchemeName } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { darkColors, lightColors, AppColors } from '../theme/colors';
 
-type ThemeMode = 'dark' | 'light' | 'system';
+type ThemeMode = 'dark' | 'light';
 
 type ThemeContextValue = {
   colors: AppColors;
@@ -18,32 +17,23 @@ const THEME_KEY = 'cc_theme_mode';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>('dark');
-  const [systemScheme, setSystemScheme] = useState<ColorSchemeName>(
-    Appearance.getColorScheme()
-  );
 
   useEffect(() => {
     (async () => {
       try {
         const saved = await SecureStore.getItemAsync(THEME_KEY);
-        if (saved === 'dark' || saved === 'light' || saved === 'system') {
+        // Legacy 'system' preference (removed — dark/light only now) falls
+        // back to the default 'dark' mode instead of crashing.
+        if (saved === 'dark' || saved === 'light') {
           setModeState(saved as ThemeMode);
         }
       } catch {
         // use default
       }
     })();
-
-    const sub = Appearance.addChangeListener(({ colorScheme }) => {
-      setSystemScheme(colorScheme);
-    });
-    return () => sub.remove();
   }, []);
 
-  const isDark = useMemo(() => {
-    if (mode === 'system') return systemScheme === 'dark';
-    return mode === 'dark';
-  }, [mode, systemScheme]);
+  const isDark = useMemo(() => mode === 'dark', [mode]);
 
   const setMode = async (newMode: ThemeMode) => {
     setModeState(newMode);

@@ -91,6 +91,14 @@ type SipState = {
     pbxCallId?: string | null;
     sipCallTarget?: string | null;
   }) => Promise<boolean>;
+  /**
+   * Android-only inbound-answer latency optimization (Phase 1 / Option 2A).
+   * Pre-acquire the mic during an incoming ring; no-op off Android and
+   * best-effort. Pair with {@link releasePrewarmedMedia} on every non-answer /
+   * terminal path so the mic is never held after a ring/call ends.
+   */
+  prewarmInboundMedia: () => void;
+  releasePrewarmedMedia: (reason: string) => void;
   hangup: () => Promise<void>;
   toggleMute: () => void;
   toggleSpeaker: () => void;
@@ -158,7 +166,7 @@ type SipState = {
 const SipContext = createContext<SipState | undefined>(undefined);
 
 export function SipProvider({ children }: { children: React.ReactNode }) {
-  const { token: authToken } = useAuth();
+  const { token: authToken, isLoading: authLoading } = useAuth();
   // Shared process-wide client so a registration the headless push task
   // established during ring is the SAME UA that answers here (see
   // sipClientSingleton.ts). createSipClient() previously made a fresh UA per
@@ -224,7 +232,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       const parsed = JSON.parse(raw) as ProvisioningBundle;
       clientRef.current.configure(parsed);
       if ("setBlackboxContext" in clientRef.current) {
-        clientRef.current.setBlackboxContext({
+        clientRef.current.setBlackboxContext?.({
           authUsername: parsed.authUsername ?? parsed.sipUsername ?? null,
           sipUsername: parsed.sipUsername ?? null,
           extensionNumber: parsed.sipUsername?.replace(/_\d+$/, "") ?? null,
@@ -774,6 +782,17 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // login starts from a known state.
   useEffect(() => {
     if (authToken) return;
+    // CRITICAL: do NOT tear down while auth is still LOADING. On a cold
+    // wake-boot the runtime starts with authToken=null until SecureStore
+    // resolves; firing logout_teardown here would unregister the UA that the
+    // wake registrar just brought online (and which is holding the live
+    // INVITE) → the SIP fork is abandoned and the caller hears voicemail while
+    // the phone still rings. Only a RESOLVED logged-out state (auth loaded,
+    // no token) is a real logout.
+    if (authLoading) {
+      console.log('[SIP_RECONNECT] logout_teardown skipped — auth still loading (cold boot)');
+      return;
+    }
     // authToken went null → logout. Defensive wrap: a throw here on first
     // mount (when there is no UA yet) would otherwise take the whole
     // provider down via the ErrorBoundary.
@@ -789,7 +808,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.warn('[SIP_RECONNECT] logout_teardown_threw:', e);
     }
-  }, [authToken, cancelPendingReconnect]);
+  }, [authToken, authLoading, cancelPendingReconnect]);
 
   // ── Stage 2 native SIP keep-alive foreground service ───────────────────
   // When we have both an auth token AND loaded provisioning, start the
@@ -1682,8 +1701,34 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
+          // ── Optimistic screen presentation ─────────────────────────────────
+          // Show the ActiveCall screen ("Dialing…") the INSTANT the user taps,
+          // before the mic-permission check, provisioning load, and SIP
+          // registration preflight run below. Those steps are quick when warm
+          // but each crosses a native bridge (PermissionsAndroid, SecureStore,
+          // UA state) and were previously all awaited before the very first
+          // callState="dialing" (fired deep inside clientRef.dial), so the
+          // call screen only appeared after the whole pipeline finished — the
+          // perceptible lag the user reported. Flipping callState here drives
+          // RootNavigator's outbound-dial effect immediately. Every failure
+          // path below sets callState="ended", which auto-resets to idle and
+          // pops the screen back, so an optimistic present is always undone
+          // if the call can't actually start.
+          //
+          // Only present optimistically for the FIRST call (not "Add call",
+          // which already has a live call on screen).
+          const presentOptimistically = !allowSecond;
+          if (presentOptimistically) {
+            setCallDirection("outbound");
+            setRemoteParty(displayTarget);
+            setLastError(null);
+            callStateRef.current = "dialing";
+            setCallState("dialing");
+          }
+
           const micOk = await ensureMicPermissionOrAlert();
           if (!micOk) {
+            if (presentOptimistically) setCallState("ended");
             void flightBeginCall({
               callDirection: "outbound",
               dialedNumber: normalizedTarget,
@@ -1728,6 +1773,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             });
           }
 
+          // These were already set above when presenting optimistically; set
+          // them (again) for the "Add call" path, which skips the optimistic
+          // present, and record the last-dialed number for both.
           setCallDirection("outbound");
           setRemoteParty(displayTarget);
           setLastError(null);
@@ -1767,6 +1815,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
                 diagnosisCategory: diagnosis.category,
               },
             });
+            // client.dial can throw BEFORE it ever fires onCallState("dialing")
+            // (e.g. ensureOutboundSipRegistration times out), so the optimistic
+            // "dialing" state above would otherwise leave the screen stranded.
+            // Force it to "ended" so the screen pops back to the origin tab.
+            if (presentOptimistically) setCallState("ended");
             await flightEndCall("failed");
             throw e instanceof Error ? e : new Error(msg);
           }
@@ -1785,10 +1838,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
 
       beginInboundBlackbox: (inviteId, meta) => {
-        const client = clientRef.current as { beginInboundBlackbox?: typeof clientRef.current.answerIncoming };
-        if (typeof client.beginInboundBlackbox === "function") {
-          client.beginInboundBlackbox(inviteId, meta);
-        }
+        clientRef.current.beginInboundBlackbox?.(inviteId, meta);
       },
 
       finalizeInboundBlackboxFailure: (input) => {
@@ -1804,6 +1854,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       rejectIncomingInvite: async (match) => {
         return clientRef.current.rejectIncoming(match);
+      },
+
+      prewarmInboundMedia: () => {
+        const client = clientRef.current as { prewarmInboundMedia?: () => void };
+        client.prewarmInboundMedia?.();
+      },
+
+      releasePrewarmedMedia: (reason: string) => {
+        const client = clientRef.current as { releasePrewarmedMedia?: (r: string) => void };
+        client.releasePrewarmedMedia?.(reason);
       },
 
       hangup: async () => {

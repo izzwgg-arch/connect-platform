@@ -66,6 +66,19 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     private static final String TAG = "IncomingCallService";
     /** Logcat filter for cross-stack timeline (pair with JS `[CALL_FLOW]` in ReactNativeJS). */
     private static final String CALL_FLOW_TAG = "ConnectCallFlow";
+    /**
+     * Bounded CPU wakelock that spans the wake-boot → SIP REGISTER window when a
+     * prewake resurrects the killed app. It MUST comfortably exceed the worst
+     * observed cold-boot(index.js + native modules) + provisioning read + JsSIP
+     * REGISTER round-trip, and stay >= the PBX wake-grace window plus margin, so
+     * the JS thread is never CPU-frozen before it registers (the swiped-away
+     * "prewake fired but SIP never registered in time" failure). It still
+     * auto-releases at this ceiling, so it can never leak; the FGS started first
+     * in handleWakePushNative provides the foreground-importance anti-Doze cover
+     * for the same window. Measured cold register-after-boot is ~1s; the ceiling
+     * is generous headroom for Doze jitter on real devices.
+     */
+    private static final long WAKE_REACT_BOOT_LOCK_MS = 35_000L;
     private static volatile String lastRingtoneInviteId = null;
     /**
      * Watchdog handler that auto-dismisses a stuck incoming call if nothing else
@@ -387,8 +400,18 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                     emitCallFlowNative("FCM_INCOMING_SUPPRESSED_DND", inviteForRing, fcmMeta);
                     // Intentionally do NOT call startIncomingCallRingtone or
                     // handleIncomingCallNative — nothing is shown, nothing rings.
-                    // forwardToExpo() below still runs so a live JS process can
-                    // observe/record the missed call, but it never presents UI.
+                    // BUT a DND call is still a missed call: the user must (a) be
+                    // told about it and (b) find it in call history. This is the
+                    // only code path guaranteed to run in every app state
+                    // (foreground / background / killed) for the FCM push, so we
+                    //   • post a missed-call notification immediately, and
+                    //   • persist a pending missed-call record that JS drains into
+                    //     local call history on its next foreground (see
+                    //     IncomingCallUiModule.drainDndMissedCalls).
+                    // A live JS/SIP process may also record it instantly via the
+                    // jssip DND branch; appendCallRecord dedupes by invite id.
+                    postMissedCallNotification(appData, inviteForRing);
+                    persistDndMissedCall(appData, inviteForRing);
                 }
                 // Multi-call: when the JS side already has an active call, skip
                 // the native ringtone + full-screen UI. The CallWaitingBanner
@@ -490,6 +513,87 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      * the JS engine boots and registers. Any failure is swallowed — we simply
      * fall back to the legacy cold-register-on-answer behaviour (no worse).
      */
+    /**
+     * Layer 2 — boot the application's EXISTING singleton React runtime so a
+     * killed/swiped app can register SIP on a wake push.
+     *
+     * <p>Reuses the one {@link com.facebook.react.ReactInstanceManager} that
+     * {@code MainActivity} attaches to (old bridge architecture,
+     * {@code newArchEnabled=false}). It does NOT:
+     * <ul>
+     *   <li>use a {@link com.facebook.react.HeadlessJsTaskService} (which owns a
+     *       disposable runtime — the 2026-06-19 two-runtime regression),</li>
+     *   <li>launch MainActivity or any Activity,</li>
+     *   <li>create a second ReactHost / ReactNativeHost / ReactContext.</li>
+     * </ul>
+     *
+     * <p>Idempotent via the RN-sanctioned guard (the same pattern
+     * {@code HeadlessJsTaskService.startTask} uses): if a context already
+     * exists we reuse it; if creation has already started we do nothing; only a
+     * cold process actually triggers {@code createReactContextInBackground()}.
+     * {@code createReactContextInBackground()} must run on the UI thread.
+     *
+     * <p>Once the context is up, {@code index.js} runs, which attaches the
+     * module-scope wake registrar; that registrar pulls the buffered wake via
+     * {@code IncomingCallUi.drainPendingWake()} and registers SIP on the shared
+     * {@code sipClientSingleton} — the very same client SipContext later
+     * attaches to when the user answers (no second UA).
+     */
+    private void ensureReactRuntimeForWake() {
+        try {
+            if (IncomingCallUiModule.hasLiveReactContext()) {
+                Log.i(TAG, "[CALL_WAKE] live React context present — no boot needed (SipContext owns register)");
+                return;
+            }
+        } catch (Throwable ignored) {
+            // module not loaded yet → treat as no live context → boot below
+        }
+        final android.content.Context app = getApplicationContext();
+        // [RUNTIME_PROOF / Step 0] Hold a short PARTIAL_WAKE_LOCK across the
+        // background React boot + wake drain + SIP register so Doze cannot freeze
+        // the JS thread mid-boot (the swiped-away stall where index.js evaluated
+        // but the async drain callback never ran). Bounded WAKE_REACT_BOOT_LOCK_MS
+        // timeout auto-releases — NO HeadlessJsTaskService, NO task, NO second
+        // runtime.
+        try {
+            android.os.PowerManager pm =
+                (android.os.PowerManager) app.getSystemService(android.content.Context.POWER_SERVICE);
+            if (pm != null) {
+                android.os.PowerManager.WakeLock wl = pm.newWakeLock(
+                    android.os.PowerManager.PARTIAL_WAKE_LOCK, "connect:wakeReactBoot");
+                wl.setReferenceCounted(false);
+                wl.acquire(WAKE_REACT_BOOT_LOCK_MS);
+                Log.i(TAG, "[RUNTIME_PROOF] wakeReactBoot wakelock acquired (" + (WAKE_REACT_BOOT_LOCK_MS / 1000) + "s) pid=" + android.os.Process.myPid());
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "[RUNTIME_PROOF] wakeReactBoot wakelock failed: " + t.getMessage());
+        }
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            try {
+                if (!(app instanceof com.facebook.react.ReactApplication)) {
+                    Log.w(TAG, "[CALL_WAKE] application is not ReactApplication — cannot boot runtime");
+                    return;
+                }
+                com.facebook.react.ReactInstanceManager im =
+                    ((com.facebook.react.ReactApplication) app).getReactNativeHost().getReactInstanceManager();
+                Log.i(TAG, "[RUNTIME_PROOF] react_instance_manager identity=" + System.identityHashCode(im)
+                    + " pid=" + android.os.Process.myPid());
+                if (im.getCurrentReactContext() != null) {
+                    Log.i(TAG, "[CALL_WAKE] REACT_BOOT skip — context already present");
+                    return;
+                }
+                if (!im.hasStartedCreatingInitialContext()) {
+                    Log.i(TAG, "[CALL_WAKE] REACT_BOOT createReactContextInBackground() — booting existing singleton runtime");
+                    im.createReactContextInBackground();
+                } else {
+                    Log.i(TAG, "[CALL_WAKE] REACT_BOOT skip — context creation already in progress");
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "[CALL_WAKE] REACT_BOOT failed: " + t.getMessage());
+            }
+        });
+    }
+
     private void startSipPreRegisterIfKilled(String inviteId, String pbxCallId) {
         try {
             boolean reactAlive = false;
@@ -899,48 +1003,39 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             Log.w(TAG, "[CALL_WAKE] wake bridge payload build failed: " + t.getMessage());
         }
 
-        // 3) Optional placeholder notification.
-        //
-        // When the app is killed/cold (lastPushReceivedAppState != "active")
-        // and we are NOT already in another call, post a non-actionable
-        // "Incoming call from X — connecting…" heads-up so the user gets
-        // visual + vibration feedback immediately. Without this, the device
-        // sits silent while we wait for SIP REGISTER → INVITE round-trip
-        // (~1–10s on a cold start), and if anything in that window fails
-        // the user never sees the call at all. The placeholder is canceled
-        // the moment a real INCOMING_CALL or termination push arrives.
-        //
-        // Skipped when:
-        //   • app is foregrounded — JS owns the UI
-        //   • app already has an active call — multi-call banner handles it
-        //   • wake payload had no caller info — heads-up would be useless
-        //   • Do Not Disturb is on — the user wants NOTHING to come in: no
-        //     ring, no full-screen UI, and no heads-up placeholder either. The
-        //     SIP wake bridge above still runs so the JS layer declines the
-        //     INVITE (486) and the call diverts to voicemail, but we present no
-        //     notification at all while DND is enabled.
-        boolean appWasForeground = "active".equalsIgnoreCase(lastPushReceivedAppState);
-        boolean haveCallerInfo =
-            (fromNum != null && !fromNum.isEmpty()) ||
-            (fromDisp != null && !fromDisp.isEmpty());
-        boolean dndOn = isDndEnabled(getApplicationContext());
-        if (dndOn) {
-            lastWakePlaceholderResult = "skipped:dnd";
-            Log.i(TAG, "[CALL_WAKE][DND] DND on — suppressing wake placeholder notification");
-        } else if (appWasForeground) {
-            lastWakePlaceholderResult = "skipped:app_foregrounded";
-        } else if (inActiveCall) {
-            lastWakePlaceholderResult = "skipped:in_active_call";
-        } else if (!haveCallerInfo) {
-            lastWakePlaceholderResult = "skipped:no_caller_info";
-        } else {
-            try {
-                postWakePlaceholderNotification(pbxCallId, fromNum, fromDisp);
-            } catch (Throwable t) {
-                lastWakePlaceholderResult = "post_threw:" + t.getClass().getSimpleName();
-                Log.w(TAG, "[CALL_WAKE] postWakePlaceholderNotification threw: " + t.getMessage());
-            }
+        // 2b) Layer 2 — if no live React context exists (app swiped/killed, or
+        // the process was resurrected without an Activity), boot the app's
+        // EXISTING singleton React runtime. emitSipWakeRegister above already
+        // buffered the wake; the freshly-booted JS drains it via
+        // IncomingCallUi.drainPendingWake() the moment its module-scope
+        // registrar attaches (sipWakeRegistrar.ts). This reuses the one
+        // ReactInstanceManager MainActivity uses — NOT a HeadlessJsTaskService,
+        // NOT a new ReactHost — so there is exactly one runtime and one UA.
+        try {
+            ensureReactRuntimeForWake();
+        } catch (Throwable t) {
+            Log.w(TAG, "[CALL_WAKE] ensureReactRuntimeForWake failed: " + t.getMessage());
         }
+
+        // 3) Placeholder notification — DISABLED.
+        //
+        // Historically this posted a non-actionable "Incoming call from X —
+        // connecting…" heads-up during a cold/killed wake so the user got
+        // instant visual feedback before the real call UI could mount. It is
+        // now intentionally suppressed (see below); the follow-up INCOMING_CALL
+        // push presents the authoritative surface a moment later.
+        //
+        // Wake placeholder DISABLED (owner request 2026-07-07). The "Incoming
+        // call — connecting…" heads-up is intentionally never posted. The wake
+        // is fully driven by SipKeepAliveService.start() + the JS WakeRegister
+        // bridge above (both already ran by this point) and does NOT depend on
+        // any visible notification. Suppressing the placeholder means the user
+        // only ever sees the real incoming-call surface — the in-app screen, or
+        // the native full-screen / CallStyle heads-up posted from the follow-up
+        // INCOMING_CALL push — with no transient extra notification alongside it.
+        // The cancelWakePlaceholderNotification() calls elsewhere stay in place
+        // and simply become harmless no-ops.
+        lastWakePlaceholderResult = "skipped:disabled";
 
         Log.i(TAG, "[CALL_WAKE] WAKE_NATIVE_HANDLED elapsedMs="
                 + (System.currentTimeMillis() - t0)
@@ -1040,10 +1135,6 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             lastIncomingUiPresentation = "telecom";
             return;
         }
-        if (!appInForeground) {
-            // Side-effect: logs launcher / lock context for diagnostics.
-            shouldUseFullScreenUi();
-        }
         // Multi-call: if the user already has an active call, route this
         // INVITE to the JS layer as a "foreground" event regardless of the
         // process/activity state. The JS CallSessionManager + CallWaitingBanner
@@ -1101,21 +1192,23 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             } catch (Exception e) {
                 Log.w(TAG, "[CALL_INCOMING] emitForegroundInvite failed: " + e.getMessage());
             }
-            // ── Fallback CallStyle notification ──────────────────────────────
-            // The user has been hitting "ringtone fires but in-app screen never
-            // mounts" when the React listener for IncomingCall.ForegroundInvite
-            // is briefly absent (cold-resume race, hermes GC pause, listener
-            // unmount/remount during navigation). To guarantee the user can
-            // ALWAYS answer, post the CallStyle heads-up here too — it stays
-            // out of the way when IncomingCallScreen mounts (React modal
-            // overlays it) and becomes the interactive surface when JS fails
-            // to mount in time. Heads-up only (preferFullScreen=false) so we
-            // do not rip the user out of whatever screen they were on.
-            try {
-                launchIncomingCallUi(data, inviteId, displayName, fromNum, false);
-            } catch (Throwable t) {
-                Log.w(TAG, "[CALL_INCOMING] foreground fallback CallStyle post failed: " + t.getMessage());
-            }
+            // ── No native CallStyle when the app is foregrounded ─────────────
+            // When the React host is in the foreground it owns the incoming-call
+            // surface: emitForegroundInvite() above mounts the Connect-branded
+            // IncomingCallScreen. We must NOT also post a native CallStyle
+            // notification here, or the user sees BOTH the floating CallStyle
+            // heads-up AND the in-app screen at the same time (double UI).
+            //
+            // Historically a "safety net" CallStyle was posted here for the rare
+            // race where the JS listener was briefly absent, but on Android 14+
+            // (targetSdk 34) that notify() is rejected unless it carries a
+            // full-screen intent, so a heads-up-only fallback silently failed and
+            // never actually provided the net on modern devices. Now that the
+            // CallStyle path always attaches a full-screen intent it WOULD post
+            // and produce that visible duplicate — so it is intentionally removed.
+            // Foreground presentation is JS-only; the native full-screen /
+            // heads-up path is reserved for the background / locked branch below.
+            Log.i(TAG, "[CALL_INCOMING] foreground: native CallStyle suppressed — JS owns the incoming UI");
             // Native ringtone keeps playing. JS no longer layers expo-av on top
             // (that caused the lock-screen double-ringtone). The native ringtone
             // is stopped exclusively via: intent_answer/decline onNewIntent,
@@ -1131,10 +1224,12 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             true,
             presentationMode
         );
-        // When we reach native UI, the app was not in the React foreground path — prefer a
-        // full-screen launch on all supported API levels so home / recent-task states still
-        // get the incoming surface (heads-up alone is easy to miss on OEMs).
-        launchIncomingCallUi(data, inviteId, displayName, fromNum, true);
+        // The app was not in the React foreground path. Choose the surface by
+        // device state: full-screen Connect UI when locked / screen-off, or the
+        // floating CallStyle heads-up when the user is unlocked on their home
+        // screen or inside another app (so we don't rip them out of it).
+        boolean preferFullScreen = shouldUseFullScreenUi();
+        launchIncomingCallUi(data, inviteId, displayName, fromNum, preferFullScreen);
     }
 
     private void handleCallTerminationNative(String type, Map<String, String> data) {
@@ -1453,9 +1548,23 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 answerIntent
             )
         );
-        if (preferFullScreen) {
-            builder.setFullScreenIntent(fullScreenIntent, true);
-        }
+        // Android 14 (targetSdk 34) REJECTS a CallStyle notification outright
+        // unless it is backed by a foreground service, a user-initiated job, OR
+        // carries a full-screen intent — otherwise NotificationManagerCompat.notify()
+        // throws IllegalArgumentException ("CallStyle notifications must be for a
+        // foreground service or user initated job or use a fullScreenIntent") and
+        // NOTHING is presented. On release builds this silently killed the
+        // heads-up/floating path (preferFullScreen=false), so incoming calls rang
+        // with no visible UI. We therefore ALWAYS attach the full-screen intent.
+        //
+        // This does NOT force a screen takeover on the home screen: the OS only
+        // launches the full-screen intent when the device is locked / screen-off;
+        // while the device is unlocked and interactive it is shown as a floating
+        // heads-up notification instead (and if USE_FULL_SCREEN_INTENT is not
+        // granted it is always demoted to a heads-up). `preferFullScreen` now only
+        // gates the extra triggerFullScreenIntent() activity launch below for the
+        // locked case.
+        builder.setFullScreenIntent(fullScreenIntent, true);
         // Notification sound is owned by the channel (v4+). Avoid NotificationCompat.setSound
         // with AudioAttributes here — older androidx resolves the (Uri, int) overload only.
 
@@ -1672,38 +1781,28 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 isInteractive = powerManager.isInteractive();
             }
 
-            String foregroundPackage = getForegroundPackageName();
-            String homePackage = getDefaultHomePackage();
-            boolean isHomeIdle =
-                (foregroundPackage != null &&
-                    homePackage != null &&
-                    homePackage.equals(foregroundPackage)) ||
-                isLikelyLauncherPackage(foregroundPackage);
-            boolean isConfidentOtherAppForeground =
-                foregroundPackage != null &&
-                !foregroundPackage.isEmpty() &&
-                !foregroundPackage.equals(getPackageName()) &&
-                !isLikelyLauncherPackage(foregroundPackage) &&
-                (homePackage == null || !foregroundPackage.equals(homePackage)) &&
-                !foregroundPackage.startsWith("com.android.systemui");
-
-            // Default to full-screen unless we are confident another app is
-            // actively foregrounded. This keeps home-screen / launcher / unknown
-            // Samsung task states in the full-screen bucket instead of silently
-            // dropping into the CallKeep floating path.
-            boolean preferFullScreen =
-                deviceLocked ||
-                !isInteractive ||
-                isHomeIdle ||
-                !isConfidentOtherAppForeground;
+            // Present the full-screen Connect incoming-call UI ONLY when the
+            // device is locked or the screen is off / non-interactive (the
+            // classic "ringing on the lock screen / in your pocket" case). When
+            // the device is unlocked and interactive but Connect is NOT in the
+            // foreground — i.e. the user is on their home screen or inside
+            // another app — fall through to the floating CallStyle heads-up
+            // notification instead of hijacking the screen with the full-screen
+            // UI. The Connect-foreground case never reaches here: this method is
+            // only consulted when !appInForeground, where React owns the in-app
+            // incoming screen.
+            //
+            // We deliberately do NOT enumerate the foreground package anymore:
+            // walking the running-process list added latency to every incoming
+            // call, and its "default to full-screen when unsure" behaviour is
+            // exactly what caused the full-screen UI to wrongly appear on the
+            // home screen. locked/interactive alone is fast and unambiguous.
+            boolean preferFullScreen = deviceLocked || !isInteractive;
             Log.i(
                 TAG,
                 "[CALL_INCOMING] presentation_decision"
                     + " locked=" + deviceLocked
                     + " interactive=" + isInteractive
-                    + " foregroundPackage=" + foregroundPackage
-                    + " homePackage=" + homePackage
-                    + " otherAppForeground=" + isConfidentOtherAppForeground
                     + " fullScreen=" + preferFullScreen
             );
             return preferFullScreen;
@@ -2121,6 +2220,71 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 .getBoolean(DND_PREF_KEY, false);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    // Pending DND-suppressed missed calls, persisted so JS can fold them into
+    // local call history the next time it runs (even after a killed-state wake).
+    private static final String DND_MISSED_PREFS = "connect_dnd_missed_prefs";
+    private static final String DND_MISSED_KEY = "pending_missed";
+    private static final int DND_MISSED_CAP = 50;
+
+    /**
+     * Append a missed-call record (JSON) for a DND-suppressed incoming call.
+     * Deduped by inviteId. Stored in SharedPreferences as a JSON array string;
+     * drained + cleared by {@link #drainDndMissedCalls(Context)}.
+     */
+    private void persistDndMissedCall(Map<String, String> data, String inviteId) {
+        try {
+            android.content.SharedPreferences sp = getApplicationContext()
+                .getSharedPreferences(DND_MISSED_PREFS, Context.MODE_PRIVATE);
+            org.json.JSONArray arr;
+            try {
+                arr = new org.json.JSONArray(sp.getString(DND_MISSED_KEY, "[]"));
+            } catch (Exception parseErr) {
+                arr = new org.json.JSONArray();
+            }
+            String iid = inviteId == null ? "" : inviteId;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject existing = arr.optJSONObject(i);
+                if (existing != null && iid.equals(existing.optString("inviteId"))) {
+                    return; // already recorded
+                }
+            }
+            String fromNum = data.get("fromNumber");
+            if (fromNum == null || fromNum.isEmpty()) fromNum = data.get("from");
+            JSONObject o = new JSONObject();
+            o.put("inviteId", iid);
+            o.put("pbxCallId", data.get("pbxCallId") == null ? "" : data.get("pbxCallId"));
+            o.put("fromNumber", fromNum == null ? "" : fromNum);
+            o.put("fromDisplay", data.get("fromDisplay") == null ? "" : data.get("fromDisplay"));
+            o.put("toExtension", data.get("toExtension") == null ? "" : data.get("toExtension"));
+            o.put("tenantId", data.get("tenantId") == null ? "" : data.get("tenantId"));
+            o.put("ts", System.currentTimeMillis());
+            arr.put(o);
+            while (arr.length() > DND_MISSED_CAP) arr.remove(0);
+            sp.edit().putString(DND_MISSED_KEY, arr.toString()).apply();
+            Log.i(TAG, "[DND] persisted pending missed call inviteId=" + iid + " count=" + arr.length());
+        } catch (Throwable t) {
+            Log.w(TAG, "[DND] persistDndMissedCall failed: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Return the pending DND missed-call records as a JSON array string and
+     * clear the store. Called from IncomingCallUiModule.drainDndMissedCalls so
+     * JS can append them to local call history. Never throws.
+     */
+    public static String drainDndMissedCalls(Context ctx) {
+        if (ctx == null) return "[]";
+        try {
+            android.content.SharedPreferences sp = ctx.getApplicationContext()
+                .getSharedPreferences(DND_MISSED_PREFS, Context.MODE_PRIVATE);
+            String existing = sp.getString(DND_MISSED_KEY, "[]");
+            sp.edit().remove(DND_MISSED_KEY).apply();
+            return existing == null ? "[]" : existing;
+        } catch (Throwable t) {
+            return "[]";
         }
     }
 

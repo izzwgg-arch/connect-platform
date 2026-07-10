@@ -16,7 +16,6 @@ import type {
   VoicemailResponse,
 } from "../types";
 import {
-  shouldFetchAnotherVoicemailPage,
   VOICEMAIL_API_PAGE_SIZE,
   VOICEMAIL_MAX_PAGES_PER_FOLDER,
 } from "./voicemailPagination";
@@ -156,54 +155,79 @@ export async function probeVoicemailStreamStatus(token: string, vmId: string): P
   return res.status;
 }
 
-/** Fetches every API page per folder (100 rows/page, capped) so mobile lists match portal for large mailboxes. */
+/**
+ * Fetches every API page per folder (100 rows/page, capped) so mobile lists match portal
+ * for large mailboxes. Pass `maxPagesPerFolder: 1` for a cheap "is there anything new"
+ * check (used by the background poll) instead of a full mailbox resync.
+ */
+async function fetchVoicemailPage(
+  token: string,
+  folder: VoicemailFolder,
+  page: number,
+): Promise<{ data: VoicemailResponse & VoicemailApiScopeMeta; headerV: string | null; headerM: string | null; url: string }> {
+  const params = new URLSearchParams({ folder, page: String(page) });
+  const url = `${API_BASE}/voice/voicemail?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VOICEMAIL_FAILED");
+  const headerV = res.headers.get("X-Voicemail-Scope-Version");
+  const headerM = res.headers.get("X-Scoped-Mailboxes");
+  return { data: json as VoicemailResponse & VoicemailApiScopeMeta, headerV, headerM, url };
+}
+
+function logVmListPage(url: string, data: VoicemailResponse & VoicemailApiScopeMeta, headerV: string | null, headerM: string | null): void {
+  if (typeof __DEV__ === "undefined" || !__DEV__) return;
+  const batch = data.voicemails ?? [];
+  console.log("[VM_LIST]", url, {
+    scopeVersion: data.voicemailScopeVersion ?? headerV,
+    scopedMailboxes: data.scopedMailboxesForUser ?? headerM,
+    distinctExt: distinctExtensionsFromVoicemails(batch),
+    idsSample: voicemailIdsSample(batch, 5),
+  });
+}
+
 export async function getVoicemails(
   token: string,
-  input: { folders?: VoicemailFolder[]; page?: number } = {},
+  input: { folders?: VoicemailFolder[]; page?: number; maxPagesPerFolder?: number } = {},
 ): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number>; scopeMeta?: VoicemailApiScopeMeta }> {
   const folders = input.folders ?? ["inbox", "urgent", "old"];
+  const maxPagesPerFolder = input.maxPagesPerFolder ?? VOICEMAIL_MAX_PAGES_PER_FOLDER;
   let mergedScopeMeta: VoicemailApiScopeMeta | undefined;
+  const applyPageMeta = (data: VoicemailResponse & VoicemailApiScopeMeta, headerV: string | null, headerM: string | null) => {
+    const pageMeta = mergeVoicemailScopeMeta(data, headerV, headerM);
+    if (pageMeta.voicemailScopeVersion != null || pageMeta.scopedMailboxesForUser != null) {
+      mergedScopeMeta = pageMeta;
+    }
+  };
   const responses = await Promise.all(
     folders.map(async (folder) => {
-      const merged: Voicemail[] = [];
-      let total = 0;
-      for (let page = 1; page <= VOICEMAIL_MAX_PAGES_PER_FOLDER; page++) {
-        const params = new URLSearchParams({ folder, page: String(page) });
-        const url = `${API_BASE}/voice/voicemail?${params.toString()}`;
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const json = await parseJson(res);
-        if (!res.ok) throw new Error(json?.error || "VOICEMAIL_FAILED");
-        const headerV = res.headers.get("X-Voicemail-Scope-Version");
-        const headerM = res.headers.get("X-Scoped-Mailboxes");
-        const data = json as VoicemailResponse & VoicemailApiScopeMeta;
-        const pageMeta = mergeVoicemailScopeMeta(data, headerV, headerM);
-        if (pageMeta.voicemailScopeVersion != null || pageMeta.scopedMailboxesForUser != null) {
-          mergedScopeMeta = pageMeta;
-        }
-        if (typeof __DEV__ !== "undefined" && __DEV__) {
-          const batchPrev = data.voicemails ?? [];
-          console.log("[VM_LIST]", url, {
-            scopeVersion: pageMeta.voicemailScopeVersion ?? headerV,
-            scopedMailboxes: pageMeta.scopedMailboxesForUser ?? headerM,
-            distinctExt: distinctExtensionsFromVoicemails(batchPrev),
-            idsSample: voicemailIdsSample(batchPrev, 5),
-          });
-        }
-        total = data.total ?? total;
-        const batch = data.voicemails ?? [];
-        merged.push(...batch);
-        if (
-          !shouldFetchAnotherVoicemailPage(
-            batch.length,
-            page,
-            total,
-            VOICEMAIL_MAX_PAGES_PER_FOLDER,
-            VOICEMAIL_API_PAGE_SIZE,
-          )
-        ) {
-          break;
+      // Page 1 tells us the real `total`, so every remaining page this folder
+      // needs can be dispatched in parallel instead of one-at-a-time — this is
+      // what previously made a large mailbox take ~30 sequential round-trips
+      // (many seconds) to fully resync.
+      const first = await fetchVoicemailPage(token, folder, 1);
+      applyPageMeta(first.data, first.headerV, first.headerM);
+      logVmListPage(first.url, first.data, first.headerV, first.headerM);
+      const total = first.data.total ?? 0;
+      const merged: Voicemail[] = [...(first.data.voicemails ?? [])];
+
+      const firstBatchLen = (first.data.voicemails ?? []).length;
+      const neededPages = Math.min(
+        maxPagesPerFolder,
+        Math.max(1, Math.ceil(total / VOICEMAIL_API_PAGE_SIZE)),
+      );
+      if (firstBatchLen >= VOICEMAIL_API_PAGE_SIZE && neededPages > 1) {
+        const rest = await Promise.all(
+          Array.from({ length: neededPages - 1 }, (_, i) => i + 2).map((page) =>
+            fetchVoicemailPage(token, folder, page),
+          ),
+        );
+        for (const r of rest) {
+          applyPageMeta(r.data, r.headerV, r.headerM);
+          logVmListPage(r.url, r.data, r.headerV, r.headerM);
+          merged.push(...(r.data.voicemails ?? []));
         }
       }
       return { folder, data: { voicemails: merged, total } as VoicemailResponse };
@@ -798,6 +822,35 @@ export async function reportDndStatus(token: string, dnd: boolean): Promise<void
   });
   if (!res.ok) {
     throw new Error(`dnd-status non-2xx: ${res.status}`);
+  }
+}
+
+/**
+ * iOS-only foreground-active heartbeat. While the app is foregrounded with a
+ * live SIP socket, ping this every ~15s so the backend's APNs VoIP-push gate
+ * (sendApnsVoipPushesForIncomingCallApi) skips the native CallKit push for
+ * this device — the in-app Connect incoming screen already handles the call
+ * over the live socket. The backend Redis key has a 30s TTL, so simply
+ * backgrounding/killing the app (no more pings) lets VoIP pushes resume
+ * automatically without needing a reliable "app going away" signal.
+ * Best-effort: never throws, matching postWakeEvent's lossy-telemetry style.
+ */
+export async function reportForegroundActive(
+  token: string,
+  deviceId: string,
+  active: boolean,
+): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/mobile/foreground-active`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ deviceId, active }),
+    });
+    if (!res.ok) {
+      console.warn("[FG_ACTIVE] reportForegroundActive non-2xx", res.status);
+    }
+  } catch (err: any) {
+    console.warn("[FG_ACTIVE] reportForegroundActive threw", err?.message);
   }
 }
 
