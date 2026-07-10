@@ -318,6 +318,7 @@ const NotificationsCtx = createContext<NotificationsState | undefined>(
 const EXPO_PUSH_TOKEN_KEY = "cc_mobile_expo_push_token";
 const INSTALLATION_DEVICE_ID_KEY = "cc_mobile_device_id";
 
+const IOS_DECLINE_GRACE_MS = 1500;
 type IncomingCallAction = "open" | "answer" | "decline";
 
 type ParsedIncomingCallAction = {
@@ -1096,6 +1097,7 @@ export function NotificationsProvider({
   const processingIncomingActionRef = useRef<string | null>(null);
   const inviteActionInFlightRef = useRef<Set<string>>(new Set());
   const consumedInviteActionRef = useRef<Set<string>>(new Set());
+  const pendingDeclineTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [pendingIncomingAction, setPendingIncomingAction] =
     useState<ParsedIncomingCallAction | null>(null);
 
@@ -4263,6 +4265,10 @@ export function NotificationsProvider({
 
     const unsubNative = subscribeNativeCallActions({
       onAnswer: async (callId) => {
+        {
+          const pd = pendingDeclineTimersRef.current.get(callId);
+          if (pd) { clearTimeout(pd); pendingDeclineTimersRef.current.delete(callId); }
+        }
         const t0 = Date.now();
         console.log('[CALLKEEP_ANSWER] native onAnswer fired callId=' + callId + ' appState=' + AppState.currentState + ' sipReg=' + sip.registrationState);
         let invite = await resolveInviteForAction(callId);
@@ -4301,6 +4307,24 @@ export function NotificationsProvider({
 
       onEnd: async (callId) => {
         const invite = await resolveInviteForAction(callId);
+        const acceptKey = invite ? ("accept:" + invite.id) : null;
+        const alreadyAnswered =
+          !!acceptKey && consumedInviteActionRef.current.has(acceptKey);
+        // iOS cold-answer race guard: a stray CallKit endCall can fire around
+        // the answer tap and beat it, declining our own still-ringing invite so
+        // the caller lands in voicemail. For a not-yet-answered call, defer the
+        // decline; onAnswer cancels it when the user is answering. An already-
+        // answered call ends immediately (real hangup). Android is unchanged.
+        if (Platform.OS === "ios" && !alreadyAnswered) {
+          if (!pendingDeclineTimersRef.current.has(callId)) {
+            const timer = setTimeout(() => {
+              pendingDeclineTimersRef.current.delete(callId);
+              void handleDeclineInvite(invite, callId);
+            }, IOS_DECLINE_GRACE_MS);
+            pendingDeclineTimersRef.current.set(callId, timer);
+          }
+          return;
+        }
         await handleDeclineInvite(invite, callId);
       },
     });
