@@ -35,7 +35,7 @@ import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
 import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
-import { tenantPayAllPublicUrl } from "../../api/src/billing/billingEmailLifecycle";
+import { tenantPayAllPublicUrl, tenantPayAllShortUrl } from "../../api/src/billing/billingEmailLifecycle";
 import { splitVoipMsSendSmsParts } from "@connect/shared";
 import {
   isConnectMohRuntimeClass,
@@ -2504,11 +2504,11 @@ async function sendPayAllLinkSms(params: { tenantId: string; toPhone: string; to
     await (db as any).billingEventLog.create({ data: { tenantId: params.tenantId, runId: params.runId, type: "billing.pay_all_sms_sender_unavailable", message: "Billing SMS sender number not configured or has no SMS credentials." } }).catch(() => null);
     return false;
   }
-  const link = tenantPayAllPublicUrl(params.tenantId);
+  const link = await tenantPayAllShortUrl(params.tenantId);
   const amount = centsToDollarsWorker(params.totalDueCents);
   const body = params.dueToday
-    ? `Connect Communications: A payment of ${amount} is due today. Pay securely here: ${link}. Thank you!`
-    : `Connect Communications: You have a balance of ${amount} due on ${params.paymentDate}. Pay securely here: ${link}. Thank you!`;
+    ? `Connect Communications: Your balance of ${amount} is due today. Pay securely here: ${link}`
+    : `Connect Communications: Your balance of ${amount} is due. Pay securely here: ${link}`;
   try {
     for (const part of splitVoipMsSendSmsParts(body)) {
       await sender.provider.sendMessage({ tenantId: params.tenantId, to: params.toPhone, from: sender.fromNumber, body: part });

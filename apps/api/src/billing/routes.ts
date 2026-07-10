@@ -53,7 +53,7 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePublicPayUrl, tenantPayAllPublicUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { billingInvoicePublicPayUrl, tenantPayAllPublicUrl, tenantPayAllShortUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
@@ -2681,9 +2681,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid_phone", message: "Phone number appears too short." });
     }
 
-    const payUrl = tenantPayAllPublicUrl(tenantId);
+    const payUrl = await tenantPayAllShortUrl(tenantId);
     const amountStr = centsToDollarsStr(totalDueCents);
-    const msgBody = `Connect Communications: You have a balance of ${amountStr} due. Please complete your payment securely here: ${payUrl}. Thank you!`;
+    const msgBody = `Connect Communications: Your balance of ${amountStr} is due. Pay securely here: ${payUrl}`;
 
     try {
       for (const part of splitVoipMsSendSmsParts(msgBody)) {

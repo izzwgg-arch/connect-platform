@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { db } from "@connect/db";
 import { buildBillingEmailJobCreateData } from "./billingAuth";
 import { billingApologyEmail, autopayReminderEmail, invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail, paymentRefundedEmail } from "./emailTemplates";
@@ -30,6 +31,29 @@ export function billingInvoicePublicPayUrl(invoiceId: string, tenantId: string):
 export function tenantPayAllPublicUrl(tenantId: string): string {
   const token = createTenantPayAllToken(tenantId);
   return `${publicPortalBaseUrl()}/pay/all/${encodeURIComponent(token)}`;
+}
+
+/** Short random pay-all code (stored on the tenant), used for a compact SMS-friendly link. */
+async function getOrCreateTenantPayAllCode(tenantId: string): Promise<string> {
+  const row = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId }, select: { metadata: true } });
+  const md = row?.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? (row.metadata as any) : {};
+  if (typeof md.payAllCode === "string" && md.payAllCode.length >= 6) return md.payAllCode;
+  const code = crypto.randomBytes(8).toString("base64url").replace(/[_-]/g, "").slice(0, 10);
+  await (db as any).tenantBillingSettings.update({ where: { tenantId }, data: { metadata: { ...md, payAllCode: code } } }).catch(() => null);
+  return code;
+}
+
+/** Compact public pay-all URL (short code instead of a long JWT) for SMS. */
+export async function tenantPayAllShortUrl(tenantId: string): Promise<string> {
+  const code = await getOrCreateTenantPayAllCode(tenantId);
+  return `${publicPortalBaseUrl()}/pay/all/${code}`;
+}
+
+/** Resolve a tenant from a short pay-all code. */
+export async function resolveTenantFromPayAllCode(code: string): Promise<string | null> {
+  if (!/^[A-Za-z0-9]{6,32}$/.test(code)) return null;
+  const row = await (db as any).tenantBillingSettings.findFirst({ where: { metadata: { path: ["payAllCode"], equals: code } }, select: { tenantId: true } });
+  return row?.tenantId ?? null;
 }
 
 export function billingInvoicePdfApiUrl(invoiceId: string): string {
