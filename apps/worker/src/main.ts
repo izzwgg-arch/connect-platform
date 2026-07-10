@@ -36,6 +36,7 @@ import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle
 import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
 import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
 import { tenantPayAllPublicUrl } from "../../api/src/billing/billingEmailLifecycle";
+import { splitVoipMsSendSmsParts } from "@connect/shared";
 import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
@@ -2475,17 +2476,15 @@ function billingContactPhone(metadata: unknown): string | null {
 function centsToDollarsWorker(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format((cents || 0) / 100);
 }
-async function resolveBillingSmsSenderWorker(): Promise<{ client: SmsProvider; fromNumber: string } | null> {
+async function resolveBillingSmsSenderWorker(): Promise<{ provider: VoipMsSmsProvider; fromNumber: string } | null> {
   const fromRaw = (process.env.BILLING_SMS_FROM_NUMBER || "8457231213").replace(/\D/g, "");
-  const e164 = `+1${fromRaw}`;
-  const num = await (db as any).tenantSmsNumber.findFirst({
-    where: { OR: [{ phoneRaw: fromRaw }, { phoneE164: e164 }], active: true },
-    select: { tenantId: true, phoneE164: true, provider: true },
-  });
-  if (!num) return null;
-  const client = await getProviderClient(num.tenantId, num.provider as ProviderName);
-  if (!client) return null;
-  return { client, fromNumber: num.phoneE164 || e164 };
+  const cfg: any = await (db as any).globalVoipMsConfig.findUnique({ where: { id: "default" } });
+  if (!cfg?.credentialsEncrypted) return null;
+  let creds: any;
+  try { creds = decryptJson(cfg.credentialsEncrypted); } catch { return null; }
+  if (!creds?.username || !creds?.password) return null;
+  const provider = new VoipMsSmsProvider({ username: creds.username, password: creds.password, fromNumber: fromRaw, apiBaseUrl: cfg.apiBaseUrl || creds.apiBaseUrl }, false);
+  return { provider, fromNumber: `+1${fromRaw}` };
 }
 async function tenantUnpaidTotalCents(tenantId: string): Promise<number> {
   const raw = await (db as any).billingInvoice.findMany({
@@ -2511,7 +2510,9 @@ async function sendPayAllLinkSms(params: { tenantId: string; toPhone: string; to
     ? `Connect Communications: A payment of ${amount} is due today. Pay securely here: ${link}. Thank you!`
     : `Connect Communications: You have a balance of ${amount} due on ${params.paymentDate}. Pay securely here: ${link}. Thank you!`;
   try {
-    await sender.client.sendMessage({ tenantId: params.tenantId, to: params.toPhone, from: sender.fromNumber, body });
+    for (const part of splitVoipMsSendSmsParts(body)) {
+      await sender.provider.sendMessage({ tenantId: params.tenantId, to: params.toPhone, from: sender.fromNumber, body: part });
+    }
   } catch (err: any) {
     await (db as any).billingEventLog.create({ data: { tenantId: params.tenantId, runId: params.runId, type: "billing.pay_all_sms_failed", message: `Pay-all SMS (${params.tag}) failed: ${err?.message || "unknown"}`, metadata: { tag: params.tag, paymentDate: params.paymentDate, toPhone: params.toPhone } } }).catch(() => null);
     return false;

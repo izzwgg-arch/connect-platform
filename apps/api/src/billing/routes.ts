@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
+import { splitVoipMsSendSmsParts } from "@connect/shared";
 import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createBillingInvoiceRowWithUniqueNumber, createManualInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
 import { updateInvoiceMeta, replaceInvoiceLineItems, addInvoiceLineItem, deleteInvoiceLineItem } from "./invoiceEditEngine";
 import { postExternalPayment, externalMethodLabel, type ExternalPaymentMethodType } from "./externalPayment";
@@ -247,15 +248,13 @@ type TenantSmsProviderResult = {
 /** Resolve the central billing SMS sender (a single number all billing texts come from). */
 async function resolveBillingSmsSender(): Promise<{ provider: any; fromNumber: string } | null> {
   const fromRaw = (process.env.BILLING_SMS_FROM_NUMBER || "8457231213").replace(/\D/g, "");
-  const e164 = `+1${fromRaw}`;
-  const num = await (db as any).tenantSmsNumber.findFirst({
-    where: { OR: [{ phoneRaw: fromRaw }, { phoneE164: e164 }], active: true },
-    select: { tenantId: true, phoneE164: true },
-  });
-  if (!num) return null;
-  const ctx = await resolveTenantSmsProvider(num.tenantId);
-  if (!ctx) return null;
-  return { provider: ctx.provider, fromNumber: num.phoneE164 || e164 };
+  const cfg = await (db as any).globalVoipMsConfig.findUnique({ where: { id: "default" } });
+  if (!cfg?.credentialsEncrypted) return null;
+  let creds: any;
+  try { creds = decryptJson<VoipMsCredentials>(cfg.credentialsEncrypted); } catch { return null; }
+  if (!creds?.username || !creds?.password) return null;
+  const provider = new VoipMsSmsProvider({ username: creds.username, password: creds.password, fromNumber: fromRaw, apiBaseUrl: (cfg as any).apiBaseUrl || (creds as any).apiBaseUrl }, false);
+  return { provider, fromNumber: `+1${fromRaw}` };
 }
 
 async function resolveTenantSmsProvider(tenantId: string): Promise<TenantSmsProviderResult | null> {
@@ -2687,7 +2686,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const msgBody = `Connect Communications: You have a balance of ${amountStr} due. Please complete your payment securely here: ${payUrl}. Thank you!`;
 
     try {
-      await sender.provider.sendMessage({ tenantId, to: normalizedPhone, from: sender.fromNumber, body: msgBody });
+      for (const part of splitVoipMsSendSmsParts(msgBody)) {
+        await sender.provider.sendMessage({ tenantId, to: normalizedPhone, from: sender.fromNumber, body: part });
+      }
     } catch (err: any) {
       await logBillingEvent({ tenantId, type: "billing.pay_all_sms_failed", message: `Pay-all SMS send failed: ${err?.message || "unknown error"}`, metadata: { toPhone: normalizedPhone, fromPhone: sender.fromNumber, adminUserId: u.sub } });
       return reply.code(502).send({ error: "sms_send_failed", message: err?.message || "SMS provider returned an error." });
