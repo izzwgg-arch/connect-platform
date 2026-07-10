@@ -3,7 +3,7 @@ import { buildBillingEmailJobCreateData } from "./billingAuth";
 import { billingApologyEmail, autopayReminderEmail, invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail, paymentRefundedEmail } from "./emailTemplates";
 import { clearDunningSlice } from "./billingDunning";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
-import { createBillingInvoicePayToken } from "./billingPayToken";
+import { createBillingInvoicePayToken, createTenantPayAllToken } from "./billingPayToken";
 
 export function publicPortalBaseUrl(): string {
   return (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
@@ -24,6 +24,12 @@ export function billingInvoicePortalUrl(invoiceId: string): string {
 export function billingInvoicePublicPayUrl(invoiceId: string, tenantId: string): string {
   const token = createBillingInvoicePayToken(invoiceId, tenantId);
   return `${publicPortalBaseUrl()}/pay/invoice/${encodeURIComponent(token)}`;
+}
+
+/** Signed public "pay all unpaid" URL (no login) for a tenant. */
+export function tenantPayAllPublicUrl(tenantId: string): string {
+  const token = createTenantPayAllToken(tenantId);
+  return `${publicPortalBaseUrl()}/pay/all/${encodeURIComponent(token)}`;
 }
 
 export function billingInvoicePdfApiUrl(invoiceId: string): string {

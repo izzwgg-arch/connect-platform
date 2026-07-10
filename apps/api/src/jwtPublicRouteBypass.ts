@@ -56,6 +56,8 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.startsWith("/billing/invoices/pay/")
     || path.startsWith("/billing/platform/invoices/pay/")
     || path.includes("/billing/platform/invoices/pay/")
+    || path.startsWith("/billing/platform/pay-all/")
+    || path.includes("/billing/platform/pay-all/")
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
     || isInternalMobileRingPath

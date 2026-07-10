@@ -52,7 +52,7 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { billingInvoicePublicPayUrl, tenantPayAllPublicUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
@@ -243,6 +243,20 @@ type TenantSmsProviderResult = {
   fromNumber: string;
   providerName: string;
 };
+
+/** Resolve the central billing SMS sender (a single number all billing texts come from). */
+async function resolveBillingSmsSender(): Promise<{ provider: any; fromNumber: string } | null> {
+  const fromRaw = (process.env.BILLING_SMS_FROM_NUMBER || "8457231213").replace(/\D/g, "");
+  const e164 = `+1${fromRaw}`;
+  const num = await (db as any).tenantSmsNumber.findFirst({
+    where: { OR: [{ phoneRaw: fromRaw }, { phoneE164: e164 }], active: true },
+    select: { tenantId: true, phoneE164: true },
+  });
+  if (!num) return null;
+  const ctx = await resolveTenantSmsProvider(num.tenantId);
+  if (!ctx) return null;
+  return { provider: ctx.provider, fromNumber: num.phoneE164 || e164 };
+}
 
 async function resolveTenantSmsProvider(tenantId: string): Promise<TenantSmsProviderResult | null> {
   const tenant = await (db as any).tenant.findUnique({
@@ -2641,6 +2655,46 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       fromNumbers.unshift({ number: result.fromNumber, label: result.fromNumber });
     }
     return { capable: true, fromNumber: result.fromNumber, fromNumbers, provider: result.providerName, reason: null };
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/send-pay-all-sms", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const input = z.object({ phone: z.string().min(7).max(20), note: z.string().max(300).optional() }).parse(req.body || {});
+
+    const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, include: { billingSettings: true } });
+    if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+
+    const raw = await (db as any).billingInvoice.findMany({
+      where: { tenantId, status: { notIn: ["PAID", "VOID"] }, billingProfileId: null },
+    });
+    const unpaid = raw.filter((inv: any) => Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0) > 0);
+    if (unpaid.length === 0) return reply.code(400).send({ error: "no_unpaid_invoices", message: "This tenant has no unpaid invoices." });
+    const totalDueCents = unpaid.reduce((sum: number, inv: any) => sum + Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0), 0);
+
+    const sender = await resolveBillingSmsSender();
+    if (!sender) return reply.code(400).send({ error: "billing_sms_sender_unavailable", message: "The billing SMS sender number is not configured or has no SMS credentials." });
+
+    const rawPhone = input.phone.trim();
+    const normalizedPhone = rawPhone.startsWith("+") ? rawPhone : `+1${rawPhone.replace(/\D/g, "")}`;
+    if (normalizedPhone.replace(/\D/g, "").length < 10) {
+      return reply.code(400).send({ error: "invalid_phone", message: "Phone number appears too short." });
+    }
+
+    const payUrl = tenantPayAllPublicUrl(tenantId);
+    const amountStr = centsToDollarsStr(totalDueCents);
+    const msgBody = `Connect Communications: You have a balance of ${amountStr} due. Please complete your payment securely here: ${payUrl}. Thank you!`;
+
+    try {
+      await sender.provider.sendMessage({ tenantId, to: normalizedPhone, from: sender.fromNumber, body: msgBody });
+    } catch (err: any) {
+      await logBillingEvent({ tenantId, type: "billing.pay_all_sms_failed", message: `Pay-all SMS send failed: ${err?.message || "unknown error"}`, metadata: { toPhone: normalizedPhone, fromPhone: sender.fromNumber, adminUserId: u.sub } });
+      return reply.code(502).send({ error: "sms_send_failed", message: err?.message || "SMS provider returned an error." });
+    }
+
+    await logBillingEvent({ tenantId, type: "billing.pay_all_sms_sent", message: `Pay-all SMS sent to ${normalizedPhone} (${amountStr}, ${unpaid.length} invoices)`, metadata: { toPhone: normalizedPhone, fromPhone: sender.fromNumber, totalDueCents, invoiceCount: unpaid.length, link: payUrl, adminUserId: u.sub } });
+    return { ok: true, link: payUrl, to: normalizedPhone, from: sender.fromNumber, totalDueCents, invoiceCount: unpaid.length };
   });
 
   app.post("/admin/billing/invoices/:id/sms-payment-link", async (req, reply) => {

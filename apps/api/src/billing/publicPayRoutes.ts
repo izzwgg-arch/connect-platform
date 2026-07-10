@@ -6,8 +6,8 @@ import {
   getBillingSolaAdapter,
   resolveBillingGatewayConfig,
 } from "./solaGateway";
-import { billingLiveChargesDisabled, chargeBillingInvoiceWithSut } from "./solaBillingPayments";
-import { verifyBillingInvoicePayToken } from "./billingPayToken";
+import { billingLiveChargesDisabled, chargeBillingInvoiceWithSut, chargeBillingInvoice } from "./solaBillingPayments";
+import { verifyBillingInvoicePayToken, verifyTenantPayAllToken } from "./billingPayToken";
 import { logBillingEvent } from "./invoiceEngine";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 
@@ -23,6 +23,23 @@ async function loadInvoiceForPayToken(token: string) {
   });
   if (!invoice) return { error: "invoice_not_found" as const, code: 404 as const };
   return { invoice, parsed };
+}
+
+async function loadUnpaidInvoicesForPayAllToken(token: string) {
+  const parsed = verifyTenantPayAllToken(token);
+  if (!parsed) return { error: "pay_all_token_invalid" as const, code: 410 as const };
+  const tenant = await (db as any).tenant.findUnique({
+    where: { id: parsed.tenantId },
+    select: { name: true, billingSettings: true },
+  });
+  if (!tenant) return { error: "tenant_not_found" as const, code: 404 as const };
+  const raw = await (db as any).billingInvoice.findMany({
+    where: { tenantId: parsed.tenantId, status: { notIn: ["PAID", "VOID"] }, billingProfileId: null },
+    orderBy: { periodStart: "asc" },
+    include: { lineItems: { orderBy: { createdAt: "asc" } } },
+  });
+  const invoices = raw.filter((inv: any) => Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0) > 0);
+  return { tenantId: parsed.tenantId, tenant, invoices };
 }
 
 /** Public (JWT-free) routes for customer self-pay on BillingInvoice. */
@@ -216,5 +233,114 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       }
       throw e;
     }
+  });
+
+  // -- Pay-all: pay ALL of a tenant's unpaid invoices via ONE link (cowork) ----
+  app.get("/billing/platform/pay-all/:token", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const loaded = await loadUnpaidInvoicesForPayAllToken(token);
+    if ("error" in loaded) return reply.code(loaded.code).send({ error: loaded.error });
+    const { tenant, invoices } = loaded;
+    const totalDueCents = invoices.reduce((sum: number, inv: any) => sum + Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0), 0);
+    const brand = resolveInvoiceEmailBranding(tenant?.billingSettings || {}, tenant?.name);
+    return {
+      companyName: brand.displayName || tenant?.name || "Connect Communications",
+      currency: "USD",
+      totalDueCents,
+      invoiceCount: invoices.length,
+      canPay: totalDueCents > 0,
+      invoices: invoices.map((inv: any) => ({
+        invoiceId: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        status: inv.status,
+        totalCents: inv.totalCents,
+        balanceDueCents: Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0),
+        dueDate: inv.dueDate,
+        periodStart: inv.periodStart,
+        periodEnd: inv.periodEnd,
+      })),
+    };
+  });
+
+  app.get("/billing/platform/pay-all/:token/public-config", async (req, reply) => {
+    if (!hasCredentialsMasterKey()) return reply.code(503).send({ error: "credential_crypto_unavailable" });
+    const { token } = req.params as { token: string };
+    const loaded = await loadUnpaidInvoicesForPayAllToken(token);
+    if ("error" in loaded) return reply.code(loaded.code).send({ error: loaded.error });
+    const gateway = await resolveBillingGatewayConfig(loaded.tenantId, { forTokenizing: true });
+    if (!gateway.ifieldsKey) return reply.code(503).send({ error: "payment_gateway_not_configured" });
+    const totalDueCents = loaded.invoices.reduce((sum: number, inv: any) => sum + Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0), 0);
+    return {
+      ifieldsKey: gateway.ifieldsKey,
+      ifieldsVersion: "3.4.2602.2001",
+      mode: gateway.mode || "sandbox",
+      canPay: totalDueCents > 0,
+      gatewayConfigured: gateway.configured,
+    };
+  });
+
+  app.post("/billing/platform/pay-all/:token/pay", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const loaded = await loadUnpaidInvoicesForPayAllToken(token);
+    if ("error" in loaded) return reply.code(loaded.code).send({ error: loaded.error });
+    const { tenantId, invoices } = loaded;
+    if (invoices.length === 0) return { ok: true, nothingDue: true, results: [] };
+    if (billingLiveChargesDisabled()) return reply.code(503).send({ error: "billing_live_charges_disabled" });
+
+    const input = z.object({
+      xSut: z.string().min(8),
+      xExp: z.string().min(4).max(4).optional(),
+      cardholderName: z.string().max(120).optional(),
+      billingZip: z.string().max(20).optional(),
+      billingEmail: z.string().email().max(200).optional(),
+    }).parse(req.body || {});
+
+    let adapter;
+    try {
+      adapter = await getBillingSolaAdapter(tenantId);
+    } catch (e: any) {
+      if (String(e?.message || e).includes("SOLA_NOT_ENABLED")) return reply.code(503).send({ error: "payment_gateway_not_enabled" });
+      throw e;
+    }
+
+    if (input.billingEmail?.trim()) {
+      await (db as any).tenantBillingSettings.update({ where: { tenantId }, data: { billingEmail: input.billingEmail.trim() } }).catch(() => null);
+    }
+
+    const cardData = { xSut: input.xSut, xExp: input.xExp, cardholderName: input.cardholderName, billingZip: input.billingZip };
+    const results: any[] = [];
+    let method: any = null;
+    for (let i = 0; i < invoices.length; i++) {
+      const inv = invoices[i];
+      try {
+        let tx: any;
+        if (i === 0) {
+          tx = await chargeBillingInvoiceWithSut(inv, cardData, {
+            adapter,
+            note: "pay_all_link",
+            persistPaymentMethod: invoices.length > 1,
+            customerIdentity: `tenant:${tenantId}`,
+          });
+          const savedId = (tx?.rawResponseSafeJson as any)?.savedPaymentMethodId;
+          if (savedId) method = await (db as any).paymentMethod.findUnique({ where: { id: savedId } });
+        } else if (method) {
+          tx = await chargeBillingInvoice(inv, method, { adapter, note: "pay_all_link", customerIdentity: `tenant:${tenantId}` });
+        } else {
+          results.push({ invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, error: "card_not_saved_for_remaining" });
+          continue;
+        }
+        results.push({ invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, approved: tx?.status === "APPROVED", transactionId: tx?.id });
+      } catch (e: any) {
+        results.push({ invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, error: e?.message ? String(e.message) : "charge_failed" });
+      }
+    }
+    const paidCount = results.filter((r) => r.approved).length;
+    await logBillingEvent({
+      tenantId,
+      type: "payment.pay_all_link_submitted",
+      message: `Pay-all link: ${paidCount}/${invoices.length} invoices paid`,
+      metadata: { results },
+    }).catch(() => null);
+    return { ok: true, paidCount, invoiceCount: invoices.length, results };
   });
 }

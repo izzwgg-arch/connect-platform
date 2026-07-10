@@ -35,6 +35,7 @@ import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
 import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
+import { tenantPayAllPublicUrl } from "../../api/src/billing/billingEmailLifecycle";
 import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
@@ -2458,6 +2459,97 @@ async function runAutopayReminderPhase(
   });
 }
 
+
+// -- PAYMENT_LINK collection mode (cowork): text a pay-all link instead of autopay --
+function readCollectionMode(metadata: unknown): "AUTOPAY" | "PAYMENT_LINK" {
+  const m = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as any) : {};
+  return String(m.collectionMode || "").toUpperCase() === "PAYMENT_LINK" ? "PAYMENT_LINK" : "AUTOPAY";
+}
+function billingContactPhone(metadata: unknown): string | null {
+  const m = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as any) : {};
+  const raw = String(m.billingContactPhone || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  return raw.startsWith("+") ? raw : `+1${digits}`;
+}
+function centsToDollarsWorker(cents: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format((cents || 0) / 100);
+}
+async function resolveBillingSmsSenderWorker(): Promise<{ client: SmsProvider; fromNumber: string } | null> {
+  const fromRaw = (process.env.BILLING_SMS_FROM_NUMBER || "8457231213").replace(/\D/g, "");
+  const e164 = `+1${fromRaw}`;
+  const num = await (db as any).tenantSmsNumber.findFirst({
+    where: { OR: [{ phoneRaw: fromRaw }, { phoneE164: e164 }], active: true },
+    select: { tenantId: true, phoneE164: true, provider: true },
+  });
+  if (!num) return null;
+  const client = await getProviderClient(num.tenantId, num.provider as ProviderName);
+  if (!client) return null;
+  return { client, fromNumber: num.phoneE164 || e164 };
+}
+async function tenantUnpaidTotalCents(tenantId: string): Promise<number> {
+  const raw = await (db as any).billingInvoice.findMany({
+    where: { tenantId, status: { notIn: ["PAID", "VOID"] }, billingProfileId: null },
+    select: { balanceDueCents: true, totalCents: true },
+  });
+  return raw.reduce((sum: number, inv: any) => sum + Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0), 0);
+}
+async function sendPayAllLinkSms(params: { tenantId: string; toPhone: string; totalDueCents: number; tag: "t3" | "payment_date"; paymentDate: string; runId: string | null; dueToday: boolean }): Promise<boolean> {
+  const recent = await (db as any).billingEventLog.findMany({
+    where: { tenantId: params.tenantId, type: "billing.pay_all_sms_sent", createdAt: { gte: new Date(Date.now() - 40 * 24 * 3600 * 1000) } },
+    select: { metadata: true },
+  });
+  if (recent.some((e: any) => (e.metadata as any)?.tag === params.tag && (e.metadata as any)?.paymentDate === params.paymentDate)) return false;
+  const sender = await resolveBillingSmsSenderWorker();
+  if (!sender) {
+    await (db as any).billingEventLog.create({ data: { tenantId: params.tenantId, runId: params.runId, type: "billing.pay_all_sms_sender_unavailable", message: "Billing SMS sender number not configured or has no SMS credentials." } }).catch(() => null);
+    return false;
+  }
+  const link = tenantPayAllPublicUrl(params.tenantId);
+  const amount = centsToDollarsWorker(params.totalDueCents);
+  const body = params.dueToday
+    ? `Connect Communications: A payment of ${amount} is due today. Pay securely here: ${link}. Thank you!`
+    : `Connect Communications: You have a balance of ${amount} due on ${params.paymentDate}. Pay securely here: ${link}. Thank you!`;
+  try {
+    await sender.client.sendMessage({ tenantId: params.tenantId, to: params.toPhone, from: sender.fromNumber, body });
+  } catch (err: any) {
+    await (db as any).billingEventLog.create({ data: { tenantId: params.tenantId, runId: params.runId, type: "billing.pay_all_sms_failed", message: `Pay-all SMS (${params.tag}) failed: ${err?.message || "unknown"}`, metadata: { tag: params.tag, paymentDate: params.paymentDate, toPhone: params.toPhone } } }).catch(() => null);
+    return false;
+  }
+  await (db as any).billingEventLog.create({ data: { tenantId: params.tenantId, runId: params.runId, type: "billing.pay_all_sms_sent", message: `Pay-all SMS (${params.tag}) sent to ${params.toPhone} (${amount})`, metadata: { tag: params.tag, paymentDate: params.paymentDate, toPhone: params.toPhone, fromPhone: sender.fromNumber, totalDueCents: params.totalDueCents, link } } }).catch(() => null);
+  return true;
+}
+async function runPaymentLinkModeForTenant(setting: any, schedule: BillingSchedule, runId: string, results: any[]): Promise<void> {
+  const phone = billingContactPhone(setting.metadata);
+  if (schedule.reminderDue) {
+    let invoice = await findAutopayPeriodInvoice(setting.tenantId, schedule);
+    if (!invoice) {
+      try { invoice = await createWorkerBillingInvoice(setting, schedule, { skipInvoiceEmail: true }); } catch (err: any) {
+        await (db as any).billingEventLog.create({ data: { tenantId: setting.tenantId, runId, type: "autopay_invoice_generation_failed", message: err?.message ? String(err.message) : "invoice_create_failed" } }).catch(() => null);
+      }
+    }
+  }
+  if (!phone) {
+    await (db as any).billingEventLog.create({ data: { tenantId: setting.tenantId, runId, type: "billing.pay_all_no_contact_phone", message: "PAYMENT_LINK collection mode is on but no billingContactPhone is set — cannot text a payment link." } }).catch(() => null);
+    results.push({ tenantId: setting.tenantId, mode: "payment_link", skipped: "no_contact_phone" });
+    return;
+  }
+  if (schedule.reminderDue) {
+    const total = await tenantUnpaidTotalCents(setting.tenantId);
+    if (total > 0) {
+      const sent = await sendPayAllLinkSms({ tenantId: setting.tenantId, toPhone: phone, totalDueCents: total, tag: "t3", paymentDate: schedule.paymentDate, runId, dueToday: false });
+      results.push({ tenantId: setting.tenantId, mode: "payment_link", phase: "t3", smsSent: sent });
+    }
+  }
+  if (schedule.due) {
+    const total = await tenantUnpaidTotalCents(setting.tenantId);
+    if (total > 0) {
+      const sent = await sendPayAllLinkSms({ tenantId: setting.tenantId, toPhone: phone, totalDueCents: total, tag: "payment_date", paymentDate: schedule.paymentDate, runId, dueToday: true });
+      results.push({ tenantId: setting.tenantId, mode: "payment_link", phase: "payment_date", smsSent: sent });
+    }
+  }
+}
+
 async function runMonthlyBillingAutomation(): Promise<void> {
   if (_billingAutomationRunning) return;
   _billingAutomationRunning = true;
@@ -2483,6 +2575,10 @@ async function runMonthlyBillingAutomation(): Promise<void> {
     const results: any[] = [];
     for (const { setting, schedule } of dueSchedules) {
       try {
+        if (readCollectionMode(setting.metadata) === "PAYMENT_LINK") {
+          await runPaymentLinkModeForTenant(setting, schedule, run.id, results);
+          continue;
+        }
         await runAutopayReminderPhase(setting, schedule, run.id, results);
 
         if (!schedule.due) {
