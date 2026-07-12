@@ -1656,32 +1656,6 @@ export function NotificationsProvider({
     sip.prewarmInboundMedia();
   }, [incomingInvite?.id, sip]);
 
-  // Clear a leaked CallKit "active call" (green status-bar pill). A wake-reported
-  // CallKit call is keyed on the PBX call-id UUID; some teardown paths only end
-  // the invite-id UUID, orphaning the wake one. On returning to the foreground
-  // with NO live call, end any orphaned CallKit calls. Guarded + delayed
-  // re-check so it can never end a real, in-progress call.
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (s) => {
-      if (s !== "active") return;
-      const noLiveCall = () =>
-        !incomingInvite &&
-        !callSessions.hasAnyOngoingCall &&
-        answerHandoffInviteIdRef.current == null;
-      if (!noLiveCall()) return;
-      setTimeout(() => {
-        if (noLiveCall()) {
-          try {
-            endAllNativeCalls();
-          } catch {
-            // best-effort
-          }
-        }
-      }, 1200);
-    });
-    return () => sub.remove();
-  }, [incomingInvite, callSessions.hasAnyOngoingCall]);
-
   useEffect(() => {
     setCallFlowInviteId(incomingInvite?.id ?? null);
   }, [incomingInvite?.id]);
