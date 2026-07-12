@@ -1654,6 +1654,25 @@ export function NotificationsProvider({
     // ring after voicemail, no orphaned green "active call" pill).
     associateCallIds(incomingInvite.id, incomingInvite.pbxCallId ?? null);
     sip.prewarmInboundMedia();
+    // iOS cold-answer: warm the WebRTC engine (PeerConnection factory only - no
+    // mic, no audio session) during the ring so the first answer completes fast
+    // enough that CallKit's audio session activates before it times out.
+    if (Platform.OS === "ios") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { RTCPeerConnection } = require("react-native-webrtc");
+        const warmPc = new RTCPeerConnection({ iceServers: [] });
+        setTimeout(() => {
+          try {
+            warmPc.close();
+          } catch {
+            // ignore
+          }
+        }, 0);
+      } catch {
+        // best-effort warm - ignore
+      }
+    }
   }, [incomingInvite?.id, sip]);
 
   useEffect(() => {
