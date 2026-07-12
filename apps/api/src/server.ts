@@ -28579,6 +28579,7 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
     toExtension: z.string().nullable().optional(),
+    fromNumber: z.string().nullable().optional(),
   }).parse(req.body || {});
 
   // ── Resolve Connect tenantId ──────────────────────────────────────────────
@@ -28694,11 +28695,62 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     }
   }
 
+  // iOS killed-app wake via PushKit VoIP. The Expo INCOMING_CALL_WAKE above
+  // wakes Android + foreground/short-bg iOS, but it CANNOT wake a terminated
+  // iOS app - only a native APNs VoIP push (apns-push-type: voip) does that.
+  // Fire a real VoIP push to the ringing extension's iOS devices so a
+  // cold-killed iPhone wakes, registers SIP, and CallKit rings during the
+  // dialplan's wait-for-wake grace window. Reuses the Apple-compliant sender
+  // (fg-active gate + token invalidation + logging). SURGICAL: only when the
+  // target extension is known, so we never VoIP-push devices not being rung.
+  let voipWoken = 0;
+  if (input.toExtension && input.toExtension.trim() && isApnsVoipConfigured()) {
+    try {
+      const iosDevices = await db.mobileDevice.findMany({
+        where: { tenantId, userId: { in: candidateUserIds }, active: true, platform: "IOS" } as any,
+        select: { id: true, platform: true, voipPushToken: true, userId: true } as any,
+        take: 50,
+      }).catch((err: any) => {
+        app.log.warn({ err: err?.message, tenantId, linkedId: input.linkedId }, "prewake_voip_device_query_failed");
+        return [] as Array<{ id: string; platform: string; voipPushToken: string | null; userId: string | null }>;
+      });
+      const byUser = new Map<string, Array<{ id: string; platform: string; voipPushToken: string | null }>>();
+      for (const d of iosDevices as Array<{ id: string; platform: string; voipPushToken: string | null; userId: string | null }>) {
+        if (!d.voipPushToken) continue;
+        const u = typeof d.userId === "string" ? d.userId : "";
+        if (!u) continue;
+        if (!byUser.has(u)) byUser.set(u, []);
+        byUser.get(u)!.push({ id: d.id, platform: d.platform, voipPushToken: d.voipPushToken });
+      }
+      for (const [uid, devs] of byUser) {
+        voipWoken += devs.length;
+        await sendApnsVoipPushesForIncomingCallApi({
+          tenantId,
+          userId: uid,
+          callId: input.linkedId,
+          voipPayload: {
+            callId: input.linkedId,
+            tenantId,
+            toExtension: input.toExtension.trim(),
+            callerNumber: input.fromNumber?.trim() || null,
+            callerName: null,
+            timestamp: wakeRequestedAt,
+          },
+          devices: devs,
+        }).catch((err: any) =>
+          app.log.warn({ err: err?.message, tenantId, userId: uid, linkedId: input.linkedId }, "prewake_voip_send_failed"),
+        );
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, linkedId: input.linkedId }, "prewake_voip_block_error");
+    }
+  }
+
   app.log.info(
-    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, toExtension: input.toExtension ?? null },
+    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, voipWoken, toExtension: input.toExtension ?? null },
     "mobile-prewake: done",
   );
-  return { ok: true, woken, candidates: candidateUserIds.length };
+  return { ok: true, woken, voipWoken, candidates: candidateUserIds.length };
 });
 
 // ─── Push-wake config publisher (admin/internal) ─────────────────────────────

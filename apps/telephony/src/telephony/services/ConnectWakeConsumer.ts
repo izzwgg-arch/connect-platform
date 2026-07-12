@@ -39,6 +39,9 @@ export interface ConnectWakeDeliverInput {
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
   toExtension: string;
+  /** Caller number for the held inbound call, so the iOS VoIP wake can present
+   *  a proper CallKit call with the number. Null when Asterisk gave us none. */
+  fromNumber: string | null;
 }
 
 /** Minimal slice of PbxTenantMapCache this consumer depends on (keeps it testable). */
@@ -171,6 +174,7 @@ export class ConnectWakeConsumer {
       connectTenantId,
       pbxVitalTenantId: evt.tid,
       toExtension: evt.ext,
+      fromNumber: evt.from ?? null,
     }).catch((err: unknown) => {
       log.warn(
         { err: err instanceof Error ? err.message : String(err), tid: evt.tid, ext: evt.ext },

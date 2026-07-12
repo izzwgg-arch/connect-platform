@@ -400,6 +400,7 @@ export class MobilePushNotifier {
       connectTenantId,
       pbxVitalTenantId,
       toExtension: knownExt,
+      fromNumber: call.from ?? null,
     }).catch((err: unknown) => {
       log.warn(
         { linkedId: call.linkedId, err: (err as Error)?.message },
@@ -413,6 +414,7 @@ export class MobilePushNotifier {
     connectTenantId: string | null;
     pbxVitalTenantId: string | null;
     toExtension: string | null;
+    fromNumber?: string | null;
   }): Promise<void> {
     if (!this.prewakeUrl) return;
     const controller = new AbortController();
