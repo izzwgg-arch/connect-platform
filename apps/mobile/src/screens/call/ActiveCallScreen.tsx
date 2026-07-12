@@ -454,7 +454,8 @@ export function ActiveCallScreen() {
         {/* Timer — only shown when connected */}
         <CallTimer
           running={isConnected && !sip.onHold}
-          style={{ marginTop: 6, opacity: isConnected ? 1 : 0 }}
+          startAt={primarySession?.answeredAt ?? null}
+          style={{ marginTop: 6, opacity: primarySession?.answeredAt != null ? 1 : 0 }}
         />
 
         {/* Hold badge */}

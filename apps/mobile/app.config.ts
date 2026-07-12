@@ -79,6 +79,7 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: false,
     bundleIdentifier: 'com.connectcommunications.mobile',
+    buildNumber: '9',
     infoPlist: {
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
       NSMicrophoneUsageDescription: 'Microphone access is required for voice calls.',

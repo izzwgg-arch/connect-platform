@@ -241,3 +241,16 @@ export function bringAppToForeground() {
     // ignore
   }
 }
+
+
+/** End ALL CallKit calls. Clears an orphaned/leaked "active call" (the green
+ *  status-bar pill) when the app returns to the foreground with no live call.
+ *  Callers MUST guard this behind a definitive "no live call" check - it will
+ *  end a real in-progress call. Best-effort; never throws. */
+export function endAllNativeCalls() {
+  try {
+    RNCallKeep.endAllCalls();
+  } catch {
+    // ignore
+  }
+}

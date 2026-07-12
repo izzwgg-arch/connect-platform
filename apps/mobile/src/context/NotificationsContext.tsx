@@ -34,12 +34,14 @@ import {
   bringAppToForeground,
   consumeInitialCallKeepEvents,
   dismissNativeIncomingUi,
+  endAllNativeCalls,
   endNativeCall,
   moveAppToBackground,
   setupNativeCalling,
   showIncomingNativeCall,
   subscribeNativeCallActions,
 } from "../sip/callkeep";
+import { warmCallMediaSubsystem } from "../sip/permissions";
 import {
   subscribeTelecomActions,
   terminateTelecomCall,
@@ -1569,6 +1571,11 @@ export function NotificationsProvider({
 
   useEffect(() => {
     if (!incomingInvite?.id) return;
+    // Build 9: warm the WebRTC engine during the ring (PeerConnection factory
+    // only - no mic, no audio session) so the FIRST answer on a cold-launched
+    // app completes instantly instead of missing the PBX dial window and
+    // dropping to voicemail. Best-effort, deduped per invite.
+    void warmCallMediaSubsystem(incomingInvite.id);
     if (
       sip.registrationState === "registered" ||
       sip.registrationState === "registering"
@@ -1583,6 +1590,32 @@ export function NotificationsProvider({
       );
     });
   }, [incomingInvite?.id, sip.registrationState]);
+
+  // Build 9: clear a leaked CallKit "active call" (green status-bar pill). A
+  // wake-reported CallKit call is keyed on the PBX call-id UUID; some teardown
+  // paths only end the invite-id UUID, orphaning the wake one. On returning to
+  // the foreground with NO live call, end any orphaned CallKit calls. Guarded +
+  // delayed re-check so it can never end a real, in-progress call.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s !== "active") return;
+      const noLiveCall = () =>
+        !incomingInvite &&
+        !callSessions.hasAnyOngoingCall &&
+        answerHandoffInviteIdRef.current == null;
+      if (!noLiveCall()) return;
+      setTimeout(() => {
+        if (noLiveCall()) {
+          try {
+            endAllNativeCalls();
+          } catch {
+            // best-effort
+          }
+        }
+      }, 1200);
+    });
+    return () => sub.remove();
+  }, [incomingInvite, callSessions.hasAnyOngoingCall]);
 
   useEffect(() => {
     setCallFlowInviteId(incomingInvite?.id ?? null);

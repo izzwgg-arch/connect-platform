@@ -90,3 +90,32 @@ export async function ensureMicPermissionOrAlert(): Promise<boolean> {
   showAppAlert('Microphone Required', res.message ?? 'Microphone access is needed to make calls.');
   return false;
 }
+
+
+/** Warm the WebRTC engine during an incoming ring so the FIRST getUserMedia
+ *  inside `session.answer()` is fast on a cold-launched app. Creates and
+ *  immediately closes a throwaway RTCPeerConnection: this initializes the
+ *  native WebRTC PeerConnectionFactory (the heavy one-time cost) WITHOUT
+ *  acquiring the microphone or activating an audio session, so it cannot affect
+ *  call audio or the ringtone. Deduped per invite; never throws. */
+let _lastWarmedInviteId: string | null = null;
+export async function warmCallMediaSubsystem(inviteId?: string | null): Promise<void> {
+  try {
+    if (inviteId) {
+      if (_lastWarmedInviteId === inviteId) return;
+      _lastWarmedInviteId = inviteId;
+    }
+    // Lazy-require so non-calling surfaces never pull in react-native-webrtc.
+    const webrtc = require('react-native-webrtc');
+    const PC = webrtc.RTCPeerConnection;
+    if (!PC) return;
+    const pc = new PC({ iceServers: [] });
+    try {
+      if (typeof pc.close === 'function') pc.close();
+    } catch {
+      // ignore
+    }
+  } catch {
+    // best-effort warm - ignore
+  }
+}
