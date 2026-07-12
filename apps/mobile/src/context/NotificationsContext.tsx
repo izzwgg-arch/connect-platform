@@ -1654,28 +1654,6 @@ export function NotificationsProvider({
     // ring after voicemail, no orphaned green "active call" pill).
     associateCallIds(incomingInvite.id, incomingInvite.pbxCallId ?? null);
     sip.prewarmInboundMedia();
-    // iOS cold-answer: the mic prewarm above is Android-only (CallKit owns the
-    // audio session on iOS). Still warm the WebRTC engine during the ring by
-    // creating+closing a throwaway RTCPeerConnection: this initializes the
-    // native PeerConnectionFactory (the heavy one-time cost) WITHOUT acquiring
-    // the mic or activating an audio session, so the first answer on a
-    // cold-launched app completes before the PBX dial window closes. Best-effort.
-    if (Platform.OS === "ios") {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { RTCPeerConnection } = require("react-native-webrtc");
-        const warmPc = new RTCPeerConnection({ iceServers: [] });
-        setTimeout(() => {
-          try {
-            warmPc.close();
-          } catch {
-            // ignore
-          }
-        }, 0);
-      } catch {
-        // best-effort warm - ignore
-      }
-    }
   }, [incomingInvite?.id, sip]);
 
   // Clear a leaked CallKit "active call" (green status-bar pill). A wake-reported

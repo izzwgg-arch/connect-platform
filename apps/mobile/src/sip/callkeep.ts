@@ -249,24 +249,7 @@ export function showIncomingNativeCall(callId: string, from: string) {
 }
 
 export function endNativeCall(callId: string) {
-  // Tear down any sibling CallKit call (invite-id <-> pbxCallId) FIRST so a
-  // cancel/hangup/voicemail ends every CallKit call for this phone call. We
-  // delete each sibling's associations before recursing so there is no loop.
-  const _sibs = siblingCallIds.get(callId);
-  if (_sibs && _sibs.size) {
-    const _copy = Array.from(_sibs);
-    siblingCallIds.delete(callId);
-    for (const _s of _copy) {
-      siblingCallIds.delete(_s);
-      try {
-        endNativeCall(_s);
-      } catch {
-        // ignore
-      }
-    }
-  } else {
-    siblingCallIds.delete(callId);
-  }
+  siblingCallIds.delete(callId);
   reportedIncomingCallIds.delete(callId);
   dismissNativeIncomingUi(callId);
   // iOS: ALWAYS resolve to the deterministic CallKit UUID so we end the exact
