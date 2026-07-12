@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 
 function pad(n: number): string {
   return String(n).padStart(2, '0');
@@ -13,30 +14,45 @@ export function formatDuration(seconds: number): string {
 }
 
 /**
- * Wall-clock call timer anchored to `connectedAt` (epoch ms) — the moment the
- * call was answered — rather than a local counter that increments from zero.
- * Elapsed time is always derived as `Date.now() - connectedAt`, so it reflects
- * the call's real duration even after the component unmounts/remounts (e.g.
- * the user leaves the ActiveCall screen — backgrounding the app or navigating
- * away — and comes back later). A counter-based timer would restart at zero
- * on every fresh mount since its state is local to the component instance;
- * this can't, because it has no state to lose — only `connectedAt` matters.
+ * Wall-clock call timer anchored to `connectedAt` (epoch ms). Elapsed is always
+ * derived as `Date.now() - connectedAt`, so it reflects real call duration even
+ * across backgrounding / screen remounts. If the call is active but the session
+ * has not populated `connectedAt` yet (state-store lag vs sip.callState), we
+ * anchor to the first active render so the timer starts immediately instead of
+ * sitting at 00:00; the real `connectedAt` takes precedence as soon as it lands.
+ * An AppState listener forces an immediate recompute on return to foreground.
  */
 export function useCallTimer(
   connectedAt: number | null,
   active: boolean = true
 ): { elapsed: number; formatted: string } {
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const fallbackStartRef = useRef<number | null>(null);
+
+  if (active) {
+    if (connectedAt == null && fallbackStartRef.current == null) {
+      fallbackStartRef.current = Date.now();
+    }
+  } else if (fallbackStartRef.current != null) {
+    fallbackStartRef.current = null;
+  }
+  const effectiveStart = connectedAt ?? fallbackStartRef.current;
 
   useEffect(() => {
-    if (!active || !connectedAt) return undefined;
+    if (!active || !effectiveStart) return undefined;
     setNowTs(Date.now());
     const id = setInterval(() => setNowTs(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [active, connectedAt]);
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') setNowTs(Date.now());
+    });
+    return () => {
+      clearInterval(id);
+      sub.remove();
+    };
+  }, [active, effectiveStart]);
 
   const elapsed =
-    active && connectedAt ? Math.max(0, Math.floor((nowTs - connectedAt) / 1000)) : 0;
+    active && effectiveStart ? Math.max(0, Math.floor((nowTs - effectiveStart) / 1000)) : 0;
 
   return {
     elapsed,

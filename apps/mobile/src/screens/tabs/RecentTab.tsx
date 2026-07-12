@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as Haptics from 'expo-haptics';
 import {
   Animated,
   View,
@@ -766,23 +767,83 @@ const CallCard = memo(function CallCard({
   const translateX = useRef(new Animated.Value(0)).current;
   const accent = kindAccent(group.kind, colors);
 
+  // Right = Call (green), Left = Message (teal). Directional, rubber-banded drag
+  // that only claims the gesture once it is clearly horizontal (so it never
+  // fights the list's vertical scroll on iOS), arms with a light haptic and
+  // commits with a firmer one, then springs cleanly back.
+  const ACTION_THRESHOLD = 64;
+  const MAX_DRAG = 104;
+  const armedRef = useRef<null | 'call' | 'message'>(null);
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gesture) =>
-          Math.abs(gesture.dx) > 14 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+          Math.abs(gesture.dx) > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.7,
+        onPanResponderGrant: () => {
+          armedRef.current = null;
+        },
         onPanResponderMove: (_, gesture) => {
-          translateX.setValue(Math.max(-92, Math.min(gesture.dx, 82)));
+          let dx = gesture.dx;
+          if (dx > ACTION_THRESHOLD) dx = ACTION_THRESHOLD + (dx - ACTION_THRESHOLD) * 0.35;
+          else if (dx < -ACTION_THRESHOLD) dx = -ACTION_THRESHOLD + (dx + ACTION_THRESHOLD) * 0.35;
+          translateX.setValue(Math.max(-MAX_DRAG, Math.min(dx, MAX_DRAG)));
+          const armed =
+            gesture.dx > ACTION_THRESHOLD ? 'call' : gesture.dx < -ACTION_THRESHOLD ? 'message' : null;
+          if (armed !== armedRef.current) {
+            armedRef.current = armed;
+            if (armed) {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+            }
+          }
         },
         onPanResponderRelease: (_, gesture) => {
-          const action = gesture.dx > 54 ? 'call' : gesture.dx < -54 ? 'message' : null;
+          const action =
+            gesture.dx > ACTION_THRESHOLD ? 'call' : gesture.dx < -ACTION_THRESHOLD ? 'message' : null;
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+            speed: 18,
+            bounciness: 8,
+          }).start();
+          armedRef.current = null;
+          if (action) {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+            // Defer so the row visibly springs back before we navigate away.
+            setTimeout(() => {
+              if (action === 'call') onCall();
+              else onMessage();
+            }, 10);
+          }
+        },
+        onPanResponderTerminate: () => {
+          armedRef.current = null;
           Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
-          if (action === 'call') onCall();
-          if (action === 'message') onMessage();
         },
       }),
     [onCall, onMessage, translateX],
   );
+
+  const callHintOpacity = translateX.interpolate({
+    inputRange: [0, ACTION_THRESHOLD],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+  const callHintScale = translateX.interpolate({
+    inputRange: [0, ACTION_THRESHOLD],
+    outputRange: [0.6, 1],
+    extrapolate: 'clamp',
+  });
+  const msgHintOpacity = translateX.interpolate({
+    inputRange: [-ACTION_THRESHOLD, 0],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const msgHintScale = translateX.interpolate({
+    inputRange: [-ACTION_THRESHOLD, 0],
+    outputRange: [1, 0.6],
+    extrapolate: 'clamp',
+  });
 
   const pressIn = useCallback(() => {
     Animated.spring(scale, { toValue: 0.98, speed: 30, bounciness: 0, useNativeDriver: true }).start();
@@ -831,12 +892,30 @@ const CallCard = memo(function CallCard({
   return (
     <View style={styles.swipeWrap}>
       <View style={styles.swipeBg}>
-        <View style={[styles.swipeHint, { backgroundColor: colors.successMuted }]}>
-          <Ionicons name="call-outline" size={16} color={colors.success} />
-        </View>
-        <View style={[styles.swipeHint, { backgroundColor: colors.tealMuted }]}>
-          <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.teal} />
-        </View>
+        <Animated.View
+          style={[
+            styles.swipeHint,
+            {
+              backgroundColor: colors.successMuted,
+              opacity: callHintOpacity,
+              transform: [{ scale: callHintScale }],
+            },
+          ]}
+        >
+          <Ionicons name="call" size={18} color={colors.success} />
+        </Animated.View>
+        <Animated.View
+          style={[
+            styles.swipeHint,
+            {
+              backgroundColor: colors.tealMuted,
+              opacity: msgHintOpacity,
+              transform: [{ scale: msgHintScale }],
+            },
+          ]}
+        >
+          <Ionicons name="chatbubble-ellipses" size={18} color={colors.teal} />
+        </Animated.View>
       </View>
       <Animated.View style={{ transform: [{ translateX }, { scale }] }} {...panResponder.panHandlers}>
         <TouchableOpacity

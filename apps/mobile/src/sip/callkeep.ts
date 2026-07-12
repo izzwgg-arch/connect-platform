@@ -51,6 +51,24 @@ function iosRingtoneSoundFor(preference: MobileRingtoneId): string | undefined {
 // is byte-for-byte unchanged.
 const callIdToCallKitUuid = new Map<string, string>();
 const callKitUuidToCallId = new Map<string, string>();
+// Sibling call-id associations (invite-id <-> pbxCallId). One inbound call is
+// reported to CallKit under different ids by different push paths (the wake push
+// uses the PBX call-id, the live invite uses the invite id). Recording the pair
+// lets endNativeCall() tear down EVERY CallKit call for the same phone call, so
+// a cancel/hangup/voicemail never leaves a second call ringing on the lock
+// screen or lingering as the green "active call" pill.
+const siblingCallIds = new Map<string, Set<string>>();
+
+export function associateCallIds(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): void {
+  if (!a || !b || a === b) return;
+  if (!siblingCallIds.has(a)) siblingCallIds.set(a, new Set());
+  if (!siblingCallIds.has(b)) siblingCallIds.set(b, new Set());
+  siblingCallIds.get(a)!.add(b);
+  siblingCallIds.get(b)!.add(a);
+}
 
 // callIds already reported to CallKit — dedupe so a device that receives BOTH
 // an Expo push and a VoIP push (or repeated VoIP retries) does not create two
@@ -231,6 +249,24 @@ export function showIncomingNativeCall(callId: string, from: string) {
 }
 
 export function endNativeCall(callId: string) {
+  // Tear down any sibling CallKit call (invite-id <-> pbxCallId) FIRST so a
+  // cancel/hangup/voicemail ends every CallKit call for this phone call. We
+  // delete each sibling's associations before recursing so there is no loop.
+  const _sibs = siblingCallIds.get(callId);
+  if (_sibs && _sibs.size) {
+    const _copy = Array.from(_sibs);
+    siblingCallIds.delete(callId);
+    for (const _s of _copy) {
+      siblingCallIds.delete(_s);
+      try {
+        endNativeCall(_s);
+      } catch {
+        // ignore
+      }
+    }
+  } else {
+    siblingCallIds.delete(callId);
+  }
   reportedIncomingCallIds.delete(callId);
   dismissNativeIncomingUi(callId);
   // iOS: ALWAYS resolve to the deterministic CallKit UUID so we end the exact
@@ -298,6 +334,18 @@ export async function consumeInitialCallKeepEvents(): Promise<
 export function bringAppToForeground() {
   try {
     (RNCallKeep as any).backToForeground?.();
+  } catch {
+    // ignore
+  }
+}
+
+
+/** End ALL CallKit calls. Clears an orphaned/leaked "active call" (the green
+ *  status-bar pill) when the app returns to the foreground with no live call.
+ *  Callers MUST guard behind a definitive "no live call" check. Never throws. */
+export function endAllNativeCalls() {
+  try {
+    RNCallKeep.endAllCalls();
   } catch {
     // ignore
   }

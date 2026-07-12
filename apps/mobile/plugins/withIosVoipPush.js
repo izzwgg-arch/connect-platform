@@ -122,11 +122,14 @@ ${PATCH_BEGIN}
   // report to CallKit natively here — this is what makes a FULLY COLD-KILLED
   // iPhone ring, because JS has not booted yet at this point.
   NSDictionary *dict = payload.dictionaryPayload;
-  NSString *callId = dict[@"callId"];
-  if (callId == nil || callId.length == 0) { callId = dict[@"inviteId"]; }
-  NSString *callerNumber = dict[@"callerNumber"];
-  if (callerNumber == nil) { callerNumber = @""; }
-  NSString *callerName = dict[@"callerName"];
+  // NSNull-safe: a JSON null decodes to NSNull; calling .length on it throws
+  // -[NSNull length] (SIGABRT). Treat non-strings as absent.
+  NSString *callId = [dict[@"callId"] isKindOfClass:[NSString class]] ? dict[@"callId"] : nil;
+  if (callId == nil || callId.length == 0) {
+    callId = [dict[@"inviteId"] isKindOfClass:[NSString class]] ? dict[@"inviteId"] : nil;
+  }
+  NSString *callerNumber = [dict[@"callerNumber"] isKindOfClass:[NSString class]] ? dict[@"callerNumber"] : @"";
+  NSString *callerName = [dict[@"callerName"] isKindOfClass:[NSString class]] ? dict[@"callerName"] : nil;
   if (callerName == nil || callerName.length == 0) { callerName = callerNumber; }
   NSString *handle = (callerNumber.length > 0) ? callerNumber : @"Unknown";
 

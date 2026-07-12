@@ -34,6 +34,8 @@ import {
   bringAppToForeground,
   consumeInitialCallKeepEvents,
   dismissNativeIncomingUi,
+  associateCallIds,
+  endAllNativeCalls,
   endNativeCall,
   moveAppToBackground,
   setupNativeCalling,
@@ -1647,8 +1649,60 @@ export function NotificationsProvider({
   // handleDeclineInvite and the JsSIP session terminal handlers instead.
   useEffect(() => {
     if (!incomingInvite?.id) return;
+    // Pair the invite id with the PBX call-id so ending the call tears down
+    // EVERY CallKit call the wake/invite pushes created (no stuck lock-screen
+    // ring after voicemail, no orphaned green "active call" pill).
+    associateCallIds(incomingInvite.id, incomingInvite.pbxCallId ?? null);
     sip.prewarmInboundMedia();
+    // iOS cold-answer: the mic prewarm above is Android-only (CallKit owns the
+    // audio session on iOS). Still warm the WebRTC engine during the ring by
+    // creating+closing a throwaway RTCPeerConnection: this initializes the
+    // native PeerConnectionFactory (the heavy one-time cost) WITHOUT acquiring
+    // the mic or activating an audio session, so the first answer on a
+    // cold-launched app completes before the PBX dial window closes. Best-effort.
+    if (Platform.OS === "ios") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { RTCPeerConnection } = require("react-native-webrtc");
+        const warmPc = new RTCPeerConnection({ iceServers: [] });
+        setTimeout(() => {
+          try {
+            warmPc.close();
+          } catch {
+            // ignore
+          }
+        }, 0);
+      } catch {
+        // best-effort warm - ignore
+      }
+    }
   }, [incomingInvite?.id, sip]);
+
+  // Clear a leaked CallKit "active call" (green status-bar pill). A wake-reported
+  // CallKit call is keyed on the PBX call-id UUID; some teardown paths only end
+  // the invite-id UUID, orphaning the wake one. On returning to the foreground
+  // with NO live call, end any orphaned CallKit calls. Guarded + delayed
+  // re-check so it can never end a real, in-progress call.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s !== "active") return;
+      const noLiveCall = () =>
+        !incomingInvite &&
+        !callSessions.hasAnyOngoingCall &&
+        answerHandoffInviteIdRef.current == null;
+      if (!noLiveCall()) return;
+      setTimeout(() => {
+        if (noLiveCall()) {
+          try {
+            endAllNativeCalls();
+          } catch {
+            // best-effort
+          }
+        }
+      }, 1200);
+    });
+    return () => sub.remove();
+  }, [incomingInvite, callSessions.hasAnyOngoingCall]);
 
   useEffect(() => {
     setCallFlowInviteId(incomingInvite?.id ?? null);
