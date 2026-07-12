@@ -16,6 +16,8 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   getWebIncomingRingtone,
   getWebRingerEnabled,
+  getWebRingerOutputDeviceId,
+  getWebRingerVolume,
   WEB_RINGER_ENABLED_EVENT,
 } from "./telephonyAudioPreferences";
 
@@ -135,11 +137,10 @@ function startCadenceTone(
  * US ringback cadence is identical: 440+480 Hz, 2s on / 4s off.
  * Incoming ring uses 480+440 Hz at higher volume to stand out.
  */
-function startIncomingRingtone(ctx: AudioContext): ToneHandle {
+function startIncomingRingtone(ctx: AudioContext, volume = 0.18): ToneHandle {
   // Double-ring pattern: 0.4s on, 0.2s off, 0.4s on, 3s off
   let stopped = false;
   let timeoutId: ReturnType<typeof setTimeout>;
-  const volume = 0.18;
 
   function ring() {
     if (stopped) return;
@@ -334,11 +335,20 @@ export function useTelephonyAudio() {
       return;
     }
     stopAll();
+    // Ringer routing (desktop only): its own output device + volume, so a
+    // headset user still hears the ring on their speakers. Browser: unchanged.
+    const isDesktop =
+      typeof window !== "undefined" && Boolean((window as any).connectDesktop?.isDesktop);
+    const ringerVol = isDesktop ? getWebRingerVolume() : 1;
+    const ringerDeviceId = isDesktop ? getWebRingerOutputDeviceId() : "";
     const ringtonePreference = getWebIncomingRingtone();
     if (ringtonePreference === "connect-default" && typeof Audio !== "undefined") {
       const audio = new Audio("/ringtones/connect-default-ringtone.mp4");
       audio.loop = true;
-      audio.volume = 1;
+      audio.volume = ringerVol;
+      if (ringerDeviceId && typeof (audio as any).setSinkId === "function") {
+        void (audio as any).setSinkId(ringerDeviceId).catch(() => undefined);
+      }
       ringtoneAudioRef.current = audio;
       audio.play().catch(() => {
         ringtoneAudioRef.current = null;
@@ -347,7 +357,10 @@ export function useTelephonyAudio() {
     }
     const ctx = ensureCtx();
     if (!ctx) return;
-    ringtoneRef.current = startIncomingRingtone(ctx);
+    if (ringerDeviceId && typeof (ctx as any).setSinkId === "function") {
+      void (ctx as any).setSinkId(ringerDeviceId).catch(() => undefined);
+    }
+    ringtoneRef.current = startIncomingRingtone(ctx, 0.18 * ringerVol);
   }, [stopAll]);
 
   useEffect(() => {
