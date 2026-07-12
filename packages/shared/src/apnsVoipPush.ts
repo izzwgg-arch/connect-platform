@@ -211,15 +211,25 @@ export function sendApnsVoipPush(
       return;
     }
 
-    const body = JSON.stringify({
-      // CallKit-minimal payload. No alert/sound — VoIP pushes are silent wakes.
+    // CallKit-minimal payload. No alert/sound — VoIP pushes are silent wakes.
+    // CRITICAL: NEVER emit JSON null for optional fields. A JSON null decodes
+    // to NSNull on iOS, and the native PushKit handler calls `.length`/checks
+    // `== nil` on these — `[NSNull length]` throws `unrecognized selector`,
+    // crashing the app the instant it receives the push (SIGABRT in
+    // PKPushRegistry voipPayloadReceived). A crashing VoIP receiver makes iOS
+    // stop delivering VoIP pushes to the app. So OMIT empty fields entirely:
+    // an absent key decodes to nil, which the native `== nil` guard handles.
+    const bodyObj: Record<string, string> = {
       callId: payload.callId,
       tenantId: payload.tenantId,
       toExtension: payload.toExtension,
-      callerNumber: payload.callerNumber ?? null,
-      callerName: payload.callerName ?? null,
       timestamp: payload.timestamp,
-    });
+    };
+    const cn = (payload.callerNumber ?? "").toString().trim();
+    if (cn) bodyObj.callerNumber = cn;
+    const cName = (payload.callerName ?? "").toString().trim();
+    if (cName) bodyObj.callerName = cName;
+    const body = JSON.stringify(bodyObj);
 
     let session: http2.ClientHttp2Session;
     try {
