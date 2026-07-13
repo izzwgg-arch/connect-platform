@@ -67,6 +67,20 @@ export function MiniChat() {
     messagesRef.current = messages;
   }, [messages]);
 
+  // The reused chat components are theme-token driven (var(--panel)/--bg/--text).
+  // Force this window's document into dark mode while chat is mounted so the
+  // conversation matches the mobile app. This is the pop-out mini window's own
+  // document (always dark) and is separate from the browser portal.
+  useEffect(() => {
+    const el = document.documentElement;
+    const prev = el.getAttribute("data-theme");
+    el.setAttribute("data-theme", "dark");
+    return () => {
+      if (prev) el.setAttribute("data-theme", prev);
+      else el.removeAttribute("data-theme");
+    };
+  }, []);
+
   useEffect(() => {
     let alive = true;
     apiGet<{ threads: ChatThread[] }>("/chat/threads")
