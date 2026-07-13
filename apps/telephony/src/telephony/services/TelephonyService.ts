@@ -1087,7 +1087,7 @@ export class TelephonyService {
     const isInviteAccept = params.trigger === "invite_accept"; // (1)
     const isDirectExtTarget =
       !!extLegDialContext && !!extLegDialExten && /local-dialing/i.test(extLegDialContext); // (3)
-    const freshContactUri =
+    let freshContactUri =
       isInviteAccept && isDirectExtTarget && extLegAor && extLegDialedAt != null
         ? this.contactRegistry.freshContactNotDialed(
             extLegAor,
@@ -1095,8 +1095,78 @@ export class TelephonyService {
             extLegDialedContacts,
           )
         : null; // (4)+(5)
+    // STABLE-INSTANCE COLD-ANSWER WAIT (2026-07-13). With the iOS stable
+    // +sip.instance (build 16) the rewoken app still rotates its Contact URI on
+    // every REGISTER, but the VoIP-wake → WSS → REGISTER round-trip frequently
+    // lands a few seconds AFTER the user taps Answer, so freshContactNotDialed()
+    // is transiently null at this instant and the call strands on the dead
+    // pre-wake leg via `extension_leg_already_live` → voicemail (PROVEN live:
+    // linkedId 1783970133.244286, 2026-07-13 — invite_accept at +5s, no fresh
+    // contact yet, requeue skipped, hangup at +12s). When the user has actually
+    // tapped Answer (invite_accept) on a DIRECT extension dial that has NOT
+    // answered, briefly wait for that late registration before giving up.
+    //
+    // This is Android- and ring-group-safe: Android answers the INVITE with SIP
+    // 200 (tripping `extensionAnsweredAt` — the loop bails immediately and the
+    // post-wait re-check below forces modeBReDeliver=false), ring groups/queues
+    // are excluded by `isDirectExtTarget`, and a genuine fresh, not-yet-dialed
+    // contact is still required — so the RSBK ring-group loop stays impossible.
+    // The app waits up to MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS (16 s) for the
+    // requeued INVITE, so this bounded wait is well within its answer budget.
+    if (
+      isInviteAccept &&
+      isDirectExtTarget &&
+      !modeBAlreadyRedirected &&
+      !!extLegAor &&
+      extLegDialedAt != null &&
+      extLegDialedContacts.length > 0 &&
+      !freshContactUri
+    ) {
+      const MODE_B_FRESH_CONTACT_WAIT_MS = 8000;
+      const MODE_B_FRESH_CONTACT_POLL_MS = 350;
+      const waitDeadline = Date.now() + MODE_B_FRESH_CONTACT_WAIT_MS;
+      log.info(
+        { linkedId: params.linkedId, extLegAor, waitMs: MODE_B_FRESH_CONTACT_WAIT_MS },
+        "mode-b: awaiting late cold-answer registration (no fresh contact yet)",
+      );
+      while (!freshContactUri && Date.now() < waitDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, MODE_B_FRESH_CONTACT_POLL_MS));
+        const liveCall = this.calls.getById(params.linkedId);
+        // Never disturb a call that ended or answered (e.g. Android SIP 200)
+        // while we were waiting.
+        if (!liveCall || liveCall.state === "hungup" || liveCall.extensionAnsweredAt) {
+          break;
+        }
+        freshContactUri = this.contactRegistry.freshContactNotDialed(
+          extLegAor,
+          extLegDialedAt,
+          extLegDialedContacts,
+        );
+        if (freshContactUri) {
+          log.info(
+            {
+              linkedId: params.linkedId,
+              extLegAor,
+              freshContactUri,
+              waitedMs: MODE_B_FRESH_CONTACT_WAIT_MS - (waitDeadline - Date.now()),
+            },
+            "mode-b: fresh contact resolved after wait (stable-instance cold answer)",
+          );
+        }
+      }
+    }
+    // Re-confirm the call is still unanswered after any wait — a call that
+    // answered (Android SIP 200) or hung up while we waited must never be
+    // redirected.
+    const postWaitCall = this.calls.getById(params.linkedId);
+    const stillUnanswered =
+      !!postWaitCall && postWaitCall.state !== "hungup" && !postWaitCall.extensionAnsweredAt;
     const modeBReDeliver =
-      isInviteAccept && isDirectExtTarget && !!freshContactUri && !modeBAlreadyRedirected; // (1)(3)(4)(5)(7)
+      isInviteAccept &&
+      isDirectExtTarget &&
+      !!freshContactUri &&
+      !modeBAlreadyRedirected &&
+      stillUnanswered; // (1)(3)(4)(5)(7) + still-unanswered
 
     // DIAGNOSTIC ONLY (2026-06-29): emit the full Mode-B evaluation for every
     // invite_accept requeue so a failed killed-answer test proves exactly which
