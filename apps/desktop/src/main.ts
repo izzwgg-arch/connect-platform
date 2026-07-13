@@ -25,6 +25,9 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let settings: DesktopSettings = DEFAULT_SETTINGS;
 let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
+// Last theme the full portal window reported. Forwarded to the mini pop-out so it
+// follows the portal's light/dark mode. Defaults to dark (the mini's base palette).
+let miniTheme: "dark" | "light" = "dark";
 
 // ── Diagnostic file logging ───────────────────────────────────────────
 // The desktop app shipped with no logs, so failures in the hidden phone-engine
@@ -242,7 +245,13 @@ function createMiniWindow(show = true): BrowserWindow {
   miniWindow.on("resize", persistBounds);
   miniWindow.on("move", persistBounds);
 
-  loadPortal(miniWindow, "/desktop/mini-dialer");
+  // Start on the correct theme (query param avoids a light/dark flash on open) and
+  // re-assert it once loaded, so the pop-out matches the portal's current mode.
+  miniWindow.webContents.on("did-finish-load", () => {
+    if (!miniWindow || miniWindow.isDestroyed()) return;
+    miniWindow.webContents.send("desktop:mini-theme", miniTheme);
+  });
+  loadPortal(miniWindow, `/desktop/mini-dialer?miniTheme=${miniTheme}`);
   return miniWindow;
 }
 
@@ -338,6 +347,13 @@ function registerIpc(): void {
     BrowserWindow.fromWebContents(event.sender)?.minimize();
   });
   ipcMain.handle("desktop:toggle-always-on-top", () => toggleAlwaysOnTop());
+  ipcMain.handle("desktop:set-mini-theme", (_event, theme: "dark" | "light") => {
+    miniTheme = theme === "light" ? "light" : "dark";
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.webContents.send("desktop:mini-theme", miniTheme);
+    }
+    return miniTheme;
+  });
   ipcMain.handle("desktop:get-settings", () => settings);
   ipcMain.handle("desktop:update-settings", (_event, patch: Partial<DesktopSettings>) => {
     writeSettings({ ...settings, ...patch });
@@ -385,7 +401,33 @@ function registerIpc(): void {
   });
 }
 
-app.whenReady().then(() => {
+// ── Single-instance lock ──────────────────────────────────────────────
+// Without this, every launch (startOnLogin, a manual re-open, or the relaunch
+// after an asar reship) spawns a SEPARATE Connect process. Each process has its
+// own mini-window singleton, so each one opens its OWN mini dialer on an incoming
+// call — that is the "multiple dialers on every call" bug. Enforce exactly one
+// running instance: a second launch just focuses the existing window and exits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    const existing =
+      fullWindow && !fullWindow.isDestroyed()
+        ? fullWindow
+        : miniWindow && !miniWindow.isDestroyed()
+          ? miniWindow
+          : null;
+    if (existing) {
+      if (existing.isMinimized()) existing.restore();
+      existing.show();
+      existing.focus();
+    } else {
+      createFullWindow(true);
+    }
+  });
+
+  app.whenReady().then(() => {
   initLogging();
   app.setAppUserModelId("com.connectcommunications.desktop");
   settings = readSettings();
@@ -401,7 +443,8 @@ app.whenReady().then(() => {
   if (settings.openMiniOnStartup) createMiniWindow(true);
 
   app.on("activate", () => createFullWindow(true));
-});
+  });
+}
 
 app.on("window-all-closed", () => {
   if (isQuitting) app.quit();

@@ -248,6 +248,8 @@ type ConnectDesktopApi = {
     getSettings: () => Promise<DesktopWindowSettings>;
     updateSettings: (patch: Partial<DesktopWindowSettings>) => Promise<DesktopWindowSettings>;
     onSettings: (listener: (settings: DesktopWindowSettings) => void) => () => void;
+    setMiniTheme?: (theme: "dark" | "light") => Promise<unknown>;
+    onMiniTheme?: (listener: (theme: "dark" | "light") => void) => () => void;
   };
   notifications?: {
     show: (payload: { kind: string; title: string; body?: string; route?: string }) => Promise<unknown>;

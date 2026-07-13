@@ -292,16 +292,28 @@ function MiniToggle({
 export function DesktopMiniDialer() {
   const phone = useSipPhone();
   const { user, tenant, adminScope } = useAppContext();
-  // The pop-out window has its own storage and cannot read the portal's theme
-  // choice, so it stays on the mobile-style dark palette. Pin the document theme
-  // to dark too, so reused/global-styled controls (chat, form inputs) match.
-  const [miniTheme] = useState<"dark" | "light">("dark");
+  // The pop-out is a separate BrowserWindow that can't reliably read the portal's
+  // theme directly, so the desktop main process pushes it: the initial value arrives
+  // as a ?miniTheme= query param (no flash on open), and live changes arrive over the
+  // connectDesktop.window.onMiniTheme channel. Falls back to dark (the base palette).
+  const [miniTheme, setMiniTheme] = useState<"dark" | "light">(() => {
+    if (typeof window === "undefined") return "dark";
+    return new URLSearchParams(window.location.search).get("miniTheme") === "light" ? "light" : "dark";
+  });
+  useEffect(() => {
+    const off = window.connectDesktop?.window?.onMiniTheme?.((t) => {
+      setMiniTheme(t === "light" ? "light" : "dark");
+    });
+    return () => { off?.(); };
+  }, []);
+  // Drive the document theme from the pushed value so reused/global-styled controls
+  // (chat, form inputs) match the mini's light/dark palette.
   useEffect(() => {
     const el = document.documentElement;
     const prev = el.getAttribute("data-theme");
-    el.setAttribute("data-theme", "dark");
+    el.setAttribute("data-theme", miniTheme);
     return () => { if (prev) el.setAttribute("data-theme", prev); else el.removeAttribute("data-theme"); };
-  }, []);
+  }, [miniTheme]);
   const [tab, setTab] = useState<TabKey>("dialer");
   const [calls, setCalls] = useState<MiniCallRow[]>([]);
   const [contacts, setContacts] = useState<ContactRow[]>([]);
@@ -501,7 +513,15 @@ export function DesktopMiniDialer() {
                 </label>
                 <label className="settings-field">
                   <span>Ringer volume</span>
-                  <input type="range" min={0} max={100} value={Math.round(ringerVolume * 100)} onChange={(e) => updateRingerVolume(Number(e.target.value) / 100)} style={{ width: "100%" }} />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(ringerVolume * 100)}
+                    onChange={(e) => updateRingerVolume(Number(e.target.value) / 100)}
+                    className="ringer-range"
+                    style={{ width: "100%", background: `linear-gradient(to right, #3b82f6 ${Math.round(ringerVolume * 100)}%, var(--mn-surface-2) ${Math.round(ringerVolume * 100)}%)` }}
+                  />
                 </label>
                 <div className="settings-section-label">Startup</div>
                 <MiniToggle checked={settings.startOnLogin !== false} label="Start with Windows" hint="Open Connect when this computer starts" onChange={(c) => updateDesktopSettings({ startOnLogin: c })} />
