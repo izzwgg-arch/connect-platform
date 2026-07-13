@@ -4334,14 +4334,34 @@ export function NotificationsProvider({
       onEnd: async (callId) => {
         const invite = await resolveInviteForAction(callId);
         const acceptKey = invite ? ("accept:" + invite.id) : null;
+        // "Already answered" = the app recorded an accept for this invite (only
+        // added AFTER the answer succeeds, so it is false during the vulnerable
+        // answer-race window) OR the SIP call is currently connected. The
+        // connected fallback matters for a cold lock-screen answer where the
+        // invite is no longer resolvable, so a later CallKit endCall is still
+        // recognised as a real hangup rather than a ring decline.
         const alreadyAnswered =
-          !!acceptKey && consumedInviteActionRef.current.has(acceptKey);
+          (!!acceptKey && consumedInviteActionRef.current.has(acceptKey)) ||
+          sip.callState === "connected";
+        // COWORK fix (2026-07-13): a real hangup of an ESTABLISHED call must BYE
+        // the active SIP session. handleDeclineInvite only sends a ring DECLINE
+        // (respondInvite DECLINE + rejectIncomingInvite -> 486), which does NOT
+        // tear down a confirmed dialog — so the call stayed up (lock-screen
+        // "hang up doesn't hang up") and the ongoing-call banner stayed stuck.
+        // Terminate the live session instead. Same end-immediately gating as
+        // before (this branch previously ran handleDeclineInvite); only the
+        // teardown mechanism changed, so the answer race is unaffected.
+        if (alreadyAnswered) {
+          endNativeCall(callId);
+          await sip.hangup().catch(() => undefined);
+          return;
+        }
         // iOS cold-answer race guard: a stray CallKit endCall can fire around
         // the answer tap and beat it, declining our own still-ringing invite so
         // the caller lands in voicemail. For a not-yet-answered call, defer the
-        // decline; onAnswer cancels it when the user is answering. An already-
-        // answered call ends immediately (real hangup). Android is unchanged.
-        if (Platform.OS === "ios" && !alreadyAnswered) {
+        // decline; onAnswer cancels it when the user is answering. Android is
+        // unchanged.
+        if (Platform.OS === "ios") {
           if (!pendingDeclineTimersRef.current.has(callId)) {
             const timer = setTimeout(() => {
               pendingDeclineTimersRef.current.delete(callId);
