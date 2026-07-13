@@ -356,6 +356,17 @@ export function MiniChat() {
           .mc-conv-wrap .cc-conv-title { min-width: 0; }
           .mc-conv-wrap .cc-avatar.large { width: 36px; height: 36px; font-size: 13px; }
           .mc-conv-wrap .cc-call-btn span { display: none; }
+          /* Wider bubbles for the narrow pop-out window (64% is too pinched here). */
+          .mc-conv-wrap .cc-msg-wrap { max-width: 86%; }
+          .mc-conv-wrap .cc-message-list { overflow-x: hidden; }
+          /* Images ship with a fixed inline width (up to 260px) that overflows the
+             narrow bubble. Make them responsive so they never exceed the bubble. */
+          .mc-conv-wrap .cc-attach-stack { max-width: 100%; min-width: 0; }
+          .mc-conv-wrap .cc-attach-image-bubble { width: auto !important; height: auto !important; max-width: 100% !important; }
+          .mc-conv-wrap .cc-attach-image-bubble img { width: auto !important; height: auto !important; max-width: 100% !important; max-height: 300px !important; object-fit: contain !important; }
+          .mc-conv-wrap .cc-attach-media video { max-width: 100% !important; height: auto !important; }
+          .mc-conv-wrap .cc-voicenote { max-width: 100%; }
+          .mc-conv-wrap .cc-attach-file { max-width: 100%; }
         `}</style>
       </div>
     );
