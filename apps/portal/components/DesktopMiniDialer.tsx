@@ -270,6 +270,7 @@ export function DesktopMiniDialer() {
   const [settings, setSettings] = useState<MiniDesktopSettings>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickReply, setQuickReply] = useState("");
+  const [lastDialed, setLastDialed] = useState("");
   const inCall = phone.callState === "ringing" || phone.callState === "dialing" || phone.callState === "connected";
   const timerSec = useCallTimer(phone.callState === "connected");
 
@@ -404,7 +405,7 @@ export function DesktopMiniDialer() {
 
   const callTarget = (target: string) => {
     const value = target.trim();
-    if (value && phone.regState === "registered") phone.dial(value);
+    if (value && phone.regState === "registered") { phone.dial(value); setLastDialed(value); }
   };
 
   const selectedSession = phone.sessions.find((session) => session.isActive) || phone.sessions[0] || null;
@@ -535,7 +536,7 @@ export function DesktopMiniDialer() {
               {KEYS.map(([digit, letters]) => (<button key={digit} onClick={() => appendDigit(digit)}><strong>{digit}</strong><span>{letters}</span></button>))}
             </div>
             <div className="dialer-actions">
-              <button className="call-button" disabled={phone.regState !== "registered" || !phone.dialpadInput.trim()} onClick={() => callTarget(phone.dialpadInput)}><Phone size={22} /></button>
+              <button className="call-button" onClick={() => { const v = phone.dialpadInput.trim(); if (!v) { if (lastDialed) phone.setDialpadInput(lastDialed); return; } callTarget(v); }}><Phone size={22} /></button>
               <button className="delete-button" onClick={() => phone.setDialpadInput((prev) => prev.slice(0, -1))}><Delete size={20} /></button>
             </div>
           </div>
@@ -678,14 +679,14 @@ export function DesktopMiniDialer() {
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
         .dialer-pane { padding: 14px 16px 10px; height: 100%; --keyh: 56px; }
-        .dialer-pane.with-suggestions { --keyh: 44px; }
+        .dialer-pane.with-suggestions { --keyh: 50px; }
         .number-input { width: 100%; height: 44px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #f0f4ff !important; font-size: 20px; text-align: center; letter-spacing: 1px; outline: none; }
         .number-input::placeholder { color: #4d6088 !important; font-size: 15px; letter-spacing: 0; }
         .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #8899bb !important; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
         .suggestions { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px; }
         .suggestions button { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border: 0.5px solid #1e2d47; border-radius: 14px; background: #111827; color: #f0f4ff; cursor: pointer; text-align: left; } .suggestions button > :global(svg) { color: #4d6088; flex-shrink: 0; } .sugg-av { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgba(136,153,187,0.16); color: #8899bb; font-size: 13px; font-weight: 500; flex-shrink: 0; } .sugg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; } .sugg-main strong { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sugg-main small { font-size: 13px; color: #8899bb; }
         
-        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px auto 2px; width: 100%; max-width: 300px; }
+        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: auto auto 2px; width: 100%; max-width: 300px; }
         .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: var(--keyh); border-radius: 12px; border: 0; background: transparent; color: #f0f4ff; cursor: pointer; }
         .keypad button:hover { background: #162034; }
         .keypad strong { font-size: 30px; font-weight: 400; line-height: 1; }
