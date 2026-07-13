@@ -345,7 +345,7 @@ export function MiniChat() {
                app) without touching global styles or the browser experience. */
             --bg: #090e18; --panel: #111827; --panel-2: #162034; --panel-3: #1a2740;
             --border: #1e2d47; --text: #f0f4ff; --text-dim: #8899bb; --text-dimmer: #4d6088;
-            --accent: #3b82f6;
+            --accent: #3b82f6; --accent-2: #2563eb; --danger: #ef4444;
             color: #f0f4ff;
           }
           .mc-conv-wrap .cc-conversation { height: 100%; min-height: 0; flex: 1; border: 0; border-radius: 0; display: flex; flex-direction: column; }
@@ -367,6 +367,41 @@ export function MiniChat() {
           .mc-conv-wrap .cc-attach-media video { max-width: 100% !important; height: auto !important; }
           .mc-conv-wrap .cc-voicenote { max-width: 100%; }
           .mc-conv-wrap .cc-attach-file { max-width: 100%; }
+          /* The pill "bubble" composer (emoji + attach + input + send/mic on one
+             row) is only styled for the CRM shell. Port it to the mini window so
+             the bottom bar looks and works like the mobile composer instead of a
+             stack of unstyled controls with a clipped input. */
+          .mc-conv-wrap .cc-composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+          .mc-conv-wrap .cc-compose-row { display: flex; align-items: flex-end; gap: 0; }
+          .mc-conv-wrap .cc-compose-bubble {
+            position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;
+            min-height: 44px; padding: 4px;
+            border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+            border-radius: 22px; background: var(--panel-2);
+          }
+          .mc-conv-wrap .cc-compose-bubble textarea {
+            flex: 1; min-width: 0; min-height: 34px; max-height: 112px; padding: 8px 8px;
+            border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none;
+            color: var(--text); resize: none; font: inherit; font-size: 14px; line-height: 1.35;
+          }
+          .mc-conv-wrap .cc-compose-bubble textarea::placeholder { color: var(--text-dim); }
+          .mc-conv-wrap .cc-compose-icon,
+          .mc-conv-wrap .cc-compose-action {
+            width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center;
+            justify-content: center; border: 0; border-radius: 999px; background: transparent;
+            color: var(--text-dim); cursor: pointer; transition: background .15s ease, color .15s ease, transform .15s ease;
+          }
+          .mc-conv-wrap .cc-compose-icon:hover,
+          .mc-conv-wrap .cc-compose-icon.active { color: var(--text); background: rgba(59,130,246,0.16); }
+          .mc-conv-wrap .cc-plus-btn.active { transform: rotate(45deg); }
+          .mc-conv-wrap .cc-compose-action {
+            color: #fff; background: #3b82f6; box-shadow: 0 6px 16px rgba(59,130,246,0.35);
+          }
+          .mc-conv-wrap .cc-compose-action:hover { filter: brightness(1.05); }
+          .mc-conv-wrap .cc-compose-action:disabled { cursor: not-allowed; opacity: 0.5; box-shadow: none; }
+          .mc-conv-wrap .cc-sms-counter { font-size: 11px; padding: 6px 4px 0; }
+          /* Recording bar tidy-up for the narrow window. */
+          .mc-conv-wrap .cc-recording { gap: 6px; }
         `}</style>
       </div>
     );
