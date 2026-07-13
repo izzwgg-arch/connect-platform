@@ -5,6 +5,8 @@ import {
   AlertCircle,
   ArrowUpRight,
   Bell,
+  Grid3x3,
+  Volume2,
   ChevronLeft,
   Clock3,
   Delete,
@@ -510,10 +512,12 @@ export function DesktopMiniDialer() {
             )}
             <div className="call-spacer" />
             <div className="call-grid">
-              <button className={phone.muted ? "hot" : ""} onClick={() => phone.setMute(!phone.muted)}><span>{phone.muted ? <MicOff size={22} /> : <Mic size={22} />}</span>Mute</button>
-              <button onClick={() => setTab("dialer")}><span><Plus size={22} /></span>Keypad</button>
-              <button className={phone.onHold ? "hot" : ""} onClick={phone.toggleHold}><span><Pause size={22} /></span>Hold</button>
+              <button className={phone.muted ? "hot" : ""} onClick={() => phone.setMute(!phone.muted)}><span>{phone.muted ? <MicOff size={22} /> : <Mic size={22} />}</span>{phone.muted ? "Unmute" : "Mute"}</button>
+              <button className={phone.speakerOn ? "hot" : ""} onClick={phone.toggleSpeaker}><span><Volume2 size={22} /></span>Speaker</button>
+              <button onClick={() => setTab("dialer")}><span><Grid3x3 size={22} /></span>Keypad</button>
+              <button className={phone.onHold ? "hot" : ""} onClick={phone.toggleHold}><span><Pause size={22} /></span>{phone.onHold ? "Resume" : "Hold"}</button>
               <button onClick={() => phone.transfer(prompt("Transfer to extension or number") || "")}><span><Send size={22} /></span>Transfer</button>
+              <button onClick={() => setTab("dialer")}><span><Plus size={22} /></span>Add call</button>
             </div>
             <button className="round-btn hangup" onClick={phone.hangup}><Phone size={26} style={{ transform: "rotate(135deg)" }} /></button>
           </section>
@@ -665,14 +669,14 @@ export function DesktopMiniDialer() {
         .call-spacer { flex: 1; }
         .call-answer-row { display: flex; justify-content: space-around; width: 100%; }
         .call-action { display: flex; flex-direction: column; align-items: center; gap: 12px; font-size: 13px; color: rgba(240,244,255,0.7); }
-        .round-btn { display: grid; place-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; }
+        .round-btn { display: grid; place-items: center; border: 0; border-radius: 50%; color: #fff; cursor: pointer; padding: 0; box-sizing: border-box; flex-shrink: 0; }
         .round-btn.decline, .round-btn.answer { width: 76px; height: 76px; }
         .round-btn.decline { background: #ef4444; box-shadow: 0 6px 18px rgba(239,68,68,0.4); }
         .round-btn.answer { background: #22c55e; box-shadow: 0 6px 18px rgba(34,197,94,0.4); }
         .round-btn.hangup { width: 72px; height: 72px; background: #ef4444; box-shadow: 0 6px 18px rgba(239,68,68,0.4); }
-        .call-grid { display: grid; grid-template-columns: repeat(2, 72px); gap: 20px 40px; justify-content: center; margin-bottom: 26px; }
+        .call-grid { display: grid; grid-template-columns: repeat(3, 64px); gap: 16px 12px; justify-content: center; margin-bottom: 22px; }
         .call-grid button { display: flex; flex-direction: column; align-items: center; gap: 7px; border: 0; background: transparent; color: #8899bb; font-size: 11px; cursor: pointer; }
-        .call-grid button span { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; background: rgba(30,45,71,0.55); border: 1px solid #1e2d47; color: #dbe4ff; }
+        .call-grid button { padding: 0; } .call-grid button span { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: rgba(30,45,71,0.55); border: 1px solid #1e2d47; color: #dbe4ff; box-sizing: border-box; }
         .call-grid button.hot span { background: #f0f4ff; border-color: #f0f4ff; color: #0a1128; }
 
         .mini-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
