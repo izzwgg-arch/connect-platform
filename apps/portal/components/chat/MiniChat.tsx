@@ -123,7 +123,12 @@ export function MiniChat() {
   }, [msgReload, activeThread?.id, loadMessages]);
 
   useEffect(() => {
-    setActiveThread((current) => resolveActiveThread(current, threads, pendingThreadId));
+    setActiveThread((current) => {
+      // Keep showing the list until the user opens a thread (mobile-style),
+      // instead of auto-selecting the first conversation.
+      if (!current && !pendingThreadId) return null;
+      return resolveActiveThread(current, threads, pendingThreadId);
+    });
     if (pendingThreadId) {
       const found = threads.find((t) => t.id === pendingThreadId);
       if (found) {
@@ -318,12 +323,22 @@ export function MiniChat() {
         />
         {toast ? <div className="cc-toast">{toast}</div> : null}
         <style jsx global>{`
-          .mc-conv-wrap { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-          .mc-conv-wrap .cc-conversation { height: 100%; min-height: 0; flex: 1; border: 0; border-radius: 0; background: transparent; display: flex; flex-direction: column; }
+          .mc-conv-wrap {
+            height: 100%; min-height: 0; display: flex; flex-direction: column;
+            /* Force the shared chat components to the mobile dark palette.
+               These design tokens cascade to every cc-* descendant, so the
+               conversation matches the rest of the dark dialer (and the mobile
+               app) without touching global styles or the browser experience. */
+            --bg: #090e18; --panel: #111827; --panel-2: #162034; --panel-3: #1a2740;
+            --border: #1e2d47; --text: #f0f4ff; --text-dim: #8899bb; --text-dimmer: #4d6088;
+            --accent: #3b82f6;
+            color: #f0f4ff;
+          }
+          .mc-conv-wrap .cc-conversation { height: 100%; min-height: 0; flex: 1; border: 0; border-radius: 0; display: flex; flex-direction: column; }
           .mc-conv-wrap .cc-message-list { flex: 1; min-height: 0; overflow-y: auto; }
-          .mc-conv-wrap .cc-conv-head { padding: 10px 12px; gap: 10px; }
-          .mc-conv-wrap .cc-conv-head h2 { font-size: 15px; }
-          .mc-conv-wrap .cc-conv-head p { font-size: 11px; }
+          .mc-conv-wrap .cc-conv-head { min-height: 52px; padding: 10px 12px; gap: 10px; }
+          .mc-conv-wrap .cc-conv-head h2 { font-size: 15px; color: var(--text); }
+          .mc-conv-wrap .cc-conv-head p { font-size: 11px; color: var(--text-dim); }
           .mc-conv-wrap .cc-conv-title { min-width: 0; }
           .mc-conv-wrap .cc-avatar.large { width: 36px; height: 36px; font-size: 13px; }
           .mc-conv-wrap .cc-call-btn span { display: none; }
