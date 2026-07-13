@@ -721,8 +721,8 @@ export function DesktopMiniDialer() {
         .settings-field input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 5px; border-radius: 3px; background: var(--mn-surface-2); outline: none; margin: 6px 0; }
         .settings-field input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border-radius: 50%; background: #3b82f6; border: 2px solid var(--mn-surface); cursor: pointer; }
         .settings-section-label { font-size: 11px; font-weight: 500; color: var(--mn-text-3); text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 8px; }
-        .settings-toggle-row { -webkit-appearance: none; appearance: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 8px 0; box-sizing: border-box; border: 0 !important; border-top: 0.5px solid var(--mn-line) !important; background: transparent !important; background-color: transparent !important; width: 100%; text-align: left; cursor: pointer; color: var(--mn-text); font: inherit; }
-        .settings-toggle-row > span { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+        .settings-toggle-row { -webkit-appearance: none; appearance: none; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 46px; padding: 8px 0; box-sizing: border-box; border: 0 !important; border-top: 0.5px solid var(--mn-line) !important; background: transparent !important; background-color: transparent !important; width: 100%; text-align: left; cursor: pointer; color: var(--mn-text); font: inherit; }
+        .settings-toggle-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
         .settings-toggle-row strong { font-size: 13px; font-weight: 500; line-height: 1.25; }
         .settings-toggle-row small { font-size: 11px; line-height: 1.3; color: var(--mn-text-2); }
         .settings-toggle-row i { display: block; position: relative; width: 40px; height: 23px; border-radius: 999px; background: var(--mn-border); flex-shrink: 0; transition: background .16s ease; }
