@@ -676,11 +676,11 @@ export function DesktopMiniDialer() {
         .mini-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
-        .dialer-pane { padding: 14px 16px 10px; height: 100%; }
+        .dialer-pane { padding: 14px 16px 10px; height: 100%; position: relative; }
         .number-input { width: 100%; height: 44px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #f0f4ff !important; font-size: 20px; text-align: center; letter-spacing: 1px; outline: none; }
         .number-input::placeholder { color: #4d6088 !important; font-size: 15px; letter-spacing: 0; }
         .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #8899bb !important; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
-        .suggestions { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+        .suggestions { position: absolute; left: 16px; right: 16px; top: 102px; z-index: 15; display: flex; flex-direction: column; gap: 2px; padding: 5px; background: #0d1426; border: 0.5px solid #253555; border-radius: 12px; box-shadow: 0 16px 36px rgba(0,0,0,0.6); }
         .suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 12px; background: #111827; color: #f0f4ff; font-size: 14px; cursor: pointer; }
         .suggestions small { color: #8899bb; font-size: 12px; }
         .keypad { display: grid; grid-template-columns: repeat(3, 58px); gap: 9px 22px; margin: 10px auto 4px; justify-content: center; }
