@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, session, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
@@ -28,6 +28,25 @@ let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
 // Last theme the full portal window reported. Forwarded to the mini pop-out so it
 // follows the portal's light/dark mode. Defaults to dark (the mini's base palette).
 let miniTheme: "dark" | "light" = "dark";
+// Power-save blocker held for the duration of a call so Windows never suspends the
+// app or throttles the CPU mid-call (another source of choppy desktop audio).
+let callPowerSaveBlockerId: number | null = null;
+function setCallAudioKeepAlive(active: boolean): void {
+  try {
+    if (active) {
+      if (callPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(callPowerSaveBlockerId)) {
+        callPowerSaveBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+        diag("audio", "power-save blocker started for call");
+      }
+    } else if (callPowerSaveBlockerId !== null) {
+      if (powerSaveBlocker.isStarted(callPowerSaveBlockerId)) powerSaveBlocker.stop(callPowerSaveBlockerId);
+      callPowerSaveBlockerId = null;
+      diag("audio", "power-save blocker released");
+    }
+  } catch (err) {
+    diag("audio", `power-save blocker error: ${String(err)}`);
+  }
+}
 
 // ── Diagnostic file logging ───────────────────────────────────────────
 // The desktop app shipped with no logs, so failures in the hidden phone-engine
@@ -144,6 +163,12 @@ function webPreferences(windowKind: string) {
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: false,
+    // CRITICAL for call audio: the SIP phone/WebRTC runs in the FULL window, which
+    // normally sits hidden behind the mini pop-out or minimized to the tray. Chromium
+    // throttles hidden/occluded windows by default (clamps timers, starves media
+    // processing) — that is what makes desktop call audio choppy/breaking-up while the
+    // web and mobile apps are fine. Disable throttling so audio keeps full CPU when hidden.
+    backgroundThrottling: false,
     additionalArguments: [`--connect-window-kind=${windowKind}`],
   };
 }
@@ -379,6 +404,11 @@ function registerIpc(): void {
     sendPhoneEventToRenderers(envelope);
     if (envelope.type === "state") {
       const state = envelope.payload as { callState?: string; callDirection?: string; ringingSessionIds?: unknown[]; remoteParty?: string | null };
+      // Hold a power-save blocker for the whole call (ringing/dialing/connected) so
+      // Windows never suspends the app or throttles the CPU mid-call.
+      const callActive = state.callState === "ringing" || state.callState === "dialing" || state.callState === "connected"
+        || (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
+      setCallAudioKeepAlive(callActive);
       // Only react to genuinely inbound ringing — never for outbound calls where
       // the remote phone is ringing (callDirection === "outbound").
       const isInboundRing =
@@ -403,6 +433,16 @@ function registerIpc(): void {
     return true;
   });
 }
+
+// ── Keep call audio smooth when the window is hidden/occluded ──────────
+// backgroundThrottling:false (per-window, above) stops timer throttling, but Chromium
+// separately lowers a renderer's process priority when it's hidden or occluded, which
+// starves the WebRTC audio thread and makes desktop call audio choppy. These switches
+// (must be set before app ready) keep the renderer at full priority so audio stays
+// smooth even with the full window behind the mini or minimized to the tray.
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 
 // ── Single-instance lock ──────────────────────────────────────────────
 // Without this, every launch (startOnLogin, a manual re-open, or the relaunch
