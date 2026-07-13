@@ -251,7 +251,10 @@ function createMiniWindow(show = true): BrowserWindow {
     if (!miniWindow || miniWindow.isDestroyed()) return;
     miniWindow.webContents.send("desktop:mini-theme", miniTheme);
   });
-  loadPortal(miniWindow, `/desktop/mini-dialer?miniTheme=${miniTheme}`);
+  // Cache-bust the mini route: Electron's HTTP cache otherwise serves a stale
+  // mini-dialer HTML across relaunches, so freshly deployed portal fixes wouldn't
+  // appear without a manual hard-reload. A unique param forces a fresh fetch.
+  loadPortal(miniWindow, `/desktop/mini-dialer?miniTheme=${miniTheme}&_cb=${Date.now()}`);
   return miniWindow;
 }
 
@@ -427,7 +430,7 @@ if (!gotSingleInstanceLock) {
     }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
   initLogging();
   app.setAppUserModelId("com.connectcommunications.desktop");
   settings = readSettings();
@@ -435,6 +438,11 @@ if (!gotSingleInstanceLock) {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === "media" || permission === "notifications");
   });
+  // Flush the HTTP cache on startup so freshly deployed portal code is picked up.
+  // This clears ONLY the network cache — cookies and localStorage are untouched, so
+  // the user stays signed in. (Electron was otherwise serving a stale mini-dialer
+  // document across relaunches even with a cache-busting URL param.)
+  try { await session.defaultSession.clearCache(); } catch { /* non-fatal */ }
   registerIpc();
   rebuildTray();
   // Single-phone model: the full window is the one SIP phone; no separate hidden

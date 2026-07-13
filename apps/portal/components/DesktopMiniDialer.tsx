@@ -267,28 +267,6 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
   );
 }
 
-function MiniToggle({
-  checked,
-  label,
-  hint,
-  onChange,
-}: {
-  checked: boolean;
-  label: string;
-  hint: string;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <button type="button" className="settings-toggle-row" onClick={() => onChange(!checked)}>
-      <span>
-        <strong>{label}</strong>
-        <small>{hint}</small>
-      </span>
-      <i data-on={checked ? "true" : "false"} />
-    </button>
-  );
-}
-
 export function DesktopMiniDialer() {
   const phone = useSipPhone();
   const { user, tenant, adminScope } = useAppContext();
@@ -524,9 +502,17 @@ export function DesktopMiniDialer() {
                   />
                 </label>
                 <div className="settings-section-label">Startup</div>
-                <MiniToggle checked={settings.startOnLogin !== false} label="Start with Windows" hint="Open Connect when this computer starts" onChange={(c) => updateDesktopSettings({ startOnLogin: c })} />
-                <MiniToggle checked={settings.openMinimizedToTray !== false} label="Open minimized" hint="Start quietly in the system tray" onChange={(c) => updateDesktopSettings({ openMinimizedToTray: c })} />
-                <MiniToggle checked={Boolean(settings.openMiniOnStartup)} label="Open mini dialer" hint="Show this floating dialer on startup" onChange={(c) => updateDesktopSettings({ openMiniOnStartup: c })} />
+                {([
+                  { checked: settings.startOnLogin !== false, label: "Start with Windows", hint: "Open Connect when this computer starts", apply: (c: boolean) => updateDesktopSettings({ startOnLogin: c }) },
+                  { checked: settings.openMinimizedToTray !== false, label: "Open minimized", hint: "Start quietly in the system tray", apply: (c: boolean) => updateDesktopSettings({ openMinimizedToTray: c }) },
+                  { checked: Boolean(settings.openMiniOnStartup), label: "Open mini dialer", hint: "Show this floating dialer on startup", apply: (c: boolean) => updateDesktopSettings({ openMiniOnStartup: c }) },
+                ]).map((row) => (
+                  // Inlined (not a child <MiniToggle/>) so styled-jsx scopes .settings-toggle-row to it.
+                  <button key={row.label} type="button" className="settings-toggle-row" onClick={() => row.apply(!row.checked)}>
+                    <span><strong>{row.label}</strong><small>{row.hint}</small></span>
+                    <i data-on={row.checked ? "true" : "false"} />
+                  </button>
+                ))}
               </div>
             )}
           </div>
