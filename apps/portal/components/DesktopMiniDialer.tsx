@@ -33,6 +33,7 @@ import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
 import { apiGet, getPortalApiBaseUrl } from "../services/apiClient";
 import { loadContacts, loadSmsThreads, type ContactRow, type SmsThread } from "../services/platformData";
+import { MiniChat } from "./chat/MiniChat";
 import { readAuthToken } from "../services/session";
 import {
   getWebRingerOutputDeviceId,
@@ -599,21 +600,7 @@ export function DesktopMiniDialer() {
           </div>
         )}
 
-        {tab === "messages" && (
-          <div className="screen list-pane">
-            <div className="screen-title">Messages</div>
-            {threads.map((thread) => (
-              <article className="mini-row" key={thread.id} onClick={() => window.connectDesktop?.window?.expandToFull?.(`/sms?phone=${encodeURIComponent(thread.phone)}`)} style={{ cursor: "pointer" }}>
-                <div className="row-icon"><MessageSquare size={16} /></div>
-                <div className="row-main">
-                  <strong>{thread.phone}</strong>
-                  <span className="row-preview">{thread.preview}</span>
-                </div>
-              </article>
-            ))}
-            {threads.length === 0 && <p className="empty">No messages yet.</p>}
-          </div>
-        )}
+        {tab === "messages" && <MiniChat />}
 
         {tab === "voicemail" && (() => {
           const q = vmQuery.trim().toLowerCase();
@@ -676,7 +663,7 @@ export function DesktopMiniDialer() {
       </section>
 
       <nav className="mini-tabs">
-        {([["calls", Clock3, "Recents"], ["messages", MessageSquare, "Messages"], ["voicemail", Voicemail, "Voicemail"], ["dialer", Phone, "Dialer"]] as const).map(([key, Icon, label]) => (
+        {([["calls", Clock3, "Recents"], ["messages", MessageSquare, "Chat"], ["voicemail", Voicemail, "Voicemail"], ["dialer", Phone, "Dialer"]] as const).map(([key, Icon, label]) => (
           <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key as TabKey)}>
             <Icon size={20} />
             <span>{label}</span>
