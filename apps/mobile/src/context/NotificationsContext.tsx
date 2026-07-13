@@ -2213,7 +2213,8 @@ export function NotificationsProvider({
         // re-routes the INVITE within Timer B (~32s) to the fresh Contact.
         const sipSocketLooksStale =
           sip.registrationState === "registered" && sip.callState === "idle";
-        const shouldForceSipRefresh = sipLooksUnready || sipSocketLooksStale;
+        // COWORK cold-answer fix (2026-07-13): on iOS cold answer HOLD the fresh wake registration - never force-restart on the stale-socket heuristic, which mints a new rotated Contact and makes the server Mode-B re-delivery target a dead contact (voicemail). Proven live 1783981096.246385. Warm iOS + Android unchanged (earlyColdAcceptSent=false for them).
+        const shouldForceSipRefresh = earlyColdAcceptSent ? sipLooksUnready : (sipLooksUnready || sipSocketLooksStale);
         const wasAlreadyRegistered = sip.registrationState === "registered";
         // When the socket looks stale we MUST retry register() a few times —
         // the first ua.stop()/new UA() cycle can race with the WebSocket being
