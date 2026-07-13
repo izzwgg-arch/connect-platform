@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -27,6 +27,8 @@ import {
   Search,
   Send,
   Settings,
+  MoreHorizontal,
+  User,
   Voicemail,
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
@@ -105,6 +107,16 @@ function shortTime(value?: string): string {
   }
 }
 
+// Just the clock time (e.g. "2:34 PM") — matches the mobile Recents/Voicemail rows.
+function timeOfDay(value?: string): string {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
 function initials(value: string | null | undefined): string {
   const source = (value || "Connect").trim();
   return source
@@ -114,6 +126,43 @@ function initials(value: string | null | undefined): string {
     .map((part) => part[0])
     .join("")
     .toUpperCase() || "C";
+}
+
+// Mobile-matching avatar: the same 8-colour palette + name hash as the mobile
+// app's Avatar, and a slate "person" glyph for unsaved numbers (a raw phone
+// number / no letters), so Recents and Voicemail look identical to mobile.
+const AVATAR_COLORS = ["#3b82f6", "#06b6d4", "#8b5cf6", "#f43f5e", "#10b981", "#f59e0b", "#ec4899", "#6366f1"];
+function avatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+function isUnsavedNumber(name: string | null | undefined): boolean {
+  const s = (name || "").trim();
+  if (!s) return true;
+  return !/[a-zA-Z]/.test(s);
+}
+function MiniAvatar({ name, size = 44 }: { name: string | null | undefined; size?: number }) {
+  const label = (name || "").trim();
+  const unsaved = isUnsavedNumber(label);
+  const style: CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: "50%",
+    display: "grid",
+    placeItems: "center",
+    flexShrink: 0,
+    color: "#fff",
+    fontSize: Math.round(size * 0.36),
+    fontWeight: 700,
+    letterSpacing: 0.5,
+    background: unsaved ? "#64748b" : avatarColor(label),
+  };
+  return (
+    <span className="mini-avatar" style={style}>
+      {unsaved ? <User size={Math.round(size * 0.52)} /> : initials(label)}
+    </span>
+  );
 }
 
 function callStatusLabel(callState: string): string {
@@ -665,15 +714,31 @@ export function DesktopMiniDialer() {
             {calls.map((call) => {
               const target = call.direction === "outgoing" ? call.toNumber : call.fromNumber;
               const missed = call.status === "missed";
+              const outgoing = call.direction === "outgoing";
+              const name = call.fromName || target || "Unknown";
+              const dur = formatDuration(call.durationSec);
+              const kindLabel = missed ? "Missed" : outgoing ? "Outgoing" : "Incoming";
               return (
                 <article className="mini-row" key={call.rowId || call.callId || `${target}-${call.startedAt}`}>
-                  <div className={`row-icon ${missed ? "missed" : ""}`}>{call.direction === "outgoing" ? <PhoneCall size={16} /> : <PhoneIncoming size={16} />}</div>
+                  <MiniAvatar name={name} size={44} />
                   <div className="row-main">
-                    <strong>{call.fromName || target || "Unknown"}</strong>
-                    <span>{call.direction || "call"} &#183; {call.status || "completed"} &#183; {formatDuration(call.durationSec)}</span>
+                    <strong>{name}</strong>
+                    <span className="row-meta">
+                      {missed
+                        ? <PhoneOff size={13} className="rm-icon rm-missed" />
+                        : outgoing
+                          ? <PhoneCall size={13} className="rm-icon rm-out" />
+                          : <PhoneIncoming size={13} className="rm-icon rm-in" />}
+                      {missed ? "Missed" : dur ? `${kindLabel} · ${dur}` : kindLabel}
+                    </span>
                   </div>
-                  <div className="row-time">{shortTime(call.startedAt)}</div>
-                  <button className="row-call" onClick={() => target && callTarget(target)}><Phone size={17} /></button>
+                  <div className="row-right">
+                    <span className="row-time">{timeOfDay(call.startedAt)}</span>
+                    <div className="row-actions">
+                      <button className="row-msg" onClick={() => setTab("messages")} title="Message"><MessageSquare size={15} /></button>
+                      <button className="row-call" onClick={() => target && callTarget(target)} title="Call"><Phone size={16} /></button>
+                    </div>
+                  </div>
                 </article>
               );
             })}
@@ -718,10 +783,10 @@ export function DesktopMiniDialer() {
                 {list.map((vm) => (
                   <div className={"vm-card" + (!vm.listened ? " new" : "")} key={vm.id}>
                     <div className="vm-top">
-                      <span className="vm-av">{initials(vm.callerName || vm.callerId)}</span>
+                      <MiniAvatar name={vm.callerName || vm.callerId} size={40} />
                       <div className="vm-info">
-                        <strong>{vm.callerName || vm.callerId}</strong>
-                        <small>{vm.callerId}</small>
+                        <strong>{vm.callerName || vm.callerId || "Unknown caller"}</strong>
+                        <small>{vm.callerId || "Unknown number"}</small>
                       </div>
                       <div className="vm-right">
                         {!vm.listened ? <span className="vm-badge new">NEW</span> : <span className="vm-badge read">READ</span>}
@@ -732,7 +797,11 @@ export function DesktopMiniDialer() {
                     {vm.transcription ? <p className="vm-transcript">{vm.transcription}</p> : null}
                     <div className="vm-actions">
                       <span className="vm-date"><Clock3 size={12} /> {shortTime(vm.receivedAt)}</span>
-                      <button className="vm-callback" onClick={() => callTarget(vm.callerId)}><Phone size={13} /> Call back</button>
+                      <div className="vm-action-btns">
+                        <button className="vm-act vm-act-call" onClick={() => callTarget(vm.callerId)} title="Call back"><Phone size={16} /></button>
+                        <button className="vm-act vm-act-msg" onClick={() => setTab("messages")} title="Message"><MessageSquare size={16} /></button>
+                        <button className="vm-act vm-act-more" onClick={() => setVoicemails((prev) => prev.map((v) => v.id === vm.id ? { ...v, listened: !v.listened } : v))} title={vm.listened ? "Mark unread" : "Mark read"}><MoreHorizontal size={18} /></button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -864,16 +933,23 @@ export function DesktopMiniDialer() {
         .delete-button { grid-column: 3; justify-self: center; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 0.5px solid var(--mn-border); background: rgba(30,45,71,0.55); color: var(--mn-text-2); cursor: pointer; }
 
         .list-pane { display: flex; flex-direction: column; }
-        .mini-row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 0.5px solid var(--mn-line); }
-        .row-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: rgba(59,130,246,0.14); border: 1px solid rgba(59,130,246,0.3); color: #93c5fd; flex-shrink: 0; }
-        .row-icon.missed { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.3); color: #fb7185; }
-        .row-icon.new { background: rgba(59,130,246,0.16); border-color: rgba(59,130,246,0.4); color: #93c5fd; }
-        .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-        .row-main strong { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
-        .row-main span { font-size: 12px; color: var(--mn-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* Recents rows — cards that match the mobile RecentTab exactly. */
+        .mini-row { display: flex; align-items: center; gap: 12px; padding: 12px; margin: 0 12px 10px; border-radius: 18px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); min-height: 72px; box-sizing: border-box; }
+        .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .row-main strong { font-size: 15px; font-weight: 700; letter-spacing: -0.15px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--mn-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rm-icon { flex-shrink: 0; }
+        .rm-missed { color: #ef4444; }
+        .rm-in { color: #22d3ee; }
+        .rm-out { color: #22c55e; }
+        .row-right { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; align-self: stretch; gap: 6px; flex-shrink: 0; padding: 1px 0; }
+        .row-actions { display: flex; align-items: center; gap: 6px; }
+        .row-msg { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(6,182,212,0.33); background: rgba(6,182,212,0.14); color: #22d3ee; cursor: pointer; flex-shrink: 0; }
+        .row-msg:hover { background: rgba(6,182,212,0.22); }
         .row-preview { color: var(--mn-text-2); }
-        .row-time { font-size: 12px; color: var(--mn-text-3); flex-shrink: 0; }
-        .row-call { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #93c5fd; cursor: pointer; flex-shrink: 0; }
+        .row-time { font-size: 11.5px; font-weight: 700; color: var(--mn-text-3); flex-shrink: 0; }
+        .row-call { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 0; background: #3b82f6; color: #fff; cursor: pointer; flex-shrink: 0; box-shadow: 0 4px 12px rgba(59,130,246,0.35); }
+        .row-call:hover { filter: brightness(1.05); }
         .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
 
         .vm-screen { padding: 0; }
@@ -914,7 +990,15 @@ export function DesktopMiniDialer() {
         .vm-transcript { margin: 12px 0 0; font-size: 13px; line-height: 20px; font-weight: 500; color: var(--mn-text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
         .vm-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; min-width: 0; }
         .vm-date { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--mn-text-3); padding: 4px 8px; border-radius: 10px; background: rgba(148,163,184,0.10); white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden; }
-        .vm-callback { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: #3b82f6; padding: 6px 11px; border-radius: 12px; border: 0; background: rgba(59,130,246,0.14); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+        /* Voicemail action buttons — call / message / more, matching mobile. */
+        .vm-action-btns { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .vm-act { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; border: 1px solid transparent; cursor: pointer; flex-shrink: 0; }
+        .vm-act-call { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.30); color: #22c55e; }
+        .vm-act-call:hover { background: rgba(34,197,94,0.22); }
+        .vm-act-msg { background: rgba(6,182,212,0.14); border-color: rgba(6,182,212,0.30); color: #22d3ee; }
+        .vm-act-msg:hover { background: rgba(6,182,212,0.22); }
+        .vm-act-more { background: rgba(148,163,184,0.12); color: var(--mn-text-2); }
+        .vm-act-more:hover { background: rgba(148,163,184,0.20); }
 
         .mini-tabs { display: flex; border-top: 0.5px solid var(--mn-line); background: var(--mn-bg); }
         .mini-tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 11px; border: 0; background: transparent; color: var(--mn-text-4); font-size: 10px; cursor: pointer; transition: color .16s ease; }
