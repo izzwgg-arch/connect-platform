@@ -249,12 +249,9 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
           seek(Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * max);
         }}
       >
-        <div className="vm-wave-row track">
-          {bars.map((h, i) => <span key={i} style={{ height: String(Math.round(h * 100)) + "%" }} />)}
-        </div>
-        <div className="vm-wave-row played" style={{ clipPath: "inset(0 " + (100 - pct * 100) + "% 0 0)" }}>
-          {bars.map((h, i) => <span key={i} style={{ height: String(Math.round(h * 100)) + "%" }} />)}
-        </div>
+        {bars.map((h, i) => (
+          <span key={i} className={i / bars.length < pct ? "on" : ""} style={{ height: String(Math.round(6 + h * 22)) + "px" }} />
+        ))}
       </div>
     </div>
   );
@@ -805,11 +802,9 @@ export function DesktopMiniDialer() {
         .vm-player[data-error="true"] { opacity: .5; }
         .vm-play { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #3b82f6; cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; }
         .vm-play[data-active="true"] { background: #3b82f6; color: #fff; }
-        .vm-wave { position: relative; flex: 1; height: 30px; cursor: pointer; }
-        .vm-wave-row { position: absolute; inset: 0; display: flex; align-items: center; gap: 2px; }
-        .vm-wave-row span { flex: 1; border-radius: 2px; min-height: 3px; }
-        .vm-wave-row.track span { background: rgba(148,163,184,0.30); }
-        .vm-wave-row.played span { background: #3b82f6; }
+        .vm-wave { display: flex; align-items: center; gap: 2px; flex: 1; height: 30px; cursor: pointer; }
+        .vm-wave span { flex: 1; border-radius: 2px; background: rgba(148,163,184,0.34); }
+        .vm-wave span.on { background: #3b82f6; }
         .vm-elapsed { font-size: 11px; font-weight: 700; color: #8899bb; font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 30px; text-align: right; }
         .vm-transcript { margin: 12px 0 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #8899bb; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
         .vm-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
