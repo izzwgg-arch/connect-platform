@@ -292,16 +292,15 @@ function MiniToggle({
 export function DesktopMiniDialer() {
   const phone = useSipPhone();
   const { user, tenant, adminScope } = useAppContext();
-  const [miniTheme, setMiniTheme] = useState<"dark" | "light">("dark");
+  // The pop-out window has its own storage and cannot read the portal's theme
+  // choice, so it stays on the mobile-style dark palette. Pin the document theme
+  // to dark too, so reused/global-styled controls (chat, form inputs) match.
+  const miniTheme = "dark" as const;
   useEffect(() => {
-    const read = () => {
-      try { setMiniTheme(localStorage.getItem("cc-theme") === "light" ? "light" : "dark"); }
-      catch { setMiniTheme("dark"); }
-    };
-    read();
-    window.addEventListener("storage", read);
-    const id = window.setInterval(read, 1500);
-    return () => { window.removeEventListener("storage", read); window.clearInterval(id); };
+    const el = document.documentElement;
+    const prev = el.getAttribute("data-theme");
+    el.setAttribute("data-theme", "dark");
+    return () => { if (prev) el.setAttribute("data-theme", prev); else el.removeAttribute("data-theme"); };
   }, []);
   const [tab, setTab] = useState<TabKey>("dialer");
   const [calls, setCalls] = useState<MiniCallRow[]>([]);
