@@ -8,12 +8,11 @@ ENV CI=true \
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends openssl \
   && rm -rf /var/lib/apt/lists/* \
-  # The node:20 base image began shipping a corepack (0.31+) that requires the
-  # Node 22-only `node:sqlite` builtin, so `corepack enable` crashes on Node 20.
-  # Pin a known-good corepack before enabling it.
-  && npm install --global corepack@0.29.4 \
-  && corepack enable \
-  && corepack prepare pnpm@10.30.2 --activate \
+  # Install pnpm directly via npm instead of corepack: the node:20 base image's
+  # bundled corepack (0.31+) requires the Node 22-only `node:sqlite` builtin and
+  # crashes, while older corepack can't verify pnpm 10.30.2's signature. npm avoids
+  # both problems.
+  && npm install --global pnpm@10.30.2 \
   && pnpm config set store-dir /pnpm/store
 
 FROM base AS deps
