@@ -62,10 +62,22 @@ export function MiniChat() {
   const messagesRef = useRef<ChatMessage[]>([]);
   const messageRequestSeq = useRef(0);
   const loadedThreadId = useRef<string | null>(null);
+  const convRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Auto-grow the composer like the mobile app: the shared ChatComposer textarea
+  // is fixed-height (rows=1) and just scrolls, so here we size it to its content
+  // up to a max, then let it scroll. Also shorten the long default placeholder.
+  useEffect(() => {
+    const ta = convRef.current?.querySelector<HTMLTextAreaElement>(".cc-compose-bubble textarea");
+    if (!ta) return;
+    if (ta.placeholder !== "Message") ta.placeholder = "Message";
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+  }, [draft, activeThread?.id]);
 
   // The reused chat components are theme-token driven (var(--panel)/--bg/--text).
   // Force this window's document into dark mode while chat is mounted so the
@@ -306,7 +318,7 @@ export function MiniChat() {
 
   if (activeThread) {
     return (
-      <div className="mc-conv-wrap">
+      <div className="mc-conv-wrap" ref={convRef}>
         <ChatConversation
           thread={activeThread}
           messages={messages}
@@ -371,7 +383,8 @@ export function MiniChat() {
              row) is only styled for the CRM shell. Port it to the mini window so
              the bottom bar looks and works like the mobile composer instead of a
              stack of unstyled controls with a clipped input. */
-          .mc-conv-wrap .cc-composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+          /* No panel/wrapper behind the composer - it sits directly on the page. */
+          .mc-conv-wrap .cc-composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); background: transparent; border-top: 0; box-shadow: none; }
           .mc-conv-wrap .cc-compose-row { display: flex; align-items: flex-end; gap: 0; }
           .mc-conv-wrap .cc-compose-bubble {
             position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;
@@ -380,9 +393,10 @@ export function MiniChat() {
             border-radius: 22px; background: var(--panel-2);
           }
           .mc-conv-wrap .cc-compose-bubble textarea {
-            flex: 1; min-width: 0; min-height: 34px; max-height: 112px; padding: 8px 8px;
+            flex: 1; min-width: 0; min-height: 34px; max-height: 140px; padding: 8px 8px;
             border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none;
-            color: var(--text); resize: none; font: inherit; font-size: 14px; line-height: 1.35;
+            color: var(--text); resize: none; font: inherit; font-size: 14px; line-height: 1.4;
+            overflow-y: auto;
           }
           .mc-conv-wrap .cc-compose-bubble textarea::placeholder { color: var(--text-dim); }
           .mc-conv-wrap .cc-compose-bubble textarea { scrollbar-width: none; }
