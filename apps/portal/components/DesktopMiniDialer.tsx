@@ -305,6 +305,26 @@ export function DesktopMiniDialer() {
   const [lastDialed, setLastDialed] = useState("");
   const inCall = phone.callState === "ringing" || phone.callState === "dialing" || phone.callState === "connected";
   const timerSec = useCallTimer(phone.callState === "connected");
+  // In-call sub-views for the active-call screen: the 6-control grid ("controls"),
+  // a live DTMF keypad ("keypad"), or a number-entry pad for Transfer / Add call
+  // ("entry"). Previously Keypad/Add-call switched tabs (hidden under the call
+  // overlay) and Transfer used window.prompt() (blocked in Electron) — all no-ops.
+  const [callView, setCallView] = useState<"controls" | "keypad" | "entry">("controls");
+  const [callEntry, setCallEntry] = useState("");
+  const [entryMode, setEntryMode] = useState<"transfer" | "add">("transfer");
+  const [dtmfLog, setDtmfLog] = useState("");
+  // Reset the in-call sub-view whenever a call ends so the next call starts on the grid.
+  useEffect(() => {
+    if (!inCall) { setCallView("controls"); setCallEntry(""); setDtmfLog(""); }
+  }, [inCall]);
+  const runCallEntry = () => {
+    const v = callEntry.trim();
+    if (!v) return;
+    if (entryMode === "transfer") phone.transfer(v);
+    else phone.dial(v); // Add call — the full-window phone holds the current call and dials.
+    setCallEntry("");
+    setCallView("controls");
+  };
 
   const registration = useMemo(() => {
     if (phone.regState === "registered") return { label: "Registered", tone: "green" };
@@ -545,27 +565,67 @@ export function DesktopMiniDialer() {
           </section>
         ) : (
           <section className="call-screen active">
-            <div className="call-status">{callStatusLabel(phone.callState)}</div>
-            <div className="call-timer">{formatDuration(timerSec)}</div>
-            <div className="call-avatar-lg blue">{initials(selectedSession?.remoteParty || phone.remoteParty || phone.dialpadInput || "?")}</div>
-            <strong className="call-name">{selectedSession?.remoteParty || phone.remoteParty || phone.dialpadInput || "Unknown caller"}</strong>
-            {incomingWaiting.length > 0 && (
-              <div className="call-waiting">
-                <Bell size={13} /> {incomingWaiting[0]?.remoteParty}
-                <button onClick={() => phone.answerSession(incomingWaiting[0]!.id)}>Answer</button>
-                <button onClick={() => phone.hangupSession(incomingWaiting[0]!.id)}>Decline</button>
-              </div>
+            {callView === "controls" ? (
+              <>
+                <div className="call-status">{callStatusLabel(phone.callState)}</div>
+                <div className="call-timer">{formatDuration(timerSec)}</div>
+                <div className="call-avatar-lg blue">{initials(selectedSession?.remoteParty || phone.remoteParty || phone.dialpadInput || "?")}</div>
+                <strong className="call-name">{selectedSession?.remoteParty || phone.remoteParty || phone.dialpadInput || "Unknown caller"}</strong>
+                {incomingWaiting.length > 0 && (
+                  <div className="call-waiting">
+                    <Bell size={13} /> {incomingWaiting[0]?.remoteParty}
+                    <button onClick={() => phone.answerSession(incomingWaiting[0]!.id)}>Answer</button>
+                    <button onClick={() => phone.hangupSession(incomingWaiting[0]!.id)}>Decline</button>
+                  </div>
+                )}
+                <div className="call-spacer" />
+                <div className="call-grid">
+                  <button className={phone.muted ? "hot" : ""} onClick={() => phone.setMute(!phone.muted)}><span>{phone.muted ? <MicOff size={22} /> : <Mic size={22} />}</span>{phone.muted ? "Unmute" : "Mute"}</button>
+                  <button className={phone.speakerOn ? "hot" : ""} onClick={phone.toggleSpeaker}><span><Volume2 size={22} /></span>Speaker</button>
+                  <button onClick={() => { setDtmfLog(""); setCallView("keypad"); }}><span><Grid3x3 size={22} /></span>Keypad</button>
+                  <button className={phone.onHold ? "hot" : ""} onClick={phone.toggleHold}><span><Pause size={22} /></span>{phone.onHold ? "Resume" : "Hold"}</button>
+                  <button onClick={() => { setCallEntry(""); setEntryMode("transfer"); setCallView("entry"); }}><span><Send size={22} /></span>Transfer</button>
+                  <button onClick={() => { setCallEntry(""); setEntryMode("add"); setCallView("entry"); }}><span><Plus size={22} /></span>Add call</button>
+                </div>
+                <button className="round-btn hangup" onClick={phone.hangup}><Phone size={26} style={{ transform: "rotate(135deg)" }} /></button>
+              </>
+            ) : callView === "keypad" ? (
+              <>
+                <div className="call-subhead">
+                  <button className="call-back" onClick={() => setCallView("controls")} aria-label="Back"><ChevronLeft size={18} /></button>
+                  <div className="call-subhead-mid"><strong>{selectedSession?.remoteParty || phone.remoteParty || "On call"}</strong><span>{formatDuration(timerSec)}</span></div>
+                  <span className="call-subhead-spacer" />
+                </div>
+                <div className="call-dtmf">{dtmfLog || " "}</div>
+                <div className="keypad in-call-keypad">
+                  {KEYS.map(([digit, letters]) => (
+                    <button key={digit} onClick={() => { phone.sendDtmf(digit); phone.playDtmfTone(digit); setDtmfLog((prev) => (prev + digit).slice(-24)); }}><strong>{digit}</strong><span>{letters}</span></button>
+                  ))}
+                </div>
+                <button className="round-btn hangup" onClick={phone.hangup}><Phone size={26} style={{ transform: "rotate(135deg)" }} /></button>
+              </>
+            ) : (
+              <>
+                <div className="call-subhead">
+                  <button className="call-back" onClick={() => setCallView("controls")} aria-label="Back"><ChevronLeft size={18} /></button>
+                  <div className="call-subhead-mid"><strong>{entryMode === "transfer" ? "Transfer to" : "Add call"}</strong></div>
+                  <span className="call-subhead-spacer" />
+                </div>
+                <input className="number-input call-entry-input" value={callEntry} placeholder="Number or extension" onChange={(e) => setCallEntry(e.target.value.replace(/[^\d*#+]/g, ""))} onKeyDown={(e) => { if (e.key === "Enter") runCallEntry(); }} autoFocus />
+                <div className="keypad in-call-keypad">
+                  {KEYS.map(([digit, letters]) => (
+                    <button key={digit} onClick={() => { setCallEntry((prev) => prev + digit); phone.playDtmfTone(digit); }}><strong>{digit}</strong><span>{letters}</span></button>
+                  ))}
+                </div>
+                <div className="call-entry-actions">
+                  <button className="call-entry-del" onClick={() => setCallEntry((prev) => prev.slice(0, -1))} aria-label="Delete"><Delete size={18} /></button>
+                  <button className={"call-entry-go" + (entryMode === "transfer" ? " transfer" : "")} disabled={!callEntry.trim()} onClick={runCallEntry}>
+                    {entryMode === "transfer" ? <><Send size={16} /> Transfer</> : <><Phone size={16} /> Call</>}
+                  </button>
+                  <span className="call-entry-spacer" />
+                </div>
+              </>
             )}
-            <div className="call-spacer" />
-            <div className="call-grid">
-              <button className={phone.muted ? "hot" : ""} onClick={() => phone.setMute(!phone.muted)}><span>{phone.muted ? <MicOff size={22} /> : <Mic size={22} />}</span>{phone.muted ? "Unmute" : "Mute"}</button>
-              <button className={phone.speakerOn ? "hot" : ""} onClick={phone.toggleSpeaker}><span><Volume2 size={22} /></span>Speaker</button>
-              <button onClick={() => setTab("dialer")}><span><Grid3x3 size={22} /></span>Keypad</button>
-              <button className={phone.onHold ? "hot" : ""} onClick={phone.toggleHold}><span><Pause size={22} /></span>{phone.onHold ? "Resume" : "Hold"}</button>
-              <button onClick={() => phone.transfer(prompt("Transfer to extension or number") || "")}><span><Send size={22} /></span>Transfer</button>
-              <button onClick={() => setTab("dialer")}><span><Plus size={22} /></span>Add call</button>
-            </div>
-            <button className="round-btn hangup" onClick={phone.hangup}><Phone size={26} style={{ transform: "rotate(135deg)" }} /></button>
           </section>
         )
       )}
@@ -758,6 +818,24 @@ export function DesktopMiniDialer() {
         .call-grid button { display: flex; flex-direction: column; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--mn-text-2); font-size: 11px; cursor: pointer; }
         .call-grid button { padding: 0; } .call-grid button span { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: rgba(30,45,71,0.55); border: 1px solid var(--mn-border); color: #dbe4ff; box-sizing: border-box; }
         .call-grid button.hot span { background: var(--mn-text); border-color: var(--mn-text); color: #0a1128; }
+
+        /* In-call sub-views (DTMF keypad, Transfer / Add-call entry). */
+        .call-subhead { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 4px; }
+        .call-subhead-spacer { width: 34px; flex-shrink: 0; }
+        .call-back { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(30,45,71,0.55); color: #dbe4ff; cursor: pointer; flex-shrink: 0; }
+        .call-back:hover { background: rgba(59,130,246,0.28); }
+        .call-subhead-mid { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+        .call-subhead-mid strong { font-size: 15px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+        .call-subhead-mid span { font-size: 12px; color: var(--mn-text-2); font-variant-numeric: tabular-nums; }
+        .call-dtmf { min-height: 34px; font-size: 26px; letter-spacing: 3px; color: var(--mn-text); text-align: center; margin: 8px 0 6px; font-variant-numeric: tabular-nums; word-break: break-all; }
+        .in-call-keypad { margin: 6px auto 16px; --keyh: 54px; }
+        .call-entry-input { margin: 8px 0 6px; }
+        .call-entry-actions { display: flex; align-items: center; justify-content: space-between; width: 100%; max-width: 300px; margin: 0 auto 6px; }
+        .call-entry-del { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 0.5px solid var(--mn-border); background: rgba(30,45,71,0.55); color: var(--mn-text-2); cursor: pointer; flex-shrink: 0; }
+        .call-entry-spacer { width: 52px; flex-shrink: 0; }
+        .call-entry-go { display: inline-flex; align-items: center; gap: 8px; height: 50px; padding: 0 22px; border: 0; border-radius: 25px; background: #22c55e; color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 16px rgba(34,197,94,0.35); }
+        .call-entry-go.transfer { background: #3b82f6; box-shadow: 0 6px 16px rgba(59,130,246,0.35); }
+        .call-entry-go:disabled { background: var(--mn-border); color: var(--mn-text-3); box-shadow: none; cursor: default; }
 
         .mini-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
         .screen { display: flex; flex-direction: column; }
