@@ -79,6 +79,21 @@ export function MiniChat() {
     ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
   }, [draft, activeThread?.id]);
 
+  // Shorten the emoji search placeholder to match the mobile app ("Search emoji").
+  // The emoji tray mounts on demand, so watch the conversation subtree for it.
+  useEffect(() => {
+    const wrap = convRef.current;
+    if (!wrap) return;
+    const apply = () => {
+      const input = wrap.querySelector<HTMLInputElement>(".cc-emoji-search input");
+      if (input && input.placeholder !== "Search emoji") input.placeholder = "Search emoji";
+    };
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(wrap, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [activeThread?.id]);
+
   // The reused chat components are theme-token driven (var(--panel)/--bg/--text).
   // Force this window's document into dark mode while chat is mounted so the
   // conversation matches the mobile app. This is the pop-out mini window's own
@@ -438,7 +453,6 @@ export function MiniChat() {
             flex-direction: row; align-items: center; gap: 8px; height: 38px; padding: 0 10px;
             border: 1px solid #1e2d47; border-radius: 12px; background: #162034; margin-bottom: 8px;
           }
-          .mc-conv-wrap .cc-emoji-search::before { content: "\\1F50D"; font-size: 13px; opacity: 0.6; }
           .mc-conv-wrap .cc-emoji-search span { display: none; }
           .mc-conv-wrap .cc-emoji-search input {
             min-height: 0; height: 36px; border: 0; border-radius: 0; background: transparent;
@@ -452,10 +466,10 @@ export function MiniChat() {
           .mc-conv-wrap .cc-emoji-category-title { position: sticky; top: 0; z-index: 1; padding: 6px 2px 4px; background: #111827; }
           .mc-conv-wrap .cc-emoji-category-title strong { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; color: #8899bb; }
           .mc-conv-wrap .cc-emoji-category-title small { display: none; }
-          .mc-conv-wrap .cc-emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+          .mc-conv-wrap .cc-emoji-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; }
           .mc-conv-wrap .cc-emoji-option {
             width: 100%; aspect-ratio: 1; display: inline-flex; align-items: center; justify-content: center;
-            border: 0; border-radius: 10px; background: transparent; cursor: pointer; font-size: 22px; line-height: 1;
+            border: 0; border-radius: 10px; background: transparent; cursor: pointer; font-size: 20px; line-height: 1; padding: 0;
           }
           .mc-conv-wrap .cc-emoji-option:hover { background: rgba(59,130,246,0.16); }
           .mc-conv-wrap .cc-emoji-empty { padding: 20px 8px; text-align: center; color: #8899bb; font-size: 13px; }
@@ -475,7 +489,7 @@ export function MiniChat() {
             content: "Attach"; grid-column: 1 / -1; font-size: 17px; font-weight: 900; color: #f0f4ff; padding: 0 2px 2px;
           }
           .mc-conv-wrap .cc-attach-menu button {
-            width: 100%; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+            width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
             gap: 8px; min-height: 78px; padding: 12px 8px; border-radius: 18px; border: 1px solid #1e2d47; background: #162034;
           }
           .mc-conv-wrap .cc-attach-menu button:hover { background: #1c2840; }
