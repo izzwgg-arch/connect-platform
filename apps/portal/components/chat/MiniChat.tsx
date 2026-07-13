@@ -418,6 +418,71 @@ export function MiniChat() {
           .mc-conv-wrap .cc-sms-counter { font-size: 11px; padding: 6px 4px 0; }
           /* Recording bar tidy-up for the narrow window. */
           .mc-conv-wrap .cc-recording { gap: 6px; }
+
+          /* ===== Emoji tray - match the mobile app =====
+             Rounded floating panel above the composer, "Emoji" title, a search
+             box, uppercase section labels and an 8-column emoji grid. (These
+             classes are otherwise unstyled off the CRM shell.) */
+          .mc-conv-wrap .cc-emoji-menu-wrap { position: static; }
+          .mc-conv-wrap .cc-emoji-menu {
+            position: absolute; left: 6px; right: 6px; bottom: calc(100% + 10px); z-index: 42;
+            width: auto; max-width: none; max-height: 320px; display: flex; flex-direction: column;
+            overflow: hidden; border: 1px solid #1e2d47; border-radius: 22px; background: #111827;
+            box-shadow: 0 22px 55px rgba(0,0,0,0.6); padding: 12px;
+          }
+          .mc-conv-wrap .cc-emoji-menu::after { display: none; }
+          .mc-conv-wrap .cc-emoji-menu-head { padding: 0 2px 8px; border-bottom: 0; }
+          .mc-conv-wrap .cc-emoji-menu-head strong { font-size: 14px; font-weight: 900; color: #f0f4ff; }
+          .mc-conv-wrap .cc-emoji-menu-head small { display: none; }
+          .mc-conv-wrap .cc-emoji-search {
+            flex-direction: row; align-items: center; gap: 8px; height: 38px; padding: 0 10px;
+            border: 1px solid #1e2d47; border-radius: 12px; background: #162034; margin-bottom: 8px;
+          }
+          .mc-conv-wrap .cc-emoji-search::before { content: "\\1F50D"; font-size: 13px; opacity: 0.6; }
+          .mc-conv-wrap .cc-emoji-search span { display: none; }
+          .mc-conv-wrap .cc-emoji-search input {
+            min-height: 0; height: 36px; border: 0; border-radius: 0; background: transparent;
+            padding: 0; font-size: 14px; color: #f0f4ff;
+          }
+          .mc-conv-wrap .cc-emoji-search input:focus { box-shadow: none; }
+          .mc-conv-wrap .cc-emoji-results { flex: 1; min-height: 0; overflow-y: auto; padding: 0; scrollbar-width: none; }
+          .mc-conv-wrap .cc-emoji-results::-webkit-scrollbar { width: 0; height: 0; }
+          .mc-conv-wrap .cc-emoji-category { display: flex; flex-direction: column; gap: 4px; }
+          .mc-conv-wrap .cc-emoji-category + .cc-emoji-category { margin-top: 8px; }
+          .mc-conv-wrap .cc-emoji-category-title { position: sticky; top: 0; z-index: 1; padding: 6px 2px 4px; background: #111827; }
+          .mc-conv-wrap .cc-emoji-category-title strong { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; color: #8899bb; }
+          .mc-conv-wrap .cc-emoji-category-title small { display: none; }
+          .mc-conv-wrap .cc-emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+          .mc-conv-wrap .cc-emoji-option {
+            width: 100%; aspect-ratio: 1; display: inline-flex; align-items: center; justify-content: center;
+            border: 0; border-radius: 10px; background: transparent; cursor: pointer; font-size: 22px; line-height: 1;
+          }
+          .mc-conv-wrap .cc-emoji-option:hover { background: rgba(59,130,246,0.16); }
+          .mc-conv-wrap .cc-emoji-empty { padding: 20px 8px; text-align: center; color: #8899bb; font-size: 13px; }
+
+          /* ===== Attach popup - match the mobile "Attach" sheet =====
+             Rounded card above the composer with an "Attach" title and a 2-column
+             grid of icon + label cards. */
+          .mc-conv-wrap .cc-attach-menu-wrap { position: static; }
+          .mc-conv-wrap .cc-attach-menu {
+            position: absolute; left: 6px; right: 6px; bottom: calc(100% + 10px); z-index: 40;
+            width: auto; padding: 16px; border: 1px solid #1e2d47; border-radius: 24px; background: #111827;
+            box-shadow: 0 22px 55px rgba(0,0,0,0.6);
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+          }
+          .mc-conv-wrap .cc-attach-menu::after { display: none; }
+          .mc-conv-wrap .cc-attach-menu::before {
+            content: "Attach"; grid-column: 1 / -1; font-size: 17px; font-weight: 900; color: #f0f4ff; padding: 0 2px 2px;
+          }
+          .mc-conv-wrap .cc-attach-menu button {
+            width: 100%; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+            gap: 8px; min-height: 78px; padding: 12px 8px; border-radius: 18px; border: 1px solid #1e2d47; background: #162034;
+          }
+          .mc-conv-wrap .cc-attach-menu button:hover { background: #1c2840; }
+          .mc-conv-wrap .cc-attach-menu button > svg { width: 24px; height: 24px; padding: 0; border-radius: 0; background: none; color: #3b82f6; }
+          .mc-conv-wrap .cc-attach-menu span { flex-direction: column; align-items: center; gap: 0; }
+          .mc-conv-wrap .cc-attach-menu strong { font-size: 12px; font-weight: 900; text-align: center; color: #f0f4ff; }
+          .mc-conv-wrap .cc-attach-menu small { display: none; }
         `}</style>
       </div>
     );
