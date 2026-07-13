@@ -632,10 +632,10 @@ export function DesktopMiniDialer() {
         .settings-title-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: rgba(59,130,246,0.14); border: 1px solid rgba(59,130,246,0.3); color: #93c5fd; }
         .settings-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
         .settings-field > span { font-size: 12px; color: #8899bb; }
-        .settings-field select { width: 100%; height: 38px; border-radius: 12px; border: 0.5px solid #1e2d47; background: #162034; color: #f0f4ff; font-size: 13px; padding: 0 10px; outline: none; }
+        .settings-field select { width: 100%; height: 38px; border-radius: 12px; border: 0.5px solid #1e2d47; background: #162034 !important; color: #f0f4ff !important; font-size: 13px; padding: 0 10px; outline: none; }
         .settings-field input[type="range"] { accent-color: #3b82f6; }
         .settings-section-label { font-size: 11px; font-weight: 500; color: #4d6088; text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 8px; }
-        .settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 0.5px solid #162036; }
+        .settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border: 0 !important; border-top: 0.5px solid #162036 !important; background: transparent !important; width: 100%; text-align: left; cursor: pointer; color: #f0f4ff; }
         .settings-toggle-row span { display: flex; flex-direction: column; }
         .settings-toggle-row strong { font-size: 13px; font-weight: 500; }
         .settings-toggle-row small { font-size: 11px; color: #8899bb; }
@@ -677,14 +677,14 @@ export function DesktopMiniDialer() {
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
         .dialer-pane { padding: 14px 16px 10px; height: 100%; }
-        .number-input { width: 100%; height: 48px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827; color: #f0f4ff; font-size: 22px; text-align: center; letter-spacing: 1px; outline: none; }
-        .number-input::placeholder { color: #4d6088; font-size: 15px; letter-spacing: 0; }
-        .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid #1e2d47; background: #111827; color: #8899bb; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
+        .number-input { width: 100%; height: 48px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #f0f4ff !important; font-size: 22px; text-align: center; letter-spacing: 1px; outline: none; }
+        .number-input::placeholder { color: #4d6088 !important; font-size: 15px; letter-spacing: 0; }
+        .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #8899bb !important; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
         .suggestions { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
         .suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 12px; background: #111827; color: #f0f4ff; font-size: 14px; cursor: pointer; }
         .suggestions small { color: #8899bb; font-size: 12px; }
-        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px auto 12px; width: 100%; max-width: 260px; }
-        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; height: 60px; border-radius: 50%; border: 0.5px solid #1e2d47; background: #111827; color: #f0f4ff; cursor: pointer; }
+        .keypad { display: grid; grid-template-columns: repeat(3, 66px); gap: 14px; margin: 18px auto 12px; justify-content: center; }
+        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; width: 66px; height: 66px; border-radius: 50%; border: 0.5px solid #1e2d47; background: #111827; color: #f0f4ff; cursor: pointer; }
         .keypad button:hover { background: #162034; }
         .keypad strong { font-size: 23px; font-weight: 500; }
         .keypad span { font-size: 9px; letter-spacing: 1.5px; color: #4d6088; }
