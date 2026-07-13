@@ -812,9 +812,13 @@ export function FloatingDialer() {
   }, [phone.callState]);
 
   useEffect(() => {
-    if (isInCall) {
-      setOpen(true);
-    }
+    if (!isInCall) return;
+    // In the desktop app the pop-out mini dialer is the incoming/active-call
+    // surface, so do NOT also auto-open this in-app dialer (that made a second
+    // dialer pop on every call). Browser behavior is unchanged.
+    const isDesktop = typeof window !== "undefined" && Boolean((window as { connectDesktop?: unknown }).connectDesktop);
+    if (isDesktop) return;
+    setOpen(true);
   }, [isInCall]);
 
   useEffect(() => {

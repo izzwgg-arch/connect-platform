@@ -26,6 +26,65 @@ let isQuitting = false;
 let settings: DesktopSettings = DEFAULT_SETTINGS;
 let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
 
+// ── Diagnostic file logging ───────────────────────────────────────────
+// The desktop app shipped with no logs, so failures in the hidden phone-engine
+// window were invisible. Capture each window's console + renderer crashes to a
+// rotating file under userData/logs so calls are always recorded.
+let logStream: fs.WriteStream | null = null;
+function logDir(): string {
+  return path.join(app.getPath("userData"), "logs");
+}
+function diag(tag: string, message: string): void {
+  try {
+    logStream?.write(`[${new Date().toISOString()}] [${tag}] ${message}\n`);
+  } catch {
+    /* never let logging throw */
+  }
+}
+function initLogging(): void {
+  try {
+    fs.mkdirSync(logDir(), { recursive: true });
+    const file = path.join(logDir(), "connect.log");
+    try {
+      if (fs.statSync(file).size > 5 * 1024 * 1024) fs.renameSync(file, file + ".1");
+    } catch {
+      /* no existing log yet */
+    }
+    logStream = fs.createWriteStream(file, { flags: "a" });
+    diag("main", `=== log start v${app.getVersion()} ${process.platform} ===`);
+  } catch {
+    /* never let logging break startup */
+  }
+}
+function attachConsoleCapture(win: BrowserWindow, tag: string): void {
+  try {
+    // Electron changed the console-message signature across majors. Old:
+    // (event, level, message, line, sourceId). New (>=37): a single details
+    // object { level, message, lineNumber, sourceId }. Handle both.
+    win.webContents.on("console-message", (...args: unknown[]) => {
+      let level: unknown, message = "", sourceId = "", line: unknown = "";
+      if (args.length >= 3) {
+        level = args[1];
+        message = String(args[2] ?? "");
+        line = args[3] ?? "";
+        sourceId = String(args[4] ?? "");
+      } else {
+        const d = (args[0] ?? {}) as Record<string, unknown>;
+        level = d.level;
+        message = String(d.message ?? "");
+        line = d.lineNumber ?? "";
+        sourceId = String(d.sourceId ?? "");
+      }
+      diag(tag, `console.${String(level)}: ${message}${sourceId ? ` @${sourceId}:${String(line)}` : ""}`);
+    });
+    win.webContents.on("render-process-gone", (_e, details) => {
+      diag(tag, `render-process-gone: ${details.reason} exit=${details.exitCode}`);
+    });
+  } catch {
+    /* ignore capture wiring failures */
+  }
+}
+
 function settingsPath(): string {
   return path.join(app.getPath("userData"), "settings.json");
 }
@@ -111,6 +170,8 @@ function createFullWindow(show = true): BrowserWindow {
     icon: iconPath,
     webPreferences: webPreferences("full"),
   });
+
+  attachConsoleCapture(fullWindow, "full");
 
   fullWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -198,6 +259,7 @@ function createPhoneEngineWindow(): BrowserWindow {
     webPreferences: webPreferences("phone-engine"),
   });
 
+  attachConsoleCapture(phoneEngineWindow, "phone-engine");
   loadPortal(phoneEngineWindow, "/desktop/phone-engine");
   return phoneEngineWindow;
 }
@@ -304,30 +366,27 @@ function registerIpc(): void {
         (state.callState === "ringing" && state.callDirection !== "outbound") ||
         (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
       if (isInboundRing) {
+        // Single incoming-call surface: just the pop-out mini dialer. (The
+        // duplicate "Incoming call" notification was removed so a call no longer
+        // produces multiple popups.)
         showMiniForIncomingCall();
-        if (Notification.isSupported()) {
-          const note = new Notification({
-            title: "Incoming call",
-            body: state.remoteParty ? String(state.remoteParty) : "Connect call",
-            icon: iconPath,
-          });
-          note.on("click", showMiniForIncomingCall);
-          note.show();
-        }
       }
     }
   });
 
   ipcMain.handle("phone:command", (_event, command: PhoneEngineCommand) => {
-    // The full window now runs LocalSipPhoneProvider directly (like the web app).
-    // Send commands there first; fall back to phone-engine window if full isn't open.
-    const target = (fullWindow && !fullWindow.isDestroyed()) ? fullWindow : createPhoneEngineWindow();
+    // Single-phone model: the main (full) window runs the ONE SIP phone; the mini
+    // pop-out is a proxy. All commands (from either surface) go to the full window.
+    // We no longer spawn a hidden phone-engine window - that second phone was the
+    // source of the double-ring and the answer landing on the wrong leg.
+    const target = (fullWindow && !fullWindow.isDestroyed()) ? fullWindow : createFullWindow(false);
     target.webContents.send("phone:command", command);
     return true;
   });
 }
 
 app.whenReady().then(() => {
+  initLogging();
   app.setAppUserModelId("com.connectcommunications.desktop");
   settings = readSettings();
   applyLoginSettings();
@@ -336,7 +395,8 @@ app.whenReady().then(() => {
   });
   registerIpc();
   rebuildTray();
-  createPhoneEngineWindow();
+  // Single-phone model: the full window is the one SIP phone; no separate hidden
+  // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
 
