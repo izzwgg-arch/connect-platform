@@ -50,7 +50,24 @@ import * as SecureStore from "expo-secure-store";
 // reg-id=1;+sip.instance, so the registrar REPLACES the one binding. Per-install
 // (NOT per-extension) so multiple phones on one extension keep distinct bindings
 // and all ring. iOS-only; Android keeps one long-lived UA and is untouched.
-const SIP_INSTANCE_ID_KEY = "cc_sip_instance_id";
+// v1 key persisted with SecureStore's DEFAULT keychain accessibility
+// (WHEN_UNLOCKED). That default is the reason build 15 showed no change: an
+// inbound call wakes the app via VoIP push while the iPhone is still LOCKED, so
+// a WHEN_UNLOCKED keychain item is unreadable, getItemAsync fails, and the code
+// below used to fall through to genUuidV4() — minting a FRESH instance_id on
+// every locked wake. The registrar then saw a brand-new device each time and
+// stacked a new contact (the observed non-deduplicated fresh contact). The v2
+// key is written with AFTER_FIRST_UNLOCK so it is readable during a background
+// wake on a locked device (the phone has been unlocked at least once since
+// boot in normal use), giving us a genuinely STABLE +sip.instance across wakes.
+const SIP_INSTANCE_ID_KEY_V1 = "cc_sip_instance_id";
+const SIP_INSTANCE_ID_KEY = "cc_sip_instance_id_v2";
+// Keychain items are only accessible when readable in the current lock state.
+// AFTER_FIRST_UNLOCK keeps the item readable after the first post-boot unlock,
+// including while the screen is subsequently locked (i.e. during a VoIP wake).
+const SIP_INSTANCE_KEYCHAIN_OPTS = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+} as const;
 const UUID_V4_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 let cachedSipInstanceId: string | null = null;
@@ -61,20 +78,40 @@ function genUuidV4(): string {
     return v.toString(16);
   });
 }
+async function readSecure(key: string): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch {
+    // Thrown when the item exists but is not accessible in the current lock
+    // state (e.g. a stale WHEN_UNLOCKED item read during a locked wake).
+    return null;
+  }
+}
 async function getStableSipInstanceId(): Promise<string> {
   if (cachedSipInstanceId && UUID_V4_RE.test(cachedSipInstanceId)) {
     return cachedSipInstanceId;
   }
-  let id: string | null = null;
-  try {
-    id = await SecureStore.getItemAsync(SIP_INSTANCE_ID_KEY);
-  } catch {
-    id = null;
-  }
+  // Prefer the v2 (AFTER_FIRST_UNLOCK) item.
+  let id = await readSecure(SIP_INSTANCE_ID_KEY);
+  let needsPersist = false;
+  // Migrate a valid v1 value forward so existing installs keep the same
+  // identity (only readable while unlocked — best effort).
   if (!id || !UUID_V4_RE.test(id)) {
-    id = genUuidV4();
+    const legacy = await readSecure(SIP_INSTANCE_ID_KEY_V1);
+    if (legacy && UUID_V4_RE.test(legacy)) {
+      id = legacy;
+    } else {
+      id = genUuidV4();
+    }
+    needsPersist = true;
+  }
+  if (needsPersist) {
     try {
-      await SecureStore.setItemAsync(SIP_INSTANCE_ID_KEY, id);
+      await SecureStore.setItemAsync(
+        SIP_INSTANCE_ID_KEY,
+        id,
+        SIP_INSTANCE_KEYCHAIN_OPTS,
+      );
     } catch {
       // best-effort persistence; a non-persisted id still de-dups within a run
     }
