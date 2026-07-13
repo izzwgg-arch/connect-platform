@@ -134,17 +134,22 @@ function voicemailStreamUrl(id: string): string {
   return `${getPortalApiBaseUrl()}/voice/voicemail/${encodeURIComponent(id)}/stream${tokenQuery}`;
 }
 
-function useCallTimer(active: boolean): number {
+// Elapsed seconds since the call connected. Driven by an absolute timestamp
+// (broadcast from the full window) rather than a local "started counting now",
+// so the mini pop-out proxy shows the real elapsed time even if it's opened
+// mid-call. Returns 0 while startedAt is null (not connected).
+function useCallTimer(startedAt: number | null): number {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
-    if (!active) {
+    if (!startedAt) {
       setSeconds(0);
       return;
     }
-    const started = Date.now();
-    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    const tick = () => setSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [startedAt]);
   return seconds;
 }
 
@@ -304,7 +309,7 @@ export function DesktopMiniDialer() {
   const [quickReply, setQuickReply] = useState("");
   const [lastDialed, setLastDialed] = useState("");
   const inCall = phone.callState === "ringing" || phone.callState === "dialing" || phone.callState === "connected";
-  const timerSec = useCallTimer(phone.callState === "connected");
+  const timerSec = useCallTimer(phone.callState === "connected" ? phone.callStartedAt : null);
   // In-call sub-views for the active-call screen: the 6-control grid ("controls"),
   // a live DTMF keypad ("keypad"), or a number-entry pad for Transfer / Add call
   // ("entry"). Previously Keypad/Add-call switched tabs (hidden under the call

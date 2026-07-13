@@ -153,6 +153,9 @@ export interface RawStatSample {
 export type SipPhoneState = {
   regState: SipRegState;
   callState: SipCallState;
+  /** Epoch ms when the active call connected (media established), else null. Drives the
+   *  in-call timer — broadcast so the mini pop-out proxy shows the correct elapsed time. */
+  callStartedAt: number | null;
   /** "outbound" when user placed the call, "inbound" when a SIP INVITE arrived, null when idle. */
   callDirection: "outbound" | "inbound" | null;
   remoteParty: string | null;
@@ -554,6 +557,7 @@ function appendConnLog(ev: Omit<ConnectionEvent, "sincePrevMs">): ConnectionEven
 function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [regState, setRegState] = useState<SipRegState>("idle");
   const [callState, setCallState] = useState<SipCallState>("idle");
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [callDirection, setCallDirection] = useState<"outbound" | "inbound" | null>(null);
   const [remoteParty, setRemoteParty] = useState<string | null>(null);
   const [muted, setMutedState] = useState(false);
@@ -1950,6 +1954,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         callStartedAtRef.current = Date.now();
         finalReportSentRef.current = false;
       }
+      setCallStartedAt(callStartedAtRef.current);
       console.log(label);
       setCallState("connected");
       patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
@@ -1994,6 +1999,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       teardownRemoteAudioPlayback();
       clearCallDiag();
       callStartedAtRef.current = null;
+      setCallStartedAt(null);
       dialGuardRef.current = null;
       localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
@@ -2096,6 +2102,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       patchDiag({ lastCallError: msg });
       clearCallDiag();
       callStartedAtRef.current = null;
+      setCallStartedAt(null);
       dialGuardRef.current = null;
       localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
@@ -2403,6 +2410,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     teardownRemoteAudioPlayback();
     clearCallDiag();
     callStartedAtRef.current = null;
+    setCallStartedAt(null);
     packetsReceivedRef.current = null;
     lastStatsRef.current = null;
     prevBytesReceivedRef.current = null;
@@ -2704,6 +2712,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   return {
     regState,
     callState,
+    callStartedAt,
     callDirection,
     remoteParty,
     muted,
@@ -2781,6 +2790,7 @@ function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneSta
   return {
     regState: phone.regState,
     callState: phone.callState,
+    callStartedAt: phone.callStartedAt,
     callDirection: phone.callDirection,
     remoteParty: phone.remoteParty,
     muted: phone.muted,
@@ -2822,6 +2832,7 @@ function noopSetState<T>(_value: React.SetStateAction<T>): void {
 const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   regState: "idle",
   callState: "idle",
+  callStartedAt: null,
   callDirection: null,
   remoteParty: null,
   muted: false,
