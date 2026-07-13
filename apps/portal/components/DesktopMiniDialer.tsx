@@ -678,7 +678,7 @@ export function DesktopMiniDialer() {
         .mini-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
-        .dialer-pane { padding: 14px 16px 10px; height: 100%; --keyh: 56px; }
+        .dialer-pane { padding: 14px 16px 10px; height: 100%; display: flex; flex-direction: column; --keyh: 56px; }
         .dialer-pane.with-suggestions { --keyh: 50px; }
         .number-input { width: 100%; height: 44px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #f0f4ff !important; font-size: 20px; text-align: center; letter-spacing: 1px; outline: none; }
         .number-input::placeholder { color: #4d6088 !important; font-size: 15px; letter-spacing: 0; }
