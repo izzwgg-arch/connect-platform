@@ -520,7 +520,7 @@ export function DesktopMiniDialer() {
 
       <section className="mini-content">
         {tab === "dialer" && (
-          <div className="screen dialer-pane">
+          <div className={"screen dialer-pane" + (dialSuggestions.length > 0 ? " with-suggestions" : "")}>
             <input className="number-input" value={phone.dialpadInput} placeholder="Search or dial" onChange={(e) => phone.setDialpadInput(e.target.value.replace(/[^\d*#+]/g, ""))} onKeyDown={(e) => { if (e.key === "Enter") callTarget(phone.dialpadInput); }} />
             <select className="route-select" value={phone.selectedOutboundRouteId} onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}>
               {routeOptions.map((route) => <option key={route.id || "none"} value={route.id}>{route.name}</option>)}
@@ -676,20 +676,21 @@ export function DesktopMiniDialer() {
         .mini-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
-        .dialer-pane { padding: 14px 16px 10px; height: 100%; position: relative; }
+        .dialer-pane { padding: 14px 16px 10px; height: 100%; --key: 58px; --kgap: 22px; }
+        .dialer-pane.with-suggestions { --key: 45px; --kgap: 16px; }
         .number-input { width: 100%; height: 44px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #f0f4ff !important; font-size: 20px; text-align: center; letter-spacing: 1px; outline: none; }
         .number-input::placeholder { color: #4d6088 !important; font-size: 15px; letter-spacing: 0; }
         .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #8899bb !important; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
-        .suggestions { position: absolute; left: 16px; right: 16px; top: 102px; z-index: 15; display: flex; flex-direction: column; gap: 2px; padding: 5px; background: #0d1426; border: 0.5px solid #253555; border-radius: 12px; box-shadow: 0 16px 36px rgba(0,0,0,0.6); }
-        .suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 12px; background: #111827; color: #f0f4ff; font-size: 14px; cursor: pointer; }
-        .suggestions small { color: #8899bb; font-size: 12px; }
-        .keypad { display: grid; grid-template-columns: repeat(3, 58px); gap: 9px 22px; margin: 10px auto 4px; justify-content: center; }
-        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; width: 58px; height: 58px; border-radius: 50%; border: 0.5px solid #1e2d47; background: #111827; color: #f0f4ff; cursor: pointer; }
+        .suggestions { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 2px; }
+        .suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 10px; border: 0; border-radius: 10px; background: #111827; color: #f0f4ff; font-size: 13px; cursor: pointer; }
+        .suggestions small { color: #8899bb; font-size: 11px; }
+        .keypad { display: grid; grid-template-columns: repeat(3, var(--key)); gap: 8px var(--kgap); margin: 8px auto 4px; justify-content: center; }
+        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; width: var(--key); height: var(--key); border-radius: 50%; border: 0.5px solid #1e2d47; background: #111827; color: #f0f4ff; cursor: pointer; }
         .keypad button:hover { background: #162034; }
         .keypad strong { font-size: 21px; font-weight: 500; }
         .keypad span { font-size: 9px; letter-spacing: 1.5px; color: #4d6088; }
-        .dialer-actions { display: grid; grid-template-columns: repeat(3, 58px); gap: 9px 22px; justify-content: center; align-items: center; margin: 6px auto 4px; }
-        .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
+        .dialer-actions { display: grid; grid-template-columns: repeat(3, var(--key)); gap: 8px var(--kgap); justify-content: center; align-items: center; margin: 4px auto 4px; }
+        .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: var(--key); height: var(--key); border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
         .call-button:disabled { background: #1e2d47; color: #4d6088; box-shadow: none; cursor: default; }
         .delete-button { grid-column: 3; justify-self: center; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; border: 0; background: transparent; color: #8899bb; cursor: pointer; }
 
