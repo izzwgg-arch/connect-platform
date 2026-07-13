@@ -295,7 +295,7 @@ export function DesktopMiniDialer() {
   // The pop-out window has its own storage and cannot read the portal's theme
   // choice, so it stays on the mobile-style dark palette. Pin the document theme
   // to dark too, so reused/global-styled controls (chat, form inputs) match.
-  const miniTheme = "dark" as const;
+  const miniTheme: "dark" | "light" = "dark";
   useEffect(() => {
     const el = document.documentElement;
     const prev = el.getAttribute("data-theme");
