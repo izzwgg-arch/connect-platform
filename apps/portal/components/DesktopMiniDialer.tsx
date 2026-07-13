@@ -154,7 +154,7 @@ function vmWaveBars(src: string): number[] {
     h = Math.imul(h, 16777619);
   }
   const bars: number[] = [];
-  for (let i = 0; i < 32; i += 1) {
+  for (let i = 0; i < 20; i += 1) {
     h ^= h << 13;
     h ^= h >>> 17;
     h ^= h << 5;
@@ -256,7 +256,6 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
           {bars.map((h, i) => <span key={i} style={{ height: String(Math.round(h * 100)) + "%" }} />)}
         </div>
       </div>
-      <span className="vm-elapsed">{formatDuration(playing || current > 0 ? current : max)}</span>
     </div>
   );
 }
@@ -807,7 +806,7 @@ export function DesktopMiniDialer() {
         .vm-play { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #3b82f6; cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; }
         .vm-play[data-active="true"] { background: #3b82f6; color: #fff; }
         .vm-wave { position: relative; flex: 1; height: 30px; cursor: pointer; }
-        .vm-wave-row { position: absolute; inset: 0; display: flex; align-items: center; gap: 3px; }
+        .vm-wave-row { position: absolute; inset: 0; display: flex; align-items: center; gap: 2px; }
         .vm-wave-row span { flex: 1; border-radius: 2px; min-height: 3px; }
         .vm-wave-row.track span { background: rgba(148,163,184,0.30); }
         .vm-wave-row.played span { background: #3b82f6; }
