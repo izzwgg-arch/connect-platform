@@ -24,6 +24,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Search,
   Send,
   Settings,
   Voicemail,
@@ -61,6 +62,7 @@ type MiniVoicemail = {
   receivedAt: string;
   durationSec: number;
   listened: boolean;
+  transcription?: string | null;
   streamUrl?: string;
 };
 
@@ -145,6 +147,23 @@ function useCallTimer(active: boolean): number {
   return seconds;
 }
 
+function vmWaveBars(src: string): number[] {
+  let h = 2166136261;
+  for (let i = 0; i < src.length; i += 1) {
+    h ^= src.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const bars: number[] = [];
+  for (let i = 0; i < 32; i += 1) {
+    h ^= h << 13;
+    h ^= h >>> 17;
+    h ^= h << 5;
+    h >>>= 0;
+    bars.push(0.25 + ((h % 1000) / 1000) * 0.75);
+  }
+  return bars;
+}
+
 function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: number }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -214,27 +233,30 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
   };
 
   const max = Math.max(duration, durationSec, 1);
+  const bars = vmWaveBars(src);
+  const pct = Math.max(0, Math.min(1, current / max));
 
   return (
     <div className="vm-player" data-error={error ? "true" : "false"}>
-      <button type="button" className="vm-play" onClick={toggle} aria-label={playing ? "Pause voicemail" : "Play voicemail"}>
-        {error ? <AlertCircle size={14} /> : playing ? <Pause size={15} /> : <Play size={15} />}
+      <button type="button" className="vm-play" data-active={playing ? "true" : "false"} onClick={toggle} aria-label={playing ? "Pause voicemail" : "Play voicemail"}>
+        {error ? <AlertCircle size={16} /> : playing ? <Pause size={17} /> : <Play size={17} />}
       </button>
-      <div className="vm-progress-wrap">
-        <input
-          className="vm-progress"
-          type="range"
-          min={0}
-          max={max}
-          step={0.1}
-          value={Math.min(current, max)}
-          onChange={(event) => seek(Number(event.target.value))}
-        />
-        <div className="vm-time">
-          <span>{formatDuration(current)}</span>
-          <span>{error ? "Can't play" : formatDuration(max)}</span>
+      <div
+        className="vm-wave"
+        onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (rect.width <= 0) return;
+          seek(Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * max);
+        }}
+      >
+        <div className="vm-wave-row track">
+          {bars.map((h, i) => <span key={i} style={{ height: String(Math.round(h * 100)) + "%" }} />)}
+        </div>
+        <div className="vm-wave-row played" style={{ clipPath: "inset(0 " + (100 - pct * 100) + "% 0 0)" }}>
+          {bars.map((h, i) => <span key={i} style={{ height: String(Math.round(h * 100)) + "%" }} />)}
         </div>
       </div>
+      <span className="vm-elapsed">{formatDuration(playing || current > 0 ? current : max)}</span>
     </div>
   );
 }
@@ -269,6 +291,8 @@ export function DesktopMiniDialer() {
   const [contacts, setContacts] = useState<ContactRow[]>([]);
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
+  const [vmQuery, setVmQuery] = useState("");
+  const [vmFilter, setVmFilter] = useState<"all" | "new" | "urgent" | "old">("all");
   const [settings, setSettings] = useState<MiniDesktopSettings>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickReply, setQuickReply] = useState("");
@@ -586,27 +610,64 @@ export function DesktopMiniDialer() {
           </div>
         )}
 
-        {tab === "voicemail" && (
-          <div className="screen list-pane">
-            <div className="screen-title">Voicemail</div>
-            <div className="vm-cards">
-              {voicemails.map((vm) => (
-                <div className={`vm-card ${!vm.listened ? "unread" : ""}`} key={vm.id}>
-                  <div className="vm-card-head">
-                    <div className={`row-icon ${!vm.listened ? "new" : ""}`}><Voicemail size={16} /></div>
-                    <div className="row-main">
-                      <strong>{vm.callerName || vm.callerId}{!vm.listened ? <span className="unread-dot" /> : null}</strong>
-                      <span>{shortTime(vm.receivedAt)} &#183; {formatDuration(vm.durationSec)}</span>
+        {tab === "voicemail" && (() => {
+          const q = vmQuery.trim().toLowerCase();
+          const unreadCount = voicemails.filter((v) => !v.listened).length;
+          const counts = {
+            all: voicemails.length,
+            new: unreadCount,
+            urgent: 0,
+            old: voicemails.filter((v) => v.listened).length,
+          } as const;
+          const list = voicemails
+            .filter((v) => (vmFilter === "all" ? true : vmFilter === "new" ? !v.listened : vmFilter === "old" ? v.listened : false))
+            .filter((v) => !q || (v.callerName || "").toLowerCase().includes(q) || (v.callerId || "").toLowerCase().includes(q) || (v.transcription || "").toLowerCase().includes(q));
+          const chips = [["all", "All"], ["new", "New"], ["urgent", "Urgent"], ["old", "Old"]] as const;
+          return (
+            <div className="screen list-pane vm-screen">
+              <div className="vm-header">
+                <div className="vm-h-title">Voicemail</div>
+                <div className="vm-h-sub">{unreadCount} new &#183; {voicemails.length} total</div>
+              </div>
+              <div className="vm-search">
+                <Search size={16} />
+                <input value={vmQuery} onChange={(e) => setVmQuery(e.target.value)} placeholder="Search caller, number..." />
+              </div>
+              <div className="vm-chips">
+                {chips.map(([key, label]) => (
+                  <button key={key} className={"vm-chip" + (vmFilter === key ? " active" : "")} onClick={() => setVmFilter(key)}>
+                    <span>{label}</span>
+                    <small>{counts[key]}</small>
+                  </button>
+                ))}
+              </div>
+              <div className="vm-cards">
+                {list.map((vm) => (
+                  <div className={"vm-card" + (!vm.listened ? " new" : "")} key={vm.id}>
+                    <div className="vm-top">
+                      <span className="vm-av">{initials(vm.callerName || vm.callerId)}</span>
+                      <div className="vm-info">
+                        <strong>{vm.callerName || vm.callerId}</strong>
+                        <small>{vm.callerId}</small>
+                      </div>
+                      <div className="vm-right">
+                        {!vm.listened ? <span className="vm-badge new">NEW</span> : <span className="vm-badge read">READ</span>}
+                        <span className="vm-dur">{formatDuration(vm.durationSec)}</span>
+                      </div>
                     </div>
-                    <button className="row-call" onClick={() => callTarget(vm.callerId)}><Phone size={17} /></button>
+                    <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} />
+                    {vm.transcription ? <p className="vm-transcript">{vm.transcription}</p> : null}
+                    <div className="vm-actions">
+                      <span className="vm-date"><Clock3 size={12} /> {shortTime(vm.receivedAt)}</span>
+                      <button className="vm-callback" onClick={() => callTarget(vm.callerId)}><Phone size={13} /> Call back</button>
+                    </div>
                   </div>
-                  <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} />
-                </div>
-              ))}
+                ))}
+              </div>
+              {list.length === 0 && <p className="empty">No voicemails.</p>}
             </div>
-            {voicemails.length === 0 && <p className="empty">No voicemails.</p>}
-          </div>
-        )}
+          );
+        })()}
       </section>
 
       <nav className="mini-tabs">
@@ -715,16 +776,46 @@ export function DesktopMiniDialer() {
         .row-call { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #93c5fd; cursor: pointer; flex-shrink: 0; }
         .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
 
-        .vm-cards { display: flex; flex-direction: column; gap: 10px; padding: 4px 12px 12px; }
-        .vm-card { background: #111827; border: 0.5px solid #1e2d47; border-radius: 14px; padding: 12px 13px; }
-        .vm-card.unread { border-color: rgba(59,130,246,0.3); }
-        .vm-card-head { display: flex; align-items: center; gap: 11px; }
-        .vm-player { display: flex; align-items: center; gap: 9px; margin-top: 11px; }
+        .vm-screen { padding: 0; }
+        .vm-header { text-align: center; padding: 14px 16px 10px; }
+        .vm-h-title { font-size: 26px; font-weight: 800; letter-spacing: -0.7px; color: #f0f4ff; line-height: 30px; }
+        .vm-h-sub { margin-top: 3px; font-size: 13px; font-weight: 600; color: #8899bb; }
+        .vm-search { display: flex; align-items: center; gap: 10px; margin: 0 14px 10px; height: 44px; padding: 0 14px; border-radius: 16px; border: 0.5px solid #1e2d47; background: #111827; color: #4d6088; }
+        .vm-search input { flex: 1; border: 0; background: transparent; outline: none; color: #f0f4ff; font-size: 14px; font-weight: 500; }
+        .vm-search input::placeholder { color: #4d6088; }
+        .vm-chips { display: flex; gap: 7px; margin: 0 14px 10px; }
+        .vm-chip { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; border-radius: 13px; border: 0.5px solid #182339; background: #162034; color: #8899bb; cursor: pointer; }
+        .vm-chip span { font-size: 12px; font-weight: 800; }
+        .vm-chip small { font-size: 11px; font-weight: 800; color: #4d6088; }
+        .vm-chip.active { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.14); color: #3b82f6; }
+        .vm-chip.active small { color: #3b82f6; }
+        .vm-cards { display: flex; flex-direction: column; gap: 10px; padding: 2px 14px 14px; }
+        .vm-card { background: #111827; border: 0.5px solid #1e2d47; border-radius: 20px; padding: 14px; }
+        .vm-card.new { border-color: rgba(59,130,246,0.28); background: #13203b; }
+        .vm-top { display: flex; align-items: center; gap: 11px; }
+        .vm-av { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: rgba(136,153,187,0.16); color: #8899bb; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+        .vm-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .vm-info strong { font-size: 16px; font-weight: 800; letter-spacing: -0.25px; color: #f0f4ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .vm-info small { font-size: 13px; font-weight: 600; color: #8899bb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .vm-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+        .vm-badge { font-size: 9px; font-weight: 900; letter-spacing: 0.5px; padding: 3px 7px; border-radius: 9px; border: 1px solid transparent; }
+        .vm-badge.new { color: #3b82f6; background: rgba(59,130,246,0.14); border-color: rgba(59,130,246,0.33); }
+        .vm-badge.read { color: #22c55e; background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.33); }
+        .vm-dur { font-size: 12px; font-weight: 800; color: #8899bb; padding: 3px 8px; border-radius: 10px; background: rgba(148,163,184,0.10); }
+        .vm-player { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
         .vm-player[data-error="true"] { opacity: .5; }
-        .vm-play { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #93c5fd; cursor: pointer; flex-shrink: 0; }
-        .vm-progress-wrap { flex: 1; height: 5px; border-radius: 3px; background: rgba(148,163,184,0.25); overflow: hidden; }
-        .vm-progress { height: 100%; background: #3b82f6; }
-        .vm-time { font-size: 11px; color: #4d6088; font-variant-numeric: tabular-nums; }
+        .vm-play { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #3b82f6; cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; }
+        .vm-play[data-active="true"] { background: #3b82f6; color: #fff; }
+        .vm-wave { position: relative; flex: 1; height: 30px; cursor: pointer; }
+        .vm-wave-row { position: absolute; inset: 0; display: flex; align-items: center; gap: 3px; }
+        .vm-wave-row span { flex: 1; border-radius: 2px; min-height: 3px; }
+        .vm-wave-row.track span { background: rgba(148,163,184,0.30); }
+        .vm-wave-row.played span { background: #3b82f6; }
+        .vm-elapsed { font-size: 11px; font-weight: 700; color: #8899bb; font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 30px; text-align: right; }
+        .vm-transcript { margin: 12px 0 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #8899bb; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .vm-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
+        .vm-date { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: #4d6088; padding: 4px 9px; border-radius: 10px; background: rgba(148,163,184,0.10); }
+        .vm-callback { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: #3b82f6; padding: 6px 12px; border-radius: 12px; border: 0; background: rgba(59,130,246,0.14); cursor: pointer; }
 
         .mini-tabs { display: flex; border-top: 0.5px solid #162036; background: #090e18; }
         .mini-tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 11px; border: 0; background: transparent; color: #374869; font-size: 10px; cursor: pointer; transition: color .16s ease; }
