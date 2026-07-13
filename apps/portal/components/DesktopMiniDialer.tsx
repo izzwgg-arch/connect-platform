@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  ArrowUpRight,
   Bell,
   ChevronLeft,
   Clock3,
@@ -527,7 +528,7 @@ export function DesktopMiniDialer() {
             </select>
             {dialSuggestions.length > 0 && (
               <div className="suggestions">
-                {dialSuggestions.map((s) => (<button key={s.id} onClick={() => phone.setDialpadInput(s.number)}><span>{s.label}</span><small>{s.number} &#183; {s.meta}</small></button>))}
+                {dialSuggestions.map((s) => (<button key={s.id} onClick={() => phone.setDialpadInput(s.number)}><span className="sugg-av">{initials(s.label)}</span><span className="sugg-main"><strong>{s.label}</strong><small>{s.number}</small></span><ArrowUpRight size={16} /></button>))}
               </div>
             )}
             <div className="keypad">
@@ -676,23 +677,23 @@ export function DesktopMiniDialer() {
         .mini-content { flex: 1; overflow-y: auto; overflow-x: hidden; }
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
-        .dialer-pane { padding: 14px 16px 10px; height: 100%; --key: 58px; --kgap: 22px; }
-        .dialer-pane.with-suggestions { --key: 45px; --kgap: 16px; }
+        .dialer-pane { padding: 14px 16px 10px; height: 100%; --keyh: 56px; }
+        .dialer-pane.with-suggestions { --keyh: 44px; }
         .number-input { width: 100%; height: 44px; border-radius: 14px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #f0f4ff !important; font-size: 20px; text-align: center; letter-spacing: 1px; outline: none; }
         .number-input::placeholder { color: #4d6088 !important; font-size: 15px; letter-spacing: 0; }
         .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid #1e2d47; background: #111827 !important; color: #8899bb !important; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
-        .suggestions { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 2px; }
-        .suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 10px; border: 0; border-radius: 10px; background: #111827; color: #f0f4ff; font-size: 13px; cursor: pointer; }
-        .suggestions small { color: #8899bb; font-size: 11px; }
-        .keypad { display: grid; grid-template-columns: repeat(3, var(--key)); gap: 8px var(--kgap); margin: 8px auto 4px; justify-content: center; }
-        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; width: var(--key); height: var(--key); border-radius: 50%; border: 0.5px solid #1e2d47; background: #111827; color: #f0f4ff; cursor: pointer; }
+        .suggestions { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px; }
+        .suggestions button { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border: 0.5px solid #1e2d47; border-radius: 14px; background: #111827; color: #f0f4ff; cursor: pointer; text-align: left; } .suggestions button > :global(svg) { color: #4d6088; flex-shrink: 0; } .sugg-av { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgba(136,153,187,0.16); color: #8899bb; font-size: 13px; font-weight: 500; flex-shrink: 0; } .sugg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; } .sugg-main strong { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sugg-main small { font-size: 13px; color: #8899bb; }
+        
+        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px auto 2px; width: 100%; max-width: 300px; }
+        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: var(--keyh); border-radius: 12px; border: 0; background: transparent; color: #f0f4ff; cursor: pointer; }
         .keypad button:hover { background: #162034; }
-        .keypad strong { font-size: 21px; font-weight: 500; }
-        .keypad span { font-size: 9px; letter-spacing: 1.5px; color: #4d6088; }
-        .dialer-actions { display: grid; grid-template-columns: repeat(3, var(--key)); gap: 8px var(--kgap); justify-content: center; align-items: center; margin: 4px auto 4px; }
-        .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: var(--key); height: var(--key); border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
+        .keypad strong { font-size: 30px; font-weight: 400; line-height: 1; }
+        .keypad span { font-size: 9px; letter-spacing: 2px; color: #4d6088; font-weight: 500; }
+        .dialer-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; justify-content: center; align-items: center; margin: 4px auto 6px; width: 100%; max-width: 300px; }
+        .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
         .call-button:disabled { background: #1e2d47; color: #4d6088; box-shadow: none; cursor: default; }
-        .delete-button { grid-column: 3; justify-self: center; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; border: 0; background: transparent; color: #8899bb; cursor: pointer; }
+        .delete-button { grid-column: 3; justify-self: center; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 0.5px solid #1e2d47; background: rgba(30,45,71,0.55); color: #8899bb; cursor: pointer; }
 
         .list-pane { display: flex; flex-direction: column; }
         .mini-row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 0.5px solid #162036; }
