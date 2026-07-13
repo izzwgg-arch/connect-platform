@@ -528,9 +528,11 @@ export function DesktopMiniDialer() {
         {tab === "dialer" && (
           <div className={"screen dialer-pane" + (dialSuggestions.length > 0 ? " with-suggestions" : "")}>
             <input className="number-input" value={phone.dialpadInput} placeholder="Search or dial" onChange={(e) => phone.setDialpadInput(e.target.value.replace(/[^\d*#+]/g, ""))} onKeyDown={(e) => { if (e.key === "Enter") callTarget(phone.dialpadInput); }} />
-            <select className="route-select" value={phone.selectedOutboundRouteId} onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}>
-              {routeOptions.map((route) => <option key={route.id || "none"} value={route.id}>{route.name}</option>)}
-            </select>
+            {phone.outboundRoutes.length > 0 && (
+              <select className="route-select" value={phone.selectedOutboundRouteId} onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}>
+                {routeOptions.map((route) => <option key={route.id || "none"} value={route.id}>{route.name}</option>)}
+              </select>
+            )}
             {dialSuggestions.length > 0 && (
               <div className="suggestions">
                 {dialSuggestions.map((s) => (<button key={s.id} onClick={() => phone.setDialpadInput(s.number)}><span className="sugg-av">{initials(s.label)}</span><span className="sugg-main"><strong>{s.label}</strong><small>{s.number}</small></span><ArrowUpRight size={16} /></button>))}
