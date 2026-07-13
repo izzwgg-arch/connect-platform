@@ -253,6 +253,15 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
           <span key={i} className={i / bars.length < pct ? "on" : ""} style={{ height: String(Math.round(6 + h * 22)) + "px" }} />
         ))}
       </div>
+      <style jsx>{`
+        .vm-player { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+        .vm-player[data-error="true"] { opacity: .5; }
+        .vm-play { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #3b82f6; cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; }
+        .vm-play[data-active="true"] { background: #3b82f6; color: #fff; }
+        .vm-wave { display: flex; align-items: center; gap: 2px; flex: 1; height: 30px; cursor: pointer; }
+        .vm-wave span { flex: 1; border-radius: 2px; background: rgba(148,163,184,0.34); }
+        .vm-wave span.on { background: #3b82f6; }
+      `}</style>
     </div>
   );
 }
