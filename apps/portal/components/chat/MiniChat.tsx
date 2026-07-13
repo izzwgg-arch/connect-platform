@@ -385,6 +385,8 @@ export function MiniChat() {
             color: var(--text); resize: none; font: inherit; font-size: 14px; line-height: 1.35;
           }
           .mc-conv-wrap .cc-compose-bubble textarea::placeholder { color: var(--text-dim); }
+          .mc-conv-wrap .cc-compose-bubble textarea { scrollbar-width: none; }
+          .mc-conv-wrap .cc-compose-bubble textarea::-webkit-scrollbar { width: 0; height: 0; }
           .mc-conv-wrap .cc-compose-icon,
           .mc-conv-wrap .cc-compose-action {
             width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center;
