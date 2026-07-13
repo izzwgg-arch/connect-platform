@@ -38,6 +38,50 @@ import {
 } from "@connect/shared/webrtcBlackbox";
 import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
+import * as SecureStore from "expo-secure-store";
+
+// -- iOS stable SIP instance id (RFC 5626 outbound de-dup) ----------------------
+// iOS cannot hold a persistent SIP socket, so the app spins up a fresh JsSIP UA
+// on every wake/reconnect. When instance_id is unset, JsSIP mints a NEW random
+// +sip.instance per UA (see jssip UA.js), so the PBX registrar treats each wake
+// as a brand-new device and STACKS a new AOR contact. Inbound calls then fork to
+// stale contacts the app is no longer answering on -> voicemail. Pinning a
+// persisted per-install UUID makes every re-register carry the SAME
+// reg-id=1;+sip.instance, so the registrar REPLACES the one binding. Per-install
+// (NOT per-extension) so multiple phones on one extension keep distinct bindings
+// and all ring. iOS-only; Android keeps one long-lived UA and is untouched.
+const SIP_INSTANCE_ID_KEY = "cc_sip_instance_id";
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+let cachedSipInstanceId: string | null = null;
+function genUuidV4(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+async function getStableSipInstanceId(): Promise<string> {
+  if (cachedSipInstanceId && UUID_V4_RE.test(cachedSipInstanceId)) {
+    return cachedSipInstanceId;
+  }
+  let id: string | null = null;
+  try {
+    id = await SecureStore.getItemAsync(SIP_INSTANCE_ID_KEY);
+  } catch {
+    id = null;
+  }
+  if (!id || !UUID_V4_RE.test(id)) {
+    id = genUuidV4();
+    try {
+      await SecureStore.setItemAsync(SIP_INSTANCE_ID_KEY, id);
+    } catch {
+      // best-effort persistence; a non-persisted id still de-dups within a run
+    }
+  }
+  cachedSipInstanceId = id;
+  return id;
+}
 import { getDnd } from "./dndStore";
 
 const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
@@ -407,6 +451,19 @@ export class JsSipClient implements SipClient {
 
     if (this.bundle.outboundProxy) {
       uaConfig.outbound_proxy_set = this.bundle.outboundProxy;
+    }
+
+    // iOS: pin a persisted per-install instance id so the registrar de-dups our
+    // AOR binding across wakes instead of stacking a new random contact each
+    // time (the root cause of cold-answer -> voicemail). Android is not gated in
+    // here and keeps JsSIP's default behaviour, so its registration is unchanged.
+    if (Platform.OS === "ios") {
+      try {
+        uaConfig.instance_id = await getStableSipInstanceId();
+        console.log("[SIP] iOS stable instance_id:", uaConfig.instance_id);
+      } catch (e) {
+        console.warn("[SIP] instance_id resolve failed (fallback random):", e);
+      }
     }
 
     this.ua = new (JsSIP as any).UA(uaConfig);
