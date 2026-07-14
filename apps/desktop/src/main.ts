@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, session, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
@@ -25,6 +25,10 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let settings: DesktopSettings = DEFAULT_SETTINGS;
 let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
+// When the last phone-state envelope arrived (main-process clock). A frozen renderer
+// cannot update this, so a "call active" state older than a couple of minutes is stale
+// evidence, not a reason to skip recovery.
+let lastPhoneStateAt = 0;
 // Last theme the full portal window reported. Forwarded to the mini pop-out so it
 // follows the portal's light/dark mode. Defaults to dark (the mini's base palette).
 let miniTheme: "dark" | "light" = "dark";
@@ -400,7 +404,10 @@ function registerIpc(): void {
   });
 
   ipcMain.on("phone:engine-event", (_event, envelope: PhoneEngineEnvelope) => {
-    if (envelope.type === "state") latestPhoneStateEnvelope = envelope;
+    if (envelope.type === "state") {
+      latestPhoneStateEnvelope = envelope;
+      lastPhoneStateAt = Date.now();
+    }
     sendPhoneEventToRenderers(envelope);
     if (envelope.type === "state") {
       const state = envelope.payload as { callState?: string; callDirection?: string; ringingSessionIds?: unknown[]; remoteParty?: string | null };
@@ -434,6 +441,55 @@ function registerIpc(): void {
   });
 }
 
+// ── SIP-engine liveness: heartbeat + hard recovery ─────────────────────
+// Root cause of "registered → yellow forever until app restart" (diagnosed 2026-07-14):
+// Windows/Chromium can FREEZE the hidden full window's renderer outright (native window
+// occlusion tracking + EcoQoS/Modern Standby), not just throttle it. When that happens
+// every in-renderer defence — CRLF keepalive, liveness watchdog, reconnect backoff,
+// even telemetry — stops with it, the WSS socket dies, and nothing ever reconnects.
+// A frozen renderer cannot heal itself, so the MAIN process (which is never frozen)
+// pings the SIP window every 30 s with a trivial executeJavaScript. Three consecutive
+// unanswered pings (~90 s) ⇒ webContents.reload(), which rebuilds the portal and
+// re-registers. Reload is skipped only while a call is plausibly active on FRESH state.
+let heartbeatMisses = 0;
+let heartbeatBusy = false;
+function startSipEngineHeartbeat(): void {
+  setInterval(async () => {
+    const win = fullWindow;
+    if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
+    if (heartbeatBusy) return; // previous ping still in flight; its own timeout scores the miss
+    heartbeatBusy = true;
+    const alive = await Promise.race([
+      win.webContents.executeJavaScript("1", true).then(() => true).catch(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10_000)),
+    ]);
+    heartbeatBusy = false;
+    if (win.isDestroyed()) return;
+    if (alive) {
+      if (heartbeatMisses > 0) diag("heartbeat", `SIP window responsive again after ${heartbeatMisses} miss(es)`);
+      heartbeatMisses = 0;
+      return;
+    }
+    heartbeatMisses += 1;
+    diag("heartbeat", `SIP window unresponsive (miss ${heartbeatMisses}/3)`);
+    if (heartbeatMisses < 3) return;
+    const state = (latestPhoneStateEnvelope?.payload ?? {}) as { callState?: string; ringingSessionIds?: unknown[] };
+    const callActive = state.callState === "ringing" || state.callState === "dialing" || state.callState === "connected"
+      || (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
+    if (callActive && Date.now() - lastPhoneStateAt < 120_000) {
+      diag("heartbeat", "holding reload: call state is active and fresh");
+      return;
+    }
+    heartbeatMisses = 0;
+    diag("heartbeat", "reloading frozen SIP window");
+    try {
+      win.webContents.reload();
+    } catch (err) {
+      diag("heartbeat", `reload failed: ${String(err)}`);
+    }
+  }, 30_000);
+}
+
 // ── Keep call audio smooth when the window is hidden/occluded ──────────
 // backgroundThrottling:false (per-window, above) stops timer throttling, but Chromium
 // separately lowers a renderer's process priority when it's hidden or occluded, which
@@ -443,6 +499,12 @@ function registerIpc(): void {
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
+// The switches above only address PRIORITY/throttling. Chromium's native window
+// occlusion tracker separately marks a fully covered/minimized window as hidden and
+// can freeze its renderer entirely (and IntensiveWakeUpThrottling clamps its timers
+// to once a minute). Either one silently kills the SIP engine's keepalive/watchdog
+// loop — the diagnosed cause of permanent yellow. Disable both features outright.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion,IntensiveWakeUpThrottling");
 
 // ── Single-instance lock ──────────────────────────────────────────────
 // Without this, every launch (startOnLogin, a manual re-open, or the relaunch
@@ -485,10 +547,28 @@ if (!gotSingleInstanceLock) {
   try { await session.defaultSession.clearCache(); } catch { /* non-fatal */ }
   registerIpc();
   rebuildTray();
+  // Hold an app-suspension power-save blocker for the app's entire lifetime — not just
+  // during calls. A softphone must stay registered to RECEIVE calls, and Modern
+  // Standby/EcoQoS otherwise suspends the idle app exactly when it looks least busy.
+  try {
+    const id = powerSaveBlocker.start("prevent-app-suspension");
+    diag("main", `lifetime app-suspension blocker started (id ${id})`);
+  } catch (err) {
+    diag("main", `lifetime power-save blocker failed: ${String(err)}`);
+  }
   // Single-phone model: the full window is the one SIP phone; no separate hidden
   // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
+  startSipEngineHeartbeat();
+  // After sleep/resume the renderer may be alive but its socket long dead; nudge the
+  // portal's own reconnect path immediately instead of waiting for its next timer.
+  powerMonitor.on("resume", () => {
+    diag("power", "system resumed — nudging SIP reconnect");
+    const win = fullWindow;
+    if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
+    win.webContents.executeJavaScript("window.dispatchEvent(new Event('online')); 1", true).catch(() => { /* heartbeat will catch a frozen renderer */ });
+  });
 
   app.on("activate", () => createFullWindow(true));
   });
