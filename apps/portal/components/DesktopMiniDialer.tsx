@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
-import { apiGet, getPortalApiBaseUrl } from "../services/apiClient";
+import { apiGet, apiPatch, getPortalApiBaseUrl } from "../services/apiClient";
 import { loadContacts, loadSmsThreads, type ContactRow, type SmsThread } from "../services/platformData";
 import { MiniChat } from "./chat/MiniChat";
 import { MiniTeam } from "./MiniTeam";
@@ -185,6 +185,39 @@ function voicemailStreamUrl(id: string): string {
   return `${getPortalApiBaseUrl()}/voice/voicemail/${encodeURIComponent(id)}/stream${tokenQuery}`;
 }
 
+// Locally-authoritative voicemail read/unread overrides, persisted so a voicemail
+// that was played (or explicitly toggled) NEVER reverts to NEW because a later
+// server refetch returned a stale copy — it only flips back on an explicit
+// "mark unread". Mirrors the mobile app's read-override behaviour.
+const VM_READ_KEY = "cc-mini-vm-read";
+const VM_UNREAD_KEY = "cc-mini-vm-unread";
+function loadIdSet(key: string): Set<string> {
+  try {
+    const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? (arr as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveIdSet(key: string, set: Set<string>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify([...set]));
+  } catch {
+    /* ignore */
+  }
+}
+function applyVmReadOverrides(list: MiniVoicemail[]): MiniVoicemail[] {
+  const read = loadIdSet(VM_READ_KEY);
+  const unread = loadIdSet(VM_UNREAD_KEY);
+  if (read.size === 0 && unread.size === 0) return list;
+  return list.map((vm) => {
+    if (read.has(vm.id) && !vm.listened) return { ...vm, listened: true };
+    if (unread.has(vm.id) && vm.listened) return { ...vm, listened: false };
+    return vm;
+  });
+}
+
 // Elapsed seconds since the call connected. Driven by an absolute timestamp
 // (broadcast from the full window) rather than a local "started counting now",
 // so the mini pop-out proxy shows the real elapsed time even if it's opened
@@ -221,7 +254,7 @@ function vmWaveBars(src: string): number[] {
   return bars;
 }
 
-function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: number }) {
+function VoicemailPlayer({ src, durationSec, onPlay }: { src: string; durationSec: number; onPlay?: () => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -275,7 +308,10 @@ function VoicemailPlayer({ src, durationSec }: { src: string; durationSec: numbe
     }
     setError(false);
     audio.play()
-      .then(() => setPlaying(true))
+      .then(() => {
+        setPlaying(true);
+        onPlay?.();
+      })
       .catch(() => {
         setPlaying(false);
         setError(true);
@@ -436,7 +472,7 @@ export function DesktopMiniDialer() {
       .then((result) => setThreads(result.threads.slice(0, 20)))
       .catch(() => setThreads([]));
     apiGet<{ voicemails?: MiniVoicemail[] }>("/voice/voicemail?folder=inbox&page=1&pageSize=20")
-      .then((result) => setVoicemails(Array.isArray(result.voicemails) ? result.voicemails : []))
+      .then((result) => setVoicemails(applyVmReadOverrides(Array.isArray(result.voicemails) ? result.voicemails : [])))
       .catch(() => setVoicemails([]));
   }, [adminScope]);
 
@@ -517,6 +553,20 @@ export function DesktopMiniDialer() {
     const value = target.trim();
     if (value && phone.regState === "registered") { phone.dial(value); setLastDialed(value); }
   };
+
+  // Mark a voicemail read/unread: persist a local override (so a later refetch can
+  // never revert it), update the on-screen list, and tell the server. Playing a
+  // voicemail calls this with listened=true; it only flips back on an explicit
+  // "mark unread".
+  const markVmListened = useCallback((id: string, listened: boolean) => {
+    const read = loadIdSet(VM_READ_KEY);
+    const unread = loadIdSet(VM_UNREAD_KEY);
+    if (listened) { read.add(id); unread.delete(id); } else { unread.add(id); read.delete(id); }
+    saveIdSet(VM_READ_KEY, read);
+    saveIdSet(VM_UNREAD_KEY, unread);
+    setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, listened } : v)));
+    apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened }).catch(() => undefined);
+  }, []);
 
   const selectedSession = phone.sessions.find((session) => session.isActive) || phone.sessions[0] || null;
   const incomingWaiting = phone.sessions.filter((session) => session.state === "ringing" && !session.isActive);
@@ -797,14 +847,14 @@ export function DesktopMiniDialer() {
                         <span className="vm-dur">{formatDuration(vm.durationSec)}</span>
                       </div>
                     </div>
-                    <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} />
+                    <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} onPlay={() => markVmListened(vm.id, true)} />
                     {vm.transcription ? <p className="vm-transcript">{vm.transcription}</p> : null}
                     <div className="vm-actions">
                       <span className="vm-date"><Clock3 size={12} /> {shortTime(vm.receivedAt)}</span>
                       <div className="vm-action-btns">
                         <button className="vm-act vm-act-call" onClick={() => callTarget(vm.callerId)} title="Call back"><Phone size={16} /></button>
                         <button className="vm-act vm-act-msg" onClick={() => setTab("messages")} title="Message"><MessageSquare size={16} /></button>
-                        <button className="vm-act vm-act-more" onClick={() => setVoicemails((prev) => prev.map((v) => v.id === vm.id ? { ...v, listened: !v.listened } : v))} title={vm.listened ? "Mark unread" : "Mark read"}><MoreHorizontal size={18} /></button>
+                        <button className="vm-act vm-act-more" onClick={() => markVmListened(vm.id, !vm.listened)} title={vm.listened ? "Mark unread" : "Mark read"}><MoreHorizontal size={18} /></button>
                       </div>
                     </div>
                   </div>
