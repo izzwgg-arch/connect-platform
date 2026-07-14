@@ -29,6 +29,7 @@ import {
   Settings,
   MoreHorizontal,
   User,
+  Users,
   Voicemail,
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
@@ -36,6 +37,7 @@ import { useSipPhone } from "../hooks/useSipPhone";
 import { apiGet, getPortalApiBaseUrl } from "../services/apiClient";
 import { loadContacts, loadSmsThreads, type ContactRow, type SmsThread } from "../services/platformData";
 import { MiniChat } from "./chat/MiniChat";
+import { MiniTeam } from "./MiniTeam";
 import { readAuthToken } from "../services/session";
 import {
   getWebRingerOutputDeviceId,
@@ -44,7 +46,7 @@ import {
   setWebRingerVolume,
 } from "../hooks/telephonyAudioPreferences";
 
-type TabKey = "dialer" | "calls" | "messages" | "voicemail";
+type TabKey = "dialer" | "calls" | "messages" | "voicemail" | "team";
 
 type MiniCallRow = {
   callId?: string;
@@ -500,9 +502,11 @@ export function DesktopMiniDialer() {
     setWebRingerVolume(value);
   }, []);
 
-  useEffect(() => {
-    if (phone.callState === "ringing") setTab("dialer");
-  }, [phone.callState]);
+  // Do NOT switch tabs when a call starts. The active-call screen is a full overlay,
+  // so the underlying tab (Recents / Chat / Voicemail / Team) — and its scroll
+  // position — stays mounted beneath it. Leaving the tab alone means that when the
+  // call ends you land back exactly where you dialed from (e.g. the same voicemail),
+  // with no scrolling required.
 
   const appendDigit = (digit: string) => {
     phone.setDialpadInput((prev) => `${prev}${digit}`);
@@ -810,10 +814,12 @@ export function DesktopMiniDialer() {
             </div>
           );
         })()}
+
+        {tab === "team" && <MiniTeam onCall={callTarget} onMessage={() => setTab("messages")} tenantId={tenant?.id ?? null} />}
       </section>
 
       <nav className="mini-tabs">
-        {([["calls", Clock3, "Recents"], ["messages", MessageSquare, "Chat"], ["voicemail", Voicemail, "Voicemail"], ["dialer", Phone, "Dialer"]] as const).map(([key, Icon, label]) => (
+        {([["dialer", Phone, "Dialer"], ["calls", Clock3, "Recents"], ["messages", MessageSquare, "Chat"], ["voicemail", Voicemail, "Voicemail"], ["team", Users, "Team"]] as const).map(([key, Icon, label]) => (
           <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key as TabKey)}>
             <Icon size={20} />
             <span>{label}</span>
