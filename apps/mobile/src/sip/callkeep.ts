@@ -220,7 +220,24 @@ export function showIncomingNativeCall(callId: string, from: string) {
   // callId, byte-for-byte identical to the pre-iOS behavior.
   if (Platform.OS === "ios") {
     if (reportedIncomingCallIds.has(callId)) {
-      console.log("[CALL_INCOMING] showIncomingNativeCall: duplicate callId ignored callId=", callId);
+      // Already reported to CallKit — commonly by a caller-less PREWAKE VoIP
+      // push that displayed "Unknown". If we now have a real caller (the full
+      // INCOMING_CALL push / resolved invite), UPDATE the CallKit label instead
+      // of dropping it, so the incoming screen shows the number/name rather than
+      // "Unknown" (COWORK fix 2026-07-13). No-op when `from` is empty. Android
+      // never reaches this branch.
+      const trimmed = (from || "").trim();
+      if (trimmed) {
+        try {
+          const u = callKitUuidForCallId(callId);
+          (RNCallKeep as any).updateDisplay?.(u, trimmed, trimmed);
+          console.log("[CALL_INCOMING] showIncomingNativeCall: refreshed CallKit label for already-reported callId=", callId, "from=", trimmed);
+        } catch (e) {
+          console.warn("[CALL_INCOMING] updateDisplay failed:", String(e));
+        }
+      } else {
+        console.log("[CALL_INCOMING] showIncomingNativeCall: duplicate callId ignored (no caller to refresh) callId=", callId);
+      }
       return;
     }
     reportedIncomingCallIds.add(callId);

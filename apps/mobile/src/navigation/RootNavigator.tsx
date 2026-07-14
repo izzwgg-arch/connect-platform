@@ -327,8 +327,20 @@ function TabsWrapper() {
   // route, so it's false while ActiveCall / IncomingCall is presented on top.
   const tabsFocused = useIsFocused();
   const bannerSession = callSessions.activeCall ?? callSessions.heldCalls[0] ?? null;
-  const hasOngoingCall = callSessions.hasAnyOngoingCall || callState === 'connected';
-  const showOngoingBanner = tabsFocused && hasOngoingCall && !coverTabs;
+  // COWORK fix (2026-07-13): a lingering/zombie session from a cold-answer
+  // re-delivery can leave the multi-call map (`hasAnyOngoingCall`) reporting an
+  // "ongoing" call after the real call has already ended, which stranded this
+  // banner (the green pill) on screen. The SIP aggregate `callState` reliably
+  // returns to "ended"/"idle" when the last live SIP leg dies, so treat
+  // idle/ended as "no live call" and hide the pill — UNLESS there is a
+  // genuinely held (parked) call. Display-only; never touches the
+  // answer/register path.
+  const callLayerEnded = callState === 'idle' || callState === 'ended';
+  const hasHeldCall = callSessions.heldCalls.length > 0;
+  const hasOngoingCall =
+    (callSessions.hasAnyOngoingCall || callState === 'connected') &&
+    (!callLayerEnded || hasHeldCall);
+  const showOngoingBanner = tabsFocused && hasOngoingCall && !!bannerSession && !coverTabs;
   const bannerName =
     bannerSession?.remoteName?.trim() || bannerSession?.remoteNumber || 'Ongoing call';
   const bannerConnectedAt = bannerSession?.answeredAt ?? null;
