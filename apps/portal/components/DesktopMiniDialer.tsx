@@ -981,15 +981,14 @@ export function DesktopMiniDialer() {
         .screen { display: flex; flex-direction: column; }
         .screen-title { font-size: 24px; font-weight: 500; letter-spacing: -0.4px; padding: 16px 18px 10px; }
         .dialer-pane { padding: 14px 16px 10px; height: 100%; display: flex; flex-direction: column; --keyh: 56px; }
-        .dialer-pane.with-suggestions { --keyh: 50px; }
         .number-input { width: 100%; height: 44px; border-radius: 14px; border: 0.5px solid var(--mn-border); background: var(--mn-surface) !important; color: var(--mn-text) !important; font-size: 20px; text-align: center; letter-spacing: 1px; outline: none; }
         .number-input::placeholder { color: var(--mn-text-3) !important; font-size: 15px; letter-spacing: 0; }
         .route-select { width: 100%; height: 34px; border-radius: 10px; border: 0.5px solid var(--mn-border); background: var(--mn-surface) !important; color: var(--mn-text-2) !important; font-size: 12px; padding: 0 10px; margin-top: 8px; outline: none; }
         .suggestions { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px; }
         .suggestions button { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border: 0.5px solid var(--mn-border); border-radius: 14px; background: var(--mn-surface); color: var(--mn-text); cursor: pointer; text-align: left; } .suggestions button > :global(svg) { color: var(--mn-text-3); flex-shrink: 0; } .sugg-av { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgba(136,153,187,0.16); color: var(--mn-text-2); font-size: 13px; font-weight: 500; flex-shrink: 0; } .sugg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; } .sugg-main strong { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sugg-main small { font-size: 13px; color: var(--mn-text-2); }
         
-        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: auto auto 2px; width: 100%; max-width: 300px; }
-        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: var(--keyh); border-radius: 12px; border: 0; background: transparent; color: var(--mn-text); cursor: pointer; }
+        .keypad { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, minmax(0, var(--keyh))); align-content: center; gap: 4px; margin: 2px auto; width: 100%; max-width: 300px; }
+        .keypad button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 100%; min-height: 0; border-radius: 12px; border: 0; background: transparent; color: var(--mn-text); cursor: pointer; }
         .keypad button:hover { background: var(--mn-surface-2); }
         .keypad strong { font-size: 30px; font-weight: 400; line-height: 1; }
         .keypad span { font-size: 9px; letter-spacing: 2px; color: var(--mn-text-3); font-weight: 500; }
