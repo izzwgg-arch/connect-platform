@@ -58,6 +58,7 @@ export interface ConnectionEvent {
     | "unregistered"
     | "disconnected"
     | "reconnect"
+    | "hard-reinit"
     | "registrationFailed"
     | "netchange"
     | "online"
@@ -556,6 +557,9 @@ function appendConnLog(ev: Omit<ConnectionEvent, "sincePrevMs">): ConnectionEven
 
 function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [regState, setRegState] = useState<SipRegState>("idle");
+  // Bumping this rebuilds the SIP engine from scratch (fresh JsSIP UA + registration),
+  // exactly like a page reload — used to auto-recover a stuck "Connecting" state.
+  const [reinitSeq, setReinitSeq] = useState(0);
   const [callState, setCallState] = useState<SipCallState>("idle");
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [callDirection, setCallDirection] = useState<"outbound" | "inbound" | null>(null);
@@ -760,6 +764,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Consecutive reconnect attempts, for exponential backoff. Reset on register. */
   const reconnectAttemptRef = useRef<number>(0);
+  /** Epoch ms the phone first went unregistered (null while registered). Drives the
+   *  stuck-registration hard-recovery: gentle reconnect (ua.start) can leave a wedged
+   *  JsSIP transport stuck yellow ("Connecting") forever — only a fresh UA recovers,
+   *  which is why a page reload fixes it. When stuck past a threshold we rebuild the UA. */
+  const unregisteredSinceRef = useRef<number | null>(null);
+  /** Epoch ms of the last hard-reinit, to cap how often we rebuild the UA. */
+  const lastHardReinitRef = useRef<number>(0);
   /** Set by the active UA so network/visibility listeners can force a fast recovery. */
   const forceReconnectRef = useRef<(() => void) | null>(null);
   /** Timestamp when the local hangup was initiated (for the stale-report). */
@@ -1281,18 +1292,37 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         keepAliveTimerRef.current = setInterval(sendKeepAlive, 15_000);
 
         // Proactive liveness watchdog: if the socket is dead, kick a reconnect;
-        // if the socket is open but registration lapsed, refresh it.
+        // if the socket is open but registration lapsed, refresh it. And, as a last
+        // resort, if the phone stays unregistered for too long (a wedged JsSIP
+        // transport that ua.start()/register() won't revive), rebuild the whole UA —
+        // the same recovery a page reload performs, but automatic.
+        const STUCK_REINIT_MS = 20_000; // unregistered this long → rebuild the UA
+        const REINIT_COOLDOWN_MS = 45_000; // never rebuild more often than this
         const runWatchdog = () => {
           if (cancelled || uaRef.current !== ua) return;
           const connected = !!ua.isConnected?.();
           const registered = !!ua.isRegistered?.();
+          if (registered) {
+            unregisteredSinceRef.current = null;
+            return;
+          }
+          // Not registered — note when it started and try the gentle recovery first.
+          if (unregisteredSinceRef.current == null) unregisteredSinceRef.current = Date.now();
           if (!connected) {
             queueReconnect();
-          } else if (!registered) {
+          } else {
             try { ua.register(); } catch { /* ignore */ }
           }
+          const stuckMs = Date.now() - unregisteredSinceRef.current;
+          const sinceReinit = Date.now() - lastHardReinitRef.current;
+          if (stuckMs >= STUCK_REINIT_MS && sinceReinit >= REINIT_COOLDOWN_MS) {
+            lastHardReinitRef.current = Date.now();
+            unregisteredSinceRef.current = null;
+            logConn("hard-reinit");
+            setReinitSeq((s) => s + 1); // tears down this UA and rebuilds a fresh one
+          }
         };
-        watchdogTimerRef.current = setInterval(runWatchdog, 15_000);
+        watchdogTimerRef.current = setInterval(runWatchdog, 10_000);
 
         // Exposed to the window 'online' / 'visibilitychange' listeners so a
         // regained network or a woken tab recovers immediately (handles 5G dynamic
@@ -1336,6 +1366,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           if (!cancelled) {
             regFailCount = 0;
             reconnectAttemptRef.current = 0;
+            unregisteredSinceRef.current = null;
             setRegState("registered");
             setError(null);
             logConn("registered");
@@ -1545,8 +1576,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         audioRef.current = null;
       }
     };
+    // Re-runs (tearing down + rebuilding the SIP engine) whenever reinitSeq bumps —
+    // the auto-recovery for a wedged registration. Other inputs are read via refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reinitSeq]);
 
   // ── Session lifecycle ───────────────────────────────────────────────────
 
