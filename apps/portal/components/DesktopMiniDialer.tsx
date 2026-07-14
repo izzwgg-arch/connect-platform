@@ -635,11 +635,21 @@ export function DesktopMiniDialer() {
                   { checked: settings.openMinimizedToTray !== false, label: "Open minimized", hint: "Start quietly in the system tray", apply: (c: boolean) => updateDesktopSettings({ openMinimizedToTray: c }) },
                   { checked: Boolean(settings.openMiniOnStartup), label: "Open mini dialer", hint: "Show this floating dialer on startup", apply: (c: boolean) => updateDesktopSettings({ openMiniOnStartup: c }) },
                 ]).map((row) => (
-                  // Inlined (not a child <MiniToggle/>) so styled-jsx scopes .settings-toggle-row to it.
-                  <button key={row.label} type="button" className="settings-toggle-row" onClick={() => row.apply(!row.checked)}>
+                  // A <div> (not a native <button>) so the row reliably stretches to the
+                  // full popover width — Chromium buttons shrink-wrap to content even with
+                  // width:100%, which collapsed the label column. Inlined so styled-jsx
+                  // scopes .settings-toggle-row to it.
+                  <div
+                    key={row.label}
+                    className="settings-toggle-row"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => row.apply(!row.checked)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.apply(!row.checked); } }}
+                  >
                     <span><strong>{row.label}</strong><small>{row.hint}</small></span>
                     <i data-on={row.checked ? "true" : "false"} />
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
