@@ -298,14 +298,27 @@ export function useTelephonyAudio() {
     ringbackRef.current = null;
   }, []);
 
+  // Route the shared tone AudioContext to a specific output device (the call
+  // output / headset). Without this the outbound ringback plays on the OS default
+  // speaker even when the user picked a headset — the connected call then jumps to
+  // the headset only after answer. Requires AudioContext.setSinkId (Chromium 110+/
+  // Electron); a no-op elsewhere so the tone stays on the default device.
+  function applyCtxSink(ctx: AudioContext, outputDeviceId?: string) {
+    if (outputDeviceId && typeof (ctx as unknown as { setSinkId?: unknown }).setSinkId === "function") {
+      void (ctx as unknown as { setSinkId: (id: string) => Promise<void> }).setSinkId(outputDeviceId).catch(() => undefined);
+    }
+  }
+
   /**
    * UK local ringback (BT-style 400+450 Hz, 400/200/400/2000 ms).
    * Plays until SIP progress / early media — then stopLocalRingback().
+   * `outputDeviceId` = the call output device so ringback plays on the headset.
    */
-  const startUkLocalRingback = useCallback(() => {
+  const startUkLocalRingback = useCallback((outputDeviceId?: string) => {
     stopLocalRingback();
     const ctx = ensureCtx();
     if (!ctx) return;
+    applyCtxSink(ctx, outputDeviceId);
     ringbackRef.current = startUkRingbackTone(ctx);
   }, [stopLocalRingback]);
 
@@ -313,18 +326,20 @@ export function useTelephonyAudio() {
    * European local ringback (ETSI-style 425 Hz, 1s on / 4s off).
    * Plays until SIP progress / early media — then stopLocalRingback().
    */
-  const startEuropeanLocalRingback = useCallback(() => {
+  const startEuropeanLocalRingback = useCallback((outputDeviceId?: string) => {
     stopLocalRingback();
     const ctx = ensureCtx();
     if (!ctx) return;
+    applyCtxSink(ctx, outputDeviceId);
     ringbackRef.current = startCadenceTone(ctx, 425, 425, 1000, 4000, 0.12);
   }, [stopLocalRingback]);
 
   /** US ringback: 440+480 Hz, 2s on / 4s off. */
-  const startRingback = useCallback(() => {
+  const startRingback = useCallback((outputDeviceId?: string) => {
     stopAll();
     const ctx = ensureCtx();
     if (!ctx) return;
+    applyCtxSink(ctx, outputDeviceId);
     ringbackRef.current = startCadenceTone(ctx, 440, 480, 2000, 4000, 0.12);
   }, [stopAll]);
 

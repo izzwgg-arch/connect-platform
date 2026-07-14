@@ -603,6 +603,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const sessionIdCounterRef = useRef<number>(0);
   const activeSessionIdRef = useRef<string | null>(null);
   const currentMicDeviceIdRef = useRef("");
+  // Mirror of currentSinkId (the call output / headset device) for use in the dial
+  // callback, so the outbound ringback can play on the same device as the call.
+  const currentSinkIdRef = useRef("");
   const MAX_CONCURRENT_SESSIONS_WEB = 5;
 
   function getOrAssignSessionId(s: unknown): string {
@@ -2258,7 +2261,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setError(null);
       setOnHold(false);
       console.log("[SIP] CALL_INITIATED target:", normalised, "route:", selectedOutboundRoute?.name || "none");
-      startUkLocalRingback();
+      // Play the ringback on the selected call output device (headset), not the OS
+      // default — so it matches where the connected call audio will go.
+      startUkLocalRingback(currentSinkIdRef.current);
       localRingbackActiveRef.current = true;
       patchDiag({ localRingback: "local" });
 
@@ -2563,6 +2568,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (typeof el.setSinkId === "function") {
         await el.setSinkId(sinkId);
       }
+      currentSinkIdRef.current = sinkId;
       setCurrentSinkId(sinkId);
       setSpeakerOn(sinkId !== "");
     } catch (e) {
