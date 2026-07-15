@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMoni
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
+import { initAutoUpdater, checkForUpdatesInteractive } from "./updater";
 
 const DEFAULT_MINI_BOUNDS: DesktopSettings["miniBounds"] = { width: 360, height: 640 };
 
@@ -332,6 +333,8 @@ function rebuildTray(): void {
       click: () => toggleAlwaysOnTop(),
     },
     { type: "separator" },
+    { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
+    { type: "separator" },
     {
       label: "Quit Connect",
       click: () => {
@@ -560,24 +563,13 @@ if (!gotSingleInstanceLock) {
   // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
+  // In-app auto-update: check the feed on launch (and periodically), download in
+  // the background, and prompt the user to restart when an update is ready.
+  initAutoUpdater(diag);
   startSipEngineHeartbeat();
   // After sleep/resume the renderer may be alive but its socket long dead; nudge the
   // portal's own reconnect path immediately instead of waiting for its next timer.
   powerMonitor.on("resume", () => {
     diag("power", "system resumed — nudging SIP reconnect");
     const win = fullWindow;
-    if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
-    win.webContents.executeJavaScript("window.dispatchEvent(new Event('online')); 1", true).catch(() => { /* heartbeat will catch a frozen renderer */ });
-  });
-
-  app.on("activate", () => createFullWindow(true));
-  });
-}
-
-app.on("window-all-closed", () => {
-  if (isQuitting) app.quit();
-});
-
-app.on("before-quit", () => {
-  isQuitting = true;
-});
+    if (!win || win.isDestroyed() || win.webContents.isLo

@@ -29,12 +29,10 @@
     "nsis": {
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
-    }
-  },
-  "devDependencies": {
-    "@types/node": "^25.6.0",
-    "electron": "^41.5.0",
-    "electron-builder": "^26.8.1",
-    "typescript": "^6.0.3"
-  }
-}
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://app.connectcomunications.com/desktop/",
+        "channel": "latest"
+    
