@@ -100,6 +100,8 @@ import {
   vmNormalizeFolder,
   buildExpoPushV2Item,
   EXPO_PUSH_USER_ALERT_TYPES,
+  SMS_CONSENT_LABEL,
+  SMS_CONSENT_VERSION,
 } from "@connect/shared";
 import {
   isApnsVoipConfigured,
@@ -4839,7 +4841,21 @@ app.get("/metrics", async (req, reply) => {
   reply.header("Content-Type", apiRegistry.contentType).send(body);
 });
 
-const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8) });
+// Optional SMS opt-in consent captured at signup. All fields optional so a
+// missing/partial object never blocks account creation; canonical text/version
+// are filled server-side when absent.
+const smsConsentInputSchema = z
+  .object({
+    optedIn: z.boolean().optional(),
+    consentText: z.string().max(2000).optional(),
+    consentVersion: z.string().max(64).optional(),
+    method: z.string().max(64).optional(),
+    source: z.string().max(128).optional(),
+    timestamp: z.string().max(64).optional(),
+    phoneE164: z.string().max(32).optional(),
+  })
+  .optional();
+const signupSchema = z.object({ tenantName: z.string().min(2), email: z.string().email(), password: z.string().min(8), smsConsent: smsConsentInputSchema });
 
 /**
  * Production smoke-tenant firewall.
@@ -4924,6 +4940,31 @@ app.post("/auth/signup", async (req, reply) => {
   });
 
   await audit({ tenantId: tenant.id, actorUserId: user.id, action: "TENANT_SIGNUP_CREATED", entityType: "Tenant", entityId: tenant.id });
+
+  // Persist an auditable 10DLC SMS consent record when the signup form sent one.
+  // Failure here must never block account creation.
+  if (input.smsConsent) {
+    try {
+      const rec = await db.smsConsentRecord.create({
+        data: {
+          tenantId: tenant.id,
+          userId: user.id,
+          optedIn: input.smsConsent.optedIn === true,
+          method: input.smsConsent.method || "signup_form",
+          source: input.smsConsent.source || "website_signup",
+          consentText: input.smsConsent.consentText || SMS_CONSENT_LABEL,
+          consentVersion: input.smsConsent.consentVersion || SMS_CONSENT_VERSION,
+          phoneE164: input.smsConsent.phoneE164 || null,
+          ipAddress: ip,
+          userAgent: String(req.headers["user-agent"] || "") || null,
+        },
+      });
+      await audit({ tenantId: tenant.id, actorUserId: user.id, action: "SMS_CONSENT_RECORDED", entityType: "SmsConsentRecord", entityId: rec.id });
+    } catch (e) {
+      app.log.warn({ err: String(e), userId: user.id, endpoint: "/auth/signup" }, "sms_consent_persist_failed");
+    }
+  }
+
   const token = await reply.jwtSign({ sub: user.id, tenantId: tenant.id, email: user.email, role: user.role, name: displayNameForUser(user as any) });
   return { token, user: { id: user.id, email: user.email, role: user.role }, tenant: { id: tenant.id, name: tenant.name } };
 });
@@ -5268,6 +5309,70 @@ app.addHook("preHandler", async (req, reply) => {
   if (portalPermission && !(await hasEffectivePortalPermission(user, portalPermission))) {
     return reply.status(403).send({ error: "forbidden", permission: portalPermission });
   }
+});
+
+// ── 10DLC SMS consent: dashboard opt-in capture + audit retrieval ───────────
+const meSmsConsentSchema = z.object({
+  optedIn: z.boolean(),
+  consentText: z.string().max(2000).optional(),
+  consentVersion: z.string().max(64).optional(),
+  source: z.string().max(128).optional(),
+  phoneE164: z.string().max(32).optional(),
+});
+
+// Record an SMS consent decision from the account dashboard notification settings.
+app.post("/me/sms-consent", async (req, reply) => {
+  const user = getUser(req);
+  const input = meSmsConsentSchema.parse(req.body);
+  const ip = String((req.headers["x-forwarded-for"] as string | undefined) || req.ip || "unknown").split(",")[0].trim();
+  const rec = await db.smsConsentRecord.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      optedIn: input.optedIn === true,
+      method: "dashboard_settings",
+      source: input.source || "portal_settings",
+      consentText: input.consentText || SMS_CONSENT_LABEL,
+      consentVersion: input.consentVersion || SMS_CONSENT_VERSION,
+      phoneE164: input.phoneE164 || null,
+      ipAddress: ip,
+      userAgent: String(req.headers["user-agent"] || "") || null,
+    },
+  });
+  await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "SMS_CONSENT_RECORDED", entityType: "SmsConsentRecord", entityId: rec.id });
+  return { ok: true, id: rec.id, optedIn: rec.optedIn, createdAt: rec.createdAt };
+});
+
+// Return the caller's most recent SMS consent state (used to prefill the toggle).
+app.get("/me/sms-consent", async (req) => {
+  const user = getUser(req);
+  const latest = await db.smsConsentRecord.findFirst({
+    where: { userId: user.sub },
+    orderBy: { createdAt: "desc" },
+  });
+  return { optedIn: latest?.optedIn ?? false, latest: latest ?? null };
+});
+
+// Admin/audit retrieval of consent records (for 10DLC carrier audits).
+app.get("/admin/sms-consent", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const q = z
+    .object({
+      userId: z.string().optional(),
+      tenantId: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(1000).optional(),
+    })
+    .parse((req as any).query || {});
+  const where: any = {};
+  if (q.userId) where.userId = q.userId;
+  if (q.tenantId) where.tenantId = q.tenantId;
+  const records = await db.smsConsentRecord.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    take: q.limit ?? 200,
+  });
+  return { records };
 });
 
 app.get("/me", async (req, reply) => {

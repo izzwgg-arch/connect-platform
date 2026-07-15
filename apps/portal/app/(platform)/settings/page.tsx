@@ -45,6 +45,13 @@ const FWD_DESTINATIONS = [
   "Disconnect",
 ];
 
+// Canonical 10DLC SMS opt-in consent text. Keep IDENTICAL to @connect/shared
+// SMS_CONSENT_LABEL and the marketing site (connectcomunications.com).
+const SMS_CONSENT_LABEL =
+  "I agree to receive service-related text messages (account notifications, customer support, verification codes, security alerts) from Connect Communications. Message frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to cancel.";
+const SMS_CONSENT_VERSION = "2026-07-15";
+const MARKETING_SITE = "https://connectcomunications.com";
+
 // ── Sub-nav ───────────────────────────────────────────────────────────────────
 
 const TABS: { key: SettingsTab; label: string; icon: string }[] = [
@@ -66,6 +73,38 @@ function GeneralTab() {
   const [displayName, setDisplayName] = useState(user.name);
   const [language, setLanguage] = useState("en");
   const [pushEnabled, setPushEnabled] = useState(true);
+  // SMS opt-in consent (10DLC). Defaults to unchecked; prefilled from the latest
+  // recorded consent so the toggle reflects the user's current state.
+  const [smsConsent, setSmsConsent] = useState(false);
+  const [smsConsentSaving, setSmsConsentSaving] = useState(false);
+  const [smsConsentMsg, setSmsConsentMsg] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ optedIn?: boolean }>("/me/sms-consent")
+      .then((r) => { if (!cancelled && r && typeof r.optedIn === "boolean") setSmsConsent(r.optedIn); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleSaveSmsConsent(next: boolean) {
+    setSmsConsent(next);
+    setSmsConsentSaving(true);
+    setSmsConsentMsg("");
+    try {
+      await apiPost("/me/sms-consent", {
+        optedIn: next,
+        consentText: SMS_CONSENT_LABEL,
+        consentVersion: SMS_CONSENT_VERSION,
+        source: "portal_settings",
+      });
+      setSmsConsentMsg(next ? "Opt-in recorded." : "Opt-out recorded.");
+    } catch {
+      setSmsConsentMsg("Could not save — please try again.");
+    } finally {
+      setSmsConsentSaving(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -145,6 +184,28 @@ function GeneralTab() {
             </label>
           </div>
         </div>
+      </section>
+
+      {/* Text Message Notifications (10DLC SMS opt-in consent) */}
+      <section>
+        <h3 style={{ fontSize: 14, fontWeight: 650, marginBottom: 14, color: "var(--text-dim)", letterSpacing: "0.5px", textTransform: "uppercase" }}>Text Message Notifications</h3>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, cursor: "pointer", lineHeight: 1.6 }}>
+          <input
+            type="checkbox"
+            checked={smsConsent}
+            disabled={smsConsentSaving}
+            onChange={(e) => handleSaveSmsConsent(e.target.checked)}
+            style={{ width: 16, height: 16, marginTop: 2, cursor: "pointer", flexShrink: 0 }}
+          />
+          <span>
+            {SMS_CONSENT_LABEL}{" "}
+            See our{" "}
+            <a href={`${MARKETING_SITE}/legal/privacy`} target="_blank" rel="noopener noreferrer" style={{ color: "#8ebf33" }}>Privacy Policy</a>
+            {" "}and{" "}
+            <a href={`${MARKETING_SITE}/sms-policy`} target="_blank" rel="noopener noreferrer" style={{ color: "#8ebf33" }}>SMS Policy</a>.
+          </span>
+        </label>
+        {smsConsentMsg ? <div className="chip success" style={{ fontSize: 12, marginTop: 10 }}>{smsConsentMsg}</div> : null}
       </section>
 
       {/* Account Details */}

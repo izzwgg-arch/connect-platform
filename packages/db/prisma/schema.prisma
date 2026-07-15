@@ -5682,3 +5682,32 @@ model PbxEndpointRegistrationEvent {
   @@index([tenantId, occurredAt])
   @@index([occurredAt])
 }
+
+/// Append-only record of a user's SMS opt-in/opt-out consent, captured for 10DLC
+/// carrier audits. One row per consent event (never mutated). Retrievable by
+/// userId/tenantId. Standalone table (no FK relations) so it survives account
+/// changes and can be exported independently for a carrier audit.
+model SmsConsentRecord {
+  id             String   @id @default(cuid())
+  tenantId       String
+  userId         String
+  /// true = opted in, false = opted out/declined at capture time.
+  optedIn        Boolean
+  /// "signup_form" | "dashboard_settings"
+  method         String
+  /// Free-form origin, e.g. "website_signup" or "portal_settings".
+  source         String
+  /// Exact consent language shown to the user at capture time.
+  consentText    String
+  /// Version stamp of the consent language (see @connect/shared SMS_CONSENT_VERSION).
+  consentVersion String
+  /// Mobile number the consent applies to, when known (E.164).
+  phoneE164      String?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([createdAt])
+}

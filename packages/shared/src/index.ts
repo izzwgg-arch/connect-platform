@@ -17,6 +17,7 @@ export * from "./webrtcBlackbox";
 export * from "./webrtcIncidentAlerts";
 export * from "./webrtcGlobalOutageAlerts";
 export * from "./localDevCredentials";
+export * from "./smsConsent";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
 
 export const UserSchema = z.object({
