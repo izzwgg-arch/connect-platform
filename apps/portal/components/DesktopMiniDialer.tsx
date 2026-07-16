@@ -28,6 +28,8 @@ import {
   Send,
   Settings,
   MoreHorizontal,
+  StickyNote,
+  BellRing,
   User,
   Users,
   Voicemail,
@@ -69,7 +71,47 @@ type MiniVoicemail = {
   listened: boolean;
   transcription?: string | null;
   streamUrl?: string;
+  // Team-shared note + callback reminder (server-backed).
+  note?: string | null;
+  noteUpdatedByName?: string | null;
+  callbackReminderAt?: string | null;
+  callbackReminderLabel?: string | null;
+  callbackReminderMine?: boolean;
+  callbackReminderSetByName?: string | null;
 };
+
+type DueReminder = {
+  id: string;
+  callerId: string;
+  callerName?: string | null;
+  callbackReminderAt?: string | null;
+  callbackReminderLabel?: string | null;
+  note?: string | null;
+};
+
+// ISO → value for <input type="datetime-local"> (local time, no seconds/zone).
+function toLocalInput(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Friendly reminder time: "today 3:00 PM", "tomorrow 9:00 AM", or "Jul 18 2:30 PM".
+function reminderWhen(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(d) - startOf(today)) / 86400000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days === -1) return `yesterday ${time}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
 
 type DialSuggestion = {
   id: string;
@@ -391,6 +433,14 @@ export function DesktopMiniDialer() {
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
   const [vmQuery, setVmQuery] = useState("");
   const [vmFilter, setVmFilter] = useState<"all" | "new" | "urgent" | "old">("all");
+  // Which voicemail's ⋯ menu is open, and which Note / Reminder editor is open.
+  const [vmMenuId, setVmMenuId] = useState<string | null>(null);
+  const [vmNoteEditId, setVmNoteEditId] = useState<string | null>(null);
+  const [vmNoteDraft, setVmNoteDraft] = useState("");
+  const [vmRemEditId, setVmRemEditId] = useState<string | null>(null);
+  const [vmRemDraft, setVmRemDraft] = useState<{ at: string; label: string }>({ at: "", label: "" });
+  // Due callback reminders (polled) that the user must dismiss.
+  const [dueReminders, setDueReminders] = useState<DueReminder[]>([]);
   const [settings, setSettings] = useState<MiniDesktopSettings>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickReply, setQuickReply] = useState("");
@@ -568,11 +618,52 @@ export function DesktopMiniDialer() {
     apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened }).catch(() => undefined);
   }, []);
 
+  // Persist a note/reminder change to the server and update the on-screen row.
+  const patchVm = useCallback((id: string, body: Record<string, unknown>, patch: Partial<MiniVoicemail>) => {
+    setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+    apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, body).catch(() => undefined);
+  }, []);
+
+  // Poll for the current user's due callback reminders and surface a dismissible
+  // alert. Keeps returning until acknowledged, so it survives a reload/restart.
+  useEffect(() => {
+    let alive = true;
+    const check = () => {
+      apiGet<{ reminders?: DueReminder[] }>("/voice/voicemail/callback-reminders/due")
+        .then((r) => { if (alive) setDueReminders(Array.isArray(r.reminders) ? r.reminders : []); })
+        .catch(() => undefined);
+    };
+    check();
+    const t = setInterval(check, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const dismissReminder = useCallback((id: string) => {
+    setDueReminders((prev) => prev.filter((r) => r.id !== id));
+    apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { ackCallbackReminder: true }).catch(() => undefined);
+  }, []);
+
   const selectedSession = phone.sessions.find((session) => session.isActive) || phone.sessions[0] || null;
   const incomingWaiting = phone.sessions.filter((session) => session.state === "ringing" && !session.isActive);
 
   return (
     <main className={"mini-shell" + (miniTheme === "light" ? " mini-light" : "")}>
+      {dueReminders.length > 0 ? (
+        <div className="vm-alert-overlay">
+          <div className="vm-alert">
+            <div className="vm-alert-icon"><BellRing size={26} /></div>
+            <div className="vm-alert-title">Callback reminder</div>
+            <div className="vm-alert-name">{dueReminders[0].callerName || dueReminders[0].callerId || "Unknown"}</div>
+            {dueReminders[0].callbackReminderLabel ? <div className="vm-alert-label">{dueReminders[0].callbackReminderLabel}</div> : null}
+            {dueReminders[0].note ? <div className="vm-alert-note"><StickyNote size={12} /> {dueReminders[0].note}</div> : null}
+            <div className="vm-alert-btns">
+              <button className="vm-btn ghost" onClick={() => dismissReminder(dueReminders[0].id)}>Dismiss</button>
+              <button className="vm-btn primary" onClick={() => { const r = dueReminders[0]; dismissReminder(r.id); callTarget(r.callerId); }}><Phone size={15} /> Call back</button>
+            </div>
+            {dueReminders.length > 1 ? <div className="vm-alert-more">+{dueReminders.length - 1} more reminder{dueReminders.length - 1 > 1 ? "s" : ""}</div> : null}
+          </div>
+        </div>
+      ) : null}
       <div className="mini-titlebar">
         <div className="mini-drag" />
         <div className="mini-winbtns">
@@ -859,12 +950,56 @@ export function DesktopMiniDialer() {
                     </div>
                     <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} onPlay={() => markVmListened(vm.id, true)} />
                     {vm.transcription ? <p className="vm-transcript">{vm.transcription}</p> : null}
+                    {(vm.note || vm.callbackReminderAt) && vmNoteEditId !== vm.id && vmRemEditId !== vm.id ? (
+                      <div className="vm-meta">
+                        {vm.note ? (
+                          <div className="vm-note-chip"><StickyNote size={12} /> <span>{vm.note}</span>{vm.noteUpdatedByName ? <em>— {vm.noteUpdatedByName}</em> : null}</div>
+                        ) : null}
+                        {vm.callbackReminderAt ? (
+                          <div className="vm-rem-chip"><BellRing size={12} /> <span>Callback {reminderWhen(vm.callbackReminderAt)}{vm.callbackReminderLabel ? ` · ${vm.callbackReminderLabel}` : ""}</span></div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {vmNoteEditId === vm.id ? (
+                      <div className="vm-edit">
+                        <textarea className="vm-note-input" placeholder="Add a note for the team…" value={vmNoteDraft} onChange={(e) => setVmNoteDraft(e.target.value)} rows={3} autoFocus />
+                        <div className="vm-edit-btns">
+                          <button className="vm-btn ghost" onClick={() => setVmNoteEditId(null)}>Cancel</button>
+                          {vm.note ? <button className="vm-btn ghost danger" onClick={() => { patchVm(vm.id, { note: null }, { note: null, noteUpdatedByName: null }); setVmNoteEditId(null); }}>Clear</button> : null}
+                          <button className="vm-btn primary" onClick={() => { const t = vmNoteDraft.trim(); patchVm(vm.id, { note: t }, { note: t || null, noteUpdatedByName: t ? "You" : null }); setVmNoteEditId(null); }}>Save note</button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {vmRemEditId === vm.id ? (
+                      <div className="vm-edit">
+                        <label className="vm-edit-lbl">Remind me to call back at</label>
+                        <input className="vm-rem-input" type="datetime-local" value={vmRemDraft.at} onChange={(e) => setVmRemDraft((d) => ({ ...d, at: e.target.value }))} autoFocus />
+                        <input className="vm-rem-input" type="text" placeholder="Note for the reminder (optional)" value={vmRemDraft.label} onChange={(e) => setVmRemDraft((d) => ({ ...d, label: e.target.value }))} />
+                        <div className="vm-edit-btns">
+                          <button className="vm-btn ghost" onClick={() => setVmRemEditId(null)}>Cancel</button>
+                          {vm.callbackReminderAt ? <button className="vm-btn ghost danger" onClick={() => { patchVm(vm.id, { callbackReminderAt: null }, { callbackReminderAt: null, callbackReminderLabel: null }); setVmRemEditId(null); }}>Clear</button> : null}
+                          <button className="vm-btn primary" disabled={!vmRemDraft.at} onClick={() => { const iso = vmRemDraft.at ? new Date(vmRemDraft.at).toISOString() : null; if (!iso) return; patchVm(vm.id, { callbackReminderAt: iso, callbackReminderLabel: vmRemDraft.label.trim() || null }, { callbackReminderAt: iso, callbackReminderLabel: vmRemDraft.label.trim() || null, callbackReminderMine: true }); setVmRemEditId(null); }}>Set reminder</button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="vm-actions">
                       <span className="vm-date"><Clock3 size={12} /> {shortTime(vm.receivedAt)}</span>
                       <div className="vm-action-btns">
                         <button className="vm-act vm-act-call" onClick={() => callTarget(vm.callerId)} title="Call back"><Phone size={16} /></button>
                         <button className="vm-act vm-act-msg" onClick={() => setTab("messages")} title="Message"><MessageSquare size={16} /></button>
-                        <button className="vm-act vm-act-more" onClick={() => markVmListened(vm.id, !vm.listened)} title={vm.listened ? "Mark unread" : "Mark read"}><MoreHorizontal size={18} /></button>
+                        <div className="vm-menu-wrap">
+                          <button className={"vm-act vm-act-more" + (vmMenuId === vm.id ? " open" : "")} onClick={() => setVmMenuId(vmMenuId === vm.id ? null : vm.id)} title="More"><MoreHorizontal size={18} /></button>
+                          {vmMenuId === vm.id ? (
+                            <>
+                              <div className="vm-menu-backdrop" onClick={() => setVmMenuId(null)} />
+                              <div className="vm-menu">
+                                <button onClick={() => { markVmListened(vm.id, !vm.listened); setVmMenuId(null); }}>{vm.listened ? "Mark as unread" : "Mark as read"}</button>
+                                <button onClick={() => { setVmNoteDraft(vm.note || ""); setVmNoteEditId(vm.id); setVmRemEditId(null); setVmMenuId(null); }}><StickyNote size={14} /> {vm.note ? "Edit note" : "Add note"}</button>
+                                <button onClick={() => { setVmRemDraft({ at: toLocalInput(vm.callbackReminderAt), label: vm.callbackReminderLabel || "" }); setVmRemEditId(vm.id); setVmNoteEditId(null); setVmMenuId(null); }}><BellRing size={14} /> {vm.callbackReminderAt ? "Edit callback reminder" : "Schedule callback reminder"}</button>
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -992,84 +1127,4 @@ export function DesktopMiniDialer() {
         .keypad button:hover { background: var(--mn-surface-2); }
         .keypad strong { font-size: 30px; font-weight: 400; line-height: 1; }
         .keypad span { font-size: 9px; letter-spacing: 2px; color: var(--mn-text-3); font-weight: 500; }
-        .dialer-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; justify-content: center; align-items: center; margin: 4px auto 6px; width: 100%; max-width: 300px; }
-        .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
-        .call-button:disabled { background: var(--mn-border); color: var(--mn-text-3); box-shadow: none; cursor: default; }
-        .delete-button { grid-column: 3; justify-self: center; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 0.5px solid var(--mn-border); background: rgba(30,45,71,0.55); color: var(--mn-text-2); cursor: pointer; }
-
-        .list-pane { display: flex; flex-direction: column; }
-        /* Recents rows — cards that match the mobile RecentTab exactly. */
-        .mini-row { display: flex; align-items: center; gap: 12px; padding: 12px; margin: 0 12px 10px; border-radius: 18px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); min-height: 72px; box-sizing: border-box; }
-        .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-        .row-main strong { font-size: 15px; font-weight: 700; letter-spacing: -0.15px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .row-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--mn-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .rm-icon { flex-shrink: 0; }
-        .rm-missed { color: #ef4444; }
-        .rm-in { color: #22d3ee; }
-        .rm-out { color: #22c55e; }
-        .row-right { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; align-self: stretch; gap: 6px; flex-shrink: 0; padding: 1px 0; }
-        .row-actions { display: flex; align-items: center; gap: 6px; }
-        .row-msg { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(6,182,212,0.33); background: rgba(6,182,212,0.14); color: #22d3ee; cursor: pointer; flex-shrink: 0; }
-        .row-msg:hover { background: rgba(6,182,212,0.22); }
-        .row-preview { color: var(--mn-text-2); }
-        .row-time { font-size: 11.5px; font-weight: 700; color: var(--mn-text-3); flex-shrink: 0; }
-        .row-call { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 0; background: #3b82f6; color: #fff; cursor: pointer; flex-shrink: 0; box-shadow: 0 4px 12px rgba(59,130,246,0.35); }
-        .row-call:hover { filter: brightness(1.05); }
-        .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
-
-        .vm-screen { padding: 0; }
-        .vm-header { text-align: center; padding: 14px 16px 10px; }
-        .vm-h-title { font-size: 26px; font-weight: 800; letter-spacing: -0.7px; color: var(--mn-text); line-height: 30px; }
-        .vm-h-sub { margin-top: 3px; font-size: 13px; font-weight: 600; color: var(--mn-text-2); }
-        .vm-search { display: flex; align-items: center; gap: 10px; margin: 0 14px 10px; height: 44px; padding: 0 14px; border-radius: 16px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); color: var(--mn-text-3); }
-        .vm-search input { flex: 1; min-width: 0; border: 0; background: transparent !important; outline: none; color: var(--mn-text) !important; font-size: 14px; font-weight: 500; box-shadow: none !important; }
-        .vm-search input:-webkit-autofill, .vm-search input:-webkit-autofill:focus, .vm-search input:-webkit-autofill:hover { -webkit-box-shadow: 0 0 0 1000px var(--mn-surface) inset !important; -webkit-text-fill-color: var(--mn-text) !important; caret-color: var(--mn-text); }
-        .vm-search input::placeholder { color: var(--mn-text-3); }
-        .vm-chips { display: flex; gap: 7px; margin: 0 14px 10px; }
-        .vm-chip { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; border-radius: 13px; border: 0.5px solid var(--mn-border); background: var(--mn-surface-2); color: var(--mn-text-2); cursor: pointer; }
-        .vm-chip span { font-size: 12px; font-weight: 800; }
-        .vm-chip small { font-size: 11px; font-weight: 800; color: var(--mn-text-3); }
-        .vm-chip.active { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.14); color: #3b82f6; }
-        .vm-chip.active small { color: #3b82f6; }
-        .vm-cards { display: flex; flex-direction: column; gap: 10px; padding: 2px 14px 14px; }
-        .vm-card { background: var(--mn-surface); border: 0.5px solid var(--mn-border); border-radius: 20px; padding: 14px; }
-        .vm-card.new { border-color: rgba(59,130,246,0.28); background: var(--mn-card-new); }
-        .vm-top { display: flex; align-items: center; gap: 11px; }
-        .vm-av { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: rgba(136,153,187,0.16); color: var(--mn-text-2); font-size: 14px; font-weight: 600; flex-shrink: 0; }
-        .vm-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-        .vm-info strong { font-size: 16px; font-weight: 800; letter-spacing: -0.25px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .vm-info small { font-size: 13px; font-weight: 600; color: var(--mn-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .vm-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
-        .vm-badge { font-size: 9px; font-weight: 900; letter-spacing: 0.5px; padding: 3px 7px; border-radius: 9px; border: 1px solid transparent; }
-        .vm-badge.new { color: #3b82f6; background: rgba(59,130,246,0.14); border-color: rgba(59,130,246,0.33); }
-        .vm-badge.read { color: #22c55e; background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.33); }
-        .vm-dur { font-size: 12px; font-weight: 800; color: var(--mn-text-2); padding: 3px 8px; border-radius: 10px; background: rgba(148,163,184,0.10); }
-        .vm-player { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
-        .vm-player[data-error="true"] { opacity: .5; }
-        .vm-play { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #3b82f6; cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; }
-        .vm-play[data-active="true"] { background: #3b82f6; color: #fff; }
-        .vm-wave { display: flex; align-items: center; gap: 2px; flex: 1; height: 30px; cursor: pointer; }
-        .vm-wave span { flex: 1; border-radius: 2px; background: rgba(148,163,184,0.34); }
-        .vm-wave span.on { background: #3b82f6; }
-        .vm-elapsed { font-size: 11px; font-weight: 700; color: var(--mn-text-2); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 30px; text-align: right; }
-        .vm-transcript { margin: 12px 0 0; font-size: 13px; line-height: 20px; font-weight: 500; color: var(--mn-text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-        .vm-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; min-width: 0; }
-        .vm-date { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--mn-text-3); padding: 4px 8px; border-radius: 10px; background: rgba(148,163,184,0.10); white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden; }
-        /* Voicemail action buttons — call / message / more, matching mobile. */
-        .vm-action-btns { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-        .vm-act { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; border: 1px solid transparent; cursor: pointer; flex-shrink: 0; }
-        .vm-act-call { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.30); color: #22c55e; }
-        .vm-act-call:hover { background: rgba(34,197,94,0.22); }
-        .vm-act-msg { background: rgba(6,182,212,0.14); border-color: rgba(6,182,212,0.30); color: #22d3ee; }
-        .vm-act-msg:hover { background: rgba(6,182,212,0.22); }
-        .vm-act-more { background: rgba(148,163,184,0.12); color: var(--mn-text-2); }
-        .vm-act-more:hover { background: rgba(148,163,184,0.20); }
-
-        .mini-tabs { display: flex; border-top: 0.5px solid var(--mn-line); background: var(--mn-bg); }
-        .mini-tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 11px; border: 0; background: transparent; color: var(--mn-text-4); font-size: 10px; cursor: pointer; transition: color .16s ease; }
-        .mini-tabs .active { color: #3b82f6; }
-        .empty { text-align: center; color: var(--mn-text-3); padding: 40px 10px; font-size: 13px; }
-`}</style>
-    </main>
-  );
-}
+        .dialer-actions { display: grid; grid-template-columns: r

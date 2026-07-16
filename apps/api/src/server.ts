@@ -3030,6 +3030,34 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
   }
 
   for (const device of iosDevices) {
+    // iOS-only foreground-active gate. When the Connect app on this device has
+    // recently reported itself foreground-active (it holds a live socket and
+    // will receive the SIP INVITE directly), skip the VoIP push so the native
+    // CallKit screen does NOT appear on top of the in-app Connect incoming
+    // screen. FAILS OPEN: on any Redis miss/error we still send the push, so we
+    // never risk missing a call. Android never reaches this function.
+    try {
+      const fgActive = await redis.get("ios_fg_active:" + device.id);
+      if (fgActive) {
+        app.log.info(
+          {
+            event: "api_apns_voip_skipped_foreground_active",
+            source: "api",
+            tenantId: input.tenantId,
+            userId: input.userId,
+            callId: input.callId,
+            deviceId: device.id,
+          },
+          "api_apns_voip_skipped_foreground_active",
+        );
+        continue;
+      }
+    } catch (gateErr: any) {
+      app.log.warn(
+        { event: "api_apns_voip_fg_gate_error", deviceId: device.id, err: gateErr?.message },
+        "api_apns_voip_fg_gate_error — sending push (fail-open)",
+      );
+    }
     const tokenTail = (device.voipPushToken || "").slice(-6);
     app.log.info(
       {
@@ -13728,6 +13756,19 @@ app.get("/voice/health", async (req, reply) => {
   });
 });
 
+// Standing-registration keep-alive kill-switch (Android only). Server-controlled
+// so ops can enable the persistent SIP registration per user/tenant with NO app
+// build and roll it back instantly. STANDING_REG_ENABLED_USERS is a comma list of
+// userIds and/or tenantIds; "*" enables everyone; empty (default) = off for all,
+// which keeps every current device byte-for-byte unchanged.
+function standingRegistrationEnabledFor(userId: string, tenantId: string): boolean {
+  const raw = (process.env.STANDING_REG_ENABLED_USERS || "").trim();
+  if (!raw) return false;
+  if (raw === "*") return true;
+  const allow = new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
+  return allow.has(userId) || allow.has(tenantId);
+}
+
 app.post("/mobile/devices/register", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({
@@ -13900,7 +13941,13 @@ app.post("/mobile/devices/register", async (req, reply) => {
   }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
-  return { ok: true, id: saved.id, platform: saved.platform, lastSeenAt: saved.lastSeenAt };
+  return {
+    ok: true,
+    id: saved.id,
+    platform: saved.platform,
+    lastSeenAt: saved.lastSeenAt,
+    standingRegistration: standingRegistrationEnabledFor(user.sub, user.tenantId),
+  };
 });
 
 app.post("/mobile/devices/unregister", async (req, reply) => {
@@ -16637,6 +16684,21 @@ app.get("/voice/voicemail", async (req, reply) => {
   const tenantNameByCuid = new Map(tenantRows.map((t) => [t.id, t.name]));
   const tenantNameBySlug = new Map(dirRows.map((d) => [d.tenantSlug, d.displayName ?? d.tenantSlug]));
 
+  // Resolve display names for whoever edited the shared note / set a reminder.
+  const authorIds = Array.from(
+    new Set(
+      voicemails
+        .flatMap((vm) => [vm.noteUpdatedByUserId, vm.callbackReminderSetById])
+        .filter((v): v is string => !!v),
+    ),
+  );
+  const authorRows = authorIds.length
+    ? await db.user.findMany({ where: { id: { in: authorIds } }, select: { id: true, email: true } })
+    : [];
+  const authorNameById = new Map(
+    authorRows.map((u) => [u.id, u.email ? u.email.split("@")[0] : "User"] as const),
+  );
+
   return reply.send({
     voicemails: voicemails.map((vm) => {
       let tenantName: string | null = null;
@@ -16658,6 +16720,18 @@ app.get("/voice/voicemail", async (req, reply) => {
         extension:   vm.extension,
         tenantId:    vm.tenantId,
         tenantName,
+        // Team-shared note.
+        note:                vm.note ?? null,
+        noteUpdatedAt:       vm.noteUpdatedAt ? vm.noteUpdatedAt.toISOString() : null,
+        noteUpdatedByUserId: vm.noteUpdatedByUserId ?? null,
+        noteUpdatedByName:   vm.noteUpdatedByUserId ? (authorNameById.get(vm.noteUpdatedByUserId) ?? null) : null,
+        // Callback reminder. `callbackReminderMine` = the current user set it (only they get alerted).
+        callbackReminderAt:      vm.callbackReminderAt ? vm.callbackReminderAt.toISOString() : null,
+        callbackReminderLabel:   vm.callbackReminderLabel ?? null,
+        callbackReminderSetById: vm.callbackReminderSetById ?? null,
+        callbackReminderSetByName: vm.callbackReminderSetById ? (authorNameById.get(vm.callbackReminderSetById) ?? null) : null,
+        callbackReminderMine:    !!vm.callbackReminderSetById && vm.callbackReminderSetById === user.sub,
+        callbackReminderAckAt:   vm.callbackReminderAckAt ? vm.callbackReminderAckAt.toISOString() : null,
       };
     }),
     total,
@@ -16722,6 +16796,13 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
   const body = z.object({
     listened: z.boolean().optional(),
     folder: z.enum(["inbox", "old", "urgent"]).optional(),
+    // Team-shared note. Pass "" or null to clear.
+    note: z.string().max(4000).nullable().optional(),
+    // Callback reminder. ISO datetime to set; null to clear.
+    callbackReminderAt: z.string().datetime().nullable().optional(),
+    callbackReminderLabel: z.string().max(200).nullable().optional(),
+    // Dismiss the due alert (setter acknowledges it).
+    ackCallbackReminder: z.boolean().optional(),
   }).parse(req.body || {});
 
   // Read-state (listened/readAt) belongs to the mailbox owner, not to whoever
@@ -16742,11 +16823,63 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
     }
   } catch { isOwnMailbox = false; }
 
-  const { data, readStateSkipped } = computeVoicemailPatchUpdate({
-    body,
-    currentReadAt: vm.readAt ?? null,
-    isOwnMailbox,
-  });
+  // A note/reminder-only PATCH must NOT implicitly mark the voicemail read
+  // (the legacy "bare PATCH = mark read" default only applies to read/folder ops).
+  const touchesReadOrFolder = body.listened !== undefined || body.folder !== undefined;
+  const isNoteOrReminderOnly =
+    !touchesReadOrFolder &&
+    (body.note !== undefined ||
+      body.callbackReminderAt !== undefined ||
+      body.callbackReminderLabel !== undefined ||
+      body.ackCallbackReminder !== undefined);
+  const { data, readStateSkipped } = isNoteOrReminderOnly
+    ? { data: {} as Record<string, unknown>, readStateSkipped: false }
+    : computeVoicemailPatchUpdate({
+        body,
+        currentReadAt: vm.readAt ?? null,
+        isOwnMailbox,
+      });
+
+  // ── Team-shared note (anyone with access may edit the single shared note) ──
+  if (body.note !== undefined) {
+    const trimmed = (body.note ?? "").trim();
+    if (trimmed) {
+      data.note = trimmed;
+      data.noteUpdatedAt = new Date();
+      data.noteUpdatedByUserId = user.sub;
+    } else {
+      data.note = null;
+      data.noteUpdatedAt = null;
+      data.noteUpdatedByUserId = null;
+    }
+  }
+
+  // ── Callback reminder ──────────────────────────────────────────────────────
+  // Setting a time (re)arms the reminder for the acting user — only they are
+  // alerted. Passing null clears it entirely. A bare label change updates the label.
+  if (body.callbackReminderAt !== undefined) {
+    if (body.callbackReminderAt) {
+      data.callbackReminderAt = new Date(body.callbackReminderAt);
+      data.callbackReminderSetById = user.sub;
+      data.callbackReminderLabel = body.callbackReminderLabel ?? null;
+      data.callbackReminderFiredAt = null; // re-arm
+      data.callbackReminderAckAt = null;
+    } else {
+      data.callbackReminderAt = null;
+      data.callbackReminderSetById = null;
+      data.callbackReminderLabel = null;
+      data.callbackReminderFiredAt = null;
+      data.callbackReminderAckAt = null;
+    }
+  } else if (body.callbackReminderLabel !== undefined) {
+    data.callbackReminderLabel = body.callbackReminderLabel;
+  }
+
+  // Dismiss the due alert. Only the setter can acknowledge their own reminder.
+  if (body.ackCallbackReminder && vm.callbackReminderSetById === user.sub) {
+    data.callbackReminderAckAt = new Date();
+  }
+
   if (Object.keys(data).length > 0) {
     await db.voicemail.update({
       where: { id },
@@ -16754,6 +16887,46 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
     });
   }
   return reply.send({ ok: true, readStateSkipped });
+});
+
+// ── GET /voice/voicemail/callback-reminders/due — poll for the acting user's due reminders ──
+// Clients poll this (~30s). Returns callback reminders the acting user set that
+// are now due and not yet dismissed; each drives a dismissible on-screen alert.
+// On dismiss the client PATCHes { ackCallbackReminder: true }. Until acknowledged
+// a reminder keeps being returned, so it survives an app restart ("must dismiss").
+app.get("/voice/voicemail/callback-reminders/due", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const now = new Date();
+  const rows = await db.voicemail.findMany({
+    where: {
+      deletedAt: null,
+      callbackReminderSetById: user.sub,
+      callbackReminderAckAt: null,
+      callbackReminderAt: { lte: now },
+    },
+    orderBy: { callbackReminderAt: "asc" },
+    take: 20,
+  });
+  // Record-keeping: stamp when the alert first became deliverable.
+  const unfired = rows.filter((r) => !r.callbackReminderFiredAt).map((r) => r.id);
+  if (unfired.length) {
+    await db.voicemail.updateMany({
+      where: { id: { in: unfired } },
+      data: { callbackReminderFiredAt: now },
+    });
+  }
+  return reply.send({
+    reminders: rows.map((vm) => ({
+      id: vm.id,
+      callerId: vm.callerNumber ?? "Unknown",
+      callerName: vm.callerName ?? null,
+      extension: vm.extension,
+      callbackReminderAt: vm.callbackReminderAt?.toISOString() ?? null,
+      callbackReminderLabel: vm.callbackReminderLabel ?? null,
+      note: vm.note ?? null,
+    })),
+  });
 });
 
 // ── DELETE /voice/voicemail/:id — soft-delete + best-effort PBX delete ───────
@@ -30500,6 +30673,54 @@ app.post("/mobile/dnd-status", async (req, reply) => {
   return reply.send({ ok: true, dnd: parsed.dnd, published, skipped: [...skipped, ...failed] });
 });
 
+// ─── iOS foreground-active heartbeat ────────────────────────────────────────
+// The iOS Connect app POSTs here (~every 15s) while it is FOREGROUND and holds a
+// live SIP socket, so the incoming-call pipeline can skip the APNs VoIP push for
+// this device (see sendApnsVoipPushesForIncomingCallApi). This is what keeps the
+// native CallKit screen from appearing over the in-app Connect incoming screen
+// while the app is open. Backgrounding/quitting stops the pings; the Redis key
+// expires (short TTL) and VoIP pushes resume automatically. iOS-only by
+// construction — Android never calls this, and non-IOS devices are a no-op.
+// Fails soft: a Redis error never breaks the client.
+app.post("/mobile/foreground-active", async (req, reply) => {
+  const user = req.user as JwtUser | undefined;
+  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
+
+  const body = z
+    .object({ deviceId: z.string().min(1), active: z.boolean().optional().default(true) })
+    .safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+
+  const device = await db.mobileDevice
+    .findFirst({
+      where: { id: body.data.deviceId, tenantId: user.tenantId, userId: user.sub },
+      select: { id: true, platform: true },
+    })
+    .catch(() => null);
+  if (!device) return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
+
+  // Only iOS devices participate in the VoIP-push gate; others are a harmless no-op.
+  if (device.platform !== "IOS") return reply.send({ ok: true, ignored: "not_ios" });
+
+  const key = "ios_fg_active:" + device.id;
+  try {
+    if (body.data.active) {
+      // SHORT 10s TTL; the client re-pings every ~4s. A short TTL is what makes
+      // the force-quit case safe: a killed app cannot clear this flag, so we rely
+      // on the flag expiring quickly (<=10s) to resume VoIP pushes (native CallKit
+      // ring) for a phone that is no longer foreground-active.
+      await redis.set(key, "1", "EX", 10);
+    } else {
+      await redis.del(key);
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message, deviceId: device.id }, "mobile/foreground-active: redis error");
+    return reply.send({ ok: false, reason: "redis_error" });
+  }
+
+  return reply.send({ ok: true, active: body.data.active });
+});
+
 // ─── Wake timeline read API (for Diagnostics screen + admin tools) ──────────
 // Returns the full event sequence for a pbxCallId, or the most recent N events
 // for the calling user when no pbxCallId is supplied. Tenant-scoped.
@@ -35707,152 +35928,4 @@ const port = Number(process.env.PORT || 3001);
       app.log.warn({ pbxWsEndpoint }, "PBX_WS_ENDPOINT uses insecure ws:// — browsers require wss://");
     } else if (pbxWsEndpoint.includes(":8088") || pbxWsEndpoint.includes(":5060")) {
       app.log.warn({ pbxWsEndpoint }, "PBX_WS_ENDPOINT port looks stale — expected :8089/ws");
-    } else {
-      app.log.info({ pbxWsEndpoint }, "PBX WebSocket endpoint OK");
-    }
-  }
-
-  if (!turnServerEnv) {
-    app.log.warn(
-      "TURN_SERVER is NOT set — audio will likely fail for users behind strict/symmetric NAT. " +
-      "Install coturn on the backend server and set TURN_SERVER, TURN_USERNAME, TURN_PASSWORD."
-    );
-  } else {
-    app.log.info(
-      {
-        turnServer: turnServerEnv,
-        authMode: turnAuthSecretEnv ? "hmac-use-auth-secret" : "static-credentials",
-        turnAuthSecret: turnAuthSecretEnv ? "(set)" : "(not set)",
-        turnUsername: !turnAuthSecretEnv && turnUsernameEnv ? "(set)" : "(not set — using hmac)",
-        turnPassword: !turnAuthSecretEnv && turnPasswordEnv ? "(set)" : "(not set — using hmac)",
-      },
-      "TURN server configured"
-    );
-  }
-
-  app.log.info(
-    { stunServer: stunServerEnv },
-    "STUN server configured"
-  );
-
-  if (missingAtStart.length > 0) {
-    app.log.warn({ missingAtStart }, "WebRTC provisioning is INCOMPLETE — see warnings above");
-  } else {
-    app.log.info("WebRTC telephony env config OK");
-  }
-
-  await registerBillingRoutes(app);
-  await registerPlatformRolePermissionRoutes(app);
-  await registerCustomRoleRoutes(app);
-  await registerOnboardingPublicRoutes(app);
-  await registerOnboardingProvisioningRoutes(app);
-  registerUserExtensionProvisioningRoutes(app, {
-    getUser: getUser as any,
-    requirePermission: requirePermission as any,
-    canManageUsers: canManageUsers as any,
-    resolveManagedTenant: resolveManagedTenant as any,
-    // Wrap the real sync signature (db, pbxInstanceId, client, options) into a
-    // tenantId-only callable. Returns a no-op result if the tenant has no PBX
-    // link, so an admin clicking "Re-sync credentials" never crashes.
-    syncExtensionsFromPbx: async (tenantId: string) => {
-      const link = await db.tenantPbxLink.findUnique({
-        where: { tenantId },
-        include: { pbxInstance: true },
-      });
-      if (!link) return { skipped: "pbx_not_linked" };
-      const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-      const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45000 });
-      const vitalTenantId = link.pbxTenantId || undefined;
-      return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, {
-        ...(vitalTenantId ? { vitalTenantId } : {}),
-      });
-    },
-    audit: audit as any,
-    encryptJson,
-    resetSipPasswordOnPbx: async (linkId) => {
-      const link = await db.pbxExtensionLink.findUnique({
-        where: { id: linkId },
-        include: { tenant: { select: { id: true } } },
-      });
-      if (!link) return null;
-      const tenantPbxLink = await db.tenantPbxLink.findUnique({
-        where: { tenantId: link.tenantId },
-        include: { pbxInstance: true },
-      });
-      if (!tenantPbxLink) return null;
-      const auth = decryptJson<{ token: string; secret?: string }>(
-        tenantPbxLink.pbxInstance.apiAuthEncrypted,
-      );
-      const out = await getWirePbxClient({
-        baseUrl: tenantPbxLink.pbxInstance.baseUrl,
-        token: auth.token,
-        secret: auth.secret,
-        timeoutMs: 45000,
-      }).resetPassword(link.pbxExtensionId);
-      return { sipPassword: out.sipPassword };
-    },
-    createWebrtcDeviceOnPbx: async (linkId) => {
-      const link = await db.pbxExtensionLink.findUnique({
-        where: { id: linkId },
-        include: { tenant: { select: { id: true } } },
-      });
-      if (!link) return null;
-      const tenantPbxLink = await db.tenantPbxLink.findUnique({
-        where: { tenantId: link.tenantId },
-        include: { pbxInstance: true },
-      });
-      if (!tenantPbxLink) return null;
-      const auth = decryptJson<{ token: string; secret?: string }>(
-        tenantPbxLink.pbxInstance.apiAuthEncrypted,
-      );
-      return getWirePbxClient({
-        baseUrl: tenantPbxLink.pbxInstance.baseUrl,
-        token: auth.token,
-        secret: auth.secret,
-        timeoutMs: 45000,
-      }).createSipDevice({ pbxExtensionId: link.pbxExtensionId, enableWebrtc: true });
-    },
-  });
-  registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
-  await registerCrmRoutes(app, { smsQueue });
-  await app.listen({ host: "0.0.0.0", port });
-  markListeningComplete();
-  hostMetricsCollector.start();
-  startServerHealthRefresh(serverHealthDeps);
-
-  const shutdownBudgetMs = Math.min(Math.max(Number(process.env.CONNECT_API_SHUTDOWN_MS ?? 55000), 3000), 120_000);
-  const shutdown = async (signal: NodeJS.Signals) => {
-    const t0 = Date.now();
-    app.log.warn(
-      { signal, phase: "shutdown_begin", timers: shutdownRegisteredTimerCount(), budgetMs: shutdownBudgetMs },
-      "api_sigterm_received",
-    );
-    markNotAcceptingTraffic();
-    stopServerHealthRefresh();
-    hostMetricsCollector.stop();
-    try {
-      await Promise.race([
-        app.close(),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(Object.assign(new Error("shutdown_timeout"), { name: "ShutdownTimeout" })), shutdownBudgetMs),
-        ),
-      ]);
-      app.log.warn({ signal, phase: "shutdown_complete", elapsedMs: Date.now() - t0 }, "api_shutdown_complete");
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      app.log.error({ signal, phase: "shutdown_error", elapsedMs: Date.now() - t0, err: msg }, "api_shutdown_forced");
-    } finally {
-      clearRegisteredShutdownTimers();
-      process.exit(0);
-    }
-  };
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-
-  startPbxKpiBackgroundRefresh();
-  startPbxLiveDashboardWarm();
-  startPbxTenantListWarm();
-})().catch((e) => {
-  app.log.error(e);
-  process.exit(1);
-});
+  

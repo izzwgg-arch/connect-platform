@@ -2765,10 +2765,24 @@ model Voicemail {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  // ── Team-shared note (single editable note per voicemail) ──────────────
+  note                String? // shared note body; null/empty = no note
+  noteUpdatedAt       DateTime?
+  noteUpdatedByUserId String? // who last edited the shared note
+
+  // ── Callback reminder (timed, dismissible alert to the setter) ─────────
+  callbackReminderAt        DateTime? // when to alert; null = no reminder
+  callbackReminderSetById   String? // user who set it — the ONLY one alerted
+  callbackReminderLabel     String? // optional short label shown in the alert
+  callbackReminderFiredAt   DateTime? // when the due-alert was delivered
+  callbackReminderAckAt     DateTime? // when the setter dismissed the alert
+
   @@index([tenantId])
   @@index([extension])
   @@index([receivedAt])
   @@index([tenantId, extension, receivedAt])
+  // Scheduler scan: due, not-yet-fired reminders.
+  @@index([callbackReminderAt, callbackReminderFiredAt])
 }
 
 // Admin-configured rules that map DID or extension patterns to VitalPBX tenant slugs.
@@ -5865,32 +5879,4 @@ model PbxEndpointRegistration {
   lastEventAt        DateTime  @default(now())
   /// Source of the last update: "ami_contactstatus" | "ami_peerstatus" | "ami_bootstrap".
   source             String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-
-  @@index([status])
-  @@index([tenantId, status])
-  @@index([extensionId])
-  @@index([lastEventAt])
-}
-
-/// Append-only history of PBX registration state transitions for an endpoint.
-/// Powers the "why did this device go Not Registered" timeline in the admin UI.
-/// Pruned by the worker after ~14 days.
-model PbxEndpointRegistrationEvent {
-  id          String   @id @default(cuid())
-  endpoint    String
-  tenantId    String?
-  extensionId String?
-  /// Normalized status at this event ("REGISTERED" | "UNREACHABLE" | "UNREGISTERED" | "UNKNOWN").
-  status      String
-  rawStatus   String?
-  contactUri  String?
-  userAgent   String?
-  details     Json?
-  occurredAt  DateTime @default(now())
-
-  @@index([endpoint, occurredAt])
-  @@index([tenantId, occurredAt])
-  @@index([occurredAt])
-}
+  create
