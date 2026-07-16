@@ -39,6 +39,10 @@ export interface ConnectWakeDeliverInput {
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
   toExtension: string;
+  /** Caller number from the AMI ConnectWake UserEvent (2026-07-16, owner
+   *  request): forwarded so the API's prewake VoIP push can show the real
+   *  number on the iOS lock screen instead of "Unknown". */
+  fromNumber?: string | null;
 }
 
 /** Minimal slice of PbxTenantMapCache this consumer depends on (keeps it testable). */
@@ -171,6 +175,7 @@ export class ConnectWakeConsumer {
       connectTenantId,
       pbxVitalTenantId: evt.tid,
       toExtension: evt.ext,
+      fromNumber: evt.from,
     }).catch((err: unknown) => {
       log.warn(
         { err: err instanceof Error ? err.message : String(err), tid: evt.tid, ext: evt.ext },

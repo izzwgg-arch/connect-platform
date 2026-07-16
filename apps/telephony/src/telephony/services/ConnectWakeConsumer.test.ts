@@ -113,6 +113,7 @@ test("handleWake: dispatches one delivery and resolves the connect tenant id", (
     connectTenantId: "connect-uuid-1",
     pbxVitalTenantId: "2",
     toExtension: "110",
+    fromNumber: "5035551234",
   });
 });
 
