@@ -56,6 +56,14 @@ type SipState = {
   lastDialed: string | null;
   /** Current audio output route during a call */
   audioRoute: AudioRoute;
+  /**
+   * iOS-ONLY display fallback (2026-07-15): wall-clock ms timestamp of when
+   * the current call reached "connected"; cleared when it ends. Used by the
+   * in-call timer + ongoing-call banner when the multi-call session map has
+   * no `answeredAt` (cold-answer re-INVITE session mismatch). Always null on
+   * Android — the Android display path is intentionally untouched.
+   */
+  callConnectedAt: number | null;
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
   register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
@@ -1440,6 +1448,24 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // first transitions to "connected" so the live timer in the persistent
   // notification reflects the true wall-clock duration even after re-renders.
   const callConnectedAtRef = useRef<number | null>(null);
+  // COWORK iOS fix (2026-07-15): reactive twin of callConnectedAtRef for the
+  // UI layer. On a cold-answer re-delivery the call bridges on a re-INVITE'd
+  // session whose id differs from the one the multi-call session map tracks,
+  // so that session never flips to "active" and `answeredAt` stays null —
+  // the in-call timer sticks at 0:00 and the ongoing-call banner has nothing
+  // to show. This state is an authoritative SIP-level fallback for display.
+  // iOS-ONLY by explicit owner directive (2026-07-15): on Android this effect
+  // returns immediately and the value stays null forever. Display-only;
+  // provably isolated from the answer/register path.
+  const [iosCallConnectedAt, setIosCallConnectedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    if (callState === "connected") {
+      setIosCallConnectedAt((cur) => cur ?? Date.now());
+    } else if (callState === "ended" || callState === "idle") {
+      setIosCallConnectedAt((cur) => (cur == null ? cur : null));
+    }
+  }, [callState]);
   useEffect(() => {
     const prev = prevCallStateRef.current;
     prevCallStateRef.current = callState;
@@ -1611,6 +1637,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       lastError,
       lastDialed,
       audioRoute,
+      callConnectedAt: iosCallConnectedAt,
 
       saveProvisioning: async (bundle) => {
         await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(bundle));
@@ -1933,7 +1960,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       setActiveSipSession: (id) => clientRef.current.setActiveSession(id),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registrationState, callState, callDirection, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed, audioRoute, ensureProvisioningLoaded],
+    [registrationState, callState, callDirection, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed, audioRoute, iosCallConnectedAt, ensureProvisioningLoaded],
   );
 
   return <SipContext.Provider value={value}>{children}</SipContext.Provider>;

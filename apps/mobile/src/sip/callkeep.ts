@@ -68,12 +68,43 @@ export function associateCallIds(
   if (!siblingCallIds.has(b)) siblingCallIds.set(b, new Set());
   siblingCallIds.get(a)!.add(b);
   siblingCallIds.get(b)!.add(a);
+  // COWORK build 20 (2026-07-16): siblings are the SAME phone call under two
+  // backend ids — feed the alias map so all CallKit operations collapse onto
+  // ONE call (see callKitCallIdAlias below). iOS-only state; on Android these
+  // maps are never read.
+  if (Platform.OS === "ios") {
+    const canonical = reportedIncomingCallIds.has(b) && !reportedIncomingCallIds.has(a) ? b : a;
+    const alias = canonical === a ? b : a;
+    if (callKitCallIdAlias.get(alias) !== canonical) {
+      callKitCallIdAlias.set(alias, canonical);
+      console.log("[CALL_INCOMING] associateCallIds → alias:", alias, "->", canonical);
+    }
+  }
 }
 
 // callIds already reported to CallKit — dedupe so a device that receives BOTH
 // an Expo push and a VoIP push (or repeated VoIP retries) does not create two
 // CallKit calls / two visible incoming UIs.
 const reportedIncomingCallIds = new Set<string>();
+
+// COWORK build 20 (2026-07-16): one inbound call arrives as TWO pushes with
+// DIFFERENT backend ids — a caller-less PREWAKE VoIP push carrying the PBX
+// callId, then ~350ms later the full INCOMING_CALL push carrying the invite
+// cuid. Reporting each id separately created TWO CallKit calls per inbound
+// call (live-traced 2026-07-16): the lock screen showed the caller-less one
+// ("Unknown"), and teardown — which ends by invite id — left the other
+// CallKit call live, a zombie that kept iOS's green status-bar pill up after
+// hangup. The alias map folds the second id onto the first ("placeholder")
+// so there is exactly ONE CallKit call. `callerlessReportedCallIds` tracks
+// placeholders (reported with an empty `from`) — only those are fold targets,
+// so two genuinely concurrent calls with real callers are never merged.
+// iOS-ONLY: nothing populates or reads these on Android.
+const callKitCallIdAlias = new Map<string, string>();
+const callerlessReportedCallIds = new Set<string>();
+
+function resolveNativeCallId(callId: string): string {
+  return callKitCallIdAlias.get(callId) ?? callId;
+}
 
 /** Stable CallKit UUID for a backend callId.
  *
@@ -212,13 +243,37 @@ export async function applyIosRingtonePreference(preference: MobileRingtoneId): 
   }
 }
 
-export function showIncomingNativeCall(callId: string, from: string) {
+// COWORK build 20 (2026-07-16, owner request): `from` is the NUMBER (CallKit
+// handle) and `callerName` the display name / CNAM. Passing them separately
+// makes iOS render its native two-line incoming UI — name (or caller ID) on
+// top, number underneath. Callers that pass only `from` behave exactly as
+// before (name falls back to the number). Android call sites are iOS-gated
+// and never reach this function.
+export function showIncomingNativeCall(callId: string, from: string, callerName?: string | null) {
   // iOS ONLY: dedupe (an iPhone may receive both an Expo push and a VoIP push
   // for the same call → report to CallKit at most once per callId) and map the
   // callId to a real CallKit UUID. Android must run its original path untouched,
   // so none of this executes on Android — it falls straight through to the raw
   // callId, byte-for-byte identical to the pre-iOS behavior.
   if (Platform.OS === "ios") {
+    callId = resolveNativeCallId(callId);
+    const trimmedFrom = (from || "").trim();
+    const trimmedName = (callerName || "").trim();
+    // COWORK build 20: if this report has a REAL caller and a caller-less
+    // PREWAKE placeholder is still reported, this is the second push of the
+    // SAME call under a different backend id. Fold it onto the placeholder
+    // (alias + fall into the update path below) instead of reporting a second
+    // CallKit call — see the alias map comment above.
+    if (!reportedIncomingCallIds.has(callId) && trimmedFrom) {
+      for (const placeholderId of callerlessReportedCallIds) {
+        if (placeholderId !== callId && reportedIncomingCallIds.has(placeholderId)) {
+          callKitCallIdAlias.set(callId, placeholderId);
+          console.log("[CALL_INCOMING] folded second-push callId into placeholder:", callId, "->", placeholderId);
+          callId = placeholderId;
+          break;
+        }
+      }
+    }
     if (reportedIncomingCallIds.has(callId)) {
       // Already reported to CallKit — commonly by a caller-less PREWAKE VoIP
       // push that displayed "Unknown". If we now have a real caller (the full
@@ -226,12 +281,14 @@ export function showIncomingNativeCall(callId: string, from: string) {
       // of dropping it, so the incoming screen shows the number/name rather than
       // "Unknown" (COWORK fix 2026-07-13). No-op when `from` is empty. Android
       // never reaches this branch.
-      const trimmed = (from || "").trim();
-      if (trimmed) {
+      if (trimmedFrom) {
         try {
           const u = callKitUuidForCallId(callId);
-          (RNCallKeep as any).updateDisplay?.(u, trimmed, trimmed);
-          console.log("[CALL_INCOMING] showIncomingNativeCall: refreshed CallKit label for already-reported callId=", callId, "from=", trimmed);
+          // updateDisplay(uuid, displayName, handle): name on top, number
+          // underneath — falls back to the number when there's no name.
+          (RNCallKeep as any).updateDisplay?.(u, trimmedName || trimmedFrom, trimmedFrom);
+          callerlessReportedCallIds.delete(callId);
+          console.log("[CALL_INCOMING] showIncomingNativeCall: refreshed CallKit label for already-reported callId=", callId, "from=", trimmedFrom, "name=", trimmedName);
         } catch (e) {
           console.warn("[CALL_INCOMING] updateDisplay failed:", String(e));
         }
@@ -241,6 +298,7 @@ export function showIncomingNativeCall(callId: string, from: string) {
       return;
     }
     reportedIncomingCallIds.add(callId);
+    if (!trimmedFrom) callerlessReportedCallIds.add(callId);
   }
   const uuid = Platform.OS === "ios" ? callKitUuidForCallId(callId) : callId;
   console.log("[CALL_INCOMING] showIncomingNativeCall (foreground) callId=", callId, "uuid=", uuid, "from=", from);
@@ -250,7 +308,12 @@ export function showIncomingNativeCall(callId: string, from: string) {
   });
   try {
     void appendIosRingLog("IOS_JS_CALLKIT_REPORT", { callId, uuid, appState: AppState.currentState });
-    RNCallKeep.displayIncomingCall(uuid, from, from, "number", false);
+    // displayIncomingCall(uuid, handle, localizedCallerName, …): handle = the
+    // NUMBER (shown under the name), localizedCallerName = name/CNAM on top.
+    // With no name this is (number, number) — identical to prior behavior.
+    // Android never reaches here (all call sites are iOS-gated).
+    const displayName = Platform.OS === "ios" ? ((callerName || "").trim() || from) : from;
+    RNCallKeep.displayIncomingCall(uuid, from, displayName, "number", false);
     console.log("[CALL_INCOMING] showIncomingNativeCall: displayIncomingCall returned");
     logCallFlow("CALLKEEP_DISPLAY_DONE", {
       inviteId: callId,
@@ -266,6 +329,31 @@ export function showIncomingNativeCall(callId: string, from: string) {
 }
 
 export function endNativeCall(callId: string) {
+  // COWORK build 20 (2026-07-16): resolve a second-push alias to the one real
+  // CallKit call (see callKitCallIdAlias) so ending by EITHER backend id kills
+  // the call the user is looking at — previously the invite-id end was a no-op
+  // on the placeholder call, leaving a zombie CallKit call (stuck green
+  // system pill). Also end any sibling-reported CallKit calls (pre-alias
+  // races where both ids were reported). Android: alias/sibling state is
+  // never populated → identity, unchanged behavior.
+  if (Platform.OS === "ios") {
+    callId = resolveNativeCallId(callId);
+    callerlessReportedCallIds.delete(callId);
+    const sibs = siblingCallIds.get(callId);
+    if (sibs) {
+      for (const sib of sibs) {
+        const sibResolved = resolveNativeCallId(sib);
+        if (sibResolved === callId) continue;
+        reportedIncomingCallIds.delete(sibResolved);
+        callerlessReportedCallIds.delete(sibResolved);
+        try {
+          RNCallKeep.endCall(callIdToCallKitUuid.get(sibResolved) ?? callKitUuidForCallId(sibResolved));
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
   siblingCallIds.delete(callId);
   reportedIncomingCallIds.delete(callId);
   dismissNativeIncomingUi(callId);

@@ -498,10 +498,19 @@ export function ActiveCallScreen() {
         {/* Timer — only shown when connected. Anchored to the session's
             answeredAt wall-clock timestamp (not a local counter) so leaving
             and returning to this screen (backgrounding, navigating away)
-            never resets it back to zero. */}
+            never resets it back to zero.
+            COWORK iOS fix (2026-07-15): on a cold-answer re-delivery the call
+            bridges on a re-INVITE'd session the session map never flips to
+            "active", so answeredAt stays null and the timer sticks at 0:00.
+            Fall back to the SIP-level connect timestamp. iOS-only by owner
+            directive — sip.callConnectedAt is always null on Android, and the
+            explicit Platform gate keeps the Android expression inert. */}
         <CallTimer
           running={isConnected && !sip.onHold}
-          connectedAt={primarySession?.answeredAt ?? null}
+          connectedAt={
+            primarySession?.answeredAt ??
+            (Platform.OS === 'ios' ? sip.callConnectedAt : null)
+          }
           style={{ marginTop: 6, opacity: isConnected ? 1 : 0 }}
         />
 

@@ -169,6 +169,50 @@ ${PATCH_BEGIN}
     }
   } @catch (NSException *cbEx) {}
 
+  // COWORK build 20 (2026-07-16, owner request): server-driven CANCEL push.
+  // When the caller hangs up, the call is answered on another device, or
+  // voicemail takes it, the server sends a VoIP push with cancel="1" so
+  // ringing stops IMMEDIATELY — even when JS is suspended (the case where the
+  // INVITE_POLL / INVITE_CANCELED FCM can't run). Apple's rule that every
+  // VoIP push must report a call is satisfied by re-reporting the primary
+  // UUID first — a duplicate report of an already-ringing UUID is a harmless
+  // CXProvider error — then ending it right away. The altCallId key covers
+  // the sibling report when the same call was reported under both the PBX
+  // linkedId and the invite id. Reasons follow RNCallKeep: 2=remote ended,
+  // 4=answered elsewhere, 6=missed.
+  NSString *cancelFlag = dict[@"cancel"];
+  if (cancelFlag != nil && ([cancelFlag isEqualToString:@"1"] || [cancelFlag isEqualToString:@"true"]) && callId != nil && callId.length > 0) {
+    int endReason = 2;
+    NSString *cancelReason = dict[@"reason"];
+    if (cancelReason != nil) {
+      if ([cancelReason containsString:@"answered_elsewhere"] || [cancelReason containsString:@"claimed"]) { endReason = 4; }
+      else if ([cancelReason containsString:@"voicemail"] || [cancelReason containsString:@"unanswered"] || [cancelReason containsString:@"missed"]) { endReason = 6; }
+    }
+    NSString *cancelUuid = ConnectDeterministicCallKitUUID(callId);
+    [RNCallKeep reportNewIncomingCall:cancelUuid
+                               handle:(handle.length > 0 ? handle : @"Unknown")
+                           handleType:@"number"
+                             hasVideo:NO
+                  localizedCallerName:nil
+                      supportsHolding:NO
+                         supportsDTMF:NO
+                     supportsGrouping:NO
+                   supportsUngrouping:NO
+                          fromPushKit:YES
+                              payload:dict
+                withCompletionHandler:nil];
+    [RNCallKeep endCallWithUUID:cancelUuid reason:endReason];
+    NSString *altCancelId = dict[@"altCallId"];
+    if (altCancelId != nil && altCancelId.length > 0 && ![altCancelId isEqualToString:callId]) {
+      [RNCallKeep endCallWithUUID:ConnectDeterministicCallKitUUID(altCancelId) reason:endReason];
+    }
+    // Forward to JS too (when awake it clears invite state; the JS onIncoming
+    // handler recognizes cancel payloads and never treats them as new calls).
+    [RNVoipPushNotificationManager didReceiveIncomingPushWithPayload:payload forType:(NSString *)type];
+    completion();
+    return;
+  }
+
   if (callId != nil && callId.length > 0) {
     NSString *uuid = ConnectDeterministicCallKitUUID(callId);
     [RNCallKeep reportNewIncomingCall:uuid

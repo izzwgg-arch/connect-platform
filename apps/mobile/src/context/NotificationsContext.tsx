@@ -4248,6 +4248,30 @@ export function NotificationsProvider({
             console.warn("[VOIP_PUSH] onIncoming missing callId — cannot report to CallKit");
             return;
           }
+          // COWORK build 20 (2026-07-16): server-driven CANCEL VoIP push
+          // (cancel="1"). The NATIVE handler has already ended the CallKit
+          // call(s); here we only clean JS invite state so no recovery path
+          // resurrects the call. Must NEVER fall through to payloadToInvite
+          // below — that would fabricate a fresh incoming call out of a
+          // cancellation.
+          const cancelFlag = String((payload as any)?.cancel ?? "");
+          if (cancelFlag === "1" || cancelFlag === "true" || (payload as any)?.type === "INVITE_CANCELED") {
+            const altId = String((payload as any)?.altCallId || "");
+            console.log("[VOIP_PUSH] cancel push — clearing invite state callId=", callId, "altCallId=", altId || "(none)");
+            suppressedIncomingInviteIdsRef.current.add(callId);
+            if (altId) suppressedIncomingInviteIdsRef.current.add(altId);
+            endNativeCall(callId);
+            if (altId && altId !== callId) endNativeCall(altId);
+            setIncomingInvite((prev) => {
+              if (!prev || (prev.id !== callId && prev.id !== altId)) return prev;
+              clearExpireTimer();
+              shownInviteIdRef.current = null;
+              setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
+              AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+              return null;
+            });
+            return;
+          }
           // If this call was already canceled/answered-elsewhere, don't resurrect
           // it; make sure CallKit clears any stale report instead.
           if (suppressedIncomingInviteIdsRef.current.has(callId)) {
@@ -4276,7 +4300,7 @@ export function NotificationsProvider({
           emitAnswerFlowEvent("INCOMING_PUSH_RECEIVED", invite, { source: "ios_voip_push" });
 
           // 1) Report to CallKit FIRST (idempotent — deduped in callkeep.ts).
-          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
           // 2) Persist invite state so resolveInviteForAction can answer/decline
           //    without a race (safeSetInvite also dedupes via shownInviteIdRef).
           safeSetInvite(invite);
@@ -4734,7 +4758,7 @@ export function NotificationsProvider({
                 // Android now wakes directly into the branded Connect screen
                 // instead of CallKeep's telecom UI.
                 if (Platform.OS !== "android") {
-                  showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+                  showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
                 }
                 nativeCacheClaimed = true;
                 if (diagSessionIdRef.current) {
@@ -4769,7 +4793,7 @@ export function NotificationsProvider({
             const invite = payloadToInvite(cached);
             safeSetInvite(invite);
             if (Platform.OS !== "android") {
-              showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+              showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
             }
           }
 
@@ -4805,7 +4829,7 @@ export function NotificationsProvider({
         const invite = pending[0] as CallInvite;
         safeSetInvite(invite);
         if (Platform.OS !== "android") {
-          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
         }
 
         if (diagSessionIdRef.current) {
@@ -4924,7 +4948,7 @@ export function NotificationsProvider({
 
         safeSetInvite(invite);
         if (Platform.OS !== "android") {
-          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
         }
 
         const sid = diagSessionIdRef.current;
