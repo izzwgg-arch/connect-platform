@@ -1303,7 +1303,7 @@ export function DesktopMiniDialer() {
         .settings-toggle-row i[data-on="true"] { background: #3b82f6; }
         .settings-toggle-row i[data-on="true"]:after { transform: translateX(17px); background: #fff; }
 
-        .call-screen { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; padding: 40px 24px 26px; }
+        .call-screen { position: absolute; inset: 0; z-index: 80; /* above settings (50) and notifications (60): an incoming call always covers open popovers; they reappear when the call ends */ display: flex; flex-direction: column; align-items: center; padding: 40px 24px 26px; }
         .call-screen.incoming { background: #0b1330; }
         .call-screen.active { background: #0a1128; }
         .call-avatar-wrap { position: relative; margin-top: 34px; display: grid; place-items: center; }
