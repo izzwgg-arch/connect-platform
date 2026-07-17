@@ -3,6 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
 
+// Chromium blocks media playback in windows the user has never interacted with.
+// The FULL window runs the real SIP phone and plays the ringtone — but users who
+// live in the mini pop-out (app starts minimized to tray) never click the full
+// window, so its ringtone .play() was silently rejected: "phone never rings on
+// this machine, everything else works". Disable the gesture requirement.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
 const DEFAULT_MINI_BOUNDS: DesktopSettings["miniBounds"] = { width: 360, height: 640 };
 
 const DEFAULT_SETTINGS: DesktopSettings = {
