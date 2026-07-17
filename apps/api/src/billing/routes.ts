@@ -62,6 +62,7 @@ import {
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { saveAdminCardWithSut } from "./adminCardSave";
 import { registerBillingPublicPayRoutes } from "./publicPayRoutes";
+import { registerBillingPayLinkRoutes } from "./payLinkRoutes";
 import {
   agingToCsv,
   csvMeta,
@@ -380,6 +381,7 @@ async function queueBillingEmail(input: { tenantId: string; to: string; type: st
 
 export async function registerBillingRoutes(app: FastifyInstance) {
   registerBillingPublicPayRoutes(app);
+  registerBillingPayLinkRoutes(app, requirePlatformBilling);
   const sendLiveChargesDisabled = (reply: FastifyReply) =>
     reply.code(503).send({ error: "billing_live_charges_disabled" });
 

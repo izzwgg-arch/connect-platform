@@ -1,0 +1,58 @@
+/* Multi-invoice pay link — invoice list on top of the shared pay-invoice styles. */
+
+.billing-pay-invoice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.billing-pay-invoice-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.08);
+  font-size: 0.92rem;
+}
+
+.billing-pay-invoice-row .inv-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.billing-pay-invoice-row .inv-number {
+  font-weight: 600;
+}
+
+.billing-pay-invoice-row .inv-period {
+  opacity: 0.7;
+  font-size: 0.8rem;
+}
+
+.billing-pay-invoice-row .inv-amount {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.billing-pay-invoice-row.inv-settled {
+  opacity: 0.55;
+}
+
+.billing-pay-invoice-row.inv-settled .inv-amount {
+  text-decoration: line-through;
+}
+
+.billing-pay-invoice-row .inv-paid-chip {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #16a34a;
+}

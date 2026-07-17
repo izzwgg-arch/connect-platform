@@ -494,6 +494,13 @@ enum BillingInvoiceStatus {
   VOID
 }
 
+enum BillingPayLinkStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  VOID
+}
+
 enum BillingLineItemType {
   EXTENSION
   PHONE_NUMBER
@@ -787,6 +794,7 @@ model Tenant {
   paymentTransactions             PaymentTransaction[]
   billingRuns                     BillingRun[]
   billingEventLogs                BillingEventLog[]
+  billingPayLinks                 BillingPayLink[]
   solaExternalScheduleLinks       BillingSolaExternalScheduleLink[]
   customers                       Customer[]
   contacts                        Contact[]
@@ -1434,6 +1442,30 @@ model BillingChargeOperation {
   @@index([tenantId, createdAt])
   @@index([invoiceId])
   @@index([status, updatedAt])
+}
+
+/// Short public pay link covering one or more BillingInvoices — one card charge
+/// pays every still-open invoice in the set (per-invoice receipts fan out after).
+model BillingPayLink {
+  id                String               @id @default(cuid())
+  /// Short unambiguous public code (no 0/O/1/l), e.g. X7K2QF → /p/X7K2QF
+  code              String               @unique
+  tenantId          String
+  /// BillingInvoice ids covered by this link (charged = still-unpaid subset at pay time).
+  invoiceIds        String[]
+  status            BillingPayLinkStatus @default(ACTIVE)
+  expiresAt         DateTime
+  /// Parent gateway PaymentTransaction (combined charge) once paid.
+  paidTransactionId String?
+  completedAt       DateTime?
+  createdByUserId   String?
+  metadata          Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([expiresAt])
 }
 
 model BillingRun {
