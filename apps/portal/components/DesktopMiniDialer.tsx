@@ -619,10 +619,20 @@ export function DesktopMiniDialer() {
       saveIdSet(MISSED_DISMISS_KEY, dismissed);
       setNotifTick((t) => t + 1);
     }
-    await Promise.all([
-      ...ids.map((id) => apiPost(`/chat/threads/${id}/read`, {}).catch(() => undefined)),
-      ...vmIds.map((id) => apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true }).catch(() => undefined)),
-    ]);
+    await Promise.all(ids.map((id) => apiPost(`/chat/threads/${id}/read`, {}).catch(() => undefined)));
+    const vmResults = await Promise.all(vmIds.map((id) =>
+      apiPatch<{ ok?: boolean; skipped?: string }>(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true })
+        .then((r) => (r?.skipped ? id : null))
+        .catch(() => null),
+    ));
+    const vmSkipped = vmResults.filter(Boolean) as string[];
+    if (vmSkipped.length > 0) {
+      const r2 = loadIdSet(VM_READ_KEY); const u2 = loadIdSet(VM_UNREAD_KEY);
+      for (const id of vmSkipped) { r2.delete(id); u2.delete(id); }
+      saveIdSet(VM_READ_KEY, r2); saveIdSet(VM_UNREAD_KEY, u2);
+      const set = new Set(vmSkipped);
+      setVoicemails((prev) => prev.map((v) => (set.has(v.id) ? { ...v, listened: false } : v)));
+    }
     setNewChats([]);
     setNotifOpen(false);
     refreshLists();
@@ -717,7 +727,17 @@ export function DesktopMiniDialer() {
     saveIdSet(VM_READ_KEY, read);
     saveIdSet(VM_UNREAD_KEY, unread);
     setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, listened } : v)));
-    apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened }).catch(() => undefined);
+    apiPatch<{ ok?: boolean; skipped?: string }>(`/voice/voicemail/${encodeURIComponent(id)}`, { listened })
+      .then((r) => {
+        if (r?.skipped) {
+          // Tenant-wide viewer: server kept the shared state — undo the local override.
+          const r2 = loadIdSet(VM_READ_KEY); const u2 = loadIdSet(VM_UNREAD_KEY);
+          r2.delete(id); u2.delete(id);
+          saveIdSet(VM_READ_KEY, r2); saveIdSet(VM_UNREAD_KEY, u2);
+          setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, listened: !listened } : v)));
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   // Mark every unlistened voicemail read in one shot: persist local overrides,
@@ -731,7 +751,19 @@ export function DesktopMiniDialer() {
     saveIdSet(VM_READ_KEY, read);
     saveIdSet(VM_UNREAD_KEY, unread);
     setVoicemails((prev) => prev.map((v) => (v.listened ? v : { ...v, listened: true })));
-    for (const id of vmIds) void apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true }).catch(() => undefined);
+    void Promise.all(vmIds.map((id) =>
+      apiPatch<{ ok?: boolean; skipped?: string }>(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true })
+        .then((r) => (r?.skipped ? id : null))
+        .catch(() => null),
+    )).then((results) => {
+      const skippedIds = results.filter(Boolean) as string[];
+      if (skippedIds.length === 0) return;
+      const r2 = loadIdSet(VM_READ_KEY); const u2 = loadIdSet(VM_UNREAD_KEY);
+      for (const id of skippedIds) { r2.delete(id); u2.delete(id); }
+      saveIdSet(VM_READ_KEY, r2); saveIdSet(VM_UNREAD_KEY, u2);
+      const set = new Set(skippedIds);
+      setVoicemails((prev) => prev.map((v) => (set.has(v.id) ? { ...v, listened: false } : v)));
+    });
   }, [voicemails]);
 
   const patchVm = useCallback((id: string, body: Record<string, unknown>, patch: Partial<MiniVoicemail>) => {

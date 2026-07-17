@@ -767,9 +767,11 @@ export default function VoicemailPage() {
   const canGoNext = totalCount > page * 100;
 
   async function markRead(vm: Voicemail, listened: boolean) {
-    await apiPatch(`/voice/voicemail/${vm.id}`, { listened });
+    const res = await apiPatch<{ ok: boolean; skipped?: string }>(`/voice/voicemail/${vm.id}`, { listened });
+    if (res?.skipped) return; // tenant-wide viewer: server left the shared read state alone
     if (selected?.id === vm.id) setSelected({ ...selected, listened });
     setReloadKey((key) => key + 1);
+    window.dispatchEvent(new Event("cc:navbadges:refresh"));
   }
 
   async function markUrgent(vm: Voicemail, urgent: boolean) {
@@ -782,9 +784,11 @@ export default function VoicemailPage() {
   async function handlePlayed(vm: Voicemail) {
     if (vm.listened) return;
     try {
-      await apiPatch(`/voice/voicemail/${vm.id}`, { listened: true });
+      const res = await apiPatch<{ ok: boolean; skipped?: string }>(`/voice/voicemail/${vm.id}`, { listened: true });
+      if (res?.skipped) return; // tenant-wide viewer: playing must not clear "New" for the team
       if (selected?.id === vm.id) setSelected({ ...selected, listened: true });
       setReloadKey((key) => key + 1);
+      window.dispatchEvent(new Event("cc:navbadges:refresh"));
     } catch {
       // Marking read is now driven ONLY by this explicit PATCH on real playback
       // (the stream endpoint no longer auto-marks read). Keep playback resilient

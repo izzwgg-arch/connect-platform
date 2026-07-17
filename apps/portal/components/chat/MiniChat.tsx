@@ -157,8 +157,14 @@ export function MiniChat() {
         const marker = lastReadPostRef.current;
         if (!marker || marker.threadId !== threadId || newestTs > marker.ts) {
           lastReadPostRef.current = { threadId, ts: newestTs };
-          void apiPost(`/chat/threads/${threadId}/read`, {}).catch(() => undefined);
-          setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, isNew: false, unread: 0 } : t)));
+          void apiPost<{ ok?: boolean; skipped?: string }>(`/chat/threads/${threadId}/read`, {})
+            .then((r) => {
+              if (!r?.skipped) {
+                setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, isNew: false, unread: 0 } : t)));
+                window.dispatchEvent(new Event("cc:navbadges:refresh"));
+              }
+            })
+            .catch(() => undefined);
         }
       }
       setScrollIntent({ reason: isThreadSwitch ? "initial" : reason, token: Date.now() });

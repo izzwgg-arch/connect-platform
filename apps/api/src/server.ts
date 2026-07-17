@@ -16691,18 +16691,38 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
     folder: z.enum(["inbox", "old", "urgent"]).optional(),
   }).parse(req.body || {});
   const listened = body.listened ?? true;
+  const wantsListenedChange = body.listened !== undefined || body.folder === undefined;
+  // Read-state hardening: only a mailbox OWNER may flip the shared listened/readAt
+  // state. Tenant-wide oversight viewers (can_view_tenant_voicemails, super-admins
+  // browsing other mailboxes) see everything but must never clear "New" for the team.
+  let allowListenedChange = true;
+  if (wantsListenedChange) {
+    let isOwnMailbox = false;
+    try {
+      const ownScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+      if (ownScope.ok) {
+        isOwnMailbox = voicemailRowInOwnedScope(vm, { tenantIds: ownScope.tenantIds, extensions: ownScope.extensions });
+      }
+    } catch { isOwnMailbox = false; }
+    allowListenedChange = isOwnMailbox;
+  }
   const data: Record<string, any> = {};
-  if (body.listened !== undefined || body.folder === undefined) {
+  if (wantsListenedChange && allowListenedChange) {
     data.listened = listened;
     data.readAt = listened ? (vm.readAt ?? new Date()) : null;
   }
   if (body.folder !== undefined) {
     data.folder = body.folder;
   }
-  await db.voicemail.update({
-    where: { id },
-    data,
-  });
+  if (Object.keys(data).length > 0) {
+    await db.voicemail.update({
+      where: { id },
+      data,
+    });
+  }
+  if (wantsListenedChange && !allowListenedChange) {
+    return reply.send({ ok: true, skipped: "tenant_viewer" });
+  }
   return reply.send({ ok: true });
 });
 

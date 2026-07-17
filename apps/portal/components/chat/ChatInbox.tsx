@@ -57,6 +57,7 @@ export function ChatInbox({
             <span className="cc-thread-main">
               <span className="cc-thread-top">
                 <strong>{thread.participantName}</strong>
+                <span className={"cc-state " + (thread.isNew ? "new" : "read")}>{thread.isNew ? "New" : "Read"}</span>
                 <small>{fmtChatTime(thread.lastAt)}</small>
               </span>
               <span className="cc-thread-bottom">
