@@ -57,7 +57,6 @@ export function ChatInbox({
             <span className="cc-thread-main">
               <span className="cc-thread-top">
                 <strong>{thread.participantName}</strong>
-                <span className={"cc-state " + (thread.isNew ? "new" : "read")}>{thread.isNew ? "New" : "Read"}</span>
                 <small>{fmtChatTime(thread.lastAt)}</small>
               </span>
               <span className="cc-thread-bottom">
@@ -69,6 +68,7 @@ export function ChatInbox({
                   {thread.type === "SMS" && smsInboxBadge(thread.smsInboxKind) ? (
                     <span className={`cc-sms-inbox-badge cc-sms-inbox-${thread.smsInboxKind}`}>{smsInboxBadge(thread.smsInboxKind)}</span>
                   ) : null}
+                  <span className={"cc-state " + (thread.isNew ? "new" : "read")}>{thread.isNew ? "New" : "Read"}</span>
                 </span>
                 <span className="cc-thread-preview">{thread.lastMessage || "No messages yet"}</span>
               </span>

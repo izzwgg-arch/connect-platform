@@ -579,7 +579,7 @@ export function MiniChat() {
             const tone = toneFor(t.participantName || t.id);
             return (
               <button type="button" className="mc-thread" key={t.id} onClick={() => setActiveThread(t)}>
-                <span className={"mc-av" + (phoneish ? " ph" : "")} style={phoneish ? undefined : { background: tone }}>
+                <span className={"mc-av" + (phoneish ? " ph" : "")} style={{ background: tone }}>
                   {phoneish ? <User size={20} /> : initials(t.participantName)}
                   {t.type === "DM" ? <i className="mc-online" /> : null}
                 </span>
@@ -630,7 +630,7 @@ export function MiniChat() {
         .mc-thread { display: flex; align-items: center; gap: 12px; padding: 11px 8px; border: 0; border-bottom: 0.5px solid var(--mn-line); background: transparent; cursor: pointer; text-align: left; width: 100%; }
         .mc-thread:active { background: rgba(59,130,246,0.06); }
         .mc-av { position: relative; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; color: #fff; font-size: 15px; font-weight: 700; flex-shrink: 0; }
-        .mc-av.ph { background: rgba(136,153,187,0.22); color: var(--mn-text-2); }
+        .mc-av.ph { color: #fff; }
         .mc-online { position: absolute; right: 1px; bottom: 1px; width: 12px; height: 12px; border-radius: 50%; background: #22c55e; border: 2px solid var(--mn-bg); }
         .mc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
         .mc-row1 { display: flex; align-items: center; gap: 8px; min-width: 0; }

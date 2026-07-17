@@ -143,6 +143,14 @@ const KEYS: Array<[string, string]> = [
   ["*", ""], ["0", "+"], ["#", ""],
 ];
 
+// "+18456627080" -> "845-662-7080" for the small number line on recents rows.
+function fmtNumSmall(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length === 10) return `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+  return (raw || "").replace(/^\+1(?=\d)/, "");
+}
+
 function formatDuration(sec = 0): string {
   const safe = Math.max(0, Math.floor(sec));
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
@@ -1072,6 +1080,7 @@ export function DesktopMiniDialer() {
                   <MiniAvatar name={name} size={44} />
                   <div className="row-main">
                     <strong>{name}</strong>
+                    {target && name !== target ? <small className="row-number">{fmtNumSmall(target)}</small> : null}
                     <span className="row-meta">
                       {missed
                         ? <PhoneOff size={13} className="rm-icon rm-missed" />
@@ -1370,6 +1379,7 @@ export function DesktopMiniDialer() {
         .keypad span { font-size: 9px; letter-spacing: 2px; color: var(--mn-text-3); font-weight: 500; }
         /* Dialer tab: drop the keypad to the bottom of the pane so it sits right on top of the call button (no dead gap). */
         .dialer-pane .keypad { align-content: end; padding-bottom: 4px; }
+        .row-number { display: block; font-size: 11px; font-weight: 600; color: var(--mn-text-3); line-height: 1.2; margin: 1px 0; }
         .dialer-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; justify-content: center; align-items: center; margin: 4px auto 6px; width: 100%; max-width: 300px; }
         .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
         .call-button:disabled { background: var(--mn-border); color: var(--mn-text-3); box-shadow: none; cursor: default; }
