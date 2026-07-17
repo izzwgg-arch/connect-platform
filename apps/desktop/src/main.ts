@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, session, 
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
+import { checkForUpdatesInteractive, initAutoUpdater } from "./updater";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -307,6 +308,8 @@ function rebuildTray(): void {
       click: () => toggleAlwaysOnTop(),
     },
     { type: "separator" },
+    { label: "Check for Updates\u2026", click: () => checkForUpdatesInteractive() },
+    { type: "separator" },
     {
       label: "Quit Connect",
       click: () => {
@@ -448,6 +451,9 @@ if (!gotSingleInstanceLock) {
   // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
+  // In-app auto-update: check the feed on launch (and periodically), download in
+  // the background, and prompt the user to restart when an update is ready.
+  initAutoUpdater(diag);
 
   app.on("activate", () => createFullWindow(true));
   });
