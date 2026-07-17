@@ -78,7 +78,7 @@ export const navItems: NavItem[] = [
   { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail", badgeKey: "voicemail" },
   { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat", badgeKey: "chat" },
   { id: "workspace.contacts", href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts" },
-  { id: "workspace.install", href: "https://app.connectcomunications.com/desktop/Connect-Setup-0.1.2.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },
+  { id: "workspace.install", href: "https://app.connectcomunications.com/desktop/Connect-Setup-0.1.3.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },
 
   { id: "pbx.extensions", href: "/pbx/extensions", label: "Extensions", icon: "EX", lucide: UserCog, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_extensions" },
   { id: "pbx.time_conditions", href: "/pbx/time-conditions", label: "Time Conditions", icon: "TC", lucide: Clock, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_time_conditions" },

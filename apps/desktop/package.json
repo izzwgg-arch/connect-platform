@@ -1,6 +1,6 @@
 {
   "name": "@connect/desktop",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "private": true,
   "main": "dist/main.js",
   "scripts": {
@@ -29,7 +29,13 @@
     "nsis": {
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
-    }
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://app.connectcomunications.com/desktop/",
+      "channel": "latest"
+    },
+    "artifactName": "Connect-Setup-${version}.${ext}"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
