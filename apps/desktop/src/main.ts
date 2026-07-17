@@ -25,6 +25,68 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let settings: DesktopSettings = DEFAULT_SETTINGS;
 let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
+// Last theme the full portal window reported. Forwarded to the mini pop-out so it
+// follows the portal's light/dark mode. Defaults to dark (the mini's base palette).
+let miniTheme: "dark" | "light" = "dark";
+
+// ── Diagnostic file logging ───────────────────────────────────────────
+// The desktop app shipped with no logs, so failures in the hidden phone-engine
+// window were invisible. Capture each window's console + renderer crashes to a
+// rotating file under userData/logs so calls are always recorded.
+let logStream: fs.WriteStream | null = null;
+function logDir(): string {
+  return path.join(app.getPath("userData"), "logs");
+}
+function diag(tag: string, message: string): void {
+  try {
+    logStream?.write(`[${new Date().toISOString()}] [${tag}] ${message}\n`);
+  } catch {
+    /* never let logging throw */
+  }
+}
+function initLogging(): void {
+  try {
+    fs.mkdirSync(logDir(), { recursive: true });
+    const file = path.join(logDir(), "connect.log");
+    try {
+      if (fs.statSync(file).size > 5 * 1024 * 1024) fs.renameSync(file, file + ".1");
+    } catch {
+      /* no existing log yet */
+    }
+    logStream = fs.createWriteStream(file, { flags: "a" });
+    diag("main", `=== log start v${app.getVersion()} ${process.platform} ===`);
+  } catch {
+    /* never let logging break startup */
+  }
+}
+function attachConsoleCapture(win: BrowserWindow, tag: string): void {
+  try {
+    // Electron changed the console-message signature across majors. Old:
+    // (event, level, message, line, sourceId). New (>=37): a single details
+    // object { level, message, lineNumber, sourceId }. Handle both.
+    win.webContents.on("console-message", (...args: unknown[]) => {
+      let level: unknown, message = "", sourceId = "", line: unknown = "";
+      if (args.length >= 3) {
+        level = args[1];
+        message = String(args[2] ?? "");
+        line = args[3] ?? "";
+        sourceId = String(args[4] ?? "");
+      } else {
+        const d = (args[0] ?? {}) as Record<string, unknown>;
+        level = d.level;
+        message = String(d.message ?? "");
+        line = d.lineNumber ?? "";
+        sourceId = String(d.sourceId ?? "");
+      }
+      diag(tag, `console.${String(level)}: ${message}${sourceId ? ` @${sourceId}:${String(line)}` : ""}`);
+    });
+    win.webContents.on("render-process-gone", (_e, details) => {
+      diag(tag, `render-process-gone: ${details.reason} exit=${details.exitCode}`);
+    });
+  } catch {
+    /* ignore capture wiring failures */
+  }
+}
 
 function settingsPath(): string {
   return path.join(app.getPath("userData"), "settings.json");
@@ -112,6 +174,8 @@ function createFullWindow(show = true): BrowserWindow {
     webPreferences: webPreferences("full"),
   });
 
+  attachConsoleCapture(fullWindow, "full");
+
   fullWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
@@ -181,7 +245,13 @@ function createMiniWindow(show = true): BrowserWindow {
   miniWindow.on("resize", persistBounds);
   miniWindow.on("move", persistBounds);
 
-  loadPortal(miniWindow, "/desktop/mini-dialer");
+  // Start on the correct theme (query param avoids a light/dark flash on open) and
+  // re-assert it once loaded, so the pop-out matches the portal's current mode.
+  miniWindow.webContents.on("did-finish-load", () => {
+    if (!miniWindow || miniWindow.isDestroyed()) return;
+    miniWindow.webContents.send("desktop:mini-theme", miniTheme);
+  });
+  loadPortal(miniWindow, `/desktop/mini-dialer?miniTheme=${miniTheme}`);
   return miniWindow;
 }
 
@@ -198,6 +268,7 @@ function createPhoneEngineWindow(): BrowserWindow {
     webPreferences: webPreferences("phone-engine"),
   });
 
+  attachConsoleCapture(phoneEngineWindow, "phone-engine");
   loadPortal(phoneEngineWindow, "/desktop/phone-engine");
   return phoneEngineWindow;
 }
@@ -276,6 +347,13 @@ function registerIpc(): void {
     BrowserWindow.fromWebContents(event.sender)?.minimize();
   });
   ipcMain.handle("desktop:toggle-always-on-top", () => toggleAlwaysOnTop());
+  ipcMain.handle("desktop:set-mini-theme", (_event, theme: "dark" | "light") => {
+    miniTheme = theme === "light" ? "light" : "dark";
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.webContents.send("desktop:mini-theme", miniTheme);
+    }
+    return miniTheme;
+  });
   ipcMain.handle("desktop:get-settings", () => settings);
   ipcMain.handle("desktop:update-settings", (_event, patch: Partial<DesktopSettings>) => {
     writeSettings({ ...settings, ...patch });
@@ -304,23 +382,53 @@ function registerIpc(): void {
         (state.callState === "ringing" && state.callDirection !== "outbound") ||
         (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
       if (isInboundRing) {
-        // Show ONLY the mini call screen. Do not also raise an OS "Incoming call"
-        // notification — that produced a duplicate popup on top of the actual call.
+        // Single incoming-call surface: just the pop-out mini dialer. (The
+        // duplicate "Incoming call" notification was removed so a call no longer
+        // produces multiple popups.)
         showMiniForIncomingCall();
       }
     }
   });
 
   ipcMain.handle("phone:command", (_event, command: PhoneEngineCommand) => {
-    // The full window now runs LocalSipPhoneProvider directly (like the web app).
-    // Send commands there first; fall back to phone-engine window if full isn't open.
-    const target = (fullWindow && !fullWindow.isDestroyed()) ? fullWindow : createPhoneEngineWindow();
+    // Single-phone model: the main (full) window runs the ONE SIP phone; the mini
+    // pop-out is a proxy. All commands (from either surface) go to the full window.
+    // We no longer spawn a hidden phone-engine window - that second phone was the
+    // source of the double-ring and the answer landing on the wrong leg.
+    const target = (fullWindow && !fullWindow.isDestroyed()) ? fullWindow : createFullWindow(false);
     target.webContents.send("phone:command", command);
     return true;
   });
 }
 
-app.whenReady().then(() => {
+// ── Single-instance lock ──────────────────────────────────────────────
+// Without this, every launch (startOnLogin, a manual re-open, or the relaunch
+// after an asar reship) spawns a SEPARATE Connect process. Each process has its
+// own mini-window singleton, so each one opens its OWN mini dialer on an incoming
+// call — that is the "multiple dialers on every call" bug. Enforce exactly one
+// running instance: a second launch just focuses the existing window and exits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    const existing =
+      fullWindow && !fullWindow.isDestroyed()
+        ? fullWindow
+        : miniWindow && !miniWindow.isDestroyed()
+          ? miniWindow
+          : null;
+    if (existing) {
+      if (existing.isMinimized()) existing.restore();
+      existing.show();
+      existing.focus();
+    } else {
+      createFullWindow(true);
+    }
+  });
+
+  app.whenReady().then(() => {
+  initLogging();
   app.setAppUserModelId("com.connectcommunications.desktop");
   settings = readSettings();
   applyLoginSettings();
@@ -329,12 +437,14 @@ app.whenReady().then(() => {
   });
   registerIpc();
   rebuildTray();
-  createPhoneEngineWindow();
+  // Single-phone model: the full window is the one SIP phone; no separate hidden
+  // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
 
   app.on("activate", () => createFullWindow(true));
-});
+  });
+}
 
 app.on("window-all-closed", () => {
   if (isQuitting) app.quit();

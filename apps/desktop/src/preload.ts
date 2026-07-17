@@ -26,6 +26,16 @@ const desktopApi = {
       ipcRenderer.on("desktop:settings", wrapped);
       return () => ipcRenderer.removeListener("desktop:settings", wrapped);
     },
+    // Theme sync: the pop-out mini window lives in a separate BrowserWindow and does
+    // not reliably share the portal's theme (an earlier localStorage/cc-theme attempt
+    // was abandoned). The FULL window pushes its current theme here; main forwards it
+    // to the mini so the pop-out follows the portal's light/dark mode.
+    setMiniTheme: (theme: "dark" | "light") => ipcRenderer.invoke("desktop:set-mini-theme", theme),
+    onMiniTheme: (listener: (theme: "dark" | "light") => void) => {
+      const wrapped = (_: unknown, theme: "dark" | "light") => listener(theme);
+      ipcRenderer.on("desktop:mini-theme", wrapped);
+      return () => ipcRenderer.removeListener("desktop:mini-theme", wrapped);
+    },
   },
 
   phone: {
