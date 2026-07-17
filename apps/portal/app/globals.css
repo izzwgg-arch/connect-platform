@@ -37519,3 +37519,7 @@ table tr:hover {
 
 /* Small caller number under the name in voicemail rows */
 .vm-number { font-size: 11px; font-weight: 600; color: #64748b; line-height: 1.2; margin-top: 1px; }
+
+/* Name + read-state tag grouped on the chat row top line */
+.cc-thread-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.cc-thread-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
