@@ -882,23 +882,43 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
   app.get("/chat/a/:attachmentId/:fileName", handleAttachmentIdDownload);
 
   // ── Chat threads (JWT) ─────────────────────────────────────────────────────
+  // Tenant-shared "New": a thread is New until some real participant (not the
+  // sender, not a silent tenant-wide viewer) has read past the newest inbound
+  // message. Silent viewers never advance lastReadAt (see mark-read below), so
+  // they are naturally excluded here.
+  const isThreadSharedNew = (
+    newest: { senderUserId: string | null; createdAt: Date; direction: string } | undefined | null,
+    participants: { userId: string | null; lastReadAt: Date | null }[],
+  ): boolean => {
+    if (!newest || newest.direction === "OUTBOUND") return false;
+    return !participants.some(
+      (p) => p.userId && p.userId !== newest.senderUserId && p.lastReadAt && p.lastReadAt.getTime() >= newest.createdAt.getTime(),
+    );
+  };
+
   app.get("/chat/unread-count", async (req, reply) => {
     const user = req.user as JwtUser;
-    // Count threads where this user is an active participant and has unread messages.
-    const participants = await db.connectChatParticipant.findMany({
-      where: { userId: user.sub, leftAt: null, archivedForUser: false },
-      select: { threadId: true, lastReadAt: true },
-    });
+    const tenantId = effectiveChatTenantId(req, user);
+    const canViewTenant = await hasEffectivePortalPermission(user, "can_view_tenant_chats" as any).catch(() => false);
+    const sel = {
+      id: true,
+      messages: {
+        where: { deletedForEveryoneAt: null },
+        orderBy: { createdAt: "desc" as const },
+        take: 1,
+        select: { senderUserId: true, createdAt: true, direction: true },
+      },
+      participants: { where: { leftAt: null }, select: { userId: true, lastReadAt: true } },
+    } as const;
+    const threads = canViewTenant
+      ? await db.connectChatThread.findMany({ where: { tenantId, active: true }, select: sel, take: 500 })
+      : (await db.connectChatParticipant.findMany({
+          where: { userId: user.sub, leftAt: null, archivedForUser: false, thread: { tenantId, active: true } },
+          select: { thread: { select: sel } },
+        })).map((p) => p.thread);
     let count = 0;
-    for (const p of participants) {
-      const unread = await db.connectChatMessage.count({
-        where: {
-          threadId: p.threadId,
-          direction: { not: "OUTBOUND" },
-          ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
-        },
-      });
-      if (unread > 0) count++;
+    for (const t of threads) {
+      if (isThreadSharedNew((t as any).messages[0], (t as any).participants)) count++;
     }
     return { count };
   });
@@ -924,6 +944,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           createdAt: true,
           type: true,
           senderUserId: true,
+          direction: true,
           deliveryStatus: true,
           deliveryError: true,
           attachments: { select: { durationMs: true, mediaKind: true, mimeType: true }, orderBy: { createdAt: "asc" } },
@@ -970,6 +991,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
     const threads = await Promise.all(threadsRaw.map(async (t: any) => {
       const last = t.messages[0];
+      const isNew = isThreadSharedNew(t.messages[0], t.participants);
       const unread = canViewTenant ? 0 : (unreadMap.get(t.id) || 0);
       let participantName = t.title || "Chat";
       let participantExtension = "";
@@ -1000,6 +1022,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         lastMessage: lastMessagePreview(last),
         lastAt: (last?.createdAt || t.lastMessageAt).toISOString(),
         unread,
+        isNew,
         tenantSmsE164: t.tenantSmsE164,
         externalSmsE164: t.externalSmsE164,
         smsInboxKind: t.type === "SMS" ? (isSharedTenantSmsInbox(t.smsInboxOwnerUserId || "") ? "shared" : "personal") : null,
@@ -1363,6 +1386,12 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       select: { id: true },
     });
     if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    const isSilentViewer = await hasEffectivePortalPermission(user, "can_view_tenant_chats" as any).catch(() => false);
+    if (isSilentViewer) {
+      // Tenant-wide oversight roles view everything but must never mark chats read
+      // for the real participants — leave lastReadAt untouched.
+      return { ok: true, lastReadAt: null, skipped: "tenant_viewer" };
+    }
     const now = new Date();
     await db.connectChatParticipant.update({ where: { id: part.id }, data: { lastReadAt: now } });
     return { ok: true, lastReadAt: now.toISOString() };

@@ -20,6 +20,37 @@ type VoicemailProbe = {
   }>;
 };
 
+const SEEN_STORE_KEY = "cc:notif:seen:v1";
+const SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SEEN_MAX = 800;
+
+/** Durable, cross-window fire-once guard. Returns true if this key already fired
+ *  (caller should skip); otherwise records it and returns false. Backed by
+ *  localStorage, shared by every desktop window, so a given notification fires
+ *  exactly once across reloads, relaunches, and multiple windows. */
+function alreadyNotified(key: string): boolean {
+  try {
+    const now = Date.now();
+    const raw = JSON.parse(window.localStorage.getItem(SEEN_STORE_KEY) || "{}") as Record<string, number>;
+    for (const k of Object.keys(raw)) {
+      if (now - raw[k] > SEEN_TTL_MS) delete raw[k];
+    }
+    if (raw[key]) {
+      window.localStorage.setItem(SEEN_STORE_KEY, JSON.stringify(raw));
+      return true;
+    }
+    raw[key] = now;
+    const keys = Object.keys(raw);
+    if (keys.length > SEEN_MAX) {
+      keys.sort((a, b) => raw[a] - raw[b]).slice(0, keys.length - SEEN_MAX).forEach((k) => delete raw[k]);
+    }
+    window.localStorage.setItem(SEEN_STORE_KEY, JSON.stringify(raw));
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function DesktopNotificationsBridge() {
   const phone = useSipPhone();
   const { backendJwtRole, tenantId, can } = useAppContext();
@@ -33,21 +64,24 @@ export function DesktopNotificationsBridge() {
   }, [tenantId, backendJwtRole]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind === "phone-engine") return;
+    if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind !== "full") return;
     const prev = previousCall.current;
     if (prev.state === "ringing" && prev.direction === "inbound" && phone.callState === "ended") {
-      void window.connectDesktop.notifications?.show({
-        kind: "missed-call",
-        title: "Missed call",
-        body: prev.remoteParty || "Connect call",
-        route: "/calls",
-      });
+      const key = `missed:${(prev.remoteParty || "call").trim()}:${Math.floor(Date.now() / 60000)}`;
+      if (!alreadyNotified(key)) {
+        void window.connectDesktop.notifications?.show({
+          kind: "missed-call",
+          title: "Missed call",
+          body: prev.remoteParty || "Connect call",
+          route: "/calls",
+        });
+      }
     }
     previousCall.current = { state: phone.callState, direction: phone.callDirection, remoteParty: phone.remoteParty };
   }, [phone.callDirection, phone.callState, phone.remoteParty]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind === "phone-engine") return;
+    if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind !== "full") return;
 
     let cancelled = false;
     const backoff = backoffRef.current;
@@ -57,7 +91,7 @@ export function DesktopNotificationsBridge() {
       const previous = knownThreadIds.current;
       if (previous) {
         const newest = threads.find((thread) => !previous.has(thread.id));
-        if (newest) {
+        if (newest && !alreadyNotified(`sms:${newest.id}`)) {
           void window.connectDesktop?.notifications?.show({
             kind: "message",
             title: "New message",
@@ -105,7 +139,7 @@ export function DesktopNotificationsBridge() {
           const previous = knownVoicemailIds.current;
           if (previous) {
             const newest = unread.find((item) => !previous.has(item.id));
-            if (newest) {
+            if (newest && !alreadyNotified(`voicemail:${newest.id}`)) {
               void window.connectDesktop?.notifications?.show({
                 kind: "voicemail",
                 title: "New voicemail",

@@ -13982,7 +13982,7 @@ body {
 
 .drawer-nav-link {
   display: grid;
-  grid-template-columns: 34px 1fr;
+  grid-template-columns: 34px 1fr auto;
   align-items: center;
   gap: 6px;
   min-height: 36px;

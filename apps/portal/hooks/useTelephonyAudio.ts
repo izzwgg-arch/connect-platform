@@ -16,6 +16,8 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   getWebIncomingRingtone,
   getWebRingerEnabled,
+  getWebRingerOutputDeviceId,
+  getWebRingerVolume,
   WEB_RINGER_ENABLED_EVENT,
 } from "./telephonyAudioPreferences";
 
@@ -135,11 +137,10 @@ function startCadenceTone(
  * US ringback cadence is identical: 440+480 Hz, 2s on / 4s off.
  * Incoming ring uses 480+440 Hz at higher volume to stand out.
  */
-function startIncomingRingtone(ctx: AudioContext): ToneHandle {
+function startIncomingRingtone(ctx: AudioContext, volume = 0.18): ToneHandle {
   // Double-ring pattern: 0.4s on, 0.2s off, 0.4s on, 3s off
   let stopped = false;
   let timeoutId: ReturnType<typeof setTimeout>;
-  const volume = 0.18;
 
   function ring() {
     if (stopped) return;
@@ -297,14 +298,27 @@ export function useTelephonyAudio() {
     ringbackRef.current = null;
   }, []);
 
+  // Route the shared tone AudioContext to a specific output device (the call
+  // output / headset). Without this the outbound ringback plays on the OS default
+  // speaker even when the user picked a headset — the connected call then jumps to
+  // the headset only after answer. Requires AudioContext.setSinkId (Chromium 110+/
+  // Electron); a no-op elsewhere so the tone stays on the default device.
+  function applyCtxSink(ctx: AudioContext, outputDeviceId?: string) {
+    if (outputDeviceId && typeof (ctx as unknown as { setSinkId?: unknown }).setSinkId === "function") {
+      void (ctx as unknown as { setSinkId: (id: string) => Promise<void> }).setSinkId(outputDeviceId).catch(() => undefined);
+    }
+  }
+
   /**
    * UK local ringback (BT-style 400+450 Hz, 400/200/400/2000 ms).
    * Plays until SIP progress / early media — then stopLocalRingback().
+   * `outputDeviceId` = the call output device so ringback plays on the headset.
    */
-  const startUkLocalRingback = useCallback(() => {
+  const startUkLocalRingback = useCallback((outputDeviceId?: string) => {
     stopLocalRingback();
     const ctx = ensureCtx();
     if (!ctx) return;
+    applyCtxSink(ctx, outputDeviceId);
     ringbackRef.current = startUkRingbackTone(ctx);
   }, [stopLocalRingback]);
 
@@ -312,18 +326,20 @@ export function useTelephonyAudio() {
    * European local ringback (ETSI-style 425 Hz, 1s on / 4s off).
    * Plays until SIP progress / early media — then stopLocalRingback().
    */
-  const startEuropeanLocalRingback = useCallback(() => {
+  const startEuropeanLocalRingback = useCallback((outputDeviceId?: string) => {
     stopLocalRingback();
     const ctx = ensureCtx();
     if (!ctx) return;
+    applyCtxSink(ctx, outputDeviceId);
     ringbackRef.current = startCadenceTone(ctx, 425, 425, 1000, 4000, 0.12);
   }, [stopLocalRingback]);
 
   /** US ringback: 440+480 Hz, 2s on / 4s off. */
-  const startRingback = useCallback(() => {
+  const startRingback = useCallback((outputDeviceId?: string) => {
     stopAll();
     const ctx = ensureCtx();
     if (!ctx) return;
+    applyCtxSink(ctx, outputDeviceId);
     ringbackRef.current = startCadenceTone(ctx, 440, 480, 2000, 4000, 0.12);
   }, [stopAll]);
 
@@ -334,11 +350,20 @@ export function useTelephonyAudio() {
       return;
     }
     stopAll();
+    // Ringer routing (desktop only): its own output device + volume, so a
+    // headset user still hears the ring on their speakers. Browser: unchanged.
+    const isDesktop =
+      typeof window !== "undefined" && Boolean((window as any).connectDesktop?.isDesktop);
+    const ringerVol = isDesktop ? getWebRingerVolume() : 1;
+    const ringerDeviceId = isDesktop ? getWebRingerOutputDeviceId() : "";
     const ringtonePreference = getWebIncomingRingtone();
     if (ringtonePreference === "connect-default" && typeof Audio !== "undefined") {
       const audio = new Audio("/ringtones/connect-default-ringtone.mp4");
       audio.loop = true;
-      audio.volume = 1;
+      audio.volume = ringerVol;
+      if (ringerDeviceId && typeof (audio as any).setSinkId === "function") {
+        void (audio as any).setSinkId(ringerDeviceId).catch(() => undefined);
+      }
       ringtoneAudioRef.current = audio;
       audio.play().catch(() => {
         ringtoneAudioRef.current = null;
@@ -347,7 +372,10 @@ export function useTelephonyAudio() {
     }
     const ctx = ensureCtx();
     if (!ctx) return;
-    ringtoneRef.current = startIncomingRingtone(ctx);
+    if (ringerDeviceId && typeof (ctx as any).setSinkId === "function") {
+      void (ctx as any).setSinkId(ringerDeviceId).catch(() => undefined);
+    }
+    ringtoneRef.current = startIncomingRingtone(ctx, 0.18 * ringerVol);
   }, [stopAll]);
 
   useEffect(() => {

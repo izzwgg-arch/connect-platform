@@ -304,16 +304,9 @@ function registerIpc(): void {
         (state.callState === "ringing" && state.callDirection !== "outbound") ||
         (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
       if (isInboundRing) {
+        // Show ONLY the mini call screen. Do not also raise an OS "Incoming call"
+        // notification — that produced a duplicate popup on top of the actual call.
         showMiniForIncomingCall();
-        if (Notification.isSupported()) {
-          const note = new Notification({
-            title: "Incoming call",
-            body: state.remoteParty ? String(state.remoteParty) : "Connect call",
-            icon: iconPath,
-          });
-          note.on("click", showMiniForIncomingCall);
-          note.show();
-        }
       }
     }
   });

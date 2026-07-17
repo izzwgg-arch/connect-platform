@@ -4,6 +4,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { splitRingGroupPrefix } from "../lib/ringGroupPrefix";
 import { useTelephonyAudio } from "./useTelephonyAudio";
+import { useTelephonySocket } from "./useTelephonySocket";
+import type { LiveCall } from "../types/liveCall";
 import {
   summarizeOfferSdp,
   isWebrtcSdpRejection,
@@ -58,6 +60,7 @@ export interface ConnectionEvent {
     | "unregistered"
     | "disconnected"
     | "reconnect"
+    | "hard-reinit"
     | "registrationFailed"
     | "netchange"
     | "online"
@@ -153,9 +156,15 @@ export interface RawStatSample {
 export type SipPhoneState = {
   regState: SipRegState;
   callState: SipCallState;
+  /** Epoch ms when the active call connected (media established), else null. Drives the
+   *  in-call timer — broadcast so the mini pop-out proxy shows the correct elapsed time. */
+  callStartedAt: number | null;
   /** "outbound" when user placed the call, "inbound" when a SIP INVITE arrived, null when idle. */
   callDirection: "outbound" | "inbound" | null;
   remoteParty: string | null;
+  remotePartyNumber: string | null;
+  remotePartyName: string | null;
+  remotePartyPrefix: string | null;
   muted: boolean;
   onHold: boolean;
   /** True when audio is routed to the loudest output device (speaker/headphone). */
@@ -248,6 +257,8 @@ type ConnectDesktopApi = {
     getSettings: () => Promise<DesktopWindowSettings>;
     updateSettings: (patch: Partial<DesktopWindowSettings>) => Promise<DesktopWindowSettings>;
     onSettings: (listener: (settings: DesktopWindowSettings) => void) => () => void;
+    setMiniTheme?: (theme: "dark" | "light") => Promise<unknown>;
+    onMiniTheme?: (listener: (theme: "dark" | "light") => void) => () => void;
   };
   notifications?: {
     show: (payload: { kind: string; title: string; body?: string; route?: string }) => Promise<unknown>;
@@ -551,9 +562,17 @@ function appendConnLog(ev: Omit<ConnectionEvent, "sincePrevMs">): ConnectionEven
 
 function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [regState, setRegState] = useState<SipRegState>("idle");
+  // Bumping this rebuilds the SIP engine from scratch (fresh JsSIP UA + registration),
+  // exactly like a page reload — used to auto-recover a stuck "Connecting" state.
+  const [reinitSeq, setReinitSeq] = useState(0);
   const [callState, setCallState] = useState<SipCallState>("idle");
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [callDirection, setCallDirection] = useState<"outbound" | "inbound" | null>(null);
   const [remoteParty, setRemoteParty] = useState<string | null>(null);
+  const [remotePartyNumber, setRemotePartyNumber] = useState<string | null>(null);
+  const [remotePartyName, setRemotePartyName] = useState<string | null>(null);
+  const [remotePartyPrefix, setRemotePartyPrefix] = useState<string | null>(null);
+  const { calls: enrichLiveCalls } = useTelephonySocket();
   const [muted, setMutedState] = useState(false);
   const [onHold, setOnHold] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
@@ -593,6 +612,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const sessionIdCounterRef = useRef<number>(0);
   const activeSessionIdRef = useRef<string | null>(null);
   const currentMicDeviceIdRef = useRef("");
+  // Mirror of currentSinkId (the call output / headset device) for use in the dial
+  // callback, so the outbound ringback can play on the same device as the call.
+  const currentSinkIdRef = useRef("");
+  // The user's BASE call-output device (the headset / configured speaker). This is
+  // what audio returns to when loudspeaker mode is turned off. Distinct from
+  // speakerOn, which is a temporary "route to the computer's loudspeaker" override.
+  const preferredSinkIdRef = useRef("");
   const MAX_CONCURRENT_SESSIONS_WEB = 5;
 
   function getOrAssignSessionId(s: unknown): string {
@@ -754,6 +780,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Consecutive reconnect attempts, for exponential backoff. Reset on register. */
   const reconnectAttemptRef = useRef<number>(0);
+  /** Epoch ms the phone first went unregistered (null while registered). Drives the
+   *  stuck-registration hard-recovery: gentle reconnect (ua.start) can leave a wedged
+   *  JsSIP transport stuck yellow ("Connecting") forever — only a fresh UA recovers,
+   *  which is why a page reload fixes it. When stuck past a threshold we rebuild the UA. */
+  const unregisteredSinceRef = useRef<number | null>(null);
+  /** Epoch ms of the last hard-reinit, to cap how often we rebuild the UA. */
+  const lastHardReinitRef = useRef<number>(0);
   /** Set by the active UA so network/visibility listeners can force a fast recovery. */
   const forceReconnectRef = useRef<(() => void) | null>(null);
   /** Timestamp when the local hangup was initiated (for the stale-report). */
@@ -1275,18 +1308,37 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         keepAliveTimerRef.current = setInterval(sendKeepAlive, 15_000);
 
         // Proactive liveness watchdog: if the socket is dead, kick a reconnect;
-        // if the socket is open but registration lapsed, refresh it.
+        // if the socket is open but registration lapsed, refresh it. And, as a last
+        // resort, if the phone stays unregistered for too long (a wedged JsSIP
+        // transport that ua.start()/register() won't revive), rebuild the whole UA —
+        // the same recovery a page reload performs, but automatic.
+        const STUCK_REINIT_MS = 20_000; // unregistered this long → rebuild the UA
+        const REINIT_COOLDOWN_MS = 45_000; // never rebuild more often than this
         const runWatchdog = () => {
           if (cancelled || uaRef.current !== ua) return;
           const connected = !!ua.isConnected?.();
           const registered = !!ua.isRegistered?.();
+          if (registered) {
+            unregisteredSinceRef.current = null;
+            return;
+          }
+          // Not registered — note when it started and try the gentle recovery first.
+          if (unregisteredSinceRef.current == null) unregisteredSinceRef.current = Date.now();
           if (!connected) {
             queueReconnect();
-          } else if (!registered) {
+          } else {
             try { ua.register(); } catch { /* ignore */ }
           }
+          const stuckMs = Date.now() - unregisteredSinceRef.current;
+          const sinceReinit = Date.now() - lastHardReinitRef.current;
+          if (stuckMs >= STUCK_REINIT_MS && sinceReinit >= REINIT_COOLDOWN_MS) {
+            lastHardReinitRef.current = Date.now();
+            unregisteredSinceRef.current = null;
+            logConn("hard-reinit");
+            setReinitSeq((s) => s + 1); // tears down this UA and rebuilds a fresh one
+          }
         };
-        watchdogTimerRef.current = setInterval(runWatchdog, 15_000);
+        watchdogTimerRef.current = setInterval(runWatchdog, 10_000);
 
         // Exposed to the window 'online' / 'visibilitychange' listeners so a
         // regained network or a woken tab recovers immediately (handles 5G dynamic
@@ -1330,6 +1382,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           if (!cancelled) {
             regFailCount = 0;
             reconnectAttemptRef.current = 0;
+            unregisteredSinceRef.current = null;
             setRegState("registered");
             setError(null);
             logConn("registered");
@@ -1424,7 +1477,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
               // carries (e.g. "Estimates:Estimates:Caller") so the softphone shows
               // a clean caller; the prefix is surfaced as a tag from the matched
               // live call's fromPrefix instead.
-              const rawParty = data.request.from.display_name || data.request.from.uri.user;
+              const reqAny = data.request as unknown as { getHeader?: (n: string) => string | undefined };
+              const headerParty = (() => {
+                try {
+                  const raw = reqAny.getHeader?.("P-Asserted-Identity") || reqAny.getHeader?.("Remote-Party-ID") || "";
+                  const uriUser = /sip:([^@;>]+)@/i.exec(raw);
+                  if (uriUser && uriUser[1]) return uriUser[1];
+                  const num = /(\+?\d{4,})/.exec(raw);
+                  return num && num[1] ? num[1] : "";
+                } catch { return ""; }
+              })();
+              const rawParty = data.request.from.display_name || data.request.from.uri.user || headerParty;
+              try { console.log("[SIP] INCOMING caller-id diag " + JSON.stringify({ fromDisplay: data.request.from.display_name || null, fromUser: data.request.from.uri.user || null, headerParty: headerParty || null })); } catch { /* ignore */ }
               const party = splitRingGroupPrefix(rawParty).rest || rawParty;
               console.log(`[MULTICALL] web incoming call=${mcId} from=${party} activeBefore=${activeSessionIdRef.current ?? "none"}`);
               registerSessionMeta(mcId, {
@@ -1443,6 +1507,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
                 bindSession(data.session, party);
                 setCallState("ringing");
                 setRemoteParty(party);
+                setRemotePartyNumber((data.request.from.uri.user || headerParty || "").trim() || null);
                 console.log("[SIP] INCOMING_CALL from:", party);
                 startRingtone();
               } else {
@@ -1539,8 +1604,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         audioRef.current = null;
       }
     };
+    // Re-runs (tearing down + rebuilding the SIP engine) whenever reinitSeq bumps —
+    // the auto-recovery for a wedged registration. Other inputs are read via refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reinitSeq]);
 
   // ── Session lifecycle ───────────────────────────────────────────────────
 
@@ -1948,6 +2015,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         callStartedAtRef.current = Date.now();
         finalReportSentRef.current = false;
       }
+      setCallStartedAt(callStartedAtRef.current);
       console.log(label);
       setCallState("connected");
       patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
@@ -1992,6 +2060,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       teardownRemoteAudioPlayback();
       clearCallDiag();
       callStartedAtRef.current = null;
+      setCallStartedAt(null);
       dialGuardRef.current = null;
       localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
@@ -2094,6 +2163,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       patchDiag({ lastCallError: msg });
       clearCallDiag();
       callStartedAtRef.current = null;
+      setCallStartedAt(null);
       dialGuardRef.current = null;
       localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
@@ -2216,7 +2286,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setError(null);
       setOnHold(false);
       console.log("[SIP] CALL_INITIATED target:", normalised, "route:", selectedOutboundRoute?.name || "none");
-      startUkLocalRingback();
+      // Play the ringback on the selected call output device (headset), not the OS
+      // default — so it matches where the connected call audio will go.
+      startUkLocalRingback(currentSinkIdRef.current);
       localRingbackActiveRef.current = true;
       patchDiag({ localRingback: "local" });
 
@@ -2401,6 +2473,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     teardownRemoteAudioPlayback();
     clearCallDiag();
     callStartedAtRef.current = null;
+    setCallStartedAt(null);
     packetsReceivedRef.current = null;
     lastStatsRef.current = null;
     prevBytesReceivedRef.current = null;
@@ -2513,19 +2586,27 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     }
   }, [refreshAudioDevices]);
 
-  const setAudioSinkId = useCallback(async (sinkId: string) => {
+  const applySink = useCallback(async (deviceId: string) => {
     const el = audioRef.current as (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }) | null;
     if (!el) return;
     try {
       if (typeof el.setSinkId === "function") {
-        await el.setSinkId(sinkId);
+        await el.setSinkId(deviceId);
       }
-      setCurrentSinkId(sinkId);
-      setSpeakerOn(sinkId !== "");
+      currentSinkIdRef.current = deviceId;
+      setCurrentSinkId(deviceId);
     } catch (e) {
       console.warn("[SipPhone] setSinkId failed:", e);
     }
   }, []);
+
+  // Choose the BASE call-output device (headset). Exits loudspeaker mode and routes
+  // there. speakerOn is a separate temporary override, NOT "a device is selected".
+  const setAudioSinkId = useCallback(async (sinkId: string) => {
+    preferredSinkIdRef.current = sinkId;
+    setSpeakerOn(false);
+    await applySink(sinkId);
+  }, [applySink]);
 
   useEffect(() => {
     void refreshAudioDevices();
@@ -2549,7 +2630,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (desktopSettings.selectedMicDeviceId != null && desktopSettings.selectedMicDeviceId !== currentMicDeviceIdRef.current) {
         void setAudioInputDeviceId(desktopSettings.selectedMicDeviceId).catch(() => undefined);
       }
-      if (desktopSettings.selectedSpeakerDeviceId != null && desktopSettings.selectedSpeakerDeviceId !== currentSinkId) {
+      if (desktopSettings.selectedSpeakerDeviceId != null && desktopSettings.selectedSpeakerDeviceId !== preferredSinkIdRef.current) {
         void setAudioSinkId(desktopSettings.selectedSpeakerDeviceId);
       }
     });
@@ -2557,53 +2638,81 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       cancelled = true;
       unsubscribe();
     };
-  }, [currentSinkId, setAudioInputDeviceId, setAudioSinkId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setAudioInputDeviceId, setAudioSinkId]);
 
+  // The Speaker button is a temporary override: ON routes to the computer's
+  // built-in LOUDSPEAKER; OFF returns to the base device (headset / OS default).
   const toggleSpeaker = useCallback(async () => {
     if (speakerOn) {
-      // Switch back to default (earpiece / OS default)
-      await setAudioSinkId("");
       setSpeakerOn(false);
-    } else {
-      // Find first non-default audio output (usually the speaker/headphones)
-      let devices = audioOutputDevices;
-      if (devices.length === 0) {
-        // Enumerate now if we haven't yet
-        if (typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
-          try {
-            const all = await navigator.mediaDevices.enumerateDevices();
-            devices = all.filter((d) => d.kind === "audiooutput");
-            setAudioOutputDevices(devices);
-          } catch { /* ignore */ }
-        }
-      }
-      // Prefer a device that looks like a speaker; fall back to first non-default
-      const speaker = devices.find(
-        (d) => d.deviceId !== "default" && d.deviceId !== "communications" &&
-          (d.label.toLowerCase().includes("speaker") || d.label.toLowerCase().includes("headphone") ||
-           d.label.toLowerCase().includes("output")),
-      ) ?? devices.find((d) => d.deviceId !== "default" && d.deviceId !== "");
-      if (speaker) {
-        await setAudioSinkId(speaker.deviceId);
-        setSpeakerOn(true);
-      } else {
-        // setSinkId not available or only one device — toggle visual state
-        setSpeakerOn(true);
-      }
+      await applySink(preferredSinkIdRef.current || "");
+      return;
     }
-  }, [speakerOn, audioOutputDevices, setAudioSinkId]);
+    let devices = audioOutputDevices;
+    if (devices.length === 0 && typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices = all.filter((d) => d.kind === "audiooutput");
+        setAudioOutputDevices(devices);
+      } catch { /* ignore */ }
+    }
+    const isHeadset = (l: string) => l.includes("headset") || l.includes("headphone") || l.includes("earphone") || l.includes("earbud");
+    const base = preferredSinkIdRef.current;
+    const loudspeaker =
+      devices.find((d) => d.deviceId !== base && d.deviceId !== "communications" && d.label.toLowerCase().includes("speaker") && !isHeadset(d.label.toLowerCase())) ??
+      devices.find((d) => d.deviceId !== base && d.deviceId !== "default" && d.deviceId !== "communications" && !isHeadset(d.label.toLowerCase()));
+    setSpeakerOn(true);
+    await applySink(loudspeaker ? loudspeaker.deviceId : "");
+  }, [speakerOn, audioOutputDevices, applySink]);
 
   // Enumerate devices whenever a call connects
   useEffect(() => {
     if (callState === "connected") void refreshAudioDevices();
   }, [callState, refreshAudioDevices]);
 
-  // Reset speaker state on call end
+  // Enrich the incoming caller with the ring-group/queue prefix + clean name from the
+  // live-call feed (matched by caller number). Broadcast so the mini pop-out — which
+  // has no reliable live-call feed of its own — can render the prefix pill.
+  useEffect(() => {
+    if (callDirection !== "inbound" || callState === "idle" || callState === "ended") {
+      setRemotePartyName(null);
+      setRemotePartyPrefix(null);
+      return;
+    }
+    const num = (remotePartyNumber || "").replace(/\D/g, "");
+    const raw = (remoteParty || "").trim();
+    let matched: LiveCall | null = null;
+    for (const c of enrichLiveCalls.values()) {
+      if (c.direction !== "inbound") continue;
+      const cf = (c.from || "").replace(/\D/g, "");
+      if (num && cf && (cf === num || cf.endsWith(num) || num.endsWith(cf))) { matched = c; break; }
+    }
+    const cleanName = matched?.fromName?.trim() || null;
+    let prefix: string | null = matched?.fromPrefix?.trim() || null;
+    let name: string | null = cleanName;
+    if (!prefix && raw) {
+      const ci = raw.indexOf(":");
+      if (ci > 0 && !/^\+?\d{5,}$/.test(raw.slice(0, ci).trim())) {
+        prefix = raw.slice(0, ci).trim();
+        if (!name) name = raw.slice(ci + 1).replace(/:\s*$/, "").trim() || null;
+      }
+    }
+    if (!prefix && cleanName && raw && raw.length > cleanName.length && raw.toLowerCase().endsWith(cleanName.toLowerCase())) {
+      prefix = raw.slice(0, raw.length - cleanName.length).trim() || null;
+      name = cleanName;
+    }
+    setRemotePartyName(name);
+    setRemotePartyPrefix(prefix);
+  }, [enrichLiveCalls, callDirection, callState, remoteParty, remotePartyNumber]);
+
+  // Reset speaker mode on call end and route audio back to the base device.
   useEffect(() => {
     if (callState === "idle" || callState === "ended") {
       setSpeakerOn(false);
-      setCurrentSinkId("");
+      void applySink(preferredSinkIdRef.current || "");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callState]);
 
   // ── Blind transfer ──────────────────────────────────────────────────────────
@@ -2702,8 +2811,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   return {
     regState,
     callState,
+    callStartedAt,
     callDirection,
     remoteParty,
+    remotePartyNumber,
+    remotePartyName,
+    remotePartyPrefix,
     muted,
     onHold,
     speakerOn,
@@ -2779,8 +2892,12 @@ function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneSta
   return {
     regState: phone.regState,
     callState: phone.callState,
+    callStartedAt: phone.callStartedAt,
     callDirection: phone.callDirection,
     remoteParty: phone.remoteParty,
+    remotePartyNumber: phone.remotePartyNumber,
+    remotePartyName: phone.remotePartyName,
+    remotePartyPrefix: phone.remotePartyPrefix,
     muted: phone.muted,
     onHold: phone.onHold,
     speakerOn: phone.speakerOn,
@@ -2820,8 +2937,12 @@ function noopSetState<T>(_value: React.SetStateAction<T>): void {
 const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   regState: "idle",
   callState: "idle",
+  callStartedAt: null,
   callDirection: null,
   remoteParty: null,
+  remotePartyNumber: null,
+  remotePartyName: null,
+  remotePartyPrefix: null,
   muted: false,
   onHold: false,
   speakerOn: false,
