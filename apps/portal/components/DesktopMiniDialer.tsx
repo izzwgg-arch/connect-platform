@@ -1367,6 +1367,18 @@ export function DesktopMiniDialer() {
         .mini-shell.mini-light .call-back:hover { background: rgba(59,130,246,0.15); }
         .mini-shell.mini-light .call-entry-del { background: #ffffff; }
         .mini-shell.mini-light .delete-button { background: transparent; border-color: transparent; }
+        /* Light mode: notifications popup */
+        .mini-shell.mini-light .notif-popover { background: #ffffff; border: 1px solid rgba(15,23,42,0.12); box-shadow: 0 24px 70px rgba(15,23,42,.25); }
+        .mini-shell.mini-light .notif-head strong { color: #0f172a; }
+        .mini-shell.mini-light .notif-clear { background: rgba(37,99,235,.10) !important; border: 1px solid rgba(37,99,235,.25) !important; color: #2563eb; }
+        .mini-shell.mini-light .notif-empty { color: #55637a; }
+        .mini-shell.mini-light .notif-row { background: #f4f7fb !important; border: 1px solid rgba(15,23,42,.08) !important; }
+        .mini-shell.mini-light .notif-row:hover { background: #e9eef5 !important; }
+        .mini-shell.mini-light .notif-text strong { color: #0f172a; }
+        .mini-shell.mini-light .notif-text small { color: #55637a; }
+        .mini-shell.mini-light .notif-ic.chat { background: rgba(37,99,235,.12); color: #2563eb; }
+        .mini-shell.mini-light .notif-ic.vm { background: rgba(124,58,237,.12); color: #7c3aed; }
+        .mini-shell.mini-light .notif-ic.missed { background: rgba(220,38,38,.10); color: #dc2626; }
 
         /* In-call sub-views (DTMF keypad, Transfer / Add-call entry). */
         .call-subhead { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 4px; }
