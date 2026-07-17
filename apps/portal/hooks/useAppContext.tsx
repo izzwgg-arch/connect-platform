@@ -359,6 +359,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     if (themeHydrated) localStorage.setItem("cc-theme", theme);
+    // Desktop app: mirror the theme to the pop-out mini dialer, which is a separate
+    // BrowserWindow that can't reliably read this window's theme. Only the full window
+    // pushes (the mini has no theme toggle), avoiding an echo loop.
+    if (typeof window !== "undefined") {
+      const cd = (window as unknown as { connectDesktop?: any }).connectDesktop;
+      if (cd?.isDesktop && cd?.windowKind !== "mini") {
+        try { cd.window?.setMiniTheme?.(theme); } catch { /* bridge not ready */ }
+      }
+    }
   }, [theme, themeHydrated]);
 
   useEffect(() => {
