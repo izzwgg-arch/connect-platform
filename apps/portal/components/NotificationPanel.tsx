@@ -246,7 +246,6 @@ export function NotificationPanel() {
                 lineHeight: "1rem",
                 textAlign: "center",
                 padding: "0 3px",
-                boxShadow: "0 0 0 2px var(--surface, #0b0f1a)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",

@@ -29,6 +29,7 @@ import {
   Settings,
   MoreHorizontal,
   StickyNote,
+  BellOff,
   BellRing,
   User,
   Users,
@@ -446,6 +447,22 @@ export function DesktopMiniDialer() {
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const notifWrapRef = useRef<HTMLDivElement | null>(null);
+  const settingsWrapRef = useRef<HTMLDivElement | null>(null);
+  const [dnd, setDnd] = useState<boolean>(() => { try { return localStorage.getItem("cc-dnd") === "1"; } catch { return false; } });
+  const toggleDnd = useCallback(() => {
+    setDnd((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("cc-dnd", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  // Follow DND toggled from another window (full <-> mini share localStorage).
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => { if (e.key === "cc-dnd") setDnd(e.newValue === "1"); };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   const delHoldTimerRef = useRef<number | null>(null);
   const delHoldFiredRef = useRef(false);
   const [notifTick, setNotifTick] = useState(0);
@@ -460,6 +477,18 @@ export function DesktopMiniDialer() {
   const [dueReminders, setDueReminders] = useState<DueReminder[]>([]);
   const [settings, setSettings] = useState<MiniDesktopSettings>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Clicking anywhere outside a popover closes it — no need to re-click the icon.
+  useEffect(() => {
+    if (!notifOpen && !settingsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (notifOpen && notifWrapRef.current && !notifWrapRef.current.contains(t)) setNotifOpen(false);
+      if (settingsOpen && settingsWrapRef.current && !settingsWrapRef.current.contains(t)) setSettingsOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [notifOpen, settingsOpen]);
+
   const [quickReply, setQuickReply] = useState("");
   const [lastDialed, setLastDialed] = useState("");
   const inCall = phone.callState === "ringing" || phone.callState === "dialing" || phone.callState === "connected";
@@ -828,7 +857,10 @@ export function DesktopMiniDialer() {
         </div>
         <div className="mini-drag" />
         <div className="mini-winbtns">
-          <div className="notif-wrap">
+          <button type="button" title={dnd ? "Do Not Disturb is ON — incoming calls are rejected" : "Do Not Disturb"} aria-label="Do Not Disturb" aria-pressed={dnd} className={dnd ? "dnd-btn on" : "dnd-btn"} onClick={toggleDnd}>
+            <BellOff size={15} />
+          </button>
+          <div className="notif-wrap" ref={notifWrapRef}>
             <button type="button" title="Notifications" aria-label="Notifications" aria-expanded={notifOpen} onClick={() => setNotifOpen((v) => !v)}>
               <Bell size={15} />
               {notifItems.total > 0 && <span className="notif-dot">{notifItems.total > 9 ? "9+" : notifItems.total}</span>}
@@ -863,7 +895,7 @@ export function DesktopMiniDialer() {
               </div>
             )}
           </div>
-          <div className="settings-wrap">
+          <div className="settings-wrap" ref={settingsWrapRef}>
             <button title="Settings" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
               <Settings size={15} />
             </button>
@@ -1260,6 +1292,7 @@ export function DesktopMiniDialer() {
         .mini-identity-status.green { color: #34d399; }
         .mini-identity-status.amber { color: #fbbf24; }
         .mini-identity-status.red { color: #f87171; }
+        .dnd-btn.on { color: #ef4444 !important; background: rgba(239,68,68,.14) !important; }
         .notif-wrap { position: relative; }
         .notif-wrap > button { position: relative; }
         .notif-dot { position: absolute; top: -1px; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px var(--mn-bg); }

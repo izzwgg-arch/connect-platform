@@ -38,6 +38,15 @@ export type SipCallState =
   | "connected"
   | "ended";
 
+// ── Do Not Disturb ────────────────────────────────────────────────────────
+// Shared localStorage flag (full + mini windows see the same store). The REAL
+// phone (full window) checks it at INVITE time and rejects with 486 before any
+// ringtone or UI — so DND toggled from the mini pop-out silences this phone.
+export const DND_STORAGE_KEY = "cc-dnd";
+export function isDndEnabled(): boolean {
+  try { return typeof window !== "undefined" && localStorage.getItem(DND_STORAGE_KEY) === "1"; } catch { return false; }
+}
+
 export type MicPermission = "unknown" | "granted" | "denied" | "prompt";
 
 export type IceCandidateType = "host" | "srflx" | "relay" | "prflx" | null;
@@ -1468,6 +1477,17 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 (data.session as any).terminate({ status_code: 486, reason_phrase: "Busy Here" });
               } catch { /* ignore */ }
+              return;
+            }
+            // Do Not Disturb: reject every inbound ring with 486 Busy before
+            // any ringtone/UI. Outbound calls are unaffected.
+            if (data.originator === "remote" && isDndEnabled()) {
+              console.log(`[SIP] DND on — rejecting inbound ${mcId} with 486`);
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (data.session as any).terminate({ status_code: 486, reason_phrase: "Busy Here" });
+              } catch { /* ignore */ }
+              sessionsByIdRef.current.delete(mcId);
               return;
             }
             sessionsByIdRef.current.set(mcId, data.session);
