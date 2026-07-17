@@ -30,6 +30,15 @@ function isPhoneLabel(name: string): boolean {
   return !/[a-z]/i.test(name || "");
 }
 
+// "+18456627080" -> "845-662-7080": strip the +1 country code and hyphenate,
+// so phone-only names take far less room in the thread list.
+function formatPhoneLabel(name: string): string {
+  const digits = (name || "").replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length === 10) return `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+  return (name || "").replace(/^\+1(?=\d)/, "");
+}
+
 function DeliveryTick({ status }: { status?: string | null }) {
   const s = (status || "").toLowerCase();
   if (!s) return null;
@@ -570,7 +579,7 @@ export function MiniChat() {
                 </span>
                 <span className="mc-main">
                   <span className="mc-row1">
-                    <strong className="mc-name">{t.participantName}</strong>
+                    <strong className={"mc-name" + (phoneish ? " ph" : "")}>{phoneish ? formatPhoneLabel(t.participantName) : t.participantName}</strong>
                     <span className={"mc-badge " + t.type.toLowerCase()}>{chatBadge(t.type)}</span>
                     <span className={"mc-state " + (t.isNew ? "new" : "read")}>{t.isNew ? "New" : "Read"}</span>
                   </span>
@@ -620,6 +629,7 @@ export function MiniChat() {
         .mc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
         .mc-row1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
         .mc-name { font-size: 16px; font-weight: 800; letter-spacing: -0.2px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        .mc-name.ph { font-size: 12.5px; font-weight: 600; letter-spacing: 0.1px; }
         .mc-badge { flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 11px; border: 1px solid transparent; }
         .mc-badge.dm, .mc-badge.group, .mc-badge.tenant_group { color: #60a5fa; border-color: rgba(59,130,246,0.45); background: rgba(59,130,246,0.10); }
         .mc-badge.sms { color: #22d3ee; border-color: rgba(6,182,212,0.45); background: rgba(6,182,212,0.10); }
