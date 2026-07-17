@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Plus, Search, User } from "lucide-react";
+import { Check, CheckCheck, Plus, Search, User, Users } from "lucide-react";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ChatConversation } from "./ChatConversation";
 import { NewChatDialog } from "./NewChatDialog";
@@ -405,7 +405,7 @@ export function MiniChat() {
           .mc-conv-wrap .cc-message-list { flex: 1; min-height: 0; overflow-y: auto; }
           .mc-conv-wrap .cc-conv-head { min-height: 52px; padding: 10px 12px; gap: 10px; }
           .mc-conv-wrap .cc-conv-head h2 { font-size: 15px; color: var(--text); }
-          .mc-conv-wrap .cc-conv-head p { font-size: 11px; color: var(--text-dim); }
+          .mc-conv-wrap .cc-conv-head p { display: none; }
           .mc-conv-wrap .cc-conv-title { min-width: 0; }
           .mc-conv-wrap .cc-avatar.large { width: 36px; height: 36px; font-size: 13px; }
           .mc-conv-wrap .cc-call-btn span { display: none; }
@@ -580,12 +580,12 @@ export function MiniChat() {
             return (
               <button type="button" className="mc-thread" key={t.id} onClick={() => setActiveThread(t)}>
                 <span className={"mc-av" + (phoneish ? " ph" : "")} style={{ background: tone }}>
-                  {phoneish ? <User size={20} /> : initials(t.participantName)}
+                  {t.type === "TENANT_GROUP" || t.type === "GROUP" ? <Users size={20} /> : phoneish ? <User size={20} /> : initials(t.participantName)}
                   {t.type === "DM" ? <i className="mc-online" /> : null}
                 </span>
                 <span className="mc-main">
                   <span className="mc-row1">
-                    <strong className={"mc-name" + (phoneish ? " ph" : "")}>{phoneish ? formatPhoneLabel(t.participantName) : t.participantName}</strong>
+                    <strong className={"mc-name" + (phoneish ? " ph" : "")}>{t.type === "TENANT_GROUP" ? t.participantName.replace(/\s*[\u2014-]\s*Tenant Group Chat\s*$/i, "") : phoneish ? formatPhoneLabel(t.participantName) : t.participantName}</strong>
                     <span className={"mc-badge " + t.type.toLowerCase()}>{chatBadge(t.type)}</span>
                     <span className={"mc-state " + (t.isNew ? "new" : "read")}>{t.isNew ? "New" : "Read"}</span>
                   </span>

@@ -11,7 +11,6 @@ import {
   Clock3,
   Delete,
   Headphones,
-  Maximize2,
   MessageSquare,
   Mic,
   MicOff,
@@ -447,6 +446,8 @@ export function DesktopMiniDialer() {
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const delHoldTimerRef = useRef<number | null>(null);
+  const delHoldFiredRef = useRef(false);
   const [notifTick, setNotifTick] = useState(0);
   const [newChats, setNewChats] = useState<{ id: string; name: string; preview: string; route: string }[]>([]);
   const [vmQuery, setVmQuery] = useState("");
@@ -941,7 +942,6 @@ export function DesktopMiniDialer() {
             )}
           </div>
           <button title="Always on top" onClick={() => window.connectDesktop?.window?.toggleAlwaysOnTop?.()}>{settings.alwaysOnTop ? <Pin size={14} /> : <PinOff size={14} />}</button>
-          <button title="Open full app" onClick={() => window.connectDesktop?.window?.expandToFull?.("/dashboard/voice/phone")}><Maximize2 size={14} /></button>
           <button title="Minimize" onClick={() => window.connectDesktop?.window?.minimize?.()}><ChevronLeft size={15} /></button>
           <button title="Close" className="close-btn" onClick={() => window.connectDesktop?.window?.closeMini?.()}>&#215;</button>
         </div>
@@ -1060,7 +1060,14 @@ export function DesktopMiniDialer() {
             </div>
             <div className="dialer-actions">
               <button className="call-button" onClick={() => { const v = phone.dialpadInput.trim(); if (!v) { if (lastDialed) phone.setDialpadInput(lastDialed); return; } callTarget(v); }}><Phone size={22} /></button>
-              <button className="delete-button" onClick={() => phone.setDialpadInput((prev) => prev.slice(0, -1))}><Delete size={20} /></button>
+              <button
+                className="delete-button"
+                title="Delete (hold to clear)"
+                onClick={() => { if (delHoldFiredRef.current) { delHoldFiredRef.current = false; return; } phone.setDialpadInput((prev) => prev.slice(0, -1)); }}
+                onPointerDown={() => { delHoldFiredRef.current = false; delHoldTimerRef.current = window.setTimeout(() => { delHoldFiredRef.current = true; phone.setDialpadInput(""); }, 550); }}
+                onPointerUp={() => { if (delHoldTimerRef.current) window.clearTimeout(delHoldTimerRef.current); }}
+                onPointerLeave={() => { if (delHoldTimerRef.current) window.clearTimeout(delHoldTimerRef.current); }}
+              ><Delete size={20} /></button>
             </div>
           </div>
         )}
@@ -1240,14 +1247,14 @@ export function DesktopMiniDialer() {
           --mn-border: rgba(15,23,42,0.14); --mn-text: #0f172a; --mn-text-2: #55637a; --mn-text-3: #8794a8;
           --mn-text-4: #b6c0d0; --mn-card-new: #e8f1ff;
         }
-        .mini-titlebar { -webkit-app-region: drag; display: flex; align-items: center; height: 34px; padding: 0 6px 0 0; background: var(--mn-bg); border-bottom: 0.5px solid var(--mn-line); }
+        .mini-titlebar { -webkit-app-region: drag; display: flex; align-items: center; height: 40px; padding: 0 6px 0 0; background: var(--mn-bg); border-bottom: 0.5px solid var(--mn-line); }
         .mini-drag { flex: 1; height: 100%; }
         .mini-winbtns { -webkit-app-region: no-drag; display: flex; align-items: center; gap: 2px; }
         .settings-wrap { position: relative; }
         .mini-identity { display: flex; align-items: center; gap: 8px; padding-left: 6px; min-width: 0; -webkit-app-region: no-drag; }
         .mini-identity-avatar { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; color: #dbeafe; background: linear-gradient(135deg,#2563eb,#0ea5e9); flex-shrink: 0; }
         .mini-identity-text { display: grid; gap: 1px; min-width: 0; }
-        .mini-identity-text strong { color: #e5eefb; font-size: 12px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .mini-identity-text strong { color: var(--mn-text); font-size: 12px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .mini-identity-status { font-size: 10px; line-height: 1.15; display: inline-flex; align-items: center; gap: 4px; color: #8fb3c8; }
         .mini-identity-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
         .mini-identity-status.green { color: #34d399; }
@@ -1255,8 +1262,8 @@ export function DesktopMiniDialer() {
         .mini-identity-status.red { color: #f87171; }
         .notif-wrap { position: relative; }
         .notif-wrap > button { position: relative; }
-        .notif-dot { position: absolute; top: -1px; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px rgba(5,12,24,.9); }
-        .notif-popover { position: fixed; top: 40px; left: 8px; right: 8px; margin-left: auto; z-index: 60; width: auto; max-width: 336px; padding: 10px; border-radius: 20px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125, 211, 252, .20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
+        .notif-dot { position: absolute; top: -1px; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px var(--mn-bg); }
+        .notif-popover { position: fixed; top: 46px; left: 8px; right: 8px; margin-left: auto; z-index: 60; width: auto; max-width: 336px; padding: 10px; border-radius: 20px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125, 211, 252, .20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
         .notif-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; }
         .notif-head strong { color: #e5eefb; font-size: 13px; }
         .notif-clear { width: auto !important; height: auto !important; padding: 4px 9px !important; border-radius: 8px !important; background: rgba(56,189,248,.14) !important; border: 1px solid rgba(125,211,252,.28) !important; color: #7dd3fc; font-size: 10px; font-weight: 700; }
@@ -1275,7 +1282,7 @@ export function DesktopMiniDialer() {
         .mini-winbtns button:hover { background: var(--mn-surface-2); color: var(--mn-text); }
         .close-btn:hover { background: #ef4444; color: #fff; }
 
-        .settings-popover { position: fixed; top: 36px; right: 6px; left: auto; z-index: 50; width: min(320px, calc(100vw - 12px)); max-height: calc(100vh - 46px); overflow-y: auto; padding: 14px; border-radius: 16px; background: var(--mn-surface); border: 0.5px solid var(--mn-border); box-shadow: 0 24px 70px rgba(0,0,0,.55); -webkit-app-region: no-drag; }
+        .settings-popover { position: fixed; top: 42px; right: 6px; left: auto; z-index: 50; width: min(320px, calc(100vw - 12px)); max-height: calc(100vh - 46px); overflow-y: auto; padding: 14px; border-radius: 16px; background: var(--mn-surface); border: 0.5px solid var(--mn-border); box-shadow: 0 24px 70px rgba(0,0,0,.55); -webkit-app-region: no-drag; }
         .settings-title { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
         .settings-title span:last-child { display: flex; flex-direction: column; }
         .settings-title strong { font-size: 14px; font-weight: 500; }
@@ -1359,6 +1366,7 @@ export function DesktopMiniDialer() {
         .mini-shell.mini-light .call-back { background: #ffffff; color: #33415c; border: 0.5px solid rgba(15,23,42,0.14); }
         .mini-shell.mini-light .call-back:hover { background: rgba(59,130,246,0.15); }
         .mini-shell.mini-light .call-entry-del { background: #ffffff; }
+        .mini-shell.mini-light .delete-button { background: transparent; border-color: transparent; }
 
         /* In-call sub-views (DTMF keypad, Transfer / Add-call entry). */
         .call-subhead { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 4px; }

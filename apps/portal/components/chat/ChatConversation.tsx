@@ -1,12 +1,12 @@
 "use client";
 
-import { Phone, RefreshCcw, X } from "lucide-react";
+import { Phone, RefreshCcw, User, Users, X } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 import { useSipPhone } from "../../hooks/useSipPhone";
 import { isNearScrollBottom, shouldAutoScroll, shouldPreserveScrollOffset, type ChatScrollIntent } from "./chatState";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
-import { crmSmsBadge, initials, smsInboxBadge, threadLabel } from "./formatting";
+import { crmSmsBadge, initials, isPhoneLabel, smsInboxBadge, threadDisplayName, threadLabel, toneFor } from "./formatting";
 import type { ChatMessage, ChatThread, PendingAttachment } from "./types";
 
 export function ChatConversation({
@@ -113,9 +113,11 @@ export function ChatConversation({
     <main className="cc-conversation">
       <header className="cc-conv-head">
         <button type="button" className="cc-icon-btn cc-panel-close" onClick={onBack} title="Close chat"><X size={18} /></button>
-        <span className="cc-avatar large">{initials(thread.participantName)}</span>
+        <span className="cc-avatar large" style={{ background: toneFor(thread.participantName || thread.id), color: "#fff" }}>
+          {thread.type === "TENANT_GROUP" || thread.type === "GROUP" ? <Users size={19} /> : isPhoneLabel(thread.participantName) ? <User size={19} /> : initials(thread.participantName)}
+        </span>
         <div className="cc-conv-title">
-          <h2>{thread.participantName}</h2>
+          <h2>{threadDisplayName(thread)}</h2>
           <p>
             {threadLabel(thread.type)}
             {thread.type === "SMS" && crmSmsBadge(thread.crmSms) ? (

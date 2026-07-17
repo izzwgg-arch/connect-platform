@@ -1,20 +1,8 @@
 "use client";
 
-import { AlertCircle, MessageCircle, Search, User } from "lucide-react";
+import { AlertCircle, MessageCircle, Search, User, Users } from "lucide-react";
 import type { ChatThread } from "./types";
-import { crmSmsBadge, fmtChatTime, initials, smsInboxBadge, threadLabel } from "./formatting";
-
-// Same avatar palette as the mini dialer / mobile app: stable color per contact,
-// person figure (not digits) for phone-number-only threads.
-const AVATAR_TONES = ["#22c55e", "#06b6d4", "#3b82f6", "#a78bfa", "#f59e0b", "#ec4899", "#14b8a6", "#8b5cf6"];
-function toneFor(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i += 1) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return AVATAR_TONES[h % AVATAR_TONES.length];
-}
-function isPhoneLabel(name: string): boolean {
-  return !/[a-z]/i.test(name || "");
-}
+import { crmSmsBadge, fmtChatTime, initials, isPhoneLabel, smsInboxBadge, threadDisplayName, threadLabel, toneFor } from "./formatting";
 
 export function ChatInbox({
   threads,
@@ -66,12 +54,12 @@ export function ChatInbox({
             onClick={() => onSelect(thread)}
           >
             <span className="cc-avatar" style={{ background: toneFor(thread.participantName || thread.id), color: "#fff" }}>
-              {isPhoneLabel(thread.participantName) ? <User size={17} /> : initials(thread.participantName)}
+              {thread.type === "TENANT_GROUP" || thread.type === "GROUP" ? <Users size={17} /> : isPhoneLabel(thread.participantName) ? <User size={17} /> : initials(thread.participantName)}
             </span>
             <span className="cc-thread-main">
               <span className="cc-thread-top">
                 <span className="cc-thread-name">
-                  <strong>{thread.participantName}</strong>
+                  <strong>{threadDisplayName(thread)}</strong>
                   <span className={"cc-state " + (thread.isNew ? "new" : "read")}>{thread.isNew ? "New" : "Read"}</span>
                 </span>
                 <small>{fmtChatTime(thread.lastAt)}</small>
