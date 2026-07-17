@@ -61,6 +61,7 @@ export function MiniChat() {
   const [toast, setToast] = useState("");
   const messagesRef = useRef<ChatMessage[]>([]);
   const messageRequestSeq = useRef(0);
+  const lastReadPostRef = useRef<{ threadId: string; ts: number } | null>(null);
   const loadedThreadId = useRef<string | null>(null);
   const convRef = useRef<HTMLDivElement | null>(null);
 
@@ -138,6 +139,19 @@ export function MiniChat() {
       const next = res.messages ?? [];
       setMessages((prev) => (isThreadSwitch ? next : mergeChatMessages(prev, next)));
       loadedThreadId.current = threadId;
+      // Viewing a thread marks it read (server advances lastReadAt; silent
+      // viewers are skipped server-side). Re-post when a newer message lands
+      // while the thread stays open, so the shared "New" state clears.
+      {
+        const newest = next.length > 0 ? next[next.length - 1] : null;
+        const newestTs = newest ? new Date(newest.sentAt).getTime() || 0 : 0;
+        const marker = lastReadPostRef.current;
+        if (!marker || marker.threadId !== threadId || newestTs > marker.ts) {
+          lastReadPostRef.current = { threadId, ts: newestTs };
+          void apiPost(`/chat/threads/${threadId}/read`, {}).catch(() => undefined);
+          setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, isNew: false, unread: 0 } : t)));
+        }
+      }
       setScrollIntent({ reason: isThreadSwitch ? "initial" : reason, token: Date.now() });
     } catch {
       if (requestId === messageRequestSeq.current && messagesRef.current.length === 0) setMessages([]);
@@ -300,7 +314,7 @@ export function MiniChat() {
   const counts = useMemo(
     () => ({
       all: threads.length,
-      unread: threads.filter((t) => (t.unread || 0) > 0).length,
+      unread: threads.filter((t) => t.isNew || (t.unread || 0) > 0).length,
       sms: threads.filter((t) => t.type === "SMS").length,
       dms: threads.filter((t) => t.type === "DM").length,
     }),
@@ -310,7 +324,7 @@ export function MiniChat() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return threads.filter((t) => {
-      if (filter === "unread" && !((t.unread || 0) > 0)) return false;
+      if (filter === "unread" && !(t.isNew || (t.unread || 0) > 0)) return false;
       if (filter === "sms" && t.type !== "SMS") return false;
       if (filter === "dms" && t.type !== "DM") return false;
       return (
@@ -558,6 +572,7 @@ export function MiniChat() {
                   <span className="mc-row1">
                     <strong className="mc-name">{t.participantName}</strong>
                     <span className={"mc-badge " + t.type.toLowerCase()}>{chatBadge(t.type)}</span>
+                    <span className={"mc-state " + (t.isNew ? "new" : "read")}>{t.isNew ? "New" : "Read"}</span>
                   </span>
                   <span className="mc-preview">{t.lastMessage || "No messages yet"}</span>
                 </span>
@@ -614,6 +629,9 @@ export function MiniChat() {
         .mc-tick { color: var(--mn-text-3); }
         .mc-tick.read { color: #3b82f6; }
         .mc-unread { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #3b82f6; color: #fff; font-size: 11px; font-weight: 800; }
+        .mc-state { flex-shrink: 0; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 999px; letter-spacing: .4px; text-transform: uppercase; }
+        .mc-state.new { background: rgba(34,197,94,.16); color: #34d399; border: 1px solid rgba(34,197,94,.35); }
+        .mc-state.read { background: rgba(148,163,184,.10); color: #94a3b8; border: 1px solid rgba(148,163,184,.18); }
         .mc-empty { text-align: center; color: var(--mn-text-3); font-size: 13px; padding: 40px 16px; }
       `}</style>
     </div>

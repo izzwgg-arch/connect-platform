@@ -239,6 +239,7 @@ function voicemailStreamUrl(id: string): string {
 // "mark unread". Mirrors the mobile app's read-override behaviour.
 const VM_READ_KEY = "cc-mini-vm-read";
 const VM_UNREAD_KEY = "cc-mini-vm-unread";
+const MISSED_DISMISS_KEY = "cc-mini-missed-dismissed";
 function loadIdSet(key: string): Set<string> {
   try {
     const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
@@ -438,6 +439,7 @@ export function DesktopMiniDialer() {
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [notifTick, setNotifTick] = useState(0);
   const [newChats, setNewChats] = useState<{ id: string; name: string; preview: string; route: string }[]>([]);
   const [vmQuery, setVmQuery] = useState("");
   const [vmFilter, setVmFilter] = useState<"all" | "new" | "urgent" | "old">("all");
@@ -591,19 +593,40 @@ export function DesktopMiniDialer() {
     const vms = (voicemails || [])
       .filter((v) => !v.listened)
       .map((v) => ({ kind: "voicemail" as const, id: v.id, title: v.callerName || v.callerId || "Voicemail", sub: "New voicemail", route: "/voicemail" }));
+    const dismissedMissed = loadIdSet(MISSED_DISMISS_KEY);
     const missed = (calls || [])
       .filter((c) => (c.direction || "").toLowerCase().startsWith("in") && /miss|no.?answer|unanswer|fail/i.test(c.status || ""))
-      .map((c) => ({ kind: "missed" as const, id: c.callId || c.rowId || `${c.fromNumber || "x"}-${c.startedAt || ""}`, title: c.fromName || c.fromNumber || "Missed call", sub: "Missed call", route: "/calls" }));
+      .map((c) => ({ kind: "missed" as const, id: c.callId || c.rowId || `${c.fromNumber || "x"}-${c.startedAt || ""}`, title: c.fromName || c.fromNumber || "Missed call", sub: "Missed call", route: "/calls" }))
+      .filter((n) => !dismissedMissed.has(String(n.id)));
     return { chats, vms, missed, total: chats.length + vms.length + missed.length };
-  }, [newChats, voicemails, calls]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newChats, voicemails, calls, notifTick]);
 
   const markAllNotifsRead = useCallback(async () => {
     const ids = newChats.map((c) => c.id);
-    await Promise.all(ids.map((id) => apiPost(`/chat/threads/${id}/read`, {}).catch(() => undefined)));
+    const vmIds = (voicemails || []).filter((v) => !v.listened).map((v) => v.id);
+    if (vmIds.length > 0) {
+      const read = loadIdSet(VM_READ_KEY);
+      const unread = loadIdSet(VM_UNREAD_KEY);
+      for (const id of vmIds) { read.add(id); unread.delete(id); }
+      saveIdSet(VM_READ_KEY, read);
+      saveIdSet(VM_UNREAD_KEY, unread);
+      setVoicemails((prev) => prev.map((v) => (v.listened ? v : { ...v, listened: true })));
+    }
+    if (notifItems.missed.length > 0) {
+      const dismissed = loadIdSet(MISSED_DISMISS_KEY);
+      for (const n of notifItems.missed) dismissed.add(String(n.id));
+      saveIdSet(MISSED_DISMISS_KEY, dismissed);
+      setNotifTick((t) => t + 1);
+    }
+    await Promise.all([
+      ...ids.map((id) => apiPost(`/chat/threads/${id}/read`, {}).catch(() => undefined)),
+      ...vmIds.map((id) => apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true }).catch(() => undefined)),
+    ]);
     setNewChats([]);
     setNotifOpen(false);
     refreshLists();
-  }, [newChats, refreshLists]);
+  }, [newChats, voicemails, notifItems, refreshLists]);
 
   useEffect(() => {
     if (dialQuery.length < 2) {
@@ -696,6 +719,20 @@ export function DesktopMiniDialer() {
     setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, listened } : v)));
     apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened }).catch(() => undefined);
   }, []);
+
+  // Mark every unlistened voicemail read in one shot: persist local overrides,
+  // flip the on-screen list, and PATCH each one server-side (best-effort).
+  const markAllVmsRead = useCallback(() => {
+    const vmIds = (voicemails || []).filter((v) => !v.listened).map((v) => v.id);
+    if (vmIds.length === 0) return;
+    const read = loadIdSet(VM_READ_KEY);
+    const unread = loadIdSet(VM_UNREAD_KEY);
+    for (const id of vmIds) { read.add(id); unread.delete(id); }
+    saveIdSet(VM_READ_KEY, read);
+    saveIdSet(VM_UNREAD_KEY, unread);
+    setVoicemails((prev) => prev.map((v) => (v.listened ? v : { ...v, listened: true })));
+    for (const id of vmIds) void apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true }).catch(() => undefined);
+  }, [voicemails]);
 
   const patchVm = useCallback((id: string, body: Record<string, unknown>, patch: Partial<MiniVoicemail>) => {
     setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
@@ -1046,6 +1083,7 @@ export function DesktopMiniDialer() {
               <div className="vm-header">
                 <div className="vm-h-title">Voicemail</div>
                 <div className="vm-h-sub">{unreadCount} new &#183; {voicemails.length} total</div>
+                {unreadCount > 0 && <button type="button" className="vm-mark-all" onClick={markAllVmsRead}>Mark all read</button>}
               </div>
               <div className="vm-search">
                 <Search size={16} />
@@ -1176,8 +1214,8 @@ export function DesktopMiniDialer() {
         .mini-identity-status.red { color: #f87171; }
         .notif-wrap { position: relative; }
         .notif-wrap > button { position: relative; }
-        .notif-dot { position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px rgba(5,12,24,.9); }
-        .notif-popover { position: absolute; top: 34px; right: -40px; z-index: 20; width: min(320px, calc(100vw - 24px)); padding: 10px; border-radius: 20px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125, 211, 252, .20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
+        .notif-dot { position: absolute; top: -1px; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px rgba(5,12,24,.9); }
+        .notif-popover { position: fixed; top: 40px; left: 8px; right: 8px; margin-left: auto; z-index: 60; width: auto; max-width: 336px; padding: 10px; border-radius: 20px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125, 211, 252, .20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
         .notif-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; }
         .notif-head strong { color: #e5eefb; font-size: 13px; }
         .notif-clear { width: auto !important; height: auto !important; padding: 4px 9px !important; border-radius: 8px !important; background: rgba(56,189,248,.14) !important; border: 1px solid rgba(125,211,252,.28) !important; color: #7dd3fc; font-size: 10px; font-weight: 700; }
@@ -1324,7 +1362,9 @@ export function DesktopMiniDialer() {
         .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
 
         .vm-screen { padding: 0; }
-        .vm-header { text-align: center; padding: 14px 16px 10px; }
+        .vm-header { position: relative; text-align: center; padding: 14px 16px 10px; }
+        .vm-mark-all { position: absolute; right: 12px; top: 16px; padding: 5px 10px; border-radius: 9px; border: 1px solid rgba(125,211,252,.28); background: rgba(56,189,248,.12); color: #7dd3fc; font-size: 11px; font-weight: 700; cursor: pointer; }
+        .vm-mark-all:hover { background: rgba(56,189,248,.20); }
         .vm-h-title { font-size: 26px; font-weight: 800; letter-spacing: -0.7px; color: var(--mn-text); line-height: 30px; }
         .vm-h-sub { margin-top: 3px; font-size: 13px; font-weight: 600; color: var(--mn-text-2); }
         .vm-search { display: flex; align-items: center; gap: 10px; margin: 0 14px 10px; height: 44px; padding: 0 14px; border-radius: 16px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); color: var(--mn-text-3); }

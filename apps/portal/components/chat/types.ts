@@ -22,6 +22,8 @@ export interface ChatThread {
   lastMessage: string;
   lastAt: string;
   unread: number;
+  /** Tenant-shared "New" - true until a real participant reads the newest inbound message. */
+  isNew?: boolean;
   deliveryStatus?: string | null;
   deliveryError?: string | null;
 }
