@@ -1344,6 +1344,22 @@ export function DesktopMiniDialer() {
         .call-grid button { padding: 0; } .call-grid button span { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: rgba(30,45,71,0.55); border: 1px solid var(--mn-border); color: #dbe4ff; box-sizing: border-box; }
         .call-grid button.hot span { background: var(--mn-text); border-color: var(--mn-text); color: #0a1128; }
 
+        /* Light mode: incoming + active call screens (mirror the light palette). */
+        .mini-shell.mini-light .call-screen.incoming { background: #eef2f7; }
+        .mini-shell.mini-light .call-screen.active { background: #e9eef5; }
+        .mini-shell.mini-light .call-avatar-lg.blue { background: rgba(59,130,246,0.10); border-color: rgba(59,130,246,0.35); color: #2563eb; }
+        .mini-shell.mini-light .call-avatar-lg.green { background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.40); color: #16a34a; }
+        .mini-shell.mini-light .call-label { color: #16a34a; }
+        .mini-shell.mini-light .call-status { color: #16a34a; }
+        .mini-shell.mini-light .call-prefix-pill { background: rgba(34,197,94,0.12); color: #16a34a; }
+        .mini-shell.mini-light .call-action { color: #55637a; }
+        .mini-shell.mini-light .call-waiting { background: #ffffff; border-color: rgba(15,23,42,0.12); color: #0f172a; }
+        .mini-shell.mini-light .call-grid button span { background: #ffffff; border-color: rgba(15,23,42,0.14); color: #33415c; box-shadow: 0 1px 3px rgba(15,23,42,0.10); }
+        .mini-shell.mini-light .call-grid button.hot span { background: #0f172a; border-color: #0f172a; color: #ffffff; }
+        .mini-shell.mini-light .call-back { background: #ffffff; color: #33415c; border: 0.5px solid rgba(15,23,42,0.14); }
+        .mini-shell.mini-light .call-back:hover { background: rgba(59,130,246,0.15); }
+        .mini-shell.mini-light .call-entry-del { background: #ffffff; }
+
         /* In-call sub-views (DTMF keypad, Transfer / Add-call entry). */
         .call-subhead { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 4px; }
         .call-subhead-spacer { width: 34px; flex-shrink: 0; }
