@@ -179,6 +179,14 @@ function displayName(vm: Voicemail): string {
   return vm.callerName?.trim() || vm.callerId || "Unknown caller";
 }
 
+// "+18457814103" -> "845-781-4103" for the small under-name line.
+function fmtPhoneSmall(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length === 10) return `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+  return raw || "";
+}
+
 function initials(vm: Voicemail): string {
   const name = displayName(vm);
   const words = name.replace(/[^\w\s]/g, "").trim().split(/\s+/).filter(Boolean);
@@ -237,6 +245,7 @@ function SmartAudioPlayer({
   const [durationSec, setDurationSec] = useState(vm.durationSec);
   const [speed, setSpeed] = useState(1);
   const [volume, setVolume] = useState(0.9);
+  const lastAutoPlayRef = useRef(0);
   const bars = useMemo(() => waveformBars(vm.id, size === "compact" ? 36 : 64), [vm.id, size]);
   const progress = durationSec > 0 ? Math.min(100, (currentSec / durationSec) * 100) : 0;
 
@@ -303,6 +312,25 @@ function SmartAudioPlayer({
     }
   }, [activeId, vm.id]);
 
+  // When this player is switched to a DIFFERENT voicemail (same component,
+  // new vm prop), drop the previously loaded audio — otherwise play() keeps
+  // replaying the old message no matter which row was clicked.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    setPlaying(false);
+    setLoading(false);
+    setCurrentSec(0);
+    setError(null);
+  }, [src]);
+
+  useEffect(() => {
+    setDurationSec(vm.durationSec);
+  }, [vm.id, vm.durationSec]);
+
   useEffect(() => () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -332,7 +360,11 @@ function SmartAudioPlayer({
   }
 
   useEffect(() => {
-    if (!autoPlayRequest) return;
+    // Consume each request token exactly once. Without this, any dependency
+    // change (e.g. the vm object refreshing when a call comes in) re-ran the
+    // effect and restarted playback mid-call.
+    if (!autoPlayRequest || autoPlayRequest === lastAutoPlayRef.current) return;
+    lastAutoPlayRef.current = autoPlayRequest;
     const audio = getOrCreateAudio();
     if (!audio.src) audio.src = src;
     if (!audio.paused) return;
@@ -460,6 +492,7 @@ function VoicemailRow({
             <strong>{displayName(vm)}</strong>
             <StatusBadge vm={vm} />
           </div>
+          {vm.callerId && displayName(vm) !== vm.callerId ? <div className="vm-number">{fmtPhoneSmall(vm.callerId)}</div> : null}
           <div className="vm-subline">
             <span>ext {vm.extension}</span>
             <span>{showTenant && vm.tenantName ? vm.tenantName : type}</span>
