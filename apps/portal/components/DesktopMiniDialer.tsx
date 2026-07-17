@@ -857,7 +857,7 @@ export function DesktopMiniDialer() {
         </div>
         <div className="mini-drag" />
         <div className="mini-winbtns">
-          <button type="button" title={dnd ? "Do Not Disturb is ON — incoming calls are rejected" : "Do Not Disturb"} aria-label="Do Not Disturb" aria-pressed={dnd} className={dnd ? "dnd-btn on" : "dnd-btn"} onClick={toggleDnd}>
+          <button type="button" title={dnd ? "Do Not Disturb is ON — this phone won\u2019t ring (your other devices still do)" : "Do Not Disturb"} aria-label="Do Not Disturb" aria-pressed={dnd} className={dnd ? "dnd-btn on" : "dnd-btn"} onClick={toggleDnd}>
             <BellOff size={15} />
           </button>
           <div className="notif-wrap" ref={notifWrapRef}>

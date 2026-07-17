@@ -40,8 +40,10 @@ export type SipCallState =
 
 // ── Do Not Disturb ────────────────────────────────────────────────────────
 // Shared localStorage flag (full + mini windows see the same store). The REAL
-// phone (full window) checks it at INVITE time and rejects with 486 before any
-// ringtone or UI — so DND toggled from the mini pop-out silences this phone.
+// phone (full window) checks it at INVITE time and simply IGNORES the inbound
+// leg on this device — no ringtone, no UI, and crucially NO rejection, so the
+// PBX keeps ringing every other device registered to the same extension
+// (hard phones etc.). Only the softphone you toggled goes quiet.
 export const DND_STORAGE_KEY = "cc-dnd";
 export function isDndEnabled(): boolean {
   try { return typeof window !== "undefined" && localStorage.getItem(DND_STORAGE_KEY) === "1"; } catch { return false; }
@@ -1479,15 +1481,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
               } catch { /* ignore */ }
               return;
             }
-            // Do Not Disturb: reject every inbound ring with 486 Busy before
-            // any ringtone/UI. Outbound calls are unaffected.
+            // Do Not Disturb: silence THIS device only. We deliberately do NOT
+            // reject the INVITE — a 486 could end the call for the whole
+            // extension. This leg just never rings or shows UI; the PBX keeps
+            // ringing hard phones / other registrations, and this leg drops on
+            // its own when the call is answered elsewhere or the caller gives up.
             if (data.originator === "remote" && isDndEnabled()) {
-              console.log(`[SIP] DND on — rejecting inbound ${mcId} with 486`);
-              try {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (data.session as any).terminate({ status_code: 486, reason_phrase: "Busy Here" });
-              } catch { /* ignore */ }
-              sessionsByIdRef.current.delete(mcId);
+              console.log(`[SIP] DND on — silencing inbound ${mcId} on this device only (no reject)`);
               return;
             }
             sessionsByIdRef.current.set(mcId, data.session);
