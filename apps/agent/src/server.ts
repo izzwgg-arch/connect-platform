@@ -23,6 +23,7 @@ import { makePbxBackend } from "./actions/pbxBackend";
 import { ScopedPbxExecutor } from "./pbx/executor";
 import { makePbxClientFactory } from "./pbx/client";
 import { TriageOrchestrator } from "./triage/orchestrator";
+import { WatchmanRunner } from "./watchman/runner";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -96,6 +97,18 @@ async function main() {
       engine?.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
       actionService?.tick().catch((err) => app.log.error({ err }, "action tick failed"));
     }, 5 * 60 * 1000).unref();
+
+    // Watchman: read-only security + health monitoring loop (hourly). Detect +
+    // alert only — never remediates. Exposed for on-demand run via owner route.
+    const watchman = new WatchmanRunner(prisma, audit, notifier);
+    app.post("/agent/watchman/run", async (req, reply) => {
+      const secret = process.env.AGENT_INTERNAL_SECRET;
+      if (!secret || req.headers["x-agent-internal-secret"] !== secret) return reply.code(403).send({ error: "forbidden" });
+      return watchman.runOnce();
+    });
+    setInterval(() => {
+      watchman.runOnce().catch((err) => app.log.error({ err }, "watchman run failed"));
+    }, 60 * 60 * 1000).unref();
   }
 
   app.get("/health", async () => ({ ok: true, service: "@connect/agent", ts: new Date().toISOString() }));
