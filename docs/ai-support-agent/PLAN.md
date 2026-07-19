@@ -162,6 +162,42 @@ Owner-side feature to create and manage cloned voices and generate IVR prompt au
 
 Which of these a *customer* can request is governed per tenant by the Policy Engine (§6a); owner mode has the full table.
 
+## 7a. Provisioning Catalog — full PBX build-out capabilities (owner mandate, 2026-07-19)
+
+Owner directive: max out what the agent can do on the PBX — create tenants, extensions, IVRs, the works — **while guaranteeing that no existing tenant or call flow changes in any way.** These are owner-mode actions (customers never see them; per-tenant policy could later expose narrow ones like "add an extension to your own tenant").
+
+| # | Action | Class | Notes |
+|---|--------|-------|-------|
+| B1 | Create tenant | additive | new tenant shell + naming/numbering plan |
+| B2 | Create extension (in named tenant) | additive | device credentials, voicemail box |
+| B3 | Modify extension settings | scoped-modify | only the named extension |
+| B4 | Create IVR | additive | menu tree, destinations validated to exist |
+| B5 | Modify IVR (named) | scoped-modify | snapshot + rollback |
+| B6 | Upload/assign IVR prompt audio (A12) | scoped-modify | existing flow |
+| B7 | Create ring group / queue | additive | |
+| B8 | Modify ring group / queue membership (named) | scoped-modify | |
+| B9 | Create time condition / time group | additive | |
+| B10 | Assign inbound DID → destination (named DID) | scoped-modify | **sub-collection ops ONLY — never tenant PUT** (June-2026 DID-wipe lesson) |
+| B11 | Create outbound route (named tenant) | additive | dial-pattern validation |
+| B12 | Voicemail box settings (named ext) | scoped-modify | |
+| B13 | Feature codes / follow-me / paging (named objects) | scoped-modify | |
+| B14 | Apply-changes (config regenerate) | gated-commit | the ONLY regenerate trigger; runs per approved action bundle, never automatic/background |
+
+**Action classes drive the safety rules (§6d):** `additive` creates brand-new objects that nothing routes to yet — structurally incapable of touching existing call flows. `scoped-modify` changes exactly one named existing object and requires that object's id in the approved diff. `gated-commit` is the apply step, bound to the approved bundle.
+
+## 6d. Scoped PBX Executor — the zero-disturbance design
+
+The executor is the only code path that can write to VitalPBX, and it is built around one invariant: **an action may only affect the objects named in its approved diff; every other tenant and call flow must be provably unchanged.** Mechanisms, in execution order:
+
+1. **Sole gateway:** a dedicated executor module holds the only `VitalPbxClient` with `allowConfigMutations: true`, constructed per approved action and torn down after. The global `PBX_ALLOW_CONFIG_MUTATIONS` env stays unset everywhere; the api's safeguard and `pbxMutationSafeguard.test.ts` remain untouched.
+2. **Catalog schema validation:** action params validate against the catalog entry (zod). Unknown endpoint = does not exist. **Full-resource tenant PUTs are not in the endpoint set at all** — sub-collection operations only, forever (the June-2026 DID wipe can structurally never recur).
+3. **Blast-radius declaration:** every action compiles to an explicit object manifest (`tenant X, extension Y`). The executor refuses any API call whose target isn't in the manifest.
+4. **Pre-flight:** target existence, name/number collision checks, no active calls on any named object, PBX load sane, snapshot of every named object taken and rollback path verified.
+5. **Invariant guard (the "nothing else changes" proof):** before execution, the executor fingerprints the config of ALL existing tenants (per-tenant config checksum via read endpoints). After execution + apply, it re-fingerprints: every tenant not in the blast-radius manifest must hash identical, or the executor auto-rolls back the named objects, raises a CRITICAL incident, and emails+SMS Izzy. Existing call flows are thus verified untouched after every single provisioning action — not assumed.
+6. **Approval:** owner-mode instruction = approval for actions Izzy requests himself (per §6a), but the exact diff + blast-radius manifest is always shown/emailed before execution; customer-requested actions always wait for human approval.
+7. **Execute → verify → apply (B14) → verify again → report.** Timed/temporary changes get scheduler-enforced revert as in §6.
+8. **AGENT-LAB tenant:** a dedicated sandbox tenant on the live PBX (`AGENT-LAB`, no real DIDs, test extensions only) where the full B-catalog is ex
+
 Read tools (no approval, always logged): extension registration status (AMI), device reachability/latency, active calls, CDR history, voicemail box status, recording lookup, IVR/route current config read, tenant config read, trunk status, server health metrics, fail2ban/log reads (loopcom; pbx read-only per standing rule).
 
 Catalog grows only by Izzy adding entries — each new action type is itself a change Izzy signs off on.

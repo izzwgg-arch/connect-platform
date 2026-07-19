@@ -58,6 +58,29 @@ _Status legend: every capability ships as **PLANNED** → **BUILT** → **CERTIF
 | Book callback | PLANNED |
 | DTMF fallback + guaranteed human escape hatch | PLANNED |
 
+## 4b. PBX Provisioning — owner mode, ADDITIVE-ONLY (see PBX_PROVISIONING_PLAN.md — awaiting owner sign-off)
+
+Create-only. The agent can create these; it can never edit or delete a pre-existing object, and never touch another tenant's config. Ownership Ledger + additive-only contract enforce zero impact on existing tenants/call flows.
+
+| # | Capability | Status |
+|---|---|---|
+| P1 | Create tenant | PLANNED (gated on sign-off) |
+| P2 | Add inbound DID to a tenant (via add_inbound_numbers, never tenant PUT) | PLANNED |
+| P3 | Apply changes for an agent-created tenant only | PLANNED |
+| P4 | Create extension | PLANNED |
+| P5 | Create/attach device to an agent-created extension | PLANNED |
+| P6 | Set features on agent-created extensions | PLANNED |
+| P7 | Create IVR | PLANNED |
+| P8 | Create inbound route (additive; never rebinds an existing DID) | PLANNED |
+| P9 | Create outbound route (extra confirmation) | PLANNED |
+| P10 | Create ring group | PLANNED |
+| P11 | Create queue | PLANNED |
+| P12 | Create time condition / time group | PLANNED |
+| P13 | Create virtual ext / feature code / conference / parking lot | PLANNED |
+| P14 | Upload IVR prompt audio (Voice Studio) | PLANNED |
+
+**Never (any mode):** edit/delete any pre-existing tenant, extension, DID, route, IVR, ring group, queue, or time condition; global reload / service restart; trunk/SIP-transport/network config.
+
 ## 5. Owner-only (Izzy)
 
 | Capability | Status |
