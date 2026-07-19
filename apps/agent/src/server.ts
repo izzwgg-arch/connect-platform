@@ -32,6 +32,7 @@ import { MessagingChannelHandler, NullMessagingTransport } from "./channels/mess
 import { VoiceStudio } from "./voice/studio";
 import { KnowledgeBase } from "./knowledge/kb";
 import { verifyPortalJwt } from "./auth";
+import { buildProvisioningPlan } from "./pbx/provisioningPlan";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -145,6 +146,19 @@ async function main() {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
       return { results: await kb.retrieve(String(b.query ?? ""), b.tenantId ?? null) };
+    });
+
+    // Owner bulk onboarding: build a tenant + extensions plan. Returns the
+    // ordered, feasibility-graded steps for review. Execution is gated: each
+    // step runs through the ActionService (approval + Scoped Executor), and
+    // extension steps (feasibility=helper) stay simulation-only until PW-2 +
+    // the create-extension helper is enabled in an owner window.
+    app.post("/agent/provisioning/plan", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const built = buildProvisioningPlan(req.body);
+      if (!built.ok) return reply.code(400).send({ error: "bad_request", detail: built.error });
+      await audit.record({ actor: "owner", event: "provisioning.plan_built", payload: { steps: built.steps.length, warnings: built.warnings } });
+      return { plan: built, note: "Preview only. Executing requires per-step approval; extension creation is live-gated until PW-2 (see docs/PBX_AUDIT.md)." };
     });
 
     // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
