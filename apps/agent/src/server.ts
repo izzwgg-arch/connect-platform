@@ -14,6 +14,9 @@ import { getPrisma } from "./db";
 import { ConversationEngine } from "./conversation/engine";
 import { PrismaConversationStore } from "./conversation/store";
 import { registerChatRoutes } from "./conversation/routes";
+import { ReadTools } from "./tools/readTools";
+import { DiagnosticsEngine } from "./diag/engine";
+import { registerDiagRoutes } from "./diag/routes";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -49,6 +52,7 @@ async function main() {
 
   if (engine) {
     registerChatRoutes(app, engine);
+    registerDiagRoutes(app, new DiagnosticsEngine(new ReadTools(prisma), prisma, audit, notifier, router));
     // DB-backed scheduler tick: auto-close stale chats every 15 minutes.
     setInterval(() => {
       engine.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
