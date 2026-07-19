@@ -24,6 +24,7 @@ import { ScopedPbxExecutor } from "./pbx/executor";
 import { makePbxClientFactory } from "./pbx/client";
 import { TriageOrchestrator } from "./triage/orchestrator";
 import { WatchmanRunner } from "./watchman/runner";
+import { registerAdminRoutes } from "./actions/adminRoutes";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -90,6 +91,7 @@ async function main() {
     registerChatRoutes(app, engine);
     registerDiagRoutes(app, diagEngine);
     registerActionRoutes(app, actionService);
+    registerAdminRoutes(app, prisma);
 
     // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
     // auto-revert actions every 5 minutes.
