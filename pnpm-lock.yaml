@@ -34,6 +34,9 @@ importers:
       '@connect/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@connect/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@fastify/rate-limit':
         specifier: ^10.3.0
         version: 10.3.0

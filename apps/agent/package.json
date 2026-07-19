@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@connect/db": "workspace:*",
+    "@connect/shared": "workspace:*",
     "@anthropic-ai/sdk": "^0.60.0",
     "fastify": "^5.6.0",
     "@fastify/rate-limit": "^10.3.0",
