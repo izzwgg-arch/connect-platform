@@ -18,6 +18,8 @@ COPY packages/integrations/package.json ./packages/integrations/package.json
 COPY packages/security/package.json ./packages/security/package.json
 RUN --mount=type=cache,id=connect-pnpm-store,target=/pnpm/store \
   pnpm install --frozen-lockfile --filter @connect/agent...
+# Prisma client must match the schema in this image (agent reads/writes Agent* tables).
+RUN pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma
 COPY . .
 ARG BUILD_COMMIT=""
 ENV BUILD_COMMIT=$BUILD_COMMIT \

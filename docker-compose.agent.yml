@@ -14,24 +14,13 @@ services:
         BUILD_COMMIT: ${BUILD_COMMIT:-}
     env_file:
       - /opt/connectcomms/env/.env.platform
+    # All AGENT_* secrets/keys/toggles live in /opt/connectcomms/env/.env.platform
+    # (via env_file). Only static values here — compose `environment:` entries
+    # OVERRIDE env_file, so listing keys here with empty defaults would blank them.
     environment:
       TZ: ${TZ:-America/New_York}
       AGENT_PORT: 3920
-      AGENT_ENABLED: ${AGENT_ENABLED:-0}
-      AGENT_KILL_SWITCH: ${AGENT_KILL_SWITCH:-0}
       AGENT_AUDIT_DIR: /var/log/connect-agent
-      AGENT_OWNER_EMAIL: ${AGENT_OWNER_EMAIL:-izzywkg@gmail.com}
-      AGENT_TEAM_EMAILS: ${AGENT_TEAM_EMAILS:-}
-      AGENT_SMTP_HOST: ${AGENT_SMTP_HOST:-}
-      AGENT_SMTP_PORT: ${AGENT_SMTP_PORT:-587}
-      AGENT_SMTP_USER: ${AGENT_SMTP_USER:-}
-      AGENT_SMTP_PASS: ${AGENT_SMTP_PASS:-}
-      AGENT_SMTP_FROM: ${AGENT_SMTP_FROM:-Connect Agent <agent@connectcomunications.com>}
-      AGENT_SELFTEST_SECRET: ${AGENT_SELFTEST_SECRET:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      EVERETT_API_KEY: ${EVERETT_API_KEY:-}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
     ports:
       - "127.0.0.1:3920:3920"
     volumes:

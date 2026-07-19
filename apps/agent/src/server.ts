@@ -6,19 +6,54 @@
  */
 import Fastify from "fastify";
 import { loadConfig, killSwitchEngaged } from "./config";
-import { AuditLog, FileAuditSink } from "./audit/audit";
+import { AuditLog, FileAuditSink, type AuditSink } from "./audit/audit";
 import { Notifier } from "./notify/notifier";
 import { ModelRouter } from "./llm/router";
 import { loadManifest, executableCapabilities } from "./manifest/manifest";
+import { getPrisma } from "./db";
+import { ConversationEngine } from "./conversation/engine";
+import { PrismaConversationStore } from "./conversation/store";
+import { registerChatRoutes } from "./conversation/routes";
+
+class PrismaAuditSink implements AuditSink {
+  constructor(private prisma: any) {}
+  async write(row: any): Promise<void> {
+    await this.prisma.agentAuditLog.create({
+      data: {
+        ts: new Date(row.ts),
+        actor: row.actor,
+        event: row.event,
+        tenantId: row.tenantId ?? null,
+        conversationId: row.conversationId ?? null,
+        actionId: row.actionId ?? null,
+        capabilityId: row.capabilityId ?? null,
+        payload: row.payload ?? undefined,
+        hash: row.hash,
+      },
+    });
+  }
+}
 
 async function main() {
   const cfg = loadConfig();
-  const audit = new AuditLog([new FileAuditSink(cfg.auditDir)]);
+  const prisma = await getPrisma();
+  const sinks: AuditSink[] = [new FileAuditSink(cfg.auditDir)];
+  if (prisma) sinks.push(new PrismaAuditSink(prisma));
+  const audit = new AuditLog(sinks);
   const notifier = new Notifier(cfg, audit);
   const router = new ModelRouter(cfg, audit);
   const manifest = loadManifest();
+  const engine = prisma ? new ConversationEngine(new PrismaConversationStore(prisma), router, audit) : null;
 
   const app = Fastify({ logger: true });
+
+  if (engine) {
+    registerChatRoutes(app, engine);
+    // DB-backed scheduler tick: auto-close stale chats every 15 minutes.
+    setInterval(() => {
+      engine.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
+    }, 15 * 60 * 1000).unref();
+  }
 
   app.get("/health", async () => ({ ok: true, service: "@connect/agent", ts: new Date().toISOString() }));
 
@@ -27,6 +62,8 @@ async function main() {
     killSwitchEngaged: killSwitchEngaged(),
     providersConfigured: router.available(),
     smtpConfigured: notifier.configured,
+    dbConnected: prisma !== null,
+    chatEnabled: engine !== null,
     manifest: {
       total: manifest.length,
       executable: executableCapabilities(manifest).length,
