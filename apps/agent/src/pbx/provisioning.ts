@@ -29,6 +29,16 @@ export type ProvKind =
   | "virtual_ext"
   | "ivr_prompt";
 
+/**
+ * Real-world feasibility on the live VitalPBX 4.5.3 (see docs PBX_AUDIT.md):
+ *   - "api"    → official api_v2 create endpoint exists (safe, preferred)
+ *   - "helper" → no API endpoint, but a Connect helper script exists/planned
+ *   - "db"     → GUI/DB-only; requires DB write + gen-conf (high risk, owner-run)
+ * The executor uses this to refuse live attempts against a path that doesn't
+ * really exist, instead of silently "succeeding" in simulation.
+ */
+export type ProvFeasibility = "api" | "helper" | "db";
+
 export interface ProvOp {
   id: string; // catalog id, e.g. "P1"
   kind: ProvKind;
@@ -43,6 +53,8 @@ export interface ProvOp {
   schema: z.ZodTypeAny;
   /** How to read the created object id out of the API response. */
   idPath?: string;
+  /** How this op is actually achievable on the live PBX (audit-verified). */
+  feasibility: ProvFeasibility;
 }
 
 const nonEmpty = z.string().min(1);
@@ -51,69 +63,69 @@ export const PROVISIONING_CATALOG: Record<string, ProvOp> = {
   P1: {
     id: "P1", kind: "tenant", title: "Create tenant", method: "POST", path: "/api/v2/tenants", creates: true,
     schema: z.object({ name: nonEmpty, description: z.string().optional(), plan: z.string().optional(), extensions_limit: z.number().int().positive().optional(), settings: z.record(z.string(), z.any()).optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "api"
   },
   P2: {
     id: "P2", kind: "inbound_number", title: "Add inbound DID to tenant", method: "PATCH", path: "/api/v2/tenants/:tenantId/inbound_numbers", creates: true, subCollectionSafe: true,
-    schema: z.object({ tenantId: nonEmpty, phone_number: nonEmpty, description: z.string().optional() }),
+    schema: z.object({ tenantId: nonEmpty, phone_number: nonEmpty, description: z.string().optional() }), feasibility: "api"
   },
   P3: {
     id: "P3", kind: "apply_changes", title: "Apply changes for an agent-created tenant", method: "PATCH", path: "/api/v2/tenants/:tenantId/apply_changes", creates: false,
-    schema: z.object({ tenantId: nonEmpty }),
+    schema: z.object({ tenantId: nonEmpty }), feasibility: "api"
   },
   P4: {
     id: "P4", kind: "extension", title: "Create extension", method: "POST", path: "/api/v2/extensions", creates: true,
     schema: z.object({ tenantId: nonEmpty, extension: nonEmpty, name: nonEmpty, voicemail: z.boolean().optional(), device_profile: z.string().optional(), email: z.string().email().optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "helper"
   },
   P5: {
     id: "P5", kind: "device", title: "Create/attach device to an agent-created extension", method: "POST", path: "/api/v2/devices", creates: true,
     schema: z.object({ tenantId: nonEmpty, extensionId: nonEmpty, type: z.enum(["sip", "webrtc"]).default("sip"), label: z.string().optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "api"
   },
   P6: {
     id: "P6", kind: "extension_features", title: "Set features on an agent-created extension", method: "PATCH", path: "/api/v2/extensions/:extensionId", creates: false,
-    schema: z.object({ tenantId: nonEmpty, extensionId: nonEmpty, features: z.record(z.string(), z.any()) }),
+    schema: z.object({ tenantId: nonEmpty, extensionId: nonEmpty, features: z.record(z.string(), z.any()) }), feasibility: "api"
   },
   P7: {
     id: "P7", kind: "ivr", title: "Create IVR", method: "POST", path: "/api/v2/ivrs", creates: true,
     schema: z.object({ tenantId: nonEmpty, name: nonEmpty, prompt: z.string().optional(), entries: z.array(z.object({ digit: nonEmpty, destination: nonEmpty })).optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "db"
   },
   P8: {
     id: "P8", kind: "inbound_route", title: "Create inbound route (additive; never rebinds an existing DID)", method: "POST", path: "/api/v2/inbound_routes", creates: true,
     schema: z.object({ tenantId: nonEmpty, did: nonEmpty, destination: nonEmpty }),
-    idPath: "id",
+    idPath: "id", feasibility: "helper"
   },
   P9: {
     id: "P9", kind: "outbound_route", title: "Create outbound route (high-risk, extra confirmation)", method: "POST", path: "/api/v2/outbound_routes", creates: true,
     schema: z.object({ tenantId: nonEmpty, name: nonEmpty, pattern: nonEmpty, trunk: nonEmpty }),
-    idPath: "id",
+    idPath: "id", feasibility: "db"
   },
   P10: {
     id: "P10", kind: "ring_group", title: "Create ring group", method: "POST", path: "/api/v2/ring_groups", creates: true,
     schema: z.object({ tenantId: nonEmpty, name: nonEmpty, extensions: z.array(nonEmpty).min(1), strategy: z.string().optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "db"
   },
   P11: {
     id: "P11", kind: "queue", title: "Create queue", method: "POST", path: "/api/v2/queues", creates: true,
     schema: z.object({ tenantId: nonEmpty, name: nonEmpty, strategy: z.string().optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "api"
   },
   P12: {
     id: "P12", kind: "time_condition", title: "Create time condition / time group", method: "POST", path: "/api/v2/time_conditions", creates: true,
     schema: z.object({ tenantId: nonEmpty, name: nonEmpty, ranges: z.array(z.record(z.string(), z.any())).optional(), matchDestination: nonEmpty.optional(), noMatchDestination: nonEmpty.optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "db"
   },
   P13: {
     id: "P13", kind: "virtual_ext", title: "Create virtual ext / feature code / conference / parking lot", method: "POST", path: "/api/v2/virtual_extensions", creates: true,
     schema: z.object({ tenantId: nonEmpty, subtype: z.enum(["virtual_extension", "conference", "parking_lot", "feature_code"]), name: nonEmpty, config: z.record(z.string(), z.any()).optional() }),
-    idPath: "id",
+    idPath: "id", feasibility: "api"
   },
   P14: {
     id: "P14", kind: "ivr_prompt", title: "Upload IVR prompt audio (Voice Studio)", method: "POST", path: "/api/v2/recordings", creates: true,
     schema: z.object({ tenantId: nonEmpty, name: nonEmpty, audioFileId: nonEmpty }),
-    idPath: "id",
+    idPath: "id", feasibility: "helper"
   },
 };
 

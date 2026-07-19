@@ -122,6 +122,22 @@ test("live mode requires ownerConfirmed", async () => {
   assert.match(res.refusedReason!, /ownerConfirmed/);
 });
 
+test("FEASIBILITY: live create-extension (helper-only) is refused — API has no such endpoint", async () => {
+  const exec = makeExec();
+  // owned tenant so we get past the parent-ownership gate
+  const t = await exec.execute({ opId: "P1", params: { name: "T" }, requestedBy: "owner:izzy" });
+  const res = await exec.execute({ opId: "P4", params: { tenantId: t.createdObjectId, extension: "101", name: "R" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(res.ok, false);
+  assert.match(res.refusedReason!, /not available via the VitalPBX API|feasibility=helper/);
+});
+
+test("FEASIBILITY: live create-queue (api) is allowed through the feasibility gate", async () => {
+  const exec = makeExec();
+  const t = await exec.execute({ opId: "P1", params: { name: "T" }, requestedBy: "owner:izzy" });
+  const res = await exec.execute({ opId: "P11", params: { tenantId: t.createdObjectId, name: "Support Q" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(res.ok, true); // api feasibility → passes the gate (spy client stands in for live)
+});
+
 test("bad params refused before any dispatch", async () => {
   const exec = makeExec();
   const res = await exec.execute({ opId: "P4", params: { tenantId: "t" /* missing extension+name */ }, requestedBy: "owner:izzy" });

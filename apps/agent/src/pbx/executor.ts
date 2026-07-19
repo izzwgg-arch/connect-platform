@@ -101,6 +101,18 @@ export class ScopedPbxExecutor {
       return this.refuse(input, mode, "Live PBX write requires ownerConfirmed=true (per-op approval).");
     }
 
+    // Gate 3b: FEASIBILITY. Audit (docs/PBX_AUDIT.md) confirmed which ops have a
+    // real API endpoint on VitalPBX 4.5.3. A live attempt against a "helper"/"db"
+    // op whose bridge isn't wired must NOT be dispatched to the API (it would
+    // 404 or, worse, hit the wrong path). Simulation may still exercise them.
+    if (mode === "live" && op.feasibility !== "api") {
+      return this.refuse(
+        input,
+        mode,
+        `Live '${op.kind}' is not available via the VitalPBX API (feasibility=${op.feasibility}). Requires the ${op.feasibility === "helper" ? "Connect helper script" : "DB+gen-conf owner-run"} path, which is not enabled for automatic execution. See docs/PBX_AUDIT.md.`,
+      );
+    }
+
     // Build the request. :tenantId / :extensionId substituted from params.
     const path = op.path
       .replace(":tenantId", encodeURIComponent(String(params.tenantId ?? "")))
