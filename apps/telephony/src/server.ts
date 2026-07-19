@@ -16,6 +16,7 @@ process.on("unhandledRejection", (reason) => {
 import http from "http";
 import { createApp } from "./app";
 import { createTelephonyModule } from "./telephony";
+import { createSmartHomeModule, type SmartHomeModule } from "./smarthome";
 
 async function main() {
   logger.info(
@@ -56,6 +57,27 @@ async function main() {
 
   telephony.start();
 
+  // Smart-home phone IVR (FastAGI) — flag-gated, isolated from core telephony.
+  let smartHome: SmartHomeModule | null = null;
+  if (env.SMARTHOME_IVR_ENABLED) {
+    if (!env.SMARTHOME_CONFIG_PATH) {
+      throw new Error("SMARTHOME_IVR_ENABLED=true requires SMARTHOME_CONFIG_PATH");
+    }
+    const allowedPeers = (env.SMARTHOME_AGI_ALLOWED_PEERS ?? env.PBX_HOST)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    smartHome = createSmartHomeModule({
+      configPath: env.SMARTHOME_CONFIG_PATH,
+      agiPort: env.SMARTHOME_AGI_PORT,
+      agiBind: env.SMARTHOME_AGI_BIND,
+      allowedPeers,
+      haTimeoutMs: env.SMARTHOME_HA_TIMEOUT_MS,
+    });
+    await smartHome.start();
+    logger.info({ port: env.SMARTHOME_AGI_PORT, allowedPeers }, "Smart-home IVR enabled");
+  }
+
   await new Promise<void>((resolve, reject) => {
     server.listen(env.PORT, "0.0.0.0", () => resolve());
     server.once("error", reject);
@@ -72,6 +94,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "Shutdown signal received");
+    smartHome?.stop();
     telephony.stop();
     server.close(() => {
       logger.info("HTTP server closed");

@@ -45,6 +45,21 @@ const schema = z.object({
     .transform((v) => v === "1" || v.toLowerCase() === "true")
     .default("false"),
 
+  // ── Smart-home IVR (FastAGI) ──────────────────────────────────────────────
+  /** Master switch for the smart-home phone IVR. Off by default. */
+  SMARTHOME_IVR_ENABLED: z
+    .string()
+    .transform((v) => v === "1" || v.toLowerCase() === "true")
+    .default("false"),
+  /** FastAGI listen port — the PBX dialplan points AGI(agi://<this-host>:<port>) here. */
+  SMARTHOME_AGI_PORT: z.coerce.number().int().min(1).max(65535).default(4573),
+  SMARTHOME_AGI_BIND: z.string().default("0.0.0.0"),
+  /** Comma-separated peer IPs allowed to open AGI sessions. Defaults to PBX_HOST. */
+  SMARTHOME_AGI_ALLOWED_PEERS: z.string().optional(),
+  /** Path to the smart-home accounts/menu JSON config. Required when enabled. */
+  SMARTHOME_CONFIG_PATH: z.string().optional(),
+  SMARTHOME_HA_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5000),
+
   /** When true, allow ARI_BRIDGED_ACTIVE_POLL_MS down to 1000 (tests / emergency only). */
   ARI_BRIDGED_ACTIVE_POLL_DEBUG: z
     .string()

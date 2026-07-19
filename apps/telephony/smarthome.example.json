@@ -1,0 +1,38 @@
+{
+  "prompts": {
+    "enterPin": "vm-password",
+    "invalidPin": "vm-incorrect",
+    "invalidOption": "invalid",
+    "menu": "beep",
+    "ok": "auth-thankyou",
+    "fail": "sorry",
+    "goodbye": "vm-goodbye"
+  },
+  "accounts": [
+    {
+      "id": "izzy-home",
+      "enabled": true,
+      "pinHash": "scrypt:REPLACE_WITH_OUTPUT_OF_hashPinCli",
+      "ha": {
+        "baseUrl": "http://YOUR_HOME_ASSISTANT_HOST:8123",
+        "token": "YOUR_HA_LONG_LIVED_ACCESS_TOKEN"
+      },
+      "menu": [
+        { "digit": "1", "label": "lights on", "domain": "light", "service": "turn_on", "entityId": "light.living_room" },
+        { "digit": "2", "label": "lights off", "domain": "light", "service": "turn_off", "entityId": "light.living_room" },
+        { "digit": "3", "label": "all lights off", "domain": "light", "service": "turn_off", "entityId": "all" },
+        { "digit": "4", "label": "front door lock", "domain": "lock", "service": "lock", "entityId": "lock.front_door" },
+        {
+          "digit": "5",
+          "label": "any other system via webhook",
+          "webhook": {
+            "url": "https://example-system.local/api/scenes/movie-night",
+            "method": "POST",
+            "headers": { "Authorization": "Bearer OTHER_SYSTEM_TOKEN" },
+            "body": { "activate": true }
+          }
+        }
+      ]
+    }
+  ]
+}

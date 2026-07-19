@@ -91,6 +91,27 @@ export const cdrPostsTotal = new Counter({
   registers: [registry],
 });
 
+// ── Smart-home IVR ───────────────────────────────────────────────────────────
+
+export const smarthomeCallsTotal = new Counter({
+  name: "connect_smarthome_ivr_calls_total",
+  help: "Total calls handled by the smart-home IVR",
+  registers: [registry],
+});
+
+export const smarthomeAuthFailuresTotal = new Counter({
+  name: "connect_smarthome_ivr_auth_failures_total",
+  help: "Total failed PIN attempts (including lockout rejections) on the smart-home IVR",
+  registers: [registry],
+});
+
+export const smarthomeHaActionsTotal = new Counter({
+  name: "connect_smarthome_ivr_ha_actions_total",
+  help: "Home Assistant actions triggered from the smart-home IVR",
+  labelNames: ["outcome"] as const, // "ok" | "failed"
+  registers: [registry],
+});
+
 // ── WebSocket clients ────────────────────────────────────────────────────────
 
 export const wsClients = new Gauge({
