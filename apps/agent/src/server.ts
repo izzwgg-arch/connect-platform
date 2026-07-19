@@ -25,6 +25,9 @@ import { makePbxClientFactory } from "./pbx/client";
 import { TriageOrchestrator } from "./triage/orchestrator";
 import { WatchmanRunner } from "./watchman/runner";
 import { registerAdminRoutes } from "./actions/adminRoutes";
+import { registerPolicyAdminRoutes } from "./policy/adminRoutes";
+import { IdentityResolver } from "./channels/identity";
+import { EmailChannel } from "./channels/email";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -92,6 +95,18 @@ async function main() {
     registerDiagRoutes(app, diagEngine);
     registerActionRoutes(app, actionService);
     registerAdminRoutes(app, prisma);
+    registerPolicyAdminRoutes(app, prisma, audit);
+
+    // Email channel: inbound support mail → identity → engine → reply.
+    // Exposed for the IMAP poller / webhook to POST parsed messages into.
+    const emailChannel = new EmailChannel(engine, new IdentityResolver(prisma), notifier, audit);
+    app.post("/agent/channels/email/inbound", async (req, reply) => {
+      const secret = process.env.AGENT_INTERNAL_SECRET;
+      if (!secret || req.headers["x-agent-internal-secret"] !== secret) return reply.code(403).send({ error: "forbidden" });
+      const body = (req.body ?? {}) as any;
+      if (typeof body.from !== "string" || typeof body.text !== "string") return reply.code(400).send({ error: "bad_request" });
+      return emailChannel.handleInbound({ from: body.from, subject: body.subject, text: body.text, messageId: body.messageId });
+    });
 
     // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
     // auto-revert actions every 5 minutes.
