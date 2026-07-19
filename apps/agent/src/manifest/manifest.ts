@@ -21,6 +21,11 @@ export const Capability = z.object({
   status: CapabilityStatus,
   defaultLimits: z.record(z.string(), z.number()).optional(),
   defaultCustomerMode: z.enum(["allowed", "ask_owner", "blocked"]).optional(),
+  /** True for PBX-write capabilities. */
+  pbxWrite: z.boolean().optional(),
+  /** Certified in simulation does NOT authorize live PBX writes. liveEnabled
+   *  must be independently flipped (after PW-2 live validation + owner action). */
+  liveEnabled: z.boolean().optional(),
 });
 export type Capability = z.infer<typeof Capability>;
 

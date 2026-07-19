@@ -19,8 +19,19 @@ test("GATE: planned/built/suspended capabilities are not executable", () => {
   assert.deepEqual(exec, ["d", "e"]);
 });
 
-test("GATE: fresh manifest exposes nothing (nothing certified yet)", () => {
-  // Phase 0 truth: until the certification harness flips statuses, the agent
-  // has ZERO executable capabilities. This test is the owner mandate in code.
-  assert.equal(executableCapabilities().length, 0);
+test("GATE: only certified/live capabilities are executable; planned/built are not", () => {
+  const all = loadManifest();
+  const exec = executableCapabilities(all);
+  // Everything exposed must be certified or live — never planned/built/suspended.
+  assert.ok(exec.every((c) => c.status === "certified" || c.status === "live"));
+  // Planned capabilities (e.g. watchman, transcription) must NOT be exposed.
+  assert.ok(!exec.some((c) => c.id === "watchman.security_monitor"));
+  assert.ok(!exec.some((c) => c.id === "owner.kill_switch")); // still planned
+});
+
+test("GATE: PBX-write capabilities are certified in SIM but never live-enabled from the manifest", () => {
+  const pbx = loadManifest().filter((c) => c.pbxWrite);
+  assert.ok(pbx.length >= 14);
+  // Certified means sim-proven; liveEnabled must stay false until PW-2 + owner action.
+  assert.ok(pbx.every((c) => c.liveEnabled === false));
 });

@@ -2,16 +2,16 @@
   "$comment": "Connect AI Agent Capability Manifest (machine twin of docs/ai-support-agent/CAPABILITIES.md). OWNER MANDATE: the tool registry loads ONLY capabilities with status 'certified' or 'live'. Statuses: planned | built | certified | live | suspended. Never hand-edit status to certified — the certification harness does that.",
   "manifestVersion": 1,
   "capabilities": [
-    { "id": "read.extension_status", "kind": "read", "roles": ["owner", "customer"], "title": "Extension registration status (Connect DB mirror — zero PBX contact)", "status": "built" },
+    { "id": "read.extension_status", "kind": "read", "roles": ["owner", "customer"], "title": "Extension registration status (Connect DB mirror — zero PBX contact)", "status": "certified" },
     { "id": "read.device_reachability", "kind": "read", "roles": ["owner", "customer"], "title": "Device reachability / transport / NAT info", "status": "planned" },
     { "id": "read.active_call_presence", "kind": "read", "roles": ["owner", "customer"], "title": "Active-call presence check for an extension", "status": "planned" },
-    { "id": "read.cdr_history", "kind": "read", "roles": ["owner", "customer"], "title": "CDR / call history lookup (Connect DB)", "status": "built" },
+    { "id": "read.cdr_history", "kind": "read", "roles": ["owner", "customer"], "title": "CDR / call history lookup (Connect DB)", "status": "certified" },
     { "id": "read.voicemail_state", "kind": "read", "roles": ["owner", "customer"], "title": "Voicemail box status; forwarding/DND/greeting state", "status": "planned" },
     { "id": "read.route_config", "kind": "read", "roles": ["owner", "customer"], "title": "IVR / inbound route / time-condition config (read)", "status": "planned" },
     { "id": "read.trunk_status", "kind": "read", "roles": ["owner"], "title": "Trunk status (read)", "status": "planned" },
     { "id": "read.recording_transcript", "kind": "read", "roles": ["owner", "customer"], "title": "Recording lookup + transcript retrieval", "status": "planned" },
     { "id": "read.platform_health", "kind": "read", "roles": ["owner"], "title": "loopcom platform health snapshot", "status": "planned" },
-    { "id": "diag.full_diagnosis", "kind": "read", "roles": ["owner", "customer"], "title": "Structured diagnosis with ranked root causes + report", "status": "built" },
+    { "id": "diag.full_diagnosis", "kind": "read", "roles": ["owner", "customer"], "title": "Structured diagnosis with ranked root causes + report", "status": "certified" },
 
     { "id": "action.A1.temp_forward", "kind": "action", "roles": ["owner", "customer"], "title": "Temporary call forwarding (auto-revert)", "defaultLimits": { "maxDurationHours": 24, "maxPerDay": 3 }, "status": "planned" },
     { "id": "action.A2.forward_set_clear", "kind": "action", "roles": ["owner", "customer"], "title": "Forward set/clear (uncond/busy/no-answer)", "status": "planned" },
@@ -33,6 +33,21 @@
     { "id": "owner.policy_edit", "kind": "owner", "roles": ["owner"], "title": "Natural-language per-tenant policy editing (confirm-diff)", "status": "planned" },
     { "id": "owner.history_toggle", "kind": "owner", "roles": ["owner"], "title": "History-visibility toggle per tenant", "status": "planned" },
     { "id": "owner.voice_studio", "kind": "owner", "roles": ["owner"], "title": "Voice Studio: clone voices, generate/preview prompts", "status": "planned" },
-    { "id": "owner.kill_switch", "kind": "owner", "roles": ["owner"], "title": "Kill switch", "status": "planned" }
+    { "id": "owner.kill_switch", "kind": "owner", "roles": ["owner"], "title": "Kill switch", "status": "planned" },
+
+    { "id": "pbx.P1", "kind": "action", "roles": ["owner"], "title": "Create tenant (additive)", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P2", "kind": "action", "roles": ["owner"], "title": "Add inbound DID to tenant (sub-collection, never tenant PUT)", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P3", "kind": "action", "roles": ["owner"], "title": "Apply changes for an agent-created tenant", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P4", "kind": "action", "roles": ["owner"], "title": "Create extension", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P5", "kind": "action", "roles": ["owner"], "title": "Create/attach device to an agent-created extension", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P6", "kind": "action", "roles": ["owner"], "title": "Set features on an agent-created extension", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P7", "kind": "action", "roles": ["owner"], "title": "Create IVR", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P8", "kind": "action", "roles": ["owner"], "title": "Create inbound route (additive)", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P9", "kind": "action", "roles": ["owner"], "title": "Create outbound route (extra confirmation)", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P10", "kind": "action", "roles": ["owner"], "title": "Create ring group", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P11", "kind": "action", "roles": ["owner"], "title": "Create queue", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P12", "kind": "action", "roles": ["owner"], "title": "Create time condition / time group", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P13", "kind": "action", "roles": ["owner"], "title": "Create virtual ext / conference / parking / feature code", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.P14", "kind": "action", "roles": ["owner"], "title": "Upload IVR prompt audio (Voice Studio)", "pbxWrite": true, "status": "certified", "liveEnabled": false }
   ]
 }
