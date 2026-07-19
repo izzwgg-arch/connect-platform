@@ -1,0 +1,92 @@
+/**
+ * Notifier — email on every action, approval requests, escalations, digests
+ * (PLAN.md §13). SMS (Twilio) hook lands in Phase 3.
+ * Degrades gracefully: without SMTP creds it queues to the audit log only and
+ * warns — it never blocks or crashes the caller.
+ */
+import nodemailer, { type Transporter } from "nodemailer";
+import type { AgentConfig } from "../config";
+import type { AuditLog } from "../audit/audit";
+
+export type MailKind =
+  | "action_executed"
+  | "action_reverted"
+  | "action_failed"
+  | "approval_request"
+  | "escalation"
+  | "incident"
+  | "daily_digest"
+  | "test";
+
+export interface Mail {
+  kind: MailKind;
+  to: string[];
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+export class Notifier {
+  private transporter: Transporter | null = null;
+
+  constructor(
+    private cfg: AgentConfig,
+    private audit: AuditLog,
+  ) {
+    if (cfg.smtp.host && cfg.smtp.user && cfg.smtp.pass) {
+      this.transporter = nodemailer.createTransport({
+        host: cfg.smtp.host,
+        port: cfg.smtp.port,
+        secure: cfg.smtp.port === 465,
+        auth: { user: cfg.smtp.user, pass: cfg.smtp.pass },
+      });
+    }
+  }
+
+  get configured(): boolean {
+    return this.transporter !== null;
+  }
+
+  async send(mail: Mail): Promise<{ sent: boolean; reason?: string }> {
+    await this.audit.record({
+      actor: "system",
+      event: `notify.${mail.kind}`,
+      payload: { to: mail.to, subject: mail.subject, configured: this.configured },
+    });
+    if (!this.transporter) {
+      // eslint-disable-next-line no-console
+      console.warn(`[notifier] SMTP not configured — mail "${mail.subject}" recorded to audit only`);
+      return { sent: false, reason: "smtp_not_configured" };
+    }
+    try {
+      await this.transporter.sendMail({
+        from: this.cfg.smtp.from,
+        to: mail.to.join(", "),
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+      });
+      return { sent: true };
+    } catch (err) {
+      // Retry once, then record failure — audit row already exists either way.
+      try {
+        await this.transporter.sendMail({
+          from: this.cfg.smtp.from,
+          to: mail.to.join(", "),
+          subject: mail.subject,
+          text: mail.text,
+          html: mail.html,
+        });
+        return { sent: true };
+      } catch (err2) {
+        await this.audit.record({ actor: "system", event: "notify.failed", payload: { subject: mail.subject, error: String(err2) } });
+        return { sent: false, reason: String(err2) };
+      }
+    }
+  }
+
+  /** Every executed action emails the owner — hard rule. */
+  ownerRecipients(): string[] {
+    return [this.cfg.ownerEmail, ...this.cfg.teamEmails];
+  }
+}

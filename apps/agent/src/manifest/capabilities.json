@@ -1,0 +1,38 @@
+{
+  "$comment": "Connect AI Agent Capability Manifest (machine twin of docs/ai-support-agent/CAPABILITIES.md). OWNER MANDATE: the tool registry loads ONLY capabilities with status 'certified' or 'live'. Statuses: planned | built | certified | live | suspended. Never hand-edit status to certified — the certification harness does that.",
+  "manifestVersion": 1,
+  "capabilities": [
+    { "id": "read.extension_status", "kind": "read", "roles": ["owner", "customer"], "title": "Extension registration status + qualify", "status": "planned" },
+    { "id": "read.device_reachability", "kind": "read", "roles": ["owner", "customer"], "title": "Device reachability / transport / NAT info", "status": "planned" },
+    { "id": "read.active_call_presence", "kind": "read", "roles": ["owner", "customer"], "title": "Active-call presence check for an extension", "status": "planned" },
+    { "id": "read.cdr_history", "kind": "read", "roles": ["owner", "customer"], "title": "CDR / call history lookup (Connect DB)", "status": "planned" },
+    { "id": "read.voicemail_state", "kind": "read", "roles": ["owner", "customer"], "title": "Voicemail box status; forwarding/DND/greeting state", "status": "planned" },
+    { "id": "read.route_config", "kind": "read", "roles": ["owner", "customer"], "title": "IVR / inbound route / time-condition config (read)", "status": "planned" },
+    { "id": "read.trunk_status", "kind": "read", "roles": ["owner"], "title": "Trunk status (read)", "status": "planned" },
+    { "id": "read.recording_transcript", "kind": "read", "roles": ["owner", "customer"], "title": "Recording lookup + transcript retrieval", "status": "planned" },
+    { "id": "read.platform_health", "kind": "read", "roles": ["owner"], "title": "loopcom platform health snapshot", "status": "planned" },
+    { "id": "diag.full_diagnosis", "kind": "read", "roles": ["owner", "customer"], "title": "Structured diagnosis with ranked root causes + report", "status": "planned" },
+
+    { "id": "action.A1.temp_forward", "kind": "action", "roles": ["owner", "customer"], "title": "Temporary call forwarding (auto-revert)", "defaultLimits": { "maxDurationHours": 24, "maxPerDay": 3 }, "status": "planned" },
+    { "id": "action.A2.forward_set_clear", "kind": "action", "roles": ["owner", "customer"], "title": "Forward set/clear (uncond/busy/no-answer)", "status": "planned" },
+    { "id": "action.A3.ivr_switch", "kind": "action", "roles": ["owner"], "title": "IVR switch on inbound route (auto-revert)", "status": "planned" },
+    { "id": "action.A4.time_condition_override", "kind": "action", "roles": ["owner"], "title": "Time-condition override (auto-revert)", "status": "planned" },
+    { "id": "action.A5.vm_pin_reset", "kind": "action", "roles": ["owner", "customer"], "title": "Voicemail PIN reset", "defaultCustomerMode": "ask_owner", "status": "planned" },
+    { "id": "action.A6.temp_greeting", "kind": "action", "roles": ["owner", "customer"], "title": "Temp voicemail greeting on/off (auto-revert)", "status": "planned" },
+    { "id": "action.A7.dnd", "kind": "action", "roles": ["owner", "customer"], "title": "DND set/clear (auto-revert)", "defaultLimits": { "maxDurationHours": 8 }, "status": "planned" },
+    { "id": "action.A8.ring_group_member", "kind": "action", "roles": ["owner"], "title": "Ring-group member add/remove (temporary)", "status": "planned" },
+    { "id": "action.A9.queue_agent_pause", "kind": "action", "roles": ["owner"], "title": "Queue agent pause/unpause", "status": "planned" },
+    { "id": "action.A10.reprovision", "kind": "action", "roles": ["owner", "customer"], "title": "Phone reprovision / SIP re-register kick", "status": "planned" },
+    { "id": "action.A11.caller_blacklist", "kind": "action", "roles": ["owner"], "title": "Caller blacklist (tenant-level, optional expiry)", "status": "planned" },
+    { "id": "action.A12.ivr_prompt_audio", "kind": "action", "roles": ["owner"], "title": "IVR prompt audio update (Voice Studio)", "status": "planned" },
+
+    { "id": "watchman.security_monitor", "kind": "monitor", "roles": ["owner"], "title": "Security monitoring loops (read-only)", "status": "planned" },
+    { "id": "watchman.health_monitor", "kind": "monitor", "roles": ["owner"], "title": "Health monitoring loops (read-only)", "status": "planned" },
+    { "id": "transcribe.recordings", "kind": "pipeline", "roles": ["owner"], "title": "Call-recording transcription (EN Whisper / YI Everett.ai)", "status": "planned" },
+
+    { "id": "owner.policy_edit", "kind": "owner", "roles": ["owner"], "title": "Natural-language per-tenant policy editing (confirm-diff)", "status": "planned" },
+    { "id": "owner.history_toggle", "kind": "owner", "roles": ["owner"], "title": "History-visibility toggle per tenant", "status": "planned" },
+    { "id": "owner.voice_studio", "kind": "owner", "roles": ["owner"], "title": "Voice Studio: clone voices, generate/preview prompts", "status": "planned" },
+    { "id": "owner.kill_switch", "kind": "owner", "roles": ["owner"], "title": "Kill switch", "status": "planned" }
+  ]
+}

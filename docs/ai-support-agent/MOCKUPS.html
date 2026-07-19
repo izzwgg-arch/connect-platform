@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect AI Agent — UI Mockups</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#2b3648;--text:#e6edf3;--dim:#8b98a9;--accent:#3b82f6;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif}
+.app{display:flex;min-height:100vh}
+.side{width:220px;background:var(--panel);border-right:1px solid var(--border);padding:16px;position:fixed;top:0;bottom:0}
+.logo{font-weight:700;font-size:16px;margin-bottom:4px}.logo span{color:var(--accent)}
+.tag{font-size:11px;color:var(--dim);margin-bottom:20px}
+.nav{list-style:none}.nav li{padding:9px 12px;border-radius:8px;cursor:pointer;color:var(--dim);margin-bottom:4px;font-weight:500}
+.nav li:hover{background:var(--panel2);color:var(--text)}.nav li.on{background:var(--accent);color:#fff}
+.main{margin-left:220px;flex:1;padding:24px 32px;max-width:1100px}
+.view{display:none}.view.on{display:block}
+h1{font-size:20px;margin-bottom:2px}.sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px}
+.row{display:flex;gap:14px;flex-wrap:wrap}.row .card{flex:1;min-width:200px}
+.kpi{font-size:24px;font-weight:700}.kpil{font-size:12px;color:var(--dim)}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:600}
+.p-green{background:#12331f;color:var(--green)}.p-amber{background:#3a2c0d;color:var(--amber)}
+.p-red{background:#3b1417;color:var(--red)}.p-blue{background:#12233f;color:#60a5fa}.p-purple{background:#241d3d;color:var(--purple)}
+.btn{border:none;border-radius:8px;padding:8px 16px;font-weight:600;cursor:pointer;font-size:13px}
+.b-green{background:var(--green);color:#04150a}.b-red{background:transparent;color:var(--red);border:1px solid var(--red)}
+.b-blue{background:var(--accent);color:#fff}.b-ghost{background:var(--panel2);color:var(--text)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid #1e2634;vertical-align:top}
+.mono{font-family:Consolas,monospace;font-size:12px}
+/* chat */
+.chatwrap{max-width:420px;background:var(--panel);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+.chathead{background:var(--panel2);padding:14px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#a78bfa);display:flex;align-items:center;justify-content:center;font-weight:700}
+.chatbody{padding:16px;display:flex;flex-direction:column;gap:10px;min-height:340px}
+.msg{max-width:82%;padding:10px 13px;border-radius:14px;font-size:13px}
+.m-agent{background:var(--panel2);border:1px solid var(--border);border-bottom-left-radius:4px;align-self:flex-start}
+.m-user{background:var(--accent);color:#fff;border-bottom-right-radius:4px;align-self:flex-end}
+.voice{display:flex;align-items:center;gap:8px}.bars{display:flex;gap:2px;align-items:center}
+.bars i{display:block;width:3px;background:#cfe0ff;border-radius:2px}
+.chatin{display:flex;gap:8px;padding:12px;border-top:1px solid var(--border)}
+.chatin input{flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:9px 14px;color:var(--text);font-size:13px}
+.iconbtn{width:38px;height:38px;border-radius:50%;background:var(--panel2);border:1px solid var(--border);color:var(--dim);cursor:pointer;font-size:16px}
+.note{font-size:11px;color:var(--dim);margin-top:10px}
+.diff{background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:Consolas,monospace;font-size:12px;margin:10px 0}
+.diff .del{color:var(--red)}.diff .add{color:var(--green)}
+.feed{list-style:none}.feed li{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #1e2634;font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex-shrink:0}
+.ts{color:var(--dim);font-size:11px;white-space:nowrap;width:70px;flex-shrink:0}
+.sev{width:6px;border-radius:3px;flex-shrink:0}
+h3{font-size:14px;margin-bottom:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}.side{position:static;width:100%}.main{margin:0}.app{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="side">
+  <div class="logo">Connect <span>AI Agent</span></div>
+  <div class="tag">"Shammes" — UI mockups v1</div>
+  <ul class="nav" id="nav">
+    <li class="on" data-v="chat">💬 Client Support Chat</li>
+    <li data-v="appr">✅ Approvals Queue</li>
+    <li data-v="act">📋 Agent Activity</li>
+    <li data-v="diag">🩺 Diagnostics Report</li>
+    <li data-v="watch">🛡️ Watchman Dashboard</li>
+    <li data-v="perm">🔐 Customer Permissions</li>
+    <li data-v="voice">🎙️ Voice Studio</li>
+    <li data-v="ivr">📞 AI Receptionist</li>
+  </ul>
+</aside>
+<main class="main">
+
+<!-- ================= CHAT ================= -->
+<section class="view on" id="v-chat">
+  <h1>Client Support Chat</h1>
+  <div class="sub">Lives in the client portal + desktop app. Text, voice notes, English/Yiddish auto-detected. What the client sees.</div>
+  <div class="chatwrap">
+    <div class="chathead">
+      <div class="avatar">C</div>
+      <div style="flex:1"><div style="font-weight:600">Connect Support</div><div style="font-size:11px;color:var(--green)">● Online — AI assistant</div></div>
+      <button class="btn b-ghost" style="font-size:12px;padding:6px 12px">🕘 History</button>
+    </div>
+    <div style="background:var(--panel2);border-bottom:1px solid var(--border);padding:8px 16px;font-size:12px;color:var(--dim)">Past chats (visible because history is ON for this tenant): &nbsp;<u>Jul 12 — Voicemail not working ✓</u> &nbsp;·&nbsp; <u>Jun 30 — New phone setup ✓</u> &nbsp;·&nbsp; <b style="color:var(--text)">Today — current chat</b></div>
+    <div class="chatbody">
+      <div class="msg m-agent">Hi Mrs. Goldman 👋 How can I help you today?</div>
+      <div class="msg m-user">transfer my calls to extension 204 till tomorrow morning</div>
+      <div class="msg m-agent">Got it. To confirm: forward <b>all calls for ext 101 (Front Desk)</b> to <b>ext 204 (Back Office)</b>, starting now until <b>tomorrow (Mon) 8:00 AM</b>, then automatically back to normal. Correct?</div>
+      <div class="msg m-user">yes</div>
+      <div class="msg m-agent">✅ Request submitted for approval — this usually takes a few minutes. I'll confirm here the moment it's live.</div>
+      <div class="msg m-agent"><span class="pill p-green">Done</span> Your calls now forward to ext 204. I'll switch it back automatically tomorrow at 8:00 AM and let you know.</div>
+      <div class="msg m-user voice"><span>▶</span><span class="bars"><i style="height:6px"></i><i style="height:12px"></i><i style="height:8px"></i><i style="height:14px"></i><i style="height:7px"></i><i style="height:11px"></i><i style="height:5px"></i></span><span style="font-size:11px">0:07</span></div>
+      <div class="msg m-agent">איך הער דיך 🙂 דו װילסט אױך אַז די װױס־מעיל זאָל גײן צו 204? — I hear you! You'd also like voicemail to go to 204?</div>
+    </div>
+    <div class="chatin">
+      <button class="iconbtn">🎤</button>
+      <input placeholder="Type a message…">
+      <button class="iconbtn" style="background:var(--accent);color:#fff;border:none">➤</button>
+    </div>
+  </div>
+  <div class="note">Voice note → transcribed (Whisper / Everett.ai for Yiddish) → same flow. Holding 🎤 enters <b>live voice mode</b>: fully hands-free conversation — talk in English or Yiddish, the agent talks back in real time (barge-in supported). Identity & tenant come from portal login — the agent can only see/act on this tenant.</div>
+</section>
+
+<!-- ================= APPROVALS ================= -->
+<section class="view" id="v-appr">
+  <h1>Approvals Queue</h1>
+  <div class="sub">Admin portal — every PBX write waits here. Same items arrive by email with one-tap signed Approve/Deny links.</div>
+
+  <div class="card" style="border-left:3px solid var(--amber)">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div><span class="pill p-amber">PENDING</span> &nbsp;<b>Temporary call forwarding</b> — Tenant: Goldman Realty</div>
+      <div style="color:var(--dim);font-size:12px">Requested 2 min ago · expires in 3h 58m</div>
+    </div>
+    <div style="margin:8px 0;color:var(--dim)">Client (Sarah G., portal chat): “transfer my calls to extension 204 till tomorrow morning”</div>
+    <div class="diff">
+<span class="del">- ext 101 forward: none</span>
+<span class="add">+ ext 101 forward-all → ext 204   (until Mon Jul 20, 8:00 AM — auto-revert scheduled)</span></div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:10px">Pre-flight ✔ ext 204 exists & registered · ✔ no active call on ext 101 · ✔ snapshot taken · ✔ revert path verified · Risk: <b>low</b> · Blast radius: <b>1 extension</b></div>
+    <button class="btn b-green">✓ Approve</button> &nbsp;<button class="btn b-red">✕ Deny</button> &nbsp;<button class="btn b-ghost">View conversation</button>
+  </div>
+
+  <div class="card" style="border-left:3px solid var(--amber)">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div><span class="pill p-amber">PENDING</span> &nbsp;<b>IVR switch</b> — Tenant: Feldman Medical</div>
+      <div style="color:var(--dim);font-size:12px">Requested 14 min ago</div>
+    </div>
+    <div style="margin:8px 0;color:var(--dim)">Office manager (email): “put on the holiday menu until the 25th”</div>
+    <div class="diff">
+<span class="del">- DID (718) 555-0142 → IVR "Main Menu"</span>
+<span class="add">+ DID (718) 555-0142 → IVR "Holiday Menu"   (until Fri Jul 25, 9:00 AM — auto-revert scheduled)</span></div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:10px">Pre-flight ✔ IVR "Holiday Menu" exists & has valid destinations · ✔ snapshot taken · Risk: <b>medium</b> · Blast radius: <b>1 inbound route</b></div>
+    <button class="btn b-green">✓ Approve</button> &nbsp;<button class="btn b-red">✕ Deny</button> &nbsp;<button class="btn b-ghost">View conversation</button>
+  </div>
+
+  <div class="card">
+    <h3>Recently decided</h3>
+    <table>
+      <tr><th>Action</th><th>Tenant</th><th>Decided by</th><th>Status</th></tr>
+      <tr><td>Voicemail PIN reset — ext 305</td><td>Katz & Co</td><td>Izzy · 10:41 AM</td><td><span class="pill p-green">EXECUTED</span></td></tr>
+      <tr><td>DND until 2 PM — ext 118</td><td>Goldman Realty</td><td>Izzy · 9:15 AM</td><td><span class="pill p-blue">REVERTED ON TIME</span></td></tr>
+      <tr><td>Ring group add ext 220</td><td>Feldman Medical</td><td>Moshe · Yesterday</td><td><span class="pill p-red">DENIED</span></td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ================= ACTIVITY ================= -->
+<section class="view" id="v-act">
+  <h1>Agent Activity Console</h1>
+  <div class="sub">Everything the agent does, live. Every row is also in the immutable audit log and (for actions) in Izzy's inbox.</div>
+  <div class="row">
+    <div class="card"><div class="kpi">47</div><div class="kpil">Conversations today</div></div>
+    <div class="card"><div class="kpi">31</div><div class="kpil">Resolved without humans</div></div>
+    <div class="card"><div class="kpi">9</div><div class="kpil">Actions executed (approved)</div></div>
+    <div class="card"><div class="kpi">4</div><div class="kpil">Escalated to team</div></div>
+    <div class="card"><div class="kpi" style="color:var(--green)">ARMED</div><div class="kpil">Kill switch status</div></div>
+  </div>
+  <div class="card">
+    <h3>Live feed</h3>
+    <ul class="feed">
+      <li><span class="ts">11:42 AM</span><span class="dot" style="background:var(--green)"></span><div><b>Action executed</b> — Fwd ext 101→204 (Goldman Realty), approved by Izzy. Verified OK. Auto-revert Mon 8:00 AM. <span class="pill p-blue">emailed</span></div></li>
+      <li><span class="ts">11:40 AM</span><span class="dot" style="background:var(--amber)"></span><div><b>Approval requested</b> — IVR switch, Feldman Medical. Email sent to 2 approvers.</div></li>
+      <li><span class="ts">11:31 AM</span><span class="dot" style="background:var(--purple)"></span><div><b>Diagnosis completed</b> — ext 412 (Katz & Co) "phone not ringing": DND was enabled on the device. Client guided to disable; confirmed fixed. KB article drafted.</div></li>
+      <li><span class="ts">11:18 AM</span><span class="dot" style="background:var(--accent)"></span><div><b>Transcript ready</b> — recording #88123 (4:32, English), linked to CDR & searchable.</div></li>
+      <li><span class="ts">11:02 AM</span><span class="dot" style="background:var(--red)"></span><div><b>Escalated</b> — Weinberg Law: intermittent one-way audio, evidence points to client-side NAT/router. Full diagnostic report emailed to team + Izzy. <span class="pill p-red">needs human</span></div></li>
+      <li><span class="ts">10:55 AM</span><span class="dot" style="background:var(--dim)"></span><div><b>Read</b> — registration status ext 210–229 (Feldman Medical) for diagnosis #D-2214.</div></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= DIAGNOSTICS ================= -->
+<section class="view" id="v-diag">
+  <h1>Diagnostics Report #D-2219</h1>
+  <div class="sub">Auto-generated by the agent (Claude) and emailed to the team before any human touched the ticket.</div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div><b>Tenant:</b> Weinberg Law &nbsp;·&nbsp; <b>Extension:</b> 307 (Reception) &nbsp;·&nbsp; <b>Reported via:</b> portal chat, 11:02 AM</div>
+      <span class="pill p-amber">SEVERITY: MEDIUM</span>
+    </div>
+    <div style="color:var(--dim)">Client report: “Callers say they can hear us but we can't hear them, happens a few times a day.”</div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Checks performed (read-only)</h3>
+      <table>
+        <tr><td>SIP registration</td><td><span class="pill p-green">OK</span> <span class="mono">Yealink T54W · 192.168.1.44 via NAT</span></td></tr>
+        <tr><td>Device reachability</td><td><span class="pill p-green">OK</span> <span class="mono">qualify 38 ms</span></td></tr>
+        <tr><td>CDR — last 48h</td><td><span class="pill p-amber">6 calls &lt; 15 s after answer</span></td></tr>
+        <tr><td>RTP/NAT symptoms</td><td><span class="pill p-red">One-way audio pattern detected</span></td></tr>
+        <tr><td>Fwd / DND / VM state</td><td><span class="pill p-green">Clean</span></td></tr>
+        <tr><td>Other exts, same site</td><td><span class="pill p-amber">Ext 309 shows same pattern</span></td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Root-cause hypotheses (ranked)</h3>
+      <ol style="padding-left:18px;display:grid;gap:8px">
+        <li><b>86%</b> — Client-side router SIP ALG mangling RTP (two extensions affected at same site; classic inbound-audio loss pattern).</li>
+        <li><b>9%</b> — NAT keep-alive interval too long on device profile.</li>
+        <li><b>5%</b> — Upstream carrier RTP issue (no matching trunk-wide pattern found).</li>
+      </ol>
+      <h3 style="margin-top:14px">Recommended fix</h3>
+      <div style="color:var(--dim);font-size:13px">Outside agent's repair scope (client-side hardware). Guide client to disable SIP ALG on their router (model captured: TP-Link ER605). If persists → prepared fallback: reprovision profile with RTP keep-alive 15s (<b>action A10 pre-drafted, awaiting team decision</b>).</div>
+    </div>
+  </div>
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+    <div style="font-size:12px;color:var(--dim)">Report emailed to team + Izzy 11:04 AM · client received plain-language version in chat · KB matched: “One-way audio — SIP ALG” (7 prior cases)</div>
+    <div><button class="btn b-blue">Open pre-drafted action</button> &nbsp;<button class="btn b-ghost">Full evidence log</button></div>
+  </div>
+</section>
+
+<!-- ================= WATCHMAN ================= -->
+<section class="view" id="v-watch">
+  <h1>Watchman — Security & Health</h1>
+  <div class="sub">24/7 read-only monitoring of loopcom + PBX. Info → daily digest · Warning → email ≤15 min · Critical → email + SMS immediately.</div>
+  <div class="row">
+    <div class="card"><div class="kpi" style="color:var(--green)">HEALTHY</div><div class="kpil">Platform (7/7 containers up)</div></div>
+    <div class="card"><div class="kpi" style="color:var(--green)">OK</div><div class="kpil">PBX reachability · trunks 12/12</div></div>
+    <div class="card"><div class="kpi" style="color:var(--amber)">1</div><div class="kpil">Open warnings</div></div>
+    <div class="card"><div class="kpi">0</div><div class="kpil">Critical incidents (30 d)</div></div>
+    <div class="card"><div class="kpi">72%</div><div class="kpil">Disk used (loopcom)</div></div>
+  </div>
+  <div class="card">
+    <h3>Incidents & signals</h3>
+    <ul class="feed">
+      <li><span class="sev" style="background:var(--red)"></span><span class="ts">Jul 18<br>02:13</span><div><b>Toll-fraud pattern blocked at detection</b> — 41 int'l call attempts to +252… from ext 118 credentials, 2–3 AM. Registration source: new IP (Netherlands). <span class="pill p-red">CRITICAL → emailed + SMS</span> · Team rotated secret 02:31 · agent verified attempts stopped, monitored 48h. Post-incident report filed.</div></li>
+      <li><span class="sev" style="background:var(--amber)"></span><span class="ts">Today<br>06:10</span><div><b>Cert expiry approaching</b> — app.connectcomunications.com TLS expires in 12 days. Renewal job exists; will re-check in 3 days. <span class="pill p-amber">WARNING</span></div></li>
+      <li><span class="sev" style="background:var(--amber)"></span><span class="ts">Today<br>04:00</span><div><b>SIP brute force</b> — 2,300 failed REGISTER from 3 IPs (fail2ban banned all 3 automatically). Pattern consistent with routine scanning. <span class="pill p-blue">logged, in digest</span></div></li>
+      <li><span class="sev" style="background:var(--green)"></span><span class="ts">Today<br>03:30</span><div><b>Backups verified</b> — Postgres dump fresh (2h old), restore-test checksum OK. Deploy queue idle. All webhook deliveries green.</div></li>
+    </ul>
+  </div>
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+    <div style="font-size:12px;color:var(--dim)">Daily digest → Izzy 7:00 AM · Watchman is read-only: it detects, analyzes (Claude), and alerts — humans act. Auto-remediation is a Phase-7 decision, per capability, per Izzy.</div>
+    <button class="btn b-ghost">View 7 AM digest</button>
+  </div>
+</section>
+
+<!-- ================= AI RECEPTIONIST ================= -->
+<section class="view" id="v-ivr">
+  <h1>AI Receptionist — Conversational IVR</h1>
+  <div class="sub">Per-tenant product: callers talk naturally (English/Yiddish auto-detected) instead of pressing menu options. The receptionist answers, acts, or transfers the live call. Config + a real call below.</div>
+  <div class="row">
+    <div class="card">
+      <h3>Tenant setup — Goldman Realty</h3>
+      <table>
+        <tr><td>Status</td><td><span class="pill p-green">LIVE</span> on (718) 555-0198</td></tr>
+        <tr><td>Persona / voice</td><td>"Rivky" — warm, brief · <span class="pill p-purple">cloned voice</span></td></tr>
+        <tr><td>Languages</td><td>English + Yiddish (auto-detect) · DTMF fallback</td></tr>
+        <tr><td>May do</td><td>answer FAQs (hours, listings line, address) · take messages · check who's available · transfer with announce · book callbacks</td></tr>
+        <tr><td>Transfer map</td><td>sales → ring group 600 · rentals → ext 112 · "the boss" → ext 100 (VIP callers only)</td></tr>
+        <tr><td>After hours</td><td>messages only + emergency cell for tenants of managed buildings</td></tr>
+        <tr><td>Escape hatch</td><td>"receptionist" / silence ×2 / 0 → human queue, always</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Live call — 2:14 PM today</h3>
+      <ul class="feed">
+        <li><span class="ts">0:00</span><div>🤖 "Goldman Realty, this is Rivky — how can I help you?"</div></li>
+        <li><span class="ts">0:04</span><div>👤 "יאָ, איך רוף וועגן די דירה אויף בעדפֿאָרד עוועניו, איז משה דאָ?"</div></li>
+        <li><span class="ts">0:07</span><div>🤖 <i>(Yiddish detected · presence check: ext 112 on a call)</i> "משה איז יעצט אויפן טעלעפון. וילט איר איבערלאָזן אַ מעסעדזש, אָדער זאָל ער אײַך צוריקרופן?"</div></li>
+        <li><span class="ts">0:15</span><div>👤 "זאָל ער מיך צוריקרופן נאָך דריי."</div></li>
+        <li><span class="ts">0:18</span><div>🤖 Callback booked 3:15 PM → task + transcript emailed to Moshe · caller confirmed in Yiddish · call ended warmly. <span class="pill p-green">contained — no human needed</span></div></li>
+      </ul>
+      <div class="note">Every call: full transcript (Everett.ai for Yiddish), recording linked, action log. In-call actions on the caller's own call (transfer, message, callback) run per tenant config — config changes still require approval.</div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="card"><div class="kpi">78%</div><div class="kpil">Calls contained (30 d, pilot)</div></div>
+    <div class="card"><div class="kpi">96%</div><div class="kpil">Correct transfers</div></div>
+    <div class="card"><div class="kpi">1.3s</div><div class="kpil">Avg response latency</div></div>
+    <div class="card"><div class="kpi">41%</div><div class="kpil">Calls in Yiddish</div></div>
+  </div>
+</section>
+
+<!-- ================= PERMISSIONS ================= -->
+<section class="view" id="v-perm">
+  <h1>Customer Permissions — Policy Engine</h1>
+  <div class="sub">Per-tenant control of what the customer's agent may do. Edit toggles directly, or just tell the agent in plain English — it drafts the change, you confirm the diff. Enforced server-side in code.</div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div><b>Tenant: Goldman Realty</b> &nbsp;<span class="pill p-blue">policy v7</span> &nbsp;<span style="color:var(--dim);font-size:12px">updated by Izzy · Jul 19, 12:05 PM</span></div>
+      <button class="btn b-ghost">Change history</button>
+    </div>
+    <table>
+      <tr><th>Capability</th><th>Customer agent</th><th>Limits</th></tr>
+      <tr><td>Diagnose extensions / phones</td><td><span class="pill p-green">ALLOWED</span></td><td>own tenant only (always)</td></tr>
+      <tr><td>A1 Temporary call forwarding</td><td><span class="pill p-green">ALLOWED</span></td><td>max 24h · business hours only · 3/day</td></tr>
+      <tr><td>A7 DND set/clear</td><td><span class="pill p-green">ALLOWED</span></td><td>max 8h</td></tr>
+      <tr><td>A3 IVR switch</td><td><span class="pill p-red">BLOCKED</span></td><td>escalates to team instead</td></tr>
+      <tr><td>A5 Voicemail PIN reset</td><td><span class="pill p-amber">ASK OWNER</span></td><td>routes to Izzy for approval</td></tr>
+      <tr><td>View old chats (History)</td><td><span class="pill p-green">ON</span></td><td>toggle per tenant</td></tr>
+      <tr><td>Channels</td><td><span class="pill p-blue">CHAT + EMAIL</span></td><td>WhatsApp off for this tenant</td></tr>
+    </table>
+  </div>
+  <div class="card" style="border-left:3px solid var(--purple)">
+    <h3>Tell the agent (natural-language policy editing)</h3>
+    <div class="msg m-user" style="max-width:100%;margin-bottom:8px">Goldman Realty shouldn't be able to change forwarding on the boss's extension 100, and turn off their chat history.</div>
+    <div class="msg m-agent" style="max-width:100%">Here's the policy change for your confirmation:</div>
+    <div class="diff">
+<span class="del">- A1 forwarding: all extensions (101–130)</span>
+<span class="add">+ A1 forwarding: extensions 101–130 EXCEPT ext 100 (protected)</span>
+<span class="del">- History visible: ON</span>
+<span class="add">+ History visible: OFF</span></div>
+    <button class="btn b-green">✓ Confirm — apply policy v8</button> &nbsp;<button class="btn b-red">✕ Cancel</button>
+  </div>
+  <div class="note">Owner mode (Izzy) is not governed by this page — full catalog, own instruction = approval, but pre-flight checks, live-PBX protocol, audit log, and confirmation emails always still run.</div>
+</section>
+
+<!-- ================= VOICE STUDIO ================= -->
+<section class="view" id="v-voice">
+  <h1>Voice Studio</h1>
+  <div class="sub">Owner mode — clone voices (ElevenLabs), generate IVR prompts in English & Yiddish, preview, then deploy to an IVR through the normal approval + rollback flow (action A12).</div>
+  <div class="row">
+    <div class="card">
+      <h3>Voice library</h3>
+      <table>
+        <tr><th>Voice</th><th>Language</th><th>Type</th><th></th></tr>
+        <tr><td>Izzy — Office</td><td>EN + YI</td><td><span class="pill p-purple">Pro clone</span></td><td>▶ preview</td></tr>
+        <tr><td>Rivky — Reception</td><td>EN</td><td><span class="pill p-blue">Instant clone</span></td><td>▶ preview</td></tr>
+        <tr><td>Heimishe Male 1</td><td>YI (NY accent)</td><td><span class="pill p-amber">Experimental</span></td><td>▶ preview</td></tr>
+      </table>
+      <div style="margin-top:10px"><button class="btn b-blue">+ Clone new voice</button> <span style="font-size:11px;color:var(--dim)">upload/record samples · provenance recorded</span></div>
+    </div>
+    <div class="card">
+      <h3>Generate prompt</h3>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:6px">Voice: <b style="color:var(--text)">Izzy — Office</b> · Language: <b style="color:var(--text)">Yiddish</b></div>
+      <div style="background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:10px">א גוטן טאָג, איר האָט דערגרייכט גאָלדמאַן ריעלטי. פֿאַר סיילס, דריקט איינס…</div>
+      <div class="voice" style="background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;max-width:260px;margin-bottom:10px"><span>▶</span><span class="bars"><i style="height:7px"></i><i style="height:13px"></i><i style="height:9px"></i><i style="height:15px"></i><i style="height:6px"></i><i style="height:11px"></i></span><span style="font-size:11px">0:14 · render #3</span></div>
+      <button class="btn b-ghost">↻ Regenerate</button> &nbsp;<button class="btn b-blue">Deploy to IVR… (A12 approval)</button>
+    </div>
+  </div>
+  <div class="card" style="font-size:12px;color:var(--dim)">Deploys snapshot the current prompt for one-tap rollback. Yiddish TTS is experimental — for critical prompts the fallback is a human recording that the Studio ingests and deploys the same way.</div>
+</section>
+
+</main>
+</div>
+<script>
+document.getElementById('nav').addEventListener('click',e=>{
+  const li=e.target.closest('li'); if(!li)return;
+  document.querySelectorAll('.nav li').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+  li.classList.add('on');
+  document.getElementById('v-'+li.dataset.v).classList.add('on');
+});
+</script>
+</body>
+</html>

@@ -52,8 +52,8 @@ model CrmEmailConnection {
   /// Admin who manages a TENANT shared sender. Nullable for USER rows.
   managedBy User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
 
-  bulkJobs               CrmBulkEmailJob[]
-  driveFolders           CrmDriveFolder[]
+  bulkJobs     CrmBulkEmailJob[]
+  driveFolders CrmDriveFolder[]
   websiteSubmissionRules CrmWebsiteSubmissionEmailRule[]
   websiteSubmissions     CrmWebsiteSubmission[]
 
@@ -141,31 +141,31 @@ enum CrmWebsiteSubmissionStatus {
 }
 
 model CrmWebsiteSubmissionEmailRule {
-  id                     String                       @id @default(cuid())
-  tenantId               String
-  connectionId           String
-  name                   String
-  active                 Boolean                      @default(true)
-  senderEmail            String?
-  senderDomain           String?
-  subjectPattern         String?
-  bodyPatterns           Json?
-  fieldMap               Json                         @default("{}")
-  attachmentExpectations Json                         @default("[]")
-  assignmentUserId       String?
-  assignmentTeamId       String?
-  confidenceThreshold    Float                        @default(0.75)
-  mode                   CrmWebsiteSubmissionRuleMode @default(REVIEW_FIRST)
-  sampleMetadata         Json?
-  lastMatchedAt          DateTime?
-  createdByUserId        String?
-  createdAt              DateTime                     @default(now())
-  updatedAt              DateTime                     @updatedAt
+  id                      String                       @id @default(cuid())
+  tenantId                String
+  connectionId            String
+  name                    String
+  active                  Boolean                      @default(true)
+  senderEmail             String?
+  senderDomain            String?
+  subjectPattern          String?
+  bodyPatterns            Json?
+  fieldMap                Json                         @default("{}")
+  attachmentExpectations  Json                         @default("[]")
+  assignmentUserId        String?
+  assignmentTeamId        String?
+  confidenceThreshold     Float                        @default(0.75)
+  mode                    CrmWebsiteSubmissionRuleMode @default(REVIEW_FIRST)
+  sampleMetadata          Json?
+  lastMatchedAt           DateTime?
+  createdByUserId         String?
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
 
-  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  connection     CrmEmailConnection     @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  assignmentUser User?                  @relation("CrmWebsiteSubmissionRuleAssignmentUser", fields: [assignmentUserId], references: [id], onDelete: SetNull)
-  createdBy      User?                  @relation("CrmWebsiteSubmissionRuleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection     CrmEmailConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  assignmentUser User?              @relation("CrmWebsiteSubmissionRuleAssignmentUser", fields: [assignmentUserId], references: [id], onDelete: SetNull)
+  createdBy      User?              @relation("CrmWebsiteSubmissionRuleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   submissions    CrmWebsiteSubmission[]
 
   @@index([tenantId, connectionId, active])
@@ -237,30 +237,30 @@ model CrmEmailSendLog {
 /// CRM Email Template — Phase 1. Tenant-scoped, optionally user-scoped (private).
 /// Body is plain text; merge fields use {{contact.firstName}} style tokens.
 model CrmEmailTemplate {
-  id              String    @id @default(cuid())
+  id              String   @id @default(cuid())
   tenantId        String
   createdByUserId String?
   name            String
   subject         String
   bodyText        String
   previewText     String?
-  category        String    @default("Custom")
-  isFavorite      Boolean   @default(false)
-  isDraft         Boolean   @default(false)
-  usageCount      Int       @default(0)
+  category        String   @default("Custom")
+  isFavorite      Boolean  @default(false)
+  isDraft         Boolean  @default(false)
+  usageCount      Int      @default(0)
   lastUsedAt      DateTime?
   bodyHtml        String?
   bodyJson        Json?
-  builderVersion  Int       @default(1)
+  builderVersion  Int      @default(1)
   /// SHARED across tenant or PRIVATE to creator.
-  visibility      String    @default("SHARED")
-  isArchived      Boolean   @default(false)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  visibility      String   @default("SHARED")
+  isArchived      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  tenant      Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User?                        @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  bulkJobs    CrmBulkEmailJob[]
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?             @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  bulkJobs  CrmBulkEmailJob[]
   attachments CrmEmailTemplateAttachment[]
 
   @@index([tenantId, isArchived, updatedAt])
@@ -272,18 +272,18 @@ model CrmEmailTemplate {
 /// CRM SMS Template — tenant-scoped reusable text snippets for contact SMS.
 /// SMS sends still use Connect Chat/VoIP.ms validation; this model stores copy and attribution.
 model CrmSmsTemplate {
-  id              String    @id @default(cuid())
+  id              String   @id @default(cuid())
   tenantId        String
   createdByUserId String?
   name            String
   bodyText        String
-  visibility      String    @default("SHARED")
-  isFavorite      Boolean   @default(false)
-  isArchived      Boolean   @default(false)
-  usageCount      Int       @default(0)
+  visibility      String   @default("SHARED")
+  isFavorite      Boolean  @default(false)
+  isArchived      Boolean  @default(false)
+  usageCount      Int      @default(0)
   lastUsedAt      DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
@@ -361,9 +361,9 @@ model CrmEmailTemplateAttachment {
   isOptional       Boolean  @default(false)
   createdAt        DateTime @default(now())
 
-  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  template   CrmEmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  uploadedBy User?            @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template CrmEmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  uploadedBy User?          @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, templateId])
   @@index([tenantId, createdAt])
@@ -491,6 +491,13 @@ enum BillingInvoiceStatus {
   PAID
   FAILED
   OVERDUE
+  VOID
+}
+
+enum BillingPayLinkStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
   VOID
 }
 
@@ -787,6 +794,7 @@ model Tenant {
   paymentTransactions             PaymentTransaction[]
   billingRuns                     BillingRun[]
   billingEventLogs                BillingEventLog[]
+  billingPayLinks                 BillingPayLink[]
   solaExternalScheduleLinks       BillingSolaExternalScheduleLink[]
   customers                       Customer[]
   contacts                        Contact[]
@@ -823,21 +831,12 @@ model Tenant {
   ivrScheduleConfig               IvrScheduleConfig?
   ivrOverrideState                IvrOverrideState?
   ivrPublishRecords               IvrPublishRecord[]
-  // MOH control mode: "connect" = Connect manages this tenant's MOH; "pbx" =
-  // hands-off, native VitalPBX MOH (Connect suppresses/clears its keys). An
-  // active ADMIN multi-tenant schedule can still take a "pbx" tenant over for
-  // the window and restore it to "pbx" afterwards.
-  mohControlMode                  String                            @default("connect")
   mohProfiles                     MohProfile[]
   mohScheduleConfig               MohScheduleConfig?
   mohOverrideState                MohOverrideState?
   mohPublishRecords               MohPublishRecord[]
   mohLastPublishedState           MohLastPublishedState?
   mohExtensionOverrides           MohExtensionOverride[]
-  mohExtensionControls            MohExtensionControl[]
-  mohSourcePolicies               MohSourcePolicy[]
-  mohAdminScheduleTargets         MohAdminScheduleTarget[]
-  mohAdminScheduleActivations     MohAdminScheduleActivation[]
   didRouteMappings                DidRouteMapping[]
   outboundRoutes                  OutboundRoute[]
   userOutboundRoutePermissions    UserOutboundRoutePermission[]
@@ -852,7 +851,7 @@ model Tenant {
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
   voicemailIngestIncidents        VoicemailIngestIncident[]
-  webrtcCallingIncidents          WebrtcCallingIncident[]
+  webrtcCallingIncidents           WebrtcCallingIncident[]
   crmSettings                     CrmTenantSettings?
   crmUserAccess                   CrmUserAccess[]
   crmUserCampaignAssignments      CrmUserCampaignAssignment[]
@@ -907,104 +906,104 @@ model Tenant {
 }
 
 model User {
-  id                                String                            @id @default(cuid())
-  tenantId                          String
-  email                             String                            @unique
-  firstName                         String?
-  lastName                          String?
-  displayName                       String?
-  avatarUrl                         String?
-  avatarStorageKey                  String?
-  phone                             String?
-  title                             String?
-  department                        String?
-  notes                             String?
-  passwordHash                      String
-  role                              UserRole                          @default(USER)
-  status                            UserStatus                        @default(ACTIVE)
-  emailVerifiedAt                   DateTime?
-  lastLoginAt                       DateTime?
-  forcePasswordReset                Boolean                           @default(false)
-  updatedAt                         DateTime                          @updatedAt
-  createdAt                         DateTime                          @default(now())
-  tenant                            Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  auditEvents                       AuditLog[]                        @relation("AuditActor")
-  passwordTokens                    UserPasswordToken[]               @relation("UserPasswordTokens")
-  createdPasswordTokens             UserPasswordToken[]               @relation("UserPasswordTokenCreator")
-  createdProviderCredentials        ProviderCredential[]              @relation("ProviderCredentialCreatedBy")
-  updatedProviderCredentials        ProviderCredential[]              @relation("ProviderCredentialUpdatedBy")
-  createdBillingSolaConfigs         BillingSolaConfig[]               @relation("BillingSolaConfigCreatedBy")
-  updatedBillingSolaConfigs         BillingSolaConfig[]               @relation("BillingSolaConfigUpdatedBy")
-  createdWhatsAppProviderConfigs    WhatsAppProviderConfig[]          @relation("WhatsAppProviderConfigCreatedBy")
-  updatedWhatsAppProviderConfigs    WhatsAppProviderConfig[]          @relation("WhatsAppProviderConfigUpdatedBy")
-  createdEmailProviderConfigs       EmailProviderConfig[]             @relation("EmailProviderConfigCreatedBy")
-  updatedEmailProviderConfigs       EmailProviderConfig[]             @relation("EmailProviderConfigUpdatedBy")
-  smsLiveEnabledTenants             Tenant[]                          @relation("TenantSmsLiveEnabledBy")
-  smsProviderLockedTenants          Tenant[]                          @relation("TenantSmsProviderLockedBy")
-  ownedExtensions                   Extension[]                       @relation("ExtensionOwner")
-  mobileDevices                     MobileDevice[]
-  callInvites                       CallInvite[]
-  callWakeEvents                    CallWakeEvent[]
-  voiceClientSessions               VoiceClientSession[]
-  voiceDiagEvents                   VoiceDiagEvent[]
-  requestedTurnValidationJobs       TurnValidationJob[]               @relation("TurnValidationRequestedBy")
-  requestedMediaTestRuns            MediaTestRun[]                    @relation("MediaTestRequestedBy")
-  mobileProvisioningTokens          MobileProvisioningToken[]
-  updatedSbcConfigs                 SbcConfig[]                       @relation("SbcConfigUpdatedBy")
-  customerNotes                     CustomerNote[]
-  createdContacts                   Contact[]                         @relation("ContactCreatedBy")
-  createdFunders                    Funder[]                          @relation("FunderCreatedBy")
-  createdCustomerTasks              CustomerTask[]                    @relation("CustomerTaskCreatedBy")
-  completedCustomerTasks            CustomerTask[]                    @relation("CustomerTaskCompletedBy")
-  createdAutomationRules            AutomationRule[]                  @relation("AutomationRuleCreatedBy")
-  tenantSmsNumbersAssigned          TenantSmsNumber[]                 @relation("TenantSmsNumberAssignUser")
-  tenantSmsNumberMultiAssignments   TenantSmsNumberUser[]             @relation("TenantSmsNumberMultiUser")
-  outboundRoutePermissions          UserOutboundRoutePermission[]     @relation("UserOutboundRoutePermissionUser")
-  connectChatParticipants           ConnectChatParticipant[]
-  connectChatMessages               ConnectChatMessage[]              @relation("ConnectChatMessageSenderUser")
-  crmAccess                         CrmUserAccess[]
-  crmCampaignAssignments            CrmUserCampaignAssignment[]
-  crmContactsAssigned               CrmContactMeta[]                  @relation("CrmContactAssignedTo")
-  crmPhoneDispositionsCreated       CrmContactPhoneDisposition[]      @relation("CrmPhoneDispositionCreatedBy")
-  crmTimelineEventsCreated          CrmTimelineEvent[]                @relation("CrmTimelineEventCreatedBy")
-  crmContactNotesCreated            CrmContactNote[]                  @relation("CrmContactNoteCreatedBy")
-  crmTasksAssigned                  CrmContactTask[]                  @relation("CrmTaskAssignedTo")
-  crmTasksCompleted                 CrmContactTask[]                  @relation("CrmTaskCompletedBy")
-  crmTasksCreated                   CrmContactTask[]                  @relation("CrmTaskCreatedBy")
-  funderTimelineEventsCreated       FunderTimelineEvent[]             @relation("FunderTimelineEventCreatedBy")
-  crmImportBatches                  CrmImportBatch[]
-  crmScriptsCreated                 CrmScript[]                       @relation("CrmScriptCreatedBy")
-  crmVoicemailDropsCreated          CrmVoicemailDrop[]                @relation("CrmVoicemailDropCreatedBy")
-  crmChecklistsCreated              CrmChecklist[]                    @relation("CrmChecklistCreatedBy")
-  crmChecklistResponses             CrmChecklistResponse[]            @relation("CrmChecklistResponseCompletedBy")
-  crmCampaignsCreated               CrmCampaign[]                     @relation("CrmCampaignCreatedBy")
-  crmCampaignMembersAssigned        CrmCampaignMember[]               @relation("CrmCampaignMemberAssignedTo")
-  mappedSolaExternalSchedules       BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
+  id                             String                            @id @default(cuid())
+  tenantId                       String
+  email                          String                            @unique
+  firstName                      String?
+  lastName                       String?
+  displayName                    String?
+  avatarUrl                      String?
+  avatarStorageKey               String?
+  phone                          String?
+  title                          String?
+  department                     String?
+  notes                          String?
+  passwordHash                   String
+  role                           UserRole                          @default(USER)
+  status                         UserStatus                        @default(ACTIVE)
+  emailVerifiedAt                DateTime?
+  lastLoginAt                    DateTime?
+  forcePasswordReset             Boolean                           @default(false)
+  updatedAt                      DateTime                          @updatedAt
+  createdAt                      DateTime                          @default(now())
+  tenant                         Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditEvents                    AuditLog[]                        @relation("AuditActor")
+  passwordTokens                 UserPasswordToken[]               @relation("UserPasswordTokens")
+  createdPasswordTokens          UserPasswordToken[]               @relation("UserPasswordTokenCreator")
+  createdProviderCredentials     ProviderCredential[]              @relation("ProviderCredentialCreatedBy")
+  updatedProviderCredentials     ProviderCredential[]              @relation("ProviderCredentialUpdatedBy")
+  createdBillingSolaConfigs      BillingSolaConfig[]               @relation("BillingSolaConfigCreatedBy")
+  updatedBillingSolaConfigs      BillingSolaConfig[]               @relation("BillingSolaConfigUpdatedBy")
+  createdWhatsAppProviderConfigs WhatsAppProviderConfig[]          @relation("WhatsAppProviderConfigCreatedBy")
+  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[]          @relation("WhatsAppProviderConfigUpdatedBy")
+  createdEmailProviderConfigs    EmailProviderConfig[]             @relation("EmailProviderConfigCreatedBy")
+  updatedEmailProviderConfigs    EmailProviderConfig[]             @relation("EmailProviderConfigUpdatedBy")
+  smsLiveEnabledTenants          Tenant[]                          @relation("TenantSmsLiveEnabledBy")
+  smsProviderLockedTenants       Tenant[]                          @relation("TenantSmsProviderLockedBy")
+  ownedExtensions                Extension[]                       @relation("ExtensionOwner")
+  mobileDevices                  MobileDevice[]
+  callInvites                    CallInvite[]
+  callWakeEvents                 CallWakeEvent[]
+  voiceClientSessions            VoiceClientSession[]
+  voiceDiagEvents                VoiceDiagEvent[]
+  requestedTurnValidationJobs    TurnValidationJob[]               @relation("TurnValidationRequestedBy")
+  requestedMediaTestRuns         MediaTestRun[]                    @relation("MediaTestRequestedBy")
+  mobileProvisioningTokens       MobileProvisioningToken[]
+  updatedSbcConfigs              SbcConfig[]                       @relation("SbcConfigUpdatedBy")
+  customerNotes                  CustomerNote[]
+  createdContacts                Contact[]                         @relation("ContactCreatedBy")
+  createdFunders                 Funder[]                          @relation("FunderCreatedBy")
+  createdCustomerTasks           CustomerTask[]                    @relation("CustomerTaskCreatedBy")
+  completedCustomerTasks         CustomerTask[]                    @relation("CustomerTaskCompletedBy")
+  createdAutomationRules         AutomationRule[]                  @relation("AutomationRuleCreatedBy")
+  tenantSmsNumbersAssigned       TenantSmsNumber[]                 @relation("TenantSmsNumberAssignUser")
+  tenantSmsNumberMultiAssignments TenantSmsNumberUser[]            @relation("TenantSmsNumberMultiUser")
+  outboundRoutePermissions       UserOutboundRoutePermission[]     @relation("UserOutboundRoutePermissionUser")
+  connectChatParticipants        ConnectChatParticipant[]
+  connectChatMessages            ConnectChatMessage[]              @relation("ConnectChatMessageSenderUser")
+  crmAccess                      CrmUserAccess[]
+  crmCampaignAssignments         CrmUserCampaignAssignment[]
+  crmContactsAssigned            CrmContactMeta[]                  @relation("CrmContactAssignedTo")
+  crmPhoneDispositionsCreated    CrmContactPhoneDisposition[]      @relation("CrmPhoneDispositionCreatedBy")
+  crmTimelineEventsCreated       CrmTimelineEvent[]                @relation("CrmTimelineEventCreatedBy")
+  crmContactNotesCreated         CrmContactNote[]                  @relation("CrmContactNoteCreatedBy")
+  crmTasksAssigned               CrmContactTask[]                  @relation("CrmTaskAssignedTo")
+  crmTasksCompleted              CrmContactTask[]                  @relation("CrmTaskCompletedBy")
+  crmTasksCreated                CrmContactTask[]                  @relation("CrmTaskCreatedBy")
+  funderTimelineEventsCreated    FunderTimelineEvent[]             @relation("FunderTimelineEventCreatedBy")
+  crmImportBatches               CrmImportBatch[]
+  crmScriptsCreated              CrmScript[]                       @relation("CrmScriptCreatedBy")
+  crmVoicemailDropsCreated       CrmVoicemailDrop[]                @relation("CrmVoicemailDropCreatedBy")
+  crmChecklistsCreated           CrmChecklist[]                    @relation("CrmChecklistCreatedBy")
+  crmChecklistResponses          CrmChecklistResponse[]            @relation("CrmChecklistResponseCompletedBy")
+  crmCampaignsCreated            CrmCampaign[]                     @relation("CrmCampaignCreatedBy")
+  crmCampaignMembersAssigned     CrmCampaignMember[]               @relation("CrmCampaignMemberAssignedTo")
+  mappedSolaExternalSchedules    BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
   /// CRM email — Phase 1 relations
-  crmEmailConnections               CrmEmailConnection[]              @relation("CrmEmailConnection_user")
-  crmEmailConnectionsManaged        CrmEmailConnection[]              @relation("CrmEmailConnection_managedBy")
-  crmEmailMessages                  CrmEmailMessage[]
-  crmEmailThreads                   CrmEmailThread[]
-  crmEmailSendLogs                  CrmEmailSendLog[]
-  crmEmailTemplates                 CrmEmailTemplate[]
-  crmSmsTemplates                   CrmSmsTemplate[]
-  crmEmailSignatures                CrmEmailSignature[]
-  crmEmailTemplateAttachments       CrmEmailTemplateAttachment[]
-  crmBulkEmailJobsCreated           CrmBulkEmailJob[]                 @relation("CrmBulkEmailJobCreator")
-  crmWebsiteSubmissionRulesAssigned CrmWebsiteSubmissionEmailRule[]   @relation("CrmWebsiteSubmissionRuleAssignmentUser")
-  crmWebsiteSubmissionRulesCreated  CrmWebsiteSubmissionEmailRule[]   @relation("CrmWebsiteSubmissionRuleCreatedBy")
+  crmEmailConnections            CrmEmailConnection[]              @relation("CrmEmailConnection_user")
+  crmEmailConnectionsManaged     CrmEmailConnection[]              @relation("CrmEmailConnection_managedBy")
+  crmEmailMessages               CrmEmailMessage[]
+  crmEmailThreads                CrmEmailThread[]
+  crmEmailSendLogs               CrmEmailSendLog[]
+  crmEmailTemplates              CrmEmailTemplate[]
+  crmSmsTemplates                CrmSmsTemplate[]
+  crmEmailSignatures             CrmEmailSignature[]
+  crmEmailTemplateAttachments    CrmEmailTemplateAttachment[]
+  crmBulkEmailJobsCreated        CrmBulkEmailJob[]                 @relation("CrmBulkEmailJobCreator")
+  crmWebsiteSubmissionRulesAssigned CrmWebsiteSubmissionEmailRule[] @relation("CrmWebsiteSubmissionRuleAssignmentUser")
+  crmWebsiteSubmissionRulesCreated  CrmWebsiteSubmissionEmailRule[] @relation("CrmWebsiteSubmissionRuleCreatedBy")
   crmUserNotifications              CrmUserNotification[]
-  customRolesCreated                CustomRole[]                      @relation("CustomRoleCreatedBy")
-  customRolesUpdated                CustomRole[]                      @relation("CustomRoleUpdatedBy")
-  customRoleAssignments             UserCustomRole[]
-  customRolesAssigned               UserCustomRole[]                  @relation("UserCustomRoleAssignedBy")
-  whatsAppAccounts                  WhatsAppAccount[]
+  customRolesCreated             CustomRole[]                      @relation("CustomRoleCreatedBy")
+  customRolesUpdated             CustomRole[]                      @relation("CustomRoleUpdatedBy")
+  customRoleAssignments          UserCustomRole[]
+  customRolesAssigned            UserCustomRole[]                  @relation("UserCustomRoleAssignedBy")
+  whatsAppAccounts               WhatsAppAccount[]
   /// CRM Drive match Phase 2
-  crmLeadDocumentsReviewed          CrmLeadDocument[]                 @relation("CrmLeadDocumentReviewedBy")
-  crmFormTemplatesCreated           CrmFormTemplate[]                 @relation("CrmFormTemplateCreatedBy")
-  crmFormRequestsCreated            CrmFormRequest[]                  @relation("CrmFormRequestCreatedBy")
-  webrtcCallingIncidentDismissals   WebrtcCallingIncidentDismissal[]
-  webrtcPlatformOutageDismissals    WebrtcPlatformOutageDismissal[]
+  crmLeadDocumentsReviewed       CrmLeadDocument[] @relation("CrmLeadDocumentReviewedBy")
+  crmFormTemplatesCreated        CrmFormTemplate[] @relation("CrmFormTemplateCreatedBy")
+  crmFormRequestsCreated         CrmFormRequest[]  @relation("CrmFormRequestCreatedBy")
+  webrtcCallingIncidentDismissals WebrtcCallingIncidentDismissal[]
+  webrtcPlatformOutageDismissals   WebrtcPlatformOutageDismissal[]
 }
 
 enum UserRole {
@@ -1443,6 +1442,30 @@ model BillingChargeOperation {
   @@index([tenantId, createdAt])
   @@index([invoiceId])
   @@index([status, updatedAt])
+}
+
+/// Short public pay link covering one or more BillingInvoices — one card charge
+/// pays every still-open invoice in the set (per-invoice receipts fan out after).
+model BillingPayLink {
+  id                String               @id @default(cuid())
+  /// Short unambiguous public code (no 0/O/1/l), e.g. X7K2QF → /p/X7K2QF
+  code              String               @unique
+  tenantId          String
+  /// BillingInvoice ids covered by this link (charged = still-unpaid subset at pay time).
+  invoiceIds        String[]
+  status            BillingPayLinkStatus @default(ACTIVE)
+  expiresAt         DateTime
+  /// Parent gateway PaymentTransaction (combined charge) once paid.
+  paidTransactionId String?
+  completedAt       DateTime?
+  createdByUserId   String?
+  metadata          Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([expiresAt])
 }
 
 model BillingRun {
@@ -2037,9 +2060,9 @@ model Customer {
 }
 
 model Contact {
-  id                    String                       @id @default(cuid())
+  id                    String                 @id @default(cuid())
   tenantId              String
-  type                  ContactType                  @default(EXTERNAL)
+  type                  ContactType            @default(EXTERNAL)
   extensionId           String?
   firstName             String?
   lastName              String?
@@ -2049,16 +2072,16 @@ model Contact {
   avatarUrl             String?
   storageKey            String?
   notes                 String?
-  source                ContactSource                @default(MANUAL)
-  favorite              Boolean                      @default(false)
-  active                Boolean                      @default(true)
+  source                ContactSource          @default(MANUAL)
+  favorite              Boolean                @default(false)
+  active                Boolean                @default(true)
   archivedAt            DateTime?
   createdBy             String?
-  createdAt             DateTime                     @default(now())
-  updatedAt             DateTime                     @updatedAt
-  tenant                Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  extension             Extension?                   @relation(fields: [extensionId], references: [id], onDelete: SetNull)
-  creator               User?                        @relation("ContactCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension             Extension?             @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+  creator               User?                  @relation("ContactCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   phones                ContactPhone[]
   emails                ContactEmail[]
   addresses             ContactAddress[]
@@ -2092,14 +2115,14 @@ model Contact {
 }
 
 model ContactPhone {
-  id               String                       @id @default(cuid())
+  id               String           @id @default(cuid())
   contactId        String
-  type             ContactPhoneType             @default(MOBILE)
+  type             ContactPhoneType @default(MOBILE)
   numberRaw        String
   numberNormalized String
-  isPrimary        Boolean                      @default(false)
-  createdAt        DateTime                     @default(now())
-  contact          Contact                      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  isPrimary        Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  contact          Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
   crmDispositions  CrmContactPhoneDisposition[]
 
   @@unique([contactId, numberNormalized])
@@ -2436,26 +2459,26 @@ model VoicemailIngestIncident {
 
 /// Platform admin alerts when WebRTC/SIP calling degrades (schema v2 black-box triggers).
 model WebrtcCallingIncident {
-  id              String                           @id @default(cuid())
-  fingerprint     String
-  tenantId        String
-  failureType     String
-  severity        String
-  status          String                           @default("OPEN")
-  direction       String
-  firstSeenAt     DateTime                         @default(now())
-  lastSeenAt      DateTime                         @updatedAt
-  occurrenceCount Int                              @default(1)
-  title           String
-  actionText      String
-  latestSipCode   Int?
-  latestSipReason String?
-  metadata        Json?
-  resolvedAt      DateTime?
-  createdAt       DateTime                         @default(now())
-  updatedAt       DateTime                         @updatedAt
-  tenant          Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  dismissals      WebrtcCallingIncidentDismissal[]
+  id               String    @id @default(cuid())
+  fingerprint      String
+  tenantId         String
+  failureType      String
+  severity         String
+  status           String    @default("OPEN")
+  direction        String
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @updatedAt
+  occurrenceCount  Int       @default(1)
+  title            String
+  actionText       String
+  latestSipCode    Int?
+  latestSipReason  String?
+  metadata         Json?
+  resolvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dismissals       WebrtcCallingIncidentDismissal[]
 
   @@index([fingerprint, status])
   @@index([tenantId, status])
@@ -2478,14 +2501,14 @@ model WebrtcCallingIncidentDismissal {
 
 /// Platform-wide WebRTC outage (cross-tenant) — GLOBAL_WEBRTC_OUTAGE.
 model WebrtcPlatformOutage {
-  id                      String                          @id @default(cuid())
+  id                      String    @id @default(cuid())
   fingerprint             String
-  failureType             String                          @default("GLOBAL_WEBRTC_OUTAGE")
+  failureType             String    @default("GLOBAL_WEBRTC_OUTAGE")
   severity                String
-  status                  String                          @default("OPEN")
-  firstSeenAt             DateTime                        @default(now())
-  lastSeenAt              DateTime                        @updatedAt
-  occurrenceCount         Int                             @default(1)
+  status                  String    @default("OPEN")
+  firstSeenAt             DateTime  @default(now())
+  lastSeenAt              DateTime  @updatedAt
+  occurrenceCount         Int       @default(1)
   title                   String
   actionText              String
   diagnosisSummary        String?
@@ -2494,8 +2517,8 @@ model WebrtcPlatformOutage {
   latestSipReason         String?
   metadata                Json?
   resolvedAt              DateTime?
-  createdAt               DateTime                        @default(now())
-  updatedAt               DateTime                        @updatedAt
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
   dismissals              WebrtcPlatformOutageDismissal[]
 
   @@index([fingerprint, status])
@@ -3380,7 +3403,6 @@ model MohProfile {
   overrideStates     MohOverrideState[]
   didRouteMappings   DidRouteMapping[]
   extensionOverrides MohExtensionOverride[]
-  sourcePolicies     MohSourcePolicy[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -3424,16 +3446,6 @@ model MohScheduleRule {
   endAt      DateTime? // UTC — for "one_time" overrides
   priority   Int       @default(0) // higher = wins on overlap
   isActive   Boolean   @default(true)
-  // ── Targeting (additive; legacy rows default to tenant-wide, all call types) ──
-  // scope: "tenant" applies to the tenant default class; "extension" targets a
-  //   single extension's per-source (or default) MOH — this is the
-  //   "Scheduled extension override" at the top of the resolution priority.
-  // extension: required when scope="extension" (normalized channel token); "" for tenant.
-  // callSource: "" / "all" means the rule applies to every call source; otherwise a
-  //   canonical MohCallSource token (see packages/shared/src/mohCallSource.ts).
-  scope      String    @default("tenant") // "tenant" | "extension"
-  extension  String    @default("") // "" when scope="tenant"
-  callSource String    @default("") // "" / "all" or a MohCallSource token
   createdAt  DateTime  @default(now())
 
   schedule MohScheduleConfig @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
@@ -3442,7 +3454,6 @@ model MohScheduleRule {
   @@index([scheduleId])
   @@index([scheduleId, isActive])
   @@index([ruleType])
-  @@index([scheduleId, scope, extension])
 }
 
 /// Current manual override per tenant (upsert: one row per tenant).
@@ -3483,16 +3494,6 @@ model MohPublishRecord {
   status                     String   @default("pending") // "pending" | "success" | "failed"
   error                      String?
   isRollback                 Boolean  @default(false)
-  // ── Live post-publish verification (read-only PBX read-back) ──
-  // verifyStatus: "verified" (Asterisk active class matches desired) | "drift"
-  //   (mismatch — surfaced in health, non-fatal) | "unverified" (probe skipped/
-  //   helper not deployed). verifiedActiveClass is what Asterisk reported.
-  verifiedAt                 DateTime?
-  verifiedActiveClass        String?
-  verifyStatus               String?
-  // Which control mode this publish reflected ("connect" | "pbx"). "pbx" rows
-  // are tombstone-only publishes that hand the tenant back to native MOH.
-  controlMode                String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -3534,56 +3535,6 @@ model MohExtensionOverride {
   @@index([enabled])
 }
 
-/// Per-call-source MOH policy (tenant- or extension-scoped).
-///
-/// Adds the "which MOH for which kind of call" dimension the time-based
-/// scheduling model lacked. One row per (tenantId, extension, source), where
-/// `extension = ""` denotes a tenant-scope policy and a non-empty normalized
-/// channel token denotes an extension-scope policy.
-///
-/// `source` is a canonical MohCallSource token from
-/// packages/shared/src/mohCallSource.ts (inbound_direct, inbound_ivr,
-/// inbound_ringgroup, inbound_queue, internal, outbound, transfer, parked,
-/// mobile_app). The publish path folds these — together with any active
-/// scheduled extension override and the global default — into the additive
-/// AstDB keys `connect/t_<slug>/moh/src/<source>` and
-/// `connect/t_<slug>/extensions/<ext>/moh/src/<source>`. When no per-source
-/// policy exists the runtime falls through to the existing tenant/extension
-/// default `moh_class` keys, so this table is a pure superset (no regression).
-model MohSourcePolicy {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  scope                String // "tenant" | "extension"
-  extension            String   @default("") // "" for tenant scope; channel token for extension scope
-  source               String // canonical MohCallSource token
-  vitalPbxMohClassName String
-  mohProfileId         String?
-  enabled              Boolean  @default(true)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  createdBy            String?
-  updatedBy            String?
-
-  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  profile MohProfile? @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
-
-  @@unique([tenantId, extension, source])
-  @@index([tenantId])
-  @@index([tenantId, scope])
-  @@index([tenantId, extension])
-  @@index([enabled])
-}
-
-/// System-wide MOH global default (Requirement 4, level 4). Singleton row keyed
-/// by the literal id "global". Used only as the last Connect-owned fallback
-/// before the PBX's own default MOH. Nullable class = "no global default set".
-model MohGlobalConfig {
-  id                   String   @id @default("global")
-  vitalPbxMohClassName String?
-  updatedAt            DateTime @updatedAt
-  updatedBy            String?
-}
-
 /// Bulk MOH assignment job (Phase 1 — schema only; no worker consumer yet).
 ///
 /// Persists requests like "set tenant default for selected tenants" or
@@ -3613,135 +3564,12 @@ model MohAssignmentJob {
 /// Per-tenant last-known publish state — cached to avoid repeated DB queries from the worker.
 /// One row per tenant; upserted on every successful publish.
 model MohLastPublishedState {
-  tenantId            String   @id
-  mohClass            String
-  holdMode            String
-  publishedAt         DateTime @default(now())
-  // Effective control mode last published ("connect" | "pbx").
-  controlMode         String?
-  // Last live read-back of Asterisk's active class + when it was verified.
-  activeClassObserved String?
-  verifiedAt          DateTime?
+  tenantId    String   @id
+  mohClass    String
+  holdMode    String
+  publishedAt DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-}
-
-/// Per-extension MOH control mode. Lets an admin flip a single extension between
-/// Connect-managed and native PBX control independently of the tenant default.
-///   controlMode: "inherit" = follow the tenant's mohControlMode (default);
-///                "connect" = Connect manages this extension even if the tenant
-///                            is PBX-controlled; "pbx" = native VitalPBX MOH for
-///                            this extension even if the tenant is Connect-managed
-///                            (Connect clears this extension's override keys).
-/// `extension` is the normalized channel token, mirroring MohExtensionOverride.
-model MohExtensionControl {
-  id          String   @id @default(cuid())
-  tenantId    String
-  extension   String
-  controlMode String   @default("inherit") // "inherit" | "connect" | "pbx"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdBy   String?
-  updatedBy   String?
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, extension])
-  @@index([tenantId])
-}
-
-/// Admin (multi-tenant) MOH schedule — a single object that takes over MOH for
-/// MANY tenants (and optionally specific extensions) for a window, e.g. a
-/// Yom Tov / holiday playlist across T2/T3/T21. This is the HIGHEST-priority
-/// layer (Option C, 2026-07-01): while active it overrides even an explicitly
-/// pinned extension. It is kept fully separate from the per-tenant
-/// MohScheduleConfig so the single-tenant schedule path is untouched.
-///
-/// While active, the worker writes the admin-overlay AstDB keys
-/// (connect/t_<slug>/admin_moh_class and the per-extension equivalent) and
-/// records a MohAdminScheduleActivation capturing the prior effective state.
-/// When the window ends it tombstones ONLY the overlay keys and restores from
-/// the activation record (fallbackMode) — extension overrides, tenant defaults,
-/// PBX-control settings and per-tenant schedules are never erased.
-model MohAdminSchedule {
-  id                   String   @id @default(cuid())
-  name                 String
-  enabled              Boolean  @default(true)
-  scheduleKind         String // "one_time" | "recurring"
-  timezone             String   @default("America/New_York")
-  vitalPbxMohClassName String // the takeover class (e.g. a shared holiday class)
-  priority             Int      @default(0) // higher wins when two admin schedules overlap a target
-  // one_time
-  startAt              DateTime?
-  endAt                DateTime?
-  // recurring (minute-of-week window; may span multiple weekdays / wrap)
-  startWeekday         Int? // 0=Sun…6=Sat
-  startTime            String? // "HH:MM"
-  endWeekday           Int?
-  endTime              String? // "HH:MM"
-  // Fallback when the window ends:
-  //   "restore_previous" = restore the exact prior effective state per target
-  //                        (default); "explicit" = apply fallbackClass instead.
-  fallbackMode         String   @default("restore_previous")
-  fallbackClass        String?
-  isDeleted            Boolean  @default(false)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  createdBy            String?
-  updatedBy            String?
-
-  targets     MohAdminScheduleTarget[]
-  activations MohAdminScheduleActivation[]
-
-  @@index([enabled])
-  @@index([isDeleted])
-}
-
-/// A tenant (optionally a single extension) targeted by an admin schedule.
-model MohAdminScheduleTarget {
-  id         String   @id @default(cuid())
-  scheduleId String
-  tenantId   String
-  extension  String   @default("") // "" = whole tenant; channel token = one extension
-  createdAt  DateTime @default(now())
-
-  schedule MohAdminSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([scheduleId, tenantId, extension])
-  @@index([tenantId])
-  @@index([scheduleId])
-}
-
-/// Idempotency + restore ledger for admin-schedule takeovers. One row is opened
-/// (state="active") when a schedule window activates for a (tenant, extension?)
-/// target, capturing the prior effective state; it is closed (state="restored")
-/// when the window ends and the prior state is restored. This makes the worker
-/// restart-safe (missed activations/restores are reconciled on startup) and
-/// idempotent (a re-tick never double-activates).
-model MohAdminScheduleActivation {
-  id                   String    @id @default(cuid())
-  scheduleId           String
-  tenantId             String
-  extension            String    @default("")
-  state                String    @default("active") // "active" | "restored"
-  activatedAt          DateTime  @default(now())
-  deactivatedAt        DateTime?
-  // Prior effective state captured at activation, for exact restore.
-  previousClass        String? // effective class before takeover (null = PBX default)
-  previousControlMode  String? // tenant/ext control mode before takeover
-  previousKeysSnapshot Json      @default("[]") // overlay-scope keys before takeover
-  appliedClass         String // the class the takeover applied
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-
-  schedule MohAdminSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@index([scheduleId])
-  @@index([tenantId])
-  @@index([state])
-  @@index([scheduleId, state])
 }
 
 // ─── DID-level routing (shared-entry architecture) ───────────────────────────
@@ -3872,18 +3700,6 @@ model PbxMohClass {
   isDefault       Boolean  @default(false)
   fileCount       Int      @default(0) // rolled up from ombu_music_files
   isActive        Boolean  @default(true) // false = removed in VitalPBX on last sync
-  // ── Catalog / playability model (additive) ───────────────────────────────
-  /// Derived origin: "tenant" | "main" | "global_default" | "connect_upload" | "unassigned".
-  /// Ownership is NOT the assignment gate — this is informational + governs native sync.
-  origin          String? // see packages/shared/src/mohCatalog.ts classifyMohOrigin
-  /// true/false from a live `moh show classes` probe; null = not probed yet (unknown).
-  loadedInAsterisk Boolean?
-  /// Whether Asterisk can actually play this class (active + files/stream + loaded!=false).
-  selectable      Boolean  @default(true)
-  /// When not selectable: "deactivated" | "not_loaded" | "no_files".
-  unavailableReason String?
-  /// Last time the live Asterisk probe updated loadedInAsterisk.
-  lastProbedAt    DateTime?
   firstSeenAt     DateTime @default(now())
   lastSeenAt      DateTime @default(now())
   createdAt       DateTime @default(now())
@@ -3896,7 +3712,6 @@ model PbxMohClass {
   @@index([tenantId])
   @@index([tenantId, isActive])
   @@index([pbxInstanceId, isActive])
-  @@index([pbxInstanceId, selectable])
 }
 
 model MohAsset {
@@ -3995,25 +3810,25 @@ model GlobalVoipMsConfig {
 
 /// VoIP.ms SMS-capable number assigned to a tenant (optionally to one user/extension or a specific set of users).
 model TenantSmsNumber {
-  id                  String                @id @default(cuid())
+  id                  String              @id @default(cuid())
   /// Null until assigned to a Connect tenant (synced inventory row).
   tenantId            String?
-  provider            IntegrationProvider   @default(VOIPMS)
+  provider            IntegrationProvider @default(VOIPMS)
   voipmsDid           String?
   phoneRaw            String?
-  phoneE164           String                @unique
-  smsCapable          Boolean               @default(true)
-  mmsCapable          Boolean               @default(false)
+  phoneE164           String              @unique
+  smsCapable          Boolean             @default(true)
+  mmsCapable          Boolean             @default(false)
   assignedUserId      String?
   assignedExtensionId String?
-  isTenantDefault     Boolean               @default(false)
-  active              Boolean               @default(true)
+  isTenantDefault     Boolean             @default(false)
+  active              Boolean             @default(true)
   lastSyncedAt        DateTime?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
-  tenant              Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  assignedUser        User?                 @relation("TenantSmsNumberAssignUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  assignedExtension   Extension?            @relation("TenantSmsNumberAssignExtension", fields: [assignedExtensionId], references: [id], onDelete: SetNull)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  tenant              Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedUser        User?               @relation("TenantSmsNumberAssignUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedExtension   Extension?          @relation("TenantSmsNumberAssignExtension", fields: [assignedExtensionId], references: [id], onDelete: SetNull)
   /// Explicit multi-user assignments (mutually exclusive with assignedExtensionId).
   assignedUsers       TenantSmsNumberUser[]
 
@@ -4092,6 +3907,11 @@ model ConnectChatMessage {
   id                     String                         @id @default(cuid())
   tenantId               String
   threadId               String
+  /// Nullable AND set to NULL automatically (see senderUser onDelete: SetNull below) whenever the
+  /// sending staff account is deleted — a normal, recurring event (offboarding), not a data bug.
+  /// NEVER use `senderUserId === viewer` to decide "mine" for SMS threads; it will silently break
+  /// again every time a rep who sent messages is removed. Use `isConnectChatMessageMine()` from
+  /// apps/api/src/connectChatMessageMine.ts, which keys SMS off `direction` instead.
   senderUserId           String?
   senderExtensionId      String?
   direction              ConnectChatMessageDirection
@@ -4287,26 +4107,26 @@ enum CrmLeadTimezoneResolutionStatus {
 /// Deleting the Contact cascades and removes the CRM meta.
 /// No contact data is duplicated — all phones/emails/names live on Contact.
 model CrmContactMeta {
-  id                       String                           @id @default(cuid())
-  contactId                String                           @unique
-  tenantId                 String
-  stage                    CrmContactStage                  @default(LEAD)
-  assignedToUserId         String?
-  doNotCall                Boolean                          @default(false)
-  doNotSms                 Boolean                          @default(false)
-  externalId               String?
-  ssn                      String?
-  monthlyRevenue           String?
-  lastActivityAt           DateTime?
-  lastDisposition          String?
-  lastDispositionAt        DateTime?
-  timezoneIana             String?
-  timezoneLabel            String?
-  timezoneOffsetMinutes    Int?
-  timezoneResolvedAt       DateTime?
-  timezoneResolutionStatus CrmLeadTimezoneResolutionStatus?
-  createdAt                DateTime                         @default(now())
-  updatedAt                DateTime                         @updatedAt
+  id                String          @id @default(cuid())
+  contactId         String          @unique
+  tenantId          String
+  stage             CrmContactStage @default(LEAD)
+  assignedToUserId  String?
+  doNotCall         Boolean         @default(false)
+  doNotSms          Boolean         @default(false)
+  externalId        String?
+  ssn               String?
+  monthlyRevenue    String?
+  lastActivityAt    DateTime?
+  lastDisposition   String?
+  lastDispositionAt DateTime?
+  timezoneIana               String?
+  timezoneLabel              String?
+  timezoneOffsetMinutes      Int?
+  timezoneResolvedAt         DateTime?
+  timezoneResolutionStatus   CrmLeadTimezoneResolutionStatus?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   contact    Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -4579,8 +4399,8 @@ model CrmImportBatch {
   createdAt       DateTime             @default(now())
   completedAt     DateTime?
 
-  tenant        Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy     User                        @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     User                 @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
   batchRows     CrmImportBatchRow[]
   leadDocuments CrmLeadDocument[]
   pipelineRuns  CrmImportBatchPipelineRun[]
@@ -4592,7 +4412,7 @@ model CrmImportBatch {
 /// Captures the company name and resolved contactId for each row so the Drive
 /// match engine can map normalised company names → contacts.
 model CrmImportBatchRow {
-  id                    String  @id @default(cuid())
+  id                    String   @id @default(cuid())
   tenantId              String
   batchId               String
   rowNumber             Int
@@ -4603,9 +4423,9 @@ model CrmImportBatchRow {
 
   createdAt DateTime @default(now())
 
-  tenant  Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  batch   CrmImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  contact Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batch   CrmImportBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  contact Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   @@index([batchId])
   @@index([tenantId, contactId])
@@ -4746,13 +4566,13 @@ model CrmCampaign {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
-  tenant         Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy      User                        @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  script         CrmScript?                  @relation(fields: [scriptId], references: [id], onDelete: SetNull)
-  checklist      CrmChecklist?               @relation(fields: [checklistId], references: [id], onDelete: SetNull)
+  tenant     Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  User                        @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  script     CrmScript?                  @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  checklist  CrmChecklist?               @relation(fields: [checklistId], references: [id], onDelete: SetNull)
   voicemailDrops CrmVoicemailDrop[]
-  members        CrmCampaignMember[]
-  userAccess     CrmUserCampaignAssignment[]
+  members    CrmCampaignMember[]
+  userAccess CrmUserCampaignAssignment[]
 
   @@index([tenantId, status, createdAt])
 }
@@ -4980,9 +4800,9 @@ model Funder {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  creator        User?                 @relation("FunderCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
-  tagLinks       FunderTagAssignment[]
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator  User?                 @relation("FunderCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  tagLinks FunderTagAssignment[]
   timelineEvents FunderTimelineEvent[]
 
   @@index([tenantId, active])
@@ -5188,14 +5008,14 @@ enum CrmFormRequestStatus {
 /// The googleConnection (CrmEmailConnection) must have the Drive readonly scope.
 /// Unique per (tenantId, purpose) — one active folder per purpose per tenant.
 model CrmDriveFolder {
-  id                 String                @id @default(cuid())
+  id                 String                 @id @default(cuid())
   tenantId           String
   googleConnectionId String
   folderId           String
   folderName         String
-  purpose            CrmDriveFolderPurpose @default(LEAD_IMPORT_INBOX)
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  purpose            CrmDriveFolderPurpose  @default(LEAD_IMPORT_INBOX)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
   tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   googleConnection CrmEmailConnection @relation(fields: [googleConnectionId], references: [id], onDelete: Cascade)
@@ -5213,42 +5033,42 @@ model CrmDriveFolder {
 /// Phase 5: text extraction status fields (textExtractionStatus, textExtractionError, textExtractedAt).
 /// No AI summaries.
 model CrmLeadDocument {
-  id                   String                      @id @default(cuid())
-  tenantId             String
+  id                  String                 @id @default(cuid())
+  tenantId            String
   /// FK to Contact — the CRM entity this document belongs to.
   /// Nullable: may be unmatched or pending review.
-  contactId            String?
+  contactId           String?
   /// Which import batch triggered discovery of this document.
-  importBatchId        String?
-  source               CrmLeadDocumentSource       @default(GOOGLE_DRIVE)
+  importBatchId       String?
+  source              CrmLeadDocumentSource  @default(GOOGLE_DRIVE)
   /// Google Drive file ID (when source=GOOGLE_DRIVE).
-  googleDriveFileId    String?
+  googleDriveFileId   String?
   /// Google Drive folder ID from which this file was discovered.
-  googleDriveFolderId  String?
-  originalFileName     String
+  googleDriveFolderId String?
+  originalFileName    String
   /// Original MIME type as reported by Google Drive.
-  mimeType             String?
+  mimeType            String?
   /// Reported file size in bytes from Drive metadata (may differ from stored size).
-  sizeBytes            BigInt?
+  sizeBytes           BigInt?
   /// SHA-256 hex hash of the stored file bytes. Computed during import.
-  contentHash          String?
+  contentHash         String?
   /// Tenant-scoped storage key for the local copy (set after IMPORTED).
-  storageKey           String?
-  status               CrmLeadDocumentStatus       @default(DISCOVERED)
+  storageKey          String?
+  status              CrmLeadDocumentStatus  @default(DISCOVERED)
   /// HIGH | MEDIUM | AMBIGUOUS — confidence of the name-match algorithm.
-  matchConfidence      String?
+  matchConfidence     String?
   /// Machine reason code, e.g. "exact_company_name", "file_contains_company".
-  matchReason          String?
+  matchReason         String?
   /// User who confirmed or rejected this document match.
-  reviewedByUserId     String?
-  reviewedAt           DateTime?
+  reviewedByUserId    String?
+  reviewedAt          DateTime?
   /// When the file was successfully stored locally (Phase 3).
-  importedAt           DateTime?
+  importedAt          DateTime?
   /// Short safe error message if status=IMPORT_FAILED (Phase 3).
-  importError          String?
+  importError         String?
   /// MIME type of the file actually stored — may differ from mimeType when
   /// a Google Workspace file (Docs/Sheets/Slides) is exported to PDF (Phase 3).
-  importedMimeType     String?
+  importedMimeType    String?
   /// Phase 5: denormalized extraction status mirror (null = not yet attempted).
   /// Source of truth is CrmLeadDocumentText.extractionStatus; this field is for
   /// fast filtering (e.g. "find all IMPORTED docs without completed extraction").
@@ -5257,52 +5077,52 @@ model CrmLeadDocument {
   textExtractionError  String?
   /// When text extraction last completed successfully.
   textExtractedAt      DateTime?
-  createdAt            DateTime                    @default(now())
-  updatedAt            DateTime                    @updatedAt
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
 
-  tenant           Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contact          Contact?                 @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  importBatch      CrmImportBatch?          @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  reviewedBy       User?                    @relation("CrmLeadDocumentReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
-  textExtraction   CrmLeadDocumentText?
-  discoveredPhones CrmLeadDiscoveredPhone[]
-  discoveredEmails CrmLeadDiscoveredEmail[]
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact         Contact?                 @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  importBatch     CrmImportBatch?          @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  reviewedBy      User?                    @relation("CrmLeadDocumentReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  textExtraction    CrmLeadDocumentText?
+  discoveredPhones  CrmLeadDiscoveredPhone[]
+  discoveredEmails  CrmLeadDiscoveredEmail[]
 
-  // Unique per (tenant, batch, Drive file) — partial, enforced in migration SQL WHERE both NOT NULL.
-  // This replaced the over-broad Phase 1 (tenantId, googleDriveFileId) constraint.
-  // Enables the same Drive file to appear in separate import batches for the same tenant.
-  @@unique([tenantId, importBatchId, googleDriveFileId])
   @@index([tenantId, status])
   @@index([tenantId, contactId])
   @@index([importBatchId])
   @@index([tenantId, googleDriveFolderId])
   @@index([tenantId, textExtractionStatus])
+  // Unique per (tenant, batch, Drive file) — partial, enforced in migration SQL WHERE both NOT NULL.
+  // This replaced the over-broad Phase 1 (tenantId, googleDriveFileId) constraint.
+  // Enables the same Drive file to appear in separate import batches for the same tenant.
+  @@unique([tenantId, importBatchId, googleDriveFileId])
 }
 
 /// Tenant-scoped reusable PDF form template.
 /// File contents are stored outside the DB using a tenant-scoped storage key.
 model CrmFormTemplate {
-  id               String                @id @default(cuid())
-  tenantId         String
-  name             String
-  description      String?
-  category         String?
-  originalFileName String
-  storageKey       String
-  mimeType         String
-  sizeBytes        BigInt
-  status           CrmFormTemplateStatus @default(DRAFT)
-  pageCount        Int?
-  pdfMetadata      Json?
-  createdByUserId  String?
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
+  id                String                @id @default(cuid())
+  tenantId          String
+  name              String
+  description       String?
+  category          String?
+  originalFileName  String
+  storageKey        String
+  mimeType          String
+  sizeBytes         BigInt
+  status            CrmFormTemplateStatus @default(DRAFT)
+  pageCount         Int?
+  pdfMetadata       Json?
+  createdByUserId   String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
 
-  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User?               @relation("CrmFormTemplateCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  fields      CrmFormField[]
-  requests    CrmFormRequest[]
-  submissions CrmFormSubmission[]
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     User?             @relation("CrmFormTemplateCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  fields        CrmFormField[]
+  requests      CrmFormRequest[]
+  submissions   CrmFormSubmission[]
 
   @@index([tenantId, status])
   @@index([tenantId, category])
@@ -5340,27 +5160,27 @@ model CrmFormField {
 /// One secure public-link request for a contact to complete a form.
 /// tokenHash stores the SHA-256 hash of the random token; the raw token is never persisted.
 model CrmFormRequest {
-  id              String               @id @default(cuid())
-  tenantId        String
-  contactId       String
-  formTemplateId  String
-  status          CrmFormRequestStatus @default(SENT)
-  recipientEmail  String
-  tokenHash       String               @unique
-  message         String?
-  expiresAt       DateTime
-  sentAt          DateTime             @default(now())
-  openedAt        DateTime?
-  completedAt     DateTime?
-  revokedAt       DateTime?
-  createdByUserId String?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  id               String               @id @default(cuid())
+  tenantId         String
+  contactId        String
+  formTemplateId   String
+  status           CrmFormRequestStatus @default(SENT)
+  recipientEmail   String
+  tokenHash        String               @unique
+  message          String?
+  expiresAt        DateTime
+  sentAt           DateTime             @default(now())
+  openedAt         DateTime?
+  completedAt      DateTime?
+  revokedAt        DateTime?
+  createdByUserId  String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
-  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contact      Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  formTemplate CrmFormTemplate    @relation(fields: [formTemplateId], references: [id], onDelete: Restrict)
-  createdBy    User?              @relation("CrmFormRequestCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  formTemplate CrmFormTemplate     @relation(fields: [formTemplateId], references: [id], onDelete: Restrict)
+  createdBy    User?               @relation("CrmFormRequestCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   submission   CrmFormSubmission?
 
   @@index([tenantId, contactId, createdAt])
@@ -5444,29 +5264,29 @@ enum CrmPipelineRunStatus {
 /// totals JSON stores aggregated progress counts across pipeline steps.
 /// errors JSON stores safe error summaries (capped at 10).
 model CrmImportBatchPipelineRun {
-  id              String               @id @default(cuid())
-  tenantId        String
-  importBatchId   String
-  status          CrmPipelineRunStatus @default(PENDING)
-  startedByUserId String?
+  id               String                 @id @default(cuid())
+  tenantId         String
+  importBatchId    String
+  status           CrmPipelineRunStatus   @default(PENDING)
+  startedByUserId  String?
   /// Step currently running or last completed. Null when PENDING.
-  currentStep     String?
+  currentStep      String?
   /// Per-step results. Shape: { [stepName]: StepRecord }
-  steps           Json                 @default("{}")
+  steps            Json                   @default("{}")
   /// Aggregate pipeline totals.
-  totals          Json                 @default("{}")
+  totals           Json                   @default("{}")
   /// Safe error list (no document text, no keys). Capped at 10 entries.
-  errors          Json                 @default("[]")
-  startedAt       DateTime?
-  completedAt     DateTime?
+  errors           Json                   @default("[]")
+  startedAt        DateTime?
+  completedAt      DateTime?
   /// Set when a stale RUNNING run is automatically recovered to FAILED by the
   /// stale-run recovery mechanism (triggered on next start/continue call).
-  recoveredAt     DateTime?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  recoveredAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
 
-  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  importBatch CrmImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  importBatch CrmImportBatch   @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, importBatchId])
   @@index([tenantId, status])
@@ -5476,34 +5296,34 @@ model CrmImportBatchPipelineRun {
 /// One row per document (unique on documentId).
 /// Created/replaced by the text extraction service; never deleted independently.
 model CrmLeadDocumentText {
-  id                   String                       @id @default(cuid())
-  tenantId             String
-  documentId           String                       @unique
+  id                  String                        @id @default(cuid())
+  tenantId            String
+  documentId          String                        @unique
   /// Denormalized for fast tenant-scoped queries without joining CrmLeadDocument.
-  contactId            String?
-  importBatchId        String?
+  contactId           String?
+  importBatchId       String?
   /// The full extracted text. Empty string if extraction failed.
-  text                 String                       @default("")
+  text                String                        @default("")
   /// Page count from PDF metadata; null for non-PDF types.
-  pageCount            Int?
+  pageCount           Int?
   /// Character count of the extracted text field.
-  charCount            Int                          @default(0)
-  extractionProvider   CrmDocTextExtractionProvider
-  extractionStatus     CrmDocTextExtractionStatus   @default(TEXT_PENDING)
+  charCount           Int                           @default(0)
+  extractionProvider  CrmDocTextExtractionProvider
+  extractionStatus    CrmDocTextExtractionStatus    @default(TEXT_PENDING)
   /// Safe error message (no document content, no storage paths, no tokens).
-  extractionError      String?
-  extractedAt          DateTime?
+  extractionError     String?
+  extractedAt         DateTime?
   /// OCR confidence score (0–100); null for non-OCR providers.
   extractionConfidence Float?
   /// Provider-specific metadata JSON. For tesseract_js:
   ///   { "ocrEngine": "tesseract_js", "language": "eng", "pageCount": 1 }
   /// Never stores document content or storage paths.
-  extractionMetadata   Json?
-  createdAt            DateTime                     @default(now())
-  updatedAt            DateTime                     @updatedAt
+  extractionMetadata  Json?
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
 
-  document CrmLeadDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document  CrmLeadDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   discoveredPhones CrmLeadDiscoveredPhone[]
   discoveredEmails CrmLeadDiscoveredEmail[]
@@ -5530,7 +5350,7 @@ enum CrmDiscoveryStatus {
 /// One row per (tenant, contact, normalizedPhone, document) — unique index prevents
 /// duplicate discoveries when extraction or discovery is rerun.
 model CrmLeadDiscoveredPhone {
-  id              String             @id @default(cuid())
+  id              String              @id @default(cuid())
   tenantId        String
   contactId       String
   documentId      String
@@ -5540,18 +5360,18 @@ model CrmLeadDiscoveredPhone {
   /// Digits-only normalized form for dedup (e.g. "5551234567")
   normalizedPhone String
   /// HIGH — valid US format + near phone label; MEDIUM — valid format only
-  confidence      String             @default("MEDIUM")
+  confidence      String              @default("MEDIUM")
   /// Up to 200 chars of surrounding text. Never the full document text.
   sourceSnippet   String?
   sourcePage      Int?
-  status          CrmDiscoveryStatus @default(PENDING)
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  status          CrmDiscoveryStatus  @default(PENDING)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
-  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contact      Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  document     CrmLeadDocument     @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  documentText CrmLeadDocumentText @relation(fields: [documentTextId], references: [id], onDelete: Cascade)
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  document     CrmLeadDocument      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentText CrmLeadDocumentText  @relation(fields: [documentTextId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, contactId, normalizedPhone, documentId])
   @@index([tenantId, contactId])
@@ -5562,7 +5382,7 @@ model CrmLeadDiscoveredPhone {
 /// An email address discovered in an imported document's extracted text.
 /// One row per (tenant, contact, email, document) — unique index prevents duplicates.
 model CrmLeadDiscoveredEmail {
-  id             String             @id @default(cuid())
+  id             String              @id @default(cuid())
   tenantId       String
   contactId      String
   documentId     String
@@ -5570,18 +5390,18 @@ model CrmLeadDiscoveredEmail {
   /// Email as extracted (lowercased)
   email          String
   /// HIGH — valid format; MEDIUM — plausible but unusual
-  confidence     String             @default("HIGH")
+  confidence     String              @default("HIGH")
   /// Up to 200 chars of surrounding text.
   sourceSnippet  String?
   sourcePage     Int?
-  status         CrmDiscoveryStatus @default(PENDING)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  status         CrmDiscoveryStatus  @default(PENDING)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
 
-  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contact      Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  document     CrmLeadDocument     @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  documentText CrmLeadDocumentText @relation(fields: [documentTextId], references: [id], onDelete: Cascade)
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  document     CrmLeadDocument      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentText CrmLeadDocumentText  @relation(fields: [documentTextId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, contactId, email, documentId])
   @@index([tenantId, contactId])
@@ -5607,12 +5427,12 @@ enum CrmLeadIntelligenceStatus {
 /// One row per contact (unique on contactId). Upserted on force-regeneration.
 /// All output is advisory only — no auto-modification of contact data.
 model CrmLeadIntelligenceReport {
-  id                   String                    @id @default(cuid())
+  id                   String                      @id @default(cuid())
   tenantId             String
   /// One report per contact — upserted on force regeneration.
-  contactId            String                    @unique
+  contactId            String                      @unique
   importBatchId        String?
-  status               CrmLeadIntelligenceStatus @default(PENDING)
+  status               CrmLeadIntelligenceStatus   @default(PENDING)
   /// 2-3 sentence executive summary.
   summary              String?
   /// Paragraph describing the company/lead's business.
@@ -5633,11 +5453,11 @@ model CrmLeadIntelligenceReport {
   /// Safe error message (no document content, no tokens, ≤ 500 chars).
   error                String?
   /// Source counts that were fed into the AI call.
-  sourceDocumentCount  Int                       @default(0)
-  sourceTextCount      Int                       @default(0)
-  sourceDiscoveryCount Int                       @default(0)
-  createdAt            DateTime                  @default(now())
-  updatedAt            DateTime                  @updatedAt
+  sourceDocumentCount  Int                         @default(0)
+  sourceTextCount      Int                         @default(0)
+  sourceDiscoveryCount Int                         @default(0)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
 
   /// Total characters of all document snippets sent to the AI.
   promptCharCount      Int?
@@ -5849,9 +5669,9 @@ model PbxStorageRetentionPolicy {
 /// admin dashboard, and alerting. Plain scalar FKs (no relations) to keep the
 /// write path cheap and avoid coupling to Tenant/Extension/MobileDevice.
 model PbxEndpointRegistration {
-  id                 String    @id @default(cuid())
+  id                 String   @id @default(cuid())
   /// pjsip endpoint / AOR name, e.g. "T25_101_1". Globally unique on the PBX.
-  endpoint           String    @unique
+  endpoint           String   @unique
   /// Connect tenant id, resolved from the endpoint prefix when possible.
   tenantId           String?
   /// Connect Extension.id, resolved from the endpoint when possible.
@@ -5861,9 +5681,9 @@ model PbxEndpointRegistration {
   /// Extension number parsed from the endpoint (e.g. "101").
   extNumber          String?
   /// True when the endpoint name carries a device suffix (WebRTC/mobile, e.g. "_1").
-  isWebrtcDevice     Boolean   @default(false)
+  isWebrtcDevice     Boolean  @default(false)
   /// Normalized state: "REGISTERED" | "UNREACHABLE" | "UNREGISTERED" | "UNKNOWN".
-  status             String    @default("UNKNOWN")
+  status             String   @default("UNKNOWN")
   /// Last raw AMI ContactStatus value (Reachable/Unreachable/Removed/Created/NonQualified...).
   rawStatus          String?
   /// Most-recent contact URI seen for this endpoint.
@@ -5876,7 +5696,231 @@ model PbxEndpointRegistration {
   lastUnreachableAt  DateTime?
   lastUnregisteredAt DateTime?
   /// Timestamp of the most recent status event of any kind.
-  lastEventAt        DateTime  @default(now())
+  lastEventAt        DateTime @default(now())
   /// Source of the last update: "ami_contactstatus" | "ami_peerstatus" | "ami_bootstrap".
   source             String?
-  create
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status])
+  @@index([tenantId, status])
+  @@index([extensionId])
+  @@index([lastEventAt])
+}
+
+/// Append-only history of PBX registration state transitions for an endpoint.
+/// Powers the "why did this device go Not Registered" timeline in the admin UI.
+/// Pruned by the worker after ~14 days.
+model PbxEndpointRegistrationEvent {
+  id          String   @id @default(cuid())
+  endpoint    String
+  tenantId    String?
+  extensionId String?
+  /// Normalized status at this event ("REGISTERED" | "UNREACHABLE" | "UNREGISTERED" | "UNKNOWN").
+  status      String
+  rawStatus   String?
+  contactUri  String?
+  userAgent   String?
+  details     Json?
+  occurredAt  DateTime @default(now())
+
+  @@index([endpoint, occurredAt])
+  @@index([tenantId, occurredAt])
+  @@index([occurredAt])
+}
+
+// ─── AI Support Agent ("Shammes") — docs/ai-support-agent/PLAN.md §5 ──────────
+// Additive only. Every PBX-affecting action is approval-gated; every event is
+// audit-logged. NOTHING here may weaken the PBX read-only safeguard.
+
+enum AgentConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum AgentChannel {
+  CHAT
+  EMAIL
+  WHATSAPP
+  SMS
+  PHONE
+}
+
+enum AgentActionStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  EXECUTING
+  EXECUTED
+  REVERTED
+  DENIED
+  EXPIRED
+  FAILED
+}
+
+/// One support chat session. Every new issue = a new conversation (auto-closed
+/// on resolution or 12h inactivity). Stored permanently; client visibility of
+/// past chats is gated per tenant by AgentPolicy.historyVisible.
+model AgentConversation {
+  id           String                  @id @default(cuid())
+  tenantId     String
+  clientUserId String?
+  role         String                  @default("customer") /// "owner" | "customer"
+  channel      AgentChannel            @default(CHAT)
+  language     String? /// detected: "en" | "yi"
+  status       AgentConversationStatus @default(OPEN)
+  startedAt    DateTime                @default(now())
+  closedAt     DateTime?
+  messages     AgentMessage[]
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, status])
+}
+
+model AgentMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   AgentConversation @relation(fields: [conversationId], references: [id])
+  role           String /// "user" | "assistant" | "system" | "tool"
+  content        String
+  audioUrl       String?
+  transcript     String?
+  model          String?
+  inputTokens    Int?
+  outputTokens   Int?
+  createdAt      DateTime          @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+/// A requested change. Client actions wait in PENDING_APPROVAL for a human;
+/// owner-requested actions are auto-approved (owner's word) but still pre-flight
+/// checked, executed via the scoped executor, audited, and emailed.
+model AgentAction {
+  id             String            @id @default(cuid())
+  tenantId       String
+  conversationId String?
+  capabilityId   String /// e.g. "action.A1.temp_forward" — must exist in the certified manifest
+  params         Json
+  riskTier       String            @default("low")
+  status         AgentActionStatus @default(DRAFT)
+  summary        String /// plain-English description + exact diff shown to approver
+  requestedBy    String /// user id or "owner"
+  requestedRole  String            @default("customer")
+  approvedBy     String?
+  approvalToken  String?           @unique /// signed token for email approve/deny links
+  deniedReason   String?
+  executedAt     DateTime?
+  revertAt       DateTime? /// scheduler enforces even across restarts
+  revertedAt     DateTime?
+  revertOfId     String?           @unique /// set on the mirror action that undoes this one
+  resultSnapshot Json? /// pre-change state captured for revert/rollback
+  errorDetail    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([tenantId, status])
+  @@index([status, revertAt])
+  @@index([createdAt])
+}
+
+/// Append-only audit trail (DB twin of the JSONL file export).
+model AgentAuditLog {
+  id             String   @id @default(cuid())
+  ts             DateTime @default(now())
+  actor          String /// "agent" | "model" | "owner" | "customer" | "system" | "watchman"
+  event          String
+  tenantId       String?
+  conversationId String?
+  actionId       String?
+  capabilityId   String?
+  payload        Json?
+  hash           String /// sha256 of the row body — tamper evidence
+
+  @@index([ts])
+  @@index([tenantId, ts])
+  @@index([event, ts])
+}
+
+/// Per-tenant permission policy for the customer-facing agent (PLAN.md §6a).
+/// Whitelist semantics: a capability absent from grants is blocked.
+model AgentPolicy {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique /// special row tenantId="__owner__" holds the owner policy
+  version        Int      @default(1)
+  grants         Json /// { [capabilityId]: { mode, limits, businessHoursOnly, protectedExtensions } }
+  historyVisible Boolean  @default(false)
+  channels       String[] @default(["chat"])
+  updatedBy      String
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+}
+
+model AgentDiagReport {
+  id        String   @id @default(cuid())
+  tenantId  String
+  extension String?
+  severity  String   @default("medium")
+  findings  Json /// checks performed, evidence
+  hypotheses Json /// ranked root causes with confidence
+  recommendation String?
+  sentTo    String[]
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+/// Watchman detections (security + health). Read-only monitoring; humans act.
+model AgentIncident {
+  id         String    @id @default(cuid())
+  type       String /// e.g. "sip_bruteforce" | "toll_fraud_pattern" | "service_down" | "cert_expiry"
+  severity   String /// "info" | "warning" | "critical"
+  evidence   Json
+  status     String    @default("open") /// "open" | "acknowledged" | "resolved"
+  notifiedAt DateTime?
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([severity, createdAt])
+  @@index([status])
+}
+
+model AgentKbArticle {
+  id        String   @id @default(cuid())
+  tenantId  String? /// null = global knowledge
+  title     String
+  problem   String
+  cause     String
+  fix       String
+  approved  Boolean  @default(false) /// team approves drafts before the agent cites them
+  sourceConversationId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, approved])
+}
+
+/// Per-tenant facts the agent learns ("Brooklyn office", device models, prefs).
+model AgentMemory {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+}
+
+model AgentTranscript {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  recordingId String   @unique
+  language    String? /// "en" | "yi"
+  text        String
+  diarization Json?
+  model       String? /// "whisper" | "everett"
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
