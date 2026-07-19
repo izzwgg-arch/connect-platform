@@ -41,11 +41,21 @@ export interface ChatResult {
   degraded: boolean;
 }
 
+/** Minimal triage interface the engine calls (avoids a hard import cycle). */
+export interface TriageLike {
+  handle(
+    intent: { kind: string } & Record<string, unknown>,
+    ctx: { tenantId: string; clientUserId: string | null; role: Role; conversationId?: string },
+    language: "en" | "yi",
+  ): Promise<{ handled: boolean; reply?: string; yiddish?: string; diagReportId?: string; actionId?: string }>;
+}
+
 export class ConversationEngine {
   constructor(
     private store: ConversationStore,
     private llm: ModelRouter | null,
     private audit: AuditLog,
+    private triage: TriageLike | null = null,
   ) {}
 
   async getOrOpenConversation(ctx: ChatContext): Promise<ConversationRow> {
@@ -76,6 +86,27 @@ export class ConversationEngine {
           : "The support assistant is currently paused. Your message has been recorded and passed to the team.";
       await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "killswitch" });
       return { conversationId: conv.id, reply, language, degraded: true };
+    }
+
+    // Triage: if the message is an actionable intent (diagnostic or a catalog
+    // action) and a triage orchestrator is wired, handle it deterministically
+    // (policy-gated, approval-gated) before falling back to conversational LLM.
+    if (this.triage) {
+      try {
+        const { detectIntent } = await import("../triage/intent");
+        const intent = detectIntent(text);
+        if (intent.kind !== "chat") {
+          const outcome = await this.triage.handle(intent, { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId, role: ctx.role, conversationId: conv.id }, language);
+          if (outcome.handled && outcome.reply) {
+            const reply = language === "yi" && outcome.yiddish ? outcome.yiddish : outcome.reply;
+            await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "triage" });
+            await this.audit.record({ actor: "agent", event: "chat.triage_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { intent: intent.kind, diagReportId: outcome.diagReportId, actionId: outcome.actionId } });
+            return { conversationId: conv.id, reply, language, model: "triage", degraded: false };
+          }
+        }
+      } catch (err) {
+        await this.audit.record({ actor: "system", event: "chat.triage_failed", conversationId: conv.id, payload: { error: String(err) } });
+      }
     }
 
     // Build short history for context (last 20 messages).

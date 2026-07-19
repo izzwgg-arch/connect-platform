@@ -22,6 +22,7 @@ import { registerActionRoutes } from "./actions/routes";
 import { makePbxBackend } from "./actions/pbxBackend";
 import { ScopedPbxExecutor } from "./pbx/executor";
 import { makePbxClientFactory } from "./pbx/client";
+import { TriageOrchestrator } from "./triage/orchestrator";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -51,15 +52,12 @@ async function main() {
   const notifier = new Notifier(cfg, audit);
   const router = new ModelRouter(cfg, audit);
   const manifest = loadManifest();
-  const engine = prisma ? new ConversationEngine(new PrismaConversationStore(prisma), router, audit) : null;
 
   const app = Fastify({ logger: true });
 
+  let engine: ConversationEngine | null = null;
   let actionService: ActionService | null = null;
-  if (engine) {
-    registerChatRoutes(app, engine);
-    registerDiagRoutes(app, new DiagnosticsEngine(new ReadTools(prisma), prisma, audit, notifier, router));
-
+  if (prisma) {
     // Action + approval lifecycle. PBX backend runs the Scoped Executor.
     // liveWrites is FALSE unless the operator explicitly enables it AND the
     // capability is liveEnabled — provisioning stays simulation-only until PW-2.
@@ -72,15 +70,30 @@ async function main() {
       prisma,
       audit,
       notifier,
-      { "pbx.": makePbxBackend(pbxExecutor) },
+      { "pbx.": makePbxBackend(pbxExecutor), "action.": makePbxBackend(pbxExecutor) },
       { approvalBaseUrl: process.env.AGENT_PUBLIC_BASE_URL, liveWrites: process.env.AGENT_PBX_LIVE_WRITES === "1" },
     );
+
+    const diagEngine = new DiagnosticsEngine(new ReadTools(prisma), prisma, audit, notifier, router);
+    const loadPolicy = async (tenantId: string) => {
+      try {
+        const p = await prisma.agentPolicy.findUnique({ where: { tenantId } });
+        return p ? { tenantId, version: p.version, updatedBy: p.updatedBy, historyVisible: p.historyVisible, channels: (p.channels ?? []) as any, grants: (p.grants ?? {}) as any } : null;
+      } catch {
+        return null;
+      }
+    };
+    const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy);
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage);
+
+    registerChatRoutes(app, engine);
+    registerDiagRoutes(app, diagEngine);
     registerActionRoutes(app, actionService);
 
     // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
     // auto-revert actions every 5 minutes.
     setInterval(() => {
-      engine.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
+      engine?.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
       actionService?.tick().catch((err) => app.log.error({ err }, "action tick failed"));
     }, 5 * 60 * 1000).unref();
   }
