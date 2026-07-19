@@ -5924,3 +5924,33 @@ model AgentTranscript {
 
   @@index([tenantId, createdAt])
 }
+
+/// Ownership Ledger (PBX_PROVISIONING_PLAN.md §4). EVERY PBX object the agent
+/// creates is recorded here. The Scoped Executor may only ever edit/delete a
+/// PBX object whose id appears in this ledger — anything absent is, by
+/// definition, pre-existing / not ours, and is untouchable. This is the
+/// structural guarantee that existing tenants and call flows are never altered.
+model AgentPbxObject {
+  id               String    @id @default(cuid())
+  /// e.g. "tenant" | "extension" | "ivr" | "inbound_route" | "ring_group" | "queue" | "time_condition" | "outbound_route" | "device" | "conference" | "parking_lot" | "ivr_prompt"
+  pbxObjectType    String
+  /// The id/key returned by VitalPBX for the created object.
+  pbxObjectId      String
+  /// VitalPBX tenant this object lives under (for scoping). Null for the tenant object itself.
+  pbxTenantId      String?
+  /// Connect tenant id when applicable.
+  connectTenantId  String?
+  /// The AgentAction that created it (audit chain).
+  createdByActionId String?
+  /// "active" | "deleted" | "rolled_back"
+  state            String    @default("active")
+  /// Was this created in simulation mode (not a real PBX object)? Keeps sim + live cleanly separated.
+  simulated        Boolean   @default(false)
+  meta             Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([pbxObjectType, pbxObjectId, simulated])
+  @@index([pbxTenantId])
+  @@index([state])
+}
