@@ -28,6 +28,10 @@ import { registerAdminRoutes } from "./actions/adminRoutes";
 import { registerPolicyAdminRoutes } from "./policy/adminRoutes";
 import { IdentityResolver } from "./channels/identity";
 import { EmailChannel } from "./channels/email";
+import { MessagingChannelHandler, NullMessagingTransport } from "./channels/messaging";
+import { VoiceStudio } from "./voice/studio";
+import { KnowledgeBase } from "./knowledge/kb";
+import { verifyPortalJwt } from "./auth";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -106,6 +110,41 @@ async function main() {
       const body = (req.body ?? {}) as any;
       if (typeof body.from !== "string" || typeof body.text !== "string") return reply.code(400).send({ error: "bad_request" });
       return emailChannel.handleInbound({ from: body.from, subject: body.subject, text: body.text, messageId: body.messageId });
+    });
+
+    // SMS / WhatsApp channel. Transport is Null until Twilio creds exist; the
+    // inbound webhook (from the Twilio adapter) posts normalized messages here.
+    const messaging = new MessagingChannelHandler(engine, new IdentityResolver(prisma), new NullMessagingTransport(), audit);
+    app.post("/agent/channels/messaging/inbound", async (req, reply) => {
+      const secret = process.env.AGENT_INTERNAL_SECRET;
+      if (!secret || req.headers["x-agent-internal-secret"] !== secret) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (typeof b.from !== "string" || typeof b.text !== "string" || (b.channel !== "sms" && b.channel !== "whatsapp")) return reply.code(400).send({ error: "bad_request" });
+      return messaging.handleInbound({ from: b.from, text: b.text, channel: b.channel, messageSid: b.messageSid });
+    });
+
+    // Voice Studio (owner-only). Manage voices + render prompt audio (guarded
+    // until ElevenLabs key). Deploy-to-IVR is action A12/P14 — not here.
+    const voiceStudio = new VoiceStudio(prisma, { elevenLabsApiKey: cfg.elevenLabsApiKey, openaiApiKey: cfg.openaiApiKey }, audit);
+    const requireOwner = (req: any) => {
+      const auth = req.headers.authorization;
+      const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+      return id?.role === "owner";
+    };
+    app.get("/agent/voice/voices", async (req, reply) => (requireOwner(req) ? { voices: await voiceStudio.listVoices() } : reply.code(403).send({ error: "forbidden" })));
+    app.post("/agent/voice/render", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (!b.voiceId || !b.text) return reply.code(400).send({ error: "bad_request" });
+      return voiceStudio.render({ voiceId: b.voiceId, text: b.text, language: b.language === "yi" ? "yi" : "en" });
+    });
+
+    // Knowledge base — retrieval (owner) + approve (owner).
+    const kb = new KnowledgeBase(prisma, audit);
+    app.post("/agent/kb/retrieve", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      return { results: await kb.retrieve(String(b.query ?? ""), b.tenantId ?? null) };
     });
 
     // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
