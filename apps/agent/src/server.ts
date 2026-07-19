@@ -17,6 +17,11 @@ import { registerChatRoutes } from "./conversation/routes";
 import { ReadTools } from "./tools/readTools";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
+import { ActionService } from "./actions/service";
+import { registerActionRoutes } from "./actions/routes";
+import { makePbxBackend } from "./actions/pbxBackend";
+import { ScopedPbxExecutor } from "./pbx/executor";
+import { makePbxClientFactory } from "./pbx/client";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -50,13 +55,34 @@ async function main() {
 
   const app = Fastify({ logger: true });
 
+  let actionService: ActionService | null = null;
   if (engine) {
     registerChatRoutes(app, engine);
     registerDiagRoutes(app, new DiagnosticsEngine(new ReadTools(prisma), prisma, audit, notifier, router));
-    // DB-backed scheduler tick: auto-close stale chats every 15 minutes.
+
+    // Action + approval lifecycle. PBX backend runs the Scoped Executor.
+    // liveWrites is FALSE unless the operator explicitly enables it AND the
+    // capability is liveEnabled — provisioning stays simulation-only until PW-2.
+    const pbxExecutor = new ScopedPbxExecutor(
+      prisma,
+      audit,
+      makePbxClientFactory({ baseUrl: process.env.PBX_BASE_URL, apiToken: process.env.PBX_API_TOKEN }),
+    );
+    actionService = new ActionService(
+      prisma,
+      audit,
+      notifier,
+      { "pbx.": makePbxBackend(pbxExecutor) },
+      { approvalBaseUrl: process.env.AGENT_PUBLIC_BASE_URL, liveWrites: process.env.AGENT_PBX_LIVE_WRITES === "1" },
+    );
+    registerActionRoutes(app, actionService);
+
+    // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
+    // auto-revert actions every 5 minutes.
     setInterval(() => {
       engine.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
-    }, 15 * 60 * 1000).unref();
+      actionService?.tick().catch((err) => app.log.error({ err }, "action tick failed"));
+    }, 5 * 60 * 1000).unref();
   }
 
   app.get("/health", async () => ({ ok: true, service: "@connect/agent", ts: new Date().toISOString() }));
