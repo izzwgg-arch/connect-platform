@@ -27,9 +27,15 @@ capabilities (currently 17 of 43).
 | Watchman security + health monitor (read-only) | ✅ live | ran live against real CDRs |
 | Owner admin APIs + `/agent-approvals` portal page | ✅ live | owner-JWT gated |
 | Transcription pipeline scaffold (Whisper/Everett) | ✅ live | guarded until keys + audio path |
+| Email channel (identity → engine → reply) | ✅ live | verified with a real user |
+| Policy admin API + `/agent-permissions` page | ✅ live | versioned + diff-audited |
+| SMS/WhatsApp channel (Twilio) | ✅ live | transport guarded until Twilio creds |
+| Voice Studio scaffold (library + render) | ✅ live | render guarded until ElevenLabs key |
+| Knowledge base + retrieval + approve | ✅ live | approved-only surfacing; pgvector-ready |
 
-Test count: **75 unit + 24 certification cases, all green.** Every deploy verified
-api/portal/agent 200 and **PBX never contacted**.
+Test count: **90 unit + 24 certification cases, all green.** Every deploy verified
+api/portal/agent 200 and **PBX never contacted**. Portal pages live: `/support-chat`,
+`/agent-approvals`, `/agent-permissions`.
 
 ## Blocked on Izzy (not code — inputs)
 
