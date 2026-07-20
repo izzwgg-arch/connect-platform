@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildProvisioningPlan } from "./provisioningPlan";
 
-test("builds tenant + N extension steps in order", () => {
+test("builds tenant + N extension steps + N device steps in order", () => {
   const p = buildProvisioningPlan({
     tenantName: "Feldman Medical",
     tenantEmail: "office@feldman.com",
@@ -13,10 +13,22 @@ test("builds tenant + N extension steps in order", () => {
     ],
   });
   assert.equal(p.ok, true);
-  assert.equal(p.steps.length, 4); // tenant + 3 ext
+  assert.equal(p.steps.length, 7); // tenant + 3 ext + 3 device
   assert.equal(p.steps[0].opId, "P1");
-  assert.equal(p.steps[0].feasibility, "api");
-  assert.ok(p.steps.slice(1).every((s) => s.opId === "P4" && s.feasibility === "helper" && s.dependsOn === 1));
+  const exts = p.steps.filter((s) => s.opId === "P4");
+  const devs = p.steps.filter((s) => s.opId === "P5");
+  assert.equal(exts.length, 3);
+  assert.equal(devs.length, 3);
+  assert.ok(exts.every((s) => s.feasibility === "helper" && s.dependsOn === 1));
+  // each device depends on its extension's step, and is API-feasible
+  assert.ok(devs.every((s) => s.feasibility === "api" && typeof s.dependsOn === "number" && s.dependsOn >= 2));
+});
+
+test("createDevice:false skips the device step for that extension", () => {
+  const p = buildProvisioningPlan({ tenantName: "T", extensions: [{ name: "A", email: "a@x.com" }, { name: "B", createDevice: false }] });
+  const devs = p.steps.filter((s) => s.opId === "P5");
+  assert.equal(devs.length, 1); // only A gets a device
+  assert.match(devs[0].summary, /PJSIP/);
 });
 
 test("auto-assigns extension numbers, honoring explicit ones and avoiding collisions", () => {
@@ -25,7 +37,7 @@ test("auto-assigns extension numbers, honoring explicit ones and avoiding collis
     startExtension: 101,
     extensions: [{ name: "A" }, { name: "B", extension: "102" }, { name: "C" }],
   });
-  const nums = p.steps.slice(1).map((s) => s.params.extension);
+  const nums = p.steps.filter((s) => s.opId === "P4").map((s) => s.params.extension);
   assert.deepEqual(nums, ["101", "102", "103"]);
   // 'C' must skip 102 (taken by B) — got 103
 });
