@@ -33,9 +33,18 @@ capabilities (currently 17 of 43).
 | Voice Studio scaffold (library + render) | ✅ live | render guarded until ElevenLabs key |
 | Knowledge base + retrieval + approve | ✅ live | approved-only surfacing; pgvector-ready |
 
-Test count: **90 unit + 24 certification cases, all green.** Every deploy verified
-api/portal/agent 200 and **PBX never contacted**. Portal pages live: `/support-chat`,
-`/agent-approvals`, `/agent-permissions`.
+| Bulk onboarding plan (tenant + extensions + VM-to-email + device) | ✅ live | proven end-to-end; extensions gated until PW-2 |
+| create-extension helper (additive, dry-run, rollback) | ✅ built | validated read-only vs live schema |
+| Per-tenant rate + spend caps | ✅ live | wired into chat engine |
+| Adversarial red-team suite | ✅ green | injection/jailbreak/cross-tenant/forged-JWT |
+| Daily digest + weekly self-review jobs | ✅ live | scheduler + owner routes (email on SMTP) |
+| Portal Activity + Watchman page | ✅ live | `/agent-activity` |
+
+Test count: **111 unit + 24 certification cases, all green.** Every deploy verified
+api/portal/agent 200 and **PBX never contacted (read-only audit only)**. Portal pages
+live: `/support-chat`, `/agent-approvals`, `/agent-permissions`, `/agent-activity`.
+Live PBX audit: docs/PBX_AUDIT.md (VitalPBX 4.5.3 — queues creatable via API,
+extensions via helper).
 
 ## Blocked on Izzy (not code — inputs)
 
