@@ -32,6 +32,7 @@ set -euo pipefail
 DB="${OMBU_DB:-ombutel}"
 COMMIT=0; OWNER_WINDOW=0
 TENANT_ID=""; EXT=""; NAME=""; EMAIL=""; MAILBOX=""
+VM=0; VM_ATTACH=1; VM_TRANSCRIBE=0
 log(){ echo "[create-ext] $*"; }
 fail(){ echo "[create-ext] FAIL: $*" >&2; exit "${2:-2}"; }
 
@@ -41,10 +42,16 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --name) NAME="$2"; shift 2;;
   --email) EMAIL="$2"; shift 2;;
   --mailbox) MAILBOX="$2"; shift 2;;
+  --vm) VM=1; shift;;                 # enable voicemail-to-email mailbox
+  --vm-no-attach) VM_ATTACH=0; shift;;# don't attach the audio file to the email
+  --vm-transcribe) VM_TRANSCRIBE=1; shift;;# enable AI voicemail transcription
   --commit) COMMIT=1; shift;;
   --owner-window) OWNER_WINDOW=1; shift;;
   *) fail "unknown arg $1" 4;;
 esac; done
+
+# Voicemail-to-email needs an address to deliver to.
+if [[ "$VM" == "1" && -z "$EMAIL" ]]; then fail "--vm requires --email (nowhere to deliver voicemail)" 2; fi
 
 [[ -n "$TENANT_ID" && -n "$EXT" && -n "$NAME" ]] || fail "require --tenant-id --ext --name" 2
 [[ "$EXT" =~ ^[0-9]{2,6}$ ]] || fail "extension must be 2-6 digits" 2
@@ -67,8 +74,18 @@ EMAIL_SQL="NULL"; [[ -n "$EMAIL" ]] && EMAIL_SQL="'$(printf '%s' "$EMAIL" | sed 
 NAME_SQL="'$(printf '%s' "$NAME" | sed "s/'/''/g")'"
 INSERT="INSERT INTO ombu_extensions (extension,name,email,mailbox,tenant_id,generate_hints) VALUES ('${EXT}',${NAME_SQL},${EMAIL_SQL},'${MAILBOX}',${TENANT_ID},'yes');"
 
+# Voicemail mailbox row (voicemail-to-email). Delivery address comes from the
+# extension's email above; this row enables the mailbox + attaches audio.
+TENANT_SLUG=$(q "SELECT name FROM ombu_tenants WHERE tenant_id=${TENANT_ID} LIMIT 1;" 2>/dev/null || echo "")
+VM_CONTEXT="${TENANT_SLUG:+${TENANT_SLUG}-}voicemail"
+VM_ATTACH_SQL=$([[ "$VM_ATTACH" == "1" ]] && echo "'yes'" || echo "'no'")
+VM_TRANS_SQL=$([[ "$VM_TRANSCRIBE" == "1" ]] && echo "'yes'" || echo "'no'")
+
 log "PLAN: create extension ${EXT} '${NAME}' <${EMAIL}> mailbox ${MAILBOX} in tenant ${TENANT_ID}"
 log "SQL : ${INSERT}"
+if [[ "$VM" == "1" ]]; then
+  log "PLAN: voicemail-to-email → ${EMAIL} (attach=${VM_ATTACH}, ai_transcription=${VM_TRANSCRIBE}, context=${VM_CONTEXT})"
+fi
 
 if [[ "$COMMIT" != "1" || "$OWNER_WINDOW" != "1" ]]; then
   log "DRY-RUN (no --commit/--owner-window) — nothing written. This is the default, safe mode."
@@ -85,17 +102,28 @@ q "$INSERT"
 NEW_ID=$(q "SELECT extension_id FROM ombu_extensions WHERE extension='${EXT}' AND tenant_id=${TENANT_ID} LIMIT 1;")
 [[ -n "$NEW_ID" ]] || fail "insert did not produce a row" 3
 
+# rollback helper — removes only what we just inserted (VM row then extension).
+rollback(){ q "DELETE FROM ombu_extensions_vm WHERE extension_id=${NEW_ID};" 2>/dev/null || true; q "DELETE FROM ombu_extensions WHERE extension_id=${NEW_ID};" 2>/dev/null || true; }
+
+# Voicemail-to-email mailbox row (additive; linked to the new extension).
+if [[ "$VM" == "1" ]]; then
+  VM_INSERT="INSERT INTO ombu_extensions_vm (extension_id,password,context,attach,enabled,ai_transcription,create_hint,ask_password) VALUES (${NEW_ID},'${MAILBOX}','${VM_CONTEXT}',${VM_ATTACH_SQL},'yes',${VM_TRANS_SQL},'yes','yes');"
+  q "$VM_INSERT" || { rollback; fail "voicemail row insert failed — rolled back extension ${EXT}" 3; }
+fi
+
 # Scoped config regen. Prefer a targeted module regen; verify integrity after.
 if command -v vitalpbx >/dev/null 2>&1; then
-  vitalpbx gen-conf >/tmp/connect-genconf.log 2>&1 || { q "DELETE FROM ombu_extensions WHERE extension_id=${NEW_ID};"; fail "gen-conf failed — rolled back extension ${EXT}" 3; }
+  vitalpbx gen-conf >/tmp/connect-genconf.log 2>&1 || { rollback; fail "gen-conf failed — rolled back extension ${EXT}" 3; }
 fi
 
 VERIFY=$(q "SELECT COUNT(*) FROM ombu_extensions WHERE extension_id=${NEW_ID};")
-if [[ "$VERIFY" != "1" ]]; then
-  q "DELETE FROM ombu_extensions WHERE extension_id=${NEW_ID};" || true
+VM_VERIFY=1
+[[ "$VM" == "1" ]] && VM_VERIFY=$(q "SELECT COUNT(*) FROM ombu_extensions_vm WHERE extension_id=${NEW_ID};")
+if [[ "$VERIFY" != "1" || "$VM_VERIFY" != "1" ]]; then
+  rollback
   fail "post-write verify failed — rolled back" 3
 fi
 
-log "OK: extension ${EXT} created (extension_id=${NEW_ID}) in tenant ${TENANT_ID}"
+log "OK: extension ${EXT} created (extension_id=${NEW_ID}) in tenant ${TENANT_ID}${VM:+, voicemail-to-email → ${EMAIL}}"
 echo "CREATED_EXTENSION_ID=${NEW_ID}"
 exit 0

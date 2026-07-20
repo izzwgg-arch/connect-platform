@@ -35,6 +35,31 @@ test("warns when an extension has no email", () => {
   assert.ok(p.warnings.some((w) => /no email/.test(w)));
 });
 
+test("voicemail-to-email defaults ON when email present, OFF when absent", () => {
+  const p = buildProvisioningPlan({ tenantName: "T", extensions: [{ name: "A", email: "a@x.com" }, { name: "B" }] });
+  const a = p.steps.find((s) => (s.params as any).name === "A")!;
+  const b = p.steps.find((s) => (s.params as any).name === "B")!;
+  assert.equal((a.params as any).voicemailToEmail, true);
+  assert.equal((a.params as any).voicemailAttach, true);
+  assert.equal((b.params as any).voicemailToEmail, false);
+  assert.match(a.summary, /voicemail→email/);
+});
+
+test("voicemail-to-email can be explicitly disabled; AI transcription opt-in", () => {
+  const p = buildProvisioningPlan({
+    tenantName: "T",
+    extensions: [
+      { name: "NoVM", email: "n@x.com", voicemailToEmail: false },
+      { name: "Transcribed", email: "t@x.com", voicemailTranscribe: true },
+    ],
+  });
+  const novm = p.steps.find((s) => (s.params as any).name === "NoVM")!;
+  const tr = p.steps.find((s) => (s.params as any).name === "Transcribed")!;
+  assert.equal((novm.params as any).voicemailToEmail, false);
+  assert.equal((tr.params as any).voicemailTranscribe, true);
+  assert.match(tr.summary, /AI transcribed/);
+});
+
 test("rejects malformed input", () => {
   assert.equal(buildProvisioningPlan({ extensions: [] }).ok, false); // missing tenantName
   assert.equal(buildProvisioningPlan({ tenantName: "T", extensions: [{ name: "X", email: "not-an-email" }] }).ok, false);

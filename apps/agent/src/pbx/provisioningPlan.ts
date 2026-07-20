@@ -19,6 +19,13 @@ export const ExtensionSpec = z.object({
   name: z.string().min(1),
   email: z.string().email().optional(),
   extension: z.string().regex(/^\d{2,6}$/).optional(), // auto-assigned if omitted
+  /** Voicemail-to-email: send voicemails to this extension's email. Default on
+   *  when an email is present. Ignored (with a warning) when no email. */
+  voicemailToEmail: z.boolean().optional(),
+  /** Attach the audio file to the voicemail email (default true). */
+  voicemailAttach: z.boolean().optional(),
+  /** AI-transcribe voicemails (VitalPBX ai_transcription). Default off. */
+  voicemailTranscribe: z.boolean().optional(),
 });
 export type ExtensionSpec = z.infer<typeof ExtensionSpec>;
 
@@ -79,12 +86,23 @@ export function buildProvisioningPlan(raw: unknown): BuiltPlan {
 
   input.extensions.forEach((e, i) => {
     const ext = e.extension ?? nextFree();
+    // Voicemail-to-email defaults ON when an email exists; impossible without one.
+    const vmToEmail = e.email ? (e.voicemailToEmail ?? true) : false;
     if (!e.email) warnings.push(`Extension ${ext} (${e.name}) has no email — voicemail-to-email won't be set.`);
+    else if (e.voicemailToEmail === false) warnings.push(`Extension ${ext} (${e.name}) has voicemail-to-email disabled by request.`);
     steps.push({
       seq: i + 2,
       opId: "P4",
-      summary: `Create extension ${ext} — ${e.name}${e.email ? ` <${e.email}>` : ""}`,
-      params: { extension: ext, name: e.name, email: e.email, voicemail: true },
+      summary: `Create extension ${ext} — ${e.name}${e.email ? ` <${e.email}>` : ""}${vmToEmail ? " · voicemail→email" : ""}${vmToEmail && e.voicemailTranscribe ? " (AI transcribed)" : ""}`,
+      params: {
+        extension: ext,
+        name: e.name,
+        email: e.email,
+        voicemail: true,
+        voicemailToEmail: vmToEmail,
+        voicemailAttach: vmToEmail ? (e.voicemailAttach ?? true) : false,
+        voicemailTranscribe: vmToEmail ? (e.voicemailTranscribe ?? false) : false,
+      },
       dependsOn: 1, // the tenant step; tenantId injected at execution time
       feasibility: "helper",
     });
