@@ -35,6 +35,8 @@ import { verifyPortalJwt } from "./auth";
 import { buildProvisioningPlan } from "./pbx/provisioningPlan";
 import { DigestJobs } from "./jobs/digest";
 import { RateLimiter } from "./guards/limits";
+import { CorpusService } from "./corpus/corpus";
+import { SEED_GLOSSARY, type DialectTerm } from "./corpus/glossary";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -199,6 +201,44 @@ async function main() {
       if (!secret || req.headers["x-agent-internal-secret"] !== secret) return reply.code(403).send({ error: "forbidden" });
       return digest.weeklySelfReview();
     });
+    // Yiddish tuning corpus (YIDDISH_TUNING.md). Multi-source capture (live
+    // calls 24/7, news hotline bulk, corrections) + dialect glossary + export.
+    const loadGlossary = async (): Promise<DialectTerm[]> => {
+      try {
+        const db = await prisma.agentDialectTerm.findMany({ take: 5000 });
+        const fromDb: DialectTerm[] = db.map((t: any) => ({ term: t.term, variants: t.variants, category: t.category, gloss: t.gloss, englishForm: t.englishForm, weight: t.weight }));
+        return fromDb.length ? [...SEED_GLOSSARY, ...fromDb] : SEED_GLOSSARY;
+      } catch {
+        return SEED_GLOSSARY;
+      }
+    };
+    const corpus = new CorpusService(prisma, audit, loadGlossary);
+    const corpusAuth = (req: any) => {
+      const secret = process.env.AGENT_INTERNAL_SECRET;
+      return (secret && req.headers["x-agent-internal-secret"] === secret) || requireOwner(req);
+    };
+    app.post("/agent/corpus/capture", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (!b.recordingId || typeof b.text !== "string") return reply.code(400).send({ error: "bad_request" });
+      return corpus.capture(b);
+    });
+    app.post("/agent/corpus/correct", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (!b.recordingId || !b.correctedText) return reply.code(400).send({ error: "bad_request" });
+      await corpus.correct(b.recordingId, b.correctedText, b.correctedBy ?? "owner");
+      return { ok: true };
+    });
+    app.post("/agent/corpus/approve", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      await corpus.approve(b.recordingId);
+      return { ok: true };
+    });
+    app.get("/agent/corpus/stats", async (req, reply) => (corpusAuth(req) ? corpus.stats() : reply.code(403).send({ error: "forbidden" })));
+    app.get("/agent/corpus/review-queue", async (req, reply) => (requireOwner(req) ? { queue: await corpus.reviewQueue() } : reply.code(403).send({ error: "forbidden" })));
+
     setInterval(() => {
       const now = new Date();
       const day = now.toISOString().slice(0, 10);

@@ -5916,13 +5916,56 @@ model AgentTranscript {
   id          String   @id @default(cuid())
   tenantId    String?
   recordingId String   @unique
-  language    String? /// "en" | "yi"
+  language    String? /// "en" | "yi" | "yi-en" (code-switched)
   text        String
   diarization Json?
-  model       String? /// "whisper" | "everett"
+  model       String? /// "whisper" | "everett" | tuned model id
   createdAt   DateTime @default(now())
 
+  // ── Yiddish tuning flywheel (docs/ai-support-agent/YIDDISH_TUNING.md) ──
+  /// where this sample came from: "live_call" | "news_hotline" | "bulk_import" | "correction"
+  source         String   @default("live_call")
+  /// STT confidence 0..1 (drives the correction queue: low → review).
+  confidence     Float?
+  /// audio pointer (path/URL) so the (audio,text) pair can be exported for tuning.
+  audioRef       String?
+  /// human-corrected transcript; when set this is the "gold" training text.
+  correctedText  String?
+  correctedBy    String?
+  correctedAt    DateTime?
+  /// may this sample be used for model tuning? (consent + retention). Default off.
+  trainingEligible Boolean @default(false)
+  /// review workflow: "none" | "pending" | "corrected" | "approved"
+  reviewStatus   String   @default("none")
+  /// glossary/slang terms detected in this transcript (for LM + analytics).
+  glossaryHits   Json?
+
   @@index([tenantId, createdAt])
+  @@index([source, reviewStatus])
+  @@index([trainingEligible, language])
+}
+
+/// Dialect glossary — heimishe NY-Yiddish slang, loshn-koydesh, names, and the
+/// Yinglish code-switch spellings. Biases STT decoding (phrase boost) and seeds
+/// the domain language model for fine-tuning. Grows as the team spots misses.
+model AgentDialectTerm {
+  id          String   @id @default(cuid())
+  /// the term as it should appear in transcripts (canonical spelling).
+  term        String
+  /// alternate spellings / mis-hearings the model tends to produce.
+  variants    String[] @default([])
+  /// "slang" | "loshn_koydesh" | "name" | "yinglish" | "business" | "place"
+  category    String   @default("slang")
+  /// optional English gloss / meaning for the LM + human reviewers.
+  gloss       String?
+  /// English word commonly code-switched in (for yinglish category).
+  englishForm String?
+  weight      Int      @default(1)
+  addedBy     String?
+  createdAt   DateTime @default(now())
+
+  @@unique([term])
+  @@index([category])
 }
 
 /// Ownership Ledger (PBX_PROVISIONING_PLAN.md §4). EVERY PBX object the agent
