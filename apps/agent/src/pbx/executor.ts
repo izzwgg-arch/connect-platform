@@ -101,6 +101,17 @@ export class ScopedPbxExecutor {
       return this.refuse(input, mode, "Live PBX write requires ownerConfirmed=true (per-op approval).");
     }
 
+    // Gate 3a: PROTECTED EXTENSIONS (checked first — highest priority). Never let
+    // a live op target a pre-existing extension number on the pilot tenant (e.g.
+    // T21 ext 101 "Home"). Throwaway test numbers only. Comma-separated block-list.
+    if (mode === "live") {
+      const protectedExts = (process.env.AGENT_PBX_PROTECTED_EXTS ?? "101").split(",").map((s) => s.trim()).filter(Boolean);
+      const ext = String((params as any).extension ?? "");
+      if (ext && protectedExts.includes(ext)) {
+        return this.refuse(input, mode, `Live op targets protected extension '${ext}' — refused. Use a throwaway test number.`);
+      }
+    }
+
     // Gate 3b: FEASIBILITY. Audit (docs/PBX_AUDIT.md) confirmed which ops have a
     // real API endpoint on VitalPBX 4.5.3. A live attempt against a "helper"/"db"
     // op whose bridge isn't wired must NOT be dispatched to the API (it would
@@ -111,6 +122,22 @@ export class ScopedPbxExecutor {
         mode,
         `Live '${op.kind}' is not available via the VitalPBX API (feasibility=${op.feasibility}). Requires the ${op.feasibility === "helper" ? "Connect helper script" : "DB+gen-conf owner-run"} path, which is not enabled for automatic execution. See docs/PBX_AUDIT.md.`,
       );
+    }
+
+    // Gate 3c: PILOT FENCE (owner mandate). Live writes are restricted to an
+    // allow-list of tenant ids (pilot: T21 "Landau Home"). AGENT_PBX_LIVE_TENANTS
+    // is comma-separated; empty/unset = NO tenant permitted (fail-closed) so a
+    // live write can never land on a non-pilot tenant by accident.
+    if (mode === "live") {
+      const allow = (process.env.AGENT_PBX_LIVE_TENANTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      const target = String((params as any).tenantId ?? "");
+      if (op.kind === "tenant") {
+        if (process.env.AGENT_PBX_LIVE_ALLOW_TENANT_CREATE !== "1") {
+          return this.refuse(input, mode, "Live tenant-create is not enabled (AGENT_PBX_LIVE_ALLOW_TENANT_CREATE!=1). Pilot uses existing T21 only.");
+        }
+      } else if (!allow.includes(target)) {
+        return this.refuse(input, mode, `Live write to tenant '${target}' refused: not in the pilot allow-list (AGENT_PBX_LIVE_TENANTS). Pilot is T21 only.`);
+      }
     }
 
     // Build the request. :tenantId / :extensionId substituted from params.

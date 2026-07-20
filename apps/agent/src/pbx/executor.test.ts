@@ -124,18 +124,57 @@ test("live mode requires ownerConfirmed", async () => {
 
 test("FEASIBILITY: live create-extension (helper-only) is refused — API has no such endpoint", async () => {
   const exec = makeExec();
-  // owned tenant so we get past the parent-ownership gate
-  const t = await exec.execute({ opId: "P1", params: { name: "T" }, requestedBy: "owner:izzy" });
-  const res = await exec.execute({ opId: "P4", params: { tenantId: t.createdObjectId, extension: "101", name: "R" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  process.env.AGENT_PBX_LIVE_TENANTS = "21";
+  // owned tenant + throwaway ext number (9001, not the protected 101)
+  const res = await exec.execute({ opId: "P4", params: { tenantId: "21", extension: "9001", name: "R" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
   assert.equal(res.ok, false);
   assert.match(res.refusedReason!, /not available via the VitalPBX API|feasibility=helper/);
+  delete process.env.AGENT_PBX_LIVE_TENANTS;
 });
 
-test("FEASIBILITY: live create-queue (api) is allowed through the feasibility gate", async () => {
+test("FEASIBILITY: live create-queue (api) passes feasibility but is fenced to pilot tenants", async () => {
   const exec = makeExec();
   const t = await exec.execute({ opId: "P1", params: { name: "T" }, requestedBy: "owner:izzy" });
-  const res = await exec.execute({ opId: "P11", params: { tenantId: t.createdObjectId, name: "Support Q" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
-  assert.equal(res.ok, true); // api feasibility → passes the gate (spy client stands in for live)
+  // No pilot allow-list set → live write refused (fail-closed).
+  delete process.env.AGENT_PBX_LIVE_TENANTS;
+  const fenced = await exec.execute({ opId: "P11", params: { tenantId: t.createdObjectId, name: "Support Q" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(fenced.ok, false);
+  assert.match(fenced.refusedReason!, /pilot allow-list|not in the pilot/);
+});
+
+test("PILOT FENCE: live write allowed only to allow-listed tenant (T21)", async () => {
+  const exec = makeExec();
+  // seed an owned tenant with id "21" so ownership passes; simulate mode for setup
+  const t = await exec.execute({ opId: "P1", params: { name: "Landau Home" }, requestedBy: "owner:izzy" });
+  process.env.AGENT_PBX_LIVE_TENANTS = "21";
+  // wrong tenant → refused
+  const wrong = await exec.execute({ opId: "P11", params: { tenantId: "8", name: "Q" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.refusedReason!, /not in the pilot/);
+  // right tenant (21) → passes the fence (queue is api-feasible)
+  const right = await exec.execute({ opId: "P11", params: { tenantId: "21", name: "Q" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(right.ok, true);
+  delete process.env.AGENT_PBX_LIVE_TENANTS;
+});
+
+test("PROTECTED EXTENSION: live create of ext 101 (existing 'Home') is refused", async () => {
+  const exec = makeExec();
+  process.env.AGENT_PBX_LIVE_TENANTS = "21";
+  process.env.AGENT_PBX_PROTECTED_EXTS = "101";
+  // P4 create-extension by number — protected-ext gate fires before anything else.
+  const res = await exec.execute({ opId: "P4", params: { tenantId: "21", extension: "101", name: "Should Not Happen" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(res.ok, false);
+  assert.match(res.refusedReason!, /protected extension/);
+  delete process.env.AGENT_PBX_LIVE_TENANTS;
+  delete process.env.AGENT_PBX_PROTECTED_EXTS;
+});
+
+test("live tenant-create refused unless explicitly enabled", async () => {
+  const exec = makeExec();
+  delete process.env.AGENT_PBX_LIVE_ALLOW_TENANT_CREATE;
+  const res = await exec.execute({ opId: "P1", params: { name: "New Co" }, requestedBy: "owner:izzy", mode: "live", ownerConfirmed: true });
+  assert.equal(res.ok, false);
+  assert.match(res.refusedReason!, /tenant-create is not enabled/);
 });
 
 test("bad params refused before any dispatch", async () => {
