@@ -16,13 +16,20 @@ export interface RouteTable {
   [k: string]: { primary: ProviderName; model: string; fallbackModel: string };
 }
 
+/**
+ * Centralized model IDs — change here (or via env) to swap models everywhere.
+ * ANTHROPIC_MODEL / OPENAI_MODEL env vars override without a code change.
+ */
+export const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // Claude Sonnet 5
+export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
+
 export const DEFAULT_ROUTES: RouteTable = {
-  support_chat: { primary: "openai", model: "gpt-5", fallbackModel: "claude-sonnet-5" },
-  task_extraction: { primary: "openai", model: "gpt-5", fallbackModel: "claude-sonnet-5" },
-  diagnostics: { primary: "anthropic", model: "claude-sonnet-5", fallbackModel: "gpt-5" },
-  security_analysis: { primary: "anthropic", model: "claude-sonnet-5", fallbackModel: "gpt-5" },
-  report_writing: { primary: "anthropic", model: "claude-sonnet-5", fallbackModel: "gpt-5" },
-  policy_editing: { primary: "anthropic", model: "claude-sonnet-5", fallbackModel: "gpt-5" },
+  support_chat: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
+  task_extraction: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
+  diagnostics: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
+  security_analysis: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
+  report_writing: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
+  policy_editing: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
 };
 
 export interface ChatMessage {
