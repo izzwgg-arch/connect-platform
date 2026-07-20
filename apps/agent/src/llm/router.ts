@@ -18,18 +18,23 @@ export interface RouteTable {
 
 /**
  * Centralized model IDs — change here (or via env) to swap models everywhere.
- * ANTHROPIC_MODEL / OPENAI_MODEL env vars override without a code change.
+ * HYBRID by design (Izzy's choice): Sonnet 5 for high-volume conversation
+ * (cheap + excellent), Opus for the few low-volume, heavy-reasoning jobs where
+ * quality matters most. All overridable via env with zero code change.
  */
-export const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // Claude Sonnet 5
+export const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // Sonnet 5 — volume
+export const ANTHROPIC_MODEL_HEAVY = process.env.ANTHROPIC_MODEL_HEAVY || "claude-opus-4-8"; // Opus — heavy reasoning
 export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
 
 export const DEFAULT_ROUTES: RouteTable = {
-  support_chat: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
-  task_extraction: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
-  diagnostics: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
-  security_analysis: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
-  report_writing: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
-  policy_editing: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
+  // High volume → Sonnet 5 (as the Anthropic side / fallback). Cheap + strong.
+  support_chat: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
+  task_extraction: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
+  // Low volume + hard reasoning → Opus.
+  diagnostics: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
+  security_analysis: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
+  report_writing: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
+  policy_editing: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
 };
 
 export interface ChatMessage {
