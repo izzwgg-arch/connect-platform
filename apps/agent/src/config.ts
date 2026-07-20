@@ -25,8 +25,12 @@ export interface AgentConfig {
   ownerEmail: string;
   teamEmails: string[];
   auditDir: string;
-  /** Everett.ai key for Yiddish STT (Phase 4+). */
+  /** Everett.ai key for Yiddish STT (legacy placeholder). */
   everettApiKey: string | null;
+  /** Yiddish Labs — advanced Yiddish↔English transcription + text processing. */
+  yiddishLabsApiKey: string | null;
+  /** Shared secret to verify inbound Yiddish Labs webhooks. */
+  yiddishLabsWebhookSecret: string | null;
   /** ElevenLabs key for Voice Studio (Phase 5). */
   elevenLabsApiKey: string | null;
 }
@@ -63,6 +67,8 @@ export function loadConfig(): AgentConfig {
       .filter(Boolean),
     auditDir: process.env.AGENT_AUDIT_DIR ?? "/var/log/connect-agent",
     everettApiKey: envStr("EVERETT_API_KEY"),
+    yiddishLabsApiKey: envStr("YIDDISHLABS_API_KEY"),
+    yiddishLabsWebhookSecret: envStr("YIDDISHLABS_WEBHOOK_SECRET"),
     elevenLabsApiKey: envStr("ELEVENLABS_API_KEY"),
   };
 }

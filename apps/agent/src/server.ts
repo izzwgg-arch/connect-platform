@@ -245,7 +245,18 @@ async function main() {
     // and it works through it 24/7. Registered path lives in AGENT_ARCHIVE_ROOT
     // (or set via the owner route into AgentMemory). Transcription is guarded by
     // the STT key; until then it still catalogs (walks) the archive.
-    const transcriber = new Transcriber(prisma, { openaiApiKey: cfg.openaiApiKey, everettApiKey: cfg.everettApiKey }, audit) as any;
+    const glossaryContext = async () => {
+      const terms = await loadGlossary();
+      // Compact bias string for STT: "Terms: a, b, c" (canonical + a few variants).
+      const flat = terms.flatMap((t) => [t.term, ...(t.variants ?? [])]).slice(0, 200);
+      return flat.length ? `Heimishe Yiddish terms: ${flat.join(", ")}` : "";
+    };
+    const transcriber = new Transcriber(
+      prisma,
+      { openaiApiKey: cfg.openaiApiKey, everettApiKey: cfg.everettApiKey, yiddishLabsApiKey: cfg.yiddishLabsApiKey },
+      audit,
+      glossaryContext,
+    ) as any;
     const archiveTx = { transcribe: (i: any) => transcriber.transcribe({ recordingId: i.recordingId, audioRef: i.audioRef, languageHint: i.languageHint }) };
     const archive = new ArchiveIngestor(corpus, new MemoryArchiveProgress(prisma), archiveTx, audit);
     const archiveRoot = () => process.env.AGENT_ARCHIVE_ROOT || "";
@@ -258,6 +269,44 @@ async function main() {
     app.get("/agent/archive/status", async (req, reply) => {
       if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
       return { root: archiveRoot(), progress: await new MemoryArchiveProgress(prisma).stats() };
+    });
+
+    // Yiddish Labs webhook — completed async transcriptions post here. Verified
+    // by a shared secret in the URL/header (set YIDDISHLABS_WEBHOOK_SECRET). On
+    // completion we capture into the corpus with the DETECTED language.
+    app.post("/agent/webhooks/yiddishlabs", async (req, reply) => {
+      const secret = cfg.yiddishLabsWebhookSecret;
+      const provided = (req.headers["x-webhook-secret"] as string) || (req.query as any)?.secret;
+      if (!secret || provided !== secret) return reply.code(403).send({ error: "forbidden" });
+      const body = (req.body ?? {}) as any;
+      const d = body.data ?? body;
+      if (body.event && body.event !== "transcription.completed") return { ignored: body.event };
+      if (!d?.id || !d?.text) return reply.code(400).send({ error: "bad_payload" });
+      const { YiddishLabsClient } = await import("./transcription/yiddishlabs");
+      const language = YiddishLabsClient.normalizeLanguage({ id: d.id, status: "completed", text: d.text, language: d.language });
+      await corpus.capture({ recordingId: `yl_${d.id}`, text: d.text, model: "yiddishlabs", source: "live_call", confidence: 0.9 });
+      await audit.record({ actor: "agent", event: "yiddishlabs.webhook_completed", payload: { id: d.id, language, words: d.word_count } });
+      return { ok: true, language };
+    });
+
+    // Yiddish Labs admin — status + recent transcripts by detected language.
+    app.get("/agent/yiddishlabs/status", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      const byLang = async (l: string) => { try { return await prisma.agentTranscript.count({ where: { language: l } }); } catch { return 0; } };
+      return {
+        configured: !!cfg.yiddishLabsApiKey,
+        webhookConfigured: !!cfg.yiddishLabsWebhookSecret,
+        counts: { yi: await byLang("yi"), en: await byLang("en"), "yi-en": await byLang("yi-en"), he: await byLang("he") },
+      };
+    });
+    app.get("/agent/yiddishlabs/recent", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      try {
+        const rows = await prisma.agentTranscript.findMany({ where: { model: "yiddishlabs" }, orderBy: { createdAt: "desc" }, take: 50, select: { recordingId: true, language: true, text: true, source: true, reviewStatus: true, createdAt: true } });
+        return { transcripts: rows };
+      } catch {
+        return { transcripts: [] };
+      }
     });
     // 24/7 continuous drain — small batches every 2 min so it never floods the
     // box or the STT provider. No-op until AGENT_ARCHIVE_ROOT is set.

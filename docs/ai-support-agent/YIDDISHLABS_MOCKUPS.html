@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Yiddish Labs Integration — Mockups</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#2b3648;--text:#e6edf3;--dim:#8b98a9;--accent:#3b82f6;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa;--yi:#a78bfa;--en:#22c55e}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif}
+.app{display:flex;min-height:100vh}
+.side{width:230px;background:var(--panel);border-right:1px solid var(--border);padding:16px;position:fixed;top:0;bottom:0}
+.logo{font-weight:700;font-size:16px}.logo span{color:var(--purple)}
+.tag{font-size:11px;color:var(--dim);margin-bottom:20px}
+.nav{list-style:none}.nav li{padding:9px 12px;border-radius:8px;cursor:pointer;color:var(--dim);margin-bottom:4px;font-weight:500;font-size:13px}
+.nav li:hover{background:var(--panel2);color:var(--text)}.nav li.on{background:var(--purple);color:#fff}
+.main{margin-left:230px;flex:1;padding:24px 32px;max-width:1080px}
+.view{display:none}.view.on{display:block}
+h1{font-size:20px;margin-bottom:2px}.sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px}
+.row{display:flex;gap:14px;flex-wrap:wrap}.row .card{flex:1;min-width:240px}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:600}
+.p-yi{background:#241d3d;color:var(--yi)}.p-en{background:#12331f;color:var(--en)}.p-he{background:#3a2c0d;color:var(--amber)}
+.p-blue{background:#12233f;color:#60a5fa}.p-dim{background:#1c2330;color:var(--dim)}.p-green{background:#12331f;color:var(--green)}
+.badge{font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700;letter-spacing:.03em}
+.kpi{font-size:24px;font-weight:700}.kpil{font-size:12px;color:var(--dim)}
+.msg{max-width:78%;padding:9px 13px;border-radius:14px;font-size:13.5px;margin-bottom:8px;white-space:pre-wrap}
+.m-user{background:var(--accent);color:#fff;border-bottom-right-radius:4px;margin-left:auto}
+.m-agent{background:var(--panel2);border:1px solid var(--border);border-bottom-left-radius:4px}
+.rtl{direction:rtl;text-align:right}
+.chatbody{display:flex;flex-direction:column;min-height:300px}
+.wave{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}.wave i{width:3px;background:#cfe0ff;border-radius:2px;display:block}
+.mono{font-family:Consolas,monospace;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid #1e2634;vertical-align:top}
+.flow{font-family:Consolas,monospace;font-size:12px;background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:12px;white-space:pre;overflow-x:auto;color:var(--dim)}
+.toggle{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.toggle span{padding:4px 12px;font-size:12px;cursor:pointer}.toggle .a{background:var(--purple);color:#fff}
+h3{font-size:14px;margin-bottom:10px}
+.note{font-size:11px;color:var(--dim);margin-top:10px}
+label.f{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #1e2634;font-size:13px}
+input,select{background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:6px 10px;font-size:13px}
+@media(max-width:900px){.side{position:static;width:100%}.main{margin:0}.app{flex-direction:column}}
+</style></head>
+<body>
+<div class="app">
+<aside class="side">
+  <div class="logo">Connect × <span>Yiddish Labs</span></div>
+  <div class="tag">Auto-detect · transcribe · converse — mockups</div>
+  <ul class="nav" id="nav">
+    <li class="on" data-v="rec">🎧 Call Recording (auto-detect)</li>
+    <li data-v="live">💬 Live Conversation (both languages)</li>
+    <li data-v="bridge">🔀 How auto-detect works</li>
+    <li data-v="cfg">⚙️ Admin & Config</li>
+    <li data-v="queue">📈 Transcription Queue → Flywheel</li>
+  </ul>
+</aside>
+<main class="main">
+
+<!-- ===== CALL RECORDING ===== -->
+<section class="view on" id="v-rec">
+  <h1>Call Recording — automatic language detection</h1>
+  <div class="sub">Every recording is sent to Yiddish Labs with <span class="mono">language=auto</span>. The system detects Yiddish vs English (or Hebrew / loshn-koydesh) and transcribes correctly — no manual setting.</div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center">
+      <div><b>Recording #88431</b> · Goldman Realty · 3:42 · yesterday 2:14 PM</div>
+      <div><span class="pill p-yi">DETECTED: ייִדיש (yi)</span> <span class="pill p-green">completed</span></div>
+    </div>
+    <div style="margin:10px 0 6px"><span class="badge p-dim">SUMMARY (auto)</span></div>
+    <div style="font-size:13px;color:var(--dim)">Caller asked to forward the office line to the back desk until tomorrow morning; confirmed the voicemail should still reach the main mailbox.</div>
+    <div style="margin:12px 0 6px;display:flex;gap:10px;align-items:center"><span class="badge p-dim">TRANSCRIPT</span>
+      <span class="toggle"><span class="a">ייִדיש</span><span>English</span></span></div>
+    <div class="msg m-agent rtl" style="max-width:100%">גוט מארגן, איך װיל אַז די אָפיס ליניע זאָל גיין צום הינטערן דעסק ביז מארגן אינדערפרי. די voicemail זאָל נאָך אלץ קומען צום הויפּט mailbox.</div>
+    <div style="margin:10px 0 6px"><span class="badge p-dim">KEYWORDS</span></div>
+    <div><span class="pill p-blue">forwarding</span> <span class="pill p-blue">voicemail</span> <span class="pill p-blue">office line</span></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center">
+      <div><b>Recording #88432</b> · Katz &amp; Co · 1:58 · yesterday 3:05 PM</div>
+      <div><span class="pill p-en">DETECTED: English (en)</span> <span class="pill p-green">completed</span></div>
+    </div>
+    <div style="margin:10px 0 6px"><span class="badge p-dim">TRANSCRIPT</span></div>
+    <div class="msg m-agent" style="max-width:100%">Hi, my desk phone stopped ringing this morning — can someone check extension 204? Everything else seems fine.</div>
+    <div class="note">Same pipeline, no toggle needed — English detected, transcribed in English. The agent picks up either language automatically.</div>
+  </div>
+</section>
+
+<!-- ===== LIVE CONVERSATION ===== -->
+<section class="view" id="v-live">
+  <h1>Live Conversation — the agent matches the caller's language</h1>
+  <div class="sub">Yiddish in → Yiddish out. English in → English out. The agent auto-detects on the first words and stays in that language the whole conversation.</div>
+  <div class="row">
+    <div class="card">
+      <h3>A Yiddish caller <span class="pill p-yi">auto → ייִדיש</span></h3>
+      <div class="chatbody">
+        <div class="msg m-user rtl">האַלאָ, מיין טעלעפאן קלינגט נישט װען מען רופט מיר</div>
+        <div class="msg m-agent rtl">גוט מארגן! לאָמיך נאָכקוקן עקסטענשאן הונדערט־צװײ… איך זע אַז „נישט שטערן" איז אָנגעשטעלט. זאָל איך עס אָפּשטעלן פֿאַר אײַך?</div>
+        <div class="msg m-user rtl">יאָ, ביטע</div>
+        <div class="msg m-agent rtl">געטאָן ✓ אײַער טעלעפאן װעט איצט קלינגען. נאָך עפּעס?</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>An English caller <span class="pill p-en">auto → English</span></h3>
+      <div class="chatbody">
+        <div class="msg m-user">Hi, my phone isn't ringing when people call me</div>
+        <div class="msg m-agent">Good morning! Let me check extension 102… I see Do-Not-Disturb is on. Want me to turn it off for you?</div>
+        <div class="msg m-user">yes please</div>
+        <div class="msg m-agent">Done ✓ Your phone will ring now. Anything else?</div>
+      </div>
+    </div>
+  </div>
+  <div class="note">Voice notes &amp; (later) live phone calls use the same auto-detect: the caller just talks, in whichever language, and the agent answers in kind — with a cloned NY-Yiddish voice on the Yiddish side.</div>
+</section>
+
+<!-- ===== BRIDGE ===== -->
+<section class="view" id="v-bridge">
+  <h1>How auto-detect + Yiddish understanding works</h1>
+  <div class="sub">Under the hood — the caller never sees this; they just speak and get answered in their language.</div>
+  <div class="card">
+    <div class="flow">caller speaks (Yiddish OR English)
+        │
+        ▼
+  Yiddish Labs STT  language=auto  ──►  detects: yi / en / he / lk
+        │
+        ├── English?  ──► straight to the AI (Sonnet 5) ──► reply in English
+        │
+        └── Yiddish?  ──► translate YI→EN ──► AI reasons in English ──► translate EN→YI
+                                                                         │
+                                                                         ▼
+                                                            reply spoken/typed in Yiddish
+        │
+        ▼
+  every transcript ──► corpus (tuning flywheel) + searchable call record</div>
+    <div class="note">Two modes we'll A/B: (1) <b>translate-bridge</b> (ships first — reliable, uses Yiddish Labs' strength) and (2) <b>native Yiddish LLM</b> (later — lower latency where quality is proven). The caller experience is identical: talk, get answered.</div>
+  </div>
+  <div class="row">
+    <div class="card"><div class="kpi" style="color:var(--yi)">ייִדיש</div><div class="kpil">yi — full Yiddish in &amp; out</div></div>
+    <div class="card"><div class="kpi" style="color:var(--en)">EN</div><div class="kpil">en — full English in &amp; out</div></div>
+    <div class="card"><div class="kpi" style="color:var(--amber)">he / lk</div><div class="kpil">Hebrew &amp; loshn-koydesh detected too</div></div>
+    <div class="card"><div class="kpi">auto</div><div class="kpil">no manual setting, ever</div></div>
+  </div>
+</section>
+
+<!-- ===== CONFIG ===== -->
+<section class="view" id="v-cfg">
+  <h1>Admin &amp; Config</h1>
+  <div class="sub">Owner-only. The API key lives in the server env (you place it) — never shown here.</div>
+  <div class="row">
+    <div class="card" style="flex:2">
+      <h3>Yiddish Labs connection</h3>
+      <label class="f"><span>API key</span><span class="pill p-green">configured ✓ (server env)</span></label>
+      <label class="f"><span>Default language</span><select><option>auto (detect Yiddish / English)</option><option>yi</option><option>en</option></select></label>
+      <label class="f"><span>Rapid mode (faster, cheaper)</span><select><option>on for short calls</option><option>always</option><option>off</option></select></label>
+      <label class="f"><span>Dialect glossary → context hints</span><span class="pill p-green">enabled</span></label>
+      <label class="f"><span>Webhook</span><span class="mono" style="font-size:11px">/agent/webhooks/yiddishlabs · verified</span></label>
+    </div>
+    <div class="card">
+      <h3>Credits &amp; guardrails</h3>
+      <div class="kpi">18,240</div><div class="kpil">credits left (≈ 5 hrs audio)</div>
+      <label class="f" style="margin-top:8px"><span>Daily credit cap</span><span class="mono">20,000</span></label>
+      <label class="f"><span>Concurrency</span><span class="mono">plan limit</span></label>
+      <div class="note">Credit = 1 audio-second. Daily cap + rate limiter prevent a surprise bill from a flood of long calls.</div>
+    </div>
+  </div>
+  <div class="card" style="border-left:3px solid var(--amber)">
+    <b>⚠ Rotate the key you pasted in chat.</b> It's exposed; generate a fresh one in the Yiddish Labs dashboard and place it in <span class="mono">/opt/connectcomms/env/.env.platform</span> as <span class="mono">YIDDISHLABS_API_KEY</span>.
+  </div>
+</section>
+
+<!-- ===== QUEUE ===== -->
+<section class="view" id="v-queue">
+  <h1>Transcription Queue → Tuning Flywheel</h1>
+  <div class="sub">Every call + the archive + the hotline flow through Yiddish Labs into one corpus — powering real-time understanding AND accumulating data for our own tuned model.</div>
+  <div class="row">
+    <div class="card"><div class="kpi">1,204</div><div class="kpil">calls transcribed today</div></div>
+    <div class="card"><div class="kpi" style="color:var(--yi)">71%</div><div class="kpil">detected Yiddish</div></div>
+    <div class="card"><div class="kpi" style="color:var(--en)">24%</div><div class="kpil">detected English</div></div>
+    <div class="card"><div class="kpi">5%</div><div class="kpil">code-switched (yi-en)</div></div>
+  </div>
+  <div class="card">
+    <table>
+      <tr><th>Recording</th><th>Detected</th><th>Status</th><th>Into corpus</th></tr>
+      <tr><td>#88431 Goldman</td><td><span class="pill p-yi">yi</span></td><td><span class="pill p-green">completed</span></td><td>✓ live_call</td></tr>
+      <tr><td>#88432 Katz</td><td><span class="pill p-en">en</span></td><td><span class="pill p-green">completed</span></td><td>✓ live_call</td></tr>
+      <tr><td>hotline-batch-014</td><td><span class="pill p-yi">yi</span></td><td><span class="pill p-blue">processing</span></td><td>→ news_hotline</td></tr>
+      <tr><td>archive/comedy/ep_233</td><td><span class="pill p-yi">yi</span></td><td><span class="pill p-dim">queued</span></td><td>→ bulk_import</td></tr>
+    </table>
+    <div class="note">Low-confidence transcripts route to native-speaker correction → gold pairs → periodic fine-tune → our own model plugs in behind the same interface.</div>
+  </div>
+</section>
+
+</main></div>
+<script>
+document.getElementById('nav').addEventListener('click',e=>{const li=e.target.closest('li');if(!li)return;
+ document.querySelectorAll('.nav li').forEach(x=>x.classList.remove('on'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+ li.classList.add('on');document.getElementById('v-'+li.dataset.v).classList.add('on');});
+document.querySelectorAll('.toggle').forEach(t=>t.addEventListener('click',e=>{if(!e.target.matches('span'))return;
+ [...t.children].forEach(s=>s.classList.remove('a'));e.target.classList.add('a');}));
+</script>
+</body></html>

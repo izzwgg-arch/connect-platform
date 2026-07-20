@@ -5,13 +5,15 @@
  * chooses the provider. Boots/degrades cleanly with no keys (jobs queue but
  * report "no provider" rather than crash).
  */
-export type TranscriptionProvider = "whisper" | "everett" | "none";
+export type TranscriptionProvider = "whisper" | "everett" | "yiddishlabs" | "none";
 
 export interface TranscriptionResult {
   ok: boolean;
   provider: TranscriptionProvider;
   language?: string;
   text?: string;
+  summary?: string | null;
+  keywords?: string[];
   error?: string;
 }
 
@@ -27,12 +29,17 @@ export interface TranscriptionInput {
 export interface ProviderClients {
   openaiApiKey: string | null;
   everettApiKey: string | null;
+  yiddishLabsApiKey?: string | null;
 }
 
 export function chooseProvider(languageHint: "en" | "yi" | "auto" | undefined, clients: ProviderClients): TranscriptionProvider {
-  if (languageHint === "yi") return clients.everettApiKey ? "everett" : "none";
-  if (languageHint === "en") return clients.openaiApiKey ? "whisper" : "none";
-  // auto: prefer whisper (has language detection); fall back to everett.
+  // Yiddish Labs is the preferred provider for Yiddish AND auto-detect (it
+  // natively detects yi/en/he/lk and is tuned for heimishe Yiddish).
+  if (languageHint === "yi") return clients.yiddishLabsApiKey ? "yiddishlabs" : clients.everettApiKey ? "everett" : "none";
+  if (languageHint === "en") return clients.openaiApiKey ? "whisper" : clients.yiddishLabsApiKey ? "yiddishlabs" : "none";
+  // auto: prefer Yiddish Labs (best Yiddish/English detection for this audience);
+  // fall back to whisper, then everett.
+  if (clients.yiddishLabsApiKey) return "yiddishlabs";
   if (clients.openaiApiKey) return "whisper";
   if (clients.everettApiKey) return "everett";
   return "none";
@@ -43,6 +50,8 @@ export class Transcriber {
     private prisma: any,
     private clients: ProviderClients,
     private audit: { record: (e: any) => Promise<boolean> },
+    /** optional: returns a short "context" string (dialect glossary) to bias STT. */
+    private context?: () => Promise<string>,
   ) {}
 
   async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
@@ -54,7 +63,7 @@ export class Transcriber {
 
     let result: TranscriptionResult;
     try {
-      result = provider === "whisper" ? await this.whisper(input) : await this.everett(input);
+      result = provider === "whisper" ? await this.whisper(input) : provider === "yiddishlabs" ? await this.yiddishlabs(input) : await this.everett(input);
     } catch (err) {
       await this.audit.record({ actor: "system", event: "transcribe.error", payload: { recordingId: input.recordingId, provider, error: String(err) } });
       return { ok: false, provider, error: String(err) };
@@ -87,5 +96,40 @@ export class Transcriber {
   private async everett(input: TranscriptionInput): Promise<TranscriptionResult> {
     if (!this.clients.everettApiKey) return { ok: false, provider: "everett", error: "no_key" };
     return { ok: false, provider: "everett", error: "everett_call_not_wired_pending_key" };
+  }
+
+  /**
+   * Yiddish Labs — auto-detect + transcribe. Reads the audio at audioRef,
+   * submits synchronously (best for calls ≤5 min; longer returns async and the
+   * webhook completes it), feeds the dialect glossary as `context`.
+   */
+  private async yiddishlabs(input: TranscriptionInput): Promise<TranscriptionResult> {
+    const key = this.clients.yiddishLabsApiKey ?? null;
+    if (!key) return { ok: false, provider: "yiddishlabs", error: "no_key" };
+    const { YiddishLabsClient } = await import("./yiddishlabs");
+    const { readFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    let file: Buffer;
+    try {
+      file = await readFile(input.audioRef);
+    } catch (err) {
+      return { ok: false, provider: "yiddishlabs", error: `audio_read_failed: ${String(err)}` };
+    }
+    const client = new YiddishLabsClient(key);
+    const context = this.context ? await this.context() : undefined;
+    const res = await client.submitSync({
+      file,
+      filename: path.basename(input.audioRef),
+      name: input.recordingId,
+      language: input.languageHint === "en" ? "en" : input.languageHint === "yi" ? "yi" : "auto",
+      context,
+      rapid: true,
+      webhookUrl: process.env.YIDDISHLABS_WEBHOOK_URL || undefined,
+    });
+    if (res.status === "completed" && res.text) {
+      return { ok: true, provider: "yiddishlabs", text: res.text, language: YiddishLabsClient.normalizeLanguage(res), summary: res.summary, keywords: res.keywords };
+    }
+    // Long audio → async; the webhook will complete it. Report queued (not an error).
+    return { ok: false, provider: "yiddishlabs", error: `async_queued:${res.id}` };
   }
 }
