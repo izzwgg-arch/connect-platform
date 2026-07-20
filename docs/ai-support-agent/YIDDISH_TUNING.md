@@ -55,8 +55,13 @@ The dataset isn't just live calls. Multiple feeds pour into the same labeled cor
    data: clean-ish audio, rich vocabulary, the exact dialect. We ingest it in bulk (call in / pull the
    recordings), transcribe, and it massively enriches the corpus beyond what calls alone give — more
    vocabulary, more topics, more speakers.
-3. **Bulk imports (`bulk_import`).** Any other audio the owner has rights to — shiurim, voicemails,
-   archives — dropped in the same way.
+3. **Bulk archive — thousands of hours on a hard drive (`bulk_import`).** The owner has an enormous
+   library: comedy, kids' stories, spoken content — thousands of hours of natural, expressive, heimishe
+   speech. We mount the drive and point the **Archive Ingestor** at it: it walks every audio file 24/7,
+   transcribes, and captures into the corpus, tagged by collection (`comedy`, `kids_stories`, …) and
+   progress-tracked so it resumes where it left off and never re-does a file. This is the richest source
+   for **accent, prosody, and natural delivery** — exactly what a human-sounding model needs. It runs
+   unattended; the more it listens, the better it gets.
 4. **Corrections (`correction`).** Human-fixed transcripts — the highest-value, "gold" pairs.
 
 All four feed the same `AgentTranscript` corpus and the same glossary. The news hotline especially teaches
@@ -78,9 +83,13 @@ the model the **code-switching** — that a sentence is mostly Yiddish with Engl
 4. **Export for tuning.** A job exports the corrected pairs (Whisper-format manifest) for a periodic
    fine-tune (Whisper-Turbo + LoRA, 8-bit — the resource-efficient path) plus an n-gram/LLM domain
    language model. The tuned model plugs back in behind the same Transcriber interface.
-5. **Accent/TTS side (later).** The same corrected corpus + speaker labels feed the Voice Studio: a
-   native-accent TTS voice (ElevenLabs custom voice) trained on approved recordings, so the agent
-   *speaks* heimishe Yiddish, not just understands it.
+5. **Accent/TTS side — the human-sounding voice.** The archive (comedy, stories — expressive, natural
+   delivery) plus corrected call data, with speaker labels, is the training material for cloned voices.
+   The owner clones a few specific people (voice talent mentioned in the content), and those voices —
+   fine-tuned on this heimishe corpus — become the agent's TTS voices, so it *speaks* NY Yiddish that
+   sounds like a real person, not a robot. The Archive Ingestor tags speaker segments so clean, single-
+   speaker audio can be pulled per voice for the clone. Voice Studio (already built) manages the library
+   and rendering; the ElevenLabs custom-voice training uses these curated clips.
 
 ## Privacy & consent (non-negotiable)
 

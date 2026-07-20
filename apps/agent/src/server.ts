@@ -37,6 +37,8 @@ import { DigestJobs } from "./jobs/digest";
 import { RateLimiter } from "./guards/limits";
 import { CorpusService } from "./corpus/corpus";
 import { SEED_GLOSSARY, type DialectTerm } from "./corpus/glossary";
+import { ArchiveIngestor, MemoryArchiveProgress } from "./corpus/archive";
+import { Transcriber } from "./transcription/transcriber";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -238,6 +240,31 @@ async function main() {
     });
     app.get("/agent/corpus/stats", async (req, reply) => (corpusAuth(req) ? corpus.stats() : reply.code(403).send({ error: "forbidden" })));
     app.get("/agent/corpus/review-queue", async (req, reply) => (requireOwner(req) ? { queue: await corpus.reviewQueue() } : reply.code(403).send({ error: "forbidden" })));
+
+    // Archive ingestor: point at a mounted drive of audio (thousands of hours)
+    // and it works through it 24/7. Registered path lives in AGENT_ARCHIVE_ROOT
+    // (or set via the owner route into AgentMemory). Transcription is guarded by
+    // the STT key; until then it still catalogs (walks) the archive.
+    const transcriber = new Transcriber(prisma, { openaiApiKey: cfg.openaiApiKey, everettApiKey: cfg.everettApiKey }, audit) as any;
+    const archiveTx = { transcribe: (i: any) => transcriber.transcribe({ recordingId: i.recordingId, audioRef: i.audioRef, languageHint: i.languageHint }) };
+    const archive = new ArchiveIngestor(corpus, new MemoryArchiveProgress(prisma), archiveTx, audit);
+    const archiveRoot = () => process.env.AGENT_ARCHIVE_ROOT || "";
+    app.post("/agent/archive/drain", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      const root = ((req.body as any)?.root as string) || archiveRoot();
+      if (!root) return reply.code(400).send({ error: "no_archive_root", hint: "set AGENT_ARCHIVE_ROOT or pass {root}" });
+      return archive.drain(root, Number((req.body as any)?.batch ?? 20));
+    });
+    app.get("/agent/archive/status", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      return { root: archiveRoot(), progress: await new MemoryArchiveProgress(prisma).stats() };
+    });
+    // 24/7 continuous drain — small batches every 2 min so it never floods the
+    // box or the STT provider. No-op until AGENT_ARCHIVE_ROOT is set.
+    setInterval(() => {
+      const root = archiveRoot();
+      if (root) archive.drain(root, 10).catch((err) => app.log.error({ err }, "archive drain failed"));
+    }, 2 * 60 * 1000).unref();
 
     setInterval(() => {
       const now = new Date();
