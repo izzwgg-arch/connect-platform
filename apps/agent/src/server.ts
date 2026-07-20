@@ -33,6 +33,8 @@ import { VoiceStudio } from "./voice/studio";
 import { KnowledgeBase } from "./knowledge/kb";
 import { verifyPortalJwt } from "./auth";
 import { buildProvisioningPlan } from "./pbx/provisioningPlan";
+import { DigestJobs } from "./jobs/digest";
+import { RateLimiter } from "./guards/limits";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -94,7 +96,8 @@ async function main() {
       }
     };
     const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy);
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage);
+    const rateLimiter = new RateLimiter();
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter);
 
     registerChatRoutes(app, engine);
     registerDiagRoutes(app, diagEngine);
@@ -179,6 +182,36 @@ async function main() {
     setInterval(() => {
       watchman.runOnce().catch((err) => app.log.error({ err }, "watchman run failed"));
     }, 60 * 60 * 1000).unref();
+
+    // Learning loop: daily digest (7am local) + weekly self-review. Both are
+    // gated to fire once per period using a simple last-run marker so restarts
+    // don't double-send.
+    const digest = new DigestJobs(prisma, audit, notifier);
+    let lastDigestDay = "";
+    let lastReviewWeek = "";
+    app.post("/agent/jobs/digest", async (req, reply) => {
+      const secret = process.env.AGENT_INTERNAL_SECRET;
+      if (!secret || req.headers["x-agent-internal-secret"] !== secret) return reply.code(403).send({ error: "forbidden" });
+      return digest.dailyDigest();
+    });
+    app.post("/agent/jobs/self-review", async (req, reply) => {
+      const secret = process.env.AGENT_INTERNAL_SECRET;
+      if (!secret || req.headers["x-agent-internal-secret"] !== secret) return reply.code(403).send({ error: "forbidden" });
+      return digest.weeklySelfReview();
+    });
+    setInterval(() => {
+      const now = new Date();
+      const day = now.toISOString().slice(0, 10);
+      if (now.getHours() === 7 && day !== lastDigestDay) {
+        lastDigestDay = day;
+        digest.dailyDigest(now).catch((err) => app.log.error({ err }, "daily digest failed"));
+      }
+      const week = `${now.getUTCFullYear()}-W${Math.floor((now.getTime() - Date.UTC(now.getUTCFullYear(), 0, 1)) / (7 * 86400_000))}`;
+      if (now.getDay() === 1 && now.getHours() === 8 && week !== lastReviewWeek) {
+        lastReviewWeek = week;
+        digest.weeklySelfReview(now).catch((err) => app.log.error({ err }, "weekly self-review failed"));
+      }
+    }, 15 * 60 * 1000).unref();
   }
 
   app.get("/health", async () => ({ ok: true, service: "@connect/agent", ts: new Date().toISOString() }));

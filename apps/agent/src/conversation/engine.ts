@@ -50,12 +50,17 @@ export interface TriageLike {
   ): Promise<{ handled: boolean; reply?: string; yiddish?: string; diagReportId?: string; actionId?: string }>;
 }
 
+export interface RateLimitLike {
+  check(tenantId: string, kind: "messages", opts?: { now?: number }): string | null;
+}
+
 export class ConversationEngine {
   constructor(
     private store: ConversationStore,
     private llm: ModelRouter | null,
     private audit: AuditLog,
     private triage: TriageLike | null = null,
+    private rateLimiter: RateLimitLike | null = null,
   ) {}
 
   async getOrOpenConversation(ctx: ChatContext): Promise<ConversationRow> {
@@ -73,6 +78,19 @@ export class ConversationEngine {
 
   async handleMessage(ctx: ChatContext, text: string): Promise<ChatResult> {
     const language = detectLanguage(text);
+
+    // Per-tenant rate cap (Phase 7) — checked before any work. Owners exempt.
+    if (this.rateLimiter && ctx.role !== "owner") {
+      const denial = this.rateLimiter.check(ctx.tenantId, "messages");
+      if (denial) {
+        const conv0 = await this.getOrOpenConversation(ctx);
+        const reply = language === "yi" ? "מיר האָבן באַקומען צו פֿיל אָנפֿרעגן פֿון אײַער קאָנטע היינט. ביטע פּרובירט שפּעטער אָדער רופֿט אונדז." : "We've received a lot of requests from your account today. Please try again later or contact us directly.";
+        await this.store.addMessage({ conversationId: conv0.id, role: "assistant", content: reply, model: "ratelimit" });
+        await this.audit.record({ actor: "system", event: "chat.rate_limited", tenantId: ctx.tenantId, conversationId: conv0.id, payload: { denial } });
+        return { conversationId: conv0.id, reply, language, degraded: true };
+      }
+    }
+
     const conv = await this.getOrOpenConversation(ctx);
     if (!conv.language) await this.store.setLanguage(conv.id, language);
     await this.store.addMessage({ conversationId: conv.id, role: "user", content: text });
