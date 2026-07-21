@@ -3,6 +3,7 @@ import type { PortalSidebarSectionKey } from "@connect/shared";
 import {
   Activity,
   AlertTriangle,
+  Bot,
   BarChart3,
   Building,
   Building2,
@@ -132,6 +133,7 @@ export const navItems: NavItem[] = [
   { id: "admin.roles", href: "/admin/roles", label: "Custom Roles", icon: "RO", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_roles" },
   { id: "admin.phone_numbers", href: "/admin/phone-numbers", label: "Phone Numbers", icon: "PN", lucide: Hash, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_phone_numbers" },
   { id: "admin.onboarding", href: "/admin/onboarding", label: "Onboarding", icon: "OB", lucide: ClipboardList, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_onboarding" },
+  { id: "admin.assistant", href: "/assistant", label: "AI Assistant", icon: "AS", lucide: Bot, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
 
