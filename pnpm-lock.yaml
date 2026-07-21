@@ -34,6 +34,9 @@ importers:
       '@connect/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@connect/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@connect/shared':
         specifier: workspace:*
         version: link:../../packages/shared
