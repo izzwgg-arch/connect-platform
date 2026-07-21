@@ -11,6 +11,13 @@ function token() { return typeof window === "undefined" ? "" : (localStorage.get
 async function get<T>(p: string): Promise<T> { const r = await fetch(`/agent-api${p}`, { headers: { Authorization: `Bearer ${token()}` } }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }
 async function post<T>(p: string, body: object): Promise<T> { const r = await fetch(`/agent-api${p}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }, body: JSON.stringify(body) }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }
 
+type SecretStatus = Record<string, { configured: boolean; source: string; hint?: string }>;
+const SECRET_FIELDS: { key: string; label: string }[] = [
+  { key: "anthropic_api_key", label: "Anthropic API key" },
+  { key: "openai_api_key", label: "OpenAI API key" },
+  { key: "yiddishlabs_api_key", label: "Yiddish Labs API key" },
+];
+
 type Status = { enabled: boolean; killSwitchEngaged: boolean; providersConfigured: string[]; smtpConfigured: boolean; dbConnected: boolean; chatEnabled: boolean; manifest: { total: number; executable: number } };
 type Cap = { id: string; title: string; kind: string; status: string; roles: string[]; pbxWrite: boolean; liveEnabled: boolean };
 
@@ -32,6 +39,14 @@ export default function AssistantPage() {
   const [chat, setChat] = useState<{ role: string; text: string }[]>([]);
   const [input, setInput] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  const [secStatus, setSecStatus] = useState<SecretStatus | null>(null);
+  const [masterKey, setMasterKey] = useState(true);
+  const [keyInput, setKeyInput] = useState<Record<string, string>>({});
+  const [keyMsg, setKeyMsg] = useState<Record<string, string>>({});
+  const [recording, setRecording] = useState(false);
+  const [micMsg, setMicMsg] = useState("");
+  const mediaRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -39,9 +54,45 @@ export default function AssistantPage() {
       setCaps((await get<{ capabilities: Cap[] }>("/admin/capabilities")).capabilities);
       setCorpus(await get("/corpus/stats").catch(() => null));
       setYl(await get("/yiddishlabs/status").catch(() => null));
+      const s = await get<{ masterKey: boolean; secrets: SecretStatus }>("/admin/secrets/status").catch(() => null);
+      if (s) { setSecStatus(s.secrets); setMasterKey(s.masterKey); }
       setErr(null);
     } catch { setErr("Owners only, or the agent is unreachable."); }
   }, []);
+
+  const saveKey = async (key: string) => {
+    const value = keyInput[key] ?? "";
+    setKeyMsg((m) => ({ ...m, [key]: "saving…" }));
+    try {
+      const r = await post<{ status: SecretStatus }>("/admin/secrets", { key, value });
+      setSecStatus(r.status);
+      setKeyInput((k) => ({ ...k, [key]: "" }));
+      setKeyMsg((m) => ({ ...m, [key]: value.trim() ? "saved ✓ (takes effect now)" : "cleared" }));
+      load();
+    } catch { setKeyMsg((m) => ({ ...m, [key]: "save failed" })); }
+  };
+
+  const startMic = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setMicMsg("transcribing…");
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const b64 = await new Promise<string>((res) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob); });
+        try {
+          const r = await post<any>("/transcribe/mic", { audioBase64: b64, filename: "mic.webm" });
+          if (r.ok && r.text) { setInput((v) => (v ? v + " " : "") + r.text); setMicMsg(`✓ ${r.language ?? ""}`); }
+          else setMicMsg("✗ " + (r.error ?? "no text"));
+        } catch { setMicMsg("✗ transcription failed"); }
+      };
+      mediaRef.current = mr; mr.start(); setRecording(true); setMicMsg("listening…");
+    } catch { setMicMsg("✗ mic permission denied"); }
+  };
+  const stopMic = () => { mediaRef.current?.stop(); setRecording(false); };
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [chat]);
 
@@ -85,6 +136,24 @@ export default function AssistantPage() {
         </div>
       )}
 
+      <div style={card}>
+        <h3 style={{ fontSize: 14, marginBottom: 4 }}>API keys</h3>
+        <div style={{ fontSize: 11.5, opacity: 0.65, marginBottom: 10 }}>Stored encrypted on the server, write-only (never shown back). Saving takes effect immediately — no restart.</div>
+        {!masterKey && <div style={{ color: "#f59e0b", fontSize: 12, marginBottom: 8 }}>Encryption master key not set on the server — keys can only be set via the env file until CREDENTIALS_MASTER_KEY is configured.</div>}
+        {SECRET_FIELDS.map((f) => {
+          const st = secStatus?.[f.key];
+          return (
+            <div key={f.key} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", flexWrap: "wrap" }}>
+              <span style={{ width: 150, fontSize: 13 }}>{f.label}</span>
+              {st?.configured ? statusChip(true, `set ${st.hint ?? ""}`) : statusChip(false, "not set")}
+              <input type="password" value={keyInput[f.key] ?? ""} onChange={(e) => setKeyInput((k) => ({ ...k, [f.key]: e.target.value }))} placeholder={st?.configured ? "replace…" : "paste key…"} style={{ flex: 1, minWidth: 160, padding: "6px 10px", borderRadius: 7, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13 }} autoComplete="off" />
+              <button style={btn} disabled={!masterKey} onClick={() => saveKey(f.key)}>Save</button>
+              {keyMsg[f.key] && <span style={{ fontSize: 11.5, color: keyMsg[f.key].includes("✓") ? "#22c55e" : "#8b98a9" }}>{keyMsg[f.key]}</span>}
+            </div>
+          );
+        })}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div style={card}>
           <h3 style={{ fontSize: 14, marginBottom: 10 }}>Provider self-test</h3>
@@ -103,10 +172,12 @@ export default function AssistantPage() {
             {chat.map((m, i) => <div key={i} style={{ margin: "4px 0", padding: "6px 10px", borderRadius: 10, fontSize: 13, background: m.role === "user" ? "#2563eb" : "rgba(128,128,128,.15)", color: m.role === "user" ? "#fff" : undefined, alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%", marginLeft: m.role === "user" ? "auto" : 0, whiteSpace: "pre-wrap" }}>{m.text}</div>)}
             <div ref={bottom} />
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Type a test message…" style={{ flex: 1, padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13 }} />
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button title="Hold to speak (Yiddish or English)" onClick={recording ? stopMic : startMic} style={{ ...btn, background: recording ? "#ef4444" : "transparent", color: recording ? "#fff" : "inherit", border: recording ? "none" : "1px solid rgba(128,128,128,.4)", width: 40, padding: 0, height: 34 }}>{recording ? "■" : "🎤"}</button>
+            <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Type, or tap 🎤 to speak…" style={{ flex: 1, padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13 }} />
             <button style={btnBlue} onClick={send}>Send</button>
           </div>
+          {micMsg && <div style={{ fontSize: 11.5, opacity: 0.7, marginTop: 4 }}>{micMsg}</div>}
         </div>
       </div>
 

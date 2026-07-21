@@ -66,6 +66,13 @@ export class ModelRouter {
     this.routes = routes;
   }
 
+  /** Hot-reload provider clients when keys change (Assistant page save) —
+   *  no process restart needed. Recreates only what's provided. */
+  reload(keys: { openaiApiKey?: string | null; anthropicApiKey?: string | null }): void {
+    this.openai = keys.openaiApiKey ? new OpenAI({ apiKey: keys.openaiApiKey }) : null;
+    this.anthropic = keys.anthropicApiKey ? new Anthropic({ apiKey: keys.anthropicApiKey }) : null;
+  }
+
   available(): ProviderName[] {
     const out: ProviderName[] = [];
     if (this.openai) out.push("openai");

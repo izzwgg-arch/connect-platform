@@ -35,6 +35,8 @@ import { verifyPortalJwt } from "./auth";
 import { buildProvisioningPlan } from "./pbx/provisioningPlan";
 import { DigestJobs } from "./jobs/digest";
 import { RateLimiter } from "./guards/limits";
+import { SecretStore, type SecretKey } from "./secrets/store";
+import { YiddishLabsClient } from "./transcription/yiddishlabs";
 import { CorpusService } from "./corpus/corpus";
 import { SEED_GLOSSARY, type DialectTerm } from "./corpus/glossary";
 import { ArchiveIngestor, MemoryArchiveProgress } from "./corpus/archive";
@@ -69,7 +71,7 @@ async function main() {
   const router = new ModelRouter(cfg, audit);
   const manifest = loadManifest();
 
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, bodyLimit: 20 * 1024 * 1024 }); // 20MB: mic audio clips
 
   let engine: ConversationEngine | null = null;
   let actionService: ActionService | null = null;
@@ -251,12 +253,27 @@ async function main() {
       const flat = terms.flatMap((t) => [t.term, ...(t.variants ?? [])]).slice(0, 200);
       return flat.length ? `Heimishe Yiddish terms: ${flat.join(", ")}` : "";
     };
-    const transcriber = new Transcriber(
-      prisma,
-      { openaiApiKey: cfg.openaiApiKey, everettApiKey: cfg.everettApiKey, yiddishLabsApiKey: cfg.yiddishLabsApiKey },
-      audit,
-      glossaryContext,
-    ) as any;
+    // Secret store — owner-managed API keys (Assistant page), encrypted at rest.
+    // Keys resolve: store (DB, decrypted) → env fallback. Mutable providerKeys
+    // are shared by reference with the transcriber + reloaded into the router,
+    // so saving a key from the UI takes effect WITHOUT a restart.
+    let secCrypto: any;
+    try {
+      const sec = await import("@connect/security");
+      secCrypto = { encryptJson: sec.encryptJson, decryptJson: sec.decryptJson, hasMasterKey: sec.hasCredentialsMasterKey };
+    } catch {
+      secCrypto = { encryptJson: () => { throw new Error("no_security"); }, decryptJson: () => null, hasMasterKey: () => false };
+    }
+    const secrets = new SecretStore(prisma, secCrypto, audit);
+    const providerKeys = {
+      openaiApiKey: (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey,
+      everettApiKey: cfg.everettApiKey,
+      yiddishLabsApiKey: (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey,
+    };
+    const anthropicResolved = (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey;
+    router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: anthropicResolved });
+
+    const transcriber = new Transcriber(prisma, providerKeys, audit, glossaryContext) as any;
     const archiveTx = { transcribe: (i: any) => transcriber.transcribe({ recordingId: i.recordingId, audioRef: i.audioRef, languageHint: i.languageHint }) };
     const archive = new ArchiveIngestor(corpus, new MemoryArchiveProgress(prisma), archiveTx, audit);
     const archiveRoot = () => process.env.AGENT_ARCHIVE_ROOT || "";
@@ -294,7 +311,7 @@ async function main() {
       if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
       const byLang = async (l: string) => { try { return await prisma.agentTranscript.count({ where: { language: l } }); } catch { return 0; } };
       return {
-        configured: !!cfg.yiddishLabsApiKey,
+        configured: !!providerKeys.yiddishLabsApiKey,
         webhookConfigured: !!cfg.yiddishLabsWebhookSecret,
         counts: { yi: await byLang("yi"), en: await byLang("en"), "yi-en": await byLang("yi-en"), he: await byLang("he") },
       };
@@ -331,6 +348,53 @@ async function main() {
     app.get("/agent/admin/capabilities", async (req, reply) => {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
       return { capabilities: manifest.map((c) => ({ id: c.id, title: c.title, kind: c.kind, status: c.status, roles: c.roles, pbxWrite: (c as any).pbxWrite ?? false, liveEnabled: (c as any).liveEnabled ?? false })) };
+    });
+
+    // ── API-key settings (Assistant page). Write-only + encrypted at rest. ──
+    app.get("/agent/admin/secrets/status", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      return { masterKey: secCrypto.hasMasterKey(), secrets: await secrets.status() };
+    });
+    app.post("/agent/admin/secrets", async (req, reply) => {
+      const auth = req.headers.authorization;
+      const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+      if (id?.role !== "owner") return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key"];
+      if (!valid.includes(b.key) || typeof b.value !== "string") return reply.code(400).send({ error: "bad_request" });
+      try {
+        await secrets.set(b.key, b.value, `owner:${id.clientUserId}`);
+      } catch (err) {
+        return reply.code(400).send({ error: String(err) });
+      }
+      // Hot-reload the affected client so it takes effect immediately.
+      providerKeys.openaiApiKey = (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey;
+      providerKeys.yiddishLabsApiKey = (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey;
+      router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey });
+      return { ok: true, status: await secrets.status() };
+    });
+
+    // ── Live mic transcription (Assistant page). Accepts a base64 audio clip,
+    //    auto-detects Yiddish/English via Yiddish Labs, returns the text. ──
+    app.post("/agent/transcribe/mic", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (typeof b.audioBase64 !== "string" || b.audioBase64.length < 32) return reply.code(400).send({ error: "no_audio" });
+      const key = providerKeys.yiddishLabsApiKey;
+      if (!key) return { ok: false, error: "yiddishlabs_not_configured" };
+      let buf: Buffer;
+      try { buf = Buffer.from(b.audioBase64.replace(/^data:[^,]+,/, ""), "base64"); } catch { return reply.code(400).send({ error: "bad_audio" }); }
+      const client = new YiddishLabsClient(key);
+      try {
+        const ctx = await glossaryContext();
+        const res = await client.submitSync({ file: buf, filename: b.filename || "mic.webm", language: "auto", context: ctx, rapid: true });
+        if (res.status === "completed" && res.text) {
+          return { ok: true, text: res.text, language: YiddishLabsClient.normalizeLanguage(res), summary: res.summary };
+        }
+        return { ok: false, error: `pending:${res.id}` };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
     });
     // 24/7 continuous drain — small batches every 2 min so it never floods the
     // box or the STT provider. No-op until AGENT_ARCHIVE_ROOT is set.

@@ -5945,6 +5945,18 @@ model AgentTranscript {
   @@index([trainingEligible, language])
 }
 
+/// Owner-managed secrets (API keys) entered via the Assistant page, encrypted
+/// at rest (AES-256-GCM via @connect/security). Values are write-only from the
+/// UI and never returned. The agent reads these first, falling back to env.
+model AgentSecret {
+  id        String   @id @default(cuid())
+  key       String   @unique /// "anthropic_api_key" | "openai_api_key" | "yiddishlabs_api_key"
+  valueEnc  String /// encrypted envelope; never logged or returned
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
 /// Dialect glossary — heimishe NY-Yiddish slang, loshn-koydesh, names, and the
 /// Yinglish code-switch spellings. Biases STT decoding (phrase boost) and seeds
 /// the domain language model for fine-tuning. Grows as the team spots misses.
