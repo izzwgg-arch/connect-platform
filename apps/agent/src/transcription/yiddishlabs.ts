@@ -6,6 +6,10 @@
  *   POST /transcriptions        — async job (any length) → webhook/poll
  *   POST /transcriptions/sync   — waits for result when audio ≤ 5 min
  *   GET  /transcriptions/:id     — poll status/result
+ *   POST /process/text          — Text Processing API: grammar / rewrite /
+ *                                 translate (source auto-detected, target set
+ *                                 by `action`). This is the translate-bridge:
+ *                                 Yiddish text ↔ English text, both ways.
  *
  * language "auto" detects Yiddish vs English (also he / lk). The `context`
  * field is fed our dialect glossary so heimishe terms transcribe right.
@@ -14,6 +18,21 @@
  * logs it. Boots/degrades cleanly with no key.
  */
 export type YLLanguage = "auto" | "yi" | "en" | "he" | "lk";
+
+/** Text Processing API actions. Translation is by TARGET (source auto-detected). */
+export type YLProcessAction =
+  | "fix_grammar"
+  | "rewrite"
+  | "translate-yiddish"
+  | "translate-english"
+  | "translate-hebrew"
+  | "translate-lk";
+
+export interface YLProcessResult {
+  text: string;
+  creditsConsumed: number;
+  raw?: any;
+}
 
 export interface YLResult {
   id: string;
@@ -120,6 +139,48 @@ export class YiddishLabsClient {
     const res = await fetch(url, { headers: this.headers() });
     if (!res.ok) throw new Error(`yiddishlabs get failed: ${res.status}`);
     return this.parse(await res.json());
+  }
+
+  // ── Text Processing API (translate-bridge) ──────────────────────────────
+
+  /**
+   * Text Processing API — grammar fix / rewrite / translate. Source language
+   * is auto-detected; `action` selects the operation (and, for translation,
+   * the target language). Returns the processed text + credits consumed.
+   */
+  async processText(textContent: string, action: YLProcessAction): Promise<YLProcessResult> {
+    if (!this.apiKey) throw new Error("yiddishlabs_not_configured");
+    const text = (textContent ?? "").trim();
+    if (!text) return { text: "", creditsConsumed: 0 };
+    const res = await fetch(`${BASE}/process/text`, {
+      method: "POST",
+      headers: { ...this.headers(), "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ text_content: text, action }),
+    });
+    if (!res.ok) throw new Error(`yiddishlabs process failed: ${res.status} ${await safeText(res)}`);
+    const j: any = await res.json();
+    return { text: typeof j.text === "string" ? j.text : "", creditsConsumed: j.credits_consumed ?? 0, raw: j };
+  }
+
+  /** Translate text INTO the target language (source auto-detected by YL). */
+  async translate(text: string, target: "yi" | "en" | "he" | "lk"): Promise<YLProcessResult> {
+    const map: Record<typeof target, YLProcessAction> = {
+      yi: "translate-yiddish",
+      en: "translate-english",
+      he: "translate-hebrew",
+      lk: "translate-lk",
+    };
+    return this.processText(text, map[target]);
+  }
+
+  /** Convenience: any language → English (for the LLM to reason on). */
+  toEnglish(text: string): Promise<YLProcessResult> {
+    return this.translate(text, "en");
+  }
+
+  /** Convenience: English → Yiddish (what the customer reads/hears). */
+  toYiddish(text: string): Promise<YLProcessResult> {
+    return this.translate(text, "yi");
   }
 }
 

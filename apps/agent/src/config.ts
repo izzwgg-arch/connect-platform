@@ -33,6 +33,13 @@ export interface AgentConfig {
   yiddishLabsWebhookSecret: string | null;
   /** ElevenLabs key for Voice Studio (Phase 5). */
   elevenLabsApiKey: string | null;
+  /**
+   * Yiddish translate-bridge: when true (default), Yiddish chats are translated
+   * Yiddish↔English by Yiddish Labs on BOTH legs and the LLM works only in
+   * English — the customer never sees model-generated Yiddish. Requires a YL
+   * key; degrades gracefully if absent. Disable with AGENT_YIDDISH_BRIDGE=0.
+   */
+  yiddishBridge: boolean;
 }
 
 function envStr(name: string): string | null {
@@ -70,6 +77,7 @@ export function loadConfig(): AgentConfig {
     yiddishLabsApiKey: envStr("YIDDISHLABS_API_KEY"),
     yiddishLabsWebhookSecret: envStr("YIDDISHLABS_WEBHOOK_SECRET"),
     elevenLabsApiKey: envStr("ELEVENLABS_API_KEY"),
+    yiddishBridge: process.env.AGENT_YIDDISH_BRIDGE !== "0", // default ON
   };
 }
 

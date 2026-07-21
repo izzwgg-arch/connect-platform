@@ -103,7 +103,38 @@ async function main() {
     };
     const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy);
     const rateLimiter = new RateLimiter();
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter);
+
+    // Secret store — owner-managed API keys (Assistant page), encrypted at rest.
+    // Keys resolve: store (DB, decrypted) → env fallback. Mutable providerKeys
+    // are shared by reference with the transcriber + Yiddish bridge + reloaded
+    // into the router, so saving a key from the UI takes effect WITHOUT a restart.
+    let secCrypto: any;
+    try {
+      const sec = await import("@connect/security");
+      secCrypto = { encryptJson: sec.encryptJson, decryptJson: sec.decryptJson, hasMasterKey: sec.hasCredentialsMasterKey };
+    } catch {
+      secCrypto = { encryptJson: () => { throw new Error("no_security"); }, decryptJson: () => null, hasMasterKey: () => false };
+    }
+    const secrets = new SecretStore(prisma, secCrypto, audit);
+    const providerKeys = {
+      openaiApiKey: (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey,
+      everettApiKey: cfg.everettApiKey,
+      yiddishLabsApiKey: (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey,
+    };
+    const anthropicResolved = (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey;
+    router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: anthropicResolved });
+
+    // Yiddish translate-bridge: reads the LIVE YL key from providerKeys each call,
+    // so saving a key from the Assistant page hot-reloads with no restart. When a
+    // Yiddish chat comes in, YL translates it to English for the LLM and the
+    // English reply back to authentic Yiddish — the model never emits Yiddish.
+    const { YiddishLabsClient: YLClient } = await import("./transcription/yiddishlabs");
+    const yiddishBridge = {
+      get configured() { return !!providerKeys.yiddishLabsApiKey; },
+      toEnglish: (t: string) => new YLClient(providerKeys.yiddishLabsApiKey).toEnglish(t),
+      toYiddish: (t: string) => new YLClient(providerKeys.yiddishLabsApiKey).toYiddish(t),
+    };
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge);
 
     registerChatRoutes(app, engine);
     registerDiagRoutes(app, diagEngine);
@@ -253,26 +284,8 @@ async function main() {
       const flat = terms.flatMap((t) => [t.term, ...(t.variants ?? [])]).slice(0, 200);
       return flat.length ? `Heimishe Yiddish terms: ${flat.join(", ")}` : "";
     };
-    // Secret store — owner-managed API keys (Assistant page), encrypted at rest.
-    // Keys resolve: store (DB, decrypted) → env fallback. Mutable providerKeys
-    // are shared by reference with the transcriber + reloaded into the router,
-    // so saving a key from the UI takes effect WITHOUT a restart.
-    let secCrypto: any;
-    try {
-      const sec = await import("@connect/security");
-      secCrypto = { encryptJson: sec.encryptJson, decryptJson: sec.decryptJson, hasMasterKey: sec.hasCredentialsMasterKey };
-    } catch {
-      secCrypto = { encryptJson: () => { throw new Error("no_security"); }, decryptJson: () => null, hasMasterKey: () => false };
-    }
-    const secrets = new SecretStore(prisma, secCrypto, audit);
-    const providerKeys = {
-      openaiApiKey: (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey,
-      everettApiKey: cfg.everettApiKey,
-      yiddishLabsApiKey: (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey,
-    };
-    const anthropicResolved = (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey;
-    router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: anthropicResolved });
-
+    // (secret store + providerKeys are initialized earlier, above the engine,
+    //  so the Yiddish translate-bridge can read the live YL key.)
     const transcriber = new Transcriber(prisma, providerKeys, audit, glossaryContext) as any;
     const archiveTx = { transcribe: (i: any) => transcriber.transcribe({ recordingId: i.recordingId, audioRef: i.audioRef, languageHint: i.languageHint }) };
     const archive = new ArchiveIngestor(corpus, new MemoryArchiveProgress(prisma), archiveTx, audit);

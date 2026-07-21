@@ -21,9 +21,28 @@ those capabilities are being certified. For any request to change or fix somethi
 request has been passed to the human team, and summarize it clearly.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
 
+/**
+ * When the Yiddish Labs translate-bridge is active, the LLM must reason and
+ * answer ONLY in English. Yiddish Labs handles BOTH translation legs (Yiddish→
+ * English in, English→Yiddish out), so the customer only ever sees YL's
+ * authentic heimishe Yiddish — never model-generated Yiddish.
+ */
+const SYSTEM_PROMPT_BRIDGE = `${SYSTEM_PROMPT}
+TRANSLATION BRIDGE ACTIVE: Write your reply in clear, simple English ONLY. Never output Yiddish or Hebrew-script text — a dedicated Yiddish translation service renders your English into authentic Yiddish for the customer. Keep sentences short and plain so they translate cleanly.`;
+
 export function detectLanguage(text: string): "en" | "yi" {
   // Hebrew-script characters → treat as Yiddish for this platform's audience.
   return /[֐-׿]/.test(text) ? "yi" : "en";
+}
+
+/**
+ * Yiddish Labs translate-bridge. Source language is auto-detected by YL; the
+ * method name selects the target. `YiddishLabsClient` satisfies this shape.
+ */
+export interface TranslatorLike {
+  readonly configured: boolean;
+  toEnglish(text: string): Promise<{ text: string; creditsConsumed: number }>;
+  toYiddish(text: string): Promise<{ text: string; creditsConsumed: number }>;
 }
 
 export interface ChatContext {
@@ -61,7 +80,42 @@ export class ConversationEngine {
     private audit: AuditLog,
     private triage: TriageLike | null = null,
     private rateLimiter: RateLimitLike | null = null,
+    private translator: TranslatorLike | null = null,
+    private bridgeEnabled = false,
   ) {}
+
+  /** Is the YL translate-bridge active for this turn? Yiddish + YL configured + enabled. */
+  private bridging(language: "en" | "yi"): boolean {
+    return this.bridgeEnabled && language === "yi" && !!this.translator?.configured;
+  }
+
+  /**
+   * Finish a bridged turn: translate the LLM's English reply → Yiddish via YL,
+   * persist both sides (Yiddish user-facing + English mirror), and return the
+   * Yiddish to the customer. On YL failure, degrade to a canned Yiddish note —
+   * never leaks model-generated Yiddish.
+   */
+  private async finishBridged(
+    conv: ConversationRow,
+    ctx: ChatContext,
+    englishReply: string,
+    model: string,
+    inDegraded: boolean,
+  ): Promise<ChatResult> {
+    let userFacing: string;
+    let degraded = inDegraded;
+    try {
+      const out = await this.translator!.toYiddish(englishReply);
+      userFacing = out.text?.trim() || fallbackReply("yi");
+    } catch (err) {
+      userFacing = fallbackReply("yi");
+      degraded = true;
+      await this.audit.record({ actor: "system", event: "chat.bridge_out_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
+    }
+    await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: userFacing, contentEn: englishReply, model });
+    await this.audit.record({ actor: "agent", event: "chat.agent_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { model, degraded, bridged: true } });
+    return { conversationId: conv.id, reply: userFacing, language: "yi", model, degraded };
+  }
 
   async getOrOpenConversation(ctx: ChatContext): Promise<ConversationRow> {
     const open = await this.store.findOpen(ctx.tenantId, ctx.clientUserId);
@@ -78,13 +132,16 @@ export class ConversationEngine {
 
   async handleMessage(ctx: ChatContext, text: string): Promise<ChatResult> {
     const language = detectLanguage(text);
+    const bridging = this.bridging(language);
 
     // Per-tenant rate cap (Phase 7) — checked before any work. Owners exempt.
     if (this.rateLimiter && ctx.role !== "owner") {
       const denial = this.rateLimiter.check(ctx.tenantId, "messages");
       if (denial) {
         const conv0 = await this.getOrOpenConversation(ctx);
-        const reply = language === "yi" ? "מיר האָבן באַקומען צו פֿיל אָנפֿרעגן פֿון אײַער קאָנטע היינט. ביטע פּרובירט שפּעטער אָדער רופֿט אונדז." : "We've received a lot of requests from your account today. Please try again later or contact us directly.";
+        const english = "We've received a lot of requests from your account today. Please try again later or contact us directly.";
+        if (bridging) return this.finishBridged(conv0, ctx, english, "ratelimit", true);
+        const reply = language === "yi" ? "מיר האָבן באַקומען צו פֿיל אָנפֿרעגן פֿון אײַער קאָנטע היינט. ביטע פּרובירט שפּעטער אָדער רופֿט אונדז." : english;
         await this.store.addMessage({ conversationId: conv0.id, role: "assistant", content: reply, model: "ratelimit" });
         await this.audit.record({ actor: "system", event: "chat.rate_limited", tenantId: ctx.tenantId, conversationId: conv0.id, payload: { denial } });
         return { conversationId: conv0.id, reply, language, degraded: true };
@@ -93,15 +150,32 @@ export class ConversationEngine {
 
     const conv = await this.getOrOpenConversation(ctx);
     if (!conv.language) await this.store.setLanguage(conv.id, language);
-    await this.store.addMessage({ conversationId: conv.id, role: "user", content: text });
-    await this.audit.record({ actor: ctx.role, event: "chat.user_message", tenantId: ctx.tenantId, conversationId: conv.id, payload: { chars: text.length, language } });
+
+    // ── INPUT LEG ── Yiddish → English via Yiddish Labs, so the LLM reasons in
+    // English. The original Yiddish is stored as the user's message; the English
+    // mirror (contentEn) drives triage + the LLM and feeds the tuning corpus.
+    let englishText = text;
+    let bridgeDegraded = false;
+    if (bridging) {
+      try {
+        const inTx = await this.translator!.toEnglish(text);
+        englishText = inTx.text?.trim() || text;
+      } catch (err) {
+        bridgeDegraded = true;
+        await this.audit.record({ actor: "system", event: "chat.bridge_in_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
+      }
+    }
+
+    await this.store.addMessage({ conversationId: conv.id, role: "user", content: text, contentEn: bridging ? englishText : undefined });
+    await this.audit.record({ actor: ctx.role, event: "chat.user_message", tenantId: ctx.tenantId, conversationId: conv.id, payload: { chars: text.length, language, bridged: bridging } });
 
     // Kill switch / disabled: store, acknowledge read-only, never call tools or LLM actions.
     if (killSwitchEngaged()) {
-      const reply =
-        language === "yi"
-          ? "דער סופּפּאָרט אַסיסטענט איז יעצט נישט אַקטיוו. אײַער מעסעדזש איז איבערגעגעבן געוואָרן צום טים."
-          : "The support assistant is currently paused. Your message has been recorded and passed to the team.";
+      const english = "The support assistant is currently paused. Your message has been recorded and passed to the team.";
+      if (bridging) return this.finishBridged(conv, ctx, english, "killswitch", true);
+      const reply = language === "yi"
+        ? "דער סופּפּאָרט אַסיסטענט איז יעצט נישט אַקטיוו. אײַער מעסעדזש איז איבערגעגעבן געוואָרן צום טים."
+        : english;
       await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "killswitch" });
       return { conversationId: conv.id, reply, language, degraded: true };
     }
@@ -109,13 +183,16 @@ export class ConversationEngine {
     // Triage: if the message is an actionable intent (diagnostic or a catalog
     // action) and a triage orchestrator is wired, handle it deterministically
     // (policy-gated, approval-gated) before falling back to conversational LLM.
+    // Intent detection runs on the ENGLISH text when bridging (numbers/keywords
+    // parse more reliably), and the English reply is translated back via YL.
     if (this.triage) {
       try {
         const { detectIntent } = await import("../triage/intent");
-        const intent = detectIntent(text);
+        const intent = detectIntent(bridging ? englishText : text);
         if (intent.kind !== "chat") {
           const outcome = await this.triage.handle(intent, { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId, role: ctx.role, conversationId: conv.id }, language);
           if (outcome.handled && outcome.reply) {
+            if (bridging) return this.finishBridged(conv, ctx, outcome.reply, "triage", bridgeDegraded);
             const reply = language === "yi" && outcome.yiddish ? outcome.yiddish : outcome.reply;
             await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "triage" });
             await this.audit.record({ actor: "agent", event: "chat.triage_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { intent: intent.kind, diagReportId: outcome.diagReportId, actionId: outcome.actionId } });
@@ -127,37 +204,44 @@ export class ConversationEngine {
       }
     }
 
-    // Build short history for context (last 20 messages).
+    // Build short history for context (last 20 messages). When bridging, feed the
+    // English mirror so the model stays entirely in English.
     const history = await this.store.listMessages(conv.id, 100);
     const msgs: ChatMessage[] = [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
       ...history.slice(-20).map((m) => ({
         role: (m.role === "assistant" ? "assistant" : "user") as "assistant" | "user",
-        content: m.content,
+        content: bridging ? (m.contentEn ?? m.content) : m.content,
       })),
     ];
 
-    let reply: string;
-    let model: string | undefined;
-    let degraded = false;
+    // Fallback English used when the LLM is unavailable or errors.
+    const teamFallbackEn = "I've received your message and passed it to our team — someone will follow up with you shortly.";
+
     if (this.llm && this.llm.available().length > 0) {
       try {
         const res = await this.llm.complete("support_chat", msgs, { maxTokens: 800, conversationId: conv.id });
-        reply = res.text.trim() || fallbackReply(language);
-        model = `${res.provider}:${res.model}`;
+        const model = `${res.provider}:${res.model}`;
+        if (bridging) {
+          const englishReply = res.text.trim() || teamFallbackEn;
+          return this.finishBridged(conv, ctx, englishReply, model, bridgeDegraded);
+        }
+        const reply = res.text.trim() || fallbackReply(language);
+        await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model });
+        await this.audit.record({ actor: "agent", event: "chat.agent_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { model, degraded: false, bridged: false } });
+        return { conversationId: conv.id, reply, language, model, degraded: false };
       } catch (err) {
         await this.audit.record({ actor: "system", event: "chat.llm_failed", conversationId: conv.id, payload: { error: String(err) } });
-        reply = fallbackReply(language);
-        degraded = true;
+        if (bridging) return this.finishBridged(conv, ctx, teamFallbackEn, "fallback", true);
       }
-    } else {
-      reply = fallbackReply(language);
-      degraded = true;
     }
 
-    await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model });
-    await this.audit.record({ actor: "agent", event: "chat.agent_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { model, degraded } });
-    return { conversationId: conv.id, reply, language, model, degraded };
+    // No LLM (or LLM failed in non-bridging mode): canned fallback.
+    if (bridging) return this.finishBridged(conv, ctx, teamFallbackEn, "fallback", true);
+    const reply = fallbackReply(language);
+    await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply });
+    await this.audit.record({ actor: "agent", event: "chat.agent_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { degraded: true, bridged: false } });
+    return { conversationId: conv.id, reply, language, degraded: true };
   }
 
   async closeConversation(ctx: ChatContext, conversationId: string): Promise<boolean> {

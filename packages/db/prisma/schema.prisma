@@ -5783,6 +5783,7 @@ model AgentMessage {
   conversation   AgentConversation @relation(fields: [conversationId], references: [id])
   role           String /// "user" | "assistant" | "system" | "tool"
   content        String
+  contentEn      String? /// English mirror when the YL translate-bridge is active (Yiddish chats). Feeds the LLM + the tuning corpus.
   audioUrl       String?
   transcript     String?
   model          String?

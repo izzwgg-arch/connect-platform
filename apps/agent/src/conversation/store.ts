@@ -22,6 +22,7 @@ export interface MessageRow {
   conversationId: string;
   role: string;
   content: string;
+  contentEn?: string | null;
   model?: string | null;
   createdAt: Date;
 }
@@ -31,7 +32,7 @@ export interface ConversationStore {
   create(input: { tenantId: string; clientUserId: string | null; role: Role; channel: string; language?: string | null }): Promise<ConversationRow>;
   close(id: string): Promise<void>;
   closeStale(olderThan: Date): Promise<number>;
-  addMessage(input: { conversationId: string; role: string; content: string; model?: string; inputTokens?: number; outputTokens?: number }): Promise<MessageRow>;
+  addMessage(input: { conversationId: string; role: string; content: string; contentEn?: string | null; model?: string; inputTokens?: number; outputTokens?: number }): Promise<MessageRow>;
   listMessages(conversationId: string, limit?: number): Promise<MessageRow[]>;
   listConversations(tenantId: string, clientUserId: string | null, limit?: number): Promise<ConversationRow[]>;
   getConversation(id: string): Promise<ConversationRow | null>;
@@ -82,7 +83,7 @@ export class PrismaConversationStore implements ConversationStore {
     return closed;
   }
 
-  addMessage(input: { conversationId: string; role: string; content: string; model?: string; inputTokens?: number; outputTokens?: number }) {
+  addMessage(input: { conversationId: string; role: string; content: string; contentEn?: string | null; model?: string; inputTokens?: number; outputTokens?: number }) {
     return this.prisma.agentMessage.create({ data: input });
   }
 
