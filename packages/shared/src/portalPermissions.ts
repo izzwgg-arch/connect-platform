@@ -84,6 +84,7 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.roles", section: "admin", label: "Custom Roles", href: "/admin/roles", permission: "can_view_admin_roles" },
   { id: "admin.phone_numbers", section: "admin", label: "Phone Numbers", href: "/admin/phone-numbers", permission: "can_view_admin_phone_numbers" },
   { id: "admin.onboarding", section: "admin", label: "Onboarding", href: "/admin/onboarding", permission: "can_view_admin_onboarding" },
+  { id: "admin.assistant", section: "admin", label: "AI Assistant", href: "/assistant", permission: "can_view_admin_assistant" },
 
   { id: "settings.tenant", section: "settings", label: "Tenant Settings", href: "/settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", section: "settings", label: "Email Settings", href: "/settings/email", permission: "can_view_settings_email" },

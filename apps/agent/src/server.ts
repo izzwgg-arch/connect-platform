@@ -308,6 +308,30 @@ async function main() {
         return { transcripts: [] };
       }
     });
+
+    // Owner console — provider self-test (owner JWT, no shared secret needed).
+    // Pings the chosen provider so the Assistant page can prove Sonnet/Opus/GPT
+    // actually respond. Blocked while the agent is disabled (kill switch).
+    app.post("/agent/admin/selftest", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      if (killSwitchEngaged()) return reply.code(423).send({ error: "kill_switch_engaged_or_agent_disabled" });
+      const provider = (req.body as any)?.provider === "anthropic" ? "diagnostics" : "support_chat";
+      try {
+        const r = await router.complete(provider as any, [
+          { role: "system", content: "Reply with exactly: SELFTEST-OK" },
+          { role: "user", content: "ping" },
+        ], { maxTokens: 16 });
+        return { ok: true, provider: r.provider, model: r.model, text: r.text.trim(), failedOver: r.failedOver };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
+    });
+
+    // Owner console — consolidated capabilities view (certified/executable gate).
+    app.get("/agent/admin/capabilities", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      return { capabilities: manifest.map((c) => ({ id: c.id, title: c.title, kind: c.kind, status: c.status, roles: c.roles, pbxWrite: (c as any).pbxWrite ?? false, liveEnabled: (c as any).liveEnabled ?? false })) };
+    });
     // 24/7 continuous drain — small batches every 2 min so it never floods the
     // box or the STT provider. No-op until AGENT_ARCHIVE_ROOT is set.
     setInterval(() => {
