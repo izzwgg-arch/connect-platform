@@ -571,7 +571,13 @@ async function main() {
         try {
           const cli = new YiddishLabsClient(providerKeys.yiddishLabsApiKey);
           const ctx = await glossaryContext();
-          const r = await cli.submitSync({ file: buf, filename, language: "auto", context: ctx, rapid: true });
+          let r = await cli.submitSync({ file: buf, filename, language: "auto", context: ctx, rapid: true });
+          // Short mic clips complete immediately; longer ones may still be
+          // processing — poll briefly (~90s) before falling back.
+          for (let i = 0; i < 45 && r.status !== "completed" && r.status !== "failed"; i++) {
+            await new Promise((x) => setTimeout(x, 2000));
+            r = await cli.get(r.id);
+          }
           if (r.status === "completed" && r.text && r.text.trim()) {
             return { ok: true, text: clean(r.text), language: YiddishLabsClient.normalizeLanguage(r) };
           }
