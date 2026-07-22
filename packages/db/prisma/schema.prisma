@@ -2869,6 +2869,9 @@ model MobileDevice {
   /// Native FCM registration token (Android) — enables direct high-priority
   /// FCM call wakes, bypassing the Expo relay. Null until the app reports it.
   nativeFcmToken        String?
+  /// Last time this device acknowledged a call-wake push (DEVICE_* stage via
+  /// /mobile/wake/event). Sent-but-never-acked is the wake-health failure signal.
+  lastWakeAckAt         DateTime?
   deviceId              String?
   appVersion            String?
   deviceName            String?

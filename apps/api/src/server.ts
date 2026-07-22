@@ -4730,6 +4730,57 @@ async function refreshTurnGauge() {
 refreshTurnGauge();
 registerShutdownTimer(setInterval(refreshTurnGauge, 300_000));
 
+// ── Wake-health monitor ──────────────────────────────────────────────────────
+// Daily sweep of every active Android device: flags latched keep-alive gates and
+// devices that were SENT call pushes recently but never ACKED one (the exact
+// failure mode that went unnoticed for a month). Emits one [WAKE_HEALTH] summary
+// line + one line per flagged device; also served on GET /admin/wake-health.
+async function computeWakeHealth() {
+  const devices = await db.mobileDevice.findMany({
+    where: { active: true, platform: "ANDROID" },
+    include: { user: { select: { email: true } }, tenant: { select: { name: true } } },
+  });
+  const now = Date.now();
+  const rows = devices.map((d: any) => {
+    const ka = (d.keepAliveSnapshot ?? {}) as Record<string, unknown>;
+    const gateLatched = ka["gateNeeded"] === true;
+    const gateDrops = Number(ka["gateDropCount"] ?? 0) || 0;
+    const sentAt = d.lastPushSentAt ? new Date(d.lastPushSentAt).getTime() : 0;
+    const ackAt = d.lastWakeAckAt ? new Date(d.lastWakeAckAt).getTime() : 0;
+    const sentRecently = sentAt > now - 7 * 24 * 3600_000;
+    const ackMissing = sentRecently && (ackAt === 0 || ackAt < sentAt - 24 * 3600_000);
+    return {
+      deviceId: d.id, tenant: d.tenant?.name ?? d.tenantId, email: d.user?.email ?? d.userId,
+      model: d.model ?? d.deviceName ?? "?", osVersion: d.osVersion ?? null, appVersion: d.appVersion ?? null,
+      directFcm: !!d.nativeFcmToken, gateLatched, gateDrops,
+      gateReason: typeof ka["gateReason"] === "string" ? (ka["gateReason"] as string) : null,
+      lastPushSentAt: d.lastPushSentAt, lastWakeAckAt: d.lastWakeAckAt, lastSeenAt: d.lastSeenAt,
+      flagged: gateLatched || ackMissing, ackMissing,
+    };
+  });
+  return { total: rows.length, flagged: rows.filter((r) => r.flagged).length, rows };
+}
+
+async function runWakeHealthSweep() {
+  try {
+    const health = await computeWakeHealth();
+    app.log.info({ wakeHealth: true, total: health.total, flagged: health.flagged }, "[WAKE_HEALTH] daily sweep");
+    for (const r of health.rows.filter((x) => x.flagged)) {
+      app.log.warn({ wakeHealth: true, ...r }, "[WAKE_HEALTH] flagged device");
+    }
+  } catch (e: any) {
+    app.log.error({ err: e?.message }, "[WAKE_HEALTH] sweep failed");
+  }
+}
+registerShutdownTimer(setTimeout(() => { void runWakeHealthSweep(); }, 120_000));
+registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 3600_000));
+
+app.get("/admin/wake-health", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return computeWakeHealth();
+});
+
 // ── Guard 3: active TURN allocation probe ─────────────────────────────────────
 // Periodically performs a real STUN/TURN Allocate against each relay transport
 // the clients are told to use (udp/tcp/tls). Exposes 0/1 gauges and loud
@@ -29471,6 +29522,17 @@ app.post("/mobile/wake/event", async (req, reply) => {
     });
     if (owned) resolvedDeviceId = owned.id;
   }
+
+  // Wake-health bookkeeping: any DEVICE_* stage proves the push reached the app.
+  // "lastPushSentAt recent but lastWakeAckAt stale" is the delivery-failure signal
+  // the wake-health monitor scans for. Never blocks telemetry ingest.
+  try {
+    if (resolvedDeviceId) {
+      await db.mobileDevice.update({ where: { id: resolvedDeviceId }, data: { lastWakeAckAt: new Date() } as any });
+    } else {
+      await db.mobileDevice.updateMany({ where: { userId: user.sub, tenantId: user.tenantId, active: true }, data: { lastWakeAckAt: new Date() } as any });
+    }
+  } catch { /* bookkeeping must never fail the event */ }
 
   await recordWakeEvent({
     tenantId: user.tenantId,
