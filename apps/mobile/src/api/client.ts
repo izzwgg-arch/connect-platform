@@ -1,3 +1,5 @@
+import { Platform } from "react-native";
+import * as ExpoNotifications from "expo-notifications";
 import type {
   AuthResponse,
   CallRecord,
@@ -667,10 +669,22 @@ export async function registerMobileDevice(token: string, input: {
     gateDropCount?: number;
   };
 }) {
+  // Android: also report the native FCM registration token so the server can
+  // deliver call wakes via direct high-priority FCM (Doze-exempt) instead of
+  // the Expo relay. Never blocks or fails registration — falls back to null.
+  let nativeFcmToken: string | null = null;
+  if (Platform.OS === "android") {
+    try {
+      const t = await ExpoNotifications.getDevicePushTokenAsync();
+      nativeFcmToken = typeof (t as { data?: unknown })?.data === "string" ? (t as { data: string }).data : null;
+    } catch {
+      nativeFcmToken = null;
+    }
+  }
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(input)
+    body: JSON.stringify({ ...input, ...(nativeFcmToken ? { nativeFcmToken } : {}) })
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "MOBILE_REGISTER_FAILED");

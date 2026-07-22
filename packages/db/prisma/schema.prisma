@@ -2788,10 +2788,31 @@ model Voicemail {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  // ── Team-shared note (single editable note per voicemail) ──────────────
+  note                String? // shared note body; null/empty = no note
+  noteUpdatedAt       DateTime?
+  noteUpdatedByUserId String? // who last edited the shared note
+
+  // ── Callback reminder (timed, dismissible alert to the setter) ─────────
+  callbackReminderAt        DateTime? // when to alert; null = no reminder
+  callbackReminderSetById   String? // user who set it — the ONLY one alerted
+  callbackReminderLabel     String? // optional short label shown in the alert
+  callbackReminderFiredAt   DateTime? // when the due-alert was delivered
+  callbackReminderAckAt     DateTime? // when the setter dismissed the alert
+
+  // ── Auto-transcription (agent): Yiddish → ivrit engine, English → GPT ──
+  transcript          String? // transcript text in the spoken language
+  transcriptLanguage  String? // "yi" | "en" | "yi-en"
+  transcriptEngine    String? // internal engine tag (never shown on frontend)
+  transcribedAt       DateTime?
+  transcriptError     String? // last failure reason; null when ok
+
   @@index([tenantId])
   @@index([extension])
   @@index([receivedAt])
   @@index([tenantId, extension, receivedAt])
+  // Scheduler scan: due, not-yet-fired reminders.
+  @@index([callbackReminderAt, callbackReminderFiredAt])
 }
 
 // Admin-configured rules that map DID or extension patterns to VitalPBX tenant slugs.
@@ -2845,6 +2866,9 @@ model MobileDevice {
   platform              MobilePlatform
   expoPushToken         String               @unique
   voipPushToken         String?
+  /// Native FCM registration token (Android) — enables direct high-priority
+  /// FCM call wakes, bypassing the Expo relay. Null until the app reports it.
+  nativeFcmToken        String?
   deviceId              String?
   appVersion            String?
   deviceName            String?
@@ -3859,6 +3883,8 @@ model ConnectChatThread {
   externalSmsE164      String?
   /// "" = tenant-wide SMS inbox; else Connect user id for assigned-number personal inbox
   smsInboxOwnerUserId  String                   @default("")
+  markedUnreadAt       DateTime?
+  markedUnreadById     String?
   participants         ConnectChatParticipant[]
   messages             ConnectChatMessage[]
   tenant               Tenant                   @relation(fields: [tenantId], references: [id])
@@ -5713,4 +5739,304 @@ model PbxEndpointRegistrationEvent {
   @@index([endpoint, occurredAt])
   @@index([tenantId, occurredAt])
   @@index([occurredAt])
+}
+
+// ─── AI Support Agent ("Shammes") — docs/ai-support-agent/PLAN.md §5 ──────────
+// Additive only. Every PBX-affecting action is approval-gated; every event is
+// audit-logged. NOTHING here may weaken the PBX read-only safeguard.
+
+enum AgentConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum AgentChannel {
+  CHAT
+  EMAIL
+  WHATSAPP
+  SMS
+  PHONE
+}
+
+enum AgentActionStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  EXECUTING
+  EXECUTED
+  REVERTED
+  DENIED
+  EXPIRED
+  FAILED
+}
+
+/// One support chat session. Every new issue = a new conversation (auto-closed
+/// on resolution or 12h inactivity). Stored permanently; client visibility of
+/// past chats is gated per tenant by AgentPolicy.historyVisible.
+model AgentConversation {
+  id           String                  @id @default(cuid())
+  tenantId     String
+  clientUserId String?
+  role         String                  @default("customer") /// "owner" | "customer"
+  channel      AgentChannel            @default(CHAT)
+  language     String? /// detected: "en" | "yi"
+  status       AgentConversationStatus @default(OPEN)
+  startedAt    DateTime                @default(now())
+  closedAt     DateTime?
+  messages     AgentMessage[]
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, status])
+}
+
+model AgentMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   AgentConversation @relation(fields: [conversationId], references: [id])
+  role           String /// "user" | "assistant" | "system" | "tool"
+  content        String
+  contentEn      String? /// English mirror when the YL translate-bridge is active (Yiddish chats). Feeds the LLM + the tuning corpus.
+  audioUrl       String?
+  transcript     String?
+  model          String?
+  inputTokens    Int?
+  outputTokens   Int?
+  createdAt      DateTime          @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+/// Persistent translation cache for the Yiddish Labs bridge. Keyed by
+/// (action, srcHash). A hit returns instantly with zero YL credits, so fixed
+/// templates + repeated phrases never re-hit YL's ~9s output leg. Additive.
+model AgentTranslation {
+  id        String   @id @default(cuid())
+  action    String /// translate-yiddish | translate-english | translate-hebrew | translate-lk
+  srcHash   String /// sha256(normalized srcText), truncated
+  srcText   String /// normalized source (truncated), for review/debug
+  outText   String /// translated output (the cached value)
+  hits      Int      @default(0)
+  pinned    Boolean  @default(false) /// pre-warmed template — never evicted
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([action, srcHash])
+  @@index([action, srcHash])
+}
+
+/// A requested change. Client actions wait in PENDING_APPROVAL for a human;
+/// owner-requested actions are auto-approved (owner's word) but still pre-flight
+/// checked, executed via the scoped executor, audited, and emailed.
+model AgentAction {
+  id             String            @id @default(cuid())
+  tenantId       String
+  conversationId String?
+  capabilityId   String /// e.g. "action.A1.temp_forward" — must exist in the certified manifest
+  params         Json
+  riskTier       String            @default("low")
+  status         AgentActionStatus @default(DRAFT)
+  summary        String /// plain-English description + exact diff shown to approver
+  requestedBy    String /// user id or "owner"
+  requestedRole  String            @default("customer")
+  approvedBy     String?
+  approvalToken  String?           @unique /// signed token for email approve/deny links
+  deniedReason   String?
+  executedAt     DateTime?
+  revertAt       DateTime? /// scheduler enforces even across restarts
+  revertedAt     DateTime?
+  revertOfId     String?           @unique /// set on the mirror action that undoes this one
+  resultSnapshot Json? /// pre-change state captured for revert/rollback
+  errorDetail    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([tenantId, status])
+  @@index([status, revertAt])
+  @@index([createdAt])
+}
+
+/// Append-only audit trail (DB twin of the JSONL file export).
+model AgentAuditLog {
+  id             String   @id @default(cuid())
+  ts             DateTime @default(now())
+  actor          String /// "agent" | "model" | "owner" | "customer" | "system" | "watchman"
+  event          String
+  tenantId       String?
+  conversationId String?
+  actionId       String?
+  capabilityId   String?
+  payload        Json?
+  hash           String /// sha256 of the row body — tamper evidence
+
+  @@index([ts])
+  @@index([tenantId, ts])
+  @@index([event, ts])
+}
+
+/// Per-tenant permission policy for the customer-facing agent (PLAN.md §6a).
+/// Whitelist semantics: a capability absent from grants is blocked.
+model AgentPolicy {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique /// special row tenantId="__owner__" holds the owner policy
+  version        Int      @default(1)
+  grants         Json /// { [capabilityId]: { mode, limits, businessHoursOnly, protectedExtensions } }
+  historyVisible Boolean  @default(false)
+  channels       String[] @default(["chat"])
+  updatedBy      String
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+}
+
+model AgentDiagReport {
+  id        String   @id @default(cuid())
+  tenantId  String
+  extension String?
+  severity  String   @default("medium")
+  findings  Json /// checks performed, evidence
+  hypotheses Json /// ranked root causes with confidence
+  recommendation String?
+  sentTo    String[]
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+/// Watchman detections (security + health). Read-only monitoring; humans act.
+model AgentIncident {
+  id         String    @id @default(cuid())
+  type       String /// e.g. "sip_bruteforce" | "toll_fraud_pattern" | "service_down" | "cert_expiry"
+  severity   String /// "info" | "warning" | "critical"
+  evidence   Json
+  status     String    @default("open") /// "open" | "acknowledged" | "resolved"
+  notifiedAt DateTime?
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([severity, createdAt])
+  @@index([status])
+}
+
+model AgentKbArticle {
+  id        String   @id @default(cuid())
+  tenantId  String? /// null = global knowledge
+  title     String
+  problem   String
+  cause     String
+  fix       String
+  approved  Boolean  @default(false) /// team approves drafts before the agent cites them
+  sourceConversationId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, approved])
+}
+
+/// Per-tenant facts the agent learns ("Brooklyn office", device models, prefs).
+model AgentMemory {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+}
+
+model AgentTranscript {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  recordingId String   @unique
+  language    String? /// "en" | "yi" | "yi-en" (code-switched)
+  text        String
+  diarization Json?
+  model       String? /// "whisper" | "everett" | tuned model id
+  createdAt   DateTime @default(now())
+
+  // ── Yiddish tuning flywheel (docs/ai-support-agent/YIDDISH_TUNING.md) ──
+  /// where this sample came from: "live_call" | "news_hotline" | "bulk_import" | "correction"
+  source         String   @default("live_call")
+  /// STT confidence 0..1 (drives the correction queue: low → review).
+  confidence     Float?
+  /// audio pointer (path/URL) so the (audio,text) pair can be exported for tuning.
+  audioRef       String?
+  /// human-corrected transcript; when set this is the "gold" training text.
+  correctedText  String?
+  correctedBy    String?
+  correctedAt    DateTime?
+  /// may this sample be used for model tuning? (consent + retention). Default off.
+  trainingEligible Boolean @default(false)
+  /// review workflow: "none" | "pending" | "corrected" | "approved"
+  reviewStatus   String   @default("none")
+  /// glossary/slang terms detected in this transcript (for LM + analytics).
+  glossaryHits   Json?
+
+  @@index([tenantId, createdAt])
+  @@index([source, reviewStatus])
+  @@index([trainingEligible, language])
+}
+
+/// Owner-managed secrets (API keys) entered via the Assistant page, encrypted
+/// at rest (AES-256-GCM via @connect/security). Values are write-only from the
+/// UI and never returned. The agent reads these first, falling back to env.
+model AgentSecret {
+  id        String   @id @default(cuid())
+  key       String   @unique /// "anthropic_api_key" | "openai_api_key" | "yiddishlabs_api_key"
+  valueEnc  String /// encrypted envelope; never logged or returned
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+/// Dialect glossary — heimishe NY-Yiddish slang, loshn-koydesh, names, and the
+/// Yinglish code-switch spellings. Biases STT decoding (phrase boost) and seeds
+/// the domain language model for fine-tuning. Grows as the team spots misses.
+model AgentDialectTerm {
+  id          String   @id @default(cuid())
+  /// the term as it should appear in transcripts (canonical spelling).
+  term        String
+  /// alternate spellings / mis-hearings the model tends to produce.
+  variants    String[] @default([])
+  /// "slang" | "loshn_koydesh" | "name" | "yinglish" | "business" | "place"
+  category    String   @default("slang")
+  /// optional English gloss / meaning for the LM + human reviewers.
+  gloss       String?
+  /// English word commonly code-switched in (for yinglish category).
+  englishForm String?
+  weight      Int      @default(1)
+  addedBy     String?
+  createdAt   DateTime @default(now())
+
+  @@unique([term])
+  @@index([category])
+}
+
+/// Ownership Ledger (PBX_PROVISIONING_PLAN.md §4). EVERY PBX object the agent
+/// creates is recorded here. The Scoped Executor may only ever edit/delete a
+/// PBX object whose id appears in this ledger — anything absent is, by
+/// definition, pre-existing / not ours, and is untouchable. This is the
+/// structural guarantee that existing tenants and call flows are never altered.
+model AgentPbxObject {
+  id               String    @id @default(cuid())
+  /// e.g. "tenant" | "extension" | "ivr" | "inbound_route" | "ring_group" | "queue" | "time_condition" | "outbound_route" | "device" | "conference" | "parking_lot" | "ivr_prompt"
+  pbxObjectType    String
+  /// The id/key returned by VitalPBX for the created object.
+  pbxObjectId      String
+  /// VitalPBX tenant this object lives under (for scoping). Null for the tenant object itself.
+  pbxTenantId      String?
+  /// Connect tenant id when applicable.
+  connectTenantId  String?
+  /// The AgentAction that created it (audit chain).
+  createdByActionId String?
+  /// "active" | "deleted" | "rolled_back"
+  state            String    @default("active")
+  /// Was this created in simulation mode (not a real PBX object)? Keeps sim + live cleanly separated.
+  simulated        Boolean   @default(false)
+  meta             Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([pbxObjectType, pbxObjectId, simulated])
+  @@index([pbxTenantId])
+  @@index([state])
 }

@@ -142,11 +142,13 @@ import {
   voicemailRowInOwnedScope,
   type VoicemailOwnedScope,
 } from "./voicemailResourceScope";
+import { computeVoicemailPatchUpdate } from "./voicemailAccessPolicy";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx, type ExtensionSyncResult } from "./pbxExtensionSync";
+import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "./fcmDirect";
 import {
   buildMohClassName,
   buildMohPbxWavStorageKey,
@@ -2997,6 +2999,34 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
   }
 
   for (const device of iosDevices) {
+    // iOS-only foreground-active gate. When the Connect app on this device has
+    // recently reported itself foreground-active (it holds a live socket and
+    // will receive the SIP INVITE directly), skip the VoIP push so the native
+    // CallKit screen does NOT appear on top of the in-app Connect incoming
+    // screen. FAILS OPEN: on any Redis miss/error we still send the push, so we
+    // never risk missing a call. Android never reaches this function.
+    try {
+      const fgActive = await redis.get("ios_fg_active:" + device.id);
+      if (fgActive) {
+        app.log.info(
+          {
+            event: "api_apns_voip_skipped_foreground_active",
+            source: "api",
+            tenantId: input.tenantId,
+            userId: input.userId,
+            callId: input.callId,
+            deviceId: device.id,
+          },
+          "api_apns_voip_skipped_foreground_active",
+        );
+        continue;
+      }
+    } catch (gateErr: any) {
+      app.log.warn(
+        { event: "api_apns_voip_fg_gate_error", deviceId: device.id, err: gateErr?.message },
+        "api_apns_voip_fg_gate_error — sending push (fail-open)",
+      );
+    }
     const tokenTail = (device.voipPushToken || "").slice(-6);
     app.log.info(
       {
@@ -3166,12 +3196,49 @@ async function sendPushToUserDevices(input: {
           ? "user_alert_data_high"
           : "generic_data_high";
 
-  const messages = filtered.map((d) =>
+  // ── Direct-FCM fast path for call-critical wakes ──────────────────────────
+  // Devices that reported a native FCM token get the wake via FCM HTTP v1
+  // directly (high priority, Doze-exempt) instead of the Expo relay. Any direct
+  // failure falls back to Expo for that device. Devices without a native token
+  // keep the Expo path bit-for-bit unchanged.
+  const callCriticalTypes = new Set(["INCOMING_CALL", "INCOMING_CALL_WAKE", "INVITE_CANCELED", "INVITE_CLAIMED"]);
+  let expoTargets = filtered;
+  if (callCriticalTypes.has(String(payloadType)) && isFcmDirectConfigured()) {
+    const directTargets = filtered.filter((d) => (d as any).nativeFcmToken && d.platform === "ANDROID");
+    if (directTargets.length > 0) {
+      const fcmData = buildFcmDataFromPayload(input.payload as unknown as Record<string, unknown>);
+      const failedIds = new Set<string>();
+      await Promise.all(directTargets.map(async (d) => {
+        try {
+          await sendFcmDirectData(String((d as any).nativeFcmToken), fcmData);
+          app.log.info({
+            callWake: true, stage: "FCM_DIRECT_DELIVERED", source: "api",
+            tenantId: input.tenantId, userId: input.userId, deviceId: d.id,
+            payloadType, model: d.model ?? null, tokenTail: String((d as any).nativeFcmToken).slice(-10),
+          }, "[CALL_WAKE] FCM_DIRECT_DELIVERED");
+        } catch (err: any) {
+          failedIds.add(d.id);
+          app.log.warn({
+            callWake: true, stage: "FCM_DIRECT_FAILED", tenantId: input.tenantId,
+            deviceId: d.id, payloadType, err: String(err?.message || err).slice(0, 200),
+          }, "[CALL_WAKE] FCM_DIRECT_FAILED — falling back to Expo for this device");
+        }
+      }));
+      expoTargets = filtered.filter((d) => !(d as any).nativeFcmToken || d.platform !== "ANDROID" || failedIds.has(d.id));
+    }
+  }
+
+  const messages = expoTargets.map((d) =>
     buildExpoPushV2Item({
       to: String(d.expoPushToken),
       payload: { ...(input.payload as unknown as Record<string, unknown>) },
     }),
   );
+
+  if (messages.length === 0) {
+    app.log.info({ event: "MOBILE_PUSH_AUDIT", stage: "expo_skipped_all_direct", tenantId: input.tenantId, userId: input.userId, payloadType }, "mobile_push_audit.all_devices_served_by_direct_fcm");
+    return;
+  }
 
   app.log.info(
     {
@@ -13701,6 +13768,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
     platform: z.enum(["IOS", "ANDROID"]),
     expoPushToken: z.string().min(8),
     voipPushToken: z.string().optional(),
+    nativeFcmToken: z.string().max(512).optional(),
     deviceId: z.string().max(200).optional(),
     appVersion: z.string().max(80).optional(),
     deviceName: z.string().max(120).optional(),
@@ -13785,6 +13853,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       platform: input.platform,
       expoPushToken: input.expoPushToken,
       voipPushToken: input.voipPushToken || null,
+      nativeFcmToken: input.nativeFcmToken || null,
       deviceId: input.deviceId || null,
       appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
@@ -13799,6 +13868,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
     } as any,
     update: {
       tenantId: user.tenantId,
+      ...(input.nativeFcmToken ? { nativeFcmToken: input.nativeFcmToken } : {}),
       userId: user.sub,
       extensionId: extension?.id ?? null,
       platform: input.platform,
@@ -16604,6 +16674,21 @@ app.get("/voice/voicemail", async (req, reply) => {
   const tenantNameByCuid = new Map(tenantRows.map((t) => [t.id, t.name]));
   const tenantNameBySlug = new Map(dirRows.map((d) => [d.tenantSlug, d.displayName ?? d.tenantSlug]));
 
+  // Resolve display names for whoever edited the shared note / set a reminder.
+  const authorIds = Array.from(
+    new Set(
+      voicemails
+        .flatMap((vm) => [vm.noteUpdatedByUserId, vm.callbackReminderSetById])
+        .filter((v): v is string => !!v),
+    ),
+  );
+  const authorRows = authorIds.length
+    ? await db.user.findMany({ where: { id: { in: authorIds } }, select: { id: true, email: true } })
+    : [];
+  const authorNameById = new Map(
+    authorRows.map((u) => [u.id, u.email ? u.email.split("@")[0] : "User"] as const),
+  );
+
   return reply.send({
     voicemails: voicemails.map((vm) => {
       let tenantName: string | null = null;
@@ -16625,6 +16710,22 @@ app.get("/voice/voicemail", async (req, reply) => {
         extension:   vm.extension,
         tenantId:    vm.tenantId,
         tenantName,
+        // AI transcript (agent-populated). Field name kept as `transcription`
+        // to match the existing portal Voicemail type.
+        transcription:       (vm as any).transcript ?? null,
+        transcriptLanguage:  (vm as any).transcriptLanguage ?? null,
+        // Team-shared note.
+        note:                vm.note ?? null,
+        noteUpdatedAt:       vm.noteUpdatedAt ? vm.noteUpdatedAt.toISOString() : null,
+        noteUpdatedByUserId: vm.noteUpdatedByUserId ?? null,
+        noteUpdatedByName:   vm.noteUpdatedByUserId ? (authorNameById.get(vm.noteUpdatedByUserId) ?? null) : null,
+        // Callback reminder. `callbackReminderMine` = current user set it (only they get alerted).
+        callbackReminderAt:        vm.callbackReminderAt ? vm.callbackReminderAt.toISOString() : null,
+        callbackReminderLabel:     vm.callbackReminderLabel ?? null,
+        callbackReminderSetById:   vm.callbackReminderSetById ?? null,
+        callbackReminderSetByName: vm.callbackReminderSetById ? (authorNameById.get(vm.callbackReminderSetById) ?? null) : null,
+        callbackReminderMine:      !!vm.callbackReminderSetById && vm.callbackReminderSetById === user.sub,
+        callbackReminderAckAt:     vm.callbackReminderAckAt ? vm.callbackReminderAckAt.toISOString() : null,
       };
     }),
     total,
@@ -16689,41 +16790,134 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
   const body = z.object({
     listened: z.boolean().optional(),
     folder: z.enum(["inbox", "old", "urgent"]).optional(),
+    // Team-shared note. Pass "" or null to clear.
+    note: z.string().max(4000).nullable().optional(),
+    // Callback reminder. ISO datetime to set; null to clear.
+    callbackReminderAt: z.string().datetime().nullable().optional(),
+    callbackReminderLabel: z.string().max(200).nullable().optional(),
+    // Dismiss the due alert (only the setter can ack their own reminder).
+    ackCallbackReminder: z.boolean().optional(),
   }).parse(req.body || {});
-  const listened = body.listened ?? true;
-  const wantsListenedChange = body.listened !== undefined || body.folder === undefined;
-  // Read-state hardening: only a mailbox OWNER may flip the shared listened/readAt
-  // state. Tenant-wide oversight viewers (can_view_tenant_voicemails, super-admins
-  // browsing other mailboxes) see everything but must never clear "New" for the team.
-  let allowListenedChange = true;
-  if (wantsListenedChange) {
-    let isOwnMailbox = false;
-    try {
-      const ownScope = await resolveVoicemailOwnedScopeForJwtUser(user);
-      if (ownScope.ok) {
-        isOwnMailbox = voicemailRowInOwnedScope(vm, { tenantIds: ownScope.tenantIds, extensions: ownScope.extensions });
-      }
-    } catch { isOwnMailbox = false; }
-    allowListenedChange = isOwnMailbox;
+
+  // Read-state (listened/readAt) belongs to the mailbox owner, not to whoever
+  // happens to be allowed to view it. A tenant owner / tenant-wide viewer /
+  // super-admin previewing someone else's voicemail must NOT flip the
+  // read/unread state for the real owner — the message is only "read" once the
+  // extension's own user listens to it. Only when the acting user owns this
+  // mailbox do we persist listened/readAt. Folder moves remain allowed for
+  // anyone with access. Mirrors the owner carve-out in the DELETE handler.
+  let isOwnMailbox = false;
+  try {
+    const ownScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+    if (ownScope.ok) {
+      isOwnMailbox = voicemailRowInOwnedScope(vm, {
+        tenantIds: ownScope.tenantIds,
+        extensions: ownScope.extensions,
+      });
+    }
+  } catch { isOwnMailbox = false; }
+
+  // A note/reminder-only PATCH must NOT implicitly mark the voicemail read
+  // (the legacy "bare PATCH = mark read" default only applies to read/folder ops).
+  const touchesReadOrFolder = body.listened !== undefined || body.folder !== undefined;
+  const isNoteOrReminderOnly =
+    !touchesReadOrFolder &&
+    (body.note !== undefined ||
+      body.callbackReminderAt !== undefined ||
+      body.callbackReminderLabel !== undefined ||
+      body.ackCallbackReminder !== undefined);
+  const { data, readStateSkipped } = isNoteOrReminderOnly
+    ? { data: {} as Record<string, unknown>, readStateSkipped: false }
+    : computeVoicemailPatchUpdate({
+        body,
+        currentReadAt: vm.readAt ?? null,
+        isOwnMailbox,
+      });
+
+  // ── Team-shared note (anyone with access may edit the single shared note) ──
+  if (body.note !== undefined) {
+    const trimmed = (body.note ?? "").trim();
+    if (trimmed) {
+      data.note = trimmed;
+      data.noteUpdatedAt = new Date();
+      data.noteUpdatedByUserId = user.sub;
+    } else {
+      data.note = null;
+      data.noteUpdatedAt = null;
+      data.noteUpdatedByUserId = null;
+    }
   }
-  const data: Record<string, any> = {};
-  if (wantsListenedChange && allowListenedChange) {
-    data.listened = listened;
-    data.readAt = listened ? (vm.readAt ?? new Date()) : null;
+
+  // ── Callback reminder ──────────────────────────────────────────────────────
+  if (body.callbackReminderAt !== undefined) {
+    if (body.callbackReminderAt) {
+      data.callbackReminderAt = new Date(body.callbackReminderAt);
+      data.callbackReminderSetById = user.sub;
+      data.callbackReminderLabel = body.callbackReminderLabel ?? null;
+      data.callbackReminderFiredAt = null;
+      data.callbackReminderAckAt = null;
+    } else {
+      data.callbackReminderAt = null;
+      data.callbackReminderSetById = null;
+      data.callbackReminderLabel = null;
+      data.callbackReminderFiredAt = null;
+      data.callbackReminderAckAt = null;
+    }
+  } else if (body.callbackReminderLabel !== undefined) {
+    data.callbackReminderLabel = body.callbackReminderLabel;
   }
-  if (body.folder !== undefined) {
-    data.folder = body.folder;
+
+  // Dismiss the due alert — only the setter can ack their own reminder.
+  if (body.ackCallbackReminder && (vm as any).callbackReminderSetById === user.sub) {
+    data.callbackReminderAckAt = new Date();
   }
+
   if (Object.keys(data).length > 0) {
     await db.voicemail.update({
       where: { id },
       data,
     });
   }
-  if (wantsListenedChange && !allowListenedChange) {
-    return reply.send({ ok: true, skipped: "tenant_viewer" });
+  return reply.send({ ok: true, readStateSkipped });
+});
+
+// ── GET /voice/voicemail/callback-reminders/due — poll for the acting user's due reminders ──
+// Clients poll this (~30s). Returns callback reminders the acting user set that are
+// now due and not yet dismissed; each drives a dismissible on-screen alert. On
+// dismiss the client PATCHes { ackCallbackReminder: true }. Until acknowledged a
+// reminder keeps being returned, so it survives an app restart ("must dismiss").
+app.get("/voice/voicemail/callback-reminders/due", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const now = new Date();
+  const rows = await db.voicemail.findMany({
+    where: {
+      deletedAt: null,
+      callbackReminderSetById: user.sub,
+      callbackReminderAckAt: null,
+      callbackReminderAt: { lte: now },
+    },
+    orderBy: { callbackReminderAt: "asc" },
+    take: 20,
+  });
+  const unfired = rows.filter((r) => !r.callbackReminderFiredAt).map((r) => r.id);
+  if (unfired.length) {
+    await db.voicemail.updateMany({
+      where: { id: { in: unfired } },
+      data: { callbackReminderFiredAt: now },
+    });
   }
-  return reply.send({ ok: true });
+  return reply.send({
+    reminders: rows.map((vm) => ({
+      id: vm.id,
+      callerId: vm.callerNumber ?? "Unknown",
+      callerName: vm.callerName ?? null,
+      extension: vm.extension,
+      callbackReminderAt: vm.callbackReminderAt?.toISOString() ?? null,
+      callbackReminderLabel: vm.callbackReminderLabel ?? null,
+      note: vm.note ?? null,
+    })),
+  });
 });
 
 // ── DELETE /voice/voicemail/:id — soft-delete + best-effort PBX delete ───────
@@ -17385,17 +17579,9 @@ async function finishVoicemailStreamFromBuffer(
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
   }
 
-  // NOTE: Streaming/downloading the audio must NEVER mark the voicemail as
-  // read. A voicemail is only "read" once a human actually listens to it, and
-  // that is signalled explicitly by the client via `PATCH /voice/voicemail/:id
-  // { listened: true }` when playback truly starts (mobile: markVoicemailListened
-  // on play-load; portal SmartAudioPlayer: onPlayed right before audio.play()).
-  // This endpoint is hit for many non-listen reasons — the mobile audio
-  // pre-loader (`?raw=1`), the `Range: bytes=0-0` access probe, browser
-  // <audio> range requests, and explicit downloads — none of which mean the
-  // message was heard. Auto-marking here caused voicemails to flip to READ
-  // merely by opening the voicemail list (mobile prefetch) or the page, so it
-  // was removed. Do not re-add read-marking on the stream path.
+  if (!vm.readAt) {
+    await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
+  }
 
   sendBufferWithOptionalRange(req, reply, Buffer.from(buf), responseContentType);
 }
@@ -28561,6 +28747,7 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
     toExtension: z.string().nullable().optional(),
+    fromNumber: z.string().nullable().optional(),
   }).parse(req.body || {});
 
   // ── Resolve Connect tenantId ──────────────────────────────────────────────
@@ -28676,11 +28863,62 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     }
   }
 
+  // iOS killed-app wake via PushKit VoIP. The Expo INCOMING_CALL_WAKE above
+  // wakes Android + foreground/short-bg iOS, but it CANNOT wake a terminated
+  // iOS app - only a native APNs VoIP push (apns-push-type: voip) does that.
+  // Fire a real VoIP push to the ringing extension's iOS devices so a
+  // cold-killed iPhone wakes, registers SIP, and CallKit rings during the
+  // dialplan's wait-for-wake grace window. Reuses the Apple-compliant sender
+  // (fg-active gate + token invalidation + logging). SURGICAL: only when the
+  // target extension is known, so we never VoIP-push devices not being rung.
+  let voipWoken = 0;
+  if (input.toExtension && input.toExtension.trim() && isApnsVoipConfigured()) {
+    try {
+      const iosDevices = await db.mobileDevice.findMany({
+        where: { tenantId, userId: { in: candidateUserIds }, active: true, platform: "IOS" } as any,
+        select: { id: true, platform: true, voipPushToken: true, userId: true } as any,
+        take: 50,
+      }).catch((err: any) => {
+        app.log.warn({ err: err?.message, tenantId, linkedId: input.linkedId }, "prewake_voip_device_query_failed");
+        return [] as Array<{ id: string; platform: string; voipPushToken: string | null; userId: string | null }>;
+      });
+      const byUser = new Map<string, Array<{ id: string; platform: string; voipPushToken: string | null }>>();
+      for (const d of iosDevices as Array<{ id: string; platform: string; voipPushToken: string | null; userId: string | null }>) {
+        if (!d.voipPushToken) continue;
+        const u = typeof d.userId === "string" ? d.userId : "";
+        if (!u) continue;
+        if (!byUser.has(u)) byUser.set(u, []);
+        byUser.get(u)!.push({ id: d.id, platform: d.platform, voipPushToken: d.voipPushToken });
+      }
+      for (const [uid, devs] of byUser) {
+        voipWoken += devs.length;
+        await sendApnsVoipPushesForIncomingCallApi({
+          tenantId,
+          userId: uid,
+          callId: input.linkedId,
+          voipPayload: {
+            callId: input.linkedId,
+            tenantId,
+            toExtension: input.toExtension.trim(),
+            callerNumber: input.fromNumber?.trim() || null,
+            callerName: null,
+            timestamp: wakeRequestedAt,
+          },
+          devices: devs,
+        }).catch((err: any) =>
+          app.log.warn({ err: err?.message, tenantId, userId: uid, linkedId: input.linkedId }, "prewake_voip_send_failed"),
+        );
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, linkedId: input.linkedId }, "prewake_voip_block_error");
+    }
+  }
+
   app.log.info(
-    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, toExtension: input.toExtension ?? null },
+    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, voipWoken, toExtension: input.toExtension ?? null },
     "mobile-prewake: done",
   );
-  return { ok: true, woken, candidates: candidateUserIds.length };
+  return { ok: true, woken, voipWoken, candidates: candidateUserIds.length };
 });
 
 // ─── Push-wake config publisher (admin/internal) ─────────────────────────────
@@ -29338,6 +29576,52 @@ app.post("/mobile/wake/event", async (req, reply) => {
   }
 
   return reply.send({ ok: true });
+});
+
+// ─── iOS foreground-active heartbeat ────────────────────────────────────────
+// The iOS Connect app POSTs here (~every 15s) while it is FOREGROUND and holds a
+// live SIP socket, so the incoming-call pipeline can skip the APNs VoIP push for
+// this device (see sendApnsVoipPushesForIncomingCallApi). This is what keeps the
+// native CallKit screen from appearing over the in-app Connect incoming screen
+// while the app is open. Backgrounding/quitting stops the pings; the Redis key
+// expires (short TTL) and VoIP pushes resume automatically. iOS-only by
+// construction — Android never calls this, and non-IOS devices are a no-op.
+// Fails soft: a Redis error never breaks the client.
+app.post("/mobile/foreground-active", async (req, reply) => {
+  const user = req.user as JwtUser | undefined;
+  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
+
+  const body = z
+    .object({ deviceId: z.string().min(1), active: z.boolean().optional().default(true) })
+    .safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+
+  const device = await db.mobileDevice
+    .findFirst({
+      where: { id: body.data.deviceId, tenantId: user.tenantId, userId: user.sub },
+      select: { id: true, platform: true },
+    })
+    .catch(() => null);
+  if (!device) return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
+
+  // Only iOS devices participate in the VoIP-push gate; others are a harmless no-op.
+  if (device.platform !== "IOS") return reply.send({ ok: true, ignored: "not_ios" });
+
+  const key = "ios_fg_active:" + device.id;
+  try {
+    if (body.data.active) {
+      // ~10s TTL; the client re-pings every ~4s, well within that window, so a
+      // force-quit (pings stop) resumes the VoIP push within ~10s.
+      await redis.set(key, "1", "EX", 10);
+    } else {
+      await redis.del(key);
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message, deviceId: device.id }, "mobile/foreground-active: redis error");
+    return reply.send({ ok: false, reason: "redis_error" });
+  }
+
+  return reply.send({ ok: true, active: body.data.active });
 });
 
 // ─── Wake timeline read API (for Diagnostics screen + admin tools) ──────────
