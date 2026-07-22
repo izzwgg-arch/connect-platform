@@ -20,6 +20,10 @@ export interface VoicemailJobDeps {
   prisma: any;
   audit: AuditLog;
   openaiApiKey: () => string | null;
+  /** Yiddish Labs key — the PRIMARY Yiddish transcription engine (king for
+   *  American Yiddish, i.e. Yiddish carrying many English words). */
+  yiddishLabsApiKey?: () => string | null;
+  /** ivrit.ai (RunPod) — kept as an automatic fallback if Yiddish Labs is down. */
   ivritApiKey: () => string | null;
   ivritEndpointId: () => string | null;
   ivritModel: string;
@@ -37,6 +41,19 @@ const LOOKBACK_DAYS = 7;
 const MAX_AUDIO_BYTES = 6 * 1024 * 1024; // ivrit blob cap safety
 
 const hasHebrew = (s: string) => /[֐-׿]/.test(s);
+
+/**
+ * Clean a Yiddish Labs transcript for display: strip the ⟦#N⟧ segment/speaker
+ * markers YL embeds, drop stray control brackets, and collapse whitespace.
+ * These markers are internal structure, never meant for the reader.
+ */
+const cleanTranscript = (s: string): string =>
+  s
+    .replace(/⟦[^⟧]*⟧/g, " ") // ⟦#1⟧ segment markers
+    .replace(/[⟦⟧]/g, " ") // any stray bracket halves
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
 
 export class VoicemailTranscriptionJob {
   private running = false;
@@ -138,8 +155,33 @@ export class VoicemailTranscriptionJob {
     return { text: (j.text ?? "").trim(), language: (j.language ?? "").toLowerCase() };
   }
 
-  /** Yiddish pass on our own RunPod endpoint (Yiddish-tuned, language forced). */
+  /**
+   * Yiddish pass. PRIMARY engine is Yiddish Labs — it is built around American
+   * Yiddish (Yiddish spoken with many English words), so heimishe voicemails
+   * transcribe far more faithfully than with a generic model. ivrit.ai (our
+   * RunPod endpoint) stays as an automatic fallback if YL is unavailable/fails.
+   */
   private async yiddishPass(buf: Buffer): Promise<string> {
+    // Primary: Yiddish Labs (language forced to Yiddish — this is the Yiddish
+    // candidate; pickLanguage still decides whether the call was truly English).
+    const ylKey = this.deps.yiddishLabsApiKey?.() ?? null;
+    if (ylKey) {
+      try {
+        const { YiddishLabsClient } = await import("./yiddishlabs");
+        const cli = new YiddishLabsClient(ylKey);
+        let r = await cli.submitSync({ file: buf, filename: "vm.wav", language: "yi" });
+        // Sync returns immediately for short audio; longer jobs may still be
+        // processing — poll briefly (up to ~2 min) before giving up.
+        for (let i = 0; i < 40 && r.status !== "completed" && r.status !== "failed"; i++) {
+          await new Promise((x) => setTimeout(x, 3000));
+          r = await cli.get(r.id);
+        }
+        if (r.status === "completed" && r.text && r.text.trim()) return cleanTranscript(r.text);
+      } catch {
+        // fall through to ivrit fallback
+      }
+    }
+    // Fallback: ivrit.ai (Yiddish-tuned RunPod model) if YL is down/unconfigured.
     const { EverettClient } = await import("./everett");
     const cli = new EverettClient(this.deps.ivritApiKey(), this.deps.ivritEndpointId(), this.deps.ivritModel);
     const r = await cli.transcribe({ file: buf, language: "yi" });
