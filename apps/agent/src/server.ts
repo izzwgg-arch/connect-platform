@@ -629,6 +629,37 @@ async function main() {
         await audit.record({ actor: id.role === "owner" ? "owner" : "customer", event: "voicemail.transcribe_ondemand", payload: { voicemailId: vmId, ok: r.ok, language: r.language } });
         return r;
       });
+
+      // On-demand translate (portal Translate button). Flips the transcript
+      // between Yiddish and English via Yiddish Labs — Yiddish (incl. American
+      // Yiddish, yi-en) → English, English → Yiddish. Goes through the same
+      // persistent translation cache as the assistant bridge, so repeat presses
+      // and common phrases are instant and free. Direction is auto from the
+      // stored transcript language; an explicit `target` ("en"|"yi") can override.
+      app.post("/agent/voicemail/translate", async (req, reply) => {
+        const auth = req.headers.authorization;
+        const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+        if (!id) return reply.code(403).send({ error: "forbidden" });
+        const body = (req.body as any) ?? {};
+        const vmId = body.voicemailId;
+        if (typeof vmId !== "string" || !vmId) return reply.code(400).send({ error: "bad_request" });
+        if (!providerKeys.yiddishLabsApiKey) return reply.code(503).send({ ok: false, error: "translation_unavailable" });
+        const vm = await prisma.voicemail.findUnique({ where: { id: vmId }, select: { transcript: true, transcriptLanguage: true, deletedAt: true } });
+        if (!vm || vm.deletedAt || !vm.transcript || !vm.transcript.trim()) return reply.code(404).send({ ok: false, error: "no_transcript" });
+        // Direction: explicit target wins; else Yiddish/Hebrew-script → English, English → Yiddish.
+        const lang = (vm.transcriptLanguage || "").toLowerCase();
+        const isYiddish = lang.startsWith("yi") || /[֐-׿]/.test(vm.transcript);
+        const explicit = body.target === "en" || body.target === "yi" ? body.target : null;
+        const toEnglish = explicit ? explicit === "en" : isYiddish;
+        const action = toEnglish ? "translate-english" : "translate-yiddish";
+        try {
+          const r = await translateCached(action, vm.transcript);
+          await audit.record({ actor: id.role === "owner" ? "owner" : "customer", event: "voicemail.translate_ondemand", payload: { voicemailId: vmId, target: toEnglish ? "en" : "yi", cached: (r as any).cached === true } });
+          return { ok: true, translated: r.text ?? "", target: toEnglish ? "en" : "yi" };
+        } catch (err) {
+          return reply.code(502).send({ ok: false, error: String(err).slice(0, 120) });
+        }
+      });
     }
 
     // 24/7 continuous drain — small batches every 2 min so it never floods the

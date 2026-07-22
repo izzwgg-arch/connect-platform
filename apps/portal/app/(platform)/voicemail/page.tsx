@@ -179,14 +179,6 @@ function displayName(vm: Voicemail): string {
   return vm.callerName?.trim() || vm.callerId || "Unknown caller";
 }
 
-// "+18457814103" -> "845-781-4103" for the small under-name line.
-function fmtPhoneSmall(raw: string): string {
-  const digits = (raw || "").replace(/\D/g, "");
-  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
-  if (ten.length === 10) return `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
-  return raw || "";
-}
-
 function initials(vm: Voicemail): string {
   const name = displayName(vm);
   const words = name.replace(/[^\w\s]/g, "").trim().split(/\s+/).filter(Boolean);
@@ -245,7 +237,6 @@ function SmartAudioPlayer({
   const [durationSec, setDurationSec] = useState(vm.durationSec);
   const [speed, setSpeed] = useState(1);
   const [volume, setVolume] = useState(0.9);
-  const lastAutoPlayRef = useRef(0);
   const bars = useMemo(() => waveformBars(vm.id, size === "compact" ? 36 : 64), [vm.id, size]);
   const progress = durationSec > 0 ? Math.min(100, (currentSec / durationSec) * 100) : 0;
 
@@ -312,25 +303,6 @@ function SmartAudioPlayer({
     }
   }, [activeId, vm.id]);
 
-  // When this player is switched to a DIFFERENT voicemail (same component,
-  // new vm prop), drop the previously loaded audio — otherwise play() keeps
-  // replaying the old message no matter which row was clicked.
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.pause();
-    audio.removeAttribute("src");
-    audio.load();
-    setPlaying(false);
-    setLoading(false);
-    setCurrentSec(0);
-    setError(null);
-  }, [src]);
-
-  useEffect(() => {
-    setDurationSec(vm.durationSec);
-  }, [vm.id, vm.durationSec]);
-
   useEffect(() => () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -360,11 +332,7 @@ function SmartAudioPlayer({
   }
 
   useEffect(() => {
-    // Consume each request token exactly once. Without this, any dependency
-    // change (e.g. the vm object refreshing when a call comes in) re-ran the
-    // effect and restarted playback mid-call.
-    if (!autoPlayRequest || autoPlayRequest === lastAutoPlayRef.current) return;
-    lastAutoPlayRef.current = autoPlayRequest;
+    if (!autoPlayRequest) return;
     const audio = getOrCreateAudio();
     if (!audio.src) audio.src = src;
     if (!audio.paused) return;
@@ -492,7 +460,6 @@ function VoicemailRow({
             <strong>{displayName(vm)}</strong>
             <StatusBadge vm={vm} />
           </div>
-          {vm.callerId && displayName(vm) !== vm.callerId ? <div className="vm-number">{fmtPhoneSmall(vm.callerId)}</div> : null}
           <div className="vm-subline">
             <span>ext {vm.extension}</span>
             <span>{showTenant && vm.tenantName ? vm.tenantName : type}</span>
@@ -584,6 +551,62 @@ function DetailPanel({
 }) {
   const type = callerType(vm);
 
+  // On-demand transcription (Transcribe button). Local state mirrors the vm's
+  // transcript and updates instantly on success; a full refresh re-syncs it.
+  const [transcript, setTranscript] = useState<string | null>(vm.transcription ?? null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeErr, setTranscribeErr] = useState<string | null>(null);
+  // On-demand translation (Translate button). Flips Yiddish ↔ English via YL.
+  const [translation, setTranslation] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [translateErr, setTranslateErr] = useState<string | null>(null);
+  useEffect(() => { setTranscript(vm.transcription ?? null); setTranscribeErr(null); setTranslation(null); setTranslateErr(null); }, [vm.id, vm.transcription]);
+  const transcriptIsYiddish = !!transcript && /[֐-׿]/.test(transcript);
+  const translationIsYiddish = !!translation && /[֐-׿]/.test(translation);
+  const doTranscribe = useCallback(async () => {
+    setTranscribing(true);
+    setTranscribeErr(null);
+    try {
+      const res = await fetch("/agent-api/voicemail/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${browserToken()}` },
+        body: JSON.stringify({ voicemailId: vm.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data?.ok && typeof data.transcript === "string" && data.transcript.trim()) {
+        setTranscript(data.transcript);
+      } else {
+        setTranscribeErr(data?.error === "no_transcription_provider" ? "Transcription isn't set up yet." : "Couldn't transcribe this message. Try again.");
+      }
+    } catch {
+      setTranscribeErr("Couldn't reach the transcription service.");
+    } finally {
+      setTranscribing(false);
+    }
+  }, [vm.id]);
+
+  const doTranslate = useCallback(async () => {
+    setTranslating(true);
+    setTranslateErr(null);
+    try {
+      const res = await fetch("/agent-api/voicemail/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${browserToken()}` },
+        body: JSON.stringify({ voicemailId: vm.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data?.ok && typeof data.translated === "string" && data.translated.trim()) {
+        setTranslation(data.translated);
+      } else {
+        setTranslateErr(data?.error === "translation_unavailable" ? "Translation isn't set up yet." : "Couldn't translate this message. Try again.");
+      }
+    } catch {
+      setTranslateErr("Couldn't reach the translation service.");
+    } finally {
+      setTranslating(false);
+    }
+  }, [vm.id]);
+
   return (
     <aside className="vm-detail custom-scrollbar">
       <div className="vm-detail-head">
@@ -612,13 +635,71 @@ function DetailPanel({
       <section className="vm-detail-card">
         <div className="vm-section-title">
           <h3>AI transcript</h3>
-          <button className="vm-text-btn" disabled={!vm.transcription} onClick={() => vm.transcription && navigator.clipboard?.writeText(vm.transcription)}>
-            Copy
-          </button>
+          {transcript?.trim() ? (
+            <button className="vm-text-btn" onClick={() => transcript && navigator.clipboard?.writeText(transcript)}>
+              Copy
+            </button>
+          ) : null}
         </div>
-        <div className="vm-transcript">
-          {vm.transcription?.trim() ? vm.transcription : <span>No transcript available for this voicemail.</span>}
-        </div>
+        {transcript?.trim() ? (
+          <>
+            <div className="vm-transcript" dir={transcriptIsYiddish ? "rtl" : "ltr"} style={{ textAlign: transcriptIsYiddish ? "right" : "left" }}>
+              {transcript}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <button className="vm-text-btn" disabled={transcribing} onClick={doTranscribe}>
+                {transcribing ? "Transcribing…" : "↻ Re-transcribe"}
+              </button>
+              <button
+                className="vm-text-btn"
+                disabled={translating}
+                onClick={translation ? () => { setTranslation(null); setTranslateErr(null); } : doTranslate}
+              >
+                {translating ? "Translating…" : translation ? "Hide translation" : (transcriptIsYiddish ? "⇄ Translate to English" : "⇄ Translate to Yiddish")}
+              </button>
+            </div>
+            {translateErr ? (
+              <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 7 }}>{translateErr}</div>
+            ) : null}
+            {translation?.trim() ? (
+              <div
+                className="vm-transcript"
+                dir={translationIsYiddish ? "rtl" : "ltr"}
+                style={{ textAlign: translationIsYiddish ? "right" : "left", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}
+              >
+                {translation}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <button
+              onClick={doTranscribe}
+              disabled={transcribing}
+              style={{
+                width: "100%",
+                background: "var(--accent)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 9,
+                padding: "11px 12px",
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: transcribing ? "default" : "pointer",
+                opacity: transcribing ? 0.7 : 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              {transcribing ? "Transcribing…" : <><Volume2 size={15} /> Transcribe voicemail</>}
+            </button>
+            <div style={{ fontSize: 11.5, color: "var(--text-dim)", textAlign: "center", marginTop: 7 }}>
+              {transcribeErr ? transcribeErr : "Read this message as text — Yiddish or English, detected automatically."}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="vm-detail-card">
@@ -800,11 +881,16 @@ export default function VoicemailPage() {
   const canGoNext = totalCount > page * 100;
 
   async function markRead(vm: Voicemail, listened: boolean) {
-    const res = await apiPatch<{ ok: boolean; skipped?: string }>(`/voice/voicemail/${vm.id}`, { listened });
-    if (res?.skipped) return; // tenant-wide viewer: server left the shared read state alone
+    const res = await apiPatch<{ ok?: boolean; readStateSkipped?: boolean }>(
+      `/voice/voicemail/${vm.id}`,
+      { listened },
+    );
+    // Read/unread belongs to the mailbox owner. When the caller holds the
+    // "see everybody's voicemails" permission but doesn't own this mailbox, the
+    // server refuses the change (readStateSkipped) — don't fake it in the UI.
+    if (res?.readStateSkipped) return;
     if (selected?.id === vm.id) setSelected({ ...selected, listened });
     setReloadKey((key) => key + 1);
-    window.dispatchEvent(new Event("cc:navbadges:refresh"));
   }
 
   async function markUrgent(vm: Voicemail, urgent: boolean) {
@@ -817,11 +903,15 @@ export default function VoicemailPage() {
   async function handlePlayed(vm: Voicemail) {
     if (vm.listened) return;
     try {
-      const res = await apiPatch<{ ok: boolean; skipped?: string }>(`/voice/voicemail/${vm.id}`, { listened: true });
-      if (res?.skipped) return; // tenant-wide viewer: playing must not clear "New" for the team
+      const res = await apiPatch<{ ok?: boolean; readStateSkipped?: boolean }>(
+        `/voice/voicemail/${vm.id}`,
+        { listened: true },
+      );
+      // Previewing someone else's mailbox (tenant-wide viewer) must not mark it
+      // read for the owner — the server signals this via readStateSkipped.
+      if (res?.readStateSkipped) return;
       if (selected?.id === vm.id) setSelected({ ...selected, listened: true });
       setReloadKey((key) => key + 1);
-      window.dispatchEvent(new Event("cc:navbadges:refresh"));
     } catch {
       // Marking read is now driven ONLY by this explicit PATCH on real playback
       // (the stream endpoint no longer auto-marks read). Keep playback resilient
