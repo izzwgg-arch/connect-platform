@@ -761,6 +761,31 @@ async function queueEmailJob(params: {
   });
 }
 
+// ── Admin alert email ────────────────────────────────────────────────────────
+// Central channel for everything an operator must know about this server:
+// wake-health, PBX sync failures, API restarts. Rides the existing EmailJob
+// queue (SendGrid/SMTP). Override recipient with env ADMIN_ALERT_EMAIL.
+const ADMIN_ALERT_EMAIL = (process.env.ADMIN_ALERT_EMAIL || "tod10950@gmail.com").trim();
+const ADMIN_ALERT_TENANT_ID = "connect-admin-tenant-v1";
+const adminAlertLastSentAt = new Map<string, number>();
+function escapeAlertHtml(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+async function sendAdminAlert(key: string, subject: string, lines: string[], minIntervalMs = 6 * 3600_000): Promise<void> {
+  try {
+    if (!ADMIN_ALERT_EMAIL) return;
+    const now = Date.now();
+    if (now - (adminAlertLastSentAt.get(key) ?? 0) < minIntervalMs) return;
+    adminAlertLastSentAt.set(key, now);
+    const textBody = lines.join("\n");
+    const htmlBody = `<div style="font-family:monospace;white-space:pre-wrap">${lines.map(escapeAlertHtml).join("<br/>")}</div>`;
+    await queueEmailJob({ tenantId: ADMIN_ALERT_TENANT_ID, type: "ADMIN_ALERT", toEmail: ADMIN_ALERT_EMAIL, subject: `[Connect Alert] ${subject}`, htmlBody, textBody });
+    app.log.info({ adminAlert: true, key, subject }, "[ADMIN_ALERT] queued");
+  } catch (e: any) {
+    app.log.warn({ adminAlert: true, key, err: String(e?.message || e).slice(0, 200) }, "[ADMIN_ALERT] queue failed");
+  }
+}
+
 async function queueReceiptEmail(params: { tenantId: string; to: string; amountCents: number; periodEnd: Date; receiptId: string }) {
   const dollars = (params.amountCents / 100).toFixed(2);
   const due = params.periodEnd.toISOString().slice(0, 10);
@@ -4768,10 +4793,25 @@ async function runWakeHealthSweep() {
     for (const r of health.rows.filter((x) => x.flagged)) {
       app.log.warn({ wakeHealth: true, ...r }, "[WAKE_HEALTH] flagged device");
     }
+    const lines = [
+      `Android wake health: ${health.flagged} of ${health.total} devices flagged`,
+      ``,
+      ...health.rows.filter((x) => x.flagged).map((r) =>
+        `${r.tenant} | ${r.email} | ${r.model} | directFCM=${r.directFcm ? "yes" : "NO"} | gateLatched=${r.gateLatched ? "YES" : "no"} drops=${r.gateDrops}${r.ackMissing ? " | PUSHES SENT BUT NEVER ACKED" : ""}`),
+      ``,
+      `Full table: GET /admin/wake-health`,
+    ];
+    await sendAdminAlert("wake_health_daily", `Wake health: ${health.flagged}/${health.total} devices flagged`, lines, 20 * 3600_000);
   } catch (e: any) {
     app.log.error({ err: e?.message }, "[WAKE_HEALTH] sweep failed");
   }
 }
+registerShutdownTimer(setTimeout(() => {
+  void sendAdminAlert("api_restarted", "Connect API (re)started", [
+    `The Connect API process started at ${new Date().toISOString()}.`,
+    "Expected after a deploy; unexpected restarts may mean a crash — check docker logs app-api-1.",
+  ], 0);
+}, 90_000));
 registerShutdownTimer(setTimeout(() => { void runWakeHealthSweep(); }, 120_000));
 registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 3600_000));
 
@@ -32704,6 +32744,11 @@ async function runAutoPbxSync(): Promise<void> {
     );
   } catch (e: any) {
     app.log.warn({ event: "pbx_auto_sync_failed", err: e?.message }, "pbx_auto_sync_failed");
+    void sendAdminAlert("pbx_auto_sync_failed", "PBX auto-sync FAILED", [
+      "The 5-minute PBX extension auto-sync cycle failed.",
+      `Error: ${String(e?.message || e).slice(0, 300)}`,
+      "New PBX extensions will NOT appear in Connect until this recovers.",
+    ], 3 * 3600_000);
   } finally {
     pbxAutoSyncRunning = false;
   }
