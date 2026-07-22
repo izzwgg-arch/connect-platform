@@ -551,6 +551,43 @@ async function main() {
         return { ok: false, error: String(err) };
       }
     });
+    // ── Voice input for the floating assistant widget. ANY authenticated portal
+    //    user (not owner-only): records a short clip in the browser and gets it
+    //    transcribed. Yiddish Labs first (king for American Yiddish; auto-detects
+    //    English too), OpenAI as a fast fallback. Text lands in the chat box for
+    //    the user to review before sending. ──
+    app.post("/agent/chat/transcribe", async (req, reply) => {
+      const auth = req.headers.authorization;
+      const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+      if (!id) return reply.code(403).send({ ok: false, error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (typeof b.audioBase64 !== "string" || b.audioBase64.length < 32) return reply.code(400).send({ ok: false, error: "no_audio" });
+      let buf: Buffer;
+      try { buf = Buffer.from(b.audioBase64.replace(/^data:[^,]+,/, ""), "base64"); } catch { return reply.code(400).send({ ok: false, error: "bad_audio" }); }
+      const filename = b.filename || "mic.webm";
+      const clean = (s: string) => s.replace(/⟦[^⟧]*⟧/g, " ").replace(/[⟦⟧]/g, " ").replace(/[ \t]+/g, " ").trim();
+      // Primary: Yiddish Labs (auto-detect yi/en, dialect glossary, rapid mode).
+      if (providerKeys.yiddishLabsApiKey) {
+        try {
+          const cli = new YiddishLabsClient(providerKeys.yiddishLabsApiKey);
+          const ctx = await glossaryContext();
+          const r = await cli.submitSync({ file: buf, filename, language: "auto", context: ctx, rapid: true });
+          if (r.status === "completed" && r.text && r.text.trim()) {
+            return { ok: true, text: clean(r.text), language: YiddishLabsClient.normalizeLanguage(r) };
+          }
+        } catch { /* fall through to OpenAI */ }
+      }
+      // Fallback: OpenAI (fast) so the mic still works if YL pends/fails.
+      if (providerKeys.openaiApiKey) {
+        try {
+          const { openaiTranscribe } = await import("./transcription/openaiStt");
+          const r = await openaiTranscribe(providerKeys.openaiApiKey, buf, filename);
+          if (r.text && r.text.trim()) return { ok: true, text: r.text.trim(), language: /[֐-׿]/.test(r.text) ? "yi" : "en" };
+        } catch { /* fall through */ }
+      }
+      return reply.code(502).send({ ok: false, error: "transcription_unavailable" });
+    });
+
     // ── STT shoot-out: run Yiddish Labs AND Everett (ivrit.ai) on the SAME
     //    audio, side by side, so the owner can compare quality + speed. ──
     app.post("/agent/transcribe/compare", async (req, reply) => {
