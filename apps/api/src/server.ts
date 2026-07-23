@@ -16,9 +16,9 @@ import { promisify } from "util";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
 import fastifyRawBody from "fastify-raw-body";
 import { getWhatsAppInboundQueue, getWhatsAppStatusQueue } from "./queues";
+import { createRedisConnection, quietMissingRedisInDev } from "./redis";
 import { verifyMetaSignature, verifyTwilioSignature } from "./whatsapp/signature";
 import { normalizeMeta, normalizeTwilioStatus } from "./whatsapp/normalize";
 import {
@@ -144,7 +144,6 @@ import {
 } from "./voicemailResourceScope";
 import { computeVoicemailPatchUpdate } from "./voicemailAccessPolicy";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
-import { parseDndStatusBody, planDndPublishTargets, buildDndPublishPayload } from "./mobileDndStatusCore";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
@@ -167,37 +166,7 @@ import {
   isValidMohRuntimeClass,
   canonicalSmsPhone,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
-  MOH_CALL_SOURCES,
-  MOH_CALL_SOURCE_LABELS,
-  isMohCallSource,
-  normalizeMohCallSource,
-  resolveEffectiveMohClass,
-  buildGlobalDefaultKey,
-  buildSourcePublishKeys,
-  computeActiveScheduleOverrides,
-  computeSourceKeysClearForRollback,
-  computeForwardKeyClears,
-  classifyMohOrigin,
-  computeMohPlayability,
-  decideNativeMohSync,
-  type MohCallSource,
-  type StaticSourcePolicy,
-  type ScheduleRuleRow,
-  type MohAstDbKey,
-  type ActiveAdminOverride,
 } from "@connect/shared";
-import {
-  adminOverridesForSlug,
-  adminScheduleTargetScopeError,
-  buildAdminOverlayKeys,
-  canManageMohControl,
-  classifyMohVerify,
-  computePbxControlTombstones,
-  effectiveExtensionControlMode,
-  loadActiveAdminOverrides,
-  normalizeExtensionControlMode,
-  normalizeTenantControlMode,
-} from "./mohControl";
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
@@ -258,7 +227,6 @@ import {
   retargetPbxInboundRoute,
   resetPbxVoicemailGreeting,
   syncPbxTenantMoh,
-  getPbxMohClasses,
   type PbxRouteHelperInspectResponse,
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
@@ -318,7 +286,7 @@ app.register(fastifyMultipart, {
   limits: { fileSize: 50 * 1024 * 1024, files: 1 },
 });
 
-const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
+const redis = createRedisConnection();
 const hostMetricsCollector = new HostMetricsCollector(
   Math.max(3000, Number(process.env.SERVER_HEALTH_SAMPLE_MS || 5000)),
 );
@@ -327,7 +295,7 @@ const PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE = Number(process.env.TELEPHONY_ARI_SNAP
 const PBX_ARI_SNAPSHOT_STALE_MS = Number(
   process.env.TELEPHONY_ARI_SNAPSHOT_STALE_MS || Math.round(PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE * 1500),
 );
-const smsQueue = new Queue("sms-send", { connection: redis });
+const smsQueue = quietMissingRedisInDev(new Queue("sms-send", { connection: redis }));
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
 const voiceSimulate = (process.env.VOICE_SIMULATE || "false").toLowerCase() === "true";
@@ -13756,19 +13724,6 @@ app.get("/voice/health", async (req, reply) => {
   });
 });
 
-// Standing-registration keep-alive kill-switch (Android only). Server-controlled
-// so ops can enable the persistent SIP registration per user/tenant with NO app
-// build and roll it back instantly. STANDING_REG_ENABLED_USERS is a comma list of
-// userIds and/or tenantIds; "*" enables everyone; empty (default) = off for all,
-// which keeps every current device byte-for-byte unchanged.
-function standingRegistrationEnabledFor(userId: string, tenantId: string): boolean {
-  const raw = (process.env.STANDING_REG_ENABLED_USERS || "").trim();
-  if (!raw) return false;
-  if (raw === "*") return true;
-  const allow = new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
-  return allow.has(userId) || allow.has(tenantId);
-}
-
 app.post("/mobile/devices/register", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({
@@ -13941,13 +13896,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
   }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
-  return {
-    ok: true,
-    id: saved.id,
-    platform: saved.platform,
-    lastSeenAt: saved.lastSeenAt,
-    standingRegistration: standingRegistrationEnabledFor(user.sub, user.tenantId),
-  };
+  return { ok: true, id: saved.id, platform: saved.platform, lastSeenAt: saved.lastSeenAt };
 });
 
 app.post("/mobile/devices/unregister", async (req, reply) => {
@@ -16720,18 +16669,22 @@ app.get("/voice/voicemail", async (req, reply) => {
         extension:   vm.extension,
         tenantId:    vm.tenantId,
         tenantName,
+        // AI transcript (agent-populated). Field name kept as `transcription`
+        // to match the existing portal Voicemail type.
+        transcription:       (vm as any).transcript ?? null,
+        transcriptLanguage:  (vm as any).transcriptLanguage ?? null,
         // Team-shared note.
         note:                vm.note ?? null,
         noteUpdatedAt:       vm.noteUpdatedAt ? vm.noteUpdatedAt.toISOString() : null,
         noteUpdatedByUserId: vm.noteUpdatedByUserId ?? null,
         noteUpdatedByName:   vm.noteUpdatedByUserId ? (authorNameById.get(vm.noteUpdatedByUserId) ?? null) : null,
-        // Callback reminder. `callbackReminderMine` = the current user set it (only they get alerted).
-        callbackReminderAt:      vm.callbackReminderAt ? vm.callbackReminderAt.toISOString() : null,
-        callbackReminderLabel:   vm.callbackReminderLabel ?? null,
-        callbackReminderSetById: vm.callbackReminderSetById ?? null,
+        // Callback reminder. `callbackReminderMine` = current user set it (only they get alerted).
+        callbackReminderAt:        vm.callbackReminderAt ? vm.callbackReminderAt.toISOString() : null,
+        callbackReminderLabel:     vm.callbackReminderLabel ?? null,
+        callbackReminderSetById:   vm.callbackReminderSetById ?? null,
         callbackReminderSetByName: vm.callbackReminderSetById ? (authorNameById.get(vm.callbackReminderSetById) ?? null) : null,
-        callbackReminderMine:    !!vm.callbackReminderSetById && vm.callbackReminderSetById === user.sub,
-        callbackReminderAckAt:   vm.callbackReminderAckAt ? vm.callbackReminderAckAt.toISOString() : null,
+        callbackReminderMine:      !!vm.callbackReminderSetById && vm.callbackReminderSetById === user.sub,
+        callbackReminderAckAt:     vm.callbackReminderAckAt ? vm.callbackReminderAckAt.toISOString() : null,
       };
     }),
     total,
@@ -16801,7 +16754,7 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
     // Callback reminder. ISO datetime to set; null to clear.
     callbackReminderAt: z.string().datetime().nullable().optional(),
     callbackReminderLabel: z.string().max(200).nullable().optional(),
-    // Dismiss the due alert (setter acknowledges it).
+    // Dismiss the due alert (only the setter can ack their own reminder).
     ackCallbackReminder: z.boolean().optional(),
   }).parse(req.body || {});
 
@@ -16855,14 +16808,12 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
   }
 
   // ── Callback reminder ──────────────────────────────────────────────────────
-  // Setting a time (re)arms the reminder for the acting user — only they are
-  // alerted. Passing null clears it entirely. A bare label change updates the label.
   if (body.callbackReminderAt !== undefined) {
     if (body.callbackReminderAt) {
       data.callbackReminderAt = new Date(body.callbackReminderAt);
       data.callbackReminderSetById = user.sub;
       data.callbackReminderLabel = body.callbackReminderLabel ?? null;
-      data.callbackReminderFiredAt = null; // re-arm
+      data.callbackReminderFiredAt = null;
       data.callbackReminderAckAt = null;
     } else {
       data.callbackReminderAt = null;
@@ -16875,8 +16826,8 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
     data.callbackReminderLabel = body.callbackReminderLabel;
   }
 
-  // Dismiss the due alert. Only the setter can acknowledge their own reminder.
-  if (body.ackCallbackReminder && vm.callbackReminderSetById === user.sub) {
+  // Dismiss the due alert — only the setter can ack their own reminder.
+  if (body.ackCallbackReminder && (vm as any).callbackReminderSetById === user.sub) {
     data.callbackReminderAckAt = new Date();
   }
 
@@ -16890,10 +16841,10 @@ app.patch("/voice/voicemail/:id", async (req, reply) => {
 });
 
 // ── GET /voice/voicemail/callback-reminders/due — poll for the acting user's due reminders ──
-// Clients poll this (~30s). Returns callback reminders the acting user set that
-// are now due and not yet dismissed; each drives a dismissible on-screen alert.
-// On dismiss the client PATCHes { ackCallbackReminder: true }. Until acknowledged
-// a reminder keeps being returned, so it survives an app restart ("must dismiss").
+// Clients poll this (~30s). Returns callback reminders the acting user set that are
+// now due and not yet dismissed; each drives a dismissible on-screen alert. On
+// dismiss the client PATCHes { ackCallbackReminder: true }. Until acknowledged a
+// reminder keeps being returned, so it survives an app restart ("must dismiss").
 app.get("/voice/voicemail/callback-reminders/due", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -16908,7 +16859,6 @@ app.get("/voice/voicemail/callback-reminders/due", async (req, reply) => {
     orderBy: { callbackReminderAt: "asc" },
     take: 20,
   });
-  // Record-keeping: stamp when the alert first became deliverable.
   const unfired = rows.filter((r) => !r.callbackReminderFiredAt).map((r) => r.id);
   if (unfired.length) {
     await db.voicemail.updateMany({
@@ -17588,17 +17538,9 @@ async function finishVoicemailStreamFromBuffer(
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
   }
 
-  // NOTE: Streaming/downloading the audio must NEVER mark the voicemail as
-  // read. A voicemail is only "read" once a human actually listens to it, and
-  // that is signalled explicitly by the client via `PATCH /voice/voicemail/:id
-  // { listened: true }` when playback truly starts (mobile: markVoicemailListened
-  // on play-load; portal SmartAudioPlayer: onPlayed right before audio.play()).
-  // This endpoint is hit for many non-listen reasons — the mobile audio
-  // pre-loader (`?raw=1`), the `Range: bytes=0-0` access probe, browser
-  // <audio> range requests, and explicit downloads — none of which mean the
-  // message was heard. Auto-marking here caused voicemails to flip to READ
-  // merely by opening the voicemail list (mobile prefetch) or the page, so it
-  // was removed. Do not re-add read-marking on the stream path.
+  if (!vm.readAt) {
+    await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
+  }
 
   sendBufferWithOptionalRange(req, reply, Buffer.from(buf), responseContentType);
 }
@@ -18936,36 +18878,6 @@ async function publishToAstDb(
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new Error(`telephony ivr-publish failed: ${resp.status} ${body}`);
-  }
-}
-
-/**
- * Relay one resolved extension's DND state to telephony's narrowly-scoped
- * /telephony/internal/dnd-publish route (connect/dnd + connect/dnd_ts only —
- * see apps/telephony/src/routes/dndPublish.ts). Throws on any non-2xx so the
- * caller (POST /mobile/dnd-status) can report per-extension failures without
- * losing track of which ones succeeded.
- */
-async function publishDndToAstDb(payload: {
-  pbxTenantId: string;
-  extension: string;
-  dnd: "0" | "1";
-  ts: string;
-}): Promise<void> {
-  const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
-  const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
-  const resp = await fetch(`${base}/telephony/internal/dnd-publish`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(secret ? { "x-cdr-secret": secret } : {}),
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => "");
-    throw new Error(`telephony dnd-publish failed: ${resp.status} ${body}`);
   }
 }
 
@@ -22540,9 +22452,7 @@ type MohRuntimeReadinessReason =
   | "invalid_moh_runtime_class"
   | "connect_asset_not_pbx_ready"
   | "connect_asset_not_in_sync_manifest"
-  | "moh_runtime_class_not_synced"
-  | "moh_class_not_loaded"
-  | "moh_class_no_files";
+  | "moh_runtime_class_not_synced";
 
 type MohRuntimeReadiness = {
   selectedClass: string;
@@ -22552,10 +22462,6 @@ type MohRuntimeReadiness = {
   pbxFormat: string | null;
   manifestFileCount: number;
   pbxGroupId: number | null;
-  /** VitalPBX numeric tenant id that owns this native class (for native-sync ownership). */
-  classPbxTenantId?: string | null;
-  /** Derived origin (tenant/main/global_default/connect_upload/unassigned). */
-  origin?: string | null;
   reason?: MohRuntimeReadinessReason;
 };
 
@@ -22637,25 +22543,18 @@ async function evaluateMohRuntimeReadiness(tenantId: string, value: string): Pro
     };
   }
 
-  // Playability-gated lookup. Ownership is NOT the assignment gate — ANY class
-  // Asterisk can actually play is assignable to any tenant (see mohCatalog.ts).
-  // We therefore search across all owners, preferring the tenant's own row,
-  // then the main/library tenant, then any active row, and gate on playability.
-  const candidates = await (db as any).pbxMohClass.findMany({
-    where: { mohClassName: runtimeClass },
-    select: {
-      id: true, pbxGroupId: true, pbxTenantId: true, tenantId: true, isDefault: true,
-      isActive: true, fileCount: true, classType: true, loadedInAsterisk: true,
-      selectable: true, unavailableReason: true, origin: true,
+  const row = await (db as any).pbxMohClass.findFirst({
+    where: {
+      mohClassName: runtimeClass,
+      isActive: true,
+      OR: [
+        { tenantId },
+        { tenantId: null },
+        { pbxTenantId: "1" },
+      ],
     },
+    select: { id: true, pbxGroupId: true },
   });
-  const rank = (r: any): number => {
-    if (r.tenantId === tenantId) return 0;          // this tenant's own class
-    if (String(r.pbxTenantId ?? "") === "1") return 1; // main/library tenant
-    if (r.isActive) return 2;                        // any other active class
-    return 3;
-  };
-  const row = candidates.slice().sort((a: any, b: any) => rank(a) - rank(b))[0];
   if (!row) {
     return {
       selectedClass: runtimeClass,
@@ -22665,38 +22564,19 @@ async function evaluateMohRuntimeReadiness(tenantId: string, value: string): Pro
       pbxFormat: null,
       manifestFileCount: 0,
       pbxGroupId: null,
-      classPbxTenantId: null,
-      origin: null,
       reason: "moh_runtime_class_not_synced",
     };
   }
   const pbxGroupId = Number(row.pbxGroupId);
-  const play = computeMohPlayability({
-    isActive: Boolean(row.isActive),
-    loadedInAsterisk: row.loadedInAsterisk ?? null,
-    fileCount: row.fileCount ?? 0,
-    classType: row.classType ?? null,
-  });
-  const origin =
-    row.origin ?? classifyMohOrigin({ pbxTenantId: row.pbxTenantId, isDefault: row.isDefault, mohClassName: runtimeClass });
-  const base = {
+  return {
     selectedClass: runtimeClass,
-    classKind: "native" as const,
+    classKind: "native",
+    assetReady: true,
     pbxStorageKey: null,
     pbxFormat: null,
     manifestFileCount: 0,
     pbxGroupId: Number.isFinite(pbxGroupId) && pbxGroupId > 0 ? pbxGroupId : null,
-    classPbxTenantId: row.pbxTenantId ?? null,
-    origin,
   };
-  if (!play.selectable) {
-    return {
-      ...base,
-      assetReady: false,
-      reason: play.unavailableReason === "not_loaded" ? "moh_class_not_loaded" : "moh_class_no_files",
-    };
-  }
-  return { ...base, assetReady: true };
 }
 
 /** Wrapper that throws with a precise statusCode/detail/readiness payload.
@@ -22721,13 +22601,7 @@ async function assertMohRuntimeReadiness(tenantId: string, value: string): Promi
         `Connect MOH upload ${result.selectedClass} would not be advertised in /voice/moh/sync-manifest. The PBX media-sync helper would not mirror any file for this class.`;
       break;
     case "moh_runtime_class_not_synced":
-      detail = `Runtime MOH class ${result.selectedClass} is not present in the synced VitalPBX MOH catalog. Run “Refresh PBX classes” and pick a class from the list.`;
-      break;
-    case "moh_class_not_loaded":
-      detail = `MOH class ${result.selectedClass} exists in VitalPBX but is not loaded/playable in Asterisk (moh show classes). It would produce silence. Pick a loaded class or reload MOH on the PBX.`;
-      break;
-    case "moh_class_no_files":
-      detail = `MOH class ${result.selectedClass} has no playable audio files, so it would produce silence on hold. Pick a class that has files (or upload audio for it).`;
+      detail = `Runtime MOH class ${result.selectedClass} is not present in the synced VitalPBX MOH catalog for this tenant.`;
       break;
   }
   throw Object.assign(new Error(result.reason), { statusCode, detail, readiness: result });
@@ -22939,12 +22813,13 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
         pbxTenantId: true,
       },
     }),
-    // Look up the class regardless of ownership (any active row for this name);
-    // ownership is decided below, not used to *find* the class.
     (db as any).pbxMohClass.findFirst({
-      where: { mohClassName: runtimeClass, isActive: true },
-      orderBy: [{ pbxTenantId: "asc" }],
-      select: { pbxGroupId: true, pbxTenantId: true },
+      where: {
+        mohClassName: runtimeClass,
+        isActive: true,
+        OR: [{ tenantId }, { tenantId: null }, { pbxTenantId: "1" }],
+      },
+      select: { pbxGroupId: true },
     }),
   ]);
 
@@ -22952,20 +22827,6 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
   const pbxGroupId = Number(mohClass?.pbxGroupId);
   if (!link?.pbxInstanceId || !/^\d{1,10}$/.test(pbxTenantId)) return empty("tenant_pbx_link_missing");
   if (!Number.isFinite(pbxGroupId) || pbxGroupId <= 0) return empty("moh_class_missing_pbx_group_id");
-
-  // OWNERSHIP RULE (the moh5→T2 silence fix): only rewrite this tenant's native
-  // VitalPBX music_group_id when the class is owned by this tenant. For
-  // main/foreign/unassigned classes we skip native sync and rely solely on the
-  // AstDB resolver setting CHANNEL(musicclass)=<class>, which plays the correct
-  // (absolute-directory) audio without pointing T2's resources at a foreign group.
-  const nativeDecision = decideNativeMohSync({
-    classKind: "native",
-    classPbxTenantId: mohClass?.pbxTenantId ?? null,
-    tenantPbxTenantId: pbxTenantId,
-  });
-  if (!nativeDecision.run) {
-    return { ...empty(nativeDecision.reason), pbxGroupId };
-  }
 
   const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
   if (!helperCfg) return empty("pbx_route_helper_not_configured");
@@ -23004,238 +22865,6 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
   }
 }
 
-/**
- * Assemble the additive per-call-source AstDB keys for a tenant publish.
- *
- * Loads static per-source policies (`MohSourcePolicy`) and the system-wide
- * global default (`MohGlobalConfig`), folds in the currently-active scheduled
- * overrides (from the same rule set already loaded for the tenant-default
- * computation, now including targeting fields), validates every referenced
- * runtime class for readiness, and returns the keys to append to the publish.
- *
- * FAIL-SAFE: a per-source class that is not PBX-ready is DROPPED (with a
- * warning) rather than throwing — one broken per-source policy must never
- * block the whole tenant publish or break the call path. The dialplan falls
- * through to the tenant/extension default for any source without a key.
- */
-async function buildTenantSourceMohPublishArtifacts(args: {
-  tenantId: string;
-  slug: string;
-  timezone: string;
-  scheduleRules: any[];
-  classForProfileId: (profileId: string) => string | null;
-  now?: Date;
-}): Promise<{
-  keys: Array<{ family: string; key: string; value: string }>;
-  globalKey: Array<{ family: string; key: string; value: string }>;
-  droppedClasses: string[];
-  sourcePolicyCount: number;
-  activeOverrideCount: number;
-}> {
-  const { tenantId, slug, timezone } = args;
-  const now = args.now ?? new Date();
-
-  const [policiesRaw, globalCfg] = await Promise.all([
-    (db as any).mohSourcePolicy.findMany({ where: { tenantId, enabled: true } }),
-    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
-  ]);
-
-  // Fold active schedule overrides (targeting fields default to tenant-wide/all).
-  const scheduleRows: ScheduleRuleRow[] = (args.scheduleRules as any[]).map((r) => ({
-    id: r.id,
-    profileId: r.profileId,
-    ruleType: r.ruleType,
-    weekday: r.weekday ?? null,
-    startTime: r.startTime ?? null,
-    endTime: r.endTime ?? null,
-    startAt: r.startAt ?? null,
-    endAt: r.endAt ?? null,
-    priority: r.priority ?? 0,
-    isActive: r.isActive !== false,
-    scope: r.scope ?? "tenant",
-    extension: r.extension ?? "",
-    callSource: r.callSource ?? "",
-  }));
-  const activeOverrides = computeActiveScheduleOverrides(scheduleRows, args.classForProfileId, timezone || "UTC", now);
-
-  const staticPolicies: StaticSourcePolicy[] = (policiesRaw as any[]).map((p) => ({
-    scope: p.scope === "extension" ? "extension" : "tenant",
-    extension: String(p.extension ?? ""),
-    source: String(p.source ?? ""),
-    vitalPbxMohClassName: String(p.vitalPbxMohClassName ?? ""),
-    enabled: p.enabled !== false,
-  }));
-
-  // Validate every distinct class referenced (static + active override). Drop
-  // any that is not publishable so a bad row can never poison the publish.
-  const distinctClasses = new Set<string>();
-  for (const p of staticPolicies) if (p.vitalPbxMohClassName) distinctClasses.add(p.vitalPbxMohClassName);
-  for (const o of activeOverrides) if (o.vitalPbxMohClassName) distinctClasses.add(o.vitalPbxMohClassName);
-  const ready = new Set<string>();
-  const droppedClasses: string[] = [];
-  for (const cls of distinctClasses) {
-    const r = await evaluateMohRuntimeReadiness(tenantId, cls);
-    if (r.reason) droppedClasses.push(cls);
-    else ready.add(r.selectedClass);
-  }
-  const keep = (cls: string) => ready.has(normalizeSharedMohRuntimeClass(cls));
-
-  const filteredStatic = staticPolicies.filter((p) => keep(p.vitalPbxMohClassName));
-  const filteredOverrides = activeOverrides.filter((o) => keep(o.vitalPbxMohClassName));
-
-  const keys = buildSourcePublishKeys({ slug, staticPolicies: filteredStatic, activeOverrides: filteredOverrides });
-
-  // Global default (level 4). Validate; empty/invalid → tombstone "" so the
-  // dialplan falls straight through to the PBX default.
-  let globalClass = "";
-  const rawGlobal = normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "");
-  if (rawGlobal) {
-    const gr = await evaluateMohRuntimeReadiness(tenantId, rawGlobal);
-    if (!gr.reason) globalClass = gr.selectedClass;
-    else droppedClasses.push(rawGlobal);
-  }
-  const globalKey = [buildGlobalDefaultKey(globalClass)];
-
-  if (droppedClasses.length) {
-    app.log.warn({ tenantId, slug, droppedClasses }, "moh: dropped unready per-source/global MOH classes from publish");
-  }
-
-  return {
-    keys,
-    globalKey,
-    droppedClasses,
-    sourcePolicyCount: filteredStatic.length,
-    activeOverrideCount: filteredOverrides.length,
-  };
-}
-
-/** Live post-publish verification (read-only). Probes Asterisk `moh show
- *  classes` via the PBX route helper and classifies whether the desired class
- *  is actually loaded. Never throws — a helper outage returns "unverified". */
-async function verifyMohActiveClass(
-  tenantId: string,
-  desiredClass: string | null,
-): Promise<{ verifyStatus: string; observed: string | null }> {
-  try {
-    const want = String(desiredClass ?? "").trim();
-    if (!want) return { verifyStatus: "verified", observed: null };
-    const link = (await db.tenantPbxLink.findFirst({ where: { tenantId }, select: { pbxInstanceId: true } as any })) as any;
-    const cfg = resolvePbxRouteHelperConfig(link?.pbxInstanceId);
-    if (!cfg) return { verifyStatus: "unverified", observed: null };
-    const probe = await getPbxMohClasses(cfg).catch(() => null);
-    if (!probe || !(probe as any).classes) return { verifyStatus: "unverified", observed: null };
-    const loaded = new Set<string>(((probe as any).classes || []).map((c: any) => String(c.name)));
-    const r = classifyMohVerify({ desiredClass: want, probeOk: true, loadedClasses: loaded });
-    return { verifyStatus: r.status, observed: r.observed };
-  } catch {
-    return { verifyStatus: "unverified", observed: null };
-  }
-}
-
-/** Native PBX-control handoff. Tombstones all of a tenant's Connect MOH keys
- *  (letting native VitalPBX MOH take over) while preserving Connect-managed
- *  extension islands and any active admin-schedule overlay. Does not require a
- *  schedule config. Returns the same shape as `doMohPublish`. */
-async function doMohPbxHandoff(
-  tenantId: string,
-  publishedBy: string,
-  source: string,
-  lastPublish: any,
-  effModeForExt: (ext: string) => "connect" | "pbx",
-): Promise<{ profile: HoldProfileData; mode: string; slug: string; recordId: string; nativeSync: NativeInboundMohSyncResult }> {
-  const slug = await getMohSlugForTenant(tenantId);
-  const previousKeysSnapshot: any[] = Array.isArray(lastPublish?.keysWritten) ? lastPublish.keysWritten : [];
-
-  // Connect-managed extension islands inside a PBX-controlled tenant keep keys.
-  const extRows = await readEnabledExtensionOverridesForTenant(db as any, tenantId);
-  const islandRows = (extRows as any[]).filter((r) => effModeForExt(String(r.extension)) === "connect");
-  const islandKeys = buildExtensionOverrideKeys(slug, islandRows) as MohAstDbKey[];
-
-  // Active admin schedule overlay can still take over a PBX-controlled tenant.
-  const activeAdminOverrides = await loadActiveAdminOverrides(db, new Date(), (tid: string) =>
-    getMohSlugForTenant(tid).then((s) => s).catch(() => null),
-  );
-  const adminForTenant = adminOverridesForSlug(activeAdminOverrides, slug);
-  const adminKeys = buildAdminOverlayKeys(slug, adminForTenant);
-
-  const keepKeys = [...islandKeys, ...adminKeys];
-  const tombstones = computePbxControlTombstones(previousKeysSnapshot as MohAstDbKey[], keepKeys);
-  const keys = [...keepKeys, ...tombstones];
-  const adminTenantClass = adminForTenant.find((o) => o.extension === "")?.vitalPbxMohClassName || "";
-
-  const record = await (db as any).mohPublishRecord.create({
-    data: {
-      tenantId,
-      publishedBy,
-      source,
-      previousMohClass: lastPublish?.newMohClass ?? null,
-      newMohClass: adminTenantClass, // "" = purely native
-      controlMode: "pbx",
-      keysWritten: keys,
-      previousKeysSnapshot,
-      extensionOverridesSnapshot: buildExtensionOverrideSnapshot(islandRows) as any,
-      status: "pending",
-      isRollback: false,
-    },
-  });
-
-  await publishMohToAstDb(slug, keys);
-
-  // Clear the reverse-map class (keep slug) so the resolver falls back to native.
-  const reverseMapLink = (await db.tenantPbxLink.findFirst({ where: { tenantId }, select: { pbxTenantId: true } as any })) as any;
-  const tenantMohEnforcement = await publishTenantMohReverseMap(
-    { pbxTenantId: reverseMapLink?.pbxTenantId ?? null, canonicalSlug: slug, mohClass: "" },
-    async (revKeys) => publishMohToAstDb(slug, revKeys),
-  );
-
-  const verify = await verifyMohActiveClass(tenantId, adminTenantClass || null);
-  const nativeSync: NativeInboundMohSyncResult = {
-    skipped: true,
-    reason: "pbx_control_native_handoff",
-    inboundTotal: 0,
-    inboundUpdated: 0,
-    extensionsTotal: 0,
-    extensionsUpdated: 0,
-    errors: [],
-    selectedClass: adminTenantClass || "",
-    assetReady: false,
-    manifestFileCount: 0,
-    canonicalSlug: slug,
-    coverage: { connectManagedInbound: adminKeys.length > 0, nativePbxInboundExtensionsQueues: false },
-    tenantMohEnforcement,
-    extensionOverrideCount: islandRows.length,
-    extensionOverrideExtensions: islandRows.map((r) => String(r.extension)),
-    extensionOverrideKeysPublished: islandKeys.length,
-  };
-
-  await (db as any).mohPublishRecord.update({
-    where: { id: record.id },
-    data: {
-      status: "success",
-      error: null,
-      nativeSync: nativeSync as any,
-      verifiedAt: new Date(),
-      verifiedActiveClass: verify.observed,
-      verifyStatus: verify.verifyStatus,
-    },
-  });
-  await (db as any).mohLastPublishedState.upsert({
-    where: { tenantId },
-    create: { tenantId, mohClass: adminTenantClass || "", holdMode: "pbx", controlMode: "pbx", activeClassObserved: verify.observed, verifiedAt: new Date() },
-    update: { mohClass: adminTenantClass || "", holdMode: "pbx", publishedAt: new Date(), controlMode: "pbx", activeClassObserved: verify.observed, verifiedAt: new Date() },
-  });
-
-  const syntheticProfile: HoldProfileData = {
-    id: "pbx_control",
-    vitalPbxMohClassName: adminTenantClass || "",
-    holdAnnouncementEnabled: false,
-    holdAnnouncementRef: null,
-    holdAnnouncementIntervalSec: 30,
-    introAnnouncementRef: null,
-  };
-  return { profile: syntheticProfile, mode: "pbx", slug, recordId: record.id, nativeSync };
-}
-
 /** Shared publish helper — loads state, computes effective profile, writes AstDB, logs record.
  *  Called by explicit publish, override activate/deactivate, and rollback paths.
  *  Throws on error (caller must handle). */
@@ -23244,29 +22873,13 @@ async function doMohPublish(
   publishedBy: string,
   source: string,
 ): Promise<{ profile: HoldProfileData; mode: string; slug: string; recordId: string; nativeSync: NativeInboundMohSyncResult }> {
-  const [config, rulesRaw, overrideRaw, profilesRaw, lastPublish, tenantRow, extControlRows] = await Promise.all([
+  const [config, rulesRaw, overrideRaw, profilesRaw, lastPublish] = await Promise.all([
     (db as any).mohScheduleConfig.findUnique({ where: { tenantId } }),
     (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId }, isActive: true } }),
     (db as any).mohOverrideState.findUnique({ where: { tenantId } }),
     (db as any).mohProfile.findMany({ where: { tenantId, isActive: true } }),
     (db as any).mohPublishRecord.findFirst({ where: { tenantId, status: "success" }, orderBy: { publishedAt: "desc" } }),
-    (db as any).tenant.findUnique({ where: { id: tenantId }, select: { mohControlMode: true } }),
-    (db as any).mohExtensionControl.findMany({ where: { tenantId }, select: { extension: true, controlMode: true } }),
   ]);
-
-  const tenantControlMode = normalizeTenantControlMode(tenantRow?.mohControlMode);
-  const extModeByExt = new Map<string, string>();
-  for (const r of (extControlRows as any[]) || []) extModeByExt.set(String(r.extension), normalizeExtensionControlMode(r.controlMode));
-  const effModeForExt = (ext: string): "connect" | "pbx" =>
-    effectiveExtensionControlMode(tenantControlMode, (extModeByExt.get(ext) as any) ?? "inherit");
-
-  // A tenant switched to native PBX control hands MOH back to VitalPBX: Connect
-  // tombstones all its keys (except connect-managed extension islands + any
-  // active admin-schedule overlay). Handled by a dedicated path so it does not
-  // require a schedule config.
-  if (tenantControlMode === "pbx") {
-    return await doMohPbxHandoff(tenantId, publishedBy, source, lastPublish, effModeForExt);
-  }
 
   if (!config) throw Object.assign(new Error("no_schedule_configured"), { statusCode: 409 });
 
@@ -23302,54 +22915,13 @@ async function doMohPublish(
   const extensionOverrideRows = await readEnabledExtensionOverridesForTenant(db as any, tenantId);
   const extensionOverrideSnapshot = buildExtensionOverrideSnapshot(extensionOverrideRows);
   const extensionKeys = buildExtensionOverrideKeys(slug, extensionOverrideRows);
+  const keys = [...tenantDefaultKeys, ...extensionKeys];
 
-  // Per-call-source policies (tenant + extension) + global default, folded with
-  // any active scheduled override. Additive AstDB keys under the `/moh/src`
-  // families + `connect/system/moh_default_class`. Fail-safe: unready classes
-  // are dropped, never thrown, so the tenant default publish always proceeds.
-  const sourceArtifacts = await buildTenantSourceMohPublishArtifacts({
-    tenantId,
-    slug,
-    timezone: config.timezone || "UTC",
-    scheduleRules: rulesRaw as any[],
-    classForProfileId: (pid: string) => profileMap.get(pid)?.vitalPbxMohClassName ?? null,
-  });
   const previousMohClass = lastPublish?.newMohClass ?? null;
-  // Use last publish's keysWritten as the "previous snapshot" for rollback and
-  // forward stale-key cleanup. This naturally carries forward any per-extension
-  // keys from the prior publish, so a rollback chain reconstructs the right
-  // "before" state.
+  // Use last publish's keysWritten as the "previous snapshot" for rollback.
+  // This naturally carries forward any per-extension keys from the prior
+  // publish, so a rollback chain reconstructs the right "before" state.
   const previousKeysSnapshot: any[] = Array.isArray(lastPublish?.keysWritten) ? lastPublish.keysWritten : [];
-
-  // Highest-priority admin (multi-tenant) schedule overlay for this tenant. An
-  // active admin schedule beats even a pinned extension; it is written to the
-  // dedicated admin-overlay families the dialplan resolver reads first.
-  const activeAdminOverrides = await loadActiveAdminOverrides(db, new Date(), (tid: string) =>
-    getMohSlugForTenant(tid).then((s) => s).catch(() => null),
-  );
-  const adminKeys = buildAdminOverlayKeys(slug, adminOverridesForSlug(activeAdminOverrides, slug));
-
-  // Drop keys for extensions explicitly set to native PBX control — they are
-  // tombstoned by the forward-clear below so the resolver falls straight
-  // through to native VitalPBX MOH for those extensions only.
-  const extFamilyRe = /^connect\/t_[0-9A-Za-z_-]{1,64}\/extensions\/([0-9A-Za-z_-]{1,32})(\/.*)?$/;
-  const gateExtPbx = (arr: MohAstDbKey[]): MohAstDbKey[] =>
-    arr.filter((k) => {
-      const m = extFamilyRe.exec(k.family);
-      return !(m && effModeForExt(m[1]) === "pbx");
-    });
-  const desiredKeys: MohAstDbKey[] = [
-    ...tenantDefaultKeys,
-    ...gateExtPbx(extensionKeys as MohAstDbKey[]),
-    ...gateExtPbx(sourceArtifacts.keys as MohAstDbKey[]),
-    ...(sourceArtifacts.globalKey as MohAstDbKey[]),
-    ...adminKeys,
-  ];
-  // Tombstone every clearable key a prior publish wrote that we no longer want
-  // (tenant class switch A→B→A, removed source/extension policy, extension→PBX,
-  // ended admin schedule) so no stale AstDB keys survive.
-  const forwardClears = computeForwardKeyClears(previousKeysSnapshot as MohAstDbKey[], desiredKeys);
-  const keys = [...desiredKeys, ...forwardClears];
 
   const record = await (db as any).mohPublishRecord.create({
     data: {
@@ -23358,7 +22930,6 @@ async function doMohPublish(
       source,
       previousMohClass,
       newMohClass: profile.vitalPbxMohClassName,
-      controlMode: "connect",
       keysWritten: keys,
       previousKeysSnapshot,
       extensionOverridesSnapshot: extensionOverrideSnapshot as any,
@@ -23441,318 +23012,24 @@ async function doMohPublish(
   }
 
   app.log.info({ tenantId, recordId: record.id, nativeSync }, "moh: native tenant MOH sync complete");
-
-  // Live post-publish verification (read-only): confirm Asterisk actually has
-  // the desired class loaded. Non-fatal — a drift/unverified result is recorded
-  // for the health surface but never fails the publish (fail-safe).
-  const verify = await verifyMohActiveClass(tenantId, profile.vitalPbxMohClassName);
-
   await (db as any).mohPublishRecord.update({
     where: { id: record.id },
     data: {
       status: "success",
       error: null,
       nativeSync: nativeSync as any,
-      verifiedAt: new Date(),
-      verifiedActiveClass: verify.observed,
-      verifyStatus: verify.verifyStatus,
     },
   });
 
   // Update last-published state cache (used by reconciliation worker)
   await (db as any).mohLastPublishedState.upsert({
     where: { tenantId },
-    create: { tenantId, mohClass: profile.vitalPbxMohClassName, holdMode: mode, controlMode: "connect", activeClassObserved: verify.observed, verifiedAt: new Date() },
-    update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date(), controlMode: "connect", activeClassObserved: verify.observed, verifiedAt: new Date() },
+    create: { tenantId, mohClass: profile.vitalPbxMohClassName, holdMode: mode },
+    update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date() },
   });
 
   return { profile, mode, slug, recordId: record.id, nativeSync };
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MOH CONTROL MODE  (Connect-managed vs native PBX control)  — Requirement 4
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** Best-effort republish after a control-mode change. Never throws — the mode
- *  switch always persists; the publish result is returned for the UI. */
-async function republishAfterControlChange(
-  tenantId: string,
-  actor: string,
-): Promise<{ published: boolean; error?: string; mode?: string; class?: string }> {
-  try {
-    const r = await doMohPublish(tenantId, actor, "manual");
-    return { published: true, mode: r.mode, class: r.profile.vitalPbxMohClassName };
-  } catch (err: any) {
-    return { published: false, error: err?.message ?? "publish_failed" };
-  }
-}
-
-// ── GET /voice/moh/control ────────────────────────────────────────────────────
-app.get("/voice/moh/control", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
-  const q = z.object({ tenantId: z.string() }).safeParse(req.query || {});
-  if (!q.success) return reply.code(400).send({ error: "tenantId required" });
-  const tid = await resolveMohTenantId(q.data.tenantId);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  try {
-    assertMohTenantAccess(user, tid);
-  } catch (err: any) {
-    return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" });
-  }
-  const tenant = await (db as any).tenant.findUnique({ where: { id: tid }, select: { mohControlMode: true } });
-  const extControls = await (db as any).mohExtensionControl.findMany({
-    where: { tenantId: tid },
-    orderBy: { extension: "asc" },
-  });
-  return reply.send({
-    tenantId: tid,
-    tenantControlMode: normalizeTenantControlMode(tenant?.mohControlMode),
-    extensionControls: extControls,
-  });
-});
-
-// ── PUT /voice/moh/control/tenant ─────────────────────────────────────────────
-// Body: { tenantId, mode: "connect" | "pbx" }. Persists the mode then republishes
-// (Connect keys, or a native-handoff tombstone publish for "pbx").
-app.put("/voice/moh/control/tenant", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  const body = z.object({ tenantId: z.string(), mode: z.enum(["connect", "pbx"]) }).safeParse(req.body || {});
-  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
-  const tid = await resolveMohTenantId(body.data.tenantId);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  if (!canManageMohControl({ role: user.role, tenantId: user.tenantId }, tid)) {
-    return reply.code(403).send({ error: "forbidden" });
-  }
-  await (db as any).tenant.update({ where: { id: tid }, data: { mohControlMode: body.data.mode } });
-  const actor = (user as any).id ?? (user as any).sub ?? "system";
-  const publish = await republishAfterControlChange(tid, actor);
-  return reply.send({ ok: true, tenantId: tid, mode: body.data.mode, publish });
-});
-
-// ── PUT /voice/moh/control/extension ──────────────────────────────────────────
-// Body: { tenantId, extension, mode: "inherit" | "connect" | "pbx" }.
-app.put("/voice/moh/control/extension", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  const body = z.object({
-    tenantId: z.string(),
-    extension: z.string().min(1).max(64),
-    mode: z.enum(["inherit", "connect", "pbx"]),
-  }).safeParse(req.body || {});
-  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
-  if (normalizeMohExtension(body.data.extension) === null) {
-    return reply.code(400).send({ error: "invalid_payload", detail: "extension shape rejected" });
-  }
-  const tid = await resolveMohTenantId(body.data.tenantId);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  if (!canManageMohControl({ role: user.role, tenantId: user.tenantId }, tid)) {
-    return reply.code(403).send({ error: "forbidden" });
-  }
-  try {
-    await assertExtensionExistsForTenantHelper(db as any, tid, body.data.extension);
-  } catch (err: any) {
-    return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" });
-  }
-  const actor = (user as any).id ?? (user as any).sub ?? "system";
-  const ext = normalizeMohExtension(body.data.extension)!;
-  if (body.data.mode === "inherit") {
-    // "PBX control" toggle off → remove the row so it follows the tenant default.
-    await (db as any).mohExtensionControl.deleteMany({ where: { tenantId: tid, extension: ext } });
-  } else {
-    await (db as any).mohExtensionControl.upsert({
-      where: { tenantId_extension: { tenantId: tid, extension: ext } },
-      create: { tenantId: tid, extension: ext, controlMode: body.data.mode, createdBy: actor, updatedBy: actor },
-      update: { controlMode: body.data.mode, updatedBy: actor },
-    });
-  }
-  const publish = await republishAfterControlChange(tid, actor);
-  return reply.send({ ok: true, tenantId: tid, extension: ext, mode: body.data.mode, publish });
-});
-
-// ── POST /voice/moh/reconcile ─────────────────────────────────────────────────
-// Force a recompute + republish + live verify for one tenant (the manual
-// "repair/reconcile" button). Returns the publish + verify result.
-app.post("/voice/moh/reconcile", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
-  if (!body.success) return reply.code(400).send({ error: "tenantId required" });
-  const tid = await resolveMohTenantId(body.data.tenantId);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  try {
-    assertMohTenantAccess(user, tid);
-  } catch (err: any) {
-    return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" });
-  }
-  const actor = (user as any).id ?? (user as any).sub ?? "system";
-  try {
-    const r = await doMohPublish(tid, actor, "reconciliation");
-    return reply.send({ ok: true, tenantId: tid, mode: r.mode, class: r.profile.vitalPbxMohClassName, recordId: r.recordId });
-  } catch (err: any) {
-    return reply.code(err?.statusCode ?? 500).send({ error: err?.message ?? "reconcile_failed", detail: err?.detail });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ADMIN (MULTI-TENANT) MOH SCHEDULES  — Requirement 3  (SUPER_ADMIN only)
-// ═══════════════════════════════════════════════════════════════════════════
-
-function adminScheduleValidationError(body: any): string | null {
-  if (body.scheduleKind === "one_time") {
-    if (!body.startAt || !body.endAt) return "one_time_requires_startAt_endAt";
-    if (new Date(body.startAt) >= new Date(body.endAt)) return "startAt_must_precede_endAt";
-  } else if (body.scheduleKind === "recurring") {
-    if (
-      body.startWeekday == null || body.endWeekday == null ||
-      !body.startTime || !body.endTime
-    ) return "recurring_requires_weekday_and_time_bounds";
-  }
-  if (!isValidMohRuntimeClass(body.vitalPbxMohClassName)) return "invalid_moh_runtime_class";
-  if (body.fallbackMode === "explicit" && body.fallbackClass && !isValidMohRuntimeClass(body.fallbackClass)) {
-    return "invalid_fallback_class";
-  }
-  return null;
-}
-
-const adminScheduleBodySchema = z.object({
-  name: z.string().min(1).max(120),
-  enabled: z.boolean().optional(),
-  scheduleKind: z.enum(["one_time", "recurring"]),
-  timezone: z.string().min(1).max(64).optional(),
-  vitalPbxMohClassName: z.string().min(1).max(100),
-  priority: z.number().int().min(0).max(1000).optional(),
-  startAt: z.string().datetime().nullable().optional(),
-  endAt: z.string().datetime().nullable().optional(),
-  startWeekday: z.number().int().min(0).max(6).nullable().optional(),
-  startTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
-  endWeekday: z.number().int().min(0).max(6).nullable().optional(),
-  endTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
-  fallbackMode: z.enum(["restore_previous", "explicit"]).optional(),
-  fallbackClass: z.string().max(100).nullable().optional(),
-  targets: z.array(z.object({ tenantId: z.string(), extension: z.string().max(64).optional() })).min(1),
-});
-
-async function resolveAdminScheduleTargets(
-  targets: Array<{ tenantId: string; extension?: string }>,
-): Promise<{ resolved: Array<{ tenantId: string; extension: string }>; error?: string }> {
-  const resolved: Array<{ tenantId: string; extension: string }> = [];
-  for (const t of targets) {
-    const tid = await resolveMohTenantId(t.tenantId);
-    if (!tid) return { resolved: [], error: `tenant_not_linked:${t.tenantId}` };
-    const ext = t.extension ? normalizeMohExtension(t.extension) : "";
-    if (t.extension && ext === null) return { resolved: [], error: `invalid_extension:${t.extension}` };
-    resolved.push({ tenantId: tid, extension: ext || "" });
-  }
-  return { resolved };
-}
-
-// ── GET /voice/moh/admin-schedules ────────────────────────────────────────────
-app.get("/voice/moh/admin-schedules", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") return reply.code(403).send({ error: "forbidden" });
-  const schedules = await (db as any).mohAdminSchedule.findMany({
-    where: { isDeleted: false },
-    orderBy: { createdAt: "desc" },
-    include: { targets: true },
-  });
-  // Attach current active state + open activations for the "controlled by / restores to" UI.
-  const activations = await (db as any).mohAdminScheduleActivation.findMany({ where: { state: "active" } });
-  return reply.send({ schedules, activeActivations: activations });
-});
-
-// ── POST /voice/moh/admin-schedules ───────────────────────────────────────────
-app.post("/voice/moh/admin-schedules", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") return reply.code(403).send({ error: "forbidden" });
-  const parsed = adminScheduleBodySchema.safeParse(req.body || {});
-  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
-  const verr = adminScheduleValidationError(parsed.data);
-  if (verr) return reply.code(400).send({ error: verr });
-  const { resolved, error } = await resolveAdminScheduleTargets(parsed.data.targets);
-  if (error) return reply.code(400).send({ error });
-  const scopeErr = adminScheduleTargetScopeError({ fallbackMode: parsed.data.fallbackMode ?? "restore_previous", targets: resolved });
-  if (scopeErr) return reply.code(400).send({ error: scopeErr });
-  const actor = (user as any).id ?? (user as any).sub ?? "system";
-  const created = await (db as any).mohAdminSchedule.create({
-    data: {
-      name: parsed.data.name,
-      enabled: parsed.data.enabled ?? true,
-      scheduleKind: parsed.data.scheduleKind,
-      timezone: parsed.data.timezone ?? "America/New_York",
-      vitalPbxMohClassName: parsed.data.vitalPbxMohClassName,
-      priority: parsed.data.priority ?? 0,
-      startAt: parsed.data.startAt ? new Date(parsed.data.startAt) : null,
-      endAt: parsed.data.endAt ? new Date(parsed.data.endAt) : null,
-      startWeekday: parsed.data.startWeekday ?? null,
-      startTime: parsed.data.startTime ?? null,
-      endWeekday: parsed.data.endWeekday ?? null,
-      endTime: parsed.data.endTime ?? null,
-      fallbackMode: parsed.data.fallbackMode ?? "restore_previous",
-      fallbackClass: parsed.data.fallbackClass ?? null,
-      createdBy: actor,
-      updatedBy: actor,
-      targets: { create: resolved.map((t) => ({ tenantId: t.tenantId, extension: t.extension })) },
-    },
-    include: { targets: true },
-  });
-  return reply.code(201).send({ schedule: created });
-});
-
-// ── PATCH /voice/moh/admin-schedules/:id ──────────────────────────────────────
-app.patch("/voice/moh/admin-schedules/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") return reply.code(403).send({ error: "forbidden" });
-  const id = String((req.params as any)?.id || "");
-  const existing = await (db as any).mohAdminSchedule.findUnique({ where: { id } });
-  if (!existing || existing.isDeleted) return reply.code(404).send({ error: "not_found" });
-  const parsed = adminScheduleBodySchema.partial().safeParse(req.body || {});
-  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
-  const merged = { ...existing, ...parsed.data };
-  const verr = adminScheduleValidationError(merged);
-  if (verr) return reply.code(400).send({ error: verr });
-  // Block extension-scoped explicit fallback (target-scope rule). Use the patch's
-  // targets when provided, else the schedule's existing targets, so flipping only
-  // fallbackMode to "explicit" on an extension-targeted schedule is still rejected.
-  const scopeTargets: Array<{ extension?: string | null }> = parsed.data.targets
-    ? parsed.data.targets.map((t) => ({ extension: t.extension ?? "" }))
-    : await (db as any).mohAdminScheduleTarget.findMany({ where: { scheduleId: id }, select: { extension: true } });
-  const scopeErr = adminScheduleTargetScopeError({ fallbackMode: merged.fallbackMode, targets: scopeTargets });
-  if (scopeErr) return reply.code(400).send({ error: scopeErr });
-  const actor = (user as any).id ?? (user as any).sub ?? "system";
-  const data: any = { updatedBy: actor };
-  for (const k of ["name", "enabled", "scheduleKind", "timezone", "vitalPbxMohClassName", "priority", "startWeekday", "startTime", "endWeekday", "endTime", "fallbackMode", "fallbackClass"] as const) {
-    if (parsed.data[k as keyof typeof parsed.data] !== undefined) (data as any)[k] = (parsed.data as any)[k];
-  }
-  if (parsed.data.startAt !== undefined) data.startAt = parsed.data.startAt ? new Date(parsed.data.startAt) : null;
-  if (parsed.data.endAt !== undefined) data.endAt = parsed.data.endAt ? new Date(parsed.data.endAt) : null;
-  if (parsed.data.targets) {
-    const { resolved, error } = await resolveAdminScheduleTargets(parsed.data.targets);
-    if (error) return reply.code(400).send({ error });
-    await (db as any).mohAdminScheduleTarget.deleteMany({ where: { scheduleId: id } });
-    data.targets = { create: resolved.map((t) => ({ tenantId: t.tenantId, extension: t.extension })) };
-  }
-  const updated = await (db as any).mohAdminSchedule.update({ where: { id }, data, include: { targets: true } });
-  return reply.send({ schedule: updated });
-});
-
-// ── DELETE /voice/moh/admin-schedules/:id ─────────────────────────────────────
-// Soft-delete + disable. The worker's next tick restores any tenants this
-// schedule was actively taking over (open activations reconcile → restored).
-app.delete("/voice/moh/admin-schedules/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  if (String(user.role || "").toUpperCase() !== "SUPER_ADMIN") return reply.code(403).send({ error: "forbidden" });
-  const id = String((req.params as any)?.id || "");
-  const existing = await (db as any).mohAdminSchedule.findUnique({ where: { id } });
-  if (!existing) return reply.code(404).send({ error: "not_found" });
-  await (db as any).mohAdminSchedule.update({ where: { id }, data: { isDeleted: true, enabled: false } });
-  return reply.send({ ok: true, id });
-});
 
 // ── GET /voice/moh/profiles ───────────────────────────────────────────────────
 app.get("/voice/moh/profiles", async (req, reply) => {
@@ -24024,332 +23301,6 @@ app.delete("/voice/moh/extension-overrides", async (req, reply) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PER-CALL-SOURCE MOH POLICIES  (tenant + extension scoped)
-//
-// Adds the "which MOH for which kind of call" dimension. Static policies live
-// in MohSourcePolicy; the publish path folds them (+ active scheduled overrides
-// + global default) into additive AstDB keys under `/moh/src`. The dialplan
-// falls through to the existing tenant/extension default keys for any source
-// with no policy, so this is a strict superset (no regression).
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ── GET /voice/moh/source-policies ───────────────────────────────────────────
-app.get("/voice/moh/source-policies", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
-  const q = z.object({
-    tenantId:  z.string().optional(),
-    scope:     z.enum(["tenant", "extension"]).optional(),
-    extension: z.string().optional(),
-  }).parse(req.query || {});
-  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
-  const tid = await resolveMohTenantId(rawTid);
-  if (!tid) return reply.send({ policies: [], sources: MOH_CALL_SOURCES, labels: MOH_CALL_SOURCE_LABELS });
-  try { assertMohTenantAccess(user, tid); }
-  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
-  const where: any = { tenantId: tid };
-  if (q.scope) where.scope = q.scope;
-  if (typeof q.extension === "string") where.extension = q.scope === "tenant" ? "" : q.extension;
-  const policies = await (db as any).mohSourcePolicy.findMany({
-    where,
-    orderBy: [{ scope: "asc" }, { extension: "asc" }, { source: "asc" }],
-  });
-  return reply.send({ policies, sources: MOH_CALL_SOURCES, labels: MOH_CALL_SOURCE_LABELS });
-});
-
-// ── PUT /voice/moh/source-policies ───────────────────────────────────────────
-// Idempotent upsert keyed on (tenantId, extension, source). extension="" for
-// tenant scope. Validates the MOH class through the same readiness pipeline as
-// profiles/extension-overrides.
-app.put("/voice/moh/source-policies", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  const body = z.object({
-    tenantId:             z.string(),
-    scope:                z.enum(["tenant", "extension"]),
-    extension:            z.string().max(64).optional(),
-    source:               z.string().min(1).max(32),
-    vitalPbxMohClassName: z.string().min(1).max(100),
-    mohProfileId:         z.string().min(1).nullable().optional(),
-    enabled:              z.boolean().optional(),
-  }).safeParse(req.body || {});
-  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
-  const d = body.data;
-
-  const source = normalizeMohCallSource(d.source);
-  if (!source) return reply.code(400).send({ error: "invalid_source", detail: `source must be one of: ${MOH_CALL_SOURCES.join(", ")}` });
-
-  const extension = d.scope === "extension" ? (d.extension ?? "") : "";
-  if (d.scope === "extension" && normalizeMohExtension(extension) === null) {
-    return reply.code(400).send({ error: "invalid_payload", detail: "extension shape rejected (allowed: A-Z a-z 0-9 _ -)" });
-  }
-
-  const tid = await resolveMohTenantId(d.tenantId);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to a Connect tenant first." });
-  if (!canManageExtensionOverrideFor({ role: user.role, tenantId: user.tenantId }, tid)) {
-    return reply.code(403).send({ error: "forbidden" });
-  }
-  try { assertMohTenantAccess(user, tid); }
-  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
-
-  if (d.scope === "extension") {
-    try { await assertExtensionExistsForTenantHelper(db as any, tid, extension); }
-    catch (err: any) { return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" }); }
-  }
-
-  let runtimeClass: string;
-  try {
-    const readiness = await assertMohRuntimeReadiness(tid, d.vitalPbxMohClassName);
-    runtimeClass = readiness.selectedClass;
-  } catch (err: any) {
-    return reply.code(err?.statusCode ?? 400).send({ error: err?.message ?? "invalid_moh_runtime_class", detail: err?.detail, readiness: err?.readiness });
-  }
-
-  if (d.mohProfileId) {
-    const profile = await (db as any).mohProfile.findUnique({ where: { id: d.mohProfileId } });
-    if (!profile || profile.tenantId !== tid) return reply.code(400).send({ error: "profile_not_in_tenant" });
-  }
-
-  const actor = (user as any).id ?? (user as any).sub ?? null;
-  const existing = await (db as any).mohSourcePolicy.findUnique({
-    where: { tenantId_extension_source: { tenantId: tid, extension, source } },
-  }).catch(() => null);
-  const policy = await (db as any).mohSourcePolicy.upsert({
-    where: { tenantId_extension_source: { tenantId: tid, extension, source } },
-    create: { tenantId: tid, scope: d.scope, extension, source, vitalPbxMohClassName: runtimeClass, mohProfileId: d.mohProfileId ?? null, enabled: d.enabled !== false, createdBy: actor, updatedBy: actor },
-    update: { scope: d.scope, vitalPbxMohClassName: runtimeClass, mohProfileId: d.mohProfileId ?? null, enabled: d.enabled !== false, updatedBy: actor },
-  });
-  return reply.code(existing ? 200 : 201).send({ policy, created: !existing });
-});
-
-// ── DELETE /voice/moh/source-policies ────────────────────────────────────────
-app.delete("/voice/moh/source-policies", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
-  if (!user) return;
-  const body = z.object({
-    tenantId:  z.string(),
-    scope:     z.enum(["tenant", "extension"]),
-    extension: z.string().max(64).optional(),
-    source:    z.string().min(1).max(32),
-  }).safeParse(req.body || {});
-  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
-  const d = body.data;
-  const source = normalizeMohCallSource(d.source);
-  if (!source) return reply.code(400).send({ error: "invalid_source" });
-  const extension = d.scope === "extension" ? (d.extension ?? "") : "";
-  const tid = await resolveMohTenantId(d.tenantId);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  if (!canManageExtensionOverrideFor({ role: user.role, tenantId: user.tenantId }, tid)) {
-    return reply.code(403).send({ error: "forbidden" });
-  }
-  try { assertMohTenantAccess(user, tid); }
-  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
-  const r = await (db as any).mohSourcePolicy.deleteMany({ where: { tenantId: tid, extension, source } });
-  return reply.send({ ok: true, deleted: r.count });
-});
-
-// ── GET /voice/moh/global-default ────────────────────────────────────────────
-app.get("/voice/moh/global-default", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
-  const cfg = await (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null);
-  return reply.send({ vitalPbxMohClassName: cfg?.vitalPbxMohClassName ?? null, updatedAt: cfg?.updatedAt ?? null });
-});
-
-// ── PUT /voice/moh/global-default ────────────────────────────────────────────
-// System-wide fallback (Requirement 4, level 4). SUPER_ADMIN only. Null clears.
-app.put("/voice/moh/global-default", async (req, reply) => {
-  const user = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
-  if (!user) return;
-  const body = z.object({ vitalPbxMohClassName: z.string().max(100).nullable() }).safeParse(req.body || {});
-  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
-  const raw = normalizeSharedMohRuntimeClass(body.data.vitalPbxMohClassName ?? "");
-  if (raw && !isValidMohRuntimeClass(raw)) {
-    return reply.code(400).send({ error: "invalid_moh_runtime_class", detail: "Global default must be a valid mohN or connect_* class, or null to clear." });
-  }
-  const actor = (user as any).id ?? null;
-  const cfg = await (db as any).mohGlobalConfig.upsert({
-    where: { id: "global" },
-    create: { id: "global", vitalPbxMohClassName: raw || null, updatedBy: actor },
-    update: { vitalPbxMohClassName: raw || null, updatedBy: actor },
-  });
-  return reply.send({ vitalPbxMohClassName: cfg.vitalPbxMohClassName ?? null, updatedAt: cfg.updatedAt });
-});
-
-// ── GET /voice/moh/resolve ───────────────────────────────────────────────────
-// Diagnostics (Requirement 11): explain exactly why a call of a given source
-// (and optional extension) resolves to a particular MOH class right now — the
-// full candidate chain + the winning level. Read-only; writes nothing.
-app.get("/voice/moh/resolve", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
-  const q = z.object({
-    tenantId:  z.string().optional(),
-    source:    z.string().optional(),
-    extension: z.string().optional(),
-    at:        z.string().optional(),
-  }).parse(req.query || {});
-  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
-  const tid = await resolveMohTenantId(rawTid);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  try { assertMohTenantAccess(user, tid); }
-  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
-
-  const source = normalizeMohCallSource(q.source ?? "internal") ?? "internal";
-  const extension = typeof q.extension === "string" && q.extension.trim() ? q.extension.trim() : "";
-  const now = q.at ? new Date(q.at) : new Date();
-
-  const [config, rulesRaw, overrideRaw, profilesRaw, sourcePolicies, extOverride, globalCfg] = await Promise.all([
-    (db as any).mohScheduleConfig.findUnique({ where: { tenantId: tid } }),
-    (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId: tid }, isActive: true } }),
-    (db as any).mohOverrideState.findUnique({ where: { tenantId: tid } }),
-    (db as any).mohProfile.findMany({ where: { tenantId: tid, isActive: true } }),
-    (db as any).mohSourcePolicy.findMany({ where: { tenantId: tid, enabled: true } }),
-    extension ? (db as any).mohExtensionOverride.findUnique({ where: { tenantId_extension: { tenantId: tid, extension } } }).catch(() => null) : Promise.resolve(null),
-    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
-  ]);
-
-  const profileMap = new Map<string, HoldProfileData>(
-    (profilesRaw as any[]).map((p: any) => [p.id, {
-      id: p.id, vitalPbxMohClassName: p.vitalPbxMohClassName,
-      holdAnnouncementEnabled: Boolean(p.holdAnnouncementEnabled),
-      holdAnnouncementRef: p.holdAnnouncementRef ?? null,
-      holdAnnouncementIntervalSec: p.holdAnnouncementIntervalSec ?? 30,
-      introAnnouncementRef: p.introAnnouncementRef ?? null,
-    }]),
-  );
-
-  // Tenant default (existing time/override resolution).
-  const tenantDefault = config ? computeCurrentMohProfile(config, rulesRaw as any[], overrideRaw as any, profileMap, now) : { profile: null, mode: "none" };
-
-  // Active scheduled overrides matching this (extension, source).
-  const scheduleRows: ScheduleRuleRow[] = (rulesRaw as any[]).map((r) => ({
-    id: r.id, profileId: r.profileId, ruleType: r.ruleType,
-    weekday: r.weekday ?? null, startTime: r.startTime ?? null, endTime: r.endTime ?? null,
-    startAt: r.startAt ?? null, endAt: r.endAt ?? null, priority: r.priority ?? 0,
-    isActive: r.isActive !== false, scope: r.scope ?? "tenant", extension: r.extension ?? "", callSource: r.callSource ?? "",
-  }));
-  const activeOverrides = computeActiveScheduleOverrides(scheduleRows, (pid) => profileMap.get(pid)?.vitalPbxMohClassName ?? null, config?.timezone || "UTC", now);
-  const schedExt = activeOverrides
-    .filter((o) => o.scope === "extension" && o.extension === extension && (o.source === source || o.source === "all"))
-    .sort((a, b) => (a.source === source ? -1 : 1) - (b.source === source ? -1 : 1) || b.priority - a.priority)[0] ?? null;
-
-  const findStatic = (scope: "tenant" | "extension", src: string) =>
-    (sourcePolicies as any[]).find((p) => p.scope === scope && (scope === "tenant" ? p.extension === "" : p.extension === extension) && p.source === src) ?? null;
-
-  const resolution = resolveEffectiveMohClass({
-    source,
-    scheduledExtensionClass: schedExt?.vitalPbxMohClassName ?? null,
-    scheduledExtensionRuleId: schedExt?.ruleId ?? null,
-    extensionSourceClass: extension ? findStatic("extension", source)?.vitalPbxMohClassName ?? null : null,
-    extensionDefaultClass: extension ? (extOverride?.enabled ? extOverride?.vitalPbxMohClassName ?? null : null) : null,
-    tenantSourceClass: findStatic("tenant", source)?.vitalPbxMohClassName ?? null,
-    tenantDefaultClass: tenantDefault.profile?.vitalPbxMohClassName ?? null,
-    globalDefaultClass: normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "") || null,
-  });
-
-  return reply.send({
-    tenantId: tid,
-    source,
-    sourceLabel: MOH_CALL_SOURCE_LABELS[source as MohCallSource],
-    extension: extension || null,
-    at: now.toISOString(),
-    resolved: {
-      class: resolution.class,
-      reason: resolution.reason,
-      ruleId: resolution.ruleId ?? null,
-      fallbackToPbxDefault: resolution.class === null,
-    },
-    candidates: {
-      schedule_extension: schedExt?.vitalPbxMohClassName ?? null,
-      extension_source: extension ? findStatic("extension", source)?.vitalPbxMohClassName ?? null : null,
-      extension_default: extension ? (extOverride?.enabled ? extOverride?.vitalPbxMohClassName ?? null : null) : null,
-      tenant_source: findStatic("tenant", source)?.vitalPbxMohClassName ?? null,
-      tenant_default: tenantDefault.profile?.vitalPbxMohClassName ?? null,
-      tenant_default_mode: tenantDefault.mode,
-      global_default: normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "") || null,
-    },
-  });
-});
-
-// ── GET /voice/moh/health ─────────────────────────────────────────────────────
-// Aggregate health for a tenant's MOH config (Requirement 11). Read-only.
-// Surfaces: (a) referenced runtime classes that are not present/ready in the
-// synced PBX catalog (missing class / unready audio), (b) stale schedule rules
-// (one_time rules whose window already ended but are still active), and
-// (c) the most recent failed publish. Never writes; safe to poll.
-app.get("/voice/moh/health", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
-  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
-  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
-  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
-  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
-  const tid = await resolveMohTenantId(rawTid);
-  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  try { assertMohTenantAccess(user, tid); }
-  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
-
-  const now = new Date();
-  const [profiles, sourcePolicies, extOverrides, globalCfg, rules, lastFailed] = await Promise.all([
-    (db as any).mohProfile.findMany({ where: { tenantId: tid, isActive: true } }),
-    (db as any).mohSourcePolicy.findMany({ where: { tenantId: tid, enabled: true } }),
-    (db as any).mohExtensionOverride.findMany({ where: { tenantId: tid, enabled: true } }).catch(() => []),
-    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
-    (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId: tid } } }).catch(() => []),
-    (db as any).mohPublishRecord.findFirst({ where: { tenantId: tid, status: "failed" }, orderBy: { publishedAt: "desc" } }).catch(() => null),
-  ]);
-
-  // (a) Referenced runtime classes → readiness check (dedup by class + origin).
-  const refs: Array<{ origin: string; label: string; className: string }> = [];
-  for (const p of profiles as any[]) refs.push({ origin: "profile", label: p.name ?? p.id, className: p.vitalPbxMohClassName });
-  for (const p of sourcePolicies as any[]) refs.push({ origin: "source_policy", label: `${p.scope}${p.extension ? `:${p.extension}` : ""}/${p.source}`, className: p.vitalPbxMohClassName });
-  for (const e of extOverrides as any[]) refs.push({ origin: "extension_override", label: `ext:${e.extension}`, className: e.vitalPbxMohClassName });
-  const globalClass = normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "");
-  if (globalClass) refs.push({ origin: "global_default", label: "global", className: globalClass });
-
-  const checked = new Map<string, { ready: boolean; reason: string | null }>();
-  const missingClasses: Array<{ origin: string; label: string; className: string; reason: string }> = [];
-  for (const r of refs) {
-    if (!r.className) continue;
-    let res = checked.get(r.className);
-    if (!res) {
-      try {
-        const readiness = await evaluateMohRuntimeReadiness(tid, r.className);
-        res = { ready: !readiness.reason, reason: readiness.reason ?? null };
-      } catch { res = { ready: false, reason: "evaluation_failed" }; }
-      checked.set(r.className, res);
-    }
-    if (!res.ready) missingClasses.push({ origin: r.origin, label: r.label, className: r.className, reason: res.reason ?? "not_ready" });
-  }
-
-  // (b) Stale schedule rules: one_time windows that already closed but are still active.
-  const staleSchedules = (rules as any[])
-    .filter((r) => r.isActive !== false && r.ruleType === "one_time" && r.endAt && new Date(r.endAt) < now)
-    .map((r) => ({ id: r.id, endAt: r.endAt, scope: r.scope ?? "tenant", extension: r.extension ?? "", callSource: r.callSource ?? "all" }));
-
-  const warnings: string[] = [];
-  if (missingClasses.length) warnings.push(`${missingClasses.length} referenced MOH class(es) are not ready in the synced PBX catalog.`);
-  if (staleSchedules.length) warnings.push(`${staleSchedules.length} one-time schedule rule(s) have ended but are still marked active.`);
-  if (lastFailed) warnings.push(`Last publish failed at ${new Date(lastFailed.publishedAt).toISOString()}: ${lastFailed.error ?? "unknown error"}.`);
-
-  return reply.send({
-    tenantId: tid,
-    healthy: warnings.length === 0,
-    checkedAt: now.toISOString(),
-    warnings,
-    missingClasses,
-    staleSchedules,
-    lastFailedPublish: lastFailed ? { id: lastFailed.id, publishedAt: lastFailed.publishedAt, error: lastFailed.error ?? null, newMohClass: lastFailed.newMohClass ?? null } : null,
-    counts: { profiles: (profiles as any[]).length, sourcePolicies: (sourcePolicies as any[]).length, extensionOverrides: (extOverrides as any[]).length, globalDefault: globalClass || null },
-  });
-});
-
 // ── PUT /voice/moh/schedule ───────────────────────────────────────────────────
 app.put("/voice/moh/schedule", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageMoh);
@@ -24395,10 +23346,6 @@ app.post("/voice/moh/schedule/rules", async (req, reply) => {
     startAt:    z.string().datetime().nullable().optional(),
     endAt:      z.string().datetime().nullable().optional(),
     priority:   z.number().int().default(0),
-    // ── Targeting (additive; defaults preserve legacy tenant-wide/all behavior) ──
-    scope:      z.enum(["tenant", "extension"]).default("tenant"),
-    extension:  z.string().max(64).optional(),
-    callSource: z.string().max(32).optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
@@ -24408,30 +23355,12 @@ app.post("/voice/moh/schedule/rules", async (req, reply) => {
   // Verify schedule belongs to tenant
   const schedule = await (db as any).mohScheduleConfig.findUnique({ where: { id: d.scheduleId } });
   if (!schedule || schedule.tenantId !== tid) return reply.code(404).send({ error: "schedule_not_found" });
-
-  // Resolve + validate targeting.
-  const scope = d.scope;
-  const extension = scope === "extension" ? (d.extension ?? "") : "";
-  if (scope === "extension") {
-    if (normalizeMohExtension(extension) === null) return reply.code(400).send({ error: "invalid_payload", detail: "extension shape rejected" });
-    try { await assertExtensionExistsForTenantHelper(db as any, tid, extension); }
-    catch (err: any) { return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" }); }
-  }
-  let callSource = "";
-  const rawSrc = String(d.callSource ?? "").trim().toLowerCase();
-  if (rawSrc && rawSrc !== "all") {
-    const norm = normalizeMohCallSource(rawSrc);
-    if (!norm) return reply.code(400).send({ error: "invalid_source", detail: `callSource must be "all" or one of: ${MOH_CALL_SOURCES.join(", ")}` });
-    callSource = norm;
-  }
-
   const rule = await (db as any).mohScheduleRule.create({
     data: {
       scheduleId: d.scheduleId, profileId: d.profileId, ruleType: d.ruleType,
       weekday: d.weekday ?? null, startTime: d.startTime ?? null, endTime: d.endTime ?? null,
       startAt: d.startAt ? new Date(d.startAt) : null, endAt: d.endAt ? new Date(d.endAt) : null,
       priority: d.priority, isActive: true,
-      scope, extension, callSource,
     },
   });
   return reply.code(201).send({ rule });
@@ -24540,6 +23469,84 @@ app.post("/voice/moh/override/deactivate", async (req, reply) => {
     app.log.warn({ tenantId: tid, err: publishError }, "moh override: deactivated but immediate publish failed (worker will reconcile)");
   }
   return reply.send({ override, publishResult, publishError });
+});
+
+// ── POST /internal/agent/moh/override ────────────────────────────────────────
+// M1 (AI agent): the agent's ONLY door into hold-music changes. Shared-secret
+// internal endpoint (fail-closed when AGENT_INTERNAL_SECRET unset) driving the
+// SAME code path as the portal override routes above. Supports:
+//   read       → snapshot (override state + owned profiles + latest publish)
+//   activate   → override to one of the tenant's OWN profiles (+ optional expiry)
+//   deactivate → back to the schedule-derived state
+// Every change is attributed as agent:<agentActionId> for the audit chain.
+app.post("/internal/agent/moh/override", async (req, reply) => {
+  const { AgentMohOverrideRequest, agentMohSecretOk, shapeMohSnapshot, AGENT_MOH_HEADER } = await import("./agentMohOverride");
+  if (!agentMohSecretOk(req.headers[AGENT_MOH_HEADER])) return reply.code(403).send({ error: "forbidden" });
+  const parsed = AgentMohOverrideRequest.safeParse(req.body || {});
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
+  const d = parsed.data;
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  const actor = `agent:${d.agentActionId}`;
+
+  if (d.action === "read") {
+    const [override, profiles, latestPublish] = await Promise.all([
+      (db as any).mohOverrideState.findUnique({ where: { tenantId: tid } }),
+      (db as any).mohProfile.findMany({ where: { tenantId: tid } }),
+      (db as any).mohPublishRecord.findFirst({ where: { tenantId: tid }, orderBy: { publishedAt: "desc" } }),
+    ]);
+    return reply.send({ ok: true, snapshot: shapeMohSnapshot({ tenantId: tid, override, profiles, latestPublish }) });
+  }
+
+  if (d.action === "activate") {
+    // Ownership is enforced HERE as well as in the agent's scope fence
+    // (belt-and-suspenders): the profile must belong to this tenant.
+    const profile = await (db as any).mohProfile.findUnique({ where: { id: d.profileId } });
+    if (!profile || profile.tenantId !== tid) return reply.code(404).send({ error: "profile_not_found" });
+    if (!profile.isActive) return reply.code(409).send({ error: "profile_inactive" });
+    const override = await (db as any).mohOverrideState.upsert({
+      where: { tenantId: tid },
+      create: {
+        tenantId: tid, isActive: true, profileId: d.profileId,
+        reason: d.reason ?? null, expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
+        activatedAt: new Date(), activatedBy: actor, deactivatedAt: null, deactivatedBy: null,
+      },
+      update: {
+        isActive: true, profileId: d.profileId, reason: d.reason ?? null,
+        expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
+        activatedAt: new Date(), activatedBy: actor, deactivatedAt: null, deactivatedBy: null,
+      },
+    });
+    let publishResult: { recordId: string; mohClass: string; mode: string } | null = null;
+    let publishError: string | null = null;
+    try {
+      const r = await doMohPublish(tid, actor, "agent_override");
+      publishResult = { recordId: r.recordId, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
+      app.log.info({ tenantId: tid, actor, ...publishResult }, "agent moh override: activated + published");
+    } catch (pubErr: any) {
+      publishError = pubErr?.message ?? "publish failed";
+      app.log.warn({ tenantId: tid, actor, err: publishError }, "agent moh override: activated but publish failed (worker will reconcile)");
+    }
+    return reply.send({ ok: true, override, publishResult, publishError });
+  }
+
+  // deactivate — mirror of the portal deactivate route, agent-attributed.
+  const override = await (db as any).mohOverrideState.upsert({
+    where: { tenantId: tid },
+    create: { tenantId: tid, isActive: false, deactivatedAt: new Date(), deactivatedBy: actor },
+    update: { isActive: false, deactivatedAt: new Date(), deactivatedBy: actor },
+  });
+  let publishResult: { recordId: string; mohClass: string; mode: string } | null = null;
+  let publishError: string | null = null;
+  try {
+    const r = await doMohPublish(tid, actor, "agent_override");
+    publishResult = { recordId: r.recordId, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
+    app.log.info({ tenantId: tid, actor, ...publishResult }, "agent moh override: deactivated + published");
+  } catch (pubErr: any) {
+    publishError = pubErr?.message ?? "publish failed";
+    app.log.warn({ tenantId: tid, actor, err: publishError }, "agent moh override: deactivated but publish failed (worker will reconcile)");
+  }
+  return reply.send({ ok: true, override, publishResult, publishError });
 });
 
 // ── GET /voice/moh/preview ────────────────────────────────────────────────────
@@ -24696,13 +23703,6 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
   const extensionKeysToClear = computeExtensionKeysClearForRollback(targetKeysWritten, restoreKeys);
   if (extensionKeysToClear.length) {
     restoreKeys = [...restoreKeys, ...extensionKeysToClear];
-  }
-  // Same tombstone treatment for per-call-source keys (`/moh/src` families)
-  // that the target publish ADDED relative to the prior state. Empty string =
-  // "fall through to the tenant/extension default" in the dialplan resolver.
-  const sourceKeysToClear = computeSourceKeysClearForRollback(targetKeysWritten, restoreKeys);
-  if (sourceKeysToClear.length) {
-    restoreKeys = [...restoreKeys, ...sourceKeysToClear];
   }
   const restoredExtensionSnapshot = extractExtensionSnapshotFromKeys(restoreKeys);
 
@@ -25254,31 +24254,14 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
       id: true, pbxInstanceId: true, tenantId: true, tenantSlug: true,
       pbxGroupId: true, pbxTenantId: true, name: true, mohClassName: true, classType: true,
       isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
-      origin: true, loadedInAsterisk: true, selectable: true, unavailableReason: true, lastProbedAt: true,
     },
   });
   return reply.send({
-    classes: rows.map((row: any) => {
-      // Recompute playability defensively so a stale stored `selectable` never
-      // lets a fileless/unloaded class through the UI (source of truth = helper).
-      const play = computeMohPlayability({
-        isActive: Boolean(row.isActive),
-        loadedInAsterisk: row.loadedInAsterisk ?? null,
-        fileCount: row.fileCount ?? 0,
-        classType: row.classType ?? null,
-      });
-      const origin =
-        row.origin ?? classifyMohOrigin({ pbxTenantId: row.pbxTenantId, isDefault: row.isDefault, mohClassName: row.mohClassName });
-      return {
-        ...row,
-        displayName: row.name,
-        runtimeClass: row.mohClassName,
-        origin,
-        filesPresent: play.filesPresent,
-        selectable: play.selectable,
-        unavailableReason: play.unavailableReason,
-      };
-    }),
+    classes: rows.map((row: any) => ({
+      ...row,
+      displayName: row.name,
+      runtimeClass: row.mohClassName,
+    })),
   });
 });
 
@@ -25307,50 +24290,23 @@ app.post("/voice/moh/pbx-classes/auto-sync", async (req, reply) => {
     });
   }
 
-  // READ-ONLY live playability probe. Best-effort: if the PBX route helper does
-  // not implement `/moh-classes` yet (or is unreachable), we leave the live map
-  // undefined so the sync falls back to file-count-based playability without
-  // blocking any class. Never writes / reloads the PBX.
-  let liveMohClasses: Map<string, { loaded: boolean; fileCount?: number | null }> | undefined;
-  let liveProbe: { attempted: boolean; ok: boolean; count: number; reason?: string } = {
-    attempted: false, ok: false, count: 0,
-  };
-  const helperCfg = resolvePbxRouteHelperConfig(instance.id);
-  if (helperCfg) {
-    liveProbe.attempted = true;
-    try {
-      const probe = await getPbxMohClasses(helperCfg);
-      liveMohClasses = new Map(
-        (probe.classes || []).map((c) => [
-          String(c.name || "").trim().toLowerCase(),
-          { loaded: true, fileCount: typeof c.fileCount === "number" ? c.fileCount : null },
-        ]),
-      );
-      liveProbe = { attempted: true, ok: true, count: liveMohClasses.size };
-    } catch (e: any) {
-      // 404 = helper endpoint not deployed yet; anything else = transient.
-      liveProbe = { attempted: true, ok: false, count: 0, reason: e?.httpStatus === 404 ? "helper_endpoint_not_implemented" : (e?.message || "probe_failed") };
-    }
-  }
-
   const { syncMohClassesFromOmbutelMysql } = await import("./pbxOmbutelMohClassSync");
   const result = await syncMohClassesFromOmbutelMysql(
     db,
     instance.id,
     instance.ombuMysqlUrlEncrypted,
-    { deactivateMissing: body.data.deactivateMissing === true, liveMohClasses },
+    { deactivateMissing: body.data.deactivateMissing === true },
   );
 
-  app.log.info({ pbxInstanceId: instance.id, result, liveProbe }, "[MOH_CLASS_AUTO_SYNC] done");
+  app.log.info({ pbxInstanceId: instance.id, result }, "[MOH_CLASS_AUTO_SYNC] done");
   if (result.source === "skipped") {
     return reply.send({
       ok: false,
       skipReason: result.skipReason,
-      liveProbe,
       hint: "Set PbxInstance.ombuMysqlUrlEncrypted to an encrypted MySQL URL (same one used by DID sync).",
     });
   }
-  return reply.send({ ok: true, result, liveProbe });
+  return reply.send({ ok: true, result });
 });
 
 // ── POST /internal/voicemail-notify — trigger immediate sync for one mailbox ──
@@ -29828,6 +28784,7 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
     toExtension: z.string().nullable().optional(),
+    fromNumber: z.string().nullable().optional(),
   }).parse(req.body || {});
 
   // ── Resolve Connect tenantId ──────────────────────────────────────────────
@@ -29943,11 +28900,62 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     }
   }
 
+  // iOS killed-app wake via PushKit VoIP. The Expo INCOMING_CALL_WAKE above
+  // wakes Android + foreground/short-bg iOS, but it CANNOT wake a terminated
+  // iOS app - only a native APNs VoIP push (apns-push-type: voip) does that.
+  // Fire a real VoIP push to the ringing extension's iOS devices so a
+  // cold-killed iPhone wakes, registers SIP, and CallKit rings during the
+  // dialplan's wait-for-wake grace window. Reuses the Apple-compliant sender
+  // (fg-active gate + token invalidation + logging). SURGICAL: only when the
+  // target extension is known, so we never VoIP-push devices not being rung.
+  let voipWoken = 0;
+  if (input.toExtension && input.toExtension.trim() && isApnsVoipConfigured()) {
+    try {
+      const iosDevices = await db.mobileDevice.findMany({
+        where: { tenantId, userId: { in: candidateUserIds }, active: true, platform: "IOS" } as any,
+        select: { id: true, platform: true, voipPushToken: true, userId: true } as any,
+        take: 50,
+      }).catch((err: any) => {
+        app.log.warn({ err: err?.message, tenantId, linkedId: input.linkedId }, "prewake_voip_device_query_failed");
+        return [] as Array<{ id: string; platform: string; voipPushToken: string | null; userId: string | null }>;
+      });
+      const byUser = new Map<string, Array<{ id: string; platform: string; voipPushToken: string | null }>>();
+      for (const d of iosDevices as Array<{ id: string; platform: string; voipPushToken: string | null; userId: string | null }>) {
+        if (!d.voipPushToken) continue;
+        const u = typeof d.userId === "string" ? d.userId : "";
+        if (!u) continue;
+        if (!byUser.has(u)) byUser.set(u, []);
+        byUser.get(u)!.push({ id: d.id, platform: d.platform, voipPushToken: d.voipPushToken });
+      }
+      for (const [uid, devs] of byUser) {
+        voipWoken += devs.length;
+        await sendApnsVoipPushesForIncomingCallApi({
+          tenantId,
+          userId: uid,
+          callId: input.linkedId,
+          voipPayload: {
+            callId: input.linkedId,
+            tenantId,
+            toExtension: input.toExtension.trim(),
+            callerNumber: input.fromNumber?.trim() || null,
+            callerName: null,
+            timestamp: wakeRequestedAt,
+          },
+          devices: devs,
+        }).catch((err: any) =>
+          app.log.warn({ err: err?.message, tenantId, userId: uid, linkedId: input.linkedId }, "prewake_voip_send_failed"),
+        );
+      }
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, linkedId: input.linkedId }, "prewake_voip_block_error");
+    }
+  }
+
   app.log.info(
-    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, toExtension: input.toExtension ?? null },
+    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, voipWoken, toExtension: input.toExtension ?? null },
     "mobile-prewake: done",
   );
-  return { ok: true, woken, candidates: candidateUserIds.length };
+  return { ok: true, woken, voipWoken, candidates: candidateUserIds.length };
 });
 
 // ─── Push-wake config publisher (admin/internal) ─────────────────────────────
@@ -30607,72 +29615,6 @@ app.post("/mobile/wake/event", async (req, reply) => {
   return reply.send({ ok: true });
 });
 
-// ─── Mobile DND status report (Connect-owned app-level DND — NOT VitalPBX's
-// native feature-code DND, an unrelated mechanism) ───────────────────────────
-// Fire-and-forget target for the mobile app's dndStore (apps/mobile/src/sip/dndStore.ts).
-// Lets [connect-wake-core]'s DND short-circuit (scripts/pbx/install-connect-wake-dialplan.sh)
-// skip ConnectWake/grace/ringback for a swiped-away app that has DND on,
-// instead of treating it like a normal cold-swiped wakeable device.
-//
-// The client supplies ONLY its own dnd boolean — no tenant/extension
-// identifiers. The API resolves the caller's OWN active extension(s) from
-// ownership records (db.extension.ownerUserId scoped to user.tenantId) and
-// the caller's tenant's numeric VitalPBX tenant id (db.tenantPbxLink), then
-// relays to telephony's narrowly-scoped /telephony/internal/dnd-publish route
-// once per owned extension. A client can never write DND for any tenant/
-// extension other than its own — there is no client-supplied family/key/ext
-// input anywhere in this path.
-//
-// Best-effort by design: a user with no linked PBX extension yet, or a
-// tenant with no TenantPbxLink, is NOT an error — the endpoint still returns
-// 200 `{ ok: true, published: 0, skipped: [...] }`. A transient provisioning
-// gap on the backend must never surface as a mobile-side error/retry storm,
-// matching the existing "DND must never break call handling" philosophy
-// already used throughout apps/mobile/src/sip/dndStore.ts. Per-extension
-// telephony relay failures are likewise reported in `skipped`, not thrown.
-app.post("/mobile/dnd-status", async (req, reply) => {
-  const user = req.user as JwtUser | undefined;
-  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
-
-  const parsed = parseDndStatusBody(req.body);
-  if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
-
-  const [extensionRows, tenantLink] = await Promise.all([
-    db.extension.findMany({
-      where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
-      select: { extNumber: true },
-    }),
-    db.tenantPbxLink
-      .findFirst({ where: { tenantId: user.tenantId }, select: { pbxTenantId: true } })
-      .catch(() => null),
-  ]);
-
-  const extNumbers = [
-    ...new Set(extensionRows.map((e) => String(e.extNumber || "").trim()).filter(Boolean)),
-  ];
-  const pbxTenantId = tenantLink?.pbxTenantId ? String(tenantLink.pbxTenantId) : null;
-  const { publishable, skipped } = planDndPublishTargets(extNumbers, pbxTenantId);
-
-  const nowMs = Date.now();
-  let published = 0;
-  const failed: Array<{ extNumber: string; reason: string }> = [];
-  for (const extNumber of publishable) {
-    try {
-      await publishDndToAstDb(buildDndPublishPayload(pbxTenantId as string, extNumber, parsed.dnd, nowMs));
-      published++;
-    } catch (err: any) {
-      const reason = err?.message ?? "telephony_relay_failed";
-      failed.push({ extNumber, reason });
-      app.log.warn(
-        { err: reason, extNumber, tenantId: user.tenantId },
-        "mobile/dnd-status: telephony relay failed",
-      );
-    }
-  }
-
-  return reply.send({ ok: true, dnd: parsed.dnd, published, skipped: [...skipped, ...failed] });
-});
-
 // ─── iOS foreground-active heartbeat ────────────────────────────────────────
 // The iOS Connect app POSTs here (~every 15s) while it is FOREGROUND and holds a
 // live SIP socket, so the incoming-call pipeline can skip the APNs VoIP push for
@@ -30705,10 +29647,8 @@ app.post("/mobile/foreground-active", async (req, reply) => {
   const key = "ios_fg_active:" + device.id;
   try {
     if (body.data.active) {
-      // SHORT 10s TTL; the client re-pings every ~4s. A short TTL is what makes
-      // the force-quit case safe: a killed app cannot clear this flag, so we rely
-      // on the flag expiring quickly (<=10s) to resume VoIP pushes (native CallKit
-      // ring) for a phone that is no longer foreground-active.
+      // ~10s TTL; the client re-pings every ~4s, well within that window, so a
+      // force-quit (pings stop) resumes the VoIP push within ~10s.
       await redis.set(key, "1", "EX", 10);
     } else {
       await redis.del(key);
@@ -35928,4 +34868,152 @@ const port = Number(process.env.PORT || 3001);
       app.log.warn({ pbxWsEndpoint }, "PBX_WS_ENDPOINT uses insecure ws:// — browsers require wss://");
     } else if (pbxWsEndpoint.includes(":8088") || pbxWsEndpoint.includes(":5060")) {
       app.log.warn({ pbxWsEndpoint }, "PBX_WS_ENDPOINT port looks stale — expected :8089/ws");
-  
+    } else {
+      app.log.info({ pbxWsEndpoint }, "PBX WebSocket endpoint OK");
+    }
+  }
+
+  if (!turnServerEnv) {
+    app.log.warn(
+      "TURN_SERVER is NOT set — audio will likely fail for users behind strict/symmetric NAT. " +
+      "Install coturn on the backend server and set TURN_SERVER, TURN_USERNAME, TURN_PASSWORD."
+    );
+  } else {
+    app.log.info(
+      {
+        turnServer: turnServerEnv,
+        authMode: turnAuthSecretEnv ? "hmac-use-auth-secret" : "static-credentials",
+        turnAuthSecret: turnAuthSecretEnv ? "(set)" : "(not set)",
+        turnUsername: !turnAuthSecretEnv && turnUsernameEnv ? "(set)" : "(not set — using hmac)",
+        turnPassword: !turnAuthSecretEnv && turnPasswordEnv ? "(set)" : "(not set — using hmac)",
+      },
+      "TURN server configured"
+    );
+  }
+
+  app.log.info(
+    { stunServer: stunServerEnv },
+    "STUN server configured"
+  );
+
+  if (missingAtStart.length > 0) {
+    app.log.warn({ missingAtStart }, "WebRTC provisioning is INCOMPLETE — see warnings above");
+  } else {
+    app.log.info("WebRTC telephony env config OK");
+  }
+
+  await registerBillingRoutes(app);
+  await registerPlatformRolePermissionRoutes(app);
+  await registerCustomRoleRoutes(app);
+  await registerOnboardingPublicRoutes(app);
+  await registerOnboardingProvisioningRoutes(app);
+  registerUserExtensionProvisioningRoutes(app, {
+    getUser: getUser as any,
+    requirePermission: requirePermission as any,
+    canManageUsers: canManageUsers as any,
+    resolveManagedTenant: resolveManagedTenant as any,
+    // Wrap the real sync signature (db, pbxInstanceId, client, options) into a
+    // tenantId-only callable. Returns a no-op result if the tenant has no PBX
+    // link, so an admin clicking "Re-sync credentials" never crashes.
+    syncExtensionsFromPbx: async (tenantId: string) => {
+      const link = await db.tenantPbxLink.findUnique({
+        where: { tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!link) return { skipped: "pbx_not_linked" };
+      const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+      const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45000 });
+      const vitalTenantId = link.pbxTenantId || undefined;
+      return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, {
+        ...(vitalTenantId ? { vitalTenantId } : {}),
+      });
+    },
+    audit: audit as any,
+    encryptJson,
+    resetSipPasswordOnPbx: async (linkId) => {
+      const link = await db.pbxExtensionLink.findUnique({
+        where: { id: linkId },
+        include: { tenant: { select: { id: true } } },
+      });
+      if (!link) return null;
+      const tenantPbxLink = await db.tenantPbxLink.findUnique({
+        where: { tenantId: link.tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!tenantPbxLink) return null;
+      const auth = decryptJson<{ token: string; secret?: string }>(
+        tenantPbxLink.pbxInstance.apiAuthEncrypted,
+      );
+      const out = await getWirePbxClient({
+        baseUrl: tenantPbxLink.pbxInstance.baseUrl,
+        token: auth.token,
+        secret: auth.secret,
+        timeoutMs: 45000,
+      }).resetPassword(link.pbxExtensionId);
+      return { sipPassword: out.sipPassword };
+    },
+    createWebrtcDeviceOnPbx: async (linkId) => {
+      const link = await db.pbxExtensionLink.findUnique({
+        where: { id: linkId },
+        include: { tenant: { select: { id: true } } },
+      });
+      if (!link) return null;
+      const tenantPbxLink = await db.tenantPbxLink.findUnique({
+        where: { tenantId: link.tenantId },
+        include: { pbxInstance: true },
+      });
+      if (!tenantPbxLink) return null;
+      const auth = decryptJson<{ token: string; secret?: string }>(
+        tenantPbxLink.pbxInstance.apiAuthEncrypted,
+      );
+      return getWirePbxClient({
+        baseUrl: tenantPbxLink.pbxInstance.baseUrl,
+        token: auth.token,
+        secret: auth.secret,
+        timeoutMs: 45000,
+      }).createSipDevice({ pbxExtensionId: link.pbxExtensionId, enableWebrtc: true });
+    },
+  });
+  registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
+  await registerCrmRoutes(app, { smsQueue });
+  await app.listen({ host: "0.0.0.0", port });
+  markListeningComplete();
+  hostMetricsCollector.start();
+  startServerHealthRefresh(serverHealthDeps);
+
+  const shutdownBudgetMs = Math.min(Math.max(Number(process.env.CONNECT_API_SHUTDOWN_MS ?? 55000), 3000), 120_000);
+  const shutdown = async (signal: NodeJS.Signals) => {
+    const t0 = Date.now();
+    app.log.warn(
+      { signal, phase: "shutdown_begin", timers: shutdownRegisteredTimerCount(), budgetMs: shutdownBudgetMs },
+      "api_sigterm_received",
+    );
+    markNotAcceptingTraffic();
+    stopServerHealthRefresh();
+    hostMetricsCollector.stop();
+    try {
+      await Promise.race([
+        app.close(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(Object.assign(new Error("shutdown_timeout"), { name: "ShutdownTimeout" })), shutdownBudgetMs),
+        ),
+      ]);
+      app.log.warn({ signal, phase: "shutdown_complete", elapsedMs: Date.now() - t0 }, "api_shutdown_complete");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      app.log.error({ signal, phase: "shutdown_error", elapsedMs: Date.now() - t0, err: msg }, "api_shutdown_forced");
+    } finally {
+      clearRegisteredShutdownTimers();
+      process.exit(0);
+    }
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+
+  startPbxKpiBackgroundRefresh();
+  startPbxLiveDashboardWarm();
+  startPbxTenantListWarm();
+})().catch((e) => {
+  app.log.error(e);
+  process.exit(1);
+});

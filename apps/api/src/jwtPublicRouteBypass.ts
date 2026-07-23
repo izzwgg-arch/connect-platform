@@ -32,6 +32,10 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.endsWith("/internal/telephony/inbound-crm-match");
   const isInternalVoicemailNotifyPath =
     path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
+  // M1 (AI agent): agent-service MOH override door. Authenticates in-handler via
+  // the AGENT_INTERNAL_SECRET shared-secret header (fail-closed when unset).
+  const isInternalAgentMohPath =
+    path === "/internal/agent/moh/override" || path.endsWith("/internal/agent/moh/override");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -56,6 +60,9 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.startsWith("/billing/invoices/pay/")
     || path.startsWith("/billing/platform/invoices/pay/")
     || path.includes("/billing/platform/invoices/pay/")
+    // Multi-invoice short pay links (/p/{code} page): public view/config/pay by code.
+    || path.startsWith("/billing/platform/pay-links/")
+    || path.includes("/billing/platform/pay-links/")
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
     || isInternalMobileRingPath
@@ -64,6 +71,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalPbxContactStatusPath
     || isInternalTelephonyPath
     || isInternalVoicemailNotifyPath
+    || isInternalAgentMohPath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath

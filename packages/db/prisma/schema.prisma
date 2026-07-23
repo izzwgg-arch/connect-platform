@@ -2800,6 +2800,13 @@ model Voicemail {
   callbackReminderFiredAt   DateTime? // when the due-alert was delivered
   callbackReminderAckAt     DateTime? // when the setter dismissed the alert
 
+  // ── Auto-transcription (agent): Yiddish → ivrit engine, English → GPT ──
+  transcript          String? // transcript text in the spoken language
+  transcriptLanguage  String? // "yi" | "en" | "yi-en"
+  transcriptEngine    String? // internal engine tag (never shown on frontend)
+  transcribedAt       DateTime?
+  transcriptError     String? // last failure reason; null when ok
+
   @@index([tenantId])
   @@index([extension])
   @@index([receivedAt])
@@ -5771,10 +5778,32 @@ model AgentConversation {
   status       AgentConversationStatus @default(OPEN)
   startedAt    DateTime                @default(now())
   closedAt     DateTime?
+  /// X2: when this closed conversation's summary landed in the user's dossier.
+  /// Null on CLOSED rows = pending sweep (idempotent, crash-safe).
+  dossierRecordedAt DateTime?
   messages     AgentMessage[]
 
   @@index([tenantId, startedAt])
   @@index([tenantId, status])
+  @@index([status, dossierRecordedAt])
+}
+
+/// X2: every user's running markdown dossier — a summary block per closed
+/// conversation plus a compacted digest of older ones. RECORDING IS
+/// UNCONDITIONAL (Izzy, 2026-07-23): written for every tenant/user, always;
+/// the history visibility toggle affects display only, never recording.
+model AgentUserDossier {
+  id           String   @id @default(cuid())
+  tenantId     String
+  clientUserId String
+  dossierMd    String   @default("")
+  /// Optimistic-concurrency revision (compare-and-set on update).
+  rev          Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([tenantId, clientUserId])
+  @@index([tenantId])
 }
 
 model AgentMessage {
@@ -5792,6 +5821,24 @@ model AgentMessage {
   createdAt      DateTime          @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+/// Persistent translation cache for the Yiddish Labs bridge. Keyed by
+/// (action, srcHash). A hit returns instantly with zero YL credits, so fixed
+/// templates + repeated phrases never re-hit YL's ~9s output leg. Additive.
+model AgentTranslation {
+  id        String   @id @default(cuid())
+  action    String /// translate-yiddish | translate-english | translate-hebrew | translate-lk
+  srcHash   String /// sha256(normalized srcText), truncated
+  srcText   String /// normalized source (truncated), for review/debug
+  outText   String /// translated output (the cached value)
+  hits      Int      @default(0)
+  pinned    Boolean  @default(false) /// pre-warmed template — never evicted
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([action, srcHash])
+  @@index([action, srcHash])
 }
 
 /// A requested change. Client actions wait in PENDING_APPROVAL for a human;
@@ -5817,6 +5864,8 @@ model AgentAction {
   revertOfId     String?           @unique /// set on the mirror action that undoes this one
   resultSnapshot Json? /// pre-change state captured for revert/rollback
   errorDetail    String?
+  paramsHash     String? /// X1: sha256 binding of capability+tenant+frozen params (modify/repair caps only)
+  approvalConsumedAt DateTime? /// X1: single-use approval consumption timestamp (modify/repair caps only)
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -6009,4 +6058,33 @@ model AgentPbxObject {
   @@unique([pbxObjectType, pbxObjectId, simulated])
   @@index([pbxTenantId])
   @@index([state])
+}
+
+/// X1 (ACTIONS_V2_ROADMAP): checksummed "before photo" captured before EVERY
+/// modify/repair write. Powers verify-after-write auto-revert and the owner's
+/// one-click revert window. Additive table — nothing existing reads or writes it.
+model AgentPbxSnapshot {
+  id           String    @id @default(cuid())
+  /// The AgentAction this snapshot belongs to (one snapshot per action).
+  actionId     String    @unique
+  capabilityId String
+  tenantId     String
+  /// e.g. "moh_tenant" | "inbound_route" | "ivr" — the ModifyOp kind.
+  objectType   String
+  objectId     String
+  /// Full pre-change state of the one target object.
+  stateJson    Json
+  /// sha256 of the canonical JSON of stateJson — integrity-checked before any restore.
+  checksum     String
+  /// Which proven write path captured it: "astdb" | "api" | "helper".
+  source       String
+  /// Simulation snapshots never describe real PBX state.
+  simulated    Boolean   @default(false)
+  capturedAt   DateTime  @default(now())
+  restoredAt   DateTime?
+  /// One-click revert available until here (AGENT_MODIFY_REVERT_DAYS, default 7d).
+  expiresAt    DateTime
+
+  @@index([tenantId, objectType, objectId])
+  @@index([expiresAt])
 }

@@ -73,6 +73,13 @@ export interface RateLimitLike {
   check(tenantId: string, kind: "messages", opts?: { now?: number }): string | null;
 }
 
+/**
+ * X2: builds the verified identity + dossier system block for a session.
+ * ok:false ⇒ identity could not be verified/built ⇒ the session runs
+ * FAIL-CLOSED info-only: no triage (no diagnostics, no action drafting).
+ */
+export type ContextProvider = (ctx: ChatContext) => Promise<{ ok: true; block: string | null } | { ok: false; reason?: string }>;
+
 export class ConversationEngine {
   constructor(
     private store: ConversationStore,
@@ -82,6 +89,7 @@ export class ConversationEngine {
     private rateLimiter: RateLimitLike | null = null,
     private translator: TranslatorLike | null = null,
     private bridgeEnabled = false,
+    private contextProvider: ContextProvider | null = null,
   ) {}
 
   /** Is the YL translate-bridge active for this turn? Yiddish + YL configured + enabled. */
@@ -180,6 +188,36 @@ export class ConversationEngine {
       return { conversationId: conv.id, reply, language, degraded: true };
     }
 
+    // ── X2 IDENTITY ── Build the verified identity + dossier block. Identity
+    // comes from the server-verified ctx, NEVER from chat text. If the build
+    // fails, the session is FAIL-CLOSED info-only: no triage (no diagnostics,
+    // no action drafting) — take a message and suggest re-login.
+    let identityBlock: string | null = null;
+    let infoOnly = false;
+    if (this.contextProvider) {
+      try {
+        const idr = await this.contextProvider(ctx);
+        if (idr.ok) identityBlock = idr.block;
+        else {
+          infoOnly = true;
+          await this.audit.record({ actor: "system", event: "identity.fail_closed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { reason: (idr as any).reason ?? "unknown" } });
+        }
+      } catch (err) {
+        infoOnly = true;
+        await this.audit.record({ actor: "system", event: "identity.fail_closed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { reason: String(err) } });
+      }
+    }
+    if (infoOnly) {
+      const english =
+        "I couldn't verify your account details just now, so to be safe I can only take a message — no lookups or changes. Your message has been recorded for the team. Logging out and back in usually fixes this.";
+      if (bridging) return this.finishBridged(conv, ctx, english, "identity-failclosed", true);
+      const reply = language === "yi"
+        ? "איך האָב יעצט נישט געקענט באַשטעטיקן אײַער קאָנטע, דעריבער קען איך בלויז איבערגעבן אַ מעסעדזש צום טים. ביטע פּרובירט זיך אויסלאָגן און ווידער אײַנלאָגן."
+        : english;
+      await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "identity-failclosed" });
+      return { conversationId: conv.id, reply, language, degraded: true };
+    }
+
     // Triage: if the message is an actionable intent (diagnostic or a catalog
     // action) and a triage orchestrator is wired, handle it deterministically
     // (policy-gated, approval-gated) before falling back to conversational LLM.
@@ -209,6 +247,7 @@ export class ConversationEngine {
     const history = await this.store.listMessages(conv.id, 100);
     const msgs: ChatMessage[] = [
       { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
+      ...(identityBlock ? [{ role: "system" as const, content: identityBlock }] : []),
       ...history.slice(-20).map((m) => ({
         role: (m.role === "assistant" ? "assistant" : "user") as "assistant" | "user",
         content: bridging ? (m.contentEn ?? m.content) : m.content,

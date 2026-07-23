@@ -48,6 +48,7 @@
     { "id": "pbx.P11", "kind": "action", "roles": ["owner"], "title": "Create queue", "pbxWrite": true, "status": "certified", "liveEnabled": false },
     { "id": "pbx.P12", "kind": "action", "roles": ["owner"], "title": "Create time condition / time group", "pbxWrite": true, "status": "certified", "liveEnabled": false },
     { "id": "pbx.P13", "kind": "action", "roles": ["owner"], "title": "Create virtual ext / conference / parking / feature code", "pbxWrite": true, "status": "certified", "liveEnabled": false },
-    { "id": "pbx.P14", "kind": "action", "roles": ["owner"], "title": "Upload IVR prompt audio (Voice Studio)", "pbxWrite": true, "status": "certified", "liveEnabled": false }
+    { "id": "pbx.P14", "kind": "action", "roles": ["owner"], "title": "Upload IVR prompt audio (Voice Studio)", "pbxWrite": true, "status": "certified", "liveEnabled": false },
+    { "id": "pbx.M1", "kind": "action", "roles": ["owner", "customer"], "title": "Change tenant music-on-hold — inbound + outbound + ALL queues (M1; tenant-owner requesters only; Izzy approves every execution)", "pbxWrite": true, "status": "built", "defaultCustomerMode": "ask_owner", "liveEnabled": false }
   ]
 }

@@ -21,7 +21,15 @@ import { ActionService } from "./actions/service";
 import { registerActionRoutes } from "./actions/routes";
 import { makePbxBackend } from "./actions/pbxBackend";
 import { ScopedPbxExecutor } from "./pbx/executor";
+import { ModifyPbxExecutor } from "./pbx/modifyExecutor";
+import { makeModifyBackend } from "./pbx/modifyBackend";
+import { SnapshotStore } from "./pbx/snapshotStore";
+import { makeScopeCheck } from "./pbx/scopeCheck";
+import { buildModifyCatalog } from "./pbx/modifyCatalog";
+import { makeMohApiClient } from "./pbx/mohApiClient";
 import { makePbxClientFactory } from "./pbx/client";
+import { buildIdentityContext, renderIdentityBlock } from "./channels/identityContext";
+import { DossierService } from "./conversation/dossier";
 import { TriageOrchestrator } from "./triage/orchestrator";
 import { WatchmanRunner } from "./watchman/runner";
 import { registerAdminRoutes } from "./actions/adminRoutes";
@@ -84,11 +92,38 @@ async function main() {
       audit,
       makePbxClientFactory({ baseUrl: process.env.PBX_BASE_URL, apiToken: process.env.PBX_API_TOKEN }),
     );
+    // X1 Modify pipeline — MODIFY_CATALOG is EMPTY and the client factory below
+    // HARDCODES simulate:true (the live client is deliberately not wired; that
+    // happens per-capability from M1 on, each under its own certification).
+    // X2 wired the real G3 scope resolver (Connect-mirror ownership proof;
+    // unmapped objectTypes still refuse fail-closed).
+    const pbxReadFactory = makePbxClientFactory({ baseUrl: process.env.PBX_BASE_URL, apiToken: process.env.PBX_API_TOKEN });
+    const modifyExecutor = new ModifyPbxExecutor(
+      prisma,
+      audit,
+      new SnapshotStore(prisma),
+      () => pbxReadFactory({ simulate: true, allowConfigMutations: false }),
+      {
+        scopeCheck: makeScopeCheck(prisma),
+        // M1: first wired capability — tenant MOH via the api's internal door.
+        // Live dispatch still requires the FULL gate chain (master switch, T21
+        // allow-list, Izzy-bound single-use approval, snapshot, verify).
+        catalog: buildModifyCatalog({ prisma, mohApi: makeMohApiClient() }),
+      },
+    );
+    const modifyBackend = makeModifyBackend(modifyExecutor);
     actionService = new ActionService(
       prisma,
       audit,
       notifier,
-      { "pbx.": makePbxBackend(pbxExecutor), "action.": makePbxBackend(pbxExecutor) },
+      {
+        "pbx.": makePbxBackend(pbxExecutor),
+        "action.": makePbxBackend(pbxExecutor),
+        // Longest-prefix routing sends pbx.M*/pbx.E* here, not to "pbx.".
+        "pbx.M": modifyBackend,
+        "pbx.E": modifyBackend,
+        "repair.": modifyBackend,
+      },
       { approvalBaseUrl: process.env.AGENT_PUBLIC_BASE_URL, liveWrites: process.env.AGENT_PBX_LIVE_WRITES === "1" },
     );
 
@@ -118,7 +153,11 @@ async function main() {
     const secrets = new SecretStore(prisma, secCrypto, audit);
     const providerKeys = {
       openaiApiKey: (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey,
-      everettApiKey: cfg.everettApiKey,
+      // Everett == ivrit.ai on RunPod. Owner pastes the RunPod key from the
+      // Assistant page (secret "ivrit_api_key"); endpoint id is config with a
+      // sensible default so it works out of the box.
+      everettApiKey: (await secrets.get("ivrit_api_key")) ?? cfg.everettApiKey,
+      everettEndpointId: process.env.IVRIT_ENDPOINT_ID || cfg.everettEndpointId || "536xyqv8oyqygx",
       yiddishLabsApiKey: (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey,
     };
     const anthropicResolved = (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey;
@@ -128,13 +167,88 @@ async function main() {
     // so saving a key from the Assistant page hot-reloads with no restart. When a
     // Yiddish chat comes in, YL translates it to English for the LLM and the
     // English reply back to authentic Yiddish — the model never emits Yiddish.
+    //
+    // SPEED: every translation goes through a persistent cache first. YL's
+    // English→Yiddish leg is a fixed ~7–10s; a cache hit returns in 0ms with 0
+    // credits, so fixed templates + repeated phrases are instant.
     const { YiddishLabsClient: YLClient } = await import("./transcription/yiddishlabs");
+    const { TranslationCache } = await import("./transcription/translationCache");
+    const { PREWARM_EN, PREWARM_YI } = await import("./transcription/prewarm");
+    const translationCache = new TranslationCache(prisma);
+    const translateCached = async (action: "translate-english" | "translate-yiddish", text: string) => {
+      const cached = await translationCache.get(action, text);
+      if (cached != null) return { text: cached, creditsConsumed: 0, cached: true };
+      const cli = new YLClient(providerKeys.yiddishLabsApiKey);
+      const r = action === "translate-english" ? await cli.toEnglish(text) : await cli.toYiddish(text);
+      if (r.text) await translationCache.set(action, text, r.text);
+      return { ...r, cached: false };
+    };
     const yiddishBridge = {
       get configured() { return !!providerKeys.yiddishLabsApiKey; },
-      toEnglish: (t: string) => new YLClient(providerKeys.yiddishLabsApiKey).toEnglish(t),
-      toYiddish: (t: string) => new YLClient(providerKeys.yiddishLabsApiKey).toYiddish(t),
+      toEnglish: (t: string) => translateCached("translate-english", t),
+      toYiddish: (t: string) => translateCached("translate-yiddish", t),
     };
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge);
+    // X2: verified identity + per-user dossier at session open. Recording is
+    // UNCONDITIONAL — the history visibility toggle never suppresses it.
+    const dossiers = new DossierService(prisma, audit, router);
+    const contextProvider = async (ctx: { tenantId: string; clientUserId: string | null }) => {
+      const built = await buildIdentityContext(prisma, ctx);
+      if (!built.ok) return { ok: false as const, reason: built.reason };
+      const dossierMd = ctx.clientUserId ? await dossiers.load(ctx.tenantId, ctx.clientUserId) : null;
+      return { ok: true as const, block: renderIdentityBlock(built.context, dossierMd) };
+    };
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider);
+
+    // Warm the in-memory cache from the DB, then pre-translate fixed templates
+    // (once) so common replies are instant. Runs in the background — never
+    // blocks boot, and no-ops without a YL key.
+    const prewarmTemplates = async () => {
+      await translationCache.warmFromDb();
+      if (!providerKeys.yiddishLabsApiKey) return;
+      const cli = new YLClient(providerKeys.yiddishLabsApiKey);
+      let warmed = 0;
+      for (const en of PREWARM_EN) {
+        if ((await translationCache.get("translate-yiddish", en)) != null) continue;
+        try { const r = await cli.toYiddish(en); if (r.text) { await translationCache.set("translate-yiddish", en, r.text, true); warmed++; } } catch { /* skip */ }
+      }
+      for (const yi of PREWARM_YI) {
+        if ((await translationCache.get("translate-english", yi)) != null) continue;
+        try { const r = await cli.toEnglish(yi); if (r.text) { await translationCache.set("translate-english", yi, r.text, true); warmed++; } } catch { /* skip */ }
+      }
+      await audit.record({ actor: "system", event: "translation.prewarmed", payload: { warmed, ...translationCache.stats() } });
+      return warmed;
+    };
+    void prewarmTemplates();
+
+    // ivrit.ai (RunPod) keep-warm: ping the endpoint on an interval so a worker
+    // stays hot and transcription avoids cold starts. Off by default; enable with
+    // AGENT_IVRIT_KEEPWARM=1 (also raise the endpoint Idle Timeout in RunPod).
+    if (process.env.AGENT_IVRIT_KEEPWARM === "1") {
+      const { startIvritKeepWarm } = await import("./transcription/keepwarm");
+      const hoursParts = (process.env.AGENT_IVRIT_KEEPWARM_HOURS || "").split("-").map((s) => Number(s.trim()));
+      startIvritKeepWarm({
+        apiKey: () => providerKeys.everettApiKey,
+        endpointId: () => providerKeys.everettEndpointId,
+        model: process.env.EVERETT_MODEL || "ivrit-ai/yi-whisper-large-v3-turbo-ct2",
+        intervalSec: Number(process.env.AGENT_IVRIT_KEEPWARM_INTERVAL_SEC || 240),
+        hours: hoursParts.length === 2 && hoursParts.every((n) => Number.isFinite(n)) ? [hoursParts[0], hoursParts[1]] : undefined,
+        audit,
+      });
+      await audit.record({ actor: "system", event: "ivrit.keepwarm_started", payload: { intervalSec: Number(process.env.AGENT_IVRIT_KEEPWARM_INTERVAL_SEC || 240), hours: process.env.AGENT_IVRIT_KEEPWARM_HOURS || "always" } });
+    }
+
+    // Owner console — translation cache visibility + manual pre-warm.
+    app.get("/agent/admin/translations/stats", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      let dbCount = 0, pinned = 0;
+      try { dbCount = await prisma.agentTranslation.count(); pinned = await prisma.agentTranslation.count({ where: { pinned: true } }); } catch { /* ignore */ }
+      return { cache: translationCache.stats(), dbEntries: dbCount, pinnedTemplates: pinned };
+    });
+    app.post("/agent/admin/translations/prewarm", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const warmed = await prewarmTemplates();
+      return { ok: true, warmed, stats: translationCache.stats() };
+    });
 
     registerChatRoutes(app, engine);
     registerDiagRoutes(app, diagEngine);
@@ -206,6 +320,7 @@ async function main() {
     setInterval(() => {
       engine?.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
       actionService?.tick().catch((err) => app.log.error({ err }, "action tick failed"));
+      dossiers.sweep().catch((err) => app.log.error({ err }, "dossier sweep failed"));
     }, 5 * 60 * 1000).unref();
 
     // Watchman: read-only security + health monitoring loop (hourly). Detect +
@@ -268,11 +383,14 @@ async function main() {
     app.post("/agent/corpus/approve", async (req, reply) => {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
-      await corpus.approve(b.recordingId);
-      return { ok: true };
+      const result = await corpus.approve(b.recordingId);
+      return { ok: true, ...result };
     });
     app.get("/agent/corpus/stats", async (req, reply) => (corpusAuth(req) ? corpus.stats() : reply.code(403).send({ error: "forbidden" })));
     app.get("/agent/corpus/review-queue", async (req, reply) => (requireOwner(req) ? { queue: await corpus.reviewQueue() } : reply.code(403).send({ error: "forbidden" })));
+    // Compliance evidence: proves Yiddish Labs was used for transcription only,
+    // never model training (yiddishLabsTrainingEligible must be 0).
+    app.get("/agent/compliance/no-training", async (req, reply) => (requireOwner(req) ? corpus.complianceReport() : reply.code(403).send({ error: "forbidden" })));
 
     // Archive ingestor: point at a mounted drive of audio (thousands of hours)
     // and it works through it 24/7. Registered path lives in AGENT_ARCHIVE_ROOT
@@ -339,6 +457,19 @@ async function main() {
       }
     });
 
+    // Everett (ivrit.ai on RunPod) admin — configuration + transcript counts.
+    app.get("/agent/everett/status", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      let count = 0;
+      try { count = await prisma.agentTranscript.count({ where: { model: "everett" } }); } catch { /* table may be empty */ }
+      return {
+        configured: !!providerKeys.everettApiKey && !!(providerKeys as any).everettEndpointId,
+        endpointConfigured: !!(providerKeys as any).everettEndpointId,
+        activeOverride: (process.env.AGENT_STT_PROVIDER ?? "").trim() || null,
+        transcripts: count,
+      };
+    });
+
     // Owner console — provider self-test (owner JWT, no shared secret needed).
     // Pings the chosen provider so the Assistant page can prove Sonnet/Opus/GPT
     // actually respond. Blocked while the agent is disabled (kill switch).
@@ -373,7 +504,7 @@ async function main() {
       const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
       if (id?.role !== "owner") return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
-      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key"];
+      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key"];
       if (!valid.includes(b.key) || typeof b.value !== "string") return reply.code(400).send({ error: "bad_request" });
       try {
         await secrets.set(b.key, b.value, `owner:${id.clientUserId}`);
@@ -383,6 +514,7 @@ async function main() {
       // Hot-reload the affected client so it takes effect immediately.
       providerKeys.openaiApiKey = (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey;
       providerKeys.yiddishLabsApiKey = (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey;
+      providerKeys.everettApiKey = (await secrets.get("ivrit_api_key")) ?? cfg.everettApiKey;
       router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey });
       return { ok: true, status: await secrets.status() };
     });
@@ -393,22 +525,231 @@ async function main() {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
       if (typeof b.audioBase64 !== "string" || b.audioBase64.length < 32) return reply.code(400).send({ error: "no_audio" });
-      const key = providerKeys.yiddishLabsApiKey;
-      if (!key) return { ok: false, error: "yiddishlabs_not_configured" };
       let buf: Buffer;
       try { buf = Buffer.from(b.audioBase64.replace(/^data:[^,]+,/, ""), "base64"); } catch { return reply.code(400).send({ error: "bad_audio" }); }
+      const filename = b.filename || "mic.webm";
+      const engine = (typeof b.engine === "string" ? b.engine : "openai").toLowerCase();
+
+      // ENGINE SELECTOR (owner can A/B from the Assistant page):
+      //   ivrit.ai (Everett/RunPod) — Hebrew/Yiddish-tuned Whisper
+      if (engine === "ivrit" || engine === "everett") {
+        if (!providerKeys.everettApiKey || !providerKeys.everettEndpointId) return { ok: false, error: "ivrit_not_configured", engine: "ivrit.ai" };
+        try {
+          const { EverettClient } = await import("./transcription/everett");
+          const cli = new EverettClient(providerKeys.everettApiKey, providerKeys.everettEndpointId);
+          const t0 = Date.now();
+          const r = await cli.transcribe({ file: buf, filename });
+          if (r.status === "completed" && r.text) {
+            const language = /[֐-׿]/.test(r.text) ? "yi" : "en";
+            await audit.record({ actor: "owner", event: "mic.transcribed", payload: { engine: "ivrit.ai", ms: Date.now() - t0, chars: r.text.length, language } });
+            return { ok: true, text: r.text, language, engine: "ivrit.ai", ms: Date.now() - t0 };
+          }
+          return { ok: false, error: "empty_transcript", engine: "ivrit.ai", ms: Date.now() - t0 };
+        } catch (err) { return { ok: false, error: String(err), engine: "ivrit.ai" }; }
+      }
+      //   Yiddish Labs (explicitly requested)
+      if (engine === "yiddishlabs" || engine === "yl") {
+        const key0 = providerKeys.yiddishLabsApiKey;
+        if (!key0) return { ok: false, error: "yiddishlabs_not_configured", engine: "yiddishlabs" };
+        try {
+          const cli = new YiddishLabsClient(key0);
+          const ctx0 = await glossaryContext();
+          const t0 = Date.now();
+          const res0 = await cli.submitSync({ file: buf, filename, language: "auto", context: ctx0, rapid: true });
+          if (res0.status === "completed" && res0.text) return { ok: true, text: res0.text, language: YiddishLabsClient.normalizeLanguage(res0), engine: "yiddishlabs", ms: Date.now() - t0 };
+          return { ok: false, error: `pending:${res0.id}`, engine: "yiddishlabs" };
+        } catch (err) { return { ok: false, error: String(err), engine: "yiddishlabs" }; }
+      }
+
+      // DEFAULT: OpenAI transcription (~2s) for live mic input capture. The text
+      // is editable + still flows through the YL bridge on send, so answer
+      // quality is unaffected. Falls back to Yiddish Labs if OpenAI isn't set.
+      const oaKey = providerKeys.openaiApiKey;
+      if (oaKey) {
+        try {
+          const { openaiTranscribe } = await import("./transcription/openaiStt");
+          const t0 = Date.now();
+          const r = await openaiTranscribe(oaKey, buf, filename);
+          if (r.text) {
+            const language = /[֐-׿]/.test(r.text) ? "yi" : "en";
+            await audit.record({ actor: "owner", event: "mic.transcribed", payload: { engine: r.model, ms: Date.now() - t0, chars: r.text.length, language } });
+            return { ok: true, text: r.text, language, engine: r.model, ms: Date.now() - t0 };
+          }
+        } catch (err) {
+          await audit.record({ actor: "system", event: "mic.openai_failed", payload: { error: String(err) } });
+          // fall through to Yiddish Labs
+        }
+      }
+
+      // FALLBACK: Yiddish Labs (slower, but keeps the mic working without OpenAI).
+      const key = providerKeys.yiddishLabsApiKey;
+      if (!key) return { ok: false, error: "no_transcription_provider" };
       const client = new YiddishLabsClient(key);
       try {
         const ctx = await glossaryContext();
-        const res = await client.submitSync({ file: buf, filename: b.filename || "mic.webm", language: "auto", context: ctx, rapid: true });
+        const res = await client.submitSync({ file: buf, filename, language: "auto", context: ctx, rapid: true });
         if (res.status === "completed" && res.text) {
-          return { ok: true, text: res.text, language: YiddishLabsClient.normalizeLanguage(res), summary: res.summary };
+          return { ok: true, text: res.text, language: YiddishLabsClient.normalizeLanguage(res), summary: res.summary, engine: "yiddishlabs" };
         }
         return { ok: false, error: `pending:${res.id}` };
       } catch (err) {
         return { ok: false, error: String(err) };
       }
     });
+    // ── Voice input for the floating assistant widget. ANY authenticated portal
+    //    user (not owner-only): records a short clip in the browser and gets it
+    //    transcribed. Yiddish Labs first (king for American Yiddish; auto-detects
+    //    English too), OpenAI as a fast fallback. Text lands in the chat box for
+    //    the user to review before sending. ──
+    app.post("/agent/chat/transcribe", async (req, reply) => {
+      const auth = req.headers.authorization;
+      const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+      if (!id) return reply.code(403).send({ ok: false, error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (typeof b.audioBase64 !== "string" || b.audioBase64.length < 32) return reply.code(400).send({ ok: false, error: "no_audio" });
+      let buf: Buffer;
+      try { buf = Buffer.from(b.audioBase64.replace(/^data:[^,]+,/, ""), "base64"); } catch { return reply.code(400).send({ ok: false, error: "bad_audio" }); }
+      const filename = b.filename || "mic.webm";
+      const clean = (s: string) => s.replace(/⟦[^⟧]*⟧/g, " ").replace(/[⟦⟧]/g, " ").replace(/[ \t]+/g, " ").trim();
+      // Primary: Yiddish Labs (auto-detect yi/en, dialect glossary, rapid mode).
+      if (providerKeys.yiddishLabsApiKey) {
+        try {
+          const cli = new YiddishLabsClient(providerKeys.yiddishLabsApiKey);
+          const ctx = await glossaryContext();
+          let r = await cli.submitSync({ file: buf, filename, language: "auto", context: ctx, rapid: true });
+          // Short mic clips complete immediately; longer ones may still be
+          // processing — poll briefly (~90s) before falling back.
+          for (let i = 0; i < 45 && r.status !== "completed" && r.status !== "failed"; i++) {
+            await new Promise((x) => setTimeout(x, 2000));
+            r = await cli.get(r.id);
+          }
+          if (r.status === "completed" && r.text && r.text.trim()) {
+            return { ok: true, text: clean(r.text), language: YiddishLabsClient.normalizeLanguage(r) };
+          }
+        } catch { /* fall through to OpenAI */ }
+      }
+      // Fallback: OpenAI (fast) so the mic still works if YL pends/fails.
+      if (providerKeys.openaiApiKey) {
+        try {
+          const { openaiTranscribe } = await import("./transcription/openaiStt");
+          const r = await openaiTranscribe(providerKeys.openaiApiKey, buf, filename);
+          if (r.text && r.text.trim()) return { ok: true, text: r.text.trim(), language: /[֐-׿]/.test(r.text) ? "yi" : "en" };
+        } catch { /* fall through */ }
+      }
+      return reply.code(502).send({ ok: false, error: "transcription_unavailable" });
+    });
+
+    // ── STT shoot-out: run Yiddish Labs AND Everett (ivrit.ai) on the SAME
+    //    audio, side by side, so the owner can compare quality + speed. ──
+    app.post("/agent/transcribe/compare", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const b = (req.body ?? {}) as any;
+      if (typeof b.audioBase64 !== "string" || b.audioBase64.length < 32) return reply.code(400).send({ error: "no_audio" });
+      let buf: Buffer;
+      try { buf = Buffer.from(b.audioBase64.replace(/^data:[^,]+,/, ""), "base64"); } catch { return reply.code(400).send({ error: "bad_audio" }); }
+      const filename = b.filename || "compare.wav";
+      const language = typeof b.language === "string" ? b.language : "auto";
+
+      const runYl = async () => {
+        if (!providerKeys.yiddishLabsApiKey) return { ok: false, error: "not_configured" };
+        const t0 = Date.now();
+        try {
+          const ctx = await glossaryContext();
+          const cli = new YiddishLabsClient(providerKeys.yiddishLabsApiKey);
+          const r = await cli.submitSync({ file: buf, filename, language: language as any, context: ctx, rapid: true });
+          if (r.status === "completed" && r.text) return { ok: true, text: r.text, language: YiddishLabsClient.normalizeLanguage(r), ms: Date.now() - t0 };
+          return { ok: false, error: `pending:${r.id}`, ms: Date.now() - t0 };
+        } catch (err) {
+          return { ok: false, error: String(err), ms: Date.now() - t0 };
+        }
+      };
+      const runEverett = async () => {
+        if (!providerKeys.everettApiKey || !(providerKeys as any).everettEndpointId) return { ok: false, error: "not_configured" };
+        const t0 = Date.now();
+        try {
+          const { EverettClient } = await import("./transcription/everett");
+          const cli = new EverettClient(providerKeys.everettApiKey, (providerKeys as any).everettEndpointId);
+          const r = await cli.transcribe({ file: buf, language: language === "auto" ? undefined : language });
+          if (r.status === "completed" && r.text) return { ok: true, text: r.text, language: EverettClient.normalizeLanguage(r.text, language), ms: Date.now() - t0, workerMs: r.executionMs };
+          return { ok: false, error: r.status === "completed" ? "empty_transcript" : "failed", ms: Date.now() - t0 };
+        } catch (err) {
+          return { ok: false, error: String(err), ms: Date.now() - t0 };
+        }
+      };
+
+      const [yiddishlabs, everett] = await Promise.all([runYl(), runEverett()]);
+      await audit.record({ actor: "owner", event: "stt.compare", payload: { filename, bytes: buf.length, yl: { ok: yiddishlabs.ok, ms: (yiddishlabs as any).ms }, everett: { ok: everett.ok, ms: (everett as any).ms } } });
+      return { ok: true, yiddishlabs, everett };
+    });
+
+    // Voicemail auto-transcription: Yiddish → ivrit engine, English → GPT.
+    // Polls for new voicemails every 90s. Enable with AGENT_VOICEMAIL_TRANSCRIBE=1
+    // + VOICEMAIL_AUDIO_BASE_URL (PBX host serving pbxRecfile paths).
+    if (process.env.AGENT_VOICEMAIL_TRANSCRIBE === "1") {
+      const { VoicemailTranscriptionJob } = await import("./transcription/voicemailJob");
+      const vmJob = new VoicemailTranscriptionJob({
+        prisma,
+        audit,
+        openaiApiKey: () => providerKeys.openaiApiKey,
+        // PRIMARY Yiddish engine: Yiddish Labs (king for American Yiddish).
+        yiddishLabsApiKey: () => providerKeys.yiddishLabsApiKey,
+        // ivrit.ai kept as an automatic fallback if Yiddish Labs is unavailable.
+        ivritApiKey: () => providerKeys.everettApiKey,
+        ivritEndpointId: () => providerKeys.everettEndpointId,
+        ivritModel: process.env.EVERETT_MODEL || "ivrit-ai/yi-whisper-large-v3-turbo-ct2",
+        // Fetch audio via the portal API's stream endpoint (handles recfile
+        // refresh + spool fallback). Same docker network → service name "api".
+        apiBaseUrl: () => process.env.AGENT_API_BASE_URL || "http://api:3001",
+        jwtSecret: () => process.env.JWT_SECRET || null,
+      });
+      setInterval(() => { vmJob.runOnce().catch((err) => app.log.error({ err }, "voicemail transcription pass failed")); }, 90 * 1000).unref();
+      await audit.record({ actor: "system", event: "voicemail.transcription_enabled", payload: { intervalSec: 90 } });
+
+      // On-demand transcribe (portal Transcribe button). Any authenticated portal
+      // user (they can already see the voicemail) may trigger it.
+      app.post("/agent/voicemail/transcribe", async (req, reply) => {
+        const auth = req.headers.authorization;
+        const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+        if (!id) return reply.code(403).send({ error: "forbidden" });
+        const vmId = (req.body as any)?.voicemailId;
+        if (typeof vmId !== "string" || !vmId) return reply.code(400).send({ error: "bad_request" });
+        const r = await vmJob.transcribeById(vmId);
+        await audit.record({ actor: id.role === "owner" ? "owner" : "customer", event: "voicemail.transcribe_ondemand", payload: { voicemailId: vmId, ok: r.ok, language: r.language } });
+        return r;
+      });
+
+      // On-demand translate (portal Translate button). Flips the transcript
+      // between Yiddish and English via Yiddish Labs — Yiddish (incl. American
+      // Yiddish, yi-en) → English, English → Yiddish. Goes through the same
+      // persistent translation cache as the assistant bridge, so repeat presses
+      // and common phrases are instant and free. Direction is auto from the
+      // stored transcript language; an explicit `target` ("en"|"yi") can override.
+      app.post("/agent/voicemail/translate", async (req, reply) => {
+        const auth = req.headers.authorization;
+        const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
+        if (!id) return reply.code(403).send({ error: "forbidden" });
+        const body = (req.body as any) ?? {};
+        const vmId = body.voicemailId;
+        if (typeof vmId !== "string" || !vmId) return reply.code(400).send({ error: "bad_request" });
+        if (!providerKeys.yiddishLabsApiKey) return reply.code(503).send({ ok: false, error: "translation_unavailable" });
+        const vm = await prisma.voicemail.findUnique({ where: { id: vmId }, select: { transcript: true, transcriptLanguage: true, deletedAt: true } });
+        if (!vm || vm.deletedAt || !vm.transcript || !vm.transcript.trim()) return reply.code(404).send({ ok: false, error: "no_transcript" });
+        // Direction: explicit target wins; else Yiddish/Hebrew-script → English, English → Yiddish.
+        const lang = (vm.transcriptLanguage || "").toLowerCase();
+        const isYiddish = lang.startsWith("yi") || /[֐-׿]/.test(vm.transcript);
+        const explicit = body.target === "en" || body.target === "yi" ? body.target : null;
+        const toEnglish = explicit ? explicit === "en" : isYiddish;
+        const action = toEnglish ? "translate-english" : "translate-yiddish";
+        try {
+          const r = await translateCached(action, vm.transcript);
+          await audit.record({ actor: id.role === "owner" ? "owner" : "customer", event: "voicemail.translate_ondemand", payload: { voicemailId: vmId, target: toEnglish ? "en" : "yi", cached: (r as any).cached === true } });
+          return { ok: true, translated: r.text ?? "", target: toEnglish ? "en" : "yi" };
+        } catch (err) {
+          return reply.code(502).send({ ok: false, error: String(err).slice(0, 120) });
+        }
+      });
+    }
+
     // 24/7 continuous drain — small batches every 2 min so it never floods the
     // box or the STT provider. No-op until AGENT_ARCHIVE_ROOT is set.
     setInterval(() => {

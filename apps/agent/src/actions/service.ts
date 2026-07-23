@@ -16,7 +16,8 @@
  */
 import type { AuditLog } from "../audit/audit";
 import type { Notifier } from "../notify/notifier";
-import { makeApprovalToken } from "./tokens";
+import { makeApprovalToken, verifyApprovalToken } from "./tokens";
+import { requiresBinding, computeParamsHash, makeBoundApprovalToken, verifyBoundApprovalToken } from "./bindings";
 
 export type ActionStatus =
   | "DRAFT"
@@ -61,12 +62,52 @@ export class ActionService {
   ) {}
 
   private backendFor(capabilityId: string): ExecuteBackend | null {
-    const prefix = capabilityId.split(".")[0] + ".";
-    return this.backends[prefix] ?? this.backends[capabilityId] ?? null;
+    // Exact id first, then LONGEST matching prefix ("pbx.M" beats "pbx." for
+    // "pbx.M1" so modify capabilities route to the Modify Executor while the
+    // P-series keeps routing to the additive Scoped Executor).
+    if (this.backends[capabilityId]) return this.backends[capabilityId];
+    const prefixes = Object.keys(this.backends)
+      .filter((k) => capabilityId.startsWith(k))
+      .sort((a, b) => b.length - a.length);
+    return prefixes.length ? this.backends[prefixes[0]] : null;
   }
 
   async create(input: CreateActionInput): Promise<any> {
     const revertAt = input.revertAfterHours ? new Date(Date.now() + input.revertAfterHours * 3600 * 1000) : null;
+
+    // X1: modify/repair capabilities are params-hash-bound, capped, and NEVER
+    // auto-approved — every live write goes through Izzy's explicit approval.
+    const bound = requiresBinding(input.capabilityId);
+    let paramsHash: string | null = null;
+    if (bound) {
+      const maxPending = Number(process.env.AGENT_MODIFY_MAX_PENDING_PER_TENANT ?? 3);
+      const pending = await this.prisma.agentAction.count({
+        where: { tenantId: input.tenantId, status: "PENDING_APPROVAL", paramsHash: { not: null } },
+      });
+      if (pending >= maxPending) {
+        const denied = await this.prisma.agentAction.create({
+          data: {
+            tenantId: input.tenantId,
+            conversationId: input.conversationId ?? null,
+            capabilityId: input.capabilityId,
+            params: input.params as any,
+            riskTier: input.riskTier ?? "medium",
+            status: "DENIED",
+            deniedReason: `modify_pending_cap: ${maxPending} changes already awaiting approval for this tenant`,
+            summary: input.summary,
+            requestedBy: input.requestedBy,
+            requestedRole: input.requestedRole,
+            revertAt: null,
+            approvalToken: null,
+            paramsHash: null,
+          },
+        });
+        await this.audit.record({ actor: "system", event: "action.denied_pending_cap", tenantId: input.tenantId, actionId: denied.id, capabilityId: input.capabilityId, payload: { maxPending } });
+        return denied;
+      }
+      paramsHash = computeParamsHash(input.capabilityId, input.tenantId, input.params);
+    }
+
     const action = await this.prisma.agentAction.create({
       data: {
         tenantId: input.tenantId,
@@ -80,11 +121,31 @@ export class ActionService {
         requestedRole: input.requestedRole,
         revertAt,
         approvalToken: null,
+        paramsHash,
       },
     });
-    await this.audit.record({ actor: input.requestedRole, event: "action.created", tenantId: input.tenantId, actionId: action.id, capabilityId: input.capabilityId, payload: { summary: input.summary } });
+    if (bound) {
+      // Post-create re-check closes the check-then-create race: every creator
+      // counts AFTER its own row exists, so any row that pushes the pending set
+      // over the cap sees the excess and demotes itself. Pending can therefore
+      // never settle above the cap regardless of interleaving.
+      const maxPending = Number(process.env.AGENT_MODIFY_MAX_PENDING_PER_TENANT ?? 3);
+      const nowPending = await this.prisma.agentAction.count({
+        where: { tenantId: input.tenantId, status: "PENDING_APPROVAL", paramsHash: { not: null } },
+      });
+      if (nowPending > maxPending) {
+        const demoted = await this.prisma.agentAction.update({
+          where: { id: action.id },
+          data: { status: "DENIED", deniedReason: `modify_pending_cap: ${maxPending} changes already awaiting approval for this tenant` },
+        });
+        await this.audit.record({ actor: "system", event: "action.denied_pending_cap", tenantId: input.tenantId, actionId: action.id, capabilityId: input.capabilityId, payload: { maxPending, race: true } });
+        return demoted;
+      }
+    }
 
-    if (input.autoApprove && input.requestedRole === "owner") {
+    await this.audit.record({ actor: input.requestedRole, event: "action.created", tenantId: input.tenantId, actionId: action.id, capabilityId: input.capabilityId, payload: { summary: input.summary, bound } });
+
+    if (input.autoApprove && input.requestedRole === "owner" && !bound) {
       return this.approve(action.id, `owner:${input.requestedBy}`, { auto: true });
     }
     await this.sendApprovalEmail(action);
@@ -93,8 +154,12 @@ export class ActionService {
 
   private async sendApprovalEmail(action: any): Promise<void> {
     const base = this.opts.approvalBaseUrl ?? "";
-    const approve = base ? `${base}/agent-api/approve?token=${makeApprovalToken(action.id, "approve")}` : "(portal Approvals page)";
-    const deny = base ? `${base}/agent-api/approve?token=${makeApprovalToken(action.id, "deny")}` : "(portal Approvals page)";
+    // Bound (modify/repair) actions get params-hash-bound tokens: the link can
+    // only ever approve the exact change described in this email, exactly once.
+    const mk = (decision: "approve" | "deny") =>
+      action.paramsHash ? makeBoundApprovalToken(action.id, decision, action.paramsHash) : makeApprovalToken(action.id, decision);
+    const approve = base ? `${base}/agent-api/approve?token=${mk("approve")}` : "(portal Approvals page)";
+    const deny = base ? `${base}/agent-api/approve?token=${mk("deny")}` : "(portal Approvals page)";
     await this.notifier.send({
       kind: "approval_request",
       to: this.notifier.ownerRecipients(),
@@ -127,7 +192,21 @@ export class ActionService {
       await this.audit.record({ actor: "system", event: "action.failed", actionId: action.id, payload: { reason: "no_backend" } });
       return failed;
     }
-    await this.prisma.agentAction.update({ where: { id: action.id }, data: { status: "EXECUTING" } });
+    if (action.paramsHash) {
+      // X1 single-use consume: atomically claim APPROVED → EXECUTING. If another
+      // worker (or a replayed link) already claimed it, refuse — one approval
+      // executes exactly once.
+      const claimed = await this.prisma.agentAction.updateMany({
+        where: { id: action.id, status: "APPROVED", approvalConsumedAt: null },
+        data: { status: "EXECUTING", approvalConsumedAt: new Date() },
+      });
+      if (!claimed || claimed.count === 0) {
+        await this.audit.record({ actor: "system", event: "action.duplicate_execute_blocked", actionId: action.id, capabilityId: action.capabilityId });
+        return this.prisma.agentAction.findUnique({ where: { id: action.id } });
+      }
+    } else {
+      await this.prisma.agentAction.update({ where: { id: action.id }, data: { status: "EXECUTING" } });
+    }
     const live = !!this.opts.liveWrites;
     let res: { ok: boolean; snapshot?: unknown; error?: string };
     try {
@@ -145,6 +224,29 @@ export class ActionService {
     await this.audit.record({ actor: "agent", event: "action.executed", tenantId: action.tenantId, actionId: action.id, capabilityId: action.capabilityId, payload: { live } });
     await this.notifier.send({ kind: "action_executed", to: this.notifier.ownerRecipients(), subject: `[Agent] Done: ${action.summary}`, text: `Action ${action.id} executed${action.revertAt ? `, auto-reverts ${action.revertAt.toISOString?.() ?? action.revertAt}` : ""}.` });
     return done;
+  }
+
+  /**
+   * Redeem an email approve/deny link (X1-aware). Bound (modify/repair) actions
+   * REQUIRE a bound token whose params-hash matches the frozen row — a legacy
+   * unbound token can never decide a bound action.
+   */
+  async redeemEmailDecision(token: string): Promise<{ ok: boolean; decision?: "approve" | "deny"; error?: string; action?: any }> {
+    const bound = verifyBoundApprovalToken(token);
+    const legacy = bound ? null : verifyApprovalToken(token);
+    const v = bound ?? legacy;
+    if (!v) return { ok: false, error: "invalid_or_expired_token" };
+    const row = await this.prisma.agentAction.findUnique({ where: { id: v.actionId } });
+    if (!row) return { ok: false, error: "action_not_found" };
+    if (row.paramsHash) {
+      if (!bound) return { ok: false, error: "bound_token_required" };
+      if (bound.paramsHash !== row.paramsHash) {
+        await this.audit.record({ actor: "system", event: "action.bound_token_mismatch", actionId: row.id, payload: { reason: "params_hash_mismatch" } });
+        return { ok: false, error: "token_binding_mismatch" };
+      }
+    }
+    const action = v.decision === "approve" ? await this.approve(v.actionId, "email-link") : await this.deny(v.actionId, "email-link");
+    return { ok: true, decision: v.decision, action };
   }
 
   /** Scheduler tick — expire stale pending actions, auto-revert due ones. DB-backed. */

@@ -105,6 +105,10 @@ fi
 
 install -d -m 0755 /opt/connect-pbx-helper
 install -d -m 0750 /var/lib/connect-pbx-helper
+# X4 (2026-07-23): queue-conf backups live under the data dir — the unit runs
+# ProtectSystem=strict, so /opt is READ-ONLY to the service at runtime.
+install -d -o asterisk -g asterisk -m 0750 /var/lib/connect-pbx-helper/backups 2>/dev/null || \
+  install -d -m 0750 /var/lib/connect-pbx-helper/backups
 useradd --system --home /var/lib/connect-pbx-helper --shell /usr/sbin/nologin connect-route-helper 2>/dev/null || true
 
 # The helper writes IVR prompts directly into Asterisk's sounds dir AND
@@ -184,7 +188,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.05.10.1"
+VERSION = "2026.07.23.3"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -237,6 +241,28 @@ class Config:
         self.voicemail_file_mode = int(os.environ.get("CONNECT_PBX_HELPER_VOICEMAIL_FILE_MODE", "0o644"), 0)
         self.vm_record_channel_template = os.environ.get("CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE", "PJSIP/{extension}").strip()
         self.vm_record_app = os.environ.get("CONNECT_PBX_VM_RECORD_APP", "VoiceMailMain").strip()
+        # transport-wss cert self-heal (certfix, 2026-07): the DEFAULT [transport-wss]
+        # object in the base pjsip.conf is hand-maintained (not VitalPBX-generated) and
+        # references a static self-signed cert under /etc/asterisk/keys/. If that
+        # directory is ever lost (e.g. during unrelated cert/cleanup work), every
+        # `pjsip reload` fails to create the transport-wss object, which silently
+        # blocks any NEW outbound registration object from starting (existing
+        # registrations that already loaded keep refreshing). This action repoints
+        # cert_file/priv_key_file to the Let's-Encrypt-renewed bundle VitalPBX's own
+        # certificate manager already keeps current, instead of a static astgenkey cert.
+        self.transport_wss_conf_path = os.environ.get("CONNECT_PBX_TRANSPORT_WSS_CONF_PATH", "/etc/asterisk/pjsip.conf").strip()
+        self.transport_wss_section = os.environ.get("CONNECT_PBX_TRANSPORT_WSS_SECTION", "transport-wss").strip()
+        self.transport_wss_desired_cert_file = os.environ.get(
+            "CONNECT_PBX_TRANSPORT_WSS_DESIRED_CERT_FILE",
+            "/usr/share/vitalpbx/certificates/m.connectcomunications.com/bundle.pem",
+        ).strip()
+        self.transport_wss_desired_key_file = os.environ.get(
+            "CONNECT_PBX_TRANSPORT_WSS_DESIRED_KEY_FILE",
+            "/usr/share/vitalpbx/certificates/m.connectcomunications.com/private.pem",
+        ).strip()
+        self.transport_wss_reload_command = os.environ.get(
+            "CONNECT_PBX_TRANSPORT_WSS_RELOAD_COMMAND", 'asterisk -rx "module reload res_pjsip.so"'
+        ).strip()
     def validate(self):
         if len(self.secret) < 32:
             raise SystemExit("CONNECT_PBX_HELPER_SECRET must be at least 32 chars")
@@ -281,6 +307,18 @@ def snap_conn():
     )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_did ON inbound_route_snapshots(tenant_id, did_digits)")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS transport_cert_snapshots (
+      conf_path TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      captured_at TEXT NOT NULL,
+      captured_by TEXT,
+      request_id TEXT,
+      original_file_text TEXT NOT NULL,
+      original_cert_file TEXT,
+      original_priv_key_file TEXT
+    )
+    """)
     return conn
 
 def audit(action, ok, payload, result=None, error=None):
@@ -390,22 +428,354 @@ def run_apply_command(command):
         "stderr": proc.stderr[-4000:],
     }
 
-def apply_changes(reload_moh=False):
+def apply_changes(reload_moh=False, reload_queues=False):
     if not CFG.apply_command:
         return {"ran": False, "reason": "apply_command_not_configured"}
     commands = [CFG.apply_command]
     if reload_moh:
         commands.append('asterisk -rx "moh reload"')
+    if reload_queues:
+        # X4 (2026-07-23): queue hold music lives in queues.conf — app_queue only
+        # picks up a musicclass change on a queue reload. Waiting callers keep
+        # their position (same reload a VitalPBX GUI queue edit triggers).
+        commands.append('asterisk -rx "queue reload all"')
     results = [run_apply_command(command) for command in commands]
     failed = next((r for r in results if r["exitCode"] != 0), None)
     return {
         "ran": True,
         "reloadMoh": reload_moh,
+        "reloadQueues": reload_queues,
         "exitCode": int(failed["exitCode"]) if failed else 0,
         "commands": results,
         "stdout": "\n".join(str(r.get("stdout") or "") for r in results)[-4000:],
         "stderr": "\n".join(str(r.get("stderr") or "") for r in results)[-4000:],
     }
+
+PEM_HEADER_RE = re.compile(r"^-----BEGIN [A-Z0-9 ]+-----")
+SECTION_LINE_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?\s*$")
+
+
+def _is_valid_pem_file(path_str):
+    try:
+        p = Path(path_str)
+        if not p.is_file():
+            return False
+        with p.open("rb") as fh:
+            head = fh.read(4096)
+        return b"-----BEGIN" in head
+    except OSError:
+        return False
+
+
+def _find_section_span(lines, section_name):
+    """Return (start_idx, end_idx) for the exact-named section's body lines
+    (start_idx is the line AFTER the `[section]` header; end_idx is exclusive,
+    the index of the next `[...]` header or len(lines)). Returns None if the
+    section is not found. Only matches an exact, non-templated `[name]` header
+    (not `[name](template)` or `[name](!)`), since transport-wss is a concrete object."""
+    start = None
+    for i, line in enumerate(lines):
+        m = SECTION_LINE_RE.match(line)
+        if not m:
+            continue
+        if start is None and m.group(1) == section_name:
+            start = i + 1
+            continue
+        if start is not None:
+            return start, i
+    if start is not None:
+        return start, len(lines)
+    return None
+
+
+def _extract_kv_in_span(lines, start, end, key):
+    pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=\s*(.*?)\s*$")
+    for i in range(start, end):
+        m = pattern.match(lines[i])
+        if m:
+            return i, m.group(1)
+    return None, None
+
+
+def transport_wss_status(_body=None):
+    """Read-only: report the current cert_file/priv_key_file for the configured
+    transport section and whether both resolve to a readable PEM file. Never
+    writes anything. Safe to call at any time, including before authorization
+    to change anything."""
+    conf_path = Path(CFG.transport_wss_conf_path)
+    result = {
+        "ok": True,
+        "confPath": str(conf_path),
+        "section": CFG.transport_wss_section,
+        "confPresent": conf_path.is_file(),
+        "sectionFound": False,
+        "currentCertFile": None,
+        "currentPrivKeyFile": None,
+        "currentCertFileValid": False,
+        "currentPrivKeyFileValid": False,
+        "desiredCertFile": CFG.transport_wss_desired_cert_file,
+        "desiredPrivKeyFile": CFG.transport_wss_desired_key_file,
+        "desiredCertFileValid": _is_valid_pem_file(CFG.transport_wss_desired_cert_file),
+        "desiredPrivKeyFileValid": _is_valid_pem_file(CFG.transport_wss_desired_key_file),
+        "healthy": False,
+    }
+    if not conf_path.is_file():
+        return result
+    lines = conf_path.read_text(errors="replace").splitlines()
+    span = _find_section_span(lines, CFG.transport_wss_section)
+    if span is None:
+        return result
+    result["sectionFound"] = True
+    start, end = span
+    _, cert_val = _extract_kv_in_span(lines, start, end, "cert_file")
+    _, key_val = _extract_kv_in_span(lines, start, end, "priv_key_file")
+    result["currentCertFile"] = cert_val
+    result["currentPrivKeyFile"] = key_val
+    result["currentCertFileValid"] = _is_valid_pem_file(cert_val) if cert_val else False
+    result["currentPrivKeyFileValid"] = _is_valid_pem_file(key_val) if key_val else False
+    result["healthy"] = result["currentCertFileValid"] and result["currentPrivKeyFileValid"]
+    try:
+        proc = subprocess.run(["asterisk", "-rx", "pjsip show transports"], text=True, capture_output=True, timeout=10, check=False)
+        output = proc.stdout + proc.stderr
+        result["pjsipShowTransportsOutput"] = output[-4000:]
+        result["transportPresentLive"] = (CFG.transport_wss_section in output)
+    except Exception as exc:
+        result["pjsipShowTransportsError"] = str(exc)
+    return result
+
+
+def ensure_transport_wss_cert(body):
+    """Idempotent self-heal for the default [transport-wss] object's cert paths.
+
+    No-ops (changed=False) if the CURRENT cert_file/priv_key_file already point
+    at readable PEM files -- this makes it safe to call unconditionally on a
+    schedule or on every deploy, exactly like the MOH sync action. Only writes
+    when the current paths are missing/unreadable AND the desired replacement
+    files (already-valid, VitalPBX-managed certs) pass a PEM sanity check.
+    Snapshots the pre-image on first write for auditability. Edits ONLY the
+    cert_file/priv_key_file lines inside the named section span -- every other
+    line in the file, and every other section, is left byte-for-byte unchanged.
+    """
+    dry_run = bool(body.get("dryRun", False))
+    actor = str(body.get("actor") or "")[:128]
+    request_id = str(body.get("requestId") or "")[:128]
+    conf_path = Path(CFG.transport_wss_conf_path)
+    if not conf_path.is_file():
+        raise RuntimeError("transport_wss_conf_path_missing: " + str(conf_path))
+    original_text = conf_path.read_text(errors="replace")
+    lines = original_text.splitlines()
+    had_trailing_newline = original_text.endswith("\n")
+    span = _find_section_span(lines, CFG.transport_wss_section)
+    if span is None:
+        raise RuntimeError("section_not_found: " + CFG.transport_wss_section)
+    start, end = span
+    cert_idx, cert_val = _extract_kv_in_span(lines, start, end, "cert_file")
+    key_idx, key_val = _extract_kv_in_span(lines, start, end, "priv_key_file")
+    cert_ok = _is_valid_pem_file(cert_val) if cert_val else False
+    key_ok = _is_valid_pem_file(key_val) if key_val else False
+    if cert_ok and key_ok:
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": "cert_files_already_present",
+            "currentCertFile": cert_val,
+            "currentPrivKeyFile": key_val,
+        }
+    if not _is_valid_pem_file(CFG.transport_wss_desired_cert_file):
+        raise RuntimeError("desired_cert_file_invalid_or_missing: " + CFG.transport_wss_desired_cert_file)
+    if not _is_valid_pem_file(CFG.transport_wss_desired_key_file):
+        raise RuntimeError("desired_priv_key_file_invalid_or_missing: " + CFG.transport_wss_desired_key_file)
+    plan = {
+        "confPath": str(conf_path),
+        "section": CFG.transport_wss_section,
+        "before": {"certFile": cert_val, "privKeyFile": key_val},
+        "after": {"certFile": CFG.transport_wss_desired_cert_file, "privKeyFile": CFG.transport_wss_desired_key_file},
+    }
+    if dry_run:
+        return {"ok": True, "changed": False, "dryRun": True, "plan": plan}
+    with snap_conn() as sconn:
+        existing = sconn.execute(
+            "SELECT conf_path FROM transport_cert_snapshots WHERE conf_path = ?", (str(conf_path),)
+        ).fetchone()
+        if not existing:
+            sconn.execute(
+                """
+                INSERT INTO transport_cert_snapshots
+                  (conf_path, section, captured_at, captured_by, request_id,
+                   original_file_text, original_cert_file, original_priv_key_file)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (str(conf_path), CFG.transport_wss_section, utc_now(), actor, request_id, original_text, cert_val, key_val),
+            )
+            sconn.commit()
+
+    def _set_kv_line(idx, key, value):
+        new_line = key + "=" + value
+        if idx is not None:
+            lines[idx] = new_line
+        else:
+            lines.insert(end, new_line)
+    # Replace priv_key_file first if it comes after cert_file so cert_idx stays valid
+    # when inserting a brand-new line (insertion only happens if the key was absent,
+    # which is not expected here since the section already had both keys per the
+    # confirmed diagnosis, but handled defensively).
+    if cert_idx is not None:
+        lines[cert_idx] = "cert_file=" + CFG.transport_wss_desired_cert_file
+    else:
+        lines.insert(end, "cert_file=" + CFG.transport_wss_desired_cert_file)
+        end += 1
+    if key_idx is not None:
+        lines[key_idx] = "priv_key_file=" + CFG.transport_wss_desired_key_file
+    else:
+        lines.insert(end, "priv_key_file=" + CFG.transport_wss_desired_key_file)
+        end += 1
+    new_text = "\n".join(lines) + ("\n" if had_trailing_newline else "")
+    orig_stat = conf_path.stat()
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".pjsip.conf.", suffix=".tmp", dir=str(conf_path.parent))
+    try:
+        with os.fdopen(tmp_fd, "w") as fh:
+            fh.write(new_text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp_path, orig_stat.st_mode & 0o777)
+        try:
+            os.chown(tmp_path, orig_stat.st_uid, orig_stat.st_gid)
+        except (PermissionError, OSError, AttributeError):
+            pass
+        os.replace(tmp_path, conf_path)
+    except Exception:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    reload_result = run_apply_command(CFG.transport_wss_reload_command)
+    status_after = transport_wss_status()
+    return {
+        "ok": True,
+        "changed": True,
+        "plan": plan,
+        "reload": reload_result,
+        "statusAfter": status_after,
+    }
+
+
+# ── X4 queue MOH coverage (2026-07-23) ──────────────────────────────────────
+# Queue hold music is the `musicclass=` line in the VitalPBX-generated
+# /etc/asterisk/vitalpbx/queues__50-<tenant>-main.conf. The DB update alone
+# (music_group_id) never reaches the running config until a GUI edit forces a
+# regen. These functions converge the generated file to what VitalPBX would
+# itself render from the already-updated DB row — regen-free, tenant-scoped,
+# backed up, and scope-verified line by line. FAIL-SAFE: on ANY doubt the file
+# is left untouched and the error is reported in the response evidence.
+
+QUEUE_CONF_DIR = "/etc/asterisk/vitalpbx"
+# Backups live in the service's own data dir: the systemd unit runs with
+# ProtectSystem=strict and /var/lib/connect-pbx-helper is in ReadWritePaths
+# (/opt is read-only to the service — learned the hard way, 2026-07-23).
+QUEUE_BACKUP_DIR = "/var/lib/connect-pbx-helper/backups"
+
+def target_class_for_group(music_group_id):
+    """VitalPBX renders music group N as Asterisk class 'mohN'; seed group 1 is 'default'."""
+    gid = int(music_group_id)
+    return "default" if gid == 1 else "moh%d" % gid
+
+def moh_class_generated(target_class):
+    """The target class must already exist in the generated MOH confs —
+    otherwise patching queues would point them at a nonexistent class."""
+    pat = re.compile(r"^\[%s\]\s*$" % re.escape(target_class), re.M)
+    for p in Path(QUEUE_CONF_DIR).glob("musiconhold__*.conf"):
+        try:
+            if pat.search(p.read_text(errors="replace")):
+                return True
+        except OSError:
+            continue
+    return False
+
+def _patch_queue_musicclass_text(text, tenant_id, target_class):
+    """Pure text transform (unit-tested offline). Refuses if ANY section in the
+    file is not [T<tenant>_Q<digits>] — a foreign section means the filename
+    convention changed and we must not touch the file."""
+    lines = text.splitlines(keepends=True)
+    section_re = re.compile(r"^\[([^\]]+)\]\s*$")
+    own_re = re.compile(r"^T%d_Q\d+$" % int(tenant_id))
+    sections = []
+    for ln in lines:
+        m = section_re.match(ln.strip())
+        if m:
+            sections.append(m.group(1))
+    foreign = [s for s in sections if not own_re.match(s)]
+    if foreign:
+        return {"error": "foreign_sections_present", "foreign": foreign[:5], "sections": len(sections), "changed": 0, "oldClasses": [], "newText": None}
+    mc_re = re.compile(r"^(musicclass=)(.*?)(\r?\n?)$")
+    old_classes = []
+    changed = 0
+    out = []
+    for ln in lines:
+        m = mc_re.match(ln)
+        if m:
+            old_classes.append(m.group(2))
+            if m.group(2) != target_class:
+                ln = m.group(1) + target_class + m.group(3)
+                changed += 1
+        out.append(ln)
+    return {"error": None, "foreign": [], "sections": len(sections), "changed": changed, "oldClasses": old_classes, "newText": "".join(out)}
+
+def patch_tenant_queue_musicclass(tenant_id, music_group_id):
+    """Tenant-scoped, backed-up, atomic musicclass patch. Never raises."""
+    evidence = {"attempted": False, "patched": 0, "sections": 0, "targetClass": None, "file": None, "backup": None, "oldClasses": [], "error": None}
+    try:
+        t = int(tenant_id)
+        target = target_class_for_group(music_group_id)
+        evidence["targetClass"] = target
+        conf = Path(QUEUE_CONF_DIR) / ("queues__50-%d-main.conf" % t)
+        evidence["file"] = str(conf)
+        if not conf.is_file():
+            evidence["error"] = "queue_conf_missing"  # tenant has no queue conf — nothing to do
+            return evidence
+        if not moh_class_generated(target):
+            evidence["error"] = "moh_class_not_generated"
+            return evidence
+        evidence["attempted"] = True
+        original = conf.read_text(errors="replace")
+        res = _patch_queue_musicclass_text(original, t, target)
+        evidence["sections"] = res["sections"]
+        evidence["oldClasses"] = res["oldClasses"]
+        if res["error"]:
+            evidence["error"] = res["error"]
+            return evidence
+        if res["changed"] == 0:
+            return evidence  # already carries the target class
+        # SCOPE VERIFICATION: the new text must differ from the original in
+        # exactly `changed` lines, every one of them a musicclass line.
+        orig_lines = original.splitlines()
+        new_lines = res["newText"].splitlines()
+        if len(orig_lines) != len(new_lines):
+            evidence["error"] = "patch_line_count_mismatch"
+            return evidence
+        diff_idx = [i for i, (a, b) in enumerate(zip(orig_lines, new_lines)) if a != b]
+        if len(diff_idx) != res["changed"] or any(not orig_lines[i].startswith("musicclass=") for i in diff_idx):
+            evidence["error"] = "patch_scope_violation"
+            return evidence
+        backup_dir = Path(QUEUE_BACKUP_DIR)
+        backup_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+        backup = backup_dir / ("%s.%s.bak" % (conf.name, dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+        st = os.stat(conf)
+        backup.write_text(original)
+        evidence["backup"] = str(backup)
+        tmp = conf.with_name(conf.name + ".connect-tmp")  # suffix ≠ *.conf ⇒ never picked up by the include glob
+        tmp.write_text(res["newText"])
+        os.chmod(tmp, st.st_mode & 0o777)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, conf)
+        evidence["patched"] = res["changed"]
+        return evidence
+    except Exception as exc:
+        evidence["error"] = "patch_failed: %s" % exc
+        return evidence
 
 def inspect_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
@@ -558,7 +928,11 @@ def sync_tenant_moh(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_changes(reload_moh=True)
+    # X4: converge the generated queue conf to the (already-committed) DB row,
+    # then reload app_queue so the change is live — the missing step behind
+    # "queues keep the old music until a GUI edit".
+    queue_patch = patch_tenant_queue_musicclass(tenant_id, music_group_id)
+    apply_result = apply_changes(reload_moh=True, reload_queues=bool(queue_patch.get("patched")))
     with db_conn() as conn:
         inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
         extension_sample = sample_music_groups(conn, "ombu_extensions", tenant_id)
@@ -575,6 +949,7 @@ def sync_tenant_moh(body):
         "queuesTotal": queues_total,
         "queuesUpdated": queues_updated,
         "queueTable": queue_table or "",
+        "queuePatch": queue_patch,
         "inboundSample": inbound_sample,
         "extensionSample": extension_sample,
         "queueSample": queue_sample,
@@ -1275,6 +1650,15 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/health":
             self.send_json(200, {"ok": True, "version": VERSION})
+        elif path == "/transport-wss/status":
+            if not self.auth_ok():
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            try:
+                self.send_json(200, transport_wss_status())
+            except Exception as exc:
+                self.send_json(409, {"ok": False, "error": str(exc)})
+            return
         elif path == "/voicemail/greeting/diag":
             if not self.auth_ok():
                 self.send_json(401, {"error": "unauthorized"})
@@ -1395,6 +1779,7 @@ class Handler(BaseHTTPRequestHandler):
             "/retarget": retarget_route,
             "/restore": restore_route,
             "/sync-tenant-moh": sync_tenant_moh,
+            "/ensure-transport-wss-cert": ensure_transport_wss_cert,
             "/upload-prompt": upload_prompt,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
@@ -1657,6 +2042,15 @@ CONNECT_PBX_HELPER_VOICEMAIL_OWNER_GROUP=asterisk
 CONNECT_PBX_HELPER_VOICEMAIL_FILE_MODE=0o644
 CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE='${VM_RECORD_CHANNEL_TEMPLATE}'
 CONNECT_PBX_VM_RECORD_APP=${VM_RECORD_APP}
+
+# transport-wss cert self-heal (certfix, 2026-07). See docs/pbx/inbound-route-helper.md.
+# Defaults below match the current PBX layout; override only if the base pjsip.conf
+# path or the VitalPBX-managed cert bundle location changes.
+CONNECT_PBX_TRANSPORT_WSS_CONF_PATH=/etc/asterisk/pjsip.conf
+CONNECT_PBX_TRANSPORT_WSS_SECTION=transport-wss
+CONNECT_PBX_TRANSPORT_WSS_DESIRED_CERT_FILE=/usr/share/vitalpbx/certificates/m.connectcomunications.com/bundle.pem
+CONNECT_PBX_TRANSPORT_WSS_DESIRED_KEY_FILE=/usr/share/vitalpbx/certificates/m.connectcomunications.com/private.pem
+CONNECT_PBX_TRANSPORT_WSS_RELOAD_COMMAND='asterisk -rx "module reload res_pjsip.so"'
 EOF
 
 chmod 0600 /etc/connect-pbx-helper.env
@@ -1908,6 +2302,11 @@ env \
   CONNECT_PBX_HELPER_VOICEMAIL_FILE_MODE=0o644 \
   CONNECT_PBX_VM_RECORD_CHANNEL_TEMPLATE="${VM_RECORD_CHANNEL_TEMPLATE}" \
   CONNECT_PBX_VM_RECORD_APP="${VM_RECORD_APP}" \
+  CONNECT_PBX_TRANSPORT_WSS_CONF_PATH=/etc/asterisk/pjsip.conf \
+  CONNECT_PBX_TRANSPORT_WSS_SECTION=transport-wss \
+  CONNECT_PBX_TRANSPORT_WSS_DESIRED_CERT_FILE=/usr/share/vitalpbx/certificates/m.connectcomunications.com/bundle.pem \
+  CONNECT_PBX_TRANSPORT_WSS_DESIRED_KEY_FILE=/usr/share/vitalpbx/certificates/m.connectcomunications.com/private.pem \
+  CONNECT_PBX_TRANSPORT_WSS_RELOAD_COMMAND='asterisk -rx "module reload res_pjsip.so"' \
   /opt/connect-pbx-helper/.venv/bin/python /opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py --check >/tmp/connect-pbx-helper-check.json
 
 systemctl daemon-reload
@@ -1958,6 +2357,12 @@ echo "  POST /voicemail/greeting/get"
 echo "  POST /voicemail/greeting/reset"
 echo "  POST /voicemail/greeting/record-call"
 echo "and writes custom greetings under /var/spool/asterisk/voicemail/<tenant>/<extension>/."
+echo
+echo "Helper also accepts transport-wss cert self-heal endpoints (certfix, 2026-07):"
+echo "  GET  /transport-wss/status              (read-only; never writes)"
+echo "  POST /ensure-transport-wss-cert          (idempotent no-op if cert already valid;"
+echo "                                             pass {\"dryRun\": true} to preview the plan"
+echo "                                             without writing)"
 echo
 echo "Verify with:"
 echo "  curl -sS http://${HELPER_BIND}:${HELPER_PORT}/health"

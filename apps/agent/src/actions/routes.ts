@@ -6,18 +6,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ActionService } from "./service";
-import { verifyApprovalToken } from "./tokens";
 import { verifyPortalJwt } from "../auth";
 
 export function registerActionRoutes(app: FastifyInstance, actions: ActionService) {
   app.get("/agent/approve", async (req, reply) => {
     const token = (req.query as any)?.token;
     if (typeof token !== "string") return reply.code(400).send({ error: "missing_token" });
-    const v = verifyApprovalToken(token);
-    if (!v) return reply.code(403).type("text/html").send("<h3>This approval link is invalid or has expired.</h3>");
-    if (v.decision === "approve") await actions.approve(v.actionId, "email-link");
-    else await actions.deny(v.actionId, "email-link");
-    return reply.type("text/html").send(`<h3>Action ${v.decision === "approve" ? "approved ✅" : "denied ✕"}.</h3><p>You can close this window.</p>`);
+    // X1: service-level redemption enforces params-hash binding for modify/repair
+    // actions (a legacy token can never decide a bound action).
+    const res = await actions.redeemEmailDecision(token);
+    if (!res.ok) return reply.code(403).type("text/html").send("<h3>This approval link is invalid, expired, or does not match the requested change.</h3>");
+    return reply.type("text/html").send(`<h3>Action ${res.decision === "approve" ? "approved ✅" : "denied ✕"}.</h3><p>You can close this window.</p>`);
   });
 
   app.post("/agent/actions/decide", async (req, reply) => {
