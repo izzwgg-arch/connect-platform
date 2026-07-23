@@ -9,6 +9,9 @@ export async function registerDeliveryCustomerRoutes(app: any): Promise<void> {
   app.get("/track/:token", async (req: any, reply: any) => {
     const token = String(req.params?.token || "");
     if (!token || token.length < 8) return reply.status(200).send({ state: "invalid" });
+    // Optional inline OTP verification (?code=…) so the customer page can verify in one call.
+    const code = String(req.query?.code || "").trim();
+    if (code) await verifyTrackingOtp(token, code);
     const result = await resolveTrackingView(token);
     // Always 200 with a state — never leak existence via status codes (anti-enumeration).
     return reply.send(result);

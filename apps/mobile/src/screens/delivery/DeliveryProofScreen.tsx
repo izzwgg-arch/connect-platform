@@ -5,6 +5,7 @@ import * as Location from "expo-location";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
+import { useTheme } from "../../context/ThemeContext";
 import { submitProof } from "../../delivery/deliveryClient";
 
 const HANDOVERS = [
@@ -17,6 +18,7 @@ const HANDOVERS = [
 export function DeliveryProofScreen() {
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
+  const { colors } = useTheme();
   const { orderId, orderRef } = (useRoute<any>().params) || {};
   const { token } = useAuth();
   const [handover, setHandover] = useState("handed_to_customer");
@@ -53,44 +55,42 @@ export function DeliveryProofScreen() {
   }
 
   return (
-    <ScrollView style={[styles.fill, { paddingTop: insets.top + 8 }]} contentContainerStyle={{ padding: 16, gap: 14 }}>
-      <Text style={styles.h1}>Proof of delivery {orderRef || ""}</Text>
+    <ScrollView style={[styles.fill, { backgroundColor: colors.bg, paddingTop: insets.top + 8 }]} contentContainerStyle={{ padding: 16, gap: 14 }}>
+      <Text style={[styles.h1, { color: colors.text }]}>Proof of delivery {orderRef || ""}</Text>
 
-      <Text style={styles.lab}>Handover</Text>
+      <Text style={[styles.lab, { color: colors.textTertiary }]}>Handover</Text>
       <View style={styles.wrap}>
         {HANDOVERS.map((h) => (
-          <TouchableOpacity key={h.key} style={[styles.chip, handover === h.key && styles.chipSel]} onPress={() => setHandover(h.key)}>
-            <Text style={[styles.chipText, handover === h.key && styles.chipTextSel]}>{h.label}</Text>
+          <TouchableOpacity key={h.key} style={[styles.chip, { backgroundColor: colors.surface, borderColor: colors.border }, handover === h.key && { backgroundColor: colors.primaryMuted, borderColor: colors.primary }]} onPress={() => setHandover(h.key)}>
+            <Text style={[styles.chipText, { color: colors.textSecondary }, handover === h.key && { color: colors.text }]}>{h.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      <Text style={styles.lab}>Recipient name (optional)</Text>
-      <TextInput style={styles.input} value={recipient} onChangeText={setRecipient} placeholder="Name" placeholderTextColor="#5f7186" />
+      <Text style={[styles.lab, { color: colors.textTertiary }]}>Recipient name (optional)</Text>
+      <TextInput style={[styles.input, { backgroundColor: colors.surfaceElevated, borderColor: colors.border, color: colors.text }]} value={recipient} onChangeText={setRecipient} placeholder="Name" placeholderTextColor={colors.textTertiary} />
 
-      <TouchableOpacity style={styles.btnSec} onPress={takePhoto}>
-        <Text style={styles.btnSecText}>{photo ? "✓ Photo captured — retake" : "📷  Take proof photo"}</Text>
+      <TouchableOpacity style={[styles.btnSec, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={takePhoto}>
+        <Text style={[styles.btnSecText, { color: colors.text }]}>{photo ? "✓ Photo captured — retake" : "📷  Take proof photo"}</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={[styles.btn, busy && { opacity: 0.6 }]} disabled={busy} onPress={submit}>
-        <Text style={styles.btnText}>Complete delivery</Text>
+      <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }, busy && { opacity: 0.6 }]} disabled={busy} onPress={submit}>
+        <Text style={[styles.btnText, { color: colors.white }]}>Complete delivery</Text>
       </TouchableOpacity>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  fill: { flex: 1, backgroundColor: "#0c1218" },
-  h1: { color: "#e1e9f1", fontSize: 18, fontWeight: "700" },
-  lab: { color: "#5f7186", fontSize: 11, textTransform: "uppercase", letterSpacing: 1, fontWeight: "700" },
+  fill: { flex: 1 },
+  h1: { fontSize: 18, fontWeight: "700" },
+  lab: { fontSize: 11, textTransform: "uppercase", letterSpacing: 1, fontWeight: "700" },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: { borderColor: "#26374a", borderWidth: 1, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: "#141f2b" },
-  chipSel: { borderColor: "#22a8ff", backgroundColor: "rgba(34,168,255,0.1)" },
-  chipText: { color: "#8ea0b2", fontSize: 12.5 },
-  chipTextSel: { color: "#e1e9f1" },
-  input: { backgroundColor: "#1a2635", borderColor: "#26374a", borderWidth: 1, borderRadius: 11, padding: 12, color: "#e1e9f1", fontSize: 14 },
-  btn: { backgroundColor: "#22a8ff", borderRadius: 12, padding: 14, alignItems: "center", marginTop: 4 },
-  btnText: { color: "#00121f", fontWeight: "700", fontSize: 15 },
-  btnSec: { backgroundColor: "#1a2635", borderColor: "#26374a", borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
-  btnSecText: { color: "#e1e9f1", fontWeight: "600" },
+  chip: { borderWidth: 1, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12 },
+  chipText: { fontSize: 12.5 },
+  input: { borderWidth: 1, borderRadius: 11, padding: 12, fontSize: 14 },
+  btn: { borderRadius: 12, padding: 14, alignItems: "center", marginTop: 4 },
+  btnText: { fontWeight: "700", fontSize: 15 },
+  btnSec: { borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
+  btnSecText: { fontWeight: "600" },
 });

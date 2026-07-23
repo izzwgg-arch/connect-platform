@@ -4,6 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
+import { useTheme } from "../../context/ThemeContext";
 import { submitException } from "../../delivery/deliveryClient";
 
 const REASONS = [
@@ -19,6 +20,7 @@ const REASONS = [
 export function DeliveryExceptionScreen() {
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
+  const { colors } = useTheme();
   const { orderId, orderRef } = (useRoute<any>().params) || {};
   const { token } = useAuth();
   const [reason, setReason] = useState<string | null>(null);
@@ -48,39 +50,38 @@ export function DeliveryExceptionScreen() {
   }
 
   return (
-    <ScrollView style={[styles.fill, { paddingTop: insets.top + 8 }]} contentContainerStyle={{ padding: 16, gap: 12 }}>
-      <Text style={styles.h1}>Report a problem {orderRef || ""}</Text>
-      <Text style={styles.lab}>What happened?</Text>
+    <ScrollView style={[styles.fill, { backgroundColor: colors.bg, paddingTop: insets.top + 8 }]} contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <Text style={[styles.h1, { color: colors.text }]}>Report a problem {orderRef || ""}</Text>
+      <Text style={[styles.lab, { color: colors.textTertiary }]}>What happened?</Text>
       {REASONS.map((r) => (
-        <TouchableOpacity key={r.key} style={[styles.row, reason === r.key && styles.rowSel]} onPress={() => setReason(r.key)}>
-          <Text style={[styles.rowText, reason === r.key && { color: "#e1e9f1" }]}>{r.label}</Text>
+        <TouchableOpacity key={r.key} style={[styles.row, { backgroundColor: colors.surface, borderColor: colors.border }, reason === r.key && { borderColor: colors.primary, backgroundColor: colors.primaryMuted }]} onPress={() => setReason(r.key)}>
+          <Text style={[styles.rowText, { color: colors.textSecondary }, reason === r.key && { color: colors.text }]}>{r.label}</Text>
         </TouchableOpacity>
       ))}
 
-      <Text style={styles.lab}>Note {reason === "other" ? "(required)" : "(optional)"}</Text>
-      <TextInput style={styles.input} value={note} onChangeText={setNote} placeholder="Add details…" placeholderTextColor="#5f7186" multiline />
+      <Text style={[styles.lab, { color: colors.textTertiary }]}>Note {reason === "other" ? "(required)" : "(optional)"}</Text>
+      <TextInput style={[styles.input, { backgroundColor: colors.surfaceElevated, borderColor: colors.border, color: colors.text }]} value={note} onChangeText={setNote} placeholder="Add details…" placeholderTextColor={colors.textTertiary} multiline />
 
-      <TouchableOpacity style={styles.btnSec} onPress={takePhoto}>
-        <Text style={styles.btnSecText}>{photo ? "✓ Photo attached — retake" : "📷  Add photo"}</Text>
+      <TouchableOpacity style={[styles.btnSec, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={takePhoto}>
+        <Text style={[styles.btnSecText, { color: colors.text }]}>{photo ? "✓ Photo attached — retake" : "📷  Add photo"}</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={[styles.btn, (!reason || busy) && { opacity: 0.5 }]} disabled={!reason || busy} onPress={submit}>
-        <Text style={styles.btnText}>Submit</Text>
+      <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }, (!reason || busy) && { opacity: 0.5 }]} disabled={!reason || busy} onPress={submit}>
+        <Text style={[styles.btnText, { color: colors.white }]}>Submit</Text>
       </TouchableOpacity>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  fill: { flex: 1, backgroundColor: "#0c1218" },
-  h1: { color: "#e1e9f1", fontSize: 18, fontWeight: "700" },
-  lab: { color: "#5f7186", fontSize: 11, textTransform: "uppercase", letterSpacing: 1, fontWeight: "700", marginTop: 6 },
-  row: { borderColor: "#26374a", borderWidth: 1, borderRadius: 11, padding: 13, backgroundColor: "#141f2b" },
-  rowSel: { borderColor: "#22a8ff", backgroundColor: "rgba(34,168,255,0.08)" },
-  rowText: { color: "#8ea0b2", fontSize: 13.5 },
-  input: { backgroundColor: "#1a2635", borderColor: "#26374a", borderWidth: 1, borderRadius: 11, padding: 12, color: "#e1e9f1", fontSize: 14, minHeight: 64, textAlignVertical: "top" },
-  btn: { backgroundColor: "#22a8ff", borderRadius: 12, padding: 14, alignItems: "center", marginTop: 4 },
-  btnText: { color: "#00121f", fontWeight: "700", fontSize: 15 },
-  btnSec: { backgroundColor: "#1a2635", borderColor: "#26374a", borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
-  btnSecText: { color: "#e1e9f1", fontWeight: "600" },
+  fill: { flex: 1 },
+  h1: { fontSize: 18, fontWeight: "700" },
+  lab: { fontSize: 11, textTransform: "uppercase", letterSpacing: 1, fontWeight: "700", marginTop: 6 },
+  row: { borderWidth: 1, borderRadius: 11, padding: 13 },
+  rowText: { fontSize: 13.5 },
+  input: { borderWidth: 1, borderRadius: 11, padding: 12, fontSize: 14, minHeight: 64, textAlignVertical: "top" },
+  btn: { borderRadius: 12, padding: 14, alignItems: "center", marginTop: 4 },
+  btnText: { fontWeight: "700", fontSize: 15 },
+  btnSec: { borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
+  btnSecText: { fontWeight: "600" },
 });

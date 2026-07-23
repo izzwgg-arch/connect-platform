@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Linking, Alert } from "react-
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
+import { useTheme } from "../../context/ThemeContext";
 import { getStopNav, markArrived } from "../../delivery/deliveryClient";
 
 // Current-stop screen: navigate (Waze) → arrive → deliver (proof) / report issue (exception).
@@ -10,6 +11,7 @@ export function DeliveryStopScreen() {
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
   const route = useRoute<any>();
+  const { colors } = useTheme();
   const { orderId, orderRef, addr } = route.params || {};
   const { token } = useAuth();
   const [arrived, setArrived] = useState(false);
@@ -37,34 +39,34 @@ export function DeliveryStopScreen() {
   }
 
   return (
-    <View style={[styles.fill, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.fill, { backgroundColor: colors.bg, paddingTop: insets.top + 8 }]}>
       <View style={styles.appbar}>
-        <TouchableOpacity onPress={() => nav.goBack()}><Text style={styles.back}>‹</Text></TouchableOpacity>
-        <Text style={styles.h1}>Stop {orderRef || ""}</Text>
+        <TouchableOpacity onPress={() => nav.goBack()}><Text style={[styles.back, { color: colors.textSecondary }]}>‹</Text></TouchableOpacity>
+        <Text style={[styles.h1, { color: colors.text }]}>Stop {orderRef || ""}</Text>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.addr}>{addr || "Delivery address"}</Text>
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Text style={[styles.addr, { color: colors.text }]}>{addr || "Delivery address"}</Text>
       </View>
 
       <View style={{ flex: 1 }} />
 
       <View style={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 16, gap: 10 }}>
-        <TouchableOpacity style={styles.btnSec} onPress={navigateToStop}>
-          <Text style={styles.btnSecText}>🧭  Navigate with Waze</Text>
+        <TouchableOpacity style={[styles.btnSec, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={navigateToStop}>
+          <Text style={[styles.btnSecText, { color: colors.text }]}>🧭  Navigate with Waze</Text>
         </TouchableOpacity>
 
         {!arrived ? (
-          <TouchableOpacity style={[styles.btn, busy && { opacity: 0.6 }]} disabled={busy} onPress={arrive}>
-            <Text style={styles.btnText}>I've arrived</Text>
+          <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }, busy && { opacity: 0.6 }]} disabled={busy} onPress={arrive}>
+            <Text style={[styles.btnText, { color: colors.white }]}>I've arrived</Text>
           </TouchableOpacity>
         ) : (
           <>
-            <TouchableOpacity style={styles.btn} onPress={() => nav.navigate("DeliveryProof", { orderId, orderRef })}>
-              <Text style={styles.btnText}>Deliver — capture proof</Text>
+            <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }]} onPress={() => nav.navigate("DeliveryProof", { orderId, orderRef })}>
+              <Text style={[styles.btnText, { color: colors.white }]}>Deliver — capture proof</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.btnGhost} onPress={() => nav.navigate("DeliveryException", { orderId, orderRef })}>
-              <Text style={styles.btnGhostText}>Report a problem</Text>
+            <TouchableOpacity style={[styles.btnGhost, { borderColor: colors.border }]} onPress={() => nav.navigate("DeliveryException", { orderId, orderRef })}>
+              <Text style={[styles.btnGhostText, { color: colors.textSecondary }]}>Report a problem</Text>
             </TouchableOpacity>
           </>
         )}
@@ -74,16 +76,16 @@ export function DeliveryStopScreen() {
 }
 
 const styles = StyleSheet.create({
-  fill: { flex: 1, backgroundColor: "#0c1218" },
+  fill: { flex: 1 },
   appbar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingBottom: 8 },
-  back: { color: "#8ea0b2", fontSize: 26 },
-  h1: { color: "#e1e9f1", fontSize: 18, fontWeight: "700" },
-  card: { backgroundColor: "#141f2b", borderColor: "#26374a", borderWidth: 1, borderRadius: 14, padding: 16, margin: 16 },
-  addr: { color: "#e1e9f1", fontSize: 15, fontWeight: "600" },
-  btn: { backgroundColor: "#22a8ff", borderRadius: 12, padding: 14, alignItems: "center" },
-  btnText: { color: "#00121f", fontWeight: "700", fontSize: 15 },
-  btnSec: { backgroundColor: "#1a2635", borderColor: "#26374a", borderWidth: 1, borderRadius: 12, padding: 14, alignItems: "center" },
-  btnSecText: { color: "#e1e9f1", fontWeight: "600", fontSize: 14 },
-  btnGhost: { borderColor: "#26374a", borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
-  btnGhostText: { color: "#8ea0b2", fontWeight: "600" },
+  back: { fontSize: 26 },
+  h1: { fontSize: 18, fontWeight: "700" },
+  card: { borderWidth: 1, borderRadius: 14, padding: 16, margin: 16 },
+  addr: { fontSize: 15, fontWeight: "600" },
+  btn: { borderRadius: 12, padding: 14, alignItems: "center" },
+  btnText: { fontWeight: "700", fontSize: 15 },
+  btnSec: { borderWidth: 1, borderRadius: 12, padding: 14, alignItems: "center" },
+  btnSecText: { fontWeight: "600", fontSize: 14 },
+  btnGhost: { borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
+  btnGhostText: { fontWeight: "600" },
 });

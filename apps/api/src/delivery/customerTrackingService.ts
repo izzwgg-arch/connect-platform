@@ -17,11 +17,12 @@ import { writeDeliveryAudit } from "./audit";
 const AVG_STOP_TRAVEL_SEC = 480; // 8 min/stop heuristic until real routing is wired
 const AVG_SERVICE_SEC = 120;
 
-export type TrackingState = "ok" | "invalid" | "expired" | "revoked" | "not_found";
+export type TrackingState = "ok" | "invalid" | "expired" | "revoked" | "not_found" | "verify";
 
 export interface TrackingResult {
   state: TrackingState;
   view?: ReturnType<typeof buildCustomerView>;
+  verify?: { hint: string };
   tenantBrand?: { name: string } | null;
 }
 
@@ -59,18 +60,23 @@ async function stopsAwayFor(tenantId: string, order: { id: string }): Promise<nu
 export async function resolveTrackingView(rawToken: string, nowMs = Date.now()): Promise<TrackingResult> {
   const tok = await db.trackingToken.findUnique({
     where: { tokenHash: hashToken(rawToken) },
-    select: { id: true, tenantId: true, orderId: true, expiresAt: true, revokedAt: true, verifiedAt: true },
+    select: { id: true, tenantId: true, orderId: true, expiresAt: true, revokedAt: true, verifiedAt: true, otpHash: true },
   });
   if (!tok) return { state: "invalid" };
 
   const order = await db.deliveryOrder.findFirst({
     where: { id: tok.orderId, tenantId: tok.tenantId },
     select: {
-      id: true, status: true, sourceId: true, updatedAt: true,
+      id: true, status: true, sourceId: true, updatedAt: true, storeId: true, customerPhone: true,
       addrLine1: true, addrUnit: true,
     },
   });
   if (!order) return { state: "not_found" };
+
+  // Brand shown in the customer header — the store name (safe; already printed on the label).
+  const store = order.storeId
+    ? await db.deliveryStore.findFirst({ where: { id: order.storeId, tenantId: tok.tenantId }, select: { name: true } })
+    : null;
 
   const status = order.status as DeliveryOrderStatus;
   const terminal = isTerminalStatus(status);
@@ -83,6 +89,14 @@ export async function resolveTrackingView(rawToken: string, nowMs = Date.now()):
 
   const tier = resolveTier({ tokenValid: true, otpVerified: tok.verifiedAt != null });
   const settings = await getDeliverySettings(tok.tenantId);
+
+  // STRICT tenants gate the whole view behind OTP — but only when a code is actually pending
+  // (otherwise there is nothing to enter, so we fall through to the coarse tier-1 view).
+  if ((settings as any).verifyTier === "STRICT" && tier < 2 && tok.otpHash && !terminal) {
+    const last2 = (order.customerPhone || "").replace(/\D/g, "").slice(-2);
+    return { state: "verify", verify: { hint: last2 ? `Enter the code we texted to the number ending ••${last2}.` : "Enter the code we texted you." } };
+  }
+
   const stopsAway = await stopsAwayFor(tok.tenantId, order);
 
   // latest fix (via the order's run) → movement/isLive
@@ -103,6 +117,7 @@ export async function resolveTrackingView(rawToken: string, nowMs = Date.now()):
   const view = buildCustomerView({
     status,
     orderRef: `#${order.sourceId}`,
+    brandName: store?.name ?? null,
     mapReveal: (settings as any).mapReveal ?? "PROGRESSIVE",
     exactPinStopsAway: (settings as any).exactPinStopsAway ?? 1,
     stopsAway,

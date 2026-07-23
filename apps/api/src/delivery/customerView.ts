@@ -49,6 +49,8 @@ const STATUS_MAP: Record<DeliveryOrderStatus, { code: PublicStatus; label: strin
 export interface CustomerViewInput {
   status: DeliveryOrderStatus;
   orderRef: string; // masked/order number — safe to show
+  brandName?: string | null; // store/tenant brand shown in the header (safe — it's on the label)
+  delayLabel?: string | null; // honest "running late" copy, only when a real source says so
   mapReveal: MapReveal;
   exactPinStopsAway: number;
   stopsAway: number | null;
@@ -68,10 +70,13 @@ export interface CustomerView {
   statusCode: PublicStatus;
   statusLabel: string;
   orderRef: string;
+  brandName?: string | null;
   eta: string | null;
   stopsAway: number | null;
   movementLabel: string;
   lastUpdated: string | null;
+  delayLabel?: string | null;
+  locationStale?: boolean;
   map: { show: boolean; exactPin: boolean; approximateArea: boolean; position: { lat: number; lng: number; heading?: number | null } | null };
   detail: { address?: string; proof?: { method: string; capturedAt: string } } | null;
 }
@@ -107,14 +112,20 @@ export function buildCustomerView(input: CustomerViewInput): CustomerView {
         }
       : null;
 
+  // Honest degraded-state: location is stale/offline while the delivery is active.
+  const locationStale = isActive && (input.movement === "stale" || input.movement === "offline");
+
   return {
     statusCode: mapped.code,
     statusLabel: mapped.label,
     orderRef: input.orderRef,
+    brandName: input.brandName ?? null,
     eta: etaText,
     stopsAway: reveal.showStopsAway && isActive ? input.stopsAway : null,
     movementLabel: movementLabel(input.movement),
     lastUpdated: input.lastUpdateSec == null ? null : `${Math.round(input.lastUpdateSec)}s ago`,
+    delayLabel: input.delayLabel ?? null,
+    locationStale,
     map: {
       show: showMap,
       exactPin,
