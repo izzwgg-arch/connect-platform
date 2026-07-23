@@ -113,6 +113,25 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
   `handleInboundSms` into the VoIP.ms inbound path (`handleVoipMsInbound`) — mirror the CRM
   inbound SMS hook pattern; respect carrier STOP/START compliance.
 
+## Phase 8 — Voice / IVR status (READ-ONLY; no PBX changes)
+- No schema changes. No PBX/AstDB/VitalPBX writes of any kind in this phase.
+- `voiceStatus.ts` composes a prerecorded-fragment plan (prompt refs + number playback —
+  decision 2). `resolveVoiceStatus()` (read-only) maps caller-ID / manual digits → order →
+  scenario (matched-single/multiple, unmatched, no-order, delivered, delayed, canceled,
+  after-hours, system-error). Never speaks address/payment/sensitive data.
+- Internal test endpoint (secret-gated, non-prod): 
+  ```bash
+  curl -sX POST .../internal/delivery/voice/resolve -H "x-delivery-source-secret: $SECRET" \
+    -H "x-tenant-id: <TENANT_ID>" -H 'content-type: application/json' \
+    -d '{"callerId":"+15551230000"}'      # → { scenario, fragments:[...] }
+  ```
+- **Going live (SEPARATE, EXPLICIT PBX APPROVAL REQUIRED — not done here):** add a delivery
+  status branch to the tenant's existing DID via the Connect IVR overlay (AstDB keys, e.g.
+  `buildIvrKeys`/`/voice/did/publish`), record the prompt audio for the `delivery/*` refs
+  (via the existing prompt sync/upload), and have the dialplan AGI call
+  `/internal/delivery/voice/resolve` to fetch the plan. Cross-check every change against the
+  PBX brain files first (docs/pbx-brain). Never mutate VitalPBX config.
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.

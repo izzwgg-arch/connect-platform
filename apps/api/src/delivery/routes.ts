@@ -15,6 +15,7 @@ import { registerDeliveryDispatchRoutes } from "./dispatchRoutes";
 import { registerDeliveryLocationRoutes } from "./locationRoutes";
 import { registerDeliveryCustomerRoutes } from "./customerRoutes";
 import { registerDeliverySmsRoutes } from "./smsRoutes";
+import { registerDeliveryVoiceRoutes } from "./voiceRoutes";
 
 const mockAdapter = new MockOrderSourceAdapter();
 
@@ -153,4 +154,7 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
 
   // ── SMS notifications + inbound commands (Phase 7 — TEST endpoints only) ──────
   await registerDeliverySmsRoutes(app);
+
+  // ── Voice/IVR status resolve (Phase 8 — READ-ONLY; no PBX writes) ────────────
+  await registerDeliveryVoiceRoutes(app);
 }
