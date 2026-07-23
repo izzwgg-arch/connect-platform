@@ -302,8 +302,10 @@ export async function queueReceiptEmailOnce(params: {
   transactionId: string;
   cardLabel?: string | null;
   paidViaAutopay?: boolean;
+  /** Skip the once-per-transaction dedupe (admin-triggered resend). */
+  force?: boolean;
 }): Promise<boolean> {
-  if (await hasReceiptEmailForTransaction(params.transactionId)) return false;
+  if (!params.force && (await hasReceiptEmailForTransaction(params.transactionId))) return false;
   const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
   const to = recipient.to;
   if (!to) {

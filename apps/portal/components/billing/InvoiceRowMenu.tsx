@@ -12,6 +12,8 @@ export type InvoiceRowMenuProps = {
   canAct: boolean;
   isBusy: (label: string) => boolean;
   onSend?: () => void;
+  /** Resend the payment receipt email (with invoice + receipt PDFs) */
+  onResendReceipt?: () => void;
   onEmailLink?: () => void;
   onRetry?: () => void;
   onMarkPaid?: () => void;
@@ -33,6 +35,7 @@ export function InvoiceRowMenu({
   canAct,
   isBusy,
   onSend,
+  onResendReceipt,
   onEmailLink,
   onRetry,
   onMarkPaid,
@@ -118,6 +121,11 @@ export function InvoiceRowMenu({
           {canAct && onSend ? (
             <button type="button" role="menuitem" disabled={disabled} onClick={act(onSend)}>
               {isBusy("Send") ? "Sending…" : "Send invoice"}
+            </button>
+          ) : null}
+          {canAct && onResendReceipt ? (
+            <button type="button" role="menuitem" disabled={disabled} onClick={act(onResendReceipt)}>
+              {isBusy("Resend receipt") ? "Sending…" : "Resend receipt"}
             </button>
           ) : null}
           {canAct && onEmailLink ? (
