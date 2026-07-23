@@ -400,6 +400,11 @@ export class MobilePushNotifier {
       connectTenantId,
       pbxVitalTenantId,
       toExtension: knownExt,
+      // 2026-07-16 (owner request): pass the caller number so the API's
+      // prewake VoIP push (callerNumber: input.fromNumber) shows the real
+      // number on the iOS lock screen instead of "Unknown". The API schema
+      // already accepts fromNumber (nullable/optional) — older APIs ignore it.
+      fromNumber: call.from ?? null,
     }).catch((err: unknown) => {
       log.warn(
         { linkedId: call.linkedId, err: (err as Error)?.message },
@@ -413,6 +418,7 @@ export class MobilePushNotifier {
     connectTenantId: string | null;
     pbxVitalTenantId: string | null;
     toExtension: string | null;
+    fromNumber?: string | null;
   }): Promise<void> {
     if (!this.prewakeUrl) return;
     const controller = new AbortController();
