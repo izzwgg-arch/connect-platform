@@ -15,10 +15,43 @@ function isValidRingtoneId(value: string | null | undefined): value is WebRingto
   return WEB_RINGTONE_OPTIONS.some((option) => option.id === value);
 }
 
+function isDesktopApp(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean(
+      (window as unknown as { connectDesktop?: { isDesktop?: boolean } })
+        .connectDesktop?.isDesktop,
+    )
+  );
+}
+
+// Windows/desktop app only: the legacy "Classic" tone is not offered as a choice
+// there (see getSelectableWebRingtoneOptions), so a stored "classic" can only be a
+// stale value that would silently replace the branded ringtone with the synth
+// tone. Self-heal it back to the branded default. Browser + mobile are untouched.
 export function getWebIncomingRingtone(): WebRingtoneId {
   if (typeof window === "undefined") return DEFAULT_WEB_RINGTONE_ID;
   const stored = window.localStorage.getItem(WEB_RINGTONE_STORAGE_KEY);
+  if (isDesktopApp() && stored === "classic") {
+    try {
+      window.localStorage.removeItem(WEB_RINGTONE_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_WEB_RINGTONE_ID;
+  }
   return isValidRingtoneId(stored) ? stored : DEFAULT_WEB_RINGTONE_ID;
+}
+
+/**
+ * Ringtone options the user may pick in Settings. The Windows/desktop app hides
+ * the legacy "Classic" tone so it can never be selected or get stuck; the branded
+ * Connect ringtone is the only choice there (a synth fallback still plays
+ * automatically if audio playback fails). Browser keeps the full list.
+ */
+export function getSelectableWebRingtoneOptions(): { id: WebRingtoneId; label: string }[] {
+  const all = WEB_RINGTONE_OPTIONS.map((o) => ({ id: o.id, label: o.label }));
+  return isDesktopApp() ? all.filter((o) => o.id !== "classic") : all;
 }
 
 export function setWebIncomingRingtone(next: WebRingtoneId): void {

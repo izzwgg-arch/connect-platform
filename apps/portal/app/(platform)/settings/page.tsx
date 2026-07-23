@@ -6,7 +6,7 @@ import { useSipPhone } from "../../../hooks/useSipPhone";
 import { ConnectSelect } from "../../../components/ConnectSelect";
 import {
   DEFAULT_WEB_RINGTONE_ID,
-  WEB_RINGTONE_OPTIONS,
+  getSelectableWebRingtoneOptions,
   getWebIncomingRingtone,
   setWebIncomingRingtone,
   type WebRingtoneId,
@@ -513,7 +513,7 @@ function AudioTab() {
                 setWebIncomingRingtone(next);
                 setIncomingRingtoneId(next);
               }}
-              options={WEB_RINGTONE_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+              options={getSelectableWebRingtoneOptions().map((o) => ({ value: o.id, label: o.label }))}
               style={{ width: "100%" }}
             />
           </div>
