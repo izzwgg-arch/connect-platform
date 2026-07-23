@@ -16,10 +16,12 @@ export function DeliveryStopScreen() {
   const { token } = useAuth();
   const [arrived, setArrived] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showNavChooser, setShowNavChooser] = useState(false);
 
-  async function navigateToStop() {
+  async function navigateToStop(app: "waze" | "google") {
+    setShowNavChooser(false);
     try {
-      const { url } = await getStopNav(token!, orderId, "waze");
+      const { url } = await getStopNav(token!, orderId, app);
       await Linking.openURL(url);
     } catch (e: any) {
       Alert.alert("Navigation unavailable", e?.body?.code === "no_coords" ? "This stop has no map coordinates yet." : "Couldn't open navigation.");
@@ -52,9 +54,20 @@ export function DeliveryStopScreen() {
       <View style={{ flex: 1 }} />
 
       <View style={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 16, gap: 10 }}>
-        <TouchableOpacity style={[styles.btnSec, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={navigateToStop}>
-          <Text style={[styles.btnSecText, { color: colors.text }]}>🧭  Navigate with Waze</Text>
-        </TouchableOpacity>
+        {!showNavChooser ? (
+          <TouchableOpacity style={[styles.btnSec, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={() => setShowNavChooser(true)}>
+            <Text style={[styles.btnSecText, { color: colors.text }]}>🧭  Navigate</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.navChooser}>
+            <TouchableOpacity style={[styles.btnSec, styles.navOption, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={() => navigateToStop("google")}>
+              <Text style={[styles.btnSecText, { color: colors.text }]}>🗺  Google Maps</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.btnSec, styles.navOption, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} onPress={() => navigateToStop("waze")}>
+              <Text style={[styles.btnSecText, { color: colors.text }]}>🧭  Waze</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {!arrived ? (
           <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary }, busy && { opacity: 0.6 }]} disabled={busy} onPress={arrive}>
@@ -84,6 +97,8 @@ const styles = StyleSheet.create({
   addr: { fontSize: 15, fontWeight: "600" },
   btn: { borderRadius: 12, padding: 14, alignItems: "center" },
   btnText: { fontWeight: "700", fontSize: 15 },
+  navChooser: { flexDirection: "row", gap: 10 },
+  navOption: { flex: 1 },
   btnSec: { borderWidth: 1, borderRadius: 12, padding: 14, alignItems: "center" },
   btnSecText: { fontWeight: "600", fontSize: 14 },
   btnGhost: { borderWidth: 1, borderRadius: 12, padding: 13, alignItems: "center" },
