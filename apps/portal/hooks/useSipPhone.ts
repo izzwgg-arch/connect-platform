@@ -4,6 +4,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { splitRingGroupPrefix } from "../lib/ringGroupPrefix";
 import { useTelephonyAudio } from "./useTelephonyAudio";
+import { useTelephonySocket } from "./useTelephonySocket";
+import type { LiveCall } from "../types/liveCall";
 import {
   summarizeOfferSdp,
   isWebrtcSdpRejection,
@@ -35,6 +37,17 @@ export type SipCallState =
   | "ringing"
   | "connected"
   | "ended";
+
+// ── Do Not Disturb ────────────────────────────────────────────────────────
+// Shared localStorage flag (full + mini windows see the same store). The REAL
+// phone (full window) checks it at INVITE time and simply IGNORES the inbound
+// leg on this device — no ringtone, no UI, and crucially NO rejection, so the
+// PBX keeps ringing every other device registered to the same extension
+// (hard phones etc.). Only the softphone you toggled goes quiet.
+export const DND_STORAGE_KEY = "cc-dnd";
+export function isDndEnabled(): boolean {
+  try { return typeof window !== "undefined" && localStorage.getItem(DND_STORAGE_KEY) === "1"; } catch { return false; }
+}
 
 export type MicPermission = "unknown" | "granted" | "denied" | "prompt";
 
@@ -261,6 +274,9 @@ export type SipPhoneState = {
   /** "outbound" when user placed the call, "inbound" when a SIP INVITE arrived, null when idle. */
   callDirection: "outbound" | "inbound" | null;
   remoteParty: string | null;
+  remotePartyNumber: string | null;
+  remotePartyName: string | null;
+  remotePartyPrefix: string | null;
   muted: boolean;
   onHold: boolean;
   /** True when audio is routed to the loudest output device (speaker/headphone). */
@@ -669,6 +685,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [callDirection, setCallDirection] = useState<"outbound" | "inbound" | null>(null);
   const [remoteParty, setRemoteParty] = useState<string | null>(null);
+  const [remotePartyNumber, setRemotePartyNumber] = useState<string | null>(null);
+  const [remotePartyName, setRemotePartyName] = useState<string | null>(null);
+  const [remotePartyPrefix, setRemotePartyPrefix] = useState<string | null>(null);
+  const { calls: enrichLiveCalls } = useTelephonySocket();
   const [muted, setMutedState] = useState(false);
   const [onHold, setOnHold] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
@@ -1798,6 +1818,15 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
               } catch { /* ignore */ }
               return;
             }
+            // Do Not Disturb: silence THIS device only. We deliberately do NOT
+            // reject the INVITE — a 486 could end the call for the whole
+            // extension. This leg just never rings or shows UI; the PBX keeps
+            // ringing hard phones / other registrations, and this leg drops on
+            // its own when the call is answered elsewhere or the caller gives up.
+            if (data.originator === "remote" && isDndEnabled()) {
+              console.log(`[SIP] DND on — silencing inbound ${mcId} on this device only (no reject)`);
+              return;
+            }
             sessionsByIdRef.current.set(mcId, data.session);
 
             if (data.originator === "remote") {
@@ -1805,7 +1834,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
               // carries (e.g. "Estimates:Estimates:Caller") so the softphone shows
               // a clean caller; the prefix is surfaced as a tag from the matched
               // live call's fromPrefix instead.
-              const rawParty = data.request.from.display_name || data.request.from.uri.user;
+              const reqAny = data.request as unknown as { getHeader?: (n: string) => string | undefined };
+              const headerParty = (() => {
+                try {
+                  const raw = reqAny.getHeader?.("P-Asserted-Identity") || reqAny.getHeader?.("Remote-Party-ID") || "";
+                  const uriUser = /sip:([^@;>]+)@/i.exec(raw);
+                  if (uriUser && uriUser[1]) return uriUser[1];
+                  const num = /(\+?\d{4,})/.exec(raw);
+                  return num && num[1] ? num[1] : "";
+                } catch { return ""; }
+              })();
+              const rawParty = data.request.from.display_name || data.request.from.uri.user || headerParty;
+              try { console.log("[SIP] INCOMING caller-id diag " + JSON.stringify({ fromDisplay: data.request.from.display_name || null, fromUser: data.request.from.uri.user || null, headerParty: headerParty || null })); } catch { /* ignore */ }
               const party = splitRingGroupPrefix(rawParty).rest || rawParty;
               // Inbound on the PRIMARY line: forget any "call back on account X"
               // memory for this caller — the latest call wins.
@@ -1827,6 +1867,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
                 bindSession(data.session, party);
                 setCallState("ringing");
                 setRemoteParty(party);
+                setRemotePartyNumber((data.request.from.uri.user || headerParty || "").trim() || null);
                 console.log("[SIP] INCOMING_CALL from:", party);
                 startRingtone();
               } else {
@@ -3040,6 +3081,44 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     if (callState === "connected") void refreshAudioDevices();
   }, [callState, refreshAudioDevices]);
 
+  // Enrich the incoming caller with the ring-group/queue prefix + clean name from the
+  // live-call feed (matched by caller number). Broadcast so the mini pop-out — which
+  // has no reliable live-call feed of its own — can render the prefix pill.
+  // Enrich the incoming caller with the ring-group/queue prefix + clean name from the
+  // live-call feed (matched by caller number). Broadcast so the mini pop-out — which
+  // has no reliable live-call feed of its own — can render the prefix pill.
+  useEffect(() => {
+    if (callDirection !== "inbound" || callState === "idle" || callState === "ended") {
+      setRemotePartyName(null);
+      setRemotePartyPrefix(null);
+      return;
+    }
+    const num = (remotePartyNumber || "").replace(/\D/g, "");
+    const raw = (remoteParty || "").trim();
+    let matched: LiveCall | null = null;
+    for (const c of enrichLiveCalls.values()) {
+      if (c.direction !== "inbound") continue;
+      const cf = (c.from || "").replace(/\D/g, "");
+      if (num && cf && (cf === num || cf.endsWith(num) || num.endsWith(cf))) { matched = c; break; }
+    }
+    const cleanName = matched?.fromName?.trim() || null;
+    let prefix: string | null = matched?.fromPrefix?.trim() || null;
+    let name: string | null = cleanName;
+    if (!prefix && raw) {
+      const ci = raw.indexOf(":");
+      if (ci > 0 && !/^\+?\d{5,}$/.test(raw.slice(0, ci).trim())) {
+        prefix = raw.slice(0, ci).trim();
+        if (!name) name = raw.slice(ci + 1).replace(/:\s*$/, "").trim() || null;
+      }
+    }
+    if (!prefix && cleanName && raw && raw.length > cleanName.length && raw.toLowerCase().endsWith(cleanName.toLowerCase())) {
+      prefix = raw.slice(0, raw.length - cleanName.length).trim() || null;
+      name = cleanName;
+    }
+    setRemotePartyName(name);
+    setRemotePartyPrefix(prefix);
+  }, [enrichLiveCalls, callDirection, callState, remoteParty, remotePartyNumber]);
+
   // Reset speaker mode on call end and route audio back to the base device, so the
   // NEXT call starts on the headset (not stuck on the loudspeaker from last time).
   useEffect(() => {
@@ -3149,6 +3228,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     callStartedAt,
     callDirection,
     remoteParty,
+    remotePartyNumber,
+    remotePartyName,
+    remotePartyPrefix,
     muted,
     onHold,
     speakerOn,
@@ -3229,6 +3311,9 @@ function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneSta
     callStartedAt: phone.callStartedAt,
     callDirection: phone.callDirection,
     remoteParty: phone.remoteParty,
+    remotePartyNumber: phone.remotePartyNumber,
+    remotePartyName: phone.remotePartyName,
+    remotePartyPrefix: phone.remotePartyPrefix,
     muted: phone.muted,
     onHold: phone.onHold,
     speakerOn: phone.speakerOn,
@@ -3273,6 +3358,9 @@ const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   callStartedAt: null,
   callDirection: null,
   remoteParty: null,
+  remotePartyNumber: null,
+  remotePartyName: null,
+  remotePartyPrefix: null,
   muted: false,
   onHold: false,
   speakerOn: false,

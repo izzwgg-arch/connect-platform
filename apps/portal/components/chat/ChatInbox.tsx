@@ -1,8 +1,8 @@
 "use client";
 
-import { AlertCircle, MessageCircle, Search } from "lucide-react";
+import { AlertCircle, MessageCircle, Search, User, Users } from "lucide-react";
 import type { ChatThread } from "./types";
-import { crmSmsBadge, fmtChatTime, initials, smsInboxBadge, threadLabel } from "./formatting";
+import { crmSmsBadge, fmtChatTime, initials, isPhoneLabel, smsInboxBadge, threadDisplayName, threadLabel, toneFor } from "./formatting";
 
 export function ChatInbox({
   threads,
@@ -53,10 +53,15 @@ export function ChatInbox({
             className={`cc-thread ${activeThreadId === thread.id ? "active" : ""} ${thread.isDefaultTenantGroup ? "pinned" : ""}`}
             onClick={() => onSelect(thread)}
           >
-            <span className="cc-avatar">{initials(thread.participantName)}</span>
+            <span className="cc-avatar" style={{ background: toneFor(thread.participantName || thread.id), color: "#fff" }}>
+              {thread.type === "TENANT_GROUP" || thread.type === "GROUP" ? <Users size={17} /> : isPhoneLabel(thread.participantName) ? <User size={17} /> : initials(thread.participantName)}
+            </span>
             <span className="cc-thread-main">
               <span className="cc-thread-top">
-                <strong>{thread.participantName}</strong>
+                <span className="cc-thread-name">
+                  <strong>{threadDisplayName(thread)}</strong>
+                  <span className={"cc-state " + (thread.isNew ? "new" : "read")}>{thread.isNew ? "New" : "Read"}</span>
+                </span>
                 <small>{fmtChatTime(thread.lastAt)}</small>
               </span>
               <span className="cc-thread-bottom">

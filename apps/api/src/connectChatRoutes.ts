@@ -45,6 +45,7 @@ import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/s
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { probeChatMedia } from "./chatMediaProbe";
 import { denoiseVoiceNote, isVoiceNoteUpload } from "./chatVoiceNoteDenoise";
+import { isConnectChatMessageMine } from "./connectChatMessageMine";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -881,23 +882,50 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
   app.get("/chat/a/:attachmentId/:fileName", handleAttachmentIdDownload);
 
   // ── Chat threads (JWT) ─────────────────────────────────────────────────────
+  // Tenant-shared "New": a thread is New until some real participant (not the
+  // sender, not a silent tenant-wide viewer) has read past the newest inbound
+  // message. Silent viewers never advance lastReadAt (see mark-read below), so
+  // they are naturally excluded here.
+  const isThreadSharedNew = (
+    newest: { senderUserId: string | null; createdAt: Date; direction: string } | undefined | null,
+    participants: { userId: string | null; lastReadAt: Date | null }[],
+    markedUnreadAt?: Date | null,
+  ): boolean => {
+    // Newest inbound message OR a manual "mark unread" both raise the New threshold.
+    const newestTs = newest && newest.direction !== "OUTBOUND" ? newest.createdAt.getTime() : 0;
+    const markTs = markedUnreadAt ? markedUnreadAt.getTime() : 0;
+    const threshold = Math.max(newestTs, markTs);
+    if (threshold === 0) return false;
+    const sender = newest?.senderUserId ?? null;
+    return !participants.some(
+      (p) => p.userId && p.userId !== sender && p.lastReadAt && p.lastReadAt.getTime() >= threshold,
+    );
+  };
+
   app.get("/chat/unread-count", async (req, reply) => {
     const user = req.user as JwtUser;
-    // Count threads where this user is an active participant and has unread messages.
-    const participants = await db.connectChatParticipant.findMany({
-      where: { userId: user.sub, leftAt: null, archivedForUser: false },
-      select: { threadId: true, lastReadAt: true },
-    });
+    const tenantId = effectiveChatTenantId(req, user);
+    const canViewTenant = await hasEffectivePortalPermission(user, "can_view_tenant_chats" as any).catch(() => false);
+    const sel = {
+      id: true,
+      markedUnreadAt: true,
+      messages: {
+        where: { deletedForEveryoneAt: null },
+        orderBy: { createdAt: "desc" as const },
+        take: 1,
+        select: { senderUserId: true, createdAt: true, direction: true },
+      },
+      participants: { where: { leftAt: null }, select: { userId: true, lastReadAt: true } },
+    } as const;
+    const threads = canViewTenant
+      ? await db.connectChatThread.findMany({ where: { tenantId, active: true }, select: sel, take: 500 })
+      : (await db.connectChatParticipant.findMany({
+          where: { userId: user.sub, leftAt: null, archivedForUser: false, thread: { tenantId, active: true } },
+          select: { thread: { select: sel } },
+        })).map((p) => p.thread);
     let count = 0;
-    for (const p of participants) {
-      const unread = await db.connectChatMessage.count({
-        where: {
-          threadId: p.threadId,
-          direction: { not: "OUTBOUND" },
-          ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
-        },
-      });
-      if (unread > 0) count++;
+    for (const t of threads) {
+      if (isThreadSharedNew((t as any).messages[0], (t as any).participants, (t as any).markedUnreadAt)) count++;
     }
     return { count };
   });
@@ -923,6 +951,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           createdAt: true,
           type: true,
           senderUserId: true,
+          direction: true,
           deliveryStatus: true,
           deliveryError: true,
           attachments: { select: { durationMs: true, mediaKind: true, mimeType: true }, orderBy: { createdAt: "asc" } },
@@ -969,6 +998,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
     const threads = await Promise.all(threadsRaw.map(async (t: any) => {
       const last = t.messages[0];
+      const isNew = isThreadSharedNew(t.messages[0], t.participants, t.markedUnreadAt);
       const unread = canViewTenant ? 0 : (unreadMap.get(t.id) || 0);
       let participantName = t.title || "Chat";
       let participantExtension = "";
@@ -999,6 +1029,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         lastMessage: lastMessagePreview(last),
         lastAt: (last?.createdAt || t.lastMessageAt).toISOString(),
         unread,
+        isNew,
         tenantSmsE164: t.tenantSmsE164,
         externalSmsE164: t.externalSmsE164,
         smsInboxKind: t.type === "SMS" ? (isSharedTenantSmsInbox(t.smsInboxOwnerUserId || "") ? "shared" : "personal") : null,
@@ -1316,7 +1347,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         senderName: m.senderUser?.email?.split("@")[0] || (threadRow?.type === "SMS" && !m.senderUserId ? threadRow.externalSmsE164 || "SMS" : "System"),
         body: deletedForEveryone ? "" : m.body,
         sentAt: m.createdAt.toISOString(),
-        mine: m.senderUserId === user.sub,
+        mine: isConnectChatMessageMine(m, threadRow?.type, user.sub),
         type: m.type,
         editedAt: m.editedAt?.toISOString() || null,
         deletedForEveryoneAt: m.deletedForEveryoneAt?.toISOString() || null,
@@ -1362,9 +1393,30 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       select: { id: true },
     });
     if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    // Anyone who is a real participant of the thread marks it read when they open it
+    // (this propagates to all their devices for the extension). A pure oversight
+    // viewer who is not a participant simply 404s above, so their view never clears
+    // the shared New state — no permission-based skip needed here.
     const now = new Date();
     await db.connectChatParticipant.update({ where: { id: part.id }, data: { lastReadAt: now } });
     return { ok: true, lastReadAt: now.toISOString() };
+  });
+
+  // Manually mark a thread unread for the whole team (tenant-shared). Requires being
+  // a real participant; clears automatically when anyone opens the thread (their
+  // lastReadAt advances past markedUnreadAt).
+  app.post("/chat/threads/:threadId/unread", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const { threadId } = req.params as { threadId: string };
+    const tenantId = effectiveChatTenantId(req, user);
+    const part = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+      select: { id: true },
+    });
+    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    const now = new Date();
+    await db.connectChatThread.update({ where: { id: threadId }, data: { markedUnreadAt: now, markedUnreadById: user.sub } });
+    return { ok: true, markedUnreadAt: now.toISOString() };
   });
 
   app.post("/chat/threads/:threadId/typing", async (req, reply) => {

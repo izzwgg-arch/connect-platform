@@ -28,8 +28,18 @@ export function useNavBadges(): NavBadges {
       if (v.status === "fulfilled") setVoicemailUnread(v.value.count ?? 0);
     };
     void load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
+    const t = setInterval(load, 20_000);
+    const refresh = () => void load();
+    const onVis = () => { if (!document.hidden) void load(); };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("cc:navbadges:refresh", refresh);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("cc:navbadges:refresh", refresh);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
   return { chat: chatUnread, voicemail: voicemailUnread };

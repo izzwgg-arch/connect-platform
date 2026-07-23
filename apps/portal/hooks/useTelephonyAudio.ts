@@ -357,17 +357,41 @@ export function useTelephonyAudio() {
     const ringerVol = isDesktop ? getWebRingerVolume() : 1;
     const ringerDeviceId = isDesktop ? getWebRingerOutputDeviceId() : "";
     const ringtonePreference = getWebIncomingRingtone();
+    // Synthesized-tone fallback: on Windows editions without the Media Foundation
+    // AAC codec (N/KN, stripped images) the .mp4 ring "plays" but is silent, and
+    // any media-element error means no ring at all. Web Audio never needs the OS
+    // codec, so it always rings.
+    const fallbackToSynth = () => {
+      ringtoneAudioRef.current = null;
+      const c = ensureCtx();
+      if (!c) return;
+      if (ringerDeviceId && typeof (c as any).setSinkId === "function") {
+        void (c as any).setSinkId(ringerDeviceId).catch(() => undefined);
+      }
+      ringtoneRef.current = startIncomingRingtone(c, 0.18 * ringerVol);
+    };
     if (ringtonePreference === "connect-default" && typeof Audio !== "undefined") {
-      const audio = new Audio("/ringtones/connect-default-ringtone.mp4");
+      // Ogg/Vorbis primary (no AAC dependency); .mp4 kept only as a source
+      // fallback for any browser that somehow lacks Vorbis but has AAC.
+      const audio = new Audio();
       audio.loop = true;
       audio.volume = ringerVol;
+      const srcOgg = document.createElement("source");
+      srcOgg.src = "/ringtones/connect-default-ringtone.ogg";
+      srcOgg.type = "audio/ogg";
+      const srcMp4 = document.createElement("source");
+      srcMp4.src = "/ringtones/connect-default-ringtone.mp4";
+      srcMp4.type = "audio/mp4";
+      audio.appendChild(srcOgg);
+      audio.appendChild(srcMp4);
       if (ringerDeviceId && typeof (audio as any).setSinkId === "function") {
         void (audio as any).setSinkId(ringerDeviceId).catch(() => undefined);
       }
+      // If none of the sources can play (decode/codec failure), ring via Web Audio.
+      audio.addEventListener("error", fallbackToSynth, { once: true });
       ringtoneAudioRef.current = audio;
-      audio.play().catch(() => {
-        ringtoneAudioRef.current = null;
-      });
+      audio.load();
+      audio.play().catch(fallbackToSynth);
       return;
     }
     const ctx = ensureCtx();

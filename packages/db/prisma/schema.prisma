@@ -2896,6 +2896,12 @@ model MobileDevice {
   platform              MobilePlatform
   expoPushToken         String               @unique
   voipPushToken         String?
+  /// Native FCM registration token (Android) — enables direct high-priority
+  /// FCM call wakes, bypassing the Expo relay. Null until the app reports it.
+  nativeFcmToken        String?
+  /// Last time this device acknowledged a call-wake push (DEVICE_* stage via
+  /// /mobile/wake/event). Sent-but-never-acked is the wake-health failure signal.
+  lastWakeAckAt         DateTime?
   deviceId              String?
   appVersion            String?
   deviceName            String?
@@ -3910,6 +3916,8 @@ model ConnectChatThread {
   externalSmsE164      String?
   /// "" = tenant-wide SMS inbox; else Connect user id for assigned-number personal inbox
   smsInboxOwnerUserId  String                   @default("")
+  markedUnreadAt       DateTime?
+  markedUnreadById     String?
   participants         ConnectChatParticipant[]
   messages             ConnectChatMessage[]
   tenant               Tenant                   @relation(fields: [tenantId], references: [id])

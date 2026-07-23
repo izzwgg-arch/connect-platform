@@ -148,6 +148,7 @@ import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTen
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx, type ExtensionSyncResult } from "./pbxExtensionSync";
+import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "./fcmDirect";
 import {
   buildMohClassName,
   buildMohPbxWavStorageKey,
@@ -758,6 +759,31 @@ async function queueEmailJob(params: {
       nextRunAt: new Date()
     }
   });
+}
+
+// ── Admin alert email ────────────────────────────────────────────────────────
+// Central channel for everything an operator must know about this server:
+// wake-health, PBX sync failures, API restarts. Rides the existing EmailJob
+// queue (SendGrid/SMTP). Override recipient with env ADMIN_ALERT_EMAIL.
+const ADMIN_ALERT_EMAIL = (process.env.ADMIN_ALERT_EMAIL || "tod10950@gmail.com").trim();
+const ADMIN_ALERT_TENANT_ID = "connect-admin-tenant-v1";
+const adminAlertLastSentAt = new Map<string, number>();
+function escapeAlertHtml(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+async function sendAdminAlert(key: string, subject: string, lines: string[], minIntervalMs = 6 * 3600_000): Promise<void> {
+  try {
+    if (!ADMIN_ALERT_EMAIL) return;
+    const now = Date.now();
+    if (now - (adminAlertLastSentAt.get(key) ?? 0) < minIntervalMs) return;
+    adminAlertLastSentAt.set(key, now);
+    const textBody = lines.join("\n");
+    const htmlBody = `<div style="font-family:monospace;white-space:pre-wrap">${lines.map(escapeAlertHtml).join("<br/>")}</div>`;
+    await queueEmailJob({ tenantId: ADMIN_ALERT_TENANT_ID, type: "ADMIN_ALERT", toEmail: ADMIN_ALERT_EMAIL, subject: `[Connect Alert] ${subject}`, htmlBody, textBody });
+    app.log.info({ adminAlert: true, key, subject }, "[ADMIN_ALERT] queued");
+  } catch (e: any) {
+    app.log.warn({ adminAlert: true, key, err: String(e?.message || e).slice(0, 200) }, "[ADMIN_ALERT] queue failed");
+  }
 }
 
 async function queueReceiptEmail(params: { tenantId: string; to: string; amountCents: number; periodEnd: Date; receiptId: string }) {
@@ -3198,12 +3224,49 @@ async function sendPushToUserDevices(input: {
           ? "user_alert_data_high"
           : "generic_data_high";
 
-  const messages = filtered.map((d) =>
+  // ── Direct-FCM fast path for call-critical wakes ──────────────────────────
+  // Devices that reported a native FCM token get the wake via FCM HTTP v1
+  // directly (high priority, Doze-exempt) instead of the Expo relay. Any direct
+  // failure falls back to Expo for that device. Devices without a native token
+  // keep the Expo path bit-for-bit unchanged.
+  const callCriticalTypes = new Set(["INCOMING_CALL", "INCOMING_CALL_WAKE", "INVITE_CANCELED", "INVITE_CLAIMED"]);
+  let expoTargets = filtered;
+  if (callCriticalTypes.has(String(payloadType)) && isFcmDirectConfigured()) {
+    const directTargets = filtered.filter((d) => (d as any).nativeFcmToken && d.platform === "ANDROID");
+    if (directTargets.length > 0) {
+      const fcmData = buildFcmDataFromPayload(input.payload as unknown as Record<string, unknown>);
+      const failedIds = new Set<string>();
+      await Promise.all(directTargets.map(async (d) => {
+        try {
+          await sendFcmDirectData(String((d as any).nativeFcmToken), fcmData);
+          app.log.info({
+            callWake: true, stage: "FCM_DIRECT_DELIVERED", source: "api",
+            tenantId: input.tenantId, userId: input.userId, deviceId: d.id,
+            payloadType, model: d.model ?? null, tokenTail: String((d as any).nativeFcmToken).slice(-10),
+          }, "[CALL_WAKE] FCM_DIRECT_DELIVERED");
+        } catch (err: any) {
+          failedIds.add(d.id);
+          app.log.warn({
+            callWake: true, stage: "FCM_DIRECT_FAILED", tenantId: input.tenantId,
+            deviceId: d.id, payloadType, err: String(err?.message || err).slice(0, 200),
+          }, "[CALL_WAKE] FCM_DIRECT_FAILED — falling back to Expo for this device");
+        }
+      }));
+      expoTargets = filtered.filter((d) => !(d as any).nativeFcmToken || d.platform !== "ANDROID" || failedIds.has(d.id));
+    }
+  }
+
+  const messages = expoTargets.map((d) =>
     buildExpoPushV2Item({
       to: String(d.expoPushToken),
       payload: { ...(input.payload as unknown as Record<string, unknown>) },
     }),
   );
+
+  if (messages.length === 0) {
+    app.log.info({ event: "MOBILE_PUSH_AUDIT", stage: "expo_skipped_all_direct", tenantId: input.tenantId, userId: input.userId, payloadType }, "mobile_push_audit.all_devices_served_by_direct_fcm");
+    return;
+  }
 
   app.log.info(
     {
@@ -4694,6 +4757,72 @@ async function refreshTurnGauge() {
 }
 refreshTurnGauge();
 registerShutdownTimer(setInterval(refreshTurnGauge, 300_000));
+
+// ── Wake-health monitor ──────────────────────────────────────────────────────
+// Daily sweep of every active Android device: flags latched keep-alive gates and
+// devices that were SENT call pushes recently but never ACKED one (the exact
+// failure mode that went unnoticed for a month). Emits one [WAKE_HEALTH] summary
+// line + one line per flagged device; also served on GET /admin/wake-health.
+async function computeWakeHealth() {
+  const devices = await db.mobileDevice.findMany({
+    where: { active: true, platform: "ANDROID" },
+    include: { user: { select: { email: true } }, tenant: { select: { name: true } } },
+  });
+  const now = Date.now();
+  const rows = devices.map((d: any) => {
+    const ka = (d.keepAliveSnapshot ?? {}) as Record<string, unknown>;
+    const gateLatched = ka["gateNeeded"] === true;
+    const gateDrops = Number(ka["gateDropCount"] ?? 0) || 0;
+    const sentAt = d.lastPushSentAt ? new Date(d.lastPushSentAt).getTime() : 0;
+    const ackAt = d.lastWakeAckAt ? new Date(d.lastWakeAckAt).getTime() : 0;
+    const sentRecently = sentAt > now - 7 * 24 * 3600_000;
+    const ackMissing = sentRecently && (ackAt === 0 || ackAt < sentAt - 24 * 3600_000);
+    return {
+      deviceId: d.id, tenant: d.tenant?.name ?? d.tenantId, email: d.user?.email ?? d.userId,
+      model: d.model ?? d.deviceName ?? "?", osVersion: d.osVersion ?? null, appVersion: d.appVersion ?? null,
+      directFcm: !!d.nativeFcmToken, gateLatched, gateDrops,
+      gateReason: typeof ka["gateReason"] === "string" ? (ka["gateReason"] as string) : null,
+      lastPushSentAt: d.lastPushSentAt, lastWakeAckAt: d.lastWakeAckAt, lastSeenAt: d.lastSeenAt,
+      flagged: gateLatched || ackMissing, ackMissing,
+    };
+  });
+  return { total: rows.length, flagged: rows.filter((r) => r.flagged).length, rows };
+}
+
+async function runWakeHealthSweep() {
+  try {
+    const health = await computeWakeHealth();
+    app.log.info({ wakeHealth: true, total: health.total, flagged: health.flagged }, "[WAKE_HEALTH] daily sweep");
+    for (const r of health.rows.filter((x) => x.flagged)) {
+      app.log.warn({ wakeHealth: true, ...r }, "[WAKE_HEALTH] flagged device");
+    }
+    const lines = [
+      `Android wake health: ${health.flagged} of ${health.total} devices flagged`,
+      ``,
+      ...health.rows.filter((x) => x.flagged).map((r) =>
+        `${r.tenant} | ${r.email} | ${r.model} | directFCM=${r.directFcm ? "yes" : "NO"} | gateLatched=${r.gateLatched ? "YES" : "no"} drops=${r.gateDrops}${r.ackMissing ? " | PUSHES SENT BUT NEVER ACKED" : ""}`),
+      ``,
+      `Full table: GET /admin/wake-health`,
+    ];
+    await sendAdminAlert("wake_health_daily", `Wake health: ${health.flagged}/${health.total} devices flagged`, lines, 20 * 3600_000);
+  } catch (e: any) {
+    app.log.error({ err: e?.message }, "[WAKE_HEALTH] sweep failed");
+  }
+}
+registerShutdownTimer(setTimeout(() => {
+  void sendAdminAlert("api_restarted", "Connect API (re)started", [
+    `The Connect API process started at ${new Date().toISOString()}.`,
+    "Expected after a deploy; unexpected restarts may mean a crash — check docker logs app-api-1.",
+  ], 0);
+}, 90_000));
+registerShutdownTimer(setTimeout(() => { void runWakeHealthSweep(); }, 120_000));
+registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 3600_000));
+
+app.get("/admin/wake-health", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  return computeWakeHealth();
+});
 
 // ── Guard 3: active TURN allocation probe ─────────────────────────────────────
 // Periodically performs a real STUN/TURN Allocate against each relay transport
@@ -14334,6 +14463,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
     platform: z.enum(["IOS", "ANDROID"]),
     expoPushToken: z.string().min(8),
     voipPushToken: z.string().optional(),
+    nativeFcmToken: z.string().max(512).optional(),
     deviceId: z.string().max(200).optional(),
     appVersion: z.string().max(80).optional(),
     deviceName: z.string().max(120).optional(),
@@ -14418,6 +14548,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       platform: input.platform,
       expoPushToken: input.expoPushToken,
       voipPushToken: input.voipPushToken || null,
+      nativeFcmToken: input.nativeFcmToken || null,
       deviceId: input.deviceId || null,
       appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
@@ -14432,6 +14563,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
     } as any,
     update: {
       tenantId: user.tenantId,
+      ...(input.nativeFcmToken ? { nativeFcmToken: input.nativeFcmToken } : {}),
       userId: user.sub,
       extensionId: extension?.id ?? null,
       platform: input.platform,
@@ -30113,6 +30245,17 @@ app.post("/mobile/wake/event", async (req, reply) => {
     if (owned) resolvedDeviceId = owned.id;
   }
 
+  // Wake-health bookkeeping: any DEVICE_* stage proves the push reached the app.
+  // "lastPushSentAt recent but lastWakeAckAt stale" is the delivery-failure signal
+  // the wake-health monitor scans for. Never blocks telemetry ingest.
+  try {
+    if (resolvedDeviceId) {
+      await db.mobileDevice.update({ where: { id: resolvedDeviceId }, data: { lastWakeAckAt: new Date() } as any });
+    } else {
+      await db.mobileDevice.updateMany({ where: { userId: user.sub, tenantId: user.tenantId, active: true }, data: { lastWakeAckAt: new Date() } as any });
+    }
+  } catch { /* bookkeeping must never fail the event */ }
+
   await recordWakeEvent({
     tenantId: user.tenantId,
     pbxCallId: body.pbxCallId,
@@ -33283,6 +33426,11 @@ async function runAutoPbxSync(): Promise<void> {
     );
   } catch (e: any) {
     app.log.warn({ event: "pbx_auto_sync_failed", err: e?.message }, "pbx_auto_sync_failed");
+    void sendAdminAlert("pbx_auto_sync_failed", "PBX auto-sync FAILED", [
+      "The 5-minute PBX extension auto-sync cycle failed.",
+      `Error: ${String(e?.message || e).slice(0, 300)}`,
+      "New PBX extensions will NOT appear in Connect until this recovers.",
+    ], 3 * 3600_000);
   } finally {
     pbxAutoSyncRunning = false;
   }

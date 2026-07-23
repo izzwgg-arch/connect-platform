@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Plus, Search, User } from "lucide-react";
+import { Check, CheckCheck, Plus, Search, User, Users } from "lucide-react";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ChatConversation } from "./ChatConversation";
 import { NewChatDialog } from "./NewChatDialog";
@@ -28,6 +28,15 @@ function chatBadge(type: string): string {
 
 function isPhoneLabel(name: string): boolean {
   return !/[a-z]/i.test(name || "");
+}
+
+// "+18456627080" -> "845-662-7080": strip the +1 country code and hyphenate,
+// so phone-only names take far less room in the thread list.
+function formatPhoneLabel(name: string): string {
+  const digits = (name || "").replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length === 10) return `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+  return (name || "").replace(/^\+1(?=\d)/, "");
 }
 
 function DeliveryTick({ status }: { status?: string | null }) {
@@ -61,6 +70,7 @@ export function MiniChat() {
   const [toast, setToast] = useState("");
   const messagesRef = useRef<ChatMessage[]>([]);
   const messageRequestSeq = useRef(0);
+  const lastReadPostRef = useRef<{ threadId: string; ts: number } | null>(null);
   const loadedThreadId = useRef<string | null>(null);
   const convRef = useRef<HTMLDivElement | null>(null);
 
@@ -138,6 +148,25 @@ export function MiniChat() {
       const next = res.messages ?? [];
       setMessages((prev) => (isThreadSwitch ? next : mergeChatMessages(prev, next)));
       loadedThreadId.current = threadId;
+      // Viewing a thread marks it read (server advances lastReadAt; silent
+      // viewers are skipped server-side). Re-post when a newer message lands
+      // while the thread stays open, so the shared "New" state clears.
+      {
+        const newest = next.length > 0 ? next[next.length - 1] : null;
+        const newestTs = newest ? new Date(newest.sentAt).getTime() || 0 : 0;
+        const marker = lastReadPostRef.current;
+        if (!marker || marker.threadId !== threadId || newestTs > marker.ts) {
+          lastReadPostRef.current = { threadId, ts: newestTs };
+          void apiPost<{ ok?: boolean; skipped?: string }>(`/chat/threads/${threadId}/read`, {})
+            .then((r) => {
+              if (!r?.skipped) {
+                setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, isNew: false, unread: 0 } : t)));
+                window.dispatchEvent(new Event("cc:navbadges:refresh"));
+              }
+            })
+            .catch(() => undefined);
+        }
+      }
       setScrollIntent({ reason: isThreadSwitch ? "initial" : reason, token: Date.now() });
     } catch {
       if (requestId === messageRequestSeq.current && messagesRef.current.length === 0) setMessages([]);
@@ -300,7 +329,7 @@ export function MiniChat() {
   const counts = useMemo(
     () => ({
       all: threads.length,
-      unread: threads.filter((t) => (t.unread || 0) > 0).length,
+      unread: threads.filter((t) => t.isNew || (t.unread || 0) > 0).length,
       sms: threads.filter((t) => t.type === "SMS").length,
       dms: threads.filter((t) => t.type === "DM").length,
     }),
@@ -310,7 +339,7 @@ export function MiniChat() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return threads.filter((t) => {
-      if (filter === "unread" && !((t.unread || 0) > 0)) return false;
+      if (filter === "unread" && !(t.isNew || (t.unread || 0) > 0)) return false;
       if (filter === "sms" && t.type !== "SMS") return false;
       if (filter === "dms" && t.type !== "DM") return false;
       return (
@@ -376,7 +405,7 @@ export function MiniChat() {
           .mc-conv-wrap .cc-message-list { flex: 1; min-height: 0; overflow-y: auto; }
           .mc-conv-wrap .cc-conv-head { min-height: 52px; padding: 10px 12px; gap: 10px; }
           .mc-conv-wrap .cc-conv-head h2 { font-size: 15px; color: var(--text); }
-          .mc-conv-wrap .cc-conv-head p { font-size: 11px; color: var(--text-dim); }
+          .mc-conv-wrap .cc-conv-head p { display: none; }
           .mc-conv-wrap .cc-conv-title { min-width: 0; }
           .mc-conv-wrap .cc-avatar.large { width: 36px; height: 36px; font-size: 13px; }
           .mc-conv-wrap .cc-call-btn span { display: none; }
@@ -550,14 +579,15 @@ export function MiniChat() {
             const tone = toneFor(t.participantName || t.id);
             return (
               <button type="button" className="mc-thread" key={t.id} onClick={() => setActiveThread(t)}>
-                <span className={"mc-av" + (phoneish ? " ph" : "")} style={phoneish ? undefined : { background: tone }}>
-                  {phoneish ? <User size={20} /> : initials(t.participantName)}
+                <span className={"mc-av" + (phoneish ? " ph" : "")} style={{ background: tone }}>
+                  {t.type === "TENANT_GROUP" || t.type === "GROUP" ? <Users size={20} /> : phoneish ? <User size={20} /> : initials(t.participantName)}
                   {t.type === "DM" ? <i className="mc-online" /> : null}
                 </span>
                 <span className="mc-main">
                   <span className="mc-row1">
-                    <strong className="mc-name">{t.participantName}</strong>
+                    <strong className={"mc-name" + (phoneish ? " ph" : "")}>{t.type === "TENANT_GROUP" ? t.participantName.replace(/\s*[\u2014-]\s*Tenant Group Chat\s*$/i, "") : phoneish ? formatPhoneLabel(t.participantName) : t.participantName}</strong>
                     <span className={"mc-badge " + t.type.toLowerCase()}>{chatBadge(t.type)}</span>
+                    <span className={"mc-state " + (t.isNew ? "new" : "read")}>{t.isNew ? "New" : "Read"}</span>
                   </span>
                   <span className="mc-preview">{t.lastMessage || "No messages yet"}</span>
                 </span>
@@ -600,11 +630,12 @@ export function MiniChat() {
         .mc-thread { display: flex; align-items: center; gap: 12px; padding: 11px 8px; border: 0; border-bottom: 0.5px solid var(--mn-line); background: transparent; cursor: pointer; text-align: left; width: 100%; }
         .mc-thread:active { background: rgba(59,130,246,0.06); }
         .mc-av { position: relative; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; color: #fff; font-size: 15px; font-weight: 700; flex-shrink: 0; }
-        .mc-av.ph { background: rgba(136,153,187,0.22); color: var(--mn-text-2); }
+        .mc-av.ph { color: #fff; }
         .mc-online { position: absolute; right: 1px; bottom: 1px; width: 12px; height: 12px; border-radius: 50%; background: #22c55e; border: 2px solid var(--mn-bg); }
         .mc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
         .mc-row1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
         .mc-name { font-size: 16px; font-weight: 800; letter-spacing: -0.2px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        .mc-name.ph { font-size: 12.5px; font-weight: 600; letter-spacing: 0.1px; }
         .mc-badge { flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 11px; border: 1px solid transparent; }
         .mc-badge.dm, .mc-badge.group, .mc-badge.tenant_group { color: #60a5fa; border-color: rgba(59,130,246,0.45); background: rgba(59,130,246,0.10); }
         .mc-badge.sms { color: #22d3ee; border-color: rgba(6,182,212,0.45); background: rgba(6,182,212,0.10); }
@@ -614,6 +645,9 @@ export function MiniChat() {
         .mc-tick { color: var(--mn-text-3); }
         .mc-tick.read { color: #3b82f6; }
         .mc-unread { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #3b82f6; color: #fff; font-size: 11px; font-weight: 800; }
+        .mc-state { flex-shrink: 0; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 999px; letter-spacing: .4px; text-transform: uppercase; }
+        .mc-state.new { background: rgba(34,197,94,.16); color: #34d399; border: 1px solid rgba(34,197,94,.35); }
+        .mc-state.read { background: rgba(148,163,184,.10); color: #94a3b8; border: 1px solid rgba(148,163,184,.18); }
         .mc-empty { text-align: center; color: var(--mn-text-3); font-size: 13px; padding: 40px 16px; }
       `}</style>
     </div>

@@ -11,7 +11,6 @@ import {
   Clock3,
   Delete,
   Headphones,
-  Maximize2,
   MessageSquare,
   Mic,
   MicOff,
@@ -19,6 +18,7 @@ import {
   Phone,
   PhoneCall,
   PhoneIncoming,
+  PhoneMissed,
   PhoneOff,
   Play,
   Pin,
@@ -29,6 +29,7 @@ import {
   Settings,
   MoreHorizontal,
   StickyNote,
+  BellOff,
   BellRing,
   User,
   Users,
@@ -36,7 +37,8 @@ import {
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
-import { apiGet, apiPatch, getPortalApiBaseUrl } from "../services/apiClient";
+import { useTelephonySocket } from "../hooks/useTelephonySocket";
+import { apiGet, apiPatch, apiPost, getPortalApiBaseUrl } from "../services/apiClient";
 import { loadContacts, loadSmsThreads, type ContactRow, type SmsThread } from "../services/platformData";
 import { MiniChat } from "./chat/MiniChat";
 import { MiniTeam } from "./MiniTeam";
@@ -89,6 +91,13 @@ type DueReminder = {
   note?: string | null;
 };
 
+function formatPhoneDisplay(n?: string | null): string {
+  const d = (n || "").replace(/\D/g, "");
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  if (d.length === 11 && d[0] === "1") return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  return n || "";
+}
+
 // ISO → value for <input type="datetime-local"> (local time, no seconds/zone).
 function toLocalInput(iso?: string | null): string {
   if (!iso) return "";
@@ -136,6 +145,14 @@ const KEYS: Array<[string, string]> = [
   ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"],
   ["*", ""], ["0", "+"], ["#", ""],
 ];
+
+// "+18456627080" -> "845-662-7080" for the small number line on recents rows.
+function fmtNumSmall(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length === 10) return `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}`;
+  return (raw || "").replace(/^\+1(?=\d)/, "");
+}
 
 function formatDuration(sec = 0): string {
   const safe = Math.max(0, Math.floor(sec));
@@ -233,6 +250,7 @@ function voicemailStreamUrl(id: string): string {
 // "mark unread". Mirrors the mobile app's read-override behaviour.
 const VM_READ_KEY = "cc-mini-vm-read";
 const VM_UNREAD_KEY = "cc-mini-vm-unread";
+const MISSED_DISMISS_KEY = "cc-mini-missed-dismissed";
 function loadIdSet(key: string): Set<string> {
   try {
     const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
@@ -431,6 +449,27 @@ export function DesktopMiniDialer() {
   const [contacts, setContacts] = useState<ContactRow[]>([]);
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [voicemails, setVoicemails] = useState<MiniVoicemail[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const notifWrapRef = useRef<HTMLDivElement | null>(null);
+  const settingsWrapRef = useRef<HTMLDivElement | null>(null);
+  const [dnd, setDnd] = useState<boolean>(() => { try { return localStorage.getItem("cc-dnd") === "1"; } catch { return false; } });
+  const toggleDnd = useCallback(() => {
+    setDnd((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("cc-dnd", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  // Follow DND toggled from another window (full <-> mini share localStorage).
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => { if (e.key === "cc-dnd") setDnd(e.newValue === "1"); };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const delHoldTimerRef = useRef<number | null>(null);
+  const delHoldFiredRef = useRef(false);
+  const [notifTick, setNotifTick] = useState(0);
+  const [newChats, setNewChats] = useState<{ id: string; name: string; preview: string; route: string }[]>([]);
   const [vmQuery, setVmQuery] = useState("");
   const [vmFilter, setVmFilter] = useState<"all" | "new" | "urgent" | "old">("all");
   // Which voicemail's ⋯ menu is open, and which Note / Reminder editor is open.
@@ -443,9 +482,65 @@ export function DesktopMiniDialer() {
   const [dueReminders, setDueReminders] = useState<DueReminder[]>([]);
   const [settings, setSettings] = useState<MiniDesktopSettings>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Clicking anywhere outside a popover closes it — no need to re-click the icon.
+  useEffect(() => {
+    if (!notifOpen && !settingsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (notifOpen && notifWrapRef.current && !notifWrapRef.current.contains(t)) setNotifOpen(false);
+      if (settingsOpen && settingsWrapRef.current && !settingsWrapRef.current.contains(t)) setSettingsOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [notifOpen, settingsOpen]);
+
   const [quickReply, setQuickReply] = useState("");
   const [lastDialed, setLastDialed] = useState("");
   const inCall = phone.callState === "ringing" || phone.callState === "dialing" || phone.callState === "connected";
+  // Enrich the incoming caller from the live-call feed: the SIP INVITE From can
+  // arrive empty for WebRTC/mini calls, but the telephony socket carries the real
+  // caller number/name, matched by the ringing extension.
+  const { calls: liveCalls } = useTelephonySocket();
+  const incomingLiveCall = useMemo(() => {
+    if (phone.callDirection !== "inbound") return null;
+    const ext = phone.diag?.extensionNumber?.trim();
+    if (!ext) return null;
+    for (const call of liveCalls.values()) {
+      const involved = [call.from, call.to, call.connectedLine, call.source_extension, call.destination_extension, ...(call.extensions || [])].some((v) => v?.trim() === ext);
+      const active = call.state === "ringing" || call.state === "dialing" || call.state === "up" || call.state === "held";
+      if (involved && active) return call;
+    }
+    return null;
+  }, [liveCalls, phone.callDirection, phone.diag?.extensionNumber]);
+  // Structured incoming caller: ring-group prefix, caller name, and the number
+  // (always shown). Prefer the live-call feed's separated fields; fall back to the
+  // SIP display name (which may embed the ring-group prefix with no separator).
+  const incomingCaller = useMemo(() => {
+    const lc = incomingLiveCall;
+    const rawDisplay = (phone.remoteParty || "").trim() || null;
+    const number = phone.remotePartyNumber?.trim() || lc?.from?.trim() || null;
+    // Prefer the full-window enrichment broadcast over IPC (phone.remotePartyName/Prefix);
+    // fall back to the mini's own live-call feed, then to local SIP-display derivation.
+    const cleanName = phone.remotePartyName?.trim() || lc?.fromName?.trim() || null;
+    let prefix: string | null = phone.remotePartyPrefix?.trim() || lc?.fromPrefix?.trim() || null;
+    let name: string | null = cleanName || rawDisplay;
+    // (a) colon-delimited "Prefix:Caller" — the standard VitalPBX ring-group format.
+    if (!prefix && rawDisplay) {
+      const c = rawDisplay.indexOf(":");
+      if (c > 0 && !/^\+?\d{5,}$/.test(rawDisplay.slice(0, c).trim())) {
+        prefix = rawDisplay.slice(0, c).trim();
+        name = rawDisplay.slice(c + 1).replace(/:\s*$/, "").trim() || cleanName || null;
+      }
+    }
+    // (b) no separator: strip the clean caller name off the display to get the prefix.
+    if (!prefix && cleanName && rawDisplay && rawDisplay.length > cleanName.length && rawDisplay.toLowerCase().endsWith(cleanName.toLowerCase())) {
+      prefix = rawDisplay.slice(0, rawDisplay.length - cleanName.length).trim() || null;
+      name = cleanName;
+    }
+    if (name && number && name.replace(/\D/g, "") === number.replace(/\D/g, "")) name = null;
+    if (name && prefix && name.trim().toLowerCase() === prefix.trim().toLowerCase()) name = null;
+    return { prefix: prefix || null, name: name || null, number };
+  }, [incomingLiveCall, phone.remoteParty, phone.remotePartyNumber, phone.remotePartyName, phone.remotePartyPrefix]);
   const timerSec = useCallTimer(phone.callState === "connected" ? phone.callStartedAt : null);
   // In-call sub-views for the active-call screen: the 6-control grid ("controls"),
   // a live DTMF keypad ("keypad"), or a number-entry pad for Transfer / Add call
@@ -540,7 +635,67 @@ export function DesktopMiniDialer() {
     apiGet<{ voicemails?: MiniVoicemail[] }>("/voice/voicemail?folder=inbox&page=1&pageSize=20")
       .then((result) => setVoicemails(applyVmReadOverrides(Array.isArray(result.voicemails) ? result.voicemails : [])))
       .catch(() => setVoicemails([]));
+    apiGet<{ threads?: Array<{ id: string; isNew?: boolean; participantName?: string; lastMessage?: string; type?: string; externalSmsE164?: string | null }> }>("/chat/threads")
+      .then((result) => setNewChats((result.threads || [])
+        .filter((t) => t.isNew)
+        .map((t) => ({
+          id: t.id,
+          name: t.participantName || "Chat",
+          preview: t.lastMessage || "",
+          route: t.type === "SMS" && t.externalSmsE164 ? `/sms?phone=${encodeURIComponent(t.externalSmsE164)}` : "/chat",
+        }))))
+      .catch(() => setNewChats([]));
   }, [adminScope]);
+
+  const notifItems = useMemo(() => {
+    const chats = newChats.map((c) => ({ kind: "chat" as const, id: c.id, title: c.name, sub: c.preview || "New message", route: c.route }));
+    const vms = (voicemails || [])
+      .filter((v) => !v.listened)
+      .map((v) => ({ kind: "voicemail" as const, id: v.id, title: v.callerName || v.callerId || "Voicemail", sub: "New voicemail", route: "/voicemail" }));
+    const dismissedMissed = loadIdSet(MISSED_DISMISS_KEY);
+    const missed = (calls || [])
+      .filter((c) => (c.direction || "").toLowerCase().startsWith("in") && /miss|no.?answer|unanswer|fail/i.test(c.status || ""))
+      .map((c) => ({ kind: "missed" as const, id: c.callId || c.rowId || `${c.fromNumber || "x"}-${c.startedAt || ""}`, title: c.fromName || c.fromNumber || "Missed call", sub: "Missed call", route: "/calls" }))
+      .filter((n) => !dismissedMissed.has(String(n.id)));
+    return { chats, vms, missed, total: chats.length + vms.length + missed.length };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newChats, voicemails, calls, notifTick]);
+
+  const markAllNotifsRead = useCallback(async () => {
+    const ids = newChats.map((c) => c.id);
+    const vmIds = (voicemails || []).filter((v) => !v.listened).map((v) => v.id);
+    if (vmIds.length > 0) {
+      const read = loadIdSet(VM_READ_KEY);
+      const unread = loadIdSet(VM_UNREAD_KEY);
+      for (const id of vmIds) { read.add(id); unread.delete(id); }
+      saveIdSet(VM_READ_KEY, read);
+      saveIdSet(VM_UNREAD_KEY, unread);
+      setVoicemails((prev) => prev.map((v) => (v.listened ? v : { ...v, listened: true })));
+    }
+    if (notifItems.missed.length > 0) {
+      const dismissed = loadIdSet(MISSED_DISMISS_KEY);
+      for (const n of notifItems.missed) dismissed.add(String(n.id));
+      saveIdSet(MISSED_DISMISS_KEY, dismissed);
+      setNotifTick((t) => t + 1);
+    }
+    await Promise.all(ids.map((id) => apiPost(`/chat/threads/${id}/read`, {}).catch(() => undefined)));
+    const vmResults = await Promise.all(vmIds.map((id) =>
+      apiPatch<{ ok?: boolean; skipped?: string }>(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true })
+        .then((r) => (r?.skipped ? id : null))
+        .catch(() => null),
+    ));
+    const vmSkipped = vmResults.filter(Boolean) as string[];
+    if (vmSkipped.length > 0) {
+      const r2 = loadIdSet(VM_READ_KEY); const u2 = loadIdSet(VM_UNREAD_KEY);
+      for (const id of vmSkipped) { r2.delete(id); u2.delete(id); }
+      saveIdSet(VM_READ_KEY, r2); saveIdSet(VM_UNREAD_KEY, u2);
+      const set = new Set(vmSkipped);
+      setVoicemails((prev) => prev.map((v) => (set.has(v.id) ? { ...v, listened: false } : v)));
+    }
+    setNewChats([]);
+    setNotifOpen(false);
+    refreshLists();
+  }, [newChats, voicemails, notifItems, refreshLists]);
 
   useEffect(() => {
     if (dialQuery.length < 2) {
@@ -631,8 +786,44 @@ export function DesktopMiniDialer() {
     saveIdSet(VM_READ_KEY, read);
     saveIdSet(VM_UNREAD_KEY, unread);
     setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, listened } : v)));
-    apiPatch(`/voice/voicemail/${encodeURIComponent(id)}`, { listened }).catch(() => undefined);
+    apiPatch<{ ok?: boolean; skipped?: string }>(`/voice/voicemail/${encodeURIComponent(id)}`, { listened })
+      .then((r) => {
+        if (r?.skipped) {
+          // Tenant-wide viewer: server kept the shared state — undo the local override.
+          const r2 = loadIdSet(VM_READ_KEY); const u2 = loadIdSet(VM_UNREAD_KEY);
+          r2.delete(id); u2.delete(id);
+          saveIdSet(VM_READ_KEY, r2); saveIdSet(VM_UNREAD_KEY, u2);
+          setVoicemails((prev) => prev.map((v) => (v.id === id ? { ...v, listened: !listened } : v)));
+        }
+      })
+      .catch(() => undefined);
   }, []);
+
+  // Mark every unlistened voicemail read in one shot: persist local overrides,
+  // flip the on-screen list, and PATCH each one server-side (best-effort).
+  const markAllVmsRead = useCallback(() => {
+    const vmIds = (voicemails || []).filter((v) => !v.listened).map((v) => v.id);
+    if (vmIds.length === 0) return;
+    const read = loadIdSet(VM_READ_KEY);
+    const unread = loadIdSet(VM_UNREAD_KEY);
+    for (const id of vmIds) { read.add(id); unread.delete(id); }
+    saveIdSet(VM_READ_KEY, read);
+    saveIdSet(VM_UNREAD_KEY, unread);
+    setVoicemails((prev) => prev.map((v) => (v.listened ? v : { ...v, listened: true })));
+    void Promise.all(vmIds.map((id) =>
+      apiPatch<{ ok?: boolean; skipped?: string }>(`/voice/voicemail/${encodeURIComponent(id)}`, { listened: true })
+        .then((r) => (r?.skipped ? id : null))
+        .catch(() => null),
+    )).then((results) => {
+      const skippedIds = results.filter(Boolean) as string[];
+      if (skippedIds.length === 0) return;
+      const r2 = loadIdSet(VM_READ_KEY); const u2 = loadIdSet(VM_UNREAD_KEY);
+      for (const id of skippedIds) { r2.delete(id); u2.delete(id); }
+      saveIdSet(VM_READ_KEY, r2); saveIdSet(VM_UNREAD_KEY, u2);
+      const set = new Set(skippedIds);
+      setVoicemails((prev) => prev.map((v) => (set.has(v.id) ? { ...v, listened: false } : v)));
+    });
+  }, [voicemails]);
 
   // Persist a note/reminder change to the server and update the on-screen row.
   const patchVm = useCallback((id: string, body: Record<string, unknown>, patch: Partial<MiniVoicemail>) => {
@@ -681,9 +872,54 @@ export function DesktopMiniDialer() {
         </div>
       ) : null}
       <div className="mini-titlebar">
+        <div className="mini-identity">
+          <div className="mini-identity-avatar">{initials(user?.name || tenant?.name || "Connect")}</div>
+          <div className="mini-identity-text">
+            <strong>{user?.name || tenant?.name || "Connect"}</strong>
+            <span className={`mini-identity-status ${registration.tone}`}>{registration.label}</span>
+          </div>
+        </div>
         <div className="mini-drag" />
         <div className="mini-winbtns">
-          <div className="settings-wrap">
+          <button type="button" title={dnd ? "Do Not Disturb is ON — this phone won\u2019t ring (your other devices still do)" : "Do Not Disturb"} aria-label="Do Not Disturb" aria-pressed={dnd} className={dnd ? "dnd-btn on" : "dnd-btn"} onClick={toggleDnd}>
+            <BellOff size={15} />
+          </button>
+          <div className="notif-wrap" ref={notifWrapRef}>
+            <button type="button" title="Notifications" aria-label="Notifications" aria-expanded={notifOpen} onClick={() => setNotifOpen((v) => !v)}>
+              <Bell size={15} />
+              {notifItems.total > 0 && <span className="notif-dot">{notifItems.total > 9 ? "9+" : notifItems.total}</span>}
+            </button>
+            {notifOpen && (
+              <div className="notif-popover">
+                <div className="notif-head">
+                  <strong>Notifications</strong>
+                  {notifItems.total > 0 && <button type="button" className="notif-clear" onClick={markAllNotifsRead}>Mark all read</button>}
+                </div>
+                <div className="notif-body">
+                  {notifItems.total === 0 && <p className="notif-empty">You&apos;re all caught up.</p>}
+                  {notifItems.chats.map((n) => (
+                    <button type="button" key={`c-${n.id}`} className="notif-row" onClick={() => { window.connectDesktop?.window?.expandToFull?.(n.route); setNotifOpen(false); }}>
+                      <span className="notif-ic chat"><MessageSquare size={14} /></span>
+                      <span className="notif-text"><strong>{n.title}</strong><small>{n.sub}</small></span>
+                    </button>
+                  ))}
+                  {notifItems.vms.map((n) => (
+                    <button type="button" key={`v-${n.id}`} className="notif-row" onClick={() => { window.connectDesktop?.window?.expandToFull?.(n.route); setNotifOpen(false); }}>
+                      <span className="notif-ic vm"><Voicemail size={14} /></span>
+                      <span className="notif-text"><strong>{n.title}</strong><small>{n.sub}</small></span>
+                    </button>
+                  ))}
+                  {notifItems.missed.map((n) => (
+                    <button type="button" key={`m-${n.id}`} className="notif-row" onClick={() => { window.connectDesktop?.window?.expandToFull?.(n.route); setNotifOpen(false); }}>
+                      <span className="notif-ic missed"><PhoneMissed size={14} /></span>
+                      <span className="notif-text"><strong>{n.title}</strong><small>{n.sub}</small></span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="settings-wrap" ref={settingsWrapRef}>
             <button title="Settings" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
               <Settings size={15} />
             </button>
@@ -762,7 +998,6 @@ export function DesktopMiniDialer() {
             )}
           </div>
           <button title="Always on top" onClick={() => window.connectDesktop?.window?.toggleAlwaysOnTop?.()}>{settings.alwaysOnTop ? <Pin size={14} /> : <PinOff size={14} />}</button>
-          <button title="Open full app" onClick={() => window.connectDesktop?.window?.expandToFull?.("/dashboard/voice/phone")}><Maximize2 size={14} /></button>
           <button title="Minimize" onClick={() => window.connectDesktop?.window?.minimize?.()}><ChevronLeft size={15} /></button>
           <button title="Close" className="close-btn" onClick={() => window.connectDesktop?.window?.closeMini?.()}>&#215;</button>
         </div>
@@ -771,10 +1006,17 @@ export function DesktopMiniDialer() {
       {inCall && (
         phone.callState === "ringing" && phone.callDirection === "inbound" ? (
           <section className="call-screen incoming">
-            <div className="call-rings"><span /><span /><span /></div>
             <div className="call-label">Incoming call</div>
-            <div className="call-avatar-lg green">{initials(selectedSession?.remoteParty || phone.remoteParty || "?")}</div>
-            <strong className="call-name">{selectedSession?.remoteParty || phone.remoteParty || "Unknown caller"}</strong>
+            <div className="call-avatar-wrap">
+              <div className="call-rings"><span /><span /><span /></div>
+              <div className="call-avatar-lg green">{initials(incomingCaller.name || incomingCaller.prefix || incomingCaller.number || "?")}</div>
+            </div>
+            <div className="call-id">
+              {incomingCaller.prefix ? <div className="call-prefix-pill">{incomingCaller.prefix}</div> : null}
+              {incomingCaller.name ? <strong className="call-name">{incomingCaller.name}</strong> : null}
+              {incomingCaller.number ? <div className="call-number">{formatPhoneDisplay(incomingCaller.number)}</div> : null}
+              {!incomingCaller.name && !incomingCaller.number ? <strong className="call-name">Unknown caller</strong> : null}
+            </div>
             {incomingWaiting.length > 0 && <div className="call-waiting"><Bell size={13} /> Call waiting</div>}
             <div className="call-spacer" />
             <div className="call-answer-row">
@@ -874,7 +1116,14 @@ export function DesktopMiniDialer() {
             </div>
             <div className="dialer-actions">
               <button className="call-button" onClick={() => { const v = phone.dialpadInput.trim(); if (!v) { if (lastDialed) phone.setDialpadInput(lastDialed); return; } callTarget(v); }}><Phone size={22} /></button>
-              <button className="delete-button" onClick={() => phone.setDialpadInput((prev) => prev.slice(0, -1))}><Delete size={20} /></button>
+              <button
+                className="delete-button"
+                title="Delete (hold to clear)"
+                onClick={() => { if (delHoldFiredRef.current) { delHoldFiredRef.current = false; return; } phone.setDialpadInput((prev) => prev.slice(0, -1)); }}
+                onPointerDown={() => { delHoldFiredRef.current = false; delHoldTimerRef.current = window.setTimeout(() => { delHoldFiredRef.current = true; phone.setDialpadInput(""); }, 550); }}
+                onPointerUp={() => { if (delHoldTimerRef.current) window.clearTimeout(delHoldTimerRef.current); }}
+                onPointerLeave={() => { if (delHoldTimerRef.current) window.clearTimeout(delHoldTimerRef.current); }}
+              ><Delete size={20} /></button>
             </div>
           </div>
         )}
@@ -894,6 +1143,7 @@ export function DesktopMiniDialer() {
                   <MiniAvatar name={name} size={44} />
                   <div className="row-main">
                     <strong>{name}</strong>
+                    {target && name !== target ? <small className="row-number">{fmtNumSmall(target)}</small> : null}
                     <span className="row-meta">
                       {missed
                         ? <PhoneOff size={13} className="rm-icon rm-missed" />
@@ -937,6 +1187,7 @@ export function DesktopMiniDialer() {
               <div className="vm-header">
                 <div className="vm-h-title">Voicemail</div>
                 <div className="vm-h-sub">{unreadCount} new &#183; {voicemails.length} total</div>
+                {unreadCount > 0 && <button type="button" className="vm-mark-all" onClick={markAllVmsRead}>Mark all read</button>}
               </div>
               <div className="vm-search">
                 <Search size={16} />
@@ -1052,15 +1303,43 @@ export function DesktopMiniDialer() {
           --mn-border: rgba(15,23,42,0.14); --mn-text: #0f172a; --mn-text-2: #55637a; --mn-text-3: #8794a8;
           --mn-text-4: #b6c0d0; --mn-card-new: #e8f1ff;
         }
-        .mini-titlebar { -webkit-app-region: drag; display: flex; align-items: center; height: 34px; padding: 0 6px 0 0; background: var(--mn-bg); border-bottom: 0.5px solid var(--mn-line); }
+        .mini-titlebar { -webkit-app-region: drag; display: flex; align-items: center; height: 40px; padding: 0 6px 0 0; background: var(--mn-bg); border-bottom: 0.5px solid var(--mn-line); }
         .mini-drag { flex: 1; height: 100%; }
         .mini-winbtns { -webkit-app-region: no-drag; display: flex; align-items: center; gap: 2px; }
         .settings-wrap { position: relative; }
+        .mini-identity { display: flex; align-items: center; gap: 8px; padding-left: 6px; min-width: 0; -webkit-app-region: no-drag; }
+        .mini-identity-avatar { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; color: #dbeafe; background: linear-gradient(135deg,#2563eb,#0ea5e9); flex-shrink: 0; }
+        .mini-identity-text { display: grid; gap: 1px; min-width: 0; }
+        .mini-identity-text strong { color: var(--mn-text); font-size: 12px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .mini-identity-status { font-size: 10px; line-height: 1.15; display: inline-flex; align-items: center; gap: 4px; color: #8fb3c8; }
+        .mini-identity-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+        .mini-identity-status.green { color: #34d399; }
+        .mini-identity-status.amber { color: #fbbf24; }
+        .mini-identity-status.red { color: #f87171; }
+        .dnd-btn.on { color: #ef4444 !important; background: rgba(239,68,68,.14) !important; }
+        .notif-wrap { position: relative; }
+        .notif-wrap > button { position: relative; }
+        .notif-dot { position: absolute; top: -1px; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 9px; font-weight: 800; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px var(--mn-bg); }
+        .notif-popover { position: fixed; top: 46px; left: 8px; right: 8px; margin-left: auto; z-index: 60; width: auto; max-width: 336px; padding: 10px; border-radius: 20px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.18), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125, 211, 252, .20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
+        .notif-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; }
+        .notif-head strong { color: #e5eefb; font-size: 13px; }
+        .notif-clear { width: auto !important; height: auto !important; padding: 4px 9px !important; border-radius: 8px !important; background: rgba(56,189,248,.14) !important; border: 1px solid rgba(125,211,252,.28) !important; color: #7dd3fc; font-size: 10px; font-weight: 700; }
+        .notif-body { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+        .notif-empty { color: #8fb3c8; font-size: 12px; text-align: center; padding: 16px 8px; }
+        .notif-row { width: 100% !important; height: auto !important; display: flex !important; align-items: center; gap: 10px; padding: 9px 8px !important; border-radius: 12px !important; background: rgba(15,23,42,.55) !important; border: 1px solid rgba(148,163,184,.12) !important; text-align: left; cursor: pointer; }
+        .notif-row:hover { background: rgba(30,41,59,.75) !important; }
+        .notif-ic { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; flex-shrink: 0; }
+        .notif-ic.chat { background: rgba(56,189,248,.16); color: #7dd3fc; }
+        .notif-ic.vm { background: rgba(167,139,250,.16); color: #c4b5fd; }
+        .notif-ic.missed { background: rgba(248,113,113,.16); color: #fca5a5; }
+        .notif-text { display: grid; gap: 1px; min-width: 0; }
+        .notif-text strong { color: #e5eefb; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .notif-text small { color: #8fb3c8; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .mini-winbtns button { -webkit-app-region: no-drag; display: grid; place-items: center; width: 28px; height: 26px; border-radius: 8px; border: 0; background: transparent; color: var(--mn-text-2); cursor: pointer; font-size: 18px; }
         .mini-winbtns button:hover { background: var(--mn-surface-2); color: var(--mn-text); }
         .close-btn:hover { background: #ef4444; color: #fff; }
 
-        .settings-popover { position: fixed; top: 36px; right: 6px; left: auto; z-index: 50; width: min(320px, calc(100vw - 12px)); max-height: calc(100vh - 46px); overflow-y: auto; padding: 14px; border-radius: 16px; background: var(--mn-surface); border: 0.5px solid var(--mn-border); box-shadow: 0 24px 70px rgba(0,0,0,.55); -webkit-app-region: no-drag; }
+        .settings-popover { position: fixed; top: 42px; right: 6px; left: auto; z-index: 50; width: min(320px, calc(100vw - 12px)); max-height: calc(100vh - 46px); overflow-y: auto; padding: 14px; border-radius: 16px; background: var(--mn-surface); border: 0.5px solid var(--mn-border); box-shadow: 0 24px 70px rgba(0,0,0,.55); -webkit-app-region: no-drag; }
         .settings-title { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
         .settings-title span:last-child { display: flex; flex-direction: column; }
         .settings-title strong { font-size: 14px; font-weight: 500; }
@@ -1081,12 +1360,16 @@ export function DesktopMiniDialer() {
         .settings-toggle-row i[data-on="true"] { background: #3b82f6; }
         .settings-toggle-row i[data-on="true"]:after { transform: translateX(17px); background: #fff; }
 
-        .call-screen { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; padding: 40px 24px 26px; }
+        .call-screen { position: absolute; inset: 0; z-index: 80; /* above settings (50) and notifications (60): an incoming call always covers open popovers; they reappear when the call ends */ display: flex; flex-direction: column; align-items: center; padding: 40px 24px 26px; }
         .call-screen.incoming { background: #0b1330; }
         .call-screen.active { background: #0a1128; }
-        /* Expanding-ripple animation on incoming calls — matches the mobile app.
-           Three concentric rings scale outward and fade, staggered, on a loop. */
-        .call-rings { position: absolute; top: 120px; width: 250px; height: 250px; pointer-events: none; }
+        .call-avatar-wrap { position: relative; margin-top: 34px; display: grid; place-items: center; }
+        .call-avatar-wrap .call-avatar-lg { margin-top: 0; }
+        .call-rings { position: absolute; top: 50%; left: 50%; width: 250px; height: 250px; transform: translate(-50%, -50%); pointer-events: none; }
+        .call-id { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+        .call-id .call-name { margin-top: 0; }
+        .call-prefix-pill { display: inline-flex; align-items: center; padding: 4px 13px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; background: rgba(34,197,94,0.16); color: #34d399; border: 0.5px solid rgba(34,197,94,0.4); }
+        .call-number { font-size: 15px; color: var(--mn-text-2); font-variant-numeric: tabular-nums; text-align: center; }
         .call-rings span {
           position: absolute; inset: 0; border-radius: 50%;
           border: 1.5px solid rgba(34,197,94,0.55);
@@ -1125,6 +1408,35 @@ export function DesktopMiniDialer() {
         .call-grid button { padding: 0; } .call-grid button span { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: rgba(30,45,71,0.55); border: 1px solid var(--mn-border); color: #dbe4ff; box-sizing: border-box; }
         .call-grid button.hot span { background: var(--mn-text); border-color: var(--mn-text); color: #0a1128; }
 
+        /* Light mode: incoming + active call screens (mirror the light palette). */
+        .mini-shell.mini-light .call-screen.incoming { background: #eef2f7; }
+        .mini-shell.mini-light .call-screen.active { background: #e9eef5; }
+        .mini-shell.mini-light .call-avatar-lg.blue { background: rgba(59,130,246,0.10); border-color: rgba(59,130,246,0.35); color: #2563eb; }
+        .mini-shell.mini-light .call-avatar-lg.green { background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.40); color: #16a34a; }
+        .mini-shell.mini-light .call-label { color: #16a34a; }
+        .mini-shell.mini-light .call-status { color: #16a34a; }
+        .mini-shell.mini-light .call-prefix-pill { background: rgba(34,197,94,0.12); color: #16a34a; }
+        .mini-shell.mini-light .call-action { color: #55637a; }
+        .mini-shell.mini-light .call-waiting { background: #ffffff; border-color: rgba(15,23,42,0.12); color: #0f172a; }
+        .mini-shell.mini-light .call-grid button span { background: #ffffff; border-color: rgba(15,23,42,0.14); color: #33415c; box-shadow: 0 1px 3px rgba(15,23,42,0.10); }
+        .mini-shell.mini-light .call-grid button.hot span { background: #0f172a; border-color: #0f172a; color: #ffffff; }
+        .mini-shell.mini-light .call-back { background: #ffffff; color: #33415c; border: 0.5px solid rgba(15,23,42,0.14); }
+        .mini-shell.mini-light .call-back:hover { background: rgba(59,130,246,0.15); }
+        .mini-shell.mini-light .call-entry-del { background: #ffffff; }
+        .mini-shell.mini-light .delete-button { background: transparent; border-color: transparent; }
+        /* Light mode: notifications popup */
+        .mini-shell.mini-light .notif-popover { background: #ffffff; border: 1px solid rgba(15,23,42,0.12); box-shadow: 0 24px 70px rgba(15,23,42,.25); }
+        .mini-shell.mini-light .notif-head strong { color: #0f172a; }
+        .mini-shell.mini-light .notif-clear { background: rgba(37,99,235,.10) !important; border: 1px solid rgba(37,99,235,.25) !important; color: #2563eb; }
+        .mini-shell.mini-light .notif-empty { color: #55637a; }
+        .mini-shell.mini-light .notif-row { background: #f4f7fb !important; border: 1px solid rgba(15,23,42,.08) !important; }
+        .mini-shell.mini-light .notif-row:hover { background: #e9eef5 !important; }
+        .mini-shell.mini-light .notif-text strong { color: #0f172a; }
+        .mini-shell.mini-light .notif-text small { color: #55637a; }
+        .mini-shell.mini-light .notif-ic.chat { background: rgba(37,99,235,.12); color: #2563eb; }
+        .mini-shell.mini-light .notif-ic.vm { background: rgba(124,58,237,.12); color: #7c3aed; }
+        .mini-shell.mini-light .notif-ic.missed { background: rgba(220,38,38,.10); color: #dc2626; }
+
         /* In-call sub-views (DTMF keypad, Transfer / Add-call entry). */
         .call-subhead { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 4px; }
         .call-subhead-spacer { width: 34px; flex-shrink: 0; }
@@ -1158,6 +1470,9 @@ export function DesktopMiniDialer() {
         .keypad button:hover { background: var(--mn-surface-2); }
         .keypad strong { font-size: 30px; font-weight: 400; line-height: 1; }
         .keypad span { font-size: 9px; letter-spacing: 2px; color: var(--mn-text-3); font-weight: 500; }
+        /* Dialer tab: drop the keypad to the bottom of the pane so it sits right on top of the call button (no dead gap). */
+        .dialer-pane .keypad { align-content: end; padding-bottom: 4px; }
+        .row-number { display: block; font-size: 11px; font-weight: 600; color: var(--mn-text-3); line-height: 1.2; margin: 1px 0; }
         .dialer-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; justify-content: center; align-items: center; margin: 4px auto 6px; width: 100%; max-width: 300px; }
         .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
         .call-button:disabled { background: var(--mn-border); color: var(--mn-text-3); box-shadow: none; cursor: default; }
@@ -1184,7 +1499,9 @@ export function DesktopMiniDialer() {
         .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
 
         .vm-screen { padding: 0; }
-        .vm-header { text-align: center; padding: 14px 16px 10px; }
+        .vm-header { position: relative; text-align: center; padding: 14px 16px 10px; }
+        .vm-mark-all { position: absolute; right: 12px; top: 16px; padding: 5px 10px; border-radius: 9px; border: 1px solid rgba(125,211,252,.28); background: rgba(56,189,248,.12); color: #7dd3fc; font-size: 11px; font-weight: 700; cursor: pointer; }
+        .vm-mark-all:hover { background: rgba(56,189,248,.20); }
         .vm-h-title { font-size: 26px; font-weight: 800; letter-spacing: -0.7px; color: var(--mn-text); line-height: 30px; }
         .vm-h-sub { margin-top: 3px; font-size: 13px; font-weight: 600; color: var(--mn-text-2); }
         .vm-search { display: flex; align-items: center; gap: 10px; margin: 0 14px 10px; height: 44px; padding: 0 14px; border-radius: 16px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); color: var(--mn-text-3); }

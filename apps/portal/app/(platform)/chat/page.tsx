@@ -133,6 +133,7 @@ export default function ChatPage() {
   const [handledThreadId, setHandledThreadId] = useState("");
   const messagesRef = useRef<ChatMessage[]>([]);
   const messageRequestSeq = useRef(0);
+  const lastReadPostRef = useRef<{ threadId: string; ts: number } | null>(null);
   const loadedThreadId = useRef<string | null>(null);
 
   const threadsState = useAsyncResource<{ threads: ChatThread[] }>(
@@ -192,6 +193,24 @@ export default function ChatPage() {
       const nextMessages = res.messages ?? [];
       setMessages((prev) => isThreadSwitch ? nextMessages : mergeChatMessages(prev, nextMessages));
       loadedThreadId.current = threadId;
+      // Viewing a thread marks it read for the team (server skips tenant-wide
+      // silent viewers). Re-post when a newer message lands while it stays open.
+      {
+        const newest = nextMessages.length > 0 ? nextMessages[nextMessages.length - 1] : null;
+        const newestTs = newest ? new Date(newest.sentAt).getTime() || 0 : 0;
+        const marker = lastReadPostRef.current;
+        if (!marker || marker.threadId !== threadId || newestTs > marker.ts) {
+          lastReadPostRef.current = { threadId, ts: newestTs };
+          void apiPost<{ ok?: boolean; skipped?: string }>(`/chat/threads/${threadId}/read`, {})
+            .then((r) => {
+              if (!r?.skipped) {
+                setThreadReload((k) => k + 1);
+                window.dispatchEvent(new Event("cc:navbadges:refresh"));
+              }
+            })
+            .catch(() => undefined);
+        }
+      }
       setScrollIntent({ reason: isThreadSwitch ? "initial" : reason, token: Date.now() });
     } catch {
       if (requestId === messageRequestSeq.current && messagesRef.current.length === 0) setMessages([]);
@@ -359,7 +378,7 @@ export default function ChatPage() {
   }
 
   const canSendInActiveThread = !activeThread || activeThread.type !== "SMS" || can("can_send_sms");
-  const unreadTotal = useMemo(() => threads.reduce((total, thread) => total + (thread.unread || 0), 0), [threads]);
+  const unreadTotal = useMemo(() => threads.filter((thread) => thread.isNew || (thread.unread || 0) > 0).length, [threads]);
   const smsThreads = useMemo(() => threads.filter((thread) => thread.type === "SMS").length, [threads]);
   const internalThreads = Math.max(threads.length - smsThreads, 0);
 

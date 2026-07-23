@@ -572,8 +572,10 @@ export function FloatingDialer() {
     [telephony.activeCalls, tenantId, extensionRows, tenant?.name],
   );
   const matchedInboundCall = useMemo(
-    () => findInboundLiveCallForParty(tenantScopedCalls, phone.remoteParty),
-    [tenantScopedCalls, phone.remoteParty],
+    () =>
+      findInboundLiveCallForParty(tenantScopedCalls, phone.remoteParty) ??
+      findOpenLiveCallForExtension(tenantScopedCalls, phone.diag.extensionNumber, "inbound"),
+    [tenantScopedCalls, phone.remoteParty, phone.diag.extensionNumber],
   );
   const inboundCallerTitle = useMemo(() => {
     if (matchedInboundCall) {

@@ -31,6 +31,17 @@ test("CRM SMS outbound uses Connect Chat send path and appears in main Chat", ()
   assert.match(chatSource, /app\.post\("\/chat\/threads\/:threadId\/messages"[\s\S]*sendConnectChatSmsMessage/);
 });
 
+test("Chat and CRM SMS both derive 'mine' from the shared isConnectChatMessageMine helper", () => {
+  // Behavioral coverage (including the SetNull-senderUserId regression) lives in
+  // connectChatMessageMine.test.ts. This just guards against either endpoint
+  // reintroducing an inline `senderUserId === viewer` check for SMS threads,
+  // which is what caused all production SMS to render as incoming on 2026-07-02.
+  assert.match(chatSource, /import \{ isConnectChatMessageMine \} from "\.\/connectChatMessageMine"/);
+  assert.match(chatSource, /mine: isConnectChatMessageMine\(m, threadRow\?\.type, user\.sub\)/);
+  assert.match(crmSmsSource, /import \{ isConnectChatMessageMine \} from "\.\.\/connectChatMessageMine"/);
+  assert.match(crmSmsSource, /mine: isConnectChatMessageMine\(m, "SMS", ""\)/);
+});
+
 test("CRM SMS workspace opens the exact Connect Chat conversation", () => {
   assert.match(smsPanelSource, /Open in Chat/);
   assert.match(contactWorkspaceSource, /apiPost<\{ threadId: string \}>\("\/chat\/threads"/);

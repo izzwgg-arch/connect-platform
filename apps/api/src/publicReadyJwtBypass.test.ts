@@ -21,6 +21,14 @@ test("shouldSkipJwtVerification: arbitrary protected API path does not skip", ()
   assert.equal(shouldSkipJwtVerification("/tenants/foo"), false);
 });
 
+test("shouldSkipJwtVerification: public multi-invoice pay links skip JWT; admin pay-links route does not", () => {
+  assert.equal(shouldSkipJwtVerification("/billing/platform/pay-links/X7K2QF"), true);
+  assert.equal(shouldSkipJwtVerification("/billing/platform/pay-links/X7K2QF/public-config"), true);
+  assert.equal(shouldSkipJwtVerification("/billing/platform/pay-links/X7K2QF/pay"), true);
+  assert.equal(shouldSkipJwtVerification("/api/billing/platform/pay-links/X7K2QF"), true);
+  assert.equal(shouldSkipJwtVerification("/admin/billing/pay-links"), false);
+});
+
 test("shouldSkipJwtVerification: public CRM form links skip only exact public prefix", () => {
   assert.equal(shouldSkipJwtVerification("/public/forms/token"), true);
   assert.equal(shouldSkipJwtVerification("/api/public/forms/token/pdf"), true);
