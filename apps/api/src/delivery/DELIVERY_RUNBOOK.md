@@ -144,6 +144,20 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
 - Smoke: ingest 3+ orders with coords → add to a run → `POST /delivery/runs/<id>/optimize`
   → returns optimized `order` + `totalMeters`; `GET .../stops/<orderId>/nav` → a `waze.com/ul` link.
 
+## Phase 9 — proof of delivery + exceptions
+- New models `ProofOfDelivery` (one per order) + `DeliveryException` (reason-coded).
+- Pure cores (tested): `proofRequirements` (required proof by order flags; completion safeguards —
+  duplicate / missing-proof / proximity with weak-GPS override); `exceptionRules` (reason →
+  photo/note/approval/notify/return/redelivery + target status; "other" always needs a note).
+- Media (photos/signatures) stored via the shared S3/R2/local storage under `pod-<orderId>`;
+  served only via signed URLs (`buildChatSignedDownloadUrl`). Set `PUBLIC_API_BASE_URL`.
+- Endpoints: driver `POST /mobile/delivery/orders/:id/proof` (→ DELIVERED, safeguards enforced)
+  and `.../exception`; dispatcher `GET /delivery/orders/:id/proof` (permission `access_delivery_proof`,
+  access audited) and `POST /delivery/exceptions/:id/approve`.
+- Exception→status mapping is clamped to a legal state-machine transition (falls back to
+  DELIVERY_FAILED) so driver submissions never hit an illegal jump.
+- Follow-up: mobile proof-capture screens (camera/signature/PIN) — API is ready; wire the UI.
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.

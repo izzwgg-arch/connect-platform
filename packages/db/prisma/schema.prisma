@@ -6074,3 +6074,43 @@ model DeliverySmsConsent {
 
   @@unique([tenantId, phoneE164])
 }
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 9 (proof of delivery + exceptions) ────
+/// Proof captured at delivery. Media stored via shared object storage (signed access only).
+model ProofOfDelivery {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  orderId             String   @unique
+  methods             String // comma-joined ProofMethods used (photo,signature,pin,tap,recipient_name,gps)
+  handover            String?
+  recipientName       String?
+  photoStorageKey     String?
+  signatureStorageKey String?
+  gpsLat              Float?
+  gpsLng              Float?
+  gpsAccuracy         Float?
+  overrideReason      String?
+  capturedByDriverId  String?
+  capturedAt          DateTime @default(now())
+  createdAt           DateTime @default(now())
+
+  @@index([tenantId, orderId])
+}
+
+/// A failed/exception event for an order (reason-coded; drives downstream behavior).
+model DeliveryException {
+  id                String    @id @default(cuid())
+  tenantId          String
+  orderId           String
+  reasonCode        String
+  note              String?
+  photoStorageKey   String?
+  needsApproval     Boolean   @default(false)
+  approvedByUserId  String?
+  approvedAt        DateTime?
+  createdByDriverId String?
+  createdAt         DateTime  @default(now())
+
+  @@index([tenantId, orderId])
+  @@index([tenantId, reasonCode])
+}
