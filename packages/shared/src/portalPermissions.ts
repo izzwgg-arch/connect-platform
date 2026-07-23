@@ -69,6 +69,7 @@ export const SIDEBAR_ITEMS = [
   { id: "tracking.drivers", section: "tracking", label: "Drivers", href: "/tracking/drivers", permission: "can_view_tracking_drivers" },
   { id: "tracking.exceptions", section: "tracking", label: "Exceptions", href: "/tracking/exceptions", permission: "can_view_tracking_exceptions" },
   { id: "tracking.reports", section: "tracking", label: "Reports", href: "/tracking/reports", permission: "can_view_tracking_reports" },
+  { id: "tracking.notifications", section: "tracking", label: "Notifications", href: "/tracking/notifications", permission: "can_view_tracking_audit" },
   { id: "tracking.audit", section: "tracking", label: "Audit Log", href: "/tracking/audit", permission: "can_view_tracking_audit" },
   { id: "tracking.settings", section: "tracking", label: "Settings", href: "/tracking/settings", permission: "can_view_tracking_settings" },
 

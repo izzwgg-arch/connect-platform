@@ -121,6 +121,23 @@ export async function resolveExceptionRow(tenantId: string, exceptionId: string,
   return { ok: true as const, orderId: ex.orderId };
 }
 
+/** Recent customer notifications (SMS/voice) — the notification center feed. */
+export async function listNotifications(tenantId: string, opts: { status?: string; take?: number } = {}) {
+  const rows = await db.deliveryNotification.findMany({
+    where: { tenantId, ...(opts.status ? { status: opts.status } : {}) },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(opts.take ?? 100, 200),
+    select: {
+      id: true, orderId: true, trigger: true, channel: true, toPhone: true, status: true,
+      errorReason: true, retryCount: true, createdAt: true,
+    },
+  });
+  return rows.map((n) => ({
+    ...n,
+    toPhone: n.toPhone ? `•••${n.toPhone.replace(/\D/g, "").slice(-4)}` : null,
+  }));
+}
+
 /** Recent delivery audit rows (tenant-scoped). */
 export async function listDeliveryAudit(tenantId: string, take = 100) {
   return db.auditLog.findMany({

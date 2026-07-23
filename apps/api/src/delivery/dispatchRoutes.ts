@@ -1,7 +1,7 @@
 // Dispatcher API routes (Phase 3). Registered by registerDeliveryRoutes().
 import { z } from "zod";
 import { requireDeliveryDispatch, requireDeliveryConfig, requireDeliveryDriverAdmin } from "./guard";
-import { getDashboardCounts, listExceptions, listExceptionQueue, resolveExceptionRow, listDeliveryAudit, upsertConfig, listDrivers, getDriverDetail, createDriver, deactivateDriver } from "./dispatchService";
+import { getDashboardCounts, listExceptions, listExceptionQueue, resolveExceptionRow, listDeliveryAudit, listNotifications, upsertConfig, listDrivers, getDriverDetail, createDriver, deactivateDriver } from "./dispatchService";
 import { dashboardTiles, rankAttention, needsIntervention, type AttentionItem } from "./dashboard";
 import { transitionOrder } from "./orderService";
 import { mintTrackingLink } from "./customerTrackingService";
@@ -61,6 +61,13 @@ export async function registerDeliveryDispatchRoutes(app: any): Promise<void> {
     const user = await requireDeliveryDispatch(req, reply);
     if (!user) return;
     return reply.send(await listDeliveryAudit(user.tenantId));
+  });
+
+  app.get("/delivery/notifications", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const status = typeof req.query?.status === "string" ? req.query.status : undefined;
+    return reply.send(await listNotifications(user.tenantId, { status }));
   });
 
   // Config (tenant admins / manage_delivery_config).

@@ -67,6 +67,10 @@ export interface MapMarker {
   position: { lat: number; lng: number; heading?: number | null } | null;
   movement: "moving" | "stopped" | "stale" | "offline" | "unknown"; lastUpdateSec: number | null;
 }
+export interface NotificationRow {
+  id: string; orderId: string; trigger: string; channel: string; toPhone?: string | null;
+  status: string; errorReason?: string | null; retryCount: number; createdAt: string;
+}
 export interface ReportSummary {
   sinceDays: number; ordersReceived: number; delivered: number; failed: number;
   successRatePct: number; firstAttemptPct: number; avgDeliveryMinutes: number; etaAccuracyPct: number;
@@ -112,6 +116,7 @@ export const deliveryApi = {
   optimizeRun: (runId: string) => req<any>("POST", `/delivery/runs/${runId}/optimize`, {}),
   report: (days = 7) => req<ReportSummary>("GET", `/delivery/reports/summary?days=${days}`),
   audit: () => req<any[]>("GET", "/delivery/audit"),
+  notifications: (status?: string) => req<NotificationRow[]>("GET", `/delivery/notifications${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   config: () => req<any>("GET", "/delivery/config"),
   saveConfig: (patch: Record<string, unknown>) => req<any>("PUT", "/delivery/config", patch),
 };
