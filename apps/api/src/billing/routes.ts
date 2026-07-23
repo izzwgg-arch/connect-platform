@@ -52,7 +52,7 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail, queueReceiptEmailOnce } from "./billingEmailLifecycle";
 import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
@@ -62,6 +62,7 @@ import {
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { saveAdminCardWithSut } from "./adminCardSave";
 import { registerBillingPublicPayRoutes } from "./publicPayRoutes";
+import { registerBillingPayLinkRoutes } from "./payLinkRoutes";
 import {
   agingToCsv,
   csvMeta,
@@ -380,6 +381,7 @@ async function queueBillingEmail(input: { tenantId: string; to: string; type: st
 
 export async function registerBillingRoutes(app: FastifyInstance) {
   registerBillingPublicPayRoutes(app);
+  registerBillingPayLinkRoutes(app, requirePlatformBilling);
   const sendLiveChargesDisabled = (reply: FastifyReply) =>
     reply.code(503).send({ error: "billing_live_charges_disabled" });
 
@@ -2418,6 +2420,35 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     await (db as any).billingInvoice.update({ where: { id }, data: { lastEmailStatus: "QUEUED", lastEmailedAt: new Date(), status: invoice.status === "DRAFT" ? "OPEN" : invoice.status } });
     await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "invoice_emailed", metadata: { to, channel: "admin_resend", emailType: "BILLING_INVOICE_READY" } });
     return { ok: true, sentTo: to };
+  });
+
+  // Admin resend payment receipt (platform-billing auth, used from admin invoice menu).
+  // Re-queues the standard BILLING_RECEIPT email; invoice + receipt PDFs attach at send time.
+  app.post("/admin/billing/invoices/:id/resend-receipt", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const invoice = await (db as any).billingInvoice.findUnique({ where: { id }, include: { tenant: { include: { billingSettings: true } } } });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    const transaction = await (db as any).paymentTransaction.findFirst({
+      where: { tenantId: invoice.tenantId, invoiceId: id, status: "APPROVED" },
+      orderBy: { createdAt: "desc" },
+      include: { paymentMethod: true },
+    });
+    if (!transaction) return reply.code(400).send({ error: "no_approved_payment", message: "This invoice has no approved payment to send a receipt for." });
+    const queued = await queueReceiptEmailOnce({
+      tenantId: invoice.tenantId,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      totalCents: transaction.amountCents ?? invoice.totalCents,
+      transactionId: transaction.id,
+      cardLabel: transaction.paymentMethod?.last4 ? `${transaction.paymentMethod.brand || "Card"} ending ${transaction.paymentMethod.last4}` : null,
+      force: true,
+    });
+    if (!queued) return reply.code(400).send({ error: "billing_email_required", message: "No billing email configured for this tenant. Set one in the tenant billing settings." });
+    await (db as any).billingInvoice.update({ where: { id }, data: { lastEmailStatus: "QUEUED", lastEmailedAt: new Date() } });
+    await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "receipt_email_resent", metadata: { transactionId: transaction.id, channel: "admin_resend", emailType: "BILLING_RECEIPT", adminUserId: u.sub } });
+    return { ok: true };
   });
 
   // Admin email payment link (platform-billing auth, used from admin invoice menu)

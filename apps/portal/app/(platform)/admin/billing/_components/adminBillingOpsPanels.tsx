@@ -1704,6 +1704,7 @@ export function InvoicesTab() {
                     onPdf={() => openAdminInvoicePdf(inv.id)}
                     onActivity={() => void toggleLog(inv.id)}
                     onSend={canSendInvoice ? () => void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`) : undefined}
+                    onResendReceipt={inv.status === "PAID" || inv.paidAt ? () => void act(inv.id, "Resend receipt", `/admin/billing/invoices/${inv.id}/resend-receipt`) : undefined}
                     onEmailLink={canCollect ? () => void act(inv.id, "Payment link", `/admin/billing/invoices/${inv.id}/email-payment-link`) : undefined}
                     onRetry={canCollect ? () => setPayInvoice(inv) : undefined}
                     onMarkPaid={canCollect ? () => setMarkPaidTarget(inv) : undefined}
