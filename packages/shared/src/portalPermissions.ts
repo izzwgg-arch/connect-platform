@@ -71,6 +71,8 @@ export const SIDEBAR_ITEMS = [
   { id: "tracking.reports", section: "tracking", label: "Reports", href: "/tracking/reports", permission: "can_view_tracking_reports" },
   { id: "tracking.notifications", section: "tracking", label: "Notifications", href: "/tracking/notifications", permission: "can_view_tracking_audit" },
   { id: "tracking.audit", section: "tracking", label: "Audit Log", href: "/tracking/audit", permission: "can_view_tracking_audit" },
+  { id: "tracking.integrations", section: "tracking", label: "Integrations", href: "/tracking/integrations", permission: "can_view_tracking_settings" },
+  { id: "tracking.health", section: "tracking", label: "System Health", href: "/tracking/health", permission: "can_view_tracking_settings" },
   { id: "tracking.settings", section: "tracking", label: "Settings", href: "/tracking/settings", permission: "can_view_tracking_settings" },
 
   { id: "billing.overview", section: "billing", label: "Billing Overview", href: "/billing", permission: "can_view_billing_overview" },
