@@ -6154,7 +6154,7 @@ app.get("/admin/users/sip-accounts-summary", async (req, reply) => {
   const userWhere: Record<string, unknown> =
     admin.role === "SUPER_ADMIN" ? { id: { in: ids } } : { id: { in: ids }, tenantId: admin.tenantId };
   const visibleUsers = await db.user.findMany({ where: userWhere as any, select: { id: true } });
-  const visibleIds = visibleUsers.map((u) => u.id);
+  const visibleIds = visibleUsers.map((u: { id: string }) => u.id);
   if (!visibleIds.length) return { accountsByUser: {} };
   const rows = await (db as any).userSipAccount.findMany({
     where: { userId: { in: visibleIds } },
