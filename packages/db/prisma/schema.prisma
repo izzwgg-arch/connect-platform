@@ -6011,3 +6011,24 @@ model EtaSnapshot {
 
   @@index([runId, calcAt])
 }
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 6 (customer tracking link) ───────────
+/// Secure customer tracking link. Token stored HASHED; high-entropy, expiring,
+/// tenant+order bound, revocable. OTP fields gate tier-2 (sensitive) detail.
+model TrackingToken {
+  id           String    @id @default(cuid())
+  tenantId     String
+  orderId      String
+  tokenHash    String    @unique
+  kind         String    @default("TRACKING")
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  otpHash      String?
+  otpExpiresAt DateTime?
+  otpAttempts  Int       @default(0)
+  verifiedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([tenantId, orderId])
+}

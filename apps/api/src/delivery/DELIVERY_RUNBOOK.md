@@ -82,6 +82,17 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
 - `git revert` this commit (or `git checkout main`). To drop the tables, revert the migration
   (`prisma migrate resolve`/down in staging). No existing data is touched by these additions.
 
+## Phase 6 — customer tracking page (added)
+- New model `TrackingToken` (included in the migrate step above).
+- Public page: `apps/portal/app/track/[token]/page.tsx` → `GET /track/:token` (no auth; token-
+  authed in the handler; already added to `jwtPublicRouteBypass.ts`). Dispatcher mint/revoke:
+  `POST /delivery/orders/:id/tracking-link[/revoke]` (JWT-gated).
+- Smoke: mint a link (`curl -sX POST .../delivery/orders/<id>/tracking-link -H "authorization: Bearer <ADMIN_JWT>"`
+  → `{ token, path }`), then open `/track/<token>` in a browser (no login) → status/ETA/progressive map.
+- Worker: register the ETA recompute cycle in `apps/worker/src/main.ts`:
+  `import { runDeliveryEtaCycle } from "./deliveryEtaJob"; setInterval(() => runDeliveryEtaCycle().catch(() => {}), 30_000);`
+- Verify `GET /track/<bad-token>` returns `{ state: "invalid" }` (200, leaks nothing).
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.

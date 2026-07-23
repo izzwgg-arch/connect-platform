@@ -13,6 +13,7 @@ import { createRun, addStop, startRun, listRunsForDriver } from "./runService";
 import { isValidStatus, type DeliveryOrderStatus, type TransitionActor } from "./status";
 import { registerDeliveryDispatchRoutes } from "./dispatchRoutes";
 import { registerDeliveryLocationRoutes } from "./locationRoutes";
+import { registerDeliveryCustomerRoutes } from "./customerRoutes";
 
 const mockAdapter = new MockOrderSourceAdapter();
 
@@ -145,4 +146,7 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
 
   // ── Live location + ETA (Phase 5) ────────────────────────────────────────────
   await registerDeliveryLocationRoutes(app);
+
+  // ── Customer tracking page + links (Phase 6) ─────────────────────────────────
+  await registerDeliveryCustomerRoutes(app);
 }

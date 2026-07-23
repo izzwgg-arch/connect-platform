@@ -46,6 +46,10 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.endsWith("/voice/moh/upload");
   const isOnboardingPublicPath = path.startsWith("/onboarding/");
   const isPublicCrmFormPath = pathWithoutApiPrefix.startsWith("/public/forms/");
+  // Public customer delivery-tracking page: token-authenticated inside the handler
+  // (the browser has no Bearer token). Only /track/* — dispatcher tracking-link mint/revoke
+  // lives under /delivery/* and remains JWT-gated.
+  const isPublicTrackingPath = pathWithoutApiPrefix.startsWith("/track/");
   // CRM Email OAuth callback: Google redirects the user's browser here with code+state.
   // The browser cannot carry our Bearer token. Auth is performed inside the handler via
   // HMAC-signed `state` (tenantId, userId, scope, ts) — see emailRoutes.ts.
@@ -68,6 +72,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isMohSyncPath
     || isOnboardingPublicPath
     || isPublicCrmFormPath
+    || isPublicTrackingPath
     || isCrmEmailOauthCallbackPath
     || [
       "/health",
