@@ -101,6 +101,7 @@ export const deliveryApi = {
   exceptionAction: (id: string, action: "resolve" | "dismiss" | "reschedule" | "notify") =>
     req<{ ok: boolean; action: string; orderId: string }>("POST", `/delivery/exceptions/${id}/action`, { action }),
   drivers: () => req<DriverRow[]>("GET", "/delivery/drivers"),
+  driver: (id: string) => req<any>("GET", `/delivery/drivers/${id}`),
   runs: () => req<RunRow[]>("GET", "/delivery/runs"),
   unassignedOrders: () => req<any[]>("GET", "/delivery/runs/unassigned"),
   run: (id: string) => req<any>("GET", `/delivery/runs/${id}`),

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Truck, Search, BatteryLow, BatteryMedium, BatteryFull } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../components/crm";
 import { deliveryApi, type DriverRow } from "../../../../services/deliveryApi";
@@ -104,7 +105,7 @@ export default function TrackingDriversPage() {
                   const onRun = d.status === "ON_RUN";
                   return (
                     <tr key={d.id} className="border-b border-crm-border hover:bg-crm-surface-2">
-                      <td className="px-4 py-2.5 text-crm-text">{d.name}</td>
+                      <td className="px-4 py-2.5"><Link href={`/tracking/drivers/${d.id}`} className="text-crm-text hover:text-crm-accent hover:underline">{d.name}</Link></td>
                       <td className="px-4 py-2.5">
                         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[d.status] || STATUS_TONE.OFFLINE}`}>{d.status.replace(/_/g, " ").toLowerCase()}</span>
                         {!d.active && <span className="ml-2 text-[11px] text-crm-danger">deactivated</span>}

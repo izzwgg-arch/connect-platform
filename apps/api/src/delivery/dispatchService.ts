@@ -211,6 +211,53 @@ export async function listDrivers(tenantId: string) {
   }));
 }
 
+/** Driver detail: profile + telemetry + recent runs + exceptions they logged. */
+export async function getDriverDetail(tenantId: string, driverId: string) {
+  const p = await db.driverProfile.findFirst({
+    where: { id: driverId, tenantId },
+    select: { id: true, userId: true, status: true, active: true, activeRunId: true, stores: { select: { storeId: true } } },
+  });
+  if (!p) return null;
+  const names = await driverNameMap(tenantId, [driverId]);
+
+  const sessions = await db.driverTrackingSession.findMany({ where: { tenantId, driverId, endedAt: null }, select: { id: true } });
+  let lastSyncAt: Date | null = null;
+  let batteryPct: number | null = null;
+  if (sessions.length) {
+    const s = await db.driverLocationSample.findFirst({
+      where: { tenantId, sessionId: { in: sessions.map((x) => x.id) } },
+      orderBy: { serverTs: "desc" },
+      select: { serverTs: true, batteryPct: true },
+    });
+    if (s) { lastSyncAt = s.serverTs; batteryPct = s.batteryPct ?? null; }
+  }
+
+  const runs = await db.deliveryRun.findMany({
+    where: { tenantId, driverId },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: { id: true, status: true, startedAt: true, endedAt: true, stops: { select: { status: true } } },
+  });
+  const runRows = runs.map((r) => ({
+    id: r.id, status: r.status, startedAt: r.startedAt, endedAt: r.endedAt,
+    stopsTotal: r.stops.length,
+    stopsDone: r.stops.filter((s) => s.status === "DONE" || s.status === "FAILED" || s.status === "SKIPPED").length,
+  }));
+
+  const exceptions = await db.deliveryException.findMany({
+    where: { tenantId, createdByDriverId: driverId },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { id: true, reasonCode: true, createdAt: true, orderId: true },
+  });
+
+  return {
+    id: p.id, userId: p.userId, name: names.get(p.id) ?? p.userId.slice(0, 8),
+    status: p.status, active: p.active, activeRunId: p.activeRunId,
+    stores: p.stores, storeCount: p.stores.length, lastSyncAt, batteryPct, runs: runRows, exceptions,
+  };
+}
+
 export async function createDriver(tenantId: string, userId: string, storeIds: string[], actorUserId: string) {
   const driver = await db.driverProfile.upsert({
     where: { tenantId_userId: { tenantId, userId } },

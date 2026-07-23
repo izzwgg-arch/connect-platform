@@ -1,7 +1,7 @@
 // Dispatcher API routes (Phase 3). Registered by registerDeliveryRoutes().
 import { z } from "zod";
 import { requireDeliveryDispatch, requireDeliveryConfig, requireDeliveryDriverAdmin } from "./guard";
-import { getDashboardCounts, listExceptions, listExceptionQueue, resolveExceptionRow, listDeliveryAudit, upsertConfig, listDrivers, createDriver, deactivateDriver } from "./dispatchService";
+import { getDashboardCounts, listExceptions, listExceptionQueue, resolveExceptionRow, listDeliveryAudit, upsertConfig, listDrivers, getDriverDetail, createDriver, deactivateDriver } from "./dispatchService";
 import { dashboardTiles, rankAttention, needsIntervention, type AttentionItem } from "./dashboard";
 import { transitionOrder } from "./orderService";
 import { mintTrackingLink } from "./customerTrackingService";
@@ -90,6 +90,14 @@ export async function registerDeliveryDispatchRoutes(app: any): Promise<void> {
     const user = await requireDeliveryDispatch(req, reply);
     if (!user) return;
     return reply.send(await listDrivers(user.tenantId));
+  });
+
+  app.get("/delivery/drivers/:id", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const d = await getDriverDetail(user.tenantId, String(req.params.id));
+    if (!d) return reply.status(404).send({ error: "not_found" });
+    return reply.send(d);
   });
 
   const createDriverBody = z.object({ userId: z.string().min(1), storeIds: z.array(z.string()).default([]) });
