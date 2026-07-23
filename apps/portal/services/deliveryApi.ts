@@ -57,6 +57,21 @@ export interface DriverRow {
   activeRunId?: string | null; stores: { storeId: string }[]; storeCount: number;
   lastSyncAt?: string | null; batteryPct?: number | null;
 }
+export interface RunRow {
+  id: string; storeId: string; status: string; driverId?: string | null; driverName?: string | null;
+  windowStart?: string | null; windowEnd?: string | null; startedAt?: string | null;
+  stopsTotal: number; stopsDone: number;
+}
+export interface MapMarker {
+  runId: string; driverId?: string | null; storeId: string;
+  position: { lat: number; lng: number; heading?: number | null } | null;
+  movement: "moving" | "stopped" | "stale" | "offline" | "unknown"; lastUpdateSec: number | null;
+}
+export interface ReportSummary {
+  sinceDays: number; ordersReceived: number; delivered: number; failed: number;
+  successRatePct: number; firstAttemptPct: number; avgDeliveryMinutes: number; etaAccuracyPct: number;
+  topFailedReasons: { reason: string; count: number }[]; approximateMetrics: string[];
+}
 export interface ExceptionRow {
   id: string; orderId: string; sourceId: string; status: string; address: string;
   customerName?: string | null; reasonCode: string; reasonLabel: string;
@@ -80,12 +95,21 @@ export const deliveryApi = {
   addNote: (id: string, text: string) => req<any>("POST", `/delivery/orders/${id}/note`, { text }),
   resendTrackingLink: (id: string) => req<{ ok: boolean; token: string; path: string }>("POST", `/delivery/orders/${id}/tracking-link`, {}),
   revokeTrackingLink: (id: string) => req<any>("POST", `/delivery/orders/${id}/tracking-link/revoke`, {}),
-  map: () => req<any[]>("GET", "/delivery/map"),
+  map: () => req<MapMarker[]>("GET", "/delivery/map"),
   exceptions: () => req<any[]>("GET", "/delivery/exceptions"),
   exceptionQueue: () => req<ExceptionRow[]>("GET", "/delivery/exceptions/queue"),
   exceptionAction: (id: string, action: "resolve" | "dismiss" | "reschedule" | "notify") =>
     req<{ ok: boolean; action: string; orderId: string }>("POST", `/delivery/exceptions/${id}/action`, { action }),
   drivers: () => req<DriverRow[]>("GET", "/delivery/drivers"),
+  runs: () => req<RunRow[]>("GET", "/delivery/runs"),
+  unassignedOrders: () => req<any[]>("GET", "/delivery/runs/unassigned"),
+  run: (id: string) => req<any>("GET", `/delivery/runs/${id}`),
+  reorderRun: (id: string, stopIds: string[]) => req<any>("POST", `/delivery/runs/${id}/reorder`, { stopIds }),
+  createRun: (storeId: string, driverId?: string) => req<any>("POST", "/delivery/runs", { storeId, driverId }),
+  addStop: (runId: string, orderId: string) => req<any>("POST", `/delivery/runs/${runId}/stops`, { orderId }),
+  startRun: (runId: string) => req<any>("POST", `/delivery/runs/${runId}/start`, {}),
+  optimizeRun: (runId: string) => req<any>("POST", `/delivery/runs/${runId}/optimize`, {}),
+  report: (days = 7) => req<ReportSummary>("GET", `/delivery/reports/summary?days=${days}`),
   audit: () => req<any[]>("GET", "/delivery/audit"),
   config: () => req<any>("GET", "/delivery/config"),
   saveConfig: (patch: Record<string, unknown>) => req<any>("PUT", "/delivery/config", patch),

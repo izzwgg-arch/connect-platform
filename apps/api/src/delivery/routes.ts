@@ -9,7 +9,7 @@ import { getDeliverySettings } from "./settingsService";
 import { MockOrderSourceAdapter } from "./orderSourceAdapter";
 import { ingestOrderEvent, listOrders, getOrder, transitionOrder, reassignOrder, addOrderNote } from "./orderService";
 import { scanLabel } from "./scanService";
-import { createRun, addStop, startRun, listRunsForDriver } from "./runService";
+import { createRun, addStop, startRun, listRunsForDriver, listRuns, listUnassignedOrders, getRun, reorderRunStops } from "./runService";
 import { optimizeRun, stopNavUrl } from "./routeService";
 import { geocodePendingOrders } from "./geocodeService";
 import { isValidStatus, type DeliveryOrderStatus, type TransitionActor } from "./status";
@@ -118,12 +118,44 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
   });
 
   // ── Dispatcher: runs ────────────────────────────────────────────────────────
+  app.get("/delivery/runs", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const storeId = typeof req.query?.storeId === "string" ? req.query.storeId : undefined;
+    return reply.send(await listRuns(user.tenantId, { storeId }));
+  });
+
+  app.get("/delivery/runs/unassigned", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const storeId = typeof req.query?.storeId === "string" ? req.query.storeId : undefined;
+    return reply.send(await listUnassignedOrders(user.tenantId, storeId));
+  });
+
   app.post("/delivery/runs", async (req: any, reply: any) => {
     const user = await requireDeliveryDispatch(req, reply);
     if (!user) return;
     const storeId = String(req.body?.storeId || "");
     if (!storeId) return reply.status(400).send({ error: "store_required" });
     return reply.send(await createRun(user.tenantId, storeId, { driverId: req.body?.driverId }));
+  });
+
+  app.get("/delivery/runs/:id", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const run = await getRun(user.tenantId, String(req.params.id));
+    if (!run) return reply.status(404).send({ error: "not_found" });
+    return reply.send(run);
+  });
+
+  app.post("/delivery/runs/:id/reorder", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const ids = Array.isArray(req.body?.stopIds) ? req.body.stopIds.map(String) : [];
+    if (ids.length === 0) return reply.status(400).send({ error: "stop_ids_required" });
+    const r = await reorderRunStops(user.tenantId, String(req.params.id), ids, user.sub);
+    if (!r.ok) return reply.status(r.code === "not_found" ? 404 : 400).send(r);
+    return reply.send(r);
   });
 
   app.post("/delivery/runs/:id/stops", async (req: any, reply: any) => {
