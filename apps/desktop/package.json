@@ -35,4 +35,16 @@
         "provider": "generic",
         "url": "https://app.connectcomunications.com/desktop/",
         "channel": "latest"
-    
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
+    "typescript": "^6.0.3"
+  }
+}
