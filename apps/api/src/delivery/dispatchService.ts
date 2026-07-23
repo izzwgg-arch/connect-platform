@@ -7,6 +7,16 @@ import type { DashboardCounts } from "./dashboard";
 import { DELIVERY_SETTINGS_DEFAULTS } from "./settingsService";
 import { EXCEPTION_STATUSES } from "./status";
 import { writeDeliveryAudit } from "./audit";
+import { exceptionRule, type ExceptionReason } from "./exceptionRules";
+
+const EXCEPTION_LABELS: Record<string, string> = {
+  customer_unavailable: "Customer unavailable", no_answer: "No answer", incorrect_address: "Incorrect address",
+  cannot_access: "Cannot access", reschedule_requested: "Reschedule requested", refused: "Refused",
+  unsafe_location: "Unsafe location", vehicle_issue: "Vehicle issue", driver_issue: "Driver issue",
+  damaged: "Damaged", missing_package: "Missing package", store_error: "Store error", payment_issue: "Payment issue",
+  age_verification_failed: "Age verification failed", weather: "Weather delay", traffic: "Traffic delay",
+  app_gps_issue: "App / GPS issue", other: "Other issue",
+};
 
 const ACTIVE_STATUSES = ["OUT_FOR_DELIVERY", "EN_ROUTE", "APPROACHING", "ARRIVED"];
 
@@ -59,6 +69,55 @@ export async function listExceptions(tenantId: string, storeId?: string) {
     take: 100,
     select: { id: true, sourceId: true, status: true, addrLine1: true, updatedAt: true, storeId: true },
   });
+}
+
+/** Actionable exception queue — real DeliveryException rows joined to their order. */
+export async function listExceptionQueue(tenantId: string, storeId?: string) {
+  const rows = await db.deliveryException.findMany({
+    where: { tenantId, approvedAt: null },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: { id: true, orderId: true, reasonCode: true, note: true, photoStorageKey: true, needsApproval: true, createdByDriverId: true, createdAt: true },
+  });
+  if (rows.length === 0) return [];
+  const orderIds = [...new Set(rows.map((r) => r.orderId))];
+  const orders = await db.deliveryOrder.findMany({
+    where: { tenantId, id: { in: orderIds }, ...(storeId ? { storeId } : {}) },
+    select: { id: true, sourceId: true, status: true, addrLine1: true, addrUnit: true, customerName: true, storeId: true },
+  });
+  const byId = new Map(orders.map((o) => [o.id, o]));
+  return rows
+    .filter((r) => byId.has(r.orderId))
+    .map((r) => {
+      const o = byId.get(r.orderId)!;
+      const rule = exceptionRule(r.reasonCode as ExceptionReason);
+      const severity: "high" | "medium" = rule.requiresApproval || rule.returnsToStore ? "high" : "medium";
+      return {
+        id: r.id,
+        orderId: r.orderId,
+        sourceId: o.sourceId,
+        status: o.status,
+        address: `${o.addrLine1}${o.addrUnit ? ` ${o.addrUnit}` : ""}`,
+        customerName: o.customerName ?? null,
+        reasonCode: r.reasonCode,
+        reasonLabel: EXCEPTION_LABELS[r.reasonCode] ?? r.reasonCode,
+        severity,
+        needsApproval: r.needsApproval,
+        hasPhoto: !!r.photoStorageKey,
+        note: r.note ?? null,
+        driverId: r.createdByDriverId ?? null,
+        occurredAt: r.createdAt,
+      };
+    });
+}
+
+/** Mark an exception handled (resolve/dismiss). Returns the affected orderId. */
+export async function resolveExceptionRow(tenantId: string, exceptionId: string, actorUserId: string, action: "resolve" | "dismiss") {
+  const ex = await db.deliveryException.findFirst({ where: { id: exceptionId, tenantId }, select: { id: true, orderId: true } });
+  if (!ex) return { ok: false as const, code: "not_found" };
+  await db.deliveryException.update({ where: { id: ex.id }, data: { approvedByUserId: actorUserId, approvedAt: new Date() } });
+  writeDeliveryAudit({ tenantId, action: `delivery.exception.${action}`, entityType: "DeliveryException", entityId: ex.id, actorUserId, metadata: { orderId: ex.orderId } });
+  return { ok: true as const, orderId: ex.orderId };
 }
 
 /** Recent delivery audit rows (tenant-scoped). */

@@ -50,6 +50,12 @@ export interface DeliveryOrderRow {
   id: string; sourceId: string; status: string; storeId: string;
   addrLine1: string; addrUnit?: string | null; customerName?: string | null; createdAt: string;
 }
+export interface ExceptionRow {
+  id: string; orderId: string; sourceId: string; status: string; address: string;
+  customerName?: string | null; reasonCode: string; reasonLabel: string;
+  severity: "high" | "medium"; needsApproval: boolean; hasPhoto: boolean;
+  note?: string | null; driverId?: string | null; occurredAt: string;
+}
 
 export const deliveryApi = {
   dashboard: (storeId?: string) => req<DashboardResponse>("GET", `/delivery/dashboard${storeId ? `?storeId=${encodeURIComponent(storeId)}` : ""}`),
@@ -65,6 +71,9 @@ export const deliveryApi = {
     req<any>("POST", `/delivery/orders/${id}/transition`, { to, reason }),
   map: () => req<any[]>("GET", "/delivery/map"),
   exceptions: () => req<any[]>("GET", "/delivery/exceptions"),
+  exceptionQueue: () => req<ExceptionRow[]>("GET", "/delivery/exceptions/queue"),
+  exceptionAction: (id: string, action: "resolve" | "dismiss" | "reschedule" | "notify") =>
+    req<{ ok: boolean; action: string; orderId: string }>("POST", `/delivery/exceptions/${id}/action`, { action }),
   drivers: () => req<any[]>("GET", "/delivery/drivers"),
   audit: () => req<any[]>("GET", "/delivery/audit"),
   config: () => req<any>("GET", "/delivery/config"),
