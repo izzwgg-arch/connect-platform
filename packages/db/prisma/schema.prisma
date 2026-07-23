@@ -5723,6 +5723,8 @@ model DeliveryStore {
   /// External reference used by the OrderSourceAdapter to map orders to stores.
   externalRef String
   timezone    String?
+  lat         Float?
+  lng         Float?
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -5795,6 +5797,9 @@ model DeliveryOrder {
   addrRegion           String?
   addrPostal           String?
   instructions         String?
+  lat                  Float?
+  lng                  Float?
+  geocodedAt           DateTime?
   requestedWindowStart DateTime?
   requestedWindowEnd   DateTime?
   priority             String    @default("NORMAL")

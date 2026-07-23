@@ -10,6 +10,7 @@ import { MockOrderSourceAdapter } from "./orderSourceAdapter";
 import { ingestOrderEvent, listOrders, getOrder, transitionOrder } from "./orderService";
 import { scanLabel } from "./scanService";
 import { createRun, addStop, startRun, listRunsForDriver } from "./runService";
+import { optimizeRun, stopNavUrl } from "./routeService";
 import { isValidStatus, type DeliveryOrderStatus, type TransitionActor } from "./status";
 import { registerDeliveryDispatchRoutes } from "./dispatchRoutes";
 import { registerDeliveryLocationRoutes } from "./locationRoutes";
@@ -109,6 +110,25 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
     const user = await requireDeliveryDispatch(req, reply);
     if (!user) return;
     const r = await startRun(user.tenantId, String(req.params.id), user.sub);
+    if (!r.ok) return reply.status(404).send(r);
+    return reply.send(r);
+  });
+
+  // Compute the best route (optimize stop order) for a run.
+  app.post("/delivery/runs/:id/optimize", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const r = await optimizeRun(user.tenantId, String(req.params.id), user.sub);
+    if (!r.ok) return reply.status(404).send(r);
+    return reply.send(r);
+  });
+
+  // Driver: navigation deep link for a stop (Waze default; ?app=google to override).
+  app.get("/mobile/delivery/stops/:orderId/nav", async (req: any, reply: any) => {
+    const ctx = await requireDriver(req, reply);
+    if (!ctx) return;
+    const app2 = req.query?.app === "google" ? "google" : "waze";
+    const r = await stopNavUrl(ctx.user.tenantId, String(req.params.orderId), app2 as any);
     if (!r.ok) return reply.status(404).send(r);
     return reply.send(r);
   });

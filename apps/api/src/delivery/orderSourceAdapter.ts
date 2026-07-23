@@ -24,6 +24,9 @@ export interface NormalizedOrderInput {
     region?: string;
     postal?: string;
     instructions?: string;
+    /** Optional source-provided coordinates (used for route optimization + Waze nav). */
+    lat?: number;
+    lng?: number;
   };
   requestedWindowStart?: string; // ISO
   requestedWindowEnd?: string; // ISO
@@ -97,6 +100,8 @@ export class MockOrderSourceAdapter implements OrderSourceAdapter {
         region: str(addr.region),
         postal: str(addr.postal),
         instructions: str(addr.instructions),
+        lat: typeof addr.lat === "number" && Number.isFinite(addr.lat) ? addr.lat : undefined,
+        lng: typeof addr.lng === "number" && Number.isFinite(addr.lng) ? addr.lng : undefined,
       },
       requestedWindowStart: str(p.windowStart),
       requestedWindowEnd: str(p.windowEnd),
@@ -129,7 +134,13 @@ export class MockOrderSourceAdapter implements OrderSourceAdapter {
         storeExternalRef,
         customerName: `Sample Customer ${i + 1}`,
         customerPhone: `+1555000${String(1000 + i)}`,
-        address: { line1: `${100 + i} ${streets[i % streets.length]}`, unit: `${i + 1}B` },
+        address: {
+          line1: `${100 + i} ${streets[i % streets.length]}`,
+          unit: `${i + 1}B`,
+          // Deterministic demo coordinates around a base point (so route optimization + Waze work).
+          lat: 40.7 + ((i * 7) % 20) * 0.004,
+          lng: -74.0 - ((i * 11) % 20) * 0.004,
+        },
         packages: [{ label: "tote-1" }, { label: "tote-2", tempSensitive: i % 2 === 0 }],
         priority: "NORMAL",
         flags: { signatureRequired: i === 0 },

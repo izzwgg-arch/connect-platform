@@ -132,6 +132,18 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
   `/internal/delivery/voice/resolve` to fetch the plan. Cross-check every change against the
   PBX brain files first (docs/pbx-brain). Never mutate VitalPBX config.
 
+## Route optimization + Waze navigation
+- Order/store gain optional `lat`/`lng` (+ `geocodedAt` on order). Populate from the order feed
+  (the mock adapter now emits demo coords) or a geocoder (MapsProvider) for addresses without coords.
+- Best-route calc (`routeOptimizer.ts`, pure): nearest-neighbor + 2-opt; keeps locked stops at the
+  front and priority stops ahead of normal. `POST /delivery/runs/:id/optimize` reorders the run's
+  `DeliveryRunStop.sequence` (ungeocoded stops are appended, not dropped).
+- Waze has NO multi-stop API — we compute the order; Waze drives each leg:
+  `GET /mobile/delivery/stops/:orderId/nav?app=waze|google` → `{ url }`; the app opens it
+  (`apps/mobile/src/delivery/openNavigation.ts` → Waze app → Waze web → Google fallback).
+- Smoke: ingest 3+ orders with coords → add to a run → `POST /delivery/runs/<id>/optimize`
+  → returns optimized `order` + `totalMeters`; `GET .../stops/<orderId>/nav` → a `waze.com/ul` link.
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.
