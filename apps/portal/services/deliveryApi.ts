@@ -49,6 +49,13 @@ export interface DashboardResponse {
 export interface DeliveryOrderRow {
   id: string; sourceId: string; status: string; storeId: string;
   addrLine1: string; addrUnit?: string | null; customerName?: string | null; createdAt: string;
+  priority?: string; notifyConsent?: boolean;
+  driverId?: string | null; driverName?: string | null; runId?: string | null;
+}
+export interface DriverRow {
+  id: string; userId: string; name: string; status: string; active: boolean;
+  activeRunId?: string | null; stores: { storeId: string }[]; storeCount: number;
+  lastSyncAt?: string | null; batteryPct?: number | null;
 }
 export interface ExceptionRow {
   id: string; orderId: string; sourceId: string; status: string; address: string;
@@ -78,7 +85,7 @@ export const deliveryApi = {
   exceptionQueue: () => req<ExceptionRow[]>("GET", "/delivery/exceptions/queue"),
   exceptionAction: (id: string, action: "resolve" | "dismiss" | "reschedule" | "notify") =>
     req<{ ok: boolean; action: string; orderId: string }>("POST", `/delivery/exceptions/${id}/action`, { action }),
-  drivers: () => req<any[]>("GET", "/delivery/drivers"),
+  drivers: () => req<DriverRow[]>("GET", "/delivery/drivers"),
   audit: () => req<any[]>("GET", "/delivery/audit"),
   config: () => req<any>("GET", "/delivery/config"),
   saveConfig: (patch: Record<string, unknown>) => req<any>("PUT", "/delivery/config", patch),

@@ -250,8 +250,23 @@ export async function resolveLabelToken(tenantId: string, token: string) {
   return idRow?.order ?? null;
 }
 
+/** Resolve DriverProfile ids → human display names (batched). Shared across list views. */
+export async function driverNameMap(tenantId: string, driverIds: (string | null | undefined)[]): Promise<Map<string, string>> {
+  const ids = [...new Set(driverIds.filter((x): x is string => !!x))];
+  if (ids.length === 0) return new Map();
+  const profiles = await db.driverProfile.findMany({ where: { tenantId, id: { in: ids } }, select: { id: true, userId: true } });
+  const users = await db.user.findMany({
+    where: { id: { in: profiles.map((p) => p.userId) } },
+    select: { id: true, firstName: true, lastName: true, displayName: true, email: true },
+  });
+  const nameByUser = new Map(
+    users.map((u) => [u.id, u.displayName || [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email || u.id.slice(0, 8)]),
+  );
+  return new Map(profiles.map((p) => [p.id, nameByUser.get(p.userId) ?? p.id.slice(0, 8)]));
+}
+
 export async function listOrders(tenantId: string, opts: { status?: string; storeId?: string; take?: number } = {}) {
-  return db.deliveryOrder.findMany({
+  const rows = await db.deliveryOrder.findMany({
     where: {
       tenantId,
       ...(opts.status && isValidStatus(opts.status) ? { status: opts.status } : {}),
@@ -259,7 +274,22 @@ export async function listOrders(tenantId: string, opts: { status?: string; stor
     },
     orderBy: { createdAt: "desc" },
     take: Math.min(opts.take ?? 100, 200),
+    select: {
+      id: true, sourceId: true, status: true, storeId: true, addrLine1: true, addrUnit: true,
+      customerName: true, createdAt: true, priority: true, messagingConsent: true,
+      assignment: { select: { driverId: true } },
+      runStop: { select: { runId: true } },
+    },
   });
+  const names = await driverNameMap(tenantId, rows.map((r) => r.assignment?.driverId));
+  return rows.map((o) => ({
+    id: o.id, sourceId: o.sourceId, status: o.status, storeId: o.storeId,
+    addrLine1: o.addrLine1, addrUnit: o.addrUnit, customerName: o.customerName, createdAt: o.createdAt,
+    priority: o.priority, notifyConsent: o.messagingConsent,
+    driverId: o.assignment?.driverId ?? null,
+    driverName: o.assignment?.driverId ? names.get(o.assignment.driverId) ?? null : null,
+    runId: o.runStop?.runId ?? null,
+  }));
 }
 
 export async function getOrder(tenantId: string, orderId: string) {

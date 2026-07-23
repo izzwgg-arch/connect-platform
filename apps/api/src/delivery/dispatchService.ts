@@ -8,6 +8,7 @@ import { DELIVERY_SETTINGS_DEFAULTS } from "./settingsService";
 import { EXCEPTION_STATUSES } from "./status";
 import { writeDeliveryAudit } from "./audit";
 import { exceptionRule, type ExceptionReason } from "./exceptionRules";
+import { driverNameMap } from "./orderService";
 
 const EXCEPTION_LABELS: Record<string, string> = {
   customer_unavailable: "Customer unavailable", no_answer: "No answer", incorrect_address: "Incorrect address",
@@ -167,11 +168,47 @@ export async function upsertConfig(tenantId: string, patch: Record<string, unkno
 
 // ── Drivers ─────────────────────────────────────────────────────────────────
 export async function listDrivers(tenantId: string) {
-  return db.driverProfile.findMany({
+  const profiles = await db.driverProfile.findMany({
     where: { tenantId },
     orderBy: { createdAt: "asc" },
     select: { id: true, userId: true, status: true, active: true, activeRunId: true, stores: { select: { storeId: true } } },
   });
+  if (profiles.length === 0) return [];
+  const names = await driverNameMap(tenantId, profiles.map((p) => p.id));
+
+  // Latest fix (last sync + battery) from each driver's OPEN tracking session — real telemetry only.
+  const driverIds = profiles.map((p) => p.id);
+  const sessions = await db.driverTrackingSession.findMany({
+    where: { tenantId, driverId: { in: driverIds }, endedAt: null },
+    select: { id: true, driverId: true },
+  });
+  const sessionToDriver = new Map(sessions.map((s) => [s.id, s.driverId]));
+  const latestByDriver = new Map<string, { serverTs: Date; batteryPct: number | null }>();
+  if (sessions.length) {
+    const samples = await db.driverLocationSample.findMany({
+      where: { tenantId, sessionId: { in: sessions.map((s) => s.id) } },
+      orderBy: { serverTs: "desc" },
+      take: 500,
+      select: { sessionId: true, serverTs: true, batteryPct: true },
+    });
+    for (const s of samples) {
+      const did = sessionToDriver.get(s.sessionId);
+      if (did && !latestByDriver.has(did)) latestByDriver.set(did, { serverTs: s.serverTs, batteryPct: s.batteryPct ?? null });
+    }
+  }
+
+  return profiles.map((p) => ({
+    id: p.id,
+    userId: p.userId,
+    name: names.get(p.id) ?? p.userId.slice(0, 8),
+    status: p.status,
+    active: p.active,
+    activeRunId: p.activeRunId,
+    stores: p.stores,
+    storeCount: p.stores.length,
+    lastSyncAt: latestByDriver.get(p.id)?.serverTs ?? null,
+    batteryPct: latestByDriver.get(p.id)?.batteryPct ?? null,
+  }));
 }
 
 export async function createDriver(tenantId: string, userId: string, storeIds: string[], actorUserId: string) {
