@@ -52,7 +52,9 @@ import {
   UsersRound,
   Voicemail,
   Wallet,
-  Zap
+  Zap,
+  Package,
+  Truck
 } from "lucide-react";
 import type { Permission } from "../types/app";
 
@@ -139,7 +141,17 @@ export const navItems: NavItem[] = [
   { id: "apps.sms_campaigns", href: "/apps/sms-campaigns", label: "SMS Campaigns", icon: "SC", lucide: Megaphone, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_sms_campaigns" },
   { id: "apps.whatsapp", href: "/apps/whatsapp", label: "WhatsApp Inbox", icon: "WA", lucide: MessageCircle, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_whatsapp_inbox" },
   { id: "apps.voip_ms", href: "/apps/voip-ms", label: "VoIP.ms", icon: "VP", lucide: PhoneForwarded, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_voip_ms" },
-  { id: "apps.customers", href: "/apps/customers", label: "Customer Hub", icon: "CU", lucide: UsersRound, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_customer_hub" }
+  { id: "apps.customers", href: "/apps/customers", label: "Customer Hub", icon: "CU", lucide: UsersRound, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_customer_hub" },
+
+  { id: "tracking.dashboard", href: "/tracking/dashboard", label: "Dashboard", icon: "TD", lucide: LayoutDashboard, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_dashboard" },
+  { id: "tracking.orders", href: "/tracking/orders", label: "Orders", icon: "TO", lucide: Package, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_orders" },
+  { id: "tracking.map", href: "/tracking/map", label: "Live Map", icon: "TM", lucide: Map, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_map" },
+  { id: "tracking.runs", href: "/tracking/runs", label: "Runs", icon: "TR", lucide: Route, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_runs" },
+  { id: "tracking.drivers", href: "/tracking/drivers", label: "Drivers", icon: "TV", lucide: Truck, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_drivers" },
+  { id: "tracking.exceptions", href: "/tracking/exceptions", label: "Exceptions", icon: "TX", lucide: AlertTriangle, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_exceptions" },
+  { id: "tracking.reports", href: "/tracking/reports", label: "Reports", icon: "TP", lucide: BarChart3, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_reports" },
+  { id: "tracking.audit", href: "/tracking/audit", label: "Audit Log", icon: "TA", lucide: History, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_audit" },
+  { id: "tracking.settings", href: "/tracking/settings", label: "Settings", icon: "TS", lucide: Settings2, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_settings" }
 ];
 
 /** Sidebar section order: Workspace → PBX → CRM → Apps → Billing → Admin → Settings */

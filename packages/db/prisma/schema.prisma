@@ -6043,3 +6043,440 @@ model AgentPbxObject {
   @@index([pbxTenantId])
   @@index([state])
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPERMARKET DELIVERY TRACKING — Phase 2 (core domain)
+// APPEND-ONLY. Paste this block at the END of packages/db/prisma/schema.prisma.
+//
+// Design notes:
+//  - tenantId is a plain scalar (String) with the FK added in the migration SQL,
+//    following the ConnectCdr precedent, so the 5,679-line Tenant/User models are
+//    NOT edited. Every query filters tenantId explicitly (repo rule 1).
+//  - Workflow statuses are stored as String (validated by apps/api/src/delivery/status.ts)
+//    to avoid Postgres enum-ordering migration pain. No new Prisma enums are added.
+//  - Relations are declared only among delivery-owned models; references to
+//    Tenant / User / DeliveryStore / DriverProfile / Contact are scalar + SQL FK.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Per-tenant delivery feature flag + configuration. Absence of a row = disabled.
+model DeliveryTenantSettings {
+  id                   String   @id @default(cuid())
+  tenantId             String   @unique
+  enabled              Boolean  @default(false)
+  /// Customer map policy: PROGRESSIVE | FULL | NONE (decision 1).
+  mapReveal            String   @default("PROGRESSIVE")
+  /// Reveal the exact driver pin when the driver is within N stops.
+  exactPinStopsAway    Int      @default(1)
+  /// Verification policy: TIERED | STRICT | LIGHT (decision 4).
+  verifyTier           String   @default("TIERED")
+  /// Voice ETA mode: PRERECORDED_NUMBER_PLAYBACK | TTS | COARSE (decision 2).
+  voiceMode            String   @default("PRERECORDED_NUMBER_PLAYBACK")
+  /// High-resolution retention window (days) for location samples etc.
+  retentionDays        Int      @default(30)
+  notifyOutForDelivery Boolean  @default(true)
+  notifyDelayed        Boolean  @default(true)
+  notifyDelivered      Boolean  @default(true)
+  notifyApproaching    Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+/// A supermarket store location within a tenant.
+model DeliveryStore {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  /// External reference used by the OrderSourceAdapter to map orders to stores.
+  externalRef String
+  timezone    String?
+  lat         Float?
+  lng         Float?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, externalRef])
+  @@index([tenantId])
+}
+
+/// A delivery zone (area) belonging to a store. geojson holds the polygon.
+model DeliveryZone {
+  id        String   @id @default(cuid())
+  tenantId  String
+  storeId   String
+  name      String
+  geojson   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, storeId])
+}
+
+/// Overlay on a Connect User granting the driver role (decision 5).
+model DriverProfile {
+  id          String        @id @default(cuid())
+  tenantId    String
+  userId      String
+  status      String        @default("OFFLINE") // OFFLINE | AVAILABLE | ON_RUN
+  active      Boolean       @default(true)
+  activeRunId String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  stores DriverStore[]
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+}
+
+/// Which stores a driver is permitted to work.
+model DriverStore {
+  id        String   @id @default(cuid())
+  tenantId  String
+  driverId  String
+  storeId   String
+  createdAt DateTime @default(now())
+
+  driver DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@unique([driverId, storeId])
+  @@index([tenantId, storeId])
+}
+
+/// A normalized delivery order. rawSourceStatus preserves the supermarket source
+/// status verbatim, separate from the normalized `status` (governed by status.ts).
+model DeliveryOrder {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  storeId              String
+  /// Stable id from the source system — idempotency anchor.
+  sourceId             String
+  rawSourceStatus      String    @default("NEW")
+  status               String    @default("RECEIVED")
+  contactId            String?
+  customerName         String?
+  customerPhone        String?
+  addrLine1            String
+  addrLine2            String?
+  addrUnit             String?
+  addrCity             String?
+  addrRegion           String?
+  addrPostal           String?
+  instructions         String?
+  lat                  Float?
+  lng                  Float?
+  geocodedAt           DateTime?
+  requestedWindowStart DateTime?
+  requestedWindowEnd   DateTime?
+  priority             String    @default("NORMAL")
+  signatureRequired    Boolean   @default(false)
+  ageRestricted        Boolean   @default(false)
+  cashOnDelivery       Boolean   @default(false)
+  language             String?
+  messagingConsent     Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  packages     DeliveryPackage[]
+  identifiers  DeliveryOrderIdentifier[]
+  statusEvents DeliveryStatusEvent[]
+  assignment   DeliveryAssignment?
+  runStop      DeliveryRunStop?
+
+  @@unique([tenantId, sourceId])
+  @@index([tenantId, status])
+  @@index([tenantId, storeId])
+}
+
+/// A package/tote within an order.
+model DeliveryPackage {
+  id            String   @id @default(cuid())
+  tenantId      String
+  orderId       String
+  label         String?
+  tempSensitive Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  order DeliveryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+/// Scan-label / tracking identifier for an order. Token is stored HASHED.
+model DeliveryOrderIdentifier {
+  id        String   @id @default(cuid())
+  tenantId  String
+  orderId   String
+  tokenHash String
+  kind      String   @default("LABEL") // LABEL | TRACKING
+  createdAt DateTime @default(now())
+
+  order DeliveryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, tokenHash])
+  @@index([orderId])
+}
+
+/// Append-only status transition log for an order.
+model DeliveryStatusEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  orderId     String
+  fromStatus  String?
+  toStatus    String
+  actor       String
+  actorUserId String?
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  order DeliveryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+/// A grouped delivery run (route) for a driver.
+model DeliveryRun {
+  id          String    @id @default(cuid())
+  tenantId    String
+  storeId     String
+  driverId    String?
+  status      String    @default("DRAFT") // DRAFT | ACTIVE | PAUSED | COMPLETED | CLOSED
+  windowStart DateTime?
+  windowEnd   DateTime?
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  stops DeliveryRunStop[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, driverId])
+}
+
+/// An ordered stop on a run (one order per stop).
+model DeliveryRunStop {
+  id        String   @id @default(cuid())
+  tenantId  String
+  runId     String
+  orderId   String   @unique
+  sequence  Int
+  status    String   @default("PENDING") // PENDING | ARRIVED | DONE | FAILED | SKIPPED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  run   DeliveryRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  order DeliveryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, orderId])
+  @@index([runId, sequence])
+}
+
+/// Order↔driver assignment. Idempotent via clientOpId; one assignment per order.
+model DeliveryAssignment {
+  id         String   @id @default(cuid())
+  tenantId   String
+  orderId    String   @unique
+  driverId   String
+  runId      String?
+  clientOpId String   @unique
+  createdAt  DateTime @default(now())
+
+  order DeliveryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, driverId])
+}
+
+/// Inbound order-source events (mock adapter now; real webhook Phase 10). Replay-friendly.
+model DeliveryOrderSourceEvent {
+  id          String    @id @default(cuid())
+  tenantId    String
+  type        String
+  sourceId    String
+  payload     Json
+  status      String    @default("RECEIVED") // RECEIVED | PROCESSED | FAILED
+  attempts    Int       @default(0)
+  error       String?
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, status])
+  @@index([tenantId, sourceId])
+}
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 3 (dispatcher RBAC) ──────────────────
+// APPEND to the end of packages/db/prisma/schema.prisma (after the Phase 2 block).
+
+/// Per-user delivery access grant (dispatcher / store-manager / etc.).
+/// Absence of a row = no delivery role (platform admins still bypass).
+model DeliveryUserAccess {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  /// One of: TENANT_ADMIN | STORE_MANAGER | DISPATCHER | DRIVER | CUSTOMER_SERVICE | REPORTING
+  role      String   @default("DISPATCHER")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, enabled])
+}
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 5 (live location + ETA) ──────────────
+// APPEND to the end of packages/db/prisma/schema.prisma (after the Phase 3 block).
+// Scalar tenantId/runId/driverId + SQL FKs (ConnectCdr precedent). Location samples are
+// high-volume — see retentionDays on DeliveryTenantSettings + the retention sweep (Phase 11).
+
+/// One tracking session per active run. Bounds when location is collected.
+model DriverTrackingSession {
+  id        String    @id @default(cuid())
+  tenantId  String
+  runId     String
+  driverId  String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  endReason String? // COMPLETED | SIGNED_OUT | TIMEOUT | MANAGER_CLOSED
+  createdAt DateTime  @default(now())
+
+  samples DriverLocationSample[]
+
+  @@index([tenantId, driverId, endedAt])
+  @@index([runId])
+}
+
+/// High-frequency GPS fix. Short retention (see retention sweep).
+model DriverLocationSample {
+  id            String   @id @default(cuid())
+  tenantId      String
+  sessionId     String
+  lat           Float
+  lng           Float
+  accuracy      Float?
+  speed         Float?
+  heading       Float?
+  batteryPct    Int?
+  mockSuspected Boolean  @default(false)
+  deviceTs      DateTime
+  serverTs      DateTime @default(now())
+
+  session DriverTrackingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, serverTs])
+  @@index([tenantId, serverTs])
+}
+
+/// An ETA computed at a point in time (audit + confidence tracking).
+model EtaSnapshot {
+  id         String   @id @default(cuid())
+  tenantId   String
+  runId      String
+  orderId    String?
+  stopsAway  Int
+  etaMinSec  Int
+  etaMaxSec  Int
+  confidence String
+  calcAt     DateTime @default(now())
+
+  @@index([runId, calcAt])
+}
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 6 (customer tracking link) ───────────
+/// Secure customer tracking link. Token stored HASHED; high-entropy, expiring,
+/// tenant+order bound, revocable. OTP fields gate tier-2 (sensitive) detail.
+model TrackingToken {
+  id           String    @id @default(cuid())
+  tenantId     String
+  orderId      String
+  tokenHash    String    @unique
+  kind         String    @default("TRACKING")
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  otpHash      String?
+  otpExpiresAt DateTime?
+  otpAttempts  Int       @default(0)
+  verifiedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([tenantId, orderId])
+}
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 7 (SMS notifications + consent) ───────
+/// Outbound customer notification log — deduped (idempotencyKey), provider-tracked.
+model DeliveryNotification {
+  id                String   @id @default(cuid())
+  tenantId          String
+  orderId           String
+  trigger           String
+  channel           String   @default("SMS")
+  toPhone           String?
+  templateVersion   String?
+  body              String?
+  providerMessageId String?
+  status            String   @default("QUEUED") // QUEUED | SENT | DELIVERED | FAILED | TEST
+  errorReason       String?
+  retryCount        Int      @default(0)
+  idempotencyKey    String   @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([tenantId, orderId])
+  @@index([tenantId, status])
+}
+
+/// Per-tenant SMS consent (STOP/START). Opt-out blocks all delivery texts.
+model DeliverySmsConsent {
+  id         String    @id @default(cuid())
+  tenantId   String
+  phoneE164  String
+  optedOut   Boolean   @default(false)
+  optedOutAt DateTime?
+  optedInAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([tenantId, phoneE164])
+}
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 9 (proof of delivery + exceptions) ────
+/// Proof captured at delivery. Media stored via shared object storage (signed access only).
+model ProofOfDelivery {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  orderId             String   @unique
+  methods             String // comma-joined ProofMethods used (photo,signature,pin,tap,recipient_name,gps)
+  handover            String?
+  recipientName       String?
+  photoStorageKey     String?
+  signatureStorageKey String?
+  gpsLat              Float?
+  gpsLng              Float?
+  gpsAccuracy         Float?
+  overrideReason      String?
+  capturedByDriverId  String?
+  capturedAt          DateTime @default(now())
+  createdAt           DateTime @default(now())
+
+  @@index([tenantId, orderId])
+}
+
+/// A failed/exception event for an order (reason-coded; drives downstream behavior).
+model DeliveryException {
+  id                String    @id @default(cuid())
+  tenantId          String
+  orderId           String
+  reasonCode        String
+  note              String?
+  photoStorageKey   String?
+  needsApproval     Boolean   @default(false)
+  approvedByUserId  String?
+  approvedAt        DateTime?
+  createdByDriverId String?
+  createdAt         DateTime  @default(now())
+
+  @@index([tenantId, orderId])
+  @@index([tenantId, reasonCode])
+}
