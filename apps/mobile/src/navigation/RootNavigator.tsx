@@ -15,6 +15,7 @@ import { QrProvisionScreen } from '../screens/auth/QrProvisionScreen';
 import { ActiveCallScreen } from '../screens/call/ActiveCallScreen';
 import { IncomingCallScreen } from '../screens/call/IncomingCallScreen';
 import { DiagnosticsScreen } from '../screens/DiagnosticsScreen';
+import { DeliveryNavigator } from './DeliveryNavigator';
 import { useIncomingNotifications } from '../context/NotificationsContext';
 import { useCallSessions } from '../context/CallSessionManager';
 import { logCallFlow } from '../debug/callFlowDebug';
@@ -318,6 +319,11 @@ function AppNavigator() {
       <AppStack.Screen
         name="Diagnostics"
         component={DiagnosticsScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <AppStack.Screen
+        name="Delivery"
+        component={DeliveryNavigator}
         options={{ animation: 'slide_from_right' }}
       />
       <AppStack.Screen

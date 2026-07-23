@@ -125,6 +125,18 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
     return reply.send(r);
   });
 
+  // Driver: mark arrival at a stop (unlocks proof/exception).
+  app.post("/mobile/delivery/orders/:orderId/arrive", async (req: any, reply: any) => {
+    const ctx = await requireDriver(req, reply);
+    if (!ctx) return;
+    const r = await transitionOrder({
+      tenantId: ctx.user.tenantId, orderId: String(req.params.orderId), to: "ARRIVED",
+      actor: "driver", actorUserId: ctx.user.sub, hasLocation: req.body?.lat != null,
+    });
+    if (!r.ok) return reply.status(422).send(r);
+    return reply.send(r);
+  });
+
   // Driver: navigation deep link for a stop (Waze default; ?app=google to override).
   app.get("/mobile/delivery/stops/:orderId/nav", async (req: any, reply: any) => {
     const ctx = await requireDriver(req, reply);

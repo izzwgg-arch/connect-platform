@@ -34,6 +34,41 @@ export async function scanLabel(
   return json as ScanResponse;
 }
 
+export async function getStopNav(token: string, orderId: string, app: "waze" | "google" = "waze"): Promise<{ url: string }> {
+  const res = await fetch(`${API_BASE}/mobile/delivery/stops/${orderId}/nav?app=${app}`, { headers: { authorization: `Bearer ${token}` } });
+  const json = await parseJson(res);
+  if (!res.ok) throw Object.assign(new Error(json?.error || "NAV_FAILED"), { status: res.status, body: json });
+  return json;
+}
+
+export async function markArrived(token: string, orderId: string, gps?: { lat: number; lng: number }): Promise<any> {
+  const res = await fetch(`${API_BASE}/mobile/delivery/orders/${orderId}/arrive`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(gps || {}),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw Object.assign(new Error(json?.error || "ARRIVE_FAILED"), { status: res.status, body: json });
+  return json;
+}
+
+export async function submitProof(token: string, orderId: string, body: Record<string, unknown>): Promise<any> {
+  const res = await fetch(`${API_BASE}/mobile/delivery/orders/${orderId}/proof`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw Object.assign(new Error(json?.error || "PROOF_FAILED"), { status: res.status, body: json });
+  return json;
+}
+
+export async function submitException(token: string, orderId: string, body: Record<string, unknown>): Promise<any> {
+  const res = await fetch(`${API_BASE}/mobile/delivery/orders/${orderId}/exception`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw Object.assign(new Error(json?.error || "EXCEPTION_FAILED"), { status: res.status, body: json });
+  return json;
+}
+
 export async function getRuns(token: string): Promise<any[]> {
   const res = await fetch(`${API_BASE}/mobile/delivery/runs`, {
     headers: { authorization: `Bearer ${token}` },
