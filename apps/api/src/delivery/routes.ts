@@ -14,6 +14,7 @@ import { isValidStatus, type DeliveryOrderStatus, type TransitionActor } from ".
 import { registerDeliveryDispatchRoutes } from "./dispatchRoutes";
 import { registerDeliveryLocationRoutes } from "./locationRoutes";
 import { registerDeliveryCustomerRoutes } from "./customerRoutes";
+import { registerDeliverySmsRoutes } from "./smsRoutes";
 
 const mockAdapter = new MockOrderSourceAdapter();
 
@@ -149,4 +150,7 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
 
   // ── Customer tracking page + links (Phase 6) ─────────────────────────────────
   await registerDeliveryCustomerRoutes(app);
+
+  // ── SMS notifications + inbound commands (Phase 7 — TEST endpoints only) ──────
+  await registerDeliverySmsRoutes(app);
 }

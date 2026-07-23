@@ -93,6 +93,26 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
   `import { runDeliveryEtaCycle } from "./deliveryEtaJob"; setInterval(() => runDeliveryEtaCycle().catch(() => {}), 30_000);`
 - Verify `GET /track/<bad-token>` returns `{ state: "invalid" }` (200, leaks nothing).
 
+## Phase 7 — SMS notifications + inbound commands (TEST MODE)
+- New models `DeliveryNotification` (deduped outbound log) + `DeliverySmsConsent` (STOP/START).
+- **Outbound is test-mode by default**: `notifyOrder()` records a `DeliveryNotification`
+  (status `TEST`, deduped by `idempotencyKey`, consent-gated) but does **not** send. Real send
+  requires `DELIVERY_SMS_LIVE=1` **and** completing the provider/queue wiring under separate
+  approval (no production SMS is activated by this phase).
+- Inbound command handling (STATUS/TRACK/ETA/ORDER/HELP/STOP/START) is fully functional but
+  reached only via the **internal test endpoints** (secret-gated), NOT the live VoIP.ms webhook:
+  ```bash
+  curl -sX POST .../internal/delivery/sms/inbound -H "x-delivery-source-secret: $SECRET" \
+    -H "x-tenant-id: <TENANT_ID>" -H 'content-type: application/json' \
+    -d '{"from":"+15551230000","body":"where is my order"}'      # → { reply, intent }
+  curl -sX POST .../internal/delivery/sms/notify -H "x-delivery-source-secret: $SECRET" \
+    -H "x-tenant-id: <TENANT_ID>" -d '{"orderId":"<id>","trigger":"out_for_delivery"}'
+  ```
+- Set `PUBLIC_TRACKING_BASE_URL` so links in messages are absolute.
+- Going live (later, with approval): wire `notifyOrder` to the `sms-send` BullMQ queue and hook
+  `handleInboundSms` into the VoIP.ms inbound path (`handleVoipMsInbound`) — mirror the CRM
+  inbound SMS hook pattern; respect carrier STOP/START compliance.
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.

@@ -76,6 +76,11 @@ export interface CustomerView {
   detail: { address?: string; proof?: { method: string; capturedAt: string } } | null;
 }
 
+/** Public status code + label for a normalized status (used by SMS/voice replies). */
+export function publicStatus(status: DeliveryOrderStatus): { code: PublicStatus; label: string } {
+  return STATUS_MAP[status] ?? { code: "processing", label: "Being processed" };
+}
+
 export function buildCustomerView(input: CustomerViewInput): CustomerView {
   const mapped = STATUS_MAP[input.status] ?? { code: "processing" as PublicStatus, label: "Being processed" };
 

@@ -6032,3 +6032,40 @@ model TrackingToken {
 
   @@index([tenantId, orderId])
 }
+
+// ── SUPERMARKET DELIVERY TRACKING — Phase 7 (SMS notifications + consent) ───────
+/// Outbound customer notification log — deduped (idempotencyKey), provider-tracked.
+model DeliveryNotification {
+  id                String   @id @default(cuid())
+  tenantId          String
+  orderId           String
+  trigger           String
+  channel           String   @default("SMS")
+  toPhone           String?
+  templateVersion   String?
+  body              String?
+  providerMessageId String?
+  status            String   @default("QUEUED") // QUEUED | SENT | DELIVERED | FAILED | TEST
+  errorReason       String?
+  retryCount        Int      @default(0)
+  idempotencyKey    String   @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([tenantId, orderId])
+  @@index([tenantId, status])
+}
+
+/// Per-tenant SMS consent (STOP/START). Opt-out blocks all delivery texts.
+model DeliverySmsConsent {
+  id         String    @id @default(cuid())
+  tenantId   String
+  phoneE164  String
+  optedOut   Boolean   @default(false)
+  optedOutAt DateTime?
+  optedInAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([tenantId, phoneE164])
+}
