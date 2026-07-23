@@ -11,6 +11,7 @@ import {
 import { writeDeliveryAudit } from "./audit";
 import { generateToken, hashToken } from "./tokens";
 import type { NormalizedOrderEvent, NormalizedOrderInput } from "./orderSourceAdapter";
+import { geocodeOrder } from "./geocodeService";
 
 function toDate(iso?: string): Date | null {
   if (!iso) return null;
@@ -231,6 +232,11 @@ export async function ingestOrderEvent(
     entityId: order.id,
     metadata: { sourceId: input.sourceId, storeId: store.id },
   });
+
+  // Geocode address-only orders in the background (no-op unless a geocoder is configured).
+  if (input.address.lat == null || input.address.lng == null) {
+    geocodeOrder(tenantId, order.id).catch(() => {});
+  }
 
   return { ok: true, orderId: order.id, created: true, labelToken };
 }

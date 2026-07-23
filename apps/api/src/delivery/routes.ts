@@ -11,6 +11,7 @@ import { ingestOrderEvent, listOrders, getOrder, transitionOrder } from "./order
 import { scanLabel } from "./scanService";
 import { createRun, addStop, startRun, listRunsForDriver } from "./runService";
 import { optimizeRun, stopNavUrl } from "./routeService";
+import { geocodePendingOrders } from "./geocodeService";
 import { isValidStatus, type DeliveryOrderStatus, type TransitionActor } from "./status";
 import { registerDeliveryDispatchRoutes } from "./dispatchRoutes";
 import { registerDeliveryLocationRoutes } from "./locationRoutes";
@@ -33,6 +34,14 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
     const result = await ingestOrderEvent(tenantId, event);
     if (!result.ok) return reply.status(409).send({ error: result.code });
     return reply.send(result);
+  });
+
+  // Internal: backfill geocode address-only orders (no-op unless a geocoder is configured).
+  app.post("/internal/delivery/geocode", async (req: any, reply: any) => {
+    if (!verifyOrderSourceSecret(req)) return reply.status(401).send({ error: "unauthorized" });
+    const tenantId = String(req.headers?.["x-tenant-id"] || req.body?.tenantId || "");
+    if (!tenantId) return reply.status(400).send({ error: "tenant_required" });
+    return reply.send(await geocodePendingOrders(tenantId, Number(req.body?.limit) || 25));
   });
 
   // ── Dispatcher: settings + orders ──────────────────────────────────────────

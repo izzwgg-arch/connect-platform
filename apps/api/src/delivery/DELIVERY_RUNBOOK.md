@@ -170,6 +170,16 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
   depth, sync failures) + the support views — the dispatcher System Health / Audit pages already
   show the intended shape; wire the metrics into the existing prom-client registry.
 
+## Geocoding (fills route-optimization coords for address-only orders)
+- Provider-agnostic (like the routing stub). Default = noop (no external calls). Configure via env:
+  `DELIVERY_GEOCODER_URL` (template with `{q}`) + `DELIVERY_GEOCODER_FORMAT` (`nominatim|mapbox|google`).
+  e.g. Nominatim: `https://nominatim.example/search?format=json&q={q}`.
+- Query builder + response parsers are pure/tested (Nominatim/Mapbox/Google shapes).
+- Runs automatically: `geocodeOrder` fires fire-and-forget on ingest for orders without coords.
+  Backfill existing ones: `POST /internal/delivery/geocode` (secret-gated) `{ tenantId, limit }`.
+- With coords present (source-provided or geocoded), `POST /delivery/runs/:id/optimize` and the
+  driver Waze nav work end to end.
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.
