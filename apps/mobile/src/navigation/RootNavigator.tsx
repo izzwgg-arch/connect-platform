@@ -68,7 +68,10 @@ function AuthNavigator() {
  */
 function TabsWrapper() {
   const nav = useNavigation<any>();
-  const { callState, callDirection } = useSip();
+  // COWORK iOS fix (2026-07-15): remoteParty + callConnectedAt are consumed
+  // ONLY by the iOS-gated banner fallback below; on Android callConnectedAt
+  // is always null and the fallback never activates.
+  const { callState, callDirection, remoteParty, callConnectedAt } = useSip();
   const {
     incomingInvite,
     incomingCallUiState,
@@ -327,11 +330,40 @@ function TabsWrapper() {
   // route, so it's false while ActiveCall / IncomingCall is presented on top.
   const tabsFocused = useIsFocused();
   const bannerSession = callSessions.activeCall ?? callSessions.heldCalls[0] ?? null;
-  const hasOngoingCall = callSessions.hasAnyOngoingCall || callState === 'connected';
-  const showOngoingBanner = tabsFocused && hasOngoingCall && !coverTabs;
+  // COWORK fix (2026-07-13): a lingering/zombie session from a cold-answer
+  // re-delivery can leave the multi-call map (`hasAnyOngoingCall`) reporting an
+  // "ongoing" call after the real call has already ended, which stranded this
+  // banner (the green pill) on screen. The SIP aggregate `callState` reliably
+  // returns to "ended"/"idle" when the last live SIP leg dies, so treat
+  // idle/ended as "no live call" and hide the pill — UNLESS there is a
+  // genuinely held (parked) call. Display-only; never touches the
+  // answer/register path.
+  const callLayerEnded = callState === 'idle' || callState === 'ended';
+  const hasHeldCall = callSessions.heldCalls.length > 0;
+  const hasOngoingCall =
+    (callSessions.hasAnyOngoingCall || callState === 'connected') &&
+    (!callLayerEnded || hasHeldCall);
+  // COWORK iOS fix (2026-07-15): the flip side of the zombie-session bug — on
+  // a cold-answer re-delivery (and some session-map misses) the live call is
+  // bridged on a session the map never marks "active", so `bannerSession` is
+  // null and the pill never shows DURING the call. When the SIP layer says
+  // "connected" but the map has nothing, drive the pill from SIP-level state
+  // (remoteParty + callConnectedAt). iOS-ONLY by owner directive: on Android
+  // this flag is hard-false and every expression below reduces to its
+  // previous value. Display-only; never touches the answer/register path.
+  const iosSipBannerFallback =
+    Platform.OS === 'ios' && callState === 'connected' && !bannerSession;
+  const showOngoingBanner =
+    tabsFocused && hasOngoingCall && (!!bannerSession || iosSipBannerFallback) && !coverTabs;
   const bannerName =
-    bannerSession?.remoteName?.trim() || bannerSession?.remoteNumber || 'Ongoing call';
-  const bannerConnectedAt = bannerSession?.answeredAt ?? null;
+    bannerSession?.remoteName?.trim() ||
+    bannerSession?.remoteNumber ||
+    (iosSipBannerFallback && remoteParty ? remoteParty : 'Ongoing call');
+  // Timer fallback applies whenever the session map lacks answeredAt (both the
+  // no-session case above and a tracked-but-never-activated session). On
+  // Android callConnectedAt is always null, so this line is inert there.
+  const bannerConnectedAt =
+    bannerSession?.answeredAt ?? (Platform.OS === 'ios' ? callConnectedAt : null);
 
   return (
     <>

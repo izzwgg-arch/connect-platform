@@ -2213,7 +2213,8 @@ export function NotificationsProvider({
         // re-routes the INVITE within Timer B (~32s) to the fresh Contact.
         const sipSocketLooksStale =
           sip.registrationState === "registered" && sip.callState === "idle";
-        const shouldForceSipRefresh = sipLooksUnready || sipSocketLooksStale;
+        // COWORK cold-answer fix (2026-07-13): on iOS cold answer HOLD the fresh wake registration - never force-restart on the stale-socket heuristic, which mints a new rotated Contact and makes the server Mode-B re-delivery target a dead contact (voicemail). Proven live 1783981096.246385. Warm iOS + Android unchanged (earlyColdAcceptSent=false for them).
+        const shouldForceSipRefresh = earlyColdAcceptSent ? sipLooksUnready : (sipLooksUnready || sipSocketLooksStale);
         const wasAlreadyRegistered = sip.registrationState === "registered";
         // When the socket looks stale we MUST retry register() a few times —
         // the first ua.stop()/new UA() cycle can race with the WebSocket being
@@ -4247,6 +4248,30 @@ export function NotificationsProvider({
             console.warn("[VOIP_PUSH] onIncoming missing callId — cannot report to CallKit");
             return;
           }
+          // COWORK build 20 (2026-07-16): server-driven CANCEL VoIP push
+          // (cancel="1"). The NATIVE handler has already ended the CallKit
+          // call(s); here we only clean JS invite state so no recovery path
+          // resurrects the call. Must NEVER fall through to payloadToInvite
+          // below — that would fabricate a fresh incoming call out of a
+          // cancellation.
+          const cancelFlag = String((payload as any)?.cancel ?? "");
+          if (cancelFlag === "1" || cancelFlag === "true" || (payload as any)?.type === "INVITE_CANCELED") {
+            const altId = String((payload as any)?.altCallId || "");
+            console.log("[VOIP_PUSH] cancel push — clearing invite state callId=", callId, "altCallId=", altId || "(none)");
+            suppressedIncomingInviteIdsRef.current.add(callId);
+            if (altId) suppressedIncomingInviteIdsRef.current.add(altId);
+            endNativeCall(callId);
+            if (altId && altId !== callId) endNativeCall(altId);
+            setIncomingInvite((prev) => {
+              if (!prev || (prev.id !== callId && prev.id !== altId)) return prev;
+              clearExpireTimer();
+              shownInviteIdRef.current = null;
+              setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
+              AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+              return null;
+            });
+            return;
+          }
           // If this call was already canceled/answered-elsewhere, don't resurrect
           // it; make sure CallKit clears any stale report instead.
           if (suppressedIncomingInviteIdsRef.current.has(callId)) {
@@ -4275,7 +4300,7 @@ export function NotificationsProvider({
           emitAnswerFlowEvent("INCOMING_PUSH_RECEIVED", invite, { source: "ios_voip_push" });
 
           // 1) Report to CallKit FIRST (idempotent — deduped in callkeep.ts).
-          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
           // 2) Persist invite state so resolveInviteForAction can answer/decline
           //    without a race (safeSetInvite also dedupes via shownInviteIdRef).
           safeSetInvite(invite);
@@ -4333,14 +4358,34 @@ export function NotificationsProvider({
       onEnd: async (callId) => {
         const invite = await resolveInviteForAction(callId);
         const acceptKey = invite ? ("accept:" + invite.id) : null;
+        // "Already answered" = the app recorded an accept for this invite (only
+        // added AFTER the answer succeeds, so it is false during the vulnerable
+        // answer-race window) OR the SIP call is currently connected. The
+        // connected fallback matters for a cold lock-screen answer where the
+        // invite is no longer resolvable, so a later CallKit endCall is still
+        // recognised as a real hangup rather than a ring decline.
         const alreadyAnswered =
-          !!acceptKey && consumedInviteActionRef.current.has(acceptKey);
+          (!!acceptKey && consumedInviteActionRef.current.has(acceptKey)) ||
+          sip.callState === "connected";
+        // COWORK fix (2026-07-13): a real hangup of an ESTABLISHED call must BYE
+        // the active SIP session. handleDeclineInvite only sends a ring DECLINE
+        // (respondInvite DECLINE + rejectIncomingInvite -> 486), which does NOT
+        // tear down a confirmed dialog — so the call stayed up (lock-screen
+        // "hang up doesn't hang up") and the ongoing-call banner stayed stuck.
+        // Terminate the live session instead. Same end-immediately gating as
+        // before (this branch previously ran handleDeclineInvite); only the
+        // teardown mechanism changed, so the answer race is unaffected.
+        if (alreadyAnswered) {
+          endNativeCall(callId);
+          await sip.hangup().catch(() => undefined);
+          return;
+        }
         // iOS cold-answer race guard: a stray CallKit endCall can fire around
         // the answer tap and beat it, declining our own still-ringing invite so
         // the caller lands in voicemail. For a not-yet-answered call, defer the
-        // decline; onAnswer cancels it when the user is answering. An already-
-        // answered call ends immediately (real hangup). Android is unchanged.
-        if (Platform.OS === "ios" && !alreadyAnswered) {
+        // decline; onAnswer cancels it when the user is answering. Android is
+        // unchanged.
+        if (Platform.OS === "ios") {
           if (!pendingDeclineTimersRef.current.has(callId)) {
             const timer = setTimeout(() => {
               pendingDeclineTimersRef.current.delete(callId);
@@ -4713,7 +4758,7 @@ export function NotificationsProvider({
                 // Android now wakes directly into the branded Connect screen
                 // instead of CallKeep's telecom UI.
                 if (Platform.OS !== "android") {
-                  showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+                  showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
                 }
                 nativeCacheClaimed = true;
                 if (diagSessionIdRef.current) {
@@ -4748,7 +4793,7 @@ export function NotificationsProvider({
             const invite = payloadToInvite(cached);
             safeSetInvite(invite);
             if (Platform.OS !== "android") {
-              showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+              showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
             }
           }
 
@@ -4784,7 +4829,7 @@ export function NotificationsProvider({
         const invite = pending[0] as CallInvite;
         safeSetInvite(invite);
         if (Platform.OS !== "android") {
-          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
         }
 
         if (diagSessionIdRef.current) {
@@ -4903,7 +4948,7 @@ export function NotificationsProvider({
 
         safeSetInvite(invite);
         if (Platform.OS !== "android") {
-          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          showIncomingNativeCall(invite.id, invite.fromNumber || invite.fromDisplay || "", invite.fromDisplay);
         }
 
         const sid = diagSessionIdRef.current;
