@@ -840,6 +840,7 @@ model Tenant {
   didRouteMappings                DidRouteMapping[]
   outboundRoutes                  OutboundRoute[]
   userOutboundRoutePermissions    UserOutboundRoutePermission[]
+  userSipAccounts                 UserSipAccount[]
   mohAssets                       MohAsset[]
   crmVoicemailDrops               CrmVoicemailDrop[]
   pbxMohClasses                   PbxMohClass[]
@@ -1004,6 +1005,7 @@ model User {
   crmFormRequestsCreated         CrmFormRequest[]  @relation("CrmFormRequestCreatedBy")
   webrtcCallingIncidentDismissals WebrtcCallingIncidentDismissal[]
   webrtcPlatformOutageDismissals   WebrtcPlatformOutageDismissal[]
+  sipAccounts                    UserSipAccount[]                  @relation("UserSipAccountUser")
 }
 
 enum UserRole {
@@ -2362,6 +2364,33 @@ model UserOutboundRoutePermission {
   @@index([tenantId, outboundRouteId])
 }
 
+/// Additional SIP account attached to a Connect user — links the user to an
+/// extension that may live in a DIFFERENT tenant, so one WebRTC/mobile phone
+/// can register several extensions from several tenants at once. The user's
+/// primary extension stays modelled by Extension.ownerUserId (untouched);
+/// rows here are strictly additive extra lines. Hard cap of 5 SIP accounts
+/// per user (primary + 4 extra) is enforced in the API layer.
+model UserSipAccount {
+  id          String    @id @default(cuid())
+  userId      String
+  /// Tenant the linked extension belongs to (NOT necessarily the user's tenant).
+  tenantId    String
+  extensionId String
+  /// Display label in the dialer dropdown; defaults to the tenant name when null.
+  label       String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation("UserSipAccountUser", fields: [userId], references: [id], onDelete: Cascade)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension   Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, extensionId])
+  @@index([userId])
+  @@index([tenantId])
+  @@index([extensionId])
+}
+
 model UserPasswordToken {
   id            String                @id @default(cuid())
   userId        String
@@ -2559,6 +2588,7 @@ model Extension {
   tenantSmsNumbersAssigned TenantSmsNumber[]        @relation("TenantSmsNumberAssignExtension")
   connectChatParticipants  ConnectChatParticipant[] @relation("ConnectChatParticipantExtension")
   mobileDevices            MobileDevice[]
+  userSipAccounts          UserSipAccount[]
 
   @@unique([tenantId, extNumber])
   @@index([tenantId, status])

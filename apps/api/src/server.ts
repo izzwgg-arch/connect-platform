@@ -2509,6 +2509,9 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/voice/me/extension", permission: "can_view_workspace_overview" },
   { prefix: "/me/outbound-routes", permission: "can_view_workspace_overview" },
   { prefix: "/voice/me/reset-sip-password", permission: "can_view_workspace_overview" },
+  // Multi-tenant SIP accounts for the logged-in user's own dialer — same bar
+  // as the primary softphone config above.
+  { prefix: "/voice/me/sip-accounts", permission: "can_view_workspace_overview" },
   { prefix: "/voice/mobile-provisioning", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/webrtc", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
@@ -6079,6 +6082,607 @@ app.put("/admin/users/:id/outbound-routes", async (req, reply) => {
     metadata: { routeIds, defaultRouteId },
   });
   return { ok: true, userId: target.id, tenantId: target.tenantId, routeIds, defaultRouteId };
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Multi-tenant SIP accounts per user ("second phone line" in the dialer).
+//
+// A UserSipAccount row links a Connect user to an EXTRA extension — possibly in
+// a different tenant — on top of the primary extension (Extension.ownerUserId,
+// untouched). The portal WebRTC phone registers each ready account as its own
+// SIP registration; the dialer dropdown mixes outbound-route prefixes and SIP
+// accounts. Everything here is additive: users without accounts see no change.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const MAX_SIP_ACCOUNTS_PER_USER = 5; // primary extension + up to 4 extra lines
+
+function formatUserSipAccount(row: any) {
+  const link = row.extension?.pbxLink || null;
+  return {
+    id: row.id,
+    userId: row.userId,
+    tenantId: row.tenantId,
+    tenantName: row.tenant?.name || null,
+    extensionId: row.extensionId,
+    extNumber: row.extension?.extNumber || null,
+    displayName: row.extension?.displayName || null,
+    label: row.label || row.tenant?.name || null,
+    sortOrder: row.sortOrder || 0,
+    webrtcEnabled: !!link?.webrtcEnabled,
+    hasSipPassword: !!link?.sipPasswordEncrypted,
+    provisionStatus: link ? (link.provisionStatus || "PENDING") : "NOT_LINKED",
+    endpointName: link?.pbxDeviceName || link?.pbxSipUsername || null,
+    createdAt: row.createdAt,
+  };
+}
+
+const userSipAccountInclude = {
+  tenant: { select: { id: true, name: true } },
+  extension: { include: { pbxLink: true } },
+} as const;
+
+async function loadUserSipAccount(userId: string, accountId: string): Promise<any | null> {
+  return (db as any).userSipAccount.findFirst({
+    where: { id: accountId, userId },
+    include: userSipAccountInclude,
+  });
+}
+
+// GET /admin/users/:id/sip-accounts — list a user's extra SIP accounts.
+app.get("/admin/users/:id/sip-accounts", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const rows = await (db as any).userSipAccount.findMany({
+    where: { userId: target.id },
+    include: userSipAccountInclude,
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  return { userId: target.id, accounts: rows.map((r: any) => formatUserSipAccount(r)) };
+});
+
+// GET /admin/users/sip-accounts-summary?userIds=a,b,c — batch fetch for the
+// Users table so it can show extra-account rows without N+1 requests.
+app.get("/admin/users/sip-accounts-summary", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const query = z.object({ userIds: z.string().min(1).max(4000) }).parse(req.query || {});
+  const ids = Array.from(new Set(query.userIds.split(",").map((s) => s.trim()).filter(Boolean))).slice(0, 200);
+  if (!ids.length) return { accountsByUser: {} };
+  const userWhere: Record<string, unknown> =
+    admin.role === "SUPER_ADMIN" ? { id: { in: ids } } : { id: { in: ids }, tenantId: admin.tenantId };
+  const visibleUsers = await db.user.findMany({ where: userWhere as any, select: { id: true } });
+  const visibleIds = visibleUsers.map((u) => u.id);
+  if (!visibleIds.length) return { accountsByUser: {} };
+  const rows = await (db as any).userSipAccount.findMany({
+    where: { userId: { in: visibleIds } },
+    include: userSipAccountInclude,
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  const accountsByUser: Record<string, unknown[]> = {};
+  for (const row of rows) {
+    (accountsByUser[row.userId] ||= []).push(formatUserSipAccount(row));
+  }
+  return { accountsByUser };
+});
+
+// POST /admin/users/:id/sip-accounts — attach an extension (from any tenant the
+// admin can manage) to this user as an extra SIP account.
+app.post("/admin/users/:id/sip-accounts", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z
+    .object({
+      tenantId: z.string().trim().min(1),
+      extensionId: z.string().trim().min(1),
+      label: z.string().trim().max(80).optional().nullable(),
+    })
+    .parse(req.body || {});
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  // Tenant admins may only attach extensions from their own tenant; only
+  // SUPER_ADMIN can link across tenants.
+  if (admin.role !== "SUPER_ADMIN" && input.tenantId !== admin.tenantId) {
+    return reply.status(403).send({ error: "cross_tenant_not_allowed" });
+  }
+  const tenant = await db.tenant.findUnique({ where: { id: input.tenantId }, select: { id: true, name: true } });
+  if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+  const tenantLink = await db.tenantPbxLink.findUnique({ where: { tenantId: tenant.id } });
+  if (!tenantLink) return reply.status(400).send({ error: "PBX_NOT_LINKED", message: `Tenant ${tenant.name} is not linked to the PBX.` });
+  const ext = await db.extension.findFirst({
+    where: { id: input.extensionId, tenantId: tenant.id, status: "ACTIVE" },
+    include: { pbxLink: true } as any,
+  });
+  if (!ext) return reply.status(404).send({ error: "extension_not_found" });
+  if (ext.ownerUserId === target.id) {
+    return reply.status(400).send({ error: "extension_is_primary", message: "This extension is already the user's primary extension." });
+  }
+  const existingCount = await (db as any).userSipAccount.count({ where: { userId: target.id } });
+  if (existingCount >= MAX_SIP_ACCOUNTS_PER_USER - 1) {
+    return reply.status(400).send({
+      error: "sip_account_limit_reached",
+      message: `A user can have at most ${MAX_SIP_ACCOUNTS_PER_USER} SIP accounts (primary extension + ${MAX_SIP_ACCOUNTS_PER_USER - 1} extra).`,
+    });
+  }
+  const dupe = await (db as any).userSipAccount.findFirst({ where: { userId: target.id, extensionId: ext.id } });
+  if (dupe) return reply.status(409).send({ error: "sip_account_already_linked" });
+  const created = await (db as any).userSipAccount.create({
+    data: {
+      userId: target.id,
+      tenantId: tenant.id,
+      extensionId: ext.id,
+      label: (input.label || "").trim() || null,
+      sortOrder: existingCount,
+    },
+    include: userSipAccountInclude,
+  });
+  await audit({
+    tenantId: target.tenantId,
+    actorUserId: admin.sub,
+    targetUserId: target.id,
+    action: "USER_SIP_ACCOUNT_ADDED",
+    entityType: "UserSipAccount",
+    entityId: created.id,
+    metadata: { accountTenantId: tenant.id, accountTenantName: tenant.name, extensionId: ext.id, extNumber: ext.extNumber },
+  });
+  return { ok: true, account: formatUserSipAccount(created) };
+});
+
+// DELETE /admin/users/:id/sip-accounts/:accountId — detach an extra SIP account.
+app.delete("/admin/users/:id/sip-accounts/:accountId", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id, accountId } = req.params as { id: string; accountId: string };
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const account = await loadUserSipAccount(target.id, accountId);
+  if (!account) return reply.status(404).send({ error: "sip_account_not_found" });
+  await (db as any).userSipAccount.delete({ where: { id: account.id } });
+  // Clean up this user's outbound-route permissions in the account's tenant —
+  // but NEVER when that tenant is the user's own tenant (those belong to the
+  // primary extension) and only when no other extra account still uses it.
+  if (account.tenantId !== target.tenantId) {
+    const stillLinked = await (db as any).userSipAccount.count({
+      where: { userId: target.id, tenantId: account.tenantId },
+    });
+    if (stillLinked === 0) {
+      await (db as any).userOutboundRoutePermission.deleteMany({
+        where: { userId: target.id, tenantId: account.tenantId },
+      });
+    }
+  }
+  await audit({
+    tenantId: target.tenantId,
+    actorUserId: admin.sub,
+    targetUserId: target.id,
+    action: "USER_SIP_ACCOUNT_REMOVED",
+    entityType: "UserSipAccount",
+    entityId: account.id,
+    metadata: { accountTenantId: account.tenantId, extensionId: account.extensionId },
+  });
+  return { ok: true, removed: true };
+});
+
+// POST /admin/users/:id/sip-accounts/:accountId/sync — re-run the PBX sync for
+// the ACCOUNT's tenant and report truthful provisioning state for that
+// extension (same semantics as /admin/users/:id/phone/sync, scoped to the
+// extra account instead of the primary extension).
+app.post("/admin/users/:id/sip-accounts/:accountId/sync", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id, accountId } = req.params as { id: string; accountId: string };
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const account = await loadUserSipAccount(target.id, accountId);
+  if (!account) return reply.status(404).send({ error: "sip_account_not_found" });
+
+  const tenantLink = await db.tenantPbxLink.findUnique({
+    where: { tenantId: account.tenantId },
+    include: { pbxInstance: true },
+  });
+  if (!tenantLink) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+
+  try {
+    const auth = decryptJson<{ token: string; secret?: string }>(tenantLink.pbxInstance.apiAuthEncrypted);
+    const vital = getVitalPbxClient({ baseUrl: tenantLink.pbxInstance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45000 });
+    await syncExtensionsFromPbx(db, tenantLink.pbxInstanceId, vital, {
+      ...(tenantLink.pbxTenantId ? { vitalTenantId: tenantLink.pbxTenantId } : {}),
+    });
+  } catch (err: any) {
+    await audit({
+      tenantId: target.tenantId,
+      actorUserId: admin.sub,
+      targetUserId: target.id,
+      action: "USER_SIP_ACCOUNT_SYNC_FAILED",
+      entityType: "UserSipAccount",
+      entityId: account.id,
+      metadata: { error: String(err?.message || err) },
+    });
+    return reply.status(502).send({ error: "pbx_sync_failed", message: String(err?.message || err) });
+  }
+
+  // The extension may only have gained its pbxLink during the sync above.
+  let linkRow = await db.pbxExtensionLink.findFirst({ where: { extensionId: account.extensionId } });
+  if (!linkRow) {
+    return reply.status(409).send({
+      error: "extension_not_linked_to_pbx",
+      message: `Extension ${account.extension?.extNumber || ""} exists in Connect but has no PBX link even after sync. Check that it exists on the PBX for this tenant.`,
+    });
+  }
+
+  let hasPassword = !!(linkRow as any).sipPasswordEncrypted;
+  let webrtcEnabled = !!linkRow.webrtcEnabled;
+  let createdWebrtcDevice = false;
+  if (!webrtcEnabled || !hasPassword) {
+    // Best-effort WebRTC device creation, mirroring the primary phone/sync path.
+    try {
+      const wireAuth = decryptJson<{ token: string; secret?: string }>(tenantLink.pbxInstance.apiAuthEncrypted);
+      const out = await getWirePbxClient({
+        baseUrl: tenantLink.pbxInstance.baseUrl,
+        token: wireAuth.token,
+        secret: wireAuth.secret,
+        timeoutMs: 45000,
+      }).createSipDevice({ pbxExtensionId: linkRow.pbxExtensionId, enableWebrtc: true });
+      if (out?.sipPassword) {
+        linkRow = await db.pbxExtensionLink.update({
+          where: { id: linkRow.id },
+          data: {
+            pbxDeviceId: (out as any).pbxDeviceId || (linkRow as any).pbxDeviceId || null,
+            pbxSipUsername: (out as any).sipUsername || linkRow.pbxSipUsername,
+            pbxDeviceName: (out as any).sipUsername || (linkRow as any).pbxDeviceName || null,
+            sipPasswordEncrypted: encryptJson(out.sipPassword),
+            sipPasswordIssuedAt: new Date(),
+            webrtcEnabled: true,
+            provisionStatus: "PROVISIONED" as any,
+            provisionSource: "PBX_GENERATED" as any,
+            lastProvisionedAt: new Date(),
+          } as any,
+        });
+        hasPassword = true;
+        webrtcEnabled = true;
+        createdWebrtcDevice = true;
+      }
+    } catch {
+      // VitalPBX 4 may not expose device creation — fall through to the
+      // truthful 409 below with manual instructions.
+    }
+  }
+
+  const ready = webrtcEnabled && hasPassword;
+  await db.pbxExtensionLink.update({
+    where: { id: linkRow.id },
+    data: {
+      provisionStatus: (ready ? "PROVISIONED" : "PENDING") as any,
+      provisionSource: (ready ? ((linkRow as any).provisionSource || "PBX_EXISTING") : null) as any,
+      lastProvisionedAt: new Date(),
+    } as any,
+  });
+
+  if (!ready) {
+    const extLabel = account.extension?.extNumber || "this extension";
+    const reason = !webrtcEnabled ? "NO_WEBRTC_DEVICE_ON_PBX" : "SIP_CREDENTIAL_NOT_SET";
+    const message = !webrtcEnabled
+      ? `VitalPBX extension ${extLabel} has no WebRTC device. Add a "_1" device with WebRTC Client enabled in VitalPBX, Apply Changes, then click Sync SIP again.`
+      : `VitalPBX extension ${extLabel} has a WebRTC device but no SIP secret was returned. Regenerate its password in VitalPBX, Apply Changes, then click Sync SIP again.`;
+    await audit({
+      tenantId: target.tenantId,
+      actorUserId: admin.sub,
+      targetUserId: target.id,
+      action: "USER_SIP_ACCOUNT_SYNC_NO_WEBRTC",
+      entityType: "UserSipAccount",
+      entityId: account.id,
+      metadata: { webrtcEnabled, hasPassword },
+    });
+    return reply.status(409).send({ error: reason, message, provisionStatus: "PENDING", webrtcEnabled, hasSipPassword: hasPassword });
+  }
+
+  await audit({
+    tenantId: target.tenantId,
+    actorUserId: admin.sub,
+    targetUserId: target.id,
+    action: "USER_SIP_ACCOUNT_SYNC_OK",
+    entityType: "UserSipAccount",
+    entityId: account.id,
+    metadata: { createdWebrtcDevice },
+  });
+  return {
+    ok: true,
+    provisionStatus: "PROVISIONED",
+    hasSipPassword: true,
+    webrtcEnabled: true,
+    createdWebrtcDevice,
+    endpointName: (linkRow as any).pbxDeviceName || linkRow.pbxSipUsername || null,
+  };
+});
+
+// GET /admin/users/:id/sip-accounts/:accountId/outbound-routes — outbound-route
+// assignment for the ACCOUNT's tenant (same shape as the primary endpoint).
+app.get("/admin/users/:id/sip-accounts/:accountId/outbound-routes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id, accountId } = req.params as { id: string; accountId: string };
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const account = await loadUserSipAccount(target.id, accountId);
+  if (!account) return reply.status(404).send({ error: "sip_account_not_found" });
+  const [routes, permissions] = await Promise.all([
+    (db as any).outboundRoute.findMany({
+      where: { tenantId: account.tenantId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    }),
+    (db as any).userOutboundRoutePermission.findMany({
+      where: { tenantId: account.tenantId, userId: target.id },
+    }),
+  ]);
+  const byRoute = new Map<string, any>(permissions.map((p: any) => [p.outboundRouteId, p]));
+  return {
+    tenantId: account.tenantId,
+    userId: target.id,
+    accountId: account.id,
+    routes: routes.map((r: any) => formatOutboundRoute(r, byRoute.get(r.id))),
+  };
+});
+
+// PUT /admin/users/:id/sip-accounts/:accountId/outbound-routes — replace this
+// user's route permissions WITHIN the account's tenant only.
+app.put("/admin/users/:id/sip-accounts/:accountId/outbound-routes", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id, accountId } = req.params as { id: string; accountId: string };
+  const input = outboundRouteAssignmentSchema.parse(req.body || {});
+  const target = await resolveAdminTargetUser(admin, id);
+  if (!target) return reply.status(404).send({ error: "user_not_found" });
+  const account = await loadUserSipAccount(target.id, accountId);
+  if (!account) return reply.status(404).send({ error: "sip_account_not_found" });
+  const enabled = input.routes.filter((r) => r.enabled !== false);
+  const routeIds = Array.from(new Set(enabled.map((r) => r.outboundRouteId)));
+  const validRoutes = routeIds.length
+    ? await (db as any).outboundRoute.findMany({ where: { id: { in: routeIds }, tenantId: account.tenantId, isActive: true }, select: { id: true } })
+    : [];
+  const validIds = new Set(validRoutes.map((r: any) => r.id));
+  const invalidIds = routeIds.filter((routeId) => !validIds.has(routeId));
+  if (invalidIds.length) return reply.status(400).send({ error: "invalid_outbound_route", routeIds: invalidIds });
+  const requestedDefault = enabled.find((r) => r.isDefault === true)?.outboundRouteId || null;
+  const defaultRouteId = requestedDefault && validIds.has(requestedDefault) ? requestedDefault : null;
+  await (db as any).$transaction(async (tx: any) => {
+    await tx.userOutboundRoutePermission.deleteMany({ where: { tenantId: account.tenantId, userId: target.id } });
+    if (routeIds.length) {
+      await tx.userOutboundRoutePermission.createMany({
+        data: routeIds.map((routeId) => ({
+          tenantId: account.tenantId,
+          userId: target.id,
+          outboundRouteId: routeId,
+          enabled: true,
+          isDefault: routeId === defaultRouteId,
+        })),
+      });
+    }
+  });
+  await audit({
+    tenantId: target.tenantId,
+    actorUserId: admin.sub,
+    targetUserId: target.id,
+    action: "USER_SIP_ACCOUNT_ROUTES_UPDATED",
+    entityType: "UserSipAccount",
+    entityId: account.id,
+    metadata: { accountTenantId: account.tenantId, routeIds, defaultRouteId },
+  });
+  return { ok: true, userId: target.id, tenantId: account.tenantId, accountId: account.id, routeIds, defaultRouteId };
+});
+
+// GET /voice/me/sip-accounts — the logged-in user's extra SIP accounts with the
+// full per-tenant WebRTC config each account needs to register. No passwords.
+app.get("/voice/me/sip-accounts", async (req, reply) => {
+  const user = getUser(req);
+  if (!checkBillingRateLimit(`sip-accounts-fetch:${user.sub}`, 120, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const rows = await (db as any).userSipAccount.findMany({
+    where: { userId: user.sub },
+    include: { tenant: true, extension: { include: { pbxLink: true } } },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  if (!rows.length) return { accounts: [] };
+
+  const accounts: unknown[] = [];
+  for (const row of rows) {
+    const tenant = row.tenant;
+    const tenantLink = await db.tenantPbxLink.findUnique({
+      where: { tenantId: row.tenantId },
+      include: { pbxInstance: true },
+    });
+    const pbxLinkRow = row.extension?.pbxLink || null;
+    const turnCfg = await getEffectiveTurnConfig(row.tenantId).catch(() => null);
+    const cfg = tenantLink ? resolveWebrtcConfig(tenant, tenantLink, turnCfg) : null;
+    const identity = pbxLinkRow
+      ? resolveWebrtcSipIdentity(pbxLinkRow as any)
+      : { sipUsername: null as string | null, authUsername: null as string | null };
+    const routeRows = await (db as any).userOutboundRoutePermission.findMany({
+      where: {
+        tenantId: row.tenantId,
+        userId: user.sub,
+        enabled: true,
+        outboundRoute: { isActive: true, tenantId: row.tenantId },
+      },
+      include: { outboundRoute: true },
+    });
+    routeRows.sort((a: any, b: any) => {
+      if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+      const sortDelta = (a.outboundRoute?.sortOrder || 0) - (b.outboundRoute?.sortOrder || 0);
+      if (sortDelta) return sortDelta;
+      return String(a.outboundRoute?.name || "").localeCompare(String(b.outboundRoute?.name || ""));
+    });
+    const ready = !!(
+      cfg?.webrtcEnabled &&
+      cfg?.sipWsUrl &&
+      cfg?.sipDomain &&
+      identity.sipUsername &&
+      pbxLinkRow?.webrtcEnabled &&
+      (pbxLinkRow as any)?.sipPasswordEncrypted &&
+      !pbxLinkRow?.isSuspended
+    );
+    accounts.push({
+      id: row.id,
+      tenantId: row.tenantId,
+      tenantName: tenant?.name || null,
+      label: row.label || tenant?.name || "Second line",
+      extensionNumber: row.extension?.extNumber || null,
+      displayName: row.extension?.displayName || null,
+      sipUsername: identity.sipUsername,
+      authUsername: identity.authUsername ?? identity.sipUsername,
+      hasSipPassword: !!(pbxLinkRow as any)?.sipPasswordEncrypted,
+      webrtcEnabled: !!(cfg?.webrtcEnabled && pbxLinkRow?.webrtcEnabled),
+      ready,
+      sipWsUrl: cfg?.sipWsUrl ?? null,
+      sipDomain: cfg?.sipDomain ?? null,
+      outboundProxy: cfg?.outboundProxy ?? null,
+      iceServers: cfg?.iceServers ?? [],
+      dtmfMode: cfg?.dtmfMode ?? "RFC2833",
+      routes: routeRows.map((p: any) => formatPublicOutboundRoute(p.outboundRoute, p)),
+    });
+  }
+  return { accounts };
+});
+
+// POST /voice/me/sip-accounts/:accountId/reset-sip-password — issue the SIP
+// credential for ONE extra account to its owner (mirror of
+// /voice/me/reset-sip-password for the primary extension).
+app.post("/voice/me/sip-accounts/:accountId/reset-sip-password", async (req, reply) => {
+  const user = getUser(req);
+  const { accountId } = req.params as { accountId: string };
+  if (!checkBillingRateLimit(`sip-provision-acct:${user.sub}`, 60, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const account = await loadUserSipAccount(user.sub, accountId);
+  if (!account) return reply.status(404).send({ error: "SIP_ACCOUNT_NOT_FOUND" });
+  const tenantLink = await db.tenantPbxLink.findUnique({
+    where: { tenantId: account.tenantId },
+    include: { pbxInstance: true },
+  });
+  if (!tenantLink) return reply.status(400).send({ error: "PBX_NOT_LINKED" });
+  const linkRow = account.extension?.pbxLink;
+  if (!linkRow) {
+    return reply.status(404).send({
+      error: "EXTENSION_NOT_PROVISIONED",
+      extensionNumber: account.extension?.extNumber || null,
+      message: "This SIP account's extension is not linked to the PBX yet. Ask an administrator to sync it.",
+    });
+  }
+  if (linkRow.isSuspended) return reply.status(403).send({ error: "EXTENSION_SUSPENDED" });
+
+  let sipPassword = "";
+  if (voiceSimulate) {
+    sipPassword = `sim-webrtc-${Date.now()}`;
+  } else if ((linkRow as any).sipPasswordEncrypted) {
+    sipPassword = decryptJson<string>((linkRow as any).sipPasswordEncrypted);
+  } else {
+    try {
+      const auth = decryptJson<{ token: string; secret?: string }>(tenantLink.pbxInstance.apiAuthEncrypted);
+      const out = await getWirePbxClient({ baseUrl: tenantLink.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }).resetPassword(linkRow.pbxExtensionId);
+      sipPassword = out.sipPassword;
+    } catch {
+      return reply.status(400).send({ error: "SIP_CREDENTIAL_NOT_SET" });
+    }
+  }
+  if (!sipPassword) return reply.status(400).send({ error: "SIP_CREDENTIAL_NOT_SET" });
+
+  await db.pbxExtensionLink.update({ where: { id: linkRow.id }, data: { sipPasswordIssuedAt: new Date() } });
+  const tenant = await db.tenant.findUnique({ where: { id: account.tenantId } });
+  const turnCfg = await getEffectiveTurnConfig(account.tenantId).catch(() => null);
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: user.sub,
+    action: "VOICE_ME_SIP_ACCOUNT_PASSWORD_ISSUED",
+    entityType: "UserSipAccount",
+    entityId: account.id,
+    metadata: { accountTenantId: account.tenantId },
+  });
+  return {
+    accountId: account.id,
+    sipPassword,
+    provisioning: buildVoiceProvisioningBundle(tenant, tenantLink, linkRow, sipPassword, turnCfg),
+  };
+});
+
+// POST /voice/me/sip-accounts/resolve-dial — apply an (optional) outbound-route
+// prefix from the ACCOUNT's tenant before dialing from that account.
+app.post("/voice/me/sip-accounts/resolve-dial", async (req, reply) => {
+  const user = getUser(req);
+  const input = z
+    .object({
+      number: z.string().trim().min(1).max(80),
+      accountId: z.string().trim().min(1),
+      outboundRouteId: z.string().trim().min(1).optional().nullable(),
+    })
+    .parse(req.body || {});
+  const account = await loadUserSipAccount(user.sub, input.accountId);
+  if (!account) return reply.status(404).send({ error: "SIP_ACCOUNT_NOT_FOUND" });
+  const originalNumber = input.number.trim();
+  const normalizedNumber = normalizeOutboundDialTarget(originalNumber);
+  if (!normalizedNumber) return reply.status(400).send({ error: "invalid_number" });
+
+  if (!input.outboundRouteId) {
+    return {
+      originalNumber,
+      normalizedNumber,
+      finalNumber: normalizedNumber,
+      accountId: account.id,
+      outboundRouteId: null,
+      outboundRouteName: null,
+      prefixApplied: false,
+    };
+  }
+  const permission = await (db as any).userOutboundRoutePermission.findFirst({
+    where: {
+      tenantId: account.tenantId,
+      userId: user.sub,
+      outboundRouteId: input.outboundRouteId,
+      enabled: true,
+      outboundRoute: { tenantId: account.tenantId, isActive: true },
+    },
+    include: { outboundRoute: true },
+  });
+  if (!permission?.outboundRoute) {
+    await audit({
+      tenantId: user.tenantId,
+      actorUserId: user.sub,
+      action: "OUTBOUND_ROUTE_DIAL_DENIED",
+      entityType: "OutboundRoute",
+      entityId: input.outboundRouteId,
+      metadata: { originalNumber, accountId: account.id, reason: "route_not_allowed" },
+    });
+    return reply.status(403).send({ error: "outbound_route_not_allowed" });
+  }
+  const resolved = applyInternalOutboundPrefix(normalizedNumber, permission.outboundRoute.prefix);
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: user.sub,
+    action: "OUTBOUND_ROUTE_DIAL_RESOLVED",
+    entityType: "OutboundRoute",
+    entityId: permission.outboundRoute.id,
+    metadata: {
+      routeName: permission.outboundRoute.name,
+      accountId: account.id,
+      accountTenantId: account.tenantId,
+      originalNumber,
+      normalizedNumber,
+      finalNumber: resolved.finalNumber,
+      prefixApplied: resolved.prefixApplied,
+      emergencyBypass: isEmergencyOutboundDialTarget(normalizedNumber),
+    },
+  });
+  return {
+    originalNumber,
+    normalizedNumber,
+    finalNumber: resolved.finalNumber,
+    accountId: account.id,
+    outboundRouteId: permission.outboundRoute.id,
+    outboundRouteName: permission.outboundRoute.name,
+    prefixApplied: resolved.prefixApplied,
+  };
 });
 
 registerAdminUserCrmAccessRoutes(app, {

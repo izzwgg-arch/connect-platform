@@ -1023,7 +1023,7 @@ export function FloatingDialer() {
 
             {!isInCall && (
               <div className="fd-body">
-                {phone.outboundRoutes.length ? (
+                {phone.outboundRoutes.length || phone.sipAccounts.length ? (
                   <div className="fd-outbound-route">
                     <label>Outbound</label>
                     <ConnectSelect
@@ -1036,6 +1036,24 @@ export function FloatingDialer() {
                           value: route.id,
                           label: route.name,
                         })),
+                        // Extra SIP accounts (other tenants' lines) share this
+                        // dropdown — selecting one calls out from that account.
+                        ...phone.sipAccounts.flatMap((account) => {
+                          const online = phone.accountRegStates[account.id] === "registered";
+                          const suffix = online ? "" : " (offline)";
+                          return [
+                            {
+                              value: `acct:${account.id}`,
+                              label: `${account.label}${suffix}`,
+                              disabled: !online,
+                            },
+                            ...account.routes.map((route) => ({
+                              value: `acct:${account.id}|${route.id}`,
+                              label: `${account.label} · ${route.name}${suffix}`,
+                              disabled: !online,
+                            })),
+                          ];
+                        }),
                       ]}
                       style={{ width: "100%" }}
                     />

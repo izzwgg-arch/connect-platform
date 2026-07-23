@@ -5,7 +5,8 @@ import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { getSipClient } from "../sip/sipClientSingleton";
-import { postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
+import { ensureSecondarySipRegistered, getSecondarySipClient, listSecondarySipClients } from "../sip/secondaryAccounts";
+import { getSipAccountProvisioning, postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
 import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle, OutboundTraceEvent } from "../sip/types";
@@ -56,6 +57,14 @@ type SipState = {
   lastDialed: string | null;
   /** Current audio output route during a call */
   audioRoute: AudioRoute;
+  /**
+   * iOS-ONLY display fallback (2026-07-15): wall-clock ms timestamp of when
+   * the current call reached "connected"; cleared when it ends. Used by the
+   * in-call timer + ongoing-call banner when the multi-call session map has
+   * no `answeredAt` (cold-answer re-INVITE session mismatch). Always null on
+   * Android — the Android display path is intentionally untouched.
+   */
+  callConnectedAt: number | null;
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
   register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
@@ -71,6 +80,13 @@ type SipState = {
        * spawning multiple background calls.
        */
       allowSecond?: boolean;
+      /**
+       * Dial from an EXTRA SIP account (multi-tenant "second line") instead of
+       * the primary extension. The secondary client registers on demand; the
+       * primary registration is never touched. Omitted = primary line,
+       * exactly as before.
+       */
+      accountId?: string | null;
     },
   ) => Promise<void>;
   answer: () => Promise<void>;
@@ -208,6 +224,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // (closures capture stale state otherwise).
   const registrationStateRef = useRef<SipRegistrationState>("idle");
 
+  // Auth token mirror for use inside the memoised dial() (the value memo's dep
+  // list intentionally omits authToken, so read it through a ref).
+  const authTokenRef = useRef<string | null>(null);
+  useEffect(() => { authTokenRef.current = authToken ?? null; }, [authToken]);
+
   // Mirror of callState read synchronously inside dial() so the
   // "already on a call" guard isn't fooled by a stale render closure.
   const callStateRef = useRef<CallState>("idle");
@@ -216,6 +237,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // underlying client.dial() settles, so a rapid double-tap (or two different
   // call buttons pressed at once) can't fan out into several background calls.
   const dialInFlightRef = useRef(false);
+
+  // The client that owns the CURRENT call. Defaults to the primary singleton;
+  // switched to a secondary-account client while a "second line" call is live,
+  // so hangup/mute/hold/DTMF hit the right UA. Reset to primary on idle.
+  const callClientRef = useRef(clientRef.current);
 
   // Multi-call event bridge. CallSessionManager registers a listener at
   // mount; SipContext forwards onSessionAdded/Changed/Removed into it.
@@ -345,6 +371,70 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     callStateRef.current = callState;
   }, [callState]);
+
+  // When no call is live, call-control routes back to the primary client.
+  useEffect(() => {
+    if (callState === "idle") callClientRef.current = clientRef.current;
+  }, [callState]);
+
+  /**
+   * Event wiring for a secondary-account ("second line") client. Drives the
+   * SAME call-state UI as the primary client, with two deliberate omissions:
+   *   • onRegistrationState — the header/registration UI always shows the
+   *     PRIMARY line's state; a second line registering must not repaint it.
+   *   • The wake/keep-alive orchestration — secondary lines have none.
+   */
+  const buildSecondaryClientEvents = useCallback((accountId: string) => ({
+    onCallState: (state: CallState) => {
+      if (state === "connected") {
+        callInfoRef.current.answered = true;
+      }
+      setCallState(state);
+    },
+    onIncomingCall: (callerNumber: string, callerName?: string | null) => {
+      // Foreground-only inbound on a second line: route answer/hangup at this
+      // client and present the normal incoming UI.
+      const party = callerNumber || "Unknown";
+      const acctClient = getSecondarySipClient(accountId);
+      if (acctClient) callClientRef.current = acctClient;
+      setCallDirection("inbound");
+      setRemoteParty(party);
+      callInfoRef.current = {
+        direction: "inbound",
+        answered: false,
+        startMs: Date.now(),
+        remoteParty: party,
+        remotePartyName: callerName || null,
+      };
+      setCallState("ringing");
+    },
+    onError: (msg: string) => {
+      setLastError(msg);
+      setCallFlowLastError(msg);
+    },
+    onOutboundTrace: (event: OutboundTraceEvent) => {
+      flightRecord("SIP", event.stage, {
+        severity: event.stage === "OUTBOUND_FAILED" ? "error" : "info",
+        payload: {
+          dialedNumber: event.dialedNumber ?? null,
+          normalizedNumber: event.normalizedNumber ?? null,
+          sipCode: event.sipCode ?? null,
+          sipReason: event.sipReason ?? null,
+          sipCause: event.sipCause ?? null,
+          secondLineAccountId: accountId,
+        },
+      });
+    },
+    onSessionAdded: (info: SipSessionInfo) => {
+      try { multiCallListenerRef.current?.onSessionAdded?.(info); } catch { /* ignore */ }
+    },
+    onSessionStateChanged: (info: SipSessionInfo) => {
+      try { multiCallListenerRef.current?.onSessionStateChanged?.(info); } catch { /* ignore */ }
+    },
+    onSessionRemoved: (id: string) => {
+      try { multiCallListenerRef.current?.onSessionRemoved?.(id); } catch { /* ignore */ }
+    },
+  }), []);
 
   // ── Bluetooth-headset availability watcher ─────────────────────────────
   // Active only during a live call. Uses the native AudioManager on
@@ -1440,6 +1530,24 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // first transitions to "connected" so the live timer in the persistent
   // notification reflects the true wall-clock duration even after re-renders.
   const callConnectedAtRef = useRef<number | null>(null);
+  // COWORK iOS fix (2026-07-15): reactive twin of callConnectedAtRef for the
+  // UI layer. On a cold-answer re-delivery the call bridges on a re-INVITE'd
+  // session whose id differs from the one the multi-call session map tracks,
+  // so that session never flips to "active" and `answeredAt` stays null —
+  // the in-call timer sticks at 0:00 and the ongoing-call banner has nothing
+  // to show. This state is an authoritative SIP-level fallback for display.
+  // iOS-ONLY by explicit owner directive (2026-07-15): on Android this effect
+  // returns immediately and the value stays null forever. Display-only;
+  // provably isolated from the answer/register path.
+  const [iosCallConnectedAt, setIosCallConnectedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    if (callState === "connected") {
+      setIosCallConnectedAt((cur) => cur ?? Date.now());
+    } else if (callState === "ended" || callState === "idle") {
+      setIosCallConnectedAt((cur) => (cur == null ? cur : null));
+    }
+  }, [callState]);
   useEffect(() => {
     const prev = prevCallStateRef.current;
     prevCallStateRef.current = callState;
@@ -1611,6 +1719,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       lastError,
       lastDialed,
       audioRoute,
+      callConnectedAt: iosCallConnectedAt,
 
       saveProvisioning: async (bundle) => {
         await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(bundle));
@@ -1791,6 +1900,42 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           const snapshot = getAudioDevicesSnapshot();
           setAudioRoute(snapshot.bluetoothConnected ? "bluetooth" : "earpiece");
 
+          // ── Second-line dial (extra SIP account from another tenant) ─────
+          // Fully isolated path: registers the secondary client on demand and
+          // never touches the primary UA or its registration.
+          const secondLineAccountId = options?.accountId || null;
+          if (secondLineAccountId) {
+            try {
+              const token = authTokenRef.current;
+              if (!token) throw new Error("Not signed in");
+              flightRecord("SIP", "OUTBOUND_SECOND_LINE_START", {
+                payload: { accountId: secondLineAccountId, normalizedTarget },
+              });
+              const secondary = await ensureSecondarySipRegistered(
+                secondLineAccountId,
+                async () => {
+                  const out = await getSipAccountProvisioning(token, secondLineAccountId);
+                  return out.provisioning as ProvisioningBundle;
+                },
+                buildSecondaryClientEvents(secondLineAccountId),
+              );
+              callClientRef.current = secondary;
+              await secondary.dial(normalizedTarget);
+              callStateRef.current = "dialing";
+            } catch (e: unknown) {
+              const msg = e instanceof Error ? e.message : String(e);
+              flightRecord("SIP", "OUTBOUND_FAILED", {
+                severity: "error",
+                payload: { message: msg, secondLine: true, accountId: secondLineAccountId },
+              });
+              callClientRef.current = clientRef.current;
+              if (presentOptimistically) setCallState("ended");
+              await flightEndCall("failed");
+              throw e instanceof Error ? e : new Error(msg);
+            }
+            return;
+          }
+
           try {
             await clientRef.current.dial(normalizedTarget);
             // Optimistically mark the call active so a tap that lands in the
@@ -1829,7 +1974,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
 
       answer: async () => {
-        await clientRef.current.answer();
+        // callClientRef points at the client whose call is live (primary by
+        // default; a secondary "second line" client when its call is ringing).
+        await callClientRef.current.answer();
       },
 
       answerIncomingInvite: async (match, timeoutMs = 5000, onTrace, deadlineHandle) => {
@@ -1867,12 +2014,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
 
       hangup: async () => {
-        await clientRef.current.hangup();
+        await callClientRef.current.hangup();
       },
 
       toggleMute: () => {
         const next = !muted;
-        clientRef.current.setMute(next);
+        callClientRef.current.setMute(next);
         setMuted(next);
       },
 
@@ -1901,16 +2048,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       toggleHold: () => {
         if (onHold) {
-          clientRef.current.unhold();
+          callClientRef.current.unhold();
           setOnHold(false);
         } else {
-          clientRef.current.hold();
+          callClientRef.current.hold();
           setOnHold(true);
         }
       },
 
       sendDtmf: (digit) => {
-        clientRef.current.sendDtmf(digit);
+        callClientRef.current.sendDtmf(digit);
       },
 
       // ---- Multi-call passthrough ----
@@ -1922,18 +2069,48 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           }
         };
       },
-      listSipSessions: () => clientRef.current.listSessions(),
-      holdSipSession: (id) => clientRef.current.holdSession(id),
-      unholdSipSession: (id) => clientRef.current.unholdSession(id),
-      hangupSipSession: (id) => clientRef.current.hangupSession(id),
-      isSipSessionAlive: (id) => clientRef.current.isSessionAlive(id),
-      transferSipSession: (id, target) => clientRef.current.transferSession(id, target),
-      answerSipSession: (id, timeoutMs, onTrace) =>
-        clientRef.current.answerSession(id, timeoutMs, onTrace),
-      setActiveSipSession: (id) => clientRef.current.setActiveSession(id),
+      // Session-level ops search the primary client first, then any live
+      // second-line clients — session ids are unique across UAs.
+      listSipSessions: () => [
+        ...clientRef.current.listSessions(),
+        ...listSecondarySipClients().flatMap((c) => { try { return c.listSessions(); } catch { return []; } }),
+      ],
+      holdSipSession: (id) =>
+        clientRef.current.holdSession(id) ||
+        listSecondarySipClients().some((c) => { try { return c.holdSession(id); } catch { return false; } }),
+      unholdSipSession: (id) =>
+        clientRef.current.unholdSession(id) ||
+        listSecondarySipClients().some((c) => { try { return c.unholdSession(id); } catch { return false; } }),
+      hangupSipSession: (id) =>
+        clientRef.current.hangupSession(id) ||
+        listSecondarySipClients().some((c) => { try { return c.hangupSession(id); } catch { return false; } }),
+      isSipSessionAlive: (id) =>
+        clientRef.current.isSessionAlive(id) ||
+        listSecondarySipClients().some((c) => { try { return c.isSessionAlive(id); } catch { return false; } }),
+      transferSipSession: (id, target) =>
+        clientRef.current.transferSession(id, target) ||
+        listSecondarySipClients().some((c) => { try { return c.transferSession(id, target); } catch { return false; } }),
+      answerSipSession: async (id, timeoutMs, onTrace) => {
+        // If a second-line client currently owns this session, answer there;
+        // otherwise delegate to the primary client with its original
+        // wait-for-INVITE semantics untouched.
+        for (const c of listSecondarySipClients()) {
+          try {
+            if (c.isSessionAlive(id)) {
+              const ok = await c.answerSession(id, timeoutMs, onTrace);
+              if (ok) callClientRef.current = c;
+              return ok;
+            }
+          } catch { /* try next client */ }
+        }
+        return clientRef.current.answerSession(id, timeoutMs, onTrace);
+      },
+      setActiveSipSession: (id) =>
+        clientRef.current.setActiveSession(id) ||
+        listSecondarySipClients().some((c) => { try { return c.setActiveSession(id); } catch { return false; } }),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registrationState, callState, callDirection, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed, audioRoute, ensureProvisioningLoaded],
+    [registrationState, callState, callDirection, remoteParty, muted, speakerOn, onHold, hasProvisioning, lastError, lastDialed, audioRoute, iosCallConnectedAt, ensureProvisioningLoaded],
   );
 
   return <SipContext.Provider value={value}>{children}</SipContext.Provider>;

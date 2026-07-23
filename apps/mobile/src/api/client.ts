@@ -86,6 +86,54 @@ export async function resolveOutboundDial(
   return json;
 }
 
+/** Extra SIP account (an extension from another tenant) attached to this user. */
+export type UserSipAccount = {
+  id: string;
+  tenantId: string;
+  tenantName: string | null;
+  label: string;
+  extensionNumber: string | null;
+  ready: boolean;
+  routes: OutboundDialRoute[];
+};
+
+export async function getSipAccounts(token: string): Promise<UserSipAccount[]> {
+  const res = await fetch(`${API_BASE}/voice/me/sip-accounts`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "SIP_ACCOUNTS_FAILED");
+  return Array.isArray(json?.accounts) ? (json.accounts as UserSipAccount[]) : [];
+}
+
+export async function resolveSipAccountDial(
+  token: string,
+  input: { number: string; accountId: string; outboundRouteId?: string | null },
+): Promise<{ finalNumber: string; originalNumber: string; normalizedNumber: string; accountId: string; outboundRouteId: string | null }> {
+  const res = await fetch(`${API_BASE}/voice/me/sip-accounts/resolve-dial`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "SIP_ACCOUNT_DIAL_RESOLVE_FAILED");
+  return json;
+}
+
+export async function getSipAccountProvisioning(
+  token: string,
+  accountId: string,
+): Promise<{ sipPassword: string; provisioning: any }> {
+  const res = await fetch(`${API_BASE}/voice/me/sip-accounts/${encodeURIComponent(accountId)}/reset-sip-password`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({})
+  });
+  const json = await parseJson(res);
+  if (!res.ok || !json?.sipPassword) throw new Error(json?.error || "SIP_ACCOUNT_PROVISION_FAILED");
+  return json;
+}
+
 export async function resetSipPassword(token: string): Promise<{ sipPassword: string; provisioning: any }> {
   const res = await fetch(`${API_BASE}/voice/me/reset-sip-password`, {
     method: "POST",

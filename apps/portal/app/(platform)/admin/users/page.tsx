@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2, Mail, Plus, Search, Shield, UserCog, XCircle } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
@@ -62,6 +62,20 @@ type OutboundRoutesResponse = {
   tenantId: string;
   userId?: string;
   routes: OutboundRouteAssignment[];
+};
+type AdminSipAccount = {
+  id: string;
+  userId: string;
+  tenantId: string;
+  tenantName: string | null;
+  extensionId: string;
+  extNumber: string | null;
+  displayName: string | null;
+  label: string | null;
+  webrtcEnabled: boolean;
+  hasSipPassword: boolean;
+  provisionStatus: string;
+  endpointName: string | null;
 };
 
 // Portal-bucket labels are the source of truth now (the API's /admin/users/catalog
@@ -163,6 +177,12 @@ export default function AdminUsersPage() {
   const [message, setMessage] = useState("");
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [syncResults, setSyncResults] = useState<Record<string, string>>({});
+  // Extra SIP accounts (other tenants' extensions) per user id.
+  const [sipAccountsByUser, setSipAccountsByUser] = useState<Record<string, AdminSipAccount[]>>({});
+  const [addSipUser, setAddSipUser] = useState<AdminUser | null>(null);
+  const [accountRouteTarget, setAccountRouteTarget] = useState<{ user: AdminUser; account: AdminSipAccount } | null>(null);
+  const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
+  const [accountResults, setAccountResults] = useState<Record<string, string>>({});
 
   const effectiveTenantId = isSuper ? selectedTenantId : contextTenantId;
 
@@ -197,6 +217,64 @@ export default function AdminUsersPage() {
       await load();
     } catch (e: any) {
       setMessage(e?.message || "Action failed");
+    }
+  }
+
+  const loadSipAccounts = useCallback(async (userIds: string[]) => {
+    if (!userIds.length) {
+      setSipAccountsByUser({});
+      return;
+    }
+    try {
+      const res = await apiGet<{ accountsByUser: Record<string, AdminSipAccount[]> }>(
+        `/admin/users/sip-accounts-summary?userIds=${encodeURIComponent(userIds.join(","))}`,
+      );
+      setSipAccountsByUser(res.accountsByUser || {});
+    } catch {
+      setSipAccountsByUser({});
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSipAccounts((data?.users || []).map((u) => u.id));
+  }, [data, loadSipAccounts]);
+
+  async function syncSipAccount(u: AdminUser, acct: AdminSipAccount) {
+    setAccountBusyId(acct.id);
+    setAccountResults((prev) => ({ ...prev, [acct.id]: "" }));
+    setMessage("");
+    try {
+      await apiPost(`/admin/users/${u.id}/sip-accounts/${acct.id}/sync`, {}, undefined, { timeoutMs: 90000 });
+      setAccountResults((prev) => ({ ...prev, [acct.id]: "✓ synced" }));
+      await loadSipAccounts((data?.users || []).map((x) => x.id));
+    } catch (e: any) {
+      const msg = String(e?.message || "sync failed");
+      const shortChip = msg.startsWith("NO_WEBRTC_DEVICE_ON_PBX")
+        ? "no WebRTC device on PBX"
+        : msg.startsWith("SIP_CREDENTIAL_NOT_SET")
+        ? "no SIP secret"
+        : msg.length > 40 ? `${msg.slice(0, 40)}…` : msg;
+      setAccountResults((prev) => ({ ...prev, [acct.id]: shortChip }));
+      setMessage(msg);
+    } finally {
+      setAccountBusyId(null);
+    }
+  }
+
+  async function removeSipAccount(u: AdminUser, acct: AdminSipAccount) {
+    const confirmed = typeof window !== "undefined" &&
+      window.confirm(`Remove the ${acct.tenantName || acct.tenantId} SIP account (ext ${acct.extNumber || "?"}) from ${u.displayName}? Their dialer will lose this line.`);
+    if (!confirmed) return;
+    setAccountBusyId(acct.id);
+    setMessage("");
+    try {
+      await apiDelete(`/admin/users/${u.id}/sip-accounts/${acct.id}`);
+      setMessage("SIP account removed");
+      await loadSipAccounts((data?.users || []).map((x) => x.id));
+    } catch (e: any) {
+      setMessage(e?.message || "Failed to remove SIP account");
+    } finally {
+      setAccountBusyId(null);
     }
   }
 
@@ -298,7 +376,8 @@ export default function AdminUsersPage() {
               <thead><tr><th>User</th><th>Tenant</th><th>Extension</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
               <tbody>
                 {(data?.users || []).map((u) => (
-                  <tr key={u.id} onClick={() => setSelected(u)} style={{ cursor: "pointer" }}>
+                  <Fragment key={u.id}>
+                  <tr onClick={() => setSelected(u)} style={{ cursor: "pointer" }}>
                     <td><strong>{u.displayName}</strong><div className="muted">{u.email}</div></td>
                     <td>{u.tenantName || "Tenant"}</td>
                     <td>{u.extension ? `${u.extension.extNumber} · ${u.extension.displayName}` : "Unassigned"}</td>
@@ -345,6 +424,13 @@ export default function AdminUsersPage() {
                             >
                               {syncingIds.has(u.id) ? "Syncing…" : "Sync SIP"}
                             </button>
+                            <button
+                              className="btn ghost"
+                              onClick={() => setAddSipUser(u)}
+                              title="Attach an extra SIP account (an extension from another tenant) to this user"
+                            >
+                              Add SIP account
+                            </button>
                           </>
                         ) : (
                           <button
@@ -363,6 +449,58 @@ export default function AdminUsersPage() {
                       </div>
                     </td>
                   </tr>
+                  {(sipAccountsByUser[u.id] || []).map((acct) => (
+                    <tr key={`${u.id}-${acct.id}`} style={{ background: "rgba(37,99,235,.05)" }}>
+                      <td style={{ paddingLeft: 28 }}>
+                        <span className="muted" style={{ fontSize: 12 }}>↳ SIP account</span>
+                        {acct.label && acct.label !== acct.tenantName ? <div style={{ fontSize: 12 }}>{acct.label}</div> : null}
+                      </td>
+                      <td>{acct.tenantName || acct.tenantId}</td>
+                      <td>{acct.extNumber ? `${acct.extNumber}${acct.displayName ? ` · ${acct.displayName}` : ""}` : "—"}</td>
+                      <td colSpan={2}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span className={`chip ${acct.provisionStatus === "PROVISIONED" ? "success" : "warning"}`} style={{ fontSize: 11 }}>
+                            {String(acct.provisionStatus || "pending").toLowerCase()}
+                          </span>
+                          {!acct.webrtcEnabled ? <span className="chip warning" style={{ fontSize: 11 }}>webrtc off</span> : null}
+                        </div>
+                      </td>
+                      <td>{acct.endpointName || ""}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                          <button
+                            className="btn ghost"
+                            disabled={accountBusyId !== null}
+                            onClick={() => setAccountRouteTarget({ user: u, account: acct })}
+                            title="Set outbound route prefixes for this SIP account's tenant"
+                          >
+                            Routes
+                          </button>
+                          <button
+                            className="btn ghost"
+                            disabled={accountBusyId !== null}
+                            onClick={() => syncSipAccount(u, acct)}
+                            title="Sync SIP/WebRTC credentials for this account from VitalPBX"
+                          >
+                            {accountBusyId === acct.id ? "Working…" : "Sync SIP"}
+                          </button>
+                          <button
+                            className="btn ghost"
+                            disabled={accountBusyId !== null}
+                            onClick={() => removeSipAccount(u, acct)}
+                          >
+                            Remove
+                          </button>
+                          {accountResults[acct.id] ? (
+                            <span className={`chip ${accountResults[acct.id].startsWith("✓") ? "success" : "danger"}`} style={{ fontSize: 11 }}>
+                              {accountResults[acct.id]}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  </Fragment>
                 ))}
                 {data && data.users.length === 0 ? <tr><td colSpan={7}><div className="state-box">No users match your filters.</div></td></tr> : null}
               </tbody>
@@ -372,6 +510,24 @@ export default function AdminUsersPage() {
 
         {selected ? <UserPanel user={selected} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} /> : null}
         {routeUser ? <OutboundRoutesModal user={routeUser} onClose={() => setRouteUser(null)} /> : null}
+        {accountRouteTarget ? (
+          <OutboundRoutesModal
+            user={accountRouteTarget.user}
+            account={accountRouteTarget.account}
+            onClose={() => setAccountRouteTarget(null)}
+          />
+        ) : null}
+        {addSipUser ? (
+          <AddSipAccountModal
+            user={addSipUser}
+            onClose={() => setAddSipUser(null)}
+            onSaved={() => {
+              setAddSipUser(null);
+              setMessage("SIP account added");
+              loadSipAccounts((data?.users || []).map((x) => x.id));
+            }}
+          />
+        ) : null}
         {crmUser ? <CrmAccessModal user={crmUser} onClose={() => setCrmUser(null)} /> : null}
         {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId === "ALL" ? "" : effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); load(); }} /> : null}
         {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
@@ -641,7 +797,7 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
   );
 }
 
-function OutboundRoutesModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+function OutboundRoutesModal({ user, account, onClose }: { user: AdminUser; account?: AdminSipAccount; onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <aside
@@ -655,10 +811,112 @@ function OutboundRoutesModal({ user, onClose }: { user: AdminUser; onClose: () =
         </div>
         <h2>Outbound Routes</h2>
         <p className="muted" style={{ marginTop: -4 }}>
-          {user.displayName} · {user.extension ? `Ext ${user.extension.extNumber}` : user.email}
+          {account
+            ? `${user.displayName} · SIP account ${account.tenantName || account.tenantId}${account.extNumber ? ` · Ext ${account.extNumber}` : ""}`
+            : `${user.displayName} · ${user.extension ? `Ext ${user.extension.extNumber}` : user.email}`}
         </p>
-        <OutboundRoutePrefixesPanel user={user} />
+        <OutboundRoutePrefixesPanel user={user} account={account} />
       </aside>
+    </div>
+  );
+}
+
+function AddSipAccountModal({ user, onClose, onSaved }: { user: AdminUser; onClose: () => void; onSaved: () => void }) {
+  const { options: tenantOptions } = useTenantOptions();
+  const [tenantId, setTenantId] = useState("");
+  const [extensionId, setExtensionId] = useState("");
+  const [label, setLabel] = useState("");
+  const [userFacingOnly, setUserFacingOnly] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const { extensions: extensionOptions } = useExtensionOptions({ tenantId, userFacingOnly });
+
+  async function save() {
+    if (!tenantId || !extensionId) return;
+    setSaving(true);
+    setError("");
+    try {
+      await apiPost(`/admin/users/${user.id}/sip-accounts`, {
+        tenantId,
+        extensionId,
+        label: label.trim() || null,
+      });
+      onSaved();
+    } catch (e: any) {
+      setError(e?.message || "Failed to add SIP account");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ width: "min(560px, 94vw)", maxHeight: "92vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12 }}>
+          <div>
+            <h2>Add SIP Account</h2>
+            <p className="muted">
+              Give {user.displayName} an extra phone line: pick the tenant, then the extension.
+              The line shows up in their dialer named after the tenant.
+            </p>
+          </div>
+          <button className="btn ghost" onClick={onClose}>Close</button>
+        </div>
+        <Field label="Tenant">
+          <ConnectSelect
+            value={tenantId}
+            onChange={(v) => { setTenantId(v); setExtensionId(""); }}
+            searchable
+            style={{ width: "100%" }}
+            options={[
+              { value: "", label: "Select tenant" },
+              ...tenantOptions.map((t) => ({ value: t.id, label: t.name })),
+            ]}
+          />
+        </Field>
+        {tenantId ? (
+          <Field label="Extension">
+            <ConnectSelect
+              value={extensionId}
+              onChange={setExtensionId}
+              searchable
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "Select extension" },
+                ...extensionOptions.map((e) => {
+                  const pieces = [
+                    `${e.extNumber} · ${e.displayName}`,
+                    e.pbxDeviceName ? `(${e.pbxDeviceName})` : null,
+                    e.ownerUserId ? "— has owner" : null,
+                    !e.webrtcEnabled ? "— webrtc off" : null,
+                  ].filter(Boolean);
+                  return { value: e.id, label: pieces.join(" ") };
+                }),
+              ]}
+            />
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 6 }}>
+              <input type="checkbox" checked={userFacingOnly} onChange={(e) => setUserFacingOnly(e.target.checked)} />
+              <span className="muted">User-facing only</span>
+            </label>
+            <div className="state-box" style={{ marginTop: 8, fontSize: 12 }}>
+              Best practice: pick an extension that isn&apos;t someone&apos;s active phone. If the
+              extension is already registered on another device, both devices will ring
+              on inbound calls, and depending on PBX settings they may compete for the
+              registration.
+            </div>
+          </Field>
+        ) : null}
+        <Field label="Label (optional)">
+          <input className="input" placeholder="Defaults to the tenant name" value={label} onChange={(e) => setLabel(e.target.value)} />
+        </Field>
+        {error ? <div className="chip danger" style={{ marginTop: 12 }}>{error}</div> : null}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn" disabled={saving || !tenantId || !extensionId} onClick={save}>
+            {saving ? "Adding…" : "Add SIP account"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -806,25 +1064,32 @@ const emptyOutboundRouteForm = {
   description: "",
 };
 
-function OutboundRoutePrefixesPanel({ user }: { user: AdminUser }) {
+function OutboundRoutePrefixesPanel({ user, account }: { user: AdminUser; account?: AdminSipAccount }) {
   const [routes, setRoutes] = useState<OutboundRouteAssignment[]>([]);
-  const [tenantId, setTenantId] = useState(user.tenantId);
+  const [tenantId, setTenantId] = useState(account ? account.tenantId : user.tenantId);
   const [draft, setDraft] = useState(emptyOutboundRouteForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState(emptyOutboundRouteForm);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
 
+  // When editing an extra SIP account, all reads/writes are scoped to that
+  // account's tenant via the sip-accounts endpoints; the primary extension's
+  // route permissions are untouched.
+  const routesEndpoint = account
+    ? `/admin/users/${user.id}/sip-accounts/${account.id}/outbound-routes`
+    : `/admin/users/${user.id}/outbound-routes`;
+
   const load = useCallback(async () => {
     try {
-      const result = await apiGet<OutboundRoutesResponse>(`/admin/users/${user.id}/outbound-routes`);
-      setTenantId(result.tenantId || user.tenantId);
+      const result = await apiGet<OutboundRoutesResponse>(routesEndpoint);
+      setTenantId(result.tenantId || (account ? account.tenantId : user.tenantId));
       setRoutes(result.routes || []);
     } catch (e: any) {
       setMessage(e?.message || "Failed to load outbound routes");
       setRoutes([]);
     }
-  }, [user.id, user.tenantId]);
+  }, [routesEndpoint, user.tenantId, account]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -845,7 +1110,7 @@ function OutboundRoutePrefixesPanel({ user }: { user: AdminUser }) {
       isDefault: route.enabled && route.isActive && (route.isDefault || (!hasDefault && route.id === enabledRoutes[0]?.id)),
     }));
     setRoutes(normalized);
-    await apiPut(`/admin/users/${user.id}/outbound-routes`, {
+    await apiPut(routesEndpoint, {
       routes: normalized
         .filter((route) => route.enabled && route.isActive)
         .map((route) => ({ outboundRouteId: route.id, enabled: true, isDefault: route.isDefault })),

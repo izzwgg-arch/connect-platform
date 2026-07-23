@@ -21,7 +21,7 @@ import { usePresence } from '../../context/PresenceContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { AppConfirmDialog } from '../../components/ui/AppPopup';
 import { showAppAlert } from '../../components/ui/appAlert';
-import { getContacts, getOutboundRoutes, getVoiceExtension, resolveOutboundDial } from '../../api/client';
+import { getContacts, getOutboundRoutes, getSipAccounts, getVoiceExtension, resolveOutboundDial, resolveSipAccountDial, type UserSipAccount } from '../../api/client';
 import { loadLocalCallHistory } from '../../storage/callHistory';
 import type { Contact, CallRecord, OutboundDialRoute, VoiceExtension } from '../../types';
 import { spacing } from '../../theme/spacing';
@@ -229,7 +229,13 @@ export function KeypadTab() {
   const [recent, setRecent] = useState<CallRecord[]>([]);
   const [voice, setVoice] = useState<VoiceExtension | null>(null);
   const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
+  // Selection encoding shared with the portal dialer:
+  //   ''                        → primary line, no prefix
+  //   '<routeId>'               → primary line + prefix
+  //   'acct:<accountId>'        → extra SIP account (second line)
+  //   'acct:<accountId>|<rid>'  → extra SIP account + its tenant's prefix
   const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState('');
+  const [sipAccounts, setSipAccounts] = useState<UserSipAccount[]>([]);
   const [dndConfirmOpen, setDndConfirmOpen] = useState(false);
   const [dndOffConfirmOpen, setDndOffConfirmOpen] = useState(false);
   // Measured height of the whole tab — drives adaptive keypad sizing so the
@@ -265,6 +271,14 @@ export function KeypadTab() {
               setSelectedOutboundRouteId('');
             }
           });
+        getSipAccounts(token)
+          .then((accounts) => {
+            if (!alive) return;
+            setSipAccounts(accounts.filter((a) => a && a.id && a.ready));
+          })
+          .catch(() => {
+            if (alive) setSipAccounts([]);
+          });
       }
       return () => { alive = false; };
     }, [token]),
@@ -296,6 +310,14 @@ export function KeypadTab() {
     () => outboundRoutes.find((route) => route.id === selectedOutboundRouteId) || null,
     [outboundRoutes, selectedOutboundRouteId],
   );
+  /** Decoded second-line selection, or null when dialing the primary line. */
+  const selectedSipAccount = useMemo(() => {
+    if (!selectedOutboundRouteId.startsWith('acct:')) return null;
+    const [accountId, routeId] = selectedOutboundRouteId.slice(5).split('|');
+    const account = sipAccounts.find((a) => a.id === accountId) || null;
+    if (!account) return null;
+    return { account, routeId: routeId || null };
+  }, [selectedOutboundRouteId, sipAccounts]);
 
   const handleKey = (digit: string) => {
     playDtmfTone(digit);
@@ -356,7 +378,9 @@ export function KeypadTab() {
   };
 
   const doCall = async (target: string) => {
-    if (sip.registrationState !== 'registered') {
+    // Second-line calls register their own SIP account on demand inside
+    // dial(), so the primary line's registration state doesn't gate them.
+    if (!selectedSipAccount && sip.registrationState !== 'registered') {
       showAppAlert(
         'Not Registered',
         'The softphone is not registered. Please check your connection in Settings.',
@@ -376,13 +400,33 @@ export function KeypadTab() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     setDialing(true);
     try {
-      const pbxTarget = selectedOutboundRoute && token
-        ? (await resolveOutboundDial(token, { number: target, outboundRouteId: selectedOutboundRoute.id })).finalNumber
-        : target;
-      await sip.dial(pbxTarget, { displayTarget: target });
+      if (selectedSipAccount && token) {
+        // Second line: resolve the (optional) prefix within the ACCOUNT's
+        // tenant, then dial from that account's own SIP registration.
+        const resolved = await resolveSipAccountDial(token, {
+          number: target,
+          accountId: selectedSipAccount.account.id,
+          outboundRouteId: selectedSipAccount.routeId,
+        });
+        await sip.dial(resolved.finalNumber || target, {
+          displayTarget: target,
+          accountId: selectedSipAccount.account.id,
+        });
+      } else {
+        const pbxTarget = selectedOutboundRoute && token
+          ? (await resolveOutboundDial(token, { number: target, outboundRouteId: selectedOutboundRoute.id })).finalNumber
+          : target;
+        await sip.dial(pbxTarget, { displayTarget: target });
+      }
     } catch (e: any) {
       setSelectedOutboundRouteId('');
-      showAppAlert('Call Failed', e?.message || 'Could not start the call. Check your connection.');
+      const msg = String(e?.message || '');
+      showAppAlert(
+        'Call Failed',
+        msg === 'SECOND_LINE_REGISTER_TIMEOUT'
+          ? 'That phone line could not connect. Try again, or ask your administrator to sync its SIP account.'
+          : msg || 'Could not start the call. Check your connection.',
+      );
     } finally {
       setDialing(false);
     }
@@ -472,7 +516,7 @@ export function KeypadTab() {
     return out.slice(0, SHORT_SCREEN ? 2 : 3);
   }, [number, contacts, recent, callActive]);
 
-  const outboundVisible = outboundRoutes.length > 0 && !callActive;
+  const outboundVisible = (outboundRoutes.length > 0 || sipAccounts.length > 0) && !callActive;
 
   // Adaptive sizing. Reserve vertical room for up to two suggestion rows and
   // shrink the keypad keys (down to KEY_MIN) to make that room. If even the
@@ -613,6 +657,36 @@ export function KeypadTab() {
                   </Text>
                 </TouchableOpacity>
               );
+            })}
+            {sipAccounts.flatMap((account) => {
+              const entries = [
+                { value: `acct:${account.id}`, label: account.label || account.tenantName || 'Second line' },
+                ...account.routes.map((route) => ({
+                  value: `acct:${account.id}|${route.id}`,
+                  label: `${account.label || account.tenantName} · ${route.name}`,
+                })),
+              ];
+              return entries.map((entry) => {
+                const selected = entry.value === selectedOutboundRouteId;
+                return (
+                  <TouchableOpacity
+                    key={entry.value}
+                    style={[
+                      styles.outboundChip,
+                      {
+                        borderColor: selected ? colors.primary : colors.borderSubtle,
+                        backgroundColor: selected ? colors.primary + '1f' : colors.surface,
+                      },
+                    ]}
+                    activeOpacity={0.78}
+                    onPress={() => setSelectedOutboundRouteId(entry.value)}
+                  >
+                    <Text style={[styles.outboundChipText, { color: selected ? colors.primary : colors.textSecondary }]}>
+                      {entry.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              });
             })}
           </ScrollView>
         </View>

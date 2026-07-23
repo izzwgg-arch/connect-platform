@@ -475,8 +475,24 @@ export function DesktopMiniDialer() {
   }, [phone.regState]);
 
   const routeOptions = useMemo(
-    () => [{ id: "", name: "No route prefix" }, ...phone.outboundRoutes.map((route) => ({ id: route.id, name: route.name || route.label || "Outbound route" }))],
-    [phone.outboundRoutes],
+    () => [
+      { id: "", name: "No route prefix", disabled: false },
+      ...phone.outboundRoutes.map((route) => ({ id: route.id, name: route.name || route.label || "Outbound route", disabled: false })),
+      // Extra SIP accounts (other tenants' lines) share this dropdown.
+      ...phone.sipAccounts.flatMap((account) => {
+        const online = phone.accountRegStates[account.id] === "registered";
+        const suffix = online ? "" : " (offline)";
+        return [
+          { id: `acct:${account.id}`, name: `${account.label}${suffix}`, disabled: !online },
+          ...account.routes.map((route) => ({
+            id: `acct:${account.id}|${route.id}`,
+            name: `${account.label} · ${route.name}${suffix}`,
+            disabled: !online,
+          })),
+        ];
+      }),
+    ],
+    [phone.outboundRoutes, phone.sipAccounts, phone.accountRegStates],
   );
 
   const dialQuery = digitsOnly(phone.dialpadInput);
@@ -755,7 +771,7 @@ export function DesktopMiniDialer() {
       {inCall && (
         phone.callState === "ringing" && phone.callDirection === "inbound" ? (
           <section className="call-screen incoming">
-            <div className="call-rings"><span /><span /></div>
+            <div className="call-rings"><span /><span /><span /></div>
             <div className="call-label">Incoming call</div>
             <div className="call-avatar-lg green">{initials(selectedSession?.remoteParty || phone.remoteParty || "?")}</div>
             <strong className="call-name">{selectedSession?.remoteParty || phone.remoteParty || "Unknown caller"}</strong>
@@ -843,9 +859,9 @@ export function DesktopMiniDialer() {
         {tab === "dialer" && (
           <div className={"screen dialer-pane" + (dialSuggestions.length > 0 ? " with-suggestions" : "")}>
             <input className="number-input" value={phone.dialpadInput} placeholder="Search or dial" onChange={(e) => phone.setDialpadInput(e.target.value.replace(/[^\d*#+]/g, ""))} onKeyDown={(e) => { if (e.key === "Enter") callTarget(phone.dialpadInput); }} />
-            {phone.outboundRoutes.length > 0 && (
+            {(phone.outboundRoutes.length > 0 || phone.sipAccounts.length > 0) && (
               <select className="route-select" value={phone.selectedOutboundRouteId} onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}>
-                {routeOptions.map((route) => <option key={route.id || "none"} value={route.id}>{route.name}</option>)}
+                {routeOptions.map((route) => <option key={route.id || "none"} value={route.id} disabled={route.disabled}>{route.name}</option>)}
               </select>
             )}
             {dialSuggestions.length > 0 && (
@@ -1068,8 +1084,23 @@ export function DesktopMiniDialer() {
         .call-screen { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; padding: 40px 24px 26px; }
         .call-screen.incoming { background: #0b1330; }
         .call-screen.active { background: #0a1128; }
-        .call-rings { position: absolute; top: 120px; width: 250px; height: 250px; border-radius: 50%; border: 1px solid rgba(34,197,94,0.18); }
-        .call-rings span { position: absolute; top: 22px; left: 22px; width: 206px; height: 206px; border-radius: 50%; border: 1px solid rgba(34,197,94,0.28); }
+        /* Expanding-ripple animation on incoming calls — matches the mobile app.
+           Three concentric rings scale outward and fade, staggered, on a loop. */
+        .call-rings { position: absolute; top: 120px; width: 250px; height: 250px; pointer-events: none; }
+        .call-rings span {
+          position: absolute; inset: 0; border-radius: 50%;
+          border: 1.5px solid rgba(34,197,94,0.55);
+          transform: scale(0.5); opacity: 0; transform-origin: center;
+          animation: cc-ring-ripple 2.2s cubic-bezier(0.2,0.6,0.3,1) infinite;
+          will-change: transform, opacity;
+        }
+        .call-rings span:nth-child(2) { animation-delay: 0.73s; }
+        .call-rings span:nth-child(3) { animation-delay: 1.46s; }
+        @keyframes cc-ring-ripple {
+          0%   { transform: scale(0.5);  opacity: 0; }
+          12%  { opacity: 0.7; }
+          100% { transform: scale(1.18); opacity: 0; }
+        }
         .call-label { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: rgba(34,197,94,0.9); margin-top: 8px; }
         .call-status { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #34d399; }
         .call-timer { font-size: 15px; color: var(--mn-text-2); font-variant-numeric: tabular-nums; margin-top: 6px; }
@@ -1127,4 +1158,123 @@ export function DesktopMiniDialer() {
         .keypad button:hover { background: var(--mn-surface-2); }
         .keypad strong { font-size: 30px; font-weight: 400; line-height: 1; }
         .keypad span { font-size: 9px; letter-spacing: 2px; color: var(--mn-text-3); font-weight: 500; }
-        .dialer-actions { display: grid; grid-template-columns: r
+        .dialer-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; justify-content: center; align-items: center; margin: 4px auto 6px; width: 100%; max-width: 300px; }
+        .call-button { grid-column: 2; justify-self: center; display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%; border: 0; background: #22c55e; color: #fff; cursor: pointer; box-shadow: 0 8px 20px rgba(34,197,94,0.35); }
+        .call-button:disabled { background: var(--mn-border); color: var(--mn-text-3); box-shadow: none; cursor: default; }
+        .delete-button { grid-column: 3; justify-self: center; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 0.5px solid var(--mn-border); background: rgba(30,45,71,0.55); color: var(--mn-text-2); cursor: pointer; }
+
+        .list-pane { display: flex; flex-direction: column; }
+        /* Recents rows — cards that match the mobile RecentTab exactly. */
+        .mini-row { display: flex; align-items: center; gap: 12px; padding: 12px; margin: 0 12px 10px; border-radius: 18px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); min-height: 72px; box-sizing: border-box; }
+        .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .row-main strong { font-size: 15px; font-weight: 700; letter-spacing: -0.15px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--mn-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rm-icon { flex-shrink: 0; }
+        .rm-missed { color: #ef4444; }
+        .rm-in { color: #22d3ee; }
+        .rm-out { color: #22c55e; }
+        .row-right { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; align-self: stretch; gap: 6px; flex-shrink: 0; padding: 1px 0; }
+        .row-actions { display: flex; align-items: center; gap: 6px; }
+        .row-msg { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(6,182,212,0.33); background: rgba(6,182,212,0.14); color: #22d3ee; cursor: pointer; flex-shrink: 0; }
+        .row-msg:hover { background: rgba(6,182,212,0.22); }
+        .row-preview { color: var(--mn-text-2); }
+        .row-time { font-size: 11.5px; font-weight: 700; color: var(--mn-text-3); flex-shrink: 0; }
+        .row-call { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 0; background: #3b82f6; color: #fff; cursor: pointer; flex-shrink: 0; box-shadow: 0 4px 12px rgba(59,130,246,0.35); }
+        .row-call:hover { filter: brightness(1.05); }
+        .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
+
+        .vm-screen { padding: 0; }
+        .vm-header { text-align: center; padding: 14px 16px 10px; }
+        .vm-h-title { font-size: 26px; font-weight: 800; letter-spacing: -0.7px; color: var(--mn-text); line-height: 30px; }
+        .vm-h-sub { margin-top: 3px; font-size: 13px; font-weight: 600; color: var(--mn-text-2); }
+        .vm-search { display: flex; align-items: center; gap: 10px; margin: 0 14px 10px; height: 44px; padding: 0 14px; border-radius: 16px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); color: var(--mn-text-3); }
+        .vm-search input { flex: 1; min-width: 0; border: 0; background: transparent !important; outline: none; color: var(--mn-text) !important; font-size: 14px; font-weight: 500; box-shadow: none !important; }
+        .vm-search input:-webkit-autofill, .vm-search input:-webkit-autofill:focus, .vm-search input:-webkit-autofill:hover { -webkit-box-shadow: 0 0 0 1000px var(--mn-surface) inset !important; -webkit-text-fill-color: var(--mn-text) !important; caret-color: var(--mn-text); }
+        .vm-search input::placeholder { color: var(--mn-text-3); }
+        .vm-chips { display: flex; gap: 7px; margin: 0 14px 10px; }
+        .vm-chip { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; border-radius: 13px; border: 0.5px solid var(--mn-border); background: var(--mn-surface-2); color: var(--mn-text-2); cursor: pointer; }
+        .vm-chip span { font-size: 12px; font-weight: 800; }
+        .vm-chip small { font-size: 11px; font-weight: 800; color: var(--mn-text-3); }
+        .vm-chip.active { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.14); color: #3b82f6; }
+        .vm-chip.active small { color: #3b82f6; }
+        .vm-cards { display: flex; flex-direction: column; gap: 10px; padding: 2px 14px 14px; }
+        .vm-card { background: var(--mn-surface); border: 0.5px solid var(--mn-border); border-radius: 20px; padding: 14px; }
+        .vm-card.new { border-color: rgba(59,130,246,0.28); background: var(--mn-card-new); }
+        .vm-top { display: flex; align-items: center; gap: 11px; }
+        .vm-av { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: rgba(136,153,187,0.16); color: var(--mn-text-2); font-size: 14px; font-weight: 600; flex-shrink: 0; }
+        .vm-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .vm-info strong { font-size: 16px; font-weight: 800; letter-spacing: -0.25px; color: var(--mn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .vm-info small { font-size: 13px; font-weight: 600; color: var(--mn-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .vm-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+        .vm-badge { font-size: 9px; font-weight: 900; letter-spacing: 0.5px; padding: 3px 7px; border-radius: 9px; border: 1px solid transparent; }
+        .vm-badge.new { color: #3b82f6; background: rgba(59,130,246,0.14); border-color: rgba(59,130,246,0.33); }
+        .vm-badge.read { color: #22c55e; background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.33); }
+        .vm-dur { font-size: 12px; font-weight: 800; color: var(--mn-text-2); padding: 3px 8px; border-radius: 10px; background: rgba(148,163,184,0.10); }
+        .vm-player { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+        .vm-player[data-error="true"] { opacity: .5; }
+        .vm-play { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(59,130,246,0.14); color: #3b82f6; cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; }
+        .vm-play[data-active="true"] { background: #3b82f6; color: #fff; }
+        .vm-wave { display: flex; align-items: center; gap: 2px; flex: 1; height: 30px; cursor: pointer; }
+        .vm-wave span { flex: 1; border-radius: 2px; background: rgba(148,163,184,0.34); }
+        .vm-wave span.on { background: #3b82f6; }
+        .vm-elapsed { font-size: 11px; font-weight: 700; color: var(--mn-text-2); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 30px; text-align: right; }
+        .vm-transcript { margin: 12px 0 0; font-size: 13px; line-height: 20px; font-weight: 500; color: var(--mn-text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .vm-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; min-width: 0; }
+        .vm-date { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--mn-text-3); padding: 4px 8px; border-radius: 10px; background: rgba(148,163,184,0.10); white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden; }
+        /* Voicemail action buttons — call / message / more, matching mobile. */
+        .vm-action-btns { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .vm-act { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; border: 1px solid transparent; cursor: pointer; flex-shrink: 0; }
+        .vm-act-call { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.30); color: #22c55e; }
+        .vm-act-call:hover { background: rgba(34,197,94,0.22); }
+        .vm-act-msg { background: rgba(6,182,212,0.14); border-color: rgba(6,182,212,0.30); color: #22d3ee; }
+        .vm-act-msg:hover { background: rgba(6,182,212,0.22); }
+        .vm-act-more { background: rgba(148,163,184,0.12); color: var(--mn-text-2); }
+        .vm-act-more:hover, .vm-act-more.open { background: rgba(148,163,184,0.20); }
+
+        /* ⋯ dropdown menu */
+        .vm-menu-wrap { position: relative; }
+        .vm-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+        .vm-menu { position: absolute; right: 0; bottom: 44px; z-index: 41; min-width: 210px; background: var(--mn-surface-2, var(--mn-surface)); border: 0.5px solid var(--mn-border); border-radius: 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.45); padding: 6px; display: flex; flex-direction: column; }
+        .vm-menu button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 10px 12px; border: 0; background: transparent; color: var(--mn-text); font-size: 13px; border-radius: 9px; cursor: pointer; }
+        .vm-menu button:hover { background: var(--mn-surface); }
+
+        /* Note / reminder chips shown on the card */
+        .vm-meta { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+        .vm-note-chip, .vm-rem-chip { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; padding: 7px 10px; border-radius: 10px; }
+        .vm-note-chip { background: rgba(234,179,8,0.12); color: #eab308; }
+        .vm-note-chip span { color: var(--mn-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .vm-note-chip em { color: var(--mn-text-3); font-style: normal; flex-shrink: 0; }
+        .vm-rem-chip { background: rgba(59,130,246,0.12); color: #3b82f6; }
+        .vm-rem-chip span { color: var(--mn-text); }
+
+        /* Inline note / reminder editors */
+        .vm-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; border: 0.5px solid var(--mn-border); border-radius: 14px; background: var(--mn-bg); }
+        .vm-edit-lbl { font-size: 11px; color: var(--mn-text-3); }
+        .vm-note-input, .vm-rem-input { width: 100%; border: 0.5px solid var(--mn-border); background: var(--mn-surface) !important; color: var(--mn-text) !important; border-radius: 10px; padding: 8px 10px; font-size: 13px; outline: none; font-family: inherit; resize: vertical; }
+        .vm-edit-btns { display: flex; justify-content: flex-end; gap: 8px; }
+        .vm-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; border: 0.5px solid var(--mn-border); background: var(--mn-surface); color: var(--mn-text); font-size: 13px; font-weight: 500; cursor: pointer; }
+        .vm-btn.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+        .vm-btn.primary:disabled { opacity: 0.5; cursor: default; }
+        .vm-btn.ghost { background: transparent; }
+        .vm-btn.ghost.danger { color: #ef4444; }
+
+        /* Due callback reminder alert (must dismiss) */
+        .vm-alert-overlay { position: absolute; inset: 0; z-index: 60; background: rgba(3,8,18,0.72); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 22px; }
+        .vm-alert { width: 100%; background: var(--mn-surface); border: 0.5px solid var(--mn-border); border-radius: 22px; padding: 22px 18px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+        .vm-alert-icon { display: grid; place-items: center; width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 50%; background: rgba(59,130,246,0.16); color: #3b82f6; }
+        .vm-alert-title { font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--mn-text-3); }
+        .vm-alert-name { font-size: 20px; font-weight: 600; color: var(--mn-text); margin-top: 4px; }
+        .vm-alert-label { font-size: 14px; color: var(--mn-text-2); margin-top: 6px; }
+        .vm-alert-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mn-text-2); margin-top: 10px; background: rgba(234,179,8,0.12); padding: 7px 10px; border-radius: 10px; }
+        .vm-alert-btns { display: flex; gap: 10px; margin-top: 18px; }
+        .vm-alert-btns .vm-btn { flex: 1; justify-content: center; padding: 12px; }
+        .vm-alert-more { margin-top: 12px; font-size: 12px; color: var(--mn-text-3); }
+
+        .mini-tabs { display: flex; border-top: 0.5px solid var(--mn-line); background: var(--mn-bg); }
+        .mini-tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 11px; border: 0; background: transparent; color: var(--mn-text-4); font-size: 10px; cursor: pointer; transition: color .16s ease; }
+        .mini-tabs .active { color: #3b82f6; }
+        .empty { text-align: center; color: var(--mn-text-3); padding: 40px 10px; font-size: 13px; }
+`}</style>
+    </main>
+  );
+}

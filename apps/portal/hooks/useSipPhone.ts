@@ -134,6 +134,107 @@ export type OutboundDialRoute = {
   label?: string;
 };
 
+/**
+ * Extra SIP account (an extension from another tenant) attached to this user.
+ * Shown in the same dialer dropdown as the outbound-route prefixes; selecting
+ * one places the call from that account's own SIP registration.
+ */
+export type DialSipAccount = {
+  id: string;
+  tenantId: string;
+  tenantName: string | null;
+  /** Display label — defaults to the tenant name the account belongs to. */
+  label: string;
+  extensionNumber: string | null;
+  /** True when the account has everything needed to register (WebRTC on, creds set). */
+  ready: boolean;
+  /** Outbound-route prefixes this user may use within the account's tenant. */
+  routes: OutboundDialRoute[];
+};
+
+/** Full per-account registration config from GET /voice/me/sip-accounts. */
+type SipAccountConfig = DialSipAccount & {
+  sipUsername: string | null;
+  authUsername: string | null;
+  hasSipPassword: boolean;
+  webrtcEnabled: boolean;
+  sipWsUrl: string | null;
+  sipDomain: string | null;
+  outboundProxy: string | null;
+  iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>;
+  dtmfMode?: "RFC2833" | "SIP_INFO";
+};
+
+/**
+ * Encoding for the dialer dropdown selection (kept inside the existing
+ * selectedOutboundRouteId string so the desktop mini-dialer IPC proxy keeps
+ * working unchanged):
+ *   ""                      → primary line, no prefix
+ *   "<routeId>"             → primary line + outbound-route prefix
+ *   "acct:<accountId>"      → extra SIP account, no prefix
+ *   "acct:<accountId>|<routeId>" → extra SIP account + its tenant's prefix
+ */
+export const SIP_ACCOUNT_OPTION_PREFIX = "acct:";
+
+export function encodeSipAccountOption(accountId: string, routeId?: string | null): string {
+  return routeId ? `${SIP_ACCOUNT_OPTION_PREFIX}${accountId}|${routeId}` : `${SIP_ACCOUNT_OPTION_PREFIX}${accountId}`;
+}
+
+export function decodeSipAccountOption(value: string): { accountId: string; routeId: string | null } | null {
+  if (!value.startsWith(SIP_ACCOUNT_OPTION_PREFIX)) return null;
+  const [accountId, routeId] = value.slice(SIP_ACCOUNT_OPTION_PREFIX.length).split("|");
+  if (!accountId) return null;
+  return { accountId, routeId: routeId || null };
+}
+
+// ── Inbound-account memory (call back on the line the call came in on) ──────
+// When an inbound call arrives on an extra SIP account we remember
+// "caller → account". A later dial to that caller with no explicit dropdown
+// selection automatically goes out from that same account. An inbound call on
+// the PRIMARY line clears the memory for that caller.
+const INBOUND_ACCOUNT_MAP_KEY = "connect.sip.inboundAccountMap.v1";
+const INBOUND_ACCOUNT_MAP_MAX = 300;
+
+function inboundPartyKey(value: string): string {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits || String(value || "").trim().toLowerCase();
+}
+
+function readInboundAccountMap(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(INBOUND_ACCOUNT_MAP_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberInboundAccount(party: string, accountId: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = inboundPartyKey(party);
+    if (!key) return;
+    const map = readInboundAccountMap();
+    if (accountId) map[key] = accountId;
+    else delete map[key];
+    const keys = Object.keys(map);
+    if (keys.length > INBOUND_ACCOUNT_MAP_MAX) {
+      for (const stale of keys.slice(0, keys.length - INBOUND_ACCOUNT_MAP_MAX)) delete map[stale];
+    }
+    window.localStorage.setItem(INBOUND_ACCOUNT_MAP_KEY, JSON.stringify(map));
+  } catch {
+    /* memory is best-effort — never break the call path */
+  }
+}
+
+function lookupInboundAccount(party: string): string | null {
+  const key = inboundPartyKey(party);
+  if (!key) return null;
+  return readInboundAccountMap()[key] || null;
+}
+
 /** One raw stat sample for debug panel. */
 export interface RawStatSample {
   ts: number;
@@ -177,6 +278,10 @@ export type SipPhoneState = {
   outboundRoutes: OutboundDialRoute[];
   selectedOutboundRouteId: string;
   selectedOutboundRoute: OutboundDialRoute | null;
+  /** Extra SIP accounts (other tenants' extensions) available to this user. Empty for most users. */
+  sipAccounts: DialSipAccount[];
+  /** Live registration state per extra SIP account id. */
+  accountRegStates: Record<string, SipRegState>;
 };
 
 export type SipPhoneActions = {
@@ -576,6 +681,20 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [dialpadInput, setDialpadInput] = useState("");
   const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
   const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState("");
+  // ── Extra SIP accounts (multi-tenant "second lines") ──────────────────────
+  // Everything below is additive: with zero extra accounts none of this runs
+  // and the phone behaves exactly as before.
+  const [sipAccounts, setSipAccounts] = useState<DialSipAccount[]>([]);
+  const [accountRegStates, setAccountRegStates] = useState<Record<string, SipRegState>>({});
+  /** Full registration configs for the extra accounts (includes ws/domain/ice). */
+  const accountConfigsRef = useRef<SipAccountConfig[]>([]);
+  /** Live JsSIP engines per extra account id. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const accountEnginesRef = useRef<Map<string, { ua: any; domain: string }>>(new Map());
+  /** Ref mirror of accountRegStates for use inside dial() without stale closures. */
+  const accountRegStatesRef = useRef<Record<string, SipRegState>>({});
+  /** Which extra account each multi-call session belongs to (absent = primary). */
+  const sessionAccountRef = useRef<Map<string, string>>(new Map());
 
   const {
     startUkLocalRingback,
@@ -606,6 +725,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   // Mirror of currentSinkId (the call output / headset device) for use in the dial
   // callback, so the outbound ringback can play on the same device as the call.
   const currentSinkIdRef = useRef("");
+  // The user's BASE call-output device (the headset / configured speaker). This is
+  // what audio returns to when loudspeaker mode is turned off. Distinct from
+  // `speakerOn`, which is a temporary "route to the computer's loudspeaker" override.
+  const preferredSinkIdRef = useRef("");
   const MAX_CONCURRENT_SESSIONS_WEB = 5;
 
   function getOrAssignSessionId(s: unknown): string {
@@ -675,6 +798,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     const removed = sessionMetaRef.current.get(id);
     sessionMetaRef.current.delete(id);
     sessionsByIdRef.current.delete(id);
+    sessionAccountRef.current.delete(id);
 
     if (removed?.isActive) {
       // LIFO restore: most-recently-held call resumes.
@@ -1067,6 +1191,223 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   useEffect(() => {
     if (callState === "idle" || callState === "ended") setSelectedOutboundRouteId("");
   }, [callState]);
+
+  // ── Extra SIP accounts: fetch the list ────────────────────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    function fetchAccounts(attempt: number) {
+      apiGet<{ accounts: SipAccountConfig[] }>("/voice/me/sip-accounts")
+        .then((res) => {
+          if (cancelled) return;
+          const accounts = (res.accounts || []).filter((a) => a && a.id);
+          accountConfigsRef.current = accounts;
+          setSipAccounts(
+            accounts.map((a) => ({
+              id: a.id,
+              tenantId: a.tenantId,
+              tenantName: a.tenantName ?? null,
+              label: a.label || a.tenantName || "Second line",
+              extensionNumber: a.extensionNumber ?? null,
+              ready: !!a.ready,
+              routes: (a.routes || []).filter((r) => r && r.id),
+            })),
+          );
+        })
+        .catch((e: unknown) => {
+          // 401 = auth token not ready yet (startup race) — retry once shortly.
+          if (!cancelled && e instanceof ApiError && e.status === 401 && attempt < 2) {
+            setTimeout(() => { if (!cancelled) fetchAccounts(attempt + 1); }, 2_500);
+          }
+          // Any other failure: no extra accounts — the phone works exactly as before.
+        });
+    }
+    fetchAccounts(0);
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Extra SIP accounts: registration engines ──────────────────────────────
+  // One additional JsSIP UA per READY account. Deliberately simpler than the
+  // primary engine (JsSIP's built-in connection recovery + a light watchdog);
+  // the primary line's engine is untouched. Inbound calls on these accounts
+  // flow into the SAME session bookkeeping/UI as primary-line calls.
+  const sipAccountsEngineKey = useMemo(
+    () => sipAccounts.filter((a) => a.ready).map((a) => a.id).join(","),
+    [sipAccounts],
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || !sipAccountsEngineKey) return;
+    let cancelled = false;
+    const cleanups: Array<() => void> = [];
+
+    const setAccountReg = (id: string, rs: SipRegState) => {
+      accountRegStatesRef.current = { ...accountRegStatesRef.current, [id]: rs };
+      setAccountRegStates(accountRegStatesRef.current);
+    };
+
+    async function startAccountEngine(cfg: SipAccountConfig) {
+      try {
+        if (!cfg.sipWsUrl || !cfg.sipDomain || !cfg.sipUsername) return;
+        setAccountReg(cfg.id, "connecting");
+        const creds = await apiPost<{ sipPassword: string }>(
+          `/voice/me/sip-accounts/${cfg.id}/reset-sip-password`,
+        );
+        if (cancelled) return;
+        const sipPassword = creds?.sipPassword || "";
+        if (!sipPassword) {
+          setAccountReg(cfg.id, "failed");
+          return;
+        }
+        const JsSIP = await loadJsSIP();
+        if (cancelled) return;
+
+        const socket = new JsSIP.WebSocketInterface(cfg.sipWsUrl);
+        const uaConfig: Record<string, unknown> = {
+          sockets: [socket],
+          uri: `sip:${cfg.sipUsername}@${cfg.sipDomain}`,
+          password: sipPassword,
+          authorization_user: cfg.authUsername || cfg.sipUsername,
+          display_name: cfg.label || cfg.sipUsername,
+          register: true,
+          register_expires: 120,
+          connection_recovery_min_interval: 2,
+          connection_recovery_max_interval: 15,
+          session_timers: false,
+          pcConfig: {
+            iceServers: cfg.iceServers?.length
+              ? cfg.iceServers
+              : [{ urls: "stun:stun.l.google.com:19302" }],
+            iceTransportPolicy: (process.env.NEXT_PUBLIC_FORCE_ICE_RELAY === "true" ? "relay" : "all") as RTCIceTransportPolicy,
+          },
+        };
+        if (cfg.outboundProxy) uaConfig.outbound_proxy_set = cfg.outboundProxy;
+
+        const ua = new JsSIP.UA(uaConfig);
+        accountEnginesRef.current.set(cfg.id, { ua, domain: cfg.sipDomain });
+
+        // RFC5626 CRLF keepalive — same NAT-warming as the primary line.
+        const keepAlive = setInterval(() => {
+          try {
+            if (!cancelled && ua.isConnected?.()) socket.send("\r\n\r\n");
+          } catch { /* ignore */ }
+        }, 15_000);
+        // Light watchdog: JsSIP's own connection recovery does the heavy
+        // lifting; this just nudges a silently-lapsed registration.
+        const watchdog = setInterval(() => {
+          if (cancelled) return;
+          try {
+            if (ua.isConnected?.() && !ua.isRegistered?.()) ua.register();
+          } catch { /* ignore */ }
+        }, 30_000);
+
+        ua.on("connecting", () => { if (!cancelled) setAccountReg(cfg.id, "connecting"); });
+        ua.on("connected", () => { if (!cancelled) setAccountReg(cfg.id, "registering"); });
+        ua.on("registered", () => {
+          if (!cancelled) {
+            setAccountReg(cfg.id, "registered");
+            console.log(`[SipPhone] account_registered account=${cfg.id} label=${cfg.label}`);
+          }
+        });
+        ua.on("unregistered", () => { if (!cancelled) setAccountReg(cfg.id, "registering"); });
+        ua.on("registrationFailed", (e: { cause?: string }) => {
+          if (!cancelled) {
+            setAccountReg(cfg.id, "failed");
+            console.warn(`[SipPhone] account_registration_failed account=${cfg.id} cause=${e?.cause ?? "?"}`);
+          }
+        });
+        ua.on("disconnected", () => { if (!cancelled) setAccountReg(cfg.id, "connecting"); });
+
+        ua.on(
+          "newRTCSession",
+          (data: {
+            originator: string;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            session: any;
+            request: { from: { uri: { user: string }; display_name?: string } };
+          }) => {
+            if (cancelled) return;
+            if (data.session.connection) {
+              wirePC(data.session.connection);
+            } else {
+              data.session.on("peerconnection", (pcData: { peerconnection: RTCPeerConnection }) => {
+                wirePC(pcData.peerconnection);
+              });
+            }
+            const mcId = getOrAssignSessionId(data.session);
+            const activeCount = sessionsByIdRef.current.size;
+            if (activeCount >= MAX_CONCURRENT_SESSIONS_WEB && data.originator === "remote") {
+              try {
+                data.session.terminate({ status_code: 486, reason_phrase: "Busy Here" });
+              } catch { /* ignore */ }
+              return;
+            }
+            sessionsByIdRef.current.set(mcId, data.session);
+            sessionAccountRef.current.set(mcId, cfg.id);
+
+            if (data.originator === "remote") {
+              const rawParty = data.request.from.display_name || data.request.from.uri.user;
+              const party = splitRingGroupPrefix(rawParty).rest || rawParty;
+              // Remember which line this caller reached us on, so calling them
+              // back automatically goes out from the same SIP account.
+              rememberInboundAccount(data.request.from.uri.user || party, cfg.id);
+              console.log(`[MULTICALL] web incoming(account=${cfg.id}) call=${mcId} from=${party}`);
+              registerSessionMeta(mcId, {
+                remoteParty: party,
+                direction: "inbound",
+                state: "ringing",
+                onHold: false,
+                isActive: false,
+              });
+              if (!sessionRef.current || sessionRef.current.isEnded?.()) {
+                callDirectionRef.current = "inbound";
+                setCallDirection("inbound");
+                setOnHold(false);
+                bindSession(data.session, party);
+                setCallState("ringing");
+                setRemoteParty(party);
+                startRingtone();
+              } else {
+                bindSideSession(data.session, party, mcId);
+                startRingtone();
+              }
+            } else {
+              registerSessionMeta(mcId, {
+                remoteParty: String(data.session.remote_identity?.uri?.user ?? ""),
+                direction: "outbound",
+                state: "dialing",
+                onHold: false,
+                isActive: true,
+              });
+            }
+          },
+        );
+
+        ua.start();
+        cleanups.push(() => {
+          clearInterval(keepAlive);
+          clearInterval(watchdog);
+          try { ua.stop(); } catch { /* ignore */ }
+        });
+      } catch (e) {
+        console.warn(`[SipPhone] account_engine_start_failed account=${cfg.id}:`, e);
+        if (!cancelled) setAccountReg(cfg.id, "failed");
+      }
+    }
+
+    for (const cfg of accountConfigsRef.current.filter((a) => a.ready)) {
+      void startAccountEngine(cfg);
+    }
+
+    return () => {
+      cancelled = true;
+      for (const stop of cleanups) {
+        try { stop(); } catch { /* ignore */ }
+      }
+      accountEnginesRef.current.clear();
+    };
+    // Keyed on the READY account-id set only — rebuilds when accounts change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sipAccountsEngineKey]);
 
   // ── Initialise ─────────────────────────────────────────────────────────
 
@@ -1466,6 +1807,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
               // live call's fromPrefix instead.
               const rawParty = data.request.from.display_name || data.request.from.uri.user;
               const party = splitRingGroupPrefix(rawParty).rest || rawParty;
+              // Inbound on the PRIMARY line: forget any "call back on account X"
+              // memory for this caller — the latest call wins.
+              rememberInboundAccount(data.request.from.uri.user || party, null);
               console.log(`[MULTICALL] web incoming call=${mcId} from=${party} activeBefore=${activeSessionIdRef.current ?? "none"}`);
               registerSessionMeta(mcId, {
                 remoteParty: party,
@@ -2201,7 +2545,34 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   const dial = useCallback(
     (target: string) => {
-      if (!uaRef.current || regState !== "registered") {
+      // ── Which line does this call go out on? ────────────────────────────
+      // Explicit dropdown selection ("acct:<id>" / "acct:<id>|<routeId>")
+      // wins; otherwise, with no selection at all, a caller we last heard
+      // from on an extra account is automatically called back on that
+      // account. Everything else uses the primary line exactly as before.
+      let dialAccountId: string | null = null;
+      let dialAccountRouteId: string | null = null;
+      const decodedAccount = decodeSipAccountOption(selectedOutboundRouteId);
+      if (decodedAccount) {
+        dialAccountId = decodedAccount.accountId;
+        dialAccountRouteId = decodedAccount.routeId;
+      } else if (!selectedOutboundRouteId) {
+        const remembered = lookupInboundAccount(target);
+        if (
+          remembered &&
+          accountEnginesRef.current.has(remembered) &&
+          accountRegStatesRef.current[remembered] === "registered"
+        ) {
+          dialAccountId = remembered;
+          console.log(`[SipPhone] callback_account_auto_selected account=${remembered}`);
+        }
+      }
+      const accountEngine = dialAccountId ? accountEnginesRef.current.get(dialAccountId) ?? null : null;
+      if (dialAccountId && (!accountEngine || accountRegStatesRef.current[dialAccountId] !== "registered")) {
+        setError("That phone line is not connected yet. Wait for it to register or pick another line.");
+        return;
+      }
+      if (!accountEngine && (!uaRef.current || regState !== "registered")) {
         setError("Not registered. Wait for SIP registration before dialling.");
         return;
       }
@@ -2223,8 +2594,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         console.warn(`[SipPhone] dial() recovering stale dial guard after ${guardAgeMs}ms`);
         dialGuardRef.current = null;
       }
-      const domain = uaRef.current._configuration?.uri?.host;
-      if (!domain) return;
+      const dialUa = accountEngine ? accountEngine.ua : uaRef.current;
+      const domain = accountEngine ? accountEngine.domain : uaRef.current._configuration?.uri?.host;
+      if (!domain || !dialUa) return;
       const normalised = target.trim();
       if (!normalised) return;
 
@@ -2267,7 +2639,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       localRingbackActiveRef.current = true;
       patchDiag({ localRingback: "local" });
 
-      const resolveDialTarget = selectedOutboundRoute
+      const resolveDialTarget = accountEngine
+        ? apiPost<{ finalNumber: string }>("/voice/me/sip-accounts/resolve-dial", {
+            number: normalised,
+            accountId: dialAccountId,
+            outboundRouteId: dialAccountRouteId,
+          }).then((result) => result.finalNumber || normalizeDialTargetForSip(normalised))
+        : selectedOutboundRoute
         ? apiPost<{ finalNumber: string }>("/me/outbound-routes/resolve-dial", {
             number: normalised,
             outboundRouteId: selectedOutboundRoute.id,
@@ -2298,11 +2676,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           };
           try {
             bb.mark("ua_call_invoked");
-            const session = uaRef.current!.call(sipTarget, {
+            const session = dialUa.call(sipTarget, {
               mediaStream: localStream,
-              pcConfig: uaRef.current!._configuration?.pcConfig ?? {},
+              pcConfig: dialUa._configuration?.pcConfig ?? {},
             });
             const sessionId = (() => { try { return getOrAssignSessionId(session); } catch { return null; } })();
+            if (dialAccountId && sessionId) sessionAccountRef.current.set(sessionId, dialAccountId);
             bb.setDial({
               uaCallInvoked: true,
               sessionReturned: !!session,
@@ -2561,20 +2940,32 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     }
   }, [refreshAudioDevices]);
 
-  const setAudioSinkId = useCallback(async (sinkId: string) => {
+  // Low-level: route the call audio element to a specific output device. Does NOT
+  // touch speaker-mode or the preferred base device — callers decide those.
+  const applySink = useCallback(async (deviceId: string) => {
     const el = audioRef.current as (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }) | null;
     if (!el) return;
     try {
       if (typeof el.setSinkId === "function") {
-        await el.setSinkId(sinkId);
+        await el.setSinkId(deviceId);
       }
-      currentSinkIdRef.current = sinkId;
-      setCurrentSinkId(sinkId);
-      setSpeakerOn(sinkId !== "");
+      currentSinkIdRef.current = deviceId;
+      setCurrentSinkId(deviceId);
     } catch (e) {
       console.warn("[SipPhone] setSinkId failed:", e);
     }
   }, []);
+
+  // Public: choose the BASE call-output device (headset / configured speaker), e.g.
+  // from the settings device picker. Choosing a base device exits loudspeaker mode
+  // and routes there. `speakerOn` is a separate, temporary override (see toggleSpeaker),
+  // NOT "a device is selected" — that conflation made the Speaker button light up
+  // whenever a headset was configured.
+  const setAudioSinkId = useCallback(async (sinkId: string) => {
+    preferredSinkIdRef.current = sinkId;
+    setSpeakerOn(false);
+    await applySink(sinkId);
+  }, [applySink]);
 
   useEffect(() => {
     void refreshAudioDevices();
@@ -2598,7 +2989,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (desktopSettings.selectedMicDeviceId != null && desktopSettings.selectedMicDeviceId !== currentMicDeviceIdRef.current) {
         void setAudioInputDeviceId(desktopSettings.selectedMicDeviceId).catch(() => undefined);
       }
-      if (desktopSettings.selectedSpeakerDeviceId != null && desktopSettings.selectedSpeakerDeviceId !== currentSinkId) {
+      // Compare against the PREFERRED base device, not the currently-routed sink —
+      // otherwise flipping into loudspeaker mode (which changes currentSinkId) would
+      // make this fire and yank audio straight back to the headset.
+      if (desktopSettings.selectedSpeakerDeviceId != null && desktopSettings.selectedSpeakerDeviceId !== preferredSinkIdRef.current) {
         void setAudioSinkId(desktopSettings.selectedSpeakerDeviceId);
       }
     });
@@ -2606,53 +3000,54 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       cancelled = true;
       unsubscribe();
     };
-  }, [currentSinkId, setAudioInputDeviceId, setAudioSinkId]);
+    // Runs once; the base device is applied on mount and updated live via onSettings.
+    // currentSinkId is intentionally NOT a dep (it changes on every speaker toggle).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setAudioInputDeviceId, setAudioSinkId]);
 
+  // The Speaker button is a temporary override: ON routes to the computer's
+  // built-in LOUDSPEAKER; OFF returns to the base device (the configured headset,
+  // or OS default). It does NOT change the saved base device.
   const toggleSpeaker = useCallback(async () => {
     if (speakerOn) {
-      // Switch back to default (earpiece / OS default)
-      await setAudioSinkId("");
+      // Turn loudspeaker OFF → back to the headset / base output device.
       setSpeakerOn(false);
-    } else {
-      // Find first non-default audio output (usually the speaker/headphones)
-      let devices = audioOutputDevices;
-      if (devices.length === 0) {
-        // Enumerate now if we haven't yet
-        if (typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
-          try {
-            const all = await navigator.mediaDevices.enumerateDevices();
-            devices = all.filter((d) => d.kind === "audiooutput");
-            setAudioOutputDevices(devices);
-          } catch { /* ignore */ }
-        }
-      }
-      // Prefer a device that looks like a speaker; fall back to first non-default
-      const speaker = devices.find(
-        (d) => d.deviceId !== "default" && d.deviceId !== "communications" &&
-          (d.label.toLowerCase().includes("speaker") || d.label.toLowerCase().includes("headphone") ||
-           d.label.toLowerCase().includes("output")),
-      ) ?? devices.find((d) => d.deviceId !== "default" && d.deviceId !== "");
-      if (speaker) {
-        await setAudioSinkId(speaker.deviceId);
-        setSpeakerOn(true);
-      } else {
-        // setSinkId not available or only one device — toggle visual state
-        setSpeakerOn(true);
-      }
+      await applySink(preferredSinkIdRef.current || "");
+      return;
     }
-  }, [speakerOn, audioOutputDevices, setAudioSinkId]);
+    // Turn loudspeaker ON → find the built-in speaker (NOT the headset).
+    let devices = audioOutputDevices;
+    if (devices.length === 0 && typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices = all.filter((d) => d.kind === "audiooutput");
+        setAudioOutputDevices(devices);
+      } catch { /* ignore */ }
+    }
+    const isHeadset = (l: string) => l.includes("headset") || l.includes("headphone") || l.includes("earphone") || l.includes("earbud");
+    const base = preferredSinkIdRef.current;
+    // Prefer a real loudspeaker: labelled "speaker", not a headset, not the base device.
+    const loudspeaker =
+      devices.find((d) => d.deviceId !== base && d.deviceId !== "communications" && d.label.toLowerCase().includes("speaker") && !isHeadset(d.label.toLowerCase())) ??
+      devices.find((d) => d.deviceId !== base && d.deviceId !== "default" && d.deviceId !== "communications" && !isHeadset(d.label.toLowerCase()));
+    setSpeakerOn(true);
+    // If we can't identify a distinct speaker, fall back to OS default ("").
+    await applySink(loudspeaker ? loudspeaker.deviceId : "");
+  }, [speakerOn, audioOutputDevices, applySink]);
 
   // Enumerate devices whenever a call connects
   useEffect(() => {
     if (callState === "connected") void refreshAudioDevices();
   }, [callState, refreshAudioDevices]);
 
-  // Reset speaker state on call end
+  // Reset speaker mode on call end and route audio back to the base device, so the
+  // NEXT call starts on the headset (not stuck on the loudspeaker from last time).
   useEffect(() => {
     if (callState === "idle" || callState === "ended") {
       setSpeakerOn(false);
-      setCurrentSinkId("");
+      void applySink(preferredSinkIdRef.current || "");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callState]);
 
   // ── Blind transfer ──────────────────────────────────────────────────────────
@@ -2766,6 +3161,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     outboundRoutes,
     selectedOutboundRouteId,
     selectedOutboundRoute,
+    sipAccounts,
+    accountRegStates,
     dial,
     answer,
     hangup,
@@ -2856,6 +3253,8 @@ function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneSta
     outboundRoutes: phone.outboundRoutes,
     selectedOutboundRouteId: phone.selectedOutboundRouteId,
     selectedOutboundRoute: phone.selectedOutboundRoute,
+    sipAccounts: phone.sipAccounts,
+    accountRegStates: phone.accountRegStates,
     dialpadInput: phone.dialpadInput,
     sessions: phone.sessions,
     activeSessionId: phone.activeSessionId,
@@ -2886,6 +3285,8 @@ const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   outboundRoutes: [],
   selectedOutboundRouteId: "",
   selectedOutboundRoute: null,
+  sipAccounts: [],
+  accountRegStates: {},
   dial: () => undefined,
   answer: () => undefined,
   hangup: () => undefined,
