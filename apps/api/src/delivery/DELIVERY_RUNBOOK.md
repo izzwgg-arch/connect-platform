@@ -158,6 +158,18 @@ curl -s localhost:3001/delivery/dashboard -H "authorization: Bearer <ADMIN_JWT>"
   DELIVERY_FAILED) so driver submissions never hit an illegal jump.
 - Follow-up: mobile proof-capture screens (camera/signature/PIN) — API is ready; wire the UI.
 
+## Phase 11 — reporting + retention
+- Pure cores (tested): `reportAggregation` (success/first-attempt rates, mean minutes, ETA
+  accuracy, reason breakdown; honestly flags approximate metrics) and `retentionPolicy`
+  (clamp days 1–365, cutoffs, location/eta/session windows).
+- Reporting: `GET /delivery/reports/summary?days=` (permission `can_view_tracking_reports`) —
+  cheap count/groupBy aggregates + a bounded duration sample; no per-row loops.
+- Retention worker: register `runDeliveryRetentionCycle` (apps/worker/src/deliveryRetentionJob.ts)
+  on a ~6h interval — prunes `DriverLocationSample` past the tenant window and old `EtaSnapshot`.
+- Observability follow-up: Prometheus counters (location ingest rate, notification results, queue
+  depth, sync failures) + the support views — the dispatcher System Health / Audit pages already
+  show the intended shape; wire the metrics into the existing prom-client registry.
+
 ## Guardrails (unchanged)
 - No PBX/SMS/DID changes. No production deploy without explicit approval. Feature is off unless
   `DeliveryTenantSettings.enabled = true` for the tenant.

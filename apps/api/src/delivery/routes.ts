@@ -18,6 +18,7 @@ import { registerDeliveryCustomerRoutes } from "./customerRoutes";
 import { registerDeliverySmsRoutes } from "./smsRoutes";
 import { registerDeliveryVoiceRoutes } from "./voiceRoutes";
 import { registerDeliveryProofRoutes } from "./proofRoutes";
+import { registerDeliveryReportRoutes } from "./reportRoutes";
 
 const mockAdapter = new MockOrderSourceAdapter();
 
@@ -181,4 +182,7 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
 
   // ── Proof of delivery + exceptions (Phase 9) ─────────────────────────────────
   await registerDeliveryProofRoutes(app);
+
+  // ── Reporting (Phase 11) ─────────────────────────────────────────────────────
+  await registerDeliveryReportRoutes(app);
 }
