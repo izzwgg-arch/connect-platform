@@ -7,7 +7,7 @@ import { z } from "zod";
 import { requireDeliveryDispatch, requireDriver, verifyOrderSourceSecret } from "./guard";
 import { getDeliverySettings } from "./settingsService";
 import { MockOrderSourceAdapter } from "./orderSourceAdapter";
-import { ingestOrderEvent, listOrders, getOrder, transitionOrder } from "./orderService";
+import { ingestOrderEvent, listOrders, getOrder, transitionOrder, reassignOrder, addOrderNote } from "./orderService";
 import { scanLabel } from "./scanService";
 import { createRun, addStop, startRun, listRunsForDriver } from "./runService";
 import { optimizeRun, stopNavUrl } from "./routeService";
@@ -96,6 +96,25 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
     });
     if (!result.ok) return reply.status(422).send(result);
     return reply.send(result);
+  });
+
+  // Dispatcher support actions on an order: reassign driver + internal note.
+  app.post("/delivery/orders/:id/reassign", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const driverId = String(req.body?.driverId || "");
+    if (!driverId) return reply.status(400).send({ error: "driver_required" });
+    const r = await reassignOrder(user.tenantId, String(req.params.id), driverId, user.sub);
+    if (!r.ok) return reply.status(r.code === "not_found" ? 404 : 400).send(r);
+    return reply.send(r);
+  });
+
+  app.post("/delivery/orders/:id/note", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    const r = await addOrderNote(user.tenantId, String(req.params.id), String(req.body?.text || ""), user.sub);
+    if (!r.ok) return reply.status(r.code === "not_found" ? 404 : 400).send(r);
+    return reply.send(r);
   });
 
   // ── Dispatcher: runs ────────────────────────────────────────────────────────

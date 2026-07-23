@@ -273,3 +273,26 @@ export async function getOrder(tenantId: string, orderId: string) {
     },
   });
 }
+
+/** Reassign an order to a different driver (dispatcher support action). */
+export async function reassignOrder(tenantId: string, orderId: string, driverId: string, actorUserId: string) {
+  const order = await db.deliveryOrder.findFirst({ where: { id: orderId, tenantId }, select: { id: true } });
+  if (!order) return { ok: false as const, code: "not_found" };
+  const driver = await db.driverProfile.findFirst({ where: { id: driverId, tenantId, active: true }, select: { id: true } });
+  if (!driver) return { ok: false as const, code: "driver_not_found" };
+  const existing = await db.deliveryAssignment.findUnique({ where: { orderId }, select: { id: true } });
+  if (existing) await db.deliveryAssignment.update({ where: { id: existing.id }, data: { driverId } });
+  else await db.deliveryAssignment.create({ data: { tenantId, orderId, driverId, clientOpId: `reassign-${generateToken(8)}` } });
+  writeDeliveryAudit({ tenantId, action: "delivery.order.reassigned", entityType: "DeliveryOrder", entityId: orderId, actorUserId, metadata: { driverId } });
+  return { ok: true as const, driverId };
+}
+
+/** Attach an internal dispatcher note (audit-backed; surfaces in the order timeline/audit). */
+export async function addOrderNote(tenantId: string, orderId: string, text: string, actorUserId: string) {
+  const order = await db.deliveryOrder.findFirst({ where: { id: orderId, tenantId }, select: { id: true } });
+  if (!order) return { ok: false as const, code: "not_found" };
+  const note = String(text || "").trim().slice(0, 1000);
+  if (!note) return { ok: false as const, code: "empty_note" };
+  writeDeliveryAudit({ tenantId, action: "delivery.order.note", entityType: "DeliveryOrder", entityId: orderId, actorUserId, metadata: { note } });
+  return { ok: true as const };
+}

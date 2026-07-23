@@ -69,6 +69,10 @@ export const deliveryApi = {
   order: (id: string) => req<any>("GET", `/delivery/orders/${id}`),
   transition: (id: string, to: string, reason?: string) =>
     req<any>("POST", `/delivery/orders/${id}/transition`, { to, reason }),
+  reassign: (id: string, driverId: string) => req<any>("POST", `/delivery/orders/${id}/reassign`, { driverId }),
+  addNote: (id: string, text: string) => req<any>("POST", `/delivery/orders/${id}/note`, { text }),
+  resendTrackingLink: (id: string) => req<{ ok: boolean; token: string; path: string }>("POST", `/delivery/orders/${id}/tracking-link`, {}),
+  revokeTrackingLink: (id: string) => req<any>("POST", `/delivery/orders/${id}/tracking-link/revoke`, {}),
   map: () => req<any[]>("GET", "/delivery/map"),
   exceptions: () => req<any[]>("GET", "/delivery/exceptions"),
   exceptionQueue: () => req<ExceptionRow[]>("GET", "/delivery/exceptions/queue"),
