@@ -34,7 +34,7 @@ test("STRESS: 100 concurrent identity builds — every result matches its own us
   const prisma = {
     tenant: { findUnique: async ({ where }: any) => ({ id: where.id, name: `Tenant ${where.id}` }) },
     user: {
-      findUnique: async ({ where }: any) => ({ id: where.id, name: `User ${where.id}`, email: null, role: "USER", status: "ACTIVE", tenantId: `t${where.id.slice(1)}` }),
+      findUnique: async ({ where }: any) => ({ id: where.id, displayName: `User ${where.id}`, firstName: null, lastName: null, email: null, role: "USER", status: "ACTIVE", tenantId: `t${where.id.slice(1)}` }),
     },
     extension: { findMany: async ({ where }: any) => [{ extNumber: `1${where.ownerUserId.slice(1)}`, displayName: where.ownerUserId, status: "ACTIVE", pbxLink: null }] },
     phoneNumber: { findMany: async () => [] },

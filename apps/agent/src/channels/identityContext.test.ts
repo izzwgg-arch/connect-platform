@@ -9,13 +9,13 @@ function fakePrisma(over: Partial<Record<string, any>> = {}) {
     user: {
       findUnique: async ({ where }: any) =>
         where.id === "u1"
-          ? { id: "u1", name: "Moshe", email: "moshe@bd.com", role: "USER", status: "ACTIVE", tenantId: "t1" }
+          ? { id: "u1", displayName: "Moshe", firstName: "Moshe", lastName: null, email: "moshe@bd.com", role: "USER", status: "ACTIVE", tenantId: "t1" }
           : where.id === "admin1"
-            ? { id: "admin1", name: "Sarah", email: "s@bd.com", role: "TENANT_ADMIN", status: "ACTIVE", tenantId: "t1" }
+            ? { id: "admin1", displayName: "Sarah", firstName: "Sarah", lastName: null, email: "s@bd.com", role: "TENANT_ADMIN", status: "ACTIVE", tenantId: "t1" }
             : where.id === "gone"
-              ? { id: "gone", name: "X", email: null, role: "USER", status: "DISABLED", tenantId: "t1" }
+              ? { id: "gone", displayName: "X", firstName: "X", lastName: null, email: null, role: "USER", status: "DISABLED", tenantId: "t1" }
               : where.id === "foreign"
-                ? { id: "foreign", name: "F", email: null, role: "USER", status: "ACTIVE", tenantId: "t9" }
+                ? { id: "foreign", displayName: "F", firstName: "F", lastName: null, email: null, role: "USER", status: "ACTIVE", tenantId: "t9" }
                 : null,
     },
     extension: {

@@ -50,7 +50,7 @@ export async function buildIdentityContext(
     if (identity.clientUserId) {
       user = await prisma.user.findUnique({
         where: { id: identity.clientUserId },
-        select: { id: true, name: true, email: true, role: true, status: true, tenantId: true },
+        select: { id: true, displayName: true, firstName: true, lastName: true, email: true, role: true, status: true, tenantId: true },
       });
       if (!user || user.status !== "ACTIVE") return { ok: false, reason: "user_inactive_or_missing" };
       // The JWT's tenant must match the user's actual tenant — a mismatch is a
@@ -60,6 +60,11 @@ export async function buildIdentityContext(
       }
     }
     const standing: Standing = user ? standingFromRole(user.role) : "tenant_user";
+    // User model has no single `name` column — derive a display name from
+    // displayName, else "firstName lastName", else null.
+    const userName: string | null = user
+      ? (user.displayName || [user.firstName, user.lastName].filter(Boolean).join(" ") || null)
+      : null;
 
     const extRows = user
       ? await prisma.extension.findMany({
@@ -96,7 +101,7 @@ export async function buildIdentityContext(
     return {
       ok: true,
       context: {
-        user: { id: user?.id ?? "", name: user?.name ?? null, email: user?.email ?? null },
+        user: { id: user?.id ?? "", name: userName, email: user?.email ?? null },
         standing,
         tenant: { id: tenant.id, name: tenant.name ?? null },
         extensions: extRows.map((e: any) => ({
