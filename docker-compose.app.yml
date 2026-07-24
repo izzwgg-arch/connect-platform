@@ -53,6 +53,11 @@ services:
       PBX_SUPPORTS_ACTIVE_CALL_POLLING: ${PBX_SUPPORTS_ACTIVE_CALL_POLLING:-false}
       PBX_WEBHOOK_EVENT_TYPES: ${PBX_WEBHOOK_EVENT_TYPES:-}
       EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+      # Firebase direct-FCM call wakes: the service-account JSON is exposed to the
+      # container via the /opt/connectcomms → /host-inventory mount below. Point the
+      # sender at it so call-critical Android wakes go direct (Doze-exempt) instead of
+      # silently falling back to the Expo relay. Missing file/path = Expo fallback.
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/host-inventory/opt/connectcomms/env/firebase-service-account.json}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
       # Shared secret for /internal/cdr-ingest — must match telephony service CDR_INGEST_SECRET.
@@ -202,6 +207,11 @@ services:
       PBX_SUPPORTS_ACTIVE_CALL_POLLING: ${PBX_SUPPORTS_ACTIVE_CALL_POLLING:-false}
       PBX_WEBHOOK_EVENT_TYPES: ${PBX_WEBHOOK_EVENT_TYPES:-}
       EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+      # Firebase direct-FCM call wakes: the service-account JSON is exposed to the
+      # container via the /opt/connectcomms → /host-inventory mount below. Point the
+      # sender at it so call-critical Android wakes go direct (Doze-exempt) instead of
+      # silently falling back to the Expo relay. Missing file/path = Expo fallback.
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/host-inventory/opt/connectcomms/env/firebase-service-account.json}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
       CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
