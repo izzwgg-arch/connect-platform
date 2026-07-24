@@ -1,0 +1,36 @@
+Hi — the Connect delivery-tracking feature is code-complete and merged to `main`
+(verified: all UI screens match the mockups, light/dark checked, 46M-iteration
+logic stress test passed). Two admin-only steps are left to ship it. Full details
+are in the repo at apps/api/src/delivery/ADMIN_HANDOFF.md.
+
+1) BUILD THE DRIVER APK — in an Administrator PowerShell (the dev account can't
+   read the pnpm store):
+
+   $env:JAVA_HOME="C:\Users\Ezra\tools\jdk-17.0.19+10"
+   $env:ANDROID_HOME="C:\Users\Ezra\Android\Sdk"
+   $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
+   cd C:\dev\projects\connect2\apps\mobile\android
+   .\gradlew.bat assembleRelease
+
+   APK lands in: app\build\outputs\apk\release\app-release.apk
+
+2) DEPLOY `main` — from your keyed shell, dry-run first:
+
+   bash scripts/release/deploy-direct.sh api --branch main --dry-run
+   bash scripts/release/deploy-direct.sh api --branch main
+   bash scripts/release/deploy-direct.sh portal --branch main
+   bash scripts/release/deploy-direct.sh worker --branch main
+
+   Then add two env vars on the host (/opt/connectcomms/env/.env.platform) and
+   re-run the api step:
+   DELIVERY_ORDER_SOURCE_SECRET=<strong random, e.g. openssl rand -hex 32>
+   PUBLIC_TRACKING_BASE_URL=https://app.connectcomunications.com
+
+   Verify: curl -s https://app.connectcomunications.com/api/track/bad-token
+           -> {"state":"invalid"}
+
+GUARDRAILS: migration is additive-only (22 new tables), no PBX/DID/SMS-routing
+changes, feature stays OFF until a tenant is enabled.
+
+HEADS-UP: this is the first real compile of the code, so if either step throws
+build errors, please send me the output — they're quick to fix.
