@@ -191,6 +191,16 @@ anchor_count()    { grep -cF "$ANCHOR_SUBSTR" "$BASEPLAN" 2>/dev/null || true; }
 is_patched()      { grep -qF "$MARKER" "$BASEPLAN" 2>/dev/null; }
 has_old_dispatch(){ grep -qF "$OLD_MARKER" "$BASEPLAN" 2>/dev/null; }
 
+# `asterisk -rx` output can carry embedded ANSI/VT100 color escape codes even
+# when captured non-interactively (e.g. via ssh -rx or from within a script) —
+# invisible to a human eye reading a real terminal, but they can split a plain
+# literal substring across escape-code boundaries and break `grep -F`. Strip
+# them before any live-dialplan text match. (Root-caused 2026-07-02: a manual
+# `asterisk -rx 'dialplan show connect-localdial-moh'` probe visibly showed the
+# expected sentinel/header text, yet the installer's own `grep -qF` against the
+# same live command reported a false FAIL.)
+strip_ansi() { sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g'; }
+
 # ── do_rollback ─────────────────────────────────────────────────────────────
 do_rollback() {
   [[ $EUID -eq 0 ]] || die "Run as root (sudo)."
@@ -316,21 +326,35 @@ do_health_check() {
   fi
 
   # 6. live: GosubIf visible in [sub-local-dialing] (format-tolerant single-token grep).
-  #    Asterisk `dialplan show` may re-wrap app args; the context token is a single
-  #    contiguous string, so grep -F on it survives spacing/formatting differences.
+  #    Asterisk `dialplan show` may re-wrap app args and/or carry ANSI color
+  #    codes; the context token is a single contiguous string, and stripping
+  #    ANSI codes first makes grep -F survive both spacing and color-escape
+  #    differences.
   checks=$((checks + 1))
-  if asterisk -rx "dialplan show sub-local-dialing" 2>&1 | grep -qF "$GENERIC_CTX"; then
+  BASEPLAN_LIVE_OUT="$(asterisk -rx "dialplan show sub-local-dialing" 2>&1 | strip_ansi)"
+  if printf '%s\n' "$BASEPLAN_LIVE_OUT" | grep -qF "$GENERIC_CTX"; then
     printf '[PASS] live [sub-local-dialing] shows the %s GosubIf\n' "$GENERIC_CTX"
   else
     printf '[FAIL] live [sub-local-dialing] does NOT show the %s GosubIf\n' "$GENERIC_CTX"; fail=$((fail + 1))
   fi
 
-  # 7. live: the generic hook context is loaded from the official file (sentinel).
+  # 7. live: the generic hook context is loaded from the official file.
+  #    Confirmed live output format (2026-07-02 manual probe):
+  #      [ Context 'connect-localdial-moh' created by 'pbx_config' ]
+  #      NoOp(Connect generic caller-leg MOH hook prefix=${TENANT_PREFIX} preset=${CHANNEL(musicclass)})
+  #    Match BOTH the context header line AND the sentinel NoOp text (after
+  #    stripping ANSI codes) — stronger proof than either alone, and immune to
+  #    the ANSI-splitting false-negative that a bare single-string grep hit.
   checks=$((checks + 1))
-  if asterisk -rx "dialplan show $GENERIC_CTX" 2>&1 | grep -qF "$HOOK_SENTINEL"; then
-    printf '[PASS] live [%s] loaded (official __67 sentinel present)\n' "$GENERIC_CTX"
+  GENERIC_CTX_LIVE_OUT="$(asterisk -rx "dialplan show $GENERIC_CTX" 2>&1 | strip_ansi)"
+  HAS_CTX_HEADER=0; HAS_SENTINEL=0
+  printf '%s\n' "$GENERIC_CTX_LIVE_OUT" | grep -qF "Context '${GENERIC_CTX}'" && HAS_CTX_HEADER=1
+  printf '%s\n' "$GENERIC_CTX_LIVE_OUT" | grep -qF "$HOOK_SENTINEL" && HAS_SENTINEL=1
+  if [[ "$HAS_CTX_HEADER" = "1" && "$HAS_SENTINEL" = "1" ]]; then
+    printf '[PASS] live [%s] loaded (context header + official sentinel present)\n' "$GENERIC_CTX"
   else
-    printf '[FAIL] live [%s] not loaded / official sentinel absent\n' "$GENERIC_CTX"; fail=$((fail + 1))
+    printf '[FAIL] live [%s] not loaded / official sentinel absent (header=%s sentinel=%s)\n' "$GENERIC_CTX" "$HAS_CTX_HEADER" "$HAS_SENTINEL"
+    fail=$((fail + 1))
   fi
 
   printf '\n====================================================\n'
@@ -453,12 +477,12 @@ step "[5/5] Reload dialplan + verify GosubIf and generic context"
 RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
 echo "  ↳ $RELOAD_OUT"
 
-if ! asterisk -rx "dialplan show sub-local-dialing" 2>&1 | grep -qF "$GENERIC_CTX"; then
+if ! asterisk -rx "dialplan show sub-local-dialing" 2>&1 | strip_ansi | grep -qF "$GENERIC_CTX"; then
   warn "GosubIf not visible in live sub-local-dialing after reload."
 fi
-SHOW_OUT="$(asterisk -rx "dialplan show $GENERIC_CTX" 2>&1 || true)"
+SHOW_OUT="$(asterisk -rx "dialplan show $GENERIC_CTX" 2>&1 | strip_ansi || true)"
 echo "$SHOW_OUT" | sed 's/^/      /'
-if echo "$SHOW_OUT" | grep -qF "$HOOK_SENTINEL"; then
+if echo "$SHOW_OUT" | grep -qF "Context '${GENERIC_CTX}'" && echo "$SHOW_OUT" | grep -qF "$HOOK_SENTINEL"; then
   echo "  ↳ OK — generic [connect-localdial-moh] context loaded"
 else
   warn "Generic context not visible — check reload output above."

@@ -80,6 +80,29 @@ export class ModelRouter {
     return out;
   }
 
+  /**
+   * Directly ping ONE provider (no routing, no failover) — used by the owner
+   * self-test so "Test OpenAI" actually calls OpenAI and "Test Claude" actually
+   * calls Anthropic. Throws if that provider's key isn't configured or the call
+   * fails, so the UI shows the real result instead of silently failing over.
+   */
+  async ping(provider: ProviderName): Promise<{ provider: ProviderName; model: string; text: string }> {
+    if (provider === "openai" && !this.openai) throw new Error("OpenAI key not configured");
+    if (provider === "anthropic" && !this.anthropic) throw new Error("Anthropic key not configured");
+    const model = provider === "openai" ? OPENAI_MODEL : ANTHROPIC_MODEL;
+    // Larger max_tokens so reasoning-style models still emit visible output.
+    const res = await this.callProvider(
+      provider,
+      model,
+      [
+        { role: "system", content: "Reply with exactly: SELFTEST-OK" },
+        { role: "user", content: "ping" },
+      ],
+      200,
+    );
+    return { provider, model, text: res.text };
+  }
+
   async complete(task: TaskClass, messages: ChatMessage[], opts: { maxTokens?: number; conversationId?: string } = {}): Promise<CompletionResult> {
     const route = this.routes[task];
     if (!route) throw new Error(`No route for task class ${task}`);

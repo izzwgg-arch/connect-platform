@@ -4,6 +4,12 @@
 > agents (Composer, Background, CLI, subagents) and to any human running agent
 > commands on their behalf.
 
+> **SSH ACCESS — CANONICAL:** To reach the Connect server (loopcom) or the PBX, follow
+> **`CLAUDE.md` → "CANONICAL SSH METHOD"** and nothing else: stage the repo key from
+> `.connect-ssh/` and `ssh -i` **from the Linux sandbox**. Ignore any other SSH-login
+> style below or in other docs (e.g. an `ssh connect` alias, or running `ssh` through
+> the PowerShell MCP) — those are superseded. The PowerShell MCP blocks `ssh`/`scp`.
+
 ## ⛔ ABSOLUTE RULE — Connect must NOT modify the PBX without explicit owner permission
 
 > **Cursor specifically is STRICTLY READ-ONLY on the PBX, always.** Owner-mandated
@@ -207,8 +213,10 @@ For **every** deploy that you care about:
  not match what you enqueued, your code did not ship.
 2. Confirm the new code is actually inside the running container by reading
  the file from inside it:
- ```pwsh
- ssh connect "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>"
+ ```bash
+ # SSH per CLAUDE.md CANONICAL SSH METHOD (from the sandbox), e.g.:
+ ssh -i /tmp/loopcom_key -o IdentitiesOnly=yes root@45.14.194.179 \
+   "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>"
  ```
 3. If either check fails, **do not retry blindly**. SSH to the server,
  capture the dirty working-tree diff (`cd /opt/connectcomms/app && git diff -- <path>`)
@@ -271,3 +279,7 @@ Direct `docker compose` / `deploy-tag.sh` execution is **break-glass only**
 - Per-service scripts: `scripts/deploy-<service>.sh`
 - Shared helpers: `scripts/lib/deploy-common.sh`
 - Worker source: `ops/deploy-queue/src/`
+
+## Imported Claude Cowork project instructions
+
+Never ask me to run stuff in PowerShell, always use the MCP with cursor to open an agent and run commands in PowerShell or have cursor run commands in PowerShell. Using the MCP, I would like to automate every task for you straight to communicate with cursor until we have proved that the task that I gave you is working end to end on the server efficient and sustainable for long term.

@@ -25,8 +25,10 @@ export interface AgentConfig {
   ownerEmail: string;
   teamEmails: string[];
   auditDir: string;
-  /** Everett.ai key for Yiddish STT (legacy placeholder). */
+  /** Everett (ivrit.ai) — RunPod API key for our serverless STT endpoint. */
   everettApiKey: string | null;
+  /** Everett (ivrit.ai) — RunPod serverless endpoint ID. */
+  everettEndpointId: string | null;
   /** Yiddish Labs — advanced Yiddish↔English transcription + text processing. */
   yiddishLabsApiKey: string | null;
   /** Shared secret to verify inbound Yiddish Labs webhooks. */
@@ -74,6 +76,7 @@ export function loadConfig(): AgentConfig {
       .filter(Boolean),
     auditDir: process.env.AGENT_AUDIT_DIR ?? "/var/log/connect-agent",
     everettApiKey: envStr("EVERETT_API_KEY"),
+    everettEndpointId: envStr("EVERETT_ENDPOINT_ID"),
     yiddishLabsApiKey: envStr("YIDDISHLABS_API_KEY"),
     yiddishLabsWebhookSecret: envStr("YIDDISHLABS_WEBHOOK_SECRET"),
     elevenLabsApiKey: envStr("ELEVENLABS_API_KEY"),

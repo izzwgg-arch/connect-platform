@@ -90,6 +90,10 @@ class SipKeepAliveService : Service() {
     private const val WAKE_LOCK_TAG = "ConnectCommunications:SipKeepAlive"
     private const val PREFS_NAME = "connect_keepalive"
     private const val PREF_KEEPALIVE_ENABLED = "enabled"
+    // Server-controlled kill-switch for the standing-registration keep-alive.
+    // Mirrored from the /mobile/devices/register response by JS. Default false
+    // => the heartbeat maintenance re-register below never fires (today's behavior).
+    private const val PREF_STANDING_REG_ENABLED = "standing_registration_enabled"
     private const val ACTION_RESTART_KEEPALIVE = "com.connectcommunications.mobile.SipKeepAlive.RESTART"
 
     /**
@@ -193,6 +197,31 @@ class SipKeepAliveService : Service() {
       return try {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
           .getBoolean(PREF_KEEPALIVE_ENABLED, false)
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
+    /**
+     * Standing-registration kill-switch. Written by JS (IncomingCallUiModule
+     * .setStandingRegistrationEnabled) from the server register response, so ops
+     * can flip the persistent keep-alive on/off per device with no new APK.
+     */
+    @JvmStatic
+    fun setStandingRegistrationEnabled(context: Context, enabled: Boolean) {
+      try {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .edit()
+          .putBoolean(PREF_STANDING_REG_ENABLED, enabled)
+          .apply()
+      } catch (_: Throwable) {}
+    }
+
+    @JvmStatic
+    fun isStandingRegistrationEnabled(context: Context): Boolean {
+      return try {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .getBoolean(PREF_STANDING_REG_ENABLED, false)
       } catch (_: Throwable) {
         false
       }
@@ -511,6 +540,22 @@ class SipKeepAliveService : Service() {
       // SIGKILLs us before the next fire. Idempotent — FLAG_UPDATE_CURRENT keeps
       // a single pending alarm.
       scheduleHeartbeat(applicationContext)
+      // STANDING REGISTRATION (server kill-switch, default OFF). The heartbeat
+      // fires onStartCommand with a null action ~every 60s (and on first start);
+      // use that cadence to refresh the SIP registration headlessly so it never
+      // lapses while the app is swiped away. Skipped during an active call and
+      // when the flag is off, so it cannot disturb in-call state or other devices.
+      if (action == null && inCall == null &&
+          isStandingRegistrationEnabled(applicationContext)) {
+        try {
+          val maint = Intent(this, SipPreRegisterTaskService::class.java)
+          maint.putExtra("mode", "maintenance")
+          startService(maint)
+          Log.i(TAG, "standing-registration: maintenance re-register dispatched")
+        } catch (t: Throwable) {
+          Log.w(TAG, "standing-registration: maintenance dispatch failed: ${t.message}")
+        }
+      }
       if (action == ACTION_EXIT_CALL) {
         Log.i(TAG, "[CONNECT_CALL_UI] foreground_service_idle — idle notification reposted after call exit")
       }

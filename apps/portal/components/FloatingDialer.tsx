@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Headphones, Info, Maximize2, MessageSquare, Phone, Search, Settings, Voicemail, X } from "lucide-react";
+import { Headphones, Info, MessageSquare, Phone, Search, Settings, Voicemail, X } from "lucide-react";
 import { ConnectSelect } from "./ConnectSelect";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
@@ -923,12 +923,6 @@ export function FloatingDialer() {
     void window.connectDesktop?.window?.updateSettings?.(patch).then((value) => setDesktopSettings(value)).catch(() => undefined);
   }, []);
 
-  const popOutMiniDialer = useCallback(() => {
-    const openMini = window.connectDesktop?.window?.openMini;
-    if (!openMini) return;
-    void openMini().then(() => setOpen(false));
-  }, []);
-
   const backHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleBackPointerDown = useCallback(() => {
@@ -996,18 +990,13 @@ export function FloatingDialer() {
               <div className="fd-header-actions">
                 <RingerControl checked={ringerOn} onChange={updateRinger} />
                 {isDesktop && (
-                  <>
-                    <DesktopSettingsMenu
-                      open={settingsOpen}
-                      phone={phone}
-                      settings={desktopSettings}
-                      onToggle={() => setSettingsOpen((value) => !value)}
-                      onUpdate={updateDesktopSettings}
-                    />
-                    <button className="fd-icon-plain" type="button" onClick={popOutMiniDialer} title="Pop out mini dialer">
-                      <Maximize2 size={16} />
-                    </button>
-                  </>
+                  <DesktopSettingsMenu
+                    open={settingsOpen}
+                    phone={phone}
+                    settings={desktopSettings}
+                    onToggle={() => setSettingsOpen((value) => !value)}
+                    onUpdate={updateDesktopSettings}
+                  />
                 )}
                 <button className="fd-chip-btn" type="button" onClick={() => setBlfOpen((value) => !value)} data-active={blfOpen ? "true" : "false"}>
                   BLF

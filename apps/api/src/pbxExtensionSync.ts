@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@connect/db";
-import type { VitalPbxClient } from "@connect/integrations";
+import type { VitalPbxClient, PjsipEndpointLiveDetail } from "@connect/integrations";
+import { queryPjsipEndpointLive, buildWebrtcCandidateEndpointName } from "@connect/integrations";
 import { encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
@@ -29,6 +30,150 @@ async function fetchWebrtcProfileIds(client: VitalPbxClient, vitalTenantId: stri
   }
 }
 
+export interface SelectedDeviceState {
+  activeDevice: any | null;
+  webrtcDevice: any | null;
+  webrtcEnabled: boolean;
+  pbxSipUsername: string;
+  pbxDeviceName: string | null;
+  pbxDeviceIdFromSync: string | null;
+  rawSecret: string | null;
+}
+
+/**
+ * Pure device-selection logic extracted from the sync loop so the "which
+ * device is active / is it WebRTC" decision can be unit tested directly
+ * against VitalPBX API fixtures, without a database or network. Behavior is
+ * unchanged from the original inline implementation — see the detection-order
+ * comment on `syncExtensionsFromPbx` below for rationale.
+ */
+export function selectActiveDeviceAndWebrtcState(
+  extNumber: string,
+  devices: any[],
+  webrtcProfileIds: Set<string>,
+): SelectedDeviceState {
+  const endsWithWebrtcSuffix = (d: any): boolean => {
+    const u = String(d?.user ?? "").trim();
+    const n = String(d?.device_name ?? "").trim();
+    return /_1$/.test(u) || /_1$/.test(n);
+  };
+  const profileIsWebrtc = (d: any): boolean => webrtcProfileIds.has(String(d?.profile_id));
+  const suffixWebrtcDevice = devices.find(endsWithWebrtcSuffix) ?? null;
+  const webrtcDevice =
+    (suffixWebrtcDevice && (webrtcProfileIds.size === 0 || profileIsWebrtc(suffixWebrtcDevice))
+      ? suffixWebrtcDevice
+      : null) ??
+    (webrtcProfileIds.size > 0 ? devices.find(profileIsWebrtc) : null) ??
+    null;
+  const activeDevice = webrtcDevice ?? devices[0] ?? null;
+
+  const pbxSipUsername = activeDevice?.user ? String(activeDevice.user).trim() : extNumber;
+  const pbxDeviceName: string | null = activeDevice?.device_name ? String(activeDevice.device_name).trim() : null;
+  const webrtcEnabled = !!webrtcDevice;
+  const pbxDeviceIdFromSync: string | null =
+    activeDevice?.device_id != null ? String(activeDevice.device_id) : null;
+  const rawSecret: string | null = (() => {
+    const s = activeDevice?.secret ?? activeDevice?.password ?? activeDevice?.sip_password ?? null;
+    return typeof s === "string" && s.trim() ? s.trim() : null;
+  })();
+
+  return { activeDevice, webrtcDevice, webrtcEnabled, pbxSipUsername, pbxDeviceName, pbxDeviceIdFromSync, rawSecret };
+}
+
+export interface LiveWebrtcConfirmation {
+  confirmed: boolean;
+  source: "api_devices_endpoint" | "ami_live" | null;
+  pbxDeviceName: string | null;
+  pbxSipUsername: string | null;
+  rawSecret: string | null;
+}
+
+/**
+ * Truthful live cross-check for when the bulk `/api/v2/extensions` response
+ * did not surface a WebRTC device for this extension. VitalPBX's bulk list
+ * can omit or fail to classify a device that an admin created directly in
+ * the VitalPBX GUI (confirmed root cause: ext 107 / T8_107_1 — a real,
+ * live, wss+DTLS device identical to the working T8_101_1 — was reported as
+ * "no WebRTC device" purely because it wasn't visible in that one API
+ * response). Two read-only fallbacks, in order:
+ *
+ *   1. `GET /api/v2/extensions/:id/devices` — a separate, per-extension
+ *      VitalPBX read that sometimes surfaces devices the bulk list omits.
+ *   2. Live AMI `PJSIPShowEndpoint` read against Asterisk itself for the
+ *      deterministic `T<code>_<ext>_1` device name — the actual live truth,
+ *      independent of anything VitalPBX's REST API chooses to report.
+ *
+ * Never mutates anything; both steps are pure reads. Either step failing
+ * (network error, AMI not configured, endpoint genuinely absent) is treated
+ * as "not confirmed" so callers fall back to the existing PENDING behavior.
+ */
+export async function confirmWebrtcDeviceLive(params: {
+  client: VitalPbxClient;
+  pbxExtensionId: string;
+  vitalTenantId: string;
+  tenantCode: string | null;
+  extNumber: string;
+  liveEndpointReader?: (endpoint: string) => Promise<PjsipEndpointLiveDetail | null>;
+}): Promise<LiveWebrtcConfirmation> {
+  const notConfirmed: LiveWebrtcConfirmation = {
+    confirmed: false,
+    source: null,
+    pbxDeviceName: null,
+    pbxSipUsername: null,
+    rawSecret: null,
+  };
+
+  // 1. Per-extension devices read — a second, independent VitalPBX GET that
+  //    can reveal devices the bulk extensions.list response omitted.
+  try {
+    const devices = await params.client.getExtensionDevices(params.pbxExtensionId, params.vitalTenantId);
+    const webrtcSuffixDevice = (Array.isArray(devices) ? devices : []).find((d: any) => {
+      const u = String(d?.user ?? "").trim();
+      const n = String(d?.device_name ?? "").trim();
+      return /_1$/.test(u) || /_1$/.test(n);
+    });
+    if (webrtcSuffixDevice) {
+      const rawSecret = (() => {
+        const s = webrtcSuffixDevice?.secret ?? webrtcSuffixDevice?.password ?? webrtcSuffixDevice?.sip_password ?? null;
+        return typeof s === "string" && s.trim() ? s.trim() : null;
+      })();
+      return {
+        confirmed: true,
+        source: "api_devices_endpoint",
+        pbxDeviceName: webrtcSuffixDevice.device_name ? String(webrtcSuffixDevice.device_name).trim() : null,
+        pbxSipUsername: webrtcSuffixDevice.user ? String(webrtcSuffixDevice.user).trim() : null,
+        rawSecret,
+      };
+    }
+  } catch {
+    // Non-fatal — fall through to the AMI live check.
+  }
+
+  // 2. Live AMI read against Asterisk for the deterministic "_1" device name.
+  //    AMI's PJSIPShowEndpoint never returns the auth secret, so this can
+  //    confirm existence but not capture a password (see Phase 3 / credential
+  //    ownership handling in the caller).
+  if (!params.tenantCode) return notConfirmed;
+  try {
+    const reader = params.liveEndpointReader ?? queryPjsipEndpointLive;
+    const candidateName = buildWebrtcCandidateEndpointName(params.tenantCode, params.extNumber);
+    const detail = await reader(candidateName);
+    if (detail?.isWebrtcCapable) {
+      return {
+        confirmed: true,
+        source: "ami_live",
+        pbxDeviceName: candidateName,
+        pbxSipUsername: candidateName,
+        rawSecret: null,
+      };
+    }
+  } catch {
+    // Non-fatal — AMI unreachable/unconfigured falls back to existing PENDING behavior.
+  }
+
+  return notConfirmed;
+}
+
 export interface ExtensionSyncTenantResult {
   vitalTenantId: string;
   displayName: string | null;
@@ -50,6 +195,12 @@ export interface ExtensionSyncTenantResult {
    * drifted out of the live Asterisk config and `apply_changes` was a no-op.
    */
   forcedRegenerate?: boolean;
+  /**
+   * Extensions where the bulk API showed no WebRTC device but a live
+   * cross-check (per-extension devices read or AMI PJSIPShowEndpoint)
+   * confirmed one truly exists on the PBX. See `confirmWebrtcDeviceLive`.
+   */
+  liveConfirmedWebrtcCount?: number;
 }
 
 export interface ExtensionSyncResult {
@@ -65,6 +216,8 @@ export interface ExtensionSyncResult {
   totalAppliedChanges: number;
   /** Number of tenants force-regenerated (no-op tenant re-save) due to config drift. */
   totalForcedRegenerate: number;
+  /** Total extensions where a live cross-check confirmed a WebRTC device the bulk API missed. */
+  totalLiveConfirmedWebrtc: number;
 }
 
 /**
@@ -88,6 +241,8 @@ export async function syncExtensionsFromPbx(
   client: VitalPbxClient,
   options?: {
     vitalTenantId?: string;
+    /** Injectable for tests; defaults to the real AMI live-read from @connect/integrations. */
+    liveEndpointReader?: (endpoint: string) => Promise<PjsipEndpointLiveDetail | null>;
   },
 ): Promise<ExtensionSyncResult> {
   // 1. Load all VitalPBX tenant directory entries for this instance
@@ -121,6 +276,7 @@ export async function syncExtensionsFromPbx(
     totalAutoProvisioned: 0,
     totalAppliedChanges: 0,
     totalForcedRegenerate: 0,
+    totalLiveConfirmedWebrtc: 0,
   };
 
   for (const td of tenantDirs) {
@@ -257,45 +413,59 @@ export async function syncExtensionsFromPbx(
         // "102_1" as a normal PJSIP/UDP device. Marking that as WebRTC makes
         // Connect say "synced" while the softphone stays stuck connecting.
         const devices: any[] = Array.isArray(ext.devices) ? ext.devices : [];
-        const endsWithWebrtcSuffix = (d: any): boolean => {
-          const u = String(d?.user ?? "").trim();
-          const n = String(d?.device_name ?? "").trim();
-          return /_1$/.test(u) || /_1$/.test(n);
-        };
-        const profileIsWebrtc = (d: any): boolean => webrtcProfileIds.has(String(d?.profile_id));
-        const suffixWebrtcDevice = devices.find(endsWithWebrtcSuffix) ?? null;
-        const webrtcDevice =
-          (suffixWebrtcDevice && (webrtcProfileIds.size === 0 || profileIsWebrtc(suffixWebrtcDevice))
-            ? suffixWebrtcDevice
-            : null) ??
-          (webrtcProfileIds.size > 0
-            ? devices.find(profileIsWebrtc)
-            : null) ??
-          null;
-        const activeDevice = webrtcDevice ?? devices[0] ?? null;
-
-        // SIP username: use the device's "user" field (e.g. "103_1"), NOT the plain extension number.
-        // The device user is what VitalPBX uses as the PJSIP endpoint/auth id for registration.
-        const pbxSipUsername = activeDevice?.user
-          ? String(activeDevice.user).trim()
-          : extNumber;
-        const pbxDeviceName: string | null = activeDevice?.device_name
-          ? String(activeDevice.device_name).trim()
+        let selected = selectActiveDeviceAndWebrtcState(extNumber, devices, webrtcProfileIds);
+        let { pbxSipUsername, pbxDeviceName, pbxDeviceIdFromSync, rawSecret } = selected;
+        let webrtcEnabled = selected.webrtcEnabled;
+        let webrtcSource: "bulk_api" | "api_devices_endpoint" | "ami_live" | null = webrtcEnabled
+          ? "bulk_api"
           : null;
-        const webrtcEnabled: boolean = !!webrtcDevice;
+
+        // Truthful live cross-check (see `confirmWebrtcDeviceLive`): the bulk
+        // list can omit or misclassify an admin-created "_1" device that is
+        // genuinely live on the PBX. Only runs when the bulk response found
+        // nothing, and only ever reads — never writes — the PBX.
+        if (!webrtcEnabled && pbxExtensionId) {
+          const live = await confirmWebrtcDeviceLive({
+            client,
+            pbxExtensionId,
+            vitalTenantId: td.vitalTenantId,
+            tenantCode: (td as any).tenantCode ?? null,
+            extNumber,
+            liveEndpointReader: options?.liveEndpointReader,
+          });
+          if (live.confirmed) {
+            webrtcEnabled = true;
+            webrtcSource = live.source;
+            pbxDeviceName = live.pbxDeviceName ?? pbxDeviceName;
+            pbxSipUsername = live.pbxSipUsername ?? pbxSipUsername;
+            rawSecret = live.rawSecret ?? rawSecret;
+            tenantResult.liveConfirmedWebrtcCount = (tenantResult.liveConfirmedWebrtcCount ?? 0) + 1;
+            result.totalLiveConfirmedWebrtc++;
+          }
+        }
         if (webrtcEnabled) {
           syncFoundWebrtcExtension = true;
         }
-        const pbxDeviceIdFromSync: string | null = activeDevice?.device_id != null
-          ? String(activeDevice.device_id)
-          : null;
+        if (webrtcSource && webrtcSource !== "bulk_api") {
+          // Observability signal for the drift-reconcile worker / operators:
+          // this extension's WebRTC device was only visible via a live
+          // cross-check, not VitalPBX's bulk extensions list.
+          console.info(
+            JSON.stringify({
+              event: "pbx_webrtc_live_confirmed",
+              tenantId: resolvedTenantId,
+              vitalTenantId: td.vitalTenantId,
+              extNumber,
+              source: webrtcSource,
+            }),
+          );
+        }
 
         // VitalPBX returns devices[].secret — the SIP password in plain text
-        // Use the active (WebRTC-preferred) device's secret.
-        const rawSecret: string | null = (() => {
-          const s = activeDevice?.secret ?? activeDevice?.password ?? activeDevice?.sip_password ?? null;
-          return typeof s === "string" && s.trim() ? s.trim() : null;
-        })();
+        // Use the active (WebRTC-preferred) device's secret. (AMI-confirmed
+        // devices never carry a secret here — PJSIPShowEndpoint never
+        // returns auth passwords — so those stay PENDING/SIP_CREDENTIAL_NOT_SET
+        // until a secret is captured through a read-only device API path.)
         const sipPasswordEncrypted: string | null =
           rawSecret && hasCredentialsMasterKey() ? encryptJson(rawSecret) : null;
 

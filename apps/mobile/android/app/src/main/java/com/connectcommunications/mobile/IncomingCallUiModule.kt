@@ -484,6 +484,20 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   }
 
   /**
+   * Server-controlled kill-switch for the standing-registration keep-alive.
+   * JS calls this with the `standingRegistration` boolean from the
+   * /mobile/devices/register response; the FGS heartbeat reads the mirrored
+   * pref to decide whether to headlessly refresh the SIP registration. Default
+   * (never called / false) preserves today's behavior exactly.
+   */
+  @ReactMethod
+  fun setStandingRegistrationEnabled(enabled: Boolean) {
+    val ctx = reactApplicationContext.applicationContext
+    Log.i(TAG, "setStandingRegistrationEnabled(" + enabled + ")")
+    SipKeepAliveService.setStandingRegistrationEnabled(ctx, enabled)
+  }
+
+  /**
    * Mirror the signed-in user's API auth token + API base URL into a private
    * SharedPreferences file so the native ChatReplyReceiver can send inline
    * notification replies even when the JS runtime / React process is not alive

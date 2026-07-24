@@ -7,8 +7,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Msg = { id: string; role: string; content: string; createdAt?: string };
+type Msg = { id: string; role: string; content: string; createdAt?: string; pending?: boolean };
 type Conv = { id: string; startedAt: string; status: string; language?: string | null };
+
+// Instant acknowledgment: Yiddish Labs' English→Yiddish leg is a fixed ~9s, so
+// we show this pre-approved Yiddish ack INSTANTLY (0ms) while the real answer
+// translates — the exact YL rendering of "One moment — I'm looking into that…".
+const ACK_YI = "ביטע ווארט איין רגע בשעת איך טשעק דאס איבער פאר אייך.";
+const ACK_EN = "One moment — I'm looking into that for you.";
+const isYiddish = (s: string) => /[֐-׿]/.test(s);
 
 function token(): string {
   if (typeof window === "undefined") return "";
@@ -39,23 +46,42 @@ export default function SupportChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Typewriter reveal of the final reply, replacing the pending ack bubble.
+  const typeOut = useCallback((id: string, full: string) => {
+    const stepChars = Math.max(2, Math.round(full.length / 60));
+    let i = 0;
+    const tick = () => {
+      i = Math.min(full.length, i + stepChars);
+      const done = i >= full.length;
+      const shown = full.slice(0, i);
+      setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, content: shown, pending: !done } : msg)));
+      if (!done) setTimeout(tick, 16);
+    };
+    tick();
+  }, []);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || sending) return;
     setSending(true);
     setError(null);
     setInput("");
-    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: text }]);
+    // Instant acknowledgment (Yiddish if the customer wrote Yiddish) so there's
+    // zero perceived wait while Yiddish Labs translates the real answer.
+    const ackId = `ack-${Date.now()}`;
+    const ack = isYiddish(text) ? ACK_YI : ACK_EN;
+    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: text }, { id: ackId, role: "assistant", content: ack, pending: true }]);
     try {
       const res = await agentPost<{ conversationId: string; reply: string }>("message", { text, channel: "chat" });
       setConversationId(res.conversationId);
-      setMessages((m) => [...m, { id: `r-${Date.now()}`, role: "assistant", content: res.reply }]);
+      typeOut(ackId, res.reply); // replace the pending ack with the real reply
     } catch {
+      setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "", pending: false } : msg)));
       setError("Couldn't reach the support assistant. Please try again, or contact us directly.");
     } finally {
       setSending(false);
     }
-  }, [input, sending]);
+  }, [input, sending, typeOut]);
 
   const startNewChat = useCallback(async () => {
     if (conversationId) {
@@ -143,11 +169,15 @@ export default function SupportChatPage() {
               background: m.role === "user" ? "#2563eb" : "rgba(128,128,128,.15)",
               color: m.role === "user" ? "#fff" : undefined,
               whiteSpace: "pre-wrap",
+              opacity: m.pending ? 0.75 : 1,
+              fontStyle: m.pending ? "italic" : "normal",
             }}
           >
             {m.content}
+            {m.pending && <span style={{ animation: "blink 1s steps(2) infinite" }}>▍</span>}
           </div>
         ))}
+        <style>{"@keyframes blink{50%{opacity:0}}"}</style>
         <div ref={bottomRef} />
       </div>
 

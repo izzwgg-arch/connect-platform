@@ -8,12 +8,13 @@
  *  - The agent resolves each key from the store first, falling back to env.
  *  - Never logged. status() reports only which keys are set + a masked hint.
  */
-export type SecretKey = "anthropic_api_key" | "openai_api_key" | "yiddishlabs_api_key";
+export type SecretKey = "anthropic_api_key" | "openai_api_key" | "yiddishlabs_api_key" | "ivrit_api_key";
 
 export const SECRET_ENV_FALLBACK: Record<SecretKey, string> = {
   anthropic_api_key: "ANTHROPIC_API_KEY",
   openai_api_key: "OPENAI_API_KEY",
   yiddishlabs_api_key: "YIDDISHLABS_API_KEY",
+  ivrit_api_key: "EVERETT_API_KEY", // ivrit.ai RunPod key (a.k.a. Everett)
 };
 
 export interface Crypto {
@@ -72,7 +73,7 @@ export class SecretStore {
 
   /** Masked status for the UI — configured? source? last 4 chars only. */
   async status(): Promise<Record<SecretKey, { configured: boolean; source: "store" | "env" | "none"; hint?: string }>> {
-    const keys: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key"];
+    const keys: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key"];
     const out: any = {};
     for (const k of keys) {
       let source: "store" | "env" | "none" = "none";

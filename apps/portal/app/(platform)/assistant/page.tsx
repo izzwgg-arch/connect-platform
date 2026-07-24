@@ -11,11 +11,27 @@ function token() { return typeof window === "undefined" ? "" : (localStorage.get
 async function get<T>(p: string): Promise<T> { const r = await fetch(`/agent-api${p}`, { headers: { Authorization: `Bearer ${token()}` } }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }
 async function post<T>(p: string, body: object): Promise<T> { const r = await fetch(`/agent-api${p}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }, body: JSON.stringify(body) }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }
 
+// Instant acknowledgment. Yiddish Labs' English→Yiddish leg is a fixed ~9s, so
+// while the real answer translates we show this fixed, pre-approved Yiddish ack
+// INSTANTLY (0ms, no network) — the exact YL translation of
+// "One moment — I'm looking into that for you." Feels instant.
+const ACK_YI = "ביטע ווארט איין רגע בשעת איך טשעק דאס איבער פאר אייך.";
+const ACK_EN = "One moment — I'm looking into that for you.";
+const isYiddish = (s: string) => /[֐-׿]/.test(s);
+
 type SecretStatus = Record<string, { configured: boolean; source: string; hint?: string }>;
 const SECRET_FIELDS: { key: string; label: string }[] = [
   { key: "anthropic_api_key", label: "Anthropic API key" },
   { key: "openai_api_key", label: "OpenAI API key" },
   { key: "yiddishlabs_api_key", label: "Yiddish Labs API key" },
+  { key: "ivrit_api_key", label: "ivrit.ai (RunPod) API key" },
+];
+
+// Mic transcription engines the owner can A/B from the Assistant page.
+const MIC_ENGINES: { id: string; label: string }[] = [
+  { id: "openai", label: "OpenAI (fast)" },
+  { id: "ivrit", label: "ivrit.ai" },
+  { id: "yiddishlabs", label: "Yiddish Labs" },
 ];
 
 type Status = { enabled: boolean; killSwitchEngaged: boolean; providersConfigured: string[]; smtpConfigured: boolean; dbConnected: boolean; chatEnabled: boolean; manifest: { total: number; executable: number } };
@@ -36,7 +52,7 @@ export default function AssistantPage() {
   const [yl, setYl] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [test, setTest] = useState<Record<string, string>>({});
-  const [chat, setChat] = useState<{ role: string; text: string }[]>([]);
+  const [chat, setChat] = useState<{ role: string; text: string; pending?: boolean }[]>([]);
   const [input, setInput] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
   const [secStatus, setSecStatus] = useState<SecretStatus | null>(null);
@@ -45,6 +61,7 @@ export default function AssistantPage() {
   const [keyMsg, setKeyMsg] = useState<Record<string, string>>({});
   const [recording, setRecording] = useState(false);
   const [micMsg, setMicMsg] = useState("");
+  const [micEngine, setMicEngine] = useState("openai");
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -80,13 +97,13 @@ export default function AssistantPage() {
       mr.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        setMicMsg("transcribing…");
+        setMicMsg(`transcribing via ${micEngine}…`);
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         const b64 = await new Promise<string>((res) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob); });
         try {
-          const r = await post<any>("/transcribe/mic", { audioBase64: b64, filename: "mic.webm" });
-          if (r.ok && r.text) { setInput((v) => (v ? v + " " : "") + r.text); setMicMsg(`✓ ${r.language ?? ""}`); }
-          else setMicMsg("✗ " + (r.error ?? "no text"));
+          const r = await post<any>("/transcribe/mic", { audioBase64: b64, filename: "mic.webm", engine: micEngine });
+          if (r.ok && r.text) { setInput((v) => (v ? v + " " : "") + r.text); setMicMsg(`✓ ${r.engine ?? micEngine} · ${r.ms ? (r.ms / 1000).toFixed(1) + "s" : ""} · ${r.language ?? ""}`); }
+          else setMicMsg(`✗ ${r.engine ?? micEngine}: ${r.error ?? "no text"}`);
         } catch { setMicMsg("✗ transcription failed"); }
       };
       mediaRef.current = mr; mr.start(); setRecording(true); setMicMsg("listening…");
@@ -104,13 +121,38 @@ export default function AssistantPage() {
     } catch (e) { setTest((t) => ({ ...t, [provider]: "✗ " + String(e) })); }
   };
 
+  // Reveal the final reply with a typewriter effect, replacing the pending ack.
+  const typeOut = (full: string) => {
+    const stepChars = Math.max(2, Math.round(full.length / 60));
+    let i = 0;
+    const tick = () => {
+      i = Math.min(full.length, i + stepChars);
+      const shown = full.slice(0, i);
+      const done = i >= full.length;
+      setChat((c) => {
+        const n = [...c];
+        for (let j = n.length - 1; j >= 0; j--) {
+          if (n[j].role === "assistant") { n[j] = { role: "assistant", text: shown, pending: !done }; break; }
+        }
+        return n;
+      });
+      if (!done) setTimeout(tick, 16);
+    };
+    tick();
+  };
+
   const send = async () => {
     const text = input.trim(); if (!text) return; setInput("");
-    setChat((c) => [...c, { role: "user", text }]);
+    // Show the user message + an INSTANT acknowledgment (Yiddish if they wrote
+    // Yiddish) so there's zero perceived wait while the real answer translates.
+    const ack = isYiddish(text) ? ACK_YI : ACK_EN;
+    setChat((c) => [...c, { role: "user", text }, { role: "assistant", text: ack, pending: true }]);
     try {
       const r = await post<{ reply: string }>("/chat/message", { text, channel: "chat" });
-      setChat((c) => [...c, { role: "assistant", text: r.reply }]);
-    } catch { setChat((c) => [...c, { role: "assistant", text: "(error reaching agent)" }]); }
+      typeOut(r.reply); // replaces the pending ack, revealed as a typewriter
+    } catch {
+      setChat((c) => { const n = [...c]; for (let j = n.length - 1; j >= 0; j--) { if (n[j].role === "assistant") { n[j] = { role: "assistant", text: "(error reaching agent)" }; break; } } return n; });
+    }
   };
 
   const certified = caps.filter((c) => c.status === "certified" || c.status === "live");
@@ -169,15 +211,20 @@ export default function AssistantPage() {
           <h3 style={{ fontSize: 14, marginBottom: 10 }}>Live test chat</h3>
           <div style={{ minHeight: 120, maxHeight: 200, overflowY: "auto", marginBottom: 8 }}>
             {chat.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Talk to the agent as a client would — English or Yiddish.</div>}
-            {chat.map((m, i) => <div key={i} style={{ margin: "4px 0", padding: "6px 10px", borderRadius: 10, fontSize: 13, background: m.role === "user" ? "#2563eb" : "rgba(128,128,128,.15)", color: m.role === "user" ? "#fff" : undefined, alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%", marginLeft: m.role === "user" ? "auto" : 0, whiteSpace: "pre-wrap" }}>{m.text}</div>)}
+            {chat.map((m, i) => <div key={i} style={{ margin: "4px 0", padding: "6px 10px", borderRadius: 10, fontSize: 13, background: m.role === "user" ? "#2563eb" : "rgba(128,128,128,.15)", color: m.role === "user" ? "#fff" : undefined, alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%", marginLeft: m.role === "user" ? "auto" : 0, whiteSpace: "pre-wrap", opacity: m.pending ? 0.75 : 1, fontStyle: m.pending ? "italic" : "normal" }}>{m.text}{m.pending && <span style={{ animation: "blink 1s steps(2) infinite" }}>▍</span>}</div>)}
+            <style>{"@keyframes blink{50%{opacity:0}}"}</style>
             <div ref={bottom} />
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button title="Hold to speak (Yiddish or English)" onClick={recording ? stopMic : startMic} style={{ ...btn, background: recording ? "#ef4444" : "transparent", color: recording ? "#fff" : "inherit", border: recording ? "none" : "1px solid rgba(128,128,128,.4)", width: 40, padding: 0, height: 34 }}>{recording ? "■" : "🎤"}</button>
+            <select value={micEngine} onChange={(e) => setMicEngine(e.target.value)} title="Transcription engine for the 🎤 — swap to compare" style={{ padding: "7px 8px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 12 }}>
+              {MIC_ENGINES.map((e) => <option key={e.id} value={e.id} style={{ color: "#000" }}>🎤 {e.label}</option>)}
+            </select>
             <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Type, or tap 🎤 to speak…" style={{ flex: 1, padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13 }} />
             <button style={btnBlue} onClick={send}>Send</button>
           </div>
           {micMsg && <div style={{ fontSize: 11.5, opacity: 0.7, marginTop: 4 }}>{micMsg}</div>}
+          <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>Swap the 🎤 engine to compare OpenAI vs ivrit.ai vs Yiddish Labs (speed + accuracy shown after each). First ivrit.ai call may take ~15–60s while its RunPod worker wakes up.</div>
         </div>
       </div>
 

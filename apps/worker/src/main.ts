@@ -34,6 +34,7 @@ import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { runWakeCanaryEnrollCycle } from "./wakeCanaryEnrollCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
+import { startPbxWebrtcDriftReconcileLoop } from "./pbxWebrtcDriftReconcileCycle";
 import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
 import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
 import {
@@ -1979,6 +1980,17 @@ runVoicemailSyncCycle().catch((err) => console.error("initial voicemail sync fai
 const vmSpoolReconcileMs = Number(process.env.VOICEMAIL_SPOOL_RECONCILE_INTERVAL_MS || 15 * 60 * 1000);
 if (Number.isFinite(vmSpoolReconcileMs) && vmSpoolReconcileMs > 0) {
   startVoicemailSpoolReconcileLoop();
+}
+
+// Sync SIP / WebRTC drift self-heal: periodically re-runs the live-check-aware
+// extension sync for every PBX-linked tenant and alerts (console.error) when
+// VitalPBX's bulk API missed a live WebRTC device (the ext 107 / T8 "Gesheft"
+// bug shape) or a PBX instance was unreachable. Read-only against the PBX;
+// complements (does not replace) apps/api's existing 5-minute auto-sync.
+// PBX_WEBRTC_DRIFT_RECONCILE_INTERVAL_MS=0 disables. Default 30 minutes.
+const pbxWebrtcDriftReconcileMs = Number(process.env.PBX_WEBRTC_DRIFT_RECONCILE_INTERVAL_MS ?? 30 * 60 * 1000);
+if (Number.isFinite(pbxWebrtcDriftReconcileMs) && pbxWebrtcDriftReconcileMs > 0) {
+  startPbxWebrtcDriftReconcileLoop();
 }
 
 setInterval(() => {

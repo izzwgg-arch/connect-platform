@@ -1,9 +1,3 @@
-# EAS Build archive ignore list.
-# NOTE: when this file exists EAS uses it INSTEAD of .gitignore, so it must
-# mirror .gitignore AND additionally exclude untracked scratch that would
-# otherwise bloat the upload (the monorepo archive is rooted at the git root).
-
-# ── mirror of .gitignore ────────────────────────────────────────────────
 # build outputs
 dist/
 build/
@@ -11,58 +5,82 @@ build/
 .next/
 .turbo/
 coverage/
-**/dist
-**/build
-**/.next
-**/.turbo
-**/coverage
-.pnpm-store
-**/.pnpm-store
 
 # logs
 logs/
 *.log
-**/*.log
-ops/logs
-**/ops/logs
-ops/snapshots
-**/ops/snapshots
 
 # env
 .env
 .env.*
+!/apps/**/.env.example
+!/packages/**/.env.example
+# Local-only secrets for PBX↔Connect observation script (see scripts/pbx-connect-observe.env.example)
 scripts/pbx-connect-observe.env
 
-# deps
+# docker
 node_modules/
 **/node_modules/
-node_modules
-**/node_modules
 
-# prisma local db
+# prisma artifacts (keep migrations)
 prisma/dev.db
 
-# scratch
+# workspace/generated artifacts
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+build
+**/build
+.turbo
+**/.turbo
+coverage
+**/coverage
+.pnpm-store
+**/.pnpm-store
+ops/logs
+**/ops/logs
+ops/snapshots
+**/ops/snapshots
+**/*.log
+
+# SSH keys for server access (NEVER commit private keys)
+.connect-ssh/
+
+# local DB repair scratch (do not ship)
 tmp-link-repair-*.sql
+
+# diagnostic/temp folders (do not ship)
 _tmp_diag/
 _tmp_*/
 
-# ── EAS-only additions: heavy untracked scratch (NOT in .gitignore) ──────
-# IMPORTANT: EAS resolves *anchored* patterns (those with an internal "/")
-# relative to the project dir (apps/mobile), NOT the git root, so a pattern
-# like "docs/pbx-brain/" silently does nothing. Non-anchored patterns
-# (no leading path, or **/-prefixed) match anywhere — use those.
-_latency_logs/
-.expo/
-**/pbx-brain/
-**/*.tar.gz
-**/*.apk
-**/*.aab
+# Local server health reports (read-only diagnostics, never committed)
+_server_reports/
 
-# native build caches (not needed for cloud build; EAS regenerates them)
-**/.gradle/
-**/.cxx/
-android/build/
-android/app/build/
-ios/Pods/
-ios/build/
+# Ad-hoc debug artifacts (screenshots, logcat dumps, APKs, scratch scripts).
+# Not source, and large binaries here were bloating EAS Build uploads to
+# 700+ MB (EAS falls back to .gitignore rules when no .easignore exists).
+_latency_logs/
+docs/
+apps/portal/public/downloads/
+_latency_logs/
+/*.txt
+
+# cowork: exclude the (locally bloated) .git dir from the EAS working-dir tarball
+.git/
+.git
+
+# cowork: large non-source junk that was bloating the tarball to 470MB+
+_repo_archive/
+_moh_safety_backup/
+_moh_catalog_clean/
+_moh_worktree/
+_pbx_installers/
+cb17/
+cb18/
+cb19/
+Connect-2-apk-*/
+Connect-2-call-history-deploy/
+Connect2-ios-fg-active-fix/

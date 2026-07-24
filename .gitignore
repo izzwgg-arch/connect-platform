@@ -46,6 +46,9 @@ ops/snapshots
 **/ops/snapshots
 **/*.log
 
+# SSH keys for server access (NEVER commit private keys)
+.connect-ssh/
+
 # local DB repair scratch (do not ship)
 tmp-link-repair-*.sql
 
@@ -64,3 +67,13 @@ docs/
 apps/portal/public/downloads/
 _latency_logs/
 /*.txt
+
+# cowork (2026-07-13): large non-source dirs bloating EAS build tarball to 1.6GB+
+_repo_archive/
+_moh_safety_backup/
+_moh_catalog_clean/
+_moh_worktree/
+_pbx_installers/
+cb17/
+cb18/
+cb19/

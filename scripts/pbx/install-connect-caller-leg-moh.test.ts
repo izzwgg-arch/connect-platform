@@ -225,11 +225,24 @@ test("--check fails when a manual __66 caller-leg patch is present (official __6
   assert.match(body, /official __67 owns the hook/);
 });
 
-test("--check verifies the LIVE dialplan (GosubIf token + loaded generic context sentinel), format-tolerant", () => {
+test("--check strips ANSI/VT100 color codes from asterisk -rx output before grepping (known false-negative fix)", () => {
+  // asterisk -rx output can carry embedded color escape codes even non-interactively,
+  // which can split a literal substring and break grep -F. strip_ansi() is a shared
+  // helper used by every live dialplan-show comparison.
+  assert.match(SCRIPT, /strip_ansi\(\)\s*\{\s*sed -E 's\/\\x1b\\\[\[0-9;\]\*\[A-Za-z\]\/\/g';\s*\}/);
   const body = fnBody("do_health_check");
-  // Single-token grep survives Asterisk `dialplan show` re-wrapping/spacing.
-  assert.match(body, /dialplan show sub-local-dialing" 2>&1 \| grep -qF "\$GENERIC_CTX"/);
-  assert.match(body, /dialplan show \$GENERIC_CTX" 2>&1 \| grep -qF "\$HOOK_SENTINEL"/);
+  assert.match(body, /dialplan show sub-local-dialing" 2>&1 \| strip_ansi\)"/);
+  assert.match(body, /dialplan show \$GENERIC_CTX" 2>&1 \| strip_ansi\)"/);
+});
+
+test("--check verifies the LIVE dialplan via BOTH the context header AND the sentinel (format-tolerant, dual-signal)", () => {
+  const body = fnBody("do_health_check");
+  // Confirmed live format (2026-07-02 manual probe):
+  //   [ Context 'connect-localdial-moh' created by 'pbx_config' ]
+  //   NoOp(Connect generic caller-leg MOH hook prefix=${TENANT_PREFIX} preset=${CHANNEL(musicclass)})
+  assert.match(body, /grep -qF "Context '\$\{GENERIC_CTX\}'" && HAS_CTX_HEADER=1/);
+  assert.match(body, /grep -qF "\$HOOK_SENTINEL" && HAS_SENTINEL=1/);
+  assert.match(body, /if \[\[ "\$HAS_CTX_HEADER" = "1" && "\$HAS_SENTINEL" = "1" \]\]; then/);
   assert.match(SCRIPT, /HOOK_SENTINEL="Connect generic caller-leg MOH hook"/);
 });
 

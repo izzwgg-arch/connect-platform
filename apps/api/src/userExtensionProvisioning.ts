@@ -34,6 +34,7 @@ import {
   type PortalRoleBucket,
 } from "./userManagementRoles";
 import { resolveWebrtcSipIdentity, computeEndpointLiveHealth } from "./voiceProvisioningBundle";
+import { resolveTenantPbxPrefix } from "./pbxTenantPrefix";
 
 // These types are intentionally loose (`any`) because the actual getUser /
 // requirePermission / canManageUsers in server.ts are typed with the server's
@@ -308,8 +309,15 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
   app.get("/admin/users/:id/phone/status", async (req, reply) => {
     const ctx = await loadLinkForAdminAction(req, reply);
     if (!ctx) return;
-    const ext = await db.extension.findFirst({
-      where: { ownerUserId: ctx.user.id, tenantId: ctx.user.tenantId },
+    // Look up the extension by ctx.link's own extensionId — NOT a fresh
+    // ownerUserId-scoped query. A user can (e.g. after a reassignment) end up
+    // with more than one Extension row; an independent, unordered findFirst
+    // by ownerUserId can silently resolve to a different extension than the
+    // one this specific PbxExtensionLink actually belongs to (regression: an
+    // admin panel showed extension 112 in the status/sync UI for a user whose
+    // real, currently-synced extension was 107).
+    const ext = await db.extension.findUnique({
+      where: { id: ctx.link.extensionId },
       select: { extNumber: true },
     });
 
@@ -488,8 +496,12 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
     });
 
     if (!ready) {
-      const ext = await db.extension.findFirst({
-        where: { ownerUserId: ctx.user.id, tenantId: ctx.user.tenantId },
+      // Look up by ctx.link.extensionId directly — see the comment on the
+      // /phone/status handler above for why an ownerUserId-scoped findFirst
+      // here is wrong (regression: printed extension 112 for a user whose
+      // actual, currently-synced extension was 107).
+      const ext = await db.extension.findUnique({
+        where: { id: ctx.link.extensionId },
         select: { extNumber: true },
       });
       await deps.audit({
@@ -502,11 +514,13 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
         metadata: { webrtcEnabled, hasPassword },
       });
       const extLabel = ext?.extNumber || "this extension";
+      const tenantPrefix = await resolveTenantPbxPrefix(db, ctx.user.tenantId).catch(() => null);
+      const examplePrefix = tenantPrefix || "T<tenant>";
       const reason = !webrtcEnabled
         ? "NO_WEBRTC_DEVICE_ON_PBX"
         : "SIP_CREDENTIAL_NOT_SET";
       const message = !webrtcEnabled
-        ? `VitalPBX extension ${extLabel} has no WebRTC device. Open VitalPBX → PBX → Extensions → ${extLabel} → Devices and add a new device whose name ends in "_1" (for example T7_${extLabel}_1) with "WebRTC Client: Yes" enabled. Save + Apply Changes, then click Sync SIP again.`
+        ? `VitalPBX extension ${extLabel} has no WebRTC device. Open VitalPBX → PBX → Extensions → ${extLabel} → Devices and add a new device whose name ends in "_1" (for example ${examplePrefix}_${extLabel}_1) with "WebRTC Client: Yes" enabled. Save + Apply Changes, then click Sync SIP again.`
         : `VitalPBX extension ${extLabel} has a WebRTC device, but no SIP secret was returned. Open VitalPBX → Extensions → ${extLabel} → Devices → the "_1" device, regenerate its password, Apply Changes, then click Sync SIP again.`;
       return reply.code(409).send({
         error: reason,
