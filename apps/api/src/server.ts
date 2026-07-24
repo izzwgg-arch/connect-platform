@@ -171,6 +171,7 @@ import {
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
+import { registerDeliveryRoutes } from "./delivery/routes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
@@ -36078,6 +36079,7 @@ const port = Number(process.env.PORT || 3001);
   });
   registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
   await registerCrmRoutes(app, { smsQueue });
+  await registerDeliveryRoutes(app);
   await app.listen({ host: "0.0.0.0", port });
   markListeningComplete();
   hostMetricsCollector.start();

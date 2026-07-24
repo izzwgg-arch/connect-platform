@@ -6,6 +6,7 @@ export type PortalSidebarSectionKey =
   | "pbx"
   | "crm"
   | "apps"
+  | "tracking"
   | "billing"
   | "admin"
   | "settings";
@@ -15,6 +16,7 @@ export const SIDEBAR_SECTIONS = [
   { id: "pbx", label: "PBX", permission: "can_view_section_pbx" },
   { id: "crm", label: "CRM", permission: "can_view_section_crm" },
   { id: "apps", label: "Apps", permission: "can_view_section_apps" },
+  { id: "tracking", label: "Tracking", permission: "can_view_section_tracking" },
   { id: "billing", label: "Billing", permission: "can_view_section_billing" },
   { id: "admin", label: "Admin", permission: "can_view_section_admin" },
   { id: "settings", label: "Settings", permission: "can_view_section_settings" },
@@ -59,6 +61,19 @@ export const SIDEBAR_ITEMS = [
   { id: "apps.whatsapp", section: "apps", label: "WhatsApp Inbox", href: "/apps/whatsapp", permission: "can_view_apps_whatsapp_inbox" },
   { id: "apps.voip_ms", section: "apps", label: "VoIP.ms", href: "/apps/voip-ms", permission: "can_view_apps_voip_ms" },
   { id: "apps.customers", section: "apps", label: "Customer Hub", href: "/apps/customers", permission: "can_view_apps_customer_hub" },
+
+  { id: "tracking.dashboard", section: "tracking", label: "Dashboard", href: "/tracking/dashboard", permission: "can_view_tracking_dashboard" },
+  { id: "tracking.orders", section: "tracking", label: "Orders", href: "/tracking/orders", permission: "can_view_tracking_orders" },
+  { id: "tracking.map", section: "tracking", label: "Live Map", href: "/tracking/map", permission: "can_view_tracking_map" },
+  { id: "tracking.runs", section: "tracking", label: "Runs", href: "/tracking/runs", permission: "can_view_tracking_runs" },
+  { id: "tracking.drivers", section: "tracking", label: "Drivers", href: "/tracking/drivers", permission: "can_view_tracking_drivers" },
+  { id: "tracking.exceptions", section: "tracking", label: "Exceptions", href: "/tracking/exceptions", permission: "can_view_tracking_exceptions" },
+  { id: "tracking.reports", section: "tracking", label: "Reports", href: "/tracking/reports", permission: "can_view_tracking_reports" },
+  { id: "tracking.notifications", section: "tracking", label: "Notifications", href: "/tracking/notifications", permission: "can_view_tracking_audit" },
+  { id: "tracking.audit", section: "tracking", label: "Audit Log", href: "/tracking/audit", permission: "can_view_tracking_audit" },
+  { id: "tracking.integrations", section: "tracking", label: "Integrations", href: "/tracking/integrations", permission: "can_view_tracking_settings" },
+  { id: "tracking.health", section: "tracking", label: "System Health", href: "/tracking/health", permission: "can_view_tracking_settings" },
+  { id: "tracking.settings", section: "tracking", label: "Settings", href: "/tracking/settings", permission: "can_view_tracking_settings" },
 
   { id: "billing.overview", section: "billing", label: "Billing Overview", href: "/billing", permission: "can_view_billing_overview" },
   { id: "billing.invoices", section: "billing", label: "Invoices", href: "/billing/invoices", permission: "can_view_billing_invoices" },
@@ -157,6 +172,13 @@ export const ACTION_PERMISSION_KEYS = [
   "can_view_tenant_voicemails",
   "can_view_tenant_chats",
   "can_view_tenant_call_recordings",
+  // Delivery/order tracking (supermarket delivery feature)
+  "can_view_tracking",
+  "can_manage_tracking",
+  "can_dispatch_tracking",
+  "can_manage_tracking_drivers",
+  "can_access_tracking_proof",
+  "can_manage_tracking_settings",
 ] as const;
 
 export type SidebarSectionPermissionKey = (typeof SIDEBAR_SECTIONS)[number]["permission"];
@@ -177,6 +199,7 @@ const WORKSPACE_SECTION = ["can_view_section_workspace"] as PortalPermissionKey[
 const PBX_SECTION = ["can_view_section_pbx"] as PortalPermissionKey[];
 const CRM_SECTION = ["can_view_section_crm"] as PortalPermissionKey[];
 const APPS_SECTION = ["can_view_section_apps"] as PortalPermissionKey[];
+const TRACKING_SECTION = ["can_view_section_tracking"] as PortalPermissionKey[];
 const BILLING_SECTION = ["can_view_section_billing"] as PortalPermissionKey[];
 const ADMIN_SECTION = ["can_view_section_admin"] as PortalPermissionKey[];
 const SETTINGS_SECTION = ["can_view_section_settings"] as PortalPermissionKey[];
@@ -220,6 +243,36 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   can_view_ivr_routing: [...PBX_SECTION, "can_view_pbx_ivr_routing"],
   can_view_moh: [...PBX_SECTION, "can_view_pbx_moh_scheduling"],
   can_view_did_routing: [...PBX_SECTION, "can_view_pbx_did_routing"],
+  // Delivery/order tracking — expands the umbrella capability to the section + all pages.
+  can_view_tracking: [
+    ...TRACKING_SECTION,
+    "can_view_tracking_dashboard",
+    "can_view_tracking_orders",
+    "can_view_tracking_map",
+    "can_view_tracking_runs",
+    "can_view_tracking_drivers",
+    "can_view_tracking_exceptions",
+    "can_view_tracking_reports",
+    "can_view_tracking_audit",
+    "can_view_tracking_settings",
+  ],
+  can_manage_tracking: [
+    ...TRACKING_SECTION,
+    "can_view_tracking_dashboard",
+    "can_view_tracking_orders",
+    "can_view_tracking_map",
+    "can_view_tracking_runs",
+    "can_view_tracking_drivers",
+    "can_view_tracking_exceptions",
+    "can_view_tracking_reports",
+    "can_view_tracking_audit",
+    "can_view_tracking_settings",
+    "can_view_tracking",
+    "can_dispatch_tracking",
+    "can_manage_tracking_drivers",
+    "can_access_tracking_proof",
+    "can_manage_tracking_settings",
+  ],
   can_view_admin: [
     ...ADMIN_SECTION,
     "can_view_admin_console",
@@ -297,6 +350,7 @@ const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_manage_did_routing",
   "can_publish_did_routing",
   "can_manage_crm",
+  "can_manage_tracking",
 ];
 
 const SUPER_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [

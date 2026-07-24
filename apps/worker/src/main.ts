@@ -3517,3 +3517,17 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 runMonthlyBillingAutomation().catch((err) => console.error("initial monthly billing cycle failed", err?.message || err));
+
+// ── Supermarket delivery tracking — background cycles (DELIVERY_DEPLOY.md §4) ──
+// ETA snapshots every 30s; retention sweep every 6h. Both no-op for tenants with
+// delivery disabled, and never throw (errors logged, cycle retried next tick).
+import { runDeliveryEtaCycle } from "./deliveryEtaJob";
+import { runDeliveryRetentionCycle } from "./deliveryRetentionJob";
+
+setInterval(() => {
+  runDeliveryEtaCycle().catch((err) => console.error("delivery ETA cycle failed", err?.message || err));
+}, 30_000);
+
+setInterval(() => {
+  runDeliveryRetentionCycle().catch((err) => console.error("delivery retention sweep failed", err?.message || err));
+}, 6 * 60 * 60 * 1000);
