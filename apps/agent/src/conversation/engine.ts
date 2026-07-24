@@ -30,9 +30,24 @@ Never invent capabilities, never promise timelines, never discuss other tenants 
 const SYSTEM_PROMPT_BRIDGE = `${SYSTEM_PROMPT}
 TRANSLATION BRIDGE ACTIVE: Write your reply in clear, simple English ONLY. Never output Yiddish or Hebrew-script text — a dedicated Yiddish translation service renders your English into authentic Yiddish for the customer. Keep sentences short and plain so they translate cleanly.`;
 
+/**
+ * Whole-sentence dominant language. This audience code-switches heavily —
+ * Yiddish is spoken with many English loanwords mixed in — so a single English
+ * word must NOT flip a Yiddish sentence to English (and one Yiddish word must not
+ * flip an English sentence to Yiddish). Decide by the SHARE of Hebrew-script
+ * (Yiddish) letters among all letters, leaning Yiddish (the community's base
+ * language), rather than by mere presence of one character.
+ */
+export const YIDDISH_DOMINANCE_THRESHOLD = 0.2;
 export function detectLanguage(text: string): "en" | "yi" {
-  // Hebrew-script characters → treat as Yiddish for this platform's audience.
-  return /[֐-׿]/.test(text) ? "yi" : "en";
+  const hebrew = (text.match(/[֐-׿]/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  const letters = hebrew + latin;
+  if (letters === 0) return "en"; // no alphabetic content → default English
+  // ≥20% Hebrew-script letters ⇒ Yiddish. A Yiddish sentence peppered with
+  // English words still clears this; near-pure English (a stray Yiddish word)
+  // does not. Tune YIDDISH_DOMINANCE_THRESHOLD if the lean needs adjusting.
+  return hebrew / letters >= YIDDISH_DOMINANCE_THRESHOLD ? "yi" : "en";
 }
 
 /**

@@ -88,6 +88,17 @@ test("language detection: Yiddish vs English", () => {
   assert.equal(detectLanguage("מײַן טעלעפון איז צעבראכן"), "yi");
 });
 
+test("language detection: code-switching — dominant language wins, one word doesn't flip it", () => {
+  // Yiddish sentence with English loanwords mixed in → still Yiddish.
+  assert.equal(detectLanguage("איך דארף set up מיין voicemail"), "yi");
+  assert.equal(detectLanguage("קען איר helfen מיר מיטן account"), "yi");
+  // A single Yiddish word dropped into an English sentence → still English.
+  assert.equal(detectLanguage("can you please set up my voicemail נאך"), "en");
+  // Empty / punctuation-only → default English, never throws.
+  assert.equal(detectLanguage("   "), "en");
+  assert.equal(detectLanguage("123 — !!"), "en");
+});
+
 test("kill switch: message stored, read-only reply, no LLM", async () => {
   const res = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "help!");
   assert.equal(res.degraded, true);

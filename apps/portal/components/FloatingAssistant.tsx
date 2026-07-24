@@ -72,10 +72,6 @@ export function FloatingAssistant() {
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  // Mic language mode. Yiddish MUST record the whole clip and transcribe at the
-  // end (Yiddish Labs — live is too slow); English can transcribe live as you
-  // speak (fast browser recognition). Default Yiddish for this community.
-  const [micLang, setMicLang] = useState<"yi" | "en">("yi");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
@@ -149,34 +145,6 @@ export function FloatingAssistant() {
     try { liveRef.current?.stop(); } catch { /* noop */ }
   }, []);
 
-  // English live transcription — words appear as you speak (browser recognition,
-  // reliable for English). Yiddish never uses this path.
-  const startLiveEn = useCallback(() => {
-    const SR = (typeof window !== "undefined" && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
-    if (!SR) return false;
-    const rec = new SR();
-    rec.lang = "en-US";
-    rec.continuous = true;
-    rec.interimResults = true;
-    let base = "";
-    setInput((v) => { base = v; return v; });
-    rec.onresult = (e: any) => {
-      let finalTxt = "";
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalTxt += t; else interim += t;
-      }
-      if (finalTxt) base = (base ? base + " " : "") + finalTxt.trim();
-      setInput((base + (interim ? " " + interim : "")).trim());
-    };
-    rec.onend = () => { setRecording(false); liveRef.current = null; inputRef.current?.focus(); };
-    rec.onerror = () => { setRecording(false); liveRef.current = null; };
-    liveRef.current = rec;
-    setRecording(true);
-    try { rec.start(); return true; } catch { setRecording(false); liveRef.current = null; return false; }
-  }, []);
-
   const startMic = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -205,11 +173,12 @@ export function FloatingAssistant() {
 
   const toggleMic = useCallback(() => {
     if (recording || transcribing) { stopMic(); return; }
-    // English → live recognition (fall back to record-then-transcribe if the
-    // browser lacks it). Yiddish → always record the whole clip, then YL.
-    if (micLang === "en") { if (!startLiveEn()) startMic(); }
-    else startMic();
-  }, [recording, transcribing, micLang, startLiveEn, startMic, stopMic]);
+    // Always record the whole clip and let Yiddish Labs auto-detect the language
+    // (Yiddish vs English) across the full utterance — never the browser's
+    // English-only recogniser, which turns Yiddish speech into gibberish. The
+    // community code-switches heavily, so detection must judge the whole clip.
+    startMic();
+  }, [recording, transcribing, startMic, stopMic]);
 
   if (HIDE_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return null;
 
@@ -270,15 +239,9 @@ export function FloatingAssistant() {
 
           <div className="fa-input">
             {micAvailable && (
-              <div className="fa-miclang" title="Voice language">
-                <button className={micLang === "yi" ? "on" : ""} onClick={() => setMicLang("yi")} disabled={recording || transcribing}>יי</button>
-                <button className={micLang === "en" ? "on" : ""} onClick={() => setMicLang("en")} disabled={recording || transcribing}>EN</button>
-              </div>
-            )}
-            {micAvailable && (
               <button
                 className={`fa-icon${recording ? " fa-icon-on" : ""}`}
-                title={recording ? "Stop" : `Speak (${micLang === "yi" ? "Yiddish" : "English"})`}
+                title={recording ? "Stop" : "Speak — auto-detects Yiddish or English"}
                 onClick={toggleMic}
                 disabled={transcribing}
               >
@@ -290,7 +253,7 @@ export function FloatingAssistant() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-              placeholder={recording ? (micLang === "yi" ? "Recording… tap mic to stop" : "Listening… tap mic to stop") : transcribing ? "Transcribing…" : "Type or talk…"}
+              placeholder={recording ? "Recording… tap mic to stop" : transcribing ? "Transcribing…" : "Type or talk…"}
               aria-label="Message"
             />
             <button className="fa-send" title="Send" onClick={() => send()} disabled={sending || !input.trim()}>
@@ -368,10 +331,6 @@ const faCss = `
 .fa-icon-on { color: #fff; background: #ef4444; animation: fa-pulse 1s ease-in-out infinite; }
 @keyframes fa-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 50% { box-shadow: 0 0 0 5px rgba(239,68,68,0); } }
 .fa-icon:disabled { opacity: .5; cursor: default; }
-.fa-miclang { display: flex; border: 1px solid var(--border, #2a3c5f); border-radius: 999px; overflow: hidden; flex: 0 0 auto; }
-.fa-miclang button { background: none; border: none; cursor: pointer; color: var(--text-dim, #8b9ab2); font-size: 11px; font-weight: 700; padding: 5px 8px; line-height: 1; }
-.fa-miclang button.on { background: var(--accent, #2f6df6); color: #fff; }
-.fa-miclang button:disabled { cursor: default; }
 .fa-input input { flex: 1; background: var(--panel-2, #16233a); border: 1px solid var(--border, #2a3c5f); color: var(--text, #e8ecf3); border-radius: 999px; padding: 9px 14px; font-size: 13px; outline: none; }
 .fa-input input:focus { border-color: var(--accent, #2f6df6); }
 .fa-send { background: var(--accent, #2f6df6); border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
