@@ -166,7 +166,8 @@ export const navSectionMeta: Record<NavItem["section"], { label: string; railIco
   settings: { label: "Settings", railIcon: "ST" },
   admin: { label: "Admin", railIcon: "AD" },
   billing: { label: "Billing", railIcon: "BL" },
-  apps: { label: "Apps", railIcon: "AP" }
+  apps: { label: "Apps", railIcon: "AP" },
+  tracking: { label: "Tracking", railIcon: "TR" }
 };
 
 /** Admin Billing nav + /admin/billing API require JWT SUPER_ADMIN (platform), not only portal permission. */
