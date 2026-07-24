@@ -270,7 +270,7 @@ export async function runCertification(): Promise<CertReport> {
     // Tripwire api client: ANY contact during simulation is a cert failure.
     let m1ApiCalls = 0;
     const m1Catalog = buildModifyCatalog({ prisma: m1Mirror, mohApi: { call: async () => { m1ApiCalls++; throw new Error("CERT VIOLATION: M1 contacted the api in simulate mode"); } } });
-    add("M1 catalog: exactly pbx.M1, modify contract holds", "pbx.M1", Object.keys(m1Catalog).length === 1 && !!m1Catalog["pbx.M1"] && catalogOpsHonorModifyContract(m1Catalog));
+    add("M1 catalog: pbx.M1 present, modify contract holds", "pbx.M1", !!m1Catalog["pbx.M1"] && catalogOpsHonorModifyContract(m1Catalog));
 
     const m1Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m1Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m1Mirror) });
     const m1Params = { tenantId: "21", objectId: "21", action: "activate", profileId: "p8" };
@@ -285,6 +285,140 @@ export async function runCertification(): Promise<CertReport> {
     const m1Foreign = await m1Exec.execute({ capabilityId: "pbx.M1", params: { ...m1Params, profileId: "px" }, requestedBy: "customer:u1", requestedRole: "customer" });
     add("M1 foreign profile refused at G3 (ownership fence)", "pbx.M1", !m1Foreign.ok && m1Foreign.gate === "G3");
     add("M1 ZERO api contact during simulation (tripwire)", "pbx.M1", m1ApiCalls === 0);
+
+    // --- M2: per-extension MOH — full sim certification ---
+    const m2Mirror: any = {
+      ...m1Mirror,
+      extension: { findFirst: async ({ where }: any) => (where.tenantId === "ct1" && ["103", "101"].includes(String(where.extNumber)) ? { id: "e1" } : null) },
+      mohExtensionOverride: { findUnique: async () => null },
+    };
+    let m2ApiCalls = 0;
+    const m2Catalog = buildModifyCatalog({ prisma: m2Mirror, mohApi: { call: async () => { m2ApiCalls++; throw new Error("CERT VIOLATION: M2 contacted the api in simulate mode"); } } });
+    add("M2 catalog: M1+M2 present, contract holds", "pbx.M2", !!m2Catalog["pbx.M1"] && !!m2Catalog["pbx.M2"] && catalogOpsHonorModifyContract(m2Catalog));
+
+    const m2Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m2Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m2Mirror) });
+    const m2Params = { tenantId: "21", objectId: "103", action: "set", profileId: "p8" };
+    memory.actions.push({ id: "m2Act", capabilityId: "pbx.M2", tenantId: "21", params: m2Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M2", "21", m2Params), resultSnapshot: null });
+    const m2Happy = await m2Exec.execute({ capabilityId: "pbx.M2", params: m2Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m2Act" });
+    add("M2 full gate chain passes in simulate", "pbx.M2", m2Happy.ok === true && m2Happy.verified === true);
+
+    const m2Protected = await m2Exec.execute({ capabilityId: "pbx.M2", params: { ...m2Params, objectId: "101" }, requestedBy: "customer:u1", requestedRole: "customer" });
+    add("M2 protected extension 101 refused at G5", "pbx.M2", !m2Protected.ok && m2Protected.gate === "G5");
+    add("M2 ZERO api contact during simulation (tripwire)", "pbx.M2", m2ApiCalls === 0);
+
+    // --- M3: inbound route destination — sim certification (live fenced by H2) ---
+    const m3Mirror: any = {
+      ...m1Mirror,
+      pbxTenantInboundDid: { findFirst: async ({ where }: any) => (where.vitalTenantId === "21" && where.e164 === "8455577768" ? { id: "d1" } : null) },
+      phoneNumber: { findFirst: async () => null },
+    };
+    let m3RouteCalls = 0;
+    const m3Catalog = buildModifyCatalog({
+      prisma: m3Mirror,
+      mohApi: { call: async () => { throw new Error("moh not used"); } },
+      routeApi: { call: async () => { m3RouteCalls++; throw new Error("CERT VIOLATION: M3 contacted the route helper in simulate"); } },
+    });
+    add("M3 catalog: M1+M2+M3 present, contract holds", "pbx.M3", !!m3Catalog["pbx.M3"] && catalogOpsHonorModifyContract(m3Catalog));
+
+    const m3Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m3Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m3Mirror) });
+    const m3Params = { tenantId: "21", objectId: "8455577768", action: "retarget", destinationId: "642" };
+    memory.actions.push({ id: "m3Act", capabilityId: "pbx.M3", tenantId: "21", params: m3Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M3", "21", m3Params), resultSnapshot: null });
+    const m3Happy = await m3Exec.execute({ capabilityId: "pbx.M3", params: m3Params, requestedBy: "owner:izzy", requestedRole: "owner", actionId: "m3Act" });
+    add("M3 full gate chain passes in simulate", "pbx.M3", m3Happy.ok === true && m3Happy.verified === true);
+
+    const m3Foreign = await m3Exec.execute({ capabilityId: "pbx.M3", params: { ...m3Params, tenantId: "8", objectId: "8455577768" }, requestedBy: "owner:izzy", requestedRole: "owner" });
+    add("M3 foreign-tenant DID refused at G3", "pbx.M3", !m3Foreign.ok && m3Foreign.gate === "G3");
+    add("M3 ZERO route-helper contact during simulation (tripwire)", "pbx.M3", m3RouteCalls === 0);
+
+    // --- M4: IVR menu digit — sim certification (AstDB custom-context path) ---
+    const m4Mirror: any = {
+      ...m1Mirror,
+      ivrRouteProfile: {
+        findFirst: async ({ where }: any) => (where.id === "pMain" && (where.tenantId === undefined || where.tenantId === "ct1") ? { id: "pMain" } : null),
+        findMany: async () => [{ id: "pMain", tenantId: "ct1" }],
+      },
+      ivrOptionRoute: { findFirst: async () => null },
+    };
+    let m4Calls = 0;
+    const m4Catalog = buildModifyCatalog({
+      prisma: m4Mirror,
+      mohApi: { call: async () => { throw new Error("moh not used"); } },
+      ivrApi: { call: async () => { m4Calls++; throw new Error("CERT VIOLATION: M4 contacted the api in simulate"); } },
+    });
+    add("M4 catalog present, contract holds", "pbx.M4", !!m4Catalog["pbx.M4"] && catalogOpsHonorModifyContract(m4Catalog));
+    const m4Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m4Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m4Mirror) });
+    const m4Params = { tenantId: "21", objectId: "pMain:1", action: "set", profileId: "pMain", optionDigit: "1", destinationType: "queue", destinationRef: "ext-queues,900,1" };
+    memory.actions.push({ id: "m4Act", capabilityId: "pbx.M4", tenantId: "21", params: m4Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M4", "21", m4Params), resultSnapshot: null });
+    const m4Happy = await m4Exec.execute({ capabilityId: "pbx.M4", params: m4Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m4Act" });
+    add("M4 full gate chain passes in simulate", "pbx.M4", m4Happy.ok === true && m4Happy.verified === true);
+    add("M4 ZERO api contact during simulation (tripwire)", "pbx.M4", m4Calls === 0);
+
+    // --- M5: IVR greeting/prompt recording — sim certification ---
+    const m5Mirror: any = {
+      ...m1Mirror,
+      ivrRouteProfile: { findFirst: async ({ where }: any) => (where.id === "pMain" && (where.tenantId === undefined || where.tenantId === "ct1") ? { id: "pMain", pbxPromptRef: "custom/old", pbxInvalidPromptRef: null, pbxTimeoutPromptRef: null, pbxRetryPromptRef: null } : null) },
+    };
+    let m5Calls = 0;
+    const m5Catalog = buildModifyCatalog({ prisma: m5Mirror, mohApi: { call: async () => ({}) }, ivrApi: { call: async () => { m5Calls++; throw new Error("CERT VIOLATION: M5 contacted the api in simulate"); } } });
+    add("M5 catalog present, contract holds", "pbx.M5", !!m5Catalog["pbx.M5"] && catalogOpsHonorModifyContract(m5Catalog));
+    const m5Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m5Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m5Mirror) });
+    const m5Params = { tenantId: "21", objectId: "pMain:greeting", profileId: "pMain", promptSlot: "greeting", promptRef: "custom/new" };
+    memory.actions.push({ id: "m5Act", capabilityId: "pbx.M5", tenantId: "21", params: m5Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M5", "21", m5Params), resultSnapshot: null });
+    const m5Happy = await m5Exec.execute({ capabilityId: "pbx.M5", params: m5Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m5Act" });
+    add("M5 full gate chain passes in simulate", "pbx.M5", m5Happy.ok === true && m5Happy.verified === true);
+    add("M5 ZERO api contact during simulation (tripwire)", "pbx.M5", m5Calls === 0);
+
+    // --- M6: IVR timeout/invalid destination — sim certification ---
+    const m6Mirror: any = {
+      ...m1Mirror,
+      ivrRouteProfile: { findFirst: async ({ where }: any) => (where.id === "pMain" && (where.tenantId === undefined || where.tenantId === "ct1") ? { id: "pMain", timeoutDestinationType: "extension", timeoutDestinationRef: "T21_cos-all,101,1", invalidDestinationType: null, invalidDestinationRef: null } : null) },
+    };
+    let m6Calls = 0;
+    const m6Catalog = buildModifyCatalog({ prisma: m6Mirror, mohApi: { call: async () => ({}) }, ivrApi: { call: async () => { m6Calls++; throw new Error("CERT VIOLATION: M6 contacted the api in simulate"); } } });
+    add("M6 catalog present, contract holds", "pbx.M6", !!m6Catalog["pbx.M6"] && catalogOpsHonorModifyContract(m6Catalog));
+    const m6Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m6Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m6Mirror) });
+    const m6Params = { tenantId: "21", objectId: "pMain:timeout", profileId: "pMain", exitSlot: "timeout", action: "set", destinationType: "queue", destinationRef: "ext-queues,900,1" };
+    memory.actions.push({ id: "m6Act", capabilityId: "pbx.M6", tenantId: "21", params: m6Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M6", "21", m6Params), resultSnapshot: null });
+    const m6Happy = await m6Exec.execute({ capabilityId: "pbx.M6", params: m6Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m6Act" });
+    add("M6 full gate chain passes in simulate", "pbx.M6", m6Happy.ok === true && m6Happy.verified === true);
+    add("M6 ZERO api contact during simulation (tripwire)", "pbx.M6", m6Calls === 0);
+
+    // --- M7: IVR schedule edit — sim certification ---
+    const m7Mirror: any = {
+      ...m1Mirror,
+      ivrScheduleConfig: { findUnique: async ({ where }: any) => (where.tenantId === "ct1" ? { tenantId: "ct1", timezone: "America/New_York", businessHoursRules: [], holidayDates: [], defaultProfileId: null, afterHoursProfileId: null, holidayProfileId: null, isActive: true } : null) },
+    };
+    let m7Calls = 0;
+    const m7Catalog = buildModifyCatalog({ prisma: m7Mirror, mohApi: { call: async () => ({}) }, ivrApi: { call: async () => { m7Calls++; throw new Error("CERT VIOLATION: M7 contacted the api in simulate"); } } });
+    add("M7 catalog present, contract holds", "pbx.M7", !!m7Catalog["pbx.M7"] && catalogOpsHonorModifyContract(m7Catalog));
+    const m7Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m7Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m7Mirror) });
+    const m7Params = { tenantId: "21", objectId: "21", schedule: { timezone: "America/New_York", businessHoursRules: [{ day: 1, open: "09:00", close: "17:00" }], holidayDates: [], defaultProfileId: null, afterHoursProfileId: null, holidayProfileId: null, isActive: true } };
+    memory.actions.push({ id: "m7Act", capabilityId: "pbx.M7", tenantId: "21", params: m7Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M7", "21", m7Params), resultSnapshot: null });
+    const m7Happy = await m7Exec.execute({ capabilityId: "pbx.M7", params: m7Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m7Act" });
+    add("M7 full gate chain passes in simulate", "pbx.M7", m7Happy.ok === true && m7Happy.verified === true);
+    add("M7 ZERO api contact during simulation (tripwire)", "pbx.M7", m7Calls === 0);
+
+    // --- M10: queue config edit (official API) — sim certification ---
+    let m10Calls = 0;
+    const m10Catalog = buildModifyCatalog({ prisma: m1Mirror, mohApi: { call: async () => ({}) }, queueApi: { call: async () => { m10Calls++; throw new Error("CERT VIOLATION: M10 contacted the queue api in simulate"); } } });
+    add("M10 catalog present, contract holds", "pbx.M10", !!m10Catalog["pbx.M10"] && catalogOpsHonorModifyContract(m10Catalog));
+    const m10Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m10Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(m1Mirror) });
+    const m10Params = { tenantId: "21", objectId: "q5", patch: { strategy: "leastrecent", timeout: 30 } };
+    memory.actions.push({ id: "m10Act", capabilityId: "pbx.M10", tenantId: "21", params: m10Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M10", "21", m10Params), resultSnapshot: null });
+    const m10Happy = await m10Exec.execute({ capabilityId: "pbx.M10", params: m10Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m10Act" });
+    add("M10 full gate chain passes in simulate", "pbx.M10", m10Happy.ok === true && m10Happy.verified === true);
+    add("M10 ZERO queue-api contact during simulation (tripwire)", "pbx.M10", m10Calls === 0);
+
+    // --- M11: extension DND/CF (live AstDB diversion) — sim certification ---
+    let m11Calls = 0;
+    const m11Catalog = buildModifyCatalog({ prisma: mirror, mohApi: { call: async () => ({}) }, extFeatureApi: { call: async () => { m11Calls++; throw new Error("CERT VIOLATION: M11 contacted the helper in simulate"); } } });
+    add("M11 catalog present, contract holds", "pbx.M11", !!m11Catalog["pbx.M11"] && catalogOpsHonorModifyContract(m11Catalog));
+    const m11Exec = new ModifyPbxExecutor(memory as any, audit, new SnapshotStore(memory), modClientFactory, { catalog: m11Catalog, env: envOn, killSwitch: () => false, scopeCheck: makeScopeCheck(mirror) });
+    const m11Params = { tenantId: "21", objectId: "103", feature: "DND", enable: "yes" };
+    memory.actions.push({ id: "m11Act", capabilityId: "pbx.M11", tenantId: "21", params: m11Params, status: "EXECUTING", approvalConsumedAt: new Date(), paramsHash: computeParamsHash("pbx.M11", "21", m11Params), resultSnapshot: null });
+    const m11Happy = await m11Exec.execute({ capabilityId: "pbx.M11", params: m11Params, requestedBy: "customer:u1", requestedRole: "customer", actionId: "m11Act" });
+    add("M11 full gate chain passes in simulate", "pbx.M11", m11Happy.ok === true && m11Happy.verified === true);
+    add("M11 ZERO helper contact during simulation (tripwire)", "pbx.M11", m11Calls === 0);
   }
 
   // --- Zero-impact: our fixture description is unchanged, and NO real PBX call happened ---

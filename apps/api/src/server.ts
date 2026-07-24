@@ -221,6 +221,10 @@ import {
   getPbxVoicemailGreeting,
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
+  agentSetPbxRouteDestination,
+  agentRestorePbxRouteDestination,
+  getPbxDiversion,
+  setPbxDiversion,
   fetchAllVoicemailSpoolMessages,
   fetchVoicemailSpoolAudioFromHelper,
   resolvePbxRouteHelperConfig,
@@ -21849,6 +21853,158 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   }
 });
 
+// ── M4 IVR publish helper (isolated; used by the agent door) ─────────────────
+// Replicates the /voice/ivr/publish core (mode → active profile → options →
+// keys → prompt-catalog dead-air check → snapshot → publishToAstDb → record)
+// as a callable helper WITHOUT touching the existing route. Returns a structured
+// result instead of a Fastify reply. publishedBy is stamped "agent:<actionId>".
+async function publishIvrForTenant(tenantId: string, publishedBy: string): Promise<
+  { ok: true; recordId: string; mode: string; keysWritten: number } | { ok: false; error: string; missing?: unknown[] }
+> {
+  const [schedule, override, profiles] = await Promise.all([
+    (db as any).ivrScheduleConfig.findUnique({ where: { tenantId } }),
+    (db as any).ivrOverrideState.findUnique({ where: { tenantId } }),
+    (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true } }),
+  ]);
+  const mode = schedule ? computeCurrentMode(schedule, override) : "business";
+  const activeProfile = ivrFindActiveProfile(mode, profiles as any[]);
+  const activeOptions = activeProfile ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } }) : [];
+  const slug = await getIvrSlugForTenant(tenantId);
+  const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true } });
+  const tenantDialContext = tenantPbxLink?.pbxTenantId ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all` : null;
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext);
+
+  const IVR_DEFAULT_PROMPT_REFS = new Set([IVR_DEFAULT_PROMPT_INVALID, IVR_DEFAULT_PROMPT_TIMEOUT, "vm-goodbye", "pbx-invalid", "vm-enter-num-to-call"]);
+  const promptCandidates: Array<{ key: string; ref: string; profileType?: string | null }> = [];
+  for (const p of profiles as any[]) {
+    for (const [key, ref] of [["active_prompt", p.pbxPromptRef], ["active_prompt_invalid", p.pbxInvalidPromptRef], ["active_prompt_timeout", p.pbxTimeoutPromptRef], ["active_prompt_retry", p.pbxRetryPromptRef]] as const) {
+      if (ref && !IVR_DEFAULT_PROMPT_REFS.has(ref)) promptCandidates.push({ key, ref: String(ref), profileType: p.type });
+    }
+  }
+  const missingPrompts = await ivrResolveMissingPromptRefs(tenantId, promptCandidates);
+  if (missingPrompts.length > 0) return { ok: false, error: "prompt_refs_not_in_catalog", missing: missingPrompts };
+
+  const family = ivrFamily(slug);
+  const previousKeys = await snapshotAstDbFamily(slug, family, keys.map((k) => k.key));
+  const record = await (db as any).ivrPublishRecord.create({
+    data: { tenantId, publishedBy, mode, keysWritten: keys, previousKeys, status: "pending", isRollback: false },
+  });
+  try {
+    await publishToAstDb(slug, keys);
+    try { await publishWakeSystemConfig(slug); await publishWakeTenantConfig(slug, tenantId); } catch (wakeErr: any) { app.log.warn({ tenantId, err: wakeErr?.message }, "agent ivr: wake-config publish failed (non-fatal)"); }
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
+    return { ok: true, recordId: record.id, mode, keysWritten: keys.length };
+  } catch (err: any) {
+    await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
+    return { ok: false, error: err?.message ?? "publish_failed" };
+  }
+}
+
+// ── POST /internal/agent/ivr/action ──────────────────────────────────────────
+// M4: the agent's IVR menu door. Shared-secret internal endpoint driving the
+// SAME IvrOptionRoute + publish machinery the portal uses. Enforces the full
+// hardening matrix (per-type ref shape, custom allow-list, sub-menu loop guard,
+// tenant ownership of profile + sub-menu target). Attribution agent:<actionId>.
+app.post("/internal/agent/ivr/action", async (req, reply) => {
+  const { AgentIvrActionRequest, validateAgentIvrOption } = await import("./agentIvrAction");
+  const { agentMohSecretOk } = await import("./agentMohOverride");
+  if (!agentMohSecretOk(req.headers["x-agent-internal-secret"])) return reply.code(403).send({ error: "forbidden" });
+  const parsed = AgentIvrActionRequest.safeParse(req.body || {});
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
+  const d = parsed.data;
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  const actor = `agent:${d.agentActionId}`;
+
+  // Profiles owned by this tenant (ownership + sub-menu loop guard source).
+  const profiles = await (db as any).ivrRouteProfile.findMany({ where: { tenantId: tid }, select: { id: true, name: true } });
+  const tenantProfileIds = new Set<string>(profiles.map((p: any) => p.id));
+
+  if (d.action === "list") {
+    const withOptions = await Promise.all(profiles.map(async (p: any) => ({
+      id: p.id, name: p.name,
+      options: await (db as any).ivrOptionRoute.findMany({ where: { profileId: p.id }, select: { id: true, optionDigit: true, destinationType: true, destinationRef: true, label: true } }),
+    })));
+    return reply.send({ ok: true, profiles: withOptions });
+  }
+
+  // set_option / clear_option / set_prompt all target a profile owned by the tenant.
+  if (!tenantProfileIds.has(d.profileId!)) return reply.code(404).send({ error: "profile_not_found_for_tenant" });
+
+  // ── M7: edit the tenant's IVR schedule (hours / holidays / per-mode profiles) ──
+  if (d.action === "set_schedule") {
+    const s = d.schedule!;
+    // Every referenced profile must belong to this tenant.
+    const refs = [s.defaultProfileId, s.afterHoursProfileId, s.holidayProfileId].filter((x): x is string => !!x);
+    for (const rid of refs) {
+      if (!tenantProfileIds.has(rid)) return reply.code(400).send({ error: "profile_not_in_tenant", detail: `profile '${rid}' is not one of this tenant's IVR menus` });
+    }
+    await (db as any).ivrScheduleConfig.upsert({
+      where: { tenantId: tid },
+      create: { tenantId: tid, timezone: s.timezone, businessHoursRules: s.businessHoursRules, holidayDates: s.holidayDates, defaultProfileId: s.defaultProfileId ?? null, afterHoursProfileId: s.afterHoursProfileId ?? null, holidayProfileId: s.holidayProfileId ?? null, isActive: s.isActive },
+      update: { timezone: s.timezone, businessHoursRules: s.businessHoursRules, holidayDates: s.holidayDates, defaultProfileId: s.defaultProfileId ?? null, afterHoursProfileId: s.afterHoursProfileId ?? null, holidayProfileId: s.holidayProfileId ?? null, isActive: s.isActive },
+    });
+    const pub = await publishIvrForTenant(tid, actor);
+    const schedule = await (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: tid } });
+    if (!pub.ok) return reply.send({ ok: true, schedule, publishResult: null, publishError: pub.error });
+    return reply.send({ ok: true, schedule, publishResult: { recordId: pub.recordId, mode: pub.mode, keysWritten: pub.keysWritten }, publishError: null });
+  }
+
+  // ── M6: change the timeout / invalid (fall-through) destination ──
+  if (d.action === "set_exit") {
+    const { IVR_EXIT_SLOT_FIELDS, validateAgentIvrOption } = await import("./agentIvrAction");
+    const fields = IVR_EXIT_SLOT_FIELDS[d.exitSlot!];
+    const hasDest = !!d.destinationType && !!d.destinationRef;
+    if (hasDest) {
+      const err = validateAgentIvrOption({ destinationType: d.destinationType!, destinationRef: d.destinationRef!, profileId: d.profileId!, tenantProfileIds });
+      if (err) return reply.code(400).send({ error: "invalid_destination", detail: err });
+    }
+    await (db as any).ivrRouteProfile.update({ where: { id: d.profileId }, data: { [fields.type]: hasDest ? d.destinationType : null, [fields.ref]: hasDest ? d.destinationRef : null } });
+    const pub = await publishIvrForTenant(tid, actor);
+    const profile = await (db as any).ivrRouteProfile.findUnique({ where: { id: d.profileId }, select: { id: true, timeoutDestinationType: true, timeoutDestinationRef: true, invalidDestinationType: true, invalidDestinationRef: true } });
+    if (!pub.ok) return reply.send({ ok: true, profile, publishResult: null, publishError: pub.error });
+    return reply.send({ ok: true, profile, publishResult: { recordId: pub.recordId, mode: pub.mode, keysWritten: pub.keysWritten }, publishError: null });
+  }
+
+  // ── M5: change which recording a prompt slot plays ──
+  if (d.action === "set_prompt") {
+    const { IVR_PROMPT_SLOT_FIELD } = await import("./agentIvrAction");
+    const field = IVR_PROMPT_SLOT_FIELD[d.promptSlot!];
+    const ref = d.promptRef && d.promptRef.trim() ? d.promptRef.trim() : null;
+    if (ref) {
+      const shapeErr = ivrValidatePromptRef(ref);
+      if (shapeErr) return reply.code(400).send({ error: "invalid_prompt_ref", detail: shapeErr });
+      // Dead-air guard: the recording MUST exist in this tenant's catalog.
+      const missing = await ivrResolveMissingPromptRefs(tid, [{ key: field, ref }]);
+      if (missing.length > 0) return reply.code(422).send({ error: "prompt_ref_not_in_catalog", detail: "That recording isn't in this tenant's synced VitalPBX library — it would dead-air on live calls." });
+    }
+    await (db as any).ivrRouteProfile.update({ where: { id: d.profileId }, data: { [field]: ref } });
+    const pub = await publishIvrForTenant(tid, actor);
+    const profile = await (db as any).ivrRouteProfile.findUnique({ where: { id: d.profileId }, select: { id: true, pbxPromptRef: true, pbxInvalidPromptRef: true, pbxTimeoutPromptRef: true, pbxRetryPromptRef: true } });
+    if (!pub.ok) return reply.send({ ok: true, profile, publishResult: null, publishError: pub.error });
+    return reply.send({ ok: true, profile, publishResult: { recordId: pub.recordId, mode: pub.mode, keysWritten: pub.keysWritten }, publishError: null });
+  }
+
+  if (d.action === "set_option") {
+    const err = validateAgentIvrOption({ destinationType: d.destinationType!, destinationRef: d.destinationRef!, profileId: d.profileId!, tenantProfileIds });
+    if (err) return reply.code(400).send({ error: "invalid_destination", detail: err });
+    const existing = await (db as any).ivrOptionRoute.findFirst({ where: { profileId: d.profileId, optionDigit: d.optionDigit } });
+    if (existing) {
+      await (db as any).ivrOptionRoute.update({ where: { id: existing.id }, data: { destinationType: d.destinationType, destinationRef: d.destinationRef, label: d.label ?? null } });
+    } else {
+      await (db as any).ivrOptionRoute.create({ data: { tenantId: tid, profileId: d.profileId, optionDigit: d.optionDigit, destinationType: d.destinationType, destinationRef: d.destinationRef, label: d.label ?? null, enabled: true } });
+    }
+  } else {
+    const existing = await (db as any).ivrOptionRoute.findFirst({ where: { profileId: d.profileId, optionDigit: d.optionDigit } });
+    if (existing) await (db as any).ivrOptionRoute.delete({ where: { id: existing.id } });
+  }
+
+  const pub = await publishIvrForTenant(tid, actor);
+  const options = await (db as any).ivrOptionRoute.findMany({ where: { profileId: d.profileId }, select: { id: true, optionDigit: true, destinationType: true, destinationRef: true, label: true } });
+  if (!pub.ok) return reply.send({ ok: true, options, publishResult: null, publishError: pub.error });
+  return reply.send({ ok: true, options, publishResult: { recordId: pub.recordId, mode: pub.mode, keysWritten: pub.keysWritten }, publishError: null });
+});
+
 // ── POST /voice/ivr/rollback/:publishId ──────────────────────────────────────
 // Restores the AstDB state that existed BEFORE the target publish happened.
 // Uses target.previousKeys (captured via AMI DBGet at publish time). Falls
@@ -24215,8 +24371,94 @@ app.post("/voice/moh/override/deactivate", async (req, reply) => {
 //   activate   → override to one of the tenant's OWN profiles (+ optional expiry)
 //   deactivate → back to the schedule-derived state
 // Every change is attributed as agent:<agentActionId> for the audit chain.
+// ── POST /internal/agent/extfeature/action ───────────────────────────────────
+// M11: the agent's extension-feature (DND / call-forward) door. Shared-secret
+// internal endpoint driving the helper's LIVE AstDB diversion write (database
+// put — NOT gen-conf). Extension ownership enforced (tenant mirror) + protected
+// extension guard. Attribution agent:<actionId>.
+app.post("/internal/agent/extfeature/action", async (req, reply) => {
+  const { agentMohSecretOk } = await import("./agentMohOverride");
+  if (!agentMohSecretOk(req.headers["x-agent-internal-secret"])) return reply.code(403).send({ error: "forbidden" });
+  const body = z.object({
+    tenantId: z.string().min(1),
+    action: z.enum(["get", "set"]),
+    extension: z.string().min(1).max(16),
+    feature: z.enum(["DND", "CFU", "CFB", "CFN", "CFI"]),
+    enable: z.enum(["yes", "no"]).optional(),
+    destination: z.string().max(24).optional(),
+    agentActionId: z.string().min(1),
+  }).refine((v) => v.action !== "set" || !!v.enable, { message: "enable required for set" }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues.slice(0, 3) });
+  const d = body.data;
+
+  const link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: String(d.tenantId), status: "LINKED" }, select: { tenantId: true, pbxInstanceId: true, pbxTenantId: true } });
+  if (!link?.pbxInstanceId || !link.pbxTenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+  if (!helperCfg) return reply.code(503).send({ error: "route_helper_not_configured" });
+  const vitalTenantId = String(link.pbxTenantId);
+  const actor = `agent:${d.agentActionId}`;
+
+  // Protected-extension guard (mirror the executor's G5) — belt-and-suspenders.
+  const protectedExts = (process.env.AGENT_PBX_PROTECTED_EXTS ?? "101").split(",").map((s) => s.trim()).filter(Boolean);
+  if (protectedExts.includes(String(d.extension))) return reply.code(409).send({ error: "protected_extension" });
+
+  try {
+    if (d.action === "get") {
+      const r = await getPbxDiversion(helperCfg, { tenantId: vitalTenantId, extension: String(d.extension), feature: d.feature });
+      return reply.send({ ok: true, state: { enable: r.enable, destination: r.destination } });
+    }
+    const r = await setPbxDiversion(helperCfg, { tenantId: vitalTenantId, extension: String(d.extension), feature: d.feature, enable: d.enable!, destination: d.destination });
+    app.log.info({ vitalTenantId, actor, extension: d.extension, feature: d.feature, enable: d.enable }, "agent extfeature: diversion set (live AstDB)");
+    return reply.send({ ok: true, before: r.before, after: r.after });
+  } catch (err: any) {
+    app.log.warn({ vitalTenantId, actor, action: d.action, err: err?.message }, "agent extfeature action failed");
+    return reply.code(502).send({ ok: false, error: err?.message ?? "extfeature_action_failed" });
+  }
+});
+
+// ── POST /internal/agent/queue/action ────────────────────────────────────────
+// M10: the agent's queue-config door. Shared-secret internal endpoint driving
+// the OFFICIAL VitalPBX queue API (VitalPBX owns its own regen — the agent never
+// runs gen-conf). Field allow-list enforced; queue ownership verified against
+// the tenant's own queue list AND VitalPBX's tenant-scoped API.
+app.post("/internal/agent/queue/action", async (req, reply) => {
+  const { AgentQueueActionRequest, AgentQueuePatch, pickQueueFields } = await import("./agentQueueAction");
+  const { agentMohSecretOk } = await import("./agentMohOverride");
+  if (!agentMohSecretOk(req.headers["x-agent-internal-secret"])) return reply.code(403).send({ error: "forbidden" });
+  const parsed = AgentQueueActionRequest.safeParse(req.body || {});
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
+  const d = parsed.data;
+
+  const link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: String(d.tenantId), status: "LINKED" }, include: { pbxInstance: true } });
+  if (!link?.pbxInstance || !link.pbxTenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
+  const vitalTenantId = String(link.pbxTenantId);
+  const actor = `agent:${d.agentActionId}`;
+
+  try {
+    const queues = await vital.listQueues(vitalTenantId);
+    if (d.action === "list") {
+      return reply.send({ ok: true, queues: (queues || []).map((q: any) => ({ id: String(q.id ?? q.queue_id ?? q.queueId ?? ""), description: q.description ?? q.name ?? null, fields: pickQueueFields(q) })) });
+    }
+    // update: verify ownership + allow-list, then official-API update.
+    const owned = (queues || []).find((q: any) => String(q.id ?? q.queue_id ?? q.queueId ?? "") === String(d.queueId));
+    if (!owned) return reply.code(404).send({ error: "queue_not_found_for_tenant" });
+    const patch = AgentQueuePatch.safeParse(d.patch);
+    if (!patch.success) return reply.code(400).send({ error: "invalid_patch", issues: patch.error.issues.slice(0, 3) });
+    await vital.updateQueue(String(d.queueId), patch.data as Record<string, unknown>, vitalTenantId);
+    const after = await vital.listQueues(vitalTenantId);
+    const updated = (after || []).find((q: any) => String(q.id ?? q.queue_id ?? q.queueId ?? "") === String(d.queueId));
+    app.log.info({ vitalTenantId, actor, queueId: d.queueId, fields: Object.keys(patch.data) }, "agent queue: updated via official API");
+    return reply.send({ ok: true, queue: { id: String(d.queueId), fields: pickQueueFields(updated) } });
+  } catch (err: any) {
+    app.log.warn({ vitalTenantId, actor, action: d.action, err: err?.message }, "agent queue action failed");
+    return reply.code(502).send({ ok: false, error: err?.message ?? "queue_action_failed" });
+  }
+});
+
 app.post("/internal/agent/moh/override", async (req, reply) => {
-  const { AgentMohOverrideRequest, agentMohSecretOk, shapeMohSnapshot, AGENT_MOH_HEADER } = await import("./agentMohOverride");
+  const { AgentMohOverrideRequest, agentMohSecretOk, shapeMohSnapshot, shapeExtensionOverride, AGENT_MOH_HEADER } = await import("./agentMohOverride");
   if (!agentMohSecretOk(req.headers[AGENT_MOH_HEADER])) return reply.code(403).send({ error: "forbidden" });
   const parsed = AgentMohOverrideRequest.safeParse(req.body || {});
   if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
@@ -24226,12 +24468,54 @@ app.post("/internal/agent/moh/override", async (req, reply) => {
   const actor = `agent:${d.agentActionId}`;
 
   if (d.action === "read") {
-    const [override, profiles, latestPublish] = await Promise.all([
+    const [override, profiles, latestPublish, extOverride] = await Promise.all([
       (db as any).mohOverrideState.findUnique({ where: { tenantId: tid } }),
       (db as any).mohProfile.findMany({ where: { tenantId: tid } }),
       (db as any).mohPublishRecord.findFirst({ where: { tenantId: tid }, orderBy: { publishedAt: "desc" } }),
+      d.extension ? (db as any).mohExtensionOverride.findUnique({ where: { tenantId_extension: { tenantId: tid, extension: normalizeMohExtension(d.extension) ?? d.extension } } }) : Promise.resolve(null),
     ]);
-    return reply.send({ ok: true, snapshot: shapeMohSnapshot({ tenantId: tid, override, profiles, latestPublish }) });
+    return reply.send({ ok: true, snapshot: shapeMohSnapshot({ tenantId: tid, override, profiles, latestPublish }), extensionOverride: shapeExtensionOverride(extOverride) });
+  }
+
+  // ── M2: per-extension override (ext_set / ext_clear) ──
+  if (d.action === "ext_set" || d.action === "ext_clear") {
+    const ext = normalizeMohExtension(d.extension!);
+    if (ext === null) return reply.code(400).send({ error: "invalid_extension" });
+    // Extension must exist for this tenant (same guard as the portal route).
+    try {
+      await assertExtensionExistsForTenantHelper(db as any, tid, ext);
+    } catch (err: any) {
+      return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" });
+    }
+
+    if (d.action === "ext_set") {
+      const profile = await (db as any).mohProfile.findUnique({ where: { id: d.profileId } });
+      if (!profile || profile.tenantId !== tid) return reply.code(404).send({ error: "profile_not_found" });
+      if (!profile.isActive) return reply.code(409).send({ error: "profile_inactive" });
+      let runtimeClass: string;
+      try {
+        const readiness = await assertMohRuntimeReadiness(tid, profile.vitalPbxMohClassName);
+        runtimeClass = readiness.selectedClass;
+      } catch (err: any) {
+        return reply.code(err?.statusCode ?? 400).send({ error: err?.message ?? "invalid_moh_runtime_class", detail: err?.detail });
+      }
+      await upsertExtensionOverride(db as any, { tenantId: tid, extension: ext, vitalPbxMohClassName: runtimeClass, mohProfileId: d.profileId ?? null, enabled: true, actorUserId: actor });
+    } else {
+      await deleteExtensionOverrideForTenant(db as any, tid, ext);
+    }
+
+    let publishResult: { recordId: string; mohClass: string; mode: string } | null = null;
+    let publishError: string | null = null;
+    try {
+      const r = await doMohPublish(tid, actor, "agent_ext_override");
+      publishResult = { recordId: r.recordId, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
+      app.log.info({ tenantId: tid, actor, extension: ext, action: d.action, ...publishResult }, "agent moh ext override: applied + published");
+    } catch (pubErr: any) {
+      publishError = pubErr?.message ?? "publish failed";
+      app.log.warn({ tenantId: tid, actor, extension: ext, err: publishError }, "agent moh ext override: applied but publish failed (worker will reconcile)");
+    }
+    const extOverride = await (db as any).mohExtensionOverride.findUnique({ where: { tenantId_extension: { tenantId: tid, extension: ext } } });
+    return reply.send({ ok: true, extensionOverride: shapeExtensionOverride(extOverride), publishResult, publishError });
   }
 
   if (d.action === "activate") {
@@ -24283,6 +24567,72 @@ app.post("/internal/agent/moh/override", async (req, reply) => {
     app.log.warn({ tenantId: tid, actor, err: publishError }, "agent moh override: deactivated but publish failed (worker will reconcile)");
   }
   return reply.send({ ok: true, override, publishResult, publishError });
+});
+
+// ── POST /internal/agent/route/action ────────────────────────────────────────
+// M3 (Option A): the agent's inbound-route door. Shared-secret internal endpoint.
+// A DID may be retargeted ONLY to a destination the tenant is ALREADY using
+// (a value bound to one of that tenant's own inbound routes) — proven, tenant-
+// scoped, no ambiguous resolution. Connect-managed DIDs are hard-refused (both
+// here and in the helper). Write goes via the ISOLATED helper endpoints that
+// never touch the connect/pbx mode signal.
+app.post("/internal/agent/route/action", async (req, reply) => {
+  const { AgentRouteActionRequest, agentMohSecretOk, buildRouteTargets, isProvenTarget } = {
+    ...(await import("./agentRouteAction")),
+    ...(await import("./agentMohOverride")),
+  } as any;
+  if (!agentMohSecretOk(req.headers["x-agent-internal-secret"])) return reply.code(403).send({ error: "forbidden" });
+  const parsed = AgentRouteActionRequest.safeParse(req.body || {});
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
+  const d = parsed.data;
+  const actor = `agent:${d.agentActionId}`;
+
+  // Resolve the vital tenant → its Connect link + PBX instance + DIDs.
+  const link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: String(d.tenantId), status: "LINKED" }, select: { tenantId: true, pbxInstanceId: true, pbxTenantId: true } });
+  if (!link?.pbxInstanceId || !link.pbxTenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+  if (!helperCfg) return reply.code(503).send({ error: "route_helper_not_configured" });
+  const vitalTenantId = String(link.pbxTenantId);
+
+  // Harvest the tenant's PROVEN in-use destinations by inspecting its own DIDs.
+  async function harvestTargets() {
+    const didRows = await db.pbxTenantInboundDid.findMany({ where: { pbxInstanceId: link!.pbxInstanceId, vitalTenantId, active: true }, select: { e164: true }, take: 500 });
+    const inspected: Array<{ did: string; description: string | null; destinationId: string | null; mode: "connect" | "pbx" | "unknown" }> = [];
+    for (const r of didRows) {
+      try {
+        const h = await inspectPbxInboundRoute(helperCfg!, { did: String(r.e164), tenantId: vitalTenantId });
+        inspected.push({ did: String(r.e164), description: (h.route as any)?.description ?? null, destinationId: (h.route as any)?.destination_id != null ? String((h.route as any).destination_id) : null, mode: h.mode === "connect" ? "connect" : h.mode === "pbx" ? "pbx" : "unknown" });
+      } catch { /* skip unreadable DID */ }
+    }
+    return buildRouteTargets(inspected);
+  }
+
+  try {
+    if (d.action === "list_targets") {
+      return reply.send({ ok: true, targets: await harvestTargets() });
+    }
+    if (d.action === "route_inspect") {
+      const h = await inspectPbxInboundRoute(helperCfg, { did: String(d.did), tenantId: vitalTenantId });
+      return reply.send({ ok: true, mode: h.mode, route: h.route });
+    }
+    if (d.action === "route_retarget") {
+      const targets = await harvestTargets();
+      if (!isProvenTarget(targets, String(d.destinationId))) {
+        return reply.code(409).send({ ok: false, error: "destination_not_proven_for_tenant", detail: "target must be a destination already in use by one of this tenant's numbers" });
+      }
+      const cur = await inspectPbxInboundRoute(helperCfg, { did: String(d.did), tenantId: vitalTenantId });
+      if (cur.mode === "connect") return reply.code(409).send({ ok: false, error: "connect_managed_route_refused" });
+      const res = await agentSetPbxRouteDestination(helperCfg, { did: String(d.did), tenantId: vitalTenantId, destinationId: String(d.destinationId), actor, requestId: d.agentActionId });
+      app.log.info({ vitalTenantId, actor, did: d.did, destinationId: d.destinationId }, "agent route: retargeted");
+      return reply.send({ ok: true, after: res.after ?? null, apply: (res as any).apply ?? null });
+    }
+    // route_restore
+    const res = await agentRestorePbxRouteDestination(helperCfg, { did: String(d.did), tenantId: vitalTenantId, actor, requestId: d.agentActionId });
+    return reply.send({ ok: true, after: res.after ?? null, apply: (res as any).apply ?? null });
+  } catch (err: any) {
+    app.log.warn({ vitalTenantId, actor, action: d.action, err: err?.message }, "agent route action failed");
+    return reply.code(502).send({ ok: false, error: err?.message ?? "route_action_failed" });
+  }
 });
 
 // ── GET /voice/moh/preview ────────────────────────────────────────────────────

@@ -106,6 +106,35 @@ export class ModifyPbxExecutor {
     this.now = opts.now ?? Date.now;
   }
 
+  /** Roll the sliding hour window if it has elapsed. Synchronous. */
+  private rollLiveWindow(now: number): void {
+    if (now - this.liveWindowStart >= 3600_000) {
+      this.liveWindowStart = now;
+      this.liveWindowCount = 0;
+    }
+  }
+
+  /** Read-only "is the budget already spent?" for the advisory G4 early-fail. */
+  private liveBudgetFull(now: number): boolean {
+    this.rollLiveWindow(now);
+    const cap = Number(this.env.AGENT_PBX_LIVE_WRITES_PER_HOUR ?? 10);
+    return this.liveWindowCount >= cap;
+  }
+
+  /**
+   * Atomic check-and-increment of the live-write budget. MUST stay fully
+   * synchronous (no await) so concurrent callers cannot both observe the same
+   * pre-increment count — this is what makes the cap hold under concurrency.
+   * Returns false (and reserves nothing) when the window is full.
+   */
+  private reserveLiveSlot(now: number): boolean {
+    this.rollLiveWindow(now);
+    const cap = Number(this.env.AGENT_PBX_LIVE_WRITES_PER_HOUR ?? 10);
+    if (this.liveWindowCount >= cap) return false;
+    this.liveWindowCount++;
+    return true;
+  }
+
   async execute(input: ModifyExecInput): Promise<ModifyExecResult> {
     const mode: ModifyMode = input.mode ?? "simulate";
 
@@ -135,17 +164,13 @@ export class ModifyPbxExecutor {
       return this.refuse(input, mode, "G3", `Scope fence: ${op.kind} '${objectId}' not verified as belonging to tenant '${tenantId}' for ${input.requestedBy} (fail-closed).`);
     }
 
-    // G4: global live-write budget (live only).
-    if (mode === "live") {
+    // G4: global live-write budget (live only). ADVISORY early-fail only — the
+    // AUTHORITATIVE, concurrency-safe reservation happens atomically just before
+    // dispatch (see reserveLiveSlot). This early check just avoids doing snapshot
+    // work for an op that is already obviously over budget.
+    if (mode === "live" && this.liveBudgetFull(this.now())) {
       const cap = Number(this.env.AGENT_PBX_LIVE_WRITES_PER_HOUR ?? 10);
-      const now = this.now();
-      if (now - this.liveWindowStart >= 3600_000) {
-        this.liveWindowStart = now;
-        this.liveWindowCount = 0;
-      }
-      if (this.liveWindowCount >= cap) {
-        return this.refuse(input, mode, "G4", `Global live-write budget reached (${cap}/hour). Queued work waits for the next window.`);
-      }
+      return this.refuse(input, mode, "G4", `Global live-write budget reached (${cap}/hour). Queued work waits for the next window.`);
     }
 
     // G5: protected extensions.
@@ -214,7 +239,16 @@ export class ModifyPbxExecutor {
       payload: { opId: op.id, kind: op.kind, objectId, mode, requestedBy: input.requestedBy, snapshotId: stored.id },
     });
 
-    // G10: dispatch.
+    // G10: dispatch. Reserve the live-write budget slot ATOMICALLY here — a
+    // synchronous check-and-increment with NO await between them, so concurrent
+    // ops that all passed the advisory G4 gate cannot collectively exceed the
+    // cap: exactly `cap` of them win the reservation, the rest refuse. (The
+    // reservation counts the ATTEMPT that reaches the write; auto-revert does
+    // not go through execute(), so it never consumes budget.)
+    if (mode === "live" && !this.reserveLiveSlot(this.now())) {
+      const cap = Number(this.env.AGENT_PBX_LIVE_WRITES_PER_HOUR ?? 10);
+      return this.refuse(input, mode, "G4", `Global live-write budget reached (${cap}/hour) at dispatch reservation. Queued work waits for the next window.`);
+    }
     let written: unknown;
     try {
       written = await op.dispatch(client, params, opCtx);
@@ -252,7 +286,7 @@ export class ModifyPbxExecutor {
       return { ok: false, capabilityId: input.capabilityId, mode, gate: "G11", refusedReason: `Verify step failed: ${String(err)} — outcome UNKNOWN, owner review required.`, snapshotId: stored.id, written };
     }
 
-    if (mode === "live") this.liveWindowCount++;
+    // Budget already reserved atomically at dispatch — do NOT double-count here.
 
     await this.audit.record({
       actor: input.requestedRole,

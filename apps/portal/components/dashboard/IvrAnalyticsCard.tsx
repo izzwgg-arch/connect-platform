@@ -83,7 +83,7 @@ export function IvrAnalyticsCard({ data, loading }: Props) {
             )}
           </div>
         </div>
-        <Link href="/pbx/ivr-routing" className="dash-v2-comm-cta">
+        <Link href="/pbx/ivr-studio" className="dash-v2-comm-cta">
           Manage IVR routing <ArrowRight size={14} aria-hidden />
         </Link>
       </div>

@@ -188,7 +188,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.07.23.3"
+VERSION = "2026.07.23.5"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -307,6 +307,25 @@ def snap_conn():
     )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_did ON inbound_route_snapshots(tenant_id, did_digits)")
+    # M3 (agent route change) — ISOLATED snapshot table. Deliberately has NO
+    # current_connect_destination_id column: the agent endpoint must NEVER touch
+    # the connect/pbx mode signal (that field, in inbound_route_snapshots, is what
+    # /inspect uses to decide "connect mode"). Keeping agent snapshots separate
+    # means an agent route change can never make a native route look Connect-managed.
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS agent_route_snapshots (
+      route_id INTEGER PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      did_digits TEXT NOT NULL,
+      did_e164 TEXT NOT NULL,
+      captured_at TEXT NOT NULL,
+      captured_by TEXT,
+      request_id TEXT,
+      original_row_json TEXT NOT NULL,
+      original_destination_id TEXT NOT NULL
+    )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_snap_did ON agent_route_snapshots(tenant_id, did_digits)")
     conn.execute("""
     CREATE TABLE IF NOT EXISTS transport_cert_snapshots (
       conf_path TEXT PRIMARY KEY,
@@ -880,6 +899,176 @@ def restore_route(body):
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
+
+# ── M3 (agent route change) — ISOLATED native-route destination change ───────
+# Changes ombu_inbound_routes.destination_id for a tenant's DID to a target the
+# CONNECT side already proved is a tenant-owned, in-use destination. Uses its own
+# agent_route_snapshots table and NEVER writes current_connect_destination_id, so
+# it cannot corrupt the connect/pbx mode signal. Refuses Connect-managed routes.
+
+def _route_is_connect_managed(route_id, current_dest):
+    """Defense-in-depth: refuse if this route is currently Connect-dispatched
+    (its destination equals a stored current_connect_destination_id, or equals
+    the configured connect destination). The Connect side already fences this;
+    this is the belt-and-suspenders check on the PBX itself."""
+    if CFG.connect_destination_id and str(current_dest) == str(CFG.connect_destination_id):
+        return True
+    with snap_conn() as sconn:
+        row = sconn.execute("SELECT current_connect_destination_id FROM inbound_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
+    return bool(row and row[0] and str(row[0]) == str(current_dest))
+
+def agent_set_route_destination(body):
+    did_digits, did_e164 = normalize_did(body.get("did"))
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    dest = require_num("destination_id", body.get("destinationId"))
+    force = bool(body.get("force", False))
+    actor = str(body.get("actor") or "")[:128]
+    request_id = str(body.get("requestId") or "")[:128]
+    with db_conn() as conn:
+        try:
+            conn.begin()
+            route = find_route(conn, tenant_id, did_digits)
+            route_id = int(route["inbound_route_id"])
+            current_dest = str(route["destination_id"])
+            if _route_is_connect_managed(route_id, current_dest):
+                raise RuntimeError("connect_managed_route_refused")
+            if current_dest == dest:
+                conn.rollback()
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route}
+            if not destination_exists(conn, dest):
+                raise RuntimeError("destination_not_found")
+            with snap_conn() as sconn:
+                existing = sconn.execute("SELECT original_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
+                if existing and not force:
+                    original = str(existing[0])
+                    # Drift guard: current must be either our captured original or a value we set.
+                    if current_dest != original:
+                        prior = sconn.execute("SELECT 1 FROM agent_route_snapshots WHERE route_id = ? AND original_destination_id = ?", (route_id, current_dest)).fetchone()
+                        if not prior:
+                            raise RuntimeError("route_drifted_since_capture")
+                if not existing:
+                    sconn.execute("""
+                    INSERT INTO agent_route_snapshots
+                      (route_id, tenant_id, did_digits, did_e164, captured_at, captured_by, request_id, original_row_json, original_destination_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (route_id, tenant_id, did_digits, did_e164, utc_now(), actor, request_id, json.dumps(route, sort_keys=True), current_dest))
+                sconn.commit()
+            with conn.cursor() as cur:
+                cur.execute("""
+                UPDATE ombu_inbound_routes
+                SET destination_id = %s
+                WHERE inbound_route_id = %s AND tenant_id = %s AND destination_id = %s
+                """, (dest, route_id, tenant_id, current_dest))
+                if cur.rowcount != 1:
+                    raise RuntimeError("agent_set_update_guard_failed")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    apply_result = apply_changes()
+    with db_conn() as conn:
+        after = find_route(conn, tenant_id, did_digits)
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "destinationId": dest, "apply": apply_result}
+
+def agent_restore_route_destination(body):
+    did_digits, did_e164 = normalize_did(body.get("did"))
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    with db_conn() as conn, snap_conn() as sconn:
+        try:
+            conn.begin()
+            route = find_route(conn, tenant_id, did_digits)
+            route_id = int(route["inbound_route_id"])
+            snap = sconn.execute("SELECT original_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
+            if not snap:
+                raise LookupError("agent_snapshot_not_found")
+            original_dest = str(snap[0])
+            current_dest = str(route["destination_id"])
+            if current_dest == original_dest:
+                conn.rollback()
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route}
+            if not destination_exists(conn, original_dest):
+                raise RuntimeError("original_destination_not_found")
+            with conn.cursor() as cur:
+                cur.execute("""
+                UPDATE ombu_inbound_routes
+                SET destination_id = %s
+                WHERE inbound_route_id = %s AND tenant_id = %s AND destination_id = %s
+                """, (original_dest, route_id, tenant_id, current_dest))
+                if cur.rowcount != 1:
+                    raise RuntimeError("agent_restore_update_guard_failed")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    apply_result = apply_changes()
+    with db_conn() as conn:
+        after = find_route(conn, tenant_id, did_digits)
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
+
+# ── M11 (agent extension features) — DND / call-forward via live AstDB ───────
+# Real DND/CF are live AstDB keys <tenantPath>/diversions/<ext>/<F>/{enable,
+# destination}. The dialplan reads them live — this is `database put`, NOT
+# gen-conf, so NO config regen and no reload. The scrambled tenant path is
+# ombu_tenants.path (16-hex), looked up by tenant_id. Everything is validated:
+# feature allow-listed, extension numeric, destination digits/+ only.
+
+DIVERSION_FEATURES = {"DND", "CFU", "CFB", "CFN", "CFI"}
+DIVERSION_DEST_RE = re.compile(r"^\+?\d{1,20}$")
+
+def resolve_tenant_path(conn, tenant_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT path FROM ombu_tenants WHERE tenant_id = %s", (tenant_id,))
+        row = cur.fetchone()
+    p = str((row or {}).get("path") or "").strip()
+    return p if re.match(r"^[0-9a-f]{8,32}$", p) else None
+
+def _astdb_get(family, key):
+    proc = subprocess.run(["asterisk", "-rx", "database get %s %s" % (family, key)], text=True, capture_output=True, timeout=15, check=False)
+    m = re.search(r"^Value:\s*(.*)$", (proc.stdout or ""), re.M)
+    return m.group(1).strip() if m else ""
+
+def _astdb_put(family, key, value):
+    proc = subprocess.run(["asterisk", "-rx", "database put %s %s %s" % (family, key, value)], text=True, capture_output=True, timeout=15, check=False)
+    return proc.returncode == 0
+
+def _ext_feature_args(body):
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    ext = require_num("extension", body.get("extension"))
+    feature = str(body.get("feature") or "").upper().strip()
+    if feature not in DIVERSION_FEATURES:
+        raise ValueError("invalid_feature")
+    return tenant_id, ext, feature
+
+def ext_feature_get(body):
+    tenant_id, ext, feature = _ext_feature_args(body)
+    with db_conn() as conn:
+        path = resolve_tenant_path(conn, tenant_id)
+    if not path:
+        raise RuntimeError("tenant_path_not_found")
+    fam = "%s/diversions/%s/%s" % (path, ext, feature)
+    return {"ok": True, "tenantId": tenant_id, "extension": ext, "feature": feature,
+            "enable": _astdb_get(fam, "enable") or "no", "destination": _astdb_get(fam, "destination") or ""}
+
+def ext_feature_set(body):
+    tenant_id, ext, feature = _ext_feature_args(body)
+    enable = "yes" if str(body.get("enable")).lower() in ("yes", "1", "true") else "no"
+    destination = str(body.get("destination") or "").strip()
+    if destination and not DIVERSION_DEST_RE.match(destination):
+        raise ValueError("invalid_destination")
+    if feature != "DND" and enable == "yes" and not destination:
+        raise ValueError("destination_required_for_call_forward")
+    with db_conn() as conn:
+        path = resolve_tenant_path(conn, tenant_id)
+    if not path:
+        raise RuntimeError("tenant_path_not_found")
+    fam = "%s/diversions/%s/%s" % (path, ext, feature)
+    before = {"enable": _astdb_get(fam, "enable") or "no", "destination": _astdb_get(fam, "destination") or ""}
+    if not _astdb_put(fam, "enable", enable):
+        raise RuntimeError("astdb_put_enable_failed")
+    # Always write destination (empty clears it) so state is unambiguous.
+    _astdb_put(fam, "destination", destination)
+    after = {"enable": _astdb_get(fam, "enable") or "no", "destination": _astdb_get(fam, "destination") or ""}
+    return {"ok": True, "tenantId": tenant_id, "extension": ext, "feature": feature, "before": before, "after": after}
 
 def sync_tenant_moh(body):
     tenant_id = require_num("tenant_id", body.get("tenantId"))
@@ -1778,6 +1967,10 @@ class Handler(BaseHTTPRequestHandler):
             "/inspect": inspect_route,
             "/retarget": retarget_route,
             "/restore": restore_route,
+            "/route-set-destination": agent_set_route_destination,
+            "/route-restore-destination": agent_restore_route_destination,
+            "/get-diversion": ext_feature_get,
+            "/set-diversion": ext_feature_set,
             "/sync-tenant-moh": sync_tenant_moh,
             "/ensure-transport-wss-cert": ensure_transport_wss_cert,
             "/upload-prompt": upload_prompt,

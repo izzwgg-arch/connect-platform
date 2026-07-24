@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AgentMohOverrideRequest, agentMohSecretOk, shapeMohSnapshot } from "./agentMohOverride";
+import { AgentMohOverrideRequest, agentMohSecretOk, shapeMohSnapshot, shapeExtensionOverride } from "./agentMohOverride";
 
 test("schema: activate requires profileId; read/deactivate do not", () => {
   const base = { tenantId: "21", agentActionId: "act1" };
@@ -63,4 +63,17 @@ test("snapshot shaping: null override / no publish handled", () => {
   assert.equal(shaped.override, null);
   assert.equal(shaped.latestPublish, null);
   assert.deepEqual(shaped.profiles, []);
+});
+
+test("M2 schema: ext_set requires extension+profileId; ext_clear requires extension", () => {
+  const base = { tenantId: "21", agentActionId: "a" };
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "ext_set", extension: "103" }).success, false);
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "ext_set", extension: "103", profileId: "p1" }).success, true);
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "ext_clear" }).success, false);
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "ext_clear", extension: "103" }).success, true);
+});
+
+test("shapeExtensionOverride: row and null", () => {
+  assert.deepEqual(shapeExtensionOverride({ extension: "103", enabled: true, mohProfileId: "p2", vitalPbxMohClassName: "moh3" }), { extension: "103", enabled: true, profileId: "p2", vitalPbxMohClassName: "moh3" });
+  assert.equal(shapeExtensionOverride(null), null);
 });

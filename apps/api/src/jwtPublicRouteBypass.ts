@@ -36,6 +36,18 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // the AGENT_INTERNAL_SECRET shared-secret header (fail-closed when unset).
   const isInternalAgentMohPath =
     path === "/internal/agent/moh/override" || path.endsWith("/internal/agent/moh/override");
+  // M3: agent inbound-route door. In-handler shared-secret auth (fail-closed).
+  const isInternalAgentRoutePath =
+    path === "/internal/agent/route/action" || path.endsWith("/internal/agent/route/action");
+  // M4: agent IVR menu door. In-handler shared-secret auth (fail-closed).
+  const isInternalAgentIvrPath =
+    path === "/internal/agent/ivr/action" || path.endsWith("/internal/agent/ivr/action");
+  // M10: agent queue-config door. In-handler shared-secret auth (fail-closed).
+  const isInternalAgentQueuePath =
+    path === "/internal/agent/queue/action" || path.endsWith("/internal/agent/queue/action");
+  // M11: agent extension-feature (DND/CF) door. In-handler shared-secret auth.
+  const isInternalAgentExtFeaturePath =
+    path === "/internal/agent/extfeature/action" || path.endsWith("/internal/agent/extfeature/action");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -72,6 +84,10 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalTelephonyPath
     || isInternalVoicemailNotifyPath
     || isInternalAgentMohPath
+    || isInternalAgentRoutePath
+    || isInternalAgentIvrPath
+    || isInternalAgentQueuePath
+    || isInternalAgentExtFeaturePath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath

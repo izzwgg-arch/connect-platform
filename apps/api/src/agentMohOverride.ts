@@ -19,15 +19,21 @@ export const AgentMohOverrideRequest = z
   .object({
     /** Connect tenant id or vital tenant id — resolved server-side (resolveMohTenantId). */
     tenantId: z.string().min(1),
-    action: z.enum(["read", "activate", "deactivate"]),
+    /** M1: read/activate/deactivate operate on the TENANT default.
+     *  M2: ext_set/ext_clear operate on ONE extension's override. */
+    action: z.enum(["read", "activate", "deactivate", "ext_set", "ext_clear"]),
     profileId: z.string().min(1).optional(),
+    /** Required for ext_set/ext_clear (M2). */
+    extension: z.string().min(1).max(64).optional(),
     reason: z.string().max(500).optional(),
     /** ISO datetime; null clears. Only meaningful for activate. */
     expiresAt: z.string().datetime().nullable().optional(),
     /** The AgentAction driving this change — REQUIRED for attribution. */
     agentActionId: z.string().min(1),
   })
-  .refine((v) => v.action !== "activate" || !!v.profileId, { message: "profileId required for activate" });
+  .refine((v) => v.action !== "activate" || !!v.profileId, { message: "profileId required for activate" })
+  .refine((v) => v.action !== "ext_set" || (!!v.profileId && !!v.extension), { message: "profileId and extension required for ext_set" })
+  .refine((v) => v.action !== "ext_clear" || !!v.extension, { message: "extension required for ext_clear" });
 
 export type AgentMohOverrideRequest = z.infer<typeof AgentMohOverrideRequest>;
 
@@ -39,6 +45,17 @@ export function agentMohSecretOk(headerValue: unknown, secret = process.env.AGEN
   const a = Buffer.from(s);
   const b = Buffer.from(headerValue);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Shape a single extension-override row for the M2 read/snapshot. */
+export function shapeExtensionOverride(row: any | null): { extension: string; enabled: boolean; profileId: string | null; vitalPbxMohClassName: string | null } | null {
+  if (!row) return null;
+  return {
+    extension: String(row.extension),
+    enabled: !!row.enabled,
+    profileId: row.mohProfileId ?? null,
+    vitalPbxMohClassName: row.vitalPbxMohClassName ?? null,
+  };
 }
 
 /** Shape the read/snapshot payload the agent's M1 op consumes. */

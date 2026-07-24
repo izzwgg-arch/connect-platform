@@ -473,7 +473,7 @@ export default function DidRoutingPage() {
           {scopeTenantId && !loading && (ivrProfiles.length === 0 || mohProfiles.length === 0) && (
             <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.25)", fontSize: 12, color: "#fde68a" }}>
               {ivrProfiles.length === 0 && (
-                <div>No IVR profiles for this tenant yet — create one on <a href="/pbx/ivr-routing" style={{ color: "#facc15" }}>IVR Routing</a>.</div>
+                <div>No IVR profiles for this tenant yet — create one on <a href="/pbx/ivr-studio" style={{ color: "#facc15" }}>IVR Studio</a>.</div>
               )}
               {mohProfiles.length === 0 && (
                 <div>No Hold profiles for this tenant yet — create one on <a href="/pbx/moh-scheduling" style={{ color: "#facc15" }}>MOH Scheduling</a>.</div>

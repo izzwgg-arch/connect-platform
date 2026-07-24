@@ -85,7 +85,7 @@ export const navItems: NavItem[] = [
   { id: "pbx.time_conditions", href: "/pbx/time-conditions", label: "Time Conditions", icon: "TC", lucide: Clock, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_time_conditions" },
   { id: "pbx.softphone", href: "/pbx/softphone", label: "WebRTC Softphone", icon: "SP", lucide: Headphones, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_softphone" },
   { id: "pbx.sbc_connectivity", href: "/pbx/sbc-connectivity", label: "SBC Connectivity", icon: "SB", lucide: Network, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_sbc_connectivity" },
-  { id: "pbx.ivr_routing", href: "/pbx/ivr-routing", label: "IVR Routing", icon: "IR", lucide: GitBranch, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_ivr_routing" },
+  { id: "pbx.ivr_routing", href: "/pbx/ivr-studio", label: "IVR Studio", icon: "IR", lucide: GitBranch, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_ivr_routing" },
   { id: "pbx.did_routing", href: "/pbx/did-routing", label: "DID Routing", icon: "DR", lucide: Route, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_did_routing" },
   { id: "pbx.moh_scheduling", href: "/pbx/moh-scheduling", label: "MOH Scheduling", icon: "MH", lucide: Music, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", href: "/pbx/call-recordings", label: "Call Recordings", icon: "CR", lucide: Disc, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_recordings" },

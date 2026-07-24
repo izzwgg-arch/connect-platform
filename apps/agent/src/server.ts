@@ -27,6 +27,10 @@ import { SnapshotStore } from "./pbx/snapshotStore";
 import { makeScopeCheck } from "./pbx/scopeCheck";
 import { buildModifyCatalog } from "./pbx/modifyCatalog";
 import { makeMohApiClient } from "./pbx/mohApiClient";
+import { makeRouteApiClient } from "./pbx/routeApiClient";
+import { makeIvrApiClient } from "./pbx/ivrApiClient";
+import { makeQueueApiClient } from "./pbx/queueApiClient";
+import { makeExtFeatureApiClient } from "./pbx/extFeatureApiClient";
 import { makePbxClientFactory } from "./pbx/client";
 import { buildIdentityContext, renderIdentityBlock } from "./channels/identityContext";
 import { DossierService } from "./conversation/dossier";
@@ -105,10 +109,12 @@ async function main() {
       () => pbxReadFactory({ simulate: true, allowConfigMutations: false }),
       {
         scopeCheck: makeScopeCheck(prisma),
-        // M1: first wired capability — tenant MOH via the api's internal door.
-        // Live dispatch still requires the FULL gate chain (master switch, T21
-        // allow-list, Izzy-bound single-use approval, snapshot, verify).
-        catalog: buildModifyCatalog({ prisma, mohApi: makeMohApiClient() }),
+        // M1/M2: tenant + extension MOH via the api's internal door.
+        // M3: route retarget via the api's route door (isolated helper endpoint
+        // installed 2026-07-23). Live dispatch STILL requires the full gate chain
+        // (master switch off by default, T21-only allow-list, Izzy-bound single-
+        // use approval, snapshot, verify) — wiring the client does NOT enable it.
+        catalog: buildModifyCatalog({ prisma, mohApi: makeMohApiClient(), routeApi: makeRouteApiClient(), ivrApi: makeIvrApiClient(), queueApi: makeQueueApiClient(), extFeatureApi: makeExtFeatureApiClient() }),
       },
     );
     const modifyBackend = makeModifyBackend(modifyExecutor);

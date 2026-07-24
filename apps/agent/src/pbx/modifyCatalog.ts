@@ -19,6 +19,14 @@ import { z } from "zod";
 // Ops import ONLY types from this file (import type ⇒ erased at runtime),
 // so this static import cannot create a runtime cycle.
 import { makeM1Op } from "./ops/m1MohTenant";
+import { makeM2Op } from "./ops/m2MohExtension";
+import { makeM3Op } from "./ops/m3InboundRoute";
+import { makeM4Op } from "./ops/m4IvrOption";
+import { makeM5Op } from "./ops/m5IvrPrompt";
+import { makeM6Op } from "./ops/m6IvrExit";
+import { makeM7Op } from "./ops/m7IvrSchedule";
+import { makeM10Op } from "./ops/m10Queue";
+import { makeM11Op } from "./ops/m11ExtFeature";
 
 /** Client surface handed to ops. Simulate factories never contact the PBX. */
 export interface ModifyClientLike {
@@ -69,6 +77,15 @@ export const MODIFY_CATALOG: Record<string, ModifyOp> = {};
 export interface ModifyCatalogDeps {
   prisma: any;
   mohApi: { call(body: Record<string, unknown>): Promise<any> };
+  /** M3 route door client — optional; defaults to a fail-closed throwing stub
+   *  (H2-gated) so callers that don't wire it can never reach a live route. */
+  routeApi?: { call(body: Record<string, unknown>): Promise<any> };
+  /** M4 IVR door client — optional; defaults to a fail-closed throwing stub. */
+  ivrApi?: { call(body: Record<string, unknown>): Promise<any> };
+  /** M10 queue door client — optional; defaults to a fail-closed throwing stub. */
+  queueApi?: { call(body: Record<string, unknown>): Promise<any> };
+  /** M11 extension-feature door client — optional; fail-closed throwing stub. */
+  extFeatureApi?: { call(body: Record<string, unknown>): Promise<any> };
 }
 
 /**
@@ -76,8 +93,28 @@ export interface ModifyCatalogDeps {
  *   pbx.M1 — tenant MOH selection (M1_MOH_TENANT_SPEC.md)
  */
 export function buildModifyCatalog(deps: ModifyCatalogDeps): Record<string, ModifyOp> {
+  const routeApi = deps.routeApi ?? {
+    async call() { throw new Error("route_api_unavailable: no routeApi wired (H2 pending)"); },
+  };
+  const ivrApi = deps.ivrApi ?? {
+    async call() { throw new Error("ivr_api_unavailable: no ivrApi wired"); },
+  };
+  const queueApi = deps.queueApi ?? {
+    async call() { throw new Error("queue_api_unavailable: no queueApi wired"); },
+  };
+  const extFeatureApi = deps.extFeatureApi ?? {
+    async call() { throw new Error("extfeature_api_unavailable: no extFeatureApi wired"); },
+  };
   return {
     "pbx.M1": makeM1Op(deps),
+    "pbx.M2": makeM2Op(deps),
+    "pbx.M3": makeM3Op({ ...deps, routeApi }),
+    "pbx.M4": makeM4Op({ ...deps, ivrApi }),
+    "pbx.M5": makeM5Op({ ...deps, ivrApi }),
+    "pbx.M6": makeM6Op({ ...deps, ivrApi }),
+    "pbx.M7": makeM7Op({ ...deps, ivrApi }),
+    "pbx.M10": makeM10Op({ ...deps, queueApi }),
+    "pbx.M11": makeM11Op({ ...deps, extFeatureApi }),
   };
 }
 

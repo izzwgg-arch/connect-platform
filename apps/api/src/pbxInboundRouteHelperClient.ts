@@ -109,6 +109,10 @@ async function callHelper<T>(
     | "/inspect"
     | "/retarget"
     | "/restore"
+    | "/route-set-destination"
+    | "/route-restore-destination"
+    | "/get-diversion"
+    | "/set-diversion"
     | "/set-moh"
     | "/sync-tenant-moh"
     | "/voicemail/greeting/upload"
@@ -195,6 +199,38 @@ export function restorePbxInboundRoute(
   body: { did: string; tenantId: string; requestId?: string; actor?: string; force?: boolean },
 ): Promise<PbxRouteHelperSwitchResponse> {
   return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/restore", body);
+}
+
+/** M3 (agent route change) — isolated native-route destination set (never touches connect-mode). */
+export function agentSetPbxRouteDestination(
+  cfg: PbxRouteHelperConfig,
+  body: { did: string; tenantId: string; destinationId: string | number; requestId?: string; actor?: string; force?: boolean },
+): Promise<PbxRouteHelperSwitchResponse> {
+  return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/route-set-destination", body);
+}
+
+/** M3 — restore the agent-captured original destination for a DID. */
+export function agentRestorePbxRouteDestination(
+  cfg: PbxRouteHelperConfig,
+  body: { did: string; tenantId: string; requestId?: string; actor?: string },
+): Promise<PbxRouteHelperSwitchResponse> {
+  return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/route-restore-destination", body);
+}
+
+/** M11 — read an extension's live DND/CF diversion state (for snapshot). */
+export function getPbxDiversion(
+  cfg: PbxRouteHelperConfig,
+  body: { tenantId: string; extension: string; feature: string },
+): Promise<{ ok: true; tenantId: string; extension: string; feature: string; enable: string; destination: string }> {
+  return callHelper(cfg, "/get-diversion", body);
+}
+
+/** M11 — set an extension's DND/CF diversion (live AstDB put; no regen). */
+export function setPbxDiversion(
+  cfg: PbxRouteHelperConfig,
+  body: { tenantId: string; extension: string; feature: string; enable: string; destination?: string },
+): Promise<{ ok: true; tenantId: string; extension: string; feature: string; before: any; after: any }> {
+  return callHelper(cfg, "/set-diversion", body);
 }
 
 export function setPbxInboundRouteMoh(

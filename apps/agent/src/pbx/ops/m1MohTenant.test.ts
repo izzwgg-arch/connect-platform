@@ -135,9 +135,9 @@ test("schema: objectId must equal tenantId; activate requires profileId; expiry 
   assert.equal(M1_SCHEMA.safeParse({ ...ACTIVATE, expiresHours: 24 }).success, true);
 });
 
-test("catalog: exactly pbx.M1, honors the modify contract", () => {
+test("catalog: includes pbx.M1, honors the modify contract", () => {
   const cat = buildModifyCatalog({ prisma, mohApi });
-  assert.deepEqual(Object.keys(cat), ["pbx.M1"]);
+  assert.ok(cat["pbx.M1"], "M1 present");
   assert.equal(catalogOpsHonorModifyContract(cat), true);
 });
 
