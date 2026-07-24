@@ -583,6 +583,30 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       console.log('[SIP_RECONNECT] skip_active_session reason=' + reason);
       return;
     }
+    // Don't tear down a registration that is already healthy. A transient
+    // socket blip during call teardown (e.g. the WSS momentarily flapping while
+    // BYE traffic + audio-focus changes settle right after a hangup) can fire
+    // onSocketDisconnected and schedule a reconnect; but by the time this runs
+    // JsSIP's own fast recovery has often already restored the socket. Doing a
+    // forceRestart here would then tear down a perfectly good UA and mint a new
+    // rotated Contact, kicking off the exact backoff storm (1+2+4+8+16s ≈ 32s of
+    // "not registered") observed after back-to-back inbound calls. If we are
+    // already connected AND registered, the reconnect is spurious — clear the
+    // attempt counter and skip. This can only ever PREVENT an unnecessary
+    // teardown; a genuinely dropped socket still fails both checks and proceeds.
+    try {
+      const connected = typeof client.isConnected === "function" ? !!client.isConnected() : false;
+      const registered = typeof client.isRegistered === "function" ? !!client.isRegistered() : false;
+      if (connected && registered) {
+        console.log('[SIP_RECONNECT] skip_already_healthy reason=' + reason);
+        reconnectAttemptRef.current = 0;
+        keepAliveFailureStreakRef.current = 0;
+        setRegistrationState("registered");
+        return;
+      }
+    } catch {
+      /* health probe threw — fall through and reconnect as before */
+    }
     reconnectInFlightRef.current = true;
     const attempt = reconnectAttemptRef.current + 1;
     reconnectAttemptRef.current = attempt;

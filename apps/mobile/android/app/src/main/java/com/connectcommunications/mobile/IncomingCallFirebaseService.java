@@ -1489,6 +1489,42 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         Log.i(TAG, "[MISSED_CALL] missed_call_channel_created");
     }
 
+    /**
+     * Pretty-print a raw caller number for the incoming-call label. US 10-digit
+     * and 1+10-digit numbers become "(AAA) BBB-CCCC"; anything else is returned
+     * trimmed and unchanged. Never throws — falls back to the input on any error.
+     */
+    private static String formatCallerNumberForDisplay(String raw) {
+        if (raw == null) return "";
+        String digits = raw.replaceAll("[^0-9]", "");
+        try {
+            if (digits.length() == 11 && digits.charAt(0) == '1') digits = digits.substring(1);
+            if (digits.length() == 10) {
+                return "(" + digits.substring(0, 3) + ") " + digits.substring(3, 6) + "-" + digits.substring(6);
+            }
+        } catch (Exception ignored) { }
+        return raw.trim();
+    }
+
+    /**
+     * Caller label for the incoming-call notification. When we have BOTH a
+     * caller name and a distinct phone number, show both ("MONROE NY · (845)
+     * 782-3064") so the number is never hidden behind a CNAM name — the missing
+     * -number complaint. When only one is present, show that one.
+     */
+    private static String buildCallerLabel(String displayName, String fromNum) {
+        String name = displayName == null ? "" : displayName.trim();
+        String num = fromNum == null ? "" : fromNum.trim();
+        boolean hasNum = !num.isEmpty();
+        boolean nameIsNumber = hasNum && (name.equals(num) || name.equals(formatCallerNumberForDisplay(num)));
+        if (!name.isEmpty() && hasNum && !nameIsNumber) {
+            return name + " · " + formatCallerNumberForDisplay(num);
+        }
+        if (!name.isEmpty()) return name;
+        if (hasNum) return formatCallerNumberForDisplay(num);
+        return "Unknown";
+    }
+
     private void launchIncomingCallUi(
         Map<String, String> data,
         String inviteId,
@@ -1497,6 +1533,9 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         boolean preferFullScreen
     ) {
         ensureIncomingCallChannel();
+        // Show caller name AND number together in the floating/heads-up call
+        // notification (CallStyle renders this Person name as the big label).
+        final String callerLabel = buildCallerLabel(displayName, fromNum);
         int notificationId = notificationIdForInvite(inviteId);
         int pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1526,7 +1565,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.notification_icon)
             .setContentTitle("Incoming call")
-            .setContentText(displayName)
+            .setContentText(callerLabel)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -1541,7 +1580,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         builder.setStyle(
             NotificationCompat.CallStyle.forIncomingCall(
                 new androidx.core.app.Person.Builder()
-                    .setName(displayName)
+                    .setName(callerLabel)
                     .setImportant(true)
                     .build(),
                 declineIntent,
