@@ -169,7 +169,7 @@ async function ensureSubaccount(
     password,
     protocol: "1",     // SIP
     auth_type: "1",    // username/password
-    device_type: "2",  // Asterisk, IP PBX, Gateway or VoIP Switch
+    device_type: "1",  // Asterisk, IP PBX, Gateway or VoIP Switch (2 = ATA/IP phone — verified via getDeviceTypes)
     lock_international: "1",
     international_route: "1",
     music_on_hold: "default",

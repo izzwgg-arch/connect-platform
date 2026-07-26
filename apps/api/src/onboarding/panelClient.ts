@@ -268,6 +268,31 @@ export function findOption(html: string, matcher: (text: string, value: string) 
 }
 
 /**
+ * Like findOption, but scoped to the <select> whose name matches. Forms like
+ * "tenants add" contain MANY option lists (outbound_profiles, shared_trunks,
+ * allowed_tenant_trunks, …) and every onboarding object is named after the
+ * company — an unscoped scan happily matches the trunk when looking for the
+ * route selection (live incident 2026-07-26: tenant got another company's
+ * outbound profile id).
+ */
+export function findOptionInSelect(
+  html: string,
+  selectName: string | RegExp,
+  matcher: (text: string, value: string) => boolean,
+): string | null {
+  const nameRe =
+    selectName instanceof RegExp
+      ? selectName
+      : new RegExp("^" + selectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$");
+  for (const sm of html.matchAll(/<select\b[^>]*name=["']([^"']+)["'][\s\S]*?<\/select>/gi)) {
+    if (!nameRe.test(sm[1])) continue;
+    const hit = findOption(sm[0], matcher);
+    if (hit != null) return hit;
+  }
+  return null;
+}
+
+/**
  * Read a rendered form back as [name,value] pairs, exactly as a browser would
  * submit it: unchecked checkboxes are OMITTED, multi-selects contribute one
  * pair per selected option.

@@ -127,13 +127,40 @@ class FakePanel {
       return this.json({ state: "success" });
     }
 
-    // rendered forms (CSRF + option lists + edit forms)
+    // rendered forms (CSRF + option lists + edit forms). Selects are NAMED and
+    // forms carry the same company-named decoy lists as the real panel — the
+    // 2026-07-26 live incident was an unscoped scan matching the trunk (in
+    // shared_trunks) when looking for the route selection.
     if (method === "getContent") {
       if (cls === "trunk_group" && mode === "add") {
-        return this.json({ html: this.csrfHtml(this.omitTrunkOption ? "" : this.optionsFor(this.trunks)) });
+        return this.json({
+          html: this.csrfHtml(
+            `<select name="trklist[]" multiple>${this.omitTrunkOption ? "" : this.optionsFor(this.trunks)}</select>` +
+              `<select name="mod_dest"><option value="1">Extensions</option></select>`,
+          ),
+        });
       }
-      if (cls === "ars" && mode === "add") return this.json({ html: this.csrfHtml(this.optionsFor(this.routes)) });
-      if (cls === "tenants" && mode === "add") return this.json({ html: this.csrfHtml(this.optionsFor(this.selections)) });
+      if (cls === "ars" && mode === "add") {
+        return this.json({
+          html: this.csrfHtml(
+            `<select name="members[{{row-count-placeholder}}][outbound_route_id]">${this.optionsFor(this.routes)}</select>` +
+              `<select name="members[0][outbound_route_id]">${this.optionsFor(this.routes)}</select>` +
+              `<select name="members[0][time_group_id]"><option value="">All time</option></select>`,
+          ),
+        });
+      }
+      if (cls === "tenants" && mode === "add") {
+        // Same layout as production: outbound_profiles (route selections),
+        // then trunk/route lists that ALSO contain the company name.
+        return this.json({
+          html: this.csrfHtml(
+            `<select name="outbound_profiles[]" multiple>${this.optionsFor(this.selections)}</select>` +
+              `<select name="shared_trunks[]" multiple>${this.optionsFor(this.trunks)}</select>` +
+              `<select name="allowed_tenant_trunks[]" multiple>${this.optionsFor(this.trunks)}</select>` +
+              `<select name="allowed_outbound_routes[]" multiple>${this.optionsFor(this.routes)}</select>`,
+          ),
+        });
+      }
       if (cls === "tenants" && mode === "read") {
         const opts2 = this.tenants
           .map((t) => `<option value="${this.hidePathsOnTenantsPage ? t.slug : t.path}">${esc(t.slug)}</option>`)
@@ -521,6 +548,22 @@ test("stress: 40-person tenant builds every extension and device", async () => {
   const withCell = fake.extensions.filter((e) => e.devices.some((d) => d.technology === "virtual"));
   assert.equal(withCell.length, people.filter((p: any) => p.cellNumber).length);
   assert.equal(result.firstExtId, fake.extensions[0].id);
+});
+
+test("REGRESSION: route selection is never confused with the same-named trunk (live 2026-07-26)", async () => {
+  const fake = new FakePanel();
+  // Resume scenario: the trunk (named exactly like the company) already
+  // exists. The unscoped pre-check used to match it inside the tenant form's
+  // shared_trunks list and skip creating the route selection entirely,
+  // assigning the trunk's id as the tenant's outbound profile.
+  fake.trunks.push({ id: "80", name: "Bobs Plumbing" });
+  const result = await run(fake);
+  assert.equal(result.trunkId, "80"); // trunk correctly reused
+  assert.ok(fake.puts.some((p) => p.cls === "ars"), "route selection must actually be created");
+  const tenant = fake.puts.find((p) => p.cls === "tenants")!;
+  const profile = get(tenant.fields, "outbound_profiles[]");
+  assert.equal(profile, result.arsId);
+  assert.notEqual(profile, "80");
 });
 
 test("PRODUCTION contract: tenants page has no path hashes — the REST resolver supplies the path", async () => {

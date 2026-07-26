@@ -29,6 +29,7 @@ import {
   decodeEntities,
   dropPairs,
   findOption,
+  findOptionInSelect,
   parseFormPairs,
   upsertPair,
 } from "./panelClient";
@@ -72,10 +73,17 @@ type Pairs = Array<[string, string | number | null | undefined]>;
 
 // ── Flow steps (field sets are the recorded ones, verbatim) ──────────────────
 
+// Where each object's id is looked up after create (and for idempotent reuse).
+// SCOPED to the one select that lists that object type — these forms contain
+// several company-named option lists and an unscoped scan grabs the wrong one.
+const TRUNK_SELECT = "trklist[]"; // in trunk_group (outbound route) add form
+const ROUTE_SELECT = /^members\[\d+\]\[outbound_route_id\]$/; // in ars add form
+const ARS_SELECT = "outbound_profiles[]"; // in tenants add form
+
 async function createTrunk(s: PanelSession, co: string, vm: PbxBuildJob["voipms"]): Promise<string> {
   // Idempotent resume: if a previous (interrupted) run already created this
   // trunk, reuse it instead of failing on the panel's duplicate-name error.
-  const pre = findOption(await s.loadForm("trunk_group", "add"), (t) => t.toLowerCase() === co.toLowerCase());
+  const pre = findOptionInSelect(await s.loadForm("trunk_group", "add"), TRUNK_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("trunks");
   const p: Pairs = [
@@ -107,13 +115,13 @@ async function createTrunk(s: PanelSession, co: string, vm: PbxBuildJob["voipms"
   assertSaved("trunk", await s.post(p));
   await applyChanges(s, "trunk");
   const h = await s.loadForm("trunk_group", "add");
-  const id = findOption(h, (t) => t.toLowerCase() === co.toLowerCase());
+  const id = findOptionInSelect(h, TRUNK_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
   if (!id) throw new PanelStepError("trunk", `trunk "${co}" not found in outbound-route form after create`);
   return id;
 }
 
 async function createOutboundRoute(s: PanelSession, co: string, did: string, trunkId: string): Promise<string> {
-  const pre = findOption(await s.loadForm("ars", "add"), (t) => t.toLowerCase() === co.toLowerCase());
+  const pre = findOptionInSelect(await s.loadForm("ars", "add"), ROUTE_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("trunk_group");
   const p: Pairs = [
@@ -131,13 +139,13 @@ async function createOutboundRoute(s: PanelSession, co: string, did: string, tru
   assertSaved("outbound-route", await s.post(p));
   await applyChanges(s, "outbound-route");
   const h = await s.loadForm("ars", "add");
-  const id = findOption(h, (t) => t.toLowerCase() === co.toLowerCase());
+  const id = findOptionInSelect(h, ROUTE_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
   if (!id) throw new PanelStepError("outbound-route", `route "${co}" not found in route-selection form after create`);
   return id;
 }
 
 async function createRouteSelection(s: PanelSession, co: string, routeId: string): Promise<string> {
-  const pre = findOption(await s.loadForm("tenants", "add"), (t) => t.toLowerCase() === co.toLowerCase());
+  const pre = findOptionInSelect(await s.loadForm("tenants", "add"), ARS_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("ars");
   assertSaved(
@@ -150,7 +158,7 @@ async function createRouteSelection(s: PanelSession, co: string, routeId: string
   );
   await applyChanges(s, "route-selection");
   const h = await s.loadForm("tenants", "add");
-  const id = findOption(h, (t) => t.toLowerCase() === co.toLowerCase());
+  const id = findOptionInSelect(h, ARS_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
   if (!id) throw new PanelStepError("route-selection", `selection "${co}" not found in tenant form after create`);
   return id;
 }

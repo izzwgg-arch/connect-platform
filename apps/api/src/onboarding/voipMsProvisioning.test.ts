@@ -177,7 +177,7 @@ test("live new number (not owned): subaccount + orderDID with NY pop, routed to 
   const create = calls("createSubAccount");
   assert.equal(create.length, 1);
   assert.equal(create[0].params.username, "BobsPlumbing1");
-  assert.equal(create[0].params.device_type, "2"); // Asterisk / IP-PBX
+  assert.equal(create[0].params.device_type, "1"); // Asterisk / IP-PBX (2 would be ATA/IP phone)
   assert.equal(create[0].params.protocol, "1");
   assert.equal(create[0].params.callerid_number, undefined); // own-device CallerID: not set
 
