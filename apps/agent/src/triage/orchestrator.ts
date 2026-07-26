@@ -37,6 +37,9 @@ const ACTION_CAPABILITY: Record<ActionType, string | null> = {
   // DND routes to the M11 modify capability (live AstDB diversion via the helper,
   // full gate chain + Izzy-bound approval). The retired action.A7 handler is dead.
   dnd: "pbx.M11",
+  // Tenant hold-music routes to the M1 modify capability (portal MOH door,
+  // full gate chain; auto-executes per the 2026-07-26 owner mandate).
+  moh: "pbx.M1",
   ivr_switch: "action.A3.ivr_switch",
   vm_reset: "action.A5.vm_pin_reset",
   unknown: null,
@@ -90,7 +93,7 @@ export class TriageOrchestrator {
     }
 
     // Build a human summary and draft the action (approval-gated unless owner).
-    const summary = this.summarize(intent);
+    let summary = this.summarize(intent);
     // Modify-executor capabilities (pbx.M*) use the single-object contract keyed
     // by the PBX tenant id + extension, not the legacy {extension,target,...} shape.
     let params: Record<string, unknown>;
@@ -111,6 +114,42 @@ export class TriageOrchestrator {
         };
       }
       params = { tenantId: pbxTenantId, objectId: String(ext), feature: "DND", enable: intent.enableHint ?? "yes" };
+      actionTenantId = pbxTenantId;
+    } else if (capId === "pbx.M1") {
+      const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
+      if (!pbxTenantId) {
+        return {
+          handled: true,
+          reply: "Your account isn't linked to the phone system yet, so I can't change the hold music — I've flagged it for our team.",
+          yiddish: language === "yi" ? "דאָס איז עפּעס וואָס איך וועל איבערגעבן צו אונדזער טים." : undefined,
+        };
+      }
+      if (intent.enableHint === "no") {
+        params = { tenantId: pbxTenantId, objectId: pbxTenantId, action: "deactivate", reason: "chat request" };
+        summary = "set the hold music back to the regular schedule";
+      } else {
+        // Resolve the requested profile by name from the tenant's OWN MOH
+        // profiles (ownership re-checked by the scope fence + M1 snapshot +
+        // api door). Most-specific (longest) name wins; ambiguous → ask.
+        const profiles = await this.listMohProfiles(ctx.tenantId);
+        const t = intent.raw.toLowerCase();
+        const matches = profiles
+          .filter((p) => p.name && t.includes(String(p.name).toLowerCase()))
+          .sort((a, b) => String(b.name).length - String(a.name).length);
+        const chosen = matches.length === 1 || (matches.length > 1 && String(matches[0].name).length > String(matches[1].name).length) ? matches[0] : null;
+        if (!chosen) {
+          const names = profiles.map((p) => p.name).filter(Boolean).join(", ");
+          return {
+            handled: true,
+            reply: profiles.length
+              ? `Which hold music would you like? Your available options are: ${names}. (You can also say "back to the regular schedule".)`
+              : "I don't see any hold-music profiles set up for your account yet — I've let our team know.",
+            yiddish: language === "yi" ? "וועלכע האלט מוזיק ווילט איר? זאָגט מיר דעם נאָמען." : undefined,
+          };
+        }
+        params = { tenantId: pbxTenantId, objectId: pbxTenantId, action: "activate", profileId: chosen.id, reason: "chat request" };
+        summary = `switch the hold music to "${chosen.name}"`;
+      }
       actionTenantId = pbxTenantId;
     } else {
       params = { extension: intent.extensionHint, target: intent.targetHint, until: intent.untilHint, raw: intent.raw };
@@ -159,6 +198,19 @@ export class TriageOrchestrator {
     }
   }
 
+  /** The tenant's own active MOH profiles (Connect mirror; empty on error). */
+  private async listMohProfiles(connectTenantId: string): Promise<Array<{ id: string; name: string }>> {
+    try {
+      const rows = await this.prisma.mohProfile.findMany({
+        where: { tenantId: connectTenantId, isActive: true },
+        select: { id: true, name: true },
+      });
+      return rows ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   private async resolveExtension(ctx: TriageCtx): Promise<string | null> {
     if (!ctx.clientUserId) return null;
     try {
@@ -176,6 +228,9 @@ export class TriageOrchestrator {
         return `forward ${ext} to ${intent.targetHint ? `ext ${intent.targetHint}` : "the requested number"}${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
       case "dnd":
         return `${intent.enableHint === "no" ? "disable" : "enable"} Do Not Disturb on ${ext}${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
+      case "moh":
+        // Overridden in the pbx.M1 branch once the profile is resolved.
+        return intent.enableHint === "no" ? "set the hold music back to the regular schedule" : "change the hold music";
       case "ivr_switch":
         return `switch the IVR${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
       case "vm_reset":

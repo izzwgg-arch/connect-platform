@@ -53,6 +53,26 @@ export function dndAutoApproveMandate(capabilityId: string, params: Record<strin
   return capabilityId === "pbx.M11" && String((params as any)?.feature ?? "") === "DND";
 }
 
+/**
+ * OWNER MANDATE (Izzy, 2026-07-26 #2): switching a tenant's hold music (M1,
+ * activate or deactivate) executes immediately when the tenant asks — same
+ * contract as the DND mandate: params-hash binding, scope fence (own tenant +
+ * own MOH profiles only), live-tenant allow-list, rate budget,
+ * snapshot/verify/auto-revert, audit, and result email all still apply.
+ * Kill switch: AGENT_MOH_AUTO_APPROVE=0.
+ */
+export function mohAutoApproveMandate(capabilityId: string): boolean {
+  if (process.env.AGENT_MOH_AUTO_APPROVE === "0") return false;
+  return capabilityId === "pbx.M1";
+}
+
+/** Owner-mandate label for a capability/params combo, or null when none applies. */
+export function ownerMandateFor(capabilityId: string, params: Record<string, unknown>): string | null {
+  if (dndAutoApproveMandate(capabilityId, params)) return "dnd-2026-07-26";
+  if (mohAutoApproveMandate(capabilityId)) return "moh-2026-07-26";
+  return null;
+}
+
 export interface CreateActionInput {
   tenantId: string;
   capabilityId: string;
@@ -162,18 +182,19 @@ export class ActionService {
 
     await this.audit.record({ actor: input.requestedRole, event: "action.created", tenantId: input.tenantId, actionId: action.id, capabilityId: input.capabilityId, payload: { summary: input.summary, bound } });
 
-    // DND-only exception to the "bound is never auto-approved" rule — see the
-    // owner-mandate doc on dndAutoApproveMandate above.
-    if (bound && dndAutoApproveMandate(input.capabilityId, input.params)) {
+    // Owner-mandate exceptions to the "bound is never auto-approved" rule —
+    // see dndAutoApproveMandate / mohAutoApproveMandate above.
+    const mandate = bound ? ownerMandateFor(input.capabilityId, input.params) : null;
+    if (mandate) {
       await this.audit.record({
         actor: "system",
         event: "action.owner_mandate_auto_approve",
         tenantId: input.tenantId,
         actionId: action.id,
         capabilityId: input.capabilityId,
-        payload: { mandate: "dnd-2026-07-26", requestedBy: input.requestedBy, requestedRole: input.requestedRole },
+        payload: { mandate, requestedBy: input.requestedBy, requestedRole: input.requestedRole },
       });
-      return this.approve(action.id, "owner-mandate:dnd-2026-07-26", { auto: true });
+      return this.approve(action.id, `owner-mandate:${mandate}`, { auto: true });
     }
 
     if (input.autoApprove && input.requestedRole === "owner" && !bound) {

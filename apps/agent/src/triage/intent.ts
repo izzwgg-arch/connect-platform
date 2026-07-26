@@ -9,7 +9,7 @@ export type Intent =
   | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; enableHint?: "yes" | "no"; raw: string }
   | { kind: "chat" };
 
-export type ActionType = "forward" | "dnd" | "ivr_switch" | "vm_reset" | "unknown";
+export type ActionType = "forward" | "dnd" | "moh" | "ivr_switch" | "vm_reset" | "unknown";
 
 const DIAG_TERMS = [
   "not ringing", "won't ring", "wont ring", "doesn't ring", "no calls", "not receiving", "can't hear", "cant hear",
@@ -22,6 +22,7 @@ const DIAG_TERMS = [
 const ACTION_PATTERNS: Array<{ type: ActionType; terms: string[] }> = [
   { type: "forward", terms: ["forward my call", "forward call", "transfer my call", "send my call", "divert", "forward to", "פארוואַרד", "אריבערפירן", "טראַנספער"] },
   { type: "dnd", terms: ["do not disturb", "dnd", "silence my", "don't ring me", "נישט שטערן"] },
+  { type: "moh", terms: ["hold music", "music on hold", "on-hold music", "waiting music", "האלט מוזיק"] },
   { type: "ivr_switch", terms: ["holiday menu", "switch ivr", "change the ivr", "change my menu", "holiday greeting", "night mode"] },
   { type: "vm_reset", terms: ["reset voicemail", "voicemail pin", "vm pin", "voicemail password"] },
 ];
@@ -32,6 +33,11 @@ const EXT_RE = /\b(?:ext(?:ension)?\.?\s*)?(\d{2,5})\b/i;
 // clear it ("turn off dnd", "take me out of do not disturb", "cancel dnd"…).
 // Conservative: only unmistakable disable words flip the direction.
 const DND_DISABLE_RE = /\boff\b|\bdisable|\bremove\b|\bcancel|\bstop\b|\bdeactivat|\bun-?dnd\b|\bout of\b|\bresume\b|אויסשאַלט|נעם(?:ט)? אַראָפּ/i;
+
+// MOH direction: "activate a profile" unless the message clearly asks to go
+// back to the regular schedule ("turn off the holiday hold music", "back to
+// the normal hold music", "cancel the hold music override").
+const MOH_DEACTIVATE_RE = /\boff\b|\bdisable|\bremove\b|\bcancel|\bdeactivat|\bback to (?:the )?(?:schedule|normal|default|regular)\b|\bregular\b|\bnormal\b/i;
 
 export function detectIntent(text: string): Intent {
   const t = text.toLowerCase();
@@ -48,7 +54,16 @@ export function detectIntent(text: string): Intent {
         extensionHint: ext,
         targetHint: targetMatch?.[1],
         untilHint: untilMatch?.[1]?.trim(),
-        enableHint: p.type === "dnd" ? (DND_DISABLE_RE.test(t) ? "no" : "yes") : undefined,
+        enableHint:
+          p.type === "dnd"
+            ? DND_DISABLE_RE.test(t)
+              ? "no"
+              : "yes"
+            : p.type === "moh"
+              ? MOH_DEACTIVATE_RE.test(t)
+                ? "no"
+                : "yes"
+              : undefined,
         raw: text,
       };
     }

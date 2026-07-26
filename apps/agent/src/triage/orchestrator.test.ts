@@ -15,6 +15,12 @@ import { detectIntent } from "./intent";
 const prismaStub: any = {
   tenantPbxLink: { findUnique: async () => ({ pbxTenantId: "21" }) },
   extension: { findFirst: async () => ({ extNumber: "101" }) },
+  mohProfile: {
+    findMany: async () => [
+      { id: "prof-jazz", name: "Jazz" },
+      { id: "prof-classical", name: "Classical Calm" },
+    ],
+  },
 };
 
 function makeOrch(created: any[]) {
@@ -55,4 +61,50 @@ test("FAILED execution is reported as a failure, not 'submitted for approval'", 
   const out = await orch.handle(detectIntent("put ext 101 on dnd"), { tenantId: "c", clientUserId: "u1", role: "customer" }, "en");
   assert.match(out.reply ?? "", /didn't go through/);
   assert.doesNotMatch(out.reply ?? "", /approval/);
+});
+
+// ── M1 (tenant hold music) chat wiring ──────────────────────────────────────
+
+test("MOH activate: profile resolved by name, action keyed by the VITAL tenant id", async () => {
+  const created: any[] = [];
+  const orch = makeOrch(created);
+  const intent = detectIntent("please change our hold music to Jazz");
+  const out = await orch.handle(intent, { tenantId: "cmConnectCuid", clientUserId: "u1", role: "customer" }, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].capabilityId, "pbx.M1");
+  assert.equal(created[0].tenantId, "21");
+  assert.deepEqual(created[0].params, { tenantId: "21", objectId: "21", action: "activate", profileId: "prof-jazz", reason: "chat request" });
+  assert.match(out.reply ?? "", /^Done/);
+});
+
+test("MOH deactivate: 'back to normal' maps to action:'deactivate'", async () => {
+  const created: any[] = [];
+  const orch = makeOrch(created);
+  const intent = detectIntent("set our hold music back to normal please");
+  await orch.handle(intent, { tenantId: "cmConnectCuid", clientUserId: "u1", role: "customer" }, "en");
+  assert.equal(created[0].params.action, "deactivate");
+  assert.equal(created[0].tenantId, "21");
+});
+
+test("MOH with no matching profile name asks instead of guessing", async () => {
+  const created: any[] = [];
+  const orch = makeOrch(created);
+  const intent = detectIntent("change the hold music to something upbeat");
+  const out = await orch.handle(intent, { tenantId: "cmConnectCuid", clientUserId: "u1", role: "customer" }, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created.length, 0); // nothing drafted
+  assert.match(out.reply ?? "", /Jazz, Classical Calm/);
+});
+
+test("MOH longest-name match wins when names overlap", async () => {
+  const created: any[] = [];
+  const prisma: any = {
+    ...prismaStub,
+    mohProfile: { findMany: async () => [{ id: "p1", name: "Jazz" }, { id: "p2", name: "Jazz Deluxe" }] },
+  };
+  const actions: any = { create: async (input: any) => { created.push(input); return { id: "a", status: "EXECUTED" }; } };
+  const orch = new TriageOrchestrator(prisma, {} as any, actions, async () => null);
+  await orch.handle(detectIntent("switch hold music to Jazz Deluxe"), { tenantId: "c", clientUserId: "u1", role: "customer" }, "en");
+  assert.equal(created[0].params.profileId, "p2");
 });

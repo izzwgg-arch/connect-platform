@@ -59,6 +59,33 @@ test("non-DND actions carry no enableHint", () => {
   if (i.kind === "action") assert.equal(i.enableHint, undefined);
 });
 
+test("MOH: 'change our hold music to Jazz' is an activate request", () => {
+  const i = detectIntent("please change our hold music to Jazz");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") {
+    assert.equal(i.actionType, "moh");
+    assert.equal(i.enableHint, "yes");
+  }
+});
+
+test("MOH: 'music on hold' phrasing also matches", () => {
+  const i = detectIntent("can you switch the music on hold to Classical");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.actionType, "moh");
+});
+
+test("MOH direction: 'back to normal' deactivates", () => {
+  const i = detectIntent("set our hold music back to normal");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, "no");
+});
+
+test("MOH direction: 'turn off the holiday hold music' deactivates", () => {
+  const i = detectIntent("turn off the holiday hold music");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, "no");
+});
+
 test("action intent: IVR switch", () => {
   const i = detectIntent("please put on the holiday menu until the 25th");
   assert.equal(i.kind, "action");

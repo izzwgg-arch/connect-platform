@@ -33,7 +33,8 @@ test("GATE: PBX-write capabilities stay sim-only except ones explicitly certifie
   const pbx = loadManifest().filter((c) => c.pbxWrite);
   assert.ok(pbx.length >= 14);
   // liveEnabled is off by default and only flipped per capability after live
-  // certification on T21. M11 (DND/CF) is the first certified-live capability.
+  // certification. M11 (DND/CF) was first; M1 (tenant MOH) went live for all
+  // tenants under the 2026-07-26 owner mandate.
   const liveEnabled = pbx.filter((c) => c.liveEnabled === true).map((c) => c.id);
-  assert.deepEqual(liveEnabled, ["pbx.M11"]);
+  assert.deepEqual(liveEnabled, ["pbx.M1", "pbx.M11"]);
 });
