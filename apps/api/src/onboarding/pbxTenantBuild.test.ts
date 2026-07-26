@@ -152,10 +152,20 @@ class FakePanel {
       return this.json({ html: this.csrfHtml() });
     }
 
-    // destination options (extension lookup for inbound routes)
+    // destination options (extension lookup for inbound routes) — production
+    // shape verified live: html is empty, extensions come as an options ARRAY.
     if (cls === "inbound_route" && method === "getDestinationChildOptions") {
-      const html = this.extensions.map((e) => `<option value="${e.id}">${e.ext} ${esc(e.name)}</option>`).join("");
-      return this.json({ html });
+      return this.json({
+        state: "success",
+        html: "",
+        action: "dependentCombo",
+        options: [
+          { content: "Select Destination", value: "" },
+          ...this.extensions.map((e) => ({ content: `${e.ext} - ${e.name}`, value: Number(e.id) })),
+        ],
+        child: "inbound_route-destination",
+        parent: "inbound_route-mod_dest",
+      });
     }
 
     // module writes

@@ -267,16 +267,25 @@ async function extensionId(s: PanelSession, ext: string): Promise<string> {
     ["class", "inbound_route"], ["method", "getDestinationChildOptions"], ["mode", "view"],
     ["data[selected]", "1"], ["data[parent]", "inbound_route-mod_dest"], ["data[child]", "inbound_route-destination"],
   ]);
+  const matcher = new RegExp("(^|\\D)" + ext + "(\\D|$)");
   let h = text;
   try {
     const j = JSON.parse(text);
+    // Production shape (verified live): {"state":"success","html":"","action":
+    // "dependentCombo","options":[{"content":"101 - machela","value":201},…]}.
+    if (Array.isArray(j?.options)) {
+      for (const o of j.options) {
+        if (o && o.value !== "" && matcher.test(String(o.content ?? ""))) return String(o.value);
+      }
+    }
     h = typeof (j.html || j.options) === "string" ? j.html || j.options : JSON.stringify(j);
   } catch {
     /* raw HTML */
   }
+  // Fallback: scrape <option> markup if the panel ever answers with HTML.
   h = h.replace(/\\"/g, '"').replace(/\\\//g, "/");
   for (const m of h.matchAll(/value=["'](\d+)["'][^>]*>([^<]*)/gi)) {
-    if (new RegExp("(^|\\D)" + ext + "(\\D|$)").test(m[2])) return m[1];
+    if (matcher.test(m[2])) return m[1];
   }
   throw new PanelStepError("extension-import", `extension ${ext} not visible in destination list after import`);
 }
