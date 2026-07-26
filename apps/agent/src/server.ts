@@ -756,6 +756,48 @@ async function main() {
       });
     }
 
+    // Voicemail-to-email: emails each NEW voicemail (recording attached) to the
+    // address on the mailbox extension, when that extension has the switch on.
+    // Master switch: AGENT_VOICEMAIL_EMAIL=1. A hard fresh-window guard means the
+    // ~19k historical voicemails can never be back-emailed. Polls every 60s.
+    if (process.env.AGENT_VOICEMAIL_EMAIL === "1") {
+      const { VoicemailEmailJob } = await import("./notify/voicemailEmailJob");
+      const vmEmailJob = new VoicemailEmailJob({
+        prisma,
+        audit,
+        notifier,
+        apiBaseUrl: () => process.env.AGENT_API_BASE_URL || "http://api:3001",
+        jwtSecret: () => process.env.JWT_SECRET || null,
+        portalUrl: () => process.env.AGENT_PORTAL_URL || "https://app.connectcomunications.com",
+        brandName: "Connect",
+      });
+      setInterval(() => {
+        vmEmailJob.runOnce().catch((err) => app.log.error({ err }, "voicemail email pass failed"));
+      }, 60 * 1000).unref();
+      await audit.record({ actor: "system", event: "voicemail.email_enabled", payload: { intervalSec: 60 } });
+    }
+
+    // SMS-to-email: emails a copy of every INBOUND text to the users on that
+    // conversation who have "SMS to Email" on, threaded one-per-number.
+    // Master switch: AGENT_SMS_EMAIL=1. A hard fresh-window guard means the
+    // existing inbound-SMS backlog can never be back-emailed. Polls every 30s.
+    if (process.env.AGENT_SMS_EMAIL === "1") {
+      const { SmsEmailForwardJob } = await import("./notify/smsEmailForwardJob");
+      const smsEmailJob = new SmsEmailForwardJob({
+        prisma,
+        audit,
+        notifier,
+        messageIdDomain: () => process.env.AGENT_SMS_EMAIL_DOMAIN || "sms.connectcomunications.com",
+        replyDomain: () => process.env.AGENT_SMS_EMAIL_REPLY_DOMAIN || null,
+        replySecret: () => process.env.JWT_SECRET || null,
+        brandName: "Connect",
+      });
+      setInterval(() => {
+        smsEmailJob.runOnce().catch((err) => app.log.error({ err }, "sms email pass failed"));
+      }, 30 * 1000).unref();
+      await audit.record({ actor: "system", event: "sms.email_enabled", payload: { intervalSec: 30 } });
+    }
+
     // 24/7 continuous drain — small batches every 2 min so it never floods the
     // box or the STT provider. No-op until AGENT_ARCHIVE_ROOT is set.
     setInterval(() => {

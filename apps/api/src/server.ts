@@ -17828,7 +17828,7 @@ async function convertGreetingToPbxWav(sourcePath: string, targetPath: string): 
   }
 }
 
-function formatExtensionControlPanel(extension: any, metadata: ExtensionGreetingMetadata | null) {
+function formatExtensionControlPanel(extension: any, metadata: ExtensionGreetingMetadata | null, smsToEmailEnabled = false) {
   const hasCustomGreeting = Boolean(metadata?.convertedStorageKey || (metadata?.publishStatus === "published" && metadata?.sha256));
   const greetingType = metadata?.greetingType || "unavailable";
   return {
@@ -17840,6 +17840,12 @@ function formatExtensionControlPanel(extension: any, metadata: ExtensionGreeting
       status: extension.status,
     } : null,
     presence: "AVAILABLE",
+    smsToEmail: { enabled: Boolean(smsToEmailEnabled) },
+    vmEmail: {
+      // Default ON when the column is absent/null (matches the schema default).
+      enabled: extension ? extension.vmEmailEnabled !== false : true,
+      includeTranscript: extension ? extension.vmEmailIncludeTranscript !== false : true,
+    },
     greeting: {
       status: hasCustomGreeting ? "custom" : "default",
       durationSec: metadata?.durationSec ?? null,
@@ -17856,10 +17862,69 @@ function formatExtensionControlPanel(extension: any, metadata: ExtensionGreeting
 app.get("/voice/extensions/me/control-panel", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
-  const extension = await resolveVoicemailGreetingExtension(user);
-  if (!extension || !user.tenantId) return reply.send(formatExtensionControlPanel(null, null));
+  const [prefs, extension] = await Promise.all([
+    db.user.findUnique({ where: { id: user.sub }, select: { smsEmailForwardEnabled: true } }),
+    resolveVoicemailGreetingExtension(user),
+  ]);
+  const smsToEmailEnabled = Boolean(prefs?.smsEmailForwardEnabled);
+  if (!extension || !user.tenantId) return reply.send(formatExtensionControlPanel(null, null, smsToEmailEnabled));
   const metadata = await readExtensionGreetingMetadata(user.tenantId, extension.id);
-  return reply.send(formatExtensionControlPanel(extension, metadata));
+  return reply.send(formatExtensionControlPanel(extension, metadata, smsToEmailEnabled));
+});
+
+app.put("/voice/extensions/me/sms-to-email", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload" });
+  await db.user.update({
+    where: { id: user.sub },
+    data: { smsEmailForwardEnabled: parsed.data.enabled },
+  });
+  await db.auditLog.create({
+    data: {
+      tenantId: user.tenantId ?? "",
+      action: parsed.data.enabled ? "SMS_TO_EMAIL_ENABLED" : "SMS_TO_EMAIL_DISABLED",
+      entityType: "User",
+      entityId: user.sub,
+      actorUserId: user.sub,
+    },
+  }).catch(() => undefined);
+  return reply.send({ ok: true, enabled: parsed.data.enabled });
+});
+
+// Voicemail-to-email preferences (Quick Controls). Stored on the caller's own
+// mailbox extension so the agent sender can read them per-mailbox. Either field
+// may be sent on its own (the two toggles save independently).
+app.put("/voice/extensions/me/voicemail-email", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const parsed = z
+    .object({ enabled: z.boolean().optional(), includeTranscript: z.boolean().optional() })
+    .safeParse(req.body);
+  if (!parsed.success || (parsed.data.enabled === undefined && parsed.data.includeTranscript === undefined)) {
+    return reply.code(400).send({ error: "invalid_payload" });
+  }
+  const extension = await resolveVoicemailGreetingExtension(user);
+  if (!extension) return reply.code(404).send({ error: "no_extension" });
+  const data: { vmEmailEnabled?: boolean; vmEmailIncludeTranscript?: boolean } = {};
+  if (parsed.data.enabled !== undefined) data.vmEmailEnabled = parsed.data.enabled;
+  if (parsed.data.includeTranscript !== undefined) data.vmEmailIncludeTranscript = parsed.data.includeTranscript;
+  const updated = await db.extension.update({
+    where: { id: extension.id },
+    data,
+    select: { vmEmailEnabled: true, vmEmailIncludeTranscript: true },
+  });
+  await db.auditLog.create({
+    data: {
+      tenantId: user.tenantId ?? "",
+      action: "VOICEMAIL_EMAIL_PREFS_UPDATED",
+      entityType: "Extension",
+      entityId: extension.id,
+      actorUserId: user.sub,
+    },
+  }).catch(() => undefined);
+  return reply.send({ ok: true, enabled: updated.vmEmailEnabled, includeTranscript: updated.vmEmailIncludeTranscript });
 });
 
 app.get("/voice/extensions/me/voicemail-greeting/stream", async (req, reply) => {

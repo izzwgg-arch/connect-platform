@@ -925,6 +925,9 @@ model User {
   emailVerifiedAt                DateTime?
   lastLoginAt                    DateTime?
   forcePasswordReset             Boolean                           @default(false)
+  /// SMS-to-Email: when true, inbound texts to this user's assigned number(s) are
+  /// also emailed to User.email, and email replies are sent back as texts.
+  smsEmailForwardEnabled         Boolean                           @default(false)
   updatedAt                      DateTime                          @updatedAt
   createdAt                      DateTime                          @default(now())
   tenant                         Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2577,6 +2580,11 @@ model Extension {
   ownerUserId              String?
   status                   String                   @default("ACTIVE")
   billable                 Boolean                  @default(true)
+  // Voicemail-to-email: when enabled, each NEW voicemail for this mailbox is
+  // emailed to the extension's address (pbxUserEmail, else owner login email).
+  // vmEmailIncludeTranscript controls whether the typed-out message is included.
+  vmEmailEnabled           Boolean                  @default(true)
+  vmEmailIncludeTranscript Boolean                  @default(true)
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt
   tenant                   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2836,6 +2844,15 @@ model Voicemail {
   transcriptEngine    String? // internal engine tag (never shown on frontend)
   transcribedAt       DateTime?
   transcriptError     String? // last failure reason; null when ok
+
+  // ── Voicemail-to-email (agent sender) ─────────────────────────────────
+  // emailedAt is stamped exactly once per voicemail after the sender has
+  // PROCESSED it (sent, skipped, or failed) so it is never re-sent. emailError
+  // holds the skip/fail reason (null when delivered). The sender only ever
+  // considers messages with emailedAt == null AND a recent receivedAt, so the
+  // historical backlog can never be emailed.
+  emailedAt           DateTime?
+  emailError          String?
 
   @@index([tenantId])
   @@index([extension])
@@ -3977,6 +3994,10 @@ model ConnectChatMessage {
   externalConversationId String?
   providerStatus         String?
   providerMetadata       Json?
+  /// SMS-to-Email: stamped once after an inbound text is emailed to opted-in users
+  /// (so it is never emailed twice). emailForwardError holds the skip/fail reason.
+  emailForwardedAt       DateTime?
+  emailForwardError      String?
   deliveredAt            DateTime?
   thread                 ConnectChatThread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
   senderUser             User?                          @relation("ConnectChatMessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)

@@ -16,7 +16,15 @@ export type MailKind =
   | "escalation"
   | "incident"
   | "daily_digest"
+  | "voicemail"
+  | "sms"
   | "test";
+
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
 
 export interface Mail {
   kind: MailKind;
@@ -24,6 +32,13 @@ export interface Mail {
   subject: string;
   text: string;
   html?: string;
+  attachments?: MailAttachment[];
+  /** Reply-To address (e.g. SMS reply-back routing). */
+  replyTo?: string;
+  /** Extra headers — used for email threading (Message-ID / References / In-Reply-To). */
+  headers?: Record<string, string>;
+  /** Explicit Message-ID so a conversation's emails can reference each other. */
+  messageId?: string;
 }
 
 export class Notifier {
@@ -51,32 +66,31 @@ export class Notifier {
     await this.audit.record({
       actor: "system",
       event: `notify.${mail.kind}`,
-      payload: { to: mail.to, subject: mail.subject, configured: this.configured },
+      payload: { to: mail.to, subject: mail.subject, configured: this.configured, attachments: mail.attachments?.length ?? 0 },
     });
     if (!this.transporter) {
       // eslint-disable-next-line no-console
       console.warn(`[notifier] SMTP not configured — mail "${mail.subject}" recorded to audit only`);
       return { sent: false, reason: "smtp_not_configured" };
     }
+    const message = {
+      from: this.cfg.smtp.from,
+      to: mail.to.join(", "),
+      subject: mail.subject,
+      text: mail.text,
+      html: mail.html,
+      ...(mail.replyTo ? { replyTo: mail.replyTo } : {}),
+      ...(mail.messageId ? { messageId: mail.messageId } : {}),
+      ...(mail.headers ? { headers: mail.headers } : {}),
+      ...(mail.attachments ? { attachments: mail.attachments.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType })) } : {}),
+    };
     try {
-      await this.transporter.sendMail({
-        from: this.cfg.smtp.from,
-        to: mail.to.join(", "),
-        subject: mail.subject,
-        text: mail.text,
-        html: mail.html,
-      });
+      await this.transporter.sendMail(message);
       return { sent: true };
     } catch (err) {
       // Retry once, then record failure — audit row already exists either way.
       try {
-        await this.transporter.sendMail({
-          from: this.cfg.smtp.from,
-          to: mail.to.join(", "),
-          subject: mail.subject,
-          text: mail.text,
-          html: mail.html,
-        });
+        await this.transporter.sendMail(message);
         return { sent: true };
       } catch (err2) {
         await this.audit.record({ actor: "system", event: "notify.failed", payload: { subject: mail.subject, error: String(err2) } });

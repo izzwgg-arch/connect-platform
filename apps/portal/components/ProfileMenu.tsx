@@ -4,12 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
 import { getWebRingerEnabled, setWebRingerEnabled } from "../hooks/telephonyAudioPreferences";
-import { apiDelete, apiGet, apiPost, apiUploadVoicemailGreeting, ApiError } from "../services/apiClient";
+import { apiDelete, apiGet, apiPost, apiPut, apiUploadVoicemailGreeting, ApiError } from "../services/apiClient";
 import { clearAuthSession } from "../services/session";
 import { useSipPhone } from "../hooks/useSipPhone";
-import { ScopedActionButton } from "./ScopedActionButton";
 import { ViewportDropdown } from "./ViewportDropdown";
-import { ConnectSelect } from "./ConnectSelect";
 import { UserAvatarUpload } from "./UserAvatarUpload";
 import { getPreferredUserDisplayName } from "../lib/userDisplayName";
 
@@ -22,6 +20,8 @@ type ControlPanelResponse = {
     status: string;
   };
   presence: "AVAILABLE" | "RINGING" | "ON_CALL" | "DND" | "OFFLINE" | string;
+  smsToEmail?: { enabled: boolean };
+  vmEmail?: { enabled: boolean; includeTranscript: boolean };
   greeting: GreetingState;
 };
 
@@ -110,6 +110,11 @@ export function ProfileMenu() {
   const [open, setOpen] = useState(false);
   const [dnd, setDnd] = useState(false);
   const [ringerOn, setRingerOn] = useState(true);
+  const [smsToEmail, setSmsToEmail] = useState(false);
+  const [smsToEmailSaving, setSmsToEmailSaving] = useState(false);
+  const [vmEmail, setVmEmail] = useState(true);
+  const [vmEmailTranscript, setVmEmailTranscript] = useState(true);
+  const [vmEmailSaving, setVmEmailSaving] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -119,7 +124,7 @@ export function ProfileMenu() {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
-  const { user, tenant, role, setRole, theme, setTheme, setUserAvatarUrl } = useAppContext();
+  const { user, tenant, theme, setTheme, setUserAvatarUrl } = useAppContext();
   const sipPhone = useSipPhone();
   const closeMenu = useCallback(() => setOpen(false), []);
   const displayName = getPreferredUserDisplayName(user);
@@ -154,6 +159,14 @@ export function ProfileMenu() {
     if (!open) setVmRecordJob(null);
   }, [open]);
 
+  useEffect(() => {
+    if (panelData?.smsToEmail) setSmsToEmail(Boolean(panelData.smsToEmail.enabled));
+    if (panelData?.vmEmail) {
+      setVmEmail(panelData.vmEmail.enabled !== false);
+      setVmEmailTranscript(panelData.vmEmail.includeTranscript !== false);
+    }
+  }, [panelData]);
+
   function logout() {
     clearAuthSession();
     router.replace("/login");
@@ -167,6 +180,45 @@ export function ProfileMenu() {
   function updateRinger(next: boolean) {
     setRingerOn(next);
     setWebRingerEnabled(next);
+  }
+
+  async function updateSmsToEmail(next: boolean) {
+    const previous = smsToEmail;
+    setSmsToEmail(next); // optimistic
+    setSmsToEmailSaving(true);
+    try {
+      await apiPut("/voice/extensions/me/sms-to-email", { enabled: next });
+    } catch {
+      setSmsToEmail(previous); // revert on failure
+    } finally {
+      setSmsToEmailSaving(false);
+    }
+  }
+
+  async function updateVmEmail(next: boolean) {
+    const previous = vmEmail;
+    setVmEmail(next); // optimistic
+    setVmEmailSaving(true);
+    try {
+      await apiPut("/voice/extensions/me/voicemail-email", { enabled: next });
+    } catch {
+      setVmEmail(previous); // revert on failure
+    } finally {
+      setVmEmailSaving(false);
+    }
+  }
+
+  async function updateVmEmailTranscript(next: boolean) {
+    const previous = vmEmailTranscript;
+    setVmEmailTranscript(next); // optimistic
+    setVmEmailSaving(true);
+    try {
+      await apiPut("/voice/extensions/me/voicemail-email", { includeTranscript: next });
+    } catch {
+      setVmEmailTranscript(previous); // revert on failure
+    } finally {
+      setVmEmailSaving(false);
+    }
   }
 
   async function refreshPanel() {
@@ -321,6 +373,9 @@ export function ProfileMenu() {
           <ControlToggle label="DND" detail="Silence calls for this browser" checked={dnd} onChange={updateDnd} />
           <ControlToggle label="Ringer" detail="WebRTC incoming ring" checked={ringerOn} onChange={updateRinger} />
           <ControlToggle label="Theme" detail={theme === "dark" ? "Dark mode" : "Light mode"} checked={theme === "dark"} onChange={(next) => setTheme(next ? "dark" : "light")} />
+          <ControlToggle label="SMS to Email" detail="Send my texts to my inbox" checked={smsToEmail} disabled={smsToEmailSaving} onChange={updateSmsToEmail} />
+          <ControlToggle label="Email my voicemails" detail="Send each new voicemail to my email" checked={vmEmail} disabled={vmEmailSaving} onChange={updateVmEmail} />
+          <ControlToggle label="Include the typed-out message" detail="Add the written text to the email" checked={vmEmailTranscript} disabled={vmEmailSaving || !vmEmail} onChange={updateVmEmailTranscript} />
         </section>
 
         <section className="ecp-section" aria-label="Voicemail greeting">
@@ -453,22 +508,6 @@ export function ProfileMenu() {
           </div>
         </section>
 
-        <section className="ecp-section ecp-admin" aria-label="Role and admin controls">
-          <div className="ecp-section-title">Role / Admin</div>
-          <ConnectSelect
-            className="select"
-            value={role}
-            onChange={(v) => setRole(v as typeof role)}
-            options={[
-              { value: "END_USER", label: "End User" },
-              { value: "TENANT_ADMIN", label: "Tenant Admin" },
-              { value: "SUPER_ADMIN", label: "Super Admin" },
-            ]}
-            style={{ width: "100%" }}
-          />
-          <ScopedActionButton className="btn ghost">Office Hours Override</ScopedActionButton>
-        </section>
-
         <section className="ecp-logout">
           <button className="ecp-logout-btn" onClick={logout}>Logout</button>
         </section>
@@ -477,9 +516,9 @@ export function ProfileMenu() {
   );
 }
 
-function ControlToggle({ label, detail, checked, onChange }: { label: string; detail: string; checked: boolean; onChange: (next: boolean) => void }) {
+function ControlToggle({ label, detail, checked, onChange, disabled }: { label: string; detail: string; checked: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
   return (
-    <button className="ecp-toggle-row" type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}>
+    <button className="ecp-toggle-row" type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}>
       <span>
         <strong>{label}</strong>
         <small>{detail}</small>
