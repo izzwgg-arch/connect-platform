@@ -140,7 +140,7 @@ test("dry-run new number: ready state + credentials generated, ZERO VoIP.ms call
   assert.equal(res.live, false);
 
   const row = state.submissions.get(id);
-  assert.equal(row.numberStatus, "ready");
+  assert.equal(row.numberStatus, "ready_dryrun"); // distinct so a LIVE run can redo it
   assert.equal(row.provisionedDid, "8455577726");
   assert.equal(row.didIsTemporary, false);
   const sub = JSON.parse(row.voipmsSubaccountEncrypted.replace(/^enc:/, ""));
@@ -160,7 +160,7 @@ test("dry-run port: temporary number flagged, port logged, nothing charged", asy
   const res = await mod.applyOnboardingNumber(id);
   assert.equal(res.ok, true);
   const row = state.submissions.get(id);
-  assert.equal(row.numberStatus, "ready");
+  assert.equal(row.numberStatus, "ready_dryrun");
   assert.equal(row.didIsTemporary, true);
   assert.ok(state.events.some((e) => /submit port-in for 2125550000/i.test(e.message)));
 });
@@ -281,6 +281,27 @@ test("live: existing subaccount is reused with a rotated password (idempotent re
   assert.equal(rotate.length, 1);
   assert.equal(rotate[0].params.id, "77");
   assert.ok(rotate[0].params.password.length >= 12);
+});
+
+test("live: existing-subaccount match works when the master username is a login EMAIL", async () => {
+  // VoIP.ms prefixes subaccounts with the ACCOUNT NUMBER, never the API
+  // username — when the API username is an email ("izzy@x.com"), the old
+  // exact-match ("izzy@x.com_BobsPlumbing1") never hit and re-runs crashed
+  // on duplicate creation. Suffix matching must find "123456_BobsPlumbing1".
+  reset({ live: true });
+  state.voipmsConfig = { credentialsEncrypted: "enc:" + JSON.stringify({ username: "izzy@x.com", password: "pw" }) };
+  vmsHandlers.getSubAccounts = () => ({
+    status: "success",
+    accounts: [{ id: "88", account: "123456_BobsPlumbing1" }],
+  });
+  vmsHandlers.getDIDsInfo = () => ({ status: "success", dids: [] });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("createSubAccount").length, 0); // reused, not duplicated
+  assert.equal(calls("setSubAccount")[0].params.id, "88");
+  const sub = JSON.parse(state.submissions.get(id).voipmsSubaccountEncrypted.replace(/^enc:/, ""));
+  assert.equal(sub.username, "123456_BobsPlumbing1"); // provider's name, not email-derived
 });
 
 // ── Guards, idempotency, failure ─────────────────────────────────────────────

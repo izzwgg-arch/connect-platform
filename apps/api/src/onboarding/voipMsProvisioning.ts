@@ -140,23 +140,25 @@ async function ensureSubaccount(
 ): Promise<ProvisionedSubaccount> {
   const subName = subAccountName(company, 1);
   const password = generatePassword();
-  const fullUser = `${creds.username}_${subName}`;
 
   if (!live) {
-    await logEvent(submissionId, `[dry-run] Create subaccount ${subName} (Asterisk/IP-PBX, own device CallerID) → ${fullUser}.`);
-    return { username: fullUser, password, server: VOIPMS_TRUNK_SERVER };
+    await logEvent(submissionId, `[dry-run] Create subaccount ${subName} (Asterisk/IP-PBX, own device CallerID) → <account>_${subName}.`);
+    return { username: `${creds.username}_${subName}`, password, server: VOIPMS_TRUNK_SERVER };
   }
 
   // Idempotent: reuse the subaccount if a previous run already created it.
+  // VoIP.ms names subaccounts "<accountNumber>_<subName>" and the account
+  // number is NOT the API username (that's the login email) — match on the
+  // "_<subName>" suffix and take the provider's own account string.
   try {
     const existing = await vms(creds, "getSubAccounts");
     const list: any[] = Array.isArray(existing?.accounts) ? existing.accounts : [];
-    const hit = list.find((a) => String(a?.account || "").toLowerCase() === fullUser.toLowerCase());
+    const hit = list.find((a) => String(a?.account || "").toLowerCase().endsWith(`_${subName.toLowerCase()}`));
     if (hit) {
       // We can't read the old password back — rotate it so the trunk config works.
       await vms(creds, "setSubAccount", { id: String(hit.id), password });
-      await logEvent(submissionId, `Subaccount ${fullUser} already existed — password rotated.`);
-      return { username: fullUser, password, server: VOIPMS_TRUNK_SERVER };
+      await logEvent(submissionId, `Subaccount ${hit.account} already existed — password rotated.`);
+      return { username: String(hit.account), password, server: VOIPMS_TRUNK_SERVER };
     }
   } catch {
     /* fall through to create */
@@ -175,7 +177,8 @@ async function ensureSubaccount(
     dtmf_mode: "auto",
     nat: "yes",
   });
-  const account = String(r?.account || fullUser);
+  const account = String(r?.account || "");
+  if (!account) throw new Error("voipms createSubAccount returned no account name");
   await logEvent(submissionId, `Subaccount ${account} created (Asterisk/IP-PBX, own device CallerID).`);
   return { username: account, password, server: VOIPMS_TRUNK_SERVER };
 }
@@ -301,6 +304,8 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
   } as any);
   if (!row) return { ok: false, live, detail: "submission_not_found" };
   if (row.numberStatus === "ready") return { ok: true, live, detail: "already_ready" };
+  // A previous DRY run doesn't count once the gate is on — redo it for real.
+  if (row.numberStatus === "ready_dryrun" && !live) return { ok: true, live, detail: "already_ready" };
   if (row.numberStatus === "provisioning") return { ok: false, live, detail: "already_running" };
 
   await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { numberStatus: "provisioning" } });
@@ -365,7 +370,7 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
     await (db as any).onboardingSubmission.update({
       where: { id: submissionId },
       data: {
-        numberStatus: "ready",
+        numberStatus: live ? "ready" : "ready_dryrun",
         provisionedDid: did || null,
         didIsTemporary: temporary,
         voipmsSubaccountEncrypted: encryptJson(sub),

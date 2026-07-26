@@ -29,10 +29,15 @@ export type PanelConfig = { baseUrl: string; accounts: RobotAccount[]; mainTenan
 const MAIN_TENANT_DEFAULT = "2dc3974017c1bc65";
 
 export function loadPanelConfig(env: NodeJS.ProcessEnv = process.env): PanelConfig | null {
-  const baseUrl = String(env.ONBOARDING_PANEL_BASE_URL || env.CONNECT_PANEL_BASE_URL || "").replace(/\/+$/, "");
+  // CONNECT_BASE_URL / CONNECT_ROBOT_* are the variable names used by the
+  // proven /etc/connect-robot/credentials.env file — accept them directly so
+  // the API container can mount that file unchanged.
+  const baseUrl = String(env.ONBOARDING_PANEL_BASE_URL || env.CONNECT_PANEL_BASE_URL || env.CONNECT_BASE_URL || "").replace(/\/+$/, "");
   const accounts: RobotAccount[] = [];
-  if (env.ONBOARDING_ROBOT_USER && env.ONBOARDING_ROBOT_PASS) {
-    accounts.push({ id: "robot", user: String(env.ONBOARDING_ROBOT_USER), pass: String(env.ONBOARDING_ROBOT_PASS) });
+  const singleUser = env.ONBOARDING_ROBOT_USER || env.CONNECT_ROBOT_USER;
+  const singlePass = env.ONBOARDING_ROBOT_PASS || env.CONNECT_ROBOT_PASS;
+  if (singleUser && singlePass) {
+    accounts.push({ id: "robot", user: String(singleUser), pass: String(singlePass) });
   }
   for (let i = 1; i <= 15; i++) {
     const u = env[`ONBOARDING_ROBOT_${i}_USER`];

@@ -309,13 +309,13 @@ const events = () => state.events.map((e) => e.message).join("\n");
 
 // ── Dry run ───────────────────────────────────────────────────────────────────
 
-test("gate off: fully-logged dry run, nothing created, status done", async () => {
+test("gate off: fully-logged dry run, nothing created, status dry_run_done", async () => {
   reset({ live: false });
   const id = seedSubmission();
   await orchestrator.runOnboardingSetup(id);
 
   const row = state.submissions.get(id);
-  assert.equal(row.pbxSetupStatus, "done");
+  assert.equal(row.pbxSetupStatus, "dry_run_done");
   assert.equal(buildCalls.length, 0);
   assert.equal(state.tenants.size, 0);
   assert.equal(state.emailJobs.length, 0);
@@ -577,6 +577,26 @@ test("in-flight and completed runs are never restarted", async () => {
     await orchestrator.runOnboardingSetup(id);
     assert.equal(buildCalls.length, 0, `status ${status} must not re-run`);
   }
+});
+
+test("gate flipped on after a dry run: the same submission provisions for REAL on re-kick", async () => {
+  reset(); // gate ON
+  // The dry run left dry_run_done + a live-provisioned number stage.
+  const id = seedSubmission({ pbxSetupStatus: "dry_run_done", numberStatus: "ready" });
+  wireHealthySync();
+  await orchestrator.runOnboardingSetup(id);
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done");
+  assert.equal(buildCalls.length, 1); // actually built this time
+  assert.equal(state.emailJobs.length, 2);
+});
+
+test("gate still off: a finished dry run is NOT spammed again", async () => {
+  reset({ live: false });
+  const id = seedSubmission({ pbxSetupStatus: "dry_run_done" });
+  const eventsBefore = state.events.length;
+  await orchestrator.runOnboardingSetup(id);
+  assert.equal(state.events.length, eventsBefore); // returned early, no new logs
 });
 
 test("stale in-flight run (API restarted mid-build) is resumed instead of blocked forever", async () => {

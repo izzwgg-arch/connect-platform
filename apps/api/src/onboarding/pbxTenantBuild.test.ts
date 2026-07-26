@@ -509,6 +509,26 @@ test("stress: 40-person tenant builds every extension and device", async () => {
   assert.equal(result.firstExtId, fake.extensions[0].id);
 });
 
+test("loadPanelConfig accepts the /etc/connect-robot credentials.env variable names", async () => {
+  const { loadPanelConfig } = await import("./panelClient");
+  const cfg = loadPanelConfig({
+    CONNECT_BASE_URL: "https://m.connectcomunications.com/",
+    CONNECT_ROBOT_USER: "lOOPCOMAGENT7548",
+    CONNECT_ROBOT_PASS: "pw",
+  } as any);
+  assert.ok(cfg);
+  assert.equal(cfg!.baseUrl, "https://m.connectcomunications.com");
+  assert.equal(cfg!.accounts[0].user, "lOOPCOMAGENT7548");
+  // ONBOARDING_* names still win when both are present
+  const cfg2 = loadPanelConfig({
+    ONBOARDING_PANEL_BASE_URL: "https://panel.example",
+    CONNECT_BASE_URL: "https://other.example",
+    ONBOARDING_ROBOT_USER: "a",
+    ONBOARDING_ROBOT_PASS: "b",
+  } as any);
+  assert.equal(cfg2!.baseUrl, "https://panel.example");
+});
+
 test("slugify matches the robot's behavior", () => {
   assert.equal(slugify("j&j PLumbing"), "j_j_plumbing");
   assert.equal(slugify("  Acme  Corp  "), "acme_corp");

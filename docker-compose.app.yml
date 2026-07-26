@@ -8,8 +8,19 @@ services:
         BUILD_COMMIT: ${BUILD_COMMIT:-}
     env_file:
       - /opt/connectcomms/env/.env.platform
+      # VitalPBX panel robot login for the automated onboarding tenant build
+      # (CONNECT_BASE_URL / CONNECT_ROBOT_USER / CONNECT_ROBOT_PASS). Optional:
+      # hosts without the file simply run onboarding in dry-run mode.
+      - path: /etc/connect-robot/credentials.env
+        required: false
     environment:
       TZ: ${TZ:-America/New_York}
+      # ── Automated onboarding (owner-mandated 2026-07-26) ────────────────────
+      # "on" = wizard submissions really buy the VoIP.ms number/subaccount and
+      # build the VitalPBX tenant. Set to anything else to fall back to
+      # fully-logged dry runs.
+      VOIPMS_AUTO_PROVISION: ${VOIPMS_AUTO_PROVISION:-on}
+      ONBOARDING_PBX_AUTO_SETUP: ${ONBOARDING_PBX_AUTO_SETUP:-on}
       # Production must send real provider traffic. The platform env historically
       # carried SMS_PROVIDER_TEST_MODE=true for early smoke tests; override it here
       # unless the host shell explicitly opts back into test mode for a dry run.
@@ -172,8 +183,13 @@ services:
     container_name: app-api-candidate-1
     env_file:
       - /opt/connectcomms/env/.env.platform
+      - path: /etc/connect-robot/credentials.env
+        required: false
     environment:
       TZ: ${TZ:-America/New_York}
+      # Same automated-onboarding gates as the stable api service.
+      VOIPMS_AUTO_PROVISION: ${VOIPMS_AUTO_PROVISION:-on}
+      ONBOARDING_PBX_AUTO_SETUP: ${ONBOARDING_PBX_AUTO_SETUP:-on}
       SMS_PROVIDER_TEST_MODE: ${SMS_PROVIDER_TEST_MODE:-false}
       SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
       SOLA_CARDKNOX_SIMULATE: ${SOLA_CARDKNOX_SIMULATE:-false}

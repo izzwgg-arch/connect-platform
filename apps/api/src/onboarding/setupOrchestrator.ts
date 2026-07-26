@@ -314,6 +314,10 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
   } as any);
   if (!row) return;
   if (row.pbxSetupStatus === "done") return;
+  const live = pbxAutoSetupEnabled();
+  // A completed DRY run stays re-runnable: once the gate is turned on, the
+  // same submission can be re-kicked and provisioned for real.
+  if (row.pbxSetupStatus === "dry_run_done" && !live) return;
   if (row.pbxSetupStatus === "building" || row.pbxSetupStatus === "syncing" || row.pbxSetupStatus === "inviting") {
     // In flight — but if the API restarted mid-run, the status would stay
     // stuck forever. Rows untouched for longer than the stale window are
@@ -324,7 +328,6 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
     await logEvent(submissionId, `Setup was interrupted mid-run (stuck in "${row.pbxSetupStatus}" for ${Math.round(age / 60000)} min) — resuming.`);
   }
 
-  const live = pbxAutoSetupEnabled();
   const company = String(row.companyName || "").trim();
   const people: PbxPerson[] = (row.requestedExtensions || []).map((e: any) => ({
     name: String(e.displayName || e.extNumber),
@@ -339,11 +342,19 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
     await setPbxStatus(submissionId, "queued", { setupError: null });
 
     // ── 1. The number stage must be ready ───────────────────────────────────
+    // "ready_dryrun" counts only while WE are also in dry-run mode; a live run
+    // must redo the number stage for real (the dry-run credentials were never
+    // registered with VoIP.ms).
+    const numberOk = (s: string | null) => s === "ready" || (!live && s === "ready_dryrun");
     let fresh = row;
-    if (row.numberStatus !== "ready") {
+    if (!numberOk(row.numberStatus)) {
+      if (live && row.numberStatus === "ready_dryrun") {
+        await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { numberStatus: null } });
+        await logEvent(submissionId, "Previous number stage was a dry run — re-provisioning for real.");
+      }
       const res = await applyOnboardingNumber(submissionId);
       fresh = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId }, include: { requestedExtensions: true } } as any);
-      if (fresh.numberStatus !== "ready") {
+      if (!numberOk(fresh.numberStatus)) {
         throw new Error(`number_stage_not_ready (${res.detail})`);
       }
     }
@@ -364,7 +375,7 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
           `${people.some((p) => p.cellNumber) ? ` (incl. ${people.filter((p) => p.cellNumber).length} with cell routing)` : ""}, inbound route → ext ${people[0].ext}.`,
       );
       await logEvent(submissionId, "[dry-run] Would sync extensions into Connect, verify users + SIP, and email every extension its invitation.");
-      await setPbxStatus(submissionId, "done");
+      await setPbxStatus(submissionId, "dry_run_done");
       await logEvent(submissionId, "[dry-run] Setup pipeline complete (enable ONBOARDING_PBX_AUTO_SETUP to run for real).");
       return;
     }
