@@ -122,7 +122,7 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
       return reply.code(409).send({ error: "setup_in_progress" });
     }
     await (db as any).onboardingEvent.create({
-      data: { submissionId: id, type: "SETUP_RETRY", message: `Setup retry requested by admin` },
+      data: { submissionId: id, type: "STATUS_CHANGED", message: `Setup retry requested by admin` },
     });
     void (async () => {
       await applyOnboardingNumber(id).catch(() => { /* logged inside */ });

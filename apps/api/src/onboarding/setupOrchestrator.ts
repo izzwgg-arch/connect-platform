@@ -383,13 +383,37 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
     const panelCfg = loadPanelConfig();
     if (!panelCfg) throw new Error("panel_not_configured (ONBOARDING_PANEL_BASE_URL / ONBOARDING_ROBOT_*)");
 
+    // The read-only REST tenants list is the reliable source for tenant path
+    // hashes (the panel's tenants form doesn't render them).
+    const pbx = await loadPbxInstanceClient();
+    if (!pbx) throw new Error("no_enabled_pbx_instance");
+    const resolveTenantPath = async (slug: string, companyName: string): Promise<string | null> => {
+      try {
+        const tenants = (await pbx.client.listTenants()) as any[];
+        const hit = tenants.find(
+          (t) =>
+            String(t?.name || "").toLowerCase() === slug.toLowerCase() ||
+            String(t?.description || "").trim().toLowerCase() === companyName.trim().toLowerCase(),
+        );
+        return hit?.path ? String(hit.path) : null;
+      } catch {
+        return null;
+      }
+    };
+
     const account = await acquireAccount(panelCfg);
     let tenantPath: string;
     try {
       const session = await new PanelSession(panelCfg.baseUrl, account).login();
-      const result = await buildPbxTenant(session, panelCfg.mainTenant, job, (msg) => {
-        void logEvent(submissionId, `PBX build: ${msg}`);
-      });
+      const result = await buildPbxTenant(
+        session,
+        panelCfg.mainTenant,
+        job,
+        (msg) => {
+          void logEvent(submissionId, `PBX build: ${msg}`);
+        },
+        resolveTenantPath,
+      );
       tenantPath = result.tenantPath;
     } finally {
       releaseAccount(account);
@@ -398,8 +422,6 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
     await logEvent(submissionId, `PBX tenant built (path ${tenantPath}). Syncing into Connect…`);
 
     // ── 3. Sync + hard-verify into Connect ──────────────────────────────────
-    const pbx = await loadPbxInstanceClient();
-    if (!pbx) throw new Error("no_enabled_pbx_instance");
 
     const slug = slugify(company);
     const dirEntry = await findPbxDirectoryEntry(pbx.instanceId, pbx.client, slug, company);

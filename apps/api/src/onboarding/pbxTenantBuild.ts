@@ -155,8 +155,25 @@ async function createRouteSelection(s: PanelSession, co: string, routeId: string
   return id;
 }
 
+/**
+ * Resolve a tenant's 16-hex path hash outside the panel (the VitalPBX REST
+ * API's read-only tenants list carries a "path" field). The panel's own
+ * tenants form does NOT render path hashes, so a resolver is the reliable
+ * source; the HTML scrape below stays only as a last-ditch fallback.
+ */
+export type TenantPathResolver = (slug: string, company: string) => Promise<string | null>;
+
 /** Scan the tenants page for the slug/company and return its 16-hex path. */
-async function findTenantPath(s: PanelSession, co: string, slug: string): Promise<string | null> {
+async function findTenantPath(
+  s: PanelSession,
+  co: string,
+  slug: string,
+  resolve?: TenantPathResolver,
+): Promise<string | null> {
+  if (resolve) {
+    const viaApi = await resolve(slug, co).catch(() => null);
+    if (viaApi && /^[a-f0-9]{16}$/i.test(viaApi)) return viaApi;
+  }
   const h = await s.loadForm("tenants", "read");
   for (const m of h.matchAll(/value=["']([a-f0-9]{16})["'][^>]*>([\s\S]{0,120}?)</gi)) {
     const t = decodeEntities(m[2]).trim().toLowerCase();
@@ -168,8 +185,15 @@ async function findTenantPath(s: PanelSession, co: string, slug: string): Promis
   return m ? m[1] : null;
 }
 
-async function createTenant(s: PanelSession, co: string, slug: string, did: string, arsId: string): Promise<string> {
-  const pre = await findTenantPath(s, co, slug);
+async function createTenant(
+  s: PanelSession,
+  co: string,
+  slug: string,
+  did: string,
+  arsId: string,
+  resolve?: TenantPathResolver,
+): Promise<string> {
+  const pre = await findTenantPath(s, co, slug, resolve);
   if (pre) return pre;
   const csrf = await s.ensureCsrf("tenants");
   assertSaved(
@@ -190,9 +214,13 @@ async function createTenant(s: PanelSession, co: string, slug: string, did: stri
     ]),
   );
   await applyChanges(s, "tenant");
-  const tenantPath = await findTenantPath(s, co, slug);
-  if (!tenantPath) throw new PanelStepError("tenant", `tenant "${slug}" created but its path was not found — cannot switch into it`);
-  return tenantPath;
+  // The REST tenants list can lag a beat behind Apply Changes — retry briefly.
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    const tenantPath = await findTenantPath(s, co, slug, resolve);
+    if (tenantPath) return tenantPath;
+    await new Promise((r) => setTimeout(r, Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000)));
+  }
+  throw new PanelStepError("tenant", `tenant "${slug}" created but its path was not found — cannot switch into it`);
 }
 
 async function importExtension(s: PanelSession, person: PbxPerson): Promise<void> {
@@ -322,6 +350,7 @@ export async function buildPbxTenant(
   mainTenant: string,
   job: PbxBuildJob,
   log: (msg: string) => void = () => {},
+  resolveTenantPath?: TenantPathResolver,
 ): Promise<PbxBuildResult> {
   const co = job.company;
   const slug = slugify(co);
@@ -339,7 +368,7 @@ export async function buildPbxTenant(
   log(`outbound route ok (id ${routeId})`);
   const arsId = await createRouteSelection(s, co, routeId);
   log(`route selection ok (id ${arsId})`);
-  const tenantPath = await createTenant(s, co, slug, job.did, arsId);
+  const tenantPath = await createTenant(s, co, slug, job.did, arsId, resolveTenantPath);
   log(`tenant ok (path ${tenantPath})`);
 
   s.setTenant(tenantPath);

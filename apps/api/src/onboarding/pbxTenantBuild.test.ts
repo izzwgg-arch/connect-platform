@@ -28,6 +28,8 @@ class FakePanel {
   suppressDeviceMarkers = false;
   failApply = false;
   rejectLogin = false;
+  // Production behavior: the tenants form does NOT render 16-hex path hashes.
+  hidePathsOnTenantsPage = false;
 
   applies = 0;
   sequence: string[] = [];
@@ -133,7 +135,9 @@ class FakePanel {
       if (cls === "ars" && mode === "add") return this.json({ html: this.csrfHtml(this.optionsFor(this.routes)) });
       if (cls === "tenants" && mode === "add") return this.json({ html: this.csrfHtml(this.optionsFor(this.selections)) });
       if (cls === "tenants" && mode === "read") {
-        const opts2 = this.tenants.map((t) => `<option value="${t.path}">${esc(t.slug)}</option>`).join("");
+        const opts2 = this.tenants
+          .map((t) => `<option value="${this.hidePathsOnTenantsPage ? t.slug : t.path}">${esc(t.slug)}</option>`)
+          .join("");
         return this.json({ html: this.csrfHtml(opts2) });
       }
       if (cls === "extensions" && mode === "edit") {
@@ -507,6 +511,32 @@ test("stress: 40-person tenant builds every extension and device", async () => {
   const withCell = fake.extensions.filter((e) => e.devices.some((d) => d.technology === "virtual"));
   assert.equal(withCell.length, people.filter((p: any) => p.cellNumber).length);
   assert.equal(result.firstExtId, fake.extensions[0].id);
+});
+
+test("PRODUCTION contract: tenants page has no path hashes — the REST resolver supplies the path", async () => {
+  // This is exactly what broke the first live run: the real panel's tenants
+  // form renders numeric option ids, never 16-hex paths. The resolver (backed
+  // by the read-only VitalPBX REST tenants list) must supply it.
+  const fake = new FakePanel();
+  fake.hidePathsOnTenantsPage = true;
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const resolver = async (slug: string) => fake.tenants.find((t) => t.slug === slug)?.path || null;
+  const result = await buildPbxTenant(s, MAIN, job(), () => {}, resolver);
+  assert.match(result.tenantPath, /^[a-f0-9]{16}$/);
+  assert.equal(result.tenantPath, fake.tenants[0].path);
+  assert.equal(fake.inboundRoutes.length, 1); // build completed inside the tenant
+});
+
+test("no resolver + pathless tenants page fails with a clear error (after retries)", async () => {
+  process.env.ONBOARDING_RETRY_BASE_MS = "5";
+  try {
+    const fake = new FakePanel();
+    fake.hidePathsOnTenantsPage = true;
+    await assert.rejects(run(fake), /path was not found/i);
+  } finally {
+    delete process.env.ONBOARDING_RETRY_BASE_MS;
+  }
 });
 
 test("loadPanelConfig accepts the /etc/connect-robot credentials.env variable names", async () => {

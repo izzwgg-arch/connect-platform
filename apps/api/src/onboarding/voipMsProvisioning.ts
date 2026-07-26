@@ -241,11 +241,23 @@ async function enableSms(creds: VmsCreds, submissionId: string, did: string, liv
     await logEvent(submissionId, `[dry-run] Enable SMS on ${did}.`);
     return;
   }
-  try {
-    await vms(creds, "setSMS", { did, enable: "1" });
-    await logEvent(submissionId, `SMS enabled on ${did}.`);
-  } catch (e: any) {
-    await logEvent(submissionId, `SMS enable on ${did} failed: ${String(e?.message || e).slice(0, 160)}`);
+  // VoIP.ms answers "sms_wait_message" on freshly-ordered DIDs — retry with a
+  // pause before giving up (SMS is best-effort and never fails the stage).
+  const retryMs = Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000);
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await vms(creds, "setSMS", { did, enable: "1" });
+      await logEvent(submissionId, `SMS enabled on ${did}.`);
+      return;
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      if (/sms_wait_message/i.test(msg) && attempt < 4) {
+        await new Promise((r) => setTimeout(r, retryMs * attempt * 3));
+        continue;
+      }
+      await logEvent(submissionId, `SMS enable on ${did} failed: ${msg.slice(0, 160)}`);
+      return;
+    }
   }
 }
 
