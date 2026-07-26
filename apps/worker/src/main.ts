@@ -1263,6 +1263,13 @@ async function runMediaReliabilityMaintenanceCycle(): Promise<void> {
 }
 
 async function runPbxCdrSyncCycle(): Promise<void> {
+  // Legacy WirePBX-era CDR poll. VitalPBX has no `/cdrs` endpoint (CDRs arrive
+  // via the /internal/cdr-ingest push path), so against the production PBX this
+  // poll can only fail — and until 2026-07-26 each failure flipped the tenant's
+  // TenantPbxLink to ERROR, which blocks the agent/PBX write doors
+  // (tenant_not_linked). Disabled unless explicitly re-enabled for a PBX that
+  // actually implements the WirePBX CDR endpoint.
+  if ((process.env.PBX_CDR_POLL_ENABLED || "false").toLowerCase() !== "true") return;
   const links: any[] = await db.tenantPbxLink.findMany({ where: { status: "LINKED" }, include: { pbxInstance: true } as any } as any);
   for (const link of links) {
     try {
@@ -1310,7 +1317,10 @@ async function runPbxCdrSyncCycle(): Promise<void> {
       });
       await db.tenantPbxLink.update({ where: { id: link.id }, data: { lastSyncAt: new Date(), status: "LINKED", lastError: null } });
     } catch (e: any) {
-      await db.tenantPbxLink.update({ where: { id: link.id }, data: { status: "ERROR", lastError: String(e?.message || "PBX_CDR_SYNC_FAILED") } });
+      // Record the failure WITHOUT touching link.status — a CDR poll failure is
+      // not evidence the link is broken, and status=ERROR blocks the agent/PBX
+      // write doors for the whole tenant.
+      await db.tenantPbxLink.update({ where: { id: link.id }, data: { lastError: String(e?.message || "PBX_CDR_SYNC_FAILED") } });
       await db.auditLog.create({ data: { tenantId: link.tenantId, action: "PBX_CDR_SYNC_FAILED", entityType: "TenantPbxLink", entityId: link.id } });
     }
   }
