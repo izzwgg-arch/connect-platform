@@ -37,6 +37,22 @@ export interface ExecuteBackend {
   revert?(action: any): Promise<{ ok: boolean; error?: string }>;
 }
 
+/**
+ * OWNER MANDATE (Izzy, 2026-07-26): putting a phone IN or OUT of DND executes
+ * immediately when a user asks — no approval loop. Scope is EXACTLY pbx.M11
+ * with feature=DND; call-forwards (CFU/CFB/CFN/CFI) and every other capability
+ * keep the normal Izzy-approval flow. The X1 binding contract still holds: the
+ * action row stays params-hash-bound and its approval is consumed single-use,
+ * so the modify executor's G8 gate verifies unchanged. Every other fence
+ * (scope, protected extensions, live tenant allow-list, rate budget,
+ * snapshot/verify/auto-revert, audit, result email) still applies.
+ * Kill switch: AGENT_DND_AUTO_APPROVE=0.
+ */
+export function dndAutoApproveMandate(capabilityId: string, params: Record<string, unknown>): boolean {
+  if (process.env.AGENT_DND_AUTO_APPROVE === "0") return false;
+  return capabilityId === "pbx.M11" && String((params as any)?.feature ?? "") === "DND";
+}
+
 export interface CreateActionInput {
   tenantId: string;
   capabilityId: string;
@@ -75,8 +91,9 @@ export class ActionService {
   async create(input: CreateActionInput): Promise<any> {
     const revertAt = input.revertAfterHours ? new Date(Date.now() + input.revertAfterHours * 3600 * 1000) : null;
 
-    // X1: modify/repair capabilities are params-hash-bound, capped, and NEVER
+    // X1: modify/repair capabilities are params-hash-bound, capped, and not
     // auto-approved — every live write goes through Izzy's explicit approval.
+    // SOLE exception: the DND owner mandate (dndAutoApproveMandate above).
     const bound = requiresBinding(input.capabilityId);
     let paramsHash: string | null = null;
     if (bound) {
@@ -144,6 +161,20 @@ export class ActionService {
     }
 
     await this.audit.record({ actor: input.requestedRole, event: "action.created", tenantId: input.tenantId, actionId: action.id, capabilityId: input.capabilityId, payload: { summary: input.summary, bound } });
+
+    // DND-only exception to the "bound is never auto-approved" rule — see the
+    // owner-mandate doc on dndAutoApproveMandate above.
+    if (bound && dndAutoApproveMandate(input.capabilityId, input.params)) {
+      await this.audit.record({
+        actor: "system",
+        event: "action.owner_mandate_auto_approve",
+        tenantId: input.tenantId,
+        actionId: action.id,
+        capabilityId: input.capabilityId,
+        payload: { mandate: "dnd-2026-07-26", requestedBy: input.requestedBy, requestedRole: input.requestedRole },
+      });
+      return this.approve(action.id, "owner-mandate:dnd-2026-07-26", { auto: true });
+    }
 
     if (input.autoApprove && input.requestedRole === "owner" && !bound) {
       return this.approve(action.id, `owner:${input.requestedBy}`, { auto: true });

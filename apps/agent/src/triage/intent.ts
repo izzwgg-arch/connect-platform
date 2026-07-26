@@ -6,7 +6,7 @@
  */
 export type Intent =
   | { kind: "diagnostic"; extensionHint?: string; complaint: string }
-  | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; raw: string }
+  | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; enableHint?: "yes" | "no"; raw: string }
   | { kind: "chat" };
 
 export type ActionType = "forward" | "dnd" | "ivr_switch" | "vm_reset" | "unknown";
@@ -28,6 +28,11 @@ const ACTION_PATTERNS: Array<{ type: ActionType; terms: string[] }> = [
 
 const EXT_RE = /\b(?:ext(?:ension)?\.?\s*)?(\d{2,5})\b/i;
 
+// DND direction: a DND request is "enable" unless the message clearly asks to
+// clear it ("turn off dnd", "take me out of do not disturb", "cancel dnd"…).
+// Conservative: only unmistakable disable words flip the direction.
+const DND_DISABLE_RE = /\boff\b|\bdisable|\bremove\b|\bcancel|\bstop\b|\bdeactivat|\bun-?dnd\b|\bout of\b|\bresume\b|אויסשאַלט|נעם(?:ט)? אַראָפּ/i;
+
 export function detectIntent(text: string): Intent {
   const t = text.toLowerCase();
 
@@ -43,6 +48,7 @@ export function detectIntent(text: string): Intent {
         extensionHint: ext,
         targetHint: targetMatch?.[1],
         untilHint: untilMatch?.[1]?.trim(),
+        enableHint: p.type === "dnd" ? (DND_DISABLE_RE.test(t) ? "no" : "yes") : undefined,
         raw: text,
       };
     }

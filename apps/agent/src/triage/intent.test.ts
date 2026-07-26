@@ -29,6 +29,36 @@ test("action intent: DND", () => {
   if (i.kind === "action") assert.equal(i.actionType, "dnd");
 });
 
+test("DND direction: enable by default", () => {
+  const i = detectIntent("put my phone on do not disturb please, ext 101");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, "yes");
+});
+
+test("DND direction: 'turn off' disables", () => {
+  const i = detectIntent("turn off dnd on ext 101");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, "no");
+});
+
+test("DND direction: 'out of' disables", () => {
+  const i = detectIntent("take my phone out of do not disturb");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, "no");
+});
+
+test("DND direction: 'cancel' disables", () => {
+  const i = detectIntent("please cancel do not disturb for extension 102");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, "no");
+});
+
+test("non-DND actions carry no enableHint", () => {
+  const i = detectIntent("forward my calls to extension 204");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.enableHint, undefined);
+});
+
 test("action intent: IVR switch", () => {
   const i = detectIntent("please put on the holiday menu until the 25th");
   assert.equal(i.kind, "action");

@@ -104,7 +104,7 @@ export class TriageOrchestrator {
           yiddish: language === "yi" ? "איך האָב נישט געקענט וויסן וועלכע עקסטענשן איר מיינט. ביטע זאָגט מיר די עקסטענשן נומער." : undefined,
         };
       }
-      params = { tenantId: pbxTenantId, objectId: String(ext), feature: "DND", enable: "yes" };
+      params = { tenantId: pbxTenantId, objectId: String(ext), feature: "DND", enable: intent.enableHint ?? "yes" };
     } else {
       params = { extension: intent.extensionHint, target: intent.targetHint, until: intent.untilHint, raw: intent.raw };
     }
@@ -163,7 +163,7 @@ export class TriageOrchestrator {
       case "forward":
         return `forward ${ext} to ${intent.targetHint ? `ext ${intent.targetHint}` : "the requested number"}${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
       case "dnd":
-        return `enable Do Not Disturb on ${ext}${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
+        return `${intent.enableHint === "no" ? "disable" : "enable"} Do Not Disturb on ${ext}${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
       case "ivr_switch":
         return `switch the IVR${intent.untilHint ? ` until ${intent.untilHint}` : ""}`;
       case "vm_reset":

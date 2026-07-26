@@ -79,6 +79,40 @@ test("AUTO-APPROVE DISABLED: owner-requested pbx.M1 still goes to PENDING_APPROV
   assert.equal(modifyBackend.calls.length, 0);
 });
 
+const DND_PARAMS = { tenantId: "21", objectId: "102", feature: "DND", enable: "yes" };
+
+test("OWNER MANDATE: DND (pbx.M11 feature=DND) executes without approval, binding intact", async () => {
+  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M11", params: DND_PARAMS, summary: "enable DND on ext 102", requestedBy: "u1", requestedRole: "customer" });
+  assert.equal(a.status, "EXECUTED");
+  assert.equal(modifyBackend.calls.length, 1);
+  // Binding contract still holds: params-hash frozen, approval consumed single-use.
+  assert.equal(a.paramsHash, computeParamsHash("pbx.M11", "21", DND_PARAMS));
+  assert.ok(a.approvalConsumedAt);
+  assert.equal(a.approvedBy, "owner-mandate:dnd-2026-07-26");
+  // No approval email; the result email still goes out.
+  assert.ok(!(notifierStub as any).sent.some((m: any) => m.kind === "approval_request"));
+  assert.ok((notifierStub as any).sent.some((m: any) => m.kind === "action_executed"));
+});
+
+test("OWNER MANDATE scope: pbx.M11 call-forward (CFU) still requires approval", async () => {
+  const p = { tenantId: "21", objectId: "102", feature: "CFU", enable: "yes", destination: "13055550100" };
+  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M11", params: p, summary: "CFU", requestedBy: "u1", requestedRole: "customer" });
+  assert.equal(a.status, "PENDING_APPROVAL");
+  assert.equal(modifyBackend.calls.length, 0);
+  assert.ok((notifierStub as any).sent.some((m: any) => m.kind === "approval_request"));
+});
+
+test("OWNER MANDATE kill switch: AGENT_DND_AUTO_APPROVE=0 restores the approval flow", async () => {
+  process.env.AGENT_DND_AUTO_APPROVE = "0";
+  try {
+    const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M11", params: DND_PARAMS, summary: "DND", requestedBy: "u1", requestedRole: "customer" });
+    assert.equal(a.status, "PENDING_APPROVAL");
+    assert.equal(modifyBackend.calls.length, 0);
+  } finally {
+    delete process.env.AGENT_DND_AUTO_APPROVE;
+  }
+});
+
 test("legacy P-series capability keeps auto-approve (no regression)", async () => {
   const a = await svc().create({ tenantId: "21", capabilityId: "pbx.P1", params: { name: "T" }, summary: "t", requestedBy: "izzy", requestedRole: "owner", autoApprove: true });
   assert.equal(a.status, "EXECUTED");
