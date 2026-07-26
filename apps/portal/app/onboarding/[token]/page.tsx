@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Extension = { displayName: string; extNumber: string; email: string; vmPassword: string };
+type CellMode = "" | "also" | "only";
+type Extension = { displayName: string; extNumber: string; email: string; vmPassword: string; cellMode: CellMode; cellNumber: string };
 
 type PortingDetails = {
   carrier: string;
@@ -35,7 +36,7 @@ type FormData = {
   smsEnabled: boolean;
 };
 
-const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "", vmPassword: "" };
+const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "", vmPassword: "", cellMode: "", cellNumber: "" };
 
 const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
@@ -85,7 +86,8 @@ function validateStep(step: number, f: FormData): string | null {
     if (f.mainPhone.trim().length < 7) return "A valid phone number is required.";
     if (f.address.trim().length < 3) return "Service address is required.";
     if (!isEmail(f.mainEmail)) return "A valid main email is required.";
-    if (!isEmail(f.billingEmail)) return "A valid billing email is required.";
+    // Billing email is optional — when blank we bill to the main email.
+    if (f.billingEmail.trim() && !isEmail(f.billingEmail)) return "The billing email doesn't look right — fix it or leave it blank.";
   }
   if (step === 2) {
     if (!f.numberChoice) return "Please choose how you'd like to set up your number.";
@@ -100,6 +102,9 @@ function validateStep(step: number, f: FormData): string | null {
     for (const ext of f.extensions) {
       if (ext.displayName.trim().length < 1) return "Each extension needs a name.";
       if (!isNumericExt(ext.extNumber)) return `Extension number "${ext.extNumber || "(empty)"}" must be numeric.`;
+      if (ext.cellMode && ext.cellNumber.replace(/\D/g, "").replace(/^1/, "").length !== 10) {
+        return `Enter a full cell phone number for ${ext.displayName.trim() || "extension " + (ext.extNumber || "?")}.`;
+      }
     }
     const nums = f.extensions.map((e) => e.extNumber.trim());
     if (new Set(nums).size !== nums.length) return "Extension numbers must be unique.";
@@ -161,7 +166,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             numberChoice:  a.phone?.choice         || prev.numberChoice,
             selectedNumber:a.phone?.selectedNumber || prev.selectedNumber,
             porting:       { ...prev.porting, ...(a.phone?.details || {}) },
-            extensions:    Array.isArray(a.extensions) && a.extensions.length ? a.extensions : prev.extensions,
+            extensions:    Array.isArray(a.extensions) && a.extensions.length ? a.extensions.map((e: any) => ({ ...EMPTY_EXT, ...e })) : prev.extensions,
             smsEnabled:    a.addons?.smsEnabled    ?? prev.smsEnabled,
           }));
         }
@@ -272,6 +277,18 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     const err = validateStep(step, form);
     if (err) { setStepError(err); return; }
     setStepError(null);
+    // Leaving the number step: start setting up their number in the background
+    // (buy / route / temporary number for ports). Fire-and-forget — the customer
+    // keeps moving through the wizard while it happens.
+    if (step === 2) {
+      void apiPost(`/onboarding/${encodeURIComponent(token)}/apply-number`, {
+        choice: form.numberChoice,
+        selectedNumber: form.numberChoice === "new" ? form.selectedNumber : undefined,
+        porting: form.numberChoice === "port" ? form.porting : undefined,
+        smsEnabled: form.smsEnabled,
+        companyName: form.companyName,
+      }).catch(() => { /* retried on final submit */ });
+    }
     const next = step + 1;
     setStep(next);
     scheduleAutosave(form, next);
@@ -291,14 +308,22 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         address:            form.address,
         mainPhone:          form.mainPhone,
         mainEmail:          form.mainEmail,
-        billingEmail:       form.billingEmail,
+        // No separate billing contact? Bills go to the main email.
+        billingEmail:       form.billingEmail.trim() || form.mainEmail,
         phoneNumberChoice:  form.numberChoice || undefined,
         selectedNumber:     form.numberChoice === "new" ? form.selectedNumber || undefined : undefined,
         porting:            form.numberChoice === "port" ? form.porting : undefined,
         smsEnabled:         form.smsEnabled,
         extensions:         form.extensions
           .filter((e) => e.displayName.trim() && e.extNumber.trim())
-          .map((e) => ({ displayName: e.displayName.trim(), extNumber: e.extNumber.trim(), email: e.email.trim() || undefined, vmPassword: e.vmPassword.trim() || undefined })),
+          .map((e) => ({
+            displayName: e.displayName.trim(),
+            extNumber: e.extNumber.trim(),
+            email: e.email.trim() || undefined,
+            vmPassword: e.vmPassword.trim() || undefined,
+            cellMode: e.cellMode || undefined,
+            cellNumber: e.cellMode ? e.cellNumber.replace(/\D/g, "").replace(/^1/, "") : undefined,
+          })),
       });
       window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
     } catch (e: any) {
@@ -545,12 +570,44 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <thead><tr><th>Name</th><th>Ext #</th><th>Email <span className="ob-label-optional">optional</span></th><th /></tr></thead>
               <tbody>
                 {form.extensions.map((ext, i) => (
-                  <tr key={i} className="ob-ext-row">
-                    <td><input className="ob-input" placeholder="Jane Smith" value={ext.displayName} onChange={(e) => updateExt(i, { displayName: e.target.value })} /></td>
-                    <td><input className="ob-input" placeholder="101" value={ext.extNumber} onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })} style={{ textAlign: "center" }} /></td>
-                    <td><input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email} onChange={(e) => updateExt(i, { email: e.target.value })} /></td>
-                    <td>{form.extensions.length > 1 && (<button className="ob-ext-remove" onClick={() => removeExt(i)} title="Remove">×</button>)}</td>
-                  </tr>
+                  <Fragment key={i}>
+                    <tr className="ob-ext-row">
+                      <td><input className="ob-input" placeholder="Jane Smith" value={ext.displayName} onChange={(e) => updateExt(i, { displayName: e.target.value })} /></td>
+                      <td><input className="ob-input" placeholder="101" value={ext.extNumber} onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })} style={{ textAlign: "center" }} /></td>
+                      <td><input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email} onChange={(e) => updateExt(i, { email: e.target.value })} /></td>
+                      <td>{form.extensions.length > 1 && (<button className="ob-ext-remove" onClick={() => removeExt(i)} title="Remove">×</button>)}</td>
+                    </tr>
+                    <tr className="ob-ext-cell-row">
+                      <td colSpan={4}>
+                        <div className="ob-ext-cell">
+                          <select
+                            className="ob-input ob-ext-cell-select"
+                            value={ext.cellMode}
+                            onChange={(e) => updateExt(i, { cellMode: e.target.value as CellMode, cellNumber: e.target.value ? ext.cellNumber : "" })}
+                          >
+                            <option value="">Rings their desk phone &amp; app</option>
+                            <option value="also">Also rings their cell phone</option>
+                            <option value="only">Goes straight to their cell phone</option>
+                          </select>
+                          {ext.cellMode && (
+                            <input
+                              className="ob-input ob-ext-cell-input"
+                              placeholder="Cell number — (555) 000-0000"
+                              value={ext.cellNumber}
+                              onChange={(e) => updateExt(i, { cellNumber: e.target.value })}
+                            />
+                          )}
+                        </div>
+                        {ext.cellMode && (
+                          <div className="ob-field-hint" style={{ marginTop: 6 }}>
+                            {ext.cellMode === "also"
+                              ? "Calls to this extension will ring the desk phone, the app, and this cell number at the same time."
+                              : "Calls to this extension will go straight to this cell number."}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -605,7 +662,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <div className="ob-review-section-title">Extensions ({form.extensions.filter((e) => e.extNumber).length})</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                 {form.extensions.filter((e) => e.extNumber).map((e, i) => (
-                  <div key={i} className="ob-review-ext-chip"><span className="ob-review-ext-num">{e.extNumber}</span>{e.displayName}</div>
+                  <div key={i} className="ob-review-ext-chip">
+                    <span className="ob-review-ext-num">{e.extNumber}</span>
+                    {e.displayName}
+                    {e.cellMode && <span className="ob-review-ext-cell">{e.cellMode === "only" ? "→ cell" : "+ cell"}</span>}
+                  </div>
                 ))}
               </div>
             </div>

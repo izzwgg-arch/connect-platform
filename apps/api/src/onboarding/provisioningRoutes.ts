@@ -3,6 +3,8 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { createPublicLinkSchema, adminStatusUpdateSchema, adminChecklistUpdateSchema, adminNotesUpdateSchema } from "./validation";
 import { buildVitalPbxCsvForSubmission, listAdminSubmissions, readAdminSubmissionDetail, toPublicUrl, isValidStatusTransition } from "./provisioning";
+import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
+import { runOnboardingSetup } from "./setupOrchestrator";
 
 function user(req: any): { sub?: string; role?: string } { return req.user as any; }
 async function requireSuperAdmin(req: any, reply: any): Promise<{ sub?: string; role?: string } | null> {
@@ -96,6 +98,38 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
     reply.header("content-type", csv.mime);
     reply.header("content-disposition", `attachment; filename=${JSON.stringify(csv.filename)}`);
     return csv.body;
+  });
+
+  // Re-kick the automated setup pipeline for a submitted onboarding.
+  // Safe to call after a failure or an interrupted run: every stage
+  // (VoIP.ms number, SMS, PBX build, sync, invites) is idempotent and
+  // resumes where it left off. Refuses while a run is genuinely in flight.
+  app.post("/admin/onboarding/submissions/:id/retry-setup", async (req, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const { id } = (req.params as any) as { id: string };
+    const row = await (db as any).onboardingSubmission.findUnique({
+      where: { id },
+      select: { id: true, status: true, pbxSetupStatus: true, updatedAt: true },
+    });
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    if (row.status !== "SUBMITTED" && row.status !== "APPROVED" && row.status !== "PROVISIONING") {
+      return reply.code(409).send({ error: "not_submitted", detail: `status is ${row.status}` });
+    }
+    if (row.pbxSetupStatus === "done") return reply.code(409).send({ error: "already_done" });
+    const inFlight = ["building", "syncing", "inviting"].includes(String(row.pbxSetupStatus || ""));
+    const staleMs = Number(process.env.ONBOARDING_INFLIGHT_STALE_MS || 15 * 60_000);
+    if (inFlight && Date.now() - new Date(row.updatedAt || 0).getTime() < staleMs) {
+      return reply.code(409).send({ error: "setup_in_progress" });
+    }
+    await (db as any).onboardingEvent.create({
+      data: { submissionId: id, type: "SETUP_RETRY", message: `Setup retry requested by admin` },
+    });
+    void (async () => {
+      await applyOnboardingNumber(id).catch(() => { /* logged inside */ });
+      await syncOnboardingSms(id).catch(() => { /* logged inside */ });
+      await runOnboardingSetup(id).catch(() => { /* logged inside */ });
+    })();
+    return { ok: true, status: "retrying" };
   });
 
   // Delete submission (SUPER_ADMIN only)

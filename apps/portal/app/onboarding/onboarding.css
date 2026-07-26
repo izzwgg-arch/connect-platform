@@ -208,6 +208,11 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-ext-remove:hover { color:var(--danger); }
 .ob-ext-add { background:none; border:1.5px dashed var(--border); color:var(--muted); font-size:13px; font-weight:540; border-radius:10px; padding:10px 14px; width:100%; cursor:pointer; margin-top:9px; transition:border-color .15s, color .15s, background .15s; }
 .ob-ext-add:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+.ob-ext-cell-row td { padding:0 6px 14px 0; }
+.ob-ext-cell { display:flex; gap:8px; }
+.ob-ext-cell .ob-input { height:36px; font-size:12.5px; }
+.ob-ext-cell-select { flex:0 0 46%; color:var(--text-2); }
+.ob-ext-cell-input { flex:1; }
 
 /* ── Callout ────────────────────────────────────────────────────────────────── */
 .ob-callout { display:flex; gap:10px; align-items:flex-start; margin-top:14px; padding:12px 14px; border-radius:11px; background:var(--accent-soft); border:1px solid var(--accent-ring); font-size:12.5px; color:var(--text-2); line-height:1.5; }
@@ -236,6 +241,7 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-review-val.ob-auto { color:var(--good); }
 .ob-review-ext-chip { display:inline-flex; align-items:center; gap:5px; background:var(--surface-2); border:1px solid var(--border); border-radius:7px; padding:3px 9px; font-size:12px; color:var(--text-2); margin:2px 4px 0 0; }
 .ob-review-ext-num { font-weight:650; color:var(--accent); font-size:11px; background:var(--accent-soft); border-radius:4px; padding:1px 5px; }
+.ob-review-ext-cell { font-size:10.5px; font-weight:640; color:var(--good); }
 
 /* ── Actions ────────────────────────────────────────────────────────────────── */
 .ob-actions { display:flex; align-items:center; justify-content:space-between; margin-top:26px; }

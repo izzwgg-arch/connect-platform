@@ -16,8 +16,8 @@ export default function OnboardingSuccessPage() {
 
       <h1 className="ob-success-title">Your phone system is being built</h1>
       <p className="ob-success-sub">
-        Everything you set up is provisioning automatically right now. You&rsquo;ll get your login details by email
-        the moment it&rsquo;s ready — usually within minutes.
+        Please give us a few minutes while we set everything up. You can safely close this window —
+        we&rsquo;ll email everyone on your team their login details the moment it&rsquo;s all ready.
       </p>
 
       {/* What's happening now */}

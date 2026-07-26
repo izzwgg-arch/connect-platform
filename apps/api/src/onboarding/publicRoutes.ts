@@ -5,10 +5,11 @@ import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
-import { publicSaveSchema, publicSubmitSchema } from "./validation";
+import { publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
-import { provisionOnboardingNumber } from "./voipMsProvisioning";
+import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
+import { runOnboardingSetup } from "./setupOrchestrator";
 
 function sanitizeFileName(name: string): string {
   const base = path.basename(name || "");
@@ -255,6 +256,39 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     return reply.code(503).send({ error: "card_disabled" });
   });
 
+  // Apply the chosen number — fires when the customer leaves the "Your number"
+  // step. Persists the choice and kicks off VoIP.ms provisioning (subaccount +
+  // DID / port + temporary number) in the background so it's usually done by
+  // the time they hit "Launch".
+  app.post("/onboarding/:token/apply-number", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const body = publicApplyNumberSchema.parse(req.body || {});
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked" });
+
+    // Merge the number choice into answers so provisioning can read it even if
+    // the autosave for this step hasn't landed yet.
+    const answers: any = { ...(row.answers as any || {}) };
+    answers.phone = {
+      ...(answers.phone || {}),
+      choice: body.choice,
+      selectedNumber: body.selectedNumber || answers.phone?.selectedNumber || "",
+      details: body.porting ?? answers.phone?.details ?? {},
+    };
+    await (db as any).onboardingSubmission.update({
+      where: { id: row.id },
+      data: {
+        answers,
+        phoneNumberChoice: body.choice,
+        companyName: row.companyName || body.companyName || null,
+      },
+    });
+
+    void applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+    return { ok: true, status: "provisioning" };
+  });
+
   // Submit — validate + persist
   app.post("/onboarding/:token/submit", async (req: any, reply) => {
     const { token } = (req.params as any) as { token: string };
@@ -286,10 +320,21 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
             email: e.email || null,
             vmPassword: e.vmPassword || null,
             smsEnabled: !!e.smsEnabled,
+            cellMode: e.cellMode || null,
+            cellNumber: e.cellMode ? e.cellNumber || null : null,
           })),
           skipDuplicates: true,
         });
       }
+
+      // Keep the latest number choice in answers too (provisioning reads it there).
+      const answers: any = { ...(row.answers as any || {}) };
+      answers.phone = {
+        ...(answers.phone || {}),
+        choice: body.phoneNumberChoice || answers.phone?.choice || "",
+        selectedNumber: body.selectedNumber || answers.phone?.selectedNumber || "",
+        details: body.porting ?? answers.phone?.details ?? {},
+      };
 
       await tx.onboardingSubmission.update({
         where: { id: row.id },
@@ -298,9 +343,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
           contactFirstName: body.contactFirstName,
           contactLastName: body.contactLastName,
           mainEmail: body.mainEmail,
-          billingEmail: body.billingEmail,
+          // No separate billing contact means bills go to the main email.
+          billingEmail: body.billingEmail || body.mainEmail,
           mainPhone: body.mainPhone || null,
           phoneNumberChoice: body.phoneNumberChoice || null,
+          answers,
           smsEnabled,
           smsMonthlyPriceCents,
           status: "SUBMITTED" as OnboardingStatus,
@@ -310,10 +357,16 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       });
     });
 
-    // Kick off VoIP.ms number provisioning in the background. This is gated:
-    // it only charges / files a port when VOIPMS_AUTO_PROVISION="on"; otherwise
-    // it's a dry run that just records what it would do on the submission timeline.
-    void provisionOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+    // Full automated setup, in the background:
+    //  1. make sure the VoIP.ms number stage finished (retry if it failed/never ran),
+    //  2. sync the SMS add-on onto the DID,
+    //  3. build the whole VitalPBX tenant (trunk → routes → tenant → extensions →
+    //     inbound route), sync extensions into Connect, SIP-sync, send invites.
+    void (async () => {
+      await applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+      await syncOnboardingSms(row.id).catch(() => { /* logged inside */ });
+      await runOnboardingSetup(row.id).catch(() => { /* logged inside */ });
+    })();
 
     return { ok: true };
   });

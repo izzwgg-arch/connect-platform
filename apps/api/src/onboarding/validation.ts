@@ -13,6 +13,10 @@ export const extensionInputSchema = z.object({
   email: z.string().email().optional(),
   vmPassword: z.string().regex(/^[0-9*]*$/).max(20).optional(),
   smsEnabled: z.boolean().optional(),
+  // Cell-phone routing ("virtual device" on the PBX): also = ring cell alongside
+  // desk/app; only = calls go straight to the cell.
+  cellMode: z.enum(["also", "only"]).optional(),
+  cellNumber: z.string().regex(/^[0-9]{10}$/).optional(),
 });
 
 // Public submit payload
@@ -21,11 +25,23 @@ export const publicSubmitSchema = z.object({
   contactFirstName: z.string().min(1).max(120),
   contactLastName: z.string().min(1).max(120),
   mainEmail: z.string().email(),
-  billingEmail: z.string().email(),
+  // Optional — when omitted, billing goes to the main email.
+  billingEmail: z.string().email().optional(),
   mainPhone: z.string().optional(),
   phoneNumberChoice: z.string().optional(),
+  selectedNumber: z.string().optional(),
+  porting: z.unknown().optional(),
   smsEnabled: z.boolean().optional(),
   extensions: z.array(extensionInputSchema).min(0).max(500).default([]),
+});
+
+// Public apply-number payload (fires as the customer leaves the number step)
+export const publicApplyNumberSchema = z.object({
+  choice: z.enum(["new", "port"]),
+  selectedNumber: z.string().optional(),
+  porting: z.unknown().optional(),
+  smsEnabled: z.boolean().optional(),
+  companyName: z.string().min(1).max(200).optional(),
 });
 
 // Admin create public link

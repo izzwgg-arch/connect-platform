@@ -1,0 +1,447 @@
+import { createHash, randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
+import { db } from "@connect/db";
+import { decryptJson } from "@connect/security";
+import { VitalPbxClient } from "@connect/integrations";
+import { syncPbxTenantDirectoryFromRows } from "../pbxTenantDirectorySync";
+import { syncExtensionsFromPbx } from "../pbxExtensionSync";
+import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
+import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
+import { buildPbxTenant, slugify, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
+import { readSubaccount, applyOnboardingNumber } from "./voipMsProvisioning";
+
+/**
+ * setupOrchestrator — everything that happens after the customer presses
+ * "Launch my phone system".
+ *
+ *   1. ENSURE NUMBER   — VoIP.ms stage must be ready (retried here if it
+ *                        failed / never ran while they filled the wizard).
+ *   2. BUILD PBX       — full VitalPBX tenant via the panel robot flow
+ *                        (trunk → outbound route → route selection → tenant →
+ *                        extensions incl. cell devices → inbound route).
+ *   3. SYNC CONNECT    — refresh the PBX tenant directory, link the new PBX
+ *                        tenant to a Connect tenant, run the extension sync,
+ *                        and HARD-VERIFY every requested extension landed as a
+ *                        Connect extension + user with SIP credentials. The
+ *                        sync alone has historically been unreliable, so this
+ *                        stage retries with backoff and then deterministically
+ *                        repairs anything the sync missed (users, ownership)
+ *                        instead of hoping the next cycle fixes it.
+ *   4. INVITE          — once SIP state is verified, email every person their
+ *                        login-setup invitation.
+ *
+ * Progress is tracked on OnboardingSubmission.pbxSetupStatus:
+ *   queued → building → syncing → inviting → done | failed
+ * Every step also writes a human-readable OnboardingEvent, so the admin detail
+ * page shows a full timeline.
+ *
+ * SAFETY GATE: panel writes only happen when ONBOARDING_PBX_AUTO_SETUP="on".
+ * With the gate off (default) the run is a fully-logged dry run and no PBX,
+ * tenant, user, or email state is created.
+ */
+
+const INVITE_TOKEN_HOURS = 72;
+
+function pbxAutoSetupEnabled(): boolean {
+  return String(process.env.ONBOARDING_PBX_AUTO_SETUP || "").toLowerCase() === "on";
+}
+
+async function logEvent(submissionId: string, message: string): Promise<void> {
+  try {
+    await (db as any).onboardingEvent.create({
+      data: { submissionId, type: "STATUS_CHANGED", message: message.slice(0, 480) },
+    });
+  } catch {
+    /* event logging is best-effort */
+  }
+}
+
+async function setPbxStatus(submissionId: string, pbxSetupStatus: string, extra: Record<string, unknown> = {}): Promise<void> {
+  await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { pbxSetupStatus, ...extra } });
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Retry backoff base — overridable so tests don't sleep for real seconds. */
+const retryBaseMs = () => Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000);
+
+// ── Panel account pool (in-process) ──────────────────────────────────────────
+// One PBX build per robot account at a time, so parallel onboardings never
+// collide on the per-session "current tenant" cookie or on panel Apply locks.
+
+const busyAccounts = new Set<string>();
+const accountWaiters: Array<() => void> = [];
+
+async function acquireAccount(cfg: PanelConfig): Promise<RobotAccount> {
+  for (;;) {
+    const free = cfg.accounts.find((a) => !busyAccounts.has(a.id));
+    if (free) {
+      busyAccounts.add(free.id);
+      return free;
+    }
+    await new Promise<void>((resolve) => accountWaiters.push(resolve));
+  }
+}
+
+function releaseAccount(account: RobotAccount): void {
+  busyAccounts.delete(account.id);
+  const w = accountWaiters.shift();
+  if (w) w();
+}
+
+// ── Connect-side helpers ──────────────────────────────────────────────────────
+
+function portalPublicUrl(pathname: string): string {
+  const origin = String(
+    process.env.PORTAL_PUBLIC_URL || process.env.CONNECT_APP_URL || process.env.APP_PUBLIC_URL || "https://app.connectcomunications.com",
+  ).replace(/\/$/, "");
+  return `${origin}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
+}
+
+async function queueInviteEmail(input: {
+  user: { id: string; tenantId: string; email: string; displayName?: string | null; firstName?: string | null; lastName?: string | null };
+  tenantName: string;
+  extensionNumber: string | null;
+}): Promise<void> {
+  const token = `cp_${randomBytes(32).toString("base64url")}`;
+  await (db as any).userPasswordToken.create({
+    data: {
+      userId: input.user.id,
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+      type: "INVITE",
+      expiresAt: new Date(Date.now() + INVITE_TOKEN_HOURS * 3600_000),
+      createdBy: null,
+    },
+  });
+  const userName =
+    String(input.user.displayName || "").trim() ||
+    [input.user.firstName, input.user.lastName].map((v) => String(v || "").trim()).filter(Boolean).join(" ") ||
+    String(input.user.email || "User").split("@")[0];
+  const template = welcomeCreatePasswordEmail({
+    userName,
+    userFirstName: String(input.user.firstName || "").trim() || null,
+    tenantName: input.tenantName,
+    extensionNumber: input.extensionNumber,
+    setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(token)}`),
+    expiresHours: INVITE_TOKEN_HOURS,
+    androidApkUrl: null,
+  });
+  // Same semantics as the admin invite/resend-invite path: the account is
+  // INVITED until they set their password through the link.
+  await (db as any).user
+    .update({ where: { id: input.user.id }, data: { status: "INVITED", forcePasswordReset: true } })
+    .catch(() => {});
+  await (db as any).emailJob.create({
+    data: {
+      tenantId: input.user.tenantId,
+      type: "USER_INVITE",
+      toEmail: input.user.email,
+      subject: template.subject,
+      htmlBody: template.html,
+      textBody: template.text,
+      status: "QUEUED",
+      attempts: 0,
+      nextRunAt: new Date(),
+    },
+  });
+}
+
+/** Load the (single) enabled PBX instance + an API client for it. */
+async function loadPbxInstanceClient(): Promise<{ instanceId: string; client: VitalPbxClient } | null> {
+  const instance = await (db as any).pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) return null;
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const client = new VitalPbxClient({
+    baseUrl: instance.baseUrl,
+    apiToken: auth.token,
+    apiSecret: auth.secret,
+    timeoutMs: Number(process.env.PBX_TIMEOUT_MS || 20000),
+    simulate: (process.env.PBX_SIMULATE || "false").toLowerCase() === "true",
+  });
+  return { instanceId: String(instance.id), client };
+}
+
+/**
+ * Find the new PBX tenant in the directory (by slug/description) with retries —
+ * VitalPBX needs a moment after Apply Changes before the tenant shows up in
+ * its own API list.
+ */
+async function findPbxDirectoryEntry(
+  instanceId: string,
+  client: VitalPbxClient,
+  slug: string,
+  company: string,
+  attempts = 6,
+): Promise<any | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const tenants = await client.listTenants();
+      await syncPbxTenantDirectoryFromRows(db as any, instanceId, tenants as unknown[]);
+    } catch {
+      /* transient — retry below */
+    }
+    const dirs = await (db as any).pbxTenantDirectory.findMany({ where: { pbxInstanceId: instanceId } });
+    const hit = dirs.find(
+      (d: any) =>
+        String(d.tenantSlug || "").toLowerCase() === slug ||
+        String(d.displayName || "").trim().toLowerCase() === company.trim().toLowerCase(),
+    );
+    if (hit) return hit;
+    await sleep(Math.min(retryBaseMs() * 5, retryBaseMs() * (i + 1)));
+  }
+  return null;
+}
+
+/**
+ * Ensure the Connect Tenant + TenantPbxLink for the new PBX tenant. Reuses a
+ * tenant that the background auto-sync may have already auto-provisioned (and
+ * fixes its name to the real company name).
+ */
+async function ensureConnectTenant(
+  instanceId: string,
+  dirEntry: any,
+  company: string,
+): Promise<string> {
+  const existingLink = await (db as any).tenantPbxLink.findFirst({
+    where: { pbxInstanceId: instanceId, pbxTenantId: String(dirEntry.vitalTenantId) },
+  });
+  if (existingLink) {
+    await (db as any).tenant.update({ where: { id: existingLink.tenantId }, data: { name: company } }).catch(() => {});
+    if (existingLink.status !== "LINKED") {
+      await (db as any).tenantPbxLink.update({ where: { id: existingLink.id }, data: { status: "LINKED", lastError: null } }).catch(() => {});
+    }
+    return String(existingLink.tenantId);
+  }
+  const created = await (db as any).$transaction(async (tx: any) => {
+    const t = await tx.tenant.create({ data: { name: company, kind: "CUSTOMER", isApproved: true } });
+    await tx.tenantPbxLink.create({
+      data: {
+        tenantId: t.id,
+        pbxInstanceId: instanceId,
+        pbxTenantId: String(dirEntry.vitalTenantId),
+        pbxTenantCode: dirEntry.tenantCode ?? null,
+        status: "LINKED",
+      },
+    });
+    return t;
+  });
+  return String(created.id);
+}
+
+export type ExtensionVerification = {
+  extNumber: string;
+  extensionOk: boolean;
+  sipOk: boolean;
+  userOk: boolean;
+  email: string | null;
+};
+
+/**
+ * HARD verification + repair pass for one tenant's requested extensions.
+ *
+ * The bulk sync (syncExtensionsFromPbx) has historically been "best effort":
+ * user creation is silently skipped on email conflicts, ownership can stay
+ * unset, and failures vanish into catch-alls. This pass makes the outcome
+ * deterministic for onboarding:
+ *   - every requested extension must exist as a Connect Extension,
+ *   - every requested extension with an email gets a Connect user (created if
+ *     the sync didn't) and the extension's ownerUserId set,
+ *   - SIP state (PbxExtensionLink) must exist for the extension.
+ */
+export async function verifyAndRepairTenantExtensions(
+  tenantId: string,
+  requested: Array<{ extNumber: string; displayName?: string | null; email?: string | null }>,
+): Promise<ExtensionVerification[]> {
+  const out: ExtensionVerification[] = [];
+  for (const req of requested) {
+    const extNumber = String(req.extNumber).trim();
+    const email = String(req.email || "").trim().toLowerCase() || null;
+    const v: ExtensionVerification = { extNumber, extensionOk: false, sipOk: false, userOk: !email, email };
+
+    const ext = await (db as any).extension.findUnique({
+      where: { tenantId_extNumber: { tenantId, extNumber } },
+      include: { pbxLink: true },
+    });
+    if (!ext) {
+      out.push(v);
+      continue;
+    }
+    v.extensionOk = true;
+    // Same bar as the admin "Sync SIP" button (userExtensionProvisioning):
+    // a WebRTC device must exist AND its SIP password must be captured —
+    // that's what makes the softphone actually register. A bare link row is
+    // not "synced".
+    v.sipOk = !!(ext.pbxLink && ext.pbxLink.pbxSipUsername && ext.pbxLink.webrtcEnabled && ext.pbxLink.sipPasswordEncrypted);
+
+    if (email) {
+      let user = await (db as any).user.findUnique({ where: { email } });
+      if (user && user.tenantId !== tenantId) {
+        // Email belongs to a user in ANOTHER tenant. Never hijack it — this
+        // extension keeps working, but no Connect login/invite is possible for
+        // this address. Surfaced (not swallowed) so the timeline shows it.
+        v.userOk = false;
+        out.push(v);
+        continue;
+      }
+      if (!user) {
+        const tempPassword = randomBytes(24).toString("base64url");
+        user = await (db as any).user.create({
+          data: {
+            tenantId,
+            email,
+            passwordHash: await bcrypt.hash(tempPassword, 10),
+            role: "USER",
+            displayName: String(req.displayName || "").trim() || null,
+          },
+        });
+      }
+      if (ext.ownerUserId !== user.id) {
+        await (db as any).extension.update({ where: { id: ext.id }, data: { ownerUserId: user.id } });
+      }
+      v.userOk = true;
+    }
+    out.push(v);
+  }
+  return out;
+}
+
+// ── Main entry ────────────────────────────────────────────────────────────────
+
+export async function runOnboardingSetup(submissionId: string): Promise<void> {
+  const row = await (db as any).onboardingSubmission.findUnique({
+    where: { id: submissionId },
+    include: { requestedExtensions: true },
+  } as any);
+  if (!row) return;
+  if (row.pbxSetupStatus === "done") return;
+  if (row.pbxSetupStatus === "building" || row.pbxSetupStatus === "syncing" || row.pbxSetupStatus === "inviting") {
+    // In flight — but if the API restarted mid-run, the status would stay
+    // stuck forever. Rows untouched for longer than the stale window are
+    // treated as interrupted and resumed instead of blocked.
+    const staleMs = Number(process.env.ONBOARDING_INFLIGHT_STALE_MS || 15 * 60_000);
+    const age = Date.now() - new Date(row.updatedAt || 0).getTime();
+    if (age < staleMs) return;
+    await logEvent(submissionId, `Setup was interrupted mid-run (stuck in "${row.pbxSetupStatus}" for ${Math.round(age / 60000)} min) — resuming.`);
+  }
+
+  const live = pbxAutoSetupEnabled();
+  const company = String(row.companyName || "").trim();
+  const people: PbxPerson[] = (row.requestedExtensions || []).map((e: any) => ({
+    name: String(e.displayName || e.extNumber),
+    ext: String(e.extNumber),
+    email: e.email || undefined,
+    vmPassword: e.vmPassword || undefined,
+    cellMode: (e.cellMode as "also" | "only" | null) || null,
+    cellNumber: e.cellNumber || null,
+  }));
+
+  try {
+    await setPbxStatus(submissionId, "queued", { setupError: null });
+
+    // ── 1. The number stage must be ready ───────────────────────────────────
+    let fresh = row;
+    if (row.numberStatus !== "ready") {
+      const res = await applyOnboardingNumber(submissionId);
+      fresh = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId }, include: { requestedExtensions: true } } as any);
+      if (fresh.numberStatus !== "ready") {
+        throw new Error(`number_stage_not_ready (${res.detail})`);
+      }
+    }
+    const sub = readSubaccount(fresh);
+    const did = String(fresh.provisionedDid || "");
+    if (!sub || did.length !== 10) throw new Error("number_stage_missing_subaccount_or_did");
+    if (!company) throw new Error("company_name_missing");
+    if (!people.length) throw new Error("no_extensions_requested");
+
+    // ── 2. Build the PBX tenant ─────────────────────────────────────────────
+    await setPbxStatus(submissionId, "building");
+    const job: PbxBuildJob = { company, did, voipms: { user: sub.username, pass: sub.password, server: sub.server }, people };
+
+    if (!live) {
+      await logEvent(
+        submissionId,
+        `[dry-run] Build VitalPBX tenant "${company}": trunk ${sub.username}@${sub.server}, DID ${did}, ${people.length} extension(s)` +
+          `${people.some((p) => p.cellNumber) ? ` (incl. ${people.filter((p) => p.cellNumber).length} with cell routing)` : ""}, inbound route → ext ${people[0].ext}.`,
+      );
+      await logEvent(submissionId, "[dry-run] Would sync extensions into Connect, verify users + SIP, and email every extension its invitation.");
+      await setPbxStatus(submissionId, "done");
+      await logEvent(submissionId, "[dry-run] Setup pipeline complete (enable ONBOARDING_PBX_AUTO_SETUP to run for real).");
+      return;
+    }
+
+    const panelCfg = loadPanelConfig();
+    if (!panelCfg) throw new Error("panel_not_configured (ONBOARDING_PANEL_BASE_URL / ONBOARDING_ROBOT_*)");
+
+    const account = await acquireAccount(panelCfg);
+    let tenantPath: string;
+    try {
+      const session = await new PanelSession(panelCfg.baseUrl, account).login();
+      const result = await buildPbxTenant(session, panelCfg.mainTenant, job, (msg) => {
+        void logEvent(submissionId, `PBX build: ${msg}`);
+      });
+      tenantPath = result.tenantPath;
+    } finally {
+      releaseAccount(account);
+    }
+    await setPbxStatus(submissionId, "syncing", { pbxTenantPath: tenantPath });
+    await logEvent(submissionId, `PBX tenant built (path ${tenantPath}). Syncing into Connect…`);
+
+    // ── 3. Sync + hard-verify into Connect ──────────────────────────────────
+    const pbx = await loadPbxInstanceClient();
+    if (!pbx) throw new Error("no_enabled_pbx_instance");
+
+    const slug = slugify(company);
+    const dirEntry = await findPbxDirectoryEntry(pbx.instanceId, pbx.client, slug, company);
+    if (!dirEntry) throw new Error(`pbx_tenant_not_in_directory (slug ${slug})`);
+
+    const tenantId = await ensureConnectTenant(pbx.instanceId, dirEntry, company);
+    await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { createdTenantId: tenantId } });
+
+    // Retry the extension sync until every requested extension is present and
+    // SIP-synced (VitalPBX can lag right after Apply Changes). Then repair
+    // anything the sync skipped (users, ownership) deterministically.
+    let verifications: ExtensionVerification[] = [];
+    const maxAttempts = 5;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await syncExtensionsFromPbx(db as any, pbx.instanceId, pbx.client as any, { vitalTenantId: String(dirEntry.vitalTenantId) });
+      } catch (e: any) {
+        await logEvent(submissionId, `Extension sync attempt ${attempt} failed: ${String(e?.message || e).slice(0, 160)}`);
+      }
+      verifications = await verifyAndRepairTenantExtensions(tenantId, fresh.requestedExtensions || []);
+      const allOk = verifications.every((v) => v.extensionOk && v.sipOk && v.userOk);
+      if (allOk) break;
+      if (attempt < maxAttempts) await sleep(Math.min(retryBaseMs() * 5, retryBaseMs() * attempt));
+    }
+
+    const missingExt = verifications.filter((v) => !v.extensionOk).map((v) => v.extNumber);
+    const missingSip = verifications.filter((v) => v.extensionOk && !v.sipOk).map((v) => v.extNumber);
+    const emailConflicts = verifications.filter((v) => v.email && !v.userOk).map((v) => `${v.extNumber} (${v.email})`);
+    if (missingExt.length) throw new Error(`extensions_missing_after_sync: ${missingExt.join(", ")}`);
+    if (missingSip.length) throw new Error(`sip_not_synced: ${missingSip.join(", ")}`);
+    if (emailConflicts.length) {
+      await logEvent(submissionId, `Email already in use by another organization — no invite sent for: ${emailConflicts.join("; ")}.`);
+    }
+    await logEvent(submissionId, `All ${verifications.length} extension(s) verified in Connect (users + SIP synced).`);
+
+    // ── 4. Invitations ──────────────────────────────────────────────────────
+    await setPbxStatus(submissionId, "inviting");
+    let invited = 0;
+    for (const v of verifications) {
+      if (!v.email || !v.userOk) continue;
+      const user = await (db as any).user.findUnique({ where: { email: v.email } });
+      if (!user) continue;
+      await queueInviteEmail({ user, tenantName: company, extensionNumber: v.extNumber });
+      invited++;
+    }
+    await logEvent(submissionId, `Sent ${invited} invitation email(s).`);
+
+    await setPbxStatus(submissionId, "done");
+    await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { status: "ACTIVE" } }).catch(() => {});
+    await logEvent(submissionId, `Setup complete — tenant "${company}" is live with ${people.length} extension(s) on ${did}.`);
+  } catch (e: any) {
+    const msg = String(e?.message || e).slice(0, 300);
+    await setPbxStatus(submissionId, "failed", { setupError: msg }).catch(() => {});
+    await logEvent(submissionId, `Setup failed: ${msg}`);
+  }
+}

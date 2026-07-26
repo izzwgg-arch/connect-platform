@@ -4788,6 +4788,19 @@ model OnboardingSubmission {
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
 
+  // ── Automated provisioning state ──────────────────────────────────────────
+  // VoIP.ms number stage (runs in the background right after the number step):
+  //   pending → provisioning → ready | failed
+  numberStatus              String?
+  provisionedDid            String? // 10-digit DID actually live on the subaccount
+  didIsTemporary            Boolean @default(false) // true while a port is pending
+  voipmsSubaccountEncrypted String? // encrypted { username, password, server }
+  // VitalPBX build stage (runs after final submit):
+  //   queued → building → syncing → inviting → done | failed
+  pbxSetupStatus String?
+  pbxTenantPath  String? // VitalPBX tenant path hash once created
+  setupError     String?
+
   requestedExtensions OnboardingRequestedExtension[]
   uploadedFiles       OnboardingUploadedFile[]
   events              OnboardingEvent[]
@@ -4801,6 +4814,10 @@ model OnboardingRequestedExtension {
   email        String?
   vmPassword   String?
   smsEnabled   Boolean  @default(false)
+  // Cell-phone forwarding chosen in the wizard ("virtual device" on the PBX):
+  //   cellMode: null | "also" (extension + cell ring together) | "only" (straight to cell)
+  cellMode     String?
+  cellNumber   String?
   createdAt    DateTime @default(now())
 
   submission OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
