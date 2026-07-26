@@ -34,7 +34,9 @@ export interface TriageOutcome {
 
 const ACTION_CAPABILITY: Record<ActionType, string | null> = {
   forward: "action.A1.temp_forward",
-  dnd: "action.A7.dnd",
+  // DND routes to the M11 modify capability (live AstDB diversion via the helper,
+  // full gate chain + Izzy-bound approval). The retired action.A7 handler is dead.
+  dnd: "pbx.M11",
   ivr_switch: "action.A3.ivr_switch",
   vm_reset: "action.A5.vm_pin_reset",
   unknown: null,
@@ -89,10 +91,27 @@ export class TriageOrchestrator {
 
     // Build a human summary and draft the action (approval-gated unless owner).
     const summary = this.summarize(intent);
+    // Modify-executor capabilities (pbx.M*) use the single-object contract keyed
+    // by the PBX tenant id + extension, not the legacy {extension,target,...} shape.
+    let params: Record<string, unknown>;
+    if (capId === "pbx.M11") {
+      const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
+      const ext = intent.extensionHint ?? (await this.resolveExtension(ctx));
+      if (!pbxTenantId || !ext) {
+        return {
+          handled: true,
+          reply: "I couldn't tell which extension to set Do Not Disturb on. Tell me the extension number and I'll take care of it.",
+          yiddish: language === "yi" ? "איך האָב נישט געקענט וויסן וועלכע עקסטענשן איר מיינט. ביטע זאָגט מיר די עקסטענשן נומער." : undefined,
+        };
+      }
+      params = { tenantId: pbxTenantId, objectId: String(ext), feature: "DND", enable: "yes" };
+    } else {
+      params = { extension: intent.extensionHint, target: intent.targetHint, until: intent.untilHint, raw: intent.raw };
+    }
     const action = await this.actions.create({
       tenantId: ctx.tenantId,
       capabilityId: capId,
-      params: { extension: intent.extensionHint, target: intent.targetHint, until: intent.untilHint, raw: intent.raw },
+      params,
       summary,
       requestedBy: ctx.clientUserId ?? "unknown",
       requestedRole: ctx.role,
@@ -116,6 +135,16 @@ export class TriageOrchestrator {
             : `איך האָב עס איבערגעגעבן פֿאַר אַפּרואוו. איך וועל אײַך לאָזן וויסן ווען עס איז גרייט.`
           : undefined,
     };
+  }
+
+  /** Map a Connect tenant id → its VitalPBX tenant number (what M-ops key on). */
+  private async resolvePbxTenantId(connectTenantId: string): Promise<string | null> {
+    try {
+      const link = await this.prisma.tenantPbxLink.findUnique({ where: { tenantId: connectTenantId }, select: { pbxTenantId: true } });
+      return link?.pbxTenantId != null ? String(link.pbxTenantId) : null;
+    } catch {
+      return null;
+    }
   }
 
   private async resolveExtension(ctx: TriageCtx): Promise<string | null> {

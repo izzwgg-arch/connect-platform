@@ -29,9 +29,11 @@ test("GATE: only certified/live capabilities are executable; planned/built are n
   assert.ok(!exec.some((c) => c.id === "owner.kill_switch")); // still planned
 });
 
-test("GATE: PBX-write capabilities are certified in SIM but never live-enabled from the manifest", () => {
+test("GATE: PBX-write capabilities stay sim-only except ones explicitly certified live", () => {
   const pbx = loadManifest().filter((c) => c.pbxWrite);
   assert.ok(pbx.length >= 14);
-  // Certified means sim-proven; liveEnabled must stay false until PW-2 + owner action.
-  assert.ok(pbx.every((c) => c.liveEnabled === false));
+  // liveEnabled is off by default and only flipped per capability after live
+  // certification on T21. M11 (DND/CF) is the first certified-live capability.
+  const liveEnabled = pbx.filter((c) => c.liveEnabled === true).map((c) => c.id);
+  assert.deepEqual(liveEnabled, ["pbx.M11"]);
 });
