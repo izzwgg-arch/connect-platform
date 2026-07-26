@@ -97,6 +97,59 @@ test("MOH with no matching profile name asks instead of guessing", async () => {
   assert.match(out.reply ?? "", /Jazz, Classical Calm/);
 });
 
+// ── clarification resume (2026-07-26 live failure: bare "Main" reply fell to
+// the LLM, which hallucinated "I'll pass the request to the team") ──────────
+
+const CLARIFY = "Which hold music would you like? Your available options are: Jazz, Classical Calm.";
+
+function prismaWithLastAssistant(lastContent: string): any {
+  return {
+    ...prismaStub,
+    agentMessage: { findFirst: async () => ({ content: lastContent, contentEn: null }) },
+  };
+}
+
+test("RESUME: bare profile name after the clarify question executes the switch", async () => {
+  const created: any[] = [];
+  const actions: any = { create: async (input: any) => { created.push(input); return { id: "a", status: "EXECUTED" }; } };
+  const orch = new TriageOrchestrator(prismaWithLastAssistant(CLARIFY), {} as any, actions, async () => null);
+  const out = await orch.handle(
+    detectIntent("jazz"),
+    { tenantId: "cmConnectCuid", clientUserId: "u1", role: "customer", conversationId: "conv1" },
+    "en",
+  );
+  assert.equal(out.handled, true);
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].params, { tenantId: "21", objectId: "21", action: "activate", profileId: "prof-jazz", reason: "chat request" });
+  assert.match(out.reply ?? "", /^Done/);
+});
+
+test("RESUME: 'back to the regular schedule' after the clarify question deactivates", async () => {
+  const created: any[] = [];
+  const actions: any = { create: async (input: any) => { created.push(input); return { id: "a", status: "EXECUTED" }; } };
+  const orch = new TriageOrchestrator(prismaWithLastAssistant(CLARIFY), {} as any, actions, async () => null);
+  await orch.handle(detectIntent("back to the regular schedule"), { tenantId: "c", clientUserId: "u1", role: "customer", conversationId: "conv1" }, "en");
+  assert.equal(created[0].params.action, "deactivate");
+});
+
+test("RESUME: unrelated chat after the clarify question is NOT hijacked", async () => {
+  const created: any[] = [];
+  const actions: any = { create: async (input: any) => { created.push(input); return { id: "a", status: "EXECUTED" }; } };
+  const orch = new TriageOrchestrator(prismaWithLastAssistant(CLARIFY), {} as any, actions, async () => null);
+  const out = await orch.handle(detectIntent("thank you so much"), { tenantId: "c", clientUserId: "u1", role: "customer", conversationId: "conv1" }, "en");
+  assert.equal(out.handled, false);
+  assert.equal(created.length, 0);
+});
+
+test("RESUME: profile-name reply with a different last assistant message stays chat", async () => {
+  const created: any[] = [];
+  const actions: any = { create: async (input: any) => { created.push(input); return { id: "a", status: "EXECUTED" }; } };
+  const orch = new TriageOrchestrator(prismaWithLastAssistant("Done — enabled DND on ext 101."), {} as any, actions, async () => null);
+  const out = await orch.handle(detectIntent("jazz"), { tenantId: "c", clientUserId: "u1", role: "customer", conversationId: "conv1" }, "en");
+  assert.equal(out.handled, false);
+  assert.equal(created.length, 0);
+});
+
 test("MOH longest-name match wins when names overlap", async () => {
   const created: any[] = [];
   const prisma: any = {

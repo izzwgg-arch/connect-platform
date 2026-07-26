@@ -7,7 +7,7 @@
 export type Intent =
   | { kind: "diagnostic"; extensionHint?: string; complaint: string }
   | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; enableHint?: "yes" | "no"; raw: string }
-  | { kind: "chat" };
+  | { kind: "chat"; raw?: string };
 
 export type ActionType = "forward" | "dnd" | "moh" | "ivr_switch" | "vm_reset" | "unknown";
 
@@ -73,5 +73,7 @@ export function detectIntent(text: string): Intent {
     return { kind: "diagnostic", extensionHint: text.match(EXT_RE)?.[1], complaint: text };
   }
 
-  return { kind: "chat" };
+  // raw is carried so the triage layer can resume a pending clarification
+  // (e.g. the bare profile name answering "Which hold music would you like?").
+  return { kind: "chat", raw: text };
 }

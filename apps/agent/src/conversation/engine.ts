@@ -16,9 +16,16 @@ export const AUTO_CLOSE_HOURS = 12;
 
 const SYSTEM_PROMPT = `You are the Connect Communications support agent ("Shammes").
 You help phone-system clients in English or Yiddish — always reply in the language the client used.
-CURRENT LIMITATIONS (be honest about them): you cannot yet run diagnostics or make any changes;
-those capabilities are being certified. For any request to change or fix something, warmly say the
-request has been passed to the human team, and summarize it clearly.
+WHAT YOU CAN DO TODAY (via a separate automated system, not by you directly):
+- Put an extension in or out of Do Not Disturb (e.g. "put extension 102 on do not disturb").
+- Change the account's hold music to one of its own hold-music profiles, or back to the schedule
+  (e.g. "change our hold music to Jazz", "set the hold music back to normal").
+Clearly-phrased requests like those execute automatically and you never see them. If such a request
+DOES reach you, it means a detail was missing — ask ONE short question for the exact extension
+number or hold-music profile name; the client's answer is then executed automatically. NEVER say
+these requests were "passed to the team" and NEVER claim you cannot change DND or hold music.
+EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet — warmly say the request has
+been passed to the human team, and summarize it clearly.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
 
 /**
@@ -242,15 +249,16 @@ export class ConversationEngine {
       try {
         const { detectIntent } = await import("../triage/intent");
         const intent = detectIntent(bridging ? englishText : text);
-        if (intent.kind !== "chat") {
-          const outcome = await this.triage.handle(intent, { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId, role: ctx.role, conversationId: conv.id }, language);
-          if (outcome.handled && outcome.reply) {
-            if (bridging) return this.finishBridged(conv, ctx, outcome.reply, "triage", bridgeDegraded);
-            const reply = language === "yi" && outcome.yiddish ? outcome.yiddish : outcome.reply;
-            await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "triage" });
-            await this.audit.record({ actor: "agent", event: "chat.triage_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { intent: intent.kind, diagReportId: outcome.diagReportId, actionId: outcome.actionId } });
-            return { conversationId: conv.id, reply, language, model: "triage", degraded: false };
-          }
+        // Chat-kind intents also go through triage: a bare reply like "Main"
+        // may be the answer to triage's own pending clarifying question
+        // (resume path). Triage returns handled:false for genuine small talk.
+        const outcome = await this.triage.handle(intent, { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId, role: ctx.role, conversationId: conv.id }, language);
+        if (outcome.handled && outcome.reply) {
+          if (bridging) return this.finishBridged(conv, ctx, outcome.reply, "triage", bridgeDegraded);
+          const reply = language === "yi" && outcome.yiddish ? outcome.yiddish : outcome.reply;
+          await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "triage" });
+          await this.audit.record({ actor: "agent", event: "chat.triage_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { intent: intent.kind, diagReportId: outcome.diagReportId, actionId: outcome.actionId } });
+          return { conversationId: conv.id, reply, language, model: "triage", degraded: false };
         }
       } catch (err) {
         await this.audit.record({ actor: "system", event: "chat.triage_failed", conversationId: conv.id, payload: { error: String(err) } });

@@ -54,7 +54,16 @@ export class TriageOrchestrator {
   ) {}
 
   async handle(intent: Intent, ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
-    if (intent.kind === "chat") return { handled: false };
+    if (intent.kind === "chat") {
+      // A plain-chat message may be the ANSWER to our own pending clarifying
+      // question (e.g. we asked "Which hold music would you like?" and the
+      // user replied just "Main"). Resume that flow instead of dropping the
+      // reply into the LLM (2026-07-26 live failure: the LLM answered "I'll
+      // pass the request to the team" and nothing executed).
+      const resumed = await this.resumeMohClarification(intent, ctx);
+      if (!resumed) return { handled: false };
+      intent = resumed;
+    }
 
     if (intent.kind === "diagnostic") {
       // diag.full_diagnosis must be certified/executable.
@@ -193,6 +202,43 @@ export class TriageOrchestrator {
     try {
       const link = await this.prisma.tenantPbxLink.findUnique({ where: { tenantId: connectTenantId }, select: { pbxTenantId: true } });
       return link?.pbxTenantId != null ? String(link.pbxTenantId) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * If the previous assistant message in this conversation was our MOH
+   * clarifying question, interpret the user's reply as the answer: a profile
+   * name (activate) or schedule words (deactivate). Conservative: anything
+   * that doesn't clearly resolve returns null and falls through to the LLM.
+   */
+  private async resumeMohClarification(intent: Extract<Intent, { kind: "chat" }>, ctx: TriageCtx): Promise<Extract<Intent, { kind: "action" }> | null> {
+    const text = (intent.raw ?? "").trim();
+    if (!text || text.length > 80 || !ctx.conversationId) return null;
+    try {
+      const last = await this.prisma.agentMessage.findFirst({
+        where: { conversationId: ctx.conversationId, role: "assistant" },
+        orderBy: { createdAt: "desc" },
+        select: { content: true, contentEn: true },
+      });
+      const lastText = String(last?.contentEn ?? last?.content ?? "");
+      if (!/^Which hold music would you like\?|וועלכע האלט מוזיק ווילט איר/.test(lastText)) return null;
+      const t = text.toLowerCase();
+      if (/\b(schedule|normal|default|regular)\b/.test(t)) {
+        return { kind: "action", actionType: "moh", enableHint: "no", raw: text };
+      }
+      const profiles = await this.listMohProfiles(ctx.tenantId);
+      const matches = profiles
+        .filter((p) => {
+          const n = String(p.name ?? "").toLowerCase();
+          return !!n && (n.includes(t) || t.includes(n));
+        })
+        .sort((a, b) => String(b.name).length - String(a.name).length);
+      const chosen = matches.length === 1 || (matches.length > 1 && String(matches[0].name).length > String(matches[1].name).length) ? matches[0] : null;
+      if (!chosen) return null;
+      // raw = the full profile name so the pbx.M1 branch resolves it exactly.
+      return { kind: "action", actionType: "moh", enableHint: "yes", raw: String(chosen.name) };
     } catch {
       return null;
     }
