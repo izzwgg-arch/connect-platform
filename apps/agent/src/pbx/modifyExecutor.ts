@@ -180,10 +180,13 @@ export class ModifyPbxExecutor {
       return this.refuse(input, mode, "G5", `Target extension '${ext}' is protected — refused.`);
     }
 
-    // G6: live tenant allow-list, fail-closed (live-cert = T21 only).
+    // G6: live tenant allow-list, fail-closed. "*" opens every linked tenant
+    // (owner mandate 2026-07-26: DND live for all tenants) — the G3 scope
+    // fence still proves per-tenant object ownership on every call, so a
+    // wildcard never allows cross-tenant writes. Empty/unset stays fail-closed.
     if (mode === "live") {
       const allow = (this.env.AGENT_PBX_LIVE_TENANTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-      if (!allow.includes(tenantId)) {
+      if (!allow.includes("*") && !allow.includes(tenantId)) {
         return this.refuse(input, mode, "G6", `Live write to tenant '${tenantId}' refused: not in AGENT_PBX_LIVE_TENANTS allow-list (fail-closed).`);
       }
     }

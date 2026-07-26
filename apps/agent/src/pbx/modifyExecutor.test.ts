@@ -178,6 +178,14 @@ test("G6: live write to non-allow-listed tenant refused (fail-closed when unset)
   assert.equal(r2.gate, "G6");
 });
 
+test("G6 wildcard: AGENT_PBX_LIVE_TENANTS='*' admits any tenant past G6 (scope fence still applies)", async () => {
+  prisma.actions.push(approvedRow({ tenantId: "8", paramsHash: computeParamsHash("pbx.M0", "8", { ...GOOD, tenantId: "8" }) }));
+  const r = await makeExec({ scope: scopeYes, env: { ...ENV_OK, AGENT_PBX_LIVE_TENANTS: "*" } }).execute(
+    input({ mode: "live", actionId: "act1", params: { ...GOOD, tenantId: "8" } }),
+  );
+  assert.notEqual(r.gate, "G6");
+});
+
 function approvedRow(over: Partial<any> = {}) {
   return {
     id: "act1",
