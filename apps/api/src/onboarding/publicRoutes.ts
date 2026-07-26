@@ -100,6 +100,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     return { canTokenize: false };
   });
 
+  // VoIP.ms availability search takes 15-25s; cache per-query results so
+  // repeat searches (and the auto-search on step entry) come back instantly.
+  const numberSearchCache = new Map<string, { at: number; payload: unknown }>();
+  const NUMBER_SEARCH_CACHE_MS = 10 * 60_000;
+
   // Search available numbers to buy (VoIP.ms), gated by a valid onboarding token.
   // Read-only lookup only — never orders/charges. Never exposes prices to the customer.
   app.get("/onboarding/:token/numbers", async (req, reply) => {
@@ -110,6 +115,10 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const q = String((req.query as any)?.q || "").trim();
     const creds = await loadGlobalVoipMsCreds();
     if (!creds) return { numbers: [], note: "number_provider_unconfigured" };
+
+    const cacheKey = q.replace(/\D/g, "") || q.toLowerCase();
+    const cached = numberSearchCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < NUMBER_SEARCH_CACHE_MS) return cached.payload;
 
     try {
       const testMode = (process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true";
@@ -132,7 +141,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
           voice: r.capabilities?.voice !== false,
         };
       });
-      return { numbers };
+      const payload = { numbers };
+      if (numbers.length) numberSearchCache.set(cacheKey, { at: Date.now(), payload });
+      return payload;
     } catch {
       return { numbers: [], error: "number_search_failed" };
     }

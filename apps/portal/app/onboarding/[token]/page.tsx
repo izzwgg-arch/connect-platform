@@ -215,8 +215,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     setNumbersLoading(true);
     setNumbersError(null);
     try {
+      // VoIP.ms availability search regularly takes 15-25s — far beyond the
+      // client's default 10s timeout, which made this look like "no numbers".
       const r = await apiGet<{ numbers?: AvailableNumber[] }>(
         `/onboarding/${encodeURIComponent(token)}/numbers?q=${encodeURIComponent(query)}`,
+        undefined,
+        { timeoutMs: 45_000 },
       );
       setNumbers(Array.isArray(r.numbers) ? r.numbers : []);
     } catch {
@@ -246,7 +250,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     setPortability("checking");
     const t = setTimeout(async () => {
       try {
-        const r = await apiGet<{ portable: boolean | null }>(`/onboarding/${encodeURIComponent(token)}/portability?number=${encodeURIComponent(digits)}`);
+        const r = await apiGet<{ portable: boolean | null }>(
+          `/onboarding/${encodeURIComponent(token)}/portability?number=${encodeURIComponent(digits)}`,
+          undefined,
+          { timeoutMs: 30_000 },
+        );
         if (!cancelled) setPortability(r.portable === true ? "portable" : "unknown");
       } catch {
         if (!cancelled) setPortability("unknown");
@@ -493,7 +501,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                     onKeyDown={(e) => e.key === "Enter" && searchNumbers(numbersQuery)} />
                   <button className="ob-btn-ghost" onClick={() => searchNumbers(numbersQuery)}>Search</button>
                 </div>
-                {numbersLoading && <div className="ob-field-hint">Finding available numbers…</div>}
+                {numbersLoading && <div className="ob-field-hint">Finding available numbers… this can take up to 30 seconds.</div>}
                 {numbersError && <div className="ob-field-hint">{numbersError}</div>}
                 {!numbersLoading && numbers.length > 0 && (
                   <>
