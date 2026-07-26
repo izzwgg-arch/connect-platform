@@ -1,0 +1,52 @@
+# Dev/debug sandbox — an opt-in SSH box for poking at the platform from inside
+# the Docker network. It is intentionally kept out of the app/sbc stacks and is
+# never started automatically. Bring it up only when you need it:
+#
+#   # 1. Point it at your SSH public key (or mount a file at /authorized_keys).
+#   export DEVBOX_AUTHORIZED_KEY="$(cat ~/.ssh/id_ed25519.pub)"
+#
+#   # 2. Start it.
+#   docker compose -f docker-compose.devbox.yml up -d --build
+#
+#   # 3. SSH in. Port 22 is published to the host on 127.0.0.1:2222 only, so
+#   #    this works from the host itself or over an SSH tunnel — never from an
+#   #    external interface.
+#   ssh -p 2222 devbox@127.0.0.1
+#
+#   # 4. Tear it down when you're done.
+#   docker compose -f docker-compose.devbox.yml down
+#
+# The container listens on port 22; the host binds 127.0.0.1:2222 -> 22 so it
+# never clashes with the host's own sshd on 22. Change DEVBOX_SSH_BIND if you
+# want a different host port (keep the 127.0.0.1: prefix to stay localhost-only).
+services:
+  devbox:
+    build:
+      context: ./infra/devbox
+    image: connect-devbox:latest
+    container_name: connect-devbox
+    restart: "no"
+    environment:
+      # A single SSH public key string. Alternatively, mount a keys file at
+      # /authorized_keys (see the commented volume below).
+      DEVBOX_AUTHORIZED_KEY: ${DEVBOX_AUTHORIZED_KEY:-}
+    ports:
+      # host -> container. Localhost-bound: reachable only from the host / a
+      # tunnel, never from the box's external IP.
+      - "${DEVBOX_SSH_BIND:-127.0.0.1:2222}:22"
+    # volumes:
+    #   # Mount an authorized_keys file instead of (or in addition to) the env var.
+    #   - ./infra/devbox/authorized_keys:/authorized_keys:ro
+    networks:
+      - devbox_net
+      # Uncomment to let the sandbox reach the running app services by name.
+      # Requires the app stack (which creates infra_default) to be up.
+      # - app_net
+
+networks:
+  devbox_net:
+    name: devbox_net
+    driver: bridge
+  # app_net:
+  #   external: true
+  #   name: infra_default
