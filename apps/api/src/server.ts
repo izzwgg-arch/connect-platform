@@ -23398,6 +23398,23 @@ async function resolveMohTenantId(raw: string | null | undefined): Promise<strin
   return raw;
 }
 
+/**
+ * Agent-door variant of resolveMohTenantId. The AI agent keys M1/M2 params by
+ * the VITAL tenant number (e.g. "21" — the modify executor's G8 binding
+ * contract), so plain digits resolve via the TenantPbxLink mirror to the
+ * Connect tenant cuid the MOH tables key on. Without this, ownership checks
+ * compared cuids against "21" (profile_not_found) and the deactivate upsert
+ * violated the Tenant FK (2026-07-26 live failure). Connect cuids and vpbx:
+ * scopes fall through unchanged.
+ */
+async function resolveAgentMohTenantId(raw: string | null | undefined): Promise<string | null> {
+  if (raw && /^\d+$/.test(raw)) {
+    const link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: raw, status: "LINKED" }, select: { tenantId: true } });
+    return link?.tenantId ?? null;
+  }
+  return resolveMohTenantId(raw);
+}
+
 /** Slug for AstDB family — same derivation as IVR. */
 async function getMohSlugForTenant(tenantId: string): Promise<string> {
   return getIvrSlugForTenant(tenantId);
@@ -24529,7 +24546,7 @@ app.post("/internal/agent/moh/override", async (req, reply) => {
   const parsed = AgentMohOverrideRequest.safeParse(req.body || {});
   if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
   const d = parsed.data;
-  const tid = await resolveMohTenantId(d.tenantId);
+  const tid = await resolveAgentMohTenantId(d.tenantId);
   if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
   const actor = `agent:${d.agentActionId}`;
 
