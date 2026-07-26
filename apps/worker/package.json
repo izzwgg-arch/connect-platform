@@ -19,7 +19,8 @@
     "@connect/integrations": "workspace:*",
     "bullmq": "^5.58.0",
     "ioredis": "^5.8.0",
-    "@connect/security": "workspace:*"
+    "@connect/security": "workspace:*",
+    "bcryptjs": "^2.4.3"
   },
   "devDependencies": {
     "tsx": "^4.20.5",

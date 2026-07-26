@@ -494,6 +494,9 @@ importers:
       '@connect/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      bcryptjs:
+        specifier: ^2.4.3
+        version: 2.4.3
       bullmq:
         specifier: ^5.58.0
         version: 5.70.1
