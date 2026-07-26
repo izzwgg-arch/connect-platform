@@ -6,6 +6,9 @@ import { db } from "@connect/db";
 import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
 import { publicSaveSchema, publicSubmitSchema } from "./validation";
+import { decryptJson } from "@connect/security";
+import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
+import { provisionOnboardingNumber } from "./voipMsProvisioning";
 
 function sanitizeFileName(name: string): string {
   const base = path.basename(name || "");
@@ -36,6 +39,19 @@ function resolveOnboardingStoragePath(storageKey: string): string {
 async function ensureRowForToken(token: string): Promise<any | null> {
   const row = await (db as any).onboardingSubmission.findFirst({ where: { publicToken: token } });
   return row || null;
+}
+
+/** Master (reseller) VoIP.ms account used to search & buy numbers during onboarding. */
+async function loadGlobalVoipMsCreds(): Promise<VoipMsCredentials | null> {
+  const row = await (db as any).globalVoipMsConfig.findUnique({ where: { id: "default" } });
+  if (!row?.credentialsEncrypted) return null;
+  try {
+    const c = decryptJson<any>(row.credentialsEncrypted);
+    if (!c?.username || !c?.password) return null;
+    return { username: c.username, password: c.password, fromNumber: c.fromNumber || "", apiBaseUrl: row.apiBaseUrl || c.apiBaseUrl };
+  } catch {
+    return null;
+  }
 }
 
 function isProduction(): boolean {
@@ -81,6 +97,76 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // Public config — card capture disabled for now
   app.get("/onboarding/:token/public-config", async (req, reply) => {
     return { canTokenize: false };
+  });
+
+  // Search available numbers to buy (VoIP.ms), gated by a valid onboarding token.
+  // Read-only lookup only — never orders/charges. Never exposes prices to the customer.
+  app.get("/onboarding/:token/numbers", async (req, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+
+    const q = String((req.query as any)?.q || "").trim();
+    const creds = await loadGlobalVoipMsCreds();
+    if (!creds) return { numbers: [], note: "number_provider_unconfigured" };
+
+    try {
+      const testMode = (process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true";
+      const provider = new VoipMsNumberProvider(creds, testMode);
+      const digits = q.replace(/\D/g, "");
+      const results = await provider.searchNumbers({
+        type: "local",
+        areaCode: digits || undefined,
+        contains: digits || undefined,
+        limit: 12,
+      });
+      const numbers = results.map((r) => {
+        const d = String(r.phoneNumber).replace(/\D/g, "").replace(/^1/, "");
+        const display = d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : r.phoneNumber;
+        return {
+          number: display,
+          e164: r.phoneNumber,
+          location: r.region || "",
+          sms: r.capabilities?.sms !== false,
+          voice: r.capabilities?.voice !== false,
+        };
+      });
+      return { numbers };
+    } catch {
+      return { numbers: [], error: "number_search_failed" };
+    }
+  });
+
+  // Check whether an existing number can be ported in (VoIP.ms getPortability).
+  // Read-only. Returns portable: true | false | null (unknown / not enough info).
+  app.get("/onboarding/:token/portability", async (req, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+
+    let number = String((req.query as any)?.number || "").replace(/\D/g, "");
+    if (number.length === 11 && number.startsWith("1")) number = number.slice(1);
+    if (number.length !== 10) return { portable: null, note: "need_full_number" };
+
+    const creds = await loadGlobalVoipMsCreds();
+    if (!creds) return { portable: null, note: "provider_unconfigured" };
+
+    try {
+      const base = (creds.apiBaseUrl || "https://voip.ms/api/v1/rest.php").replace(/\/$/, "");
+      const url = new URL(base);
+      url.searchParams.set("api_username", creds.username);
+      url.searchParams.set("api_password", creds.password);
+      url.searchParams.set("method", "getPortability");
+      url.searchParams.set("did", number);
+      const res = await fetch(url.toString(), { method: "GET" });
+      const json: any = await res.json().catch(() => ({}));
+      if (String(json.status || "").toLowerCase() !== "success") return { portable: null };
+      const flag = String(json.portable ?? json.portability ?? "").toLowerCase();
+      // Explicit "no" => not portable; anything else on a successful lookup => portable.
+      return { portable: flag ? !/no|false|^0$/.test(flag) : true };
+    } catch {
+      return { portable: null };
+    }
   });
 
   // Autosave current step + partial answers
@@ -144,6 +230,8 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.promises.writeFile(absolutePath, buffer);
 
+    const kindParam = String((req.query as any)?.kind || "bill").toLowerCase();
+    const fileKind = kindParam === "loa" ? "PORTING_LOA" : "PORTING_BILL";
     const saved = await (db as any).onboardingUploadedFile.create({
       data: {
         submissionId: row.id,
@@ -151,7 +239,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         mimeType: filePart.mimetype || null,
         sizeBytes: buffer.length,
         storageKey,
-        kind: "PORTING_BILL",
+        kind: fileKind,
       },
     });
 
@@ -221,6 +309,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         },
       });
     });
+
+    // Kick off VoIP.ms number provisioning in the background. This is gated:
+    // it only charges / files a port when VOIPMS_AUTO_PROVISION="on"; otherwise
+    // it's a dry run that just records what it would do on the submission timeline.
+    void provisionOnboardingNumber(row.id).catch(() => { /* logged inside */ });
 
     return { ok: true };
   });

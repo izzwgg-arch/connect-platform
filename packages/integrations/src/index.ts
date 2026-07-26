@@ -193,14 +193,68 @@ export class VoipMsNumberProvider implements NumberProvider {
   }
 
   async searchNumbers(input: NumberSearchInput): Promise<NumberSearchResult[]> {
+    const lim = Math.min(Math.max(input.limit || 20, 1), 50);
     if ((process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true" || this.testMode) {
-      return makeDeterministicNumbers("US", input.areaCode, Math.min(Math.max(input.limit || 20, 1), 50));
+      return makeDeterministicNumbers("US", input.areaCode, lim);
     }
 
-    const err: any = new Error("VoIP.ms number search not available yet");
-    err.code = "VOIPMS_NUMBER_SEARCH_UNAVAILABLE";
-    err.provider = "VOIPMS";
-    throw err;
+    // Real VoIP.ms lookup of available numbers to purchase.
+    //   local    -> searchDIDsUSA(type, query)   type: starts | contains | ends
+    //   tollfree -> searchTollFreeUSA(query)
+    const digits = String(input.areaCode || input.contains || "").replace(/\D/g, "");
+    const base = this.credentials.apiBaseUrl || VOIPMS_DEFAULT_BASE;
+    const url = new URL(base);
+    url.searchParams.set("api_username", this.credentials.username);
+    url.searchParams.set("api_password", this.credentials.password);
+    if (input.type === "tollfree") {
+      url.searchParams.set("method", "searchTollFreeUSA");
+      url.searchParams.set("type", digits ? "contains" : "starts");
+      url.searchParams.set("query", digits);
+    } else {
+      url.searchParams.set("method", "searchDIDsUSA");
+      url.searchParams.set("type", digits.length === 3 ? "starts" : "contains");
+      url.searchParams.set("query", digits);
+    }
+
+    let json: any = {};
+    try {
+      const res = await fetch(url.toString(), { method: "GET" });
+      json = await res.json().catch(() => ({}));
+    } catch (e: any) {
+      e.provider = "VOIPMS";
+      throw e;
+    }
+
+    const status = String(json.status || "").toLowerCase();
+    if (status !== "success") {
+      // No matches is a normal, empty result — not an error the customer should see.
+      if (/no_did|no_number|not_found|no_result/.test(status)) return [];
+      const err: any = new Error(`VoIP.ms number search failed: ${json.status || "unknown_error"}`);
+      err.provider = "VOIPMS";
+      err.code = json.status || "unknown_error";
+      throw err;
+    }
+
+    const rows: any[] = Array.isArray(json.dids) ? json.dids : Array.isArray(json.DIDs) ? json.DIDs : [];
+    const out: NumberSearchResult[] = [];
+    for (const r of rows) {
+      if (!r || typeof r !== "object") continue;                                 // skip null / non-object rows
+      let did = String(r.did ?? r.number ?? r.DID ?? "").replace(/\D/g, "");
+      if (did.length === 11 && did.startsWith("1")) did = did.slice(1);
+      if (did.length !== 10) continue;                                           // skip empty / malformed numbers
+      const region = [r.ratecenter ?? r.rate_center ?? "", r.state ?? r.province ?? ""].filter(Boolean).join(", ") || "US";
+      const smsField = r.sms;
+      const smsCapable = smsField === undefined ? true : (smsField === 1 || smsField === "1" || smsField === true);
+      out.push({
+        phoneNumber: `+1${did}`,
+        region,
+        capabilities: { sms: smsCapable, mms: false, voice: true },
+        monthlyCostCents: undefined,
+        providerMeta: { ratecenter: r.ratecenter ?? r.rate_center ?? null, state: r.state ?? r.province ?? null },
+      });
+      if (out.length >= lim) break;
+    }
+    return out;
   }
 
   async purchaseNumber(input: NumberPurchaseInput): Promise<NumberPurchaseResult> {
