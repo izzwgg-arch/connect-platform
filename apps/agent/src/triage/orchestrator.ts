@@ -94,6 +94,12 @@ export class TriageOrchestrator {
     // Modify-executor capabilities (pbx.M*) use the single-object contract keyed
     // by the PBX tenant id + extension, not the legacy {extension,target,...} shape.
     let params: Record<string, unknown>;
+    // M-series binding contract: the AgentAction row AND its params-hash are
+    // keyed by the VITAL tenant number (params.tenantId, e.g. "21") — the
+    // executor's G8 gate recomputes the hash from params.tenantId and requires
+    // action.tenantId to equal it. Creating the row with the Connect cuid
+    // breaks G8 with "Params-hash mismatch" (2026-07-26 live failure).
+    let actionTenantId = ctx.tenantId;
     if (capId === "pbx.M11") {
       const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
       const ext = intent.extensionHint ?? (await this.resolveExtension(ctx));
@@ -105,11 +111,12 @@ export class TriageOrchestrator {
         };
       }
       params = { tenantId: pbxTenantId, objectId: String(ext), feature: "DND", enable: intent.enableHint ?? "yes" };
+      actionTenantId = pbxTenantId;
     } else {
       params = { extension: intent.extensionHint, target: intent.targetHint, until: intent.untilHint, raw: intent.raw };
     }
     const action = await this.actions.create({
-      tenantId: ctx.tenantId,
+      tenantId: actionTenantId,
       capabilityId: capId,
       params,
       summary,
@@ -122,17 +129,22 @@ export class TriageOrchestrator {
     });
 
     const submitted = action.status === "EXECUTED";
+    const failed = action.status === "FAILED" || action.status === "DENIED";
     return {
       handled: true,
       actionId: action.id,
       reply: submitted
         ? `Done — ${summary}.`
-        : `Got it: ${summary}. I've submitted this for approval — I'll confirm here the moment it's live.`,
+        : failed
+          ? `Sorry — I tried to ${summary}, but it didn't go through. I've flagged it for our team to look at.`
+          : `Got it: ${summary}. I've submitted this for approval — I'll confirm here the moment it's live.`,
       yiddish:
         language === "yi"
           ? submitted
             ? `געטאָן — ${summary}.`
-            : `איך האָב עס איבערגעגעבן פֿאַר אַפּרואוו. איך וועל אײַך לאָזן וויסן ווען עס איז גרייט.`
+            : failed
+              ? `עס האָט זיך נישט אײַנגעגעבן — איך האָב עס איבערגעגעבן צו אונדזער טים.`
+              : `איך האָב עס איבערגעגעבן פֿאַר אַפּרואוו. איך וועל אײַך לאָזן וויסן ווען עס איז גרייט.`
           : undefined,
     };
   }
