@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Clock,
   Copy,
+  Download,
   MessageSquare,
   MoreHorizontal,
   Pause,
@@ -430,6 +431,7 @@ function VoicemailRow({
   onCall,
   onMessage,
   onCopy,
+  onDownload,
   onDelete,
   onMarkRead,
   onMarkUrgent,
@@ -444,6 +446,7 @@ function VoicemailRow({
   onCall: (number: string) => void;
   onMessage: (number: string) => void;
   onCopy: (number: string) => void;
+  onDownload: (vm: Voicemail) => void;
   onDelete: (id: string) => void;
   onMarkRead: (vm: Voicemail, listened: boolean) => void;
   onMarkUrgent: (vm: Voicemail, urgent: boolean) => void;
@@ -498,6 +501,9 @@ function VoicemailRow({
                 <button onClick={() => { onCopy(vm.callerId); setMenuOpen(false); }}>
                   <Copy size={14} /> Copy number
                 </button>
+                <button onClick={() => { onDownload(vm); setMenuOpen(false); }}>
+                  <Download size={14} /> Download audio
+                </button>
                 {canDelete ? (
                   <button className="danger" disabled={deleting} onClick={() => { onDelete(vm.id); setMenuOpen(false); }}>
                     <Trash2 size={14} /> Delete
@@ -527,6 +533,7 @@ function DetailPanel({
   onCall,
   onMessage,
   onCopy,
+  onDownload,
   onDelete,
   onMarkRead,
   onMarkUrgent,
@@ -545,6 +552,7 @@ function DetailPanel({
   onCall: (number: string) => void;
   onMessage: (number: string) => void;
   onCopy: (number: string) => void;
+  onDownload: (vm: Voicemail) => void;
   onDelete: (id: string) => void;
   onMarkRead: (vm: Voicemail, listened: boolean) => void;
   onMarkUrgent: (vm: Voicemail, urgent: boolean) => void;
@@ -721,6 +729,7 @@ function DetailPanel({
           <button onClick={() => onMarkRead(vm, !vm.listened)}><Check size={15} /> Mark {vm.listened ? "unread" : "read"}</button>
           <button onClick={() => onMarkUrgent(vm, vm.folder !== "urgent")}><Star size={15} /> {vm.folder === "urgent" ? "Remove urgent" : "Mark urgent"}</button>
           <button onClick={() => onCopy(vm.callerId)}><Copy size={15} /> Copy number</button>
+          <button onClick={() => onDownload(vm)}><Download size={15} /> Download</button>
           {canDelete ? (
             <button className="danger" disabled={deleting} onClick={() => onDelete(vm.id)}><Trash2 size={15} /> Delete</button>
           ) : null}
@@ -943,6 +952,19 @@ export default function VoicemailPage() {
     navigator.clipboard?.writeText(number);
   }
 
+  function handleDownload(vm: Voicemail) {
+    // Same auth pattern as the stream player: the JWT rides in ?token= because
+    // a plain navigation can't set headers. The server replies with
+    // Content-Disposition: attachment, so the browser saves instead of playing.
+    const url = `${mediaBaseUrl()}/voice/voicemail/${vm.id}/download?token=${encodeURIComponent(browserToken())}`;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
   function handleRowPlay(vm: Voicemail) {
     setSelected(vm);
     setActivePlayerId(vm.id);
@@ -1050,6 +1072,7 @@ export default function VoicemailPage() {
                         onCall={handleCall}
                         onMessage={handleMessage}
                         onCopy={handleCopy}
+                        onDownload={handleDownload}
                         onDelete={handleDelete}
                         onMarkRead={markRead}
                         onMarkUrgent={markUrgent}
@@ -1083,6 +1106,7 @@ export default function VoicemailPage() {
             onCall={handleCall}
             onMessage={handleMessage}
             onCopy={handleCopy}
+            onDownload={handleDownload}
             onDelete={handleDelete}
             onMarkRead={markRead}
             onMarkUrgent={markUrgent}
