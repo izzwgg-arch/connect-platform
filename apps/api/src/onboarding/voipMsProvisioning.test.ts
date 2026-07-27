@@ -122,6 +122,7 @@ function seedSubmission(over: Partial<any> = {}): string {
     voipmsSubaccountEncrypted: null,
     answers: { phone: { choice: "new", selectedNumber: "(845) 557-7726", details: {} } },
     uploadedFiles: [],
+    updatedAt: new Date(),
     ...over,
   });
   return id;
@@ -321,6 +322,17 @@ test("already provisioning (in flight): refuses to double-run", async () => {
   assert.equal(res.ok, false);
   assert.equal(res.detail, "already_running");
   assert.equal(vmsCalls.length, 0);
+});
+
+test("STALE provisioning (API died mid-run): resumes instead of blocking forever", async () => {
+  reset({ live: true });
+  const id = seedSubmission({
+    numberStatus: "provisioning",
+    updatedAt: new Date(Date.now() - 11 * 60_000), // beyond the 10-min stale window
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(state.submissions.get(id).numberStatus, "ready");
 });
 
 test("VoIP.ms rejection marks the stage failed with the provider's error", async () => {

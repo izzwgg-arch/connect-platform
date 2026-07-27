@@ -8,7 +8,7 @@ import { syncExtensionsFromPbx } from "../pbxExtensionSync";
 import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
 import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
 import { buildPbxTenant, slugify, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
-import { readSubaccount, applyOnboardingNumber } from "./voipMsProvisioning";
+import { readSubaccount, applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 
 /**
  * setupOrchestrator — everything that happens after the customer presses
@@ -307,8 +307,57 @@ export async function verifyAndRepairTenantExtensions(
 
 // ── Main entry ────────────────────────────────────────────────────────────────
 
+/**
+ * The number stage runs as its own background task (kicked when the customer
+ * leaves the "Your number" step). A fast customer can hit "Launch" while it is
+ * still buying the DID — in that case WAIT for it to finish instead of failing
+ * with number_stage_not_ready (live incident 2026-07-26: submit 6s after
+ * apply-number permanently killed the whole setup).
+ */
+async function waitForNumberStage(submissionId: string): Promise<any> {
+  const timeoutMs = Number(process.env.ONBOARDING_NUMBER_WAIT_MS || 5 * 60_000);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const cur = await (db as any).onboardingSubmission.findUnique({
+      where: { id: submissionId },
+      include: { requestedExtensions: true },
+    } as any);
+    if (!cur || cur.numberStatus !== "provisioning" || Date.now() >= deadline) return cur;
+    await sleep(retryBaseMs());
+  }
+}
+
+/**
+ * Called when the background number stage finishes: if the customer already
+ * submitted (and the setup either hasn't run or bailed waiting on the number),
+ * pick the pipeline back up. Together with waitForNumberStage this makes the
+ * apply-number ⇄ submit race impossible to lose: whichever side finishes last
+ * carries the setup forward.
+ */
+export async function resumeSetupIfSubmitted(submissionId: string): Promise<void> {
+  const row = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId } });
+  if (!row || row.status !== "SUBMITTED") return;
+  if (row.pbxSetupStatus === "done") return;
+  await syncOnboardingSms(submissionId).catch(() => { /* logged inside */ });
+  await runOnboardingSetup(submissionId);
+}
+
+// One run per submission per process: the submit chain and the apply-number
+// completion hook can both call runOnboardingSetup at nearly the same moment.
+const setupsInFlight = new Set<string>();
+
 export async function runOnboardingSetup(submissionId: string): Promise<void> {
-  const row = await (db as any).onboardingSubmission.findUnique({
+  if (setupsInFlight.has(submissionId)) return;
+  setupsInFlight.add(submissionId);
+  try {
+    await runOnboardingSetupInner(submissionId);
+  } finally {
+    setupsInFlight.delete(submissionId);
+  }
+}
+
+async function runOnboardingSetupInner(submissionId: string): Promise<void> {
+  let row = await (db as any).onboardingSubmission.findUnique({
     where: { id: submissionId },
     include: { requestedExtensions: true },
   } as any);
@@ -326,6 +375,13 @@ export async function runOnboardingSetup(submissionId: string): Promise<void> {
     const age = Date.now() - new Date(row.updatedAt || 0).getTime();
     if (age < staleMs) return;
     await logEvent(submissionId, `Setup was interrupted mid-run (stuck in "${row.pbxSetupStatus}" for ${Math.round(age / 60000)} min) — resuming.`);
+  }
+
+  if (row.numberStatus === "provisioning") {
+    await logEvent(submissionId, "Number stage still provisioning — waiting for it before building.");
+    const waited = await waitForNumberStage(submissionId);
+    if (!waited) return;
+    row = waited;
   }
 
   const company = String(row.companyName || "").trim();

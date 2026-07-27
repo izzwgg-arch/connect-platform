@@ -452,6 +452,90 @@ test("extension without an email: provisioned but simply not invited", async () 
   assert.equal(state.emailJobs.length, 1);
 });
 
+// ── The apply-number ⇄ submit race (live incident 2026-07-26) ─────────────────
+// The customer hit "Launch" 6 seconds after leaving the number step: the
+// number stage was still "provisioning", the orchestrator refused with
+// number_stage_not_ready, and nothing ever picked the setup back up.
+
+test("RACE: submit while the number stage is provisioning — setup WAITS, then completes", async () => {
+  reset();
+  wireHealthySync();
+  const id = seedSubmission({ numberStatus: "provisioning" });
+  // the background number task finishes shortly after submit
+  setTimeout(() => {
+    const row = state.submissions.get(id);
+    row.numberStatus = "ready";
+    row.updatedAt = new Date();
+  }, 40);
+  await orchestrator.runOnboardingSetup(id);
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done");
+  assert.equal(buildCalls.length, 1);
+  assert.match(events(), /waiting for it before building/i);
+});
+
+test("RACE: number stage finishes after submit failed — resumeSetupIfSubmitted carries it forward", async () => {
+  reset();
+  wireHealthySync();
+  const id = seedSubmission({
+    numberStatus: "ready",
+    pbxSetupStatus: "failed",
+    setupError: "number_stage_not_ready (already_running)",
+  });
+  await orchestrator.resumeSetupIfSubmitted(id);
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done");
+  assert.equal(row.setupError, null);
+  assert.equal(buildCalls.length, 1);
+});
+
+test("resumeSetupIfSubmitted is a no-op before submit and after done", async () => {
+  reset();
+  const notSubmitted = seedSubmission({ status: "ACTIVE" });
+  await orchestrator.resumeSetupIfSubmitted(notSubmitted);
+  assert.equal(buildCalls.length, 0);
+
+  const done = seedSubmission({ pbxSetupStatus: "done" });
+  await orchestrator.resumeSetupIfSubmitted(done);
+  assert.equal(buildCalls.length, 0);
+});
+
+test("RACE: concurrent kicks run the setup exactly once", async () => {
+  reset();
+  wireHealthySync();
+  const id = seedSubmission();
+  await Promise.all([
+    orchestrator.runOnboardingSetup(id),
+    orchestrator.runOnboardingSetup(id),
+    orchestrator.resumeSetupIfSubmitted(id),
+  ]);
+  assert.equal(state.submissions.get(id).pbxSetupStatus, "done");
+  assert.equal(buildCalls.length, 1);
+  assert.equal(state.emailJobs.length, 2, "invites must not be duplicated");
+});
+
+test("RACE: wait for number stage times out — fails, but a later resume kick succeeds", async () => {
+  reset();
+  wireHealthySync();
+  process.env.ONBOARDING_NUMBER_WAIT_MS = "30"; // stuck "provisioning" past the wait window
+  try {
+    const id = seedSubmission({ numberStatus: "provisioning" });
+    await orchestrator.runOnboardingSetup(id);
+    let row = state.submissions.get(id);
+    assert.equal(row.pbxSetupStatus, "failed");
+    assert.match(row.setupError, /number_stage_not_ready/);
+
+    // …the number task eventually finishes and fires the completion hook:
+    row.numberStatus = "ready";
+    row.updatedAt = new Date();
+    await orchestrator.resumeSetupIfSubmitted(id);
+    row = state.submissions.get(id);
+    assert.equal(row.pbxSetupStatus, "done");
+  } finally {
+    delete process.env.ONBOARDING_NUMBER_WAIT_MS;
+  }
+});
+
 // ── Failure paths ─────────────────────────────────────────────────────────────
 
 test("number stage failed + unretryable: setup fails with number_stage_not_ready", async () => {

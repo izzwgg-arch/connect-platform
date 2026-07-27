@@ -318,7 +318,14 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
   if (row.numberStatus === "ready") return { ok: true, live, detail: "already_ready" };
   // A previous DRY run doesn't count once the gate is on — redo it for real.
   if (row.numberStatus === "ready_dryrun" && !live) return { ok: true, live, detail: "already_ready" };
-  if (row.numberStatus === "provisioning") return { ok: false, live, detail: "already_running" };
+  if (row.numberStatus === "provisioning") {
+    // In flight (apply-number background task). But if the API died mid-run
+    // the row would stay "provisioning" forever — rows untouched beyond the
+    // stale window are resumed instead (every step below is idempotent).
+    const staleMs = Number(process.env.ONBOARDING_NUMBER_STALE_MS || 10 * 60_000);
+    const age = Date.now() - new Date(row.updatedAt || 0).getTime();
+    if (age < staleMs) return { ok: false, live, detail: "already_running" };
+  }
 
   await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { numberStatus: "provisioning" } });
 

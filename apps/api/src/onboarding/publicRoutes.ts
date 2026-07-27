@@ -9,7 +9,7 @@ import { publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from ".
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
-import { runOnboardingSetup } from "./setupOrchestrator";
+import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
 
 function sanitizeFileName(name: string): string {
   const base = path.basename(name || "");
@@ -296,7 +296,12 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       },
     });
 
-    void applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+    void (async () => {
+      await applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+      // If the customer raced ahead and already hit "Launch" while the number
+      // was provisioning, carry the setup pipeline forward now.
+      await resumeSetupIfSubmitted(row.id).catch(() => { /* logged inside */ });
+    })();
     return { ok: true, status: "provisioning" };
   });
 
