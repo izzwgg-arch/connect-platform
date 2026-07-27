@@ -210,7 +210,11 @@ export class TriageOrchestrator {
    */
   private async resumeMohClarification(intent: Extract<Intent, { kind: "chat" }>, ctx: TriageCtx): Promise<Extract<Intent, { kind: "action" }> | null> {
     let text = (intent.raw ?? "").trim();
-    if (!text || text.length > 120 || !ctx.conversationId) return null;
+    // 300 not 120: frustrated rephrasings run long ('I asked you to change it
+    // to "Main" for twenty minutes—not "Default" …', 170 chars, live
+    // 2026-07-27 — the old guard dropped it to the LLM, which then invented a
+    // confirmation). The profile/verb checks below still gate what resumes.
+    if (!text || text.length > 300 || !ctx.conversationId) return null;
     try {
       const thread = await this.collectMohClarifyThread(ctx);
       if (!thread) return null;
@@ -526,7 +530,32 @@ export class TriageOrchestrator {
       return { handled: true, reply: decision.message, yiddish: yiTeam };
     }
 
-    const deactivate = intent.enableHint === "no";
+    // A profile explicitly named as a TARGET ("to Main", 'to "Main"') beats the
+    // deactivate heuristic: 'change it to Main for 20 minutes and then have it
+    // switch back to Classic' contains "back" but is an ACTIVATE of Main (live
+    // failure 2026-07-27: it executed as a clear, twice). The EARLIEST "to
+    // <profile>" mention is the target; later ones ("back to Classic") describe
+    // the revert, which the M1/M2 snapshot restore handles automatically.
+    const profiles = await this.listMohProfiles(ctx.tenantId);
+    const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let targetProfile: { id: string; name: string } | null = null;
+    {
+      let bestIdx = Number.POSITIVE_INFINITY;
+      let bestLen = -1;
+      for (const p of profiles) {
+        const n = String(p.name ?? "").toLowerCase();
+        if (!n) continue;
+        const m = t.match(new RegExp(String.raw`\b(?:to|onto)\s+(?:the\s+)?["'“”]?` + escapeRe(n) + String.raw`\b`, "i"));
+        const idx = m?.index ?? -1;
+        if (idx >= 0 && (idx < bestIdx || (idx === bestIdx && n.length > bestLen))) {
+          bestIdx = idx;
+          bestLen = n.length;
+          targetProfile = p;
+        }
+      }
+    }
+
+    const deactivate = intent.enableHint === "no" && !targetProfile;
     const minutesFromTiming =
       timing.kind === "duration"
         ? timing.minutes
@@ -561,12 +590,14 @@ export class TriageOrchestrator {
       }
     } else {
       // Activate — resolve the profile from the tenant's OWN active profiles
-      // (ownership re-checked by scope fence + op snapshot + api door).
-      const profiles = await this.listMohProfiles(ctx.tenantId);
+      // (ownership re-checked by scope fence + op snapshot + api door). An
+      // explicit "to <profile>" target wins; otherwise longest name mentioned.
       const matches = profiles
         .filter((p) => p.name && t.includes(String(p.name).toLowerCase()))
         .sort((a, b) => String(b.name).length - String(a.name).length);
-      const chosen = matches.length === 1 || (matches.length > 1 && String(matches[0].name).length > String(matches[1].name).length) ? matches[0] : null;
+      const chosen =
+        targetProfile ??
+        (matches.length === 1 || (matches.length > 1 && String(matches[0].name).length > String(matches[1].name).length) ? matches[0] : null);
       if (!chosen) {
         const names = profiles.map((p) => p.name).filter(Boolean).join(", ");
         return {
@@ -592,8 +623,19 @@ export class TriageOrchestrator {
           };
           summary = `play "${chosen.name}" hold music ${timing.label}`;
         } else if (minutesFromTiming != null) {
-          params = { tenantId: pbxTenantId, objectId: pbxTenantId, action: "activate", profileId: chosen.id, reason: "chat request", expiresMinutes: minutesFromTiming };
-          summary = `switch the hold music to "${chosen.name}" ${timingPhrase}, then back to the regular schedule`;
+          // If another manual override is playing RIGHT NOW, the timer must
+          // restore IT (action revert = snapshot restore), not the schedule —
+          // "Main for 20 minutes then back to Classic" (live 2026-07-27).
+          const cur = await this.currentMohOverride(ctx.tenantId);
+          if (cur?.isActive && cur.profileId && cur.profileId !== chosen.id) {
+            const curName = profiles.find((p) => p.id === cur.profileId)?.name ?? null;
+            params = { tenantId: pbxTenantId, objectId: pbxTenantId, action: "activate", profileId: chosen.id, reason: "chat request (timed; revert restores previous override)" };
+            revertAfterMinutes = minutesFromTiming;
+            summary = `switch the hold music to "${chosen.name}" ${timingPhrase}, then back to ${curName ? `"${curName}"` : "the previous music"}`;
+          } else {
+            params = { tenantId: pbxTenantId, objectId: pbxTenantId, action: "activate", profileId: chosen.id, reason: "chat request", expiresMinutes: minutesFromTiming };
+            summary = `switch the hold music to "${chosen.name}" ${timingPhrase}, then back to the regular schedule`;
+          }
         } else {
           params = { tenantId: pbxTenantId, objectId: pbxTenantId, action: "activate", profileId: chosen.id, reason: "chat request" };
           summary = `switch the hold music to "${chosen.name}"`;

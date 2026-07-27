@@ -89,6 +89,22 @@ export function detectIntent(text: string): Intent {
     }
   }
 
+  // Loose MOH: a change-verb near "music" without the word "hold" ("change my
+  // music from classic to main" — real client phrasing 2026-07-27), or a
+  // status question mentioning music ("what music is playing right now?").
+  const looseMohChange = /\b(?:change|switch|set|put|play|update)\b[^.?!\n]{0,40}?\bmusic\b/i.test(t);
+  const looseMohStatus = MOH_STATUS_Q_RE.test(t) && /\bmusic\b/i.test(t);
+  if (looseMohChange || looseMohStatus) {
+    return {
+      kind: "action",
+      actionType: "moh",
+      extensionHint: text.match(EXT_RE)?.[1],
+      enableHint: MOH_DEACTIVATE_RE.test(t) ? "no" : "yes",
+      statusQuery: looseMohStatus,
+      raw: text,
+    };
+  }
+
   if (DIAG_TERMS.some((term) => t.includes(term))) {
     return { kind: "diagnostic", extensionHint: text.match(EXT_RE)?.[1], complaint: text };
   }

@@ -367,6 +367,93 @@ test("MOH longest-name match wins when names overlap", async () => {
   assert.equal(created[0].params.profileId, "p2");
 });
 
+// ── "to <profile> … and change it back" direction + timed restore-previous
+// (live failure 2026-07-27: executed as an M2 clear, twice) ──────────────────
+
+test("DIRECTION: 'change it to X for twenty minutes then switch back to Y' ACTIVATES X with a timer (live regression 2026-07-27)", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "USER",
+    ownExt: "101",
+    messages: [{ role: "assistant", content: PROFILE_Q, contentEn: null }],
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent('Change it to "Jazz" for twenty minutes, and then have it switch back to "Classical Calm."'), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created[0].capabilityId, "pbx.M2");
+  assert.equal(created[0].params.action, "set", "must be an activate, not a clear");
+  assert.equal(created[0].params.profileId, "prof-jazz", "the EARLIEST 'to <profile>' is the target");
+  assert.equal(created[0].revertAfterMinutes, 20, "'twenty' spelled out must still arm the timer");
+});
+
+test("DIRECTION: long frustrated rephrasing (>120 chars) still resumes instead of falling to the LLM", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "USER",
+    ownExt: "101",
+    messages: [{ role: "assistant", content: 'Done — set extension 101\'s hold music back to the company default.', contentEn: null }],
+  });
+  const orch = makeOrch(created, prisma);
+  const text = 'I asked you to change it to "Jazz" for twenty minutes—not "Default" and not "Classical Calm." Change it to "Jazz" for twenty minutes, and then after twenty minutes, it should change back to "Classical Calm."';
+  assert.ok(text.length > 120 && text.length <= 300);
+  const out = await orch.handle(detectIntent(text), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created[0].params.action, "set");
+  assert.equal(created[0].params.profileId, "prof-jazz");
+  assert.equal(created[0].revertAfterMinutes, 20);
+});
+
+test("DIRECTION: tenant-scope timed change over an ACTIVE override restores the override, not the schedule", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "TENANT_ADMIN",
+    ownExt: null,
+    override: { isActive: true, profileId: "prof-classical" },
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("change the whole company hold music to Jazz for 20 minutes and then change it back to Classical Calm"), CTX, "en");
+  assert.equal(created[0].capabilityId, "pbx.M1");
+  assert.equal(created[0].params.action, "activate");
+  assert.equal(created[0].params.profileId, "prof-jazz");
+  assert.equal(created[0].params.expiresMinutes, undefined, "must use action revert, not worker expiry");
+  assert.equal(created[0].revertAfterMinutes, 20);
+  assert.match(out.reply ?? "", /then back to "Classical Calm"/);
+});
+
+test("DIRECTION: tenant-scope timed change with NO active override keeps the worker-expiry path", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({ role: "TENANT_ADMIN", ownExt: null });
+  const orch = makeOrch(created, prisma);
+  await orch.handle(detectIntent("change the whole company hold music to Jazz for 20 minutes"), CTX, "en");
+  assert.equal(created[0].params.expiresMinutes, 20);
+  assert.equal(created[0].revertAfterMinutes, undefined);
+});
+
+test("DIRECTION: 'back to the regular schedule' still deactivates (no profile named)", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({ role: "TENANT_ADMIN", ownExt: null });
+  const orch = makeOrch(created, prisma);
+  await orch.handle(detectIntent("set the whole company hold music back to the regular schedule"), CTX, "en");
+  assert.equal(created[0].params.action, "deactivate");
+});
+
+test("DIRECTION: detectIntent catches 'change my music …' without the word 'hold'", () => {
+  const i = detectIntent("change my music from classical calm to jazz") as any;
+  assert.equal(i.kind, "action");
+  assert.equal(i.actionType, "moh");
+  const s = detectIntent("what music is playing right now?") as any;
+  assert.equal(s.actionType, "moh");
+  assert.equal(s.statusQuery, true);
+});
+
+test("DIRECTION: 'from X to Y' picks Y, not the longer name X", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({ role: "USER", ownExt: "101" });
+  const orch = makeOrch(created, prisma);
+  await orch.handle(detectIntent("switch my music from Classical Calm to Jazz"), CTX, "en");
+  assert.equal(created[0].params.profileId, "prof-jazz");
+});
+
 // ── MOH status question ("which one am I on right now?") — read-only, no action
 // (2026-07-26 live failure: the LLM claimed it cannot check the hold music) ───
 

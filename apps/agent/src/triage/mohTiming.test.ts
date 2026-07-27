@@ -21,6 +21,11 @@ test("duration: minutes and hours", () => {
   assert.equal((d2 as any).minutes, 120);
   assert.equal((parseMohTiming("switch it for an hour", TZ, NOW) as any).minutes, 60);
   assert.equal((parseMohTiming("for half an hour", TZ, NOW) as any).minutes, 30);
+  // spelled-out counts (live client phrasing 2026-07-27: "for twenty minutes")
+  assert.equal((parseMohTiming("change it to main for twenty minutes", TZ, NOW) as any).minutes, 20);
+  assert.equal((parseMohTiming("for twenty-five minutes", TZ, NOW) as any).minutes, 25);
+  assert.equal((parseMohTiming("in forty five mins", TZ, NOW) as any).minutes, 45);
+  assert.equal((parseMohTiming("for two hours", TZ, NOW) as any).minutes, 120);
   assert.equal((parseMohTiming("in the next 20 mins", TZ, NOW) as any).minutes, 20);
 });
 

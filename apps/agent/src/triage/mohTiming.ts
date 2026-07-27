@@ -133,8 +133,18 @@ function fmtClock(c: ClockTime): string {
   return `${h12}${c.mm ? `:${String(c.mm).padStart(2, "0")}` : ""} ${mer}`;
 }
 
+/** Spelled-out counts clients actually type ("for twenty minutes" — live 2026-07-27). */
+const WORD_NUMS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, ninety: 90,
+  "twenty-five": 25, "twenty five": 25, "forty-five": 45, "forty five": 45,
+};
+const WORD_NUM_ALT = Object.keys(WORD_NUMS).sort((a, b) => b.length - a.length).join("|");
+
 function durationToMinutes(numRaw: string, unit: string): number | null {
-  const n = numRaw === "a" || numRaw === "an" || numRaw === "one" ? 1 : numRaw === "half an" || numRaw === "half a" ? 0.5 : Number(numRaw);
+  const w = WORD_NUMS[numRaw.trim()];
+  const n =
+    w != null ? w : numRaw === "a" || numRaw === "an" ? 1 : numRaw === "half an" || numRaw === "half a" ? 0.5 : Number(numRaw);
   if (!Number.isFinite(n) || n <= 0) return null;
   const isHours = /^h/.test(unit);
   return Math.max(1, Math.round(isHours ? n * 60 : n));
@@ -242,7 +252,9 @@ export function parseMohTiming(text: string, tz: string, now: Date = new Date())
 
   // ── duration: "in 15 minutes" / "for 2 hours" / "for an hour" ──
   {
-    const m = t.match(/\b(?:in|for|after)\s+(?:the next\s+)?(\d+(?:\.\d+)?|an?|one|half an|half a)\s*(minutes?|mins?|min\b|hours?|hrs?|hr\b)\b/);
+    const m = t.match(
+      new RegExp(String.raw`\b(?:in|for|after)\s+(?:the next\s+)?(\d+(?:\.\d+)?|an?|half an|half a|${WORD_NUM_ALT})\s*(minutes?|mins?|min\b|hours?|hrs?|hr\b)\b`),
+    );
     if (m) {
       const minutes = durationToMinutes(m[1], m[2]);
       if (minutes != null) {
