@@ -23,15 +23,34 @@ export const M1_SCHEMA = z
     tenantId: nonEmpty,
     /** Single-object contract: the tenant's MOH slot IS the object. Must equal tenantId. */
     objectId: nonEmpty,
-    action: z.enum(["activate", "deactivate"]),
-    /** Required for activate; must belong to the tenant (checked 3×: scope fence, snapshot, api). */
+    /** schedule = create a one_time/weekly MohScheduleRule (worker plays + reverts it). */
+    action: z.enum(["activate", "deactivate", "schedule"]),
+    /** Required for activate/schedule; must belong to the tenant (checked 3×: scope fence, snapshot, api). */
     profileId: nonEmpty.optional(),
     reason: z.string().max(500).optional(),
     /** Optional expiry for temporary switches ("holiday music until Monday 9am"). */
     expiresHours: z.number().int().min(1).max(24 * 30).optional(),
+    /** Minute-level expiry ("change it back in 15 minutes"). Wins over expiresHours. */
+    expiresMinutes: z.number().int().min(1).max(60 * 24 * 30).optional(),
+    /** schedule, one_time window (UTC instants, ISO). */
+    startAt: z.string().datetime().optional(),
+    endAt: z.string().datetime().optional(),
+    /** schedule, weekly rule: 0=Sun…6=Sat + "HH:MM" local (tenant schedule tz). */
+    weekday: z.number().int().min(0).max(6).optional(),
+    startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   })
   .refine((v) => v.objectId === v.tenantId, { message: "objectId must equal tenantId (tenant MOH slot)" })
-  .refine((v) => v.action !== "activate" || !!v.profileId, { message: "profileId required for activate" });
+  .refine((v) => v.action !== "activate" || !!v.profileId, { message: "profileId required for activate" })
+  .refine(
+    (v) =>
+      v.action !== "schedule" ||
+      (!!v.profileId && ((!!v.startAt && !!v.endAt) !== (v.weekday != null && !!v.startTime && !!v.endTime))),
+    { message: "schedule requires profileId and EITHER startAt+endAt OR weekday+startTime+endTime" },
+  )
+  .refine((v) => !(v.startAt && v.endAt) || new Date(v.endAt).getTime() > new Date(v.startAt).getTime(), {
+    message: "endAt must be after startAt",
+  });
 
 export interface M1Snapshot {
   connectTenantId: string;
@@ -60,7 +79,7 @@ export function makeM1Op(deps: ModifyCatalogDeps): ModifyOp {
       const connectTenantId = await resolveConnectTenant(deps.prisma, params.tenantId);
       if (!connectTenantId) return null; // G9 refuses: unlinked tenant
       let targetClass: string | null = null;
-      if (params.action === "activate") {
+      if (params.action === "activate" || params.action === "schedule") {
         // Triple-checked ownership, layer 2 of 3 (scope fence did layer 1, api does layer 3).
         const profile = await deps.prisma.mohProfile.findFirst({
           where: { id: params.profileId, tenantId: connectTenantId, isActive: true },
@@ -81,7 +100,29 @@ export function makeM1Op(deps: ModifyCatalogDeps): ModifyOp {
     },
 
     async dispatch(_client: ModifyClientLike, params: Record<string, any>, ctx: ModifyOpCtx) {
-      const expiresAt = params.expiresHours ? new Date(Date.now() + params.expiresHours * 3600_000).toISOString() : undefined;
+      if (params.action === "schedule") {
+        if (ctx.simulate) {
+          return { simulated: true, action: "schedule", profileId: params.profileId ?? null, startAt: params.startAt ?? null, endAt: params.endAt ?? null, weekday: params.weekday ?? null };
+        }
+        const resp = await deps.mohApi.call({
+          tenantId: String(params.tenantId),
+          action: "schedule_add",
+          profileId: params.profileId,
+          startAt: params.startAt,
+          endAt: params.endAt,
+          weekday: params.weekday,
+          startTime: params.startTime,
+          endTime: params.endTime,
+          reason: params.reason ?? "agent M1 scheduled MOH window",
+          agentActionId: ctx.actionId ?? "unknown",
+        });
+        return { action: "schedule", profileId: params.profileId ?? null, rule: resp.rule ?? null, publish: resp.publishResult ?? null, publishError: resp.publishError ?? null };
+      }
+      const expiresAt = params.expiresMinutes
+        ? new Date(Date.now() + params.expiresMinutes * 60_000).toISOString()
+        : params.expiresHours
+          ? new Date(Date.now() + params.expiresHours * 3600_000).toISOString()
+          : undefined;
       if (ctx.simulate) {
         // Certification surface: NO network contact, deterministic result.
         return { simulated: true, action: params.action, profileId: params.profileId ?? null, expiresAt: expiresAt ?? null };
@@ -99,6 +140,29 @@ export function makeM1Op(deps: ModifyCatalogDeps): ModifyOp {
 
     async verify(_client: ModifyClientLike, params: Record<string, any>, written: any, ctx: ModifyOpCtx) {
       if (ctx.simulate) return { ok: true, observed: { simulated: true } };
+
+      // schedule: verify the rule row landed (a future window publishes nothing
+      // now — the worker reconcile plays it at start time; an immediate-publish
+      // failure inside an already-active window is also worker-reconciled ≤60s).
+      if (params.action === "schedule") {
+        const connectTid = await resolveConnectTenant(deps.prisma, params.tenantId);
+        if (!connectTid) return { ok: false, detail: "tenant link vanished during execution" };
+        const cfg = await deps.prisma.mohScheduleConfig.findUnique({ where: { tenantId: connectTid } });
+        if (!cfg) return { ok: false, detail: "schedule config missing after schedule_add" };
+        const rule = await deps.prisma.mohScheduleRule.findFirst({
+          where: {
+            scheduleId: cfg.id,
+            profileId: params.profileId,
+            isActive: true,
+            ...(params.startAt
+              ? { ruleType: "one_time", startAt: new Date(params.startAt), endAt: new Date(params.endAt) }
+              : { ruleType: "weekly", weekday: params.weekday, startTime: params.startTime, endTime: params.endTime }),
+          },
+        });
+        if (!rule) return { ok: false, detail: "scheduled rule not found after schedule_add" };
+        return { ok: true, observed: { ruleId: rule.id, ruleType: rule.ruleType } };
+      }
+
       if (written?.publishError) return { ok: false, detail: `publish failed: ${written.publishError}` };
       const connectTenantId = await resolveConnectTenant(deps.prisma, params.tenantId);
       if (!connectTenantId) return { ok: false, detail: "tenant link vanished during execution" };
@@ -137,6 +201,22 @@ export function makeM1Op(deps: ModifyCatalogDeps): ModifyOp {
     },
 
     async revert(_client: ModifyClientLike, params: Record<string, any>, snapshotState: any, ctx: ModifyOpCtx) {
+      // schedule revert = remove the rule we created (match on our exact shape).
+      if (params.action === "schedule") {
+        if (ctx.simulate) return { removed: true };
+        return deps.mohApi.call({
+          tenantId: String(params.tenantId),
+          action: "schedule_remove",
+          profileId: params.profileId,
+          startAt: params.startAt,
+          endAt: params.endAt,
+          weekday: params.weekday,
+          startTime: params.startTime,
+          endTime: params.endTime,
+          reason: "agent M1 revert (remove scheduled rule)",
+          agentActionId: ctx.actionId ?? "revert",
+        });
+      }
       const prev = (snapshotState as M1Snapshot)?.override;
       if (ctx.simulate) return { restored: prev ?? { isActive: false } };
       if (prev?.isActive && prev.profileId) {

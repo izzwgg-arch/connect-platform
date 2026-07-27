@@ -54,16 +54,17 @@ export function dndAutoApproveMandate(capabilityId: string, params: Record<strin
 }
 
 /**
- * OWNER MANDATE (Izzy, 2026-07-26 #2): switching a tenant's hold music (M1,
- * activate or deactivate) executes immediately when the tenant asks — same
- * contract as the DND mandate: params-hash binding, scope fence (own tenant +
- * own MOH profiles only), live-tenant allow-list, rate budget,
- * snapshot/verify/auto-revert, audit, and result email all still apply.
- * Kill switch: AGENT_MOH_AUTO_APPROVE=0.
+ * OWNER MANDATE (Izzy, 2026-07-26 #2, extended #3): hold-music changes execute
+ * immediately when the tenant asks — tenant-wide (M1: switch/deactivate/timed
+ * expiry/scheduled windows) AND per-extension (M2: set/clear). Same contract
+ * as the DND mandate: params-hash binding, scope fence (own tenant + own MOH
+ * profiles only), live-tenant allow-list, rate budget, snapshot/verify/
+ * auto-revert, audit, and result email all still apply.
+ * Kill switch: AGENT_MOH_AUTO_APPROVE=0 (covers both M1 and M2).
  */
 export function mohAutoApproveMandate(capabilityId: string): boolean {
   if (process.env.AGENT_MOH_AUTO_APPROVE === "0") return false;
-  return capabilityId === "pbx.M1";
+  return capabilityId === "pbx.M1" || capabilityId === "pbx.M2";
 }
 
 /** Owner-mandate label for a capability/params combo, or null when none applies. */
@@ -83,6 +84,8 @@ export interface CreateActionInput {
   conversationId?: string;
   /** hours until auto-revert (temporary actions); omitted = permanent */
   revertAfterHours?: number;
+  /** minute-level auto-revert (e.g. extension MOH "for 15 minutes"); wins over hours */
+  revertAfterMinutes?: number;
   /** owner-mode auto-approval */
   autoApprove?: boolean;
   riskTier?: string;
@@ -109,7 +112,12 @@ export class ActionService {
   }
 
   async create(input: CreateActionInput): Promise<any> {
-    const revertAt = input.revertAfterHours ? new Date(Date.now() + input.revertAfterHours * 3600 * 1000) : null;
+    const revertMs = input.revertAfterMinutes
+      ? input.revertAfterMinutes * 60_000
+      : input.revertAfterHours
+        ? input.revertAfterHours * 3600_000
+        : null;
+    const revertAt = revertMs ? new Date(Date.now() + revertMs) : null;
 
     // X1: modify/repair capabilities are params-hash-bound, capped, and not
     // auto-approved — every live write goes through Izzy's explicit approval.

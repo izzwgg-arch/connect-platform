@@ -20,20 +20,46 @@ export const AgentMohOverrideRequest = z
     /** Connect tenant id or vital tenant id — resolved server-side (resolveMohTenantId). */
     tenantId: z.string().min(1),
     /** M1: read/activate/deactivate operate on the TENANT default.
-     *  M2: ext_set/ext_clear operate on ONE extension's override. */
-    action: z.enum(["read", "activate", "deactivate", "ext_set", "ext_clear"]),
+     *  M2: ext_set/ext_clear operate on ONE extension's override.
+     *  schedule_add/schedule_remove: one_time or weekly MohScheduleRule rows —
+     *  the worker's 60s reconcile cycle plays and reverts them automatically. */
+    action: z.enum(["read", "activate", "deactivate", "ext_set", "ext_clear", "schedule_add", "schedule_remove"]),
     profileId: z.string().min(1).optional(),
     /** Required for ext_set/ext_clear (M2). */
     extension: z.string().min(1).max(64).optional(),
     reason: z.string().max(500).optional(),
     /** ISO datetime; null clears. Only meaningful for activate. */
     expiresAt: z.string().datetime().nullable().optional(),
+    /** schedule_add/remove, one_time window (UTC instants). */
+    startAt: z.string().datetime().optional(),
+    endAt: z.string().datetime().optional(),
+    /** schedule_add/remove, weekly rule: 0=Sun…6=Sat + "HH:MM" local times. */
+    weekday: z.number().int().min(0).max(6).optional(),
+    startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
     /** The AgentAction driving this change — REQUIRED for attribution. */
     agentActionId: z.string().min(1),
   })
   .refine((v) => v.action !== "activate" || !!v.profileId, { message: "profileId required for activate" })
   .refine((v) => v.action !== "ext_set" || (!!v.profileId && !!v.extension), { message: "profileId and extension required for ext_set" })
-  .refine((v) => v.action !== "ext_clear" || !!v.extension, { message: "extension required for ext_clear" });
+  .refine((v) => v.action !== "ext_clear" || !!v.extension, { message: "extension required for ext_clear" })
+  .refine(
+    (v) =>
+      (v.action !== "schedule_add" && v.action !== "schedule_remove") ||
+      (!!v.profileId && (isOneTimeScheduleShape(v) !== isWeeklyScheduleShape(v))),
+    { message: "schedule_add/remove requires profileId and EITHER startAt+endAt (one_time) OR weekday+startTime+endTime (weekly)" },
+  )
+  .refine((v) => !isOneTimeScheduleShape(v) || new Date(v.endAt!).getTime() > new Date(v.startAt!).getTime(), {
+    message: "endAt must be after startAt",
+  });
+
+export function isOneTimeScheduleShape(v: { startAt?: string; endAt?: string }): boolean {
+  return !!v.startAt && !!v.endAt;
+}
+
+export function isWeeklyScheduleShape(v: { weekday?: number; startTime?: string; endTime?: string }): boolean {
+  return v.weekday != null && !!v.startTime && !!v.endTime;
+}
 
 export type AgentMohOverrideRequest = z.infer<typeof AgentMohOverrideRequest>;
 

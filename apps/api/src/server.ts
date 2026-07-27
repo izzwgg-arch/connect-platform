@@ -24601,6 +24601,81 @@ app.post("/internal/agent/moh/override", async (req, reply) => {
     return reply.send({ ok: true, extensionOverride: shapeExtensionOverride(extOverride), publishResult, publishError });
   }
 
+  // ── Scheduled windows (agent M1 "schedule"): one_time / weekly rule rows on
+  // the tenant's own MohScheduleConfig. The worker's 60s reconcile cycle plays
+  // the profile inside the window and reverts after it — no agent involvement
+  // at fire time, so schedules survive agent restarts.
+  if (d.action === "schedule_add" || d.action === "schedule_remove") {
+    const { isOneTimeScheduleShape } = await import("./agentMohOverride");
+    const profile = await (db as any).mohProfile.findUnique({ where: { id: d.profileId } });
+    if (!profile || profile.tenantId !== tid) return reply.code(404).send({ error: "profile_not_found" });
+    const oneTime = isOneTimeScheduleShape(d);
+    const windowActiveNow = oneTime && new Date(d.startAt!) <= new Date() && new Date(d.endAt!) > new Date();
+
+    let cfg = await (db as any).mohScheduleConfig.findUnique({ where: { tenantId: tid } });
+    if (d.action === "schedule_add") {
+      if (!profile.isActive) return reply.code(409).send({ error: "profile_inactive" });
+      try {
+        await assertMohRuntimeReadiness(tid, profile.vitalPbxMohClassName);
+      } catch (err: any) {
+        return reply.code(err?.statusCode ?? 400).send({ error: err?.message ?? "invalid_moh_runtime_class", detail: err?.detail });
+      }
+      if (cfg && !cfg.isActive) {
+        // A deliberately disabled schedule must not be silently re-enabled.
+        return reply.code(409).send({ error: "schedule_disabled", detail: "This tenant's hold-music schedule is switched off — enable it in the portal before adding scheduled rules." });
+      }
+      if (!cfg) {
+        // A tenant without a schedule shell gets an empty one (no default/after-
+        // hours profile ⇒ the worker computes "none" outside rule windows and
+        // publishes nothing — existing behavior is untouched).
+        cfg = await (db as any).mohScheduleConfig.create({ data: { tenantId: tid, timezone: "America/New_York", isActive: true } });
+      }
+      const rule = await (db as any).mohScheduleRule.create({
+        data: {
+          scheduleId: cfg.id, profileId: d.profileId, ruleType: oneTime ? "one_time" : "weekly",
+          weekday: oneTime ? null : d.weekday, startTime: oneTime ? null : d.startTime, endTime: oneTime ? null : d.endTime,
+          startAt: oneTime ? new Date(d.startAt!) : null, endAt: oneTime ? new Date(d.endAt!) : null,
+          priority: 50, isActive: true,
+        },
+      });
+      let publishResult: { recordId: string; mohClass: string; mode: string } | null = null;
+      let publishError: string | null = null;
+      if (windowActiveNow) {
+        try {
+          const r = await doMohPublish(tid, actor, "agent_schedule");
+          publishResult = { recordId: r.recordId, mohClass: r.profile.vitalPbxMohClassName, mode: r.mode };
+        } catch (pubErr: any) {
+          publishError = pubErr?.message ?? "publish failed";
+        }
+      }
+      app.log.info({ tenantId: tid, actor, ruleId: rule.id, ruleType: rule.ruleType, windowActiveNow }, "agent moh schedule: rule added");
+      return reply.send({ ok: true, rule, publishResult, publishError });
+    }
+
+    // schedule_remove — deactivate the matching agent-shaped rule(s).
+    if (!cfg) return reply.send({ ok: true, removed: 0 });
+    const removed = await (db as any).mohScheduleRule.updateMany({
+      where: {
+        scheduleId: cfg.id, profileId: d.profileId, isActive: true,
+        ...(oneTime
+          ? { ruleType: "one_time", startAt: new Date(d.startAt!), endAt: new Date(d.endAt!) }
+          : { ruleType: "weekly", weekday: d.weekday ?? null, startTime: d.startTime ?? null, endTime: d.endTime ?? null }),
+      },
+      data: { isActive: false },
+    });
+    let publishError: string | null = null;
+    if (removed.count > 0) {
+      // Republish so a window that was live right now stops immediately.
+      try {
+        await doMohPublish(tid, actor, "agent_schedule");
+      } catch (pubErr: any) {
+        publishError = pubErr?.message ?? "publish failed";
+      }
+    }
+    app.log.info({ tenantId: tid, actor, removed: removed.count }, "agent moh schedule: rule(s) removed");
+    return reply.send({ ok: true, removed: removed.count, publishError });
+  }
+
   if (d.action === "activate") {
     // Ownership is enforced HERE as well as in the agent's scope fence
     // (belt-and-suspenders): the profile must belong to this tenant.

@@ -36,8 +36,9 @@ const DND_DISABLE_RE = /\boff\b|\bdisable|\bremove\b|\bcancel|\bstop\b|\bdeactiv
 
 // MOH direction: "activate a profile" unless the message clearly asks to go
 // back to the regular schedule ("turn off the holiday hold music", "back to
-// the normal hold music", "cancel the hold music override").
-const MOH_DEACTIVATE_RE = /\boff\b|\bdisable|\bremove\b|\bcancel|\bdeactivat|\bback to (?:the )?(?:schedule|normal|default|regular)\b|\bregular\b|\bnormal\b/i;
+// the normal hold music", "change it back in 15 minutes", "revert").
+export const MOH_DEACTIVATE_RE =
+  /\boff\b|\bdisable|\bremove\b|\bcancel|\bdeactivat|\brevert\b|\bback to (?:the )?(?:schedule|normal|default|regular)\b|\bregular\b|\bnormal\b|\b(?:change|switch|put|set)\s+(?:it\s+|everything\s+|the\s+(?:hold\s+)?music\s+)?back\b/i;
 
 export function detectIntent(text: string): Intent {
   const t = text.toLowerCase();

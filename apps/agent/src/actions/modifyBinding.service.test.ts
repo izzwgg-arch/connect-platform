@@ -71,12 +71,13 @@ function svc() {
 
 const P = { tenantId: "21", objectId: "moh1", classId: "jazz" };
 
-// pbx.M2 is the exemplar BOUND, NON-MANDATED capability for the generic-flow
-// tests below (pbx.M1 auto-executes under the 2026-07-26 MOH owner mandate).
-test("AUTO-APPROVE DISABLED: owner-requested pbx.M2 still goes to PENDING_APPROVAL", async () => {
-  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M2", params: P, summary: "ext MOH switch", requestedBy: "izzy", requestedRole: "owner", autoApprove: true });
+// pbx.M4 is the exemplar BOUND, NON-MANDATED capability for the generic-flow
+// tests below (pbx.M1 AND pbx.M4 auto-execute under the 2026-07-26 MOH owner
+// mandates, so neither can play the "normal approval flow" role anymore).
+test("AUTO-APPROVE DISABLED: owner-requested pbx.M4 still goes to PENDING_APPROVAL", async () => {
+  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "ext MOH switch", requestedBy: "izzy", requestedRole: "owner", autoApprove: true });
   assert.equal(a.status, "PENDING_APPROVAL");
-  assert.equal(a.paramsHash, computeParamsHash("pbx.M2", "21", P));
+  assert.equal(a.paramsHash, computeParamsHash("pbx.M4", "21", P));
   assert.ok((notifierStub as any).sent.some((m: any) => m.kind === "approval_request"));
   assert.equal(modifyBackend.calls.length, 0);
 });
@@ -138,6 +139,37 @@ test("OWNER MANDATE kill switch: AGENT_MOH_AUTO_APPROVE=0 restores the M1 approv
   }
 });
 
+const M2_PARAMS = { tenantId: "21", objectId: "102", action: "set", profileId: "prof1", reason: "chat request" };
+
+test("OWNER MANDATE: extension MOH (pbx.M2) executes without approval, binding intact", async () => {
+  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M2", params: M2_PARAMS, summary: "switch ext 102 hold music", requestedBy: "u1", requestedRole: "customer" });
+  assert.equal(a.status, "EXECUTED");
+  assert.equal(modifyBackend.calls.length, 1);
+  assert.equal(a.paramsHash, computeParamsHash("pbx.M2", "21", M2_PARAMS));
+  assert.ok(a.approvalConsumedAt);
+  assert.equal(a.approvedBy, "owner-mandate:moh-2026-07-26");
+  assert.ok(!(notifierStub as any).sent.some((m: any) => m.kind === "approval_request"));
+});
+
+test("OWNER MANDATE kill switch: AGENT_MOH_AUTO_APPROVE=0 also restores the M2 approval flow", async () => {
+  process.env.AGENT_MOH_AUTO_APPROVE = "0";
+  try {
+    const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M2", params: M2_PARAMS, summary: "switch ext hold music", requestedBy: "u1", requestedRole: "customer" });
+    assert.equal(a.status, "PENDING_APPROVAL");
+    assert.equal(modifyBackend.calls.length, 0);
+  } finally {
+    delete process.env.AGENT_MOH_AUTO_APPROVE;
+  }
+});
+
+test("REVERT TIMER: revertAfterMinutes sets a minute-level revertAt", async () => {
+  const before = Date.now();
+  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M2", params: M2_PARAMS, summary: "timed ext MOH", requestedBy: "u1", requestedRole: "customer", revertAfterMinutes: 15 });
+  assert.ok(a.revertAt, "revertAt must be set");
+  const delta = new Date(a.revertAt).getTime() - before;
+  assert.ok(delta >= 14 * 60_000 && delta <= 16 * 60_000, `revertAt ~15min out (got ${Math.round(delta / 1000)}s)`);
+});
+
 test("legacy P-series capability keeps auto-approve (no regression)", async () => {
   const a = await svc().create({ tenantId: "21", capabilityId: "pbx.P1", params: { name: "T" }, summary: "t", requestedBy: "izzy", requestedRole: "owner", autoApprove: true });
   assert.equal(a.status, "EXECUTED");
@@ -148,19 +180,19 @@ test("legacy P-series capability keeps auto-approve (no regression)", async () =
 test("PENDING CAP: 4th concurrent modify request for a tenant is denied", async () => {
   const s = svc();
   for (let i = 0; i < 3; i++) {
-    await s.create({ tenantId: "21", capabilityId: "pbx.M2", params: { ...P, classId: `c${i}` }, summary: `m${i}`, requestedBy: "u", requestedRole: "customer" });
+    await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: { ...P, classId: `c${i}` }, summary: `m${i}`, requestedBy: "u", requestedRole: "customer" });
   }
-  const fourth = await s.create({ tenantId: "21", capabilityId: "pbx.M2", params: { ...P, classId: "c3" }, summary: "m3", requestedBy: "u", requestedRole: "customer" });
+  const fourth = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: { ...P, classId: "c3" }, summary: "m3", requestedBy: "u", requestedRole: "customer" });
   assert.equal(fourth.status, "DENIED");
   assert.match(fourth.deniedReason, /modify_pending_cap/);
   // other tenants unaffected
-  const other = await s.create({ tenantId: "8", capabilityId: "pbx.M2", params: { ...P, tenantId: "8" }, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const other = await s.create({ tenantId: "8", capabilityId: "pbx.M4", params: { ...P, tenantId: "8" }, summary: "m", requestedBy: "u", requestedRole: "customer" });
   assert.equal(other.status, "PENDING_APPROVAL");
 });
 
-test("ROUTING: pbx.M2 goes to the modify backend, pbx.P1 to the legacy backend", async () => {
+test("ROUTING: pbx.M4 goes to the modify backend, pbx.P1 to the legacy backend", async () => {
   const s = svc();
-  const m = await s.create({ tenantId: "21", capabilityId: "pbx.M2", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const m = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
   await s.approve(m.id, "owner:izzy");
   assert.equal(modifyBackend.calls.length, 1);
   assert.equal(pbxBackend.calls.length, 0);
@@ -171,7 +203,7 @@ test("ROUTING: pbx.M2 goes to the modify backend, pbx.P1 to the legacy backend",
 
 test("SINGLE-USE: approving a bound action consumes it; second execute attempt is blocked", async () => {
   const s = svc();
-  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M2", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
   const done = await s.approve(a.id, "owner:izzy");
   assert.equal(done.status, "EXECUTED");
   assert.ok(prisma.rows[0].approvalConsumedAt);
@@ -183,7 +215,7 @@ test("SINGLE-USE: approving a bound action consumes it; second execute attempt i
 
 test("EMAIL REDEMPTION: bound action requires a bound token with the matching hash", async () => {
   const s = svc();
-  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M2", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
 
   // legacy unbound token for the same action id → rejected
   const legacy = makeApprovalToken(a.id, "approve");
@@ -192,7 +224,7 @@ test("EMAIL REDEMPTION: bound action requires a bound token with the matching ha
   assert.equal(r1.error, "bound_token_required");
 
   // bound token with a DIFFERENT hash (approval for another change) → rejected
-  const wrongHash = computeParamsHash("pbx.M2", "21", { ...P, classId: "other" });
+  const wrongHash = computeParamsHash("pbx.M4", "21", { ...P, classId: "other" });
   const r2 = await s.redeemEmailDecision(makeBoundApprovalToken(a.id, "approve", wrongHash));
   assert.equal(r2.ok, false);
   assert.equal(r2.error, "token_binding_mismatch");
@@ -214,7 +246,7 @@ test("EMAIL REDEMPTION: legacy actions still redeem with legacy tokens (no regre
 
 test("approval email for bound actions carries a BOUND token", async () => {
   const s = svc();
-  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M2", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
   const mail = (notifierStub as any).sent.find((m: any) => m.kind === "approval_request");
   const tok = /token=([^\s&]+)/.exec(mail.text)?.[1];
   assert.ok(tok);

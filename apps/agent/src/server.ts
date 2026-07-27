@@ -322,10 +322,14 @@ async function main() {
     });
 
     // DB-backed scheduler ticks (survive restarts): close stale chats + expire/
-    // auto-revert actions every 5 minutes.
+    // auto-revert actions. Every 60s so minute-level revert timers ("switch my
+    // extension's hold music back in 15 minutes") fire close to on-time; the
+    // tick is two cheap indexed queries when nothing is due.
+    setInterval(() => {
+      actionService?.tick().catch((err) => app.log.error({ err }, "action tick failed"));
+    }, 60 * 1000).unref();
     setInterval(() => {
       engine?.autoCloseStale().catch((err) => app.log.error({ err }, "autoCloseStale failed"));
-      actionService?.tick().catch((err) => app.log.error({ err }, "action tick failed"));
       dossiers.sweep().catch((err) => app.log.error({ err }, "dossier sweep failed"));
     }, 5 * 60 * 1000).unref();
 

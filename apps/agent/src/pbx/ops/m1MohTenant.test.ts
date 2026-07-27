@@ -55,6 +55,22 @@ class FakePrisma {
     findFirst: async ({ where }: any) => this.publishes.filter((p) => p.tenantId === where.tenantId).sort((a, b) => b.publishedAt - a.publishedAt)[0] ?? null,
   };
   agentAction = { findUnique: async ({ where }: any) => this.actions.find((r) => r.id === where.id) ?? null };
+  scheduleRules: any[] = [];
+  mohScheduleConfig = {
+    findUnique: async ({ where }: any) => (where.tenantId === "ct1" ? { id: "cfg1", tenantId: "ct1", isActive: true, timezone: "America/New_York" } : null),
+  };
+  mohScheduleRule = {
+    findFirst: async ({ where }: any) =>
+      this.scheduleRules.find(
+        (r) =>
+          r.scheduleId === where.scheduleId &&
+          r.profileId === where.profileId &&
+          r.isActive === where.isActive &&
+          (where.ruleType === undefined || r.ruleType === where.ruleType) &&
+          (where.startAt === undefined || +r.startAt === +where.startAt) &&
+          (where.weekday === undefined || r.weekday === where.weekday),
+      ) ?? null,
+  };
   agentPbxSnapshot = {
     create: async ({ data }: any) => {
       const row = { id: `snap${++this.seq}`, capturedAt: new Date(), restoredAt: null, ...data };
@@ -79,6 +95,26 @@ class SpyMohApi {
       this.prisma.overrides.set(ct, { isActive: true, profileId: body.profileId, expiresAt: body.expiresAt ?? null });
     } else if (body.action === "deactivate") {
       this.prisma.overrides.set(ct, { isActive: false, profileId: null, expiresAt: null });
+    }
+    if (body.action === "schedule_add") {
+      const rule = {
+        id: `rule${this.prisma.scheduleRules.length + 1}`, scheduleId: "cfg1", profileId: body.profileId,
+        ruleType: body.startAt ? "one_time" : "weekly",
+        startAt: body.startAt ? new Date(body.startAt as string) : null, endAt: body.endAt ? new Date(body.endAt as string) : null,
+        weekday: body.weekday ?? null, startTime: body.startTime ?? null, endTime: body.endTime ?? null, isActive: true,
+      };
+      this.prisma.scheduleRules.push(rule);
+      return { ok: true, rule, publishResult: null, publishError: null };
+    }
+    if (body.action === "schedule_remove") {
+      let removed = 0;
+      for (const r of this.prisma.scheduleRules) {
+        if (r.profileId === body.profileId && r.isActive) {
+          r.isActive = false;
+          removed++;
+        }
+      }
+      return { ok: true, removed };
     }
     const cls = body.profileId === "p3" ? "moh3" : "moh8";
     this.prisma.publishes.push({
@@ -133,6 +169,62 @@ test("schema: objectId must equal tenantId; activate requires profileId; expiry 
   assert.equal(M1_SCHEMA.safeParse({ tenantId: "21", objectId: "21", action: "deactivate" }).success, true);
   assert.equal(M1_SCHEMA.safeParse({ ...ACTIVATE, expiresHours: 0 }).success, false);
   assert.equal(M1_SCHEMA.safeParse({ ...ACTIVATE, expiresHours: 24 }).success, true);
+});
+
+const WINDOW = { tenantId: "21", objectId: "21", action: "schedule", profileId: "p8", startAt: "2026-07-30T19:00:00.000Z", endAt: "2026-07-30T21:00:00.000Z" };
+const WEEKLY = { tenantId: "21", objectId: "21", action: "schedule", profileId: "p8", weekday: 5, startTime: "15:00", endTime: "17:00" };
+
+test("schema: schedule requires profileId and EXACTLY one of window/weekly; endAt>startAt", () => {
+  assert.equal(M1_SCHEMA.safeParse(WINDOW).success, true);
+  assert.equal(M1_SCHEMA.safeParse(WEEKLY).success, true);
+  assert.equal(M1_SCHEMA.safeParse({ ...WINDOW, profileId: undefined }).success, false);
+  assert.equal(M1_SCHEMA.safeParse({ tenantId: "21", objectId: "21", action: "schedule", profileId: "p8" }).success, false);
+  assert.equal(M1_SCHEMA.safeParse({ ...WINDOW, weekday: 5, startTime: "15:00", endTime: "17:00" }).success, false); // both shapes
+  assert.equal(M1_SCHEMA.safeParse({ ...WINDOW, endAt: "2026-07-30T18:00:00.000Z" }).success, false); // end before start
+  assert.equal(M1_SCHEMA.safeParse({ ...ACTIVATE, expiresMinutes: 15 }).success, true);
+  assert.equal(M1_SCHEMA.safeParse({ ...ACTIVATE, expiresMinutes: 0 }).success, false);
+});
+
+test("SIM schedule: passes the chain with zero api calls", async () => {
+  const res = await makeExec().execute({ capabilityId: "pbx.M1", params: WINDOW, requestedBy: "customer:u1", requestedRole: "customer" });
+  assert.equal(res.ok, true, res.refusedReason);
+  assert.equal(mohApi.calls.length, 0);
+});
+
+test("LIVE schedule: dispatches schedule_add, verify finds the rule row", async () => {
+  const exec = makeExec();
+  prisma.actions.push(approvedRow(WINDOW));
+  const res = await exec.execute({ capabilityId: "pbx.M1", params: WINDOW, requestedBy: "owner:izzy", requestedRole: "owner", actionId: "act1", mode: "live" });
+  assert.equal(res.ok, true, res.refusedReason);
+  assert.equal(res.verified, true);
+  assert.equal(mohApi.calls.length, 1);
+  assert.equal(mohApi.calls[0].action, "schedule_add");
+  assert.equal(mohApi.calls[0].startAt, WINDOW.startAt);
+  assert.equal(prisma.scheduleRules.length, 1);
+});
+
+test("LIVE schedule revert: removes the rule via schedule_remove", async () => {
+  const exec = makeExec();
+  prisma.actions.push(approvedRow(WINDOW));
+  const res = await exec.execute({ capabilityId: "pbx.M1", params: WINDOW, requestedBy: "owner:izzy", requestedRole: "owner", actionId: "act1", mode: "live" });
+  assert.equal(res.ok, true);
+  prisma.actions[0].resultSnapshot = { written: res.written };
+  const r = await exec.revert("act1", "owner:izzy");
+  assert.equal(r.ok, true, r.refusedReason);
+  assert.equal(mohApi.calls.at(-1)!.action, "schedule_remove");
+  assert.equal(prisma.scheduleRules[0].isActive, false);
+});
+
+test("LIVE schedule with EXPIRED minutes-style expiry on activate still verifies", async () => {
+  const exec = makeExec();
+  const params = { ...ACTIVATE, expiresMinutes: 15 };
+  prisma.actions.push(approvedRow(params));
+  const res = await exec.execute({ capabilityId: "pbx.M1", params, requestedBy: "owner:izzy", requestedRole: "owner", actionId: "act1", mode: "live" });
+  assert.equal(res.ok, true, res.refusedReason);
+  const call = mohApi.calls[0];
+  assert.ok(call.expiresAt, "expiresAt must be sent to the door");
+  const mins = (new Date(call.expiresAt).getTime() - Date.now()) / 60000;
+  assert.ok(mins > 13 && mins < 16, `expiry ≈15min out (got ${mins.toFixed(1)})`);
 });
 
 test("catalog: includes pbx.M1, honors the modify contract", () => {

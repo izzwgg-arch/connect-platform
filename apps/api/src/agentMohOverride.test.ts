@@ -24,6 +24,25 @@ test("schema: bad expiry / unknown action / empty tenant rejected", () => {
   assert.equal(AgentMohOverrideRequest.safeParse({ tenantId: "", action: "read", agentActionId: "a" }).success, false);
 });
 
+test("schema: schedule_add/remove require profileId + exactly one shape (one_time XOR weekly)", () => {
+  const base = { tenantId: "21", agentActionId: "a", profileId: "p1" };
+  const oneTime = { startAt: "2026-07-30T19:00:00.000Z", endAt: "2026-07-30T21:00:00.000Z" };
+  const weekly = { weekday: 5, startTime: "15:00", endTime: "17:00" };
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_add", ...oneTime }).success, true);
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_add", ...weekly }).success, true);
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_remove", ...oneTime }).success, true);
+  // missing profileId
+  assert.equal(AgentMohOverrideRequest.safeParse({ tenantId: "21", agentActionId: "a", action: "schedule_add", ...oneTime }).success, false);
+  // no shape at all
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_add" }).success, false);
+  // both shapes at once
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_add", ...oneTime, ...weekly }).success, false);
+  // end before start
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_add", startAt: oneTime.endAt, endAt: oneTime.startAt }).success, false);
+  // bad weekly time format
+  assert.equal(AgentMohOverrideRequest.safeParse({ ...base, action: "schedule_add", weekday: 5, startTime: "3pm", endTime: "17:00" }).success, false);
+});
+
 test("secret check: FAIL-CLOSED when unset; wrong/empty refused; exact match passes", () => {
   assert.equal(agentMohSecretOk("anything", undefined), false);
   assert.equal(agentMohSecretOk("anything", ""), false);
