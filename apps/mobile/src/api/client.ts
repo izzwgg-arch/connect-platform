@@ -23,6 +23,7 @@ import {
   VOICEMAIL_MAX_PAGES_PER_FOLDER,
 } from "./voicemailPagination";
 import { decodeJwtPayloadLoose } from "../voicemail/vmGreetingInviteUtils";
+import { applyServerFeatureFlags } from "../config/featureFlags";
 import {
   distinctExtensionsFromVoicemails,
   filterVoicemailsToScopedMailboxes,
@@ -736,6 +737,11 @@ export async function registerMobileDevice(token: string, input: {
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "MOBILE_REGISTER_FAILED");
+  // Apply per-device remote feature flags from the register response here (the
+  // single choke point) so every register call site — push init, retry, wake —
+  // mirrors them without needing its own wiring. Fire-and-forget: flag
+  // application must never delay or fail device registration.
+  void applyServerFeatureFlags((json as { featureFlags?: unknown })?.featureFlags);
   return json;
 }
 

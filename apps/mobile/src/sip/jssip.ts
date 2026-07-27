@@ -39,6 +39,7 @@ import {
 import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 import * as SecureStore from "expo-secure-store";
+import { isStandingRegistrationEnabled } from "../config/featureFlags";
 
 // -- iOS stable SIP instance id (RFC 5626 outbound de-dup) ----------------------
 // iOS cannot hold a persistent SIP socket, so the app spins up a fresh JsSIP UA
@@ -490,14 +491,22 @@ export class JsSipClient implements SipClient {
       uaConfig.outbound_proxy_set = this.bundle.outboundProxy;
     }
 
-    // iOS: pin a persisted per-install instance id so the registrar de-dups our
+    // Pin a persisted per-install instance id so the registrar de-dups our
     // AOR binding across wakes instead of stacking a new random contact each
-    // time (the root cause of cold-answer -> voicemail). Android is not gated in
-    // here and keeps JsSIP's default behaviour, so its registration is unchanged.
-    if (Platform.OS === "ios") {
+    // time (the root cause of cold-answer -> voicemail).
+    //  - iOS: always on (shipped earlier).
+    //  - Android: only when the server-controlled standingRegistration flag is
+    //    on for this device. Random-per-UA contacts are what made the PBX
+    //    re-INVITE dead sockets after every UA rebuild; a stable +sip.instance
+    //    makes each re-register REPLACE the previous binding. Flag off ⇒
+    //    JsSIP default (today's behaviour), untouched.
+    const wantStableInstanceId =
+      Platform.OS === "ios" ||
+      (Platform.OS === "android" && isStandingRegistrationEnabled());
+    if (wantStableInstanceId) {
       try {
         uaConfig.instance_id = await getStableSipInstanceId();
-        console.log("[SIP] iOS stable instance_id:", uaConfig.instance_id);
+        console.log(`[SIP] stable instance_id (${Platform.OS}):`, uaConfig.instance_id);
       } catch (e) {
         console.warn("[SIP] instance_id resolve failed (fallback random):", e);
       }
@@ -819,6 +828,47 @@ export class JsSipClient implements SipClient {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Mid-call network handoff (standing-registration feature — caller gates on
+   * the server flag). When the default network changes under an active call
+   * (Wi-Fi ⇄ LTE/5G), the existing RTP path dies with the old interface. A
+   * plain UA reconnect can't help — it would tear the session down. The SIP
+   * fix is an ICE restart: renegotiate the established session with
+   * iceRestart:true so WebRTC gathers fresh candidates on the new network and
+   * a re-INVITE moves the media without dropping the call.
+   *
+   * Returns the number of sessions a restart was dispatched for (0 = nothing
+   * to do). Failures are logged and swallowed — worst case the call behaves
+   * exactly as it does today (dies on network switch).
+   */
+  tryIceRestart(reason: string): number {
+    let dispatched = 0;
+    try {
+      const seen = new Set<any>();
+      const candidates: any[] = [];
+      for (const s of this.sessionsById.values()) candidates.push(s);
+      if (this.session) candidates.push(this.session);
+      for (const session of candidates) {
+        if (!session || seen.has(session)) continue;
+        seen.add(session);
+        try {
+          if (typeof session.isEstablished !== "function" || !session.isEstablished()) continue;
+          if (typeof session.renegotiate !== "function") continue;
+          const ok = session.renegotiate({
+            rtcOfferConstraints: { iceRestart: true },
+          });
+          console.log(`[SIP_ICE_RESTART] renegotiate(iceRestart) ${ok ? "dispatched" : "refused"} reason=${reason} sessionId=${this.getSessionIdSafe(session) ?? "?"}`);
+          if (ok) dispatched += 1;
+        } catch (e) {
+          console.warn(`[SIP_ICE_RESTART] session renegotiate threw (${reason}):`, e instanceof Error ? e.message : String(e));
+        }
+      }
+    } catch (e) {
+      console.warn(`[SIP_ICE_RESTART] tryIceRestart threw (${reason}):`, e instanceof Error ? e.message : String(e));
+    }
+    return dispatched;
   }
 
   /**

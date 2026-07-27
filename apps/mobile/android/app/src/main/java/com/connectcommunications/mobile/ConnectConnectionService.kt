@@ -44,7 +44,8 @@ class ConnectConnectionService : ConnectionService() {
     val callerNumber = extras?.getString(EXTRA_CALLER_NUMBER).orEmpty()
     val callerName = extras?.getString(EXTRA_CALLER_NAME).orEmpty()
     val pbxCallId = extras?.getString(EXTRA_PBX_CALL_ID).orEmpty()
-    Log.i(TAG, "onCreateIncomingConnection extras resolved: inviteId=$inviteId callerNumber=$callerNumber callerName=$callerName pbxCallId=$pbxCallId (innerExtras=${innerExtras != null})")
+    val startActive = extras?.getBoolean(EXTRA_START_ACTIVE, false) == true
+    Log.i(TAG, "onCreateIncomingConnection extras resolved: inviteId=$inviteId callerNumber=$callerNumber callerName=$callerName pbxCallId=$pbxCallId startActive=$startActive (innerExtras=${innerExtras != null})")
 
     val connection = ConnectIncomingConnection(
       applicationContext,
@@ -67,10 +68,22 @@ class ConnectConnectionService : ConnectionService() {
     // call controls. We do NOT add SUPPORT_HOLD because some OEM call UIs
     // route the Hold button into the native dialer when present.
     connection.connectionCapabilities = Connection.CAPABILITY_MUTE
-    connection.setRinging()
+    if (startActive) {
+      // Answer-time anchor mode (standing-registration feature): the SIP call
+      // is ALREADY connected in JS — we register it with Telecom purely so the
+      // OS treats the process as hosting a live phone call (top scheduling
+      // bucket, survives recents-swipe, no Doze throttling of the media path).
+      // Going straight to ACTIVE skips the ringing phase entirely, so the
+      // Samsung One UI "OS dialer shows before the SIP INVITE arrives" problem
+      // that got ring-time dispatch disabled in 2026-05 cannot occur.
+      connection.setActive()
+      Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId — Connection set ACTIVE (answer-time anchor)")
+    } else {
+      connection.setRinging()
+      Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId from=$callerNumber name=$callerName — Connection set RINGING")
+    }
 
     TelecomBridge.registerActiveConnection(inviteId, connection)
-    Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId from=$callerNumber name=$callerName — Connection set RINGING")
     return connection
   }
 
@@ -107,5 +120,12 @@ class ConnectConnectionService : ConnectionService() {
     const val EXTRA_CALLER_NUMBER = "connect_caller_number"
     const val EXTRA_CALLER_NAME = "connect_caller_name"
     const val EXTRA_PBX_CALL_ID = "connect_pbx_call_id"
+    /**
+     * When true the Connection is created directly in ACTIVE state (no ringing
+     * phase, no OS ring UI). Used by the answer-time Telecom anchor: JS
+     * registers the already-connected SIP call with Telecom so the OS protects
+     * the process for the duration of the call.
+     */
+    const val EXTRA_START_ACTIVE = "connect_start_active"
   }
 }

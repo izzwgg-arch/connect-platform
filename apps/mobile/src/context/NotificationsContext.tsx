@@ -47,8 +47,10 @@ import {
   subscribeTelecomActions,
   terminateTelecomCall,
   markTelecomActive,
+  TELECOM_ANCHOR_PREFIX,
 } from "../sip/telecom";
 import { initVoipPushListener, getCachedVoipPushToken } from "../sip/voipPush";
+import { isStandingRegistrationEnabled } from "../config/featureFlags";
 // NOTE: stopAllTelephonyAudio is imported statically here rather than via
 // `void import("../audio/telephonyAudio").then(...)`. The dynamic-import
 // pattern was throwing `Object is not a function` inside teardown paths
@@ -2211,8 +2213,38 @@ export function NotificationsProvider({
         // case: register() has a guard that skips restart if an incoming
         // session is already present, so this is safe. After restart, the PBX
         // re-routes the INVITE within Timer B (~32s) to the fresh Contact.
+        //
+        // STANDING REGISTRATION (server flag, Android): "registered but idle at
+        // answer-tap" is the NORMAL healthy state — the PBX only dials the
+        // contact after the backend claim, so no INVITE is expected yet, and
+        // the socket is actively maintained (FGS + native maintenance
+        // re-register). Blind force-restarting here tore down a good UA,
+        // rotated the Contact, and added 200-700 ms to every answer. In
+        // standing mode only treat the socket as stale when the WebSocket
+        // transport is provably DOWN (isConnected() false).
+        const standingMode = Platform.OS === "android" && isStandingRegistrationEnabled();
+        const sipTransportDown = (() => {
+          if (!standingMode) return false;
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const singleton = require("../sip/sipClientSingleton") as typeof import("../sip/sipClientSingleton");
+            const client = singleton.peekSipClient() as any;
+            if (!client || typeof client.isConnected !== "function") return true;
+            return !client.isConnected();
+          } catch {
+            return true;
+          }
+        })();
         const sipSocketLooksStale =
-          sip.registrationState === "registered" && sip.callState === "idle";
+          sip.registrationState === "registered" &&
+          sip.callState === "idle" &&
+          (!standingMode || sipTransportDown);
+        if (standingMode && sip.registrationState === "registered" && sip.callState === "idle") {
+          console.log(
+            "[ANSWER_PIPELINE] standing_mode socket check — transportDown=" + sipTransportDown +
+            (sipTransportDown ? " (forcing restart)" : " (healthy, fast path — no UA teardown)"),
+          );
+        }
         // COWORK cold-answer fix (2026-07-13): on iOS cold answer HOLD the fresh wake registration - never force-restart on the stale-socket heuristic, which mints a new rotated Contact and makes the server Mode-B re-delivery target a dead contact (voicemail). Proven live 1783981096.246385. Warm iOS + Android unchanged (earlyColdAcceptSent=false for them).
         const shouldForceSipRefresh = earlyColdAcceptSent ? sipLooksUnready : (sipLooksUnready || sipSocketLooksStale);
         const wasAlreadyRegistered = sip.registrationState === "registered";
@@ -3839,6 +3871,13 @@ export function NotificationsProvider({
       onDisconnect: async (payload) => {
         const inviteId = payload.inviteId;
         if (!inviteId) return;
+        // Answer-time anchors (standing-registration feature) are owned by
+        // SipContext, which hangs up the live SIP session itself. Running
+        // handleDeclineInvite against an anchor id would fire a bogus decline.
+        if (inviteId.startsWith(TELECOM_ANCHOR_PREFIX)) {
+          console.log("[TELECOM] onDisconnect for anchor " + inviteId + " — SipContext owns it, skipping");
+          return;
+        }
         console.log("[TELECOM] onDisconnect inviteId=" + inviteId + " reason=" + payload.reason);
         // Same as reject for our SIP layer: hang up the live session.
         const invite = await resolveInviteForAction(inviteId);

@@ -114,7 +114,27 @@ class SipKeepAliveService : Service() {
      * worst-case ~60 s dead window instead of indefinite.
      */
     private const val HEARTBEAT_INTERVAL_MS = 60_000L
+    /**
+     * Relaxed heartbeat cadence used ONLY when the server-controlled
+     * standing-registration flag is on and no call is active. In that mode the
+     * heartbeat's job shifts from "resurrect ASAP after a SIGKILL" to
+     * "periodically refresh the SIP registration" (registrar expiry is 600 s,
+     * so 5 min keeps a comfortable 2x margin). Combined with dropping the
+     * permanent idle wakelock this is the battery fix: 12 CPU wakes/hour
+     * instead of 60, and the CPU actually sleeps in between. Flag off ⇒ the
+     * legacy 60 s exact cadence above, unchanged.
+     */
+    private const val HEARTBEAT_INTERVAL_STANDING_IDLE_MS = 300_000L
     private const val HEARTBEAT_REQUEST_CODE = 24425
+
+    /**
+     * Companion-level mirror of the instance `inCall` state so the static
+     * scheduleHeartbeat() (also called from KeepAliveRestartReceiver, where no
+     * service instance exists) can pick the right cadence. If the process was
+     * SIGKILLed the call died with it, so false is the correct receiver-side
+     * default.
+     */
+    @Volatile private var inCallActive = false
 
     // ── Foreground state intents ─────────────────────────────────────────────
     /**
@@ -290,21 +310,35 @@ class SipKeepAliveService : Service() {
         if (!isKeepAliveEnabled(context)) return
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         val pi = heartbeatPendingIntent(context, create = true) ?: return
-        val triggerAtMs = SystemClock.elapsedRealtime() + HEARTBEAT_INTERVAL_MS
-        try {
-          alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi,
-          )
-        } catch (sec: SecurityException) {
-          // Some OS builds gate setExact* behind SCHEDULE_EXACT_ALARM when the
-          // battery-optimization exemption is revoked. Inexact-while-idle never
-          // needs the permission and is fine for a watchdog cadence.
+        // Standing-registration idle mode trades the 60 s exact watchdog for a
+        // 5 min inexact-while-idle maintenance tick (see constant docs). Exact
+        // 60 s is kept while a call is active and for all flag-off devices.
+        val standingIdle = isStandingRegistrationEnabled(context) && !inCallActive
+        val intervalMs = if (standingIdle) HEARTBEAT_INTERVAL_STANDING_IDLE_MS else HEARTBEAT_INTERVAL_MS
+        val triggerAtMs = SystemClock.elapsedRealtime() + intervalMs
+        if (standingIdle) {
+          // Inexact by design: lets the OS batch the wake with other alarms.
+          // AllowWhileIdle still fires in Doze (subject to the per-app idle
+          // budget, which a 5 min cadence stays inside).
           alarmManager.setAndAllowWhileIdle(
             AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi,
           )
-          Log.w(TAG, "scheduleHeartbeat: fell back to inexact (${sec.message})")
+        } else {
+          try {
+            alarmManager.setExactAndAllowWhileIdle(
+              AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi,
+            )
+          } catch (sec: SecurityException) {
+            // Some OS builds gate setExact* behind SCHEDULE_EXACT_ALARM when the
+            // battery-optimization exemption is revoked. Inexact-while-idle never
+            // needs the permission and is fine for a watchdog cadence.
+            alarmManager.setAndAllowWhileIdle(
+              AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi,
+            )
+            Log.w(TAG, "scheduleHeartbeat: fell back to inexact (${sec.message})")
+          }
         }
-        Log.i(TAG, "scheduleHeartbeat in=${HEARTBEAT_INTERVAL_MS}ms")
+        Log.i(TAG, "scheduleHeartbeat in=${intervalMs}ms standingIdle=$standingIdle")
       } catch (t: Throwable) {
         Log.w(TAG, "scheduleHeartbeat failed: ${t.message}")
       }
@@ -485,6 +519,7 @@ class SipKeepAliveService : Service() {
           speakerOn = intent.getBooleanExtra(EXTRA_SPEAKER_ON, false),
           muted = intent.getBooleanExtra(EXTRA_MUTED, false),
         )
+        inCallActive = true
         Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_posted callerName=${inCall?.callerName ?: ""}")
       }
 
@@ -496,6 +531,7 @@ class SipKeepAliveService : Service() {
       ACTION_NOTIF_HANGUP_SVC -> {
         Log.i(TAG, "ACTION_NOTIF_HANGUP_SVC — clearing in-call notification immediately")
         inCall = null
+        inCallActive = false
         clearInCallForeground()
         Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared startId=$startId (hangup_button)")
         // Relay to main process: InCallNotificationReceiver → emitInCallAction("hangup") → JS BYE
@@ -511,6 +547,7 @@ class SipKeepAliveService : Service() {
       //    session failed, call declined) ────────────────────────────────────
       ACTION_EXIT_CALL -> {
         inCall = null
+        inCallActive = false
         // stopForeground(REMOVE) atomically cancels notification 4242 and releases
         // the PHONE_CALL foreground type association. Without this, the
         // CallStyle.forOngoingCall chip persists on OEM lock screens (confirmed
@@ -535,7 +572,18 @@ class SipKeepAliveService : Service() {
     if (foregrounded) {
       isRunning = true
       KeepAliveDiag.putBool(applicationContext, KeepAliveDiag.K_IS_RUNNING, true)
-      acquireWakeLock()
+      // Wakelock policy:
+      //  - legacy (standing-registration flag OFF): permanent partial wakelock
+      //    for the life of the service — today's behavior, unchanged. This was
+      //    measured holding the CPU awake 7+ h/day (the 9.5%/day battery bill).
+      //  - standing mode (flag ON): hold the wakelock only while a call is
+      //    active. Idle registration upkeep is done by the heartbeat alarm's
+      //    own wake window + the FGS network access, so the CPU may sleep.
+      if (inCall != null || !isStandingRegistrationEnabled(applicationContext)) {
+        acquireWakeLock()
+      } else {
+        releaseWakeLock()
+      }
       // (Re)arm the watchdog heartbeat so the process is resurrected if an OEM
       // SIGKILLs us before the next fire. Idempotent — FLAG_UPDATE_CURRENT keeps
       // a single pending alarm.
@@ -580,6 +628,7 @@ class SipKeepAliveService : Service() {
   override fun onDestroy() {
     Log.i(TAG, "onDestroy")
     serviceDestroyedAtMs = System.currentTimeMillis()
+    inCallActive = false
     isRunning = false
     KeepAliveDiag.putBool(applicationContext, KeepAliveDiag.K_IS_RUNNING, false)
     KeepAliveDiag.putLong(applicationContext, KeepAliveDiag.K_SVC_DESTROYED, serviceDestroyedAtMs)

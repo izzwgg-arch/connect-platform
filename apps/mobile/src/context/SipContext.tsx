@@ -37,6 +37,8 @@ import {
   type KeepAliveGateState,
 } from "../sip/keepAliveGate";
 import { BATTERY_OPT_ONBOARD_PROMPTED_KEY } from "../hooks/useBatteryOptimizationPrompt";
+import { startTelecomActiveCall, terminateTelecomCall } from "../sip/telecom";
+import { isStandingRegistrationEnabled } from "../config/featureFlags";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -1154,6 +1156,27 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         }
         lastNetworkRegainAtRef.current = now;
         flightRecord("SIP", "NETWORK_REGAINED", { payload: { transport } });
+        // Mid-call Wi-Fi ⇄ LTE/5G handoff (standing-registration flag only):
+        // an active call's RTP path just lost its interface. Renegotiate with
+        // an ICE restart so media moves to the new network instead of dying.
+        // The reconnect orchestrator below intentionally skips mid-call, so
+        // without this the call had no recovery path at all. Failures fall
+        // through silently to today's behavior.
+        if (isStandingRegistrationEnabled()) {
+          try {
+            const client: any = clientRef.current;
+            if (
+              typeof client.hasActiveSession === "function" &&
+              client.hasActiveSession() &&
+              typeof client.tryIceRestart === "function"
+            ) {
+              const n = client.tryIceRestart('network_changed:' + transport);
+              flightRecord("SIP", "ICE_RESTART_ATTEMPTED", { payload: { transport, sessions: n } });
+            }
+          } catch (e) {
+            console.warn('[SIP_ICE_RESTART] network-change hook threw:', String(e));
+          }
+        }
         scheduleReconnect('network_regained:' + transport);
         verifyAndArmKeepAliveRef.current('network_regained');
       },
@@ -1554,6 +1577,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // first transitions to "connected" so the live timer in the persistent
   // notification reflects the true wall-clock duration even after re-renders.
   const callConnectedAtRef = useRef<number | null>(null);
+  // Answer-time Telecom anchor id (standing-registration flag only). Non-null
+  // while the OS holds an ACTIVE self-managed Connection for the current call
+  // — that Connection is what keeps the process alive across a recents-swipe.
+  const telecomAnchorIdRef = useRef<string | null>(null);
   // COWORK iOS fix (2026-07-15): reactive twin of callConnectedAtRef for the
   // UI layer. On a cold-answer re-delivery the call bridges on a re-INVITE'd
   // session whose id differs from the one the multi-call session map tracks,
@@ -1618,6 +1645,25 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         } catch (e) {
           console.warn("[IN_CALL_NOTIF] startInCallNotification threw:", String(e));
         }
+        // Answer-time Telecom anchor (standing-registration flag only).
+        // Registers this already-connected call with the OS as an ACTIVE
+        // self-managed call so the process survives a recents-swipe for the
+        // call's duration. Fire-and-forget: a false/failed dispatch leaves the
+        // call exactly as it is today (FGS-only protection). Flag off ⇒ this
+        // block is a no-op and nothing about the legacy flow changes.
+        if (isStandingRegistrationEnabled() && !telecomAnchorIdRef.current) {
+          const anchorId = `tc-anchor-${Date.now()}`;
+          telecomAnchorIdRef.current = anchorId;
+          void startTelecomActiveCall({
+            inviteId: anchorId,
+            callerNumber: "",
+            callerName: remoteParty || "On a call",
+          }).then((ok) => {
+            if (!ok && telecomAnchorIdRef.current === anchorId) {
+              telecomAnchorIdRef.current = null;
+            }
+          });
+        }
       }
     }
     if (callState === "ended" && prev !== "ended") {
@@ -1671,9 +1717,39 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           console.warn("[IN_CALL_NOTIF] stopInCallNotification threw:", String(e));
         }
         callConnectedAtRef.current = null;
+        // Release the answer-time Telecom anchor (if one was dispatched) so
+        // the OS drops the active-call state and process protection with it.
+        if (telecomAnchorIdRef.current) {
+          const anchorId = telecomAnchorIdRef.current;
+          telecomAnchorIdRef.current = null;
+          terminateTelecomCall(anchorId, "other");
+        }
       }
     }
   }, [callState, remoteParty, speakerOn, muted]);
+
+  // Answer-time Telecom anchor: if the OS disconnects the anchor Connection
+  // out from under us (system abort, user hangup from another Telecom surface
+  // like Android Auto / a Bluetooth HFP button routed through Telecom), hang
+  // up the SIP call so audio doesn't keep flowing behind a dead OS call.
+  // Anchor ids are namespaced (tc-anchor-*) and owned exclusively here —
+  // NotificationsContext's Telecom handlers ignore them.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = DeviceEventEmitter.addListener(
+      "Telecom.Disconnect",
+      (p: { inviteId?: string; reason?: string }) => {
+        const id = String(p?.inviteId || "");
+        if (!id || id !== telecomAnchorIdRef.current) return;
+        console.log(`[TELECOM] anchor disconnected by OS (${p?.reason || "unknown"}) — hanging up SIP`);
+        telecomAnchorIdRef.current = null;
+        clientRef.current.hangup().catch((err) => {
+          console.warn("[TELECOM] hangup after anchor disconnect failed:", String(err));
+        });
+      },
+    );
+    return () => sub.remove();
+  }, []);
 
   // Refresh the in-call notification's Speaker / Mute toggle visuals when
   // the underlying audio routing flips mid-call. Skipped while idle so we

@@ -1032,6 +1032,36 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   // by inviteId (the same id Telecom passed to JS on Telecom.Answer).
 
   /**
+   * Answer-time Telecom anchor (standing-registration feature — JS only calls
+   * this when the server flag is on). Registers the already-connected SIP call
+   * with the OS as an ACTIVE self-managed call so the process is protected for
+   * the call's duration (survives recents-swipe). Resolves true when the
+   * anchor was dispatched; false means the call simply continues unanchored —
+   * never an error the JS call flow needs to handle.
+   */
+  @ReactMethod
+  fun telecomStartActiveCall(
+    inviteId: String?,
+    callerNumber: String?,
+    callerName: String?,
+    pbxCallId: String?,
+    promise: Promise,
+  ) {
+    try {
+      val id = inviteId?.takeIf { it.isNotEmpty() } ?: run {
+        promise.resolve(false)
+        return
+      }
+      val ctx = reactApplicationContext.applicationContext
+      val ok = TelecomBridge.startActiveCall(ctx, id, callerNumber, callerName, pbxCallId)
+      promise.resolve(ok)
+    } catch (t: Throwable) {
+      Log.w(TAG, "telecomStartActiveCall failed: ${t.message}")
+      promise.resolve(false)
+    }
+  }
+
+  /**
    * JS reports the SIP UA acknowledged the user's answer (200 OK sent /
    * media established). Flips the OS Connection to ACTIVE so the system
    * call UI shows the in-call timer and the lock-screen banner clears.

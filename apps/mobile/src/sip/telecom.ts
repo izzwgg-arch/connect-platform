@@ -29,6 +29,14 @@ import {
  * know "the call is now active" or "tear down — SIP failed").
  */
 
+/**
+ * Id prefix for answer-time Telecom anchors (already-connected calls that
+ * SipContext registers with the OS purely for process protection). These ids
+ * are NOT PBX invite ids — the NotificationsContext Telecom handlers must
+ * ignore them (SipContext owns the anchor's lifecycle end to end).
+ */
+export const TELECOM_ANCHOR_PREFIX = "tc-anchor-";
+
 export type TelecomAnswerPayload = {
   inviteId: string;
   callerNumber?: string;
@@ -127,6 +135,43 @@ export function telecomHasConnection(inviteId: string | null | undefined): boole
   try {
     return Boolean(NativeModules.IncomingCallUi?.telecomHasConnection?.(inviteId));
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Answer-time Telecom anchor (standing-registration feature — caller must
+ * gate on the server flag). Registers an ALREADY-CONNECTED SIP call with the
+ * OS as an active self-managed call so Android protects the process for the
+ * call's duration (survives recents-swipe, no Doze throttling of media).
+ * There is no ringing phase and no OS ring UI. Resolves true when the anchor
+ * was dispatched; false means the call continues exactly as today, without
+ * the anchor — never a failure the call flow needs to handle.
+ */
+export async function startTelecomActiveCall(input: {
+  inviteId: string;
+  callerNumber?: string;
+  callerName?: string;
+  pbxCallId?: string;
+}): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  if (!input.inviteId) return false;
+  try {
+    const mod: any = NativeModules.IncomingCallUi;
+    if (!mod || typeof mod.telecomStartActiveCall !== "function") {
+      console.warn("[TELECOM] telecomStartActiveCall bridge missing — anchor skipped");
+      return false;
+    }
+    const ok = await mod.telecomStartActiveCall(
+      input.inviteId,
+      input.callerNumber || "",
+      input.callerName || "",
+      input.pbxCallId || "",
+    );
+    console.log(`[TELECOM] answer-time anchor ${ok ? "dispatched" : "skipped"} inviteId=${input.inviteId}`);
+    return Boolean(ok);
+  } catch (e) {
+    console.warn("[TELECOM] startTelecomActiveCall threw:", e instanceof Error ? e.message : String(e));
     return false;
   }
 }

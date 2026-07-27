@@ -2958,6 +2958,12 @@ model MobileDevice {
   // backgrounded S25 / Android 15" (PHONE_CALL FGS rejected by One UI 7).
   keepAliveSnapshot     Json?
   keepAliveReportedAt   DateTime?
+  // Per-device remote feature flags, returned verbatim to the app by
+  // /mobile/devices/register. Currently: { standingRegistration?: boolean }.
+  // null/absent key = flag off. This is the remote kill-switch for the
+  // standing-SIP-registration mode: flip the key off and the device reverts
+  // to legacy behavior on its next register (no rebuild required).
+  featureFlags          Json?
   active                Boolean              @default(true)
   deactivatedAt         DateTime?
   lastSeenAt            DateTime             @default(now())

@@ -46,14 +46,34 @@ AppRegistry.registerHeadlessTask(
   SIP_PREREGISTER_TASK,
   () => async (taskData?: Record<string, any>) => {
     const inviteId = String(taskData?.inviteId || taskData?.callId || '');
+    const mode = String(taskData?.mode || '');
     const startedAt = Date.now();
-    logCallFlow('SIP_PREREGISTER_TASK_START', { inviteId: inviteId || null });
+    logCallFlow('SIP_PREREGISTER_TASK_START', { inviteId: inviteId || null, extra: { mode: mode || null } });
 
     try {
       // Lazy-require so the heavy SIP/WebRTC module graph is only pulled in when
       // a call actually arrives (keeps the cold index.js load light).
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const singleton = require('../sip/sipClientSingleton') as typeof import('../sip/sipClientSingleton');
+
+      // ── Standing-registration maintenance tick ────────────────────────────
+      // Dispatched by SipKeepAliveService's heartbeat (server flag gated,
+      // never while a call is active on the native side). Job: make sure the
+      // registration is fresh, then get out — no 30s ring-hold. When the UA is
+      // already registered headlessPreRegisterSip() returns immediately, so a
+      // healthy tick costs a few ms of JS.
+      if (mode === 'maintenance') {
+        if (singleton.hasActiveSipSession()) {
+          logCallFlow('SIP_MAINT_REGISTER_SKIP_ACTIVE_SESSION', { inviteId: null });
+          return;
+        }
+        const ok = await singleton.headlessPreRegisterSip();
+        logCallFlow('SIP_MAINT_REGISTER_RESULT', {
+          inviteId: null,
+          extra: { registered: ok, sinceStartMs: Date.now() - startedAt },
+        });
+        return;
+      }
 
       const registered = await singleton.headlessPreRegisterSip();
       logCallFlow('SIP_PREREGISTER_RESULT', {

@@ -177,6 +177,64 @@ object TelecomBridge {
   }
 
   /**
+   * Answer-time Telecom anchor (standing-registration feature, flag-gated in
+   * JS). Registers an ALREADY-CONNECTED SIP call with the OS as a self-managed
+   * call that starts directly in ACTIVE state — no ringing phase, no OS ring
+   * UI, so the One UI early-dialer problem that disabled ring-time dispatch
+   * cannot occur. The point is purely process protection: while Telecom owns
+   * an active call, the system keeps our process in the top scheduling bucket
+   * and a recents-swipe does not kill the audio path.
+   *
+   * Returns true when the request was dispatched; false lets the caller fall
+   * back silently (call continues exactly as today, just without the anchor).
+   */
+  fun startActiveCall(
+    context: Context,
+    inviteId: String,
+    callerNumber: String?,
+    callerName: String?,
+    pbxCallId: String?,
+  ): Boolean {
+    return try {
+      ensurePhoneAccountRegistered(context)
+      val handle = phoneAccountHandle ?: run {
+        Log.w(TAG, "startActiveCall: no PhoneAccountHandle after register")
+        return false
+      }
+      val tm = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+        ?: return false
+      if (!isPhoneAccountEnabled(tm, handle)) {
+        Log.w(TAG, "startActiveCall: PhoneAccount not enabled — skipping anchor (call continues unanchored)")
+        return false
+      }
+
+      val numberSan = (callerNumber ?: "").replace("[^+0-9]".toRegex(), "").ifEmpty { "0000000000" }
+      val callUri = Uri.fromParts(SCHEME_TEL, numberSan, null)
+      val extras = Bundle().apply {
+        putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, callUri)
+        val callExtras = Bundle().apply {
+          putString(ConnectConnectionService.EXTRA_INVITE_ID, inviteId)
+          putString(ConnectConnectionService.EXTRA_CALLER_NUMBER, callerNumber ?: "")
+          putString(ConnectConnectionService.EXTRA_CALLER_NAME, callerName ?: "")
+          putString(ConnectConnectionService.EXTRA_PBX_CALL_ID, pbxCallId ?: "")
+          putBoolean(ConnectConnectionService.EXTRA_START_ACTIVE, true)
+        }
+        putBundle(TelecomManager.EXTRA_INCOMING_CALL_EXTRAS, callExtras)
+      }
+
+      tm.addNewIncomingCall(handle, extras)
+      Log.i(TAG, "startActiveCall: answer-time anchor dispatched inviteId=$inviteId from=$callerNumber")
+      true
+    } catch (se: SecurityException) {
+      Log.w(TAG, "startActiveCall SecurityException — PhoneAccount likely not enabled: ${se.message}")
+      false
+    } catch (t: Throwable) {
+      Log.w(TAG, "startActiveCall failed: ${t.message}", t)
+      false
+    }
+  }
+
+  /**
    * Reads the PhoneAccount the OS currently knows about for our handle and
    * returns true iff it exists AND is enabled. {@code getPhoneAccount} can
    * return null if registration failed silently (e.g. ComponentName not

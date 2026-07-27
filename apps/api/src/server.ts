@@ -14645,7 +14645,19 @@ app.post("/mobile/devices/register", async (req, reply) => {
   }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
-  return { ok: true, id: saved.id, platform: saved.platform, lastSeenAt: saved.lastSeenAt };
+  // featureFlags: per-device remote flags (currently { standingRegistration }).
+  // The app mirrors these into native prefs on every register, so flipping a
+  // flag in the DB takes effect on the device's next app start / register —
+  // this is the remote kill-switch for the standing-registration rollout.
+  // `as any`: column is newer than some generated Prisma clients (same pattern
+  // as the other fresh MobileDevice columns in this file).
+  return {
+    ok: true,
+    id: saved.id,
+    platform: saved.platform,
+    lastSeenAt: saved.lastSeenAt,
+    featureFlags: (saved as any).featureFlags ?? {},
+  };
 });
 
 app.post("/mobile/devices/unregister", async (req, reply) => {
@@ -14790,6 +14802,7 @@ app.get("/admin/mobile/devices", async (req, reply) => {
       permissionsReportedAt: d.permissionsReportedAt ?? null,
       keepAliveSnapshot: d.keepAliveSnapshot ?? null,
       keepAliveReportedAt: d.keepAliveReportedAt ?? null,
+      featureFlags: d.featureFlags ?? null,
       expoPushTokenTail: String(d.expoPushToken).slice(-12),
       voipPushTokenTail: d.voipPushToken ? String(d.voipPushToken).slice(-12) : null,
       createdAt: d.createdAt,
@@ -14797,6 +14810,56 @@ app.get("/admin/mobile/devices", async (req, reply) => {
       deactivatedAt: d.deactivatedAt
     }))
   };
+});
+
+// Set/merge per-device remote feature flags (SUPER_ADMIN only). This is the
+// operator control surface for the standing-registration staged rollout:
+//   POST /admin/mobile/devices/:id/feature-flags { "standingRegistration": true }
+// Keys are merged into the existing JSON (pass null to delete a key), so
+// unrelated flags survive. The device picks the change up on its next
+// /mobile/devices/register call (every app start) — no rebuild needed.
+app.post("/admin/mobile/devices/:id/feature-flags", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { id: deviceId } = req.params as { id: string };
+  const input = z.object({
+    standingRegistration: z.boolean().nullish(),
+  }).strict().parse(req.body || {});
+
+  // `as any`: featureFlags is newer than some generated Prisma clients (same
+  // pattern as the other fresh MobileDevice columns in this file).
+  const device = (await (db.mobileDevice as any).findUnique({
+    where: { id: deviceId },
+    select: { id: true, tenantId: true, platform: true, model: true, deviceName: true, featureFlags: true },
+  })) as { id: string; tenantId: string; featureFlags?: unknown } | null;
+  if (!device) return reply.code(404).send({ error: "device_not_found" });
+
+  const current = (device.featureFlags ?? {}) as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(input)) {
+    if (value === null) delete merged[key];
+    else if (value !== undefined) merged[key] = value;
+  }
+
+  const saved = await (db.mobileDevice as any).update({
+    where: { id: deviceId },
+    data: { featureFlags: merged },
+  });
+
+  await audit({
+    tenantId: device.tenantId,
+    actorUserId: admin.sub,
+    action: "MOBILE_DEVICE_FEATURE_FLAGS_SET",
+    entityType: "MobileDevice",
+    entityId: device.id,
+    metadata: { featureFlags: merged },
+  });
+  app.log.info(
+    { deviceId: device.id, featureFlags: merged },
+    "[MOBILE_FLAGS] feature flags updated"
+  );
+
+  return { ok: true, id: device.id, featureFlags: saved.featureFlags ?? {} };
 });
 
 // ── Per-device PBX registration state (device-registration dashboard) ──────────
