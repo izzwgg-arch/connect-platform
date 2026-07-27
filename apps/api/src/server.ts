@@ -30781,7 +30781,11 @@ app.post("/mobile/wake/event", async (req, reply) => {
 
   const body = z.object({
     pbxCallId: z.string().min(1),
-    deviceId: z.string().min(1).optional(),
+    // .nullish(): the Android client sends deviceId:null before it knows its
+    // device row id. A bare .optional() rejected null with a ZodError → 500,
+    // which silently killed the DEVICE_REGISTER_COMPLETE requeue trigger
+    // (observed 2026-07-27, "postWakeEvent non-2xx 500" on every cold answer).
+    deviceId: z.string().min(1).nullish(),
     stage: z.enum([
       "DEVICE_PUSH_RECEIVED",
       "DEVICE_REGISTER_TRIGGERED",

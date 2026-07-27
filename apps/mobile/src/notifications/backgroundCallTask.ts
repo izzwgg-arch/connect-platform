@@ -378,14 +378,39 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
 });
 
 // ─── Register the task with expo-notifications ────────────────────────────────
-Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK)
-  .then(() => {
-    console.log(`${LOG} registerTaskAsync OK (${BACKGROUND_NOTIFICATION_TASK})`);
-  })
-  .catch((e) => {
-    if (!String(e?.message).includes('already registered')) {
-      console.warn(`${LOG} registerTaskAsync failed:`, e?.message);
-    } else {
-      console.log(`${LOG} registerTaskAsync already registered`);
-    }
-  });
+// iOS ONLY. On Android this task is catastrophic and redundant:
+//  - Redundant: IncomingCallFirebaseService.java handles every call push
+//    natively (full-screen UI, ringtone, pending_call_native.json cache) and
+//    NotificationsContext reads that cache file directly as a fallback, so
+//    nothing on Android depends on this task's AsyncStorage writes.
+//  - Catastrophic: with direct FCM v1 pushes, every forwarded message while
+//    the app is backgrounded schedules an expo TaskJobService job, and
+//    expo-task-manager's headless app loader DESTROYS and recreates the live
+//    React context to run it ("ModuleRegistry was destroyed" in logcat). That
+//    teardown killed the JsSIP websocket mid-call (answered calls never got
+//    their SIP INVITE → voicemail; outgoing calls died mid-ring), piled up
+//    stale PJSIP contacts, and triggered the expo-av teardown crashes.
+//    Root-caused on-device 2026-07-27 (Samsung S24, build 20260723-163030).
+if (Platform.OS === 'ios') {
+  Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK)
+    .then(() => {
+      console.log(`${LOG} registerTaskAsync OK (${BACKGROUND_NOTIFICATION_TASK})`);
+    })
+    .catch((e) => {
+      if (!String(e?.message).includes('already registered')) {
+        console.warn(`${LOG} registerTaskAsync failed:`, e?.message);
+      } else {
+        console.log(`${LOG} registerTaskAsync already registered`);
+      }
+    });
+} else {
+  // Clear the registration persisted by earlier builds so expo-notifications
+  // stops scheduling TaskJobService jobs (registrations survive app updates).
+  Notifications.unregisterTaskAsync(BACKGROUND_NOTIFICATION_TASK)
+    .then(() => {
+      console.log(`${LOG} unregisterTaskAsync OK — Android no longer runs ${BACKGROUND_NOTIFICATION_TASK}`);
+    })
+    .catch(() => {
+      // not registered → nothing to clear
+    });
+}
