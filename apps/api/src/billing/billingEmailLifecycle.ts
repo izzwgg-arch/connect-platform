@@ -110,9 +110,39 @@ function invoiceMetadataEmail(metadata: unknown): string {
   return "";
 }
 
+/** Roles whose users may receive billing email as a last-resort fallback recipient. */
+const BILLING_FALLBACK_USER_ROLES = ["BILLING_ADMIN", "BILLING", "TENANT_ADMIN", "ADMIN"] as const;
+
+/**
+ * Last-resort recipient: active tenant users with a billing-capable role.
+ * Returns up to 3 distinct emails (comma-joined), preferring billing roles.
+ */
+async function resolveTenantBillingUserFallbackEmail(tenantId: string): Promise<string> {
+  const users: Array<{ email?: string | null; role?: string | null }> = await (db as any).user
+    .findMany({
+      where: { tenantId, status: "ACTIVE", role: { in: [...BILLING_FALLBACK_USER_ROLES] } },
+      select: { email: true, role: true },
+    })
+    .catch(() => []);
+  if (!Array.isArray(users) || users.length === 0) return "";
+  const rolePriority = new Map<string, number>(BILLING_FALLBACK_USER_ROLES.map((r, i) => [r, i]));
+  const seen = new Set<string>();
+  const emails: string[] = [];
+  for (const u of [...users].sort((a, b) => (rolePriority.get(String(a.role)) ?? 99) - (rolePriority.get(String(b.role)) ?? 99))) {
+    const email = String(u.email || "").trim();
+    if (!email || seen.has(email.toLowerCase())) continue;
+    seen.add(email.toLowerCase());
+    emails.push(email);
+    if (emails.length >= 3) break;
+  }
+  return emails.join(", ");
+}
+
 async function resolveBillingEmailRecipient(params: {
   tenantId: string;
   invoiceId?: string | null;
+  /** Fall back to active tenant admin/billing users when no billing email is configured (receipts). */
+  allowUserFallback?: boolean;
 }): Promise<{ to: string; source: string; tenantName?: string | null; settings?: any }> {
   const [tenant, invoice] = await Promise.all([
     (db as any).tenant.findUnique({
@@ -122,7 +152,7 @@ async function resolveBillingEmailRecipient(params: {
     params.invoiceId
       ? (db as any).billingInvoice.findUnique({
         where: { id: params.invoiceId },
-        select: { metadata: true },
+        select: { metadata: true, billingEmail: true },
       }).catch(() => null)
       : Promise.resolve(null),
   ]);
@@ -130,10 +160,138 @@ async function resolveBillingEmailRecipient(params: {
   const tenantEmail = normalizeMultiBillingEmail(settings?.billingEmail);
   if (tenantEmail) return { to: tenantEmail, source: "tenant_billing_email", tenantName: tenant?.name, settings };
 
+  const invoiceColumnEmail = normalizeMultiBillingEmail(invoice?.billingEmail);
+  if (invoiceColumnEmail) return { to: invoiceColumnEmail, source: "invoice_billing_email", tenantName: tenant?.name, settings };
+
   const invoiceEmail = invoiceMetadataEmail(invoice?.metadata);
   if (invoiceEmail) return { to: invoiceEmail, source: "invoice_metadata", tenantName: tenant?.name, settings };
 
+  if (params.allowUserFallback) {
+    const userEmail = await resolveTenantBillingUserFallbackEmail(params.tenantId);
+    if (userEmail) return { to: userEmail, source: "tenant_billing_user", tenantName: tenant?.name, settings };
+  }
+
   return { to: "", source: "missing", tenantName: tenant?.name, settings };
+}
+
+// ─── Billing admin alert (rides the ADMIN_ALERT EmailJob channel) ─────────────
+
+export const BILLING_ADMIN_ALERT_TENANT_ID = "connect-admin-tenant-v1";
+
+function billingAdminAlertRecipient(): string {
+  return (process.env.ADMIN_ALERT_EMAIL || "tod10950@gmail.com").trim();
+}
+
+function escapeAlertHtml(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Queue an ADMIN_ALERT email about a billing/receipt problem. Never throws. */
+export async function queueBillingAdminAlertEmail(subject: string, lines: string[]): Promise<boolean> {
+  try {
+    const to = billingAdminAlertRecipient();
+    if (!to) return false;
+    await (db as any).emailJob.create({
+      data: {
+        tenantId: BILLING_ADMIN_ALERT_TENANT_ID,
+        invoiceId: null,
+        type: "ADMIN_ALERT",
+        toEmail: to,
+        subject: `[Connect Alert] ${subject}`,
+        htmlBody: `<div style="font-family:monospace;white-space:pre-wrap">${lines.map(escapeAlertHtml).join("<br/>")}</div>`,
+        textBody: lines.join("\n"),
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A receipt could not be queued because the tenant has no usable recipient at all.
+ * Alert the operator exactly once per transaction (sentinel: receipt_email_escalated).
+ */
+async function escalateMissingReceiptRecipient(params: {
+  tenantId: string;
+  invoiceId: string;
+  invoiceNumber?: string | null;
+  transactionId: string;
+  tenantName?: string | null;
+}): Promise<boolean> {
+  const existing = await (db as any).billingEventLog.findFirst({
+    where: { type: "receipt_email_escalated", message: params.transactionId },
+  });
+  if (existing) return false;
+  await (db as any).billingEventLog.create({
+    data: {
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      type: "receipt_email_escalated",
+      message: params.transactionId,
+      metadata: { reason: "no_recipient" },
+    },
+  });
+  await queueBillingAdminAlertEmail(
+    `Receipt email NOT sent — no recipient for ${params.tenantName || params.tenantId}`,
+    [
+      `A payment receipt could not be emailed because no recipient could be resolved.`,
+      ``,
+      `Tenant:       ${params.tenantName || "?"} (${params.tenantId})`,
+      `Invoice:      ${params.invoiceNumber || "?"} (${params.invoiceId})`,
+      `Transaction:  ${params.transactionId}`,
+      ``,
+      `Checked: tenant billing settings email, invoice billing email, invoice metadata,`,
+      `and active tenant admin/billing users — all empty.`,
+      ``,
+      `Fix: set a billing email in the tenant's billing settings, then resend the receipt`,
+      `from the admin invoice menu (or wait for the receipt reconciliation sweep to retry).`,
+    ],
+  );
+  return true;
+}
+
+/**
+ * When a receipt fell back to tenant admin users (no billing email configured),
+ * nudge the operator to configure a proper billing email — at most once per
+ * tenant per 24h (sentinel: receipt_email_user_fallback_alerted).
+ */
+async function alertReceiptUserFallbackUsed(params: {
+  tenantId: string;
+  invoiceId: string;
+  tenantName?: string | null;
+  to: string;
+}): Promise<void> {
+  const recent = await (db as any).billingEventLog.findFirst({
+    where: {
+      tenantId: params.tenantId,
+      type: "receipt_email_user_fallback_alerted",
+      createdAt: { gte: new Date(Date.now() - 24 * 3600_000) },
+    },
+  });
+  if (recent) return;
+  await (db as any).billingEventLog.create({
+    data: {
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      type: "receipt_email_user_fallback_alerted",
+      message: params.to,
+      metadata: { reason: "no_billing_email_configured" },
+    },
+  });
+  await queueBillingAdminAlertEmail(
+    `Receipt sent via user fallback — set billing email for ${params.tenantName || params.tenantId}`,
+    [
+      `A payment receipt was delivered, but only because it fell back to the tenant's`,
+      `admin/billing users — this tenant has no billing email configured.`,
+      ``,
+      `Tenant:     ${params.tenantName || "?"} (${params.tenantId})`,
+      `Sent to:    ${params.to}`,
+      ``,
+      `Fix: set a billing email in the tenant's billing settings so receipts go to the`,
+      `right inbox instead of the fallback.`,
+    ],
+  );
 }
 
 /**
@@ -306,11 +464,27 @@ export async function queueReceiptEmailOnce(params: {
   force?: boolean;
 }): Promise<boolean> {
   if (!params.force && (await hasReceiptEmailForTransaction(params.transactionId))) return false;
-  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
+  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId, allowUserFallback: true });
   const to = recipient.to;
   if (!to) {
     await logLifecycle("receipt_email_skipped", params.tenantId, params.invoiceId, "No billingEmail", { transactionId: params.transactionId });
+    // A skipped receipt must never be silent: alert the operator (once per transaction).
+    await escalateMissingReceiptRecipient({
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      invoiceNumber: params.invoiceNumber,
+      transactionId: params.transactionId,
+      tenantName: recipient.tenantName,
+    }).catch(() => false);
     return false;
+  }
+  if (recipient.source === "tenant_billing_user") {
+    await alertReceiptUserFallbackUsed({
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      tenantName: recipient.tenantName,
+      to,
+    }).catch(() => undefined);
   }
   const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
   const portalInvoiceUrl = billingInvoicePortalUrl(params.invoiceId);

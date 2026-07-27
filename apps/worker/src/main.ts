@@ -26,6 +26,7 @@ import {
   queueAutopayReminderEmailOnce,
   queueInvoiceSentOnFinalize,
 } from "../../api/src/billing/billingEmailLifecycle";
+import { sweepMissingReceiptEmails } from "../../api/src/billing/receiptReconciliation";
 import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
 import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
@@ -3620,6 +3621,32 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 runMonthlyBillingAutomation().catch((err) => console.error("initial monthly billing cycle failed", err?.message || err));
+
+// Receipt reconciliation sweep — redundant safety net (also runs in the API
+// every 10 min): guarantees every approved payment gets a receipt email even
+// if the API's sweep or the queue-on-charge path is down. Per-transaction
+// sentinels in BillingEventLog keep the two runners from duplicating work.
+let _receiptSweepRunning = false;
+async function runWorkerReceiptReconciliation(): Promise<void> {
+  if (_receiptSweepRunning) return;
+  _receiptSweepRunning = true;
+  try {
+    const summary = await sweepMissingReceiptEmails({ runner: "worker" });
+    if (summary.queued > 0 || summary.revived > 0 || summary.escalated > 0 || summary.errors > 0) {
+      console.warn("receipt reconciliation sweep took action", JSON.stringify(summary));
+    }
+  } finally {
+    _receiptSweepRunning = false;
+  }
+}
+
+setInterval(() => {
+  runWorkerReceiptReconciliation().catch((err) => console.error("receipt reconciliation sweep failed", err?.message || err));
+}, 30 * 60 * 1000);
+
+setTimeout(() => {
+  runWorkerReceiptReconciliation().catch((err) => console.error("initial receipt reconciliation sweep failed", err?.message || err));
+}, 5 * 60 * 1000);
 
 // ── Supermarket delivery tracking — background cycles (DELIVERY_DEPLOY.md §4) ──
 // ETA snapshots every 30s; retention sweep every 6h. Both no-op for tenants with

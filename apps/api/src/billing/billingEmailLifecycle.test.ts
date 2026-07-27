@@ -8,11 +8,13 @@ const state: {
   invoices: Map<string, Row>;
   emailJobs: Row[];
   events: Row[];
+  users: Row[];
 } = {
   tenants: new Map(),
   invoices: new Map(),
   emailJobs: [],
   events: [],
+  users: [],
 };
 
 function resetState() {
@@ -20,6 +22,7 @@ function resetState() {
   state.invoices = new Map();
   state.emailJobs = [];
   state.events = [];
+  state.users = [];
 }
 
 const db = {
@@ -34,25 +37,35 @@ const db = {
       return invoice;
     },
   },
+  user: {
+    findMany: async ({ where }: { where: Row }) => state.users.filter((u) =>
+      u.tenantId === where.tenantId
+      && (!where.status || u.status === where.status)
+      && (!where.role?.in || where.role.in.includes(u.role)),
+    ),
+  },
   emailJob: {
     findFirst: async ({ where }: { where: Row }) => state.emailJobs.find((job) =>
       job.tenantId === where.tenantId
       && job.type === where.type
-      && where.status?.in?.includes(job.status)
+      && (!where.status?.in || where.status.in.includes(job.status))
       && (!where.htmlBody?.contains || String(job.htmlBody || "").includes(where.htmlBody.contains)),
     ) || null,
     create: async ({ data }: { data: Row }) => {
-      const row = { id: `email_${state.emailJobs.length + 1}`, status: "QUEUED", ...data };
+      const row = { id: `email_${state.emailJobs.length + 1}`, status: "QUEUED", createdAt: new Date(), ...data };
       state.emailJobs.push(row);
       return row;
     },
   },
   billingEventLog: {
     findFirst: async ({ where }: { where: Row }) => state.events.find((event) =>
-      event.type === where.type && (!where.message || event.message === where.message),
+      event.type === where.type
+      && (!where.message || event.message === where.message)
+      && (!where.tenantId || event.tenantId === where.tenantId)
+      && (!where.createdAt?.gte || (event.createdAt && event.createdAt >= where.createdAt.gte)),
     ) || null,
     create: async ({ data }: { data: Row }) => {
-      const row = { id: `event_${state.events.length + 1}`, ...data };
+      const row = { id: `event_${state.events.length + 1}`, createdAt: new Date(), ...data };
       state.events.push(row);
       return row;
     },
@@ -151,6 +164,94 @@ test("declined payment email path does not create a paid receipt", async () => {
   assert.equal(state.emailJobs.length, 1);
   assert.equal(state.emailJobs[0].type, "BILLING_PAYMENT_FAILED");
   assert.equal(state.events.some((event) => event.type === "receipt_emailed"), false);
+});
+
+test("receipt email falls back to the invoice billingEmail column", async () => {
+  const { queueReceiptEmailOnce } = await loadLifecycle();
+  resetState();
+  seedTenant("tenant_1", null);
+  state.invoices.set("invoice_1", { id: "invoice_1", billingEmail: "column@example.com", metadata: {} });
+
+  const queued = await queueReceiptEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-4",
+    totalCents: 1200,
+    transactionId: "tx_invoice_column",
+  });
+
+  assert.equal(queued, true);
+  assert.equal(state.emailJobs[0].type, "BILLING_RECEIPT");
+  assert.equal(state.emailJobs[0].toEmail, "column@example.com");
+  assert.equal(state.events[0].metadata.recipientSource, "invoice_billing_email");
+});
+
+test("receipt email falls back to tenant billing users and alerts operator once per day", async () => {
+  const { queueReceiptEmailOnce } = await loadLifecycle();
+  resetState();
+  seedTenant("tenant_1", null);
+  seedInvoice("invoice_1");
+  state.users.push(
+    { tenantId: "tenant_1", email: "admin@customer.com", role: "TENANT_ADMIN", status: "ACTIVE" },
+    { tenantId: "tenant_1", email: "billing@customer.com", role: "BILLING_ADMIN", status: "ACTIVE" },
+    { tenantId: "tenant_1", email: "inactive@customer.com", role: "TENANT_ADMIN", status: "SUSPENDED" },
+  );
+
+  const queued = await queueReceiptEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-5",
+    totalCents: 3000,
+    transactionId: "tx_user_fallback",
+  });
+
+  assert.equal(queued, true);
+  const receipt = state.emailJobs.find((j) => j.type === "BILLING_RECEIPT");
+  // Billing roles first, inactive users excluded.
+  assert.equal(receipt?.toEmail, "billing@customer.com, admin@customer.com");
+  assert.equal(state.events.find((e) => e.type === "receipt_emailed")?.metadata.recipientSource, "tenant_billing_user");
+  // Operator gets nudged to configure a real billing email — once.
+  assert.equal(state.emailJobs.filter((j) => j.type === "ADMIN_ALERT").length, 1);
+
+  await queueReceiptEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-5b",
+    totalCents: 3000,
+    transactionId: "tx_user_fallback_2",
+  });
+  assert.equal(state.emailJobs.filter((j) => j.type === "ADMIN_ALERT").length, 1);
+});
+
+test("receipt with no resolvable recipient escalates an admin alert exactly once per transaction", async () => {
+  const { queueReceiptEmailOnce } = await loadLifecycle();
+  resetState();
+  seedTenant("tenant_1", null);
+  seedInvoice("invoice_1");
+
+  const first = await queueReceiptEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-6",
+    totalCents: 4000,
+    transactionId: "tx_no_recipient",
+    force: true,
+  });
+  const retry = await queueReceiptEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-6",
+    totalCents: 4000,
+    transactionId: "tx_no_recipient",
+    force: true,
+  });
+
+  assert.equal(first, false);
+  assert.equal(retry, false);
+  assert.equal(state.emailJobs.filter((j) => j.type === "BILLING_RECEIPT").length, 0);
+  assert.equal(state.events.filter((e) => e.type === "receipt_email_skipped").length, 2);
+  assert.equal(state.events.filter((e) => e.type === "receipt_email_escalated").length, 1);
+  assert.equal(state.emailJobs.filter((j) => j.type === "ADMIN_ALERT").length, 1);
 });
 
 test("autopay T-3 reminder queues once per invoice", async () => {

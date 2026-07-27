@@ -178,6 +178,7 @@ import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
 import { registerBillingRoutes } from "./billing/routes";
 import { extractBillingInvoiceIdFromEmailJob, loadBillingPdfAttachmentsForEmailJob } from "./billing/billingEmailAttachments";
+import { sweepMissingReceiptEmails } from "./billing/receiptReconciliation";
 import { applySolaWebhookToBillingInvoice, reconcileBillingTransactionFromPortalRefund, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
@@ -33830,6 +33831,25 @@ const emailJobTimer = registerShutdownTimer(
   }, 15_000),
 );
 emailJobTimer.unref();
+
+// Receipt reconciliation sweep — safety net so every approved payment gets a
+// receipt email even when the primary queue-on-charge path missed it
+// (no billing email at charge time, crash between charge and queue, or a
+// receipt EmailJob that exhausted all retries). Also runs in the worker.
+function runReceiptReconciliationSweep(): void {
+  sweepMissingReceiptEmails({ runner: "api" })
+    .then((summary) => {
+      if (summary.queued > 0 || summary.revived > 0 || summary.escalated > 0 || summary.errors > 0) {
+        app.log.warn({ receiptSweep: summary }, "receipt reconciliation sweep took action");
+      }
+    })
+    .catch((e) => app.log.error({ err: e }, "receipt reconciliation sweep failed"));
+}
+registerShutdownTimer(setTimeout(runReceiptReconciliationSweep, 90_000));
+const receiptReconciliationTimer = registerShutdownTimer(
+  setInterval(runReceiptReconciliationSweep, 10 * 60_000),
+);
+receiptReconciliationTimer.unref();
 
 const invoiceOverdueTimer = registerShutdownTimer(
   setInterval(() => {
