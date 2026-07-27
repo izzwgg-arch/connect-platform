@@ -2292,6 +2292,26 @@ async function runMohScheduleCycle(): Promise<void> {
           continue;
         }
 
+        // Per-extension MOH overrides (M2 / portal): the worker's key set MUST
+        // carry them — the forward-clear below tombstones any clearable key the
+        // last publish wrote that this one omits, so omitting live extension
+        // overrides here would wipe them on the next schedule transition.
+        const extOverrideRows: any[] = await (db as any).mohExtensionOverride.findMany({
+          where: { tenantId, enabled: true },
+          orderBy: { extension: "asc" },
+          select: { extension: true, vitalPbxMohClassName: true },
+        });
+        const extOverrideKeys = extOverrideRows
+          .filter((r) => /^[0-9A-Za-z_-]{1,32}$/.test(String(r.extension ?? "")) && String(r.vitalPbxMohClassName ?? "").trim().length > 0)
+          .flatMap((r) => {
+            const extFam = `${fam}/extensions/${r.extension}`;
+            const cls = String(r.vitalPbxMohClassName).trim();
+            return [
+              { family: extFam, key: "moh_class",        value: cls },
+              { family: extFam, key: "active_moh_class", value: cls },
+            ];
+          });
+
         const keys = [
           { family: fam, key: "active_moh_class",           value: profile.vitalPbxMohClassName },
           { family: fam, key: "moh_class",                  value: profile.vitalPbxMohClassName },
@@ -2303,6 +2323,7 @@ async function runMohScheduleCycle(): Promise<void> {
           { family: fam, key: "hold_announce",              value: profile.holdAnnouncementEnabled ? (profile.holdAnnouncementRef ?? "") : "" },
           { family: fam, key: "hold_repeat",                value: String(profile.holdAnnouncementIntervalSec ?? 30) },
           ...sourceKeys,
+          ...extOverrideKeys,
         ];
 
         // Forward stale-key cleanup: tombstone any clearable key the previous

@@ -23892,6 +23892,21 @@ async function doMohPublish(
   const extensionKeys = buildExtensionOverrideKeys(slug, extensionOverrideRows);
   const keys = [...tenantDefaultKeys, ...extensionKeys];
 
+  // Tombstone per-extension class keys the previous publish wrote but this one
+  // no longer includes — without this, an ext_clear leaves the extension's old
+  // moh_class in AstDB forever (found live 2026-07-26: ext 101 kept playing the
+  // cleared override). Restricted to `.../extensions/<ext>` moh_class keys: the
+  // per-source (`moh/src`) and admin-overlay keys are worker-owned and an API
+  // publish must never clear them.
+  {
+    const { computeForwardKeyClears } = await import("@connect/shared");
+    const prevKeysForClears: any[] = Array.isArray(lastPublish?.keysWritten) ? lastPublish.keysWritten : [];
+    const extClears = computeForwardKeyClears(prevKeysForClears, keys).filter(
+      (k) => /\/extensions\/[0-9A-Za-z_-]{1,32}$/.test(k.family) && (k.key === "moh_class" || k.key === "active_moh_class"),
+    );
+    keys.push(...extClears);
+  }
+
   const previousMohClass = lastPublish?.newMohClass ?? null;
   // Use last publish's keysWritten as the "previous snapshot" for rollback.
   // This naturally carries forward any per-extension keys from the prior
