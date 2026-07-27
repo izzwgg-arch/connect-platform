@@ -34,7 +34,8 @@ const MIC_ENGINES: { id: string; label: string }[] = [
   { id: "yiddishlabs", label: "Yiddish Labs" },
 ];
 
-type Status = { enabled: boolean; killSwitchEngaged: boolean; providersConfigured: string[]; smtpConfigured: boolean; dbConnected: boolean; chatEnabled: boolean; manifest: { total: number; executable: number } };
+type Status = { enabled: boolean; killSwitchEngaged: boolean; providersConfigured: string[]; activeChatModel?: { provider: string; model: string }; smtpConfigured: boolean; dbConnected: boolean; chatEnabled: boolean; manifest: { total: number; executable: number } };
+type ModelCatalog = { active: { provider: string; model: string }; providers: Record<string, string[]> };
 type Cap = { id: string; title: string; kind: string; status: string; roles: string[]; pbxWrite: boolean; liveEnabled: boolean };
 
 const statusChip = (ok: boolean, on = "on", off = "off") => (
@@ -59,6 +60,9 @@ export default function AssistantPage() {
   const [masterKey, setMasterKey] = useState(true);
   const [keyInput, setKeyInput] = useState<Record<string, string>>({});
   const [keyMsg, setKeyMsg] = useState<Record<string, string>>({});
+  const [models, setModels] = useState<ModelCatalog | null>(null);
+  const [modelSel, setModelSel] = useState("");
+  const [modelMsg, setModelMsg] = useState("");
   const [recording, setRecording] = useState(false);
   const [micMsg, setMicMsg] = useState("");
   const [micEngine, setMicEngine] = useState("openai");
@@ -87,6 +91,37 @@ export default function AssistantPage() {
       setKeyMsg((m) => ({ ...m, [key]: value.trim() ? "saved ✓ (takes effect now)" : "cleared" }));
       load();
     } catch { setKeyMsg((m) => ({ ...m, [key]: "save failed" })); }
+  };
+
+  // Model catalog is fetched once (it hits both providers' list APIs) and after
+  // every apply — the ACTIVE model rides the regular 15s /status poll instead.
+  const loadModels = useCallback(async () => {
+    try {
+      const m = await get<ModelCatalog>("/admin/models");
+      setModels(m);
+      setModelSel((s) => s || `${m.active.provider}:${m.active.model}`);
+    } catch { /* owner-only or agent down; card just hides */ }
+  }, []);
+  useEffect(() => { loadModels(); }, [loadModels]);
+
+  const applyModel = async (value: string) => {
+    setModelMsg("applying…");
+    try {
+      const r = await post<{ ok: boolean; activeChatModel?: { provider: string; model: string } }>("/admin/secrets", { key: "chat_model", value });
+      const a = r.activeChatModel;
+      setModelMsg(a ? `✓ chat now runs on ${a.provider}:${a.model}` : "✓ applied");
+      load(); loadModels();
+    } catch { setModelMsg("✗ apply failed"); }
+  };
+
+  const testModel = async () => {
+    const [provider, ...rest] = modelSel.split(":");
+    if (!provider || rest.length === 0) return;
+    setModelMsg("testing…");
+    try {
+      const r = await post<any>("/admin/selftest", { provider, model: rest.join(":") });
+      setModelMsg(r.ok ? `✓ ${r.model} replied: ${r.text}` : `✗ ${String(r.error).slice(0, 120)}`);
+    } catch (e) { setModelMsg("✗ " + String(e)); }
   };
 
   const startMic = async () => {
@@ -194,6 +229,34 @@ export default function AssistantPage() {
             </div>
           );
         })}
+      </div>
+
+      <div style={card}>
+        <h3 style={{ fontSize: 14, marginBottom: 4 }}>Chat model</h3>
+        <div style={{ fontSize: 11.5, opacity: 0.65, marginBottom: 10 }}>
+          Which LLM answers the agent chat (support conversations + task extraction). Applies instantly to new messages — no restart. Heavy-reasoning jobs (diagnostics, security, reports) keep their own model.
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13 }}>Active:</span>
+          <span style={{ ...pill, background: "#12233f", color: "#60a5fa" }}>
+            {status?.activeChatModel ? `${status.activeChatModel.provider}:${status.activeChatModel.model}` : "…"}
+          </span>
+          <select value={modelSel} onChange={(e) => setModelSel(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13, minWidth: 260 }}>
+            {!models && <option value="">loading models…</option>}
+            {models && Object.entries(models.providers).map(([prov, ids]) => ids.length > 0 && (
+              <optgroup key={prov} label={prov === "openai" ? "OpenAI" : "Anthropic (Claude)"}>
+                {ids.map((id) => <option key={`${prov}:${id}`} value={`${prov}:${id}`} style={{ color: "#000" }}>{id}</option>)}
+              </optgroup>
+            ))}
+          </select>
+          <button style={btn} onClick={testModel} disabled={!modelSel}>Test selected</button>
+          <button style={btnBlue} onClick={() => applyModel(modelSel)} disabled={!modelSel || !masterKey}>Use this model</button>
+          <button style={btn} onClick={() => { setModelSel(""); applyModel(""); }}>Reset to default</button>
+        </div>
+        {modelMsg && <div style={{ fontSize: 12.5, fontFamily: "Consolas,monospace", marginTop: 8, color: modelMsg.startsWith("✓") ? "#22c55e" : modelMsg.startsWith("✗") ? "#ef4444" : "#8b98a9" }}>{modelMsg}</div>}
+        <div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
+          The list is live from each provider&apos;s models API (chat-capable only). &quot;Test selected&quot; makes a real call to exactly that model. Your pick is saved on the server and survives restarts.
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

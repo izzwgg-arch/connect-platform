@@ -37,6 +37,28 @@ export const DEFAULT_ROUTES: RouteTable = {
   policy_editing: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
 };
 
+/**
+ * Owner model-picker support (Assistant page, 2026-07-27): which provider
+ * model IDs are offered as CHAT models. Both providers list far more than
+ * chat completions (embeddings, TTS, whisper, image, realtime, moderation,
+ * dated snapshots…) — this keeps the dropdown to models that actually work
+ * with our chat call shape. Pure and unit-tested.
+ */
+export function filterChatModels(provider: ProviderName, ids: string[]): string[] {
+  const deny = /(embed|whisper|tts|audio|realtime|image|dall-e|moderation|search|transcribe|instruct|davinci|babbage|computer-use|codex|-pro\b|deep-research)/i;
+  const dated = /-\d{4}-\d{2}-\d{2}$|-\d{8}$|-\d{4}$/; // snapshots — bare aliases stay
+  const allow = provider === "openai" ? /^(gpt-|o\d|chatgpt-)/i : /^claude-/i;
+  return [...new Set(ids)]
+    .filter((id) => allow.test(id) && !deny.test(id) && !dated.test(id))
+    .sort();
+}
+
+/** Parse a stored "provider:modelId" pick; null when malformed. */
+export function parseChatModelPick(v: string | null | undefined): { provider: ProviderName; model: string } | null {
+  const m = String(v ?? "").trim().match(/^(openai|anthropic):(.+)$/);
+  return m ? { provider: m[1] as ProviderName, model: m[2].trim() } : null;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -81,15 +103,56 @@ export class ModelRouter {
   }
 
   /**
+   * Owner model-picker: point the CONVERSATION task classes (support_chat +
+   * task_extraction) at an explicit provider/model. The other provider's
+   * default stays as the failover; heavy-reasoning routes are untouched.
+   * Passing null restores the code defaults. Takes effect immediately.
+   */
+  setChatModel(pick: { provider: ProviderName; model: string } | null): void {
+    const next = pick
+      ? { primary: pick.provider, model: pick.model, fallbackModel: pick.provider === "openai" ? ANTHROPIC_MODEL : OPENAI_MODEL }
+      : { primary: "anthropic" as ProviderName, model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL };
+    this.routes = { ...this.routes, support_chat: { ...next }, task_extraction: { ...next } };
+  }
+
+  /** The chat model currently in effect (for status/UI). */
+  activeChatModel(): { provider: ProviderName; model: string } {
+    const r = this.routes.support_chat;
+    return { provider: r.primary, model: r.model };
+  }
+
+  /**
+   * Live model catalogs from both providers (owner model-picker dropdown).
+   * Filtered to chat-capable IDs; a provider without a key returns [].
+   */
+  async listModels(): Promise<Record<ProviderName, string[]>> {
+    const out: Record<ProviderName, string[]> = { openai: [], anthropic: [] };
+    if (this.openai) {
+      try {
+        const ids: string[] = [];
+        for await (const m of this.openai.models.list()) ids.push(m.id);
+        out.openai = filterChatModels("openai", ids);
+      } catch { /* key invalid / network — dropdown just omits the provider */ }
+    }
+    if (this.anthropic) {
+      try {
+        const res = await this.anthropic.models.list({ limit: 100 });
+        out.anthropic = filterChatModels("anthropic", res.data.map((m: any) => m.id));
+      } catch { /* ditto */ }
+    }
+    return out;
+  }
+
+  /**
    * Directly ping ONE provider (no routing, no failover) — used by the owner
    * self-test so "Test OpenAI" actually calls OpenAI and "Test Claude" actually
    * calls Anthropic. Throws if that provider's key isn't configured or the call
    * fails, so the UI shows the real result instead of silently failing over.
    */
-  async ping(provider: ProviderName): Promise<{ provider: ProviderName; model: string; text: string }> {
+  async ping(provider: ProviderName, explicitModel?: string): Promise<{ provider: ProviderName; model: string; text: string }> {
     if (provider === "openai" && !this.openai) throw new Error("OpenAI key not configured");
     if (provider === "anthropic" && !this.anthropic) throw new Error("Anthropic key not configured");
-    const model = provider === "openai" ? OPENAI_MODEL : ANTHROPIC_MODEL;
+    const model = explicitModel?.trim() || (provider === "openai" ? OPENAI_MODEL : ANTHROPIC_MODEL);
     // Larger max_tokens so reasoning-style models still emit visible output.
     const res = await this.callProvider(
       provider,

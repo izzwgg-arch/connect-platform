@@ -168,6 +168,12 @@ async function main() {
     };
     const anthropicResolved = (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey;
     router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: anthropicResolved });
+    // Owner's chat-model pick (Assistant page) survives restarts via the store.
+    {
+      const { parseChatModelPick } = await import("./llm/router");
+      const pick = parseChatModelPick(await secrets.get("chat_model"));
+      if (pick) router.setChatModel(pick);
+    }
 
     // Yiddish translate-bridge: reads the LIVE YL key from providerKeys each call,
     // so saving a key from the Assistant page hot-reloads with no restart. When a
@@ -483,10 +489,21 @@ async function main() {
     // Owner console — provider self-test (owner JWT, no shared secret needed).
     // Pings the chosen provider so the Assistant page can prove Sonnet/Opus/GPT
     // actually respond. Blocked while the agent is disabled (kill switch).
+    // With an explicit `model`, pings EXACTLY that provider+model (no routing,
+    // no failover) — the model-picker's "Test" button depends on this honesty.
     app.post("/agent/admin/selftest", async (req, reply) => {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
       if (killSwitchEngaged()) return reply.code(423).send({ error: "kill_switch_engaged_or_agent_disabled" });
-      const provider = (req.body as any)?.provider === "anthropic" ? "diagnostics" : "support_chat";
+      const b = (req.body ?? {}) as any;
+      if (typeof b.model === "string" && b.model.trim() && (b.provider === "openai" || b.provider === "anthropic")) {
+        try {
+          const r = await router.ping(b.provider, b.model);
+          return { ok: true, provider: r.provider, model: r.model, text: r.text.trim(), failedOver: false };
+        } catch (err) {
+          return { ok: false, error: String(err) };
+        }
+      }
+      const provider = b?.provider === "anthropic" ? "diagnostics" : "support_chat";
       try {
         const r = await router.complete(provider as any, [
           { role: "system", content: "Reply with exactly: SELFTEST-OK" },
@@ -496,6 +513,14 @@ async function main() {
       } catch (err) {
         return { ok: false, error: String(err) };
       }
+    });
+
+    // Owner console — model picker (Assistant page). Lists every chat-capable
+    // model both provider keys can reach, plus which one is active right now.
+    app.get("/agent/admin/models", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const providers = await router.listModels();
+      return { active: router.activeChatModel(), providers };
     });
 
     // Owner console — consolidated capabilities view (certified/executable gate).
@@ -514,8 +539,12 @@ async function main() {
       const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
       if (id?.role !== "owner") return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
-      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key"];
+      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key", "chat_model"];
       if (!valid.includes(b.key) || typeof b.value !== "string") return reply.code(400).send({ error: "bad_request" });
+      const { parseChatModelPick } = await import("./llm/router");
+      if (b.key === "chat_model" && b.value.trim() && !parseChatModelPick(b.value)) {
+        return reply.code(400).send({ error: "bad_model_pick", hint: 'expected "openai:<model>" or "anthropic:<model>" (empty to reset)' });
+      }
       try {
         await secrets.set(b.key, b.value, `owner:${id.clientUserId}`);
       } catch (err) {
@@ -526,7 +555,9 @@ async function main() {
       providerKeys.yiddishLabsApiKey = (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey;
       providerKeys.everettApiKey = (await secrets.get("ivrit_api_key")) ?? cfg.everettApiKey;
       router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey });
-      return { ok: true, status: await secrets.status() };
+      // Apply the chat-model pick (or reset to defaults when cleared).
+      router.setChatModel(parseChatModelPick(await secrets.get("chat_model")));
+      return { ok: true, status: await secrets.status(), activeChatModel: router.activeChatModel() };
     });
 
     // ── Live mic transcription (Assistant page). Accepts a base64 audio clip,
@@ -830,6 +861,7 @@ async function main() {
     enabled: cfg.enabled,
     killSwitchEngaged: killSwitchEngaged(),
     providersConfigured: router.available(),
+    activeChatModel: router.activeChatModel(),
     smtpConfigured: notifier.configured,
     dbConnected: prisma !== null,
     chatEnabled: engine !== null,
