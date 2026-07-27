@@ -10,6 +10,7 @@ import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
+import { toPublicUrl } from "./provisioning";
 
 function sanitizeFileName(name: string): string {
   const base = path.basename(name || "");
@@ -69,8 +70,19 @@ function generatePublicToken(bytes: number = 24): string {
 }
 
 function isWriteBlocked(row: any): boolean {
+  if (isReusableTemplate(row)) return true; // spawn-only — see below
   const s = String(row?.status || "");
   return ["SUBMITTED", "CANCELED", "COMPLETED"].includes(s);
+}
+
+/**
+ * Template row behind a REUSABLE test link (answers.reusableTestLink = true).
+ * It is spawn-only: every visit mints a fresh normal submission from it, and
+ * the template itself must never be written to (a wizard autosave would wipe
+ * the flag and kill the link).
+ */
+function isReusableTemplate(row: any): boolean {
+  return !!(row?.answers as any)?.reusableTestLink;
 }
 
 export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
@@ -98,6 +110,24 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // Public config — card capture disabled for now
   app.get("/onboarding/:token/public-config", async (req, reply) => {
     return { canTokenize: false };
+  });
+
+  // Reusable TEST link: mints a brand-new submission (own token) on every call,
+  // so one evergreen URL supports unlimited wizard runs. Only works against a
+  // template row explicitly flagged answers.reusableTestLink = true.
+  app.post("/onboarding/test/:token/spawn", async (req, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const template = await ensureRowForToken(token);
+    if (!template || !isReusableTemplate(template)) return reply.code(404).send({ error: "invalid_token" });
+    const newToken = generatePublicToken();
+    const created = await (db as any).onboardingSubmission.create({
+      data: {
+        publicToken: newToken,
+        status: "INVITE_SENT" as OnboardingStatus,
+        events: { create: { type: "CREATED", message: `Spawned from reusable test link ${token.slice(0, 8)}…` } },
+      },
+    });
+    return { ok: true, token: newToken, link: toPublicUrl(newToken), submissionId: created.id };
   });
 
   // VoIP.ms availability search takes 15-25s; cache per-query results so
