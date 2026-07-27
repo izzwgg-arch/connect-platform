@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { TriageOrchestrator } from "./orchestrator";
 import { detectIntent } from "./intent";
 
-function makePrisma(opts: { role?: string; ownExt?: string | null; override?: any; messages?: any[] } = {}): any {
+function makePrisma(opts: { role?: string; ownExt?: string | null; override?: any; extOverride?: any; messages?: any[] } = {}): any {
   return {
     tenantPbxLink: { findUnique: async () => ({ pbxTenantId: "21" }) },
     extension: { findFirst: async () => (opts.ownExt === null ? null : { extNumber: opts.ownExt ?? "101" }) },
@@ -27,6 +27,7 @@ function makePrisma(opts: { role?: string; ownExt?: string | null; override?: an
     },
     mohScheduleConfig: { findUnique: async () => ({ timezone: "America/New_York" }) },
     mohOverrideState: { findUnique: async () => opts.override ?? { isActive: false, profileId: null } },
+    mohExtensionOverride: { findFirst: async () => opts.extOverride ?? null },
     agentMessage: { findMany: async () => opts.messages ?? [] },
   };
 }
@@ -182,6 +183,40 @@ test("TIMED REVERT: 'change it back in 15 minutes' re-arms the active override w
   assert.equal(created[0].params.profileId, "prof-jazz");
   assert.equal(created[0].params.expiresMinutes, 15);
   assert.match(out.reply ?? "", /back to the regular schedule in 15 minutes/);
+});
+
+test("TIMED REVERT: admin WITH an extension is NOT asked scope — tenant override wins (live regression 2026-07-26)", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "TENANT_ADMIN",
+    ownExt: "102",
+    override: { isActive: true, profileId: "prof-jazz" },
+    messages: [{ role: "assistant", content: 'Done — switch the hold music to "Jazz".', contentEn: null }],
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("change it back in 2 minutes"), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.doesNotMatch(out.reply ?? "", /whole company, or just your extension/);
+  assert.equal(created[0].capabilityId, "pbx.M1");
+  assert.equal(created[0].params.action, "activate");
+  assert.equal(created[0].params.expiresMinutes, 2);
+});
+
+test("TIMED REVERT: admin's own ext override beats the tenant override for scope inference", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "TENANT_ADMIN",
+    ownExt: "102",
+    override: { isActive: true, profileId: "prof-jazz" },
+    extOverride: { mohProfileId: "prof-classical" },
+    messages: [{ role: "assistant", content: 'Done — switch extension 102\'s hold music to "Classical Calm".', contentEn: null }],
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("change it back"), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created[0].capabilityId, "pbx.M2");
+  assert.equal(created[0].params.action, "clear");
+  assert.equal(created[0].params.objectId, "102");
 });
 
 test("TIMED REVERT with nothing active says so instead of acting", async () => {

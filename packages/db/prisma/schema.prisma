@@ -831,12 +831,20 @@ model Tenant {
   ivrScheduleConfig               IvrScheduleConfig?
   ivrOverrideState                IvrOverrideState?
   ivrPublishRecords               IvrPublishRecord[]
+  /// "connect" (Connect-managed MOH, default) | "pbx" (native VitalPBX control —
+  /// the worker reconcile never republishes Connect keys for these tenants).
+  /// Column added by migration 20260702000000_moh_control_and_admin_schedules.
+  mohControlMode                  String                            @default("connect")
   mohProfiles                     MohProfile[]
   mohScheduleConfig               MohScheduleConfig?
   mohOverrideState                MohOverrideState?
   mohPublishRecords               MohPublishRecord[]
   mohLastPublishedState           MohLastPublishedState?
   mohExtensionOverrides           MohExtensionOverride[]
+  mohExtensionControls            MohExtensionControl[]
+  mohSourcePolicies               MohSourcePolicy[]
+  mohAdminScheduleTargets         MohAdminScheduleTarget[]
+  mohAdminScheduleActivations     MohAdminScheduleActivation[]
   didRouteMappings                DidRouteMapping[]
   outboundRoutes                  OutboundRoute[]
   userOutboundRoutePermissions    UserOutboundRoutePermission[]
@@ -3463,6 +3471,7 @@ model MohProfile {
   overrideStates     MohOverrideState[]
   didRouteMappings   DidRouteMapping[]
   extensionOverrides MohExtensionOverride[]
+  sourcePolicies     MohSourcePolicy[]
 
   @@index([tenantId])
   @@index([tenantId, type])
@@ -3507,6 +3516,11 @@ model MohScheduleRule {
   priority   Int       @default(0) // higher = wins on overlap
   isActive   Boolean   @default(true)
   createdAt  DateTime  @default(now())
+  /// Targeting (migration 20260630120000): scope "tenant" | "extension";
+  /// extension="" = tenant-wide; callSource="" = all call sources.
+  scope      String    @default("tenant")
+  extension  String    @default("")
+  callSource String    @default("")
 
   schedule MohScheduleConfig @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
   profile  MohProfile        @relation(fields: [profileId], references: [id], onDelete: Cascade)
@@ -3514,6 +3528,7 @@ model MohScheduleRule {
   @@index([scheduleId])
   @@index([scheduleId, isActive])
   @@index([ruleType])
+  @@index([scheduleId, scope, extension])
 }
 
 /// Current manual override per tenant (upsert: one row per tenant).
@@ -3554,6 +3569,11 @@ model MohPublishRecord {
   status                     String   @default("pending") // "pending" | "success" | "failed"
   error                      String?
   isRollback                 Boolean  @default(false)
+  // Live verification + control mode (migration 20260702000000).
+  verifiedAt                 DateTime?
+  verifiedActiveClass        String?
+  verifyStatus               String?
+  controlMode                String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -3624,12 +3644,142 @@ model MohAssignmentJob {
 /// Per-tenant last-known publish state — cached to avoid repeated DB queries from the worker.
 /// One row per tenant; upserted on every successful publish.
 model MohLastPublishedState {
-  tenantId    String   @id
-  mohClass    String
-  holdMode    String
-  publishedAt DateTime @default(now())
+  tenantId            String    @id
+  mohClass            String
+  holdMode            String
+  publishedAt         DateTime  @default(now())
+  // Live verification + control mode (migration 20260702000000).
+  controlMode         String?
+  activeClassObserved String?
+  verifiedAt          DateTime?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Per-extension MOH control mode: "inherit" (tenant decides) | "connect" | "pbx".
+/// Migration 20260702000000_moh_control_and_admin_schedules.
+model MohExtensionControl {
+  id          String   @id @default(cuid())
+  tenantId    String
+  extension   String
+  controlMode String   @default("inherit")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String?
+  updatedBy   String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, extension])
+  @@index([tenantId])
+}
+
+/// Per-call-source MOH policy: one row per (tenantId, extension, source);
+/// extension="" = tenant scope. Migration 20260630120000_moh_call_source_policies.
+model MohSourcePolicy {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  scope                String // "tenant" | "extension"
+  extension            String   @default("")
+  source               String
+  vitalPbxMohClassName String
+  mohProfileId         String?
+  enabled              Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdBy            String?
+  updatedBy            String?
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  profile MohProfile? @relation(fields: [mohProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, extension, source])
+  @@index([tenantId])
+  @@index([tenantId, scope])
+  @@index([tenantId, extension])
+  @@index([enabled])
+}
+
+/// Platform-wide MOH fallback class (singleton row id="global").
+/// Migration 20260630120000_moh_call_source_policies.
+model MohGlobalConfig {
+  id                   String   @id @default("global")
+  vitalPbxMohClassName String?
+  updatedAt            DateTime @updatedAt
+  updatedBy            String?
+}
+
+/// Admin (multi-tenant) MOH overlay schedule — holiday/Yom Tov style windows
+/// applied across many tenants at once. scheduleKind: "one_time" | "weekly".
+/// Migration 20260702000000_moh_control_and_admin_schedules.
+model MohAdminSchedule {
+  id                   String    @id @default(cuid())
+  name                 String
+  enabled              Boolean   @default(true)
+  scheduleKind         String
+  timezone             String    @default("America/New_York")
+  vitalPbxMohClassName String
+  priority             Int       @default(0)
+  startAt              DateTime?
+  endAt                DateTime?
+  startWeekday         Int?
+  startTime            String?
+  endWeekday           Int?
+  endTime              String?
+  fallbackMode         String    @default("restore_previous") // "restore_previous" | "fixed_class"
+  fallbackClass        String?
+  isDeleted            Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  createdBy            String?
+  updatedBy            String?
+
+  targets     MohAdminScheduleTarget[]
+  activations MohAdminScheduleActivation[]
+
+  @@index([enabled])
+  @@index([isDeleted])
+}
+
+/// Target of an admin MOH schedule: a tenant, optionally narrowed to one extension.
+model MohAdminScheduleTarget {
+  id         String   @id @default(cuid())
+  scheduleId String
+  tenantId   String
+  extension  String   @default("")
+  createdAt  DateTime @default(now())
+
+  schedule MohAdminSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, tenantId, extension])
+  @@index([tenantId])
+  @@index([scheduleId])
+}
+
+/// Idempotency + restore ledger for admin MOH schedule windows.
+model MohAdminScheduleActivation {
+  id                   String    @id @default(cuid())
+  scheduleId           String
+  tenantId             String
+  extension            String    @default("")
+  state                String    @default("active") // "active" | "ended"
+  activatedAt          DateTime  @default(now())
+  deactivatedAt        DateTime?
+  previousClass        String?
+  previousControlMode  String?
+  previousKeysSnapshot Json      @default("[]")
+  appliedClass         String
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  schedule MohAdminSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId])
+  @@index([tenantId])
+  @@index([state])
+  @@index([scheduleId, state])
 }
 
 // ─── DID-level routing (shared-entry architecture) ───────────────────────────

@@ -2230,13 +2230,24 @@ async function runMohScheduleCycle(): Promise<void> {
         const slug = await workerCanonicalTenantSlug(tenantId, sched.tenant?.name);
         const fam = `connect/t_${slug}`;
 
-        const [rules, override, profilesRaw, lastState, lastPublish] = await Promise.all([
+        let [rules, override, profilesRaw, lastState, lastPublish] = await Promise.all([
           (db as any).mohScheduleRule.findMany({ where: { scheduleId: sched.id, isActive: true } }),
           (db as any).mohOverrideState.findUnique({ where: { tenantId } }),
           (db as any).mohProfile.findMany({ where: { tenantId, isActive: true } }),
           (db as any).mohLastPublishedState.findUnique({ where: { tenantId } }),
           (db as any).mohPublishRecord.findFirst({ where: { tenantId, status: "success" }, orderBy: { publishedAt: "desc" }, select: { keysWritten: true } }),
         ]);
+
+        // Timed override expiry ("play Classic for 30 minutes"): once expiresAt
+        // passes, retire the row so the DB/UI reflect reality — compute below
+        // already ignores expired overrides, this keeps state honest.
+        if (override?.isActive && override.expiresAt && new Date(override.expiresAt) <= now) {
+          await (db as any).mohOverrideState.update({
+            where: { tenantId },
+            data: { isActive: false, deactivatedAt: now, deactivatedBy: "system:expiry" },
+          });
+          override = { ...override, isActive: false };
+        }
 
         const profileMap = new Map<string, WorkerHoldProfile>(
           (profilesRaw as any[]).map((p: any) => [p.id, {

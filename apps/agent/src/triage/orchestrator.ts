@@ -311,6 +311,19 @@ export class TriageOrchestrator {
     }
   }
 
+  /** Active per-extension MOH override for this user's extension (null = none). */
+  private async currentMohExtOverride(connectTenantId: string, extension: string): Promise<{ mohProfileId: string | null } | null> {
+    try {
+      const o = await this.prisma.mohExtensionOverride.findFirst({
+        where: { tenantId: connectTenantId, extension, enabled: true },
+        select: { mohProfileId: true },
+      });
+      return o ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Hold-music flow (owner mandate 2026-07-26 #3). Scope-aware and time-aware:
    *   - tenant admins choose whole-company (pbx.M1) vs one extension (pbx.M2);
@@ -380,6 +393,18 @@ export class TriageOrchestrator {
     } else if (!scope) {
       if (!ownExt) {
         scope = "tenant"; // admin with no personal extension: only tenant scope makes sense
+      } else if (intent.enableHint === "no") {
+        // "Change it back (in 15 minutes)" — infer the scope from what is
+        // actually overridden instead of asking: the user's own extension
+        // override if one is active, else the tenant-wide override. Asking
+        // "whole company or your extension?" about a REVERT is noise.
+        const extOv = await this.currentMohExtOverride(ctx.tenantId, ownExt);
+        if (extOv) {
+          scope = "extension";
+          targetExt = ownExt;
+        } else {
+          scope = "tenant";
+        }
       } else {
         return {
           handled: true,
