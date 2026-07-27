@@ -3915,6 +3915,14 @@ model PbxMohClass {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  /// Catalog / playability columns (migration 20260701160000) — existed in the
+  /// DB but were missing from this model until 2026-07-26 (schema drift).
+  origin            String? // MohClassOrigin: "tenant" | "main" | "global_default" | "connect_upload" | "unassigned"
+  loadedInAsterisk  Boolean? // live `moh show classes` probe; null = unknown
+  selectable        Boolean   @default(true)
+  unavailableReason String? // "deactivated" | "not_loaded" | "no_files"
+  lastProbedAt      DateTime?
+
   pbxInstance PbxInstance @relation(fields: [pbxInstanceId], references: [id], onDelete: Cascade)
   tenant      Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
@@ -3922,6 +3930,7 @@ model PbxMohClass {
   @@index([tenantId])
   @@index([tenantId, isActive])
   @@index([pbxInstanceId, isActive])
+  @@index([pbxInstanceId, selectable])
 }
 
 model MohAsset {
