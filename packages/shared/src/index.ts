@@ -9,6 +9,7 @@ export * from "./smsText";
 export * from "./voipMsWebhook";
 export * from "./mohRuntimeClass";
 export * from "./mohCallSource";
+export * from "./mohProvision";
 export * from "./mohSourcePublish";
 export * from "./mohCatalog";
 export * from "./canonicalTenantSlug";

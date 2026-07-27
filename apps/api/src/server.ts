@@ -24555,6 +24555,33 @@ app.post("/internal/agent/queue/action", async (req, reply) => {
   }
 });
 
+/**
+ * Bootstrap a tenant's MohScheduleConfig on first agent MOH use (owner mandate
+ * 2026-07-26: hold music for ALL tenants, present and future). Without a
+ * config, doMohPublish throws no_schedule_configured — so timers could never
+ * revert and deactivate could never publish for a tenant nobody hand-set-up.
+ * The bootstrapped default profile targets the class the tenant ALREADY
+ * sounds like (own PBX class first, else the PBX-wide default), so "back to
+ * the regular schedule" never changes the audio of a tenant that never chose
+ * a schedule. Existing configs are returned untouched.
+ */
+async function ensureAgentMohScheduleConfig(tenantId: string): Promise<any> {
+  const found = await (db as any).mohScheduleConfig.findUnique({ where: { tenantId } });
+  if (found) return found;
+  const { visibleMohCatalogForTenant, pickDefaultMohClass } = await import("@connect/shared");
+  const catalogAll = await (db as any).pbxMohClass.findMany({
+    where: { isActive: true },
+    select: { tenantId: true, pbxTenantId: true, mohClassName: true, name: true, isDefault: true, isActive: true, selectable: true },
+  });
+  const cls = pickDefaultMohClass(visibleMohCatalogForTenant(catalogAll, tenantId), tenantId);
+  const prof = cls
+    ? await (db as any).mohProfile.findFirst({ where: { tenantId, isActive: true, vitalPbxMohClassName: cls }, orderBy: { createdAt: "asc" } })
+    : null;
+  return (db as any).mohScheduleConfig.create({
+    data: { tenantId, timezone: "America/New_York", isActive: true, defaultProfileId: prof?.id ?? null },
+  });
+}
+
 app.post("/internal/agent/moh/override", async (req, reply) => {
   const { AgentMohOverrideRequest, agentMohSecretOk, shapeMohSnapshot, shapeExtensionOverride, AGENT_MOH_HEADER } = await import("./agentMohOverride");
   if (!agentMohSecretOk(req.headers[AGENT_MOH_HEADER])) return reply.code(403).send({ error: "forbidden" });
@@ -24564,6 +24591,9 @@ app.post("/internal/agent/moh/override", async (req, reply) => {
   const tid = await resolveAgentMohTenantId(d.tenantId);
   if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
   const actor = `agent:${d.agentActionId}`;
+  // First MOH use on a tenant nobody hand-configured: bootstrap the schedule
+  // shell so publishes (and timed reverts) have a defined "schedule" state.
+  if (d.action !== "read") await ensureAgentMohScheduleConfig(tid);
 
   if (d.action === "read") {
     const [override, profiles, latestPublish, extOverride] = await Promise.all([

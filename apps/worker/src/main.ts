@@ -54,6 +54,8 @@ import {
   selectAdminFallbackTenantClass,
   buildAdminFallbackTenantClassKeys,
   computeForwardKeyClears,
+  visibleMohCatalogForTenant,
+  planMissingMohProfiles,
   type ScheduleRuleRow,
   type StaticSourcePolicy,
   type AdminScheduleRow,
@@ -2609,6 +2611,65 @@ setInterval(() => {
 }, 60 * 1000);
 
 runMohScheduleCycle().catch((err) => console.error("initial moh reconcile cycle failed", err?.message || err));
+
+// ── MOH profile auto-provision (owner mandate 2026-07-26: hold-music control
+// for ALL tenants, present and future) ────────────────────────────────────────
+// Every LINKED tenant gets a MohProfile row for each PBX class it can play
+// (its own classes + the shared main-tenant library), so agent requests like
+// "change our hold music to Main" work the moment a tenant is linked — no
+// manual setup. DB-only and strictly additive: existing profiles are never
+// modified, classes already covered are skipped, and nothing is published
+// from here (publishes only happen when a user actually asks for a change).
+let _mohProvisionRunning = false;
+async function runMohProfileProvisionCycle(): Promise<void> {
+  if (_mohProvisionRunning) return;
+  _mohProvisionRunning = true;
+  try {
+    const links: any[] = await (db as any).tenantPbxLink.findMany({ where: { status: "LINKED" }, select: { tenantId: true } });
+    if (links.length === 0) return;
+    const catalogAll: any[] = await (db as any).pbxMohClass.findMany({
+      where: { isActive: true },
+      select: { tenantId: true, pbxTenantId: true, mohClassName: true, name: true, isDefault: true, isActive: true, selectable: true },
+    });
+    if (catalogAll.length === 0) return;
+
+    for (const link of links) {
+      try {
+        const catalog = visibleMohCatalogForTenant(catalogAll, link.tenantId);
+        if (catalog.length === 0) continue;
+        const existing: any[] = await (db as any).mohProfile.findMany({
+          where: { tenantId: link.tenantId },
+          select: { name: true, vitalPbxMohClassName: true },
+        });
+        const plan = planMissingMohProfiles(catalog, existing);
+        for (const p of plan) {
+          await (db as any).mohProfile.create({
+            data: {
+              tenantId: link.tenantId,
+              name: p.name,
+              type: "custom",
+              vitalPbxMohClassName: p.vitalPbxMohClassName,
+              isActive: true,
+              createdBy: "system:moh-provision",
+            },
+          });
+        }
+        if (plan.length > 0) {
+          console.log(`moh provision: created ${plan.length} profile(s) for tenant ${link.tenantId}: ${plan.map((p) => `${p.name}→${p.vitalPbxMohClassName}`).join(", ")}`);
+        }
+      } catch (tenantErr: any) {
+        console.error(`moh provision: error for tenant ${link.tenantId}: ${tenantErr?.message}`);
+      }
+    }
+  } finally {
+    _mohProvisionRunning = false;
+  }
+}
+
+setInterval(() => {
+  runMohProfileProvisionCycle().catch((err) => console.error("moh provision cycle failed", err?.message || err));
+}, 10 * 60 * 1000);
+runMohProfileProvisionCycle().catch((err) => console.error("initial moh provision cycle failed", err?.message || err));
 
 let _billingAutomationRunning = false;
 
