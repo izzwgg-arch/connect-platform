@@ -150,37 +150,82 @@ async function ensureSubaccount(
   // VoIP.ms names subaccounts "<accountNumber>_<subName>" and the account
   // number is NOT the API username (that's the login email) — match on the
   // "_<subName>" suffix and take the provider's own account string.
+  // A transient lookup failure must NOT abort — createSubAccount below
+  // self-heals on used_username by re-looking-up and reusing.
+  let hit: any = null;
   try {
-    const existing = await vms(creds, "getSubAccounts");
-    const list: any[] = Array.isArray(existing?.accounts) ? existing.accounts : [];
-    const hit = list.find((a) => String(a?.account || "").toLowerCase().endsWith(`_${subName.toLowerCase()}`));
-    if (hit) {
-      // We can't read the old password back — rotate it so the trunk config works.
-      await vms(creds, "setSubAccount", { id: String(hit.id), password });
-      await logEvent(submissionId, `Subaccount ${hit.account} already existed — password rotated.`);
-      return { username: String(hit.account), password, server: VOIPMS_TRUNK_SERVER };
-    }
+    hit = await findExistingSubaccount(creds, subName);
   } catch {
-    /* fall through to create */
+    /* transient — fall through to create, which self-heals */
   }
+  if (hit) return await reuseSubaccount(creds, submissionId, hit, password);
 
-  const r = await vms(creds, "createSubAccount", {
-    username: subName,
+  try {
+    const r = await vms(creds, "createSubAccount", {
+      username: subName,
+      password,
+      protocol: "1",     // SIP
+      auth_type: "1",    // username/password
+      device_type: "1",  // Asterisk, IP PBX, Gateway or VoIP Switch (2 = ATA/IP phone — verified via getDeviceTypes)
+      lock_international: "1",
+      international_route: "1",
+      music_on_hold: "default",
+      allowed_codecs: "ulaw;g729",
+      dtmf_mode: "auto",
+      nat: "yes",
+    });
+    const account = String(r?.account || "");
+    if (!account) throw new Error("voipms createSubAccount returned no account name");
+    await logEvent(submissionId, `Subaccount ${account} created (Asterisk/IP-PBX, own device CallerID).`);
+    return { username: account, password, server: VOIPMS_TRUNK_SERVER };
+  } catch (e: any) {
+    // used_username = it already exists (e.g. an earlier interrupted run made
+    // it while VoIP.ms was flaky and our pre-lookup missed it). Reuse it.
+    // Live 2026-07-27: "Ezra Store 1" failed three times in a row on exactly
+    // this, permanently blocking the submission.
+    if (String(e?.message || "").includes("used_username")) {
+      const again = await findExistingSubaccount(creds, subName);
+      if (again) return await reuseSubaccount(creds, submissionId, again, password);
+    }
+    throw e;
+  }
+}
+
+async function findExistingSubaccount(creds: VmsCreds, subName: string): Promise<any | null> {
+  const existing = await vms(creds, "getSubAccounts");
+  const list: any[] = Array.isArray(existing?.accounts) ? existing.accounts : [];
+  return list.find((a) => String(a?.account || "").toLowerCase().endsWith(`_${subName.toLowerCase()}`)) || null;
+}
+
+/**
+ * Reuse an existing subaccount: we can't read its password back, so rotate it.
+ * VoIP.ms setSubAccount is a full update — resend the account's own current
+ * settings (from getSubAccounts) alongside the new password, otherwise the
+ * call fails and the old code swallowed that and died on used_username.
+ */
+async function reuseSubaccount(
+  creds: VmsCreds,
+  submissionId: string,
+  hit: any,
+  password: string,
+): Promise<ProvisionedSubaccount> {
+  await vms(creds, "setSubAccount", {
+    id: String(hit.id),
     password,
-    protocol: "1",     // SIP
-    auth_type: "1",    // username/password
-    device_type: "1",  // Asterisk, IP PBX, Gateway or VoIP Switch (2 = ATA/IP phone — verified via getDeviceTypes)
-    lock_international: "1",
-    international_route: "1",
-    music_on_hold: "default",
-    allowed_codecs: "ulaw;g729",
-    dtmf_mode: "auto",
-    nat: "yes",
+    auth_type: String(hit.auth_type || "1"),
+    protocol: String(hit.protocol || "1"),
+    device_type: String(hit.device_type || "1"),
+    lock_international: String(hit.lock_international || "1"),
+    international_route: String(hit.international_route || "1"),
+    music_on_hold: String(hit.music_on_hold || "default"),
+    allowed_codecs: String(hit.allowed_codecs || "ulaw;g729"),
+    dtmf_mode: String(hit.dtmf_mode || "auto"),
+    nat: String(hit.nat || "yes"),
+    ...(hit.internal_extension ? { internal_extension: String(hit.internal_extension) } : {}),
+    ...(hit.description ? { description: String(hit.description) } : {}),
   });
-  const account = String(r?.account || "");
-  if (!account) throw new Error("voipms createSubAccount returned no account name");
-  await logEvent(submissionId, `Subaccount ${account} created (Asterisk/IP-PBX, own device CallerID).`);
-  return { username: account, password, server: VOIPMS_TRUNK_SERVER };
+  await logEvent(submissionId, `Subaccount ${hit.account} already existed — password rotated.`);
+  return { username: String(hit.account), password, server: VOIPMS_TRUNK_SERVER };
 }
 
 // ── DIDs ──────────────────────────────────────────────────────────────────────

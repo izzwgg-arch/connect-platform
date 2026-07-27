@@ -329,6 +329,44 @@ test("live: existing subaccount is reused with a rotated password (idempotent re
   assert.equal(rotate.length, 1);
   assert.equal(rotate[0].params.id, "77");
   assert.ok(rotate[0].params.password.length >= 12);
+  // setSubAccount is a FULL update on VoIP.ms — the rotation must resend the
+  // account's settings or the call fails (and the run dies on used_username).
+  assert.equal(rotate[0].params.protocol, "1");
+  assert.equal(rotate[0].params.device_type, "1");
+});
+
+test("REGRESSION: createSubAccount used_username self-heals by reusing (live 2026-07-27 Ezra Store 1)", async () => {
+  // An earlier interrupted run created the subaccount while VoIP.ms was flaky.
+  // On the next run the pre-lookup ALSO failed transiently, create returned
+  // used_username, and the old code gave up — three times in a row.
+  reset({ live: true });
+  let subLookups = 0;
+  vmsHandlers.getSubAccounts = () => {
+    subLookups++;
+    if (subLookups === 1) return { status: "fail" }; // transient pre-lookup failure
+    return { status: "success", accounts: [{ id: "99", account: "344022_BobsPlumbing1", device_type: "1" }] };
+  };
+  vmsHandlers.createSubAccount = () => ({ status: "used_username" });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("setSubAccount")[0].params.id, "99"); // reused after self-heal
+  const sub = JSON.parse(state.submissions.get(id).voipmsSubaccountEncrypted.replace(/^enc:/, ""));
+  assert.equal(sub.username, "344022_BobsPlumbing1");
+});
+
+test("rotation failure on reuse surfaces the REAL error instead of a misleading used_username", async () => {
+  reset({ live: true });
+  vmsHandlers.getSubAccounts = () => ({
+    status: "success",
+    accounts: [{ id: "77", account: "344022_BobsPlumbing1" }],
+  });
+  vmsHandlers.setSubAccount = () => ({ status: "missing_device_type" });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, false);
+  assert.equal(calls("createSubAccount").length, 0); // never falls through to create
+  assert.match(String(state.submissions.get(id).setupError || res.detail), /missing_device_type/);
 });
 
 test("live: existing-subaccount match works when the master username is a login EMAIL", async () => {
