@@ -196,23 +196,40 @@ async function findAccountDid(creds: VmsCreds, did: string): Promise<any | null>
   }
 }
 
+export type SpareDid = { did: string; location: string; sms: boolean };
+
 /**
- * Pick a spare DID for a port-in customer: any DID in the master account not
- * routed to a subaccount (subaccount routings contain "_"). Returns "" when
- * nothing spare is available.
+ * All SPARE DIDs in the master account: already purchased but not routed to
+ * any subaccount (subaccount routings contain "_"). These are the numbers we
+ * want to hand out FIRST — use up stock before buying new ones.
  */
-async function findSpareDid(creds: VmsCreds): Promise<string> {
+export async function listSpareDids(creds: VmsCreds): Promise<SpareDid[]> {
   try {
     const r = await vms(creds, "getDIDsInfo");
     const rows: any[] = Array.isArray(r?.dids) ? r.dids : [];
-    const spare = rows.find((d) => {
-      const routing = String(d?.routing || "");
-      return routing.startsWith("account:") && !routing.includes("_");
-    });
-    return spare ? tenDigits(spare.did) : "";
+    return rows
+      .filter((d) => {
+        const routing = String(d?.routing || "");
+        return routing.startsWith("account:") && !routing.includes("_");
+      })
+      .map((d) => ({
+        did: tenDigits(d.did),
+        location: [d?.ratecenter, d?.state].filter(Boolean).join(", "),
+        sms: d?.sms == null || String(d.sms) === "1",
+      }))
+      .filter((d) => d.did.length === 10);
   } catch {
-    return "";
+    return [];
   }
+}
+
+/**
+ * Pick a spare DID for a port-in customer. Returns "" when nothing spare is
+ * available.
+ */
+async function findSpareDid(creds: VmsCreds): Promise<string> {
+  const [first] = await listSpareDids(creds);
+  return first?.did || "";
 }
 
 /** Order a brand-new DID routed straight to the subaccount, POP New York 1. */
@@ -374,7 +391,14 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
       if (live) {
         const owned = await findAccountDid(creds, did);
         if (owned) {
-          // Already ours (spare in the master account) — no purchase, just point it.
+          // Already ours (spare in the master account) — no purchase, just
+          // point it. But NEVER steal a number that another subaccount is
+          // already using (two customers can pick the same spare from a
+          // cached search).
+          const routing = String(owned.routing || "");
+          if (routing.includes("_") && !routing.includes(sub.username)) {
+            throw new Error("selected_number_already_assigned");
+          }
           await routeDid(creds, submissionId, did, sub.username);
         } else {
           await orderDid(creds, submissionId, did, sub.username);

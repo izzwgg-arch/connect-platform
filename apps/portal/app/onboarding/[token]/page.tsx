@@ -19,7 +19,7 @@ type PortingDetails = {
   billFileName: string;
 };
 
-type AvailableNumber = { number: string; location: string; sms: boolean; voice: boolean };
+type AvailableNumber = { number: string; location: string; sms: boolean; voice: boolean; inStock?: boolean };
 
 type FormData = {
   companyName: string;
@@ -512,7 +512,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                           <div>
                             <div className="ob-num-n">{n.number}</div>
                             {n.location && <div className="ob-num-loc">{n.location}</div>}
-                            <div className="ob-caps">{n.voice && <span className="ob-cap">Voice</span>}{n.sms && <span className="ob-cap">SMS</span>}</div>
+                            <div className="ob-caps">{n.inStock && <span className="ob-cap ob-cap-stock">Ready now</span>}{n.voice && <span className="ob-cap">Voice</span>}{n.sms && <span className="ob-cap">SMS</span>}</div>
                           </div>
                           <div className="ob-num-tick"><IconTick /></div>
                         </div>

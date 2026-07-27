@@ -8,7 +8,7 @@ import type { OnboardingStatus } from "@prisma/client";
 import { publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
-import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
+import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
 
 function sanitizeFileName(name: string): string {
@@ -124,23 +124,51 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       const testMode = (process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true";
       const provider = new VoipMsNumberProvider(creds, testMode);
       const digits = q.replace(/\D/g, "");
-      const results = await provider.searchNumbers({
-        type: "local",
-        areaCode: digits || undefined,
-        contains: digits || undefined,
-        limit: 12,
-      });
-      const numbers = results.map((r) => {
-        const d = String(r.phoneNumber).replace(/\D/g, "").replace(/^1/, "");
-        const display = d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : r.phoneNumber;
-        return {
-          number: display,
-          e164: r.phoneNumber,
-          location: r.region || "",
-          sms: r.capabilities?.sms !== false,
-          voice: r.capabilities?.voice !== false,
-        };
-      });
+      const fmt = (d: string) => (d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : d);
+
+      // Numbers we ALREADY OWN (spare in the master account, not assigned to
+      // any subaccount) come first — use up stock before buying new ones.
+      // The availability search runs in parallel so this adds no wait time.
+      const matchesQuery = (d: string) =>
+        !digits || (digits.length <= 3 ? d.startsWith(digits) : d.includes(digits));
+      const [spares, results] = await Promise.all([
+        listSpareDids(creds as any).catch(() => []),
+        provider
+          .searchNumbers({
+            type: "local",
+            areaCode: digits || undefined,
+            contains: digits || undefined,
+            limit: 12,
+          })
+          .catch(() => []),
+      ]);
+      const spareNumbers = spares
+        .filter((s) => matchesQuery(s.did))
+        .map((s) => ({
+          number: fmt(s.did),
+          e164: s.did,
+          location: s.location,
+          sms: s.sms,
+          voice: true,
+          inStock: true, // already purchased — provisioning routes it, no new purchase
+        }));
+      const spareSet = new Set(spareNumbers.map((s) => s.e164));
+
+      const purchasable = results
+        .map((r) => {
+          const d = String(r.phoneNumber).replace(/\D/g, "").replace(/^1/, "");
+          return {
+            number: fmt(d.length === 10 ? d : String(r.phoneNumber)),
+            e164: r.phoneNumber,
+            location: r.region || "",
+            sms: r.capabilities?.sms !== false,
+            voice: r.capabilities?.voice !== false,
+            inStock: false,
+          };
+        })
+        .filter((n) => !spareSet.has(String(n.e164).replace(/\D/g, "").replace(/^1/, "")));
+
+      const numbers = [...spareNumbers, ...purchasable].slice(0, 12);
       const payload = { numbers };
       if (numbers.length) numberSearchCache.set(cacheKey, { at: Date.now(), payload });
       return payload;

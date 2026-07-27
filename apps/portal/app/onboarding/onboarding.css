@@ -181,6 +181,7 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-num.selected .ob-num-tick { border-color:var(--accent); background:var(--accent); color:#fff; }
 .ob-caps { display:flex; gap:5px; margin-top:5px; }
 .ob-cap { font-size:9.5px; font-weight:640; letter-spacing:.4px; text-transform:uppercase; color:var(--good); background:var(--good-soft); border-radius:5px; padding:1.5px 5px; }
+.ob-cap-stock { color:var(--accent); background:var(--accent-soft); }
 
 /* ── Porting ────────────────────────────────────────────────────────────────── */
 .ob-porting-details { background:var(--surface-2); border:1.5px solid var(--border); border-radius:13px; padding:20px; margin-top:4px; animation:ob-rise .2s ease; }

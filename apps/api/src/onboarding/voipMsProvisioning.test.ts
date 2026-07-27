@@ -209,6 +209,53 @@ test("live new number ALREADY in our account: routed, not re-purchased", async (
   assert.equal(route[0].params.routing, "account:344022_BobsPlumbing1");
 });
 
+test("listSpareDids: only unassigned account DIDs count as spare (stock to use up first)", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [
+      { did: "8455550001", routing: "account:344022", ratecenter: "MONROE", state: "NY", sms: 1 },
+      { did: "8455550002", routing: "account:344022_Bobs1", sms: 1 }, // assigned to a subaccount
+      { did: "8455550003", routing: "vm:101" }, // not account-routed
+      { did: "18455550004", routing: "account:344022", sms: 0 }, // 11-digit form still counts
+    ],
+  });
+  const spares = await mod.listSpareDids({ username: "344022", password: "pw" });
+  assert.deepEqual(spares.map((s) => s.did), ["8455550001", "8455550004"]);
+  assert.equal(spares[0].location, "MONROE, NY");
+  assert.equal(spares[0].sms, true);
+  assert.equal(spares[1].sms, false);
+});
+
+test("GUARD: spare grabbed by ANOTHER customer meanwhile → fails, never steals the number", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "8455577726", routing: "account:344022_SomeoneElse1" }],
+  });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, false);
+  const row = state.submissions.get(id);
+  assert.equal(row.numberStatus, "failed");
+  assert.match(row.setupError, /selected_number_already_assigned/);
+  assert.equal(calls("setDIDRouting").length, 0);
+  assert.equal(calls("orderDID").length, 0);
+});
+
+test("resume: number already routed to OUR OWN subaccount is re-routed without error", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "8455577726", routing: "account:344022_BobsPlumbing1" }],
+  });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("orderDID").length, 0);
+  assert.equal(calls("setDIDRouting").length, 1);
+});
+
 test("live new number with SMS add-on: setSMS enable=1 on the DID", async () => {
   reset({ live: true });
   const id = seedSubmission({ smsEnabled: true });
