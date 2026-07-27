@@ -366,3 +366,84 @@ test("MOH longest-name match wins when names overlap", async () => {
   await orch.handle(detectIntent("switch hold music to Jazz Deluxe"), CTX, "en");
   assert.equal(created[0].params.profileId, "p2");
 });
+
+// ── MOH status question ("which one am I on right now?") — read-only, no action
+// (2026-07-26 live failure: the LLM claimed it cannot check the hold music) ───
+
+test("STATUS: detectIntent flags status questions, not change requests", () => {
+  assert.equal((detectIntent("what hold music is playing right now?") as any).statusQuery, true);
+  assert.equal((detectIntent("which hold music are we on currently?") as any).statusQuery, true);
+  assert.equal((detectIntent("change the hold music to Main") as any).statusQuery, false);
+  assert.equal((detectIntent("set my hold music back to normal") as any).statusQuery, false);
+});
+
+test("STATUS: fresh question answers from the mirror — no action created", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({ role: "TENANT_ADMIN", ownExt: "102", override: { isActive: true, profileId: "prof-jazz", expiresAt: null } });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("what hold music is playing right now?"), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created.length, 0);
+  assert.match(out.reply ?? "", /company-wide hold music is "Jazz"/);
+  assert.match(out.reply ?? "", /extension 102 follows the company hold music/);
+  assert.match(out.reply ?? "", /Which hold music would you like\?/); // resumable tail
+});
+
+test("STATUS: user's own extension override is reported first", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({ role: "USER", ownExt: "101", extOverride: { mohProfileId: "prof-classical" } });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("which hold music am I on right now?"), CTX, "en");
+  assert.equal(created.length, 0);
+  assert.match(out.reply ?? "", /extension 101 has its own hold music right now: "Classical Calm"/);
+  assert.match(out.reply ?? "", /regular schedule/); // no tenant override active
+});
+
+test("STATUS: timed override reports its expiry time", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "TENANT_ADMIN",
+    ownExt: null,
+    override: { isActive: true, profileId: "prof-jazz", expiresAt: new Date("2026-07-27T02:45:00Z") }, // 10:45 PM EDT
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("what hold music is playing now?"), CTX, "en");
+  assert.match(out.reply ?? "", /"Jazz" until 10:45[\s\u202f]PM/); // Intl space varies by ICU build
+});
+
+test("STATUS: mid-clarification 'Which one am I on right now?' answers status instead of falling to the LLM (screenshot regression 2026-07-26)", async () => {
+  const created: any[] = [];
+  const prisma = makePrisma({
+    role: "USER",
+    ownExt: "101",
+    extOverride: { mohProfileId: "prof-classical" },
+    messages: [{ role: "assistant", content: PROFILE_Q, contentEn: null }],
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("Which one am I on right now?"), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created.length, 0);
+  assert.match(out.reply ?? "", /extension 101 has its own hold music right now: "Classical Calm"/);
+});
+
+test("STATUS: a bare profile reply AFTER the status answer still resumes into a change", async () => {
+  const created: any[] = [];
+  const statusReply =
+    'Your extension 101 follows the company hold music. The company-wide hold music is on the regular schedule. If you\'d like to change it — Which hold music would you like? Your available options are: Jazz, Classical Calm.';
+  const prisma = makePrisma({
+    role: "USER",
+    ownExt: "101",
+    messages: [
+      { role: "assistant", content: statusReply, contentEn: null },
+      { role: "user", content: "Which one am I on right now?", contentEn: null },
+      { role: "assistant", content: PROFILE_Q, contentEn: null },
+      { role: "user", content: "change my hold music", contentEn: null },
+    ],
+  });
+  const orch = makeOrch(created, prisma);
+  const out = await orch.handle(detectIntent("Jazz"), CTX, "en");
+  assert.equal(out.handled, true);
+  assert.equal(created[0].capabilityId, "pbx.M2"); // regular user → own extension
+  assert.equal(created[0].params.profileId, "prof-jazz");
+  assert.equal(created[0].params.objectId, "101");
+});

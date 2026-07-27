@@ -6,7 +6,7 @@
  */
 export type Intent =
   | { kind: "diagnostic"; extensionHint?: string; complaint: string }
-  | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; enableHint?: "yes" | "no"; raw: string }
+  | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; enableHint?: "yes" | "no"; statusQuery?: boolean; raw: string }
   | { kind: "chat"; raw?: string };
 
 export type ActionType = "forward" | "dnd" | "moh" | "ivr_switch" | "vm_reset" | "unknown";
@@ -40,6 +40,24 @@ const DND_DISABLE_RE = /\boff\b|\bdisable|\bremove\b|\bcancel|\bstop\b|\bdeactiv
 export const MOH_DEACTIVATE_RE =
   /\boff\b|\bdisable|\bremove\b|\bcancel|\bdeactivat|\brevert\b|\bback to (?:the )?(?:schedule|normal|default|regular)\b|\bregular\b|\bnormal\b|\b(?:change|switch|put|set)\s+(?:it\s+|everything\s+|the\s+(?:hold\s+)?music\s+)?back\b/i;
 
+// MOH status QUESTION ("which one am I on right now?", "what hold music is
+// playing?") — answered read-only from the Connect mirror, never as a change.
+// Question-word led so imperatives ("set the hold music to Main") never match.
+export const MOH_STATUS_Q_RE = new RegExp(
+  [
+    String.raw`\b(?:which|what)\b[^?]{0,60}?\bam i on\b`,
+    String.raw`\b(?:which|what)\b[^?]{0,60}?\bare we on\b`,
+    String.raw`\b(?:which|what)\b[^?]{0,60}?\b(?:is|'s)\s+(?:it\s+|currently\s+)?playing\b`,
+    String.raw`\b(?:which|what)\b[^?]{0,60}?\bplaying\s+(?:right\s+)?now\b`,
+    String.raw`\b(?:which|what)\b[^?]{0,60}?\bcurrently\b`,
+    String.raw`\bwhat(?:'s| is)\s+(?:the|our|my)\s+(?:current\s+)?hold[- ]?music\b`,
+    String.raw`\bcurrent hold[- ]?music\b`,
+    // Yiddish: "וועלכע מוזיק שפילט יעצט" (which music is playing now)
+    String.raw`וועלכע[^?]{0,40}שפילט`,
+  ].join("|"),
+  "i",
+);
+
 export function detectIntent(text: string): Intent {
   const t = text.toLowerCase();
 
@@ -65,6 +83,7 @@ export function detectIntent(text: string): Intent {
                 ? "no"
                 : "yes"
               : undefined,
+        statusQuery: p.type === "moh" ? MOH_STATUS_Q_RE.test(t) : undefined,
         raw: text,
       };
     }

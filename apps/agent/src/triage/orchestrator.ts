@@ -12,7 +12,7 @@
  * (approval + gated executor). Diagnosis is read-only.
  */
 import type { Intent, ActionType } from "./intent";
-import { MOH_DEACTIVATE_RE } from "./intent";
+import { MOH_DEACTIVATE_RE, MOH_STATUS_Q_RE } from "./intent";
 import { parseMohTiming, type MohTiming } from "./mohTiming";
 import { evaluate, type TenantPolicy, type Role } from "../policy/policy";
 import { capabilityById, executableCapabilities } from "../manifest/manifest";
@@ -61,7 +61,9 @@ const MOH_EXT_NUM_RE = /\bext(?:ension)?\.?\s*(\d{2,5})\b/i;
 // Clarifying questions this orchestrator asks (resume markers — exact prefixes).
 const MOH_Q_PROFILE = "Which hold music would you like?";
 const MOH_Q_SCOPE = "Should I change the hold music for the whole company, or just your extension";
-const MOH_CLARIFY_MARKER_RE = /^Which hold music would you like\?|^Should I change the hold music for the whole company|וועלכע האלט מוזיק ווילט איר/;
+// NOT anchored: the status answer ("Right now … Which hold music would you
+// like?") re-asks the profile question mid-message and must stay resumable.
+const MOH_CLARIFY_MARKER_RE = /Which hold music would you like\?|Should I change the hold music for the whole company|וועלכע האלט מוזיק ווילט איר/;
 /** Any hold-music assistant message — context for follow-ups like "change it back in 15 minutes". */
 const MOH_CONTEXT_RE = /hold music|hold-music|האלט מוזיק/i;
 
@@ -213,6 +215,13 @@ export class TriageOrchestrator {
       const thread = await this.collectMohClarifyThread(ctx);
       if (!thread) return null;
       const t = text.toLowerCase();
+      // "Which one am I on right now?" mid-clarification is a STATUS question,
+      // not an answer — route it to the read-only status reply (2026-07-26 live
+      // failure: it fell to the LLM, which claimed it cannot check hold music).
+      // Tested against the CURRENT reply only, never the combined thread text.
+      if (MOH_STATUS_Q_RE.test(t)) {
+        return { kind: "action", actionType: "moh", enableHint: "yes", statusQuery: true, raw: text };
+      }
       const profiles = await this.listMohProfiles(ctx.tenantId);
       const isProfileAnswer = profiles.some((p) => {
         const n = String(p.name ?? "").toLowerCase();
@@ -312,16 +321,83 @@ export class TriageOrchestrator {
   }
 
   /** Active per-extension MOH override for this user's extension (null = none). */
-  private async currentMohExtOverride(connectTenantId: string, extension: string): Promise<{ mohProfileId: string | null } | null> {
+  private async currentMohExtOverride(
+    connectTenantId: string,
+    extension: string,
+  ): Promise<{ mohProfileId: string | null; vitalPbxMohClassName?: string | null } | null> {
     try {
       const o = await this.prisma.mohExtensionOverride.findFirst({
         where: { tenantId: connectTenantId, extension, enabled: true },
-        select: { mohProfileId: true },
+        select: { mohProfileId: true, vitalPbxMohClassName: true },
       });
       return o ?? null;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Read-only "what's playing right now?" answer, straight from the Connect
+   * mirror (extension override > tenant override > regular schedule default).
+   * Ends with the exact profile clarify question so a bare follow-up like
+   * "Main" resumes into the normal change flow.
+   */
+  private async answerMohStatus(ctx: TriageCtx, ownExt: string | null, tz: string, language: "en" | "yi"): Promise<TriageOutcome> {
+    const profiles = await this.listMohProfiles(ctx.tenantId);
+    const nameOf = (id: string | null | undefined) => (id ? profiles.find((p) => p.id === id)?.name ?? null : null);
+    const fmtTime = (d: Date | string) =>
+      new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz }).format(new Date(d));
+
+    const parts: string[] = [];
+    let extOverridden = false;
+    if (ownExt) {
+      const extOv = await this.currentMohExtOverride(ctx.tenantId, ownExt);
+      if (extOv) {
+        extOverridden = true;
+        const label = nameOf(extOv.mohProfileId) ?? extOv.vitalPbxMohClassName ?? "a custom class";
+        parts.push(`Your extension ${ownExt} has its own hold music right now: "${label}".`);
+      }
+    }
+
+    let ov: { isActive?: boolean; profileId?: string | null; expiresAt?: Date | null } | null = null;
+    try {
+      ov = await this.prisma.mohOverrideState.findUnique({
+        where: { tenantId: ctx.tenantId },
+        select: { isActive: true, profileId: true, expiresAt: true },
+      });
+    } catch {
+      ov = null;
+    }
+    if (ov?.isActive && ov.profileId) {
+      const until = ov.expiresAt ? ` until ${fmtTime(ov.expiresAt)}` : "";
+      parts.push(`The company-wide hold music is "${nameOf(ov.profileId) ?? "a custom profile"}"${until} (a manual change, not the schedule).`);
+    } else {
+      let defName: string | null = null;
+      try {
+        const cfg = await this.prisma.mohScheduleConfig.findUnique({ where: { tenantId: ctx.tenantId }, select: { defaultProfileId: true } });
+        defName = nameOf(cfg?.defaultProfileId);
+      } catch {
+        defName = null;
+      }
+      parts.push(
+        defName
+          ? `The company-wide hold music is on the regular schedule — the default is "${defName}".`
+          : "The company-wide hold music is on the regular schedule.",
+      );
+    }
+    if (ownExt && !extOverridden) {
+      parts.push(`Your extension ${ownExt} follows the company hold music.`);
+    }
+
+    const names = profiles.map((p) => p.name).filter(Boolean).join(", ");
+    const tail = names
+      ? ` If you'd like to change it — ${MOH_Q_PROFILE} Your available options are: ${names}. (You can also say "back to the regular schedule".)`
+      : "";
+    return {
+      handled: true,
+      reply: parts.join(" ") + tail,
+      yiddish: language === "yi" ? parts.join(" ") : undefined,
+    };
   }
 
   /**
@@ -350,6 +426,12 @@ export class TriageOrchestrator {
     const isAdmin = standing !== "tenant_user";
     const ownExt = await this.resolveExtension(ctx);
     const tz = await this.resolveMohTimezone(ctx.tenantId);
+
+    // Status question ("which one am I on right now?") — read-only answer, no
+    // action. Flag is set by detectIntent (fresh message) or the clarify-resume
+    // path (mid-conversation), never inferred from combined thread text.
+    if (intent.statusQuery) return this.answerMohStatus(ctx, ownExt, tz, language);
+
     const timing: MohTiming = parseMohTiming(raw, tz);
 
     // ── scope ──
