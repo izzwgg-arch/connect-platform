@@ -1110,6 +1110,45 @@ exten => s,1,NoOp(Connect tenant MOH resolver tenant=${ARG1} caller=${ARG2} call
  same => n,GotoIf($[${LEN(${CH_EXT_TEST})} > 32]?ext_tok_done)
  same => n,Set(CH_EXT_SAFE=${CH_EXT_TEST})
  same => n(ext_tok_done),NoOp(Connect tenant MOH ext token tenant_id=${TENANT_ID} ext=${CH_EXT_SAFE})
+ ; ── Effective extension token (peer/device fallback, 2026-07-27) ─────────────
+ ; The channel token alone is NOT enough on this build (live gap, proven by
+ ; call logs 2026-07-27):
+ ;   - extension endpoints are named "T<id>_<ext>_<device>", so the raw tail
+ ;     ("<ext>_<device>") never matches the published "<ext>" key family;
+ ;   - the leg an OUTSIDE caller rides (and hears when the extension holds
+ ;     them) is a trunk endpoint — no tenant token at all. The extension that
+ ;     owns the call is only visible as the resolver's caller/callee args.
+ ; Resolve the FIRST candidate that actually HAS published per-extension keys:
+ ;   channel token → channel token sans device suffix → callee arg → caller arg.
+ ; Key existence is the safety gate: an outside phone number never has a key
+ ; family, so it can never select a class; reads stay pinned under the
+ ; context-resolved tenant slug, so no cross-tenant read is possible. All
+ ; misses leave CH_EXT_SAFE for the reads below exactly as the channel token
+ ; path produced it (fail-safe = pre-existing behaviour).
+ same => n,Set(EXT_KEYS_HIT=)
+ same => n,ExecIf($["${CH_EXT_SAFE}" != ""]?Set(EXT_KEYS_HIT=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/active_moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/admin_moh_class)}))
+ same => n,GotoIf($["${EXT_KEYS_HIT}" != ""]?ext_eff_done)
+ same => n,Set(EXT_TRY=)
+ same => n,ExecIf($["${CH_EXT_SAFE}" != ""]?Set(EXT_TRY=${CUT(CH_EXT_SAFE,_,1)}))
+ same => n,GotoIf($["${EXT_TRY}" = ""]?ext_try_callee)
+ same => n,GotoIf($["${EXT_TRY}" = "${CH_EXT_SAFE}"]?ext_try_callee)
+ same => n,Set(EXT_KEYS_HIT=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/active_moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/admin_moh_class)})
+ same => n,ExecIf($["${EXT_KEYS_HIT}" != ""]?Set(CH_EXT_SAFE=${EXT_TRY}))
+ same => n,GotoIf($["${EXT_KEYS_HIT}" != ""]?ext_eff_done)
+ same => n(ext_try_callee),Set(EXT_TRY=${FILTER(A-Za-z0-9_-,${ARG3})})
+ same => n,GotoIf($["${EXT_TRY}" = ""]?ext_try_caller)
+ same => n,GotoIf($["${EXT_TRY}" != "${ARG3}"]?ext_try_caller)
+ same => n,GotoIf($[${LEN(${EXT_TRY})} > 32]?ext_try_caller)
+ same => n,Set(EXT_KEYS_HIT=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/active_moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/admin_moh_class)})
+ same => n,ExecIf($["${EXT_KEYS_HIT}" != ""]?Set(CH_EXT_SAFE=${EXT_TRY}))
+ same => n,GotoIf($["${EXT_KEYS_HIT}" != ""]?ext_eff_done)
+ same => n(ext_try_caller),Set(EXT_TRY=${FILTER(A-Za-z0-9_-,${ARG2})})
+ same => n,GotoIf($["${EXT_TRY}" = ""]?ext_eff_done)
+ same => n,GotoIf($["${EXT_TRY}" != "${ARG2}"]?ext_eff_done)
+ same => n,GotoIf($[${LEN(${EXT_TRY})} > 32]?ext_eff_done)
+ same => n,Set(EXT_KEYS_HIT=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/active_moh_class)}${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${EXT_TRY}/admin_moh_class)})
+ same => n,ExecIf($["${EXT_KEYS_HIT}" != ""]?Set(CH_EXT_SAFE=${EXT_TRY}))
+ same => n(ext_eff_done),NoOp(Connect tenant MOH effective ext token tenant_id=${TENANT_ID} ext=${CH_EXT_SAFE})
  ; ── (0) Admin multi-tenant schedule overlay (HIGHEST priority) ───────────────
  ; Written by Connect's admin-schedule worker to the dedicated admin_src /
  ; admin_moh_class families. While present it overrides even an explicitly

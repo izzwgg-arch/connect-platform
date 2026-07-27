@@ -322,6 +322,37 @@ test("resolver source priority: transfer/ring-group/queue/ivr are classified bef
   }
 });
 
+test("resolver derives the effective extension token via device-suffix and peer-arg fallbacks, gated on key existence", () => {
+  // Live gap (Landau T21 ext 101, 2026-07-27): endpoints are named
+  // "T<id>_<ext>_<device>" so the raw channel tail never matches the
+  // published "<ext>" family, and the trunk leg an outside caller rides has
+  // no tenant token at all — its extension is only in ARG2/ARG3. The
+  // resolver must try: channel token → token sans device suffix (CUT _,1)
+  // → callee (ARG3) → caller (ARG2), adopting a candidate ONLY when the
+  // per-extension key family actually exists under the resolved tenant slug.
+  const body = resolverBody();
+  // Existence probe concatenates the three per-extension families.
+  assert.match(body, /Set\(EXT_KEYS_HIT=\$\{DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/extensions\/\$\{CH_EXT_SAFE\}\/moh_class\)\}\$\{DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/extensions\/\$\{CH_EXT_SAFE\}\/active_moh_class\)\}\$\{DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/extensions\/\$\{CH_EXT_SAFE\}\/admin_moh_class\)\}\)/);
+  // Device-suffix strip candidate.
+  assert.match(body, /Set\(EXT_TRY=\$\{CUT\(CH_EXT_SAFE,_,1\)\}\)/);
+  // Peer-arg candidates use the same whitelist + length guards as the
+  // channel-token path (FILTER equality + LEN <= 32).
+  assert.match(body, /\(ext_try_callee\),Set\(EXT_TRY=\$\{FILTER\(A-Za-z0-9_-,\$\{ARG3\}\)\}\)/);
+  assert.match(body, /\(ext_try_caller\),Set\(EXT_TRY=\$\{FILTER\(A-Za-z0-9_-,\$\{ARG2\}\)\}\)/);
+  assert.match(body, /GotoIf\(\$\[\$\{LEN\(\$\{EXT_TRY\}\)\} > 32\]\?ext_try_caller\)/);
+  // Adoption is ALWAYS conditional on a non-empty existence probe — an
+  // outside phone number (no key family) can never be adopted.
+  const adoptions = body.match(/ExecIf\(\$\["\$\{EXT_KEYS_HIT\}" != ""\]\?Set\(CH_EXT_SAFE=\$\{EXT_TRY\}\)\)/g) ?? [];
+  assert.ok(adoptions.length >= 3, "each fallback candidate must adopt only behind the key-existence gate");
+  // Unconditional Set(CH_EXT_SAFE=${EXT_TRY}) (outside ExecIf) must not exist.
+  assert.equal(/same => n,Set\(CH_EXT_SAFE=\$\{EXT_TRY\}\)/.test(body), false, "candidate adoption must never be unconditional");
+  // The fallback block must sit BEFORE the admin-overlay reads so every
+  // extension-scope read (admin + source + default) uses the effective token.
+  const idxEff = body.indexOf("(ext_eff_done)");
+  const idxAdmin = body.indexOf("Set(ADMIN_OVR=");
+  assert.ok(idxEff > -1 && idxAdmin > -1 && idxEff < idxAdmin, "effective-token resolution must precede the admin overlay reads");
+});
+
 test("installer only writes Connect-owned dialplan files, never VitalPBX-generated files", () => {
   // We write the new Connect-owned `__65` file and may add a sentinel #include
   // to Connect's already-loaded `__60_custom` file when this PBX does not
