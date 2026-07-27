@@ -148,7 +148,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   useEffect(() => {
     async function validate() {
       try {
-        const r = await apiGet<{ ok: boolean; exists?: boolean; submission?: { id: string; currentStep: number; answers: any } }>(
+        const r = await apiGet<{ ok: boolean; exists?: boolean; submission?: { id: string; currentStep: number | string | null; answers: any } }>(
           `/onboarding/${encodeURIComponent(token)}/validate`,
         );
         if (r.exists === false) { setTokenError("not_active"); return; }
@@ -170,7 +170,8 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             smsEnabled:    a.addons?.smsEnabled    ?? prev.smsEnabled,
           }));
         }
-        const savedStep = typeof r.submission?.currentStep === "number" ? r.submission.currentStep : 0;
+        // The API stores the step as a string — parse either form.
+        const savedStep = Number(r.submission?.currentStep ?? 0) || 0;
         if (savedStep > 0 && savedStep < STEPS.length) setStep(savedStep);
       } catch {
         setTokenError("not_active");

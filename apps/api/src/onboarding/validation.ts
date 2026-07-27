@@ -1,8 +1,12 @@
 import { z } from "zod";
 
-// Public save (autosave) payload
+// Public save (autosave) payload.
+// The wizard sends currentStep as a NUMBER (step index); the DB stores a
+// string. Rejecting numbers made every autosave 500 (live incident
+// 2026-07-27: the resulting error flood helped get a customer IP auto-banned
+// mid-wizard, and progress was never saved). Coerce instead.
 export const publicSaveSchema = z.object({
-  currentStep: z.string().min(1).max(80).optional(),
+  currentStep: z.coerce.string().min(1).max(80).optional(),
   answers: z.unknown().optional(),
 });
 

@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicSubmitSchema, publicApplyNumberSchema, extensionInputSchema } from "./validation";
+import { publicSubmitSchema, publicApplyNumberSchema, extensionInputSchema, publicSaveSchema } from "./validation";
 
 const baseSubmit = {
   companyName: "Bobs Plumbing",
@@ -35,6 +35,14 @@ test("apply-number: choice is required and constrained", () => {
   assert.doesNotThrow(() => publicApplyNumberSchema.parse({ choice: "port", porting: { numbers: "2125550000" } }));
   assert.throws(() => publicApplyNumberSchema.parse({ choice: "steal" }));
   assert.throws(() => publicApplyNumberSchema.parse({}));
+});
+
+test("REGRESSION: autosave accepts currentStep as a NUMBER (live 2026-07-27 — every save 500'd)", () => {
+  // The wizard has always sent the step index as a number; the schema only
+  // took strings, so every autosave failed and progress was never saved.
+  assert.equal(publicSaveSchema.parse({ currentStep: 3, answers: {} }).currentStep, "3");
+  assert.equal(publicSaveSchema.parse({ currentStep: "3" }).currentStep, "3");
+  assert.equal(publicSaveSchema.parse({}).currentStep, undefined);
 });
 
 test("submit: extensions still validated (numeric, vm password digits)", () => {
