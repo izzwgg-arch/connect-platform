@@ -450,6 +450,9 @@ test("extension without an email: provisioned but simply not invited", async () 
   await orchestrator.runOnboardingSetup(id);
   assert.equal(state.submissions.get(id).pbxSetupStatus, "done");
   assert.equal(state.emailJobs.length, 1);
+  // ...but the event log must SAY so — "Sent 0/1 invitation email(s)" alone
+  // left the owner guessing (live confusion 2026-07-27).
+  assert.match(events(), /No email entered for extension\(s\) 102 — they cannot receive a login invite/);
 });
 
 // ── The apply-number ⇄ submit race (live incident 2026-07-26) ─────────────────

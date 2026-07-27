@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
-import { publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
+import { isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
@@ -69,21 +69,9 @@ function generatePublicToken(bytes: number = 24): string {
   return randomBytes(bytes).toString("base64url");
 }
 
-function isWriteBlocked(row: any): boolean {
-  if (isReusableTemplate(row)) return true; // spawn-only — see below
-  const s = String(row?.status || "");
-  return ["SUBMITTED", "CANCELED", "COMPLETED"].includes(s);
-}
-
-/**
- * Template row behind a REUSABLE test link (answers.reusableTestLink = true).
- * It is spawn-only: every visit mints a fresh normal submission from it, and
- * the template itself must never be written to (a wizard autosave would wipe
- * the flag and kill the link).
- */
-function isReusableTemplate(row: any): boolean {
-  return !!(row?.answers as any)?.reusableTestLink;
-}
+// Write policy + reusable-template detection live in ./validation so they can
+// be unit-tested without route plumbing.
+const isWriteBlocked = isSubmissionWriteBlocked;
 
 export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // Validate token exists (prod) or can be created (dev)

@@ -511,6 +511,12 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     if (emailConflicts.length) {
       await logEvent(submissionId, `Email already in use by another organization — no invite sent for: ${emailConflicts.join("; ")}.`);
     }
+    // "Sent 0 invitation email(s)" must never be a mystery: spell out when
+    // extensions simply have no address to invite (live confusion 2026-07-27).
+    const noEmail = verifications.filter((v) => !v.email).map((v) => v.extNumber);
+    if (noEmail.length) {
+      await logEvent(submissionId, `No email entered for extension(s) ${noEmail.join(", ")} — they cannot receive a login invite.`);
+    }
     await logEvent(submissionId, `All ${verifications.length} extension(s) verified in Connect (users + SIP synced).`);
 
     // ── 4. Invitations ──────────────────────────────────────────────────────

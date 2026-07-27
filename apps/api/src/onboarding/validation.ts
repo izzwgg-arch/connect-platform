@@ -48,6 +48,22 @@ export const publicApplyNumberSchema = z.object({
   companyName: z.string().min(1).max(200).optional(),
 });
 
+// Write policy for the public wizard: ONLY pre-submit statuses may write.
+// Listing blocked statuses instead was a hole — the orchestrator moves a
+// finished submission to ACTIVE, which silently made the wizard writable
+// again (live 2026-07-27: a second submit renamed a submission two minutes
+// after its PBX tenant was already built). Reusable test templates are
+// spawn-only and never writable.
+export function isReusableTemplate(row: { answers?: unknown } | null | undefined): boolean {
+  return !!(row?.answers as any)?.reusableTestLink;
+}
+
+export function isSubmissionWriteBlocked(row: { status?: unknown; answers?: unknown } | null | undefined): boolean {
+  if (isReusableTemplate(row)) return true; // spawn-only
+  const s = String(row?.status || "");
+  return !["INVITE_SENT", "IN_PROGRESS"].includes(s);
+}
+
 // Admin create public link
 export const createPublicLinkSchema = z.object({
   companyName: z.string().min(1).max(200).optional(),

@@ -256,6 +256,8 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 
 /* ── Error ──────────────────────────────────────────────────────────────────── */
 .ob-error { background:var(--danger-soft); border:1.5px solid var(--danger-border); border-radius:10px; padding:12px 16px; font-size:13.5px; color:var(--danger); margin-top:12px; }
+.ob-warn { background:rgba(245,166,35,.09); border:1.5px solid rgba(245,166,35,.45); border-radius:10px; padding:12px 16px; font-size:13.5px; color:#c77f00; margin-top:12px; }
+.ob-shell[data-ob-theme="dark"] .ob-warn { color:#f5b354; }
 
 /* ── Loading ────────────────────────────────────────────────────────────────── */
 .ob-loading { display:flex; align-items:center; justify-content:center; min-height:40vh; flex-direction:column; gap:16px; color:var(--muted); font-size:14px; }

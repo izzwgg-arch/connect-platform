@@ -678,6 +678,18 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   </div>
                 ))}
               </div>
+              {(() => {
+                const filled = form.extensions.filter((e) => e.extNumber.trim());
+                const missing = filled.filter((e) => !e.email.trim());
+                if (!filled.length || !missing.length) return null;
+                return (
+                  <div className="ob-warn">
+                    {missing.length === filled.length
+                      ? "No email addresses were entered, so nobody on your team will receive their login details. Go back to \u201CYour team\u201D and add an email for each person who needs access."
+                      : `Extension${missing.length > 1 ? "s" : ""} ${missing.map((e) => e.extNumber).join(", ")} ${missing.length > 1 ? "have" : "has"} no email — ${missing.length > 1 ? "those people" : "that person"} won\u2019t receive login details.`}
+                  </div>
+                );
+              })()}
             </div>
             <div className="ob-review-section">
               <div className="ob-review-section-title">Add-ons</div>

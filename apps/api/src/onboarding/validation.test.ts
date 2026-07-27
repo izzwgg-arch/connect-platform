@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicSubmitSchema, publicApplyNumberSchema, extensionInputSchema, publicSaveSchema } from "./validation";
+import { publicSubmitSchema, publicApplyNumberSchema, extensionInputSchema, publicSaveSchema, isSubmissionWriteBlocked, isReusableTemplate } from "./validation";
 
 const baseSubmit = {
   companyName: "Bobs Plumbing",
@@ -43,6 +43,26 @@ test("REGRESSION: autosave accepts currentStep as a NUMBER (live 2026-07-27 — 
   assert.equal(publicSaveSchema.parse({ currentStep: 3, answers: {} }).currentStep, "3");
   assert.equal(publicSaveSchema.parse({ currentStep: "3" }).currentStep, "3");
   assert.equal(publicSaveSchema.parse({}).currentStep, undefined);
+});
+
+test("REGRESSION: a finished (ACTIVE) submission is NOT writable (live 2026-07-27 — a second submit renamed a built tenant)", () => {
+  // Only the two pre-submit statuses may write; everything after submit is
+  // locked, including the statuses the orchestrator sets on completion.
+  assert.equal(isSubmissionWriteBlocked({ status: "INVITE_SENT" }), false);
+  assert.equal(isSubmissionWriteBlocked({ status: "IN_PROGRESS" }), false);
+  for (const s of ["SUBMITTED", "AWAITING_PBX_SETUP", "AWAITING_PORT", "AWAITING_PAYMENT", "READY_TO_SYNC", "ACTIVE", "COMPLETED", "CANCELED"]) {
+    assert.equal(isSubmissionWriteBlocked({ status: s }), true, `${s} must be write-blocked`);
+  }
+  // Unknown/blank statuses fail closed.
+  assert.equal(isSubmissionWriteBlocked({ status: "" }), true);
+  assert.equal(isSubmissionWriteBlocked({}), true);
+});
+
+test("reusable test templates are spawn-only — never writable, whatever their status", () => {
+  const template = { status: "INVITE_SENT", answers: { reusableTestLink: true } };
+  assert.equal(isReusableTemplate(template), true);
+  assert.equal(isSubmissionWriteBlocked(template), true);
+  assert.equal(isReusableTemplate({ status: "INVITE_SENT", answers: {} }), false);
 });
 
 test("submit: extensions still validated (numeric, vm password digits)", () => {

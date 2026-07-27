@@ -137,3 +137,42 @@ test("PHASE 5: re-running the full sync is idempotent — same converged state, 
   assert.equal(first.totalLiveConfirmedWebrtc, second.totalLiveConfirmedWebrtc);
   assert.equal(pbxExtensionLinks.get("ext_connect-t8:107").webrtcEnabled, true);
 });
+
+test("RACE regression (live 2026-07-27): TenantPbxLink created MID-SYNC is honored — no duplicate Connect tenant", async () => {
+  // The full-instance sync snapshots all links up front and can run for
+  // minutes. The onboarding orchestrator created its tenant+link while a sync
+  // was mid-run; the stale snapshot missed it and a duplicate Connect tenant
+  // was auto-provisioned ("Ezra's Store 2" twice, 63s apart).
+  const { db, extensions } = makeStatefulMockDb();
+  let tenantsCreated = 0;
+  (db as any).pbxTenantDirectory.findMany = async () => [
+    { vitalTenantId: "9", tenantSlug: "ezra_s_store_2", tenantCode: "T9", displayName: "Ezra's Store 2" },
+  ];
+  // Stale snapshot: the sync started before the onboarding link existed…
+  (db as any).tenantPbxLink.findMany = async () => [];
+  // …but a fresh read finds it.
+  (db as any).tenantPbxLink.findFirst = async ({ where }: any) =>
+    (where?.pbxTenantId?.in || []).includes("9") ? { tenantId: "connect-onboarding", pbxTenantId: "9" } : null;
+  (db as any).$transaction = async (fn: any) =>
+    fn({
+      tenant: { create: async () => { tenantsCreated++; return { id: "dup-tenant" }; } },
+      tenantPbxLink: { create: async () => ({}) },
+    });
+  const client: any = {
+    async listExtensions() {
+      return [{ extension_id: "e1", extension: "101", name: "Ezra", devices: [{ user: "101_1", device_name: "T9_101_1", secret: "s" }] }];
+    },
+    async getExtensionDevices() { return []; },
+    async callEndpoint() { return { data: [] }; },
+  };
+
+  const result = await syncExtensionsFromPbx(db, "inst1", client, { liveEndpointReader: async () => null });
+
+  assert.equal(tenantsCreated, 0, "must not auto-provision a duplicate tenant");
+  assert.equal(result.totalAutoProvisioned, 0);
+  assert.ok(
+    [...extensions.keys()].every((k) => k.startsWith("connect-onboarding:")),
+    "extensions must land on the tenant the onboarding linked",
+  );
+  assert.ok(extensions.size > 0, "the tenant's extensions still sync");
+});

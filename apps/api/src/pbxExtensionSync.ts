@@ -285,6 +285,20 @@ export async function syncExtensionsFromPbx(
     let connectTenantId =
       vitalToConnect.get(td.vitalTenantId) ?? vitalToConnect.get(td.tenantSlug) ?? null;
 
+    if (!connectTenantId) {
+      // The in-memory map is a snapshot from when this sync started; a link can
+      // appear mid-run (the onboarding orchestrator creates one as soon as it
+      // builds a PBX tenant). Re-check the DB before provisioning, otherwise we
+      // mint a DUPLICATE Connect tenant (live incident 2026-07-27).
+      const freshLink = await db.tenantPbxLink.findFirst({
+        where: { pbxInstanceId, pbxTenantId: { in: [td.vitalTenantId, td.tenantSlug] } },
+      });
+      if (freshLink) {
+        connectTenantId = freshLink.tenantId;
+        vitalToConnect.set(td.vitalTenantId, connectTenantId);
+      }
+    }
+
     let autoProvisioned = false;
     if (!connectTenantId) {
       // Auto-provision a Connect Tenant + TenantPbxLink for this PBX tenant so that
