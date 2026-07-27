@@ -54,7 +54,7 @@ export const publicApplyNumberSchema = z.object({
 // again (live 2026-07-27: a second submit renamed a submission two minutes
 // after its PBX tenant was already built). Reusable test templates are
 // spawn-only and never writable.
-export function isReusableTemplate(row: { answers?: unknown } | null | undefined): boolean {
+export function isReusableTemplate(row: { answers?: unknown; status?: unknown } | null | undefined): boolean {
   return !!(row?.answers as any)?.reusableTestLink;
 }
 

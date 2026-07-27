@@ -120,7 +120,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
 
   // VoIP.ms availability search takes 15-25s; cache per-query results so
   // repeat searches (and the auto-search on step entry) come back instantly.
-  const numberSearchCache = new Map<string, { at: number; payload: unknown }>();
+  // ONLY the purchasable search is cached — the spare-DID list is fetched
+  // fresh every time (it's one fast call, and stock changes with every
+  // onboarding that claims or releases a number; caching it made freed
+  // numbers invisible for up to 10 minutes — live 2026-07-27).
+  const numberSearchCache = new Map<string, { at: number; purchasable: Array<Record<string, unknown>> }>();
   const NUMBER_SEARCH_CACHE_MS = 10 * 60_000;
 
   // Search available numbers to buy (VoIP.ms), gated by a valid onboarding token.
@@ -136,7 +140,8 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
 
     const cacheKey = q.replace(/\D/g, "") || q.toLowerCase();
     const cached = numberSearchCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < NUMBER_SEARCH_CACHE_MS) return cached.payload;
+    const cachedPurchasable =
+      cached && Date.now() - cached.at < NUMBER_SEARCH_CACHE_MS ? cached.purchasable : null;
 
     try {
       const testMode = (process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true";
@@ -151,14 +156,16 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         !digits || (digits.length <= 3 ? d.startsWith(digits) : d.includes(digits));
       const [spares, results] = await Promise.all([
         listSpareDids(creds as any).catch(() => []),
-        provider
-          .searchNumbers({
-            type: "local",
-            areaCode: digits || undefined,
-            contains: digits || undefined,
-            limit: 12,
-          })
-          .catch(() => []),
+        cachedPurchasable
+          ? Promise.resolve(null)
+          : provider
+              .searchNumbers({
+                type: "local",
+                areaCode: digits || undefined,
+                contains: digits || undefined,
+                limit: 12,
+              })
+              .catch(() => []),
       ]);
       const spareNumbers = spares
         .filter((s) => matchesQuery(s.did))
@@ -172,8 +179,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         }));
       const spareSet = new Set(spareNumbers.map((s) => s.e164));
 
-      const purchasable = results
-        .map((r) => {
+      const purchasableAll =
+        cachedPurchasable ??
+        (results || []).map((r: any) => {
           const d = String(r.phoneNumber).replace(/\D/g, "").replace(/^1/, "");
           return {
             number: fmt(d.length === 10 ? d : String(r.phoneNumber)),
@@ -183,13 +191,16 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
             voice: r.capabilities?.voice !== false,
             inStock: false,
           };
-        })
-        .filter((n) => !spareSet.has(String(n.e164).replace(/\D/g, "").replace(/^1/, "")));
+        });
+      if (!cachedPurchasable && purchasableAll.length) {
+        numberSearchCache.set(cacheKey, { at: Date.now(), purchasable: purchasableAll });
+      }
+      const purchasable = purchasableAll.filter(
+        (n: any) => !spareSet.has(String(n.e164).replace(/\D/g, "").replace(/^1/, "")),
+      );
 
       const numbers = [...spareNumbers, ...purchasable].slice(0, 12);
-      const payload = { numbers };
-      if (numbers.length) numberSearchCache.set(cacheKey, { at: Date.now(), payload });
-      return payload;
+      return { numbers };
     } catch {
       return { numbers: [], error: "number_search_failed" };
     }
