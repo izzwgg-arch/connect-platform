@@ -45,7 +45,10 @@ export const DEFAULT_ROUTES: RouteTable = {
  * with our chat call shape. Pure and unit-tested.
  */
 export function filterChatModels(provider: ProviderName, ids: string[]): string[] {
-  const deny = /(embed|whisper|tts|audio|realtime|image|dall-e|moderation|search|transcribe|instruct|davinci|babbage|computer-use|codex|-pro\b|deep-research)/i;
+  // gpt-5-chat-latest / gpt-5.1-chat-latest: still returned by OpenAI's models
+  // API but 404 "deprecated" on real calls (proven live 2026-07-27) — a dropdown
+  // entry that can't answer is worse than none.
+  const deny = /(embed|whisper|tts|audio|realtime|image|dall-e|moderation|search|transcribe|instruct|davinci|babbage|computer-use|codex|-pro\b|deep-research|^gpt-5(\.1)?-chat-latest$)/i;
   const dated = /-\d{4}-\d{2}-\d{2}$|-\d{8}$|-\d{4}$/; // snapshots — bare aliases stay
   const allow = provider === "openai" ? /^(gpt-|o\d|chatgpt-)/i : /^claude-/i;
   return [...new Set(ids)]

@@ -10,8 +10,11 @@ test("filterChatModels: keeps chat-capable OpenAI models, drops non-chat + dated
     "gpt-4o-realtime-preview", "gpt-4o-search-preview", "gpt-4o-transcribe",
     "o1-pro", "o3-deep-research", "davinci-002", "babbage-002", "codex-mini-latest",
     "gpt-3.5-turbo-instruct", "tts-1-hd", "gpt-5", // dupe on purpose
+    // listed by OpenAI's models API but 404 "deprecated" on real calls (live 2026-07-27)
+    "gpt-5-chat-latest", "gpt-5.1-chat-latest",
+    "gpt-5.2-chat-latest", // NOT deprecated — must stay
   ];
-  assert.deepEqual(filterChatModels("openai", ids), ["chatgpt-4o-latest", "gpt-4.1", "gpt-4o", "gpt-5", "gpt-5-mini", "o3", "o4-mini"]);
+  assert.deepEqual(filterChatModels("openai", ids), ["chatgpt-4o-latest", "gpt-4.1", "gpt-4o", "gpt-5", "gpt-5-mini", "gpt-5.2-chat-latest", "o3", "o4-mini"]);
 });
 
 test("filterChatModels: keeps Claude aliases, drops dated snapshots + foreign ids", () => {
