@@ -65,17 +65,27 @@ class FakePanel {
   }
 
   private extensionEditHtml(ext: { id: string; ext: string; name: string; devices: Array<Record<string, string>> }): string {
-    const markers = this.suppressDeviceMarkers
+    // PRODUCTION contract (verified live 2026-07-26): devices appear ONLY as
+    // device_id <option>s. SIP/PJSIP devices are labelled "T51_<user> - name";
+    // VIRTUAL devices are labelled by their DESCRIPTION ONLY — the cell number
+    // is never anywhere in the edit-form HTML.
+    const devOpts = this.suppressDeviceMarkers
       ? ""
-      : ext.devices.map((d) => `<span>${esc(d.user || "")} ${esc(d.number || "")}</span>`).join("");
+      : ext.devices
+          .map((d) => {
+            const label =
+              d.technology === "virtual" ? d.dev_description || "cell device" : `T51_${d.user || ""} - ${ext.name}`;
+            return `<option value="${d.id}">${esc(label)}</option>`;
+          })
+          .join("");
     return this.csrfHtml(
       `<input name="extension" value="${ext.ext}">` +
         `<input name="ext_name" value="${esc(ext.name)}">` +
         `<input name="call_waiting" type="checkbox" checked value="yes">` +
         `<input name="secret_ignore" type="checkbox" value="yes">` +
+        `<select name="device_id"><option value="new">---New---</option>${devOpts}</select>` +
         `<select name="profile_id"><option value="1" selected>Default PJSIP Profile</option><option value="12">Default WebRTC Profile</option></select>` +
-        `<select name="dynamic_queues[]" multiple><option value="q1" selected>Q1</option></select>` +
-        markers,
+        `<select name="dynamic_queues[]" multiple><option value="q1" selected>Q1</option></select>`,
     );
   }
 
@@ -101,7 +111,12 @@ class FakePanel {
           const cells = line.split(",");
           const row: Record<string, string> = {};
           header.forEach((h, i) => (row[h] = cells[i] ?? ""));
-          this.extensions.push({ id: String(this.nextId++), ext: row.extension, name: row.ext_name, devices: [{ user: row.device_user }] });
+          this.extensions.push({
+            id: String(this.nextId++),
+            ext: row.extension,
+            name: row.ext_name,
+            devices: [{ id: String(this.nextId++), user: row.device_user }],
+          });
         }
         return this.json({ state: "success", notification: { type: "info", text: "Import completed successfully" } });
       }
@@ -179,6 +194,23 @@ class FakePanel {
       return this.json({ html: this.csrfHtml() });
     }
 
+    // getDevice — production shape: returns the device sub-form; the number of
+    // a virtual device is ONLY visible here, never in the extension edit form.
+    if (cls === "extensions" && method === "getDevice") {
+      const devId = get(f, "data[device_id]");
+      const extId = get(f, "data[extension_id]");
+      const ext = this.extensions.find((e) => e.id === extId);
+      const dev = ext?.devices.find((d) => d.id === devId);
+      if (!dev || this.suppressDeviceMarkers) return this.json({ state: "success", html: this.csrfHtml() });
+      return this.json({
+        state: "success",
+        html:
+          `<input type="hidden" name="technology" value="${esc(dev.technology || "pjsip")}">` +
+          `<input type="text" name="number" value="${esc(dev.number || "")}" class="form-control virtual-tech">` +
+          `<input type="text" name="user" value="${esc(dev.user || "")}">`,
+      });
+    }
+
     // destination options (extension lookup for inbound routes) — production
     // shape verified live: html is empty, extensions come as an options ARRAY.
     if (cls === "inbound_route" && method === "getDestinationChildOptions") {
@@ -231,6 +263,7 @@ class FakePanel {
         const ext = this.extensions.find((e) => e.ext === get(f, "extension"));
         if (ext) {
           ext.devices.push({
+            id: String(this.nextId++),
             user: get(f, "user") || "",
             technology: get(f, "technology") || "",
             number: get(f, "number") || "",
@@ -238,6 +271,7 @@ class FakePanel {
             profile_id: get(f, "profile_id") || "",
             vitxi_client: get(f, "vitxi_client") || "",
             dtmfmode: get(f, "dtmfmode") || "",
+            dev_description: get(f, "dev_description") || "",
           });
         }
         return this.json({ state: "success" });
@@ -457,6 +491,30 @@ test("device that never shows up on the extension after save fails verification"
   const fake = new FakePanel();
   fake.suppressDeviceMarkers = true;
   await assert.rejects(run(fake), /device not found on extension 101/i);
+});
+
+test("REGRESSION: cell device verifies via getDevice — its number is NOT in the edit form (live 2026-07-26)", async () => {
+  // The live incident: the virtual device saved fine, but the edit form only
+  // shows it as a description-labelled option, so a marker search for the cell
+  // number declared failure and killed the pipeline before inbound route +
+  // invites. The FakePanel mimics that exactly; the build must succeed.
+  const fake = new FakePanel();
+  const result = await run(fake, job({
+    people: [{ name: "moshe wein", ext: "102", email: "mw@example.com", cellMode: "only", cellNumber: "5622096644" }],
+  }));
+  assert.ok(result.tenantPath);
+  const ext = fake.extensions.find((e) => e.ext === "102")!;
+  const cell = ext.devices.find((d) => d.technology === "virtual")!;
+  assert.equal(cell.number, "5622096644");
+  // inbound route was reached (the incident stopped before this step)
+  assert.equal(fake.inboundRoutes.length, 1);
+  // and re-running must not duplicate the cell device (guard also uses getDevice)
+  const putsAfter = fake.puts.length;
+  await run(fake, job({
+    people: [{ name: "moshe wein", ext: "102", email: "mw@example.com", cellMode: "only", cellNumber: "5622096644" }],
+  }));
+  assert.equal(fake.puts.length, putsAfter, "resume must not re-create the cell device");
+  assert.equal(ext.devices.filter((d) => d.technology === "virtual").length, 1);
 });
 
 test("Apply Changes failure aborts immediately", async () => {

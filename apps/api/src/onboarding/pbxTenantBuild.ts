@@ -298,10 +298,44 @@ async function extensionId(s: PanelSession, ext: string): Promise<string> {
   throw new PanelStepError("extension-import", `extension ${ext} not visible in destination list after import`);
 }
 
+/** Device options in the extension edit form's device_id dropdown. */
+function deviceOptions(html: string): Array<{ id: string; label: string }> {
+  const sel = html.match(/<select[^>]*name=["']device_id["'][\s\S]*?<\/select>/i);
+  if (!sel) return [];
+  const out: Array<{ id: string; label: string }> = [];
+  for (const m of sel[0].matchAll(/<option[^>]*value=["'](\d+)["'][^>]*>([\s\S]*?)<\/option>/gi)) {
+    out.push({ id: m[1], label: decodeEntities(m[2]).trim() });
+  }
+  return out;
+}
+
+/**
+ * Is a cell ("virtual") device with this number already on the extension?
+ * The panel labels virtual devices by DESCRIPTION ONLY — the cell number never
+ * appears in the edit-form HTML (live incident 2026-07-26: the device saved
+ * fine but the old marker check declared failure and killed the pipeline).
+ * The number is only visible through the panel's own getDevice call.
+ */
+async function hasCellDevice(s: PanelSession, extId: string, editHtml: string, cellNumber: string): Promise<boolean> {
+  if (!cellNumber) return false;
+  for (const dev of deviceOptions(editHtml)) {
+    const r = await s.post([
+      ["class", "extensions"], ["method", "getDevice"], ["mode", "edit"],
+      ["data[device_id]", dev.id], ["data[extension_id]", extId],
+    ]);
+    if (r.text.includes(cellNumber)) return true;
+  }
+  return false;
+}
+
 async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind: "webrtc" | "cell"): Promise<void> {
   const h = await s.loadForm("extensions", "edit", extId);
-  const wantMarker = kind === "webrtc" ? person.ext + "_1" : String(person.cellNumber || "");
-  if (wantMarker && h.includes(wantMarker)) return; // already on the extension (resumed run)
+  // Resume guard: skip if the device is already on the extension.
+  if (kind === "webrtc") {
+    if (h.includes(person.ext + "_1")) return; // device label carries the SIP user
+  } else if (await hasCellDevice(s, extId, h, String(person.cellNumber || ""))) {
+    return;
+  }
   let pairs = parseFormPairs(h);
   pairs = dropPairs(pairs, "dynamic_queues[]", "static_queues[]");
   upsertPair(pairs, "class", "extensions");
@@ -330,8 +364,11 @@ async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind
   assertSaved(`device-${kind}`, await s.post(pairs));
   // verify the device is now on the extension
   const h2 = await s.loadForm("extensions", "edit", extId);
-  const marker = kind === "webrtc" ? person.ext + "_1" : String(person.cellNumber || "");
-  if (!h2.includes(marker)) {
+  const ok =
+    kind === "webrtc"
+      ? h2.includes(person.ext + "_1")
+      : await hasCellDevice(s, extId, h2, String(person.cellNumber || ""));
+  if (!ok) {
     throw new PanelStepError(`device-${kind}`, `device not found on extension ${person.ext} after save`);
   }
 }
