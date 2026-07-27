@@ -127,10 +127,17 @@ export async function sweepMissingReceiptEmails(options?: {
       });
 
       if (job) {
-        if (job.status === "SENT" || job.status === "QUEUED" || job.status === "RUNNING") continue;
+        if (job.status === "SENT") continue;
         const maxAttempts = Number(job.maxAttempts ?? RECEIPT_EMAIL_MAX_ATTEMPTS_DEFAULT) || RECEIPT_EMAIL_MAX_ATTEMPTS_DEFAULT;
-        if (job.status === "FAILED" && Number(job.attempts ?? 0) < maxAttempts) continue; // retry still pending
-        // Permanently failed — revive it (throttled), so it retries forever.
+        const attempts = Number(job.attempts ?? 0);
+        // QUEUED/FAILED with attempts left → the regular processor will retry it.
+        if ((job.status === "QUEUED" || job.status === "FAILED") && attempts < maxAttempts) continue;
+        // RUNNING and recently touched → a send is in flight right now.
+        const updatedAt = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
+        if (job.status === "RUNNING" && updatedAt > Date.now() - 15 * 60_000) continue;
+        // Everything else is stuck: FAILED/QUEUED with attempts exhausted, or a
+        // RUNNING job orphaned by a crash mid-send. Revive it (throttled), so
+        // delivery retries forever.
         if (await hasEventForTransaction("receipt_email_revived", tx.id, retryIntervalMs)) continue;
         await (db as any).billingEventLog.create({
           data: {

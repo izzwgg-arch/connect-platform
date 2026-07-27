@@ -210,6 +210,46 @@ test("sweep revives a receipt job that exhausted all retries", async () => {
   assert.equal(again.revived, 0);
 });
 
+test("sweep revives a RUNNING job orphaned by a crash mid-send, but not one in flight", async () => {
+  const { sweepMissingReceiptEmails } = await loadReconciliation();
+  resetState();
+  seedTenant("tenant_1", "billing@example.com");
+  seedInvoice("invoice_1");
+  seedInvoice("invoice_2");
+  seedTx("tx_orphaned", { invoiceId: "invoice_1" });
+  seedTx("tx_in_flight", { invoiceId: "invoice_2" });
+  state.emailJobs.push(
+    {
+      id: "email_orphaned",
+      tenantId: "tenant_1",
+      type: "BILLING_RECEIPT",
+      status: "RUNNING",
+      attempts: 1,
+      maxAttempts: 5,
+      htmlBody: "<!-- connect-billing-transaction:tx_orphaned -->",
+      createdAt: new Date(Date.now() - 2 * HOUR),
+      updatedAt: new Date(Date.now() - 2 * HOUR),
+    },
+    {
+      id: "email_in_flight",
+      tenantId: "tenant_1",
+      type: "BILLING_RECEIPT",
+      status: "RUNNING",
+      attempts: 1,
+      maxAttempts: 5,
+      htmlBody: "<!-- connect-billing-transaction:tx_in_flight -->",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  );
+
+  const summary = await sweepMissingReceiptEmails({ runner: "api" });
+
+  assert.equal(summary.revived, 1);
+  assert.equal(state.emailJobs.find((j) => j.id === "email_orphaned")!.status, "QUEUED");
+  assert.equal(state.emailJobs.find((j) => j.id === "email_in_flight")!.status, "RUNNING");
+});
+
 test("sweep does not revive a FAILED job that still has retries pending", async () => {
   const { sweepMissingReceiptEmails } = await loadReconciliation();
   resetState();

@@ -1029,6 +1029,13 @@ async function processEmailJobsBatch() {
   if (emailJobProcessorRunning) return;
   emailJobProcessorRunning = true;
   try {
+    // Recover jobs orphaned in RUNNING by a crash/restart mid-send (e.g. a
+    // blue/green candidate killed between "RUNNING" and "SENT"): without this
+    // they would stay RUNNING forever and never be retried.
+    await db.emailJob.updateMany({
+      where: { status: "RUNNING", updatedAt: { lt: new Date(Date.now() - 10 * 60_000) } },
+      data: { status: "QUEUED", nextRunAt: new Date() },
+    });
     const jobs = await db.emailJob.findMany({
       where: { status: { in: ["QUEUED", "FAILED"] }, nextRunAt: { lte: new Date() }, attempts: { lt: 5 } },
       orderBy: { createdAt: "asc" },
