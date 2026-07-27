@@ -33,8 +33,10 @@ export type ActionStatus =
 export interface ExecuteBackend {
   /** Perform the real work for an approved action. Returns a result snapshot. */
   execute(action: any, opts: { live: boolean }): Promise<{ ok: boolean; snapshot?: unknown; error?: string }>;
-  /** Optional revert of a previously executed action. */
-  revert?(action: any): Promise<{ ok: boolean; error?: string }>;
+  /** Optional revert of a previously executed action. `permanent: true` on a
+   *  failure means retrying can never succeed (drift/expired/corrupt snapshot)
+   *  — the scheduler must drop the timer instead of retrying forever. */
+  revert?(action: any): Promise<{ ok: boolean; error?: string; permanent?: boolean }>;
 }
 
 /**
@@ -282,6 +284,22 @@ export class ActionService {
     }
     const done = await this.prisma.agentAction.update({ where: { id: action.id }, data: { status: "EXECUTED", executedAt: new Date(), resultSnapshot: (res.snapshot ?? {}) as any } });
     await this.audit.record({ actor: "agent", event: "action.executed", tenantId: action.tenantId, actionId: action.id, capabilityId: action.capabilityId, payload: { live } });
+    // Latest instruction wins: a successful write CANCELS any pending
+    // auto-revert timer of an older action on the SAME object. Otherwise the
+    // older timer fires after our write and clobbers it (live incident
+    // 2026-07-27: an "until 7:30" ext-101 revert wiped a newer "for 45
+    // minutes" re-arm 51 seconds after it executed).
+    const objectId = String((action.params as any)?.objectId ?? "");
+    if (objectId) {
+      const others = await this.prisma.agentAction.findMany({
+        where: { tenantId: action.tenantId, capabilityId: action.capabilityId, status: "EXECUTED", revertAt: { not: null }, id: { not: action.id } },
+      });
+      for (const o of others) {
+        if (String((o.params as any)?.objectId ?? "") !== objectId) continue;
+        await this.prisma.agentAction.update({ where: { id: o.id }, data: { revertAt: null } });
+        await this.audit.record({ actor: "system", event: "action.revert_superseded", tenantId: action.tenantId, actionId: o.id, payload: { supersededBy: action.id } });
+      }
+    }
     await this.notifier.send({ kind: "action_executed", to: this.notifier.ownerRecipients(), subject: `[Agent] Done: ${action.summary}`, text: `Action ${action.id} executed${action.revertAt ? `, auto-reverts ${action.revertAt.toISOString?.() ?? action.revertAt}` : ""}.` });
     return done;
   }
@@ -321,12 +339,20 @@ export class ActionService {
     let reverted = 0;
     for (const a of due) {
       const backend = this.backendFor(a.capabilityId);
-      const r = backend?.revert ? await backend.revert(a) : { ok: true };
+      const r: { ok: boolean; error?: string; permanent?: boolean } = backend?.revert ? await backend.revert(a) : { ok: true };
       if (r.ok) {
         await this.prisma.agentAction.update({ where: { id: a.id }, data: { status: "REVERTED", revertedAt: now } });
         await this.audit.record({ actor: "agent", event: "action.reverted", actionId: a.id, tenantId: a.tenantId });
         await this.notifier.send({ kind: "action_reverted", to: this.notifier.ownerRecipients(), subject: `[Agent] Reverted: ${a.summary}`, text: `Action ${a.id} auto-reverted on schedule.` });
         reverted++;
+      } else if (r.permanent) {
+        // Retrying can never succeed (object drifted, snapshot gone/expired).
+        // Drop the timer so the tick stops hammering the same refusal every
+        // 60s (live incident 2026-07-27: one stuck timer, one audit row per
+        // minute, forever). The action stays EXECUTED — the state it wrote is
+        // simply no longer ours to undo.
+        await this.prisma.agentAction.update({ where: { id: a.id }, data: { revertAt: null } });
+        await this.audit.record({ actor: "system", event: "action.revert_abandoned", actionId: a.id, tenantId: a.tenantId, payload: { error: r.error } });
       } else {
         await this.audit.record({ actor: "system", event: "action.revert_failed", actionId: a.id, payload: { error: r.error } });
       }

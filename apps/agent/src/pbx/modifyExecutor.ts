@@ -59,6 +59,12 @@ export interface ModifyRevertResult {
   ok: boolean;
   refusedReason?: string;
   restored?: unknown;
+  /**
+   * true = this refusal can never succeed on retry (drift, expired window,
+   * corrupt/missing snapshot). The scheduler must stop re-attempting —
+   * before 2026-07-27 a drift-refused timer retried every 60s forever.
+   */
+  permanent?: boolean;
 }
 
 /** Proves (tenant, objectType, objectId, requester) line up in the Connect DB mirror. */
@@ -310,17 +316,17 @@ export class ModifyPbxExecutor {
    */
   async revert(actionId: string, requestedBy: string): Promise<ModifyRevertResult> {
     const action = await this.prisma.agentAction.findUnique({ where: { id: actionId } });
-    if (!action) return { ok: false, refusedReason: "action_not_found" };
+    if (!action) return { ok: false, refusedReason: "action_not_found", permanent: true };
     const op = this.catalog[action.capabilityId];
-    if (!op) return { ok: false, refusedReason: `Capability '${action.capabilityId}' not in catalog.` };
+    if (!op) return { ok: false, refusedReason: `Capability '${action.capabilityId}' not in catalog.`, permanent: true };
     const snapRow = await this.snapshots.getForAction(actionId);
-    if (!snapRow) return { ok: false, refusedReason: "No snapshot stored for this action." };
+    if (!snapRow) return { ok: false, refusedReason: "No snapshot stored for this action.", permanent: true };
     if (new Date(snapRow.expiresAt).getTime() < this.now()) {
-      return { ok: false, refusedReason: "Revert window expired — restore must be done manually from the archived snapshot." };
+      return { ok: false, refusedReason: "Revert window expired — restore must be done manually from the archived snapshot.", permanent: true };
     }
     if (!this.snapshots.integrityOk(snapRow)) {
       await this.audit.record({ actor: "system", event: "pbx.modify.snapshot_corrupt", actionId, payload: { snapshotId: snapRow.id } });
-      return { ok: false, refusedReason: "Snapshot integrity check FAILED — refusing to restore from a corrupted snapshot." };
+      return { ok: false, refusedReason: "Snapshot integrity check FAILED — refusing to restore from a corrupted snapshot.", permanent: true };
     }
 
     const mode: ModifyMode = snapRow.simulated ? "simulate" : "live";
@@ -333,7 +339,7 @@ export class ModifyPbxExecutor {
     const current = await op.verify(client, params, written, revertCtx);
     if (!current.ok) {
       await this.audit.record({ actor: "system", event: "pbx.modify.revert_refused_drift", actionId, payload: { detail: current.detail } });
-      return { ok: false, refusedReason: "Object was changed by someone else after our write (GUI edit?) — refusing to overwrite their change. Owner review required." };
+      return { ok: false, refusedReason: "Object was changed by someone else after our write (GUI edit?) — refusing to overwrite their change. Owner review required.", permanent: true };
     }
 
     try {

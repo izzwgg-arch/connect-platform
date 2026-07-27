@@ -27,7 +27,7 @@ export function makeModifyBackend(executor: ModifyPbxExecutor): ExecuteBackend {
     },
     async revert(action: any) {
       const res = await executor.revert(action.id, "scheduler_or_owner");
-      return { ok: res.ok, error: res.refusedReason };
+      return { ok: res.ok, error: res.refusedReason, permanent: res.permanent };
     },
   };
 }
