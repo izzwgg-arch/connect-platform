@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.07.28.2"
+VERSION = "2026.07.28.5"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -169,10 +169,18 @@ def snap_conn():
       captured_by TEXT,
       request_id TEXT,
       original_row_json TEXT NOT NULL,
-      original_destination_id TEXT NOT NULL
+      original_destination_id TEXT NOT NULL,
+      last_set_destination_id TEXT
     )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_snap_did ON agent_route_snapshots(tenant_id, did_digits)")
+    # Migration for pre-2026-07-28 databases: the drift guard needs to know the
+    # destination WE last wrote, or a second agent retarget of the same DID is
+    # falsely rejected as route_drifted_since_capture (live bug 2026-07-28).
+    try:
+        conn.execute("ALTER TABLE agent_route_snapshots ADD COLUMN last_set_destination_id TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.execute("""
     CREATE TABLE IF NOT EXISTS transport_cert_snapshots (
       conf_path TEXT PRIMARY KEY,
@@ -951,24 +959,25 @@ def agent_set_route_destination(body):
                 raise RuntimeError("connect_managed_route_refused")
             if current_dest == dest:
                 conn.rollback()
-                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route}
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route, "after": route, "destinationId": dest}
             if not destination_exists(conn, dest):
                 raise RuntimeError("destination_not_found")
             with snap_conn() as sconn:
-                existing = sconn.execute("SELECT original_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
+                existing = sconn.execute("SELECT original_destination_id, last_set_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
                 if existing and not force:
                     original = str(existing[0])
-                    # Drift guard: current must be either our captured original or a value we set.
-                    if current_dest != original:
-                        prior = sconn.execute("SELECT 1 FROM agent_route_snapshots WHERE route_id = ? AND original_destination_id = ?", (route_id, current_dest)).fetchone()
-                        if not prior:
-                            raise RuntimeError("route_drifted_since_capture")
+                    last_set = str(existing[1]) if existing[1] is not None else None
+                    # Drift guard: current must be our captured original or the
+                    # destination WE last wrote (agent retarget → retarget again).
+                    if current_dest != original and current_dest != last_set:
+                        raise RuntimeError("route_drifted_since_capture")
                 if not existing:
                     sconn.execute("""
                     INSERT INTO agent_route_snapshots
                       (route_id, tenant_id, did_digits, did_e164, captured_at, captured_by, request_id, original_row_json, original_destination_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (route_id, tenant_id, did_digits, did_e164, utc_now(), actor, request_id, json.dumps(route, sort_keys=True), current_dest))
+                sconn.execute("UPDATE agent_route_snapshots SET last_set_destination_id = ? WHERE route_id = ?", (str(dest), route_id))
                 sconn.commit()
             with conn.cursor() as cur:
                 cur.execute("""
@@ -985,9 +994,16 @@ def agent_set_route_destination(body):
     # 2026-07-28: destinations are BAKED into the generated dialplan — the old
     # `dialplan reload` apply never surfaced this write. Real per-tenant regen.
     apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
+    bake = None
+    with db_conn() as conn:
+        decoded = _decode_destination(conn, dest)
+    if decoded and decoded.get("type") in DEST_TARGET_TYPES and decoded.get("targetId"):
+        bake = bake_route_goto(tenant_id, did_digits, decoded["type"], decoded["targetId"])
+        if bake.get("error"):
+            raise RuntimeError("route_bake_failed:%s" % bake["error"])
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
-    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "destinationId": dest, "apply": apply_result}
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "destinationId": dest, "apply": apply_result, "bake": bake}
 
 def agent_restore_route_destination(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
@@ -1004,7 +1020,7 @@ def agent_restore_route_destination(body):
             current_dest = str(route["destination_id"])
             if current_dest == original_dest:
                 conn.rollback()
-                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route}
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route, "after": route, "restoredDestinationId": original_dest}
             if not destination_exists(conn, original_dest):
                 raise RuntimeError("original_destination_not_found")
             with conn.cursor() as cur:
@@ -1021,9 +1037,16 @@ def agent_restore_route_destination(body):
             raise
     # 2026-07-28: same as agent_set — restore needs the real per-tenant regen.
     apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
+    bake = None
+    with db_conn() as conn:
+        decoded = _decode_destination(conn, original_dest)
+    if decoded and decoded.get("type") in DEST_TARGET_TYPES and decoded.get("targetId"):
+        bake = bake_route_goto(tenant_id, did_digits, decoded["type"], decoded["targetId"])
+        if bake.get("error"):
+            raise RuntimeError("route_bake_failed:%s" % bake["error"])
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
-    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result, "bake": bake}
 
 # ?????? M11 (agent extension features) ??? DND / call-forward via live AstDB ?????????????????????
 # Real DND/CF are live AstDB keys <tenantPath>/diversions/<ext>/<F>/{enable,
@@ -1977,6 +2000,123 @@ def _verify_target_any_tenant(conn, target_type, target_id):
         row = cur.fetchone()
     return str(row.get("label") or "").strip() if row else None
 
+# ── M3 route bake ── VitalPBX's REST apply_changes returns success WITHOUT
+# regenerating the tenant conf on this build (verified live 2026-07-28: pending
+# flags consumed, file mtime unchanged, GUI Apply works). Until VitalPBX fixes
+# the API, bake the route's Goto line directly into the generated dialplan —
+# same guarded pattern as the MOH patcher (backup + line-scope check + atomic
+# replace) — then dialplan reload. If a future VitalPBX build makes the REST
+# apply actually regen, the patcher simply finds the Goto already converged.
+# Goto formats verified against live generated confs across tenants:
+#   extension/custom_app → Goto(T<t>_cos-all,<ext>,1)
+#   queue                → Goto(T<t>_ext-queues,<ext>,1)
+#   ring_group           → Goto(T<t>_ext-ringgroups,<ext>,1)
+#   ivr                  → Goto(T<t>_app-ivr,IVR-<id>,1)
+#   time_condition       → Goto(T<t>_app-time-condition,TC-<id>,1)
+
+def _goto_target_for(conn, tenant_id, target_type, target_id):
+    t = int(tenant_id)
+    if target_type in ("extension", "queue", "ring_group", "custom_application"):
+        _, table, pk, tenant_col, _ = DEST_TARGET_TYPES[target_type]
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT extension FROM `{table}` WHERE `{pk}` = %s AND `{tenant_col}` = %s", (target_id, tenant_id))
+            row = cur.fetchone()
+        if not row:
+            raise LookupError("bake_target_not_found:%s:%s" % (target_type, target_id))
+        ext = str(row["extension"]).strip()
+        ctx = {"extension": "T%d_cos-all", "custom_application": "T%d_cos-all",
+               "queue": "T%d_ext-queues", "ring_group": "T%d_ext-ringgroups"}[target_type] % t
+        return "%s,%s,1" % (ctx, ext)
+    if target_type == "ivr":
+        return "T%d_app-ivr,IVR-%s,1" % (t, int(target_id))
+    if target_type == "time_condition":
+        return "T%d_app-time-condition,TC-%s,1" % (t, int(target_id))
+    raise ValueError("unsupported_bake_target:%s" % target_type)
+
+def _patch_route_goto_text(text, did_digits, goto_target):
+    """Pure text transform: inside every `exten => _<did>[/...],1,NoOp(INBOUND_ROUTE:`
+    block, replace the single `same => n,Goto(...)` line. Refuses ambiguous blocks."""
+    header_re = re.compile(r"^exten => _?%s(?:/[^,]*)?,1,NoOp\(INBOUND_ROUTE:" % re.escape(str(did_digits)))
+    goto_re = re.compile(r"^(\s*)same => n,Goto\(([^)]*)\)\s*$")
+    lines = text.splitlines()
+    out = list(lines)
+    changed = 0
+    old = []
+    i = 0
+    while i < len(lines):
+        if header_re.match(lines[i]):
+            block_gotos = []
+            j = i + 1
+            while j < len(lines) and lines[j].strip().startswith("same =>"):
+                m = goto_re.match(lines[j])
+                if m:
+                    block_gotos.append((j, m.group(1), m.group(2)))
+                j += 1
+            if len(block_gotos) != 1:
+                return {"changed": 0, "newText": text, "old": [], "error": "route_block_goto_ambiguous:%d" % len(block_gotos)}
+            idx, indent, current = block_gotos[0]
+            if current != goto_target:
+                out[idx] = "%ssame => n,Goto(%s)" % (indent, goto_target)
+                old.append(current)
+                changed += 1
+            i = j
+        else:
+            i += 1
+    new_text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+    return {"changed": changed, "newText": new_text, "old": old, "error": None if changed or not old else None}
+
+def bake_route_goto(tenant_id, did_digits, target_type, target_id):
+    evidence = {"attempted": False, "changed": 0, "goto": None, "file": None, "backup": None, "old": [], "reload": None, "error": None}
+    try:
+        t = int(tenant_id)
+        conf = Path(QUEUE_CONF_DIR) / ("extensions__50-%d-dialplan.conf" % t)
+        evidence["file"] = str(conf)
+        with db_conn() as conn:
+            goto = _goto_target_for(conn, t, target_type, target_id)
+        evidence["goto"] = goto
+        if not conf.is_file():
+            evidence["error"] = "dialplan_conf_missing"
+            return evidence
+        evidence["attempted"] = True
+        original = conf.read_text(errors="replace")
+        res = _patch_route_goto_text(original, did_digits, goto)
+        evidence["old"] = res["old"]
+        if res.get("error"):
+            evidence["error"] = res["error"]
+            return evidence
+        if res["changed"] == 0:
+            return evidence  # already converged (regen worked, or same destination)
+        orig_lines = original.splitlines()
+        new_lines = res["newText"].splitlines()
+        if len(orig_lines) != len(new_lines):
+            evidence["error"] = "patch_line_count_mismatch"
+            return evidence
+        diff_idx = [i for i, (a, b) in enumerate(zip(orig_lines, new_lines)) if a != b]
+        if len(diff_idx) != res["changed"] or any("Goto(" not in orig_lines[i] for i in diff_idx):
+            evidence["error"] = "patch_scope_violation"
+            return evidence
+        backup_dir = Path(QUEUE_BACKUP_DIR)
+        backup_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+        backup = backup_dir / ("%s.%s.bak" % (conf.name, dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+        st = os.stat(conf)
+        backup.write_text(original)
+        evidence["backup"] = str(backup)
+        tmp = conf.with_name(conf.name + ".connect-tmp")
+        tmp.write_text(res["newText"])
+        os.chmod(tmp, st.st_mode & 0o777)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, conf)
+        evidence["changed"] = res["changed"]
+        evidence["reload"] = run_apply_command('asterisk -rx "dialplan reload"')
+        if evidence["reload"]["exitCode"] != 0:
+            evidence["error"] = "dialplan_reload_failed"
+    except Exception as exc:
+        evidence["error"] = "bake_failed: %s" % exc
+    return evidence
+
 def _mark_pending_changes(tenant_id, module_names):
     """VitalPBX's apply_changes only regenerates modules queued in
     ombu_queued_changes plus the (per-tenant-prefixed) reload_dialplan setting —
@@ -2214,15 +2354,23 @@ def agent_set_route_destination_v2(body):
             dest, created = _ensure_destination(conn, OWNER_MODULE_INBOUND_ROUTE, target_type, target_id)
             if current_dest == str(dest):
                 conn.rollback()
-                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route, "target": {"type": target_type, "id": target_id, "label": label}}
+                # DB already converged — but the BAKED dialplan may still disagree
+                # (that is exactly how VitalPBX's broken REST regen bites), so run
+                # the bake anyway and return the full after/destination fields the
+                # agent's verify step compares against.
+                bake = bake_route_goto(tenant_id, did_digits, target_type, target_id)
+                if bake.get("error"):
+                    raise RuntimeError("route_bake_failed:%s" % bake["error"])
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route, "after": route, "destinationId": dest, "target": {"type": target_type, "id": target_id, "label": label}, "bake": bake}
             with snap_conn() as sconn:
-                existing = sconn.execute("SELECT original_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
+                existing = sconn.execute("SELECT original_destination_id, last_set_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
                 if existing and not force:
                     original = str(existing[0])
-                    if current_dest != original:
-                        prior = sconn.execute("SELECT 1 FROM agent_route_snapshots WHERE route_id = ? AND original_destination_id = ?", (route_id, current_dest)).fetchone()
-                        if not prior:
-                            raise RuntimeError("route_drifted_since_capture")
+                    last_set = str(existing[1]) if existing[1] is not None else None
+                    # Drift guard: current must be our captured original or the
+                    # destination WE last wrote (agent retarget → retarget again).
+                    if current_dest != original and current_dest != last_set:
+                        raise RuntimeError("route_drifted_since_capture")
                 if not existing:
                     sconn.execute(
                         """
@@ -2232,6 +2380,7 @@ def agent_set_route_destination_v2(body):
                         """,
                         (route_id, tenant_id, did_digits, did_e164, utc_now(), actor, request_id, json.dumps(route, sort_keys=True, default=str), current_dest),
                     )
+                sconn.execute("UPDATE agent_route_snapshots SET last_set_destination_id = ? WHERE route_id = ?", (str(dest), route_id))
                 sconn.commit()
             with conn.cursor() as cur:
                 cur.execute(
@@ -2245,6 +2394,9 @@ def agent_set_route_destination_v2(body):
             conn.rollback()
             raise
     apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
+    bake = bake_route_goto(tenant_id, did_digits, target_type, target_id)
+    if bake.get("error"):
+        raise RuntimeError("route_bake_failed:%s" % bake["error"])
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {
@@ -2258,6 +2410,7 @@ def agent_set_route_destination_v2(body):
         "destinationCreated": created,
         "target": {"type": target_type, "id": target_id, "label": label},
         "apply": apply_result,
+        "bake": bake,
     }
 
 def _resolve_ivr(conn, tenant_id, ivr_id):
