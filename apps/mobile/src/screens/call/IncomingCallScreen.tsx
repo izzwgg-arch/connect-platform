@@ -9,6 +9,9 @@ import {
   ActivityIndicator,
   Platform,
   NativeModules,
+  TextInput,
+  KeyboardAvoidingView,
+  Pressable,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -27,6 +30,8 @@ import { markCallLatency } from '../../debug/callLatency';
 import { spacing } from '../../theme/spacing';
 import { findCallModalNavigator } from '../../navigation/callStackNav';
 import { normalizeCallerIdentity, callerDisplayLines } from '../../calls/callerIdentity';
+import { useTheme } from '../../context/ThemeContext';
+import { getQuickReplies, canSmsReply, sendQuickReplySms, DEFAULT_QUICK_REPLIES } from '../../calls/quickReplies';
 
 const INVITE_TTL_S = 45; // seconds before invite expires
 
@@ -42,11 +47,84 @@ export function IncomingCallScreen() {
     declineIncomingCall,
     answerHandoffInviteIdRef,
     answerHandoffTick,
-  } = useIncomingNotifications();
+    quickReplyInviteId,
+    clearQuickReplyRequest,
+  } = useIncomingNotifications() as ReturnType<typeof useIncomingNotifications> & {
+    quickReplyInviteId?: string | null;
+    clearQuickReplyRequest?: () => void;
+  };
+  const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const [displayInvite, setDisplayInvite] = useState(incomingInvite);
   // Remaining-time countdown (seconds until invite expires)
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL_S);
+
+  // ── Quick reply ("decline with message") ─────────────────────────────────
+  const [replySheetOpen, setReplySheetOpen] = useState(false);
+  const [quickReplies, setQuickRepliesState] = useState<string[]>(DEFAULT_QUICK_REPLIES);
+  const [customReply, setCustomReply] = useState('');
+  const replySentRef = useRef(false);
+  useEffect(() => {
+    getQuickReplies().then(setQuickRepliesState).catch(() => undefined);
+  }, []);
+  // Notification "Reply" action deep-links here with the sheet pre-opened.
+  useEffect(() => {
+    if (!quickReplyInviteId) return;
+    if (displayInvite && quickReplyInviteId === displayInvite.id) {
+      setReplySheetOpen(true);
+      clearQuickReplyRequest?.();
+    }
+  }, [quickReplyInviteId, displayInvite, clearQuickReplyRequest]);
+
+  // Theme palette — the screen supports light mode; dark keeps the original
+  // navy look exactly.
+  const pal = isDark
+    ? {
+        gradient: ['#0a0f1e', '#0d1430', '#0f1a42'] as const,
+        flatBg: '#040810',
+        name: '#f0f4ff',
+        secondary: 'rgba(136,153,187,0.8)',
+        actionLabel: 'rgba(240,244,255,0.7)',
+        replyBtnBg: 'rgba(30,45,71,0.85)',
+        replyBtnBorder: 'rgba(147,197,253,0.35)',
+        replyBtnIcon: '#bcd0f7',
+        sheetBg: '#141d3f',
+        sheetHandle: '#31427a',
+        bubbleBg: '#1b2650',
+        bubbleText: '#dbe6ff',
+        customBg: '#10193a',
+        customBorder: '#31427a',
+        customText: '#e7eeff',
+        customPlaceholder: 'rgba(143,163,208,0.8)',
+        sheetCaption: '#8fa3d0',
+        backdrop: 'rgba(0,0,0,0.45)',
+        pillBg: 'rgba(30,45,71,0.6)',
+        pillBorder: 'rgba(59,130,246,0.2)',
+        pillText: 'rgba(136,153,187,0.7)',
+      }
+    : {
+        gradient: ['#eef3fc', '#e7effb', '#dfe9fa'] as const,
+        flatBg: '#eef3fc',
+        name: '#122344',
+        secondary: 'rgba(59,79,120,0.85)',
+        actionLabel: 'rgba(28,44,80,0.75)',
+        replyBtnBg: '#ffffff',
+        replyBtnBorder: 'rgba(59,79,120,0.35)',
+        replyBtnIcon: '#28437c',
+        sheetBg: '#ffffff',
+        sheetHandle: '#c3d0e8',
+        bubbleBg: '#eef2fa',
+        bubbleText: '#1c2c50',
+        customBg: '#f6f8fd',
+        customBorder: '#c3d0e8',
+        customText: '#1c2c50',
+        customPlaceholder: 'rgba(91,111,150,0.8)',
+        sheetCaption: '#5b6f96',
+        backdrop: 'rgba(10,20,40,0.35)',
+        pillBg: '#ffffff',
+        pillBorder: 'rgba(59,79,120,0.25)',
+        pillText: '#41597f',
+      };
 
   // The logged-in user's own extension identity, so its name (e.g. "Home") is
   // never shown as the incoming caller. Loaded non-blocking with an
@@ -88,6 +166,10 @@ export function IncomingCallScreen() {
   useEffect(() => {
     if (incomingInvite) {
       setDisplayInvite(incomingInvite);
+      // New ring — reset the quick-reply machinery from any previous call.
+      replySentRef.current = false;
+      setReplySheetOpen(false);
+      setCustomReply('');
       return;
     }
     if (incomingCallUiState.phase !== 'idle') {
@@ -281,6 +363,25 @@ export function IncomingCallScreen() {
     }
   };
 
+  // Quick reply: decline IMMEDIATELY (caller stops ringing, same as the stock
+  // dialer), then send the SMS in the background from the user's own number.
+  // A send failure is logged, never surfaced mid-decline.
+  const handleQuickReply = (message: string) => {
+    const invite = incomingInvite ?? displayInvite;
+    const text = message.trim();
+    if (!invite || !text || replySentRef.current) return;
+    replySentRef.current = true;
+    setReplySheetOpen(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    const replyTo = invite.fromNumber || '';
+    if (token && canSmsReply(replyTo)) {
+      sendQuickReplySms(token, replyTo, text).catch((e) => {
+        console.warn('[QUICK_REPLY] sms send failed:', e instanceof Error ? e.message : String(e));
+      });
+    }
+    void handleDecline();
+  };
+
   // Normalize the PBX-delivered caller identity so the ring-group prefix,
   // external number, and caller name are kept separate and rendered
   // deterministically (never the prefix alone, never our own extension name).
@@ -357,13 +458,13 @@ export function IncomingCallScreen() {
   const showActions = !!incomingInvite && !isConnecting && !isEnded && !hasFailure;
 
   if (!displayInvite && incomingCallUiState.phase === 'idle') {
-    return <View style={[styles.container, { backgroundColor: '#040810' }]} />;
+    return <View style={[styles.container, { backgroundColor: pal.flatBg }]} />;
   }
 
   // Answer-from-notification: invite is cleared immediately while SIP connects.
   // Keep a flat background only — ActiveCall is pushed on the same tick (above).
   if (inAnswerHandoff) {
-    return <View style={[styles.container, { backgroundColor: '#040810' }]} />;
+    return <View style={[styles.container, { backgroundColor: pal.flatBg }]} />;
   }
 
   const initials = callerName
@@ -375,7 +476,7 @@ export function IncomingCallScreen() {
 
   return (
     <LinearGradient
-      colors={['#0a0f1e', '#0d1430', '#0f1a42']}
+      colors={pal.gradient as unknown as string[]}
       style={styles.container}
     >
       {/* Pulse rings */}
@@ -438,18 +539,18 @@ export function IncomingCallScreen() {
         ) : null}
 
         {/* Caller info */}
-        <Text style={[typography.callName, { color: '#f0f4ff', textAlign: 'center' }]} numberOfLines={2}>
+        <Text style={[typography.callName, { color: pal.name, textAlign: 'center' }]} numberOfLines={2}>
           {callerName}
         </Text>
         {callerNumber && callerNumber !== callerName ? (
-          <Text style={[typography.bodyLg, { color: 'rgba(136,153,187,0.8)', marginTop: 4 }]}>
+          <Text style={[typography.bodyLg, { color: pal.secondary, marginTop: 4 }]}>
             {callerNumber}
           </Text>
         ) : null}
         {toExt ? (
-          <View style={styles.extPill}>
-            <Ionicons name="call-outline" size={12} color="rgba(136,153,187,0.7)" style={{ marginRight: 4 }} />
-            <Text style={[typography.caption, { color: 'rgba(136,153,187,0.7)' }]}>
+          <View style={[styles.extPill, { backgroundColor: pal.pillBg, borderColor: pal.pillBorder }]}>
+            <Ionicons name="call-outline" size={12} color={pal.pillText} style={{ marginRight: 4 }} />
+            <Text style={[typography.caption, { color: pal.pillText }]}>
               Ext {toExt}
             </Text>
           </View>
@@ -498,8 +599,22 @@ export function IncomingCallScreen() {
                 <Ionicons name="call" size={30} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
               </TouchableOpacity>
             </Animated.View>
-            <Text style={styles.actionLabel}>Decline</Text>
+            <Text style={[styles.actionLabel, { color: pal.actionLabel }]}>Decline</Text>
           </View>
+
+          {/* Reply (decline with message) — PSTN callers only */}
+          {canSmsReply(displayInvite?.fromNumber) ? (
+            <View style={styles.actionItem}>
+              <TouchableOpacity
+                style={[styles.replyBtn, { backgroundColor: pal.replyBtnBg, borderColor: pal.replyBtnBorder }]}
+                onPress={() => setReplySheetOpen(true)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="chatbubble-ellipses-outline" size={26} color={pal.replyBtnIcon} />
+              </TouchableOpacity>
+              <Text style={[styles.actionLabel, { color: pal.actionLabel }]}>Reply</Text>
+            </View>
+          ) : null}
 
           {/* Answer */}
           <View style={styles.actionItem}>
@@ -508,11 +623,60 @@ export function IncomingCallScreen() {
                 <Ionicons name="call" size={30} color="#fff" />
               </TouchableOpacity>
             </Animated.View>
-            <Text style={styles.actionLabel}>{isConnecting ? 'Connecting…' : 'Answer'}</Text>
+            <Text style={[styles.actionLabel, { color: pal.actionLabel }]}>{isConnecting ? 'Connecting…' : 'Answer'}</Text>
           </View>
           </View>
         ) : null}
       </Animated.View>
+
+      {/* Quick-reply sheet — call keeps ringing until a reply is picked */}
+      {replySheetOpen && showActions ? (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="box-none"
+        >
+          <Pressable
+            style={[StyleSheet.absoluteFill, { backgroundColor: pal.backdrop }]}
+            onPress={() => setReplySheetOpen(false)}
+          />
+          <View style={[styles.replySheet, { backgroundColor: pal.sheetBg, paddingBottom: insets.bottom + 12 }]}>
+            <View style={[styles.sheetHandle, { backgroundColor: pal.sheetHandle }]} />
+            <Text style={[typography.caption, { color: pal.sheetCaption, marginBottom: 8 }]}>
+              Reply with a text and decline
+            </Text>
+            {quickReplies.map((msg) => (
+              <TouchableOpacity
+                key={msg}
+                style={[styles.replyBubble, { backgroundColor: pal.bubbleBg }]}
+                onPress={() => handleQuickReply(msg)}
+                activeOpacity={0.7}
+              >
+                <Text style={{ color: pal.bubbleText, fontSize: 13 }} numberOfLines={1}>{msg}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={[styles.customReplyRow, { backgroundColor: pal.customBg, borderColor: pal.customBorder }]}>
+              <TextInput
+                style={[styles.customReplyInput, { color: pal.customText }]}
+                placeholder="Write your own…"
+                placeholderTextColor={pal.customPlaceholder}
+                value={customReply}
+                onChangeText={setCustomReply}
+                maxLength={160}
+                returnKeyType="send"
+                onSubmitEditing={() => handleQuickReply(customReply)}
+              />
+              <TouchableOpacity
+                onPress={() => handleQuickReply(customReply)}
+                disabled={!customReply.trim()}
+                style={{ opacity: customReply.trim() ? 1 : 0.4, padding: 4 }}
+              >
+                <Ionicons name="send" size={18} color={pal.replyBtnIcon} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      ) : null}
     </LinearGradient>
   );
 }
@@ -660,5 +824,50 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     marginTop: 8,
+  },
+  replyBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  replySheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 32,
+    height: 4,
+    borderRadius: 2,
+    marginBottom: 8,
+  },
+  replyBubble: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 6,
+  },
+  customReplyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+  },
+  customReplyInput: {
+    flex: 1,
+    fontSize: 13,
+    paddingVertical: 8,
   },
 });

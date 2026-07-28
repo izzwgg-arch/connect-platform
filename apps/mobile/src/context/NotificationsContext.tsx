@@ -323,7 +323,7 @@ const EXPO_PUSH_TOKEN_KEY = "cc_mobile_expo_push_token";
 const INSTALLATION_DEVICE_ID_KEY = "cc_mobile_device_id";
 
 const IOS_DECLINE_GRACE_MS = 1500;
-type IncomingCallAction = "open" | "answer" | "decline";
+type IncomingCallAction = "open" | "answer" | "decline" | "reply";
 
 type ParsedIncomingCallAction = {
   action: IncomingCallAction;
@@ -410,7 +410,7 @@ function parseIncomingCallActionUrl(url: string | null): ParsedIncomingCallActio
     }
 
     const rawAction = parsed.searchParams.get("action") || "open";
-    if (rawAction !== "open" && rawAction !== "answer" && rawAction !== "decline") {
+    if (rawAction !== "open" && rawAction !== "answer" && rawAction !== "decline" && rawAction !== "reply") {
       return null;
     }
 
@@ -1139,6 +1139,10 @@ export function NotificationsProvider({
   const timingsRef = useRef<Record<string, number>>({});
   const answerHandoffInviteIdRef = useRef<string | null>(null);
   const [answerHandoffTick, setAnswerHandoffTick] = useState(0);
+  // Set when the user tapped "Reply" on the incoming-call notification: the
+  // IncomingCallScreen auto-opens the quick-reply sheet for this invite and
+  // then calls clearQuickReplyRequest().
+  const [quickReplyInviteId, setQuickReplyInviteId] = useState<string | null>(null);
   // True when the current/most-recent call was answered while the app was in the
   // background (e.g. from the lock screen). Used to move back to the lock screen
   // after hangup instead of leaving the Quick page visible on top.
@@ -4640,7 +4644,10 @@ export function NotificationsProvider({
         safeSetInvite(fallbackInvite);
       }
 
-      if (action === "open") {
+      if (action === "open" || action === "reply") {
+        // "reply" = "open" + auto-open the quick-reply sheet on the
+        // IncomingCallScreen (the screen clears the flag after consuming it).
+        if (action === "reply") setQuickReplyInviteId(inviteId);
         await resolveInviteForAction(inviteId, fallbackInvite).catch(() => fallbackInvite);
         if (!cancelled) processingIncomingActionRef.current = null;
         return;
@@ -5368,6 +5375,8 @@ export function NotificationsProvider({
       answeredFromBackgroundRef,
       answeredFromLockScreenRef,
       answerInviteRef,
+      quickReplyInviteId,
+      clearQuickReplyRequest: () => setQuickReplyInviteId(null),
       clearIncomingInvite: () => safeSetInvite(null),
       answerIncomingCall: (invite: CallInvite) =>
         handleAcceptInvite(invite, invite.id, { skipBringToForeground: false }),
@@ -5387,6 +5396,7 @@ export function NotificationsProvider({
       incomingInvite,
       incomingCallUiState,
       answerHandoffTick,
+      quickReplyInviteId,
       runMediaTest,
       callReadiness,
       safeSetInvite,

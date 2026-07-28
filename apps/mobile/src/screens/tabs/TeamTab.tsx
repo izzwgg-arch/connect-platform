@@ -281,7 +281,7 @@ export function TeamTab() {
           bounces={Platform.OS === 'ios'}
           alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} colors={[colors.primary]} progressBackgroundColor={colors.surface} />}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
             return (

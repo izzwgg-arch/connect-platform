@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Platform,
   Linking,
+  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +28,7 @@ import {
   type MobileRingtoneId,
 } from '../audio/ringtonePreferences';
 import { applyIosRingtonePreference } from '../sip/callkeep';
+import { DEFAULT_QUICK_REPLIES, getQuickReplies, setQuickReplies } from '../calls/quickReplies';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
@@ -125,6 +127,19 @@ export function SettingsScreen() {
   const [incomingRingtone, setIncomingRingtoneId] =
     useState<MobileRingtoneId>(DEFAULT_MOBILE_RINGTONE_ID);
 
+  // Quick replies (decline-with-message). Drafts edit in place; persisted on
+  // end-editing. Empty rows are dropped by setQuickReplies, so re-hydrate the
+  // draft list from storage after each save.
+  const [quickReplyDrafts, setQuickReplyDrafts] = useState<string[]>(DEFAULT_QUICK_REPLIES);
+  const quickReplyDraftsRef = useRef(quickReplyDrafts);
+  useEffect(() => { quickReplyDraftsRef.current = quickReplyDrafts; }, [quickReplyDrafts]);
+  const persistQuickReplies = useCallback(async () => {
+    try {
+      await setQuickReplies(quickReplyDraftsRef.current);
+      setQuickReplyDrafts(await getQuickReplies());
+    } catch { /* keep drafts */ }
+  }, []);
+
   const handleRetryPushToken = async () => {
     setRetryingPushToken(true);
     try {
@@ -166,6 +181,7 @@ export function SettingsScreen() {
       if (!token) return;
       getVoiceExtension(token).then(setVoice).catch(() => {});
       getMobileIncomingRingtone().then(setIncomingRingtoneId).catch(() => {});
+      getQuickReplies().then(setQuickReplyDrafts).catch(() => {});
     }, [token, refreshDeviceReadiness])
   );
 
@@ -309,6 +325,41 @@ export function SettingsScreen() {
             value={getMobileIncomingRingtoneLabel(incomingRingtone)}
             onPress={handleCycleIncomingRingtone}
           />
+        </SectionCard>
+
+        <SectionHeader title="Quick Replies" />
+        <SectionCard>
+          <Text style={[typography.caption, { color: colors.textTertiary, paddingHorizontal: 16, paddingTop: 12 }]}>
+            Shown when declining a call with a message. Sent as a text from your number.
+          </Text>
+          {quickReplyDrafts.map((draft, i) => (
+            <View
+              key={i}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginHorizontal: 16,
+                marginTop: 10,
+                marginBottom: i === quickReplyDrafts.length - 1 ? 14 : 0,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: colors.border,
+                borderRadius: 8,
+                paddingHorizontal: 10,
+              }}
+            >
+              <TextInput
+                style={{ flex: 1, color: colors.text, fontSize: 14, paddingVertical: 9 }}
+                value={draft}
+                maxLength={160}
+                placeholder={`Quick reply ${i + 1}`}
+                placeholderTextColor={colors.textTertiary}
+                onChangeText={(t) => {
+                  setQuickReplyDrafts((prev) => prev.map((p, j) => (j === i ? t : p)));
+                }}
+                onEndEditing={() => void persistQuickReplies()}
+              />
+            </View>
+          ))}
         </SectionCard>
 
         {/* ── Call Readiness — Android only ─────────────────────────────── */}

@@ -1561,6 +1561,17 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             buildIncomingCallIntent("decline", data, inviteId, fromNum),
             pendingIntentFlags
         );
+        // "Reply" (decline with message): opens the app on the incoming-call
+        // screen with the quick-reply sheet already open (JS handles the
+        // action=reply deep link). Only offered when the caller is a real
+        // PSTN number that can receive an SMS — extensions can't.
+        PendingIntent replyIntent = PendingIntent.getActivity(
+            this,
+            notificationId + 30000,
+            buildIncomingCallIntent("reply", data, inviteId, fromNum),
+            pendingIntentFlags
+        );
+        boolean canSmsReply = fromNum != null && fromNum.replaceAll("\\D", "").length() >= 10;
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.notification_icon)
@@ -1587,6 +1598,21 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 answerIntent
             )
         );
+        // CallStyle renders Decline/Answer itself; custom actions are shown in
+        // addition. Reply = decline-with-message (PSTN callers only).
+        // Samsung One UI draws custom CallStyle action chips WHITE and keeps the
+        // default (white) label color — white-on-white, invisible (same OEM bug
+        // as the old in-call Speaker chip). Force a dark label via a colored
+        // span so it reads on the white chip in both themes.
+        if (canSmsReply) {
+            android.text.SpannableString replyLabel = new android.text.SpannableString("Reply");
+            replyLabel.setSpan(
+                new android.text.style.ForegroundColorSpan(0xFF1C2C50),
+                0, replyLabel.length(),
+                android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            );
+            builder.addAction(R.drawable.notification_icon, replyLabel, replyIntent);
+        }
         // Android 14 (targetSdk 34) REJECTS a CallStyle notification outright
         // unless it is backed by a foreground service, a user-initiated job, OR
         // carries a full-screen intent — otherwise NotificationManagerCompat.notify()

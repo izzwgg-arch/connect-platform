@@ -968,7 +968,7 @@ export function VoicemailTab() {
           bounces={Platform.OS === 'ios'}
           alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={VM.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={VM.primary} colors={[VM.primary]} progressBackgroundColor={colors.surface} />}
           contentContainerStyle={[styles.list, { paddingBottom: spacing['5'] }]}
           renderItem={({ item }) => (
             <VoicemailCard

@@ -42,7 +42,7 @@ export function RunsScreen() {
         <FlatList
           data={runs}
           keyExtractor={(r) => r.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.textSecondary} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.textSecondary} colors={[colors.textSecondary]} progressBackgroundColor={colors.surface} />}
           ListEmptyComponent={loading ? null : <Text style={[styles.dim, { color: colors.textSecondary }]}>No runs assigned yet.</Text>}
           contentContainerStyle={{ padding: 16, gap: 12 }}
           renderItem={({ item }) => {

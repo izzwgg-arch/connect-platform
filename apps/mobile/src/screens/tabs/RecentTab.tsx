@@ -636,6 +636,7 @@ export function RecentTab() {
               onRefresh={onUserRefresh}
               tintColor={colors.primary}
               colors={[colors.primary]}
+              progressBackgroundColor={colors.surface}
             />
           }
         />

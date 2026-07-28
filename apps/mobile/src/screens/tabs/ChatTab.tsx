@@ -1697,7 +1697,7 @@ export function ChatTab() {
               bounces={Platform.OS === 'ios'}
               alwaysBounceVertical={Platform.OS === 'ios'}
               overScrollMode="never"
-              refreshControl={<RefreshControl refreshing={manualRefreshing} onRefresh={refreshChat} tintColor={colors.primary} />}
+              refreshControl={<RefreshControl refreshing={manualRefreshing} onRefresh={refreshChat} tintColor={colors.primary} colors={[colors.primary]} progressBackgroundColor={colors.surface} />}
               contentContainerStyle={styles.threadList}
               renderItem={({ item }) => <ThreadRow thread={item} onPress={() => setActiveThread(item)} />}
             />

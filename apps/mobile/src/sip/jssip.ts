@@ -38,7 +38,7 @@ import {
 } from "@connect/shared/webrtcBlackbox";
 import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
-import { preferOpusInSdp } from "./preferOpusSdp";
+import { preferOpusInSdp, preferOpusOnlyOffer } from "./preferOpusSdp";
 import * as SecureStore from "expo-secure-store";
 import { isStandingRegistrationEnabled } from "../config/featureFlags";
 import { NativeSipSocket, isNativeSipSocketAvailable } from "./nativeSipSocket";
@@ -403,6 +403,14 @@ export class JsSipClient implements SipClient {
    * UA "connected" handler once the socket is back. Null = nothing pending.
    */
   private pendingIceRestartReason: string | null = null;
+
+  /**
+   * Most recent live-ping stats snapshot that carried real RTP numbers.
+   * Fallback source for the end-of-call quality report when the peer
+   * connection is already closed (see startLivePing / collectAndSubmit).
+   * Reset at the start of every call.
+   */
+  private lastLivePingStats: Record<string, unknown> | null = null;
 
   /** Guards against overlapping getUserMedia prewarm acquisitions. */
   private prewarmInFlight = false;
@@ -1247,8 +1255,18 @@ export class JsSipClient implements SipClient {
     if (PREFER_OPUS_SDP) {
       session.on("sdp", (e: any) => {
         try {
-          if (e && e.originator === "local" && typeof e.sdp === "string") {
-            e.sdp = preferOpusInSdp(e.sdp);
+          if (e && typeof e.sdp === "string") {
+            const mLine = (sdp: string) => (sdp.match(/^m=audio.*$/m)?.[0] ?? "no-m-audio").slice(0, 90);
+            if (e.originator === "local") {
+              const before = mLine(e.sdp);
+              // Offers: opus-only (PBX re-orders to ulaw otherwise — see
+              // preferOpusOnlyOffer). Answers: reorder only, never strip.
+              e.sdp = e.type === "offer" ? preferOpusOnlyOffer(e.sdp) : preferOpusInSdp(e.sdp);
+              console.log(`[SIP_SDP] local ${e.type}: ${before} -> ${mLine(e.sdp)}`);
+            } else {
+              // Remote SDP: log only — shows what the PBX offered/answered.
+              console.log(`[SIP_SDP] remote ${e.type}: ${mLine(e.sdp)}`);
+            }
           }
         } catch (err) {
           console.warn('[SIP_SDP] opus preference munge failed:', err instanceof Error ? err.message : String(err));
@@ -2939,6 +2957,9 @@ export class JsSipClient implements SipClient {
 
   private startLivePing(session: any) {
     this.stopLivePing();
+    // Fresh call — drop the previous call's cached stats so a stale snapshot
+    // can never leak into this call's final report.
+    this.lastLivePingStats = null;
     this.livePingInterval = setInterval(async () => {
       if (!this.onCallQualityPing) return;
       const durationMs = this.callStartedAt ? Date.now() - this.callStartedAt : 0;
@@ -2965,8 +2986,12 @@ export class JsSipClient implements SipClient {
         if (pc && typeof pc.getStats === "function") {
           const stats = await pc.getStats();
           const localCandidates = new Map<string, string>();
+          const codecIds = new Map<string, string>();
           stats.forEach((r: any) => {
             if (r.type === "local-candidate") localCandidates.set(r.id, r.candidateType || "");
+            if (r.type === "codec" && typeof r.mimeType === "string") {
+              codecIds.set(r.id, r.mimeType.replace(/^audio\//, ""));
+            }
           });
           stats.forEach((r: any) => {
             if (r.type === "inbound-rtp" && r.kind === "audio") {
@@ -2974,6 +2999,7 @@ export class JsSipClient implements SipClient {
               if (typeof r.packetsReceived === "number") snapshot.packetsReceived = r.packetsReceived;
               if (typeof r.jitter === "number") snapshot.jitterMs = Math.round(r.jitter * 1000);
               if (typeof r.bytesReceived === "number") snapshot.bytesReceived = r.bytesReceived;
+              if (r.codecId && codecIds.has(r.codecId)) snapshot.audioCodec = codecIds.get(r.codecId);
             }
             if (r.type === "outbound-rtp" && r.kind === "audio") {
               if (typeof r.packetsSent === "number") snapshot.packetsSent = r.packetsSent;
@@ -2985,6 +3011,14 @@ export class JsSipClient implements SipClient {
               if (ct) { snapshot.candidateType = ct; snapshot.isUsingRelay = ct === "relay"; }
             }
           });
+          // Cache the last snapshot that actually carried RTP stats. The final
+          // end-of-call report often runs AFTER JsSIP closed the
+          // RTCPeerConnection (remote hangup path) — getStats then returns
+          // nothing and the report used to go out empty (every pre-2026-07-28
+          // Android report had no rtt/loss/codec). This cache is its fallback.
+          if (snapshot.packetsReceived !== undefined || snapshot.rttMs !== undefined) {
+            this.lastLivePingStats = { ...snapshot };
+          }
         }
       } catch { /* ignore */ }
 
@@ -3021,7 +3055,11 @@ export class JsSipClient implements SipClient {
     const report: Record<string, unknown> = {
       platform: "ANDROID",
       durationMs,
-      direction: this.callDirection,
+      // Server zod is .optional() (NOT .nullable()) for direction — a null
+      // would 400 the whole report. Omit when unknown.
+      ...(this.callDirection === "inbound" || this.callDirection === "outbound"
+        ? { direction: this.callDirection }
+        : {}),
       endReason,
       deviceModel,
       networkType,
@@ -3064,6 +3102,20 @@ export class JsSipClient implements SipClient {
       }
     } catch {
       // getStats may not be available on all RN-WebRTC versions
+    }
+
+    // Fallback: the PC is closed on remote-hangup paths and getStats comes
+    // back empty — fill the report from the last live-ping snapshot (taken
+    // every 10s during the call) so the report is never blind.
+    if (report.packetsReceived === undefined && report.rttMs === undefined && this.lastLivePingStats) {
+      const cached = this.lastLivePingStats;
+      for (const key of [
+        "rttMs", "jitterMs", "packetsLost", "packetsReceived",
+        "audioCodec", "candidateType", "isUsingRelay", "audioRoute",
+      ] as const) {
+        if (cached[key] !== undefined && report[key] === undefined) report[key] = cached[key];
+      }
+      report.statsSource = "live_ping_cache";
     }
 
     // Compute quality grade

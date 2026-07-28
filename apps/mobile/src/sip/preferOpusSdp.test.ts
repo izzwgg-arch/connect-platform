@@ -50,3 +50,21 @@ test("handles empty/garbage input", () => {
   assert.equal(preferOpusInSdp(""), "");
   assert.equal(preferOpusInSdp("not an sdp"), "not an sdp");
 });
+
+test("opus-only offer strips narrowband codecs, keeps opus + dtmf", () => {
+  const { preferOpusOnlyOffer } = require("./preferOpusSdp");
+  const out = preferOpusOnlyOffer(SDP_ULAW_FIRST.replace(
+    "m=audio 9 UDP/TLS/RTP/SAVPF 0 8 111 126",
+    "m=audio 9 UDP/TLS/RTP/SAVPF 111 63 9 102 0 8 13 110 126",
+  ) + "\r\na=rtpmap:63 red/48000/2\r\na=rtpmap:110 telephone-event/48000");
+  assert.match(out, /m=audio 9 UDP\/TLS\/RTP\/SAVPF 111 63 110 126/);
+});
+
+test("opus-only offer is a no-op when sdp has no opus", () => {
+  const { preferOpusOnlyOffer } = require("./preferOpusSdp");
+  const noOpus = SDP_ULAW_FIRST
+    .replace("a=rtpmap:111 opus/48000/2\r\n", "")
+    .replace("a=fmtp:111 minptime=10;useinbandfec=1\r\n", "")
+    .replace("m=audio 9 UDP/TLS/RTP/SAVPF 0 8 111 126", "m=audio 9 UDP/TLS/RTP/SAVPF 0 8 126");
+  assert.equal(preferOpusOnlyOffer(noOpus), noOpus);
+});

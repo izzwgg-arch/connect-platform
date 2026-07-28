@@ -341,30 +341,33 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // Wire the live ping callback — fires every ~10 s during a call
   useEffect(() => {
     const client = clientRef.current as any;
-    if ("onCallQualityReport" in client || typeof client.onCallQualityReport !== "undefined") {
-      client.onCallQualityReport = (report: Record<string, unknown>) => {
-        if (!authToken) return;
-        postCallQualityReport(authToken, report).catch(() => {
-          // Non-fatal — telemetry loss acceptable
-        });
-      };
-    }
-    if ("onCallQualityPing" in client || typeof client.onCallQualityPing !== "undefined") {
-      client.onCallQualityPing = (snapshot: Record<string, unknown>) => {
-        if (!authToken) return;
-        if (snapshot._clear) {
-          clearCallQualityPing(authToken).catch(() => {});
-        } else {
-          postCallQualityPing(authToken, snapshot).catch(() => {});
-        }
-      };
-    }
-    if ("onWebrtcCallDebug" in client || typeof client.onWebrtcCallDebug !== "undefined") {
-      client.onWebrtcCallDebug = (payload: Record<string, unknown>) => {
-        if (!authToken) return;
-        postWebrtcCallDebug(authToken, payload).catch(() => {});
-      };
-    }
+    // Assign unconditionally. The old feature-detection guard
+    // (`"onCallQualityReport" in client || typeof ... !== "undefined"`) was
+    // always FALSE: these are bare optional class fields with no initializer,
+    // so the bundler strips them and the property does not exist at runtime
+    // until assigned — the guard itself prevented the assignment. Result:
+    // NO Android call-quality report was ever submitted (verified 2026-07-28:
+    // zero platform=ANDROID CALL_QUALITY_REPORT rows in VoiceDiagEvent).
+    // Assignment is safe on any client version — an older client that never
+    // calls the callback simply ignores it.
+    client.onCallQualityReport = (report: Record<string, unknown>) => {
+      if (!authToken) return;
+      postCallQualityReport(authToken, report).catch(() => {
+        // Non-fatal — telemetry loss acceptable
+      });
+    };
+    client.onCallQualityPing = (snapshot: Record<string, unknown>) => {
+      if (!authToken) return;
+      if (snapshot._clear) {
+        clearCallQualityPing(authToken).catch(() => {});
+      } else {
+        postCallQualityPing(authToken, snapshot).catch(() => {});
+      }
+    };
+    client.onWebrtcCallDebug = (payload: Record<string, unknown>) => {
+      if (!authToken) return;
+      postWebrtcCallDebug(authToken, payload).catch(() => {});
+    };
   }, [authToken]);
 
   // Keep registrationStateRef in sync so the AppState callback below
