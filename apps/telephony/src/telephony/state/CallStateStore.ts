@@ -1131,7 +1131,21 @@ export class CallStateStore extends EventEmitter {
     const bill = parseInt(params.billableSeconds, 10);
     if (!isNaN(dur) && dur > call.durationSec) call.durationSec = dur;
     if (!isNaN(bill) && bill > call.billableSec) call.billableSec = bill;
-    call.metadata["cdrDisposition"] = params.disposition;
+    // Call-level disposition merges by PRIORITY, not last-write-wins. A call
+    // forked to several devices emits one Cdr event per fork; the losing forks
+    // report NO ANSWER and can arrive AFTER the answered leg's event. Live bug
+    // 2026-07-28 (first day AMI Cdr events were enabled): an answered 30s call
+    // classified "missed" because the unanswered fork's event landed last.
+    // ANSWERED must always win; anything beats an empty value.
+    {
+      const dispRank = (d: string) =>
+        d === "ANSWERED" ? 4 : d === "BUSY" ? 3 : d === "NO ANSWER" ? 2 : d ? 1 : 0;
+      const prevDisp = String(call.metadata["cdrDisposition"] ?? "").toUpperCase().trim();
+      const newDisp = String(params.disposition ?? "").toUpperCase().trim();
+      if (dispRank(newDisp) > dispRank(prevDisp)) {
+        call.metadata["cdrDisposition"] = params.disposition;
+      }
+    }
 
     // Populate from/to from CDR source/destination if missing
     if (params.source && !call.from) call.from = params.source;
@@ -1204,17 +1218,20 @@ export class CallStateStore extends EventEmitter {
     };
     if (legEntry.source || legEntry.destination) {
       const prevLegs = (call.metadata["cdrLegs"] as typeof legEntry[] | undefined) ?? [];
-      // Dedupe key MUST include lastApplication: a ring-to-voicemail flow emits
-      // two legs with identical source/destination/dcontext — "Dial"/NO ANSWER
-      // followed by "VoiceMail"/ANSWERED (verified in PBX CDR 2026-07-28). The
-      // old src+dst+dcontext key silently dropped the VoiceMail leg, which is
-      // the one leg that proves the call was answered by voicemail.
+      // Dedupe key MUST include lastApplication AND disposition: a
+      // ring-to-voicemail flow emits "Dial"/NO ANSWER then "VoiceMail"/ANSWERED
+      // with identical src/dst/dcontext, and a multi-device fork emits
+      // "Dial"/ANSWERED + "Dial"/NO ANSWER (one per fork — verified in PBX CDR
+      // 2026-07-28). The old narrower keys silently dropped whichever leg
+      // arrived second — including the ANSWERED leg that proves a human took
+      // the call.
       const isDupe = prevLegs.some(
         (l) =>
           l.source      === legEntry.source &&
           l.destination === legEntry.destination &&
           l.dcontext    === legEntry.dcontext &&
-          (l.lastApplication ?? "") === legEntry.lastApplication,
+          (l.lastApplication ?? "") === legEntry.lastApplication &&
+          (l.disposition ?? "") === legEntry.disposition,
       );
       if (!isDupe) call.metadata["cdrLegs"] = [...prevLegs, legEntry];
     }
