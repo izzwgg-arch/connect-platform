@@ -305,7 +305,11 @@ export async function runVoicemailSyncCycle(): Promise<void> {
               ...(recfile ? { pbxRecfile: recfile } : {}),
               callerNumber,
               callerName,
-              listened,
+              // Playing a voicemail in the app never moves it out of the PBX
+              // INBOX, so "still in INBOX" is not evidence it is unread. Only
+              // promote to listened when the PBX says it left INBOX; never
+              // downgrade Connect's own read state on re-sync.
+              ...(listened ? { listened: true } : {}),
             },
           });
         }

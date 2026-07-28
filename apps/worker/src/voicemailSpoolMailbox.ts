@@ -187,7 +187,9 @@ export async function fetchSpoolAndApplyVoicemails(
           ...(recfile ? { pbxRecfile: recfile } : {}),
           callerNumber,
           callerName,
-          listened,
+          // Never downgrade read state on re-sync — "still in PBX INBOX" is not
+          // evidence the message is unread (app playback doesn't move it).
+          ...(listened ? { listened: true } : {}),
         },
       });
 
