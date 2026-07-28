@@ -46,10 +46,12 @@ SECRET_FILE="${SECRET_FILE:-/etc/connect/connect_media_secret}"
 LOG_FILE="${LOG_FILE:-/var/log/connect-media-sync.log}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-30}"
 
+# stderr only — cron already appends both streams to LOG_FILE; tee-ing here
+# too double-writes every line (seen on first install 2026-07-28).
 log() {
   local ts
   ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  printf '%s %s\n' "$ts" "$*" | tee -a "$LOG_FILE" >&2
+  printf '%s %s\n' "$ts" "$*" >&2
 }
 
 need() {
@@ -196,8 +198,11 @@ fi
 rm -f "$NEW_CONF"
 
 # ── reload leg: only when files or conf changed ──
+# Full path: cron's PATH (/usr/bin:/bin) misses /usr/sbin/asterisk — the bare
+# name made every cron reload fail on first install (2026-07-28).
+AST_BIN="${AST_BIN:-$(command -v asterisk || echo /usr/sbin/asterisk)}"
 if [[ "$CHANGED" -eq 1 ]]; then
-  if asterisk -rx "module reload res_musiconhold" >/dev/null 2>&1; then
+  if "$AST_BIN" -rx "module reload res_musiconhold" >/dev/null 2>&1; then
     log "reloaded res_musiconhold"
   else
     log "ERROR: asterisk moh reload failed"
