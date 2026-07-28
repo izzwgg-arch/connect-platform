@@ -142,4 +142,5 @@ test("extractMohRequest: prompt carries the profile list, local clock, and exten
   assert.match(seenSystem, /Monday 2026-07-27 19:51/); // 7:51 PM EDT local clock
   assert.match(seenSystem, /OWN EXTENSION: 101/);
   assert.match(seenSystem, /NEVER the "profile" value/); // the back-to rule
+  assert.match(seenSystem, /NOT tomorrow 09:45/); // next-occurrence worked example (live misread 2026-07-27)
 });

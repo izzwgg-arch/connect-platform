@@ -85,7 +85,7 @@ function buildPrompt(input: ExtractInput, now: Date): string {
     `- CRITICAL: a profile named after "back to"/"return to"/"revert to"/"then back" describes what happens AFTER a timer ends — it is NEVER the "profile" value. In "switch to Main till 8:45 then back to Classic", profile="Main" and the Classic part is the automatic revert (already handled by the system; do not encode it).`,
     `- scope: "tenant" only when the whole company/office/everyone is explicit; "extension" when it's about their own phone/extension or a named extension; null when the message doesn't say.`,
     `- extension: an extension NUMBER only when explicitly mentioned (e.g. "extension 102"); never guess, never copy times or durations here.`,
-    `- timing "until": a bare hour with no am/pm means the NEXT future time the clock reads that hour (at 19:52, "until 8" or "until eight o'clock" = 20:00 today). Spelled-out numbers count ("eight" = 8).`,
+    `- timing "until": a time with NO am/pm means the EARLIEST FUTURE moment the clock shows that time. Worked examples at 19:52: "until 8" or "until eight o'clock" = today 20:00; "until 9:45" = today 21:45 (NOT tomorrow 09:45); "until 7" = tomorrow 07:00 (19:00 already passed). Spelled-out numbers count ("eight" = 8). Only pick a morning reading when the client says so ("9:45 am", "in the morning") or names a day ("tomorrow at 9:45").`,
     `- timing "duration": "for 20 minutes", "for two hours".`,
     `- timing "window": a future one-time range ("tomorrow 3pm to 5pm"). "weekly": a recurring rule ("every Friday 3-5pm").`,
     `- "change it back in 15 minutes" (no new profile) = operation "restore" with a 15-minute duration.`,
