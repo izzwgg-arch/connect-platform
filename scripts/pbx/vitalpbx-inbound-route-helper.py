@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.07.28.1"
+VERSION = "2026.07.28.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -984,7 +984,7 @@ def agent_set_route_destination(body):
             raise
     # 2026-07-28: destinations are BAKED into the generated dialplan — the old
     # `dialplan reload` apply never surfaced this write. Real per-tenant regen.
-    apply_result = apply_tenant_changes(tenant_id)
+    apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "destinationId": dest, "apply": apply_result}
@@ -1020,7 +1020,7 @@ def agent_restore_route_destination(body):
             conn.rollback()
             raise
     # 2026-07-28: same as agent_set — restore needs the real per-tenant regen.
-    apply_result = apply_tenant_changes(tenant_id)
+    apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
@@ -1871,12 +1871,13 @@ DEST_TARGET_TYPES = {
     # type → (module name for category lookup, table, pk column, tenant column, label SQL)
     "extension": ("extensions", "ombu_extensions", "extension_id", "tenant_id", "CONCAT(extension, ' ', name)"),
     "queue": ("queues", "ombu_queues", "queue_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
-    "ring_group": ("ring_groups", "ombu_ring_groups", "ring_group_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
+    "ring_group": ("ring_group", "ombu_ring_groups", "ring_group_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
     "ivr": ("ivr", "ombu_ivrs", "ivr_id", "tenant_id", "COALESCE(description,'')"),
     "time_condition": ("time_conditions", "ombu_time_conditions", "time_condition_id", "tenant_id", "COALESCE(description,'')"),
     "custom_application": ("custom_app", "ombu_custom_applications", "custom_application_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
 }
-OWNER_MODULE_INBOUND_ROUTE = "inbound_routes"
+# Verified live 2026-07-28: ombu_modules names are singular for these two.
+OWNER_MODULE_INBOUND_ROUTE = "inbound_route"
 OWNER_MODULE_IVR = "ivr"
 IVR_OPTION_RE = re.compile(r"^(?:\d{1,2}|\*|#)$")
 
@@ -1976,19 +1977,55 @@ def _verify_target_any_tenant(conn, target_type, target_id):
         row = cur.fetchone()
     return str(row.get("label") or "").strip() if row else None
 
-def apply_tenant_changes(tenant_id, extra_reloads=()):
+def _mark_pending_changes(tenant_id, module_names):
+    """VitalPBX's apply_changes only regenerates modules queued in
+    ombu_queued_changes plus the (per-tenant-prefixed) reload_dialplan setting —
+    the GUI stamps both on every Save. Our direct DB writes bypass that
+    bookkeeping, so stamp it ourselves or apply_changes regenerates nothing
+    (verified live 2026-07-28: apply returned success while the generated conf
+    stayed stale)."""
+    marked = {"modules": [], "dialplan": None}
+    with db_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                for name in module_names:
+                    try:
+                        mid = _module_id_by_name(conn, name)
+                    except LookupError:
+                        marked["modules"].append({"name": name, "error": "module_not_found"})
+                        continue
+                    cur.execute(
+                        "INSERT IGNORE INTO ombu_queued_changes (tenant_id, module_id) VALUES (%s, %s)",
+                        (tenant_id, mid),
+                    )
+                    marked["modules"].append({"name": name, "moduleId": mid})
+                cur.execute("SELECT prefix FROM ombu_tenants WHERE tenant_id = %s", (tenant_id,))
+                row = cur.fetchone()
+                prefix = str(row["prefix"] or "") if row else ""
+                setting_name = (prefix + "reload_dialplan") if prefix else "reload_dialplan"
+                cur.execute("UPDATE ombu_settings SET value = 'yes' WHERE name = %s", (setting_name,))
+                marked["dialplan"] = {"setting": setting_name, "updated": cur.rowcount}
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return marked
+
+def apply_tenant_changes(tenant_id, extra_reloads=(), pending_modules=()):
     """Official VitalPBX per-tenant regen (same as GUI Apply Changes):
-    PUT /api/v2/tenants/<id>/apply_changes with the provisioned app-key.
+    UPDATE /api/v2/tenants/<id>/apply_changes with the provisioned app-key
+    (custom HTTP verb — PUT returns 501 "Invalid Operation", verified live).
     Falls back to the legacy apply command when no key is configured (which
     only reloads — sufficient for nothing baked, so log loudly)."""
     if not CFG.vitalpbx_api_key:
         legacy = apply_changes()
         legacy["mode"] = "legacy_no_api_key"
         return legacy
+    pending = _mark_pending_changes(tenant_id, pending_modules) if pending_modules else None
     url = "%s/api/v2/tenants/%s/apply_changes" % (CFG.vitalpbx_api_url.rstrip("/"), tenant_id)
     req = urllib.request.Request(
         url,
-        method="PUT",
+        method="UPDATE",
         data=b"{}",
         headers={"app-key": CFG.vitalpbx_api_key, "content-type": "application/json", "accept": "application/json"},
     )
@@ -2009,6 +2046,7 @@ def apply_tenant_changes(tenant_id, extra_reloads=()):
         "httpStatus": status,
         "elapsedMs": int((time.time() - start) * 1000),
         "body": body_text[:2000],
+        "pending": pending,
     }
     if status not in (200, 201, 202, 204):
         raise RuntimeError("apply_changes_failed_http_%s %s" % (status, body_text[:300]))
@@ -2206,7 +2244,7 @@ def agent_set_route_destination_v2(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_tenant_changes(tenant_id)
+    apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {
@@ -2312,7 +2350,7 @@ def ivr_action(body):
             except Exception:
                 conn.rollback()
                 raise
-        apply_result = apply_tenant_changes(tenant_id)
+        apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_IVR,))
         return {"ok": True, "tenantId": tenant_id, "ivrId": int(ivr_id), "ivrName": str(ivr["description"] or ""), "beforeRecordingId": before, "afterRecordingId": int(recording_id), "recordingName": str(rec["name"]), "apply": apply_result}
 
     if action in ("set_entry", "clear_entry"):
@@ -2359,7 +2397,7 @@ def ivr_action(body):
             except Exception:
                 conn.rollback()
                 raise
-        apply_result = apply_tenant_changes(tenant_id)
+        apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_IVR,))
         return {
             "ok": True,
             "tenantId": tenant_id,
@@ -2435,7 +2473,7 @@ def queue_action(body):
             except Exception:
                 conn.rollback()
                 raise
-        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',))
+        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',), pending_modules=("queues",))
         with db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -2512,7 +2550,7 @@ def queue_action(body):
             except Exception:
                 conn.rollback()
                 raise
-        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',))
+        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',), pending_modules=("queues",))
         return {"ok": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "mohClass": target_class_for_group(group_id), "musicGroupId": group_id, "apply": apply_result}
 
     if action == "set_announcement":
@@ -2536,7 +2574,7 @@ def queue_action(body):
             except Exception:
                 conn.rollback()
                 raise
-        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',))
+        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',), pending_modules=("queues",))
         return {"ok": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "slot": slot, "recordingId": int(recording_id) if recording_id is not None else None, "recordingName": rec_name, "apply": apply_result}
 
     raise ValueError("unsupported_queue_action:%s" % action)

@@ -125,6 +125,37 @@ test("CONNECT-MODE FENCE: a connect-routed DID is hard-refused at snapshot (G9)"
   assert.equal(routeApi.dest, "456", "no retarget happened");
 });
 
+test("LIVE verify accepts the VitalPBX REST apply shape (httpStatus, no exitCode)", async () => {
+  // Post-2026-07-28 the helper regens via UPDATE /api/v2/tenants/:id/apply_changes
+  // and reports {mode, httpStatus} instead of {exitCode}. Verify must not treat
+  // the missing exitCode as a failure (live bug: "helper apply failed (exit undefined)").
+  const origCall = routeApi.call.bind(routeApi);
+  routeApi.call = async (body: any) => {
+    const res = await origCall(body);
+    if (body.action === "route_retarget") res.apply = { mode: "vitalpbx_apply_changes", ran: true, httpStatus: 200 };
+    return res;
+  };
+  const exec = makeExec();
+  prisma.actions.push(approvedRow(RETARGET));
+  const res = await exec.execute({ capabilityId: "pbx.M3", params: RETARGET, requestedBy: "owner:izzy", requestedRole: "owner", actionId: "act1", mode: "live" });
+  assert.equal(res.ok, true, res.refusedReason);
+  assert.equal(res.verified, true);
+});
+
+test("LIVE verify rejects a non-2xx REST apply status", async () => {
+  const origCall = routeApi.call.bind(routeApi);
+  routeApi.call = async (body: any) => {
+    const res = await origCall(body);
+    if (body.action === "route_retarget") res.apply = { mode: "vitalpbx_apply_changes", ran: true, httpStatus: 501 };
+    return res;
+  };
+  const exec = makeExec();
+  prisma.actions.push(approvedRow(RETARGET));
+  const res = await exec.execute({ capabilityId: "pbx.M3", params: RETARGET, requestedBy: "owner:izzy", requestedRole: "owner", actionId: "act1", mode: "live" });
+  assert.equal(res.ok, false);
+  assert.equal(res.gate, "G11");
+});
+
 test("LIVE verify mismatch (apply failed) ⇒ auto-revert via restore", async () => {
   routeApi.applyExit = 1;
   const exec = makeExec();

@@ -123,8 +123,18 @@ export function makeM3Op(deps: ModifyCatalogDeps & { routeApi: { call(body: Reco
 
     async verify(_client: ModifyClientLike, params: Record<string, any>, written: any, ctx: ModifyOpCtx) {
       if (ctx.simulate) return { ok: true, observed: { simulated: true } };
-      if (written?.apply && written.apply.ran && Number(written.apply.exitCode) !== 0) {
-        return { ok: false, detail: `helper apply failed (exit ${written.apply.exitCode})` };
+      // Apply result comes in two shapes: legacy shell command ({exitCode}) and
+      // the VitalPBX REST regen ({mode:"vitalpbx_apply_changes", httpStatus}).
+      // Fail only on an explicit bad signal — the helper already raises on any
+      // non-2xx apply, so a missing field means that shape doesn't apply.
+      if (written?.apply?.ran) {
+        const a = written.apply;
+        if (a.exitCode !== undefined && Number(a.exitCode) !== 0) {
+          return { ok: false, detail: `helper apply failed (exit ${a.exitCode})` };
+        }
+        if (a.httpStatus !== undefined && ![200, 201, 202, 204].includes(Number(a.httpStatus))) {
+          return { ok: false, detail: `helper apply failed (http ${a.httpStatus})` };
+        }
       }
       const resp = await routeApi.call({ action: "route_inspect", tenantId: String(params.tenantId), did: String(params.objectId), agentActionId: ctx.actionId ?? "verify" });
       const nowDest = resp.route?.destination_id != null ? String(resp.route.destination_id) : null;
