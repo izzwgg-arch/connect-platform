@@ -24866,6 +24866,144 @@ app.post("/internal/agent/moh/override", async (req, reply) => {
   return reply.send({ ok: true, override, publishResult, publishError });
 });
 
+// ── POST /internal/agent/moh/upload-asset ────────────────────────────────────
+// Agent chat MP3 upload → hold-music profile, one door (owner request
+// 2026-07-27). Same pipeline as the portal Assets tab (writeMohFile + ffmpeg +
+// MohAsset + PBX pull sync), PLUS an auto-created MohProfile so the chat flow
+// can immediately set the new music via the existing M1/M2 capabilities.
+// Multiple files = a playlist: per-track transcode, concatenated into ONE
+// asset.wav so the whole manifest/sync/publish pipeline stays unchanged.
+// Route-level bodyLimit: files arrive as base64 JSON from the agent container
+// (server-to-server; the browser leg is chunked separately on the agent side).
+app.post("/internal/agent/moh/upload-asset", { bodyLimit: 120 * 1024 * 1024 }, async (req, reply) => {
+  const { agentMohSecretOk, AGENT_MOH_HEADER } = await import("./agentMohOverride");
+  const { AgentMohUploadRequest, decodeAgentMohUploadFiles, uniquifyMohName } = await import("./agentMohUpload");
+  if (!agentMohSecretOk(req.headers[AGENT_MOH_HEADER])) return reply.code(403).send({ ok: false, error: "forbidden" });
+  const parsed = AgentMohUploadRequest.safeParse(req.body || {});
+  if (!parsed.success) return reply.code(400).send({ ok: false, error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
+  const d = parsed.data;
+
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ ok: false, error: "tenant_not_linked" });
+  const tenantSlug = await getIvrSlugForTenant(tid);
+  const actor = d.requestedBy ?? "agent:chat-upload";
+
+  let files: Array<{ filename: string; buffer: Buffer }>;
+  try {
+    files = decodeAgentMohUploadFiles(d.files);
+  } catch (err: any) {
+    return reply.code(400).send({ ok: false, error: String(err?.message ?? err) });
+  }
+
+  // Uniquify the human name against BOTH existing profiles and asset classes,
+  // so "Party Mix" uploaded twice becomes "Party Mix 2" instead of a 409.
+  const [profileRows, assetRows] = await Promise.all([
+    (db as any).mohProfile.findMany({ where: { tenantId: tid }, select: { name: true } }),
+    (db as any).mohAsset.findMany({ where: { tenantId: tid }, select: { name: true, mohClassName: true } }),
+  ]);
+  const taken = new Set<string>();
+  for (const r of profileRows) taken.add(String(r.name ?? "").toLowerCase());
+  for (const r of assetRows) taken.add(String(r.name ?? "").toLowerCase());
+  let name: string;
+  let mohClassName: string;
+  try {
+    name = uniquifyMohName(d.name, taken);
+    mohClassName = buildMohClassName(tenantSlug, name);
+    // Slug-level collision check too ("Jazz!" and "Jazz?" share one slug).
+    const classTaken = new Set(assetRows.map((r: any) => String(r.mohClassName ?? "").toLowerCase()));
+    for (let i = 2; classTaken.has(mohClassName.toLowerCase()) && i < 100; i++) {
+      name = uniquifyMohName(`${d.name} ${i}`, taken);
+      mohClassName = buildMohClassName(tenantSlug, name);
+    }
+  } catch (err: any) {
+    return reply.code(400).send({ ok: false, error: String(err?.message ?? err) });
+  }
+
+  // Store the originals (track_NN_orig.<ext> keeps playlists collision-free).
+  const originals: Array<{ storageKey: string; absolutePath: string }> = [];
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const stored = await writeMohFile({
+        tenantSlug,
+        mohClassName,
+        originalFilename: files[i].filename,
+        buffer: files[i].buffer,
+        baseNameStem: `track_${String(i + 1).padStart(2, "0")}_orig`,
+      });
+      originals.push({ storageKey: stored.storageKey, absolutePath: stored.absolutePath });
+    }
+  } catch (err: any) {
+    for (const o of originals) await deleteMohFile(o.storageKey).catch(() => void 0);
+    return reply.code(500).send({ ok: false, error: "storage_write_failed", detail: err?.message });
+  }
+
+  const pbxKey = buildMohPbxWavStorageKey(tenantSlug, mohClassName);
+  const pbxAbs = resolveStoragePath(pbxKey);
+  const { transcodeMohPlaylistToPbxWav } = await import("./mohStorage");
+  const transcode = await transcodeMohPlaylistToPbxWav({
+    sourceAbsolutePaths: originals.map((o) => o.absolutePath),
+    destAbsolutePath: pbxAbs,
+  });
+  if (!transcode.ok) {
+    for (const o of originals) await deleteMohFile(o.storageKey).catch(() => void 0);
+    return reply.code(422).send({ ok: false, error: "moh_conversion_failed", detail: transcode.error });
+  }
+
+  const pbxBuf = await fs.promises.readFile(pbxAbs);
+  const pbxSha = createHash("sha256").update(pbxBuf).digest("hex");
+
+  let asset: any;
+  let profile: any;
+  try {
+    asset = await (db as any).mohAsset.create({
+      data: {
+        tenantId: tid,
+        tenantSlug,
+        name,
+        mohClassName,
+        sourceFilename: files.map((f) => f.filename).join(", ").slice(0, 500),
+        storageKey: pbxKey,
+        originalStorageKey: originals[0].storageKey,
+        pbxStorageKey: pbxKey,
+        contentHash: pbxSha,
+        sizeBytes: pbxBuf.length,
+        mimeType: "audio/wav",
+        originalMimeType: null,
+        pbxFormat: "wav_pcm_s16le_8k_mono",
+        conversionStatus: "ready",
+        conversionError: null,
+        status: "ready",
+        createdBy: actor,
+      },
+    });
+    profile = await (db as any).mohProfile.create({
+      data: {
+        tenantId: tid,
+        name,
+        type: "custom",
+        vitalPbxMohClassName: mohClassName,
+        isActive: true,
+        createdBy: actor,
+      },
+    });
+  } catch (err: any) {
+    for (const o of originals) await deleteMohFile(o.storageKey).catch(() => void 0);
+    await deleteMohFile(pbxKey).catch(() => void 0);
+    if (asset) await (db as any).mohAsset.delete({ where: { id: asset.id } }).catch(() => void 0);
+    if (String(err?.code) === "P2002") return reply.code(409).send({ ok: false, error: "duplicate_content" });
+    return reply.code(500).send({ ok: false, error: "db_create_failed", detail: err?.message });
+  }
+
+  app.log.info({ tenantId: tid, actor, mohClassName, tracks: files.length, profileId: profile.id }, "agent moh upload: asset + profile created");
+  return reply.code(201).send({
+    ok: true,
+    profile: { id: profile.id, name: profile.name },
+    mohClassName,
+    tracks: files.length,
+    assetId: asset.id,
+  });
+});
+
 // ── POST /internal/agent/route/action ────────────────────────────────────────
 // M3 (Option A): the agent's inbound-route door. Shared-secret internal endpoint.
 // A DID may be retargeted ONLY to a destination the tenant is ALREADY using

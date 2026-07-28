@@ -142,7 +142,8 @@ async function main() {
         return null;
       }
     };
-    const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy, router);
+    const { makeMohUploadApiClient } = await import("./pbx/mohUploadApiClient");
+    const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy, router, makeMohUploadApiClient());
     const rateLimiter = new RateLimiter();
 
     // Secret store — owner-managed API keys (Assistant page), encrypted at rest.
@@ -262,7 +263,10 @@ async function main() {
       return { ok: true, warmed, stats: translationCache.stats() };
     });
 
-    registerChatRoutes(app, engine);
+    // Chat-widget file uploads (chunked; audio → hold-music flow, docs → team).
+    const { ChatUploadStore } = await import("./uploads/uploadStore");
+    const uploadStore = new ChatUploadStore(process.env.AGENT_UPLOAD_DIR || "./data/chat-uploads");
+    registerChatRoutes(app, engine, uploadStore);
     registerDiagRoutes(app, diagEngine);
     registerActionRoutes(app, actionService);
     registerAdminRoutes(app, prisma);

@@ -76,19 +76,23 @@ export function resolveStoragePath(storageKey: string): string {
 }
 
 /** Write the original upload bytes as `asset_orig.<ext>` so `asset.wav` stays
- *  reserved for the PBX-safe transcoded artifact. */
+ *  reserved for the PBX-safe transcoded artifact. Playlist uploads (agent chat)
+ *  pass `baseNameStem` (e.g. "track_02_orig") so several originals can live in
+ *  the same class folder without clobbering each other. */
 export async function writeMohFile(input: {
   tenantSlug: string;
   mohClassName: string;
   originalFilename: string;
   buffer: Buffer;
+  baseNameStem?: string;
 }): Promise<{ storageKey: string; sha256: string; sizeBytes: number; absolutePath: string }> {
   const tenantSeg = sanitizePathSegment(input.tenantSlug);
   const classSeg = sanitizePathSegment(input.mohClassName);
   if (!tenantSeg || !classSeg) throw new Error("invalid_tenant_or_class");
 
   const ext = path.extname(input.originalFilename || "").toLowerCase().replace(/[^.a-z0-9]/g, "");
-  const baseName = `asset_orig${ext || ""}`;
+  const stem = sanitizePathSegment(input.baseNameStem ?? "asset_orig") || "asset_orig";
+  const baseName = `${stem}${ext || ""}`;
   const storageKey = `${tenantSeg}/${classSeg}/${baseName}`;
   const absolutePath = resolveStoragePath(storageKey);
   await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -176,6 +180,65 @@ export async function transcodeMohToPbxWav(input: {
     return { ok: false, error: `ffmpeg_rename_failed: ${msg}`.slice(0, 4000) };
   }
   return { ok: true };
+}
+
+/**
+ * Playlist transcode: each source file → PBX WAV (8 kHz mono s16le), then all
+ * tracks concatenated IN ORDER into one `asset.wav`. One class = one file keeps
+ * the whole existing MohAsset/manifest/sync pipeline unchanged — the "playlist"
+ * is simply the tracks playing back to back on hold.
+ */
+export async function transcodeMohPlaylistToPbxWav(input: {
+  sourceAbsolutePaths: string[];
+  destAbsolutePath: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (input.sourceAbsolutePaths.length === 0) return { ok: false, error: "no_source_files" };
+  if (input.sourceAbsolutePaths.length === 1) {
+    return transcodeMohToPbxWav({ sourceAbsolutePath: input.sourceAbsolutePaths[0], destAbsolutePath: input.destAbsolutePath });
+  }
+
+  const dir = path.dirname(input.destAbsolutePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const tmpTracks: string[] = [];
+  const listPath = `${input.destAbsolutePath}.concat.${process.pid}.txt`;
+  const tmpOut = `${input.destAbsolutePath}.tmp.${process.pid}.wav`;
+  const cleanup = async () => {
+    for (const p of [...tmpTracks, listPath, tmpOut]) await fs.promises.rm(p, { force: true }).catch(() => void 0);
+  };
+
+  try {
+    for (let i = 0; i < input.sourceAbsolutePaths.length; i++) {
+      const trackOut = `${input.destAbsolutePath}.track${String(i + 1).padStart(2, "0")}.${process.pid}.wav`;
+      const r = await transcodeMohToPbxWav({ sourceAbsolutePath: input.sourceAbsolutePaths[i], destAbsolutePath: trackOut });
+      if (!r.ok) {
+        await cleanup();
+        return { ok: false, error: `track ${i + 1}: ${r.error}` };
+      }
+      tmpTracks.push(trackOut);
+    }
+
+    // ffmpeg concat demuxer; all tracks share the exact same codec/rate/channels
+    // after the per-track transcode, so a stream copy is lossless and instant.
+    const listBody = tmpTracks.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n") + "\n";
+    await fs.promises.writeFile(listPath, listBody, "utf8");
+    await execFileAsync(
+      "ffmpeg",
+      ["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", "-f", "wav", tmpOut],
+      { timeout: 180_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    const st = await fs.promises.stat(tmpOut).catch(() => null);
+    if (!st?.isFile() || st.size < 64) {
+      await cleanup();
+      return { ok: false, error: "ffmpeg concat produced empty or invalid WAV output" };
+    }
+    await fs.promises.rename(tmpOut, input.destAbsolutePath);
+    return { ok: true };
+  } catch (e: any) {
+    const msg = e?.stderr ? String(e.stderr) : e?.message || String(e);
+    return { ok: false, error: `ffmpeg_concat_failed: ${msg}`.slice(0, 4000) };
+  } finally {
+    for (const p of [...tmpTracks, listPath, tmpOut]) await fs.promises.rm(p, { force: true }).catch(() => void 0);
+  }
 }
 
 export async function deleteMohFile(storageKey: string): Promise<void> {

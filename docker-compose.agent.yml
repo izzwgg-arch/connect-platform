@@ -21,10 +21,12 @@ services:
       TZ: ${TZ:-America/New_York}
       AGENT_PORT: 3920
       AGENT_AUDIT_DIR: /var/log/connect-agent
+      AGENT_UPLOAD_DIR: /var/lib/connect-agent/uploads
     ports:
       - "127.0.0.1:3920:3920"
     volumes:
       - agent-audit:/var/log/connect-agent
+      - agent-uploads:/var/lib/connect-agent/uploads
     networks:
       - default
       - infra_default
@@ -32,4 +34,7 @@ services:
 volumes:
   # Append-only audit JSONL (tamper-evidence copy of the DB audit trail).
   agent-audit:
+    driver: local
+  # Chat-widget file uploads (chunk staging + assembled attachments).
+  agent-uploads:
     driver: local

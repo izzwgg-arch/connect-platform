@@ -14,9 +14,20 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Bot, Send, Mic, X, Plus } from "lucide-react";
+import { Bot, Send, Mic, X, Plus, Paperclip, Music, FileText } from "lucide-react";
 
 type Msg = { id: string; role: "user" | "assistant"; content: string; pending?: boolean };
+
+type PendingFile = {
+  localId: string;
+  name: string;
+  sizeBytes: number;
+  kind: "audio" | "document";
+  progress: number; // 0..100
+  status: "uploading" | "ready" | "error";
+  attachmentId?: string;
+  error?: string;
+};
 
 const ACK_YI = "ביטע ווארט איין רגע בשעת איך טשעק דאס איבער פאר אייך.";
 const ACK_EN = "One moment — I'm looking into that for you.";
@@ -38,6 +49,43 @@ async function agentPost<T>(path: string, body: object): Promise<T> {
   });
   if (!res.ok) throw new Error(`agent ${path} failed: ${res.status}`);
   return res.json();
+}
+
+const isAudioFile = (f: File) => /^audio\//i.test(f.type) || /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|wma|aiff?)$/i.test(f.name);
+const MAX_UPLOAD_BYTES = 60 * 1024 * 1024;
+// 3 MB raw chunks: base64 (~4 MB) + JSON stays well under nginx's 10 MB
+// /agent-api/ body cap on every network in between.
+const UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024;
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).replace(/^data:[^,]*,/, ""));
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
+/** init → chunk×N → finish against the agent's chunked upload endpoints. */
+async function uploadFileChunked(file: File, onProgress: (pct: number) => void): Promise<{ id: string; filename: string }> {
+  const totalChunks = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_BYTES));
+  const init = await agentPost<{ ok: boolean; uploadId?: string }>("upload/init", {
+    filename: file.name,
+    mimeType: file.type || "application/octet-stream",
+    sizeBytes: file.size,
+    totalChunks,
+  });
+  if (!init.ok || !init.uploadId) throw new Error("upload init failed");
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = file.slice(i * UPLOAD_CHUNK_BYTES, Math.min(file.size, (i + 1) * UPLOAD_CHUNK_BYTES));
+    const dataBase64 = await blobToBase64(slice);
+    await agentPost<{ ok: boolean }>("upload/chunk", { uploadId: init.uploadId, index: i, dataBase64 });
+    onProgress(Math.round(((i + 1) / (totalChunks + 1)) * 100));
+  }
+  const fin = await agentPost<{ ok: boolean; attachment?: { id: string; filename: string } }>("upload/finish", { uploadId: init.uploadId });
+  if (!fin.ok || !fin.attachment) throw new Error("upload finish failed");
+  onProgress(100);
+  return fin.attachment;
 }
 
 /** Human-friendly name for the current page, for the "sees your page" chip. */
@@ -72,11 +120,17 @@ export function FloatingAssistant() {
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const liveRef = useRef<any>(null);
+  // Each mic take gets a serial number; cancelling marks the CURRENT take as
+  // discarded so its onstop/late transcription result is thrown away — the
+  // only abort path used to be stop-and-upload (owner request 2026-07-27).
+  const takeRef = useRef(0);
+  const cancelledTakeRef = useRef(-1);
 
   const label = useMemo(() => pageLabel(pathname), [pathname]);
 
@@ -105,18 +159,24 @@ export function FloatingAssistant() {
 
   const send = useCallback(
     async (raw?: string) => {
-      const text = (raw ?? input).trim();
-      if (!text || sending) return;
+      const ready = pendingFiles.filter((f) => f.status === "ready" && f.attachmentId);
+      const stillUploading = pendingFiles.some((f) => f.status === "uploading");
+      let text = (raw ?? input).trim();
+      if ((!text && ready.length === 0) || sending || stillUploading) return;
+      if (!text) text = `I uploaded: ${ready.map((f) => f.name).join(", ")}`;
       setSending(true);
       setInput("");
+      setPendingFiles([]);
       const ackId = `ack-${Date.now()}`;
       const ack = isYiddish(text) ? ACK_YI : ACK_EN;
-      setMessages((m) => [...m, { id: `u-${Date.now()}`, role: "user", content: text }, { id: ackId, role: "assistant", content: ack, pending: true }]);
+      const shownText = ready.length ? `${text}\n📎 ${ready.map((f) => f.name).join(", ")}` : text;
+      setMessages((m) => [...m, { id: `u-${Date.now()}`, role: "user", content: shownText }, { id: ackId, role: "assistant", content: ack, pending: true }]);
       try {
         const res = await agentPost<{ conversationId: string; reply: string }>("message", {
           text,
           channel: "chat",
           context: { page: label, path: pathname },
+          ...(ready.length ? { attachments: ready.map((f) => f.attachmentId) } : {}),
         });
         setConversationId(res.conversationId);
         typeOut(ackId, res.reply);
@@ -126,8 +186,45 @@ export function FloatingAssistant() {
         setSending(false);
       }
     },
-    [input, sending, typeOut, label, pathname],
+    [input, sending, typeOut, label, pathname, pendingFiles],
   );
+
+  // File uploads: pick any documents (MP3s become hold-music candidates), chunk-
+  // upload each in the background, then send them with the next message.
+  const pickFiles = useCallback(() => fileInputRef.current?.click(), []);
+  const onFilesChosen = useCallback((list: FileList | null) => {
+    if (!list?.length) return;
+    const files = Array.from(list).slice(0, 10);
+    for (const file of files) {
+      const localId = `f-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const entry: PendingFile = {
+        localId,
+        name: file.name,
+        sizeBytes: file.size,
+        kind: isAudioFile(file) ? "audio" : "document",
+        progress: 0,
+        status: "uploading",
+      };
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setPendingFiles((p) => [...p, { ...entry, status: "error", error: "Too large (max 60 MB)" }]);
+        continue;
+      }
+      setPendingFiles((p) => [...p, entry]);
+      uploadFileChunked(file, (pct) => {
+        setPendingFiles((p) => p.map((f) => (f.localId === localId ? { ...f, progress: pct } : f)));
+      })
+        .then((att) => {
+          setPendingFiles((p) => p.map((f) => (f.localId === localId ? { ...f, status: "ready", progress: 100, attachmentId: att.id } : f)));
+        })
+        .catch(() => {
+          setPendingFiles((p) => p.map((f) => (f.localId === localId ? { ...f, status: "error", error: "Upload failed" } : f)));
+        });
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+  const removePendingFile = useCallback((localId: string) => {
+    setPendingFiles((p) => p.filter((f) => f.localId !== localId));
+  }, []);
 
   const newChat = useCallback(async () => {
     if (conversationId) {
@@ -142,25 +239,34 @@ export function FloatingAssistant() {
   // Yiddish, auto-detects English). Click once to start, once again to stop.
   const stopMic = useCallback(() => {
     try { mediaRef.current?.stop(); } catch { /* noop */ }
-    try { liveRef.current?.stop(); } catch { /* noop */ }
+  }, []);
+
+  /** Abort the current take: nothing is uploaded, nothing lands in the input. */
+  const cancelMic = useCallback(() => {
+    cancelledTakeRef.current = takeRef.current;
+    try { mediaRef.current?.stop(); } catch { /* noop */ }
+    setTranscribing(false);
   }, []);
 
   const startMic = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
+      takeRef.current += 1;
+      const take = takeRef.current;
       chunksRef.current = [];
       mr.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         setRecording(false);
+        if (cancelledTakeRef.current === take) return; // discarded — never upload
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         if (blob.size < 400) return; // too short / no audio captured
         setTranscribing(true);
         try {
           const b64 = await new Promise<string>((res) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob); });
           const r = await agentPost<{ ok: boolean; text?: string }>("transcribe", { audioBase64: b64, filename: "mic.webm" });
-          if (r.ok && r.text) { setInput((v) => (v ? v + " " : "") + r.text); inputRef.current?.focus(); }
+          if (cancelledTakeRef.current !== take && r.ok && r.text) { setInput((v) => (v ? v + " " : "") + r.text); inputRef.current?.focus(); }
         } catch { /* silent — user can type instead */ } finally { setTranscribing(false); }
       };
       mediaRef.current = mr;
@@ -237,11 +343,42 @@ export function FloatingAssistant() {
             </div>
           )}
 
+          {pendingFiles.length > 0 && (
+            <div className="fa-files">
+              {pendingFiles.map((f) => (
+                <div key={f.localId} className={`fa-file${f.status === "error" ? " fa-file-err" : ""}`}>
+                  {f.kind === "audio" ? <Music size={13} /> : <FileText size={13} />}
+                  <span className="fa-file-name" title={f.name}>{f.name}</span>
+                  {f.status === "uploading" && <span className="fa-file-pct">{f.progress}%</span>}
+                  {f.status === "error" && <span className="fa-file-pct">{f.error}</span>}
+                  <button title="Remove" onClick={() => removePendingFile(f.localId)}><X size={12} /></button>
+                  {f.status === "uploading" && <i className="fa-file-bar" style={{ width: `${f.progress}%` }} />}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="fa-input">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => onFilesChosen(e.target.files)}
+              aria-label="Attach files"
+            />
+            <button className="fa-icon" title="Attach files — MP3s can become your hold music" onClick={pickFiles} disabled={sending}>
+              <Paperclip size={17} />
+            </button>
+            {micAvailable && (recording || transcribing) && (
+              <button className="fa-icon fa-cancel" title="Cancel — discard the recording" onClick={cancelMic}>
+                <X size={17} />
+              </button>
+            )}
             {micAvailable && (
               <button
                 className={`fa-icon${recording ? " fa-icon-on" : ""}`}
-                title={recording ? "Stop" : "Speak — auto-detects Yiddish or English"}
+                title={recording ? "Stop and transcribe" : "Speak — auto-detects Yiddish or English"}
                 onClick={toggleMic}
                 disabled={transcribing}
               >
@@ -253,10 +390,15 @@ export function FloatingAssistant() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-              placeholder={recording ? "Recording… tap mic to stop" : transcribing ? "Transcribing…" : "Type or talk…"}
+              placeholder={recording ? "Recording… mic = use it, ✕ = cancel" : transcribing ? "Transcribing… ✕ to cancel" : "Type or talk…"}
               aria-label="Message"
             />
-            <button className="fa-send" title="Send" onClick={() => send()} disabled={sending || !input.trim()}>
+            <button
+              className="fa-send"
+              title="Send"
+              onClick={() => send()}
+              disabled={sending || pendingFiles.some((f) => f.status === "uploading") || (!input.trim() && !pendingFiles.some((f) => f.status === "ready"))}
+            >
               <Send size={16} />
             </button>
           </div>
@@ -325,12 +467,22 @@ const faCss = `
 .fa-quick button { background: var(--panel-2, #14213a); border: 1px solid var(--border, #2a3c5f); color: var(--accent, #a9c2ec); font-size: 11.5px; padding: 6px 10px; border-radius: 999px; cursor: pointer; }
 .fa-quick button:hover { filter: brightness(1.08); }
 
+.fa-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; background: var(--bg, #0e1826); border-top: 1px solid var(--border, #23344f); }
+.fa-file { position: relative; overflow: hidden; display: flex; align-items: center; gap: 6px; max-width: 100%; background: var(--panel-2, #16233a); border: 1px solid var(--border, #2a3c5f); color: var(--text, #cfe0ff); border-radius: 8px; padding: 5px 8px; font-size: 11.5px; }
+.fa-file-err { border-color: rgba(239,68,68,.55); color: #f2b8b8; }
+.fa-file-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fa-file-pct { color: var(--text-dim, #8b9ab2); font-size: 10.5px; }
+.fa-file button { background: none; border: none; color: var(--text-dim, #8b9ab2); cursor: pointer; padding: 1px; display: flex; border-radius: 4px; }
+.fa-file button:hover { color: #ef4444; }
+.fa-file-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent, #2f6df6); transition: width .2s ease; }
 .fa-input { border-top: 1px solid var(--border, #23344f); padding: 10px 12px; display: flex; align-items: center; gap: 8px; background: var(--bg, #0e1826); }
 .fa-icon { background: none; border: none; cursor: pointer; color: var(--text-dim, #8b9ab2); padding: 5px; border-radius: 8px; display: flex; }
 .fa-icon:hover { background: var(--border, #23344f); }
 .fa-icon-on { color: #fff; background: #ef4444; animation: fa-pulse 1s ease-in-out infinite; }
 @keyframes fa-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 50% { box-shadow: 0 0 0 5px rgba(239,68,68,0); } }
 .fa-icon:disabled { opacity: .5; cursor: default; }
+.fa-cancel { color: #ef4444; border: 1px solid rgba(239,68,68,.45); }
+.fa-cancel:hover { background: rgba(239,68,68,.15); }
 .fa-input input { flex: 1; background: var(--panel-2, #16233a); border: 1px solid var(--border, #2a3c5f); color: var(--text, #e8ecf3); border-radius: 999px; padding: 9px 14px; font-size: 13px; outline: none; }
 .fa-input input:focus { border-color: var(--accent, #2f6df6); }
 .fa-send { background: var(--accent, #2f6df6); border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }

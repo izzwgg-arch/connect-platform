@@ -20,12 +20,20 @@ import { capabilityById, executableCapabilities } from "../manifest/manifest";
 import { standingFromRole, type Standing } from "../channels/identityContext";
 import type { DiagnosticsEngine } from "../diag/engine";
 import type { ActionService } from "../actions/service";
+import type { MohUploadApiClient } from "../pbx/mohUploadApiClient";
 
 export interface TriageCtx {
   tenantId: string;
   clientUserId: string | null;
   role: Role;
   conversationId?: string;
+}
+
+/** Audio file uploaded through the chat widget (already on the agent's disk). */
+export interface UploadedAudioFile {
+  path: string;
+  filename: string;
+  sizeBytes: number;
 }
 
 export interface TriageOutcome {
@@ -65,6 +73,11 @@ const MOH_Q_SCOPE = "Should I change the hold music for the whole company, or ju
 // NOT anchored: the status answer ("Right now … Which hold music would you
 // like?") re-asks the profile question mid-message and must stay resumable.
 const MOH_CLARIFY_MARKER_RE = /Which hold music would you like\?|Should I change the hold music for the whole company|וועלכע האלט מוזיק ווילט איר/;
+// Upload-offer message ("I've saved your music as hold-music profile "X" …") —
+// the reply ("yes" / "whole company" / "not now") resumes via resumeUploadOffer.
+const MOH_UPLOAD_OFFER_RE = /saved your music as (?:the )?hold-music profile "([^"]{1,80})"/;
+const MOH_UPLOAD_DECLINE_RE = /\b(not now|no thanks?|nah|later|leave it|don'?t|nothing now|maybe later)\b/i;
+const MOH_UPLOAD_ACCEPT_RE = /\b(yes|yeah|yep|sure|ok(?:ay)?|please|go ahead|do it|set it)\b/i;
 /** Any hold-music assistant message — context for follow-ups like "change it back in 15 minutes". */
 const MOH_CONTEXT_RE = /hold music|hold-music|האלט מוזיק/i;
 
@@ -80,18 +93,37 @@ export class TriageOrchestrator {
     private loadPolicy: (tenantId: string) => Promise<TenantPolicy | null>,
     /** LLM-first request understanding (owner directive 2026-07-27). Null ⇒ regex-only. */
     private llm: ExtractorLlm | null = null,
+    /** MOH upload door (chat MP3 → hold-music profile). Null ⇒ uploads escalate. */
+    private mohUpload: MohUploadApiClient | null = null,
   ) {}
 
-  async handle(intent: Intent, ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
+  async handle(intent: Intent | ({ kind: "audio_upload" } & Record<string, unknown>), ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
+    if (intent.kind === "audio_upload") {
+      return this.handleAudioUpload(
+        { raw: String((intent as any).raw ?? ""), files: ((intent as any).files ?? []) as UploadedAudioFile[] },
+        ctx,
+        language,
+      );
+    }
+
     if (intent.kind === "chat") {
-      // A plain-chat message may be the ANSWER to our own pending clarifying
-      // question (e.g. we asked "Which hold music would you like?" and the
-      // user replied just "Main"). Resume that flow instead of dropping the
-      // reply into the LLM (2026-07-26 live failure: the LLM answered "I'll
-      // pass the request to the team" and nothing executed).
-      const resumed = await this.resumeMohClarification(intent, ctx);
-      if (!resumed) return { handled: false };
-      intent = resumed;
+      // The reply may answer our own upload offer ("Should I set it now —
+      // whole company or your extension?") — resolve that first because the
+      // offer message embeds the exact profile name to act on.
+      const uploadResume = await this.resumeUploadOffer(intent, ctx, language);
+      if (uploadResume) {
+        if ("outcome" in uploadResume) return uploadResume.outcome;
+        intent = uploadResume.intent;
+      } else {
+        // A plain-chat message may be the ANSWER to our own pending clarifying
+        // question (e.g. we asked "Which hold music would you like?" and the
+        // user replied just "Main"). Resume that flow instead of dropping the
+        // reply into the LLM (2026-07-26 live failure: the LLM answered "I'll
+        // pass the request to the team" and nothing executed).
+        const resumed = await this.resumeMohClarification(intent, ctx);
+        if (!resumed) return { handled: false };
+        intent = resumed;
+      }
     }
 
     if (intent.kind === "diagnostic") {
@@ -294,6 +326,151 @@ export class TriageOrchestrator {
       pairs++;
     }
     return { kind: "clarify", priorUserText: parts.filter(Boolean).join(". ") };
+  }
+
+  /**
+   * The user replied to our upload offer ("I've saved your music as hold-music
+   * profile "X". Should I set it now …"). The offer message itself carries the
+   * exact profile name, so the reply resolves without any guessing:
+   *   - decline ("not now") → friendly ack, profile stays saved;
+   *   - scope/accept ("whole company", "just mine", "yes") → synthesize the
+   *     normal MOH set request and run it through handleMoh's full gate chain.
+   * Anything else returns null and falls through to the regular resume/LLM.
+   */
+  private async resumeUploadOffer(
+    intent: Extract<Intent, { kind: "chat" }>,
+    ctx: TriageCtx,
+    language: "en" | "yi",
+  ): Promise<{ outcome: TriageOutcome } | { intent: Extract<Intent, { kind: "action" }> } | null> {
+    const text = (intent.raw ?? "").trim();
+    if (!text || text.length > 300 || !ctx.conversationId) return null;
+    try {
+      const msgs: Array<{ role: string; content: string | null; contentEn: string | null }> = await this.prisma.agentMessage.findMany({
+        where: { conversationId: ctx.conversationId },
+        orderBy: { createdAt: "desc" },
+        take: 6,
+        select: { role: true, content: true, contentEn: true },
+      });
+      let i = 0;
+      while (i < msgs.length && msgs[i].role !== "assistant") i++; // skip the just-stored user reply
+      if (i >= msgs.length) return null;
+      const lastAssistant = String(msgs[i].contentEn ?? msgs[i].content ?? "");
+      const m = lastAssistant.match(MOH_UPLOAD_OFFER_RE);
+      if (!m) return null;
+      const profileName = m[1];
+      const t = text.toLowerCase();
+
+      if (MOH_UPLOAD_DECLINE_RE.test(t) && !MOH_ANSWER_TENANT_RE.test(t) && !MOH_ANSWER_EXT_RE.test(t)) {
+        return {
+          outcome: {
+            handled: true,
+            reply: `No problem — "${profileName}" is saved with your hold-music options. Whenever you want it, just say: set the hold music to "${profileName}".`,
+            yiddish: language === "yi" ? `גוט — "${profileName}" איז אָפּגעהיטן. ווען איר ווילט עס, זאָגט: טוישט די האלט מוזיק צו "${profileName}".` : undefined,
+          },
+        };
+      }
+
+      const isScope = MOH_ANSWER_TENANT_RE.test(t) || MOH_ANSWER_EXT_RE.test(t) || /^\d{2,5}$/.test(t);
+      const isAccept = MOH_UPLOAD_ACCEPT_RE.test(t);
+      if (!isScope && !isAccept) return null;
+      const scopePart = /^\d{2,5}$/.test(t) ? `extension ${t}` : text;
+      return {
+        intent: {
+          kind: "action",
+          actionType: "moh",
+          enableHint: "yes",
+          raw: `change the hold music to "${profileName}". ${scopePart}`,
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Chat-widget audio upload → hold-music profile (owner request 2026-07-27).
+   * Stores the file(s) through the api's MOH pipeline (transcode + PBX sync
+   * manifest), auto-creates the profile, then either offers to set it (reply
+   * resumes via resumeUploadOffer) or — when the message already says what to
+   * do ("use this as our hold music for the whole company") — chains straight
+   * into handleMoh's fully gated set flow.
+   */
+  private async handleAudioUpload(
+    input: { raw: string; files: UploadedAudioFile[] },
+    ctx: TriageCtx,
+    language: "en" | "yi",
+  ): Promise<TriageOutcome> {
+    const yiTeam = language === "yi" ? "דאָס איז עפּעס וואָס איך וועל איבערגעבן צו אונדזער טים." : undefined;
+    if (input.files.length === 0) return { handled: false };
+    if (!this.mohUpload) {
+      return {
+        handled: true,
+        reply: "I received your audio file, but music uploads aren't switched on for this account yet — I've passed it to our team.",
+        yiddish: yiTeam,
+      };
+    }
+    const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
+    if (!pbxTenantId) {
+      return {
+        handled: true,
+        reply: "Your account isn't linked to the phone system yet, so I can't set up hold music from this file — I've flagged it for our team.",
+        yiddish: yiTeam,
+      };
+    }
+
+    // Name: an explicit `named/called "X"` in the message wins; otherwise the
+    // first filename, cleaned up. The api door uniquifies on collision.
+    const named = input.raw.match(/\b(?:name(?:d)?|call(?:ed)?|title(?:d)?)\s+(?:it\s+)?["'“”]?([^"'“”\n,.]{2,60})["'“”]?/i)?.[1]?.trim();
+    const fromFile = String(input.files[0].filename || "")
+      .replace(/\.[a-z0-9]{1,5}$/i, "")
+      .replace(/[_\-.]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const name = (named || fromFile || "Uploaded music").slice(0, 60);
+
+    let uploaded: { profile: { id: string; name: string }; tracks: number };
+    try {
+      uploaded = await this.mohUpload.upload({
+        tenantId: ctx.tenantId,
+        name,
+        requestedBy: `agent:${ctx.conversationId ?? "chat"}`,
+        files: input.files.map((f) => ({ path: f.path, filename: f.filename })),
+      });
+    } catch (err) {
+      return {
+        handled: true,
+        reply: `Sorry — I couldn't process ${input.files.length > 1 ? "those audio files" : "that audio file"} into hold music (the file may be corrupted or in a format I can't convert). Please try a standard MP3 or WAV, or I can pass it to our team.`,
+        yiddish: yiTeam,
+      };
+    }
+
+    const savedLine = `I've saved your music as hold-music profile "${uploaded.profile.name}"${
+      uploaded.tracks > 1 ? ` — a playlist of ${uploaded.tracks} tracks playing in order` : ""
+    }.`;
+
+    // Message already says to set it? Chain into the normal, fully gated flow.
+    if (/\b(set|use|make|play|put|switch|change|activate)\b/i.test(input.raw)) {
+      const chained = await this.handleMoh(
+        { kind: "action", actionType: "moh", enableHint: "yes", raw: `change the hold music to "${uploaded.profile.name}". ${input.raw}` },
+        ctx,
+        language,
+      );
+      if (chained.handled && chained.reply) {
+        return { ...chained, reply: `${savedLine} ${chained.reply}` };
+      }
+    }
+
+    const standing = await this.resolveStanding(ctx);
+    const isAdmin = standing !== "tenant_user";
+    const ownExt = await this.resolveExtension(ctx);
+    const ask = isAdmin
+      ? ownExt
+        ? `Should I set it now — for the whole company, or just your extension (${ownExt})? You can also say "not now".`
+        : `Should I set it as the company hold music now? You can also say "not now".`
+      : ownExt
+        ? `Want me to set it as your extension (${ownExt})'s hold music now? You can also say "not now".`
+        : `It's ready in your hold-music options — your account admin can set it live.`;
+    return { handled: true, reply: `${savedLine} ${ask}` };
   }
 
   /** Portal-user standing: platform_owner / tenant_admin / tenant_user (fail-closed to tenant_user). */

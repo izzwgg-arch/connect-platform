@@ -13,6 +13,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ConversationEngine } from "./engine";
+import type { ChatUploadStore } from "../uploads/uploadStore";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
 
 const Identity = z.object({
@@ -21,7 +22,7 @@ const Identity = z.object({
   role: z.enum(["owner", "customer"]),
 });
 
-function resolveIdentity(req: FastifyRequest): AgentIdentity | null {
+export function resolveIdentity(req: FastifyRequest): AgentIdentity | null {
   const auth = req.headers.authorization;
   if (auth?.startsWith("Bearer ")) {
     const id = verifyPortalJwt(auth.slice(7));
@@ -36,14 +37,81 @@ function resolveIdentity(req: FastifyRequest): AgentIdentity | null {
   return null;
 }
 
-export function registerChatRoutes(app: FastifyInstance, engine: ConversationEngine) {
+export function registerChatRoutes(app: FastifyInstance, engine: ConversationEngine, uploads: ChatUploadStore | null = null) {
   app.post("/agent/chat/message", async (req, reply) => {
     const identity = resolveIdentity(req);
     if (!identity) return reply.code(403).send({ error: "forbidden" });
-    const body = z.object({ text: z.string().min(1).max(8000), channel: z.string().optional() }).safeParse(req.body);
+    const body = z
+      .object({
+        text: z.string().min(1).max(8000),
+        channel: z.string().optional(),
+        /** Finished upload ids from /agent/chat/upload/finish (this session). */
+        attachments: z.array(z.string().min(1).max(64)).max(10).optional(),
+      })
+      .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
-    return engine.handleMessage({ ...identity, channel: body.data.channel }, body.data.text);
+    // Attachment ids resolve ONLY within the caller's own tenant — an id from
+    // another tenant simply doesn't exist here.
+    const attachments = (body.data.attachments ?? [])
+      .map((id) => uploads?.get(id, identity.tenantId) ?? null)
+      .filter((a): a is NonNullable<typeof a> => a !== null);
+    return engine.handleMessage({ ...identity, channel: body.data.channel }, body.data.text, attachments);
   });
+
+  // ── Chunked file upload (chat widget). nginx caps /agent-api/* bodies at
+  // 10 MB, so files arrive as base64 chunks: init → chunk×N → finish. ──
+  if (uploads) {
+    app.post("/agent/chat/upload/init", async (req, reply) => {
+      const identity = resolveIdentity(req);
+      if (!identity) return reply.code(403).send({ ok: false, error: "forbidden" });
+      const body = z
+        .object({
+          filename: z.string().min(1).max(200),
+          mimeType: z.string().max(100).optional(),
+          sizeBytes: z.number().int().positive(),
+          totalChunks: z.number().int().positive(),
+        })
+        .safeParse(req.body);
+      if (!body.success) return reply.code(400).send({ ok: false, error: "bad_request" });
+      const r = await uploads.init({
+        tenantId: identity.tenantId,
+        clientUserId: identity.clientUserId,
+        filename: body.data.filename,
+        mimeType: body.data.mimeType ?? "application/octet-stream",
+        sizeBytes: body.data.sizeBytes,
+        totalChunks: body.data.totalChunks,
+      });
+      if ("error" in r) return reply.code(400).send({ ok: false, error: r.error });
+      return { ok: true, uploadId: r.uploadId };
+    });
+
+    app.post("/agent/chat/upload/chunk", async (req, reply) => {
+      const identity = resolveIdentity(req);
+      if (!identity) return reply.code(403).send({ ok: false, error: "forbidden" });
+      const body = z
+        .object({
+          uploadId: z.string().min(1).max(64),
+          index: z.number().int().min(0),
+          dataBase64: z.string().min(4),
+        })
+        .safeParse(req.body);
+      if (!body.success) return reply.code(400).send({ ok: false, error: "bad_request" });
+      const r = await uploads.addChunk({ tenantId: identity.tenantId, ...body.data });
+      if ("error" in r) return reply.code(400).send({ ok: false, error: r.error });
+      return { ok: true, received: r.received };
+    });
+
+    app.post("/agent/chat/upload/finish", async (req, reply) => {
+      const identity = resolveIdentity(req);
+      if (!identity) return reply.code(403).send({ ok: false, error: "forbidden" });
+      const body = z.object({ uploadId: z.string().min(1).max(64) }).safeParse(req.body);
+      if (!body.success) return reply.code(400).send({ ok: false, error: "bad_request" });
+      const r = await uploads.finish({ tenantId: identity.tenantId, uploadId: body.data.uploadId });
+      if ("error" in r) return reply.code(400).send({ ok: false, error: r.error });
+      const a = r.attachment;
+      return { ok: true, attachment: { id: a.id, filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes, kind: a.kind } };
+    });
+  }
 
   app.post("/agent/chat/close", async (req, reply) => {
     const identity = resolveIdentity(req);

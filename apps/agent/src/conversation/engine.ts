@@ -42,6 +42,11 @@ CRITICAL — past changes: whether an EARLIER request was executed is answered O
 not happen). NEVER claim a change did or didn't happen from memory or conversation flow alone.
 If the list is absent or doesn't mention it, say you can't confirm and suggest asking
 "what hold music is playing right now?".
+FILE UPLOADS: clients can attach files in this chat (the paperclip button). Audio files (MP3/WAV)
+uploaded as hold music are handled by the automated system — if an [Attached: …] note reaches you
+with audio, something needed clarification; ask what they'd like done with the file. Other
+documents (PDFs, spreadsheets, photos, videos) are saved and passed to the human team — confirm
+receipt by filename and ask what they need.
 EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet — warmly say the request has
 been passed to the human team, and summarize it clearly.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
@@ -90,6 +95,16 @@ export interface ChatContext {
   clientUserId: string | null;
   role: Role;
   channel?: string;
+}
+
+/** Finished chat-widget upload, resolved tenant-scoped by the route layer. */
+export interface ChatAttachmentRef {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: "audio" | "document";
+  path: string;
 }
 
 export interface ChatResult {
@@ -178,7 +193,7 @@ export class ConversationEngine {
     return conv;
   }
 
-  async handleMessage(ctx: ChatContext, text: string): Promise<ChatResult> {
+  async handleMessage(ctx: ChatContext, text: string, attachments: ChatAttachmentRef[] = []): Promise<ChatResult> {
     const language = detectLanguage(text);
     const bridging = this.bridging(language);
 
@@ -214,8 +229,28 @@ export class ConversationEngine {
       }
     }
 
-    await this.store.addMessage({ conversationId: conv.id, role: "user", content: text, contentEn: bridging ? englishText : undefined });
-    await this.audit.record({ actor: ctx.role, event: "chat.user_message", tenantId: ctx.tenantId, conversationId: conv.id, payload: { chars: text.length, language, bridged: bridging } });
+    // Attachment note — becomes part of the stored message (history shows what
+    // was attached) and of the text the LLM sees for document uploads.
+    const fmtMb = (b: number) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+    const attachNote = attachments.length
+      ? `[Attached: ${attachments.map((a) => `${a.filename} (${fmtMb(a.sizeBytes)})`).join(", ")}]`
+      : "";
+    const storedText = attachNote ? `${text}\n${attachNote}` : text;
+    if (attachNote) englishText = `${englishText}\n${attachNote}`;
+
+    await this.store.addMessage({ conversationId: conv.id, role: "user", content: storedText, contentEn: bridging ? englishText : undefined });
+    await this.audit.record({
+      actor: ctx.role,
+      event: "chat.user_message",
+      tenantId: ctx.tenantId,
+      conversationId: conv.id,
+      payload: {
+        chars: text.length,
+        language,
+        bridged: bridging,
+        ...(attachments.length ? { attachments: attachments.map((a) => ({ id: a.id, filename: a.filename, kind: a.kind, sizeBytes: a.sizeBytes })) } : {}),
+      },
+    });
 
     // Kill switch / disabled: store, acknowledge read-only, never call tools or LLM actions.
     if (killSwitchEngaged()) {
@@ -256,6 +291,29 @@ export class ConversationEngine {
         : english;
       await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "identity-failclosed" });
       return { conversationId: conv.id, reply, language, degraded: true };
+    }
+
+    // Audio uploads (MP3/WAV) go straight to the hold-music upload flow: the
+    // orchestrator stores them through the API's MOH pipeline, creates a
+    // profile, and offers to set it (scope- and role-gated as always).
+    const audioFiles = attachments.filter((a) => a.kind === "audio");
+    if (this.triage && audioFiles.length > 0) {
+      try {
+        const outcome = await this.triage.handle(
+          { kind: "audio_upload", raw: bridging ? englishText : text, files: audioFiles },
+          { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId, role: ctx.role, conversationId: conv.id },
+          language,
+        );
+        if (outcome.handled && outcome.reply) {
+          if (bridging) return this.finishBridged(conv, ctx, outcome.reply, "triage", bridgeDegraded);
+          const reply = language === "yi" && outcome.yiddish ? outcome.yiddish : outcome.reply;
+          await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: reply, model: "triage" });
+          await this.audit.record({ actor: "agent", event: "chat.triage_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { intent: "audio_upload", actionId: outcome.actionId } });
+          return { conversationId: conv.id, reply, language, model: "triage", degraded: false };
+        }
+      } catch (err) {
+        await this.audit.record({ actor: "system", event: "chat.upload_triage_failed", conversationId: conv.id, payload: { error: String(err) } });
+      }
     }
 
     // Triage: if the message is an actionable intent (diagnostic or a catalog
