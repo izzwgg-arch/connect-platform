@@ -14552,6 +14552,28 @@ app.post("/mobile/devices/register", async (req, reply) => {
         }
       : {};
 
+  // Inherit per-device feature flags across push-token rotations. Flags live
+  // on the token-keyed row, but the physical phone is identified by deviceId:
+  // an app update / reinstall mints a NEW Expo token → the upsert below
+  // CREATES a fresh row → a flagged device would silently drop out of the
+  // standing-registration rollout (observed 2026-07-27 on the first flagged
+  // S24). Copy the newest sibling row's flags into the create branch only —
+  // an existing row keeps its own flags untouched.
+  let inheritedFeatureFlags: unknown;
+  if (input.deviceId) {
+    const sibling = await (db.mobileDevice as any).findFirst({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        deviceId: input.deviceId,
+        expoPushToken: { not: input.expoPushToken },
+      },
+      orderBy: { lastSeenAt: "desc" },
+      select: { featureFlags: true },
+    }).catch(() => null);
+    if (sibling?.featureFlags != null) inheritedFeatureFlags = sibling.featureFlags;
+  }
+
   const saved = await db.mobileDevice.upsert({
     where: { expoPushToken: input.expoPushToken },
     create: {
@@ -14570,6 +14592,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       osVersion: input.osVersion || null,
       ...permissionsPatch,
       ...keepAlivePatch,
+      ...(inheritedFeatureFlags !== undefined ? { featureFlags: inheritedFeatureFlags } : {}),
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()
