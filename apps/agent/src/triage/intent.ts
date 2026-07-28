@@ -105,6 +105,19 @@ export function detectIntent(text: string): Intent {
     }
   }
 
+  // Loose PBX config (M3): a routing verb aimed at a bare number/extension —
+  // "route 845 251 0249 to extension 101", "point 8455577768 to the queue".
+  // The term list above only catches possessive phrasings ("route my number");
+  // real client phrasing 2026-07-28 used the bare DID. Texting verbs excluded
+  // so "send a message to 845..." never lands here.
+  const loosePbxRoute =
+    /\b(?:route|re-?route|point|redirect)\b[^.?!\n]{0,80}\bto\b/i.test(t) &&
+    /\d{3,}/.test(t) &&
+    !/\b(?:text|sms|message|fax|email)\b/i.test(t);
+  if (loosePbxRoute) {
+    return { kind: "action", actionType: "pbx_config", extensionHint: text.match(EXT_RE)?.[1], raw: text };
+  }
+
   // Loose MOH: a change-verb near "music" without the word "hold" ("change my
   // music from classic to main" — real client phrasing 2026-07-27), or a
   // status question mentioning music ("what music is playing right now?").

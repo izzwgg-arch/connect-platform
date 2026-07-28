@@ -97,6 +97,20 @@ test("action intent: IVR/menu phrases route to the pbx_config flow (M4 first cra
   if (j.kind === "action") assert.equal(j.actionType, "ivr_switch");
 });
 
+test("action intent: routing verb + bare DID lands in pbx_config (loose M3 fallback)", () => {
+  // Live miss 2026-07-28: "Now route 845 251 0249 to extension 101" escalated
+  // to the human team because no term matched the bare-DID phrasing.
+  const i = detectIntent("Now route 845 251 0249 to extension 101");
+  assert.equal(i.kind, "action");
+  if (i.kind === "action") assert.equal(i.actionType, "pbx_config");
+  const j = detectIntent("point 8455577768 to the sales team");
+  assert.equal(j.kind, "action");
+  if (j.kind === "action") assert.equal(j.actionType, "pbx_config");
+  // Texting verbs must NOT land in pbx_config.
+  const k = detectIntent("send a text message to 8455577768 saying we are closed");
+  assert.notEqual((k as any).actionType, "pbx_config");
+});
+
 test("plain conversation is not misclassified", () => {
   assert.equal(detectIntent("hi, what are your office hours?").kind, "chat");
   assert.equal(detectIntent("thank you so much").kind, "chat");
