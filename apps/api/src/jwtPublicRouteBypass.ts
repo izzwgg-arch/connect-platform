@@ -35,7 +35,9 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // M1 (AI agent): agent-service MOH override door. Authenticates in-handler via
   // the AGENT_INTERNAL_SECRET shared-secret header (fail-closed when unset).
   const isInternalAgentMohPath =
-    path === "/internal/agent/moh/override" || path.endsWith("/internal/agent/moh/override");
+    path === "/internal/agent/moh/override" || path.endsWith("/internal/agent/moh/override")
+    // Agent chat MP3 upload → hold-music profile door (same shared-secret auth).
+    || path === "/internal/agent/moh/upload-asset" || path.endsWith("/internal/agent/moh/upload-asset");
   // M3: agent inbound-route door. In-handler shared-secret auth (fail-closed).
   const isInternalAgentRoutePath =
     path === "/internal/agent/route/action" || path.endsWith("/internal/agent/route/action");

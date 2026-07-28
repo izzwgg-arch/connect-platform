@@ -29,6 +29,13 @@ test("shouldSkipJwtVerification: public multi-invoice pay links skip JWT; admin 
   assert.equal(shouldSkipJwtVerification("/admin/billing/pay-links"), false);
 });
 
+test("shouldSkipJwtVerification: internal agent MOH doors skip JWT (in-handler secret auth)", () => {
+  assert.equal(shouldSkipJwtVerification("/internal/agent/moh/override"), true);
+  assert.equal(shouldSkipJwtVerification("/internal/agent/moh/upload-asset"), true);
+  assert.equal(shouldSkipJwtVerification("/api/internal/agent/moh/upload-asset"), true);
+  assert.equal(shouldSkipJwtVerification("/internal/agent/moh/other"), false);
+});
+
 test("shouldSkipJwtVerification: public CRM form links skip only exact public prefix", () => {
   assert.equal(shouldSkipJwtVerification("/public/forms/token"), true);
   assert.equal(shouldSkipJwtVerification("/api/public/forms/token/pdf"), true);
