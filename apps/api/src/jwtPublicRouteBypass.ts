@@ -61,7 +61,11 @@ export function shouldSkipJwtVerification(path: string): boolean {
     path === "/voice/moh/sync-manifest"
     || path.endsWith("/voice/moh/sync-manifest")
     || path === "/voice/moh/upload"
-    || path.endsWith("/voice/moh/upload");
+    || path.endsWith("/voice/moh/upload")
+    // Signed MOH download (HMAC exp+sig in query, verified in-handler) — pulled
+    // by the PBX connect-media-sync helper, which has no JWT.
+    || path.startsWith("/voice/moh/download/")
+    || path.includes("/voice/moh/download/");
   const isOnboardingPublicPath = path.startsWith("/onboarding/");
   const isPublicCrmFormPath = pathWithoutApiPrefix.startsWith("/public/forms/");
   // Public customer delivery-tracking page: token-authenticated inside the handler

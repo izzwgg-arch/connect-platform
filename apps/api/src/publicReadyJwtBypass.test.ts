@@ -36,6 +36,13 @@ test("shouldSkipJwtVerification: internal agent MOH doors skip JWT (in-handler s
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/other"), false);
 });
 
+test("shouldSkipJwtVerification: MOH sync + signed download paths skip JWT", () => {
+  assert.equal(shouldSkipJwtVerification("/voice/moh/sync-manifest"), true);
+  assert.equal(shouldSkipJwtVerification("/voice/moh/download/test%2Fconnect_x%2Fasset.wav"), true);
+  assert.equal(shouldSkipJwtVerification("/api/voice/moh/download/test%2Fconnect_x%2Fasset.wav"), true);
+  assert.equal(shouldSkipJwtVerification("/voice/moh/assets"), false);
+});
+
 test("shouldSkipJwtVerification: public CRM form links skip only exact public prefix", () => {
   assert.equal(shouldSkipJwtVerification("/public/forms/token"), true);
   assert.equal(shouldSkipJwtVerification("/api/public/forms/token/pdf"), true);

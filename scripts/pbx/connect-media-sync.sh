@@ -26,6 +26,18 @@
 
 set -euo pipefail
 
+# Self-source the defaults file: cron's `. /etc/default/...` sets plain (un-
+# exported) shell variables that do NOT reach this child process (live miss on
+# first install 2026-07-28: CONNECT_URL stayed at the example default). Values
+# in the file win; set DEFAULTS_FILE=/dev/null to run with pure env overrides.
+DEFAULTS_FILE="${DEFAULTS_FILE:-/etc/default/connect-media-sync}"
+if [[ -r "$DEFAULTS_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DEFAULTS_FILE"
+  set +a
+fi
+
 CONNECT_URL="${CONNECT_URL:-https://connect.example.com}"
 MOH_DIR="${MOH_DIR:-/var/lib/asterisk/moh}"
 CONF_FILE="${CONF_FILE:-/etc/asterisk/vitalpbx/musiconhold__60-connect-uploads.conf}"
@@ -107,6 +119,12 @@ while IFS=$'\t' read -r moh_class want_sha url; do
     continue
   fi
   WANT_CLASS["$moh_class"]=1
+  # Re-base the signed URL onto CONNECT_URL: the API builds downloadUrl from
+  # PUBLIC_API_URL, which is unset in production, so the manifest says
+  # http://localhost:3001/... (live miss 2026-07-28). The HMAC covers only
+  # storageKey+exp — never the host — and downloads come from the same API
+  # as the manifest, so this rewrite is always safe.
+  url="$CONNECT_URL$(printf '%s' "$url" | sed -E 's#^[a-z]+://[^/]+##')"
   target_dir="$MOH_DIR/$moh_class"
   target="$target_dir/asset.wav"
 
