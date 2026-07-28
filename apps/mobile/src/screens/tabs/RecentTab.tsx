@@ -22,7 +22,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
-import { Avatar } from '../../components/ui/Avatar';
+import { Avatar, colorForName } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
@@ -729,22 +729,23 @@ function KindBadge({ kind, accent }: { kind: CallKind; accent: string }) {
   );
 }
 
-function UnknownAvatar({ size = 40 }: { size?: number }) {
-  const { colors } = useTheme();
+function UnknownAvatar({ size = 40, seed = '' }: { size?: number; seed?: string }) {
+  // Same hash-colored circle as named contacts (seeded by the number) with a
+  // person glyph — matches the Avatar component's unknown-number treatment so
+  // unknown callers no longer look like a washed-out dead state.
+  const [bg] = colorForName(seed || 'Unknown');
   return (
     <View
       style={{
         width: size,
         height: size,
         borderRadius: size / 2,
-        backgroundColor: colors.surfaceElevated,
-        borderWidth: 1,
-        borderColor: colors.borderSubtle,
+        backgroundColor: bg,
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Ionicons name="call-outline" size={Math.round(size * 0.45)} color={colors.textTertiary} />
+      <Ionicons name="person" size={Math.round(size * 0.55)} color="#fff" />
     </View>
   );
 }
@@ -934,7 +935,7 @@ const CallCard = memo(function CallCard({
         >
           <View style={styles.avatarWrap}>
             {group.unknown ? (
-              <UnknownAvatar size={44} />
+              <UnknownAvatar size={44} seed={callDisplayNumber(primaryCall) || group.displayName} />
             ) : (
               <Avatar name={primaryName || callDisplayNumber(primaryCall) || 'Unknown'} size="md" />
             )}
@@ -1045,7 +1046,7 @@ function CallDetailModal({
 
           <View style={styles.detailHeader}>
             <View style={[styles.avatarRingLarge, { borderColor: accent + '55' }]}>
-              {group.unknown ? <UnknownAvatar size={72} /> : <Avatar name={group.displayName} size="xl" />}
+              {group.unknown ? <UnknownAvatar size={72} seed={group.displayName} /> : <Avatar name={group.displayName} size="xl" />}
             </View>
             <Text style={[typography.h2, { color: colors.text, marginTop: 14, textAlign: 'center' }]} numberOfLines={1}>
               {group.displayName}

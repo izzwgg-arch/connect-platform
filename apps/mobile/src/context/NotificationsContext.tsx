@@ -2042,8 +2042,11 @@ export function NotificationsProvider({
       if (!resolved) {
         console.warn('[ACCEPT_GUARD] token not ready, waiting inviteId=' + invite?.id);
         const waitStart = Date.now();
+        // 25 ms poll (was 100 ms): on a cold lock-screen answer this loop sits
+        // between the user's tap and the entire answer pipeline — keep the
+        // post-hydration dead time negligible.
         while (!tokenRef.current && Date.now() - waitStart < 4000) {
-          await new Promise<void>((r) => setTimeout(r, 100));
+          await new Promise<void>((r) => setTimeout(r, 25));
         }
         resolved = tokenRef.current;
         if (!resolved) {
@@ -2482,6 +2485,28 @@ export function NotificationsProvider({
           pushToAnswerMs: answerTappedAt - pushReceivedAt,
           ts: answerTappedAt,
         }));
+        // Stamp answer-flow start on the raw client and expose an abort probe.
+        // A user hangup (End tap on the "Answering…" screen) after this point
+        // must abandon the pipeline immediately — before this, an End tap
+        // killed the requeued INVITE and the pipeline still sat out its full
+        // 16 s invite wait on a dead screen (live failure 2026-07-27).
+        const peekRawSipClient = (): any => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const singleton = require("../sip/sipClientSingleton") as typeof import("../sip/sipClientSingleton");
+            return singleton.peekSipClient();
+          } catch {
+            return null;
+          }
+        };
+        try { peekRawSipClient()?.markAnswerFlowStart?.(); } catch { /* diagnostics only */ }
+        const answerFlowAborted = (): boolean => {
+          try {
+            return !!peekRawSipClient()?.isAnswerFlowAborted?.();
+          } catch {
+            return false;
+          }
+        };
         sip.beginInboundBlackbox(invite.id, {
           push_received: {
             pushReceivedAt,
@@ -2547,20 +2572,41 @@ export function NotificationsProvider({
           bringAppToForeground();
         }
 
-        const registered = await sipRegisterPromise;
-        if (!registered) {
-          console.warn("[Notif] All SIP register attempts failed for invite:", invite.id);
-          setCallFlowLastError("sip_register_failed");
-          emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
-            reason: "sip_register_failed",
-          });
-          showEndedState(invite, "Call ended", { reason: "sip_register_failed" });
-          void flightEndCall('failed');
-          endNativeCall(callId);
-          markCallLatency(invite.id, "CALL_FAILED", { reason: "sip_register_failed" });
-          summarizeCallLatency(invite.id, "failed");
-          resetCallLatency(invite.id);
-          return;
+        // WARM FAST-PATH: if the matching INVITE is ALREADY live on the UA
+        // (standing registration held in the background, Asterisk dialed us
+        // directly during the ring), do NOT gate the answer on the register
+        // round-trip — the INVITE's presence is stronger proof of a working
+        // socket than any REGISTER (~140 ms saved on every warm answer). The
+        // register promise keeps running in the background for bookkeeping;
+        // cold paths below still await nothing here because waitForIncomingInvite
+        // finds the session on its first poll.
+        let warmInvitePresent = false;
+        try {
+          warmInvitePresent = sip.hasMatchingIncomingInvite(inviteMatch);
+        } catch { /* fall back to the register gate */ }
+
+        if (warmInvitePresent) {
+          console.log('[ANSWER_PIPELINE] REG_GATE_SKIPPED (invite already live)', JSON.stringify({
+            inviteId: invite.id,
+            sinceAnswerMs: Date.now() - answerTappedAt,
+          }));
+          void sipRegisterPromise.catch(() => undefined);
+        } else {
+          const registered = await sipRegisterPromise;
+          if (!registered) {
+            console.warn("[Notif] All SIP register attempts failed for invite:", invite.id);
+            setCallFlowLastError("sip_register_failed");
+            emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
+              reason: "sip_register_failed",
+            });
+            showEndedState(invite, "Call ended", { reason: "sip_register_failed" });
+            void flightEndCall('failed');
+            endNativeCall(callId);
+            markCallLatency(invite.id, "CALL_FAILED", { reason: "sip_register_failed" });
+            summarizeCallLatency(invite.id, "failed");
+            resetCallLatency(invite.id);
+            return;
+          }
         }
 
         const pbxAnswerPromise = waitForPbxAnswer(invite, 6_000);
@@ -2582,9 +2628,15 @@ export function NotificationsProvider({
           sinceAnswerMs: t4_waitStart - answerTappedAt,
         });
 
-        let inviteReady = await sip
-          .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
-          .catch(() => false);
+        // Trust the warm probe from above: the INVITE was live on the UA a
+        // few ms ago, so skip the wait loop entirely (its deadline is anchored
+        // at answer-tap time and can already be expired by the time we get
+        // here on slower paths — lock screen preamble ≈ 200 ms).
+        let inviteReady = warmInvitePresent
+          ? true
+          : await sip
+              .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
+              .catch(() => false);
 
         let backendClaimed = false;
         if (!inviteReady && earlyColdAcceptSent) {
@@ -2597,6 +2649,22 @@ export function NotificationsProvider({
           inviteReady = await sip
             .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
             .catch(() => false);
+        } else if (!inviteReady && answerFlowAborted()) {
+          // User hung up while we were still waiting for the INVITE — do NOT
+          // claim/requeue a call they already gave up on. Clean up and exit.
+          console.warn('[ANSWER_PIPELINE] aborted_by_user_before_claim', JSON.stringify({
+            inviteId: invite.id,
+            sinceAnswerMs: Date.now() - answerTappedAt,
+          }));
+          setCallFlowLastError("answer_aborted_by_user");
+          respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+          showEndedState(invite, "Call ended", { reason: "answer_aborted_by_user" });
+          void flightEndCall('failed');
+          endNativeCall(callId);
+          markCallLatency(invite.id, "CALL_FAILED", { reason: "answer_aborted_by_user" });
+          summarizeCallLatency(invite.id, "failed");
+          resetCallLatency(invite.id);
+          return;
         } else if (!inviteReady) {
           const t2_claimStart = Date.now();
           console.log('[ANSWER_PIPELINE] CLAIM_START (requeue path)', JSON.stringify({
@@ -2679,21 +2747,24 @@ export function NotificationsProvider({
         }
 
         if (!inviteReady) {
-          setCallFlowLastError("sip_invite_not_received");
+          const inviteWaitFailureReason = answerFlowAborted()
+            ? "answer_aborted_by_user"
+            : "sip_invite_not_received";
+          setCallFlowLastError(inviteWaitFailureReason);
           emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
-            reason: "sip_invite_not_received",
+            reason: inviteWaitFailureReason,
           });
           flightRecord('SIP', 'SIP_INVITE_WAIT_TIMEOUT', {
             inviteId: invite.id,
             severity: 'error',
-            payload: { sinceAnswerMs: Date.now() - answerTappedAt },
+            payload: { sinceAnswerMs: Date.now() - answerTappedAt, reason: inviteWaitFailureReason },
           });
           sip.finalizeInboundBlackboxFailure({
             inviteId: invite.id,
             pbxCallId: invite.pbxCallId ?? null,
             callerNumber: invite.fromNumber ?? null,
             calleeExtension: invite.toExtension ?? null,
-            failureReason: "sip_invite_not_received",
+            failureReason: inviteWaitFailureReason,
             pushMeta: {
               pushReceivedAt,
               answerTappedAt,
@@ -2717,10 +2788,10 @@ export function NotificationsProvider({
               sipCallTarget: invite.sipCallTarget,
             }).catch(() => undefined);
           }
-          showEndedState(invite, "Call ended", { reason: "sip_invite_not_received" });
+          showEndedState(invite, "Call ended", { reason: inviteWaitFailureReason });
           void flightEndCall('failed');
           endNativeCall(callId);
-          markCallLatency(invite.id, "CALL_FAILED", { reason: "sip_invite_not_received" });
+          markCallLatency(invite.id, "CALL_FAILED", { reason: inviteWaitFailureReason });
           summarizeCallLatency(invite.id, "failed");
           resetCallLatency(invite.id);
           return;

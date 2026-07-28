@@ -70,6 +70,10 @@ export class SimulatedSipClient implements SipClient {
     return false;
   }
 
+  hasMatchingIncomingInvite(_match?: SipMatch): boolean {
+    return false;
+  }
+
   async answerIncoming(
     _match?: SipMatch,
     _timeoutMs = 5000,

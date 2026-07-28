@@ -53,6 +53,7 @@ class ConnectConnectionService : ConnectionService() {
       callerNumber = callerNumber,
       callerName = callerName,
       pbxCallId = pbxCallId,
+      activateOnAdd = startActive,
     )
 
     val handleUri = request?.address ?: Uri.fromParts("tel", callerNumber.ifEmpty { "unknown" }, null)
@@ -73,11 +74,27 @@ class ConnectConnectionService : ConnectionService() {
       // is ALREADY connected in JS — we register it with Telecom purely so the
       // OS treats the process as hosting a live phone call (top scheduling
       // bucket, survives recents-swipe, no Doze throttling of the media path).
-      // Going straight to ACTIVE skips the ringing phase entirely, so the
-      // Samsung One UI "OS dialer shows before the SIP INVITE arrives" problem
-      // that got ring-time dispatch disabled in 2026-05 cannot occur.
-      connection.setActive()
-      Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId — Connection set ACTIVE (answer-time anchor)")
+      //
+      // DO NOT call setActive() here: inside onCreateIncomingConnection the
+      // call is not yet added to Telecom and the transition is silently
+      // dropped — the call stays RINGING (confirmed live 2026-07-28: Telecom
+      // dump showed state=RINGING at swipe-kill despite this path logging
+      // "set ACTIVE", and the process was killed mid-call). The connection
+      // flips itself to ACTIVE in onShowIncomingCallUi (activateOnAdd=true),
+      // which Telecom invokes only after the add completes; the main-thread
+      // post below is a belt-and-braces fallback for OEM builds that skip
+      // onShowIncomingCallUi for self-managed calls.
+      android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        try {
+          if (connection.state == Connection.STATE_RINGING || connection.state == Connection.STATE_NEW) {
+            connection.setActive()
+            Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId — anchor flipped to ACTIVE (posted fallback)")
+          }
+        } catch (t: Throwable) {
+          Log.w(TAG, "posted setActive failed inviteId=$inviteId: ${t.message}")
+        }
+      }, 250L)
+      Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId — answer-time anchor created (ACTIVE deferred to post-add)")
     } else {
       connection.setRinging()
       Log.i(TAG, "onCreateIncomingConnection inviteId=$inviteId from=$callerNumber name=$callerName — Connection set RINGING")

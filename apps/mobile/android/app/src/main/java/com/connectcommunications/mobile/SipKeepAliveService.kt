@@ -20,8 +20,6 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.Person
-
 /**
  * Stage 2: persistent Android Foreground Service that keeps the JS process
  * in the "foreground" importance tier while the user is logged in.
@@ -118,14 +116,21 @@ class SipKeepAliveService : Service() {
      * Relaxed heartbeat cadence used ONLY when the server-controlled
      * standing-registration flag is on and no call is active. In that mode the
      * heartbeat's job shifts from "resurrect ASAP after a SIGKILL" to
-     * "periodically refresh the SIP registration" (registrar expiry is 600 s,
-     * so 5 min keeps a comfortable 2x margin). Combined with dropping the
-     * permanent idle wakelock this is the battery fix: 12 CPU wakes/hour
-     * instead of 60, and the CPU actually sleeps in between. Flag off ⇒ the
+     * "periodically refresh the SIP registration" — and, critically, this is
+     * the ONLY refresh that runs in the background: Android freezes JS timers
+     * when the app is backgrounded, so JsSIP's own ~10 min refresh and the
+     * 45 s OPTIONS ping both stop. The cadence must therefore stay under BOTH
+     * the registrar expiry (600 s) AND the carrier NAT idle timeout (~5 min
+     * observed on T-Mobile CGNAT, 2026-07-27). 4 min covers both with margin
+     * while keeping the battery win vs the legacy 60 s exact cadence (15 CPU
+     * wakes/hour instead of 60, no permanent idle wakelock). Flag off ⇒ the
      * legacy 60 s exact cadence above, unchanged.
      */
-    private const val HEARTBEAT_INTERVAL_STANDING_IDLE_MS = 300_000L
+    private const val HEARTBEAT_INTERVAL_STANDING_IDLE_MS = 240_000L
     private const val HEARTBEAT_REQUEST_CODE = 24425
+    /** Min gap between maintenance re-register dispatches (onStartCommand fires in bursts). */
+    private const val MAINTENANCE_DISPATCH_MIN_INTERVAL_MS = 15_000L
+    @Volatile private var lastMaintenanceDispatchMs = 0L
 
     /**
      * Companion-level mirror of the instance `inCall` state so the static
@@ -490,6 +495,27 @@ class SipKeepAliveService : Service() {
     ensureChannel()
     ensureInCallChannel()
     registerNotifReceiver()
+    // Process resurrection (sticky restart after a swipe-kill / OEM kill): the
+    // SIP registration died with the old process and its WebSocket, and the
+    // next heartbeat can be minutes out (inexact alarm). Re-register NOW so an
+    // incoming call finds the phone already registered instead of paying the
+    // full wake→connect→register cost inside the ring window (2026-07-28: the
+    // process sat dead 00:22:54→00:22:58 and the call's own push had to do the
+    // registration, costing the caller-visible answer delay).
+    if (isStandingRegistrationEnabled(applicationContext)) {
+      val nowMs = SystemClock.elapsedRealtime()
+      if (nowMs - lastMaintenanceDispatchMs >= MAINTENANCE_DISPATCH_MIN_INTERVAL_MS) {
+        lastMaintenanceDispatchMs = nowMs
+        try {
+          val maint = Intent(this, SipPreRegisterTaskService::class.java)
+          maint.putExtra("mode", "maintenance")
+          startService(maint)
+          Log.i(TAG, "standing-registration: onCreate resurrection re-register dispatched")
+        } catch (t: Throwable) {
+          Log.w(TAG, "standing-registration: onCreate maintenance dispatch failed: ${t.message}")
+        }
+      }
+    }
   }
 
   /** Best-effort name of the process this service is running in. */
@@ -534,10 +560,26 @@ class SipKeepAliveService : Service() {
         inCallActive = false
         clearInCallForeground()
         Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared startId=$startId (hangup_button)")
-        // Relay to main process: InCallNotificationReceiver → emitInCallAction("hangup") → JS BYE
+        // Release the answer-time Telecom anchor natively. Its usual owner is
+        // SipContext's call-ended effect, but after a recents-swipe that tree
+        // is unmounted — without this the OS would keep an ACTIVE phantom
+        // call registered indefinitely.
         try {
-          sendBroadcast(Intent(NOTIF_ACTION_HANGUP_RELAY).setPackage(packageName))
-          Log.i(TAG, "NOTIF_HANGUP_RELAY broadcast sent to main process")
+          TelecomBridge.terminateAnchorConnections("notif_hangup")
+        } catch (t: Throwable) {
+          Log.w(TAG, "anchor teardown on notif hangup failed: ${t.message}")
+        }
+        // Relay: InCallNotificationReceiver → emitInCallAction("hangup") → JS BYE.
+        // MUST be an EXPLICIT component intent: the receiver is manifest-registered
+        // with no intent-filter, so an action-only broadcast (even with setPackage)
+        // is never delivered — confirmed live 2026-07-28 01:41: "broadcast sent"
+        // logged, receiver never fired, call never hung up.
+        try {
+          sendBroadcast(
+            Intent(this, InCallNotificationReceiver::class.java)
+              .setAction(NOTIF_ACTION_HANGUP_RELAY)
+          )
+          Log.i(TAG, "NOTIF_HANGUP_RELAY explicit broadcast sent")
         } catch (t: Throwable) {
           Log.w(TAG, "NOTIF_HANGUP_RELAY broadcast failed: ${t.message}")
         }
@@ -558,6 +600,17 @@ class SipKeepAliveService : Service() {
         // notification, so there is no foreground gap.
         clearInCallForeground()
         Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared startId=$startId")
+        // Post-call audio-state watchdog: Telecom's disconnect processing can
+        // strand MODE_IN_COMMUNICATION after the last call (see
+        // TelecomBridge.resetCallAudioStateIfIdle). Check shortly after the
+        // teardown settles and once more later to catch a late stomp. Runs in
+        // the native service, so it works after a recents-swipe too.
+        val appCtx = applicationContext
+        val watchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        watchdogHandler.postDelayed(
+          { TelecomBridge.resetCallAudioStateIfIdle(appCtx, "exit_call_t2500") }, 2_500L)
+        watchdogHandler.postDelayed(
+          { TelecomBridge.resetCallAudioStateIfIdle(appCtx, "exit_call_t8000") }, 8_000L)
       }
 
       ACTION_UPDATE_CALL -> {
@@ -595,13 +648,24 @@ class SipKeepAliveService : Service() {
       // when the flag is off, so it cannot disturb in-call state or other devices.
       if (action == null && inCall == null &&
           isStandingRegistrationEnabled(applicationContext)) {
-        try {
-          val maint = Intent(this, SipPreRegisterTaskService::class.java)
-          maint.putExtra("mode", "maintenance")
-          startService(maint)
-          Log.i(TAG, "standing-registration: maintenance re-register dispatched")
-        } catch (t: Throwable) {
-          Log.w(TAG, "standing-registration: maintenance dispatch failed: ${t.message}")
+        // Debounce: onStartCommand fires in bursts (heartbeat + wake pushes +
+        // JS setKeepAliveEnabled all start the service within seconds — 4
+        // maintenance tasks piled onto one register during the 2026-07-27
+        // failed call). One dispatch per window is enough; the JS side
+        // single-flights registration anyway.
+        val nowMs = SystemClock.elapsedRealtime()
+        if (nowMs - lastMaintenanceDispatchMs >= MAINTENANCE_DISPATCH_MIN_INTERVAL_MS) {
+          lastMaintenanceDispatchMs = nowMs
+          try {
+            val maint = Intent(this, SipPreRegisterTaskService::class.java)
+            maint.putExtra("mode", "maintenance")
+            startService(maint)
+            Log.i(TAG, "standing-registration: maintenance re-register dispatched")
+          } catch (t: Throwable) {
+            Log.w(TAG, "standing-registration: maintenance dispatch failed: ${t.message}")
+          }
+        } else {
+          Log.i(TAG, "standing-registration: maintenance dispatch debounced (${nowMs - lastMaintenanceDispatchMs}ms since last)")
         }
       }
       if (action == ACTION_EXIT_CALL) {
@@ -1047,9 +1111,14 @@ class SipKeepAliveService : Service() {
   private fun buildInCallNotification(snap: InCallSnapshot): Notification {
     val pendingFlags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
 
-    // Tap on the body opens MainActivity so the in-app ActiveCallScreen takes
-    // over for full controls (keypad, transfer, etc.).
+    // Tap on the body opens MainActivity AND deep-links to the ActiveCall
+    // screen. The VIEW/data pair rides through MainActivity into RN's Linking
+    // module (neutralizeStale only rewrites host "incoming-call"), where
+    // RootNavigator routes it to the ActiveCall modal. A bare launch intent
+    // only resumed the app on whatever screen it was last on.
     val openIntent = Intent(this, MainActivity::class.java).apply {
+      action = Intent.ACTION_VIEW
+      data = android.net.Uri.parse("com.connectcommunications.mobile://active-call")
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
     val openPi = PendingIntent.getActivity(this, 1, openIntent, pendingFlags)
@@ -1078,7 +1147,6 @@ class SipKeepAliveService : Service() {
     )
 
     val callerLabel = snap.callerName.ifBlank { "On a call" }
-    val person = Person.Builder().setName(callerLabel).setImportant(true).build()
 
     val builder = NotificationCompat.Builder(this, IN_CALL_CHANNEL_ID)
       .setSmallIcon(R.drawable.notification_icon)
@@ -1095,26 +1163,20 @@ class SipKeepAliveService : Service() {
       .setContentIntent(openPi)
       .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
-    // Android 12+ — use the system CallStyle. We pass the End action through
-    // forOngoingCall (it renders as a red hangup pill). The Speaker / Mute
-    // toggles are added as additional actions; CallStyle merges them next
-    // to the system buttons.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      builder.setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangupPi))
-    } else {
-      // Older OS — use plain action buttons with explicit labels.
-      builder.addAction(0, "End", hangupPi)
-    }
-
-    // Speaker + Mute action buttons. Labels reflect current state so the
-    // user knows what tapping will do (matches Android's stock dialer UX).
+    // Plain action buttons on ALL OS versions. CallStyle (12+) was tried and
+    // reverted 2026-07-28: Samsung One UI rendered its custom-action chip
+    // with white text on the light shade (the unreadable "Speaker" button)
+    // and dropped the second custom action (Mute) entirely. Standard
+    // notification actions render as theme-colored TEXT buttons that are
+    // legible in both light and dark mode, and all three fit.
+    builder.addAction(R.drawable.ic_notif_call_end, "Hang up", hangupPi)
     builder.addAction(
-      0,
-      if (snap.speakerOn) "Speaker on" else "Speaker",
+      R.drawable.ic_notif_speaker,
+      if (snap.speakerOn) "Speaker off" else "Speaker",
       speakerPi,
     )
     builder.addAction(
-      0,
+      R.drawable.ic_notif_mic_off,
       if (snap.muted) "Unmute" else "Mute",
       mutePi,
     )

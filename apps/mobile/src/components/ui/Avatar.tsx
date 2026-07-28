@@ -35,7 +35,7 @@ const AVATAR_COLORS = [
   ['#6366f1', '#4338ca'],
 ];
 
-function colorForName(name: string): [string, string] {
+export function colorForName(name: string): [string, string] {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
@@ -103,7 +103,10 @@ export function Avatar({ name, size = 'md', online, status }: Props) {
             width: dim,
             height: dim,
             borderRadius: dim / 2,
-            backgroundColor: unsaved ? '#64748b' : bg,
+            // Unknown numbers get the same hash-derived color as named
+            // contacts (seeded by the number itself) — just with a person
+            // glyph instead of initials. Flat gray looked like a dead state.
+            backgroundColor: bg,
           },
         ]}
       >

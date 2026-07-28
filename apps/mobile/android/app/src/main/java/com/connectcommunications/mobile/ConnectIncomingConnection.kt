@@ -1,6 +1,7 @@
 package com.connectcommunications.mobile
 
 import android.content.Context
+import android.telecom.CallAudioState
 import android.telecom.Connection
 import android.telecom.DisconnectCause
 import android.util.Log
@@ -19,13 +20,27 @@ class ConnectIncomingConnection(
   val callerNumber: String,
   val callerName: String,
   val pbxCallId: String,
+  /**
+   * Answer-time anchor mode: the SIP call is already live and this Connection
+   * exists purely so the OS treats the process as hosting an ACTIVE call.
+   * The ACTIVE transition MUST happen after Telecom has added the call —
+   * setActive() inside onCreateIncomingConnection is silently dropped and the
+   * call stays RINGING (observed live 2026-07-28: Telecom dump showed
+   * state=RINGING at swipe-kill despite our "set ACTIVE" log, and a RINGING
+   * call grants no swipe-survival protection).
+   */
+  private val activateOnAdd: Boolean = false,
 ) : Connection() {
 
   override fun onShowIncomingCallUi() {
-    // System wants us to show our own UI. For SELF_MANAGED with no app UI
-    // visible the OS already posts its own ringing notification, so this is
-    // a no-op. We log so diagnostics can prove the OS asked us.
-    Log.i(TAG, "onShowIncomingCallUi inviteId=$inviteId")
+    // System wants us to show our own UI. Telecom invokes this only AFTER the
+    // call has been fully added, which makes it the guaranteed-timing hook to
+    // flip an answer-time anchor to ACTIVE (see activateOnAdd docs).
+    Log.i(TAG, "onShowIncomingCallUi inviteId=$inviteId activateOnAdd=$activateOnAdd")
+    if (activateOnAdd) {
+      setActive()
+      Log.i(TAG, "onShowIncomingCallUi inviteId=$inviteId — anchor flipped to ACTIVE")
+    }
   }
 
   override fun onAnswer() {
@@ -41,9 +56,7 @@ class ConnectIncomingConnection(
   override fun onReject() {
     Log.i(TAG, "onReject inviteId=$inviteId — disconnecting REJECTED and notifying JS")
     TelecomBridge.notifyReject(inviteId, "user_rejected")
-    setDisconnected(DisconnectCause(DisconnectCause.REJECTED))
-    destroy()
-    TelecomBridge.unregisterActiveConnection(inviteId)
+    disconnectAndDestroy(DisconnectCause(DisconnectCause.REJECTED))
   }
 
   override fun onReject(replyMessage: String?) {
@@ -53,17 +66,35 @@ class ConnectIncomingConnection(
   override fun onDisconnect() {
     Log.i(TAG, "onDisconnect inviteId=$inviteId — local hangup, notifying JS")
     TelecomBridge.notifyDisconnect(inviteId, "user_hangup")
-    setDisconnected(DisconnectCause(DisconnectCause.LOCAL))
-    destroy()
-    TelecomBridge.unregisterActiveConnection(inviteId)
+    disconnectAndDestroy(DisconnectCause(DisconnectCause.LOCAL))
   }
 
   override fun onAbort() {
     Log.i(TAG, "onAbort inviteId=$inviteId")
     TelecomBridge.notifyDisconnect(inviteId, "system_abort")
-    setDisconnected(DisconnectCause(DisconnectCause.OTHER))
-    destroy()
-    TelecomBridge.unregisterActiveConnection(inviteId)
+    disconnectAndDestroy(DisconnectCause(DisconnectCause.OTHER))
+  }
+
+  override fun onCallAudioStateChanged(state: CallAudioState?) {
+    // Telecom is the routing authority while this Connection is ACTIVE.
+    // Log every route flip so speaker/BT problems are diagnosable from
+    // logcat, and so we can see Telecom resetting the route on activation.
+    Log.i(
+      TAG,
+      "onCallAudioStateChanged inviteId=$inviteId route=" +
+        (state?.let { CallAudioState.audioRouteToString(it.route) } ?: "null") +
+        " muted=${state?.isMuted}",
+    )
+  }
+
+  /**
+   * External hook (JS bridge via IncomingCallUiModule) — request an audio
+   * route change through Telecom. This is the ONLY effective way to move
+   * call audio while this self-managed Connection is ACTIVE.
+   */
+  fun requestAudioRoute(route: Int) {
+    Log.i(TAG, "requestAudioRoute inviteId=$inviteId route=${CallAudioState.audioRouteToString(route)}")
+    setAudioRoute(route)
   }
 
   /**
@@ -90,8 +121,30 @@ class ConnectIncomingConnection(
       "rejected" -> DisconnectCause(DisconnectCause.REJECTED)
       else -> DisconnectCause(DisconnectCause.OTHER)
     }
+    disconnectAndDestroy(cause)
+  }
+
+  /**
+   * setDisconnected() + destroy() in the same synchronous frame can race
+   * Telecom's transactional disconnect pipeline (Android 15/16
+   * "cleanupVerifyCallState" transactions) and strand the SYSTEM-held
+   * MODE_IN_COMMUNICATION audio state. Observed live 2026-07-28 on the test
+   * device: audio mode stuck "in communication" (owner uid 1000 = Telecom)
+   * for 80+ minutes after the last call ended with zero calls in
+   * CallsManager — which blocks other apps (e.g. WhatsApp voice notes) from
+   * recording. Deferring destroy() one main-looper tick gives Telecom a
+   * frame to process the disconnect before the Connection object vanishes.
+   * TelecomBridge.resetCallAudioStateIfIdle is the second line of defence.
+   */
+  private fun disconnectAndDestroy(cause: DisconnectCause) {
     setDisconnected(cause)
-    destroy()
+    android.os.Handler(android.os.Looper.getMainLooper()).post {
+      try {
+        destroy()
+      } catch (t: Throwable) {
+        Log.w(TAG, "deferred destroy failed inviteId=$inviteId: ${t.message}")
+      }
+    }
     TelecomBridge.unregisterActiveConnection(inviteId)
   }
 

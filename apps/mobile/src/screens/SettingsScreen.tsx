@@ -258,18 +258,6 @@ export function SettingsScreen() {
           />
         </SectionCard>
 
-        {/* Delivery driver — entry to the supermarket delivery tracking flow */}
-        <SectionHeader title="Delivery" />
-        <SectionCard>
-          <SettingRow
-            icon="cube-outline"
-            label="Delivery driver"
-            subtitle="Today's runs, scan orders, capture proof"
-            iconColor={colors.primary}
-            onPress={() => nav.navigate('Delivery' as never)}
-          />
-        </SectionCard>
-
         {/* Phone setup */}
         <SectionHeader title="Phone Setup" />
         <SectionCard>

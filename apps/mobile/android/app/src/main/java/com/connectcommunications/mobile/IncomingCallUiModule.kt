@@ -911,8 +911,36 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
    * Must be paired with stopBluetoothSco() when switching away from BT
    * (e.g. to speaker) to release the SCO link cleanly.
    */
+  /**
+   * Route call audio through the live Telecom Connection when one exists.
+   *
+   * While the answer-time anchor (a SELF_MANAGED Connection) is ACTIVE,
+   * Telecom owns the communication route and silently overrides
+   * AudioManager.setSpeakerphoneOn — the request is accepted by
+   * AudioDeviceBroker but Telecom immediately re-asserts its own route
+   * (confirmed live 2026-07-28: speaker worked during ringback, dead the
+   * moment the call connected and the anchor flipped ACTIVE). In that state
+   * Connection.setAudioRoute() is the only routing call that sticks.
+   *
+   * Returns true when a Telecom connection handled the request; callers
+   * fall back to the legacy AudioManager path otherwise (anchor dispatch
+   * failed, standing-registration flag off, pre-connect ringback audio).
+   */
+  private fun routeViaTelecom(route: Int, label: String): Boolean {
+    return try {
+      val conn = TelecomBridge.getAnyLiveConnection() ?: return false
+      conn.requestAudioRoute(route)
+      Log.i(TAG, "routeAudioTo$label: routed via Telecom connection inviteId=${conn.inviteId}")
+      true
+    } catch (t: Throwable) {
+      Log.w(TAG, "routeAudioTo$label: telecom route failed, falling back: ${t.message}")
+      false
+    }
+  }
+
   @ReactMethod
   fun routeAudioToBluetooth() {
+    if (routeViaTelecom(android.telecom.CallAudioState.ROUTE_BLUETOOTH, "Bluetooth")) return
     try {
       val am = reactApplicationContext
         .getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -929,6 +957,7 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun routeAudioToEarpiece() {
+    if (routeViaTelecom(android.telecom.CallAudioState.ROUTE_WIRED_OR_EARPIECE, "Earpiece")) return
     try {
       val am = reactApplicationContext
         .getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -945,6 +974,7 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun routeAudioToSpeaker() {
+    if (routeViaTelecom(android.telecom.CallAudioState.ROUTE_SPEAKER, "Speaker")) return
     try {
       val am = reactApplicationContext
         .getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -1092,6 +1122,36 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
         ?: Log.w(TAG, "telecomTerminate: no Connection for inviteId=$id")
     } catch (t: Throwable) {
       Log.w(TAG, "telecomTerminate failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Tear down every answer-time anchor Connection (tc-anchor-*) without
+   * needing the anchor id. Called from the module-scope call-ended cleanup in
+   * jssip.ts — SipContext (which tracks the id in a ref) is unmounted after a
+   * recents-swipe, so id-less native teardown is the only reliable path.
+   */
+  @ReactMethod
+  fun telecomTerminateAnchors() {
+    try {
+      TelecomBridge.terminateAnchorConnections("call_ended")
+    } catch (t: Throwable) {
+      Log.w(TAG, "telecomTerminateAnchors failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Post-call audio-state watchdog (see TelecomBridge.resetCallAudioStateIfIdle).
+   * Called from the module-scope call-ended cleanup in jssip.ts with a short
+   * delay so the deferred Connection.destroy() has settled first.
+   */
+  @ReactMethod
+  fun resetCallAudioState() {
+    try {
+      TelecomBridge.resetCallAudioStateIfIdle(
+        reactApplicationContext.applicationContext, "js_call_ended")
+    } catch (t: Throwable) {
+      Log.w(TAG, "resetCallAudioState failed: ${t.message}")
     }
   }
 

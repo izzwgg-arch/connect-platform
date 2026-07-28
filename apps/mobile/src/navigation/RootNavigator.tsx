@@ -453,6 +453,10 @@ export function RootNavigator() {
   const [splashDone, setSplashDone] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const pendingNotificationRouteRef = useRef<MobileNotificationRoute | null>(null);
+  // Set when the in-call notification body is tapped (deep link
+  // com.connectcommunications.mobile://active-call) before navigation is
+  // ready; consumed by the nav-ready effect below.
+  const pendingActiveCallOpenRef = useRef(false);
 
   void answerHandoffTick;
   const answerHandoffActive = !!answerHandoffInviteIdRef.current;
@@ -537,6 +541,19 @@ export function RootNavigator() {
   useEffect(() => {
     const handlePushRouteUrl = (url: string | null) => {
       if (!url) return;
+      if (url.startsWith('com.connectcommunications.mobile://active-call')) {
+        // In-call notification body tapped: surface the ActiveCall modal.
+        // Navigate immediately when the container is ready (warm tap while
+        // the app is alive in the background); otherwise queue for the
+        // nav-ready effect (cold start with a live call).
+        if (navRef.isReady()) {
+          console.log('[CALL_NAV] active-call deep link — navigating to ActiveCall');
+          navRef.navigate('App', { screen: 'ActiveCall' });
+        } else {
+          pendingActiveCallOpenRef.current = true;
+        }
+        return;
+      }
       if (url === 'com.connectcommunications.mobile://missed-call') {
         pendingNotificationRouteRef.current = { type: 'missed_call' };
         return;
@@ -571,6 +588,12 @@ export function RootNavigator() {
 
   useEffect(() => {
     if (!token || !navReady || isLoading) return;
+    if (pendingActiveCallOpenRef.current) {
+      pendingActiveCallOpenRef.current = false;
+      console.log('[CALL_NAV] active-call deep link (queued) — navigating to ActiveCall');
+      navRef.navigate('App', { screen: 'ActiveCall' });
+      return;
+    }
     const target = pendingNotificationRouteRef.current;
     if (!target) return;
     pendingNotificationRouteRef.current = null;

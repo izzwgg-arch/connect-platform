@@ -30,6 +30,10 @@ type Props = {
   title?: string;
   subtitle?: string;
   initialValue?: string;
+  /** Confirm-button label; defaults to the original "Transfer". */
+  submitLabel?: string;
+  /** Ionicons name for the confirm button; defaults to the transfer glyph. */
+  submitIcon?: string;
   onCancel: () => void;
   onSubmit: (target: string) => void;
 };
@@ -54,6 +58,8 @@ export function TransferModal({
   title = "Blind transfer",
   subtitle = "Enter extension or number",
   initialValue = "",
+  submitLabel = "Transfer",
+  submitIcon = "git-network-outline",
   onCancel,
   onSubmit,
 }: Props) {
@@ -180,12 +186,12 @@ export function TransferModal({
               activeOpacity={0.85}
             >
               <Ionicons
-                name="git-network-outline"
+                name={submitIcon as any}
                 size={18}
                 color="#fff"
                 style={{ marginRight: 8 }}
               />
-              <Text style={styles.btnPrimaryText}>Transfer</Text>
+              <Text style={styles.btnPrimaryText}>{submitLabel}</Text>
             </TouchableOpacity>
           </View>
         </Animated.View>

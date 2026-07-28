@@ -21,6 +21,12 @@ export type SipSessionState =
 export type SipSessionInfo = {
   sessionId: string;
   direction: "inbound" | "outbound";
+  /**
+   * When the call was confirmed (SIP ACK), epoch ms — null while ringing.
+   * Lets a remounted UI tree backdate the call timer during hydration
+   * instead of restarting it at 0:00.
+   */
+  confirmedAtMs?: number | null;
   callerNumber: string;
   callerDisplayName: string | null;
   state: SipSessionState;
@@ -150,6 +156,8 @@ export type SipClient = {
     match?: SipMatch,
     deadlineHandle?: import("./mobileAnswerTiming").SipAnswerDeadlineHandle,
   ) => Promise<boolean>;
+  /** Synchronous probe: is a matching inbound INVITE already live on the UA? */
+  hasMatchingIncomingInvite: (match?: SipMatch) => boolean;
   rejectIncoming: (match?: SipMatch) => Promise<boolean>;
   hangup: () => Promise<void>;
   /**

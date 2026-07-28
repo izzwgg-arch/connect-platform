@@ -132,6 +132,7 @@ export function ActiveCallScreen() {
   const [showDtmf, setShowDtmf] = useState(false);
   const [dtmfInput, setDtmfInput] = useState('');
   const [showTransfer, setShowTransfer] = useState(false);
+  const [showAddCall, setShowAddCall] = useState(false);
 
   const callState = sip.callState;
   const isConnected = callState === 'connected';
@@ -455,6 +456,28 @@ export function ActiveCallScreen() {
     [callSessions],
   );
 
+  const handleAddCallPress = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    setShowAddCall(true);
+  }, []);
+
+  const handleAddCallSubmit = useCallback(
+    (target: string) => {
+      setShowAddCall(false);
+      // Hold the current call first so the new line dials with the existing
+      // party parked (mirrors answerWaiting's hold-then-answer sequencing for
+      // a second INBOUND call). allowSecond skips the "Already on a call"
+      // confirm — tapping Add Call IS the explicit opt-in.
+      callSessions.holdActive();
+      sip
+        .dial(target, { allowSecond: true })
+        .catch((err) => {
+          console.warn('[MULTICALL] add-call dial failed:', err instanceof Error ? err.message : String(err));
+        });
+    },
+    [callSessions, sip],
+  );
+
   // Button bindings for the bottom control grid.
   const holdBtnActive = sip.onHold || (!callSessions.activeCall && callSessions.heldCalls.length > 0);
   const holdBtnIcon = holdBtnActive ? 'play' : 'pause';
@@ -628,8 +651,8 @@ export function ActiveCallScreen() {
             <CtrlBtn
               icon="add"
               label="Add Call"
-              onPress={() => {}}
-              disabled
+              onPress={handleAddCallPress}
+              disabled={!callSessions.activeCall}
             />
           </View>
 
@@ -672,6 +695,17 @@ export function ActiveCallScreen() {
         }
         onCancel={() => setShowTransfer(false)}
         onSubmit={handleTransferSubmit}
+      />
+
+      {/* ── Add-call modal (holds current call, dials a second line) ── */}
+      <TransferModal
+        visible={showAddCall}
+        title="Add call"
+        subtitle="Current call will be put on hold"
+        submitLabel="Call"
+        submitIcon="call"
+        onCancel={() => setShowAddCall(false)}
+        onSubmit={handleAddCallSubmit}
       />
 
       {/* ── DTMF modal ── */}

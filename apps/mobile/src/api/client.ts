@@ -207,18 +207,30 @@ export async function probeVoicemailStreamStatus(token: string, vmId: string): P
   return res.status;
 }
 
-/** Fetches every API page per folder (100 rows/page, capped) so mobile lists match portal for large mailboxes. */
+/**
+ * Fetches API pages per folder (100 rows/page, capped) so mobile lists match
+ * portal for large mailboxes.
+ *
+ * Speed (2026-07-28): page 1 of each folder reveals the folder's `total`, so
+ * pages 2..N are fetched in PARALLEL instead of the previous serial loop —
+ * a large mailbox reload went from (pages × RTT) to ~2 RTTs per folder.
+ * `maxPagesPerFolder` caps the depth; VoicemailTab's 15s background poll
+ * passes 1 to keep the poll to a single request per folder (the param was
+ * previously accepted silently and IGNORED, so every poll did a full resync).
+ */
 export async function getVoicemails(
   token: string,
-  input: { folders?: VoicemailFolder[]; page?: number } = {},
+  input: { folders?: VoicemailFolder[]; page?: number; maxPagesPerFolder?: number } = {},
 ): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number>; scopeMeta?: VoicemailApiScopeMeta }> {
   const folders = input.folders ?? ["inbox", "urgent", "old"];
+  const maxPages = Math.max(
+    1,
+    Math.min(input.maxPagesPerFolder ?? VOICEMAIL_MAX_PAGES_PER_FOLDER, VOICEMAIL_MAX_PAGES_PER_FOLDER),
+  );
   let mergedScopeMeta: VoicemailApiScopeMeta | undefined;
   const responses = await Promise.all(
     folders.map(async (folder) => {
-      const merged: Voicemail[] = [];
-      let total = 0;
-      for (let page = 1; page <= VOICEMAIL_MAX_PAGES_PER_FOLDER; page++) {
+      const fetchPage = async (page: number): Promise<{ batch: Voicemail[]; total: number }> => {
         const params = new URLSearchParams({ folder, page: String(page) });
         const url = `${API_BASE}/voice/voicemail?${params.toString()}`;
         const res = await fetch(url, {
@@ -242,19 +254,31 @@ export async function getVoicemails(
             idsSample: voicemailIdsSample(batchPrev, 5),
           });
         }
-        total = data.total ?? total;
-        const batch = data.voicemails ?? [];
-        merged.push(...batch);
-        if (
-          !shouldFetchAnotherVoicemailPage(
-            batch.length,
-            page,
-            total,
-            VOICEMAIL_MAX_PAGES_PER_FOLDER,
-            VOICEMAIL_API_PAGE_SIZE,
-          )
-        ) {
-          break;
+        return { batch: data.voicemails ?? [], total: data.total ?? 0 };
+      };
+
+      const first = await fetchPage(1);
+      const merged: Voicemail[] = [...first.batch];
+      let total = first.total;
+      if (
+        shouldFetchAnotherVoicemailPage(
+          first.batch.length,
+          1,
+          total,
+          maxPages,
+          VOICEMAIL_API_PAGE_SIZE,
+        )
+      ) {
+        const totalPages = Math.min(
+          maxPages,
+          Math.max(1, Math.ceil(total / VOICEMAIL_API_PAGE_SIZE)),
+        );
+        const rest = await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2)),
+        );
+        for (const r of rest) {
+          merged.push(...r.batch);
+          if (r.total) total = r.total;
         }
       }
       return { folder, data: { voicemails: merged, total } as VoicemailResponse };
@@ -285,6 +309,21 @@ export async function getVoicemails(
     });
   }
   return { voicemails: filtered, totals, scopeMeta: mergedScopeMeta };
+}
+
+/**
+ * Best-effort report of the mobile app's DND state (see sip/dndStore.ts).
+ * Consumed by the PBX-side connect-wake DND short-circuit. Callers treat this
+ * as fire-and-forget through reportDndWithBoundedRetry — a thrown error here
+ * only ends that retry loop, it never reaches call handling.
+ */
+export async function reportDndStatus(token: string, dnd: boolean): Promise<void> {
+  const res = await fetch(`${API_BASE}/mobile/dnd-status`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ dnd }),
+  });
+  if (!res.ok) throw new Error("DND_STATUS_REPORT_FAILED");
 }
 
 export async function markVoicemailListened(token: string, id: string, listened: boolean) {

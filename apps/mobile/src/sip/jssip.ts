@@ -38,8 +38,10 @@ import {
 } from "@connect/shared/webrtcBlackbox";
 import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
+import { preferOpusInSdp } from "./preferOpusSdp";
 import * as SecureStore from "expo-secure-store";
 import { isStandingRegistrationEnabled } from "../config/featureFlags";
+import { NativeSipSocket, isNativeSipSocketAvailable } from "./nativeSipSocket";
 
 // -- iOS stable SIP instance id (RFC 5626 outbound de-dup) ----------------------
 // iOS cannot hold a persistent SIP socket, so the app spins up a fresh JsSIP UA
@@ -124,6 +126,44 @@ import { getDnd } from "./dndStore";
 
 const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
 
+// TEMP DIAGNOSTIC (2026-07-27): every SIP wss connect on this device dies at the
+// 4 s watchdog while curl from the phone shell reaches the PBX fine. This probe
+// isolates the failing layer from INSIDE the app process: raw WebSocket with the
+// sip subprotocol, raw WebSocket without it, and a plain HTTPS fetch to the same
+// host/port. Runs once per JS runtime, logs [WS_PROBE] timings. Remove when done.
+let __wsProbeRan = false;
+function runWsProbeOnce(server: string) {
+  if (__wsProbeRan) return;
+  __wsProbeRan = true;
+  const started = Date.now();
+  const log = (tag: string, extra?: Record<string, unknown>) =>
+    console.log(`[WS_PROBE] ${tag}`, JSON.stringify({ ms: Date.now() - started, ...extra }));
+  log("start", { server });
+  try {
+    const wsA = new WebSocket(server, "sip");
+    wsA.onopen = () => { log("A_sip_proto_open"); try { wsA.close(); } catch {} };
+    wsA.onerror = (e: any) => log("A_sip_proto_error", { msg: String(e?.message ?? e) });
+    wsA.onclose = (e: any) => log("A_sip_proto_close", { code: e?.code, reason: e?.reason });
+  } catch (e) {
+    log("A_ctor_throw", { msg: String(e) });
+  }
+  try {
+    const wsB = new WebSocket(server);
+    wsB.onopen = () => { log("B_no_proto_open"); try { wsB.close(); } catch {} };
+    wsB.onerror = (e: any) => log("B_no_proto_error", { msg: String(e?.message ?? e) });
+    wsB.onclose = (e: any) => log("B_no_proto_close", { code: e?.code, reason: e?.reason });
+  } catch (e) {
+    log("B_ctor_throw", { msg: String(e) });
+  }
+  const httpsUrl = server.replace(/^wss:/, "https:");
+  fetch(httpsUrl, { method: "GET" })
+    .then((r) => log("C_https_fetch_done", { status: r.status }))
+    .catch((e) => log("C_https_fetch_error", { msg: String(e?.message ?? e) }));
+  fetch("https://app.connectcomunications.com/api/health")
+    .then((r) => log("D_api_fetch_done", { status: r.status }))
+    .catch((e) => log("D_api_fetch_error", { msg: String(e?.message ?? e) }));
+}
+
 // [RUNTIME_PROOF / Step 0] Per-JS-runtime identity + counters. These are
 // module-scope, so each React runtime that evaluates this bundle gets its OWN
 // __JS_RUNTIME_TAG and resets these counters. If two DISTINCT __JS_RUNTIME_TAG
@@ -152,6 +192,37 @@ function notifyNativeInboundLeg(state: "gone" | "alive"): void {
       if (typeof mod.notifyInboundLegGone === "function") mod.notifyInboundLegGone();
     } else if (typeof mod.notifyInboundLegAlive === "function") {
       mod.notifyInboundLegAlive();
+    }
+  } catch {
+    /* ignore — native bridge best-effort */
+  }
+}
+
+/**
+ * Native end-of-call cleanup that must NOT depend on the React tree: clear
+ * the in-call foreground notification and release any Telecom anchor
+ * Connection (tc-anchor-*). SipContext's call-ended effect normally does
+ * both, but after a recents-swipe the tree is unmounted while the call (and
+ * this module) live on — a remote hangup then left a stale "in call"
+ * notification and an ACTIVE phantom Telecom call. Both native calls are
+ * idempotent, so running alongside SipContext's cleanup is harmless.
+ */
+function nativeCallEndedCleanup(reason: string): void {
+  if (Platform.OS !== "android") return;
+  try {
+    const mod = (NativeModules as any)?.IncomingCallUi;
+    if (!mod) return;
+    console.log(`[IN_CALL_NOTIF] nativeCallEndedCleanup reason=${reason}`);
+    if (typeof mod.stopInCallNotification === "function") mod.stopInCallNotification();
+    if (typeof mod.telecomTerminateAnchors === "function") mod.telecomTerminateAnchors();
+    // Post-call audio-state watchdog: catch a stranded MODE_IN_COMMUNICATION
+    // (blocks other apps' recording, degrades the next call's audio path).
+    // Delayed so the deferred native Connection.destroy() settles first; the
+    // native EXIT_CALL path re-checks at 2.5s/8s as well.
+    if (typeof mod.resetCallAudioState === "function") {
+      setTimeout(() => {
+        try { mod.resetCallAudioState(); } catch { /* best effort */ }
+      }, 1200);
     }
   } catch {
     /* ignore — native bridge best-effort */
@@ -249,8 +320,60 @@ export class JsSipClient implements SipClient {
    */
   private static readonly MAX_CONCURRENT_SESSIONS = 5;
   private registerPromise: Promise<void> | null = null;
+  /**
+   * Epoch ms when the in-flight register attempt started. Together with the
+   * transport state this detects a STUCK attempt: WebSocket dialing for
+   * seconds with no `connected` event (observed live 2026-07-27: a single
+   * ws connect hung 10.6 s after a swipe-kill restart, and every caller —
+   * including the user's Answer — silently queued behind it).
+   */
+  private registerAttemptStartedAtMs = 0;
+  /** Monotonic id per register attempt — guards settle() from clobbering a newer attempt's promise. */
+  private registerAttemptSeq = 0;
+  /** Settles (rejects) the current in-flight attempt when we abandon it for a fresh UA. */
+  private abortRegisterAttempt: ((reason: string) => void) | null = null;
+  /**
+   * If the ws transport hasn't connected this long into an attempt, the
+   * attempt is torn down and rejected so callers retry on a FRESH WebSocket.
+   *
+   * MUST be > 10 s. RN Android's WebSocketModule uses OkHttp with a fixed 10 s
+   * connect timeout PER ROUTE, tried sequentially. On IPv6-only carriers
+   * (T-Mobile: DNS64/NAT64), the synthesized IPv6 route to the PBX's
+   * non-443 wss port blackholes (verified live 2026-07-27: curl -6 to
+   * m.connectcomunications.com:8089 times out, curl -4 connects instantly),
+   * so EVERY cold connect legitimately takes ~10.4 s: 10 s dead-v6 timeout,
+   * then instant IPv4 fallback. A 4 s watchdog killed every attempt before
+   * the fallback could run — the app could never register on cellular.
+   */
+  private static readonly REGISTER_CONNECT_WATCHDOG_MS = 12_000;
+  /**
+   * An in-flight attempt older than this with no socket is "stuck" — new
+   * register() calls rebuild instead of queueing. Must also exceed the 10 s
+   * carrier fallback window, otherwise an answer-time register() tears down a
+   * connect that was about to succeed at ~10.4 s.
+   */
+  private static readonly REGISTER_ATTEMPT_STUCK_MS = 12_500;
+  /**
+   * Standing-mode NAT keepalive: SIP OPTIONS ping over the registered wss
+   * socket. T-Mobile's CGNAT silently killed an idle standing socket within
+   * ~5 min of the last traffic (live 2026-07-27: keepalive healthy at 01:57,
+   * socket already dead when the 02:00 call rang — the caller then paid a
+   * ~10 s cold reconnect before the INVITE could even arrive). A cheap
+   * OPTIONS round-trip every 45 s holds the carrier's mapping open AND
+   * detects a silently-dead socket within a minute instead of at ring time.
+   * A short register_expires can't do this job: the PBX enforces
+   * minimum_expiration=600.
+   */
+  private optionsKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly OPTIONS_KEEPALIVE_INTERVAL_MS = 45_000;
+  /** Set by hangup() — lets an in-flight answer wait exit immediately instead of running out its deadline. */
+  private answerWaitAbortedAtMs = 0;
+  /** Answer-pipeline start marker; answer waits ignore aborts requested before this. */
+  private answerFlowStartedAtMs = 0;
   /** Epoch ms of the most recent successful SIP REGISTER. */
   private registeredAtMs: number | null = null;
+  /** Epoch ms of the last refresh REGISTER written by sendRegisterRefresh(). */
+  private lastRefreshSentAtMs = 0;
   /** Epoch ms of the most recent inbound INVITE (newRTCSession, remote). */
   private lastIncomingInviteAtMs = 0;
   /**
@@ -274,6 +397,13 @@ export class JsSipClient implements SipClient {
    * one stream is warmed at a time (prewarm only fires when no session exists).
    */
   private prewarmedInboundStream: MediaStream | null = null;
+  /**
+   * Mid-call network handoff queued while the WSS transport was down.
+   * Set by tryIceRestart() during break-before-make handovers; flushed by the
+   * UA "connected" handler once the socket is back. Null = nothing pending.
+   */
+  private pendingIceRestartReason: string | null = null;
+
   /** Guards against overlapping getUserMedia prewarm acquisitions. */
   private prewarmInFlight = false;
   private livePingInterval: ReturnType<typeof setInterval> | null = null;
@@ -407,7 +537,27 @@ export class JsSipClient implements SipClient {
     const forceRestart = options?.forceRestart === true;
 
     if (this.registerPromise) {
-      return this.registerPromise;
+      // A register attempt is already in flight. Normally we dedupe onto it,
+      // BUT if its WebSocket has been dialing for several seconds with no
+      // `connected` event the attempt is presumed stuck (dead TCP path) —
+      // queueing behind it just inherits the stall (live failure 2026-07-27:
+      // answer register waited 7.4 s on a maintenance attempt whose ws
+      // connect hung 10.6 s). Tear it down and build a fresh UA + socket.
+      const attemptAgeMs = Date.now() - this.registerAttemptStartedAtMs;
+      const stuck =
+        !this.isConnected() &&
+        attemptAgeMs > JsSipClient.REGISTER_ATTEMPT_STUCK_MS;
+      if (!stuck) {
+        return this.registerPromise;
+      }
+      console.warn(
+        `[SIP] register: in-flight attempt stuck (ws connecting ${attemptAgeMs}ms, no socket) — rebuilding UA on a fresh WebSocket`,
+      );
+      this.abortRegisterAttempt?.(
+        `superseded: ws connect stuck ${attemptAgeMs}ms`,
+      );
+      // abortRegisterAttempt() settles the old promise and clears state; fall
+      // through to the normal (re)build path below.
     }
 
     // Never tear down the UA during the inbound-INVITE answer window.
@@ -451,6 +601,7 @@ export class JsSipClient implements SipClient {
 
     this.events.onRegistrationState?.("registering");
     console.log('[SIP] Registering to', this.bundle.sipDomain, 'via', this.bundle.sipWsUrl);
+    runWsProbeOnce(this.bundle.sipWsUrl);
 
     // Register WebRTC globals (static import — avoids Metro bundler hoisting issues)
     try {
@@ -462,7 +613,17 @@ export class JsSipClient implements SipClient {
       console.warn('[SIP] WebRTC registerGlobals() failed:', e);
     }
 
-    const socket = new (JsSIP as any).WebSocketInterface(this.bundle.sipWsUrl);
+    // Native OkHttp socket (IPv4-first DNS, 6 s connect timeout, native-thread
+    // pings) — fixes the ~10.5 s IPv6 blackhole every fresh connect paid on
+    // T-Mobile's IPv6-only network via RN's built-in WebSocket. Falls back to
+    // the stock WebSocketInterface where the native module is absent (iOS).
+    let socket: unknown;
+    if (isNativeSipSocketAvailable()) {
+      console.log('[SIP_SOCKET] using native OkHttp socket (ipv4-first)');
+      socket = new NativeSipSocket(this.bundle.sipWsUrl);
+    } else {
+      socket = new (JsSIP as any).WebSocketInterface(this.bundle.sipWsUrl);
+    }
 
     const iceServers = this.bundle.iceServers?.length
       ? this.bundle.iceServers
@@ -484,8 +645,21 @@ export class JsSipClient implements SipClient {
       pcConfig: {
         iceServers,
         iceTransportPolicy: "all",
+        // Pre-gather ICE candidates (incl. TURN allocations) the moment the
+        // RTCPeerConnection is created — for inbound calls that is at INVITE
+        // arrival, DURING the ring. JsSIP holds the 200 OK until gathering
+        // completes, so without the pool the TURN/STUN round-trips (~300-600 ms
+        // on cellular) sit squarely between the user's answer tap and the PBX
+        // seeing the answer. With the pool they run while the phone is still
+        // ringing and the answer SDP is ready instantly at tap.
+        iceCandidatePoolSize: 1,
       },
     };
+
+    // NOTE: a short register_expires was tried as a NAT keepalive but the PBX
+    // enforces minimum_expiration=600, so sub-10-min refreshes get rejected.
+    // Standing-mode keepalive is instead the OPTIONS ping loop
+    // (startOptionsKeepalive), which needs no PBX cooperation.
 
     if (this.bundle.outboundProxy) {
       uaConfig.outbound_proxy_set = this.bundle.outboundProxy;
@@ -517,13 +691,23 @@ export class JsSipClient implements SipClient {
     (this.ua as any).__uaId = __uaCreateCount;
     console.log(`[RUNTIME_PROOF] ua_created uaId=${__uaCreateCount} jsRuntimeTag=${__JS_RUNTIME_TAG}`);
 
+    const attemptId = ++this.registerAttemptSeq;
+    this.registerAttemptStartedAtMs = Date.now();
+    const attemptUa = this.ua;
     this.registerPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
       const settle = (cb: () => void) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutId);
-        this.registerPromise = null;
+        clearTimeout(connectWatchdogId);
+        // Only clear shared state if a newer attempt hasn't replaced us —
+        // a late settle from an abandoned attempt must not clobber the
+        // replacement attempt's promise/abort hook.
+        if (this.registerAttemptSeq === attemptId) {
+          this.registerPromise = null;
+          this.abortRegisterAttempt = null;
+        }
         cb();
       };
       const timeoutId = setTimeout(() => {
@@ -531,12 +715,39 @@ export class JsSipClient implements SipClient {
         console.warn("[SIP] Registration timeout");
         settle(() => reject(new Error(msg)));
       }, 20_000);
+      // Connect watchdog: if the WebSocket hasn't reached `connected` in
+      // time, this attempt's socket is presumed dead. Fail FAST so callers
+      // (answer pipeline retry loop, maintenance task retry) rebuild on a
+      // fresh WebSocket instead of waiting out the 20 s cap.
+      const connectWatchdogId = setTimeout(() => {
+        if (settled) return;
+        if (this.isConnected()) return; // socket up — REGISTER exchange continues under the 20 s cap
+        const msg = `sip_connect_watchdog: ws not connected within ${JsSipClient.REGISTER_CONNECT_WATCHDOG_MS}ms`;
+        console.warn(`[SIP] ${msg} — tearing down attempt for a fresh socket`);
+        try {
+          (attemptUa as any).__jsSipClientReplaced = true;
+          attemptUa.stop();
+        } catch { /* ignore */ }
+        if (this.ua === attemptUa) this.ua = null;
+        settle(() => reject(new Error(msg)));
+      }, JsSipClient.REGISTER_CONNECT_WATCHDOG_MS);
+      // Allow a newer register() call to abandon this attempt when it's stuck.
+      this.abortRegisterAttempt = (reason: string) => {
+        if (settled) return;
+        try {
+          (attemptUa as any).__jsSipClientReplaced = true;
+          attemptUa.stop();
+        } catch { /* ignore */ }
+        if (this.ua === attemptUa) this.ua = null;
+        settle(() => reject(new Error(`sip_register_attempt_aborted: ${reason}`)));
+      };
 
       this.ua.on("registered", () => {
         __registeredOkCount += 1;
         console.log('[SIP] Registered successfully');
         console.log(`[RUNTIME_PROOF] register_ok count=${__registeredOkCount} uaId=${(this.ua as any)?.__uaId} jsRuntimeTag=${__JS_RUNTIME_TAG}`);
         this.registeredAtMs = Date.now();
+        this.startOptionsKeepalive();
         this.events.onRegistrationState?.("registered");
         settle(() => resolve());
       });
@@ -687,6 +898,21 @@ export class JsSipClient implements SipClient {
     });
     this.ua.on("connected", () => {
       console.log('[SIP_SOCKET] UA connected');
+      // Flush a deferred mid-call ICE restart (see tryIceRestart): the network
+      // changed while the socket was down; now that transport is back, move
+      // the media to the new interface. Small delay lets JsSIP finish its
+      // transport-recovery bookkeeping before we send the re-INVITE.
+      if (this.pendingIceRestartReason) {
+        const deferredReason = this.pendingIceRestartReason;
+        this.pendingIceRestartReason = null;
+        setTimeout(() => {
+          try {
+            if (this.hasActiveSession()) this.tryIceRestart(deferredReason + ":deferred");
+          } catch (err) {
+            console.warn('[SIP_ICE_RESTART] deferred flush threw:', err);
+          }
+        }, 300);
+      }
       try { this.events.onSocketConnected?.(); } catch (err) {
         console.warn('[SIP_SOCKET] onSocketConnected threw:', err);
       }
@@ -710,6 +936,7 @@ export class JsSipClient implements SipClient {
       // (async WebSocket close fires after ua.stop()) — the caller has
       // already moved on.
       if (!current) return;
+      this.stopOptionsKeepalive();
       try {
         this.events.onRegistrationState?.("disconnected");
         this.events.onSocketDisconnected?.(String(reason));
@@ -733,6 +960,114 @@ export class JsSipClient implements SipClient {
     this.ua.start();
     console.log('[SIP] UA started');
     return this.registerPromise;
+  }
+
+  /**
+   * Fire-and-forget REGISTER refresh, even when the client believes it is
+   * registered. Needed because that belief goes STALE in the background:
+   * Android pauses all JS timers when the app is backgrounded (verified
+   * 2026-07-27: frozen even during an active HeadlessJS task on Samsung One
+   * UI), so JsSIP's own ~600 s refresh timer never fires, the PBX silently
+   * expires the contact, and incoming calls skip this phone on the initial
+   * dial. The native heartbeat calls this via the maintenance headless task.
+   *
+   * DELIBERATELY TIMER-FREE: no awaiting, no setTimeout. In the background
+   * only event-driven JS runs (socket data, native module events) — a
+   * timer-based timeout would freeze and hang the caller until the app is
+   * foregrounded (observed live: a stuck 22:57 maintenance tick only
+   * completed at 23:02 when the activity resumed). Success is observed
+   * asynchronously by the persistent UA "registered" handler updating
+   * registeredAtMs; the NEXT tick decides the socket is dead if that
+   * timestamp goes stale (see headlessMaintenanceRegisterSip).
+   *
+   * Returns true if a REGISTER was actually written toward the socket.
+   */
+  sendRegisterRefresh(): boolean {
+    const ua = this.ua;
+    if (!ua) return false;
+    try {
+      if (!(ua as any)._transport?.isConnected?.() || !ua.isRegistered?.()) return false;
+      // UA.register() sends a fresh REGISTER even when already registered.
+      ua.register();
+      this.lastRefreshSentAtMs = Date.now();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Failure detector for the maintenance tick: did our own refresh REGISTER
+   * (sendRegisterRefresh) go unanswered? True only when a refresh was actually
+   * written to the socket, no `registered` event arrived after it, and enough
+   * time has passed for a reply. This deliberately does NOT use wall-clock
+   * registration age: the heartbeat alarm is inexact and Android defers it
+   * (observed 2026-07-28: a 240 s alarm fired after 420 s), so an age
+   * threshold false-positives on the first deferred tick and force-restarts a
+   * perfectly healthy UA — unregistering from the PBX in the process.
+   */
+  isRefreshUnanswered(): boolean {
+    if (!this.lastRefreshSentAtMs) return false;
+    if ((this.registeredAtMs ?? 0) >= this.lastRefreshSentAtMs) return false;
+    return Date.now() - this.lastRefreshSentAtMs > 30_000;
+  }
+
+  // ── Standing-mode OPTIONS keepalive (see field docs) ────────────────────
+  private startOptionsKeepalive() {
+    if (Platform.OS !== "android" || !isStandingRegistrationEnabled()) return;
+    this.stopOptionsKeepalive();
+    console.log(
+      `[SIP_KEEPALIVE_PING] started interval=${JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS}ms`,
+    );
+    this.optionsKeepaliveTimer = setInterval(() => {
+      const ua = this.ua;
+      if (!ua) return;
+      let transportUp = false;
+      try {
+        transportUp = (ua as any)._transport?.isConnected?.() === true;
+      } catch { /* treat as down */ }
+      if (!transportUp || !ua.isRegistered?.()) {
+        // Not our job to reconnect from here on a known-down transport — the
+        // SipContext keep-alive/reconnect machinery already watches this state.
+        return;
+      }
+      const sentAt = Date.now();
+      try {
+        ua.sendOptions(`sip:${this.bundle?.sipDomain}`, undefined, {
+          eventHandlers: {
+            succeeded: () => {
+              const rttMs = Date.now() - sentAt;
+              // Log slow round-trips only; a healthy ping every 45 s would
+              // drown the logs.
+              if (rttMs > 2_000) {
+                console.log(`[SIP_KEEPALIVE_PING] slow rtt=${rttMs}ms`);
+              }
+            },
+            failed: (e: any) => {
+              const cause = e?.cause || "unknown";
+              console.warn(
+                `[SIP_KEEPALIVE_PING] failed cause=${cause} — socket presumed dead, signalling disconnect`,
+              );
+              // Kick the existing reconnect machinery instead of rebuilding
+              // here: it owns backoff/coalescing.
+              try {
+                this.events.onRegistrationState?.("disconnected");
+                this.events.onSocketDisconnected?.(`options_keepalive_failed:${cause}`);
+              } catch { /* ignore */ }
+            },
+          },
+        });
+      } catch (err) {
+        console.warn('[SIP_KEEPALIVE_PING] sendOptions threw:', err);
+      }
+    }, JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopOptionsKeepalive() {
+    if (this.optionsKeepaliveTimer != null) {
+      clearInterval(this.optionsKeepaliveTimer);
+      this.optionsKeepaliveTimer = null;
+    }
   }
 
   // ── Stage 1 health probes ───────────────────────────────────────────────
@@ -844,6 +1179,23 @@ export class JsSipClient implements SipClient {
    * exactly as it does today (dies on network switch).
    */
   tryIceRestart(reason: string): number {
+    // Break-before-make handover (observed live: Wi-Fi → 5G, 2026-07-28): the
+    // old interface's WSS dies BEFORE the new network's socket is up. Firing
+    // renegotiate() now would push the re-INVITE into a dead transport and
+    // JsSIP terminates the whole session with cause "Connection Error" — the
+    // recovery itself kills the call. Defer: stash the request and let the
+    // UA "connected" handler flush it once the socket is back (1–2 s later).
+    // (Make-before-break, 5G → Wi-Fi, keeps the old socket alive long enough
+    // that the immediate path below still works — same as before.)
+    try {
+      if (this.ua && typeof this.ua.isConnected === "function" && !this.ua.isConnected()) {
+        if (this.hasActiveSession()) {
+          this.pendingIceRestartReason = reason;
+          console.log(`[SIP_ICE_RESTART] deferred until socket reconnect reason=${reason}`);
+        }
+        return 0;
+      }
+    } catch { /* fall through — attempt the immediate restart */ }
     let dispatched = 0;
     try {
       const seen = new Set<any>();
@@ -883,6 +1235,27 @@ export class JsSipClient implements SipClient {
   private bindSession(session: any) {
     const isOutboundSession = !this.incomingSessions.includes(session);
 
+    // Opus preference (both directions — offers AND answers). Wideband on
+    // extension-to-extension calls; in-band FEC makes every call resilient to
+    // mobile packet loss. The first live test (2026-07-28 ~11:29) sounded
+    // "quiet/horrible" — but that call ran on a phone stranded in the previous
+    // call's stuck MODE_IN_COMMUNICATION state (verified via dumpsys), so it
+    // was not a fair codec test. Re-enabled together with the audio-state
+    // watchdog that guarantees a clean state per call. If a CLEAN-state test
+    // still shows a volume drop, tune PBX-side opus gain — don't revert.
+    const PREFER_OPUS_SDP = true;
+    if (PREFER_OPUS_SDP) {
+      session.on("sdp", (e: any) => {
+        try {
+          if (e && e.originator === "local" && typeof e.sdp === "string") {
+            e.sdp = preferOpusInSdp(e.sdp);
+          }
+        } catch (err) {
+          console.warn('[SIP_SDP] opus preference munge failed:', err instanceof Error ? err.message : String(err));
+        }
+      });
+    }
+
     session.on("progress", (e: any) => {
       const code = e?.response?.status_code;
       console.log('[CALL_EVENT] progress status=' + code);
@@ -899,6 +1272,23 @@ export class JsSipClient implements SipClient {
         });
       }
       this.events.onCallState?.("ringing");
+    });
+
+    // EARLY CONNECT (inbound only): JsSIP fires `accepted` the moment our
+    // 200 OK goes on the wire — ~700 ms before `confirmed` (which waits for
+    // the PBX's ACK, delayed by its answer-time macros: recording setup,
+    // sub-before-bridging gosubs). A desk/GSM phone flips to "connected" at
+    // answer, not at ACK — mirror that for the UI. Audio routing, live-ping,
+    // and ghost bookkeeping stay on `confirmed` (unchanged below); the ghost
+    // machinery already covers a 200-OK-then-cancel race via its
+    // "never confirmed" case.
+    session.on("accepted", () => {
+      if (isOutboundSession) return;
+      if (this.ghostSessions.has(session)) return;
+      console.log('[CALL_EVENT] session_accepted — early connect (inbound 200 OK sent)');
+      if (!this.callStartedAt) this.callStartedAt = Date.now();
+      this.setSessionState(session, "connected");
+      this.events.onCallState?.("connected");
     });
 
     session.on("confirmed", () => {
@@ -1012,6 +1402,12 @@ export class JsSipClient implements SipClient {
       }
       if (isLastLiveSession) {
         this.events.onCallState?.("ended");
+        // React-tree-independent teardown of the in-call notification and the
+        // Telecom anchor. Gated on confirmed so an unanswered fork's BYE can
+        // never disturb the ring-phase notification.
+        if (this.sessionConfirmedAt.has(session)) {
+          nativeCallEndedCleanup("session_ended");
+        }
       }
       this.flushGhostRetryCallbacks("failed");
     });
@@ -1106,6 +1502,10 @@ export class JsSipClient implements SipClient {
       }
       if (isLastLiveSession) {
         this.events.onCallState?.("ended");
+        // Same React-tree-independent native teardown as the "ended" handler.
+        if (this.sessionConfirmedAt.has(session)) {
+          nativeCallEndedCleanup("session_failed");
+        }
       }
       this.events.onError?.(msg);
       this.flushGhostRetryCallbacks("failed");
@@ -1276,6 +1676,7 @@ export class JsSipClient implements SipClient {
     return {
       sessionId: id,
       direction,
+      confirmedAtMs: this.sessionConfirmedAt.get(session) ?? null,
       // Prefer the SIP URI user (the actual number/extension) so upstream
       // correlation against CallInvite.fromNumber works. Fall back to the
       // display name only when the URI user is empty.
@@ -1951,6 +2352,7 @@ export class JsSipClient implements SipClient {
     if (this.ua) {
       try { (this.ua as any).__jsSipClientReplaced = true; } catch { /* ignore */ }
     }
+    this.stopOptionsKeepalive();
     try {
       this.ua?.stop();
     } finally {
@@ -2114,6 +2516,41 @@ export class JsSipClient implements SipClient {
     this.session?.answer?.(this.buildAnswerOptions());
   }
 
+  /**
+   * Answer-pipeline lifecycle markers. The pipeline calls
+   * `markAnswerFlowStart()` when the user taps Answer; `hangup()` stamps
+   * `answerWaitAbortedAtMs`. A hangup AFTER the flow start means the user
+   * gave up mid-answer — the invite waits must exit immediately instead of
+   * running out their deadline (live failure 2026-07-27: user's End tap
+   * killed the requeued INVITE, then the pipeline sat 16 s in
+   * wait_for_incoming_invite showing a dead "Answering…" screen).
+   */
+  markAnswerFlowStart() {
+    this.answerFlowStartedAtMs = Date.now();
+  }
+
+  isAnswerFlowAborted(): boolean {
+    return (
+      this.answerFlowStartedAtMs > 0 &&
+      this.answerWaitAbortedAtMs > this.answerFlowStartedAtMs
+    );
+  }
+
+  /**
+   * Synchronous probe: is a matching inbound INVITE already live on this UA?
+   * The answer pipeline uses it to skip the register gate on warm answers —
+   * a present INVITE is stronger proof of a working socket+registration than
+   * any register round-trip (standing registration: Asterisk dialed us
+   * directly and the INVITE landed during the ring).
+   */
+  hasMatchingIncomingInvite(match?: SipMatch): boolean {
+    try {
+      return !!this.findIncoming(match);
+    } catch {
+      return false;
+    }
+  }
+
   async waitForIncomingInvite(
     match?: SipMatch,
     deadlineHandle?: SipAnswerDeadlineHandle,
@@ -2127,7 +2564,20 @@ export class JsSipClient implements SipClient {
     console.log(
       "[CALL_EVENT] wait_for_incoming_invite start until=" + getUntil(),
     );
-    while (Date.now() < getUntil()) {
+    // do..while — ALWAYS probe at least once, even when the deadline has
+    // already lapsed. The lock-screen answer path spends ~200 ms of preamble
+    // before reaching this wait; with a short pre-claim deadline the old
+    // while-loop expired WITHOUT EVER CALLING findIncoming, declared the
+    // (actually present) INVITE missing, and sent an already-ringing call
+    // down the 9-second claim/requeue path (live failure 2026-07-27 23:46).
+    do {
+      if (this.isAnswerFlowAborted()) {
+        console.warn(
+          "[CALL_EVENT] wait_for_incoming_invite aborted (user hangup during answer) waitedMs=" +
+            (Date.now() - waitStartAt),
+        );
+        return false;
+      }
       const session = this.findIncoming(match);
       if (session) {
         console.log(
@@ -2136,8 +2586,9 @@ export class JsSipClient implements SipClient {
         );
         return true;
       }
+      if (Date.now() >= getUntil()) break;
       await new Promise((resolve) => setTimeout(resolve, MOBILE_SIP_ANSWER_POLL_MS));
-    }
+    } while (true);
     console.warn(
       "[CALL_EVENT] wait_for_incoming_invite timeout waitedMs=" +
         (Date.now() - waitStartAt),
@@ -2386,6 +2837,10 @@ export class JsSipClient implements SipClient {
 
   async hangup() {
     console.log('[SIP] Hanging up');
+    // If an answer pipeline is mid-flight, this hangup is the user aborting
+    // it — stamp the abort so waitForIncomingInvite exits immediately (see
+    // markAnswerFlowStart / isAnswerFlowAborted).
+    this.answerWaitAbortedAtMs = Date.now();
     // Mark the session as user-terminated BEFORE terminate() fires so the
     // resulting `ended`/`failed` event skips ghost detection. Without this,
     // a short confirmed call (<2s) ended by the user was being flagged as

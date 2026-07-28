@@ -422,6 +422,11 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
       const appId = existingAppId ?? info.sessionId;
       sipToAppIdRef.current.set(info.sessionId, appId);
 
+      const mintedState = sipToSessionState(info.state, info.isHeld);
+      // Hydration replay (UI tree remounted mid-call): the session arrives
+      // already active/held. Backdate answeredAt to the SIP confirm time so
+      // the call timer resumes instead of restarting at 0:00.
+      const mintedLive = mintedState === "active" || mintedState === "held";
       const session: CallSession = {
         id: appId,
         sipSessionId: info.sessionId,
@@ -431,16 +436,16 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         // SIP INVITE display name may carry the inlined ring-group prefix
         // ("Estimates:Estimates:Caller"); extract the deduped tag.
         fromPrefix: splitRingGroupPrefix(info.callerDisplayName).prefix,
-        state: sipToSessionState(info.state, info.isHeld),
-        startedAt: Date.now(),
-        answeredAt: null,
-        heldAt: null,
+        state: mintedState,
+        startedAt: info.confirmedAtMs ?? Date.now(),
+        answeredAt: mintedLive ? info.confirmedAtMs ?? Date.now() : null,
+        heldAt: mintedState === "held" ? Date.now() : null,
         endedAt: null,
         pbxCallId: null,
         nativeUuid: null,
-        canHold: false,
-        canResume: false,
-        canSwap: false,
+        canHold: mintedState === "active",
+        canResume: mintedState === "held",
+        canSwap: mintedState === "active",
       };
 
       // Outbound-while-busy policy (plan §1): if the user just dialed while
@@ -474,6 +479,7 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
       mutate("onSipSessionAdded:" + info.sessionId, (prev) => {
         const callsById = { ...prev.callsById, [appId]: session };
         let ringingCallIds = prev.ringingCallIds;
+        let heldCallIds = prev.heldCallIds;
         let activeCallId = prev.activeCallId;
         if (session.state === "ringing_inbound") {
           if (!ringingCallIds.includes(appId)) {
@@ -483,8 +489,15 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
           // Outbound becomes the new active pointer immediately. The previous
           // active has been held above (for the outbound-while-busy case).
           activeCallId = appId;
+        } else if (session.state === "active") {
+          // Hydration replay: an already-connected call re-enters the store.
+          activeCallId = appId;
+        } else if (session.state === "held") {
+          if (!heldCallIds.includes(appId)) {
+            heldCallIds = [...heldCallIds, appId];
+          }
         }
-        return { ...prev, callsById, ringingCallIds, activeCallId };
+        return { ...prev, callsById, ringingCallIds, heldCallIds, activeCallId };
       });
 
       // Call-waiting beep (SIP path): a NEW inbound session arrived while another

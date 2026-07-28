@@ -102,6 +102,10 @@ type SipState = {
     match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
     deadlineHandle?: SipAnswerDeadlineHandle,
   ) => Promise<boolean>;
+  /** Synchronous probe: is a matching inbound INVITE already live on the UA? */
+  hasMatchingIncomingInvite: (
+    match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
+  ) => boolean;
   rejectIncomingInvite: (match?: {
     inviteId?: string | null;
     fromNumber?: string | null;
@@ -670,6 +674,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   }, [runReconnect]);
 
   useEffect(() => {
+    // Hydrate from the singleton's ACTUAL state before wiring events. On a
+    // wake-push boot the background registrar registers the UA before this
+    // context mounts, so the "registered" event has already fired and the UI
+    // would sit on "idle" ("Not Registered" header) forever despite a healthy
+    // registration — seen live 2026-07-28 right after a call ended.
+    try {
+      if (clientRef.current.isRegistered()) {
+        setRegistrationState("registered");
+      }
+    } catch { /* leave as-is; events will drive it */ }
     clientRef.current.setEvents({
       onRegistrationState: setRegistrationState,
       onSocketDisconnected: (reason) => {
@@ -768,6 +782,54 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       },
     });
 
+    // ── Live-call hydration after a UI-tree remount ─────────────────────────
+    // A recents-swipe destroys the activity and unmounts this provider while
+    // the call lives on in the singleton client. When the user comes back
+    // (in-call notification tap), the fresh tree boots with callState=idle —
+    // RootNavigator then sees no active call, the ActiveCall screen dismisses
+    // to the tabs, and the user has no way back to their own live call
+    // (live failure 2026-07-28 08:36). Rebuild the legacy single-call state
+    // and replay every live session into CallSessionManager.
+    try {
+      const liveSessions = clientRef.current
+        .listSessions()
+        .filter((s) => s.state === "connected" || s.state === "held" || s.isHeld);
+      if (liveSessions.length > 0) {
+        const primary =
+          liveSessions.find((s) => s.state === "connected" && !s.isHeld) ?? liveSessions[0];
+        console.log(
+          "[SIP_HYDRATE] live call on mount — rehydrating UI",
+          JSON.stringify({ sessions: liveSessions.length, primary: primary.sessionId }),
+        );
+        const party = primary.callerNumber || primary.callerDisplayName || "Unknown";
+        callInfoRef.current = {
+          direction: primary.direction,
+          answered: true,
+          startMs: primary.confirmedAtMs ?? Date.now(),
+          remoteParty: party,
+          remotePartyName: primary.callerDisplayName ?? null,
+        };
+        setCallDirection(primary.direction);
+        setRemoteParty(party);
+        setOnHold(primary.isHeld || primary.state === "held");
+        setCallState("connected");
+        // Replay sessions into CallSessionManager on the next tick — its
+        // listener registers in a child effect (which React runs before this
+        // parent effect), but the tick makes the ordering airtight.
+        setTimeout(() => {
+          try {
+            for (const info of clientRef.current.listSessions()) {
+              multiCallListenerRef.current?.onSessionAdded?.(info);
+            }
+          } catch (err) {
+            console.warn("[SIP_HYDRATE] session replay failed:", err);
+          }
+        }, 0);
+      }
+    } catch (err) {
+      console.warn("[SIP_HYDRATE] hydration check failed:", err);
+    }
+
     (async () => {
       // PERF: provisioning load + register gate the inbound-answer latency
       // on every cold start. Start them BEFORE the non-critical
@@ -835,6 +897,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           if (healthy) {
             keepAliveFailureStreakRef.current = 0;
             console.log('[SIP_KEEPALIVE] healthy', JSON.stringify({ connected, registered, hasCall }));
+            // Self-heal the header state: the UA can be registered while the
+            // context missed the event (wake-boot race) — never show "Not
+            // Registered" against a provably healthy stack.
+            if (registrationStateRef.current !== "registered") {
+              setRegistrationState("registered");
+            }
             return;
           }
           keepAliveFailureStreakRef.current += 1;
@@ -1661,7 +1729,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           }).then((ok) => {
             if (!ok && telecomAnchorIdRef.current === anchorId) {
               telecomAnchorIdRef.current = null;
+              return;
             }
+            // The anchor flips ACTIVE ~250ms-1s after dispatch, at which point
+            // Telecom takes over audio routing and asserts ITS default route
+            // (earpiece) — stomping a speaker/BT route the user picked during
+            // ringback. Re-assert the JS-selected route once the anchor is
+            // plausibly ACTIVE; routing now flows through
+            // Connection.setAudioRoute so it sticks.
+            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active"), 600);
+            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_late"), 1800);
           });
         }
       }
@@ -1767,10 +1844,13 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     }
   }, [speakerOn, muted, callState]);
 
-  // Subscribe to taps on the in-call notification's End / Speaker / Mute
-  // action buttons. The native side updates its own snapshot synchronously
-  // so the icon flips immediately; we mirror the change in JS state and
-  // call into the JsSIP / ICM bridges so the actual call actually changes.
+  // Mirror in-call notification action taps (End / Speaker / Mute) into React
+  // state so the in-app UI stays in sync while mounted. The ACTUAL call
+  // control (client.hangup/setSpeaker/setMute) is owned by the module-scope
+  // listener in sip/inCallNotificationActions.ts — a recents-swipe unmounts
+  // this whole tree (and this listener with it) while the call lives on, so
+  // anything that must keep working from the notification cannot live here
+  // (live failure 2026-07-28: hangup button dead after swipe-away).
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const sub = DeviceEventEmitter.addListener(
@@ -1778,25 +1858,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       (evt: { action?: string; value?: boolean }) => {
         const action = evt?.action;
         const value = evt?.value;
-        console.log("[IN_CALL_NOTIF] action received", { action, value });
+        console.log("[IN_CALL_NOTIF] action received (ui mirror)", { action, value });
         switch (action) {
           case "hangup": {
             console.log("[CONNECT_CALL_UI] local_hangup_cleanup — triggered via notification End button");
-            clientRef.current.hangup().catch((err) => {
-              console.warn("[IN_CALL_NOTIF] hangup from notification failed:", String(err));
-            });
             break;
           }
           case "toggle_speaker": {
             const next = typeof value === "boolean" ? value : !speakerOn;
-            try { clientRef.current.setSpeaker(next); } catch {}
             setSpeakerOn(next);
             setAudioRoute(next ? "speaker" : "earpiece");
             break;
           }
           case "toggle_mute": {
             const next = typeof value === "boolean" ? value : !muted;
-            try { clientRef.current.setMute(next); } catch {}
             setMuted(next);
             break;
           }
@@ -2097,6 +2172,14 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       waitForIncomingInvite: async (match, deadlineHandle) => {
         return clientRef.current.waitForIncomingInvite(match, deadlineHandle);
+      },
+
+      hasMatchingIncomingInvite: (match) => {
+        try {
+          return clientRef.current.hasMatchingIncomingInvite(match) === true;
+        } catch {
+          return false;
+        }
       },
 
       rejectIncomingInvite: async (match) => {

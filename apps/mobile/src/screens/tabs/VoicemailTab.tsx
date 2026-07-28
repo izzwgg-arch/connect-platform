@@ -3,6 +3,7 @@ import {
   Animated,
   FlatList,
   Modal,
+  NativeModules,
   PanResponder,
   Platform,
   Pressable,
@@ -865,12 +866,27 @@ export function VoicemailTab() {
   const downloadVoicemail = useCallback(async (vm: Voicemail) => {
     if (!token) return;
     try {
-      const safeId = vm.id.replace(/[^a-zA-Z0-9_-]/g, '');
-      const uri = `${FileSystem.documentDirectory}voicemail-${safeId || Date.now()}.wav`;
+      // Human-findable filename: caller + date, e.g.
+      // "Voicemail 5551234567 2026-07-28.wav".
+      const caller = (vm.callerId || 'unknown').replace(/[^a-zA-Z0-9+]/g, '');
+      const day = (vm.receivedAt || '').slice(0, 10) || 'undated';
+      const fileName = `Voicemail ${caller} ${day}.wav`;
+      const tmpUri = `${FileSystem.cacheDirectory}vm-dl-${vm.id.replace(/[^a-zA-Z0-9_-]/g, '') || Date.now()}.wav`;
       const url = `${API_BASE}/voice/voicemail/${encodeURIComponent(vm.id)}/download`;
-      await FileSystem.downloadAsync(url, uri, {
+      await FileSystem.downloadAsync(url, tmpUri, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      const downloadsModule = (NativeModules as { ConnectDownloads?: { saveToDownloads: (src: string, name: string, mime: string) => Promise<string> } }).ConnectDownloads;
+      if (Platform.OS === 'android' && downloadsModule?.saveToDownloads) {
+        // Publish into the PUBLIC Downloads folder so the file shows up in
+        // the system Files app — the app sandbox is invisible to the user.
+        await downloadsModule.saveToDownloads(tmpUri, fileName, 'audio/x-wav');
+        FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => undefined);
+        setPlaybackError('Saved to Downloads.');
+        return;
+      }
+      // iOS / fallback: keep the previous sandbox behavior.
+      await FileSystem.copyAsync({ from: tmpUri, to: `${FileSystem.documentDirectory}${fileName}` });
       setPlaybackError('Voicemail downloaded.');
     } catch {
       setPlaybackError('Could not download voicemail.');

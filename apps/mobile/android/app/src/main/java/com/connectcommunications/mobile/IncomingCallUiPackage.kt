@@ -10,6 +10,8 @@ class IncomingCallUiPackage : ReactPackage {
     return listOf(
       IncomingCallUiModule(reactContext),
       DeviceContactsModule(reactContext),
+      SipSocketModule(reactContext),
+      DownloadsModule(reactContext),
     )
   }
 

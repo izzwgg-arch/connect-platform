@@ -296,6 +296,103 @@ object TelecomBridge {
     return synchronized(activeConnections) { activeConnections[inviteId] }
   }
 
+  /**
+   * The live in-call Connection, if any — prefers one in STATE_ACTIVE (the
+   * answer-time anchor once flipped), falls back to any registered one.
+   *
+   * Why callers need this: while a SELF_MANAGED Connection is ACTIVE, Telecom
+   * owns the call audio routing and silently overrides
+   * AudioManager.setSpeakerphoneOn — routing MUST go through
+   * Connection.setAudioRoute() instead (confirmed live 2026-07-28: speaker
+   * toggle worked during ringback, dead the moment the anchor went ACTIVE).
+   */
+  fun getAnyLiveConnection(): ConnectIncomingConnection? {
+    return synchronized(activeConnections) {
+      activeConnections.values.firstOrNull { it.state == android.telecom.Connection.STATE_ACTIVE }
+        ?: activeConnections.values.firstOrNull()
+    }
+  }
+
+  /**
+   * Tear down every answer-time anchor Connection (inviteId "tc-anchor-*",
+   * matching TELECOM_ANCHOR_PREFIX in apps/mobile/src/sip/telecom.ts).
+   *
+   * Needed because the anchor's normal teardown lives in SipContext's
+   * call-ended effect — which is UNMOUNTED after a recents-swipe. Without
+   * this native path a hangup from the in-call notification (or a remote
+   * hangup) while swiped away leaves the OS holding an ACTIVE phantom call
+   * forever. Safe to call when no anchor exists (no-op), and safe alongside
+   * the JS teardown (terminate() unregisters, second attempt finds nothing).
+   */
+  /** True when any Connection (ring-time or answer-time anchor) is still registered. */
+  fun hasAnyActiveConnections(): Boolean =
+    synchronized(activeConnections) { activeConnections.isNotEmpty() }
+
+  /**
+   * Post-call audio-state watchdog. If NO call Connection remains but the
+   * device audio mode is still MODE_IN_COMMUNICATION (the VoIP in-call mode),
+   * force it back to MODE_NORMAL and clear the communication device / SCO
+   * link.
+   *
+   * Why: a stranded in-communication mode makes Android believe a call is
+   * still running — other apps then cannot record audio (customer report
+   * 2026-07-28: WhatsApp voice notes refused after every hangup on an S25;
+   * reproduced on the test device with the mode stuck 80+ min post-call).
+   * A fresh call started in that stale state also gets a mangled audio path
+   * (routing/AEC set up against the wrong device), which matches the
+   * intermittent "muffled" complaints.
+   *
+   * Deliberately narrow: only MODE_IN_COMMUNICATION is touched. A cellular
+   * call's MODE_IN_CALL (owned by telephony) is never overridden, and any
+   * live Connection of ours short-circuits the reset.
+   */
+  fun resetCallAudioStateIfIdle(context: Context, reason: String) {
+    try {
+      if (hasAnyActiveConnections()) {
+        Log.i(TAG, "resetCallAudioStateIfIdle skipped — live connection present reason=$reason")
+        return
+      }
+      val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+      val mode = am.mode
+      if (mode == android.media.AudioManager.MODE_IN_COMMUNICATION) {
+        Log.w(TAG, "resetCallAudioStateIfIdle: MODE_IN_COMMUNICATION stuck with no live call — forcing MODE_NORMAL reason=$reason")
+        try { am.mode = android.media.AudioManager.MODE_NORMAL } catch (t: Throwable) {
+          Log.w(TAG, "resetCallAudioStateIfIdle: setMode failed: ${t.message}")
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+          try { am.clearCommunicationDevice() } catch (_: Throwable) { /* best effort */ }
+        }
+        try {
+          if (am.isBluetoothScoOn) {
+            am.stopBluetoothSco()
+            am.isBluetoothScoOn = false
+          }
+        } catch (_: Throwable) { /* best effort */ }
+      } else if (mode != android.media.AudioManager.MODE_NORMAL) {
+        // MODE_IN_CALL / MODE_RINGTONE etc. — not ours to touch; log for diagnosis.
+        Log.i(TAG, "resetCallAudioStateIfIdle: mode=$mode not MODE_IN_COMMUNICATION — leaving untouched reason=$reason")
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "resetCallAudioStateIfIdle threw: ${t.message}")
+    }
+  }
+
+  fun terminateAnchorConnections(reason: String) {
+    val anchors = synchronized(activeConnections) {
+      activeConnections.entries
+        .filter { it.key.startsWith("tc-anchor-") }
+        .map { it.value }
+    }
+    for (conn in anchors) {
+      try {
+        Log.i(TAG, "terminateAnchorConnections inviteId=${conn.inviteId} reason=$reason")
+        conn.terminate(reason)
+      } catch (t: Throwable) {
+        Log.w(TAG, "terminateAnchorConnections failed for ${conn.inviteId}: ${t.message}")
+      }
+    }
+  }
+
   // ── Bridge out: Telecom → JS ─────────────────────────────────────────
 
   fun notifyAnswer(inviteId: String, callerNumber: String, callerName: String, pbxCallId: String) {

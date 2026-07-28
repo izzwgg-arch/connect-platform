@@ -26,9 +26,16 @@
  */
 import * as SecureStore from "expo-secure-store";
 
+import { logCallFlow } from "../debug/callFlowDebug";
 import { createSipClient } from "./index";
+import { installInCallNotificationActions } from "./inCallNotificationActions";
 import type { SipClient } from "./types";
 import type { ProvisioningBundle } from "../types";
+
+// Survives React-tree unmount (recents swipe): the notification End/Speaker/
+// Mute buttons must control the call even when SipContext is gone. Installed
+// at module scope so both the headless boot path and the app boot path get it.
+installInCallNotificationActions();
 
 /** Must match SipContext's PROVISION_KEY (SecureStore). */
 const PROVISION_KEY = "cc_mobile_provision";
@@ -167,6 +174,82 @@ export async function headlessPreRegisterSip(): Promise<boolean> {
   } finally {
     _preRegisterInFlight = null;
   }
+}
+
+/**
+ * Standing-registration maintenance register. Unlike headlessPreRegisterSip
+ * (which no-ops when the client BELIEVES it is registered), this always puts a
+ * REGISTER on the wire: in the background Android freezes JS timers, so
+ * JsSIP's own refresh never runs and the client's isRegistered() belief goes
+ * stale while the PBX silently expires the contact (then the initial dial of
+ * an incoming call skips this phone entirely — the 2026-07-27 slow-answer
+ * root cause). The forced refresh both renews the PBX binding and keeps the
+ * carrier NAT mapping warm. If the refresh fails, the socket is presumed dead
+ * and the UA is rebuilt via a forced register.
+ */
+/**
+ * Max acceptable age of the last CONFIRMED register at a maintenance tick.
+ * Ticks are nominally 240 s (SipKeepAliveService standing-idle heartbeat), so
+ * a healthy cycle shows age ≈ 240–300 s at the next tick. If the previous
+ * tick's refresh got no reply (carrier NAT silently dropped the socket) the
+ * age reads ≈ 480 s+ — well past this threshold — and we rebuild. 420 s also
+ * stays under the 600 s registrar expiry, so the rebuild lands before the PBX
+ * drops the contact.
+ */
+export async function headlessMaintenanceRegisterSip(): Promise<boolean> {
+  const client = getSipClient();
+  let believesRegistered = false;
+  try {
+    believesRegistered = client.isRegistered();
+  } catch { /* treat as not registered */ }
+
+  if (believesRegistered) {
+    let refreshUnanswered = false;
+    try {
+      refreshUnanswered = (client as any).isRefreshUnanswered?.() === true;
+    } catch { /* treat as answered */ }
+
+    if (refreshUnanswered) {
+      // A previous tick's refresh went unanswered — the socket is presumed
+      // silently dead (carrier NAT drop). Rebuild on a fresh UA/WebSocket.
+      // NOTE: the verdict is keyed to our own unanswered refresh, NOT to
+      // wall-clock registration age — the heartbeat alarm is inexact and can
+      // be deferred well past its cadence (observed 2026-07-28: 240 s alarm
+      // fired at 420 s), and an age check false-positived on the first
+      // deferred tick, force-restarting a healthy UA and unregistering from
+      // the PBX for the ~reconnect window.
+      // register()'s success path resolves off socket events, which DO run in
+      // the background; only its failure watchdogs need timers, and a hung
+      // attempt is detected and rebuilt by the next tick's register() call
+      // (REGISTER_ATTEMPT_STUCK_MS). Maintenance ticks are never dispatched
+      // while a call is active, so the teardown is safe.
+      logCallFlow('SIP_MAINT_SOCKET_STALE', {
+        inviteId: null,
+        extra: { registerAgeMs: client.getRegistrationAgeMs?.() ?? null, refreshUnanswered: true },
+      });
+      try {
+        await client.register({ forceRestart: true });
+        return client.isRegistered();
+      } catch {
+        return false;
+      }
+    }
+
+    // Healthy socket: put a refresh REGISTER on the wire and get out. NO
+    // awaiting a reply — JS timers are frozen in the background, so any
+    // timeout-based wait would hang until the app is foregrounded. The reply
+    // (a socket event, which does fire in background) updates registeredAtMs;
+    // the next tick's staleness check above is the failure detector.
+    try {
+      return (client as any).sendRegisterRefresh?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Not registered at all — the standard bounded pre-register path already
+  // handles provisioning reads and retries.
+  return headlessPreRegisterSip();
 }
 
 /** Best-effort check used by the headless hold loop. */

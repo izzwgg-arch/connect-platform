@@ -58,16 +58,17 @@ AppRegistry.registerHeadlessTask(
 
       // ── Standing-registration maintenance tick ────────────────────────────
       // Dispatched by SipKeepAliveService's heartbeat (server flag gated,
-      // never while a call is active on the native side). Job: make sure the
-      // registration is fresh, then get out — no 30s ring-hold. When the UA is
-      // already registered headlessPreRegisterSip() returns immediately, so a
-      // healthy tick costs a few ms of JS.
+      // never while a call is active on the native side). Job: put a real
+      // REGISTER on the wire, then get out — no 30s ring-hold. This must NOT
+      // be a soft no-op on isRegistered(): Android freezes JS timers in the
+      // background, so the client's registered belief goes stale while the
+      // PBX expires the contact (see headlessMaintenanceRegisterSip).
       if (mode === 'maintenance') {
         if (singleton.hasActiveSipSession()) {
           logCallFlow('SIP_MAINT_REGISTER_SKIP_ACTIVE_SESSION', { inviteId: null });
           return;
         }
-        const ok = await singleton.headlessPreRegisterSip();
+        const ok = await singleton.headlessMaintenanceRegisterSip();
         logCallFlow('SIP_MAINT_REGISTER_RESULT', {
           inviteId: null,
           extra: { registered: ok, sinceStartMs: Date.now() - startedAt },

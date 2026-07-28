@@ -1,10 +1,15 @@
-{
-  "completedAt": "2026-07-23T16:36:16.3510837-04:00",
-  "shipBuildId": "20260723-163030",
-  "shipVersionCode": "1784838630",
-  "apkPath": "C:\\Users\\izzyw\\.connect-mobile-build\\repo\\apps\\mobile\\android\\app\\build\\outputs\\apk\\release\\app-release.apk",
-  "apkBytes": 144502073,
-  "buildRoot": "C:\\Users\\izzyw\\.connect-mobile-build\\repo",
-  "realRepo": "C:\\dev\\projects\\Connect 2",
-  "skipInstall": true
+﻿{
+    "completedAt":  "2026-07-27T20:53:04.7942792-04:00",
+    "shipBuildId":  "20260727-204900",
+    "shipVersionCode":  "1785199740",
+    "apkPath":  "C:\\Users\\izzyw\\.connect-mobile-build\\repo\\apps\\mobile\\android\\app\\build\\outputs\\apk\\release\\app-release.apk",
+    "apkBytes":  144530521,
+    "buildRoot":  "C:\\Users\\izzyw\\.connect-mobile-build\\repo",
+    "realRepo":  "C:\\dev\\projects\\Connect 2",
+    "skipInstall":  false,
+    "adbInstall":  true,
+    "dumpsysVersionLines":  [
+                                "    versionCode=1785199740 minSdk=24 targetSdk=34",
+                                "    versionName=1.0.0+20260727-204900"
+                            ]
 }
