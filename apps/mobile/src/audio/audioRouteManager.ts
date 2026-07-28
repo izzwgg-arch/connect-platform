@@ -163,17 +163,24 @@ class AudioRouteManager {
    */
   refreshDevices(snapshot: AudioDeviceSnapshot): boolean {
     const prev = this.lastSnapshot;
-    const changed =
+    // Presence changes (BT/wired plug/unplug) are the ONLY trigger for
+    // re-applying the route. `speakerphoneOn` is deliberately excluded:
+    // while a Telecom anchor owns call audio, AudioManager.isSpeakerphoneOn
+    // is stale/wrong — re-applying on its "changes" made the route fight
+    // Telecom every poll tick, audibly flipping the user's speaker on/off
+    // mid-call (reported live 2026-07-28). The flag is still tracked for
+    // UI state, it just never drives applyRoute().
+    const presenceChanged =
       prev.bluetoothConnected !== snapshot.bluetoothConnected ||
-      prev.wiredHeadsetConnected !== snapshot.wiredHeadsetConnected ||
-      prev.speakerphoneOn !== snapshot.speakerphoneOn;
+      prev.wiredHeadsetConnected !== snapshot.wiredHeadsetConnected;
+    const changed = presenceChanged || prev.speakerphoneOn !== snapshot.speakerphoneOn;
     this.lastSnapshot = snapshot;
     if (changed) {
       log('available_devices', snapshot);
       if (snapshot.bluetoothConnected !== prev.bluetoothConnected) {
         log('bluetooth_available', { available: snapshot.bluetoothConnected });
       }
-      if (this.callActive) {
+      if (presenceChanged && this.callActive) {
         this.applyRoute('device_change');
       }
       this.notify();

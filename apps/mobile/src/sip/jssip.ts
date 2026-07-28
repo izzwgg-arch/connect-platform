@@ -1241,6 +1241,18 @@ export class JsSipClient implements SipClient {
   private static readonly GHOST_WINDOW_MS = 2000;
 
   private bindSession(session: any) {
+    // IDEMPOTENCY GUARD — a session must be bound exactly once. Observed live
+    // 2026-07-28: the [SIP_SDP] log fired twice for the SAME local offer,
+    // proving double-attached listeners. Double handlers double every piece
+    // of session work (audio setup on confirmed, stats collection + native
+    // cleanup on ended, telemetry posts) — enough JS-thread load to make
+    // answer/hangup taps visibly laggy once the telemetry callbacks were
+    // actually wired. Root-fix: mark and skip.
+    if ((session as any)._ccHandlersBound) {
+      console.log('[SIP] bindSession skipped — already bound sessionId=' + (this.getSessionIdSafe(session) ?? '?'));
+      return;
+    }
+    (session as any)._ccHandlersBound = true;
     const isOutboundSession = !this.incomingSessions.includes(session);
 
     // Opus preference (both directions — offers AND answers). Wideband on

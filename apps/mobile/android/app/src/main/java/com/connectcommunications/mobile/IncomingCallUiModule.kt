@@ -851,6 +851,24 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
    * list (n ≤ 10 in practice) and returns a tiny map, so it's safe to
    * invoke from the JS render loop.
    */
+  /**
+   * Async variant of getAudioDevices — same payload, resolved off the JS
+   * thread. The sync method BLOCKS the JS thread for however long
+   * AudioManager.getDevices takes; on Samsung with the BT stack or Telecom
+   * busy that was observed reaching seconds. The 1.5s in-call poll ran the
+   * sync version — the JS thread stalls made every tap laggy (2s speaker
+   * toggle, taps needing multiple presses, 2026-07-28). Pollers MUST use
+   * this; the sync method stays for rare one-shot reads.
+   */
+  @ReactMethod
+  fun getAudioDevicesAsync(promise: Promise) {
+    try {
+      promise.resolve(getAudioDevices())
+    } catch (t: Throwable) {
+      promise.reject("audio_devices_failed", t.message, t)
+    }
+  }
+
   @ReactMethod(isBlockingSynchronousMethod = true)
   fun getAudioDevices(): WritableMap {
     val map = Arguments.createMap()

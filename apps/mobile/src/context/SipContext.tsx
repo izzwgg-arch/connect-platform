@@ -485,10 +485,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const probe = () => {
-      if (cancelled) return;
+    // Probe is ASYNC — the sync getAudioDevices() blocks the JS thread for
+    // the whole AudioManager.getDevices round-trip (observed: seconds on
+    // Samsung with BT/Telecom busy), and this poll ran it every 1.5s during
+    // calls — the root cause of laggy taps / 2s speaker toggles (2026-07-28).
+    let probeInFlight = false;
+    const probe = async () => {
+      if (cancelled || probeInFlight) return;
+      probeInFlight = true;
       try {
-        const result = mod.getAudioDevices();
+        const result =
+          typeof mod.getAudioDevicesAsync === "function"
+            ? await mod.getAudioDevicesAsync()
+            : mod.getAudioDevices();
+        if (cancelled) return;
         const bt = !!result?.bluetoothConnected;
         const wired = !!result?.wiredHeadsetConnected;
         const speakerOnNow = !!result?.speakerphoneOn;
@@ -513,11 +523,13 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (e) {
         // Swallow — watcher is best-effort; SIP call is not affected.
+      } finally {
+        probeInFlight = false;
       }
     };
 
-    probe();
-    const interval = setInterval(probe, 1500);
+    void probe();
+    const interval = setInterval(() => { void probe(); }, 1500);
 
     // React to external route changes (e.g. WiredHeadset unplug fires the
     // standard DeviceEventEmitter event) — kick a fresh probe instead of
