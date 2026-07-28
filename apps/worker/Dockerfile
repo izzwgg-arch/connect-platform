@@ -12,6 +12,9 @@ RUN apt-get update -y && apt-get install -y openssl ffmpeg && rm -rf /var/lib/ap
   && corepack prepare pnpm@10.30.2 --activate \
   && pnpm config set store-dir /pnpm/store
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+# pnpm.patchedDependencies (react-native-callkeep) lives in root package.json —
+# pnpm install hashes the patch file, so the build context must include it.
+COPY patches ./patches
 COPY apps/worker/package.json ./apps/worker/package.json
 COPY packages/db/package.json ./packages/db/package.json
 COPY packages/db/prisma/schema.prisma ./packages/db/prisma/schema.prisma

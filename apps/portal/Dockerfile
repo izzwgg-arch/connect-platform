@@ -17,6 +17,9 @@ RUN apt-get update -y \
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+# pnpm.patchedDependencies (react-native-callkeep) lives in root package.json —
+# pnpm install hashes the patch file, so the build context must include it.
+COPY patches ./patches
 COPY apps/portal/package.json ./apps/portal/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
 RUN --mount=type=cache,id=connect-pnpm-store,target=/pnpm/store \
