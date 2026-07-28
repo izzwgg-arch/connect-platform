@@ -142,7 +142,7 @@ async function main() {
         return null;
       }
     };
-    const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy);
+    const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy, router);
     const rateLimiter = new RateLimiter();
 
     // Secret store — owner-managed API keys (Assistant page), encrypted at rest.

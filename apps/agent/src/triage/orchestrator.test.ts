@@ -32,14 +32,22 @@ function makePrisma(opts: { role?: string; ownExt?: string | null; override?: an
   };
 }
 
-function makeOrch(created: any[], prisma: any, status = "EXECUTED") {
+function makeOrch(created: any[], prisma: any, status = "EXECUTED", llm: any = null) {
   const actions: any = {
     create: async (input: any) => {
       created.push(input);
       return { id: "act1", status };
     },
   };
-  return new TriageOrchestrator(prisma, {} as any, actions, async () => null);
+  return new TriageOrchestrator(prisma, {} as any, actions, async () => null, llm);
+}
+
+/** Fake ModelRouter answering task_extraction with a canned JSON string. */
+function fakeLlm(json: string | (() => string)) {
+  return {
+    available: () => ["anthropic"],
+    complete: async () => ({ text: typeof json === "function" ? json() : json }),
+  };
 }
 
 const CTX = { tenantId: "cmConnectCuid", clientUserId: "u1", role: "customer" as const, conversationId: "conv1" };
@@ -533,4 +541,100 @@ test("STATUS: a bare profile reply AFTER the status answer still resumes into a 
   assert.equal(created[0].capabilityId, "pbx.M2"); // regular user → own extension
   assert.equal(created[0].params.profileId, "prof-jazz");
   assert.equal(created[0].params.objectId, "101");
+});
+
+// ── LLM-first understanding (owner directive 2026-07-27) ────────────────────
+
+test("LLM PATH: the model's validated read drives the action (live phrase 2026-07-27: 'into main … back to classic' must set the FIRST profile)", async () => {
+  const created: any[] = [];
+  const llm = fakeLlm(
+    `{"is_hold_music":true,"operation":"set","profile":"Jazz","scope":null,"extension":null,"timing":{"kind":"duration","minutes":54},"confidence":0.95}`,
+  );
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "101" }), "EXECUTED", llm);
+  const out = await orch.handle(
+    detectIntent("Put my music on hold into jazz till 8:45 then it should automatically change back to classical calm"),
+    CTX,
+    "en",
+  );
+  assert.equal(out.handled, true);
+  assert.equal(created[0].capabilityId, "pbx.M2");
+  assert.equal(created[0].params.profileId, "prof-jazz"); // NOT prof-classical
+  assert.equal(created[0].params.objectId, "101");
+  assert.equal(created[0].revertAfterMinutes, 54);
+  assert.match(out.reply ?? "", /^Done/);
+});
+
+test("LLM PATH: operation 'status' answers read-only without creating an action", async () => {
+  const created: any[] = [];
+  const llm = fakeLlm(
+    `{"is_hold_music":true,"operation":"status","profile":null,"scope":null,"extension":null,"timing":{"kind":"none"},"confidence":0.9}`,
+  );
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "101", extOverride: { mohProfileId: "prof-jazz" } }), "EXECUTED", llm);
+  const out = await orch.handle(detectIntent("is my hold music still on the jazz one"), CTX, "en");
+  assert.equal(created.length, 0);
+  assert.match(out.reply ?? "", /extension 101 has its own hold music right now: "Jazz"/);
+});
+
+test("LLM PATH: scope from the model is still policy-fenced (regular user + tenant scope refused)", async () => {
+  const created: any[] = [];
+  const llm = fakeLlm(
+    `{"is_hold_music":true,"operation":"set","profile":"Jazz","scope":"tenant","extension":null,"timing":{"kind":"none"},"confidence":0.95}`,
+  );
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "104" }), "EXECUTED", llm);
+  const out = await orch.handle(detectIntent("change the whole company hold music to Jazz"), CTX, "en");
+  assert.equal(created.length, 0);
+  assert.match(out.reply ?? "", /admin/);
+});
+
+test("LLM PATH: a null profile on 'set' asks the clarify question instead of fuzzy-guessing", async () => {
+  const created: any[] = [];
+  const llm = fakeLlm(
+    `{"is_hold_music":true,"operation":"set","profile":null,"scope":"extension","extension":null,"timing":{"kind":"none"},"confidence":0.9}`,
+  );
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "104" }), "EXECUTED", llm);
+  const out = await orch.handle(detectIntent("change my hold music to something upbeat"), CTX, "en");
+  assert.equal(created.length, 0);
+  assert.match(out.reply ?? "", /Which hold music would you like\?/);
+});
+
+test("LLM FALLBACK: garbage model output falls back to the deterministic parser", async () => {
+  const created: any[] = [];
+  const llm = fakeLlm(`Sure, happy to help! Which profile would you like?`);
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "104" }), "EXECUTED", llm);
+  const out = await orch.handle(detectIntent("change my hold music to Jazz for 20 minutes"), CTX, "en");
+  assert.equal(created[0].params.profileId, "prof-jazz");
+  assert.equal(created[0].revertAfterMinutes, 20);
+  assert.match(out.reply ?? "", /^Done/);
+});
+
+test("LLM FALLBACK: a hallucinated profile name rejects the read and the regex path still lands the right target", async () => {
+  const created: any[] = [];
+  const llm = fakeLlm(
+    `{"is_hold_music":true,"operation":"set","profile":"Smooth Vibes","scope":null,"extension":null,"timing":{"kind":"none"},"confidence":0.99}`,
+  );
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "104" }), "EXECUTED", llm);
+  await orch.handle(detectIntent("change my hold music to Jazz"), CTX, "en");
+  assert.equal(created[0].params.profileId, "prof-jazz");
+});
+
+// ── Regex fallback fixes (no LLM configured) — live misparses 2026-07-27 ────
+
+test("REGEX FALLBACK: 'into <profile>' is an accepted target preposition", async () => {
+  const created: any[] = [];
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "101" }));
+  await orch.handle(
+    detectIntent("Put my music on hold into jazz till 8:45pm then it should automatically change back to classical calm"),
+    CTX,
+    "en",
+  );
+  assert.equal(created.length, 1);
+  assert.equal(created[0].params.profileId, "prof-jazz"); // NOT prof-classical
+});
+
+test("REGEX FALLBACK: a profile named after 'back to' is never the target, even with no other preposition", async () => {
+  const created: any[] = [];
+  const orch = makeOrch(created, makePrisma({ role: "USER", ownExt: "101" }));
+  await orch.handle(detectIntent("make my hold music jazz until 9pm then back to classical calm"), CTX, "en");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].params.profileId, "prof-jazz");
 });

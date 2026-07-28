@@ -14,6 +14,7 @@
 import type { Intent, ActionType } from "./intent";
 import { MOH_DEACTIVATE_RE, MOH_STATUS_Q_RE } from "./intent";
 import { parseMohTiming, type MohTiming } from "./mohTiming";
+import { extractMohRequest, type ExtractorLlm, type MohLlmResult } from "./mohLlmExtract";
 import { evaluate, type TenantPolicy, type Role } from "../policy/policy";
 import { capabilityById, executableCapabilities } from "../manifest/manifest";
 import { standingFromRole, type Standing } from "../channels/identityContext";
@@ -77,6 +78,8 @@ export class TriageOrchestrator {
     private diag: DiagnosticsEngine,
     private actions: ActionService,
     private loadPolicy: (tenantId: string) => Promise<TenantPolicy | null>,
+    /** LLM-first request understanding (owner directive 2026-07-27). Null ⇒ regex-only. */
+    private llm: ExtractorLlm | null = null,
   ) {}
 
   async handle(intent: Intent, ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
@@ -430,25 +433,54 @@ export class TriageOrchestrator {
     const isAdmin = standing !== "tenant_user";
     const ownExt = await this.resolveExtension(ctx);
     const tz = await this.resolveMohTimezone(ctx.tenantId);
+    const profiles = await this.listMohProfiles(ctx.tenantId);
+
+    // ── LLM-first understanding (owner directive 2026-07-27) ──
+    // The frontier model reads the request against verified context (real
+    // profile names, own extension, local time) and returns validated JSON.
+    // It only ever FILLS IN the same fields the regexes below produce — every
+    // policy/scope/ownership gate still runs on the result, and a null (model
+    // down, low confidence, hallucinated profile, bad shape) falls back to the
+    // deterministic parser. See mohLlmExtract.ts.
+    const llmRead: MohLlmResult | null = intent.statusQuery
+      ? null
+      : await extractMohRequest(this.llm, {
+          text: raw,
+          profiles: profiles.map((p) => String(p.name ?? "")).filter(Boolean),
+          ownExt,
+          isAdmin,
+          tz,
+          conversationId: ctx.conversationId,
+        });
 
     // Status question ("which one am I on right now?") — read-only answer, no
-    // action. Flag is set by detectIntent (fresh message) or the clarify-resume
-    // path (mid-conversation), never inferred from combined thread text.
-    if (intent.statusQuery) return this.answerMohStatus(ctx, ownExt, tz, language);
+    // action. Flag is set by detectIntent (fresh message), the clarify-resume
+    // path (mid-conversation), or the LLM read of the message.
+    if (intent.statusQuery || llmRead?.operation === "status") return this.answerMohStatus(ctx, ownExt, tz, language);
 
-    const timing: MohTiming = parseMohTiming(raw, tz);
+    const timing: MohTiming = llmRead ? llmRead.timing : parseMohTiming(raw, tz);
 
     // ── scope ──
     let scope: "tenant" | "extension" | null = null;
     let targetExt: string | null = null;
-    const extNum = raw.match(MOH_EXT_NUM_RE)?.[1] ?? null;
-    if (MOH_TENANT_SCOPE_RE.test(t)) scope = "tenant";
-    else if (extNum) {
-      scope = "extension";
-      targetExt = extNum;
-    } else if (MOH_EXT_SCOPE_RE.test(t) || MOH_ANSWER_EXT_RE.test(t)) {
-      scope = "extension";
-      targetExt = ownExt;
+    if (llmRead) {
+      scope = llmRead.scope;
+      if (llmRead.extension) {
+        scope = "extension";
+        targetExt = llmRead.extension;
+      } else if (scope === "extension") {
+        targetExt = ownExt;
+      }
+    } else {
+      const extNum = raw.match(MOH_EXT_NUM_RE)?.[1] ?? null;
+      if (MOH_TENANT_SCOPE_RE.test(t)) scope = "tenant";
+      else if (extNum) {
+        scope = "extension";
+        targetExt = extNum;
+      } else if (MOH_EXT_SCOPE_RE.test(t) || MOH_ANSWER_EXT_RE.test(t)) {
+        scope = "extension";
+        targetExt = ownExt;
+      }
     }
 
     if (!isAdmin) {
@@ -479,7 +511,7 @@ export class TriageOrchestrator {
     } else if (!scope) {
       if (!ownExt) {
         scope = "tenant"; // admin with no personal extension: only tenant scope makes sense
-      } else if (intent.enableHint === "no") {
+      } else if (llmRead ? llmRead.operation === "restore" : intent.enableHint === "no") {
         // "Change it back (in 15 minutes)" — infer the scope from what is
         // actually overridden instead of asking: the user's own extension
         // override if one is active, else the tenant-wide override. Asking
@@ -530,32 +562,40 @@ export class TriageOrchestrator {
       return { handled: true, reply: decision.message, yiddish: yiTeam };
     }
 
-    // A profile explicitly named as a TARGET ("to Main", 'to "Main"') beats the
-    // deactivate heuristic: 'change it to Main for 20 minutes and then have it
-    // switch back to Classic' contains "back" but is an ACTIVATE of Main (live
-    // failure 2026-07-27: it executed as a clear, twice). The EARLIEST "to
-    // <profile>" mention is the target; later ones ("back to Classic") describe
-    // the revert, which the M1/M2 snapshot restore handles automatically.
-    const profiles = await this.listMohProfiles(ctx.tenantId);
+    // Target profile. LLM path: the validated profile name from the model.
+    // Regex fallback: a profile explicitly named as a TARGET ("to Main",
+    // "into Main") beats the deactivate heuristic — the EARLIEST such mention
+    // wins, and a mention right after back/return/revert/restore ("then back
+    // to Classic") is NEVER the target (live misparse 2026-07-27: "into main
+    // till 8:45 then … back to classic" set Classic — "into" wasn't accepted
+    // and "back to classic" won). The revert itself is handled by the M1/M2
+    // snapshot restore automatically.
     const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const isRevertMention = (idx: number) => /\b(?:back|return|revert|restore)[\s,]*$/.test(t.slice(Math.max(0, idx - 24), idx));
     let targetProfile: { id: string; name: string } | null = null;
-    {
+    if (llmRead?.profileName) {
+      const want = llmRead.profileName.toLowerCase();
+      targetProfile = profiles.find((p) => String(p.name ?? "").toLowerCase() === want) ?? null;
+    } else if (!llmRead) {
       let bestIdx = Number.POSITIVE_INFINITY;
       let bestLen = -1;
       for (const p of profiles) {
         const n = String(p.name ?? "").toLowerCase();
         if (!n) continue;
-        const m = t.match(new RegExp(String.raw`\b(?:to|onto)\s+(?:the\s+)?["'“”]?` + escapeRe(n) + String.raw`\b`, "i"));
-        const idx = m?.index ?? -1;
-        if (idx >= 0 && (idx < bestIdx || (idx === bestIdx && n.length > bestLen))) {
-          bestIdx = idx;
-          bestLen = n.length;
-          targetProfile = p;
+        const re = new RegExp(String.raw`\b(?:in|on)?to\s+(?:the\s+)?["'“”]?` + escapeRe(n) + String.raw`\b`, "gi");
+        for (const m of t.matchAll(re)) {
+          const idx = m.index ?? -1;
+          if (idx < 0 || isRevertMention(idx)) continue;
+          if (idx < bestIdx || (idx === bestIdx && n.length > bestLen)) {
+            bestIdx = idx;
+            bestLen = n.length;
+            targetProfile = p;
+          }
         }
       }
     }
 
-    const deactivate = intent.enableHint === "no" && !targetProfile;
+    const deactivate = llmRead ? llmRead.operation === "restore" && !targetProfile : intent.enableHint === "no" && !targetProfile;
     const minutesFromTiming =
       timing.kind === "duration"
         ? timing.minutes
@@ -591,10 +631,25 @@ export class TriageOrchestrator {
     } else {
       // Activate — resolve the profile from the tenant's OWN active profiles
       // (ownership re-checked by scope fence + op snapshot + api door). An
-      // explicit "to <profile>" target wins; otherwise longest name mentioned.
-      const matches = profiles
-        .filter((p) => p.name && t.includes(String(p.name).toLowerCase()))
-        .sort((a, b) => String(b.name).length - String(a.name).length);
+      // explicit "to <profile>" target wins; otherwise longest name mentioned
+      // ANYWHERE EXCEPT as a revert descriptor ("then back to Classic" is not
+      // a pick of Classic). The LLM path never fuzzy-guesses: the model
+      // already read the message, so a null profile means it truly wasn't
+      // stated and we ask.
+      const mentionedAsPick = (p: { name: unknown }) => {
+        const n = String(p.name ?? "").toLowerCase();
+        if (!n) return false;
+        for (const m of t.matchAll(new RegExp(escapeRe(n), "g"))) {
+          const idx = m.index ?? 0;
+          const before = t.slice(Math.max(0, idx - 34), idx);
+          if (/\b(?:back|return|revert|restore)\b[\s,]*(?:(?:in|on)?to\s+)?(?:the\s+)?["'“”]?$/.test(before)) continue;
+          return true;
+        }
+        return false;
+      };
+      const matches = llmRead
+        ? []
+        : profiles.filter(mentionedAsPick).sort((a, b) => String(b.name).length - String(a.name).length);
       const chosen =
         targetProfile ??
         (matches.length === 1 || (matches.length > 1 && String(matches[0].name).length > String(matches[1].name).length) ? matches[0] : null);
