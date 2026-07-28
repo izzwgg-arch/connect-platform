@@ -71,13 +71,14 @@ function svc() {
 
 const P = { tenantId: "21", objectId: "moh1", classId: "jazz" };
 
-// pbx.M4 is the exemplar BOUND, NON-MANDATED capability for the generic-flow
-// tests below (pbx.M1 AND pbx.M4 auto-execute under the 2026-07-26 MOH owner
-// mandates, so neither can play the "normal approval flow" role anymore).
-test("AUTO-APPROVE DISABLED: owner-requested pbx.M4 still goes to PENDING_APPROVAL", async () => {
-  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "ext MOH switch", requestedBy: "izzy", requestedRole: "owner", autoApprove: true });
+// pbx.M5 is the exemplar BOUND, NON-MANDATED capability for the generic-flow
+// tests below (M1/M2 auto-execute under the 2026-07-26 MOH mandates, M11 DND
+// under its own, and M3/M4/M10 under the 2026-07-28 PBX-config mandate — so
+// none of those can play the "normal approval flow" role anymore).
+test("AUTO-APPROVE DISABLED: owner-requested pbx.M5 still goes to PENDING_APPROVAL", async () => {
+  const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M5", params: P, summary: "ivr prompt swap", requestedBy: "izzy", requestedRole: "owner", autoApprove: true });
   assert.equal(a.status, "PENDING_APPROVAL");
-  assert.equal(a.paramsHash, computeParamsHash("pbx.M4", "21", P));
+  assert.equal(a.paramsHash, computeParamsHash("pbx.M5", "21", P));
   assert.ok((notifierStub as any).sent.some((m: any) => m.kind === "approval_request"));
   assert.equal(modifyBackend.calls.length, 0);
 });
@@ -177,22 +178,43 @@ test("legacy P-series capability keeps auto-approve (no regression)", async () =
   assert.equal(a.paramsHash ?? null, null);
 });
 
+test("OWNER MANDATE: PBX config (pbx.M3/M4/M10) executes without approval, binding intact", async () => {
+  for (const capabilityId of ["pbx.M3", "pbx.M4", "pbx.M10"]) {
+    const a = await svc().create({ tenantId: "21", capabilityId, params: P, summary: "pbx config change", requestedBy: "u1", requestedRole: "customer" });
+    assert.equal(a.status, "EXECUTED", capabilityId);
+    assert.equal(a.approvedBy, "owner-mandate:pbxcfg-2026-07-28");
+    assert.equal(a.paramsHash, computeParamsHash(capabilityId, "21", P));
+    assert.ok(a.approvalConsumedAt);
+  }
+});
+
+test("OWNER MANDATE kill switch: AGENT_PBXCFG_AUTO_APPROVE=0 restores the M3/M4/M10 approval flow", async () => {
+  process.env.AGENT_PBXCFG_AUTO_APPROVE = "0";
+  try {
+    const a = await svc().create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "ivr change", requestedBy: "u1", requestedRole: "customer" });
+    assert.equal(a.status, "PENDING_APPROVAL");
+    assert.equal(modifyBackend.calls.length, 0);
+  } finally {
+    delete process.env.AGENT_PBXCFG_AUTO_APPROVE;
+  }
+});
+
 test("PENDING CAP: 4th concurrent modify request for a tenant is denied", async () => {
   const s = svc();
   for (let i = 0; i < 3; i++) {
-    await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: { ...P, classId: `c${i}` }, summary: `m${i}`, requestedBy: "u", requestedRole: "customer" });
+    await s.create({ tenantId: "21", capabilityId: "pbx.M5", params: { ...P, classId: `c${i}` }, summary: `m${i}`, requestedBy: "u", requestedRole: "customer" });
   }
-  const fourth = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: { ...P, classId: "c3" }, summary: "m3", requestedBy: "u", requestedRole: "customer" });
+  const fourth = await s.create({ tenantId: "21", capabilityId: "pbx.M5", params: { ...P, classId: "c3" }, summary: "m3", requestedBy: "u", requestedRole: "customer" });
   assert.equal(fourth.status, "DENIED");
   assert.match(fourth.deniedReason, /modify_pending_cap/);
   // other tenants unaffected
-  const other = await s.create({ tenantId: "8", capabilityId: "pbx.M4", params: { ...P, tenantId: "8" }, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const other = await s.create({ tenantId: "8", capabilityId: "pbx.M5", params: { ...P, tenantId: "8" }, summary: "m", requestedBy: "u", requestedRole: "customer" });
   assert.equal(other.status, "PENDING_APPROVAL");
 });
 
-test("ROUTING: pbx.M4 goes to the modify backend, pbx.P1 to the legacy backend", async () => {
+test("ROUTING: pbx.M5 goes to the modify backend, pbx.P1 to the legacy backend", async () => {
   const s = svc();
-  const m = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const m = await s.create({ tenantId: "21", capabilityId: "pbx.M5", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
   await s.approve(m.id, "owner:izzy");
   assert.equal(modifyBackend.calls.length, 1);
   assert.equal(pbxBackend.calls.length, 0);
@@ -203,7 +225,7 @@ test("ROUTING: pbx.M4 goes to the modify backend, pbx.P1 to the legacy backend",
 
 test("SINGLE-USE: approving a bound action consumes it; second execute attempt is blocked", async () => {
   const s = svc();
-  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M5", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
   const done = await s.approve(a.id, "owner:izzy");
   assert.equal(done.status, "EXECUTED");
   assert.ok(prisma.rows[0].approvalConsumedAt);
@@ -215,7 +237,7 @@ test("SINGLE-USE: approving a bound action consumes it; second execute attempt i
 
 test("EMAIL REDEMPTION: bound action requires a bound token with the matching hash", async () => {
   const s = svc();
-  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M5", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
 
   // legacy unbound token for the same action id → rejected
   const legacy = makeApprovalToken(a.id, "approve");
@@ -224,7 +246,7 @@ test("EMAIL REDEMPTION: bound action requires a bound token with the matching ha
   assert.equal(r1.error, "bound_token_required");
 
   // bound token with a DIFFERENT hash (approval for another change) → rejected
-  const wrongHash = computeParamsHash("pbx.M4", "21", { ...P, classId: "other" });
+  const wrongHash = computeParamsHash("pbx.M5", "21", { ...P, classId: "other" });
   const r2 = await s.redeemEmailDecision(makeBoundApprovalToken(a.id, "approve", wrongHash));
   assert.equal(r2.ok, false);
   assert.equal(r2.error, "token_binding_mismatch");
@@ -246,7 +268,7 @@ test("EMAIL REDEMPTION: legacy actions still redeem with legacy tokens (no regre
 
 test("approval email for bound actions carries a BOUND token", async () => {
   const s = svc();
-  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M4", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
+  const a = await s.create({ tenantId: "21", capabilityId: "pbx.M5", params: P, summary: "m", requestedBy: "u", requestedRole: "customer" });
   const mail = (notifierStub as any).sent.find((m: any) => m.kind === "approval_request");
   const tok = /token=([^\s&]+)/.exec(mail.text)?.[1];
   assert.ok(tok);

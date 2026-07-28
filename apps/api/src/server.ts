@@ -224,7 +224,11 @@ import {
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
   agentSetPbxRouteDestination,
+  agentSetPbxRouteDestinationV2,
   agentRestorePbxRouteDestination,
+  getPbxTenantCatalog,
+  pbxNativeIvrAction,
+  pbxNativeQueueAction,
   getPbxDiversion,
   setPbxDiversion,
   fetchAllVoicemailSpoolMessages,
@@ -22065,16 +22069,88 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
 // SAME IvrOptionRoute + publish machinery the portal uses. Enforces the full
 // hardening matrix (per-type ref shape, custom allow-list, sub-menu loop guard,
 // tenant ownership of profile + sub-menu target). Attribution agent:<actionId>.
-app.post("/internal/agent/ivr/action", async (req, reply) => {
+app.post("/internal/agent/ivr/action", { bodyLimit: 48 * 1024 * 1024 }, async (req, reply) => {
   const { AgentIvrActionRequest, validateAgentIvrOption } = await import("./agentIvrAction");
   const { agentMohSecretOk } = await import("./agentMohOverride");
   if (!agentMohSecretOk(req.headers["x-agent-internal-secret"])) return reply.code(403).send({ error: "forbidden" });
   const parsed = AgentIvrActionRequest.safeParse(req.body || {});
   if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues.slice(0, 3) });
   const d = parsed.data;
+  const actor = `agent:${d.agentActionId}`;
+
+  // ── Native VitalPBX IVR ops (2026-07-28) ──
+  // Operate on the tenant's REAL ombu_ivrs menus via the PBX helper: recording
+  // upload, welcome greeting swap, digit-option routing. The helper verifies
+  // tenant ownership of every referenced row and runs VitalPBX's own per-tenant
+  // apply_changes regen (menus are baked into the generated dialplan).
+  if (d.action.startsWith("native_")) {
+    const link = await db.tenantPbxLink.findFirst({
+      where: { OR: [{ tenantId: d.tenantId }, { pbxTenantId: d.tenantId }], status: "LINKED" },
+      select: { pbxInstanceId: true, pbxTenantId: true },
+    });
+    if (!link?.pbxInstanceId || !link.pbxTenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+    const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+    if (!helperCfg) return reply.code(503).send({ error: "route_helper_not_configured" });
+    const vitalTenantId = String(link.pbxTenantId);
+    try {
+      if (d.action === "native_list") {
+        const catalog = await getPbxTenantCatalog(helperCfg, { tenantId: vitalTenantId });
+        return reply.send({ ok: true, catalog });
+      }
+      if (d.action === "native_upload_recording") {
+        // Transcode the original audio (MP3/WAV/…) to PBX WAV (8 kHz mono
+        // PCM) with the same ffmpeg pipeline MOH uploads use, then push the
+        // WAV bytes to the helper, which creates the ombu_recordings row and
+        // writes the md5-named file VitalPBX expects.
+        const os = await import("node:os");
+        const { transcodeMohPlaylistToPbxWav } = await import("./mohStorage");
+        let raw: Buffer;
+        try {
+          raw = Buffer.from(String(d.audioBase64), "base64");
+        } catch {
+          return reply.code(400).send({ ok: false, error: "invalid_base64" });
+        }
+        if (!raw.length || raw.length > 24 * 1024 * 1024) return reply.code(400).send({ ok: false, error: "audio_too_large_or_empty" });
+        const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-ivr-rec-"));
+        const ext = (d.audioFilename?.match(/\.([a-z0-9]{1,5})$/i)?.[1] ?? "mp3").toLowerCase();
+        const srcPath = path.join(tmpDir, `src.${ext}`);
+        const wavPath = path.join(tmpDir, "out.wav");
+        try {
+          await fs.promises.writeFile(srcPath, raw);
+          const t = await transcodeMohPlaylistToPbxWav({ sourceAbsolutePaths: [srcPath], destAbsolutePath: wavPath });
+          if (!t.ok) return reply.code(422).send({ ok: false, error: "audio_conversion_failed", detail: (t as any).error });
+          const wavB64 = (await fs.promises.readFile(wavPath)).toString("base64");
+          const res = await pbxNativeIvrAction(helperCfg, { tenantId: vitalTenantId, action: "upload_recording", name: d.recordingName, bytesB64: wavB64, actor });
+          app.log.info({ vitalTenantId, actor, recordingId: res?.recordingId, name: d.recordingName }, "agent ivr: native recording uploaded");
+          return reply.send({ ok: true, recording: { id: res.recordingId, name: res.name, durationSec: res.durationSec } });
+        } finally {
+          await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => void 0);
+        }
+      }
+      if (d.action === "native_set_welcome") {
+        const res = await pbxNativeIvrAction(helperCfg, { tenantId: vitalTenantId, action: "set_welcome", ivrId: d.ivrId, recordingId: d.recordingId, actor });
+        app.log.info({ vitalTenantId, actor, ivrId: d.ivrId, recordingId: d.recordingId }, "agent ivr: native welcome set");
+        return reply.send({ ok: true, result: res });
+      }
+      const res = await pbxNativeIvrAction(helperCfg, {
+        tenantId: vitalTenantId,
+        action: d.action === "native_set_entry" ? "set_entry" : "clear_entry",
+        ivrId: d.ivrId,
+        option: d.option,
+        targetType: d.targetType,
+        targetId: d.targetId,
+        actor,
+      });
+      app.log.info({ vitalTenantId, actor, ivrId: d.ivrId, option: d.option, targetType: d.targetType, targetId: d.targetId, action: d.action }, "agent ivr: native entry changed");
+      return reply.send({ ok: true, result: res });
+    } catch (err: any) {
+      app.log.warn({ vitalTenantId, actor, action: d.action, err: err?.message }, "agent ivr native action failed");
+      return reply.code(502).send({ ok: false, error: err?.message ?? "native_ivr_action_failed" });
+    }
+  }
+
   const tid = await resolveMohTenantId(d.tenantId);
   if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
-  const actor = `agent:${d.agentActionId}`;
 
   // Profiles owned by this tenant (ownership + sub-menu loop guard source).
   const profiles = await (db as any).ivrRouteProfile.findMany({ where: { tenantId: tid }, select: { id: true, name: true } });
@@ -24623,10 +24699,44 @@ app.post("/internal/agent/queue/action", async (req, reply) => {
 
   const link = await db.tenantPbxLink.findFirst({ where: { pbxTenantId: String(d.tenantId), status: "LINKED" }, include: { pbxInstance: true } });
   if (!link?.pbxInstance || !link.pbxTenantId) return reply.code(400).send({ error: "tenant_not_linked" });
-  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
-  const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
   const vitalTenantId = String(link.pbxTenantId);
   const actor = `agent:${d.agentActionId}`;
+
+  // ── Native VitalPBX queue ops (2026-07-28) ──
+  // Members, hold music and announcements are BAKED into the generated queues
+  // conf, so these go via the PBX helper: ombu DB write + VitalPBX's own
+  // per-tenant apply_changes regen + queue reload. Ownership of the queue,
+  // member extension and recording is verified tenant-scoped on the PBX.
+  if (["native_list", "members_add", "members_remove", "set_moh", "set_announcement"].includes(d.action)) {
+    const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+    if (!helperCfg) return reply.code(503).send({ error: "route_helper_not_configured" });
+    try {
+      if (d.action === "native_list") {
+        const catalog = await getPbxTenantCatalog(helperCfg, { tenantId: vitalTenantId });
+        return reply.send({ ok: true, catalog });
+      }
+      const res = await pbxNativeQueueAction(helperCfg, {
+        tenantId: vitalTenantId,
+        action: d.action === "members_add" ? "add_member" : d.action === "members_remove" ? "remove_member" : d.action,
+        ...(d.queueId ? { queueId: d.queueId } : {}),
+        ...(d.queueExtension ? { queueExtension: d.queueExtension } : {}),
+        ...(d.extension ? { extension: d.extension } : {}),
+        ...(d.penalty != null ? { penalty: d.penalty } : {}),
+        ...(d.mohClass ? { mohClass: d.mohClass } : {}),
+        ...(d.slot ? { slot: d.slot } : {}),
+        ...(d.recordingId !== undefined ? { recordingId: d.recordingId } : {}),
+        actor,
+      });
+      app.log.info({ vitalTenantId, actor, action: d.action, queueId: d.queueId ?? d.queueExtension }, "agent queue: native action executed");
+      return reply.send({ ok: true, result: res });
+    } catch (err: any) {
+      app.log.warn({ vitalTenantId, actor, action: d.action, err: err?.message }, "agent queue native action failed");
+      return reply.code(502).send({ ok: false, error: err?.message ?? "native_queue_action_failed" });
+    }
+  }
+
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
 
   try {
     const queues = await vital.listQueues(vitalTenantId);
@@ -25046,6 +25156,31 @@ app.post("/internal/agent/route/action", async (req, reply) => {
   try {
     if (d.action === "list_targets") {
       return reply.send({ ok: true, targets: await harvestTargets() });
+    }
+    if (d.action === "list_catalog") {
+      // Full tenant inventory (extensions/queues/ring groups/IVRs/time
+      // conditions/custom apps + current route targets) — grounds the agent's
+      // name→id resolution and diagnostics for M3 v2.
+      const catalog = await getPbxTenantCatalog(helperCfg, { tenantId: vitalTenantId });
+      return reply.send({ ok: true, catalog });
+    }
+    if (d.action === "route_retarget_v2") {
+      // v2: tenant-owned target by TYPE + ID. Ownership is verified on the PBX
+      // (helper) against the ombu tables; the destination row is find-or-created
+      // exactly the way the GUI does it, then VitalPBX's own per-tenant
+      // apply_changes regen runs — destinations are baked into generated conf.
+      const cur = await inspectPbxInboundRoute(helperCfg, { did: String(d.did), tenantId: vitalTenantId });
+      if (cur.mode === "connect") return reply.code(409).send({ ok: false, error: "connect_managed_route_refused" });
+      const res = await agentSetPbxRouteDestinationV2(helperCfg, {
+        did: String(d.did),
+        tenantId: vitalTenantId,
+        targetType: String(d.targetType),
+        targetId: String(d.targetId),
+        actor,
+        requestId: d.agentActionId,
+      });
+      app.log.info({ vitalTenantId, actor, did: d.did, targetType: d.targetType, targetId: d.targetId }, "agent route: retargeted (v2)");
+      return reply.send({ ok: true, after: res.after ?? null, target: (res as any).target ?? null, apply: (res as any).apply ?? null });
     }
     if (d.action === "route_inspect") {
       const h = await inspectPbxInboundRoute(helperCfg, { did: String(d.did), tenantId: vitalTenantId });

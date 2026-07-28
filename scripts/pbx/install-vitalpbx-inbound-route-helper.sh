@@ -188,7 +188,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.07.23.5"
+VERSION = "2026.07.26.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -796,6 +796,174 @@ def patch_tenant_queue_musicclass(tenant_id, music_group_id):
         evidence["error"] = "patch_failed: %s" % exc
         return evidence
 
+# ── X5 full MOH convergence (2026-07-26) ─────────────────────────────────────
+# Root-caused on live call C-0000319b (2026-07-26): VitalPBX HARD-CODES each
+# object's MOH class into the generated tenant dialplan
+# (/etc/asterisk/vitalpbx/extensions__50-<tenant>-dialplan.conf) as
+#   Gosub(sub-set-moh,s,1(<class>,YES))
+# right before Queue()/Dial(). That Set(CHANNEL(musicclass)) BEATS queues.conf
+# and the Connect tenant AstDB keys, so the X4 DB+queues.conf sync left queue
+# callers hearing the old class until a GUI apply regenerated the dialplan.
+# X5 therefore converges, in one call: EVERY MOH-bearing DB table, the queue
+# conf (X4), the generated dialplan's hard-coded classes, and the per-queue /
+# per-extension AstDB `moh` keys the baseplan reads behind FORCE_QUEUE_MOH.
+# Same fail-safe rules as X4: backups, atomic replace, strict scope
+# verification, and on ANY doubt the file is left untouched and the error is
+# reported in the response evidence.
+
+# Meta-table that DEFINES the music groups — must never be rewritten.
+MOH_TABLE_EXCLUDE = {"ombu_music_groups"}
+
+# Only genuine music-class tokens are rewritten in the dialplan. `ringback`
+# (ring groups set to ring instead of music) and any other special tokens are
+# deliberately left alone.
+DIALPLAN_MOH_TOKEN = r"(?:default|moh\d+|connect_[A-Za-z0-9_]+)"
+
+def moh_bearing_tables(conn):
+    """Every ombu_* table with BOTH tenant_id and music_group_id columns —
+    i.e. every object type whose MOH VitalPBX renders from the DB (inbound
+    routes, extensions, queues, ring groups, conferences, parking lots,
+    trunks, follow-me, dial profiles, ...). Discovered dynamically so a
+    VitalPBX upgrade that adds a new MOH-bearing object type is covered
+    without a helper change."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT TABLE_NAME
+              FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND COLUMN_NAME IN ('tenant_id', 'music_group_id')
+             GROUP BY TABLE_NAME
+            HAVING COUNT(DISTINCT COLUMN_NAME) = 2
+            """
+        )
+        rows = cur.fetchall()
+    names = sorted(str(r.get("TABLE_NAME") or "") for r in rows)
+    return [n for n in names if n.startswith("ombu_") and n not in MOH_TABLE_EXCLUDE]
+
+def _patch_dialplan_moh_text(text, target_class):
+    """Pure text transform (offline-testable). Rewrites ONLY the class token
+    inside `sub-set-moh,s,1(<class>` occurrences, preserving the rest of each
+    line byte-for-byte. Line count is always preserved."""
+    moh_re = re.compile(r"(sub-set-moh,s,1\()(" + DIALPLAN_MOH_TOKEN + r")([,)])")
+    lines = text.splitlines(keepends=True)
+    old_classes = []
+    changed = 0
+    out = []
+    for ln in lines:
+        def _sub(m):
+            old_classes.append(m.group(2))
+            return m.group(1) + target_class + m.group(3)
+        new_ln, n = moh_re.subn(_sub, ln)
+        if n and new_ln != ln:
+            changed += 1
+            ln = new_ln
+        out.append(ln)
+    return {"error": None, "changed": changed, "oldClasses": old_classes, "newText": "".join(out)}
+
+def patch_tenant_dialplan_moh(tenant_id, music_group_id):
+    """Tenant-scoped (per-tenant generated file), backed-up, atomic patch of
+    the hard-coded MOH classes in the generated dialplan. Never raises. The
+    standard apply command (`dialplan reload`) must run afterwards — the
+    caller's apply_changes() does that. NOTE: unlike the queue conf, the
+    tenant dialplan legitimately contains non-T<t>_ sections (IVR-<n>,
+    ARS-<n>, parking-<t>-*), so scope safety here is the tenant-scoped
+    FILENAME plus the strict line-level diff check below, not section names."""
+    evidence = {"attempted": False, "patched": 0, "targetClass": None, "file": None, "backup": None, "oldClasses": [], "error": None}
+    try:
+        t = int(tenant_id)
+        target = target_class_for_group(music_group_id)
+        evidence["targetClass"] = target
+        conf = Path(QUEUE_CONF_DIR) / ("extensions__50-%d-dialplan.conf" % t)
+        evidence["file"] = str(conf)
+        if not conf.is_file():
+            evidence["error"] = "dialplan_conf_missing"  # tenant has no generated dialplan — nothing to do
+            return evidence
+        if not moh_class_generated(target):
+            evidence["error"] = "moh_class_not_generated"
+            return evidence
+        evidence["attempted"] = True
+        original = conf.read_text(errors="replace")
+        res = _patch_dialplan_moh_text(original, target)
+        evidence["oldClasses"] = sorted(set(res["oldClasses"]))
+        if res["changed"] == 0:
+            return evidence  # already converged
+        # SCOPE VERIFICATION: same line count, and every differing line must
+        # contain a sub-set-moh call — anything else means the transform did
+        # something unexpected and the file must not be replaced.
+        orig_lines = original.splitlines()
+        new_lines = res["newText"].splitlines()
+        if len(orig_lines) != len(new_lines):
+            evidence["error"] = "patch_line_count_mismatch"
+            return evidence
+        diff_idx = [i for i, (a, b) in enumerate(zip(orig_lines, new_lines)) if a != b]
+        if len(diff_idx) != res["changed"] or any("sub-set-moh,s,1(" not in orig_lines[i] for i in diff_idx):
+            evidence["error"] = "patch_scope_violation"
+            return evidence
+        backup_dir = Path(QUEUE_BACKUP_DIR)
+        backup_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+        backup = backup_dir / ("%s.%s.bak" % (conf.name, dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+        st = os.stat(conf)
+        backup.write_text(original)
+        evidence["backup"] = str(backup)
+        tmp = conf.with_name(conf.name + ".connect-tmp")  # suffix ≠ *.conf ⇒ never picked up by the include glob
+        tmp.write_text(res["newText"])
+        os.chmod(tmp, st.st_mode & 0o777)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, conf)
+        evidence["patched"] = res["changed"]
+        return evidence
+    except Exception as exc:
+        evidence["error"] = "patch_failed: %s" % exc
+        return evidence
+
+def sync_tenant_moh_astdb(tenant_id, music_group_id, queue_table):
+    """Converge the per-queue and per-extension AstDB `moh` keys to the target
+    class. The baseplan reads `${DB(<path>/queues/<n>/moh)}` behind
+    FORCE_QUEUE_MOH (and the per-extension analog); VitalPBX only rewrites
+    these keys on a GUI apply, so a DB-only sync leaves them stale. Fail-safe:
+    reports per-family counts, never raises."""
+    out = {"attempted": False, "tenantPath": None, "targetClass": None, "queueKeys": 0, "extensionKeys": 0, "failed": 0, "error": None}
+    try:
+        target = target_class_for_group(music_group_id)
+        out["targetClass"] = target
+        exts = []
+        queues = []
+        with db_conn() as conn:
+            path = resolve_tenant_path(conn, tenant_id)
+            if not path:
+                out["error"] = "tenant_path_not_found"
+                return out
+            out["tenantPath"] = path
+            with conn.cursor() as cur:
+                cur.execute("SELECT extension FROM ombu_extensions WHERE tenant_id = %s", (tenant_id,))
+                exts = [str((r or {}).get("extension") or "").strip() for r in cur.fetchall()]
+                if queue_table:
+                    cur.execute(f"SELECT extension FROM `{queue_table}` WHERE tenant_id = %s", (tenant_id,))
+                    queues = [str((r or {}).get("extension") or "").strip() for r in cur.fetchall()]
+        out["attempted"] = True
+        for q in queues:
+            if not re.match(r"^\d{1,10}$", q):
+                continue
+            if _astdb_put("%s/queues/%s" % (path, q), "moh", target):
+                out["queueKeys"] += 1
+            else:
+                out["failed"] += 1
+        for e in exts:
+            if not re.match(r"^\d{1,10}$", e):
+                continue
+            if _astdb_put("%s/extensions/%s" % (path, e), "moh", target):
+                out["extensionKeys"] += 1
+            else:
+                out["failed"] += 1
+        return out
+    except Exception as exc:
+        out["error"] = "astdb_sync_failed: %s" % exc
+        return out
+
 def inspect_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
     tenant_id = require_num("tenant_id", body.get("tenantId"))
@@ -1075,8 +1243,8 @@ def sync_tenant_moh(body):
     music_group_id = require_num("music_group_id", body.get("musicGroupId"))
     queue_table = None
     queues_total = 0
-    queues_updated = 0
     queue_sample = []
+    table_results = {}
     with db_conn() as conn:
         try:
             conn.begin()
@@ -1090,37 +1258,38 @@ def sync_tenant_moh(body):
                     cur.execute(f"SELECT COUNT(*) AS n FROM `{queue_table}` WHERE tenant_id = %s", (tenant_id,))
                     row = cur.fetchone() or {}
                     queues_total = int(row.get("n") or 0)
+            # X5 (2026-07-26): "sync tenant MOH" means EVERY MOH-bearing object
+            # type, not just inbound/extensions/queues — ring groups,
+            # conferences, parking lots, trunks, follow-me, and dial profiles
+            # all render their own hard-coded class into the generated
+            # dialplan, so a partial DB update leaves them regen-inconsistent.
             with conn.cursor() as cur:
-                cur.execute("""
-                UPDATE ombu_inbound_routes
-                SET music_group_id = %s
-                WHERE tenant_id = %s
-                  AND (music_group_id IS NULL OR music_group_id <> %s)
-                """, (music_group_id, tenant_id, music_group_id))
-                inbound_updated = int(cur.rowcount or 0)
-                cur.execute("""
-                UPDATE ombu_extensions
-                SET music_group_id = %s
-                WHERE tenant_id = %s
-                  AND (music_group_id IS NULL OR music_group_id <> %s)
-                """, (music_group_id, tenant_id, music_group_id))
-                extensions_updated = int(cur.rowcount or 0)
-                if queue_table:
+                for table in moh_bearing_tables(conn):
+                    cur.execute(f"SELECT COUNT(*) AS n FROM `{table}` WHERE tenant_id = %s", (tenant_id,))
+                    total = int((cur.fetchone() or {}).get("n") or 0)
                     cur.execute(f"""
-                    UPDATE `{queue_table}`
+                    UPDATE `{table}`
                     SET music_group_id = %s
                     WHERE tenant_id = %s
                       AND (music_group_id IS NULL OR music_group_id <> %s)
                     """, (music_group_id, tenant_id, music_group_id))
-                    queues_updated = int(cur.rowcount or 0)
+                    table_results[table] = {"total": total, "updated": int(cur.rowcount or 0)}
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+    inbound_updated = int((table_results.get("ombu_inbound_routes") or {}).get("updated") or 0)
+    extensions_updated = int((table_results.get("ombu_extensions") or {}).get("updated") or 0)
+    queues_updated = int((table_results.get(queue_table) or {}).get("updated") or 0) if queue_table else 0
     # X4: converge the generated queue conf to the (already-committed) DB row,
     # then reload app_queue so the change is live — the missing step behind
     # "queues keep the old music until a GUI edit".
     queue_patch = patch_tenant_queue_musicclass(tenant_id, music_group_id)
+    # X5: converge the hard-coded classes in the generated tenant dialplan and
+    # the per-queue / per-extension AstDB keys — without these, callers keep
+    # hearing the old class (see the X5 block comment for the live-call proof).
+    dialplan_patch = patch_tenant_dialplan_moh(tenant_id, music_group_id)
+    astdb_sync = sync_tenant_moh_astdb(tenant_id, music_group_id, queue_table)
     apply_result = apply_changes(reload_moh=True, reload_queues=bool(queue_patch.get("patched")))
     with db_conn() as conn:
         inbound_sample = sample_music_groups(conn, "ombu_inbound_routes", tenant_id)
@@ -1139,6 +1308,9 @@ def sync_tenant_moh(body):
         "queuesUpdated": queues_updated,
         "queueTable": queue_table or "",
         "queuePatch": queue_patch,
+        "tables": table_results,
+        "dialplanPatch": dialplan_patch,
+        "astdbSync": astdb_sync,
         "inboundSample": inbound_sample,
         "extensionSample": extension_sample,
         "queueSample": queue_sample,

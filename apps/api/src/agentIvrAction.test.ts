@@ -70,3 +70,20 @@ test("sub-menu (ivr) OWNERSHIP: target profile must belong to the tenant", () =>
 test("terminate ignores ref (always OK)", () => {
   assert.equal(validateAgentIvrOption({ destinationType: "terminate", destinationRef: "", profileId: "p" }), null);
 });
+
+test("NATIVE actions (2026-07-28): per-action field requirements", () => {
+  const base = { tenantId: "21", agentActionId: "a" };
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_list" }).success, true);
+  // set_entry needs ivrId + option + targetType + targetId
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_set_entry", ivrId: "5", option: "2", targetType: "queue", targetId: "3" }).success, true);
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_set_entry", ivrId: "5", option: "2" }).success, false);
+  // native option accepts raw digits/*/# (ombu format), nothing longer
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_clear_entry", ivrId: "5", option: "*" }).success, true);
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_clear_entry", ivrId: "5", option: "12" }).success, false);
+  // set_welcome needs ivrId + recordingId
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_set_welcome", ivrId: "5", recordingId: "9" }).success, true);
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_set_welcome", ivrId: "5" }).success, false);
+  // upload_recording needs a name + base64 audio
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_upload_recording", recordingName: "Greet", audioBase64: "QUJD", audioFilename: "greet.mp3" }).success, true);
+  assert.equal(AgentIvrActionRequest.safeParse({ ...base, action: "native_upload_recording", recordingName: "Greet" }).success, false);
+});

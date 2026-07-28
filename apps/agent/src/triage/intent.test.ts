@@ -86,10 +86,15 @@ test("MOH direction: 'turn off the holiday hold music' deactivates", () => {
   if (i.kind === "action") assert.equal(i.enableHint, "no");
 });
 
-test("action intent: IVR switch", () => {
+test("action intent: IVR/menu phrases route to the pbx_config flow (M4 first crack)", () => {
   const i = detectIntent("please put on the holiday menu until the 25th");
   assert.equal(i.kind, "action");
-  if (i.kind === "action") assert.equal(i.actionType, "ivr_switch");
+  // Since 2026-07-28 menu/IVR language goes to the catalog-grounded pbx_config
+  // flow (real M4 ops); phrases it declines fall back to the legacy A3 path.
+  if (i.kind === "action") assert.equal(i.actionType, "pbx_config");
+  const j = detectIntent("switch to night mode please");
+  assert.equal(j.kind, "action");
+  if (j.kind === "action") assert.equal(j.actionType, "ivr_switch");
 });
 
 test("plain conversation is not misclassified", () => {

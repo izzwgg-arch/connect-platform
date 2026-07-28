@@ -69,10 +69,26 @@ export function mohAutoApproveMandate(capabilityId: string): boolean {
   return capabilityId === "pbx.M1" || capabilityId === "pbx.M2";
 }
 
+/**
+ * OWNER MANDATE (Izzy, 2026-07-28): inbound-route retargeting (M3), IVR
+ * recording/menu changes (M4) and queue membership/recording/hold-music
+ * changes (M10) execute immediately when the tenant asks — same contract as
+ * the DND/MOH mandates (params-hash binding, tenant-scope fences on both the
+ * API door AND the PBX helper, live-tenant allow-list, rate budget, snapshot/
+ * verify/auto-revert, audit). The orchestrator additionally restricts these
+ * three to tenant OWNERS/admins — company-wide call routing is never a
+ * regular-user power. Kill switch: AGENT_PBXCFG_AUTO_APPROVE=0.
+ */
+export function pbxConfigAutoApproveMandate(capabilityId: string): boolean {
+  if (process.env.AGENT_PBXCFG_AUTO_APPROVE === "0") return false;
+  return capabilityId === "pbx.M3" || capabilityId === "pbx.M4" || capabilityId === "pbx.M10";
+}
+
 /** Owner-mandate label for a capability/params combo, or null when none applies. */
 export function ownerMandateFor(capabilityId: string, params: Record<string, unknown>): string | null {
   if (dndAutoApproveMandate(capabilityId, params)) return "dnd-2026-07-26";
   if (mohAutoApproveMandate(capabilityId)) return "moh-2026-07-26";
+  if (pbxConfigAutoApproveMandate(capabilityId)) return "pbxcfg-2026-07-28";
   return null;
 }
 

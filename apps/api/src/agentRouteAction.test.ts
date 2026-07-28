@@ -14,6 +14,14 @@ test("schema: did required except for list_targets; destinationId required for r
   assert.equal(AgentRouteActionRequest.safeParse({ action: "list_targets", tenantId: "21" }).success, false); // agentActionId required
 });
 
+test("schema: v2 (2026-07-28) — list_catalog needs nothing extra; retarget_v2 needs type+id", () => {
+  const base = { tenantId: "21", agentActionId: "a" };
+  assert.equal(AgentRouteActionRequest.safeParse({ ...base, action: "list_catalog" }).success, true);
+  assert.equal(AgentRouteActionRequest.safeParse({ ...base, action: "route_retarget_v2", did: "845" }).success, false);
+  assert.equal(AgentRouteActionRequest.safeParse({ ...base, action: "route_retarget_v2", did: "845", targetType: "queue", targetId: "3" }).success, true);
+  assert.equal(AgentRouteActionRequest.safeParse({ ...base, action: "route_retarget_v2", did: "845", targetType: "webhook", targetId: "3" }).success, false);
+});
+
 test("buildRouteTargets: distinct in-use destinations, connect/unknown excluded, labeled by DID", () => {
   const targets = buildRouteTargets([
     { did: "8455550001", description: "Main", destinationId: "456", mode: "pbx" },

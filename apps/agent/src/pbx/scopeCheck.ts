@@ -105,8 +105,14 @@ export function makeScopeCheck(prisma: any): ScopeCheck {
         case "ivr_option":
         case "ivr_prompt":
         case "ivr_exit": {
-          // M4/M5/M6: objectId is "<profileId>:<digit|slot>". The IVR profile
-          // must belong to the tenant (clean — ivrRouteProfile.tenantId).
+          // Native VitalPBX IVR (2026-07-28): objectId "ivr:<ivrId>:<option|welcome>".
+          // The IVR lives in the ombu DB, not the Postgres mirror — its tenant
+          // ownership is verified ON THE PBX (helper _resolve_ivr, tenant-scoped
+          // SQL) at snapshot AND dispatch time. Here we confirm the requester
+          // owns the linked tenant (same trust model as "queue" / M10).
+          if (String(objectId).startsWith("ivr:")) return !!connectTenantId;
+          // M4/M5/M6 (Connect IVR): objectId is "<profileId>:<digit|slot>". The
+          // IVR profile must belong to the tenant (clean — ivrRouteProfile.tenantId).
           // Sub-menu target ownership + loop guard (M4/M6) and the dead-air
           // recording check (M5) are enforced in the api door's validator.
           const profileId = String(params?.profileId ?? String(objectId).split(":")[0]);

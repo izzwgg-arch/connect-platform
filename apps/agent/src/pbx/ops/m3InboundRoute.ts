@@ -22,17 +22,27 @@ import type { ModifyOp, ModifyOpCtx, ModifyClientLike, ModifyCatalogDeps } from 
 
 const nonEmpty = z.string().min(1);
 
+/** Native target types the v2 retarget accepts (helper verifies tenant ownership). */
+export const M3_TARGET_TYPES = ["extension", "queue", "ring_group", "ivr", "time_condition", "custom_application"] as const;
+
 export const M3_SCHEMA = z
   .object({
     tenantId: nonEmpty,
     /** Single-object contract: the DID (E.164 or digits) IS the object. */
     objectId: nonEmpty,
-    action: z.enum(["retarget", "restore"]),
-    /** Required for retarget: a destination id H2 verified belongs to the tenant. */
+    action: z.enum(["retarget", "retarget_v2", "restore"]),
+    /** Required for legacy retarget: a destination id H2 verified belongs to the tenant. */
     destinationId: nonEmpty.optional(),
+    /** v2 retarget (2026-07-28): route to ANY tenant-owned object by type + id.
+     *  Ownership verified on the PBX; destination row find-or-created like the GUI. */
+    targetType: z.enum(M3_TARGET_TYPES).optional(),
+    targetId: nonEmpty.optional(),
+    /** Human label for the target (reply/audit text only, not trusted for routing). */
+    targetLabel: z.string().max(120).optional(),
     reason: z.string().max(500).optional(),
   })
-  .refine((v) => v.action !== "retarget" || !!v.destinationId, { message: "destinationId required for retarget" });
+  .refine((v) => v.action !== "retarget" || !!v.destinationId, { message: "destinationId required for retarget" })
+  .refine((v) => v.action !== "retarget_v2" || (!!v.targetType && !!v.targetId), { message: "targetType + targetId required for retarget_v2" });
 
 export interface M3Snapshot {
   did: string;
@@ -80,6 +90,21 @@ export function makeM3Op(deps: ModifyCatalogDeps & { routeApi: { call(body: Reco
       if (ctx.simulate) {
         return { simulated: true, action: params.action, did: String(params.objectId), destinationId: params.destinationId ?? null };
       }
+      if (params.action === "retarget_v2") {
+        // v2: tenant-owned target by TYPE + ID. Helper verifies ownership,
+        // find-or-creates the destination row, runs the REAL per-tenant regen.
+        const resp = await routeApi.call({
+          action: "route_retarget_v2",
+          tenantId: String(params.tenantId),
+          did: String(params.objectId),
+          targetType: String(params.targetType),
+          targetId: String(params.targetId),
+          reason: params.reason ?? "agent M3 route change (v2)",
+          agentActionId: ctx.actionId ?? "unknown",
+        });
+        const afterDest = resp.after?.destination_id != null ? String(resp.after.destination_id) : null;
+        return { action: "retarget_v2", did: String(params.objectId), targetType: String(params.targetType), targetId: String(params.targetId), afterDestinationId: afterDest, target: resp.target ?? null, after: resp.after ?? null, apply: resp.apply ?? null };
+      }
       if (params.action === "retarget") {
         // The api door (with H2) tenant-verifies destinationId BEFORE switching.
         const resp = await routeApi.call({
@@ -106,6 +131,14 @@ export function makeM3Op(deps: ModifyCatalogDeps & { routeApi: { call(body: Reco
       if (params.action === "retarget") {
         if (nowDest !== String(params.destinationId)) {
           return { ok: false, observed: { nowDest }, detail: "route destination did not change to the requested target" };
+        }
+      }
+      if (params.action === "retarget_v2") {
+        // The helper reports the destination row it ensured + wrote; the live
+        // route must now carry exactly that id.
+        const expected = written?.afterDestinationId != null ? String(written.afterDestinationId) : null;
+        if (!expected || nowDest !== expected) {
+          return { ok: false, observed: { nowDest, expected }, detail: "route destination did not change to the requested target (v2)" };
         }
       }
       return { ok: true, observed: { nowDest, mode: resp.mode } };

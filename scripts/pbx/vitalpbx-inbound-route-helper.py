@@ -15,13 +15,16 @@ import sys
 import tempfile
 import time
 import uuid
+import ssl
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.07.26.1"
+VERSION = "2026.07.28.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -96,6 +99,17 @@ class Config:
         self.transport_wss_reload_command = os.environ.get(
             "CONNECT_PBX_TRANSPORT_WSS_RELOAD_COMMAND", 'asterisk -rx "module reload res_pjsip.so"'
         ).strip()
+        # M3/M4/M10 native config writes (2026-07-28): VitalPBX BAKES inbound-route
+        # destinations, IVR menu options and queue members into the generated conf
+        # (verified live: exten => _<DID> ... Goto(T21_cos-all,101,1)), so a DB
+        # write alone never becomes live. The ONLY sanctioned regen is VitalPBX's
+        # own per-tenant apply: PUT /api/v2/tenants/<id>/apply_changes — same code
+        # path as the GUI "Apply Changes" button. Key comes from the Connect app
+        # key already provisioned for the VitalPBX REST API.
+        self.vitalpbx_api_url = os.environ.get("CONNECT_PBX_VITALPBX_API_URL", "https://127.0.0.1").strip()
+        self.vitalpbx_api_key = os.environ.get("CONNECT_PBX_VITALPBX_API_KEY", "").strip()
+        self.apply_changes_timeout = int(os.environ.get("CONNECT_PBX_APPLY_CHANGES_TIMEOUT_SEC", "180"))
+        self.static_dir = Path(os.environ.get("CONNECT_PBX_STATIC_DIR", "/var/lib/vitalpbx/static"))
     def validate(self):
         if len(self.secret) < 32:
             raise SystemExit("CONNECT_PBX_HELPER_SECRET must be at least 32 chars")
@@ -573,12 +587,14 @@ def _patch_queue_musicclass_text(text, tenant_id, target_class):
         out.append(ln)
     return {"error": None, "foreign": [], "sections": len(sections), "changed": changed, "oldClasses": old_classes, "newText": "".join(out)}
 
-def patch_tenant_queue_musicclass(tenant_id, music_group_id):
-    """Tenant-scoped, backed-up, atomic musicclass patch. Never raises."""
+def patch_tenant_queue_musicclass(tenant_id, music_group_id, target_class=None):
+    """Tenant-scoped, backed-up, atomic musicclass patch. Never raises.
+    target_class overrides the group mapping (used to re-apply a connect_*
+    class after a VitalPBX regen — see reapply_moh_patches_after_regen)."""
     evidence = {"attempted": False, "patched": 0, "sections": 0, "targetClass": None, "file": None, "backup": None, "oldClasses": [], "error": None}
     try:
         t = int(tenant_id)
-        target = target_class_for_group(music_group_id)
+        target = target_class or target_class_for_group(music_group_id)
         evidence["targetClass"] = target
         conf = Path(QUEUE_CONF_DIR) / ("queues__50-%d-main.conf" % t)
         evidence["file"] = str(conf)
@@ -694,7 +710,7 @@ def _patch_dialplan_moh_text(text, target_class):
         out.append(ln)
     return {"error": None, "changed": changed, "oldClasses": old_classes, "newText": "".join(out)}
 
-def patch_tenant_dialplan_moh(tenant_id, music_group_id):
+def patch_tenant_dialplan_moh(tenant_id, music_group_id, target_class=None):
     """Tenant-scoped (per-tenant generated file), backed-up, atomic patch of
     the hard-coded MOH classes in the generated dialplan. Never raises. The
     standard apply command (`dialplan reload`) must run afterwards ??? the
@@ -705,7 +721,7 @@ def patch_tenant_dialplan_moh(tenant_id, music_group_id):
     evidence = {"attempted": False, "patched": 0, "targetClass": None, "file": None, "backup": None, "oldClasses": [], "error": None}
     try:
         t = int(tenant_id)
-        target = target_class_for_group(music_group_id)
+        target = target_class or target_class_for_group(music_group_id)
         evidence["targetClass"] = target
         conf = Path(QUEUE_CONF_DIR) / ("extensions__50-%d-dialplan.conf" % t)
         evidence["file"] = str(conf)
@@ -966,7 +982,9 @@ def agent_set_route_destination(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_changes()
+    # 2026-07-28: destinations are BAKED into the generated dialplan — the old
+    # `dialplan reload` apply never surfaced this write. Real per-tenant regen.
+    apply_result = apply_tenant_changes(tenant_id)
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "destinationId": dest, "apply": apply_result}
@@ -1001,7 +1019,8 @@ def agent_restore_route_destination(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_changes()
+    # 2026-07-28: same as agent_set — restore needs the real per-tenant regen.
+    apply_result = apply_tenant_changes(tenant_id)
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
@@ -1834,6 +1853,694 @@ def media_sync_trigger(body):
         fh.write("%s %s\n" % (utc_now(), reason))
     return {"ok": True, "trigger": str(MEDIA_SYNC_TRIGGER_PATH), "reason": reason}
 
+# ── M3/M4/M10 native config layer (2026-07-28) ──────────────────────────────
+# Everything below writes VitalPBX's OWN ombu_* tables (the GUI's source of
+# truth) and then triggers VitalPBX's OWN per-tenant regen (apply_changes REST
+# call — the GUI "Apply Changes" button). Root cause this exists: destinations,
+# IVR menus and queue members are baked into the generated conf; the previous
+# apply (`dialplan reload`) alone can never surface a DB-only write.
+#
+# Destination model (verified live 2026-07-28):
+#   ombu_destinations(id, category_id, module_id, `index`)
+#   - category_id → ombu_destinations_category.id → module of the TARGET type
+#   - module_id   → module that OWNS the destination row (inbound_routes=29,
+#                   ivr=31, queues=21, ...)
+#   - `index`     → PRIMARY KEY of the target row (extension_id, queue_id, ...)
+
+DEST_TARGET_TYPES = {
+    # type → (module name for category lookup, table, pk column, tenant column, label SQL)
+    "extension": ("extensions", "ombu_extensions", "extension_id", "tenant_id", "CONCAT(extension, ' ', name)"),
+    "queue": ("queues", "ombu_queues", "queue_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
+    "ring_group": ("ring_groups", "ombu_ring_groups", "ring_group_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
+    "ivr": ("ivr", "ombu_ivrs", "ivr_id", "tenant_id", "COALESCE(description,'')"),
+    "time_condition": ("time_conditions", "ombu_time_conditions", "time_condition_id", "tenant_id", "COALESCE(description,'')"),
+    "custom_application": ("custom_app", "ombu_custom_applications", "custom_application_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
+}
+OWNER_MODULE_INBOUND_ROUTE = "inbound_routes"
+OWNER_MODULE_IVR = "ivr"
+IVR_OPTION_RE = re.compile(r"^(?:\d{1,2}|\*|#)$")
+
+def _module_id_by_name(conn, name):
+    with conn.cursor() as cur:
+        cur.execute("SELECT module_id FROM ombu_modules WHERE name = %s", (name,))
+        row = cur.fetchone()
+    if not row:
+        raise LookupError("module_not_found:%s" % name)
+    return int(row["module_id"])
+
+def _category_id_for_module(conn, module_name):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.id FROM ombu_destinations_category c
+            JOIN ombu_modules m ON m.module_id = c.module_id
+            WHERE m.name = %s
+            """,
+            (module_name,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise LookupError("destination_category_not_found:%s" % module_name)
+    return int(row["id"])
+
+def _verify_target(conn, tenant_id, target_type, target_id):
+    """Target row must exist AND belong to this tenant. Returns a human label."""
+    spec = DEST_TARGET_TYPES.get(target_type)
+    if not spec:
+        raise ValueError("unsupported_target_type:%s" % target_type)
+    _, table, pk, tenant_col, label_sql = spec
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT {label_sql} AS label FROM `{table}` WHERE `{pk}` = %s AND `{tenant_col}` = %s",
+            (target_id, tenant_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise LookupError("target_not_found_for_tenant:%s:%s" % (target_type, target_id))
+    return str(row.get("label") or "").strip()
+
+def _ensure_destination(conn, owner_module_name, target_type, target_id):
+    """Find-or-create the ombu_destinations row for (owner, target). VitalPBX's
+    GUI creates these lazily per owner+target pair; we mirror that exactly."""
+    category_id = _category_id_for_module(conn, DEST_TARGET_TYPES[target_type][0])
+    owner_module_id = _module_id_by_name(conn, owner_module_name)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM ombu_destinations WHERE category_id = %s AND module_id = %s AND `index` = %s LIMIT 1",
+            (category_id, owner_module_id, str(target_id)),
+        )
+        row = cur.fetchone()
+        if row:
+            return int(row["id"]), False
+        cur.execute(
+            "INSERT INTO ombu_destinations (category_id, module_id, `index`) VALUES (%s, %s, %s)",
+            (category_id, owner_module_id, str(target_id)),
+        )
+        return int(cur.lastrowid), True
+
+def _decode_destination(conn, destination_id):
+    """destination_id → {type, targetId, label} (best effort, read-only)."""
+    if destination_id in (None, "", 0, "0"):
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.id, d.`index` AS idx, m.name AS target_module
+            FROM ombu_destinations d
+            JOIN ombu_destinations_category c ON c.id = d.category_id
+            JOIN ombu_modules m ON m.module_id = c.module_id
+            WHERE d.id = %s
+            """,
+            (destination_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return {"destinationId": int(destination_id), "type": "unknown", "targetId": None, "label": None}
+    module_to_type = {spec[0]: t for t, spec in DEST_TARGET_TYPES.items()}
+    ttype = module_to_type.get(str(row["target_module"]))
+    out = {"destinationId": int(row["id"]), "type": ttype or str(row["target_module"]), "targetId": str(row["idx"]), "label": None}
+    if ttype:
+        try:
+            out["label"] = _verify_target_any_tenant(conn, ttype, out["targetId"])
+        except Exception:
+            pass
+    return out
+
+def _verify_target_any_tenant(conn, target_type, target_id):
+    spec = DEST_TARGET_TYPES.get(target_type)
+    if not spec:
+        return None
+    _, table, pk, _tenant_col, label_sql = spec
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {label_sql} AS label FROM `{table}` WHERE `{pk}` = %s", (target_id,))
+        row = cur.fetchone()
+    return str(row.get("label") or "").strip() if row else None
+
+def apply_tenant_changes(tenant_id, extra_reloads=()):
+    """Official VitalPBX per-tenant regen (same as GUI Apply Changes):
+    PUT /api/v2/tenants/<id>/apply_changes with the provisioned app-key.
+    Falls back to the legacy apply command when no key is configured (which
+    only reloads — sufficient for nothing baked, so log loudly)."""
+    if not CFG.vitalpbx_api_key:
+        legacy = apply_changes()
+        legacy["mode"] = "legacy_no_api_key"
+        return legacy
+    url = "%s/api/v2/tenants/%s/apply_changes" % (CFG.vitalpbx_api_url.rstrip("/"), tenant_id)
+    req = urllib.request.Request(
+        url,
+        method="PUT",
+        data=b"{}",
+        headers={"app-key": CFG.vitalpbx_api_key, "content-type": "application/json", "accept": "application/json"},
+    )
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    start = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=CFG.apply_changes_timeout, context=ctx) as resp:
+            status = resp.status
+            body_text = resp.read(4000).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body_text = (exc.read(4000) or b"").decode("utf-8", "replace")
+    result = {
+        "mode": "vitalpbx_apply_changes",
+        "ran": True,
+        "httpStatus": status,
+        "elapsedMs": int((time.time() - start) * 1000),
+        "body": body_text[:2000],
+    }
+    if status not in (200, 201, 202, 204):
+        raise RuntimeError("apply_changes_failed_http_%s %s" % (status, body_text[:300]))
+    extras = [run_apply_command(c) for c in extra_reloads]
+    if extras:
+        result["extraReloads"] = extras
+    # A regen rewrites the tenant dialplan + queue conf from the ombu DB. If the
+    # tenant is currently on a Connect-uploaded MOH class (connect_*), that class
+    # exists only in the patched text + AstDB — re-apply it or callers fall back
+    # to native music until the next M1 action.
+    result["mohReapply"] = reapply_moh_patches_after_regen(tenant_id)
+    return result
+
+def reapply_moh_patches_after_regen(tenant_id):
+    out = {"attempted": False, "class": None, "queuePatch": None, "dialplanPatch": None, "error": None}
+    try:
+        with db_conn() as conn:
+            path = resolve_tenant_path(conn, tenant_id)
+            if not path:
+                return out
+            with conn.cursor() as cur:
+                cur.execute("SELECT extension FROM ombu_extensions WHERE tenant_id = %s ORDER BY extension LIMIT 1", (tenant_id,))
+                row = cur.fetchone()
+        ext = str((row or {}).get("extension") or "").strip()
+        cls = _astdb_get("%s/extensions/%s" % (path, ext), "moh") if ext else ""
+        if not re.match(r"^connect_[A-Za-z0-9_]+$", cls or ""):
+            return out
+        out["attempted"] = True
+        out["class"] = cls
+        out["queuePatch"] = patch_tenant_queue_musicclass(tenant_id, 1, target_class=cls)
+        out["dialplanPatch"] = patch_tenant_dialplan_moh(tenant_id, 1, target_class=cls)
+        run_apply_command('asterisk -rx "dialplan reload"')
+        run_apply_command('asterisk -rx "queue reload all"')
+        return out
+    except Exception as exc:
+        out["error"] = str(exc)
+        return out
+
+def tenant_catalog(body):
+    """READ-ONLY one-stop inventory for a tenant: everything the agent needs to
+    resolve names → IDs, answer diagnostics, and ground its LLM extraction."""
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    out = {"ok": True, "tenantId": tenant_id}
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT extension_id, extension, name FROM ombu_extensions WHERE tenant_id = %s ORDER BY extension", (tenant_id,))
+            out["extensions"] = [{"id": int(r["extension_id"]), "extension": str(r["extension"]), "name": str(r["name"] or "")} for r in cur.fetchall()]
+            cur.execute(
+                "SELECT queue_id, extension, description, strategy, music_group_id, announcement_id, periodic_announcement_id, join_announcement_id FROM ombu_queues WHERE tenant_id = %s ORDER BY extension",
+                (tenant_id,),
+            )
+            queues = cur.fetchall()
+            cur.execute(
+                """
+                SELECT qm.queue_member_id, qm.queue_id, qm.extension_id, qm.penalty, qm.type, e.extension, e.name
+                FROM ombu_queue_members qm JOIN ombu_extensions e ON e.extension_id = qm.extension_id
+                WHERE qm.queue_id IN (SELECT queue_id FROM ombu_queues WHERE tenant_id = %s)
+                """,
+                (tenant_id,),
+            )
+            members_by_queue = {}
+            for r in cur.fetchall():
+                members_by_queue.setdefault(int(r["queue_id"]), []).append(
+                    {
+                        "memberId": int(r["queue_member_id"]),
+                        "extensionId": int(r["extension_id"]),
+                        "extension": str(r["extension"]),
+                        "name": str(r["name"] or ""),
+                        "penalty": int(r["penalty"]),
+                        "type": str(r["type"]),
+                    }
+                )
+            out["queues"] = [
+                {
+                    "id": int(q["queue_id"]),
+                    "extension": str(q["extension"]),
+                    "description": str(q["description"] or ""),
+                    "strategy": str(q["strategy"] or ""),
+                    "musicGroupId": int(q["music_group_id"]) if q["music_group_id"] is not None else None,
+                    "announcementId": int(q["announcement_id"]) if q["announcement_id"] is not None else None,
+                    "periodicAnnouncementId": int(q["periodic_announcement_id"]) if q["periodic_announcement_id"] is not None else None,
+                    "joinAnnouncementId": int(q["join_announcement_id"]) if q["join_announcement_id"] is not None else None,
+                    "members": members_by_queue.get(int(q["queue_id"]), []),
+                }
+                for q in queues
+            ]
+            cur.execute("SELECT ring_group_id, extension, description FROM ombu_ring_groups WHERE tenant_id = %s ORDER BY extension", (tenant_id,))
+            out["ringGroups"] = [{"id": int(r["ring_group_id"]), "extension": str(r["extension"]), "description": str(r["description"] or "")} for r in cur.fetchall()]
+            cur.execute("SELECT ivr_id, description, welcome_msg_id, timeout, invalid_destination_id, timeout_destination_id FROM ombu_ivrs WHERE tenant_id = %s ORDER BY ivr_id", (tenant_id,))
+            ivrs = cur.fetchall()
+            cur.execute(
+                "SELECT id, ivr_id, `option`, destination_id, enabled, sort FROM ombu_ivr_entries WHERE ivr_id IN (SELECT ivr_id FROM ombu_ivrs WHERE tenant_id = %s) ORDER BY ivr_id, sort",
+                (tenant_id,),
+            )
+            entries_by_ivr = {}
+            for r in cur.fetchall():
+                entries_by_ivr.setdefault(int(r["ivr_id"]), []).append(
+                    {
+                        "entryId": int(r["id"]),
+                        "option": str(r["option"] or ""),
+                        "destinationId": int(r["destination_id"]) if r["destination_id"] is not None else None,
+                        "enabled": str(r["enabled"]),
+                    }
+                )
+            cur.execute("SELECT recording_id, name, duration FROM ombu_recordings WHERE tenant_id = %s ORDER BY recording_id", (tenant_id,))
+            out["recordings"] = [{"id": int(r["recording_id"]), "name": str(r["name"] or ""), "durationSec": int(r["duration"] or 0)} for r in cur.fetchall()]
+            cur.execute("SELECT time_condition_id, description, code FROM ombu_time_conditions WHERE tenant_id = %s ORDER BY time_condition_id", (tenant_id,))
+            out["timeConditions"] = [{"id": int(r["time_condition_id"]), "description": str(r["description"] or ""), "code": str(r["code"] or "")} for r in cur.fetchall()]
+            cur.execute("SELECT custom_application_id, extension, description FROM ombu_custom_applications WHERE tenant_id = %s ORDER BY extension", (tenant_id,))
+            out["customApplications"] = [{"id": int(r["custom_application_id"]), "extension": str(r["extension"]), "description": str(r["description"] or "")} for r in cur.fetchall()]
+            cur.execute("SELECT inbound_route_id, did, description, destination_id FROM ombu_inbound_routes WHERE tenant_id = %s AND did IS NOT NULL AND did != '' ORDER BY did", (tenant_id,))
+            routes = cur.fetchall()
+        out["ivrs"] = []
+        for ivr in ivrs:
+            rec_name = None
+            if ivr["welcome_msg_id"] is not None:
+                rec_name = next((r["name"] for r in out["recordings"] if r["id"] == int(ivr["welcome_msg_id"])), None)
+            entries = entries_by_ivr.get(int(ivr["ivr_id"]), [])
+            for e in entries:
+                e["target"] = _decode_destination(conn, e["destinationId"]) if e["destinationId"] else None
+            out["ivrs"].append(
+                {
+                    "id": int(ivr["ivr_id"]),
+                    "description": str(ivr["description"] or ""),
+                    "welcomeRecordingId": int(ivr["welcome_msg_id"]) if ivr["welcome_msg_id"] is not None else None,
+                    "welcomeRecordingName": rec_name,
+                    "timeoutSec": int(ivr["timeout"]) if ivr["timeout"] is not None else None,
+                    "entries": entries,
+                }
+            )
+        out["routes"] = [
+            {
+                "routeId": int(r["inbound_route_id"]),
+                "did": str(r["did"]),
+                "description": str(r["description"] or ""),
+                "destinationId": int(r["destination_id"]) if r["destination_id"] is not None else None,
+                "target": _decode_destination(conn, r["destination_id"]) if r["destination_id"] is not None else None,
+            }
+            for r in routes
+        ]
+    return out
+
+def agent_set_route_destination_v2(body):
+    """M3 v2: route a DID to ANY tenant-owned target (extension / queue /
+    ring_group / ivr / time_condition / custom_application) by TYPE + ID.
+    Ensures the ombu_destinations row exists (GUI creates them lazily), keeps
+    the v1 snapshot + connect-managed fences, then runs the REAL per-tenant
+    regen so the change actually reaches the dialplan."""
+    did_digits, did_e164 = normalize_did(body.get("did"))
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    target_type = str(body.get("targetType") or "").strip()
+    target_id = require_num("target_id", body.get("targetId"))
+    force = bool(body.get("force", False))
+    actor = str(body.get("actor") or "")[:128]
+    request_id = str(body.get("requestId") or "")[:128]
+    with db_conn() as conn:
+        try:
+            conn.begin()
+            label = _verify_target(conn, tenant_id, target_type, target_id)
+            route = find_route(conn, tenant_id, did_digits)
+            route_id = int(route["inbound_route_id"])
+            current_dest = str(route["destination_id"])
+            if _route_is_connect_managed(route_id, current_dest):
+                raise RuntimeError("connect_managed_route_refused")
+            dest, created = _ensure_destination(conn, OWNER_MODULE_INBOUND_ROUTE, target_type, target_id)
+            if current_dest == str(dest):
+                conn.rollback()
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route, "target": {"type": target_type, "id": target_id, "label": label}}
+            with snap_conn() as sconn:
+                existing = sconn.execute("SELECT original_destination_id FROM agent_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
+                if existing and not force:
+                    original = str(existing[0])
+                    if current_dest != original:
+                        prior = sconn.execute("SELECT 1 FROM agent_route_snapshots WHERE route_id = ? AND original_destination_id = ?", (route_id, current_dest)).fetchone()
+                        if not prior:
+                            raise RuntimeError("route_drifted_since_capture")
+                if not existing:
+                    sconn.execute(
+                        """
+                        INSERT INTO agent_route_snapshots
+                          (route_id, tenant_id, did_digits, did_e164, captured_at, captured_by, request_id, original_row_json, original_destination_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (route_id, tenant_id, did_digits, did_e164, utc_now(), actor, request_id, json.dumps(route, sort_keys=True, default=str), current_dest),
+                    )
+                sconn.commit()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ombu_inbound_routes SET destination_id = %s WHERE inbound_route_id = %s AND tenant_id = %s AND destination_id = %s",
+                    (dest, route_id, tenant_id, current_dest),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError("agent_set_update_guard_failed")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    apply_result = apply_tenant_changes(tenant_id)
+    with db_conn() as conn:
+        after = find_route(conn, tenant_id, did_digits)
+    return {
+        "ok": True,
+        "did": did_e164,
+        "tenantId": tenant_id,
+        "routeId": route_id,
+        "before": route,
+        "after": after,
+        "destinationId": dest,
+        "destinationCreated": created,
+        "target": {"type": target_type, "id": target_id, "label": label},
+        "apply": apply_result,
+    }
+
+def _resolve_ivr(conn, tenant_id, ivr_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT ivr_id, description, welcome_msg_id FROM ombu_ivrs WHERE ivr_id = %s AND tenant_id = %s", (ivr_id, tenant_id))
+        row = cur.fetchone()
+    if not row:
+        raise LookupError("ivr_not_found_for_tenant")
+    return row
+
+def _resolve_recording(conn, tenant_id, recording_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT recording_id, name FROM ombu_recordings WHERE recording_id = %s AND tenant_id = %s", (recording_id, tenant_id))
+        row = cur.fetchone()
+    if not row:
+        raise LookupError("recording_not_found_for_tenant")
+    return row
+
+def _recordings_dir(conn, tenant_id):
+    path = resolve_tenant_path(conn, tenant_id)
+    if not path:
+        raise RuntimeError("tenant_path_not_found")
+    d = CFG.static_dir / path / "recordings"
+    d.mkdir(mode=0o755, parents=True, exist_ok=True)
+    return d
+
+def ivr_action(body):
+    """M4 native IVR operations on VitalPBX's own IVRs (ombu_ivrs):
+    list / set_entry / clear_entry / set_welcome / upload_recording."""
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    action = str(body.get("action") or "").strip()
+    actor = str(body.get("actor") or "")[:128]
+
+    if action == "list":
+        return tenant_catalog({"tenantId": tenant_id})
+
+    if action == "upload_recording":
+        name = str(body.get("name") or "").strip()[:120]
+        if not name or not re.match(r"^[\w \-\.,()'&]{2,120}$", name):
+            raise ValueError("invalid_recording_name")
+        raw = base64.b64decode(str(body.get("bytesB64") or ""), validate=True)
+        if not raw or len(raw) > MAX_WAV_BYTES:
+            raise ValueError("wav_bytes_invalid_or_too_large")
+        if raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+            raise ValueError("not_a_wav_file")
+        # 8 kHz 16-bit mono ⇒ 16000 bytes/sec. The Connect API transcodes
+        # before sending, so this is a sanity estimate, not a decoder.
+        duration = max(1, int((len(raw) - 44) / 16000))
+        with db_conn() as conn:
+            try:
+                conn.begin()
+                rec_dir = _recordings_dir(conn, tenant_id)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO ombu_recordings (original_filename, name, duration, tenant_id) VALUES (%s, %s, %s, %s)",
+                        (name + ".wav", name, duration, tenant_id),
+                    )
+                    recording_id = int(cur.lastrowid)
+                # VitalPBX stores the audio as md5(recording_id) with no extension.
+                fname = hashlib.md5(str(recording_id).encode()).hexdigest()
+                fpath = rec_dir / fname
+                fpath.write_bytes(raw)
+                os.chmod(fpath, 0o644)
+                try:
+                    uid = pwd.getpwnam(CFG.sounds_owner_user).pw_uid
+                    gid = grp.getgrnam(CFG.sounds_owner_group).gr_gid
+                    os.chown(fpath, uid, gid)
+                except (KeyError, PermissionError):
+                    pass
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return {"ok": True, "tenantId": tenant_id, "recordingId": recording_id, "name": name, "file": str(fpath), "durationSec": duration}
+
+    if action == "set_welcome":
+        ivr_id = require_num("ivr_id", body.get("ivrId"))
+        recording_id = require_num("recording_id", body.get("recordingId"))
+        with db_conn() as conn:
+            try:
+                conn.begin()
+                ivr = _resolve_ivr(conn, tenant_id, ivr_id)
+                rec = _resolve_recording(conn, tenant_id, recording_id)
+                before = int(ivr["welcome_msg_id"]) if ivr["welcome_msg_id"] is not None else None
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE ombu_ivrs SET welcome_msg_id = %s WHERE ivr_id = %s AND tenant_id = %s", (recording_id, ivr_id, tenant_id))
+                    if cur.rowcount > 1:
+                        raise RuntimeError("welcome_update_guard_failed")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        apply_result = apply_tenant_changes(tenant_id)
+        return {"ok": True, "tenantId": tenant_id, "ivrId": int(ivr_id), "ivrName": str(ivr["description"] or ""), "beforeRecordingId": before, "afterRecordingId": int(recording_id), "recordingName": str(rec["name"]), "apply": apply_result}
+
+    if action in ("set_entry", "clear_entry"):
+        ivr_id = require_num("ivr_id", body.get("ivrId"))
+        option = str(body.get("option") or "").strip()
+        if not IVR_OPTION_RE.match(option):
+            raise ValueError("invalid_ivr_option")
+        with db_conn() as conn:
+            try:
+                conn.begin()
+                ivr = _resolve_ivr(conn, tenant_id, ivr_id)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, destination_id, enabled, sort FROM ombu_ivr_entries WHERE ivr_id = %s AND `option` = %s", (ivr_id, option))
+                    existing = cur.fetchone()
+                before = _decode_destination(conn, existing["destination_id"]) if existing and existing["destination_id"] else None
+                if action == "clear_entry":
+                    if not existing:
+                        conn.rollback()
+                        return {"ok": True, "noop": True, "tenantId": tenant_id, "ivrId": int(ivr_id), "option": option}
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM ombu_ivr_entries WHERE id = %s AND ivr_id = %s", (existing["id"], ivr_id))
+                        if cur.rowcount != 1:
+                            raise RuntimeError("entry_delete_guard_failed")
+                    target_out = None
+                else:
+                    target_type = str(body.get("targetType") or "").strip()
+                    target_id = require_num("target_id", body.get("targetId"))
+                    label = _verify_target(conn, tenant_id, target_type, target_id)
+                    dest, _created = _ensure_destination(conn, OWNER_MODULE_IVR, target_type, target_id)
+                    with conn.cursor() as cur:
+                        if existing:
+                            cur.execute("UPDATE ombu_ivr_entries SET destination_id = %s, enabled = 'yes' WHERE id = %s AND ivr_id = %s", (dest, existing["id"], ivr_id))
+                            if cur.rowcount != 1 and str(existing["destination_id"]) != str(dest):
+                                raise RuntimeError("entry_update_guard_failed")
+                        else:
+                            cur.execute("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM ombu_ivr_entries WHERE ivr_id = %s", (ivr_id,))
+                            sort = int(cur.fetchone()["s"])
+                            cur.execute(
+                                "INSERT INTO ombu_ivr_entries (ivr_id, `option`, destination_id, enabled, sort) VALUES (%s, %s, %s, 'yes', %s)",
+                                (ivr_id, option, dest, sort),
+                            )
+                    target_out = {"type": target_type, "id": target_id, "label": label, "destinationId": dest}
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        apply_result = apply_tenant_changes(tenant_id)
+        return {
+            "ok": True,
+            "tenantId": tenant_id,
+            "ivrId": int(ivr_id),
+            "ivrName": str(ivr["description"] or ""),
+            "option": option,
+            "action": action,
+            "before": before,
+            "target": target_out,
+            "apply": apply_result,
+        }
+
+    raise ValueError("unsupported_ivr_action:%s" % action)
+
+def _resolve_queue(conn, tenant_id, body):
+    """Accept queueId (PK) or queueExtension (the dialable number users know)."""
+    with conn.cursor() as cur:
+        if body.get("queueId") is not None:
+            qid = require_num("queue_id", body.get("queueId"))
+            cur.execute("SELECT queue_id, extension, description, music_group_id FROM ombu_queues WHERE queue_id = %s AND tenant_id = %s", (qid, tenant_id))
+        else:
+            qext = require_num("queue_extension", body.get("queueExtension"))
+            cur.execute("SELECT queue_id, extension, description, music_group_id FROM ombu_queues WHERE extension = %s AND tenant_id = %s", (qext, tenant_id))
+        row = cur.fetchone()
+    if not row:
+        raise LookupError("queue_not_found_for_tenant")
+    return row
+
+def queue_action(body):
+    """M10 native queue operations: list / add_member / remove_member /
+    set_moh / set_announcement. Member + announcement changes are baked into
+    the generated queues conf, so each write runs the real per-tenant regen."""
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    action = str(body.get("action") or "").strip()
+
+    if action == "list":
+        return tenant_catalog({"tenantId": tenant_id})
+
+    if action in ("add_member", "remove_member"):
+        ext = require_num("extension", body.get("extension"))
+        penalty = int(body.get("penalty") or 0)
+        if penalty < 0 or penalty > 99:
+            raise ValueError("invalid_penalty")
+        with db_conn() as conn:
+            try:
+                conn.begin()
+                queue = _resolve_queue(conn, tenant_id, body)
+                qid = int(queue["queue_id"])
+                with conn.cursor() as cur:
+                    cur.execute("SELECT extension_id, extension, name FROM ombu_extensions WHERE extension = %s AND tenant_id = %s", (ext, tenant_id))
+                    ext_row = cur.fetchone()
+                    if not ext_row:
+                        raise LookupError("extension_not_found_for_tenant")
+                    ext_id = int(ext_row["extension_id"])
+                    cur.execute("SELECT queue_member_id FROM ombu_queue_members WHERE queue_id = %s AND extension_id = %s", (qid, ext_id))
+                    member = cur.fetchone()
+                    if action == "add_member":
+                        if member:
+                            conn.rollback()
+                            return {"ok": True, "noop": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "extension": ext, "reason": "already_member"}
+                        cur.execute(
+                            "INSERT INTO ombu_queue_members (queue_id, extension_id, penalty, diversions, type) VALUES (%s, %s, %s, 'no', 'static')",
+                            (qid, ext_id, penalty),
+                        )
+                    else:
+                        if not member:
+                            conn.rollback()
+                            return {"ok": True, "noop": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "extension": ext, "reason": "not_a_member"}
+                        cur.execute("DELETE FROM ombu_queue_members WHERE queue_member_id = %s", (member["queue_member_id"],))
+                        if cur.rowcount != 1:
+                            raise RuntimeError("member_delete_guard_failed")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',))
+        with db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT e.extension FROM ombu_queue_members qm JOIN ombu_extensions e ON e.extension_id = qm.extension_id WHERE qm.queue_id = %s",
+                    (qid,),
+                )
+                members_after = sorted(str(r["extension"]) for r in cur.fetchall())
+        return {
+            "ok": True,
+            "tenantId": tenant_id,
+            "queueId": qid,
+            "queueExtension": str(queue["extension"]),
+            "queueName": str(queue["description"] or ""),
+            "action": action,
+            "extension": ext,
+            "membersAfter": members_after,
+            "apply": apply_result,
+        }
+
+    if action == "set_moh":
+        moh_class = str(body.get("mohClass") or "").strip()
+        with db_conn() as conn:
+            queue = _resolve_queue(conn, tenant_id, body)
+            qid = int(queue["queue_id"])
+        if re.match(r"^connect_[A-Za-z0-9_]+$", moh_class):
+            # Connect-uploaded class: exists only in generated MOH confs (via
+            # connect-media-sync) — patch this queue's musicclass line + AstDB.
+            if not moh_class_generated(moh_class):
+                raise RuntimeError("moh_class_not_generated:%s" % moh_class)
+            conf = Path(QUEUE_CONF_DIR) / ("queues__50-%s-main.conf" % int(tenant_id))
+            if not conf.is_file():
+                raise RuntimeError("queue_conf_missing")
+            original = conf.read_text(errors="replace")
+            section = "T%s_Q%s" % (int(tenant_id), queue["extension"])
+            lines = original.splitlines(keepends=True)
+            out_lines, in_section, changed, before_class = [], False, 0, None
+            for ln in lines:
+                stripped = ln.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    in_section = stripped == "[%s]" % section
+                if in_section and ln.startswith("musicclass="):
+                    before_class = ln[len("musicclass="):].strip()
+                    if before_class != moh_class:
+                        ln = "musicclass=%s\n" % moh_class
+                        changed += 1
+                out_lines.append(ln)
+            if changed:
+                backup_dir = Path(QUEUE_BACKUP_DIR)
+                backup_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+                backup = backup_dir / ("%s.%s.bak" % (conf.name, dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+                backup.write_text(original)
+                tmp = conf.with_name(conf.name + ".connect-tmp")
+                tmp.write_text("".join(out_lines))
+                os.replace(tmp, conf)
+            with db_conn() as conn:
+                path = resolve_tenant_path(conn, tenant_id)
+            if path:
+                _astdb_put("%s/queues/%s" % (path, queue["extension"]), "moh", moh_class)
+            reload_res = run_apply_command('asterisk -rx "queue reload all"')
+            return {"ok": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "mohClass": moh_class, "beforeClass": before_class, "patched": changed, "reload": reload_res}
+        m = re.match(r"^(?:moh(\d+)|default|(\d+))$", moh_class)
+        if not m:
+            raise ValueError("invalid_moh_class")
+        group_id = int(m.group(1) or m.group(2) or 1)
+        with db_conn() as conn:
+            try:
+                conn.begin()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT music_group_id FROM ombu_music_groups WHERE music_group_id = %s", (group_id,))
+                    if not cur.fetchone():
+                        raise LookupError("music_group_not_found")
+                    cur.execute("UPDATE ombu_queues SET music_group_id = %s WHERE queue_id = %s AND tenant_id = %s", (group_id, qid, tenant_id))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',))
+        return {"ok": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "mohClass": target_class_for_group(group_id), "musicGroupId": group_id, "apply": apply_result}
+
+    if action == "set_announcement":
+        slot = str(body.get("slot") or "").strip()
+        col = {"announcement": "announcement_id", "periodic": "periodic_announcement_id", "join": "join_announcement_id"}.get(slot)
+        if not col:
+            raise ValueError("invalid_announcement_slot")
+        recording_id = body.get("recordingId")
+        with db_conn() as conn:
+            try:
+                conn.begin()
+                queue = _resolve_queue(conn, tenant_id, body)
+                qid = int(queue["queue_id"])
+                rec_name = None
+                if recording_id is not None:
+                    recording_id = require_num("recording_id", recording_id)
+                    rec_name = str(_resolve_recording(conn, tenant_id, recording_id)["name"])
+                with conn.cursor() as cur:
+                    cur.execute(f"UPDATE ombu_queues SET `{col}` = %s WHERE queue_id = %s AND tenant_id = %s", (recording_id, qid, tenant_id))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        apply_result = apply_tenant_changes(tenant_id, extra_reloads=('asterisk -rx "queue reload all"',))
+        return {"ok": True, "tenantId": tenant_id, "queueId": qid, "queueName": str(queue["description"] or ""), "slot": slot, "recordingId": int(recording_id) if recording_id is not None else None, "recordingName": rec_name, "apply": apply_result}
+
+    raise ValueError("unsupported_queue_action:%s" % action)
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ConnectPbxRouteHelper/" + VERSION
     def log_message(self, fmt, *args):
@@ -1991,7 +2698,11 @@ class Handler(BaseHTTPRequestHandler):
             "/retarget": retarget_route,
             "/restore": restore_route,
             "/route-set-destination": agent_set_route_destination,
+            "/route-set-destination-v2": agent_set_route_destination_v2,
             "/route-restore-destination": agent_restore_route_destination,
+            "/tenant-catalog": tenant_catalog,
+            "/ivr-action": ivr_action,
+            "/queue-action": queue_action,
             "/get-diversion": ext_feature_get,
             "/set-diversion": ext_feature_set,
             "/sync-tenant-moh": sync_tenant_moh,

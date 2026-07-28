@@ -9,7 +9,7 @@ export type Intent =
   | { kind: "action"; actionType: ActionType; extensionHint?: string; targetHint?: string; untilHint?: string; enableHint?: "yes" | "no"; statusQuery?: boolean; raw: string }
   | { kind: "chat"; raw?: string };
 
-export type ActionType = "forward" | "dnd" | "moh" | "ivr_switch" | "vm_reset" | "unknown";
+export type ActionType = "forward" | "dnd" | "moh" | "ivr_switch" | "pbx_config" | "vm_reset" | "unknown";
 
 const DIAG_TERMS = [
   "not ringing", "won't ring", "wont ring", "doesn't ring", "no calls", "not receiving", "can't hear", "cant hear",
@@ -22,6 +22,22 @@ const DIAG_TERMS = [
 const ACTION_PATTERNS: Array<{ type: ActionType; terms: string[] }> = [
   { type: "forward", terms: ["forward my call", "forward call", "transfer my call", "send my call", "divert", "forward to", "פארוואַרד", "אריבערפירן", "טראַנספער"] },
   { type: "dnd", terms: ["do not disturb", "dnd", "silence my", "don't ring me", "נישט שטערן"] },
+  // PBX config (M3 inbound routing / M4 IVR / M10 queues) — BEFORE moh so
+  // "change the QUEUE hold music" routes to M10, not the tenant-wide M1.
+  // The LLM extractor re-reads the message against the tenant's real catalog;
+  // a non-config match ("what's on the lunch menu") falls back to plain chat.
+  {
+    type: "pbx_config",
+    terms: [
+      "queue", " ivr", "ivr ", "auto attendant", "auto-attendant", "menu option", "menu", "greeting",
+      "press 0", "press 1", "press 2", "press 3", "press 4", "press 5", "press 6", "press 7", "press 8", "press 9",
+      "option 0", "option 1", "option 2", "option 3", "option 4", "option 5", "option 6", "option 7", "option 8", "option 9",
+      "inbound route", "call routing", "reroute", "re-route", "route my", "route the", "route our", "route calls",
+      "point my number", "point the number", "point our number", "my number to", "number should go", "number should ring",
+      "calls should go", "calls go to", "where does my number", "where do calls", "when people call", "when someone calls",
+      "announcement",
+    ],
+  },
   { type: "moh", terms: ["hold music", "music on hold", "on-hold music", "waiting music", "האלט מוזיק"] },
   { type: "ivr_switch", terms: ["holiday menu", "switch ivr", "change the ivr", "change my menu", "holiday greeting", "night mode"] },
   { type: "vm_reset", terms: ["reset voicemail", "voicemail pin", "vm pin", "voicemail password"] },

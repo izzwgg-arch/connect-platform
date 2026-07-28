@@ -246,3 +246,72 @@ test("helper installer defines Phase 2 voicemail spool audio endpoint and valida
   assert.match(SCRIPT, /MSG_NUM_STEM_RE/, "spool audio must validate msg stem");
   assert.match(SCRIPT, /MAX_VM_SPOOL_AUDIO_BYTES/, "spool audio must cap read size");
 });
+
+// ── X5 (2026-07-26): full MOH convergence in /sync-tenant-moh ──────────────
+// Root cause (live call C-0000319b): the generated tenant dialplan hard-codes
+// each object's MOH class as Gosub(sub-set-moh,s,1(<class>,YES)), which sets
+// CHANNEL(musicclass) and beats queues.conf + AstDB. sync-tenant-moh must
+// therefore also patch the dialplan, converge per-queue/per-extension AstDB
+// keys, and update EVERY MOH-bearing DB table — not just inbound/ext/queues.
+
+test("X5: helper patches hard-coded sub-set-moh classes in the generated tenant dialplan", () => {
+  assert.match(SCRIPT, /def _patch_dialplan_moh_text\(/, "_patch_dialplan_moh_text must be defined");
+  assert.match(SCRIPT, /def patch_tenant_dialplan_moh\(/, "patch_tenant_dialplan_moh must be defined");
+  assert.match(
+    SCRIPT,
+    /extensions__50-%d-dialplan\.conf/,
+    "dialplan patch must target the per-tenant generated dialplan file",
+  );
+  assert.match(
+    SCRIPT,
+    /sub-set-moh,s,1\\\(/,
+    "dialplan patch must match the sub-set-moh Gosub form",
+  );
+});
+
+test("X5: dialplan patch rewrites only music-class tokens (never ringback)", () => {
+  assert.match(
+    SCRIPT,
+    /DIALPLAN_MOH_TOKEN\s*=\s*r"\(\?:default\|moh\\d\+\|connect_\[A-Za-z0-9_\]\+\)"/,
+    "the token allowlist must cover default|mohN|connect_* and nothing else",
+  );
+});
+
+test("X5: sync_tenant_moh updates every MOH-bearing table and excludes ombu_music_groups", () => {
+  assert.match(SCRIPT, /def moh_bearing_tables\(/, "moh_bearing_tables must be defined");
+  assert.match(
+    SCRIPT,
+    /MOH_TABLE_EXCLUDE\s*=\s*\{"ombu_music_groups"\}/,
+    "the music-groups meta-table must be excluded from the bulk update",
+  );
+  assert.match(
+    SCRIPT,
+    /def sync_tenant_moh\(body\):[\s\S]{0,3000}moh_bearing_tables\(conn\)/,
+    "sync_tenant_moh must iterate moh_bearing_tables",
+  );
+});
+
+test("X5: sync_tenant_moh converges dialplan + AstDB and reports evidence", () => {
+  assert.match(
+    SCRIPT,
+    /def sync_tenant_moh\(body\):[\s\S]{0,6000}patch_tenant_dialplan_moh\(tenant_id, music_group_id\)/,
+    "sync_tenant_moh must call patch_tenant_dialplan_moh",
+  );
+  assert.match(
+    SCRIPT,
+    /def sync_tenant_moh\(body\):[\s\S]{0,6000}sync_tenant_moh_astdb\(tenant_id, music_group_id, queue_table\)/,
+    "sync_tenant_moh must call sync_tenant_moh_astdb",
+  );
+  assert.match(SCRIPT, /"dialplanPatch": dialplan_patch/, "response must expose dialplanPatch evidence");
+  assert.match(SCRIPT, /"astdbSync": astdb_sync/, "response must expose astdbSync evidence");
+  assert.match(SCRIPT, /"tables": table_results/, "response must expose per-table update evidence");
+});
+
+test("X5: VERSION reflects the 2026-07-26 build or later", () => {
+  const m = SCRIPT.match(/^VERSION\s*=\s*"([^"]+)"/m);
+  assert.ok(m, "VERSION constant must exist");
+  assert.ok(
+    m![1].localeCompare("2026.07.26.1") >= 0,
+    "VERSION must be at or after the X5 cut (2026.07.26.1), got " + m![1],
+  );
+});

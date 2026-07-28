@@ -92,6 +92,30 @@ export type PbxTenantMohSyncResponse = {
   queuesUpdated?: number;
   queueTable?: string;
   queueSample?: Array<Record<string, unknown>>;
+  /** X5 (2026-07-26): per-table row counts for EVERY MOH-bearing ombu_* table
+   *  (ring groups, conferences, parking lots, trunks, follow-me, dial profiles, …). */
+  tables?: Record<string, { total: number; updated: number }>;
+  /** X5: patch evidence for the hard-coded `sub-set-moh,s,1(<class>,…)` lines in the
+   *  generated tenant dialplan — the layer that beats queues.conf and AstDB at runtime. */
+  dialplanPatch?: {
+    attempted: boolean;
+    patched: number;
+    targetClass?: string | null;
+    file?: string | null;
+    backup?: string | null;
+    oldClasses?: string[];
+    error?: string | null;
+  };
+  /** X5: per-queue / per-extension AstDB `moh` key convergence evidence. */
+  astdbSync?: {
+    attempted: boolean;
+    tenantPath?: string | null;
+    targetClass?: string | null;
+    queueKeys: number;
+    extensionKeys: number;
+    failed: number;
+    error?: string | null;
+  };
   inboundSample?: Array<Record<string, unknown>>;
   extensionSample?: Array<Record<string, unknown>>;
   apply?: {
@@ -110,7 +134,11 @@ async function callHelper<T>(
     | "/retarget"
     | "/restore"
     | "/route-set-destination"
+    | "/route-set-destination-v2"
     | "/route-restore-destination"
+    | "/tenant-catalog"
+    | "/ivr-action"
+    | "/queue-action"
     | "/get-diversion"
     | "/set-diversion"
     | "/set-moh"
@@ -207,6 +235,79 @@ export function agentSetPbxRouteDestination(
   body: { did: string; tenantId: string; destinationId: string | number; requestId?: string; actor?: string; force?: boolean },
 ): Promise<PbxRouteHelperSwitchResponse> {
   return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/route-set-destination", body);
+}
+
+/** Decoded destination as reported by the helper's catalog/decode logic. */
+export type PbxDecodedTarget = {
+  destinationId: number;
+  type: string;
+  targetId: string | null;
+  label: string | null;
+};
+
+/** Full read-only tenant inventory from the PBX helper (M3/M4/M10 grounding). */
+export type PbxTenantCatalog = {
+  ok: true;
+  tenantId: string;
+  extensions: Array<{ id: number; extension: string; name: string }>;
+  queues: Array<{
+    id: number;
+    extension: string;
+    description: string;
+    strategy: string;
+    musicGroupId: number | null;
+    announcementId: number | null;
+    periodicAnnouncementId: number | null;
+    joinAnnouncementId: number | null;
+    members: Array<{ memberId: number; extensionId: number; extension: string; name: string; penalty: number; type: string }>;
+  }>;
+  ringGroups: Array<{ id: number; extension: string; description: string }>;
+  ivrs: Array<{
+    id: number;
+    description: string;
+    welcomeRecordingId: number | null;
+    welcomeRecordingName: string | null;
+    timeoutSec: number | null;
+    entries: Array<{ entryId: number; option: string; destinationId: number | null; enabled: string; target: PbxDecodedTarget | null }>;
+  }>;
+  recordings: Array<{ id: number; name: string; durationSec: number }>;
+  timeConditions: Array<{ id: number; description: string; code: string }>;
+  customApplications: Array<{ id: number; extension: string; description: string }>;
+  routes: Array<{ routeId: number; did: string; description: string; destinationId: number | null; target: PbxDecodedTarget | null }>;
+};
+
+/** Native config writes run VitalPBX's own per-tenant apply_changes regen — allow for it. */
+const NATIVE_WRITE_TIMEOUT_MS = 200_000;
+
+export function getPbxTenantCatalog(
+  cfg: PbxRouteHelperConfig,
+  body: { tenantId: string },
+): Promise<PbxTenantCatalog> {
+  return callHelper<PbxTenantCatalog>(cfg, "/tenant-catalog", body, 30_000);
+}
+
+/** M3 v2 — route a DID to ANY tenant-owned target by type + id (real regen). */
+export function agentSetPbxRouteDestinationV2(
+  cfg: PbxRouteHelperConfig,
+  body: { did: string; tenantId: string; targetType: string; targetId: string | number; requestId?: string; actor?: string; force?: boolean },
+): Promise<PbxRouteHelperSwitchResponse & { target?: { type: string; id: string; label: string } }> {
+  return callHelper(cfg, "/route-set-destination-v2", body, NATIVE_WRITE_TIMEOUT_MS);
+}
+
+/** M4 native — VitalPBX IVR ops: set_entry / clear_entry / set_welcome / upload_recording / list. */
+export function pbxNativeIvrAction(
+  cfg: PbxRouteHelperConfig,
+  body: Record<string, unknown> & { tenantId: string; action: string },
+): Promise<any> {
+  return callHelper(cfg, "/ivr-action", body, NATIVE_WRITE_TIMEOUT_MS);
+}
+
+/** M10 native — VitalPBX queue ops: add_member / remove_member / set_moh / set_announcement / list. */
+export function pbxNativeQueueAction(
+  cfg: PbxRouteHelperConfig,
+  body: Record<string, unknown> & { tenantId: string; action: string },
+): Promise<any> {
+  return callHelper(cfg, "/queue-action", body, NATIVE_WRITE_TIMEOUT_MS);
 }
 
 /** M3 — restore the agent-captured original destination for a DID. */

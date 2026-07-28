@@ -31,12 +31,32 @@ export const AGENT_QUEUE_FIELDS = ["strategy", "timeout", "wrapuptime", "retry",
 export const AgentQueueActionRequest = z
   .object({
     tenantId: z.string().min(1),
-    action: z.enum(["list", "update"]),
+    action: z.enum([
+      "list", "update",
+      // Native VitalPBX queue ops (2026-07-28) via the PBX helper (DB write +
+      // official per-tenant regen): membership, hold music, announcements.
+      "native_list", "members_add", "members_remove", "set_moh", "set_announcement",
+    ]),
     queueId: z.string().min(1).optional(),
+    /** Native ops may address the queue by its dialable extension instead of the PK. */
+    queueExtension: z.string().min(1).max(10).optional(),
+    /** Member extension for members_add / members_remove. */
+    extension: z.string().min(1).max(10).optional(),
+    penalty: z.number().int().min(0).max(99).optional(),
+    /** set_moh: native ("default"/"mohN"/group number) or a Connect class ("connect_*"). */
+    mohClass: z.string().min(1).max(80).optional(),
+    /** set_announcement slot. */
+    slot: z.enum(["announcement", "periodic", "join"]).optional(),
+    /** set_announcement: native recording id; null clears the slot. */
+    recordingId: z.string().min(1).nullable().optional(),
     patch: AgentQueuePatch.optional(),
     agentActionId: z.string().min(1),
   })
-  .refine((v) => v.action !== "update" || (!!v.queueId && !!v.patch), { message: "queueId + patch required for update" });
+  .refine((v) => v.action !== "update" || (!!v.queueId && !!v.patch), { message: "queueId + patch required for update" })
+  .refine((v) => !["members_add", "members_remove", "set_moh", "set_announcement"].includes(v.action) || !!v.queueId || !!v.queueExtension, { message: "queueId or queueExtension required" })
+  .refine((v) => !["members_add", "members_remove"].includes(v.action) || !!v.extension, { message: "extension required for member ops" })
+  .refine((v) => v.action !== "set_moh" || !!v.mohClass, { message: "mohClass required for set_moh" })
+  .refine((v) => v.action !== "set_announcement" || !!v.slot, { message: "slot required for set_announcement" });
 
 export type AgentQueueActionRequest = z.infer<typeof AgentQueueActionRequest>;
 

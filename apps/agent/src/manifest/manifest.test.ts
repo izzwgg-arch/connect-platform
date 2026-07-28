@@ -34,7 +34,8 @@ test("GATE: PBX-write capabilities stay sim-only except ones explicitly certifie
   assert.ok(pbx.length >= 14);
   // liveEnabled is off by default and only flipped per capability after live
   // certification. M11 (DND/CF) was first; M1 (tenant MOH) and M2 (extension
-  // MOH) went live for all tenants under the 2026-07-26 owner mandates.
+  // MOH) went live under the 2026-07-26 owner mandates; M3 (inbound routing),
+  // M4 (native IVR) and M10 (native queue config) under the 2026-07-28 one.
   const liveEnabled = pbx.filter((c) => c.liveEnabled === true).map((c) => c.id);
-  assert.deepEqual(liveEnabled, ["pbx.M1", "pbx.M2", "pbx.M11"]);
+  assert.deepEqual(liveEnabled, ["pbx.M1", "pbx.M2", "pbx.M3", "pbx.M4", "pbx.M10", "pbx.M11"]);
 });

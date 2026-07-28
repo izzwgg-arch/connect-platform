@@ -15,6 +15,7 @@ import type { Intent, ActionType } from "./intent";
 import { MOH_DEACTIVATE_RE, MOH_STATUS_Q_RE } from "./intent";
 import { parseMohTiming, type MohTiming } from "./mohTiming";
 import { extractMohRequest, type ExtractorLlm, type MohLlmResult } from "./mohLlmExtract";
+import { extractPbxCfgRequest, type PbxCatalog, type PbxCfgOperation } from "./pbxCfgLlmExtract";
 import { evaluate, type TenantPolicy, type Role } from "../policy/policy";
 import { capabilityById, executableCapabilities } from "../manifest/manifest";
 import { standingFromRole, type Standing } from "../channels/identityContext";
@@ -53,6 +54,9 @@ const ACTION_CAPABILITY: Record<ActionType, string | null> = {
   // single extension → pbx.M2. Both auto-execute per the 2026-07-26 mandate.
   moh: "pbx.M1",
   ivr_switch: "action.A3.ivr_switch",
+  // Routing/IVR/queue config has its own catalog-grounded flow (handlePbxConfig):
+  // M3 retarget_v2, M4 native IVR, M10 native queue. Never reaches this map.
+  pbx_config: null,
   vm_reset: "action.A5.vm_pin_reset",
   unknown: null,
 };
@@ -85,6 +89,16 @@ const MOH_CONTEXT_RE = /hold music|hold-music|האלט מוזיק/i;
 const MOH_ANSWER_TENANT_RE = /\bwhole\b|\bcompany\b|\beveryone\b|\beverybody\b|\bentire\b|\btenant\b|\ball (?:extensions?|phones?|users?)\b/i;
 const MOH_ANSWER_EXT_RE = /\bextension\b|\bjust me\b|\bonly me\b|\bjust mine\b|\bonly mine\b|\bmy (?:extension|phone|line)\b|\bmine\b/i;
 
+// PBX-config clarifying questions (M3/M4/M10) — exact phrasings handlePbxConfig
+// emits, so a bare reply ("the sales queue", "extension 102") resumes the flow.
+const PBXCFG_CLARIFY_MARKER_RE =
+  /Which phone number\?|Which queue\?|Which IVR menu\?|Which menu option|Where should (?:calls|option)|Which extension should I|Which recording should|Which hold music should queue|I couldn't find (?:an IVR menu|a queue|a recording|hold music called)|in your phone system/;
+
+/** Any minimal API-door client (route/ivr/queue) the orchestrator can call. */
+export interface PbxDoorClient {
+  call(body: Record<string, unknown>): Promise<any>;
+}
+
 export class TriageOrchestrator {
   constructor(
     private prisma: any,
@@ -95,6 +109,10 @@ export class TriageOrchestrator {
     private llm: ExtractorLlm | null = null,
     /** MOH upload door (chat MP3 → hold-music profile). Null ⇒ uploads escalate. */
     private mohUpload: MohUploadApiClient | null = null,
+    /** M3/M4/M10 doors (owner directive 2026-07-28). Null ⇒ pbx-config requests escalate. */
+    private routeApi: PbxDoorClient | null = null,
+    private ivrApi: PbxDoorClient | null = null,
+    private queueApi: PbxDoorClient | null = null,
   ) {}
 
   async handle(intent: Intent | ({ kind: "audio_upload" } & Record<string, unknown>), ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
@@ -121,8 +139,13 @@ export class TriageOrchestrator {
         // reply into the LLM (2026-07-26 live failure: the LLM answered "I'll
         // pass the request to the team" and nothing executed).
         const resumed = await this.resumeMohClarification(intent, ctx);
-        if (!resumed) return { handled: false };
-        intent = resumed;
+        if (!resumed) {
+          const cfgResumed = await this.resumePbxCfgClarification(intent, ctx);
+          if (!cfgResumed) return { handled: false };
+          intent = cfgResumed;
+        } else {
+          intent = resumed;
+        }
       }
     }
 
@@ -144,6 +167,14 @@ export class TriageOrchestrator {
 
     // intent.kind === "action"
     if (intent.actionType === "moh") return this.handleMoh(intent, ctx, language);
+
+    // M3/M4/M10 — inbound routing, IVR menus, queue config (owner directive
+    // 2026-07-28). Legacy ivr_switch phrasings ("holiday menu") get first crack
+    // at the real IVR flow; when it declines they fall through to the old path.
+    if (intent.actionType === "pbx_config" || intent.actionType === "ivr_switch") {
+      const cfgOutcome = await this.handlePbxConfig(intent, ctx, language);
+      if (cfgOutcome.handled || intent.actionType === "pbx_config") return cfgOutcome;
+    }
 
     const capId = ACTION_CAPABILITY[intent.actionType];
     if (!capId) return { handled: false };
@@ -402,6 +433,17 @@ export class TriageOrchestrator {
   ): Promise<TriageOutcome> {
     const yiTeam = language === "yi" ? "דאָס איז עפּעס וואָס איך וועל איבערגעבן צו אונדזער טים." : undefined;
     if (input.files.length === 0) return { handled: false };
+
+    // Disambiguation (owner directive 2026-07-28): audio that's clearly an IVR
+    // greeting / announcement / system recording goes to the native recording
+    // pipeline (M4), NOT hold music. Ambiguous audio stays MOH (the original
+    // upload feature) — we never guess a config write from silence.
+    const mentionsRecordingUse = /\b(greeting|announcement|ivr|auto.?attendant|menu|recording)\b/i.test(input.raw);
+    const mentionsMoh = /\bhold[- ]?music\b|\bmusic on hold\b|\bwaiting music\b/i.test(input.raw);
+    if (mentionsRecordingUse && !mentionsMoh && this.ivrApi) {
+      return this.handleRecordingUpload(input, ctx, language);
+    }
+
     if (!this.mohUpload) {
       return {
         handled: true,
@@ -471,6 +513,95 @@ export class TriageOrchestrator {
         ? `Want me to set it as your extension (${ownExt})'s hold music now? You can also say "not now".`
         : `It's ready in your hold-music options — your account admin can set it live.`;
     return { handled: true, reply: `${savedLine} ${ask}` };
+  }
+
+  /**
+   * Chat audio upload that is an IVR greeting / announcement (not hold music):
+   * transcode + store it as a native VitalPBX recording via the api door, then
+   * — when the message already says where it goes ("use this as the greeting
+   * on the main menu") — chain straight into the fully gated M4 flow.
+   */
+  private async handleRecordingUpload(
+    input: { raw: string; files: UploadedAudioFile[] },
+    ctx: TriageCtx,
+    language: "en" | "yi",
+  ): Promise<TriageOutcome> {
+    const yiTeam = language === "yi" ? "דאָס איז עפּעס וואָס איך וועל איבערגעבן צו אונדזער טים." : undefined;
+    const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
+    if (!pbxTenantId || !this.ivrApi) {
+      return {
+        handled: true,
+        reply: "Your account isn't linked to the phone system yet, so I can't store this recording — I've flagged it for our team.",
+        yiddish: yiTeam,
+      };
+    }
+    // Recordings are tenant-level config — same fence as the other config writes.
+    const standing = await this.resolveStanding(ctx);
+    if (standing === "tenant_user") {
+      return {
+        handled: true,
+        reply: "Uploading phone-system recordings (greetings/announcements) needs a company admin. I can pass this to them for you.",
+        yiddish: yiTeam,
+      };
+    }
+
+    const named = input.raw.match(/\b(?:name(?:d)?|call(?:ed)?|title(?:d)?)\s+(?:it\s+)?["'“”]?([^"'“”\n,.]{2,60})["'“”]?/i)?.[1]?.trim();
+    const fs = await import("node:fs/promises");
+    const uploaded: Array<{ id: string; name: string }> = [];
+    for (const f of input.files) {
+      if (f.sizeBytes > 24 * 1024 * 1024) {
+        return {
+          handled: true,
+          reply: `"${f.filename}" is too large for a phone-system recording (max 24 MB). Greetings and announcements are usually well under a minute — could you send a smaller file?`,
+          yiddish: yiTeam,
+        };
+      }
+      const fromFile = String(f.filename || "")
+        .replace(/\.[a-z0-9]{1,5}$/i, "")
+        .replace(/[_\-.]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const name = ((input.files.length === 1 && named) || fromFile || "Chat recording").slice(0, 60);
+      try {
+        const audioBase64 = (await fs.readFile(f.path)).toString("base64");
+        const resp = await this.ivrApi.call({
+          action: "native_upload_recording",
+          tenantId: pbxTenantId,
+          recordingName: name,
+          audioFilename: f.filename,
+          audioBase64,
+          agentActionId: `chat-upload:${ctx.conversationId ?? "chat"}`,
+        });
+        uploaded.push({ id: String(resp.recording?.id ?? ""), name: String(resp.recording?.name ?? name) });
+      } catch {
+        return {
+          handled: true,
+          reply: `Sorry — I couldn't convert "${f.filename}" into a phone-system recording (the file may be corrupted or in a format I can't process). Please try a standard MP3 or WAV.`,
+          yiddish: yiTeam,
+        };
+      }
+    }
+
+    const names = uploaded.map((u) => `"${u.name}"`).join(", ");
+    const savedLine = `I've added ${uploaded.length > 1 ? `${uploaded.length} recordings (${names})` : `the recording ${names}`} to your phone system.`;
+
+    // Message already says where it goes? Chain into the fully gated M4/M10 flow.
+    if (/\b(set|use|make|play|put|switch|change|attach|assign)\b/i.test(input.raw)) {
+      const chained = await this.handlePbxConfig(
+        { kind: "action", actionType: "pbx_config", raw: `${input.raw}. The recording is named "${uploaded[0].name}".` },
+        ctx,
+        language,
+      );
+      if (chained.handled && chained.reply) {
+        return { ...chained, reply: `${savedLine} ${chained.reply}` };
+      }
+    }
+
+    const catalog = await this.fetchPbxCatalog(pbxTenantId);
+    const ivrHint = catalog?.ivrs.length
+      ? ` To use it, say for example: set the greeting on "${catalog.ivrs[0].description}" to "${uploaded[0].name}"${catalog.queues.length ? `, or: set the queue announcement to "${uploaded[0].name}"` : ""}.`
+      : "";
+    return { handled: true, reply: `${savedLine}${ivrHint}` };
   }
 
   /** Portal-user standing: platform_owner / tenant_admin / tenant_user (fail-closed to tenant_user). */
@@ -922,6 +1053,260 @@ export class TriageOrchestrator {
               : `איך האָב עס איבערגעגעבן פֿאַר אַפּרואוו. איך וועל אײַך לאָזן וויסן ווען עס איז גרייט.`
           : undefined,
     };
+  }
+
+  // ── M3 / M4 / M10: inbound routing, IVR menus, queue configuration ────────
+
+  /** Live tenant inventory from the PBX (via the api door). Null on any failure. */
+  private async fetchPbxCatalog(pbxTenantId: string): Promise<PbxCatalog | null> {
+    if (!this.routeApi) return null;
+    try {
+      const resp = await this.routeApi.call({ action: "list_catalog", tenantId: pbxTenantId, agentActionId: "triage-catalog" });
+      return (resp?.catalog ?? null) as PbxCatalog | null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Tenant hold-music profiles WITH their Asterisk class (for queue set_moh). */
+  private async listMohProfilesWithClass(connectTenantId: string): Promise<Array<{ name: string; mohClass: string }>> {
+    try {
+      const rows = await this.prisma.mohProfile.findMany({
+        where: { tenantId: connectTenantId, isActive: true },
+        select: { name: true, vitalPbxMohClassName: true },
+      });
+      return (rows ?? [])
+        .filter((r: any) => r.name && r.vitalPbxMohClassName)
+        .map((r: any) => ({ name: String(r.name), mohClass: String(r.vitalPbxMohClassName) }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * PBX configuration flow (owner directive 2026-07-28): the LLM reads the
+   * request against the tenant's LIVE inventory (DIDs + current targets, IVRs +
+   * entries, queues + members, recordings, hold-music profiles); deterministic
+   * code re-resolves every name against that same inventory and builds fully
+   * formed M3/M4/M10 params. Status questions are answered read-only from the
+   * catalog. Everything else flows through ActionService → the gated executor
+   * (ownership re-verified ON the PBX, snapshot, verify, revert).
+   */
+  private async handlePbxConfig(intent: Extract<Intent, { kind: "action" }>, ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
+    const yiTeam = language === "yi" ? "דאָס איז עפּעס וואָס איך וועל איבערגעבן צו אונדזער טים." : undefined;
+    if (!this.routeApi) return { handled: false };
+    const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
+    if (!pbxTenantId) {
+      return {
+        handled: true,
+        reply: "Your account isn't linked to the phone system yet, so I can't change call routing — I've flagged it for our team.",
+        yiddish: yiTeam,
+      };
+    }
+
+    const catalog = await this.fetchPbxCatalog(pbxTenantId);
+    if (!catalog) {
+      return {
+        handled: true,
+        reply: "I couldn't reach your phone system's configuration just now. Please try again in a minute — if it keeps happening I'll pass it to our team.",
+        yiddish: yiTeam,
+      };
+    }
+    const mohProfiles = await this.listMohProfilesWithClass(ctx.tenantId);
+
+    const extracted = await extractPbxCfgRequest(this.llm, {
+      text: intent.raw,
+      catalog,
+      mohProfiles,
+      conversationId: ctx.conversationId,
+    });
+
+    // Not actually a routing/IVR/queue request (e.g. "what's on the menu at
+    // lunch") — let the conversation LLM answer it as plain chat.
+    if (extracted?.kind === "not_pbx_config") return { handled: false };
+
+    // Config changes are company-level: regular users get a polite fence
+    // BEFORE any clarify loop (same policy the M-ops enforce downstream).
+    const standing = await this.resolveStanding(ctx);
+    if (standing === "tenant_user") {
+      return {
+        handled: true,
+        reply: "Changing call routing, IVR menus, or queue settings needs a company admin. I can pass your request to them, or an admin on your account can ask me directly.",
+        yiddish: yiTeam,
+      };
+    }
+
+    if (!extracted) {
+      // Model down / low confidence — never guess a write. Say what we CAN do,
+      // grounded in their real inventory, and let them restate.
+      const bits: string[] = [];
+      if (catalog.routes.length) bits.push(`where your number${catalog.routes.length > 1 ? "s" : ""} (${catalog.routes.map((r) => r.did).join(", ")}) route`);
+      if (catalog.ivrs.length) bits.push(`your IVR menu${catalog.ivrs.length > 1 ? "s" : ""} (${catalog.ivrs.map((i) => `"${i.description}"`).join(", ")}) — greetings and what each key does`);
+      if (catalog.queues.length) bits.push(`your queue${catalog.queues.length > 1 ? "s" : ""} (${catalog.queues.map((q) => `"${q.description}"`).join(", ")}) — members, hold music, announcements`);
+      return {
+        handled: true,
+        reply: `I wasn't 100% sure what to change, and I never guess with call routing. I can change ${bits.join("; ")}. Could you say it once more with the specific number/menu/queue and where it should go?`,
+        yiddish: yiTeam,
+      };
+    }
+
+    if (extracted.kind === "clarify") {
+      return { handled: true, reply: extracted.question, yiddish: yiTeam ? extracted.question : undefined };
+    }
+
+    const op = extracted.op;
+
+    // ── Read-only status answers straight from the live catalog ──
+    if (op.op === "status") {
+      return { handled: true, reply: this.answerPbxCfgStatus(op, catalog), yiddish: undefined };
+    }
+
+    // ── Build fully formed M3/M4/M10 params ──
+    let capId: string;
+    let params: Record<string, unknown>;
+    let summary: string;
+    if (op.domain === "route") {
+      capId = "pbx.M3";
+      if (op.op === "restore") {
+        params = { tenantId: pbxTenantId, objectId: op.did, action: "restore", reason: intent.raw.slice(0, 400) };
+        summary = `restore ${op.did} to its original routing`;
+      } else {
+        params = {
+          tenantId: pbxTenantId,
+          objectId: op.did,
+          action: "retarget_v2",
+          targetType: op.target.type,
+          targetId: op.target.id,
+          targetLabel: op.target.label,
+          reason: intent.raw.slice(0, 400),
+        };
+        summary = `route ${op.did} to ${op.target.label}`;
+      }
+    } else if (op.domain === "ivr") {
+      capId = "pbx.M4";
+      if (op.op === "set_welcome") {
+        params = { tenantId: pbxTenantId, objectId: `ivr:${op.ivrId}:welcome`, action: "native_set_welcome", ivrId: String(op.ivrId), recordingId: String(op.recordingId) };
+        summary = `set the greeting on IVR "${op.ivrName}" to recording "${op.recordingName}"`;
+      } else if (op.op === "clear_entry") {
+        params = { tenantId: pbxTenantId, objectId: `ivr:${op.ivrId}:${op.option}`, action: "native_clear_entry", ivrId: String(op.ivrId), option: op.option };
+        summary = `remove option ${op.option} from IVR "${op.ivrName}"`;
+      } else {
+        params = {
+          tenantId: pbxTenantId,
+          objectId: `ivr:${op.ivrId}:${op.option}`,
+          action: "native_set_entry",
+          ivrId: String(op.ivrId),
+          option: op.option,
+          targetType: op.target.type,
+          targetId: op.target.id,
+          targetLabel: op.target.label,
+        };
+        summary = `point option ${op.option} on IVR "${op.ivrName}" to ${op.target.label}`;
+      }
+    } else {
+      capId = "pbx.M10";
+      const base = { tenantId: pbxTenantId, objectId: op.queueExtension, queueLabel: `${op.queueExtension} ("${op.queueName}")` };
+      if (op.op === "set_announcement") {
+        params = { ...base, action: "set_announcement", slot: op.slot, recordingId: op.recordingId != null ? String(op.recordingId) : null };
+        summary = op.recordingName
+          ? `set queue "${op.queueName}" ${op.slot} announcement to recording "${op.recordingName}"`
+          : `clear queue "${op.queueName}" ${op.slot} announcement`;
+      } else if (op.op === "set_moh") {
+        params = { ...base, action: "set_moh", mohClass: op.mohClass };
+        summary = `set queue "${op.queueName}" hold music to "${op.mohLabel}"`;
+      } else {
+        params = { ...base, action: op.op === "add_member" ? "member_add" : "member_remove", extension: op.extension };
+        summary = `${op.op === "add_member" ? "add" : "remove"} extension ${op.extension} ${op.op === "add_member" ? "to" : "from"} queue "${op.queueName}"`;
+      }
+    }
+
+    const action = await this.actions.create({
+      tenantId: pbxTenantId,
+      capabilityId: capId,
+      params,
+      summary,
+      requestedBy: ctx.clientUserId ?? "unknown",
+      requestedRole: ctx.role,
+      conversationId: ctx.conversationId,
+      autoApprove: ctx.role === "owner",
+      riskTier: "medium",
+    });
+
+    const submitted = action.status === "EXECUTED";
+    const failed = action.status === "FAILED" || action.status === "DENIED";
+    return {
+      handled: true,
+      actionId: action.id,
+      reply: submitted
+        ? `Done — ${summary}. The change is live on your phone system now.`
+        : failed
+          ? `I tried to ${summary}, but it didn't go through — I've passed the details to our team.`
+          : `I've submitted this for approval: ${summary}. I'll let you know once it's live.`,
+      yiddish:
+        language === "yi"
+          ? submitted
+            ? `פֿאַרטיק — די ענדערונג איז שוין אַקטיוו.`
+            : failed
+              ? `עס האָט זיך נישט אײַנגעגעבן — איך האָב עס איבערגעגעבן צו אונדזער טים.`
+              : `איך האָב עס איבערגעגעבן פֿאַר אַפּרואוו.`
+          : undefined,
+    };
+  }
+
+  /** Read-only status text for route/IVR/queue questions, from the live catalog. */
+  private answerPbxCfgStatus(op: Extract<PbxCfgOperation, { op: "status" }>, catalog: PbxCatalog): string {
+    const fmtT = (t: { type: string; targetId: string | null; label: string | null } | null) =>
+      t ? `${t.type.replace(/_/g, " ")} ${t.label ?? t.targetId ?? "?"}`.trim() : "(not set)";
+    if (op.domain === "route") {
+      if (!catalog.routes.length) return "I don't see any phone numbers set up on your account yet.";
+      const lines = catalog.routes.map((r) => `${r.did}${r.description ? ` ("${r.description}")` : ""} → ${fmtT(r.target)}`);
+      return `Here's where your number${catalog.routes.length > 1 ? "s" : ""} currently route${catalog.routes.length > 1 ? "" : "s"}: ${lines.join("; ")}. Want me to change any of them?`;
+    }
+    if (op.domain === "ivr") {
+      if (!catalog.ivrs.length) return "Your phone system doesn't have any IVR menus yet.";
+      const lines = catalog.ivrs.map((i) => {
+        const opts = i.entries.map((e) => `press ${e.option} → ${fmtT(e.target)}`).join(", ");
+        return `"${i.description}" — greeting: ${i.welcomeRecordingName ? `"${i.welcomeRecordingName}"` : "none"}; ${opts || "no options set"}`;
+      });
+      return `Your IVR menu${catalog.ivrs.length > 1 ? "s" : ""}: ${lines.join(" | ")}. I can change the greeting or any option — just tell me.`;
+    }
+    if (!catalog.queues.length) return "Your phone system doesn't have any call queues yet.";
+    const lines = catalog.queues.map((q) => `queue ${q.extension} "${q.description}" — members: ${q.members.map((m) => m.extension).join(", ") || "none"}`);
+    return `Your queue${catalog.queues.length > 1 ? "s" : ""}: ${lines.join("; ")}. I can add/remove extensions, change the queue's hold music, or set announcements.`;
+  }
+
+  /**
+   * The user replied to one of OUR pbx-config clarifying questions ("Which
+   * queue? You have: …"). Combine the original ask with the answer and re-run
+   * the full catalog-grounded flow — same pattern as the MOH clarify resume.
+   */
+  private async resumePbxCfgClarification(intent: Extract<Intent, { kind: "chat" }>, ctx: TriageCtx): Promise<Extract<Intent, { kind: "action" }> | null> {
+    const text = (intent.raw ?? "").trim();
+    if (!text || text.length > 300 || !ctx.conversationId) return null;
+    try {
+      const msgs: Array<{ role: string; content: string | null; contentEn: string | null }> = await this.prisma.agentMessage.findMany({
+        where: { conversationId: ctx.conversationId },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        select: { role: true, content: true, contentEn: true },
+      });
+      let i = 0;
+      while (i < msgs.length && msgs[i].role !== "assistant") i++; // skip the just-stored user reply
+      if (i >= msgs.length) return null;
+      const textOf = (m: { content: string | null; contentEn: string | null }) => String(m.contentEn ?? m.content ?? "");
+      if (!PBXCFG_CLARIFY_MARKER_RE.test(textOf(msgs[i]))) return null;
+      // Collect the user messages before our question (the original request).
+      i++;
+      const prior: string[] = [];
+      while (i < msgs.length && msgs[i].role !== "assistant") {
+        prior.push(textOf(msgs[i]));
+        i++;
+      }
+      const combined = [...prior.reverse(), text].filter(Boolean).join(". ");
+      return { kind: "action", actionType: "pbx_config", raw: combined };
+    } catch {
+      return null;
+    }
   }
 
   /** The tenant's own active MOH profiles (Connect mirror; empty on error). */

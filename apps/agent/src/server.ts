@@ -143,7 +143,20 @@ async function main() {
       }
     };
     const { makeMohUploadApiClient } = await import("./pbx/mohUploadApiClient");
-    const triage = new TriageOrchestrator(prisma, diagEngine, actionService, loadPolicy, router, makeMohUploadApiClient());
+    // M3/M4/M10 doors (owner directive 2026-07-28): the orchestrator reads the
+    // live tenant catalog through these to ground LLM extraction and answer
+    // status questions; all WRITES still go through ActionService → executor.
+    const triage = new TriageOrchestrator(
+      prisma,
+      diagEngine,
+      actionService,
+      loadPolicy,
+      router,
+      makeMohUploadApiClient(),
+      makeRouteApiClient(),
+      makeIvrApiClient(),
+      makeQueueApiClient(),
+    );
     const rateLimiter = new RateLimiter();
 
     // Secret store — owner-managed API keys (Assistant page), encrypted at rest.

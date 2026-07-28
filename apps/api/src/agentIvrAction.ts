@@ -52,10 +52,32 @@ export const IvrScheduleSchema = z.object({
 });
 export type IvrSchedulePayload = z.infer<typeof IvrScheduleSchema>;
 
+/** Native VitalPBX IVR targets (ombu tables; helper verifies tenant ownership). */
+export const NATIVE_IVR_TARGET_TYPES = ["extension", "queue", "ring_group", "ivr", "time_condition", "custom_application"] as const;
+
+/** Native IVR menu options: single digit, * or #. */
+export const NATIVE_IVR_OPTION_RE = /^(?:\d|\*|#)$/;
+
 export const AgentIvrActionRequest = z
   .object({
     tenantId: z.string().min(1),
-    action: z.enum(["list", "set_option", "clear_option", "set_prompt", "set_exit", "set_schedule"]),
+    action: z.enum([
+      "list", "set_option", "clear_option", "set_prompt", "set_exit", "set_schedule",
+      // Native VitalPBX IVR ops (2026-07-28): operate on the tenant's REAL
+      // ombu_ivrs menus via the PBX helper (DB write + official per-tenant regen).
+      "native_list", "native_set_entry", "native_clear_entry", "native_set_welcome", "native_upload_recording",
+    ]),
+    // native ops:
+    ivrId: z.string().min(1).optional(),
+    option: z.string().regex(NATIVE_IVR_OPTION_RE).optional(),
+    targetType: z.enum(NATIVE_IVR_TARGET_TYPES).optional(),
+    targetId: z.string().min(1).optional(),
+    recordingId: z.string().min(1).optional(),
+    recordingName: z.string().min(2).max(120).optional(),
+    /** Original audio bytes (MP3/WAV/M4A…) for native_upload_recording — the
+     *  API transcodes to PBX WAV (8 kHz mono PCM) with ffmpeg before pushing. */
+    audioBase64: z.string().min(1).max(32 * 1024 * 1024).optional(),
+    audioFilename: z.string().min(1).max(255).optional(),
     schedule: IvrScheduleSchema.optional(),
     profileId: z.string().min(1).optional(),
     optionDigit: IVR_DIGIT_SCHEMA.optional(),
@@ -69,7 +91,12 @@ export const AgentIvrActionRequest = z
     exitSlot: z.enum(IVR_EXIT_SLOTS).optional(),
     agentActionId: z.string().min(1),
   })
-  .refine((v) => v.action === "list" || !!v.profileId, { message: "profileId required" })
+  .refine((v) => v.action === "list" || v.action.startsWith("native_") || !!v.profileId, { message: "profileId required" })
+  .refine((v) => !["native_set_entry", "native_clear_entry", "native_set_welcome"].includes(v.action) || !!v.ivrId, { message: "ivrId required" })
+  .refine((v) => v.action !== "native_set_entry" || (!!v.option && !!v.targetType && !!v.targetId), { message: "option, targetType, targetId required for native_set_entry" })
+  .refine((v) => v.action !== "native_clear_entry" || !!v.option, { message: "option required for native_clear_entry" })
+  .refine((v) => v.action !== "native_set_welcome" || !!v.recordingId, { message: "recordingId required for native_set_welcome" })
+  .refine((v) => v.action !== "native_upload_recording" || (!!v.recordingName && !!v.audioBase64), { message: "recordingName + audioBase64 required for native_upload_recording" })
   .refine((v) => v.action !== "set_option" || (!!v.optionDigit && !!v.destinationType && !!v.destinationRef), { message: "optionDigit, destinationType, destinationRef required for set_option" })
   .refine((v) => v.action !== "clear_option" || !!v.optionDigit, { message: "optionDigit required for clear_option" })
   .refine((v) => v.action !== "set_prompt" || !!v.promptSlot, { message: "promptSlot required for set_prompt" })
