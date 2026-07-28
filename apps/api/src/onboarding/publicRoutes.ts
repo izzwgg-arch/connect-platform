@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
-import { isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
+import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
@@ -365,7 +365,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // Submit — validate + persist
   app.post("/onboarding/:token/submit", async (req: any, reply) => {
     const { token } = (req.params as any) as { token: string };
-    const body = publicSubmitSchema.parse(req.body || {});
+    // A parse() throw here surfaced to customers as a raw "internal_error"
+    // zod dump — validation failures must come back as a friendly 400.
+    const parsedBody = publicSubmitSchema.safeParse(req.body || {});
+    if (!parsedBody.success) return reply.code(400).send({ error: friendlySubmitError(parsedBody.error) });
+    const body = parsedBody.data;
 
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
@@ -374,8 +378,8 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     // validate extensions numeric + unique
     const seen = new Set<string>();
     for (const e of body.extensions || []) {
-      if (!/^[0-9]+$/.test(e.extNumber)) return reply.code(400).send({ error: "invalid_extension_number" });
-      if (seen.has(e.extNumber)) return reply.code(400).send({ error: "duplicate_extension_number" });
+      if (!/^[0-9]+$/.test(e.extNumber)) return reply.code(400).send({ error: `Extension number "${e.extNumber}" can only contain digits.` });
+      if (seen.has(e.extNumber)) return reply.code(400).send({ error: `Extension number ${e.extNumber} is used more than once — extension numbers must be unique.` });
       seen.add(e.extNumber);
     }
 

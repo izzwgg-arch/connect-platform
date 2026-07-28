@@ -64,6 +64,36 @@ export function isSubmissionWriteBlocked(row: { status?: unknown; answers?: unkn
   return !["INVITE_SENT", "IN_PROGRESS"].includes(s);
 }
 
+// Human-readable message for a public-submit validation failure. The wizard
+// shows this string verbatim to the customer, so no zod jargon and no paths —
+// a raw ZodError here used to surface as "internal_error: [ {...} ]" on the
+// review step (live 2026-07-28).
+export function friendlySubmitError(err: z.ZodError): string {
+  const issue = err.issues[0];
+  if (!issue) return "Some details look invalid. Please review the form and try again.";
+  const p = issue.path;
+  if (p[0] === "extensions" && typeof p[1] === "number") {
+    const which = `Extension ${Number(p[1]) + 1}`;
+    const byField: Record<string, string> = {
+      email: "please enter a valid email address, or leave it blank",
+      extNumber: "the extension number can only contain digits",
+      cellNumber: "please enter a full 10-digit cell number",
+      vmPassword: "the voicemail PIN can only contain digits",
+      displayName: "please enter a name",
+    };
+    const hint = byField[String(p[2] || "")];
+    return `${which}: ${hint || "one of its details looks invalid"}.`;
+  }
+  const byTopField: Record<string, string> = {
+    companyName: "Please enter your company name.",
+    contactFirstName: "Please enter a first name.",
+    contactLastName: "Please enter a last name.",
+    mainEmail: "Please enter a valid main email address.",
+    billingEmail: "The billing email doesn't look right — fix it or leave it blank.",
+  };
+  return byTopField[String(p[0] || "")] || "Some details look invalid. Please review the form and try again.";
+}
+
 // Admin create public link
 export const createPublicLinkSchema = z.object({
   companyName: z.string().min(1).max(200).optional(),

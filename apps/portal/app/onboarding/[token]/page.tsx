@@ -105,6 +105,11 @@ function validateStep(step: number, f: FormData): string | null {
       if (ext.cellMode && ext.cellNumber.replace(/\D/g, "").replace(/^1/, "").length !== 10) {
         return `Enter a full cell phone number for ${ext.displayName.trim() || "extension " + (ext.extNumber || "?")}.`;
       }
+      // Email is optional, but a typed one must be valid — catching it here
+      // instead of letting the final submit reject it on the review step.
+      if (ext.email.trim() && !isEmail(ext.email)) {
+        return `The email for ${ext.displayName.trim() || "extension " + (ext.extNumber || "?")} doesn't look right — fix it or leave it blank.`;
+      }
     }
     const nums = f.extensions.map((e) => e.extNumber.trim());
     if (new Set(nums).size !== nums.length) return "Extension numbers must be unique.";
@@ -308,6 +313,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   // ── Submit ──────────────────────────────────────────────────────────────────
   async function handleSubmit() {
     setSubmitError(null);
+    // Re-check every step before launching: autosaved data can predate newer
+    // validation, and fields edited on earlier steps shouldn't fail server-side.
+    for (let s = 0; s <= 3; s++) {
+      const err = validateStep(s, form);
+      if (err) { setSubmitError(err); return; }
+    }
     setSubmitting(true);
     try {
       await apiPost(`/onboarding/${encodeURIComponent(token)}/submit`, {
@@ -696,7 +707,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <div className="ob-review-row"><span className="ob-review-key">SMS messaging</span><span className={`ob-review-val${form.smsEnabled ? " ob-auto" : ""}`}>{form.smsEnabled ? "Enabled" : "Not added"}</span></div>
             </div>
             <div className="ob-callout">
-              <span>On launch, Connect builds your tenant, creates every extension from your list, {form.numberChoice === "port" ? "ports" : "buys &amp; wires"} your number, and sets your routing — <b className="ob-auto">all automatically</b>.</span>
+              <span>On launch, Connect builds your tenant, creates every extension from your list, {form.numberChoice === "port" ? "ports" : "buys & wires"} your number, and sets your routing — <b className="ob-auto">all automatically</b>.</span>
             </div>
             {submitError && <div className="ob-error">{submitError}</div>}
           </div>
