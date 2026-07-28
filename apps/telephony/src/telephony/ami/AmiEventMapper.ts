@@ -182,6 +182,7 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         duration: g("Duration"),
         billableSeconds: g("BillableSeconds"),
         disposition: g("Disposition"),
+        lastApplication: g("LastApplication"),
       } satisfies AmiCdr;
 
     case "QueueCallerJoin":

@@ -150,6 +150,10 @@ export interface AmiCdr {
   duration: string;
   billableSeconds: string;
   disposition: string;
+  // Last dialplan application on the leg (e.g. "Dial", "VoiceMail", "Queue").
+  // "VoiceMail" on an ANSWERED leg is how we detect calls that were "answered"
+  // by voicemail — those must classify as missed, not answered.
+  lastApplication: string;
 }
 
 export interface AmiQueueCallerJoin {

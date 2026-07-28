@@ -14578,6 +14578,22 @@ app.post("/mobile/devices/register", async (req, reply) => {
     if (sibling?.featureFlags != null) inheritedFeatureFlags = sibling.featureFlags;
   }
 
+  // Default for NEW Android device rows: standing registration ON. The
+  // per-device flag was rolled out gradually, but a fresh login / reinstall /
+  // account switch mints a brand-new row with no flags, silently reverting the
+  // physical phone to legacy slow-answer mode (observed live 2026-07-28:
+  // account switch → flagless row → registration lapsed → inbound call rang
+  // nobody and went to voicemail). Standing registration is live-proven, so
+  // new rows start ON. Kill-switch semantics unchanged: inherited flags (incl.
+  // an explicit standingRegistration:false) always win over this default, and
+  // flipping the key off on the row still reverts the device on next register.
+  const createFeatureFlags: unknown =
+    inheritedFeatureFlags !== undefined
+      ? inheritedFeatureFlags
+      : input.platform === "ANDROID"
+        ? { standingRegistration: true }
+        : undefined;
+
   const saved = await db.mobileDevice.upsert({
     where: { expoPushToken: input.expoPushToken },
     create: {
@@ -14596,7 +14612,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       osVersion: input.osVersion || null,
       ...permissionsPatch,
       ...keepAlivePatch,
-      ...(inheritedFeatureFlags !== undefined ? { featureFlags: inheritedFeatureFlags } : {}),
+      ...(createFeatureFlags !== undefined ? { featureFlags: createFeatureFlags } : {}),
       active: true,
       deactivatedAt: null,
       lastSeenAt: new Date()

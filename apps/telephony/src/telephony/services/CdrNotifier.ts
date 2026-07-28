@@ -20,7 +20,39 @@ function normalizeDirection(dir: string): "incoming" | "outgoing" | "internal" |
 //  4. Outbound/internal with no answer → canceled
 // resolvedDir: pass the already-inferred direction (may differ from call.direction when we
 // applied number heuristics above). Avoids double-inferring direction inside this function.
-function deriveDisposition(call: NormalizedCall, resolvedDir?: string): string {
+/**
+ * True when an incoming call was "answered" ONLY by the voicemail application —
+ * i.e. no human/device leg ever answered. Asterisk marks the caller channel
+ * ANSWERED the moment VoiceMail() picks up, which historically made
+ * ring-to-voicemail calls show as answered/incoming in call history instead of
+ * missed. Detection (verified against live PBX CDR 2026-07-28): the flow emits
+ * a "Dial"/NO ANSWER leg followed by a "VoiceMail"/ANSWERED leg (destination
+ * sometimes rewritten to "VM-<ext>"). A real answer always leaves an ANSWERED
+ * leg whose lastapp is NOT VoiceMail (Dial/Queue/etc), so requiring EVERY
+ * answered leg to be a voicemail leg cannot misfire on answered calls,
+ * transfers, or ring groups answered by a colleague.
+ */
+export function isVoicemailOnlyAnswer(call: NormalizedCall): boolean {
+  type Leg = { destination?: string; disposition?: string; lastApplication?: string };
+  const legs = (call.metadata?.cdrLegs as Leg[] | undefined) ?? [];
+  if (legs.length === 0) return false;
+  const answered = legs.filter((l) => String(l.disposition ?? "").toUpperCase().trim() === "ANSWERED");
+  if (answered.length === 0) return false;
+  const isVmLeg = (l: Leg) =>
+    /voicemail/i.test(String(l.lastApplication ?? "")) ||
+    /^vm-/i.test(String(l.destination ?? "").trim());
+  return answered.every(isVmLeg);
+}
+
+export function deriveDisposition(call: NormalizedCall, resolvedDir?: string): string {
+  // Voicemail "answers" are missed calls from the callee's point of view.
+  // Checked FIRST because both the explicit ANSWERED disposition and the
+  // answeredAt inference below would otherwise classify them as answered.
+  // Scoped to incoming calls — the only direction where "reached voicemail"
+  // means the user missed the call.
+  const dirForVm = resolvedDir ?? normalizeDirection(call.direction);
+  if (dirForVm === "incoming" && isVoicemailOnlyAnswer(call)) return "missed";
+
   const cdrDisp = String(call.metadata?.cdrDisposition ?? "").toUpperCase().trim();
   if (cdrDisp === "ANSWERED") return "answered";
   if (cdrDisp === "NO ANSWER") return "missed";

@@ -1122,6 +1122,7 @@ export class CallStateStore extends EventEmitter {
     dcontext?: string;
     accountCode?: string;
     channel?: string;
+    lastApplication?: string;
   }): void {
     const call = this.calls.get(params.linkedId);
     if (!call) return;
@@ -1199,14 +1200,21 @@ export class CallStateStore extends EventEmitter {
       duration:    isNaN(dur)  ? 0 : dur,
       billableSec: isNaN(bill) ? 0 : bill,
       disposition: (params.disposition ?? "").trim(),
+      lastApplication: (params.lastApplication ?? "").trim(),
     };
     if (legEntry.source || legEntry.destination) {
       const prevLegs = (call.metadata["cdrLegs"] as typeof legEntry[] | undefined) ?? [];
+      // Dedupe key MUST include lastApplication: a ring-to-voicemail flow emits
+      // two legs with identical source/destination/dcontext — "Dial"/NO ANSWER
+      // followed by "VoiceMail"/ANSWERED (verified in PBX CDR 2026-07-28). The
+      // old src+dst+dcontext key silently dropped the VoiceMail leg, which is
+      // the one leg that proves the call was answered by voicemail.
       const isDupe = prevLegs.some(
         (l) =>
           l.source      === legEntry.source &&
           l.destination === legEntry.destination &&
-          l.dcontext    === legEntry.dcontext,
+          l.dcontext    === legEntry.dcontext &&
+          (l.lastApplication ?? "") === legEntry.lastApplication,
       );
       if (!isDupe) call.metadata["cdrLegs"] = [...prevLegs, legEntry];
     }
