@@ -71,6 +71,28 @@ function parseClock(raw: string, defaultMeridiem?: "am" | "pm"): ClockTime | nul
 
 const TIME_TOKEN = String.raw`\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?`;
 
+/**
+ * Spelled-out clock hours. Live miss 2026-07-27: "switch my music on hold to
+ * main until eight o'clock" parsed as NO timing at all, so the change went in
+ * without the requested end time. Normalized to digits before any matching.
+ */
+const HOUR_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+};
+const HOUR_WORD_ALT = Object.keys(HOUR_WORDS).join("|");
+
+function normalizeClockWords(t: string): string {
+  return t
+    // "eight o'clock" / "eight oclock" (incl. curly apostrophe) → "8"
+    .replace(new RegExp(String.raw`\b(${HOUR_WORD_ALT})\s+o[’']?\s?clock\b`, "g"), (_, w) => String(HOUR_WORDS[w]))
+    // "eight pm" / "eight a.m." → "8 pm" / "8 a.m."
+    .replace(new RegExp(String.raw`\b(${HOUR_WORD_ALT})\s+(a\.?m\.?|p\.?m\.?)\b`, "g"), (_, w, mer) => `${HOUR_WORDS[w]} ${mer}`)
+    // "until eight" / "till eight" / "at eight" → keyword + digit
+    .replace(new RegExp(String.raw`\b(until|till|til|at)\s+(${HOUR_WORD_ALT})\b`, "g"), (_, kw, w) => `${kw} ${HOUR_WORDS[w]}`)
+    // "8 o'clock" → "8"
+    .replace(/(\d)\s*o[’']?\s?clock\b/g, "$1");
+}
+
 const MONTHS: Record<string, number> = {
   january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
   july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
@@ -156,7 +178,7 @@ function durationToMinutes(numRaw: string, unit: string): number | null {
  * until → duration → none.
  */
 export function parseMohTiming(text: string, tz: string, now: Date = new Date()): MohTiming {
-  const t = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const t = normalizeClockWords(text.toLowerCase().replace(/\s+/g, " ").trim());
   const z = nowInZone(tz, now);
 
   // ── weekly: "every friday from 3pm to 5pm" / "every friday 3-5pm" ──
@@ -232,7 +254,20 @@ export function parseMohTiming(text: string, tz: string, now: Date = new Date())
         const day = m[1] ? parseDayPhrase(m[1], tz, now) : { y: z.y, mo: z.mo, d: z.d };
         if (day) {
           let endAt = zonedTimeToUtc(tz, day.y, day.mo, day.d, clock.hh, clock.mm);
-          if (!m[1] && endAt.getTime() <= now.getTime()) endAt = new Date(endAt.getTime() + 86400_000);
+          if (!m[1] && endAt.getTime() <= now.getTime()) {
+            // Bare hour, no meridiem, already past ⇒ the NEXT time the clock
+            // reads that hour. "until 8" asked at 7:52 PM means 8 PM tonight —
+            // NOT 8 AM tomorrow (live misparse 2026-07-27).
+            const pmCandidate = !clock.explicitMeridiem && clock.hh < 12
+              ? zonedTimeToUtc(tz, day.y, day.mo, day.d, clock.hh + 12, clock.mm)
+              : null;
+            if (pmCandidate && pmCandidate.getTime() > now.getTime()) {
+              clock.hh += 12;
+              endAt = pmCandidate;
+            } else {
+              endAt = new Date(endAt.getTime() + 86400_000);
+            }
+          }
           if (endAt.getTime() > now.getTime()) {
             return { kind: "until", endAt, label: `until ${m[1] ? `${m[1]} ` : ""}${fmtClock(clock)}` };
           }

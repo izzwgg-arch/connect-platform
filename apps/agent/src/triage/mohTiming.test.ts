@@ -41,6 +41,55 @@ test("until: past time rolls to tomorrow", () => {
   assert.equal((r as any).endAt.toISOString(), "2026-07-27T19:00:00.000Z");
 });
 
+// ── live misparses 2026-07-27 (7:51 PM EDT): "until eight o'clock" got no
+// timing; "till 8 o'clock" became 8 AM tomorrow instead of 8 PM tonight ──
+const EVENING = new Date("2026-07-27T23:51:00Z"); // Mon 7:51 PM EDT
+
+test("until: spelled-out hour with o'clock", () => {
+  const r = parseMohTiming("switch my music on hold to main until eight o'clock", TZ, EVENING);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T00:00:00.000Z"); // 8 PM EDT tonight
+  assert.match((r as any).label, /8 PM/);
+});
+
+test("until: digit + o'clock, bare hour prefers next occurrence (8 PM not 8 AM)", () => {
+  const r = parseMohTiming("do it to main only till 8 o'clock then back to classic", TZ, EVENING);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T00:00:00.000Z");
+  assert.match((r as any).label, /8 PM/);
+});
+
+test("until: spelled-out hour with curly apostrophe and explicit meridiem word", () => {
+  const r = parseMohTiming("until eight o’clock pm", TZ, EVENING);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T00:00:00.000Z");
+});
+
+test("until: spelled-out hour + pm without o'clock", () => {
+  const r = parseMohTiming("keep it on main until eight pm", TZ, EVENING);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T00:00:00.000Z");
+});
+
+test("until: bare word hour after until", () => {
+  const r = parseMohTiming("play main until eight", TZ, EVENING);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T00:00:00.000Z");
+});
+
+test("until: explicit am is respected even when past (rolls to tomorrow 8 AM)", () => {
+  const r = parseMohTiming("until 8am", TZ, EVENING);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T12:00:00.000Z"); // Tue 8 AM EDT
+});
+
+test("until: both occurrences past today rolls to tomorrow", () => {
+  const lateNight = new Date("2026-07-28T02:30:00Z"); // Mon 10:30 PM EDT
+  const r = parseMohTiming("until 8", TZ, lateNight);
+  assert.equal(r.kind, "until");
+  assert.equal((r as any).endAt.toISOString(), "2026-07-28T12:00:00.000Z"); // Tue 8 AM EDT
+});
+
 test("until: weekday + time", () => {
   const r = parseMohTiming("holiday music until monday 9am", TZ, NOW);
   assert.equal(r.kind, "until");

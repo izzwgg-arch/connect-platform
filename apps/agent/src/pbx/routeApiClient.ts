@@ -5,6 +5,8 @@
  * destination resolver) is installed: the default factory throws on any live
  * call, so M3 can be fully built + certified in simulate with zero live surface.
  */
+import { postInternalApi } from "./internalApiPost";
+
 export interface RouteApiClient {
   call(body: Record<string, unknown>): Promise<any>;
 }
@@ -30,12 +32,7 @@ export function makeRouteApiClient(opts: { baseUrl?: string; secret?: string; ti
     async call(body: Record<string, unknown>): Promise<any> {
       const secret = (opts.secret ?? process.env.AGENT_INTERNAL_SECRET ?? "").trim();
       if (!secret) throw new Error("route_api_secret_unset (AGENT_INTERNAL_SECRET) — fail-closed");
-      const resp = await fetch(`${baseUrl}/internal/agent/route/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-agent-internal-secret": secret },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      const resp = await postInternalApi({ url: `${baseUrl}/internal/agent/route/action`, secret, body, timeoutMs });
       const json: any = await resp.json().catch(() => ({}));
       if (!resp.ok || json?.ok !== true) {
         throw new Error(`route_api_error status=${resp.status} ${JSON.stringify(json).slice(0, 300)}`);
