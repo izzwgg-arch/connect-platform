@@ -1,0 +1,19 @@
+diff --git a/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java b/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java
+index 025480ac97460cc45775ea11aa43af36522d5df6..f166684930eec63122f7b2d5d83d98fc79cdfe6f 100644
+--- a/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java
++++ b/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java	
+@@ -755,8 +755,12 @@ public class RNCallKeepModule extends ReactContextBaseJavaModule implements Life
+        }
+        this.stopListenToNativeCallsState();
+        Log.d(TAG, "[RNCallKeepModule] onHostDestroy executed");
+-       // This line will kill the android process after ending all calls
+-       android.os.Process.killProcess(android.os.Process.myPid());
++       // PATCHED (Connect): upstream killed the whole process here on activity
++       // destroy. On Samsung a recents-swipe destroys the activity, so this
++       // line was SIGKILLing the app mid-call and after every swipe, defeating
++       // the keep-alive foreground service and standing SIP registration.
++       // The process must survive; services own the lifecycle, not the activity.
++       // android.os.Process.killProcess(android.os.Process.myPid());
+    }
+ 
+     @ReactMethod
