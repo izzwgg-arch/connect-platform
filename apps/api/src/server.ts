@@ -18408,6 +18408,23 @@ function pbxHelperSpoolFolderFromVoicemail(vm: { pbxFolder: string | null; folde
   return "Old";
 }
 
+// True only when the acting user owns this voicemail's mailbox — the only case
+// where streaming/downloading may stamp the message read (same ownership rule
+// as the PATCH read-state carve-out).
+async function isVoicemailOwnMailbox(
+  vm: { tenantId: string | null; extension: string },
+  user: JwtUser,
+): Promise<boolean> {
+  try {
+    const ownScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+    if (!ownScope.ok) return false;
+    return voicemailRowInOwnedScope(vm, {
+      tenantIds: ownScope.tenantIds,
+      extensions: ownScope.extensions,
+    });
+  } catch { return false; }
+}
+
 async function finishVoicemailStreamFromBuffer(
   req: any,
   vm: { id: string; readAt: Date | null },
@@ -18417,6 +18434,7 @@ async function finishVoicemailStreamFromBuffer(
   sourceBuf: Buffer,
   fileExtForMime: string,
   skipTranscode = false,
+  allowReadStamp = true,
 ): Promise<void> {
   const ext = (fileExtForMime.match(/^[a-z0-9]+$/i) ? fileExtForMime : "wav").toLowerCase();
   const mimeByExt: Record<string, string> = {
@@ -18458,7 +18476,10 @@ async function finishVoicemailStreamFromBuffer(
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
   }
 
-  if (!vm.readAt) {
+  // Read-stamping is gated: only a real playback by the mailbox owner may mark
+  // the message read. Preloader fetches (?raw=1) and non-owner previews stream
+  // audio without flipping the owner's unread state (mirrors the PATCH carve-out).
+  if (allowReadStamp && !vm.readAt) {
     await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
   }
 
@@ -18471,6 +18492,7 @@ async function streamVoicemailAudio(
   reply: any,
   asAttachment: boolean,
   skipTranscode = false,
+  allowReadStamp = true,
 ): Promise<void> {
   if (!vm.tenantId) { reply.code(503).send({ error: "audio_unavailable" }); return; }
   const link = await db.tenantPbxLink.findFirst({
@@ -18530,7 +18552,7 @@ async function streamVoicemailAudio(
         },
         "voicemail: helper_audio_fallback",
       );
-      await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, ext, skipTranscode);
+      await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, ext, skipTranscode, allowReadStamp);
       return true;
     } catch (err: any) {
       app.log.warn(
@@ -18668,7 +18690,7 @@ async function streamVoicemailAudio(
   const recfileLower = (recfile ?? "").toLowerCase();
   const fileExt = recfileLower.match(/\.([a-z0-9]+)$/)?.[1] ?? "wav";
   const sourceBuf = Buffer.from(await pbxResp.arrayBuffer());
-  await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, fileExt, skipTranscode);
+  await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, fileExt, skipTranscode, allowReadStamp);
 }
 
 // ── GET /voice/voicemail/unread-count ────────────────────────────────────────
@@ -18711,11 +18733,12 @@ app.get("/voice/voicemail/:id/stream", async (req, reply) => {
   // Android MediaPlayer (used by expo-av) handles WAV/PCM natively; skipping
   // transcode removes 500ms–2s of latency per preload request.
   const rawMode = (req.query as Record<string, string | undefined>)["raw"] === "1";
+  const isOwnMailbox = await isVoicemailOwnMailbox(vm, user);
   app.log.info(
-    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder, rawMode },
+    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder, rawMode, isOwnMailbox },
     "voicemail: stream request",
   );
-  try { return await streamVoicemailAudio(req, vm, reply, false, rawMode); }
+  try { return await streamVoicemailAudio(req, vm, reply, false, rawMode, !rawMode && isOwnMailbox); }
   catch (err: any) {
     app.log.warn({ id, err: err?.message, stack: err?.stack }, "voicemail: stream failed");
     return reply.code(503).send({ error: "audio_unavailable" });
@@ -18734,7 +18757,7 @@ app.get("/voice/voicemail/:id/download", async (req, reply) => {
   const vm = await db.voicemail.findUnique({ where: { id } });
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
-  try { return await streamVoicemailAudio(req, vm, reply, true); }
+  try { return await streamVoicemailAudio(req, vm, reply, true, false, await isVoicemailOwnMailbox(vm, user)); }
   catch (err: any) {
     app.log.warn({ id, err: err?.message }, "voicemail: download failed");
     return reply.code(503).send({ error: "audio_unavailable" });
@@ -26172,7 +26195,11 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           ...(recfile ? { pbxRecfile: recfile } : {}),
           callerNumber,
           callerName: vmExtractCallerName(rawCallerid) || null,
-          listened: folder !== "inbox",
+          // Playing a voicemail in the app never moves it out of the PBX INBOX,
+          // so "still in INBOX" is not evidence it is unread. Only promote to
+          // listened when the PBX says it left INBOX (e.g. dial-in *97 playback);
+          // never downgrade Connect's own read state on re-sync.
+          ...(folder !== "inbox" ? { listened: true } : {}),
         },
       });
       // Enabled by default now that voicemail-notify targeting is proven safe
