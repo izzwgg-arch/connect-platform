@@ -264,7 +264,10 @@ async function main() {
     });
 
     // Chat-widget file uploads (chunked; audio → hold-music flow, docs → team).
-    const { ChatUploadStore } = await import("./uploads/uploadStore");
+    // NB: the folder is "attachments", NOT "uploads" — the root .dockerignore
+    // excludes **/uploads (runtime storage) and would drop the module from the
+    // image (live crash-loop 2026-07-27).
+    const { ChatUploadStore } = await import("./attachments/uploadStore");
     const uploadStore = new ChatUploadStore(process.env.AGENT_UPLOAD_DIR || "./data/chat-uploads");
     registerChatRoutes(app, engine, uploadStore);
     registerDiagRoutes(app, diagEngine);

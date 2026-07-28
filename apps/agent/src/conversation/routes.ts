@@ -13,7 +13,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ConversationEngine } from "./engine";
-import type { ChatUploadStore } from "../uploads/uploadStore";
+import type { ChatUploadStore } from "../attachments/uploadStore";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
 
 const Identity = z.object({
