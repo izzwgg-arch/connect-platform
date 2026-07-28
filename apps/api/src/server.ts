@@ -24995,6 +24995,7 @@ app.post("/internal/agent/moh/upload-asset", { bodyLimit: 120 * 1024 * 1024 }, a
   }
 
   app.log.info({ tenantId: tid, actor, mohClassName, tracks: files.length, profileId: profile.id }, "agent moh upload: asset + profile created");
+  triggerPbxMediaSync(`agent-upload:${mohClassName}`);
   return reply.code(201).send({
     ok: true,
     profile: { id: profile.id, name: profile.name },
@@ -25314,6 +25315,29 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
 // manifests on a cron, not per-call.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Fire-and-forget push trigger: poke the PBX helper's /media-sync endpoint so
+// the PBX pulls new/removed MOH audio within seconds instead of waiting for
+// the 5-minute reconciliation cron (the helper touches a trigger file that a
+// root systemd .path unit watches). Failures are non-fatal by design — the
+// cron remains the safety net.
+function triggerPbxMediaSync(reason: string): void {
+  void (async () => {
+    try {
+      const cfg = resolvePbxRouteHelperConfig();
+      if (!cfg) return;
+      const resp = await fetch(`${cfg.baseUrl}/media-sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-connect-pbx-helper-secret": cfg.secret },
+        body: JSON.stringify({ reason }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!resp.ok) throw new Error(`helper_status_${resp.status}`);
+    } catch (err) {
+      app.log.warn({ event: "moh_media_sync_trigger_failed", reason, err: String(err) }, "media-sync trigger failed (cron will reconcile)");
+    }
+  })();
+}
+
 // ── POST /voice/moh/assets ───────────────────────────────────────────────────
 // Multipart upload: field `file` (audio bytes) + field `meta` (JSON string
 // with tenantId + name). Returns the created MohAsset row. Tenant scope and
@@ -25458,6 +25482,7 @@ app.post("/voice/moh/assets", async (req, reply) => {
     throw err;
   });
 
+  triggerPbxMediaSync(`portal-upload:${mohClassName}`);
   return reply.code(201).send({ asset });
 });
 
@@ -25509,6 +25534,7 @@ app.delete("/voice/moh/assets/:id", async (req, reply) => {
     [asset.storageKey, asset.originalStorageKey, asset.pbxStorageKey].filter(Boolean),
   );
   for (const k of keys) await deleteMohFile(k).catch(() => void 0);
+  triggerPbxMediaSync(`asset-archived:${asset.mohClassName}`);
   return reply.send({ ok: true });
 });
 
