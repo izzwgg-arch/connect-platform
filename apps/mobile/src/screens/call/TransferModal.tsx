@@ -12,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { playDtmfTone } from "../../audio/telephonyAudio";
+import { useTheme } from "../../context/ThemeContext";
 
 /**
  * TransferModal — cross-platform blind-transfer target picker.
@@ -65,6 +66,50 @@ export function TransferModal({
 }: Props) {
   const [value, setValue] = useState(initialValue);
   const slide = useRef(new Animated.Value(0)).current;
+  const { isDark } = useTheme();
+
+  // Same palette language as ActiveCallScreen's light/dark modes.
+  const pal = isDark
+    ? {
+        overlay: "rgba(3, 7, 18, 0.72)",
+        sheetBg: "rgba(10, 16, 30, 0.98)",
+        sheetBorder: "rgba(148, 163, 184, 0.18)",
+        handle: "rgba(148, 163, 184, 0.3)",
+        title: "#f8fafc",
+        subtitle: "rgba(148, 163, 184, 0.85)",
+        closeIcon: "rgba(148, 163, 184, 0.9)",
+        displayBg: "rgba(148, 163, 184, 0.08)",
+        displayBorder: "rgba(148, 163, 184, 0.12)",
+        displayText: "#f8fafc",
+        bsIcon: "rgba(226, 232, 240, 0.85)",
+        keyBg: "rgba(148, 163, 184, 0.06)",
+        keyBorder: "rgba(148, 163, 184, 0.08)",
+        keyDigit: "#f8fafc",
+        keySub: "rgba(148, 163, 184, 0.8)",
+        btnSecondaryBg: "rgba(148, 163, 184, 0.1)",
+        btnSecondaryBorder: "rgba(148, 163, 184, 0.18)",
+        btnSecondaryText: "rgba(226, 232, 240, 0.9)",
+      }
+    : {
+        overlay: "rgba(15, 23, 42, 0.35)",
+        sheetBg: "#ffffff",
+        sheetBorder: "rgba(16, 35, 70, 0.12)",
+        handle: "#c3d0e8",
+        title: "#122344",
+        subtitle: "rgba(91, 111, 150, 0.8)",
+        closeIcon: "rgba(91, 111, 150, 0.9)",
+        displayBg: "rgba(16, 35, 70, 0.05)",
+        displayBorder: "rgba(16, 35, 70, 0.10)",
+        displayText: "#122344",
+        bsIcon: "rgba(59, 79, 120, 0.85)",
+        keyBg: "rgba(16, 35, 70, 0.04)",
+        keyBorder: "rgba(16, 35, 70, 0.08)",
+        keyDigit: "#122344",
+        keySub: "rgba(91, 111, 150, 0.8)",
+        btnSecondaryBg: "rgba(16, 35, 70, 0.06)",
+        btnSecondaryBorder: "rgba(16, 35, 70, 0.12)",
+        btnSecondaryText: "#122344",
+      };
 
   useEffect(() => {
     if (visible) {
@@ -123,32 +168,37 @@ export function TransferModal({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { backgroundColor: pal.overlay }]}>
         <Animated.View
           style={[
             styles.sheet,
+            { backgroundColor: pal.sheetBg, borderColor: pal.sheetBorder },
             { transform: [{ translateY }], opacity },
           ]}
         >
-          <View style={styles.handle} />
+          <View style={[styles.handle, { backgroundColor: pal.handle }]} />
 
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>{title}</Text>
-              <Text style={styles.subtitle}>{subtitle}</Text>
+              <Text style={[styles.title, { color: pal.title }]}>{title}</Text>
+              <Text style={[styles.subtitle, { color: pal.subtitle }]}>{subtitle}</Text>
             </View>
             <TouchableOpacity onPress={onCancel} hitSlop={12}>
-              <Ionicons name="close" size={22} color="rgba(148, 163, 184, 0.9)" />
+              <Ionicons name="close" size={22} color={pal.closeIcon} />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.displayWrap}>
-            <Text style={styles.displayValue} numberOfLines={1} adjustsFontSizeToFit>
+          <View style={[styles.displayWrap, { backgroundColor: pal.displayBg, borderColor: pal.displayBorder }]}>
+            <Text
+              style={[styles.displayValue, { color: pal.displayText }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
               {value || " "}
             </Text>
             {value.length > 0 ? (
               <TouchableOpacity onPress={handleBackspace} style={styles.bsBtn} hitSlop={10}>
-                <Ionicons name="backspace-outline" size={22} color="rgba(226, 232, 240, 0.85)" />
+                <Ionicons name="backspace-outline" size={22} color={pal.bsIcon} />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -157,25 +207,25 @@ export function TransferModal({
             {KEYS.map(({ d, s }) => (
               <TouchableOpacity
                 key={d}
-                style={styles.key}
+                style={[styles.key, { backgroundColor: pal.keyBg, borderColor: pal.keyBorder }]}
                 onPress={() => handlePressKey(d)}
                 activeOpacity={0.6}
                 onLongPress={d === "0" ? () => handlePressKey("+") : undefined}
               >
-                <Text style={styles.keyDigit}>{d}</Text>
-                {s ? <Text style={styles.keySub}>{s}</Text> : null}
+                <Text style={[styles.keyDigit, { color: pal.keyDigit }]}>{d}</Text>
+                {s ? <Text style={[styles.keySub, { color: pal.keySub }]}>{s}</Text> : null}
               </TouchableOpacity>
             ))}
           </View>
 
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary]}
+              style={[styles.btn, styles.btnSecondary, { backgroundColor: pal.btnSecondaryBg, borderColor: pal.btnSecondaryBorder }]}
               onPress={handleClear}
               disabled={value.length === 0}
               activeOpacity={0.8}
             >
-              <Text style={[styles.btnSecondaryText, value.length === 0 && { opacity: 0.4 }]}>
+              <Text style={[styles.btnSecondaryText, { color: pal.btnSecondaryText }, value.length === 0 && { opacity: 0.4 }]}>
                 Clear
               </Text>
             </TouchableOpacity>

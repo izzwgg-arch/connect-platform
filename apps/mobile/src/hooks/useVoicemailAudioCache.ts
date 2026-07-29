@@ -58,6 +58,9 @@ const PRELOAD_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 // of paying expo-av's ~0.4–1s loadAsync prepare cost. Bounded so we never hold
 // more than a handful of native MediaPlayer instances.
 const PRELOAD_SOUND_COUNT = 4;
+// Expanding a card is a strong signal the user is about to press Play, so
+// `warm()` may hold up to this many extra decoded sounds beyond the top-N set.
+const MAX_PINNED_SOUNDS = 2;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type PreloadStatus = "idle" | "loading" | "ready" | "error";
@@ -80,6 +83,12 @@ export interface VoicemailAudioCache {
    * null when not pre-warmed — caller should loadAsync as usual.
    */
   takeSound: (vmId: string) => Audio.Sound | null;
+  /**
+   * User-intent prefetch: download (if needed) AND decode this voicemail right
+   * now, regardless of its position in the top-N preload set. Called when a
+   * card is expanded so the audio is ready before Play is even tapped.
+   */
+  warm: (vm: CacheableVoicemail) => void;
 }
 
 // Minimal Voicemail shape this hook needs — intentionally narrow.
@@ -110,6 +119,12 @@ export function useVoicemailAudioCache(
   const soundsRef = useRef<Map<string, Audio.Sound>>(new Map());
   // vmIds currently being decoded into a sound, to dedupe concurrent warms.
   const warmingRef = useRef<Set<string>>(new Set());
+  // vmIds the user showed intent on (expanded card) — their decoded sounds are
+  // protected from the top-N cleanup and may exceed the normal sound cap.
+  const pinnedRef = useRef<Set<string>>(new Set());
+  // Latest token, so imperative warm() calls don't need it passed in.
+  const tokenRef = useRef<string | null | undefined>(token);
+  tokenRef.current = token;
   // last token used for preloading — when it changes, clear stale cached URIs
   const lastTokenRef = useRef<string | null | undefined>(null);
 
@@ -153,7 +168,21 @@ export function useVoicemailAudioCache(
   // ── pre-warm a decoded, paused Audio.Sound for instant playback ────────────
   const ensureSound = useCallback(async (vmId: string, localUri: string): Promise<void> => {
     if (soundsRef.current.has(vmId) || warmingRef.current.has(vmId)) return;
-    if (soundsRef.current.size + warmingRef.current.size >= PRELOAD_SOUND_COUNT) return;
+    const pinned = pinnedRef.current.has(vmId);
+    const inUse = soundsRef.current.size + warmingRef.current.size;
+    if (!pinned && inUse >= PRELOAD_SOUND_COUNT) return;
+    if (pinned && inUse >= PRELOAD_SOUND_COUNT + MAX_PINNED_SOUNDS) {
+      // Hard ceiling even for user-intent warms: free the oldest non-pinned
+      // sound to make room (Map preserves insertion order).
+      for (const [oldId, oldSnd] of soundsRef.current) {
+        if (!pinnedRef.current.has(oldId)) {
+          soundsRef.current.delete(oldId);
+          oldSnd.unloadAsync().catch(() => undefined);
+          break;
+        }
+      }
+      if (soundsRef.current.size + warmingRef.current.size >= PRELOAD_SOUND_COUNT + MAX_PINNED_SOUNDS) return;
+    }
     warmingRef.current.add(vmId);
     try {
       const { sound } = await Audio.Sound.createAsync(
@@ -180,7 +209,11 @@ export function useVoicemailAudioCache(
     const cache = cacheRef.current;
     const status = statusRef.current;
 
-    const prewarm = (uri: string) => { if (wantSound) void ensureSound(vmId, uri); };
+    // Pinned (user expanded the card mid-download) also gets a decoded sound,
+    // even when the original preload didn't ask for one.
+    const prewarm = (uri: string) => {
+      if (wantSound || pinnedRef.current.has(vmId)) void ensureSound(vmId, uri);
+    };
 
     // Already cached — make sure the in-memory sound is warm, then skip. If
     // currently in-flight, skip entirely.
@@ -335,6 +368,7 @@ export function useVoicemailAudioCache(
       soundsRef.current.forEach((snd) => snd.unloadAsync().catch(() => undefined));
       soundsRef.current.clear();
       warmingRef.current.clear();
+      pinnedRef.current.clear();
       lastTokenRef.current = token;
     }
 
@@ -353,7 +387,7 @@ export function useVoicemailAudioCache(
     // playback. Drop any pre-warmed sounds that are no longer in this set.
     const topSoundIds = new Set(ordered.slice(0, PRELOAD_SOUND_COUNT).map((vm) => vm.id));
     soundsRef.current.forEach((snd, id) => {
-      if (!topSoundIds.has(id)) {
+      if (!topSoundIds.has(id) && !pinnedRef.current.has(id)) {
         soundsRef.current.delete(id);
         snd.unloadAsync().catch(() => undefined);
       }
@@ -429,11 +463,26 @@ export function useVoicemailAudioCache(
     const snd = soundsRef.current.get(vmId);
     if (!snd) return null;
     soundsRef.current.delete(vmId);
+    pinnedRef.current.delete(vmId);
     return snd;
   }, []);
 
+  const warm = useCallback((vm: CacheableVoicemail): void => {
+    const tok = tokenRef.current;
+    if (!tok) return;
+    if ((vm.durationSec ?? 1) <= 0) return; // empty recording — nothing to fetch
+    // Pin this id so its decoded sound survives top-N cleanup. Bound the pinned
+    // set: unpin the oldest entry (its sound then follows normal eviction).
+    if (!pinnedRef.current.has(vm.id) && pinnedRef.current.size >= MAX_PINNED_SOUNDS) {
+      const oldest = pinnedRef.current.values().next().value;
+      if (oldest !== undefined) pinnedRef.current.delete(oldest);
+    }
+    pinnedRef.current.add(vm.id);
+    void preloadOne(vm.id, tok, /* wantSound */ true).catch(() => undefined);
+  }, [preloadOne]);
+
   return useMemo(
-    () => ({ getLocalUri, preloadStatus, takeSound }),
-    [getLocalUri, preloadStatus, takeSound],
+    () => ({ getLocalUri, preloadStatus, takeSound, warm }),
+    [getLocalUri, preloadStatus, takeSound, warm],
   );
 }

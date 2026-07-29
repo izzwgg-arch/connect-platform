@@ -999,7 +999,15 @@ export function VoicemailTab() {
               progressAnim={progressAnim}
               onPress={() => {
                 if (selectionMode) toggleSelected(item.id);
-                else setExpandedId((current) => current === item.id ? null : item.id);
+                else {
+                  setExpandedId((current) => {
+                    const next = current === item.id ? null : item.id;
+                    // Expanding signals an imminent Play — download + decode now
+                    // so the audio starts the instant Play is tapped.
+                    if (next) audioCache.warm(item);
+                    return next;
+                  });
+                }
               }}
               onLongPress={() => toggleSelected(item.id)}
               onPlay={() => play(item)}
