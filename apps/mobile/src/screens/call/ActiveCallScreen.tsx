@@ -78,23 +78,26 @@ function CtrlBtn({ icon, label, onPress, active, danger, disabled }: CtrlBtnProp
     onPress();
   };
 
+  // Theme-aware (2026-07-28): dark keeps the original values exactly; light
+  // swaps the white-on-dark tints for navy-on-light equivalents.
+  const { isDark: ctrlDark } = useTheme();
   const bg = danger
-    ? 'rgba(239,68,68,0.18)'
+    ? (ctrlDark ? 'rgba(239,68,68,0.18)' : 'rgba(220,38,38,0.12)')
     : active
-    ? 'rgba(59,130,246,0.22)'
-    : 'rgba(255,255,255,0.07)';
+    ? (ctrlDark ? 'rgba(59,130,246,0.22)' : 'rgba(37,99,235,0.14)')
+    : (ctrlDark ? 'rgba(255,255,255,0.07)' : 'rgba(16,35,70,0.06)');
   const iconColor = danger
-    ? '#ef4444'
+    ? (ctrlDark ? '#ef4444' : '#dc2626')
     : active
-    ? '#60a5fa'
+    ? (ctrlDark ? '#60a5fa' : '#2563eb')
     : disabled
-    ? 'rgba(255,255,255,0.25)'
-    : 'rgba(255,255,255,0.85)';
+    ? (ctrlDark ? 'rgba(255,255,255,0.25)' : 'rgba(51,65,92,0.35)')
+    : (ctrlDark ? 'rgba(255,255,255,0.85)' : '#33415c');
   const border = active
-    ? 'rgba(59,130,246,0.4)'
+    ? (ctrlDark ? 'rgba(59,130,246,0.4)' : 'rgba(37,99,235,0.35)')
     : danger
     ? 'rgba(239,68,68,0.3)'
-    : 'rgba(255,255,255,0.1)';
+    : (ctrlDark ? 'rgba(255,255,255,0.1)' : 'rgba(16,35,70,0.14)');
 
   return (
     <TouchableOpacity
@@ -112,7 +115,7 @@ function CtrlBtn({ icon, label, onPress, active, danger, disabled }: CtrlBtnProp
       >
         <Ionicons name={icon as any} size={24} color={iconColor} />
       </Animated.View>
-      <Text style={[styles.ctrlLabel, { color: active ? '#93c5fd' : 'rgba(180,195,220,0.75)' }]}>
+      <Text style={[styles.ctrlLabel, { color: active ? (ctrlDark ? '#93c5fd' : '#2563eb') : (ctrlDark ? 'rgba(180,195,220,0.75)' : 'rgba(44,62,96,0.8)') }]}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -132,6 +135,38 @@ export function ActiveCallScreen() {
   const [showDtmf, setShowDtmf] = useState(false);
   const [dtmfInput, setDtmfInput] = useState('');
   const [showTransfer, setShowTransfer] = useState(false);
+
+  // Light-mode palette (2026-07-28). Dark values are byte-identical to the
+  // original hardcoded design; light mirrors the incoming-call screen family.
+  const pal = isDark
+    ? {
+        gradient: ['#090e18', '#0a1128', '#0e1830'],
+        minimize: 'rgba(255,255,255,0.85)',
+        name: '#f0f4ff',
+        number: 'rgba(136,153,187,0.75)',
+        cardBg: 'rgba(13,19,35,0.96)',
+        cardBorder: 'rgba(30,45,71,0.8)',
+        sheetBg: '#111827',
+        sheetBorder: '#1e2d47',
+        sheetHandle: '#2e4068',
+        sheetText: '#f0f4ff',
+        sheetSub: 'rgba(136,153,187,0.6)',
+        sheetClose: 'rgba(136,153,187,0.8)',
+      }
+    : {
+        gradient: ['#eef3fc', '#e7effb', '#dfe9fa'],
+        minimize: 'rgba(18,35,68,0.75)',
+        name: '#122344',
+        number: 'rgba(59,79,120,0.85)',
+        cardBg: '#ffffff',
+        cardBorder: 'rgba(16,35,70,0.12)',
+        sheetBg: '#ffffff',
+        sheetBorder: 'rgba(16,35,70,0.12)',
+        sheetHandle: '#c3d0e8',
+        sheetText: '#122344',
+        sheetSub: 'rgba(91,111,150,0.8)',
+        sheetClose: 'rgba(91,111,150,0.9)',
+      };
   const [showAddCall, setShowAddCall] = useState(false);
 
   const callState = sip.callState;
@@ -492,7 +527,7 @@ export function ActiveCallScreen() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <LinearGradient colors={['#090e18', '#0a1128', '#0e1830']} style={styles.container}>
+    <LinearGradient colors={pal.gradient as unknown as string[]} style={styles.container}>
       {/* Animated glow ring behind avatar */}
       <Animated.View
         style={[styles.glowRing, { opacity: glowOpacity, transform: [{ scale: pulseAnim }] }]}
@@ -509,7 +544,7 @@ export function ActiveCallScreen() {
         accessibilityRole="button"
         accessibilityLabel="Minimize call"
       >
-        <Ionicons name="chevron-down" size={26} color="rgba(255,255,255,0.85)" />
+        <Ionicons name="chevron-down" size={26} color={pal.minimize} />
       </TouchableOpacity>
 
       {/* ── Top status ── */}
@@ -583,7 +618,7 @@ export function ActiveCallScreen() {
         </Animated.View>
 
         <Text
-          style={styles.callerName}
+          style={[styles.callerName, { color: pal.name }]}
           numberOfLines={1}
           adjustsFontSizeToFit
         >
@@ -599,7 +634,7 @@ export function ActiveCallScreen() {
         )}
 
         {displayNumber && !isEnded && (
-          <Text style={styles.callerNumber}>{displayNumber}</Text>
+          <Text style={[styles.callerNumber, { color: pal.number }]}>{displayNumber}</Text>
         )}
       </View>
 
@@ -609,6 +644,8 @@ export function ActiveCallScreen() {
           style={[
             styles.controlsCard,
             {
+              backgroundColor: pal.cardBg,
+              borderTopColor: pal.cardBorder,
               opacity: panelOpacity,
               transform: [{ translateY: panelSlide }],
               paddingBottom: insets.bottom + 20,
@@ -657,7 +694,7 @@ export function ActiveCallScreen() {
           </View>
 
           {/* Divider */}
-          <View style={styles.divider} />
+          <View style={[styles.divider, { backgroundColor: pal.cardBorder }]} />
 
           {/* End call button */}
           <View style={styles.endCallRow}>
@@ -716,17 +753,17 @@ export function ActiveCallScreen() {
         onRequestClose={() => setShowDtmf(false)}
       >
         <View style={styles.dtmfOverlay}>
-          <View style={styles.dtmfSheet}>
-            <View style={styles.dtmfHandle} />
+          <View style={[styles.dtmfSheet, { backgroundColor: pal.sheetBg, borderTopColor: pal.sheetBorder }]}>
+            <View style={[styles.dtmfHandle, { backgroundColor: pal.sheetHandle }]} />
 
             <View style={styles.dtmfHeader}>
-              <Text style={styles.dtmfTitle}>Keypad</Text>
+              <Text style={[styles.dtmfTitle, { color: pal.sheetText }]}>Keypad</Text>
               <TouchableOpacity onPress={() => setShowDtmf(false)}>
-                <Ionicons name="close" size={24} color="rgba(136,153,187,0.8)" />
+                <Ionicons name="close" size={24} color={pal.sheetClose} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.dtmfDisplay}>{dtmfInput || ' '}</Text>
+            <Text style={[styles.dtmfDisplay, { color: pal.sheetText }]}>{dtmfInput || ' '}</Text>
 
             <View style={styles.dtmfGrid}>
               {DTMF_KEYS.map(({ digit, sub }) => (
@@ -736,8 +773,8 @@ export function ActiveCallScreen() {
                   onPress={() => handleDtmf(digit)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.dtmfDigit}>{digit}</Text>
-                  {sub ? <Text style={styles.dtmfSub}>{sub}</Text> : null}
+                  <Text style={[styles.dtmfDigit, { color: pal.sheetText }]}>{digit}</Text>
+                  {sub ? <Text style={[styles.dtmfSub, { color: pal.sheetSub }]}>{sub}</Text> : null}
                 </TouchableOpacity>
               ))}
             </View>

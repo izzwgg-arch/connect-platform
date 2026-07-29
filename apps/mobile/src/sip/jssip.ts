@@ -405,6 +405,54 @@ export class JsSipClient implements SipClient {
   private pendingIceRestartReason: string | null = null;
 
   /**
+   * Ringback staleness token. dial() starts the local ringback via an async
+   * continuation; if the call confirms/ends/fails (or early media arrives)
+   * BEFORE that continuation runs, the ringback must NOT start — on Android it
+   * is a native looping tone that nothing would ever stop (live bug
+   * 2026-07-28: ringback kept playing over a connected call, doubled with the
+   * carrier's early-media ringback). Every teardown/connect path bumps the
+   * generation; the deferred start only fires if its generation is current.
+   */
+  private ringbackGen = 0;
+
+  /** Invalidate any pending/current local ringback, then stop call audio. */
+  private stopCallAudioAndRingback(): void {
+    this.ringbackGen += 1;
+    stopAllTelephonyAudio().catch(() => undefined);
+  }
+
+  /**
+   * Software receive gain on the remote audio track(s) (react-native-webrtc
+   * `_setVolume`, linear, >1 amplifies). Android caps the VOICE_CALL stream
+   * ceiling below the stock dialer's speakerphone loudness; SipContext applies
+   * a >1 gain while the user is on speaker and 1.0 otherwise (earpiece stays
+   * natural, AEC unstressed). Applied per receiver — safe to call repeatedly.
+   */
+  setReceiveVolume(gain: number): void {
+    try {
+      const pcs = new Set<any>();
+      for (const s of this.sessionsById.values()) {
+        if ((s as any)?.connection) pcs.add((s as any).connection);
+      }
+      if ((this.session as any)?.connection) pcs.add((this.session as any).connection);
+      let applied = 0;
+      for (const pc of pcs) {
+        const receivers = typeof pc.getReceivers === "function" ? pc.getReceivers() : [];
+        for (const r of receivers) {
+          const t = r?.track;
+          if (t && t.kind === "audio" && typeof (t as any)._setVolume === "function") {
+            (t as any)._setVolume(gain);
+            applied += 1;
+          }
+        }
+      }
+      if (applied > 0) console.log(`[SIP_AUDIO] receive gain=${gain} applied to ${applied} track(s)`);
+    } catch (e) {
+      console.warn('[SIP_AUDIO] setReceiveVolume failed:', e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
    * Most recent live-ping stats snapshot that carried real RTP numbers.
    * Fallback source for the end-of-call quality report when the peer
    * connection is already closed (see startLivePing / collectAndSubmit).
@@ -1301,6 +1349,14 @@ export class JsSipClient implements SipClient {
           sipCause: e?.cause ?? null,
         });
       }
+      // Early media (183 with SDP): the carrier streams its own ringback tone
+      // over RTP. Kill the locally generated ringback or the user hears both
+      // layered (reported live 2026-07-28: US tone + a second double-ring
+      // cadence in parallel).
+      if (isOutboundSession && code === 183 && typeof e?.response?.body === "string" && e.response.body.length > 0) {
+        console.log('[AUDIO] early media detected (183 w/ SDP) — stopping local ringback');
+        this.stopCallAudioAndRingback();
+      }
       this.events.onCallState?.("ringing");
     });
 
@@ -1328,7 +1384,7 @@ export class JsSipClient implements SipClient {
         console.warn('[CALL_EVENT] session_confirmed ignored — marked as ghost');
         return;
       }
-      stopAllTelephonyAudio().catch(() => undefined);
+      this.stopCallAudioAndRingback();
       ICM.start("audio");
       // Refresh device list and re-apply the desired route. This was
       // previously a hard `routeToEarpiece()` 150 ms after confirmed,
@@ -1404,7 +1460,7 @@ export class JsSipClient implements SipClient {
       const endedKeepRingtoneAlive =
         Platform.OS === "android" && endedWasUnansweredInbound;
       if (isLastLiveSession && !endedKeepRingtoneAlive) {
-        stopAllTelephonyAudio().catch(() => undefined);
+        this.stopCallAudioAndRingback();
         this.stopLivePing();
         ICM.stop();
         audioRouteManager.noteCallEnded();
@@ -1481,7 +1537,7 @@ export class JsSipClient implements SipClient {
       const keepRingtoneAlive =
         Platform.OS === "android" && wasUnansweredInbound;
       if (isLastLiveSession && !keepRingtoneAlive) {
-        stopAllTelephonyAudio().catch(() => undefined);
+        this.stopCallAudioAndRingback();
         this.stopLivePing();
         ICM.stop();
         audioRouteManager.noteCallEnded();
@@ -2095,7 +2151,7 @@ export class JsSipClient implements SipClient {
       if (now >= this.ghostPollDeadline) {
         this.clearGhostPoll();
         console.warn('[CALL_NATIVE] ghost_poll_timeout — no newer invite arrived within window, surfacing ended state');
-        stopAllTelephonyAudio().catch(() => undefined);
+        this.stopCallAudioAndRingback();
         this.stopLivePing();
         ICM.stop();
         audioRouteManager.noteCallEnded();
@@ -2433,7 +2489,18 @@ export class JsSipClient implements SipClient {
     audioRouteManager.noteCallStarted("outbound");
     audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
     audioRouteManager.noteCallConnected();
-    initAudioSession().then(() => startRingback()).catch(() => undefined);
+    {
+      const rbGen = ++this.ringbackGen;
+      initAudioSession()
+        .then(() => {
+          if (rbGen !== this.ringbackGen) {
+            console.log('[AUDIO] ringback start skipped — call state moved on (stale generation)');
+            return;
+          }
+          return startRingback();
+        })
+        .catch(() => undefined);
+    }
     try {
       this.outboundBlackbox.mark("ua_call_invoked");
       this.session = this.ua.call(dest, {
@@ -2454,7 +2521,7 @@ export class JsSipClient implements SipClient {
       console.log('[SIP] INVITE sent');
       this.emitOutboundTrace("OUTBOUND_INVITE_SENT");
     } catch (e: any) {
-      stopAllTelephonyAudio().catch(() => undefined);
+      this.stopCallAudioAndRingback();
       ICM.stop();
       const msg = e?.message || "dial failed";
       console.error('[SIP] Dial error:', msg);
@@ -2536,7 +2603,7 @@ export class JsSipClient implements SipClient {
   }
 
   async answer() {
-    stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on answer
+    this.stopCallAudioAndRingback(); // Stop ringtone on answer (also invalidates pending ringback)
     ICM.start("audio");
     audioRouteManager.noteCallStarted("inbound");
     audioRouteManager.refreshDevices(getAudioDevicesSnapshot());
@@ -2694,7 +2761,7 @@ export class JsSipClient implements SipClient {
       console.log('[CALL_EVENT] answer_attempt n=' + attempt + ' inviteAge=' + inviteAge + 'ms waited=' + (Date.now() - answerStartAt) + 'ms');
       this.answerAttemptedSessions.add(session);
       this.session = session;
-      stopAllTelephonyAudio().catch(() => undefined);
+      this.stopCallAudioAndRingback();
       ICM.start("audio");
       setTimeout(() => ICM.routeToEarpiece(), 150);
 
@@ -2856,7 +2923,7 @@ export class JsSipClient implements SipClient {
   async rejectIncoming(match?: SipMatch): Promise<boolean> {
     const session = this.findIncoming(match);
     if (!session) return false;
-    stopAllTelephonyAudio().catch(() => undefined); // Stop ringtone on reject
+    this.stopCallAudioAndRingback(); // Stop ringtone on reject (also invalidates pending ringback)
     try {
       session.terminate?.();
     } catch {}
@@ -2883,7 +2950,7 @@ export class JsSipClient implements SipClient {
     // do not want to auto-answer anything for this dialog's recovery.
     this.clearGhostPoll();
     this.releasePrewarmedMedia("hangup");
-    stopAllTelephonyAudio().catch(() => undefined);
+    this.stopCallAudioAndRingback();
     this.stopLivePing();
     await this.collectAndSubmitQualityReport("user_hangup").catch(() => {});
     ICM.stop();

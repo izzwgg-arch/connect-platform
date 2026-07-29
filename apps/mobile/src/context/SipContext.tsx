@@ -543,6 +543,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     };
   }, [callState, bluetoothAvailable]);
 
+  // ── Speaker loudness boost (2026-07-28) ─────────────────────────────────
+  // Samsung caps the in-call VOICE_CALL stream ceiling well below the stock
+  // dialer's speakerphone loudness. While the user is on speaker apply a
+  // software receive gain on the remote audio track; earpiece/BT stay at
+  // 1.0 (natural level, AEC unstressed). Re-applies on route or call change.
+  const SPEAKER_RECEIVE_BOOST = 2.0;
+  useEffect(() => {
+    if (callState !== "connected") return;
+    const client: any = callClientRef.current ?? clientRef.current;
+    if (typeof client?.setReceiveVolume === "function") {
+      client.setReceiveVolume(audioRoute === "speaker" ? SPEAKER_RECEIVE_BOOST : 1.0);
+    }
+  }, [audioRoute, callState]);
+
   // ══════════════════════════════════════════════════════════════════════════
   // STAGE 1 — KEEP-ALIVE / AUTO-RECONNECT ORCHESTRATOR
   //
