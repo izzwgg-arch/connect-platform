@@ -610,8 +610,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // staticky"): the raw 1.4x pre-boost pushed the driver into strain. Ease the
   // raw multiplier down; the limiter-protected native gain carries the
   // loudness. Native side also adds a gentle bass lift (strength 150).
-  const SPEAKER_SOFT_BOOST = 1.15;
-  const SPEAKER_NATIVE_GAIN_MB = 500;
+  // Round 3: ALL loudness through the limiter (soft multiplier fully off) —
+  // the limiter can be driven harder without driver strain, which is how the
+  // native dialer achieves loud AND clean.
+  const SPEAKER_SOFT_BOOST = 1.0;
+  const SPEAKER_NATIVE_GAIN_MB = 700;
   useEffect(() => {
     const nativeMod: any = (NativeModules as any)?.IncomingCallUi;
     const setNative = (gainMb: number) =>
