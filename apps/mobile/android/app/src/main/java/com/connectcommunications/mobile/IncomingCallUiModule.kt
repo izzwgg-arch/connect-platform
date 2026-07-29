@@ -687,6 +687,40 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
    *   • "connect-default" → bundled Connect ringtone
    *   • "classic"         → the phone's own default ringtone
    */
+  /**
+   * Truthful "where is call audio ACTUALLY playing right now" reader.
+   * AudioManager.isSpeakerphoneOn is stale once Telecom owns routing (the
+   * known trap that forced us to ignore it), but communicationDevice
+   * (API 31+) reports the real active device. The JS route-enforcement loop
+   * compares this against the user's chosen route and re-applies on drift —
+   * which is what makes Speaker STICK from the first tap.
+   */
+  @ReactMethod
+  fun getCommunicationDeviceType(promise: Promise) {
+    try {
+      val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      if (Build.VERSION.SDK_INT >= 31) {
+        val dev = am.communicationDevice
+        val kind = when (dev?.type) {
+          AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "speaker"
+          AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "earpiece"
+          AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+          AudioDeviceInfo.TYPE_BLE_HEADSET -> "bluetooth"
+          AudioDeviceInfo.TYPE_WIRED_HEADSET,
+          AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+          AudioDeviceInfo.TYPE_USB_HEADSET -> "wired"
+          null -> "unknown"
+          else -> "other"
+        }
+        promise.resolve(kind)
+      } else {
+        promise.resolve(if (am.isSpeakerphoneOn) "speaker" else "unknown")
+      }
+    } catch (e: Exception) {
+      promise.resolve("unknown")
+    }
+  }
+
   // ── Speaker loudness boost (clean, limiter-protected) ─────────────────────
   // JS-side track._setVolume() multiplies samples with NO limiter — peaks clip
   // and speakerphone turns scratchy. Android's LoudnessEnhancer applies gain

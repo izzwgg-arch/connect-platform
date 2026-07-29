@@ -521,6 +521,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             next
           ));
         }
+        // Continuous drift guard: compare the ACTUAL native output device
+        // (communicationDevice — truthful under Telecom) against the chosen
+        // route and re-apply on mismatch. Fixes "call fell back to earpiece
+        // though the UI shows Speaker" without any user action.
+        void audioRouteManager.verifyAndEnforce("probe");
       } catch (e) {
         // Swallow — watcher is best-effort; SIP call is not affected.
       } finally {
@@ -1795,6 +1800,13 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             // Connection.setAudioRoute so it sticks.
             setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active"), 600);
             setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_late"), 1800);
+            // Blind re-asserts cover the common case; these VERIFY against the
+            // actual native output device and correct any remaining drift, so
+            // a speaker/BT route picked before connect always sticks.
+            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_300"), 300);
+            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_1200"), 1200);
+            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_2500"), 2500);
+            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_4000"), 4000);
           });
         }
       }

@@ -247,6 +247,41 @@ class AudioRouteManager {
     this.applyRouteToNative(this.currentRoute);
   }
 
+  /**
+   * Compare where call audio is ACTUALLY playing (native communicationDevice —
+   * truthful even while Telecom owns routing, unlike isSpeakerphoneOn) against
+   * the desired route, and re-apply on drift. This is what makes the user's
+   * Speaker choice STICK through Telecom anchor activation at call start, and
+   * what lets the speaker button work on the FIRST tap — app state can no
+   * longer desync from reality (Izzy 2026-07-29: "press speaker a few times").
+   * Called from SipContext right after connect and from the periodic in-call
+   * device probe. Logs [audio_route] drift_detected when it corrects.
+   */
+  async verifyAndEnforce(reason: string): Promise<void> {
+    if (!this.callActive) return;
+    if (Platform.OS !== 'android') return;
+    const mod = (NativeModules as any)?.IncomingCallUi;
+    if (typeof mod?.getCommunicationDeviceType !== 'function') return;
+    let actual = 'unknown';
+    try {
+      actual = String(await mod.getCommunicationDeviceType());
+    } catch {
+      return;
+    }
+    // "unknown"/"other" (pre-API-31 or exotic devices) — nothing truthful to
+    // compare against; never enforce on guesses.
+    if (actual !== 'speaker' && actual !== 'earpiece' && actual !== 'bluetooth' && actual !== 'wired') return;
+    const desired = this.computeDesiredRoute();
+    if (actual !== desired) {
+      log('drift_detected', { desired, actual, reason });
+      this.applyRouteToNative(desired);
+      if (this.currentRoute !== desired) {
+        this.currentRoute = desired;
+      }
+      this.notify();
+    }
+  }
+
   getUserOverride(): AudioRoute | null {
     return this.userOverride;
   }

@@ -1319,9 +1319,14 @@ export class JsSipClient implements SipClient {
             const mLine = (sdp: string) => (sdp.match(/^m=audio.*$/m)?.[0] ?? "no-m-audio").slice(0, 90);
             if (e.originator === "local") {
               const before = mLine(e.sdp);
-              // Offers: opus-only (PBX re-orders to ulaw otherwise — see
-              // preferOpusOnlyOffer). Answers: reorder only, never strip.
-              e.sdp = e.type === "offer" ? preferOpusOnlyOffer(e.sdp) : preferOpusInSdp(e.sdp);
+              // Offers AND answers: opus-only. Telemetry (2026-07-29) proved
+              // reorder-only answers lose — every INBOUND call negotiated PCMU
+              // because Asterisk keeps its own codec order regardless of the
+              // answer's preference. Selecting only opus in the answer is the
+              // one signal it cannot ignore, and it is safe: preferOpusOnlyOffer
+              // no-ops when the remote offer lacks opus (answer stays a valid
+              // subset), falling back to reorder-only.
+              e.sdp = preferOpusOnlyOffer(e.sdp);
               console.log(`[SIP_SDP] local ${e.type}: ${before} -> ${mLine(e.sdp)}`);
             } else {
               // Remote SDP: log only — shows what the PBX offered/answered.
@@ -2403,6 +2408,33 @@ export class JsSipClient implements SipClient {
         }),
       );
       return fallback;
+    }
+
+    // FORKED-CALL fallback (live failure 2026-07-28, three consecutive
+    // SIP_ANSWER_FAILED): when the AOR holds two contacts the PBX forks one
+    // call into TWO ringing sessions. The exact match misses both (it always
+    // missed — the single-session fallback silently absorbed that for years)
+    // and with candidateCount=2 nothing was returned, so answering timed out.
+    // If every answerable session is from the SAME caller they are forks of
+    // one call: answer the newest — the PBX CANCELs the other leg on 200 OK.
+    // Distinct callers (true call-waiting) still fall through to the miss log.
+    if (match && answerableSessions.length > 1) {
+      const remoteOf = (s: any) =>
+        this.normalizeNumber(String(s?.remote_identity?.uri?.user ?? ""));
+      const remotes = new Set(answerableSessions.map(remoteOf));
+      const expectedFrom = this.normalizeNumber(match.fromNumber || "");
+      if (remotes.size === 1 && (!expectedFrom || remotes.has(expectedFrom))) {
+        const fallback = answerableSessions[0];
+        console.warn(
+          "[SIP] findIncoming: forked-call fallback — all candidates share one caller, answering newest",
+          JSON.stringify({
+            expectedFrom,
+            candidateCount: answerableSessions.length,
+            session: this.describeIncomingSession(fallback),
+          }),
+        );
+        return fallback;
+      }
     }
 
     if (match && answerableSessions.length > 0) {
