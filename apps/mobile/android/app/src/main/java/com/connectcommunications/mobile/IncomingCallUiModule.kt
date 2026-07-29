@@ -687,6 +687,42 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
    *   • "connect-default" → bundled Connect ringtone
    *   • "classic"         → the phone's own default ringtone
    */
+  // ── Speaker loudness boost (clean, limiter-protected) ─────────────────────
+  // JS-side track._setVolume() multiplies samples with NO limiter — peaks clip
+  // and speakerphone turns scratchy. Android's LoudnessEnhancer applies gain
+  // WITH saturation protection, so audio gets louder without distortion.
+  // Attached to audio session 0 (global output mix); during a call the only
+  // audio playing is the remote party. Some OEMs don't route voice-call audio
+  // through global-mix effects — harmless no-op there (JS keeps a mild soft
+  // boost as the floor either way).
+  private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
+
+  @ReactMethod
+  fun setSpeakerLoudnessBoost(gainMb: Int, promise: Promise) {
+    try {
+      if (gainMb <= 0) {
+        loudnessEnhancer?.let { le ->
+          try { le.enabled = false } catch (_: Exception) {}
+          try { le.release() } catch (_: Exception) {}
+        }
+        loudnessEnhancer = null
+        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness released")
+        promise.resolve(false)
+        return
+      }
+      val le = loudnessEnhancer ?: android.media.audiofx.LoudnessEnhancer(0).also { loudnessEnhancer = it }
+      le.setTargetGain(gainMb)
+      le.enabled = true
+      Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness enabled gainMb=$gainMb")
+      promise.resolve(true)
+    } catch (e: Exception) {
+      try { loudnessEnhancer?.release() } catch (_: Exception) {}
+      loudnessEnhancer = null
+      Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness unavailable: ${e.message}")
+      promise.reject("loudness_error", e.message, e)
+    }
+  }
+
   @ReactMethod
   fun setIncomingRingtone(id: String?) {
     val ctx = reactApplicationContext.applicationContext

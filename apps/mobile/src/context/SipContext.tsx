@@ -548,12 +548,39 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // dialer's speakerphone loudness. While the user is on speaker apply a
   // software receive gain on the remote audio track; earpiece/BT stay at
   // 1.0 (natural level, AEC unstressed). Re-applies on route or call change.
-  const SPEAKER_RECEIVE_BOOST = 2.0;
+  // Speakerphone loudness. The old plain 2.0x sample multiplication CLIPPED
+  // loud peaks — that was the "scratchy" speakerphone (Izzy 2026-07-29).
+  // Now: a mild 1.4x software gain (below the clipping zone) as the floor,
+  // PLUS Android's native LoudnessEnhancer (+5 dB with limiter — louder
+  // WITHOUT distortion) on devices that honor global-mix audio effects.
+  // Logcat tag: [SPEAKER_BOOST] shows which layers are active.
+  const SPEAKER_SOFT_BOOST = 1.4;
+  const SPEAKER_NATIVE_GAIN_MB = 500;
   useEffect(() => {
-    if (callState !== "connected") return;
+    const nativeMod: any = (NativeModules as any)?.IncomingCallUi;
+    const setNative = (gainMb: number) =>
+      nativeMod?.setSpeakerLoudnessBoost?.(gainMb)?.catch?.(() => undefined);
+    if (callState !== "connected") {
+      void setNative(0);
+      return;
+    }
     const client: any = callClientRef.current ?? clientRef.current;
-    if (typeof client?.setReceiveVolume === "function") {
-      client.setReceiveVolume(audioRoute === "speaker" ? SPEAKER_RECEIVE_BOOST : 1.0);
+    const setSoft = (g: number) => {
+      if (typeof client?.setReceiveVolume === "function") client.setReceiveVolume(g);
+    };
+    if (audioRoute === "speaker") {
+      setSoft(SPEAKER_SOFT_BOOST);
+      void (async () => {
+        try {
+          const ok = await nativeMod?.setSpeakerLoudnessBoost?.(SPEAKER_NATIVE_GAIN_MB);
+          console.log(`[SPEAKER_BOOST] soft=${SPEAKER_SOFT_BOOST} native=${ok ? `${SPEAKER_NATIVE_GAIN_MB}mB` : "unavailable"}`);
+        } catch {
+          console.log(`[SPEAKER_BOOST] soft=${SPEAKER_SOFT_BOOST} native=failed`);
+        }
+      })();
+    } else {
+      setSoft(1.0);
+      void setNative(0);
     }
   }, [audioRoute, callState]);
 
