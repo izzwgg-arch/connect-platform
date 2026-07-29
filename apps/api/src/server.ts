@@ -3261,6 +3261,12 @@ async function sendPushToUserDevices(input: {
             tenantId: input.tenantId, userId: input.userId, deviceId: d.id,
             payloadType, model: d.model ?? null, tokenTail: String((d as any).nativeFcmToken).slice(-10),
           }, "[CALL_WAKE] FCM_DIRECT_DELIVERED");
+          // Direct-served devices skip the Expo loop below, so record their
+          // push state here to keep the device diagnostics surface fresh.
+          void db.mobileDevice.update({
+            where: { id: d.id },
+            data: { lastPushSentAt: new Date(), lastPushType: String(payloadType), lastPushStatus: "fcm_direct_ok", lastPushError: null } as any,
+          }).catch(() => undefined);
         } catch (err: any) {
           failedIds.add(d.id);
           app.log.warn({
@@ -3361,8 +3367,14 @@ async function sendPushToUserDevices(input: {
   const sentAt = new Date();
   const pushStateUpdates: Array<Promise<unknown>> = [];
   const invalidTokens: string[] = [];
-  for (let i = 0; i < filtered.length; i++) {
-    const device = filtered[i];
+  // CRITICAL: tickets come back positionally for the messages we SENT, i.e.
+  // `expoTargets` — NOT `filtered`. When the direct-FCM fast path served some
+  // devices, indexing tickets by `filtered` shifted every ticket onto the
+  // wrong device, so a dead ghost row's DeviceNotRegistered could be blamed on
+  // the LIVE device's token — which then got deactivated below, silently
+  // killing voicemail/SMS/missed-call pushes for that user until re-register.
+  for (let i = 0; i < expoTargets.length; i++) {
+    const device = expoTargets[i];
     const ticket = expoTickets[i] ?? null;
     const status =
       ticket?.status === "ok"
@@ -3624,6 +3636,12 @@ async function updatePbxWebhookHeartbeat(pbxInstanceId: string | undefined, upda
 
 async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED" | "CANCELED") {
   if (!invite?.pbxCallId) return;
+  const prior = await db.callRecord
+    .findUnique({
+      where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
+      select: { disposition: true },
+    })
+    .catch(() => null);
   await db.callRecord.upsert({
     where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
     create: {
@@ -3638,6 +3656,29 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
     },
     update: { disposition }
   });
+  // User-visible missed-call alert. Historically only the CDR-ingest path sent
+  // this, gated on being the FIRST writer of the ConnectCdr row — but this
+  // record (and the worker's twin) always lands before ingest, so the alert
+  // never fired for invite-driven calls. Push here, where the missed user is
+  // known directly from the invite. The callRecord row doubles as the
+  // cross-process dedupe marker: whichever writer (api or worker) first
+  // records the unanswered outcome sends the one alert.
+  const alreadyRecorded = prior?.disposition === "MISSED" || prior?.disposition === "CANCELED";
+  if (!alreadyRecorded && invite.userId) {
+    await sendPushToUserDevices({
+      tenantId: invite.tenantId,
+      userId: invite.userId,
+      payload: {
+        type: "missed_call",
+        callId: String(invite.pbxCallId),
+        tenantId: invite.tenantId,
+        recipientUserId: invite.userId,
+        callerNumber: invite.fromNumber || "Unknown caller",
+        callerNameOrNumber: invite.callerName || invite.fromNumber || "Unknown caller",
+        timestamp: new Date().toISOString(),
+      },
+    }).catch((err: any) => app.log.warn({ err: err?.message, pbxCallId: invite.pbxCallId }, "missed-call-push: invite path failed"));
+  }
 }
 
 async function resolveInviteByPbxEvent(evt: NormalizedWirePbxEvent, target: { tenantId: string } | null) {

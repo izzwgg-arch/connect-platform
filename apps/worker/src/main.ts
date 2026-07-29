@@ -337,7 +337,12 @@ function getPbxClient(input: { baseUrl: string; token: string; secret?: string |
 type WorkerMobilePushPayload =
   | { type: "INCOMING_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string }
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
-  | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
+  | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string }
+  // User-visible missed-call alert — same shape the API sends from its CDR
+  // ingest / invite paths, so the app handles both identically. `inviteId` is
+  // extra here (harmless to the app) so this file's shared logging can keep
+  // reading payload.inviteId across all payload variants.
+  | { type: "missed_call"; inviteId: string; callId: string; tenantId: string; extensionId?: string | null; recipientUserId?: string; callerNumber: string; callerNameOrNumber?: string | null; timestamp: string };
 
 /**
  * iOS VoIP push fan-out for INCOMING_CALL only.
@@ -633,6 +638,17 @@ function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "
 async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED" | "CANCELED") {
   if (!invite?.pbxCallId) return;
 
+  // Read the prior record BEFORE upserting — it is the cross-process dedupe
+  // marker for the user-visible missed-call alert below (the API has a twin of
+  // this function; whichever writer records the unanswered outcome first
+  // sends the one alert).
+  const prior = await db.callRecord
+    .findUnique({
+      where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
+      select: { disposition: true },
+    })
+    .catch(() => null);
+
   // Legacy table write (kept for backward-compat with any existing queries on callRecord).
   await db.callRecord.upsert({
     where: { tenantId_pbxCallId: { tenantId: invite.tenantId, pbxCallId: invite.pbxCallId } },
@@ -681,6 +697,30 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
   }).catch((e: any) => {
     console.warn("[worker] connectCdr upsert failed for missed invite", invite.pbxCallId, e?.message);
   });
+
+  // User-visible missed-call alert (see the dedupe note at the top of this
+  // function). Historically NO path delivered this for invite-driven calls:
+  // the CDR-ingest push in the API requires being the first ConnectCdr writer,
+  // and this function's upsert always beat it there.
+  const alreadyRecorded = prior?.disposition === "MISSED" || prior?.disposition === "CANCELED";
+  if (!alreadyRecorded && invite.userId) {
+    await sendPushToUserDevices({
+      tenantId: invite.tenantId,
+      userId: invite.userId,
+      payload: {
+        type: "missed_call",
+        inviteId: String(invite.id ?? invite.pbxCallId),
+        callId: String(invite.pbxCallId),
+        tenantId: invite.tenantId,
+        recipientUserId: invite.userId,
+        callerNumber: invite.fromNumber || "Unknown caller",
+        callerNameOrNumber: invite.callerName || invite.fromNumber || "Unknown caller",
+        timestamp: new Date().toISOString(),
+      },
+    }).catch((e: any) => {
+      console.warn("[worker] missed-call push failed", invite.pbxCallId, e?.message);
+    });
+  }
 }
 
 async function processPolledCall(link: any, call: { callId: string; state: string; from: string; toExtension: string; tenantHint?: string; startedAt: string }) {

@@ -32,6 +32,13 @@ export async function resolveExtensionForVoicemailNotify(
   }
 
   const ctx = String(contextRaw ?? "").trim().toLowerCase();
+  // AMI reports the Asterisk voicemail context, which VitalPBX names
+  // "<tenant-slug>-voicemail" (observed live: "gesheft-voicemail"), while
+  // pbxTenantDirectory stores the bare slug ("gesheft"). Comparing the raw
+  // context against the slug therefore NEVER matched, so every duplicated
+  // mailbox number (ext 101 exists on 32 tenants) failed resolution and the
+  // new-voicemail push was silently skipped. Accept both forms.
+  const ctxBase = ctx.replace(/-voicemail$/, "");
 
   const tenantMatchesVoicemailContext = async (tenantId: string): Promise<boolean> => {
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
@@ -39,7 +46,7 @@ export async function resolveExtensionForVoicemailNotify(
     const dir = await db.pbxTenantDirectory.findFirst({
       where: {
         pbxInstanceId: link.pbxInstanceId,
-        tenantSlug: { equals: ctx, mode: "insensitive" },
+        tenantSlug: { in: [ctx, ctxBase], mode: "insensitive" },
         ...(link.pbxTenantId ? { vitalTenantId: link.pbxTenantId } : {}),
       },
     });
