@@ -610,11 +610,14 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // staticky"): the raw 1.4x pre-boost pushed the driver into strain. Ease the
   // raw multiplier down; the limiter-protected native gain carries the
   // loudness. Native side also adds a gentle bass lift (strength 150).
-  // Round 3: ALL loudness through the limiter (soft multiplier fully off) —
-  // the limiter can be driven harder without driver strain, which is how the
-  // native dialer achieves loud AND clean.
-  const SPEAKER_SOFT_BOOST = 1.0;
-  const SPEAKER_NATIVE_GAIN_MB = 700;
+  // Round 4: limiter-only loudness on BOTH built-in routes (Izzy: "make it
+  // louder again, earpiece too, keep it from scratching"). The limiter caps
+  // peaks so higher drive stays clean; earpiece gets a gentler push (tiny
+  // driver). Bluetooth/wired stay untouched (their own hardware volume).
+  // Native side also shapes voice: bass 80 + presence lift (+2 dB @ ~2.5 kHz)
+  // so the caller sounds close to the mic, not across the room.
+  const SPEAKER_NATIVE_GAIN_MB = 900;
+  const EARPIECE_NATIVE_GAIN_MB = 400;
   useEffect(() => {
     const nativeMod: any = (NativeModules as any)?.IncomingCallUi;
     const setNative = (gainMb: number) =>
@@ -627,20 +630,19 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     const setSoft = (g: number) => {
       if (typeof client?.setReceiveVolume === "function") client.setReceiveVolume(g);
     };
-    if (audioRoute === "speaker") {
-      setSoft(SPEAKER_SOFT_BOOST);
-      void (async () => {
-        try {
-          const ok = await nativeMod?.setSpeakerLoudnessBoost?.(SPEAKER_NATIVE_GAIN_MB);
-          console.log(`[SPEAKER_BOOST] soft=${SPEAKER_SOFT_BOOST} native=${ok ? `${SPEAKER_NATIVE_GAIN_MB}mB` : "unavailable"}`);
-        } catch {
-          console.log(`[SPEAKER_BOOST] soft=${SPEAKER_SOFT_BOOST} native=failed`);
-        }
-      })();
-    } else {
-      setSoft(1.0);
-      void setNative(0);
-    }
+    setSoft(1.0); // raw multiplication stays OFF — it was the scratch source
+    const gain =
+      audioRoute === "speaker" ? SPEAKER_NATIVE_GAIN_MB :
+      audioRoute === "earpiece" ? EARPIECE_NATIVE_GAIN_MB :
+      0;
+    void (async () => {
+      try {
+        const ok = gain > 0 ? await nativeMod?.setSpeakerLoudnessBoost?.(gain) : await setNative(0);
+        console.log(`[SPEAKER_BOOST] route=${audioRoute} native=${gain > 0 && ok ? `${gain}mB` : gain > 0 ? "unavailable" : "off"}`);
+      } catch {
+        console.log(`[SPEAKER_BOOST] route=${audioRoute} native=failed`);
+      }
+    })();
   }, [audioRoute, callState]);
 
   // ══════════════════════════════════════════════════════════════════════════

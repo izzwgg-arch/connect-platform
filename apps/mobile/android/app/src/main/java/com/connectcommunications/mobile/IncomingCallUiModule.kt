@@ -731,6 +731,7 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   // boost as the floor either way).
   private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
   private var bassBoost: android.media.audiofx.BassBoost? = null
+  private var presenceEq: android.media.audiofx.Equalizer? = null
 
   @ReactMethod
   fun setSpeakerLoudnessBoost(gainMb: Int, promise: Promise) {
@@ -746,23 +747,44 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
           try { bb.release() } catch (_: Exception) {}
         }
         bassBoost = null
-        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness+bass released")
+        presenceEq?.let { pe ->
+          try { pe.enabled = false } catch (_: Exception) {}
+          try { pe.release() } catch (_: Exception) {}
+        }
+        presenceEq = null
+        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness+bass+presence released")
         promise.resolve(false)
         return
       }
       val le = loudnessEnhancer ?: android.media.audiofx.LoudnessEnhancer(0).also { loudnessEnhancer = it }
       le.setTargetGain(gainMb)
       le.enabled = true
-      // Gentle low-shelf lift — phone speakers lean treble-heavy ("tweeter-y",
-      // Izzy 2026-07-29). Strength 0-1000; 150 is a deliberate "tiny bit".
-      // Best-effort: some devices lack BassBoost on the output mix.
+      // Voice shaping (round 4, Izzy 2026-07-29 evening): bass halved to 80
+      // (150 masked the presence band — "sounds far from the microphone") and
+      // a +2 dB presence lift at the band nearest 2.5 kHz — the frequencies
+      // that make a voice feel close. Both best-effort per device.
       try {
         val bb = bassBoost ?: android.media.audiofx.BassBoost(0, 0).also { bassBoost = it }
-        if (bb.strengthSupported) bb.setStrength(150)
+        if (bb.strengthSupported) bb.setStrength(80)
         bb.enabled = true
-        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness gainMb=$gainMb + bass strength=150")
       } catch (e: Exception) {
-        Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] bass unavailable (loudness still on): ${e.message}")
+        Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] bass unavailable: ${e.message}")
+      }
+      try {
+        val pe = presenceEq ?: android.media.audiofx.Equalizer(0, 0).also { presenceEq = it }
+        var bestBand: Short = 0
+        var bestDiff = Int.MAX_VALUE
+        for (b in 0 until pe.numberOfBands) {
+          val cfHz = pe.getCenterFreq(b.toShort()) / 1000 // milliHz -> Hz
+          val d = Math.abs(cfHz - 2500)
+          if (d < bestDiff) { bestDiff = d; bestBand = b.toShort() }
+        }
+        val maxLvl = pe.bandLevelRange[1].toInt()
+        pe.setBandLevel(bestBand, minOf(200, maxLvl).toShort())
+        pe.enabled = true
+        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] loudness gainMb=$gainMb bass=80 presence=+2dB@band$bestBand")
+      } catch (e: Exception) {
+        Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] presence EQ unavailable: ${e.message}")
       }
       promise.resolve(true)
     } catch (e: Exception) {
