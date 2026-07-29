@@ -673,6 +673,13 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
   // the AMI CDR event fires, so this is an idempotent upsert (no duplicate if both paths run).
   const now = new Date();
   const startedAt = invite.createdAt ? new Date(invite.createdAt) : now;
+  // If CDR ingest already classified this call as answered (someone picked up
+  // on any endpoint), it is NOT a missed call: don't downgrade the disposition
+  // and don't alert.
+  const priorCdr = await db.connectCdr
+    .findUnique({ where: { linkedId: String(invite.pbxCallId) }, select: { disposition: true } })
+    .catch(() => null);
+  const answeredElsewhere = priorCdr?.disposition === "answered";
   await db.connectCdr.upsert({
     where: { linkedId: String(invite.pbxCallId) },
     create: {
@@ -691,8 +698,9 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
       rawLegCount: 1,
     },
     update: {
-      // Only update disposition if it gets more specific (missed > canceled).
-      disposition: disposition === "MISSED" ? "missed" : undefined,
+      // Only update disposition if it gets more specific (missed > canceled),
+      // and never downgrade an answered call.
+      disposition: disposition === "MISSED" && !answeredElsewhere ? "missed" : undefined,
     },
   }).catch((e: any) => {
     console.warn("[worker] connectCdr upsert failed for missed invite", invite.pbxCallId, e?.message);
@@ -703,7 +711,7 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
   // the CDR-ingest push in the API requires being the first ConnectCdr writer,
   // and this function's upsert always beat it there.
   const alreadyRecorded = prior?.disposition === "MISSED" || prior?.disposition === "CANCELED";
-  if (!alreadyRecorded && invite.userId) {
+  if (!alreadyRecorded && !answeredElsewhere && invite.userId) {
     await sendPushToUserDevices({
       tenantId: invite.tenantId,
       userId: invite.userId,

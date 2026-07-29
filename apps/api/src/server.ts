@@ -3665,6 +3665,12 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
   // records the unanswered outcome sends the one alert.
   const alreadyRecorded = prior?.disposition === "MISSED" || prior?.disposition === "CANCELED";
   if (!alreadyRecorded && invite.userId) {
+    // Final safety: if CDR ingest already classified this call as answered
+    // (someone picked up on any endpoint), it is not a missed call.
+    const cdr = await db.connectCdr
+      .findUnique({ where: { linkedId: String(invite.pbxCallId) }, select: { disposition: true } })
+      .catch(() => null);
+    if (cdr?.disposition === "answered") return;
     await sendPushToUserDevices({
       tenantId: invite.tenantId,
       userId: invite.userId,
@@ -30226,6 +30232,8 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     state: z.enum(["ringing", "hungup", "diverted_to_voicemail"]).optional(),
     /** When state is hungup, optional override for INVITE_CANCELED `reason` (default pbx_hangup). */
     cancelReason: z.string().max(120).optional().nullable(),
+    /** True when a tenant extension leg answered (desk phone / other endpoint) — suppresses the missed-call alert. */
+    answered: z.boolean().optional(),
   }).parse(req.body || {});
   const cleanedFromDisplay = cleanIncomingCallerNameForTenant(
     input.fromDisplay,
@@ -30279,8 +30287,22 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
       } catch (err: any) {
         app.log.warn({ err: err?.message, inviteId: inv.id }, "mobile-ring-notify: hangup push failed");
       }
+      // User-visible missed-call alert. This fast-path is the cancel route real
+      // calls actually take (the pbx-event/poll paths are fallbacks), and it
+      // historically never recorded the missed outcome — so no alert ever
+      // fired for calls whose ring ended here. `answered` (extension leg
+      // answered on a desk phone / other endpoint) suppresses the alert:
+      // those are not missed calls.
+      if (!input.answered) {
+        await createMissedCallRecordForInvite(
+          inv,
+          input.state === "diverted_to_voicemail" ? "MISSED" : "CANCELED",
+        ).catch((err: any) =>
+          app.log.warn({ err: err?.message, inviteId: inv.id }, "mobile-ring-notify: missed-call record/alert failed"),
+        );
+      }
     }
-    app.log.info({ linkedId: input.linkedId, canceled }, "mobile-ring-notify: hangup — invites canceled + push sent");
+    app.log.info({ linkedId: input.linkedId, canceled, answered: !!input.answered }, "mobile-ring-notify: hangup — invites canceled + push sent");
     return { ok: true, hungup: true, canceled };
   }
 

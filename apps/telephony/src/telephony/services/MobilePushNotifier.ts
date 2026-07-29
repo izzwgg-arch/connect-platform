@@ -116,6 +116,13 @@ export type MobilePushRingPayload = {
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
   state?: "ringing" | "hungup" | "diverted_to_voicemail";
+  /**
+   * True when a tenant extension leg actually answered this call
+   * (extensionAnsweredAt). The API uses it to suppress the user-visible
+   * "Missed call" alert on hangup for calls that were answered on a desk
+   * phone / another endpoint — those are not missed calls.
+   */
+  answered?: boolean;
 };
 
 /**
@@ -177,6 +184,7 @@ export class MobilePushNotifier {
         connectTenantId: call.tenantId ?? null,
         pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
         state: "hungup",
+        answered: call.extensionAnsweredAt != null,
       };
       log.info(
         { linkedId: call.linkedId, connectTenantId: call.tenantId, from: call.from },
@@ -207,6 +215,7 @@ export class MobilePushNotifier {
         connectTenantId: call.tenantId ?? null,
         pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
         state: "diverted_to_voicemail",
+        answered: call.extensionAnsweredAt != null,
       };
       log.info(
         { linkedId: call.linkedId, connectTenantId: call.tenantId },
