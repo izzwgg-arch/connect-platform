@@ -135,6 +135,31 @@ export async function getSipAccountProvisioning(
   return json;
 }
 
+/**
+ * Fresh ICE servers (STUN + TURN with freshly-minted, time-limited relay
+ * credentials). The provisioning bundle cached in SecureStore goes relay-dead
+ * within 24h (TURN creds expire) — overlay this at every SIP configure.
+ * Short timeout: this must never delay startup when offline.
+ */
+export async function getFreshIceServers(
+  token: string,
+): Promise<Array<{ urls: string | string[]; username?: string; credential?: string }> | null> {
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`${API_BASE}/voice/ice-servers`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    clearTimeout(t);
+    const json = await parseJson(res);
+    if (!res.ok || !Array.isArray(json?.iceServers) || json.iceServers.length === 0) return null;
+    return json.iceServers;
+  } catch {
+    return null;
+  }
+}
+
 export async function resetSipPassword(token: string): Promise<{ sipPassword: string; provisioning: any }> {
   const res = await fetch(`${API_BASE}/voice/me/reset-sip-password`, {
     method: "POST",

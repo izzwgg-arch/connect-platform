@@ -6,7 +6,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { getSipClient } from "../sip/sipClientSingleton";
 import { ensureSecondarySipRegistered, getSecondarySipClient, listSecondarySipClients } from "../sip/secondaryAccounts";
-import { getSipAccountProvisioning, postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
+import { getSipAccountProvisioning, getFreshIceServers, postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
 import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle, OutboundTraceEvent } from "../sip/types";
@@ -189,6 +189,8 @@ const SipContext = createContext<SipState | undefined>(undefined);
 
 export function SipProvider({ children }: { children: React.ReactNode }) {
   const { token: authToken, isLoading: authLoading } = useAuth();
+  // Throttle for the ICE-server freshness overlay (see ensureProvisioningLoaded).
+  const lastIceRefreshAtRef = useRef(0);
   // Shared process-wide client so a registration the headless push task
   // established during ring is the SAME UA that answers here (see
   // sipClientSingleton.ts). createSipClient() previously made a fresh UA per
@@ -262,6 +264,23 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     if (!raw) return false;
     try {
       const parsed = JSON.parse(raw) as ProvisioningBundle;
+      // Overlay FRESH ICE servers onto the cached bundle. The cached TURN
+      // credentials expire 24h after provisioning, which left the whole
+      // fleet relay-dead (iceHasTurn:false everywhere, 2026-07-29 root
+      // cause). Throttled; offline keeps the cached set (calls still work
+      // direct, exactly as before).
+      const tok = authTokenRef.current;
+      if (tok && Date.now() - lastIceRefreshAtRef.current > 5 * 60 * 1000) {
+        const fresh = await getFreshIceServers(tok);
+        if (fresh) {
+          lastIceRefreshAtRef.current = Date.now();
+          parsed.iceServers = fresh;
+          void SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(parsed)).catch(() => undefined);
+          console.log(`[SIP] iceServers refreshed (${fresh.length} entries)`);
+        } else {
+          console.warn("[SIP] iceServers refresh failed — using cached set (relay may be stale)");
+        }
+      }
       clientRef.current.configure(parsed);
       if ("setBlackboxContext" in clientRef.current) {
         clientRef.current.setBlackboxContext?.({

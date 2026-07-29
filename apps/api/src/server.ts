@@ -9813,6 +9813,22 @@ app.post("/voice/media-test/report", async (req, reply) => {
   return { ok: true, runId: run.id, status: passed ? "PASSED" : "FAILED", mediaTestStatus: passed ? "PASSED" : "FAILED", mediaTestedAt: now };
 });
 
+// Fresh ICE servers (STUN + TURN with freshly-minted HMAC credentials) for the
+// current user's tenant. WHY (2026-07-29 root cause): mobile provisions once
+// and caches the bundle in SecureStore, but TURN credentials expire after
+// TURN_CRED_TTL_SECS (24h) — so every cached bundle goes relay-dead within a
+// day (observed fleet-wide as iceHasTurn:false and zero relay candidates
+// ever). Clients overlay this at startup/register; the cached bundle remains
+// the offline fallback only.
+app.get("/voice/ice-servers", async (req, reply) => {
+  const user = getUser(req);
+  if (!checkBillingRateLimit(`ice-fetch:${user.sub}`, 120, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const tenant = await db.tenant.findUnique({ where: { id: user.tenantId }, select: { iceServers: true } });
+  return { iceServers: resolveClientIceServers(tenant, null) };
+});
+
 app.get("/voice/me/extension", async (req, reply) => {
   const user = getUser(req);
   if (!checkBillingRateLimit(`ext-fetch:${user.sub}`, 60, 60 * 60 * 1000)) {
