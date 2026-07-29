@@ -328,11 +328,32 @@ async function hasCellDevice(s: PanelSession, extId: string, editHtml: string, c
   return false;
 }
 
+/**
+ * Is the WebRTC app device (SIP user "<ext>_1") already on the extension?
+ * NEVER substring-scan the edit form for "<ext>_1": device names embed the
+ * tenant code, so the base desk device can contain the needle by coincidence
+ * ("T101_101" for ext 101 on tenant 101 contains "101_1") and the app device
+ * silently never gets created (live 2026-07-29: "Ezra stress test 1" —
+ * sip_not_synced). The SIP user is only authoritative in the panel's own
+ * getDevice sub-form; look for it there as an exact quoted value.
+ */
+async function hasWebrtcDevice(s: PanelSession, extId: string, editHtml: string, ext: string): Promise<boolean> {
+  const userValue = new RegExp(`value=\\\\?["']${ext}_1\\\\?["']`);
+  for (const dev of deviceOptions(editHtml)) {
+    const r = await s.post([
+      ["class", "extensions"], ["method", "getDevice"], ["mode", "edit"],
+      ["data[device_id]", dev.id], ["data[extension_id]", extId],
+    ]);
+    if (userValue.test(r.text)) return true;
+  }
+  return false;
+}
+
 async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind: "webrtc" | "cell"): Promise<void> {
   const h = await s.loadForm("extensions", "edit", extId);
   // Resume guard: skip if the device is already on the extension.
   if (kind === "webrtc") {
-    if (h.includes(person.ext + "_1")) return; // device label carries the SIP user
+    if (await hasWebrtcDevice(s, extId, h, person.ext)) return;
   } else if (await hasCellDevice(s, extId, h, String(person.cellNumber || ""))) {
     return;
   }
@@ -362,11 +383,12 @@ async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind
     upsertPair(pairs, "dtmfmode", "rfc2833");
   }
   assertSaved(`device-${kind}`, await s.post(pairs));
-  // verify the device is now on the extension
+  // verify the device is now on the extension (same authoritative getDevice
+  // check as the resume guard — the edit-form substring lies, see above)
   const h2 = await s.loadForm("extensions", "edit", extId);
   const ok =
     kind === "webrtc"
-      ? h2.includes(person.ext + "_1")
+      ? await hasWebrtcDevice(s, extId, h2, person.ext)
       : await hasCellDevice(s, extId, h2, String(person.cellNumber || ""));
   if (!ok) {
     throw new PanelStepError(`device-${kind}`, `device not found on extension ${person.ext} after save`);
