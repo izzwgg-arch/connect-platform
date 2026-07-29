@@ -365,6 +365,14 @@ export class JsSipClient implements SipClient {
    * minimum_expiration=600.
    */
   private optionsKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Per-call RTCPeerConnection config (iceServers incl. TURN, transport
+   * policy, candidate pool). Built at UA construction and passed EXPLICITLY
+   * to ua.call() / session.answer() — JsSIP discards UA-level pcConfig, so
+   * relying on `ua._configuration.pcConfig` shipped every call with an empty
+   * config (no STUN/TURN at all) since forever. See 2026-07-29 audio saga.
+   */
+  private callPcConfig: Record<string, unknown> | null = null;
   private static readonly OPTIONS_KEEPALIVE_INTERVAL_MS = 45_000;
   /** Set by hangup() — lets an in-flight answer wait exit immediately instead of running out its deadline. */
   private answerWaitAbortedAtMs = 0;
@@ -691,6 +699,31 @@ export class JsSipClient implements SipClient {
     const authUsername = this.bundle.authUsername || this.bundle.sipUsername;
     console.log('[SIP] URI user:', this.bundle.sipUsername, '| Auth user:', authUsername);
 
+    // ── Per-call RTCPeerConnection config ─────────────────────────────────
+    // CRITICAL (2026-07-29): JsSIP DISCARDS `pcConfig` passed at UA
+    // construction — `ua._configuration.pcConfig` is undefined (verified
+    // against the installed jssip). The old `this.ua._configuration?.pcConfig
+    // ?? {}` pattern therefore sent EVERY call out with an EMPTY config: no
+    // STUN, no TURN, no candidate pool — calls survived on peer-reflexive
+    // luck, which is exactly the fragility Izzy felt on 5G. This object is
+    // now stored on the client and passed EXPLICITLY to ua.call() and
+    // session.answer().
+    this.callPcConfig = {
+      iceServers,
+      // Server-controlled per-device experiment: "relay" forces media
+      // through the TURN server (cleaner path on lossy cellular direct
+      // routes); default "all". Flag arrives via /mobile/devices/register
+      // featureFlags; telemetry decides winners.
+      iceTransportPolicy: isForceTurnRelayEnabled() ? "relay" : "all",
+      // Pre-gather ICE candidates (incl. TURN allocations) the moment the
+      // RTCPeerConnection is created — for inbound calls that is at INVITE
+      // arrival, DURING the ring, so the answer SDP is ready instantly at tap.
+      iceCandidatePoolSize: 1,
+    };
+    console.log(
+      `[SIP] pcConfig: iceServers=${iceServers.length} policy=${(this.callPcConfig as any).iceTransportPolicy}`,
+    );
+
     const uaConfig: Record<string, unknown> = {
       sockets: [socket],
       uri: `sip:${this.bundle.sipUsername}@${this.bundle.sipDomain}`,
@@ -698,22 +731,6 @@ export class JsSipClient implements SipClient {
       password: this.bundle.sipPassword,
       register: true,
       session_timers: false,
-      pcConfig: {
-        iceServers,
-        // Server-controlled per-device experiment: "relay" forces media
-        // through the TURN server (cleaner path on lossy cellular direct
-        // routes); default "all" = today's behavior. Flag arrives via
-        // /mobile/devices/register featureFlags; telemetry decides winners.
-        iceTransportPolicy: isForceTurnRelayEnabled() ? "relay" : "all",
-        // Pre-gather ICE candidates (incl. TURN allocations) the moment the
-        // RTCPeerConnection is created — for inbound calls that is at INVITE
-        // arrival, DURING the ring. JsSIP holds the 200 OK until gathering
-        // completes, so without the pool the TURN/STUN round-trips (~300-600 ms
-        // on cellular) sit squarely between the user's answer tap and the PBX
-        // seeing the answer. With the pool they run while the phone is still
-        // ringing and the answer SDP is ready instantly at tap.
-        iceCandidatePoolSize: 1,
-      },
     };
 
     // NOTE: a short register_expires was tried as a NAT keepalive but the PBX
@@ -2603,7 +2620,10 @@ export class JsSipClient implements SipClient {
       this.outboundBlackbox.mark("ua_call_invoked");
       this.session = this.ua.call(dest, {
         mediaConstraints: VOICE_AUDIO_CONSTRAINTS,
-        pcConfig: this.ua._configuration?.pcConfig ?? {},
+        // Explicit per-call config — see callPcConfig doc (JsSIP discards
+        // UA-level pcConfig; the old `_configuration?.pcConfig ?? {}` was
+        // ALWAYS {}).
+        pcConfig: this.callPcConfig ?? {},
       });
       this.outboundBlackbox.setDial({
         uaCallInvoked: true,
@@ -2691,13 +2711,17 @@ export class JsSipClient implements SipClient {
    * Falls back to internal getUserMedia (constraints only) when not prewarmed —
    * this is what preserves the normal answer path if prewarm failed/was off.
    */
-  private buildAnswerOptions(): { mediaConstraints: typeof VOICE_AUDIO_CONSTRAINTS; mediaStream?: MediaStream } {
+  private buildAnswerOptions(): { mediaConstraints: typeof VOICE_AUDIO_CONSTRAINTS; mediaStream?: MediaStream; pcConfig?: Record<string, unknown> } {
+    // pcConfig must ride on EVERY answer — see callPcConfig doc (JsSIP
+    // discards UA-level pcConfig, so inbound calls otherwise get an empty
+    // RTCPeerConnection config: no STUN/TURN at all).
+    const pcConfig = (this.callPcConfig ?? undefined) as Record<string, unknown> | undefined;
     const stream = this.prewarmedInboundStream;
     if (stream) {
       console.log("[SIP][prewarm] answer_using_prewarmed_stream");
-      return { mediaConstraints: VOICE_AUDIO_CONSTRAINTS, mediaStream: stream };
+      return { mediaConstraints: VOICE_AUDIO_CONSTRAINTS, mediaStream: stream, ...(pcConfig ? { pcConfig } : {}) };
     }
-    return { mediaConstraints: VOICE_AUDIO_CONSTRAINTS };
+    return { mediaConstraints: VOICE_AUDIO_CONSTRAINTS, ...(pcConfig ? { pcConfig } : {}) };
   }
 
   async answer() {
