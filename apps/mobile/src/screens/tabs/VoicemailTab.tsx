@@ -42,6 +42,7 @@ import {
 import { useVoicemailAudioCache } from '../../hooks/useVoicemailAudioCache';
 import { consumeVoicemailScopeKeyChange } from '../../api/voicemailClientScope';
 import { subscribeToVoicemail } from '../../api/realtime';
+import { vmBadgeQueryKey } from '../../navigation/badges';
 import type { Voicemail } from '../../types';
 import { spacing } from '../../theme/spacing';
 
@@ -279,7 +280,10 @@ export function VoicemailTab() {
       }
     }
     persistReadOverrides();
-  }, [persistReadOverrides]);
+    // Keep the Voicemail tab-bar badge in sync with read/unread changes
+    // (Izzy 2026-07-28): the badge query refetches its light totals.
+    queryClient.invalidateQueries({ queryKey: vmBadgeQueryKey(token) }).catch(() => undefined);
+  }, [persistReadOverrides, queryClient, token]);
 
   // Tear down any in-progress voicemail playback. Extracted so it can be
   // reused when a call becomes active (a playing voicemail must never keep
@@ -1739,8 +1743,11 @@ function makeStyles(VM: VmPalette) {
     minHeight: 38,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: VM.borderSoft,
-    backgroundColor: VM.cardMuted,
+    // Outline-style idle chips (Izzy 2026-07-28): transparent with a visible
+    // pill border, matching Recent/Team/Chat — the old solid `cardMuted` fill
+    // read as flat white cards in light mode.
+    borderColor: VM.border,
+    backgroundColor: 'transparent',
     paddingHorizontal: spacing['2'],
     flexDirection: 'row',
     alignItems: 'center',

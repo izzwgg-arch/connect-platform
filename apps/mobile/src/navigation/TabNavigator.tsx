@@ -12,11 +12,12 @@ import {
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { getChatThreads, mobileQueryKeys } from '../api/client';
+import { getChatThreads, getVoicemails, mobileQueryKeys } from '../api/client';
+import { loadRecentsSeen, recentsSeenQueryKey, vmBadgeQueryKey } from './badges';
 import { TeamTab } from '../screens/tabs/TeamTab';
 import { ContactTab } from '../screens/tabs/ContactTab';
 import { KeypadTab } from '../screens/tabs/KeypadTab';
@@ -145,10 +146,74 @@ function useKeyboardVisible(): boolean {
   return visible;
 }
 
+/**
+ * Live unread counts for the tab badges (Izzy 2026-07-28). Chat rides the
+ * already-preloaded thread cache (zero extra requests, instant clear when a
+ * thread is read); Voicemail uses a light page-1 totals fetch; Recent counts
+ * missed calls newer than the last Recents view (cleared on tab focus by
+ * RecentTab via markRecentsSeen).
+ */
+function useTabBadges(): { Chat: number; Voicemail: number; Recent: number } {
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    void loadRecentsSeen(queryClient);
+  }, [queryClient]);
+
+  const chatQuery = useQuery({
+    queryKey: mobileQueryKeys.chatThreads,
+    enabled: Boolean(token),
+    queryFn: () => getChatThreads(token!),
+    staleTime: 30 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+  const chatUnread = Array.isArray(chatQuery.data)
+    ? (chatQuery.data as Array<{ unread?: number }>).filter((t) => (t?.unread ?? 0) > 0).length
+    : 0;
+
+  const vmQuery = useQuery({
+    queryKey: vmBadgeQueryKey(token),
+    enabled: Boolean(token),
+    queryFn: () => getVoicemails(token!, { maxPagesPerFolder: 1 }),
+    staleTime: 60 * 1000,
+    refetchInterval: 3 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+  const vmTotals: any = (vmQuery.data as any)?.totals;
+  const vmNew = vmTotals ? Math.max(0, (vmTotals.inbox ?? 0) + (vmTotals.urgent ?? 0)) : 0;
+
+  // Subscribe to the caches without fetching — RecentTab owns the fetches.
+  const historyQuery = useQuery<any>({ queryKey: mobileQueryKeys.callHistory, enabled: false });
+  const seenQuery = useQuery<number>({ queryKey: recentsSeenQueryKey, enabled: false });
+  const seenAt = typeof seenQuery.data === 'number' ? seenQuery.data : 0;
+  let missedNew = 0;
+  const historyRows: any[] = Array.isArray(historyQuery.data)
+    ? (historyQuery.data as any[])
+    : Array.isArray((historyQuery.data as any)?.calls)
+      ? (historyQuery.data as any).calls
+      : [];
+  for (const r of historyRows) {
+    const startedMs = Date.parse(String(r?.startedAt ?? ''));
+    if (!Number.isFinite(startedMs) || startedMs <= seenAt) continue;
+    const dir = String(r?.direction ?? '').toLowerCase();
+    const disp = String(r?.disposition ?? '').toLowerCase();
+    const inbound = dir === 'inbound' || dir === 'incoming';
+    if (inbound && (disp === 'missed' || disp === 'no_answer' || (r?.durationSec ?? 1) === 0)) {
+      missedNew += 1;
+    }
+  }
+
+  return { Chat: chatUnread, Voicemail: vmNew, Recent: missedNew };
+}
+
 function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const keyboardVisible = useKeyboardVisible();
+  const badges = useTabBadges();
 
   // Hide the whole tab bar while typing so it never floats above the keyboard.
   if (keyboardVisible) return null;
@@ -184,6 +249,7 @@ function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
             route={route}
             isFocused={isFocused}
             onPress={onPress}
+            badge={(badges as Record<string, number>)[route.name] ?? 0}
           />
         );
       })}

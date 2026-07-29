@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
+import { markRecentsSeen } from '../../navigation/badges';
 import * as Haptics from 'expo-haptics';
 import {
   Animated,
@@ -432,8 +433,10 @@ export function RecentTab() {
 
   useFocusEffect(
     useCallback(() => {
+      // Viewing Recents clears the missed-call tab badge (Izzy 2026-07-28).
+      markRecentsSeen(queryClient);
       if (!callHistoryQuery.data || callHistoryQuery.isStale) load();
-    }, [callHistoryQuery.data, callHistoryQuery.isStale, load]),
+    }, [callHistoryQuery.data, callHistoryQuery.isStale, load, queryClient]),
   );
 
   // Reload 3 seconds after a call ends (gives the append a moment to settle)
