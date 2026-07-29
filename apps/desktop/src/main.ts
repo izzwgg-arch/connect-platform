@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMoni
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
-import { checkForUpdatesInteractive, initAutoUpdater } from "./updater";
+import { initAutoUpdater, checkForUpdatesInteractive } from "./updater";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -340,11 +340,7 @@ function rebuildTray(): void {
       click: () => toggleAlwaysOnTop(),
     },
     { type: "separator" },
-<<<<<<< HEAD
     { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
-=======
-    { label: "Check for Updates\u2026", click: () => checkForUpdatesInteractive() },
->>>>>>> origin/main
     { type: "separator" },
     {
       label: "Quit Connect",
@@ -455,7 +451,6 @@ function registerIpc(): void {
   });
 }
 
-<<<<<<< HEAD
 // ── SIP-engine liveness: heartbeat + hard recovery ─────────────────────
 // Root cause of "registered → yellow forever until app restart" (diagnosed 2026-07-14):
 // Windows/Chromium can FREEZE the hidden full window's renderer outright (native window
@@ -521,8 +516,6 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 // loop — the diagnosed cause of permanent yellow. Disable both features outright.
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion,IntensiveWakeUpThrottling");
 
-=======
->>>>>>> origin/main
 // ── Single-instance lock ──────────────────────────────────────────────
 // Without this, every launch (startOnLogin, a manual re-open, or the relaunch
 // after an asar reship) spawns a SEPARATE Connect process. Each process has its
@@ -549,11 +542,7 @@ if (!gotSingleInstanceLock) {
     }
   });
 
-<<<<<<< HEAD
   app.whenReady().then(async () => {
-=======
-  app.whenReady().then(() => {
->>>>>>> origin/main
   initLogging();
   app.setAppUserModelId("com.connectcommunications.desktop");
   settings = readSettings();
@@ -568,7 +557,6 @@ if (!gotSingleInstanceLock) {
   try { await session.defaultSession.clearCache(); } catch { /* non-fatal */ }
   registerIpc();
   rebuildTray();
-<<<<<<< HEAD
   // Hold an app-suspension power-save blocker for the app's entire lifetime — not just
   // during calls. A softphone must stay registered to RECEIVE calls, and Modern
   // Standby/EcoQoS otherwise suspends the idle app exactly when it looks least busy.
@@ -578,8 +566,6 @@ if (!gotSingleInstanceLock) {
   } catch (err) {
     diag("main", `lifetime power-save blocker failed: ${String(err)}`);
   }
-=======
->>>>>>> origin/main
   // Single-phone model: the full window is the one SIP phone; no separate hidden
   // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
@@ -587,15 +573,15 @@ if (!gotSingleInstanceLock) {
   // In-app auto-update: check the feed on launch (and periodically), download in
   // the background, and prompt the user to restart when an update is ready.
   initAutoUpdater(diag);
-<<<<<<< HEAD
   startSipEngineHeartbeat();
   // After sleep/resume the renderer may be alive but its socket long dead; nudge the
   // portal's own reconnect path immediately instead of waiting for its next timer.
   powerMonitor.on("resume", () => {
     diag("power", "system resumed — nudging SIP reconnect");
     const win = fullWindow;
-    if (!win || win.isDestroyed() || win.webContents.isLo
-=======
+    if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
+    win.webContents.executeJavaScript("window.dispatchEvent(new Event('online')); 1", true).catch(() => { /* heartbeat will catch a frozen renderer */ });
+  });
 
   app.on("activate", () => createFullWindow(true));
   });
@@ -608,4 +594,3 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   isQuitting = true;
 });
->>>>>>> origin/main
