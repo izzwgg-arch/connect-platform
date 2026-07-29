@@ -40,7 +40,7 @@ import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 import { preferOpusInSdp, preferOpusOnlyOffer } from "./preferOpusSdp";
 import * as SecureStore from "expo-secure-store";
-import { isStandingRegistrationEnabled, isForceTurnRelayEnabled } from "../config/featureFlags";
+import { isStandingRegistrationEnabled, isForceTurnRelayEnabled, getFeatureFlags } from "../config/featureFlags";
 import { NativeSipSocket, isNativeSipSocketAvailable } from "./nativeSipSocket";
 
 // -- iOS stable SIP instance id (RFC 5626 outbound de-dup) ----------------------
@@ -1072,55 +1072,108 @@ export class JsSipClient implements SipClient {
     return Date.now() - this.lastRefreshSentAtMs > 30_000;
   }
 
-  // ── Standing-mode OPTIONS keepalive (see field docs) ────────────────────
+  // ── Standing-mode OPTIONS keepalive — WIRE-TRUTH edition ────────────────
+  // 2026-07-29 incident (Landau 101, caller heard nothing / callback never
+  // "answered"): the 5G socket died silently (half-open), JsSIP's REGISTER
+  // refresh vanished into it, and the app dialed on an 11-minute-old
+  // registration while believing "Already registered". Three holes fixed:
+  //  1. flag-hydration race could skip starting this loop entirely (silent),
+  //  2. the transport/registered gate silently returned instead of signalling,
+  //  3. an OPTIONS with NO response (half-open socket) triggered nothing —
+  //     only explicit failures did. Now every ping has a 10s response
+  //     deadline, and a registration-age watchdog forces a reconnect when
+  //     the PBX's 600s grant is about to lapse without a confirmed refresh.
   private startOptionsKeepalive() {
-    if (Platform.OS !== "android" || !isStandingRegistrationEnabled()) return;
+    if (Platform.OS !== "android") return;
     this.stopOptionsKeepalive();
-    console.log(
-      `[SIP_KEEPALIVE_PING] started interval=${JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS}ms`,
-    );
-    this.optionsKeepaliveTimer = setInterval(() => {
-      const ua = this.ua;
-      if (!ua) return;
-      let transportUp = false;
-      try {
-        transportUp = (ua as any)._transport?.isConnected?.() === true;
-      } catch { /* treat as down */ }
-      if (!transportUp || !ua.isRegistered?.()) {
-        // Not our job to reconnect from here on a known-down transport — the
-        // SipContext keep-alive/reconnect machinery already watches this state.
+    // Await flag hydration — a cold-start register can beat AsyncStorage and
+    // the sync flag read, which silently left sessions with NO keepalive.
+    void getFeatureFlags().then((flags) => {
+      if (!flags.standingRegistration) {
+        console.log("[SIP_KEEPALIVE_PING] standingRegistration off — keepalive not started");
         return;
       }
-      const sentAt = Date.now();
-      try {
-        ua.sendOptions(`sip:${this.bundle?.sipDomain}`, undefined, {
-          eventHandlers: {
-            succeeded: () => {
-              const rttMs = Date.now() - sentAt;
-              // Log slow round-trips only; a healthy ping every 45 s would
-              // drown the logs.
-              if (rttMs > 2_000) {
-                console.log(`[SIP_KEEPALIVE_PING] slow rtt=${rttMs}ms`);
-              }
+      if (this.optionsKeepaliveTimer != null) return; // raced with a newer start
+      console.log(
+        `[SIP_KEEPALIVE_PING] started interval=${JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS}ms (wire-truth)`,
+      );
+      this.optionsKeepaliveTimer = setInterval(() => {
+        const ua = this.ua;
+        if (!ua) return;
+        let transportUp = false;
+        try {
+          transportUp = (ua as any)._transport?.isConnected?.() === true;
+        } catch { /* treat as down */ }
+        if (!transportUp || !ua.isRegistered?.()) {
+          // Never silently skip — say so and kick the reconnect machinery.
+          console.warn(
+            `[SIP_KEEPALIVE_PING] gate: transportUp=${transportUp} registered=${!!ua.isRegistered?.()} — signalling disconnect`,
+          );
+          try { this.events.onSocketDisconnected?.("options_keepalive_gate"); } catch { /* ignore */ }
+          return;
+        }
+        // Registration-age watchdog: PBX grants 600s. Older than 540s with no
+        // confirmed refresh = the refresh died on a half-open socket. Force a
+        // rebuild regardless of what JsSIP believes.
+        const regAge = this.getRegistrationAgeMs();
+        if (regAge != null && regAge > 540_000) {
+          console.warn(`[SIP_KEEPALIVE_PING] registration stale ageMs=${regAge} — forcing reconnect`);
+          try {
+            this.events.onRegistrationState?.("disconnected");
+            this.events.onSocketDisconnected?.("registration_stale");
+          } catch { /* ignore */ }
+          return;
+        }
+        const sentAt = Date.now();
+        // Response deadline: half-open sockets produce NO failure event (the
+        // 32s SIP timer proved unreliable here) — 10s of silence = dead wire.
+        let settled = false;
+        const deadline = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          console.warn("[SIP_KEEPALIVE_PING] no response in 10s — socket presumed dead, signalling disconnect");
+          try {
+            this.events.onRegistrationState?.("disconnected");
+            this.events.onSocketDisconnected?.("options_keepalive_timeout");
+          } catch { /* ignore */ }
+        }, 10_000);
+        try {
+          ua.sendOptions(`sip:${this.bundle?.sipDomain}`, undefined, {
+            eventHandlers: {
+              succeeded: () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(deadline);
+                const rttMs = Date.now() - sentAt;
+                // Log slow round-trips only; a healthy ping every 45 s would
+                // drown the logs.
+                if (rttMs > 2_000) {
+                  console.log(`[SIP_KEEPALIVE_PING] slow rtt=${rttMs}ms`);
+                }
+              },
+              failed: (e: any) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(deadline);
+                const cause = e?.cause || "unknown";
+                console.warn(
+                  `[SIP_KEEPALIVE_PING] failed cause=${cause} — socket presumed dead, signalling disconnect`,
+                );
+                try {
+                  this.events.onRegistrationState?.("disconnected");
+                  this.events.onSocketDisconnected?.(`options_keepalive_failed:${cause}`);
+                } catch { /* ignore */ }
+              },
             },
-            failed: (e: any) => {
-              const cause = e?.cause || "unknown";
-              console.warn(
-                `[SIP_KEEPALIVE_PING] failed cause=${cause} — socket presumed dead, signalling disconnect`,
-              );
-              // Kick the existing reconnect machinery instead of rebuilding
-              // here: it owns backoff/coalescing.
-              try {
-                this.events.onRegistrationState?.("disconnected");
-                this.events.onSocketDisconnected?.(`options_keepalive_failed:${cause}`);
-              } catch { /* ignore */ }
-            },
-          },
-        });
-      } catch (err) {
-        console.warn('[SIP_KEEPALIVE_PING] sendOptions threw:', err);
-      }
-    }, JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS);
+          });
+        } catch (err) {
+          settled = true;
+          clearTimeout(deadline);
+          console.warn('[SIP_KEEPALIVE_PING] sendOptions threw:', err);
+          try { this.events.onSocketDisconnected?.("options_send_threw"); } catch { /* ignore */ }
+        }
+      }, JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS);
+    });
   }
 
   private stopOptionsKeepalive() {
@@ -2511,7 +2564,16 @@ export class JsSipClient implements SipClient {
       uaStarted: !!this.ua,
     });
     this.outboundBlackbox.mark("dial_start", { dest, normalized });
-    console.log('[SIP] Dialing:', dest, 'regAgeMs=' + (this.getRegistrationAgeMs() ?? 'unknown'));
+    const regAgeAtDial = this.getRegistrationAgeMs();
+    console.log('[SIP] Dialing:', dest, 'regAgeMs=' + (regAgeAtDial ?? 'unknown'));
+    // Last-resort guard (2026-07-29): dialing on a registration older than the
+    // PBX's 600s grant sends the INVITE into the void. Kick the reconnect
+    // machinery immediately — the attempt may fail fast, but the line heals in
+    // seconds instead of staying silently dead.
+    if (regAgeAtDial != null && regAgeAtDial > 540_000) {
+      console.warn(`[SIP] dial on stale registration (ageMs=${regAgeAtDial}) — forcing reconnect`);
+      try { this.events.onSocketDisconnected?.("dial_stale_registration"); } catch { /* ignore */ }
+    }
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
