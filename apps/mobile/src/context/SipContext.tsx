@@ -606,7 +606,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // PLUS Android's native LoudnessEnhancer (+5 dB with limiter — louder
   // WITHOUT distortion) on devices that honor global-mix audio effects.
   // Logcat tag: [SPEAKER_BOOST] shows which layers are active.
-  const SPEAKER_SOFT_BOOST = 1.4;
+  // 2026-07-29 tuning round 2 (Izzy: "louder than the speaker can handle,
+  // staticky"): the raw 1.4x pre-boost pushed the driver into strain. Ease the
+  // raw multiplier down; the limiter-protected native gain carries the
+  // loudness. Native side also adds a gentle bass lift (strength 150).
+  const SPEAKER_SOFT_BOOST = 1.15;
   const SPEAKER_NATIVE_GAIN_MB = 500;
   useEffect(() => {
     const nativeMod: any = (NativeModules as any)?.IncomingCallUi;

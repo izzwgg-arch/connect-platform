@@ -730,6 +730,7 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   // through global-mix effects — harmless no-op there (JS keeps a mild soft
   // boost as the floor either way).
   private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
+  private var bassBoost: android.media.audiofx.BassBoost? = null
 
   @ReactMethod
   fun setSpeakerLoudnessBoost(gainMb: Int, promise: Promise) {
@@ -740,18 +741,35 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
           try { le.release() } catch (_: Exception) {}
         }
         loudnessEnhancer = null
-        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness released")
+        bassBoost?.let { bb ->
+          try { bb.enabled = false } catch (_: Exception) {}
+          try { bb.release() } catch (_: Exception) {}
+        }
+        bassBoost = null
+        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness+bass released")
         promise.resolve(false)
         return
       }
       val le = loudnessEnhancer ?: android.media.audiofx.LoudnessEnhancer(0).also { loudnessEnhancer = it }
       le.setTargetGain(gainMb)
       le.enabled = true
-      Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness enabled gainMb=$gainMb")
+      // Gentle low-shelf lift — phone speakers lean treble-heavy ("tweeter-y",
+      // Izzy 2026-07-29). Strength 0-1000; 150 is a deliberate "tiny bit".
+      // Best-effort: some devices lack BassBoost on the output mix.
+      try {
+        val bb = bassBoost ?: android.media.audiofx.BassBoost(0, 0).also { bassBoost = it }
+        if (bb.strengthSupported) bb.setStrength(150)
+        bb.enabled = true
+        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness gainMb=$gainMb + bass strength=150")
+      } catch (e: Exception) {
+        Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] bass unavailable (loudness still on): ${e.message}")
+      }
       promise.resolve(true)
     } catch (e: Exception) {
       try { loudnessEnhancer?.release() } catch (_: Exception) {}
       loudnessEnhancer = null
+      try { bassBoost?.release() } catch (_: Exception) {}
+      bassBoost = null
       Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] native loudness unavailable: ${e.message}")
       promise.reject("loudness_error", e.message, e)
     }
