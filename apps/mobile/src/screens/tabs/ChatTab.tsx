@@ -48,6 +48,8 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { showAppAlert } from '../../components/ui/appAlert';
 import { AppActionSheet } from '../../components/ui/AppPopup';
+import { AddContactModal, type AddContactPrefill } from '../../components/AddContactModal';
+import { useContactNameResolver } from '../../contacts/useContactNameResolver';
 import {
   archiveChatThread,
   createChatThread,
@@ -696,17 +698,35 @@ export function ChatTab() {
   // resurfaces the thread (Izzy 2026-07-28).
   const [threadPendingDelete, setThreadPendingDelete] = useState<ChatThread | null>(null);
 
+  // Add-to-contacts from an SMS thread (Izzy 2026-07-28): offered on the
+  // long-press sheet for nameless SMS numbers; reuses the shared modal.
+  const [addContactPrefill, setAddContactPrefill] = useState<AddContactPrefill | null>(null);
+  const handleContactCreated = useCallback(
+    (saved?: { displayName: string }) => {
+      setAddContactPrefill(null);
+      queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads }).catch(() => undefined);
+      if (saved?.displayName) showAppAlert('Saved', `${saved.displayName} added to contacts.`);
+    },
+    [queryClient],
+  );
+
+  // Contact-name backfill (Izzy 2026-07-28): saved contact names replace raw
+  // numbers everywhere, live from the shared contacts cache.
+  const resolveContactName = useContactNameResolver();
+
   // Stable renderItem (freeze investigation 2026-07-28): keeps ThreadRow's
   // memo effective across unrelated ChatTab re-renders (poll ticks, typing).
   const renderThreadItem = useCallback(
     ({ item }: { item: ChatThread }) => (
       <ThreadRow
         thread={item}
+        nameOverride={item.type === 'SMS' ? resolveContactName(item.externalSmsE164) : null}
         onPress={() => setActiveThread(item)}
         onLongPress={() => setThreadPendingDelete(item)}
       />
     ),
-    [],
+    [resolveContactName],
   );
   const [filter, setFilter] = useState<ChatFilter>('all');
   const [query, setQuery] = useState('');
@@ -1736,6 +1756,17 @@ export function ChatTab() {
             message="Delete this conversation from your list? The other side keeps their copy, and a new message will bring it back."
             onClose={() => setThreadPendingDelete(null)}
             actions={[
+              ...(threadPendingDelete?.type === 'SMS' && threadPendingDelete.externalSmsE164
+                ? [{
+                    label: 'Add to contacts',
+                    icon: 'person-add-outline' as const,
+                    onPress: () => {
+                      const t = threadPendingDelete;
+                      setThreadPendingDelete(null);
+                      if (t?.externalSmsE164) setAddContactPrefill({ phone: t.externalSmsE164 });
+                    },
+                  }]
+                : []),
               {
                 label: 'Delete conversation',
                 icon: 'trash-outline',
@@ -1757,6 +1788,14 @@ export function ChatTab() {
               },
             ]}
           />
+
+          <AddContactModal
+            visible={Boolean(addContactPrefill)}
+            prefill={addContactPrefill ?? undefined}
+            title="Add to Contacts"
+            onClose={() => setAddContactPrefill(null)}
+            onCreated={handleContactCreated}
+          />
         </View>
       ) : (
         <View style={styles.container}>
@@ -1770,18 +1809,23 @@ export function ChatTab() {
             >
               <Ionicons name="chevron-back" size={23} color={colors.text} />
             </TouchableOpacity>
-            <Avatar name={displayThreadName(activeThread)} size="md" online={activeThread.type === 'DM'} />
+            <Avatar name={resolveContactName(activeThread.externalSmsE164) || displayThreadName(activeThread)} size="md" online={activeThread.type === 'DM'} />
             <View style={styles.chatHeaderInfo}>
-              <Text style={[styles.chatTitle, { color: colors.text }]} numberOfLines={1}>{displayThreadName(activeThread)}</Text>
+              <Text style={[styles.chatTitle, { color: colors.text }]} numberOfLines={1}>
+                {resolveContactName(activeThread.externalSmsE164) || displayThreadName(activeThread)}
+              </Text>
               <Text style={[styles.chatSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
                 {typingUsers.length
                   ? `${typingUsers[0].name} is typing...`
                   : (() => {
                       // No duplicate info (Izzy 2026-07-28): when the title IS
                       // the number (no contact name), the subtitle shows just
-                      // the kind — never "SMS · <same number>" twice.
+                      // the kind — never "SMS · <same number>" twice. With a
+                      // resolved contact name as title, the number is useful
+                      // context and comes back.
                       const target = threadTarget(activeThread);
-                      const titleIsTarget = target && displayThreadName(activeThread) === target;
+                      const effectiveTitle = resolveContactName(activeThread.externalSmsE164) || displayThreadName(activeThread);
+                      const titleIsTarget = target && effectiveTitle === target;
                       return `${threadKind(activeThread)}${target && !titleIsTarget ? ` · ${target}` : ''}`;
                     })()}
               </Text>
@@ -1975,9 +2019,9 @@ const ChatFilterChip = memo(function ChatFilterChip({ id, label, count, value, o
   );
 });
 
-const ThreadRow = memo(function ThreadRow({ thread, onPress, onLongPress }: { thread: ChatThread; onPress: () => void; onLongPress?: () => void }) {
+const ThreadRow = memo(function ThreadRow({ thread, onPress, onLongPress, nameOverride }: { thread: ChatThread; onPress: () => void; onLongPress?: () => void; nameOverride?: string | null }) {
   const { colors } = useTheme();
-  const name = displayThreadName(thread);
+  const name = nameOverride || displayThreadName(thread);
   const kind = threadKind(thread);
   return (
     <TouchableOpacity style={[styles.threadRow, { backgroundColor: colors.bg, borderBottomColor: colors.borderSubtle }]} onPress={onPress} onLongPress={onLongPress} delayLongPress={350} activeOpacity={0.82}>

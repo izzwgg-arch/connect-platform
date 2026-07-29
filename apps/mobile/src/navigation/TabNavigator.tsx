@@ -18,6 +18,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { getChatThreads, getVoicemails, mobileQueryKeys } from '../api/client';
 import { loadRecentsSeen, recentsSeenQueryKey, vmBadgeQueryKey } from './badges';
+import { autoSyncPhoneContacts } from '../contacts/autoSyncPhoneContacts';
 import { TeamTab } from '../screens/tabs/TeamTab';
 import { ContactTab } from '../screens/tabs/ContactTab';
 import { KeypadTab } from '../screens/tabs/KeypadTab';
@@ -292,8 +293,38 @@ function useChatThreadsPreload() {
   }, [token, queryClient]);
 }
 
+/**
+ * Silent phone-book → Connect contact delta-sync (Izzy 2026-07-28). Runs on
+ * sign-in and every app foreground; no-ops without contacts permission; only
+ * imports contacts ADDED after the first baseline run. After an import the
+ * contacts cache is invalidated so names backfill across Recents / Chat /
+ * Voicemail immediately.
+ */
+function usePhoneContactAutoSync() {
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!token) return;
+    const run = () => {
+      autoSyncPhoneContacts(token)
+        .then((outcome) => {
+          if (outcome.ran && !outcome.baselined && outcome.imported > 0) {
+            queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);
+          }
+        })
+        .catch(() => undefined);
+    };
+    run();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') run();
+    });
+    return () => sub.remove();
+  }, [token, queryClient]);
+}
+
 export function TabNavigator() {
   useChatThreadsPreload();
+  usePhoneContactAutoSync();
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}

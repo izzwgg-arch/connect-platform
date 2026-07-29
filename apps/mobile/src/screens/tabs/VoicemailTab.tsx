@@ -43,6 +43,7 @@ import { useVoicemailAudioCache } from '../../hooks/useVoicemailAudioCache';
 import { consumeVoicemailScopeKeyChange } from '../../api/voicemailClientScope';
 import { subscribeToVoicemail } from '../../api/realtime';
 import { vmBadgeQueryKey } from '../../navigation/badges';
+import { useContactNameResolver } from '../../contacts/useContactNameResolver';
 import type { Voicemail } from '../../types';
 import { spacing } from '../../theme/spacing';
 
@@ -202,6 +203,8 @@ export function VoicemailTab() {
   const sip = useSip();
   const { colors, isDark } = useTheme();
   const VM = useMemo(() => makeVmPalette(colors, isDark), [colors, isDark]);
+  // Contact-name backfill (Izzy 2026-07-28): saved names replace raw caller ids.
+  const resolveContactName = useContactNameResolver();
   const styles = useMemo(() => makeStyles(VM), [VM]);
   const queryClient = useQueryClient();
   const [rows, setRows] = useState<Voicemail[]>([]);
@@ -988,6 +991,7 @@ export function VoicemailTab() {
           renderItem={({ item }) => (
             <VoicemailCard
               vm={item}
+              resolvedName={resolveContactName(item.callerId)}
               active={activeId === item.id}
               selected={selectedIds.includes(item.id)}
               selectionMode={selectionMode}
@@ -1163,6 +1167,8 @@ type VoicemailCardProps = {
   selected: boolean;
   selectionMode: boolean;
   expanded: boolean;
+  /** Saved-contact name for the caller (contact backfill, Izzy 2026-07-28). */
+  resolvedName?: string | null;
   // The shared progress driver, handed only to the active card. It's a stable
   // ref so the card re-renders just once (when it becomes active) while the
   // fill keeps animating off-thread in sync with the audio.
@@ -1179,6 +1185,7 @@ type VoicemailCardProps = {
 
 const VoicemailCard = memo(function VoicemailCard({
   vm,
+  resolvedName,
   active,
   selected,
   selectionMode,
@@ -1224,13 +1231,13 @@ const VoicemailCard = memo(function VoicemailCard({
             {selected && <Ionicons name="checkmark" size={16} color={VM.text} />}
           </View>
         ) : (
-          <Avatar name={callerLabel(vm)} size="md" />
+          <Avatar name={resolvedName || callerLabel(vm)} size="md" />
         )}
 
         <View style={styles.cardInfo}>
           <View style={styles.cardTitleRow}>
             <Text style={[styles.callerName, muted && styles.mutedText]} numberOfLines={1}>
-              {callerLabel(vm)}
+              {resolvedName || callerLabel(vm)}
             </Text>
           </View>
           <Text style={styles.mailboxText} numberOfLines={1}>
