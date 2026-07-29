@@ -6217,6 +6217,27 @@ model AgentKbArticle {
   @@index([tenantId, approved])
 }
 
+/// Trainer-mode lessons: a designated tester corrects the agent in chat
+/// ("add that to your memory") and the lesson takes effect IMMEDIATELY for that
+/// tenant's conversations. Every lesson carries who/when; the owner can revoke
+/// any lesson from the AI Trainer page. Audit events: trainer.lesson_added /
+/// trainer.lesson_revoked.
+model AgentTrainerLesson {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  lesson               String /// the distilled rule the agent must follow going forward
+  rawText              String /// the trainer's original chat message, verbatim
+  createdById          String /// Connect user id of the trainer
+  createdByName        String?
+  sourceConversationId String?
+  active               Boolean   @default(true)
+  revokedAt            DateTime?
+  revokedBy            String?
+  createdAt            DateTime  @default(now())
+
+  @@index([tenantId, active, createdAt])
+}
+
 /// Per-tenant facts the agent learns ("Brooklyn office", device models, prefs).
 model AgentMemory {
   id        String   @id @default(cuid())

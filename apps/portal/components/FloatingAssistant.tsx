@@ -51,6 +51,23 @@ async function agentPost<T>(path: string, body: object): Promise<T> {
   return res.json();
 }
 
+/**
+ * Fire-and-forget button-press beacon → agent audit log. Powers the AI Trainer
+ * activity trail ("every press on the button"). Never blocks or breaks the UI.
+ */
+function uiEvent(name: string): void {
+  try {
+    void fetch("/agent-api/chat/ui-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ name }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* logging must never affect the user */
+  }
+}
+
 const isAudioFile = (f: File) => /^audio\//i.test(f.type) || /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|wma|aiff?)$/i.test(f.name);
 const MAX_UPLOAD_BYTES = 60 * 1024 * 1024;
 // 3 MB raw chunks: base64 (~4 MB) + JSON stays well under nginx's 10 MB
@@ -165,6 +182,7 @@ export function FloatingAssistant() {
       if ((!text && ready.length === 0) || sending || stillUploading) return;
       if (!text) text = `I uploaded: ${ready.map((f) => f.name).join(", ")}`;
       setSending(true);
+      uiEvent(ready.length ? `send (${ready.length} attachment(s))` : "send");
       setInput("");
       setPendingFiles([]);
       const ackId = `ack-${Date.now()}`;
@@ -303,8 +321,8 @@ export function FloatingAssistant() {
               <small><span className="fa-live" /> Online — here to help</small>
             </div>
             <div className="fa-head-actions">
-              <button title="New chat" onClick={newChat}><Plus size={16} /></button>
-              <button title="Minimize" onClick={() => setOpen(false)}><X size={16} /></button>
+              <button title="New chat" onClick={() => { uiEvent("new chat"); newChat(); }}><Plus size={16} /></button>
+              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
             </div>
           </div>
 
@@ -367,11 +385,11 @@ export function FloatingAssistant() {
               onChange={(e) => onFilesChosen(e.target.files)}
               aria-label="Attach files"
             />
-            <button className="fa-icon" title="Attach files — MP3s can become your hold music" onClick={pickFiles} disabled={sending}>
+            <button className="fa-icon" title="Attach files — MP3s can become your hold music" onClick={() => { uiEvent("attach files"); pickFiles(); }} disabled={sending}>
               <Paperclip size={17} />
             </button>
             {micAvailable && (recording || transcribing) && (
-              <button className="fa-icon fa-cancel" title="Cancel — discard the recording" onClick={cancelMic}>
+              <button className="fa-icon fa-cancel" title="Cancel — discard the recording" onClick={() => { uiEvent("cancel recording"); cancelMic(); }}>
                 <X size={17} />
               </button>
             )}
@@ -379,7 +397,7 @@ export function FloatingAssistant() {
               <button
                 className={`fa-icon${recording ? " fa-icon-on" : ""}`}
                 title={recording ? "Stop and transcribe" : "Speak — auto-detects Yiddish or English"}
-                onClick={toggleMic}
+                onClick={() => { uiEvent(recording ? "stop recording" : "start recording"); toggleMic(); }}
                 disabled={transcribing}
               >
                 <Mic size={17} />
@@ -408,7 +426,7 @@ export function FloatingAssistant() {
 
       <div className="fa-fab-wrap">
         {!open && showHint && <div className="fa-hint">Need help? I'm right here 👋</div>}
-        <button className="fa-fab" title={open ? "Close assistant" : "Open assistant"} onClick={() => { setOpen((v) => !v); setShowHint(false); }}>
+        <button className="fa-fab" title={open ? "Close assistant" : "Open assistant"} onClick={() => { uiEvent(open ? "close assistant" : "open assistant"); setOpen((v) => !v); setShowHint(false); }}>
           {open ? <X size={24} /> : <Bot size={26} />}
           {!open && <span className="fa-dot" />}
         </button>

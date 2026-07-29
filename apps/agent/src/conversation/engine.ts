@@ -11,6 +11,7 @@ import type { ConversationStore, ConversationRow, Role } from "./store";
 import type { ModelRouter, ChatMessage } from "../llm/router";
 import type { AuditLog } from "../audit/audit";
 import { killSwitchEngaged } from "../config";
+import { isMemoryAdd, renderLessonsBlock, type TrainerLessonService } from "../training/lessons";
 
 export const AUTO_CLOSE_HOURS = 12;
 
@@ -145,6 +146,7 @@ export class ConversationEngine {
     private translator: TranslatorLike | null = null,
     private bridgeEnabled = false,
     private contextProvider: ContextProvider | null = null,
+    private training: TrainerLessonService | null = null,
   ) {}
 
   /** Is the YL translate-bridge active for this turn? Yiddish + YL configured + enabled. */
@@ -263,6 +265,35 @@ export class ConversationEngine {
       return { conversationId: conv.id, reply, language, degraded: true };
     }
 
+    // ── TRAINER MODE ── A designated trainer saying "add that to your memory"
+    // creates a standing lesson that takes effect immediately (tight training
+    // loop over hundreds of scenarios). Runs BEFORE triage so a memory-add is
+    // never swallowed as an action; fully audited with who/what/when; the owner
+    // revokes lessons from the AI Trainer page. Kill switch above still wins.
+    if (this.training && isMemoryAdd(bridging ? englishText : text) && (ctx.role === "owner" || this.training.isTrainer(ctx.clientUserId))) {
+      try {
+        const recent = (await this.store.listMessages(conv.id, 100)).slice(-7, -1).map((m) => ({ role: m.role, content: m.contentEn ?? m.content }));
+        const rawText = bridging ? englishText : text;
+        const rule = await this.training.distill(rawText, recent);
+        const lesson = await this.training.addLesson({
+          tenantId: ctx.tenantId,
+          rawText,
+          lesson: rule,
+          createdById: ctx.clientUserId ?? "owner",
+          sourceConversationId: conv.id,
+        });
+        const stamp = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(lesson.createdAt));
+        const english = `Got it — added to my memory (${stamp}):\n“${rule}”\nThis is active starting with your next message. The owner can review or revoke it at any time.`;
+        if (bridging) return this.finishBridged(conv, ctx, english, "trainer", bridgeDegraded);
+        await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: english, model: "trainer" });
+        await this.audit.record({ actor: "agent", event: "chat.trainer_ack", tenantId: ctx.tenantId, conversationId: conv.id, payload: { lessonId: lesson.id } });
+        return { conversationId: conv.id, reply: english, language, model: "trainer", degraded: false };
+      } catch (err) {
+        await this.audit.record({ actor: "system", event: "trainer.lesson_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
+        // fall through to the normal pipeline — the message is not lost
+      }
+    }
+
     // ── X2 IDENTITY ── Build the verified identity + dossier block. Identity
     // comes from the server-verified ctx, NEVER from chat text. If the build
     // fails, the session is FAIL-CLOSED info-only: no triage (no diagnostics,
@@ -341,12 +372,24 @@ export class ConversationEngine {
       }
     }
 
+    // Trainer lessons (active, tenant-scoped) refine behavior in every turn.
+    // Failure-safe: lesson lookup can never break a conversation.
+    let lessonsBlock: string | null = null;
+    if (this.training) {
+      try {
+        lessonsBlock = renderLessonsBlock(await this.training.listActive(ctx.tenantId));
+      } catch {
+        lessonsBlock = null;
+      }
+    }
+
     // Build short history for context (last 20 messages). When bridging, feed the
     // English mirror so the model stays entirely in English.
     const history = await this.store.listMessages(conv.id, 100);
     const msgs: ChatMessage[] = [
       { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
       ...(identityBlock ? [{ role: "system" as const, content: identityBlock }] : []),
+      ...(lessonsBlock ? [{ role: "system" as const, content: lessonsBlock }] : []),
       ...history.slice(-20).map((m) => ({
         role: (m.role === "assistant" ? "assistant" : "user") as "assistant" | "user",
         content: bridging ? (m.contentEn ?? m.content) : m.content,

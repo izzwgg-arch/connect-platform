@@ -43,6 +43,7 @@ import { EmailChannel } from "./channels/email";
 import { MessagingChannelHandler, NullMessagingTransport } from "./channels/messaging";
 import { VoiceStudio } from "./voice/studio";
 import { KnowledgeBase } from "./knowledge/kb";
+import { TrainerLessonService } from "./training/lessons";
 import { verifyPortalJwt } from "./auth";
 import { buildProvisioningPlan } from "./pbx/provisioningPlan";
 import { DigestJobs } from "./jobs/digest";
@@ -223,7 +224,11 @@ async function main() {
       const dossierMd = ctx.clientUserId ? await dossiers.load(ctx.tenantId, ctx.clientUserId) : null;
       return { ok: true as const, block: renderIdentityBlock(built.context, dossierMd) };
     };
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider);
+    // Trainer mode: designated testers (AGENT_TRAINER_USER_IDS) teach the agent
+    // live via "add that to your memory"; lessons apply immediately, everything
+    // is audited, and the owner revokes from the AI Trainer page.
+    const trainerLessons = new TrainerLessonService(prisma, audit, router);
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons);
 
     // Warm the in-memory cache from the DB, then pre-translate fixed templates
     // (once) so common replies are instant. Runs in the background — never
@@ -287,6 +292,38 @@ async function main() {
     registerActionRoutes(app, actionService);
     registerAdminRoutes(app, prisma);
     registerPolicyAdminRoutes(app, prisma, audit);
+
+    // ── AI Trainer (owner) + widget UI-event logging ──
+    app.get("/agent/admin/trainer/lessons", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      return { lessons: await trainerLessons.listAll() };
+    });
+    app.post("/agent/admin/trainer/lessons/revoke", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const auth = (req.headers as any).authorization as string | undefined;
+      const who = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7))?.clientUserId ?? "owner" : "owner";
+      const body = (req.body ?? {}) as any;
+      if (typeof body.id !== "string" || !body.id) return reply.code(400).send({ error: "bad_request" });
+      const lesson = await trainerLessons.revoke(body.id, `owner:${who}`);
+      return lesson ? { ok: true, lesson } : reply.code(404).send({ error: "not_found_or_already_revoked" });
+    });
+    // Every widget button press, timestamped — part of the "log every little
+    // detail" trainer requirement. Identity-verified; body is a short label.
+    app.post("/agent/chat/ui-event", async (req, reply) => {
+      const { resolveIdentity } = await import("./conversation/routes");
+      const identity = resolveIdentity(req as any);
+      if (!identity) return reply.code(403).send({ error: "forbidden" });
+      const body = (req.body ?? {}) as any;
+      const name = typeof body.name === "string" ? body.name.slice(0, 60) : "";
+      if (!name) return reply.code(400).send({ error: "bad_request" });
+      await audit.record({
+        actor: identity.role === "owner" ? "owner" : "customer",
+        event: "chat.ui_event",
+        tenantId: identity.tenantId,
+        payload: { name, userId: identity.clientUserId },
+      });
+      return { ok: true };
+    });
 
     // Email channel: inbound support mail → identity → engine → reply.
     // Exposed for the IMAP poller / webhook to POST parsed messages into.
