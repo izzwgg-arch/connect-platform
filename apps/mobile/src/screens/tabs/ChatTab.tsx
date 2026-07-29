@@ -47,7 +47,9 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { showAppAlert } from '../../components/ui/appAlert';
+import { AppActionSheet } from '../../components/ui/AppPopup';
 import {
+  archiveChatThread,
   createChatThread,
   deleteChatMessage,
   getChatDirectoryFull,
@@ -72,6 +74,7 @@ import type {
   PendingChatAttachment,
 } from '../../types';
 import { radius, spacing } from '../../theme/spacing';
+import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { setActiveNotificationChatThread } from '../../notifications/notificationRouting';
 import {
   EMOJI_CATALOG,
@@ -201,7 +204,9 @@ function threadTarget(thread: ChatThread): string {
 
 function previewText(thread: ChatThread): string {
   if (thread.lastMessage) return prettyPreview(thread.lastMessage);
-  if (thread.type === 'SMS') return formatChatPhone(thread.externalSmsE164 || '') || 'SMS conversation';
+  // No duplicate info (Izzy 2026-07-28): a nameless SMS thread already shows
+  // the number as its title — repeating it as the preview reads as a bug.
+  if (thread.type === 'SMS') return 'No messages yet';
   return thread.participantExtension ? `Ext ${thread.participantExtension}` : threadKind(thread);
 }
 
@@ -686,6 +691,23 @@ export function ChatTab() {
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [activeThread, setActiveThread] = useState<ChatThread | null>(null);
+  // Long-press → per-user delete ("archive"): hides the conversation from this
+  // list only; the other side keeps their history and any new message
+  // resurfaces the thread (Izzy 2026-07-28).
+  const [threadPendingDelete, setThreadPendingDelete] = useState<ChatThread | null>(null);
+
+  // Stable renderItem (freeze investigation 2026-07-28): keeps ThreadRow's
+  // memo effective across unrelated ChatTab re-renders (poll ticks, typing).
+  const renderThreadItem = useCallback(
+    ({ item }: { item: ChatThread }) => (
+      <ThreadRow
+        thread={item}
+        onPress={() => setActiveThread(item)}
+        onLongPress={() => setThreadPendingDelete(item)}
+      />
+    ),
+    [],
+  );
   const [filter, setFilter] = useState<ChatFilter>('all');
   const [query, setQuery] = useState('');
   /** New-chat modal only — must not filter messages inside an open thread. */
@@ -1697,11 +1719,44 @@ export function ChatTab() {
               bounces={Platform.OS === 'ios'}
               alwaysBounceVertical={Platform.OS === 'ios'}
               overScrollMode="never"
+              initialNumToRender={10}
+              maxToRenderPerBatch={8}
+              updateCellsBatchingPeriod={60}
+              windowSize={5}
+              removeClippedSubviews
               refreshControl={<RefreshControl refreshing={manualRefreshing} onRefresh={refreshChat} tintColor={colors.primary} colors={[colors.primary]} progressBackgroundColor={colors.surface} />}
               contentContainerStyle={styles.threadList}
-              renderItem={({ item }) => <ThreadRow thread={item} onPress={() => setActiveThread(item)} />}
+              renderItem={renderThreadItem}
             />
           )}
+
+          <AppActionSheet
+            visible={Boolean(threadPendingDelete)}
+            title={threadPendingDelete ? displayThreadName(threadPendingDelete) : ''}
+            message="Delete this conversation from your list? The other side keeps their copy, and a new message will bring it back."
+            onClose={() => setThreadPendingDelete(null)}
+            actions={[
+              {
+                label: 'Delete conversation',
+                icon: 'trash-outline',
+                destructive: true,
+                onPress: () => {
+                  const t = threadPendingDelete;
+                  setThreadPendingDelete(null);
+                  if (!t || !token) return;
+                  // Optimistic removal; server archive follows. Restore via
+                  // refetch on failure.
+                  queryClient.setQueryData(mobileQueryKeys.chatThreads, (prev: unknown) =>
+                    Array.isArray(prev) ? prev.filter((th: ChatThread) => th.id !== t.id) : prev,
+                  );
+                  archiveChatThread(token, t.id).catch(() => {
+                    showAppAlert('Delete failed', 'Could not delete the conversation. Pull to refresh.');
+                    queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads }).catch(() => undefined);
+                  });
+                },
+              },
+            ]}
+          />
         </View>
       ) : (
         <View style={styles.container}>
@@ -1719,7 +1774,16 @@ export function ChatTab() {
             <View style={styles.chatHeaderInfo}>
               <Text style={[styles.chatTitle, { color: colors.text }]} numberOfLines={1}>{displayThreadName(activeThread)}</Text>
               <Text style={[styles.chatSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-                {typingUsers.length ? `${typingUsers[0].name} is typing...` : `${threadKind(activeThread)} ${threadTarget(activeThread) ? `· ${threadTarget(activeThread)}` : ''}`}
+                {typingUsers.length
+                  ? `${typingUsers[0].name} is typing...`
+                  : (() => {
+                      // No duplicate info (Izzy 2026-07-28): when the title IS
+                      // the number (no contact name), the subtitle shows just
+                      // the kind — never "SMS · <same number>" twice.
+                      const target = threadTarget(activeThread);
+                      const titleIsTarget = target && displayThreadName(activeThread) === target;
+                      return `${threadKind(activeThread)}${target && !titleIsTarget ? ` · ${target}` : ''}`;
+                    })()}
               </Text>
             </View>
             <TouchableOpacity style={styles.chatHeaderIcon} onPress={callThread}>
@@ -1899,24 +1963,24 @@ const ChatFilterChip = memo(function ChatFilterChip({ id, label, count, value, o
     <TouchableOpacity
       activeOpacity={0.75}
       onPress={() => onPress(id)}
-      style={[styles.filterChip, { backgroundColor: active ? colors.primary : colors.transparent, borderColor: active ? colors.primary : colors.borderSubtle }]}
+      style={[styles.filterChip, teamFilterChipColors(active, colors.primary, colors)]}
     >
-      <Text style={[styles.filterText, { color: active ? '#fff' : colors.textSecondary }]}>{label}</Text>
+      <Text style={[styles.filterText, { color: active ? colors.primary : colors.textSecondary }]}>{label}</Text>
       {count > 0 ? (
-        <View style={[styles.countBadge, { backgroundColor: active ? 'rgba(255,255,255,0.25)' : colors.surfaceElevated }]}>
-          <Text style={[styles.countText, { color: active ? '#fff' : colors.textTertiary }]}>{count > 99 ? '99+' : count}</Text>
+        <View style={[styles.countBadge, { backgroundColor: active ? `${colors.primary}26` : colors.surfaceElevated }]}>
+          <Text style={[styles.countText, { color: active ? colors.primary : colors.textTertiary }]}>{count > 99 ? '99+' : count}</Text>
         </View>
       ) : null}
     </TouchableOpacity>
   );
 });
 
-const ThreadRow = memo(function ThreadRow({ thread, onPress }: { thread: ChatThread; onPress: () => void }) {
+const ThreadRow = memo(function ThreadRow({ thread, onPress, onLongPress }: { thread: ChatThread; onPress: () => void; onLongPress?: () => void }) {
   const { colors } = useTheme();
   const name = displayThreadName(thread);
   const kind = threadKind(thread);
   return (
-    <TouchableOpacity style={[styles.threadRow, { backgroundColor: colors.bg, borderBottomColor: colors.borderSubtle }]} onPress={onPress} activeOpacity={0.82}>
+    <TouchableOpacity style={[styles.threadRow, { backgroundColor: colors.bg, borderBottomColor: colors.borderSubtle }]} onPress={onPress} onLongPress={onLongPress} delayLongPress={350} activeOpacity={0.82}>
       <Avatar name={name || thread.type} size="md" online={thread.unread > 0 || thread.type === 'DM'} />
       <View style={styles.threadInfo}>
         <View style={styles.threadNameLine}>

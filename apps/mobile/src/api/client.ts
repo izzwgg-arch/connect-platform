@@ -588,6 +588,18 @@ export async function createChatThread(
   return json as { threadId: string };
 }
 
+/** Per-user "delete conversation": hides the thread from this user's list. */
+export async function archiveChatThread(token: string, threadId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/archive`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const json = await parseJson(res);
+    throw new Error(json?.error || "CHAT_THREAD_ARCHIVE_FAILED");
+  }
+}
+
 export type SendChatMessageInput = {
   body?: string;
   type?: Exclude<ChatMessageType, "SYSTEM">;

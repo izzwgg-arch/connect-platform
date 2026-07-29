@@ -743,6 +743,13 @@ export async function sendConnectChatSmsMessage(input: {
     data: { lastMessageAt: new Date(), updatedAt: new Date() },
   });
 
+  // A new message resurfaces the thread for participants who "deleted"
+  // (archived) it — matches messenger semantics for the per-user delete.
+  await db.connectChatParticipant.updateMany({
+    where: { threadId: input.threadId, archivedForUser: true },
+    data: { archivedForUser: false },
+  }).catch(() => undefined);
+
   await input.deps.smsQueue.add(
     "send",
     { kind: "CONNECT_CHAT" as const, connectChatMessageId: msg.id, tenantId: input.tenantId },
@@ -930,6 +937,26 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     return { count };
   });
 
+  // Per-user "delete conversation" (Izzy 2026-07-28): hides the thread from
+  // the caller's list only — the other side's history is untouched, and any
+  // new message in the thread automatically resurfaces it (send path clears
+  // the flag). Nothing is destroyed, so no server-side confirmation needed.
+  app.post("/chat/threads/:threadId/archive", async (req, reply) => {
+    const user = req.user as JwtUser;
+    const tenantId = effectiveChatTenantId(req, user);
+    const { threadId } = req.params as { threadId: string };
+    const participant = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, thread: { tenantId } },
+      select: { id: true },
+    });
+    if (!participant) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    await db.connectChatParticipant.update({
+      where: { id: participant.id },
+      data: { archivedForUser: true },
+    });
+    return { ok: true };
+  });
+
   app.get("/chat/threads", async (req, reply) => {
     const user = req.user as JwtUser;
     const tenantId = effectiveChatTenantId(req, user);
@@ -974,7 +1001,9 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           take: 200,
         })
       : (await db.connectChatParticipant.findMany({
-          where: { userId: user.sub, leftAt: null, thread: { tenantId, active: true } },
+          // archivedForUser: the per-user "delete conversation" flag — archived
+          // threads stay out of the list until a new message unarchives them.
+          where: { userId: user.sub, leftAt: null, archivedForUser: false, thread: { tenantId, active: true } },
           include: { thread: { include: baseThreadInclude } },
           orderBy: { thread: { lastMessageAt: "desc" } },
         })).map((p) => p.thread);

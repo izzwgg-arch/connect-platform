@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import {
   Animated,
@@ -120,7 +121,16 @@ function callKind(call: CallRecord): CallKind {
   const disposition = normalizeDisposition(call);
   if (disposition === 'voicemail') return 'voicemail';
   if (disposition === 'answered_elsewhere') return 'answered_elsewhere';
-  if (disposition === 'missed' || disposition === 'no_answer' || (isInboundCall(call) && call.durationSec === 0)) return 'missed';
+  // HARD RULE (Izzy, 2026-07-28): a call the USER placed can never be "missed"
+  // — only INBOUND calls can. A bad upstream disposition (e.g. the far side
+  // not answering an outbound call recorded as "missed") must still render as
+  // a plain outgoing call. Server-side fix exists too; this is the belt.
+  if (
+    isInboundCall(call) &&
+    (disposition === 'missed' || disposition === 'no_answer' || call.durationSec === 0)
+  ) {
+    return 'missed';
+  }
   if (isInternalDirection(call)) return 'internal';
   return isInboundCall(call) ? 'incoming' : 'outgoing';
 }
@@ -456,6 +466,22 @@ export function RecentTab() {
     nav.navigate('Chat', { composeNumber: number, composeName: group.displayName, composeKind: kind });
   }, [nav]);
 
+  // Stable renderItem (freeze investigation 2026-07-28): an inline closure
+  // defeats CallCard's memo on every parent render — new data landing then
+  // re-renders every mounted row (measured view storms).
+  const renderRecentItem = useCallback(({ item }: { item: any }) =>
+    item.type === 'section' ? (
+      <Text style={[styles.sectionLabel, { color: colors.textTertiary }]}>{item.title}</Text>
+    ) : (
+      <CallCard
+        group={item}
+        onOpen={() => setDetailGroup(item)}
+        onCall={() => handleCall(item.canonicalNumber || callDisplayNumber(item.calls[0]))}
+        onMessage={() => handleMessage(item)}
+        onMore={() => setMenuGroup(item)}
+      />
+    ), [colors.textTertiary, handleCall, handleMessage]);
+
   const handleAddContact = useCallback(
     (group: CallGroup) => {
       const primaryCall = group.calls[0];
@@ -616,20 +642,13 @@ export function RecentTab() {
           bounces={Platform.OS === 'ios'}
           alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
-          renderItem={({ item }) =>
-            item.type === 'section' ? (
-              <Text style={[styles.sectionLabel, { color: colors.textTertiary }]}>{item.title}</Text>
-            ) : (
-              <CallCard
-                group={item}
-                onOpen={() => setDetailGroup(item)}
-                onCall={() => handleCall(item.canonicalNumber || callDisplayNumber(item.calls[0]))}
-                onMessage={() => handleMessage(item)}
-                onMore={() => setMenuGroup(item)}
-              />
-            )
-          }
+          renderItem={renderRecentItem}
           contentContainerStyle={{ paddingBottom: spacing['5'], paddingHorizontal: spacing['5'] }}
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={60}
+          windowSize={5}
+          removeClippedSubviews
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1025,6 +1044,9 @@ function CallDetailModal({
   onAddContact: () => void;
 }) {
   const { colors } = useTheme();
+  const [copiedNumber, setCopiedNumber] = useState(false);
+  // Reset the "Copied" flash whenever a different call's sheet opens.
+  useEffect(() => { setCopiedNumber(false); }, [group?.id]);
   if (!group) {
     return (
       <Modal visible={false} transparent animationType="slide" onRequestClose={onClose}>
@@ -1052,9 +1074,20 @@ function CallDetailModal({
             <Text style={[typography.h2, { color: colors.text, marginTop: 14, textAlign: 'center' }]} numberOfLines={1}>
               {group.displayName}
             </Text>
-            <Text style={[typography.bodySm, { color: colors.textSecondary, textAlign: 'center' }]} numberOfLines={1}>
-              {target}
-            </Text>
+            {/* Tap the number to copy it (Izzy 2026-07-28). */}
+            <TouchableOpacity
+              activeOpacity={0.6}
+              onPress={() => {
+                if (!target) return;
+                Clipboard.setStringAsync(String(target)).catch(() => undefined);
+                setCopiedNumber(true);
+                setTimeout(() => setCopiedNumber(false), 1400);
+              }}
+            >
+              <Text style={[typography.bodySm, { color: copiedNumber ? colors.success : colors.textSecondary, textAlign: 'center' }]} numberOfLines={1}>
+                {copiedNumber ? 'Copied to clipboard' : target}
+              </Text>
+            </TouchableOpacity>
             <View style={{ marginTop: 10 }}>
               <KindBadge kind={group.kind} accent={accent} />
             </View>
