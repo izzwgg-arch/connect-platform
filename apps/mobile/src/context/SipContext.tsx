@@ -616,8 +616,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // driver). Bluetooth/wired stay untouched (their own hardware volume).
   // Native side also shapes voice: bass 80 + presence lift (+2 dB @ ~2.5 kHz)
   // so the caller sounds close to the mic, not across the room.
+  // Round 5 (emergency): earpiece boost SUSPENDED — it shipped in the same
+  // build as a mic-dead-on-incoming report and never had a supervised
+  // incoming test. Speaker keeps the proven limiter+bass chain.
   const SPEAKER_NATIVE_GAIN_MB = 900;
-  const EARPIECE_NATIVE_GAIN_MB = 400;
+  const EARPIECE_NATIVE_GAIN_MB = 0;
   useEffect(() => {
     const nativeMod: any = (NativeModules as any)?.IncomingCallUi;
     const setNative = (gainMb: number) =>
@@ -1854,6 +1857,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             // ringback. Re-assert the JS-selected route once the anchor is
             // plausibly ACTIVE; routing now flows through
             // Connection.setAudioRoute so it sticks.
+            // Immediate + rapid re-asserts: the anchor stomps a pre-connect
+            // speaker choice for the ~600ms gap the old timers left — audible
+            // as "speaker dips to earpiece then returns" (Izzy 2026-07-29).
+            audioRouteManager.reassertRoute("telecom_anchor_dispatch");
+            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_150"), 150);
+            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_350"), 350);
             setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active"), 600);
             setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_late"), 1800);
             // Blind re-asserts cover the common case; these VERIFY against the

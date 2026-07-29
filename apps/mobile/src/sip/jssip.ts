@@ -1424,14 +1424,13 @@ export class JsSipClient implements SipClient {
             const mLine = (sdp: string) => (sdp.match(/^m=audio.*$/m)?.[0] ?? "no-m-audio").slice(0, 90);
             if (e.originator === "local") {
               const before = mLine(e.sdp);
-              // Offers AND answers: opus-only. Telemetry (2026-07-29) proved
-              // reorder-only answers lose — every INBOUND call negotiated PCMU
-              // because Asterisk keeps its own codec order regardless of the
-              // answer's preference. Selecting only opus in the answer is the
-              // one signal it cannot ignore, and it is safe: preferOpusOnlyOffer
-              // no-ops when the remote offer lacks opus (answer stays a valid
-              // subset), falling back to reorder-only.
-              e.sdp = preferOpusOnlyOffer(e.sdp);
+              // Offers: opus-only (proven, outbound HD works). Answers:
+              // REORDER-ONLY — the opus-only answer experiment (2026-07-29
+              // .3 build) is suspended: both mic-dead-on-incoming incidents
+              // today happened on builds carrying it, and it never got a
+              // supervised incoming test. Cost: inbound may negotiate PCMU
+              // until this is re-proven under live logcat.
+              e.sdp = e.type === "offer" ? preferOpusOnlyOffer(e.sdp) : preferOpusInSdp(e.sdp);
               console.log(`[SIP_SDP] local ${e.type}: ${before} -> ${mLine(e.sdp)}`);
             } else {
               // Remote SDP: log only — shows what the PBX offered/answered.

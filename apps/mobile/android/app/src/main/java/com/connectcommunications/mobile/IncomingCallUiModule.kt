@@ -770,22 +770,11 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
       } catch (e: Exception) {
         Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] bass unavailable: ${e.message}")
       }
-      try {
-        val pe = presenceEq ?: android.media.audiofx.Equalizer(0, 0).also { presenceEq = it }
-        var bestBand: Short = 0
-        var bestDiff = Int.MAX_VALUE
-        for (b in 0 until pe.numberOfBands) {
-          val cfHz = pe.getCenterFreq(b.toShort()) / 1000 // milliHz -> Hz
-          val d = Math.abs(cfHz - 2500)
-          if (d < bestDiff) { bestDiff = d; bestBand = b.toShort() }
-        }
-        val maxLvl = pe.bandLevelRange[1].toInt()
-        pe.setBandLevel(bestBand, minOf(200, maxLvl).toShort())
-        pe.enabled = true
-        Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] loudness gainMb=$gainMb bass=80 presence=+2dB@band$bestBand")
-      } catch (e: Exception) {
-        Log.w("CONNECT_CALL_UI", "[SPEAKER_BOOST] presence EQ unavailable: ${e.message}")
-      }
+      // Presence Equalizer SUSPENDED (round 5): it shipped in the same build
+      // as a mic-dead-on-incoming report — Samsung voice-call DSP chains are
+      // known to misbehave when global-mix effects attach mid-call. Re-prove
+      // under supervised logcat before restoring.
+      Log.i("CONNECT_CALL_UI", "[SPEAKER_BOOST] loudness gainMb=$gainMb bass=80 (presence EQ suspended)")
       promise.resolve(true)
     } catch (e: Exception) {
       try { loudnessEnhancer?.release() } catch (_: Exception) {}
