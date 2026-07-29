@@ -383,17 +383,28 @@ async function createInboundRoute(s: PanelSession, did: string, destExtId: strin
     /* page not scannable — fall through and create */
   }
   const csrf = await s.ensureCsrf("menu29");
-  assertSaved(
-    "inbound-route",
-    await s.post([
-      ["class", "inbound_route"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
-      ["routing_method", "default"], ["description", "Main"], ["did", did], ["cid_number", ""],
-      ["cid_management_id", ""], ["cid_lookup_id", ""], ["language", "en"], ["music_group_id", ""], ["alertinfo", ""],
-      ["pmmaxretries", "3"], ["pmminlength", "10"], ["detectiontime", "5"],
-      ["fax_mod_dest", ""], ["fax_destination", ""], ["fax_destination_custom", ""],
-      ["mod_dest", "1"], ["destination", destExtId], ["digits_to_take", "1"], ["cos_id", ""], ["prepend", ""], ["append", ""],
-    ]),
-  );
+  try {
+    assertSaved(
+      "inbound-route",
+      await s.post([
+        ["class", "inbound_route"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
+        ["routing_method", "default"], ["description", "Main"], ["did", did], ["cid_number", ""],
+        ["cid_management_id", ""], ["cid_lookup_id", ""], ["language", "en"], ["music_group_id", ""], ["alertinfo", ""],
+        ["pmmaxretries", "3"], ["pmminlength", "10"], ["detectiontime", "5"],
+        ["fax_mod_dest", ""], ["fax_destination", ""], ["fax_destination_custom", ""],
+        ["mod_dest", "1"], ["destination", destExtId], ["digits_to_take", "1"], ["cos_id", ""], ["prepend", ""], ["append", ""],
+      ]),
+    );
+  } catch (e: any) {
+    // The read-page guard above cannot see existing routes (the panel loads
+    // that list via a separate request), so a resumed build reaches this
+    // create with the route already in place and the panel rejects it as a
+    // duplicate ("description is already in use" / "inbound route <did>/Any
+    // CID already exist" — live 2026-07-28/29). That rejection IS the
+    // desired end state: the route exists. Adopt it instead of failing.
+    if (/already (in use|exists?)/i.test(String(e?.message || ""))) return;
+    throw e;
+  }
   await applyChanges(s, "inbound-route");
 }
 
