@@ -1226,6 +1226,21 @@ export class JsSipClient implements SipClient {
     }
   }
 
+  /**
+   * Live-update the ICE server set (fresh TURN credentials). pcConfig rides
+   * per-call (see callPcConfig), so the NEXT call picks these up without any
+   * UA rebuild or re-register. Called by SipContext once the auth token is
+   * available — the cold-boot configure paths (module singleton, provisioning
+   * cache) run before the token loads and can't fetch fresh servers
+   * themselves.
+   */
+  updateIceServers(iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>): void {
+    if (!Array.isArray(iceServers) || iceServers.length === 0) return;
+    if (this.bundle) this.bundle.iceServers = iceServers;
+    if (this.callPcConfig) (this.callPcConfig as any).iceServers = iceServers;
+    console.log(`[SIP] iceServers live-updated (${iceServers.length} entries)`);
+  }
+
   getRegistrationAgeMs(): number | null {
     if (!this.registeredAtMs || !this.isRegistered()) return null;
     return Math.max(0, Date.now() - this.registeredAtMs);
@@ -1385,6 +1400,22 @@ export class JsSipClient implements SipClient {
     // was not a fair codec test. Re-enabled together with the audio-state
     // watchdog that guarantees a clean state per call. If a CLEAN-state test
     // still shows a volume drop, tune PBX-side opus gain — don't revert.
+    // ICE-gathering stall-proofing (2026-07-29): JsSIP waits for gathering to
+    // COMPLETE before sending the SDP. Any unreachable/mis-credentialed ICE
+    // server (e.g. TURN with expired HMAC creds) stalls completion for tens of
+    // seconds — observed live as "calls not connecting at all". This caps the
+    // wait: 1.5s after the newest candidate, send with whatever paths exist.
+    // Dead servers cost 1.5s, never the call.
+    let iceReadyTimer: ReturnType<typeof setTimeout> | null = null;
+    session.on("icecandidate", (ev: any) => {
+      if (typeof ev?.ready !== "function") return;
+      if (iceReadyTimer) clearTimeout(iceReadyTimer);
+      iceReadyTimer = setTimeout(() => {
+        console.log("[SIP] ice gathering capped at 1.5s — proceeding with gathered candidates");
+        try { ev.ready(); } catch { /* already completed */ }
+      }, 1500);
+    });
+
     const PREFER_OPUS_SDP = true;
     if (PREFER_OPUS_SDP) {
       session.on("sdp", (e: any) => {

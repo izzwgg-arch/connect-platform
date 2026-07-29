@@ -191,6 +191,34 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const { token: authToken, isLoading: authLoading } = useAuth();
   // Throttle for the ICE-server freshness overlay (see ensureProvisioningLoaded).
   const lastIceRefreshAtRef = useRef(0);
+
+  // Fresh-ICE injection the moment the auth token is available. The cold-boot
+  // configure paths (module singleton + provisioning cache) run BEFORE auth
+  // hydrates, so they can't fetch fresh TURN credentials themselves — and
+  // cached creds expire in 24h (the fleet-wide relay-dead root cause). This
+  // effect closes that gap: token arrives → fetch fresh servers → live-update
+  // the client (per-call config; next call uses them, no re-register).
+  useEffect(() => {
+    if (!authToken) return;
+    let cancelled = false;
+    void (async () => {
+      const fresh = await getFreshIceServers(authToken);
+      if (cancelled || !fresh) return;
+      lastIceRefreshAtRef.current = Date.now();
+      (clientRef.current as any)?.updateIceServers?.(fresh);
+      (callClientRef.current as any)?.updateIceServers?.(fresh);
+      // Persist so even an offline next boot starts with the newest known set.
+      try {
+        const raw = await SecureStore.getItemAsync(PROVISION_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          parsed.iceServers = fresh;
+          await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(parsed));
+        }
+      } catch { /* best-effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, [authToken]);
   // Shared process-wide client so a registration the headless push task
   // established during ring is the SAME UA that answers here (see
   // sipClientSingleton.ts). createSipClient() previously made a fresh UA per
