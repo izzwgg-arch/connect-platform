@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Download, X } from "lucide-react";
+import { apiPost } from "../services/apiClient";
 
 /**
  * In-app auto-update surface for the desktop app.
@@ -52,6 +53,50 @@ export function useDesktopUpdate(): DesktopUpdateState | null {
 /** Apply the downloaded update now (restarts the app). Safe no-op elsewhere. */
 export function installDesktopUpdate(): void {
   void updatesBridge()?.install().catch(() => undefined);
+}
+
+/**
+ * Desktop install census beacon. Reports which desktop-shell version this
+ * logged-in user runs by (re)starting a voice-diag client session with
+ * appVersion "desktop-<shellVersion>" — an EXISTING api endpoint, so the
+ * census is a plain DB query (VoiceClientSession where appVersion LIKE
+ * 'desktop-%') instead of nginx-log detective work. Shells older than 0.1.5
+ * have no updates bridge and report "desktop-pre-0.1.5". Browser tabs report
+ * nothing. Full window only, so the mini pop-out doesn't double-count.
+ */
+const SHELL_SESSION_KEY = "cc-desktop-shell-diag-session";
+
+export function DesktopShellBeacon() {
+  useEffect(() => {
+    const cd = (window as unknown as {
+      connectDesktop?: { isDesktop?: boolean; windowKind?: string; updates?: { getState: () => Promise<DesktopUpdateState> } };
+    }).connectDesktop;
+    if (!cd?.isDesktop) return;
+    if (cd.windowKind && cd.windowKind !== "full") return;
+    let stopped = false;
+    const report = async () => {
+      let version = "pre-0.1.5";
+      try {
+        const state = await cd.updates?.getState();
+        if (state?.installedVersion) version = state.installedVersion;
+      } catch { /* old shell without the bridge */ }
+      try {
+        const prior = sessionStorage.getItem(SHELL_SESSION_KEY) || undefined;
+        const res = await apiPost<{ sessionId?: string }>("/voice/diag/session/start", {
+          ...(prior ? { sessionId: prior } : {}),
+          platform: "WEB",
+          appVersion: `desktop-${version}`.slice(0, 64),
+        });
+        if (!stopped && res?.sessionId) sessionStorage.setItem(SHELL_SESSION_KEY, res.sessionId);
+      } catch { /* logged out or offline — the next interval retries */ }
+    };
+    void report();
+    // Long-lived office machines stay open for weeks — refresh the census row
+    // twice a day so lastSeenAt reflects reality.
+    const timer = setInterval(() => void report(), 12 * 60 * 60 * 1000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, []);
+  return null;
 }
 
 const DISMISS_KEY_PREFIX = "cc-update-toast-dismissed.";

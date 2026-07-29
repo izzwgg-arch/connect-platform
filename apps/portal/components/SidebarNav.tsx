@@ -11,7 +11,7 @@ import { UserAvatarUpload } from "./UserAvatarUpload";
 import { NAV_SECTION_ORDER, navSectionMeta, type NavItem } from "../navigation/navConfig";
 import { CollapsibleNavSection } from "./CollapsibleNavSection";
 import { getPreferredUserDisplayName } from "../lib/userDisplayName";
-import { DesktopUpdateToast, installDesktopUpdate, useDesktopUpdate } from "./DesktopUpdateNotice";
+import { DesktopShellBeacon, DesktopUpdateToast, installDesktopUpdate, useDesktopUpdate } from "./DesktopUpdateNotice";
 
 type SidebarNavProps = {
   items: NavItem[];
@@ -280,6 +280,8 @@ export function SidebarNav({
 
       {/* Desktop-only: "New update ready — Install" notice (fixed position, renders app-wide). */}
       <DesktopUpdateToast />
+      {/* Desktop-only, invisible: reports shell version + user for the install census. */}
+      <DesktopShellBeacon />
     </aside>
   );
 }
