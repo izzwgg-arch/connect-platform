@@ -2780,6 +2780,31 @@ model CallRecord {
 // Connect-owned CDR — one row per completed canonical call.
 // Populated by the telephony service via /internal/cdr-ingest when a call ends.
 // This is the authoritative source for dashboard KPI cards and call history.
+/// Exactly-once claim ledger for user-visible mobile alerts (voicemail /
+/// missed_call / sms_message). EVERY sender — the real-time fast paths in
+/// api/worker AND the safety-net reconciler — must claim (type, entityId,
+/// userId) here via a unique-constrained insert BEFORE sending. The database
+/// arbitrates: whoever inserts first sends; everyone else skips. This ends the
+/// era of racing senders and silent double/zero delivery. The reconciler also
+/// uses absence of a ledger row to detect facts that were never alerted.
+model NotificationLedger {
+  id        String   @id @default(cuid())
+  /// "voicemail" | "missed_call" | "sms_message"
+  type      String
+  /// Durable fact id: Voicemail.id / ConnectCdr.linkedId / ConnectChatMessage.id
+  entityId  String
+  /// Recipient user (fanout is per-user for SMS threads)
+  userId    String
+  tenantId  String?
+  /// "fastpath:<site>" | "reconciler" — where the claim was made
+  source    String
+  sentAt    DateTime @default(now())
+
+  @@unique([type, entityId, userId])
+  @@index([type, sentAt])
+  @@index([sentAt])
+}
+
 model ConnectCdr {
   id                     String    @id @default(cuid())
   linkedId               String    @unique // Asterisk Linkedid — canonical dedupe key
@@ -4174,6 +4199,7 @@ model ConnectChatMessage {
 
   @@index([threadId, createdAt])
   @@index([tenantId, createdAt])
+  @@index([createdAt]) // notification reconciler: global recent-inbound sweep
   @@index([smsProviderMessageId])
   @@index([tenantId, externalProvider, externalMessageId])
   @@index([tenantId, externalConversationId])

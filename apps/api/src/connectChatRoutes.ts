@@ -8,7 +8,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { Queue } from "bullmq";
 import { z } from "zod";
-import { db } from "@connect/db";
+import { db, claimNotification } from "@connect/db";
 import { Prisma } from "@prisma/client";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { hasEffectivePortalPermission } from "./platformRolePermissions";
@@ -2359,8 +2359,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       });
       const tenantId = num.tenantId;
       if (!tenantId) return reply.type("text/plain").send("ok");
-      await Promise.all(recipients.map((recipient) =>
-        recipient.userId
+      await Promise.all(recipients.map(async (recipient) =>
+        recipient.userId &&
+        // Ledger claim — exactly-once across fast paths + the reconciler.
+        (await claimNotification(db as any, {
+          type: "sms_message",
+          entityId: msg.id,
+          userId: recipient.userId,
+          tenantId,
+          source: "fastpath:sms-webhook",
+        }))
           ? deps.sendPushToUserDevices!({
               tenantId,
               userId: recipient.userId,

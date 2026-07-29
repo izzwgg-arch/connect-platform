@@ -89,6 +89,7 @@ import {
   dismissWebrtcPlatformOutage,
   getWebrtcPlatformHealthSnapshot,
   loadOpenWebrtcPlatformOutageForOps,
+  claimNotification,
 } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import {
@@ -3671,6 +3672,15 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
       .findUnique({ where: { linkedId: String(invite.pbxCallId) }, select: { disposition: true } })
       .catch(() => null);
     if (cdr?.disposition === "answered") return;
+    // Ledger claim — exactly-once across fast paths + the reconciler.
+    const claimed = await claimNotification(db as any, {
+      type: "missed_call",
+      entityId: String(invite.pbxCallId),
+      userId: invite.userId,
+      tenantId: invite.tenantId,
+      source: "fastpath:invite-cancel-api",
+    });
+    if (!claimed) return;
     await sendPushToUserDevices({
       tenantId: invite.tenantId,
       userId: invite.userId,
@@ -26259,7 +26269,15 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
         pushEnabled &&
         !existingVoicemail &&
         folder === "inbox" &&
-        ext.ownerUserId
+        ext.ownerUserId &&
+        // Ledger claim — exactly-once across fast paths + the reconciler.
+        (await claimNotification(db as any, {
+          type: "voicemail",
+          entityId: voicemail.id,
+          userId: ext.ownerUserId,
+          tenantId: link.tenantId,
+          source: "fastpath:voicemail-notify",
+        }))
       ) {
         await sendPushToUserDevices({
           tenantId: link.tenantId,
@@ -30031,7 +30049,16 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
             select: { id: true, ownerUserId: true },
           })
         : null;
-      if (ext?.ownerUserId) {
+      if (
+        ext?.ownerUserId &&
+        (await claimNotification(db as any, {
+          type: "missed_call",
+          entityId: String(d.linkedId),
+          userId: ext.ownerUserId,
+          tenantId: tenantPack.tenantId,
+          source: "fastpath:cdr-ingest",
+        }))
+      ) {
         await sendPushToUserDevices({
           tenantId: tenantPack.tenantId,
           userId: ext.ownerUserId,

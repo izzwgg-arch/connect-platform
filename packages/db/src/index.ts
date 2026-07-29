@@ -5,6 +5,7 @@ export const db = new PrismaClient();
 export type { PrismaClient, Prisma } from "@prisma/client";
 export { CrmPipelineRunStatus } from "@prisma/client";
 
+export * from "./notificationLedger";
 export * from "./voicemailIngestIncidentService";
 export * from "./webrtcCallingIncidentService";
 export * from "./webrtcPlatformOutageService";

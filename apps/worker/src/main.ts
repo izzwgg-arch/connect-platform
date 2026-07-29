@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
-import { db } from "@connect/db";
+import { db, claimNotification } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import {
   normalizeProviderError,
@@ -33,6 +33,7 @@ import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeri
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
+import { runNotificationReconcileCycle, runNotificationCanaryCycle } from "./notificationReconciler";
 import { runWakeCanaryEnrollCycle } from "./wakeCanaryEnrollCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { startPbxWebrtcDriftReconcileLoop } from "./pbxWebrtcDriftReconcileCycle";
@@ -342,7 +343,11 @@ type WorkerMobilePushPayload =
   // ingest / invite paths, so the app handles both identically. `inviteId` is
   // extra here (harmless to the app) so this file's shared logging can keep
   // reading payload.inviteId across all payload variants.
-  | { type: "missed_call"; inviteId: string; callId: string; tenantId: string; extensionId?: string | null; recipientUserId?: string; callerNumber: string; callerNameOrNumber?: string | null; timestamp: string };
+  | { type: "missed_call"; inviteId: string; callId: string; tenantId: string; extensionId?: string | null; recipientUserId?: string; callerNumber: string; callerNameOrNumber?: string | null; timestamp: string }
+  // Reconciler-sent user alerts — same shapes the API sends, so the app
+  // handles fast-path and swept alerts identically.
+  | { type: "voicemail"; inviteId?: string; voicemailId: string; tenantId: string; extensionId?: string | null; recipientUserId?: string; callerNameOrNumber?: string | null; timestamp: string }
+  | { type: "sms_message"; inviteId?: string; conversationId: string; messageId: string; phoneNumber: string; recipientUserId?: string; tenantId: string; preview?: string | null; timestamp: string };
 
 /**
  * iOS VoIP push fan-out for INCOMING_CALL only.
@@ -511,7 +516,7 @@ async function sendPushToUserDevices(input: {
         tenantId: input.tenantId,
         action: "MOBILE_PUSH_SIMULATED",
         entityType: "CallInvite",
-        entityId: input.payload.inviteId,
+        entityId: input.payload.inviteId ?? (input.payload as any).voicemailId ?? (input.payload as any).messageId ?? input.userId,
         actorUserId: input.userId
       }
     });
@@ -597,7 +602,7 @@ async function sendPushToUserDevices(input: {
       tenantId: input.tenantId,
       action: "MOBILE_PUSH_SENT",
       entityType: "CallInvite",
-      entityId: input.payload.inviteId,
+      entityId: input.payload.inviteId ?? (input.payload as any).voicemailId ?? (input.payload as any).messageId ?? input.userId,
       actorUserId: input.userId
     }
   });
@@ -711,7 +716,17 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
   // the CDR-ingest push in the API requires being the first ConnectCdr writer,
   // and this function's upsert always beat it there.
   const alreadyRecorded = prior?.disposition === "MISSED" || prior?.disposition === "CANCELED";
-  if (!alreadyRecorded && !answeredElsewhere && invite.userId) {
+  const claimed =
+    !alreadyRecorded && !answeredElsewhere && invite.userId
+      ? await claimNotification(db as any, {
+          type: "missed_call",
+          entityId: String(invite.pbxCallId),
+          userId: invite.userId,
+          tenantId: invite.tenantId ?? null,
+          source: "fastpath:invite-cancel-worker",
+        })
+      : false;
+  if (claimed) {
     await sendPushToUserDevices({
       tenantId: invite.tenantId,
       userId: invite.userId,
@@ -1925,6 +1940,16 @@ setInterval(() => {
 // SMS push notification for VoIP.ms poll path — same data-only + high priority
 // envelope as API `sendPushToUserDevices` (see packages/shared expoMobilePushFormat).
 async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
+  // Ledger claim — exactly-once across the poll path, webhook path, and the
+  // reconciler, per recipient.
+  const claimed = await claimNotification(db as any, {
+    type: "sms_message",
+    entityId: input.messageId,
+    userId: input.userId,
+    tenantId: input.tenantId,
+    source: "fastpath:sms-poll",
+  });
+  if (!claimed) return;
   const allDevices = await db.mobileDevice.findMany({
     where: { tenantId: input.tenantId, userId: input.userId, active: true },
     select: { expoPushToken: true },
@@ -1974,6 +1999,26 @@ async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
 setInterval(() => {
   runVoipMsInboundSyncCycle({ sendSmsPush: sendSmsPushNotification }).catch((err) => console.error("voipms inbound sms sync failed", err?.message || err));
 }, Number(process.env.VOIPMS_INBOUND_SYNC_INTERVAL_MS || 60_000));
+
+// ── Notification safety net (see notificationReconciler.ts) ────────────────
+// Reconciler: every 60s, alert any voicemail / missed-call / inbound-SMS fact
+// the fast paths failed to deliver (ledger-deduped, so never a double alert).
+// Canary: hourly, verify zero unclaimed alert facts remain; raise a loud
+// incident otherwise. Together these make silent notification death impossible.
+const notificationReconcilerDeps = {
+  sendPush: sendPushToUserDevices as unknown as Parameters<typeof runNotificationReconcileCycle>[0]["sendPush"],
+  sendSmsPush: sendSmsPushNotification,
+};
+setInterval(() => {
+  runNotificationReconcileCycle(notificationReconcilerDeps).catch((err) =>
+    console.error("notification reconcile cycle failed", err?.message || err),
+  );
+}, Number(process.env.NOTIFICATION_RECONCILE_INTERVAL_MS || 60_000));
+setInterval(() => {
+  runNotificationCanaryCycle(notificationReconcilerDeps).catch((err) =>
+    console.error("notification canary cycle failed", err?.message || err),
+  );
+}, Number(process.env.NOTIFICATION_CANARY_INTERVAL_MS || 60 * 60 * 1000));
 
 runVoipMsInboundSyncCycle({ sendSmsPush: sendSmsPushNotification }).catch((err) => console.error("initial voipms inbound sms sync failed", err?.message || err));
 
