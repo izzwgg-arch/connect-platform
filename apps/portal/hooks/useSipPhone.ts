@@ -72,6 +72,7 @@ export interface ConnectionEvent {
     | "disconnected"
     | "reconnect"
     | "hard-reinit"
+    | "stale-socket"
     | "registrationFailed"
     | "netchange"
     | "online"
@@ -637,7 +638,7 @@ const DEFAULT_DIAG: SipDiagnostics = {
 
 // ── Connection-event telemetry (client-side, localStorage-backed ring buffer) ──
 const CONN_LOG_KEY = "connect.sip.connlog.v1";
-const CONN_LOG_MAX = 50;
+const CONN_LOG_MAX = 200;
 
 /** Read the persisted connection-event ring buffer (safe on SSR / disabled storage). */
 function readConnLog(): ConnectionEvent[] {
@@ -652,10 +653,28 @@ function readConnLog(): ConnectionEvent[] {
   }
 }
 
+/**
+ * Noisy ambient events (Network Information API fires `change` in bursts on
+ * machines with VPN/virtual adapters — observed pairs every ~10s–6min on a
+ * machine with Tailscale + Hyper-V) must not evict real transport events from
+ * the ring buffer: during the 2026-07-29 incident the entire 50-slot log was
+ * netchange pairs and every disconnect/reconnect had been pushed out. Collapse
+ * repeats of the same noisy type within a window instead of appending.
+ */
+const NOISY_EVENT_COLLAPSE_MS: Partial<Record<ConnectionEvent["type"], number>> = {
+  netchange: 120_000,
+  online: 60_000,
+  visible: 60_000,
+};
+
 /** Append one event to the persisted ring buffer and return the new capped list. */
 function appendConnLog(ev: Omit<ConnectionEvent, "sincePrevMs">): ConnectionEvent[] {
   const prev = readConnLog();
   const last = prev[prev.length - 1];
+  const collapseMs = NOISY_EVENT_COLLAPSE_MS[ev.type];
+  if (collapseMs && last && last.type === ev.type && ev.at - last.at < collapseMs) {
+    return prev; // repeat of a noisy ambient event — don't evict real history
+  }
   const full: ConnectionEvent = {
     ...ev,
     sincePrevMs: last ? Math.max(0, ev.at - last.at) : undefined,
@@ -907,6 +926,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   /** Liveness watchdog interval — proactively detects a dead/closed socket or a
    *  dropped registration and triggers recovery instead of waiting for expiry. */
   const watchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Epoch ms of the last inbound byte on the SIP socket — wire-truth liveness. */
+  const lastInboundAtRef = useRef<number>(Date.now());
   /** Single-flight reconnect timer (backoff+jitter). */
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Consecutive reconnect attempts, for exponential backoff. Reset on register. */
@@ -1573,6 +1594,38 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setRegState("connecting");
         const socket = new JsSIP.WebSocketInterface(sipWssUrl);
 
+        // ── Wire-truth liveness ────────────────────────────────────────────
+        // The PBX qualifies this contact every 30 s (OPTIONS over this socket),
+        // so a healthy socket ALWAYS delivers inbound data at least that often.
+        // A NAT/WAN flip (dual-WAN failover, CGNAT rebind, VPN path change)
+        // strands the socket half-open: the local WebSocket object still says
+        // OPEN and outbound sends "succeed" into the void, so isConnected()/
+        // isRegistered() keep lying for many minutes (2026-07-29 incident: the
+        // PBX marked the contact Unreachable within 33 s of each silent death
+        // while this client believed it was registered for up to ~9 more
+        // minutes — six abandoned half-open sockets piled up server-side).
+        // Ground truth is inbound bytes: stamp every frame JsSIP receives by
+        // wrapping the transport's ondata assignment; the watchdog below treats
+        // prolonged inbound silence as a dead socket regardless of what the
+        // socket object claims.
+        lastInboundAtRef.current = Date.now();
+        {
+          let realOndata: ((...args: unknown[]) => void) | undefined;
+          Object.defineProperty(socket, "ondata", {
+            configurable: true,
+            get: () => realOndata,
+            set: (fn: unknown) => {
+              realOndata =
+                typeof fn === "function"
+                  ? (...args: unknown[]) => {
+                      lastInboundAtRef.current = Date.now();
+                      (fn as (...a: unknown[]) => void)(...args);
+                    }
+                  : (fn as undefined);
+            },
+          });
+        }
+
         const uaConfig: Record<string, unknown> = {
           sockets: [socket],
           uri: `sip:${ext.sipUsername}@${sipDomain}`,
@@ -1650,7 +1703,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
               socket.send("\r\n\r\n");
             }
           } catch (err) {
+            // A failed send is a dead socket the transport hasn't admitted yet —
+            // don't just log it, start recovery now.
             console.warn("[SipPhone] keepalive send failed", err);
+            queueReconnect();
           }
         };
         keepAliveTimerRef.current = setInterval(sendKeepAlive, 15_000);
@@ -1662,10 +1718,28 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         // the same recovery a page reload performs, but automatic.
         const STUCK_REINIT_MS = 20_000; // unregistered this long → rebuild the UA
         const REINIT_COOLDOWN_MS = 45_000; // never rebuild more often than this
+        // No inbound bytes for this long ⇒ the socket is dead on the wire, no
+        // matter what it claims. PBX qualify interval is 30 s (plus our CRLF
+        // keepalives are answered), so 75 s = two missed qualifies + margin.
+        const SOCKET_SILENCE_DEAD_MS = 75_000;
         const runWatchdog = () => {
           if (cancelled || uaRef.current !== ua) return;
           const connected = !!ua.isConnected?.();
           const registered = !!ua.isRegistered?.();
+          // Wire truth FIRST — before trusting isRegistered(). A half-open
+          // socket keeps both isConnected() and isRegistered() true for many
+          // minutes while inbound has been silent since the path died.
+          if (connected && Date.now() - lastInboundAtRef.current >= SOCKET_SILENCE_DEAD_MS) {
+            logConn("stale-socket");
+            lastInboundAtRef.current = Date.now(); // re-arm so we don't re-trip while reconnecting
+            try {
+              socket.disconnect(); // surfaces a real 'disconnected' → error path + UI
+            } catch {
+              /* ignore — reconnect below still runs */
+            }
+            queueReconnect(true);
+            return;
+          }
           if (registered) {
             unregisteredSinceRef.current = null;
             return;
@@ -1704,7 +1778,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         };
 
         ua.on("connecting", () => { if (!cancelled) { setRegState("connecting"); logConn("connecting"); } });
-        ua.on("connected",  () => { if (!cancelled) { setRegState("registering"); logConn("connected"); } });
+        ua.on("connected",  () => { if (!cancelled) { lastInboundAtRef.current = Date.now(); setRegState("registering"); logConn("connected"); } });
 
         // JsSIP emits `disconnected` with the underlying WebSocket close code /
         // reason. Capturing it is the whole point of the telemetry: 1006 =

@@ -658,10 +658,21 @@ export function FloatingDialer() {
   // problem persists past the grace period.
   const REG_PROBLEM_GRACE_MS = 3_500;
   const isRegProblem = phone.regState === "failed" || Boolean(phone.error);
+  // Seamless-blip grace: the engine's wire-truth watchdog tears down a silently
+  // dead socket and reconnects within seconds (dual-WAN flips, NAT rebinds). A
+  // recovery that completes inside the grace window should be INVISIBLE — keep
+  // showing the last-good "Ready" instead of flashing yellow on every routine
+  // reconnect (observed ~50×/day on a flapping dual-WAN router). Only a phone that
+  // has never registered this session shows "Connecting" immediately.
+  const hadRegisteredRef = useRef(false);
+  if (phone.regState === "registered") hadRegisteredRef.current = true;
+  const isRecovering =
+    isRegProblem ||
+    (hadRegisteredRef.current && (phone.regState === "connecting" || phone.regState === "registering"));
   const [regProblemConfirmed, setRegProblemConfirmed] = useState(false);
   const regProblemTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (isRegProblem) {
+    if (isRecovering) {
       if (!regProblemConfirmed && !regProblemTimerRef.current) {
         regProblemTimerRef.current = setTimeout(() => {
           regProblemTimerRef.current = null;
@@ -672,12 +683,14 @@ export function FloatingDialer() {
       if (regProblemTimerRef.current) { clearTimeout(regProblemTimerRef.current); regProblemTimerRef.current = null; }
       if (regProblemConfirmed) setRegProblemConfirmed(false);
     }
-  }, [isRegProblem, regProblemConfirmed]);
+  }, [isRecovering, regProblemConfirmed]);
   useEffect(() => () => { if (regProblemTimerRef.current) clearTimeout(regProblemTimerRef.current); }, []);
 
-  const inRegGrace = isRegProblem && !regProblemConfirmed;
+  const inRegGrace = isRecovering && !regProblemConfirmed;
   const status = inRegGrace
-    ? { label: "Reconnecting", tone: "yellow" }
+    ? isRegProblem
+      ? { label: "Reconnecting", tone: "yellow" }
+      : { label: "Ready", tone: "green" } // sub-grace reconnect: stay green, no flash
     : statusFromRegistration(phone.regState, Boolean(phone.error));
   const cleanError = inRegGrace
     ? null
