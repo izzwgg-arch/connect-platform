@@ -19,6 +19,12 @@ import './src/notifications/sipPreRegisterHeadlessTask';
 // attaches to at answer. No Activity, no HeadlessJsTaskService, one UA.
 import './src/notifications/sipWakeRegistrar';
 
+// Diagnostic: JS-thread stall watchdog + bridge flight recorder. Proves and
+// names the "taps do nothing" freezes ([JS_LAG] in logcat). Temporary — remove
+// once the responsiveness regression is closed.
+import { installJsLagWatchdog } from "./src/debug/jsLagWatchdog";
+installJsLagWatchdog();
+
 import { registerRootComponent } from "expo";
 
 import App from "./App";

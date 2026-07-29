@@ -962,6 +962,17 @@ export function VoicemailTab() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
+          // PERF (freeze investigation 2026-07-28): voicemail rows are HEAVY
+          // (~60 waveform bar views each). The FlatList defaults pre-render
+          // ~21 screens' worth (windowSize=21) — with a 3,000-message mailbox
+          // that built thousands of views on first visit and stalled the JS
+          // thread for seconds (measured: 4.7s stall, 119x topLayout storm).
+          // Keep the render window tight; scrolling fills in ahead lazily.
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          updateCellsBatchingPeriod={60}
+          windowSize={5}
+          removeClippedSubviews
           // iOS needs the list to be able to bounce for pull-to-refresh to fire;
           // Android's RefreshControl works without it. Gate on iOS so Android is
           // byte-for-byte unchanged (see IOS_WORK_ANDROID_GUARDRAILS.md).
@@ -1368,33 +1379,46 @@ function Waveform({
     }),
   ).current;
 
-  const bars = (color: string, dim: boolean) =>
-    WAVE_BARS.map((h, idx) => (
-      <View
-        key={idx}
-        style={[
-          styles.waveBar,
-          {
-            height: 4 + h * 24,
-            backgroundColor: color,
-            opacity: dim ? 0.9 : 1,
-          },
-        ]}
-      />
-    ));
+  // PERF: memoized — each call builds ~60 <View> bars. Rebuilding them on
+  // every row re-render was a large share of the view-update storms that froze
+  // the JS thread with a 3,000-message mailbox (2026-07-28).
+  const trackBars = React.useMemo(
+    () =>
+      WAVE_BARS.map((h, idx) => (
+        <View
+          key={idx}
+          style={[styles.waveBar, { height: 4 + h * 24, backgroundColor: VM.waveTrack, opacity: 0.9 }]}
+        />
+      )),
+    [VM.waveTrack],
+  );
+  const accentBars = React.useMemo(
+    () =>
+      WAVE_BARS.map((h, idx) => (
+        <View
+          key={idx}
+          style={[styles.waveBar, { height: 4 + h * 24, backgroundColor: accent, opacity: 1 }]}
+        />
+      )),
+    [accent],
+  );
 
   return (
     <View
       style={styles.waveBars}
       onLayout={(e) => {
         const w = e.nativeEvent.layout.width;
+        // Guard: identical (±1px) re-layouts must not touch state — a state
+        // update here re-renders 60 bar views and can re-trigger layout,
+        // feeding the exact onLayout storm this file's perf notes describe.
+        if (Math.abs(w - widthRef.current) < 1) return;
         widthRef.current = w;
         setWidth(w);
       }}
       {...panResponder.panHandlers}
     >
       {/* Unplayed track */}
-      <View style={styles.waveRow}>{bars(VM.waveTrack, true)}</View>
+      <View style={styles.waveRow}>{trackBars}</View>
 
       {/* Played portion, clipped to the live playback position. Driven by the
           shared Animated value so it glides in lockstep with the audio. */}
@@ -1411,7 +1435,7 @@ function Waveform({
             },
           ]}
         >
-          <View style={[styles.waveRow, { width }]}>{bars(accent, false)}</View>
+          <View style={[styles.waveRow, { width }]}>{accentBars}</View>
         </Animated.View>
       )}
     </View>

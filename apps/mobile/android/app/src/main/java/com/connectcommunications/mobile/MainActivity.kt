@@ -97,6 +97,17 @@ class MainActivity : ReactActivity() {
       keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
       keyCode == KeyEvent.KEYCODE_VOLUME_MUTE
 
+  // Diagnostic (freeze investigation 2026-07-28): prove taps reach the app
+  // while JS is unresponsive. One log line per finger-down; correlate its
+  // timestamp against [JS_LAG] stall windows in logcat. Remove with the
+  // watchdog once the responsiveness regression is closed.
+  override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+    if (ev?.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+      Log.i("CC_TOUCH", "down x=${ev.x.toInt()} y=${ev.y.toInt()}")
+    }
+    return super.dispatchTouchEvent(ev)
+  }
+
   override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
     if (isVolumeKey(keyCode) && IncomingCallFirebaseService.isIncomingRingActive()) {
       Log.i(TAG, "[LOCK_CALL] volume key during ring — hushing ringer, vibration continues")

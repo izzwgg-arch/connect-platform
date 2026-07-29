@@ -204,6 +204,33 @@ export function ContactTab() {
     if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);
   }, []);
 
+  // Stable renderItem — an inline renderItem closure forces VirtualizedList to
+  // re-render every mounted cell on each parent render (part of the measured
+  // Contacts-tab stalls, freeze investigation 2026-07-28). Depends only on
+  // stable callbacks + theme colors.
+  const renderContactItem = useCallback(({ item }: { item: ContactListItem }) => (
+    item.type === 'section' ? (
+      <View style={styles.sectionHeader}>
+        <Text style={[styles.sectionText, { color: colors.textTertiary }]}>
+          {item.title}
+          {typeof item.count === 'number' ? ` · ${item.count}` : ''}
+        </Text>
+        <TouchableOpacity style={styles.sortAction} activeOpacity={0.74}>
+          <Ionicons name="swap-vertical-outline" size={13} color={colors.textTertiary} />
+          <Text style={[styles.sortText, { color: colors.textTertiary }]}>Sort</Text>
+        </TouchableOpacity>
+      </View>
+    ) : (
+      <ContactCard
+        contact={item.contact}
+        onPress={() => setSelected(item.contact)}
+        onCall={() => callContact(item.contact)}
+        onMessage={() => messageContact(item.contact)}
+        onMore={() => setMenuContact(item.contact)}
+      />
+    )
+  ), [colors.textTertiary, callContact, messageContact]);
+
   const emptyTitle = query.trim() ? 'No matching contacts' : 'No contacts yet';
   const emptySubtitle = query.trim()
     ? 'Try a different name, number, or extension.'
@@ -296,6 +323,17 @@ export function ContactTab() {
         <FlatList
           data={listItems}
           keyExtractor={(item) => item.id}
+          // PERF (freeze investigation 2026-07-28): measured 1.6–7.2s JS-thread
+          // stalls isolated to this tab (autonomous tab-bisect runs E/F/C).
+          // Defaults pre-render ~21 screens of rows; with a large directory
+          // that builds hundreds of card views in one JS turn. Render one
+          // screen and fill ahead lazily; renderItem is stabilized below so
+          // memoized rows are not re-rendered by unrelated parent state.
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={60}
+          windowSize={5}
+          removeClippedSubviews
           // iOS needs bounce enabled for pull-to-refresh; Android unchanged
           // (see IOS_WORK_ANDROID_GUARDRAILS.md).
           bounces={Platform.OS === 'ios'}
@@ -303,26 +341,7 @@ export function ContactTab() {
           overScrollMode="never"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} colors={[colors.primary]} progressBackgroundColor={colors.surface} />}
           contentContainerStyle={styles.list}
-          renderItem={({ item }) => item.type === 'section' ? (
-            <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionText, { color: colors.textTertiary }]}>
-                {item.title}
-                {typeof item.count === 'number' ? ` · ${item.count}` : ''}
-              </Text>
-              <TouchableOpacity style={styles.sortAction} activeOpacity={0.74}>
-                <Ionicons name="swap-vertical-outline" size={13} color={colors.textTertiary} />
-                <Text style={[styles.sortText, { color: colors.textTertiary }]}>Sort</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <ContactCard
-              contact={item.contact}
-              onPress={() => setSelected(item.contact)}
-              onCall={() => callContact(item.contact)}
-              onMessage={() => messageContact(item.contact)}
-              onMore={() => setMenuContact(item.contact)}
-            />
-          )}
+          renderItem={renderContactItem}
         />
       )}
 
