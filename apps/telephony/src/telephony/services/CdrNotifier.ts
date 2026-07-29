@@ -55,7 +55,12 @@ export function deriveDisposition(call: NormalizedCall, resolvedDir?: string): s
 
   const cdrDisp = String(call.metadata?.cdrDisposition ?? "").toUpperCase().trim();
   if (cdrDisp === "ANSWERED") return "answered";
-  if (cdrDisp === "NO ANSWER") return "missed";
+  // Direction-aware: "NO ANSWER" is a MISSED call only for the callee. For an
+  // outgoing/internal call it means the FAR side didn't pick up — that is a
+  // canceled/unanswered outbound, never "missed". (Regression 2026-07-28:
+  // enabling AMI Cdr events made outgoing unanswered calls display as Missed
+  // in Recents because this mapping ignored direction.)
+  if (cdrDisp === "NO ANSWER") return dirForVm === "incoming" ? "missed" : "canceled";
   if (cdrDisp === "BUSY") return "busy";
   if (cdrDisp === "FAILED" || cdrDisp === "CONGESTION") return "failed";
   if (cdrDisp === "CANCEL" || cdrDisp === "CANCELED") return "canceled";

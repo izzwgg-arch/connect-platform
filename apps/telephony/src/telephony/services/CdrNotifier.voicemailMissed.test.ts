@@ -78,3 +78,13 @@ test("legacy legs without lastApplication → unchanged legacy behavior", () => 
   const c = call({ metadata: { cdrDisposition: "ANSWERED", cdrLegs: [legacyLeg] } });
   assert.equal(deriveDisposition(c, "incoming"), "answered");
 });
+
+test("outgoing NO ANSWER is canceled, never missed", () => {
+  const c = call({ direction: "outbound", answeredAt: null, metadata: { cdrDisposition: "NO ANSWER" } });
+  assert.equal(deriveDisposition(c, "outgoing"), "canceled");
+});
+
+test("incoming NO ANSWER stays missed", () => {
+  const c = call({ answeredAt: null, metadata: { cdrDisposition: "NO ANSWER" } });
+  assert.equal(deriveDisposition(c, "incoming"), "missed");
+});
