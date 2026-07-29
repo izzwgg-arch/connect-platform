@@ -2429,6 +2429,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             } catch (Exception ignored) {
             }
             Log.i(TAG, "[CALL_INCOMING] native ringtone playback started (media_player on STREAM_RING)");
+            registerVolumeSilenceReceiver(appCtx);
             scheduleRingtoneTimeout(inviteIdForRing);
         } catch (IOException | IllegalArgumentException | IllegalStateException e) {
             Log.w(TAG, "[CALL_INCOMING] startIncomingCallRingtone failed: " + e.getMessage());
@@ -2489,6 +2490,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             } catch (Exception ignored) {
             }
             Log.i(TAG, "[CALL_INCOMING] native ringtone playback started (system_fallback)");
+            registerVolumeSilenceReceiver(getApplicationContext());
             scheduleRingtoneTimeout(inviteIdForRing);
         } catch (Exception e) {
             Log.w(TAG, "[CALL_INCOMING] system ringtone fallback failed: " + e.getMessage());
@@ -2604,6 +2606,51 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     }
 
     /**
+     * Background volume-key hush (Izzy 2026-07-29): MainActivity's key
+     * interception only sees volume presses while the app window has focus —
+     * from the floating heads-up / background / killed states the press went
+     * to SystemUI and the ring kept blaring. While a ring is active we listen
+     * for the system VOLUME_CHANGED broadcast (any stream, any source) and
+     * treat it as "hush": audio stops, vibration + ringing UI continue.
+     * Registered on ring start, unregistered on ring stop.
+     */
+    private static android.content.BroadcastReceiver volumeSilenceReceiver = null;
+    private static Context volumeSilenceCtx = null;
+
+    private static synchronized void registerVolumeSilenceReceiver(Context ctx) {
+        if (volumeSilenceReceiver != null) return;
+        try {
+            android.content.BroadcastReceiver r = new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(Context c, Intent i) {
+                    silenceRingerKeepVibrating("volume_button_broadcast");
+                }
+            };
+            android.content.IntentFilter f = new android.content.IntentFilter("android.media.VOLUME_CHANGED_ACTION");
+            Context app = ctx.getApplicationContext();
+            if (Build.VERSION.SDK_INT >= 33) {
+                app.registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                app.registerReceiver(r, f);
+            }
+            volumeSilenceReceiver = r;
+            volumeSilenceCtx = app;
+            Log.i(TAG, "[CALL_INCOMING] volume-silence receiver registered");
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] volume-silence receiver register failed: " + e.getMessage());
+        }
+    }
+
+    private static synchronized void unregisterVolumeSilenceReceiver() {
+        if (volumeSilenceReceiver == null) return;
+        try {
+            if (volumeSilenceCtx != null) volumeSilenceCtx.unregisterReceiver(volumeSilenceReceiver);
+        } catch (Exception ignored) { }
+        volumeSilenceReceiver = null;
+        volumeSilenceCtx = null;
+    }
+
+    /**
      * Volume-key silence: stop the ringtone AUDIO immediately but KEEP the
      * vibration running and the call ringing (watchdog/Telecom untouched). This
      * mirrors the stock phone app, where pressing volume up/down during an
@@ -2649,6 +2696,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     public static synchronized void stopIncomingCallRingtone(String reason, String inviteIdForLog) {
         cancelRingtoneTimeout();
         cancelForkAbandonStop();
+        unregisterVolumeSilenceReceiver();
         try {
             String effectiveInvite = (inviteIdForLog != null && !inviteIdForLog.isEmpty())
                 ? inviteIdForLog

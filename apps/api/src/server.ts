@@ -30272,7 +30272,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     fromPrefix: z.string().nullable().optional(),
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
-    state: z.enum(["ringing", "hungup", "diverted_to_voicemail"]).optional(),
+    state: z.enum(["ringing", "hungup", "diverted_to_voicemail", "answered_elsewhere"]).optional(),
     /** When state is hungup, optional override for INVITE_CANCELED `reason` (default pbx_hangup). */
     cancelReason: z.string().max(120).optional().nullable(),
     /** True when a tenant extension leg answered (desk phone / other endpoint) — suppresses the missed-call alert. */
@@ -30291,7 +30291,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
 
   // ── Hangup / voicemail-divert fast-path: cancel any PENDING invite for this
   // pbxCallId and push INVITE_CANCELED so the native ringtone stops immediately.
-  if (input.state === "hungup" || input.state === "diverted_to_voicemail") {
+  if (input.state === "hungup" || input.state === "diverted_to_voicemail" || input.state === "answered_elsewhere") {
     const pending = await db.callInvite.findMany({
       where: {
         pbxCallId: input.linkedId,
@@ -30299,7 +30299,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
       },
     });
     if (!pending.length) {
-      app.log.info({ linkedId: input.linkedId }, "mobile-ring-notify: hangup — no pending invites");
+      app.log.info({ linkedId: input.linkedId, state: input.state }, "mobile-ring-notify: stop — no pending invites");
       return { ok: true, hungup: true, canceled: 0 };
     }
     const nowIso = new Date().toISOString();
@@ -30313,7 +30313,9 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
       const terminationReason =
         input.state === "diverted_to_voicemail"
           ? "diverted_to_voicemail"
-          : (input.cancelReason?.trim() || "pbx_hangup");
+          : input.state === "answered_elsewhere"
+            ? "answered_elsewhere"
+            : (input.cancelReason?.trim() || "pbx_hangup");
       try {
         await sendPushToUserDevices({
           tenantId: inv.tenantId,

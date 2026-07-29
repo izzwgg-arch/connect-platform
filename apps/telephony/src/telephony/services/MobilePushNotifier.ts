@@ -115,7 +115,7 @@ export type MobilePushRingPayload = {
   fromPrefix?: string | null;
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
-  state?: "ringing" | "hungup" | "diverted_to_voicemail";
+  state?: "ringing" | "hungup" | "diverted_to_voicemail" | "answered_elsewhere";
   /**
    * True when a tenant extension leg actually answered this call
    * (extensionAnsweredAt). The API uses it to suppress the user-visible
@@ -142,6 +142,8 @@ export class MobilePushNotifier {
   private readonly pushed = new Set<string>();
   /** One-shot stop-ring notify per call so we do not spam /internal/mobile-ring-notify. */
   private readonly voicemailStopSent = new Set<string>();
+  /** One-shot answered-elsewhere stop-ring notify per call. */
+  private readonly answeredStopSent = new Set<string>();
   /** One-shot inbound pre-wake per call so we do not spam /internal/mobile-prewake. */
   private readonly preWoken = new Set<string>();
 
@@ -174,6 +176,7 @@ export class MobilePushNotifier {
     // stopping the native ringtone the moment the caller hangs up.
     if (call.state === "hungup") {
       this.voicemailStopSent.delete(call.linkedId);
+      this.answeredStopSent.delete(call.linkedId);
       this.pushed.delete(call.linkedId);
       this.preWoken.delete(call.linkedId);
       const payload: MobilePushRingPayload = {
@@ -225,6 +228,49 @@ export class MobilePushNotifier {
         log.warn(
           { linkedId: call.linkedId, err: (err as Error)?.message },
           "mobile-ring: voicemail divert notify failed",
+        );
+      });
+    }
+
+    // Answered ANYWHERE — every still-ringing mobile fork must stop NOW, not
+    // at call end. Live complaints 2026-07-29: "they answer the phone and the
+    // app still rings" (desk phones) and the virtual-extension case: the
+    // customer answers on his CARRIER phone (follow-me leg) while the app on
+    // the same handset keeps ringing. Two truthful answer signals, either
+    // fires the stop:
+    //   • extensionAnsweredAt — a tenant PJSIP extension leg answered
+    //   • bridgeIds non-empty — the caller got BRIDGED to an answering party
+    //     (covers follow-me/virtual-ext PSTN legs). IVR/voicemail pickups run
+    //     as dialplan apps WITHOUT a bridge, so menus don't false-trigger.
+    // The API cancels PENDING invites + pushes INVITE_CANCELED
+    // (reason answered_elsewhere) and records NO missed call.
+    const answeredByAnyParty =
+      call.extensionAnsweredAt != null ||
+      (Array.isArray(call.bridgeIds) && call.bridgeIds.length > 0);
+    if (
+      this.pushed.has(call.linkedId) &&
+      !this.answeredStopSent.has(call.linkedId) &&
+      answeredByAnyParty
+    ) {
+      this.answeredStopSent.add(call.linkedId);
+      const payload: MobilePushRingPayload = {
+        linkedId: call.linkedId,
+        toExtension: "",
+        fromNumber: call.from ?? null,
+        fromDisplay: call.fromName ?? null,
+        connectTenantId: call.tenantId ?? null,
+        pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
+        state: "answered_elsewhere",
+        answered: true,
+      };
+      log.info(
+        { linkedId: call.linkedId, connectTenantId: call.tenantId },
+        "mobile-ring: notifying API of answered_elsewhere (stop ring)",
+      );
+      this.postAsync(payload).catch((err: unknown) => {
+        log.warn(
+          { linkedId: call.linkedId, err: (err as Error)?.message },
+          "mobile-ring: answered_elsewhere notify failed",
         );
       });
     }
