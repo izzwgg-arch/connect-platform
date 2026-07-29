@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMoni
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
-import { initAutoUpdater, checkForUpdatesInteractive } from "./updater";
+import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -370,6 +370,11 @@ function sendPhoneEventToRenderers(envelope: PhoneEngineEnvelope): void {
 }
 
 function registerIpc(): void {
+  // In-app update UX: the portal sidebar shows "New Update — Install"; these
+  // two handlers let it read the updater state and trigger the one-click
+  // install (quitAndInstall) once the download is complete.
+  ipcMain.handle("desktop:update-get-state", () => getUpdateState());
+  ipcMain.handle("desktop:update-install", () => installDownloadedUpdate());
   ipcMain.handle("desktop:open-mini", () => createMiniWindow(true).id);
   ipcMain.handle("desktop:open-full", (_event, route?: string | null) => {
     const win = createFullWindow(true);
@@ -573,6 +578,14 @@ if (!gotSingleInstanceLock) {
   // In-app auto-update: check the feed on launch (and periodically), download in
   // the background, and prompt the user to restart when an update is ready.
   initAutoUpdater(diag);
+  // Fan updater state out to every window so the portal's "New Update" notice
+  // stays live (badge, download %, Install button) without polling.
+  onUpdateStateChange((state) => {
+    for (const win of [fullWindow, miniWindow]) {
+      if (!win || win.isDestroyed()) continue;
+      win.webContents.send("desktop:update-state", state);
+    }
+  });
   startSipEngineHeartbeat();
   // After sleep/resume the renderer may be alive but its socket long dead; nudge the
   // portal's own reconnect path immediately instead of waiting for its next timer.

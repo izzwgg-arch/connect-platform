@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
+import type { DesktopUpdateState } from "./types";
 
 // ── In-app auto-update ────────────────────────────────────────────────
 // The app checks the generic update feed (see `build.publish` in package.json,
@@ -26,6 +27,42 @@ function firstLiveWindow(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
 }
 
+// ── Update state for the in-app "Install" UX ──────────────────────────
+// The portal sidebar shows a "New Update" notice and a one-click Install
+// button; it reads this state over IPC and subscribes to changes. The state
+// is the single source of truth for both the tray dialog and the in-app UI.
+let updateState: DesktopUpdateState = { status: "idle", installedVersion: "" };
+let updateStateListener: ((state: DesktopUpdateState) => void) | null = null;
+
+function setUpdateState(patch: Partial<DesktopUpdateState>): void {
+  updateState = { ...updateState, ...patch, installedVersion: app.getVersion() };
+  try {
+    updateStateListener?.(updateState);
+  } catch {
+    /* renderer broadcast must never break the updater */
+  }
+}
+
+export function getUpdateState(): DesktopUpdateState {
+  return { ...updateState, installedVersion: app.getVersion() };
+}
+
+/** main.ts registers a broadcaster here to fan state out to all windows. */
+export function onUpdateStateChange(listener: (state: DesktopUpdateState) => void): void {
+  updateStateListener = listener;
+}
+
+/**
+ * One-click install from the in-app notice. Only valid once the update is
+ * fully downloaded; returns false otherwise so the UI can show progress.
+ */
+export function installDownloadedUpdate(): boolean {
+  if (updateState.status !== "downloaded") return false;
+  diag("update", "in-app Install clicked — quitAndInstall");
+  setImmediate(() => autoUpdater.quitAndInstall());
+  return true;
+}
+
 export function initAutoUpdater(logger: Diag): void {
   if (initialised) return;
   initialised = true;
@@ -42,14 +79,19 @@ export function initAutoUpdater(logger: Diag): void {
   autoUpdater.autoDownload = true;            // pull the update in the background
   autoUpdater.autoInstallOnAppQuit = true;    // apply on next quit if not restarted now
 
-  autoUpdater.on("checking-for-update", () => diag("update", "checking for update"));
+  autoUpdater.on("checking-for-update", () => {
+    diag("update", "checking for update");
+    setUpdateState({ status: "checking", error: undefined });
+  });
 
   autoUpdater.on("update-available", (info) => {
     diag("update", `update available: ${info?.version} — downloading`);
+    setUpdateState({ status: "available", version: info?.version, percent: 0 });
   });
 
   autoUpdater.on("update-not-available", (info) => {
     diag("update", `no update (installed ${app.getVersion()} is latest ${info?.version ?? ""})`);
+    setUpdateState({ status: "uptodate", version: undefined, percent: undefined });
     if (interactiveCheck) {
       interactiveCheck = false;
       void dialog.showMessageBox({
@@ -64,10 +106,12 @@ export function initAutoUpdater(logger: Diag): void {
 
   autoUpdater.on("download-progress", (p) => {
     diag("update", `downloading ${Math.round(p?.percent ?? 0)}%`);
+    setUpdateState({ status: "downloading", percent: Math.round(p?.percent ?? 0) });
   });
 
   autoUpdater.on("error", (err) => {
     diag("update", `error: ${String(err)}`);
+    setUpdateState({ status: "error", error: String(err) });
     if (interactiveCheck) {
       interactiveCheck = false;
       void dialog.showMessageBox({
@@ -82,6 +126,7 @@ export function initAutoUpdater(logger: Diag): void {
 
   autoUpdater.on("update-downloaded", (info) => {
     diag("update", `update downloaded: ${info?.version}`);
+    setUpdateState({ status: "downloaded", version: info?.version, percent: 100 });
     if (promptedForDownload) return;
     promptedForDownload = true;
     interactiveCheck = false;

@@ -16,6 +16,17 @@ export type DesktopSettings = {
   };
 };
 
+/** Auto-update lifecycle state, broadcast to renderers for the in-app "Install" UX. */
+export type DesktopUpdateState = {
+  status: "idle" | "checking" | "available" | "downloading" | "downloaded" | "uptodate" | "error";
+  installedVersion: string;
+  /** Version of the update being offered/downloaded (when known). */
+  version?: string;
+  /** Download progress 0–100 while status === "downloading". */
+  percent?: number;
+  error?: string;
+};
+
 export type PhoneEngineEnvelope =
   | {
       type: "state";

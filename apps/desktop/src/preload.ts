@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DesktopSettings, DesktopWindowKind, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
+import type { DesktopSettings, DesktopUpdateState, DesktopWindowKind, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
 
 function windowKind(): DesktopWindowKind | undefined {
   const arg = process.argv.find((item) => item.startsWith("--connect-window-kind="));
@@ -56,6 +56,20 @@ const desktopApi = {
   notifications: {
     show: (payload: { kind: string; title: string; body?: string; route?: string }) =>
       ipcRenderer.invoke("desktop:notification", payload),
+  },
+
+  // In-app auto-update: the portal sidebar's "Install" item uses this to show
+  // a "New Update" notice and apply the update with one click (no manual
+  // uninstall/re-download).
+  updates: {
+    getState: () => ipcRenderer.invoke("desktop:update-get-state") as Promise<DesktopUpdateState>,
+    /** Applies a fully-downloaded update (restarts the app). Resolves false if not ready yet. */
+    install: () => ipcRenderer.invoke("desktop:update-install") as Promise<boolean>,
+    onState: (listener: (state: DesktopUpdateState) => void) => {
+      const wrapped = (_: unknown, state: DesktopUpdateState) => listener(state);
+      ipcRenderer.on("desktop:update-state", wrapped);
+      return () => ipcRenderer.removeListener("desktop:update-state", wrapped);
+    },
   },
 };
 

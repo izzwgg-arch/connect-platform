@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { usePathname } from "next/navigation";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
@@ -10,6 +11,7 @@ import { UserAvatarUpload } from "./UserAvatarUpload";
 import { NAV_SECTION_ORDER, navSectionMeta, type NavItem } from "../navigation/navConfig";
 import { CollapsibleNavSection } from "./CollapsibleNavSection";
 import { getPreferredUserDisplayName } from "../lib/userDisplayName";
+import { DesktopUpdateToast, installDesktopUpdate, useDesktopUpdate } from "./DesktopUpdateNotice";
 
 type SidebarNavProps = {
   items: NavItem[];
@@ -42,6 +44,28 @@ export function SidebarNav({
   const { user, setUserAvatarUrl } = useAppContext();
   const { isExpanded, toggle } = useNavSectionExpansion();
   const displayName = getPreferredUserDisplayName(user);
+
+  // Desktop auto-update: when the shell reports an update, the "Install" nav
+  // item becomes the in-app update surface — "New Update" chip, download
+  // progress, and a one-click install (quitAndInstall) instead of the browser
+  // download link. In the web portal (no bridge) it stays a plain download.
+  const desktopUpdate = useDesktopUpdate();
+  const updateReady = desktopUpdate?.status === "downloaded";
+  const updateDownloading = desktopUpdate?.status === "available" || desktopUpdate?.status === "downloading";
+  const installChip = updateReady
+    ? "New Update"
+    : updateDownloading
+      ? `Downloading ${desktopUpdate?.percent ?? 0}%`
+      : null;
+  const handleInstallItemClick = (item: NavItem, event: ReactMouseEvent) => {
+    if (item.id !== "workspace.install") return;
+    if (updateReady) {
+      event.preventDefault();
+      installDesktopUpdate();
+    } else if (updateDownloading) {
+      event.preventDefault(); // already on its way — don't also download the installer
+    }
+  };
 
   const effectiveRail = !isMobile && railMode;
   const asideClass = [
@@ -104,11 +128,26 @@ export function SidebarNav({
                         download={item.download ? "" : undefined}
                         prefetch={item.download ? false : undefined}
                         className={`drawer-nav-link drawer-nav-link-rail ${active ? "active" : ""}`}
-                        title={item.label}
-                        onClick={onCloseMobile}
+                        title={item.id === "workspace.install" && installChip ? `${item.label} — ${installChip}` : item.label}
+                        onClick={(event) => { handleInstallItemClick(item, event); onCloseMobile(); }}
                       >
                         <span className="drawer-nav-icon drawer-nav-icon-lucide" style={{ position: "relative" }}>
                           <Icon size={18} strokeWidth={1.85} />
+                          {item.id === "workspace.install" && installChip && (
+                            <span
+                              aria-label={installChip}
+                              style={{
+                                position: "absolute",
+                                top: -3,
+                                right: -3,
+                                width: 9,
+                                height: 9,
+                                borderRadius: "9999px",
+                                background: "#22c55e",
+                                boxShadow: "0 0 8px rgba(34,197,94,.9)",
+                              }}
+                            />
+                          )}
                           {badgeCount > 0 && (
                             <span
                               aria-label={`${badgeCount} unread`}
@@ -168,12 +207,30 @@ export function SidebarNav({
                       download={item.download ? "" : undefined}
                       prefetch={item.download ? false : undefined}
                       className={`drawer-nav-link ${active ? "active" : ""}`}
-                      onClick={onCloseMobile}
+                      onClick={(event) => { handleInstallItemClick(item, event); onCloseMobile(); }}
                     >
                       <span className="drawer-nav-icon drawer-nav-icon-lucide">
                         <Icon size={18} strokeWidth={1.85} />
                       </span>
                       <span className="drawer-nav-label">{item.label}</span>
+                      {item.id === "workspace.install" && installChip && (
+                        <span
+                          style={{
+                            marginLeft: "auto",
+                            borderRadius: "9999px",
+                            padding: "2px 8px",
+                            fontSize: 10,
+                            fontWeight: 800,
+                            letterSpacing: 0.2,
+                            background: updateReady ? "#22c55e" : "rgba(34,197,94,.18)",
+                            color: updateReady ? "#04120a" : "#22c55e",
+                            flexShrink: 0,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {installChip}
+                        </span>
+                      )}
                       {badgeCount > 0 && (
                         <span
                           aria-label={`${badgeCount} unread`}
@@ -220,6 +277,9 @@ export function SidebarNav({
           </button>
         </div>
       ) : null}
+
+      {/* Desktop-only: "New update ready — Install" notice (fixed position, renders app-wide). */}
+      <DesktopUpdateToast />
     </aside>
   );
 }
