@@ -2780,6 +2780,38 @@ model CallRecord {
 // Connect-owned CDR — one row per completed canonical call.
 // Populated by the telephony service via /internal/cdr-ingest when a call ends.
 // This is the authoritative source for dashboard KPI cards and call history.
+/// 24/7 call-quality learning store. The worker's hourly aggregation cycle
+/// distills every CALL_QUALITY_REPORT into per-hour buckets keyed by the
+/// dimensions the adaptive-audio layer learns from (network path, codec,
+/// relay vs direct, direction). Raw reports stay in VoiceDiagEvent; this
+/// table is the queryable substrate for tuning decisions and degradation
+/// alerts — "the system always has the data to learn from" (Izzy 2026-07-29).
+model CallQualityHourly {
+  id          String   @id @default(cuid())
+  hourStart   DateTime
+  tenantId    String
+  userId      String?
+  direction   String? // "inbound" | "outbound"
+  audioCodec  String?
+  networkType String?
+  usedRelay   Boolean  @default(false)
+  calls       Int      @default(0)
+  poorCalls   Int      @default(0)
+  avgRttMs    Float?
+  maxRttMs    Int?
+  avgJitterMs Float?
+  avgLossPct  Float?
+  maxLossPct  Float?
+  avgTxLossPct Float?
+  maxTxLossPct Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([hourStart, tenantId, userId, direction, audioCodec, networkType, usedRelay])
+  @@index([tenantId, hourStart])
+  @@index([hourStart])
+}
+
 /// Exactly-once claim ledger for user-visible mobile alerts (voicemail /
 /// missed_call / sms_message). EVERY sender — the real-time fast paths in
 /// api/worker AND the safety-net reconciler — must claim (type, entityId,

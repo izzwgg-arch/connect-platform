@@ -34,6 +34,7 @@ import { consumeScheduledPlanChange } from "../../api/src/billing/billingSchedul
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { runNotificationReconcileCycle, runNotificationCanaryCycle } from "./notificationReconciler";
+import { runCallQualityAggregateCycle } from "./callQualityAggregator";
 import { runWakeCanaryEnrollCycle } from "./wakeCanaryEnrollCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { startPbxWebrtcDriftReconcileLoop } from "./pbxWebrtcDriftReconcileCycle";
@@ -2019,6 +2020,22 @@ setInterval(() => {
     console.error("notification canary cycle failed", err?.message || err),
   );
 }, Number(process.env.NOTIFICATION_CANARY_INTERVAL_MS || 60 * 60 * 1000));
+
+// ── 24/7 call-quality learning layer (see callQualityAggregator.ts) ────────
+// Hourly: distill every call's quality report into CallQualityHourly buckets
+// (the adaptive-audio knowledge base) + raise CALL_QUALITY_DEGRADED incidents
+// on sustained loss. First run shortly after boot so a restart never leaves
+// a blind gap.
+setTimeout(() => {
+  runCallQualityAggregateCycle().catch((err) =>
+    console.error("call quality aggregate cycle failed", err?.message || err),
+  );
+}, 120_000);
+setInterval(() => {
+  runCallQualityAggregateCycle().catch((err) =>
+    console.error("call quality aggregate cycle failed", err?.message || err),
+  );
+}, Number(process.env.CALL_QUALITY_AGGREGATE_INTERVAL_MS || 60 * 60 * 1000));
 
 runVoipMsInboundSyncCycle({ sendSmsPush: sendSmsPushNotification }).catch((err) => console.error("initial voipms inbound sms sync failed", err?.message || err));
 

@@ -19,10 +19,18 @@ const STORAGE_KEY = "connect.device_feature_flags.v1";
 
 export type DeviceFeatureFlags = {
   standingRegistration: boolean;
+  /**
+   * Force call media through the TURN relay (iceTransportPolicy "relay")
+   * instead of the direct path. Per-device experiment lever for lossy
+   * cellular networks: quality telemetry decides whether the relay path
+   * beats direct for this device/carrier. Off = today's behavior ("all").
+   */
+  forceTurnRelay: boolean;
 };
 
 const DEFAULT_FLAGS: DeviceFeatureFlags = {
   standingRegistration: false,
+  forceTurnRelay: false,
 };
 
 let cachedFlags: DeviceFeatureFlags = { ...DEFAULT_FLAGS };
@@ -46,6 +54,7 @@ function sanitize(raw: unknown): DeviceFeatureFlags {
   const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   return {
     standingRegistration: obj.standingRegistration === true,
+    forceTurnRelay: obj.forceTurnRelay === true,
   };
 }
 
@@ -61,7 +70,9 @@ export async function applyServerFeatureFlags(raw: unknown): Promise<void> {
     // default during a server rollback window.
     if (raw === undefined) return;
     const next = sanitize(raw);
-    const changed = next.standingRegistration !== cachedFlags.standingRegistration;
+    const changed =
+      next.standingRegistration !== cachedFlags.standingRegistration ||
+      next.forceTurnRelay !== cachedFlags.forceTurnRelay;
     cachedFlags = next;
     if (changed) {
       console.log(`${LOG} flags changed:`, JSON.stringify(next));
@@ -94,4 +105,12 @@ export async function getFeatureFlags(): Promise<DeviceFeatureFlags> {
  */
 export function isStandingRegistrationEnabled(): boolean {
   return cachedFlags.standingRegistration;
+}
+
+/**
+ * Sync read of the force-relay flag. Safe default: false (direct path,
+ * today's behavior) until hydration completes.
+ */
+export function isForceTurnRelayEnabled(): boolean {
+  return cachedFlags.forceTurnRelay;
 }

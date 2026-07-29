@@ -40,7 +40,7 @@ import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 import { preferOpusInSdp, preferOpusOnlyOffer } from "./preferOpusSdp";
 import * as SecureStore from "expo-secure-store";
-import { isStandingRegistrationEnabled } from "../config/featureFlags";
+import { isStandingRegistrationEnabled, isForceTurnRelayEnabled } from "../config/featureFlags";
 import { NativeSipSocket, isNativeSipSocketAvailable } from "./nativeSipSocket";
 
 // -- iOS stable SIP instance id (RFC 5626 outbound de-dup) ----------------------
@@ -700,7 +700,11 @@ export class JsSipClient implements SipClient {
       session_timers: false,
       pcConfig: {
         iceServers,
-        iceTransportPolicy: "all",
+        // Server-controlled per-device experiment: "relay" forces media
+        // through the TURN server (cleaner path on lossy cellular direct
+        // routes); default "all" = today's behavior. Flag arrives via
+        // /mobile/devices/register featureFlags; telemetry decides winners.
+        iceTransportPolicy: isForceTurnRelayEnabled() ? "relay" : "all",
         // Pre-gather ICE candidates (incl. TURN allocations) the moment the
         // RTCPeerConnection is created — for inbound calls that is at INVITE
         // arrival, DURING the ring. JsSIP holds the 200 OK until gathering
@@ -3198,6 +3202,19 @@ export class JsSipClient implements SipClient {
             if (typeof r.jitter === "number") report.jitterMs = Math.round(r.jitter * 1000);
             if (r.codecId && codecIds.has(r.codecId)) audioCodec = codecIds.get(r.codecId) ?? null;
           }
+          // SEND-side loss: what the far end (PBX) reports back about OUR
+          // uplink via RTCP. On cellular the UPLINK is usually the weak
+          // direction — without this the quality picture is half-blind
+          // (Izzy 2026-07-29: "a lot of packet loss on 5G" while receive-side
+          // stats looked clean).
+          if (r.type === "remote-inbound-rtp" && r.kind === "audio") {
+            if (typeof r.packetsLost === "number") report.txPacketsLost = r.packetsLost;
+            if (typeof r.fractionLost === "number") report.txFractionLost = Math.round(r.fractionLost * 10000) / 100;
+            if (typeof r.jitter === "number") report.txJitterMs = Math.round(r.jitter * 1000);
+          }
+          if (r.type === "outbound-rtp" && r.kind === "audio") {
+            if (typeof r.packetsSent === "number") report.packetsSent = r.packetsSent;
+          }
           if (r.type === "candidate-pair" && r.nominated === true) {
             if (typeof r.currentRoundTripTime === "number") {
               report.rttMs = Math.round(r.currentRoundTripTime * 1000);
@@ -3240,6 +3257,22 @@ export class JsSipClient implements SipClient {
     else if (rtt <= 200 && jitter <= 25 && lossRate < 1) report.qualityGrade = "good";
     else if (rtt <= 350 && jitter <= 50 && lossRate < 3) report.qualityGrade = "fair";
     else report.qualityGrade = "poor";
+
+    // Uplink (send-side) loss caps the grade — the far end hearing us choppy
+    // is just as much a bad call as the reverse, and on cellular it's usually
+    // the uplink that suffers.
+    const txSent = typeof report.packetsSent === "number" ? (report.packetsSent as number) : 0;
+    const txLost = typeof report.txPacketsLost === "number" ? (report.txPacketsLost as number) : 0;
+    const txLossRate =
+      typeof report.txFractionLost === "number"
+        ? (report.txFractionLost as number)
+        : txSent > 0
+          ? (txLost / txSent) * 100
+          : 0;
+    if (txLossRate >= 3) report.qualityGrade = "poor";
+    else if (txLossRate >= 1 && (report.qualityGrade === "excellent" || report.qualityGrade === "good")) {
+      report.qualityGrade = "fair";
+    }
 
     this.callStartedAt = null;
     this.onCallQualityReport?.(report);
