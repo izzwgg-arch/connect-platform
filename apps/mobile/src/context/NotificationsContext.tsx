@@ -3736,6 +3736,27 @@ export function NotificationsProvider({
           durationSec: 0,
           disposition: 'answered_elsewhere',
         }).catch(() => undefined);
+      } else if (disposition !== 'voicemail') {
+        // HARDENING (Izzy 2026-07-29): the classified answered_elsewhere stamp
+        // above depends on the status poll having SEEN the answer before the
+        // CANCEL — a race it loses whenever the cancel is fast (live repro:
+        // other device answered, this device showed plain "Incoming call").
+        // Leave a race-free local trace that this device's ring ended WITHOUT
+        // this device answering; mergeCallRecords promotes the server's
+        // "answered" verdict for the same call into "Answered on another
+        // device" using this trace. Caller-hangup/missed calls are unaffected
+        // (server says missed → no promotion), voicemail likewise.
+        appendCallRecord({
+          id: 'invite:' + inviteId,
+          linkedId: invite.pbxCallId || null,
+          direction: 'inbound',
+          fromNumber: invite.fromNumber || '',
+          fromName: invite.fromDisplay || null,
+          toNumber: invite.toExtension || '',
+          startedAt: new Date((invite as any)?._pushReceivedAt || Date.now()).toISOString(),
+          durationSec: 0,
+          disposition: 'ring_ended_unanswered',
+        }).catch(() => undefined);
       }
       showEndedState(invite, friendly, { reason }, delayMs);
       if (presentedOnLockScreen) {

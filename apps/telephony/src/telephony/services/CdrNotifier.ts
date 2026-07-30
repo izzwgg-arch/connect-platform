@@ -53,6 +53,16 @@ export function deriveDisposition(call: NormalizedCall, resolvedDir?: string): s
   const dirForVm = resolvedDir ?? normalizeDirection(call.direction);
   if (dirForVm === "incoming" && isVoicemailOnlyAnswer(call)) return "missed";
 
+  // HARDENED (Izzy 2026-07-29): a genuine tenant-extension leg answered.
+  // extensionAnsweredAt is set ONLY by real extension pickups — never by
+  // inbound-trunk IVR Answer() or ringback early media (see NormalizedCall).
+  // It outranks leg-level "NO ANSWER" evidence: on a multi-device fork the
+  // answering device's own CDR record can be missing or late, leaving only
+  // the unanswered siblings' NO ANSWER records — which classified a 40s
+  // answered call as missed (live repro linkedId 1785378877.138561).
+  // Answered by a human anywhere ⇒ answered, no matter which device.
+  if (dirForVm === "incoming" && call.extensionAnsweredAt) return "answered";
+
   const cdrDisp = String(call.metadata?.cdrDisposition ?? "").toUpperCase().trim();
   if (cdrDisp === "ANSWERED") return "answered";
   // Direction-aware: "NO ANSWER" is a MISSED call only for the callee. For an

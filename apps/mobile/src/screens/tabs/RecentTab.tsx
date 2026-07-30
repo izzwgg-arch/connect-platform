@@ -108,6 +108,11 @@ function normalizeDisposition(call: CallRecord): NormalizedDisposition {
   }
   if (raw === 'answered' || raw === 'answer') return 'answered';
   if (raw.includes('answered_elsewhere') || raw.includes('answered elsewhere')) return 'answered_elsewhere';
+  // Local ring-ended trace (see callHistory.ts promotion rule): until the
+  // server's record arrives it renders as a missed call — the ring did end
+  // unanswered on THIS device. Once the server row lands, the merge either
+  // keeps missed (nobody answered) or promotes to answered_elsewhere.
+  if (raw === 'ring_ended_unanswered') return 'missed';
   if (raw === 'voicemail' || raw === 'vm' || raw.includes('voicemail')) return 'voicemail';
   if (raw === 'missed') return 'missed';
   if (raw === 'no_answer' || raw === 'noanswer' || raw.includes('no answer')) return 'no_answer';
