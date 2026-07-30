@@ -1378,6 +1378,22 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     }
   }
 
+  /**
+   * Drain (return + clear) the answered-elsewhere breadcrumbs the native FCM
+   * service recorded when a ring-stop push (reason=answered_elsewhere) ended
+   * this device's ring. Same JSON-array contract as drainDndMissedCalls.
+   */
+  @ReactMethod
+  fun drainAnsweredElsewhere(promise: Promise) {
+    try {
+      val json = IncomingCallFirebaseService.drainAnsweredElsewhere(reactApplicationContext)
+      promise.resolve(json)
+    } catch (t: Throwable) {
+      Log.w(TAG, "drainAnsweredElsewhere failed: ${t.message}")
+      promise.resolve("[]")
+    }
+  }
+
   /** Whether the user has granted POST_NOTIFICATIONS (Android 13+). */
   @ReactMethod
   fun areNotificationsEnabled(promise: Promise) {

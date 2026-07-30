@@ -1137,6 +1137,31 @@ export class JsSipClient implements SipClient {
         `[SIP_KEEPALIVE_PING] started interval=${JsSipClient.OPTIONS_KEEPALIVE_INTERVAL_MS}ms (wire-truth)`,
       );
       this.optionsKeepaliveTimer = setInterval(() => {
+        // ── Phantom-anchor watchdog (Izzy 2026-07-29: "make sure it doesn't
+        // happen again") ─────────────────────────────────────────────────────
+        // A Telecom anchor Connection with NO live SIP session is a leak: it
+        // pins MODE_IN_COMMUNICATION system-wide, silencing voicemail/media
+        // playback until the app is force-stopped (live repro: TC@216 stuck
+        // ACTIVE after a never-confirmed outbound). The ended/failed handlers
+        // now clean up correctly, but this sweep guarantees ANY missed path
+        // self-heals within one keepalive tick (45s).
+        if (Platform.OS === "android" && this.sessionsById.size === 0) {
+          try {
+            const mod = (NativeModules as any)?.IncomingCallUi;
+            if (
+              mod &&
+              typeof mod.telecomHasAnyLiveConnection === "function" &&
+              mod.telecomHasAnyLiveConnection() === true &&
+              typeof mod.telecomTerminateAnchors === "function"
+            ) {
+              console.warn("[SIP_KEEPALIVE_PING] phantom Telecom anchor with zero SIP sessions — terminating (leak watchdog)");
+              mod.telecomTerminateAnchors();
+              if (typeof mod.resetCallAudioState === "function") {
+                setTimeout(() => { try { mod.resetCallAudioState(); } catch { /* ignore */ } }, 1500);
+              }
+            }
+          } catch { /* watchdog is best-effort */ }
+        }
         const ua = this.ua;
         if (!ua) return;
         let transportUp = false;
@@ -1477,13 +1502,20 @@ export class JsSipClient implements SipClient {
             const mLine = (sdp: string) => (sdp.match(/^m=audio.*$/m)?.[0] ?? "no-m-audio").slice(0, 90);
             if (e.originator === "local") {
               const before = mLine(e.sdp);
-              // Offers: opus-only (proven, outbound HD works). Answers:
-              // REORDER-ONLY — the opus-only answer experiment (2026-07-29
-              // .3 build) is suspended: both mic-dead-on-incoming incidents
-              // today happened on builds carrying it, and it never got a
-              // supervised incoming test. Cost: inbound may negotiate PCMU
-              // until this is re-proven under live logcat.
-              e.sdp = e.type === "offer" ? preferOpusOnlyOffer(e.sdp) : preferOpusInSdp(e.sdp);
+              // Opus-only BOTH directions (supervised re-proof 2026-07-29
+              // late-night, Izzy present, USB+logcat). History: the opus-only
+              // ANSWER experiment (.3 build) was suspended because both
+              // mic-dead-on-incoming incidents rode builds carrying it — but
+              // the real culprit family was found tonight: phones stranded in
+              // stale MODE_IN_COMMUNICATION by leaked/phantom Telecom anchors
+              // (fixed + watchdogged, see nativeCallEndedCleanup / keepalive
+              // sweep). Data motive: CallQualityHourly shows inbound PCMU legs
+              // running ~2% loss with no FEC — audible as hiss — while opus
+              // outbound sits near 0%. preferOpusOnlyOffer is answer-safe by
+              // construction: it only ever KEEPS payloads already present in
+              // our local SDP (itself derived from the remote offer) and
+              // returns the SDP untouched when opus is absent.
+              e.sdp = preferOpusOnlyOffer(e.sdp);
               console.log(`[SIP_SDP] local ${e.type}: ${before} -> ${mLine(e.sdp)}`);
             } else {
               // Remote SDP: log only — shows what the PBX offered/answered.
@@ -1652,8 +1684,13 @@ export class JsSipClient implements SipClient {
         this.events.onCallState?.("ended");
         // React-tree-independent teardown of the in-call notification and the
         // Telecom anchor. Gated on confirmed so an unanswered fork's BYE can
-        // never disturb the ring-phase notification.
-        if (this.sessionConfirmedAt.has(session)) {
+        // never disturb the ring-phase notification — INBOUND only. OUTBOUND
+        // sessions always clean up: the dial-time anchor exists BEFORE
+        // confirmation, so a busy/declined/canceled outbound that never
+        // confirmed used to LEAK an ACTIVE phantom Telecom call that held
+        // MODE_IN_COMMUNICATION forever and silenced all media playback
+        // (live repro 2026-07-29: stuck TC@216, voicemails inaudible).
+        if (this.sessionConfirmedAt.has(session) || !(session as any)._inboundRingLeg) {
           nativeCallEndedCleanup("session_ended");
         }
       }
@@ -1751,7 +1788,9 @@ export class JsSipClient implements SipClient {
       if (isLastLiveSession) {
         this.events.onCallState?.("ended");
         // Same React-tree-independent native teardown as the "ended" handler.
-        if (this.sessionConfirmedAt.has(session)) {
+        // Outbound always cleans up — see the anchor-leak note there (a failed
+        // outbound is exactly the busy/declined path that leaked TC@216).
+        if (this.sessionConfirmedAt.has(session) || !(session as any)._inboundRingLeg) {
           nativeCallEndedCleanup("session_failed");
         }
       }

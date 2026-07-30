@@ -81,6 +81,64 @@ export async function drainDndMissedCallsIntoHistory(): Promise<number> {
 }
 
 /**
+ * Drain (return + clear) the native answered-elsewhere breadcrumbs — written by
+ * IncomingCallFirebaseService when a ring-stop push (reason=answered_elsewhere)
+ * ended this device's ring because ANOTHER device answered. Appends each as an
+ * 'answered_elsewhere' local record so Recent labels the call "Answered on
+ * another device" (the ring-stop path bypasses every JS teardown, so without
+ * this drain the label never appears — Izzy 2026-07-29, regression after the
+ * answered-anywhere ring-stop landed). Same id scheme (`invite:<id>`) as every
+ * other stamp — appendCallRecord dedupes.
+ */
+export async function drainAnsweredElsewhereIntoHistory(): Promise<number> {
+  if (Platform.OS !== "android") return 0;
+  const mod = (NativeModules as any)?.IncomingCallUi;
+  if (!mod || typeof mod.drainAnsweredElsewhere !== "function") return 0;
+
+  let raw: string;
+  try {
+    raw = await mod.drainAnsweredElsewhere();
+  } catch {
+    return 0;
+  }
+
+  let list: NativeDndMissed[];
+  try {
+    list = JSON.parse(raw || "[]");
+  } catch {
+    return 0;
+  }
+  if (!Array.isArray(list) || list.length === 0) return 0;
+
+  let appended = 0;
+  for (const m of list) {
+    const inviteId = (m.inviteId || "").trim();
+    const pbxCallId = (m.pbxCallId || "").trim();
+    const id = inviteId
+      ? `invite:${inviteId}`
+      : pbxCallId
+        ? `ae:${pbxCallId}`
+        : `ae:${m.ts ?? Date.now()}`;
+    const tsMs = typeof m.ts === "number" && m.ts > 0 ? m.ts : Date.now();
+    const record: CallRecord = {
+      id,
+      linkedId: pbxCallId || null,
+      tenantId: m.tenantId || null,
+      direction: "inbound",
+      fromNumber: m.fromNumber || "",
+      fromName: m.fromDisplay || null,
+      toNumber: m.toExtension || "",
+      startedAt: new Date(tsMs).toISOString(),
+      durationSec: 0,
+      disposition: "answered_elsewhere",
+    };
+    await appendCallRecord(record);
+    appended += 1;
+  }
+  return appended;
+}
+
+/**
  * Hook: drain pending DND missed calls on mount (covers killed-state wakes) and
  * on every foreground transition (covers background-received calls), then
  * refresh the Recent list if anything was added.
@@ -92,9 +150,12 @@ export function useDndMissedCallDrain(): void {
     let mounted = true;
 
     const run = () => {
-      drainDndMissedCallsIntoHistory()
-        .then((n) => {
-          if (n > 0 && mounted) {
+      Promise.all([
+        drainDndMissedCallsIntoHistory(),
+        drainAnsweredElsewhereIntoHistory(),
+      ])
+        .then(([a, b]) => {
+          if (a + b > 0 && mounted) {
             queryClient
               .invalidateQueries({ queryKey: mobileQueryKeys.callHistory })
               .catch(() => undefined);

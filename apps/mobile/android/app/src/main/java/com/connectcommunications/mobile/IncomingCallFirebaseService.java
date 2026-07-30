@@ -1238,6 +1238,17 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         String pushReason = data.get("reason");
         Log.i(TAG, "[LOCK_CALL_CLEANUP] native_termination type=" + type + " inviteId=" + inviteId + " reason=" + pushReason);
         Log.i(TAG, "[CALL_INCOMING] native termination type=" + type + " inviteId=" + inviteId);
+        // Answered-elsewhere breadcrumb (Izzy 2026-07-29): the ring-stop push
+        // that ends this device's ring when another device answers is handled
+        // ENTIRELY here — data-only FCMs never reach the Expo JS listener, and
+        // the JS SIP/poll teardown paths are bypassed. Without a native record
+        // the Recent list can never label the call "Answered on another
+        // device" (regression after the answered-anywhere ring-stop landed).
+        // Persist the same breadcrumb shape as DND missed calls; JS drains it
+        // into local call history on next launch/foreground.
+        if ("answered_elsewhere".equals(pushReason)) {
+            persistAnsweredElsewhere(data, inviteId);
+        }
         // Termination implies the call is gone — placeholder must die too,
         // even if no real INCOMING_CALL ever arrived (e.g. dialplan timed out).
         cancelWakePlaceholderNotification(this, "native_termination:" + type);
@@ -2347,6 +2358,64 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 .getSharedPreferences(DND_MISSED_PREFS, Context.MODE_PRIVATE);
             String existing = sp.getString(DND_MISSED_KEY, "[]");
             sp.edit().remove(DND_MISSED_KEY).apply();
+            return existing == null ? "[]" : existing;
+        } catch (Throwable t) {
+            return "[]";
+        }
+    }
+
+    // ── Answered-elsewhere breadcrumbs ────────────────────────────────────────
+    // Same store/drain pattern as DND missed calls (same prefs file, own key):
+    // written when a ring-stop push carries reason=answered_elsewhere, drained
+    // by JS into local call history so Recent shows "Answered on another
+    // device" even when the app was backgrounded/killed during the ring.
+    private static final String ANSWERED_ELSEWHERE_KEY = "pending_answered_elsewhere";
+
+    /** Append an answered-elsewhere record (JSON). Deduped by inviteId. */
+    private void persistAnsweredElsewhere(Map<String, String> data, String inviteId) {
+        try {
+            android.content.SharedPreferences sp = getApplicationContext()
+                .getSharedPreferences(DND_MISSED_PREFS, Context.MODE_PRIVATE);
+            org.json.JSONArray arr;
+            try {
+                arr = new org.json.JSONArray(sp.getString(ANSWERED_ELSEWHERE_KEY, "[]"));
+            } catch (Exception parseErr) {
+                arr = new org.json.JSONArray();
+            }
+            String iid = inviteId == null ? "" : inviteId;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject existing = arr.optJSONObject(i);
+                if (existing != null && iid.equals(existing.optString("inviteId"))) {
+                    return; // already recorded
+                }
+            }
+            String fromNum = data.get("fromNumber");
+            if (fromNum == null || fromNum.isEmpty()) fromNum = data.get("from");
+            JSONObject o = new JSONObject();
+            o.put("inviteId", iid);
+            o.put("pbxCallId", data.get("pbxCallId") == null ? "" : data.get("pbxCallId"));
+            o.put("fromNumber", fromNum == null ? "" : fromNum);
+            o.put("fromDisplay", data.get("fromDisplay") == null ? "" : data.get("fromDisplay"));
+            o.put("toExtension", data.get("toExtension") == null ? "" : data.get("toExtension"));
+            o.put("tenantId", data.get("tenantId") == null ? "" : data.get("tenantId"));
+            o.put("ts", System.currentTimeMillis());
+            arr.put(o);
+            while (arr.length() > DND_MISSED_CAP) arr.remove(0);
+            sp.edit().putString(ANSWERED_ELSEWHERE_KEY, arr.toString()).apply();
+            Log.i(TAG, "[ANSWERED_ELSEWHERE] persisted breadcrumb inviteId=" + iid + " count=" + arr.length());
+        } catch (Throwable t) {
+            Log.w(TAG, "[ANSWERED_ELSEWHERE] persist failed: " + t.getMessage());
+        }
+    }
+
+    /** Return + clear the pending answered-elsewhere records. Never throws. */
+    public static String drainAnsweredElsewhere(Context ctx) {
+        if (ctx == null) return "[]";
+        try {
+            android.content.SharedPreferences sp = ctx.getApplicationContext()
+                .getSharedPreferences(DND_MISSED_PREFS, Context.MODE_PRIVATE);
+            String existing = sp.getString(ANSWERED_ELSEWHERE_KEY, "[]");
+            sp.edit().remove(ANSWERED_ELSEWHERE_KEY).apply();
             return existing == null ? "[]" : existing;
         } catch (Throwable t) {
             return "[]";
