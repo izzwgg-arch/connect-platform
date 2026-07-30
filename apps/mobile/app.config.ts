@@ -70,6 +70,12 @@ const config: ExpoConfig = {
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   backgroundColor: '#040810',
+  // SDK 54 defaults the New Architecture ON. This app's call stack (JsSIP +
+  // react-native-webrtc + the patched CallKeep + the native Telecom/CallKit
+  // glue) is proven ONLY on the classic architecture — keep it pinned off for
+  // this migration; flipping it is its own future engagement with full call
+  // re-proofs.
+  newArchEnabled: false,
 
   // ── App icon (1024×1024, no rounded corners — OS clips to shape) ──────────
   icon: './assets/icon.png',
@@ -87,7 +93,7 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '29',
+    buildNumber: '30',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       // App Store upload rejected "Connect" as an already-taken bundle name

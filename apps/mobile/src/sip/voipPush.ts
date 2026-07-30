@@ -141,14 +141,15 @@ export function initVoipPushListener(handlers: VoipPushHandlers): () => void {
   Voip.addEventListener('register', onRegister);
   Voip.addEventListener('notification', onNotification);
 
-  // Trigger the native voipRegistration if the AppDelegate patch already ran
-  // it (the call is idempotent on iOS). Without this, token delivery on a
-  // fresh install is delayed until the user backgrounds + foregrounds the app.
-  try {
-    Voip.registerVoipToken?.();
-  } catch (e) {
-    console.warn('[voipPush] registerVoipToken failed:', e);
-  }
+  // SDK 54 (2026-07-30): DO NOT call Voip.registerVoipToken() here. It makes
+  // RNVoipPushNotification create a SECOND PKPushRegistry whose delegate is
+  // the app delegate — which is now Expo's Swift ExpoAppDelegate and does NOT
+  // implement PKPushRegistryDelegate, so any delivery to that registry would
+  // crash (unrecognized selector). PushKit registration is owned entirely by
+  // the native ConnectVoipPushHandler (modules/connect-voip), installed at
+  // launch BEFORE JS boots — fresh-install token delivery does not need a JS
+  // trigger. Credentials still reach JS through the same 'register' event
+  // (handler forwards to RNVoipPushNotificationManager.didUpdatePushCredentials).
 
   return () => {
     try {

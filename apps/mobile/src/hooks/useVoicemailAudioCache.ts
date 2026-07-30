@@ -30,7 +30,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { Audio } from "expo-av";
 import { buildVoicemailPreloadUri, buildVoicemailStreamUri } from "../api/client";
 
@@ -259,7 +259,7 @@ export function useVoicemailAudioCache(
     // Require at least 512 bytes to guard against stale zero-byte / partial
     // downloads that would cause cache_play_failed on every play.
     try {
-      const info = await FileSystem.getInfoAsync(localUri, { size: true });
+      const info = await FileSystem.getInfoAsync(localUri, { size: true } as FileSystem.InfoOptions & { size?: boolean });
       if (info.exists && ((info as any).size ?? 0) >= MIN_AUDIO_BYTES) {
         markReady({
           localUri,
@@ -296,7 +296,7 @@ export function useVoicemailAudioCache(
         await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => undefined);
         return -1;
       }
-      const info = await FileSystem.getInfoAsync(result.uri, { size: true });
+      const info = await FileSystem.getInfoAsync(result.uri, { size: true } as FileSystem.InfoOptions & { size?: boolean });
       return (info as any).size ?? 0;
     };
 

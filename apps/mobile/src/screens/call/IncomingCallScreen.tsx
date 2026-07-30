@@ -476,7 +476,7 @@ export function IncomingCallScreen() {
 
   return (
     <LinearGradient
-      colors={pal.gradient as unknown as string[]}
+      colors={pal.gradient as unknown as [string, string, ...string[]]}
       style={styles.container}
     >
       {/* Pulse rings */}

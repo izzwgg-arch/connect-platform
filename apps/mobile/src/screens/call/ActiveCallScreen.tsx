@@ -543,7 +543,7 @@ export function ActiveCallScreen() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <LinearGradient colors={pal.gradient as unknown as string[]} style={styles.container}>
+    <LinearGradient colors={pal.gradient as unknown as [string, string, ...string[]]} style={styles.container}>
       {/* Animated glow ring behind avatar */}
       <Animated.View
         style={[styles.glowRing, { opacity: glowOpacity, transform: [{ scale: pulseAnim }] }]}

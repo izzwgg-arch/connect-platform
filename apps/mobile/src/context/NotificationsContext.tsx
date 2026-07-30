@@ -62,7 +62,7 @@ import { isStandingRegistrationEnabled } from "../config/featureFlags";
 import { stopAllTelephonyAudio } from "../audio/telephonyAudio";
 import { syncMobileIncomingRingtoneToNative } from "../audio/ringtonePreferences";
 import { appendCallRecord } from "../storage/callHistory";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import type { CallInvite, MobilePushPayload } from "../types";
 import {
   PENDING_CALL_STORAGE_KEY,
@@ -156,17 +156,17 @@ Notifications.setNotificationHandler({
       "MISSED_CALL",
     ]);
     if (CALL_TYPES.has(type)) {
-      return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+      return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
     }
     const USER_ALERT_TYPES = new Set(["voicemail", "missed_call", "dm_message", "sms_message"]);
     if (USER_ALERT_TYPES.has(type)) {
       // Per-user isolation: never display an alert addressed to a different
       // signed-in user (defends against stale/rotated push tokens).
       if (!isNotificationForCurrentUser(data)) {
-        return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+        return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
       }
       if (data?.alertTitle) {
-        return { shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false };
+        return { shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false };
       }
     }
     // When IncomingCallFirebaseService consumes the FCM payload before expo-
@@ -177,7 +177,7 @@ Notifications.setNotificationHandler({
     const hasCallShapedKeys =
       !!(data?.inviteId || data?.callId || data?.pbxCallId || data?.sipCallTarget);
     if (!type && hasCallShapedKeys) {
-      return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+      return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
     }
     // Also suppress entirely empty / unknown notifications — our app never
     // intentionally sends a display-only push, so an empty banner is always
@@ -185,12 +185,12 @@ Notifications.setNotificationHandler({
     const hasRenderableContent =
       !!(notification.request.content.title || notification.request.content.body);
     if (!type && !hasRenderableContent) {
-      return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+      return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
     }
     if (shouldSuppressForegroundPush(data)) {
-      return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+      return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
     }
-    return { shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false };
+    return { shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false };
   },
 });
 
