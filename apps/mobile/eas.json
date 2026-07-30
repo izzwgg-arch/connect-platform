@@ -83,7 +83,8 @@
       "channel": "production",
       "credentialsSource": "remote",
       "ios": {
-        "resourceClass": "m-medium"
+        "resourceClass": "m-medium",
+        "image": "latest"
       },
       "env": {
         "EXPO_PUBLIC_VOICE_SIMULATE": "false",

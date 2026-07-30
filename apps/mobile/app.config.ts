@@ -87,9 +87,14 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '28',
+    buildNumber: '29',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
+      // App Store upload rejected "Connect" as an already-taken bundle name
+      // (ITMS-90129). CFBundleName is the unique internal name; the home-screen
+      // label stays "Connect" via CFBundleDisplayName.
+      CFBundleName: 'ConnectComms',
+      CFBundleDisplayName: 'Connect',
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
       NSMicrophoneUsageDescription: 'Microphone access is required for voice calls.',
       NSContactsUsageDescription:
