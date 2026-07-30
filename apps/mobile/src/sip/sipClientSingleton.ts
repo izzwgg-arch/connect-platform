@@ -40,6 +40,21 @@ installInCallNotificationActions();
 /** Must match SipContext's PROVISION_KEY (SecureStore). */
 const PROVISION_KEY = "cc_mobile_provision";
 
+/**
+ * Throttled backend device re-report for headless operation (no React tree).
+ * Lazy-required so the cold index.js boot stays light; the reporter itself
+ * self-throttles (~5 min) and never throws.
+ */
+function reportHeadlessHealth(reason: string): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require("../notifications/headlessDeviceReport") as typeof import("../notifications/headlessDeviceReport");
+    mod.reportDeviceHealthHeadless(reason);
+  } catch {
+    /* best-effort only */
+  }
+}
+
 let _client: SipClient | null = null;
 
 // [RUNTIME_PROOF / Step 0] Per-JS-runtime identity for the SIP singleton. A
@@ -128,7 +143,10 @@ export async function headlessPreRegisterSip(): Promise<boolean> {
   _preRegisterInFlight = (async (): Promise<boolean> => {
     const client = getSipClient();
     try {
-      if (client.isRegistered()) return true;
+      if (client.isRegistered()) {
+        reportHeadlessHealth("prewake_already_registered");
+        return true;
+      }
     } catch {
       /* fall through to (re)register */
     }
@@ -154,9 +172,13 @@ export async function headlessPreRegisterSip(): Promise<boolean> {
         return false;
       }
       try {
-        if (client.isRegistered()) return true;
+        if (client.isRegistered()) {
+          reportHeadlessHealth("prewake_registered");
+          return true;
+        }
       } catch {
         // Cannot determine state — the register() call resolved, assume ok.
+        reportHeadlessHealth("prewake_registered_assumed");
         return true;
       }
       // register() resolved but the registered event has not landed yet; wait a
@@ -241,7 +263,12 @@ export async function headlessMaintenanceRegisterSip(): Promise<boolean> {
     // (a socket event, which does fire in background) updates registeredAtMs;
     // the next tick's staleness check above is the failure detector.
     try {
-      return (client as any).sendRegisterRefresh?.() === true;
+      const refreshed = (client as any).sendRegisterRefresh?.() === true;
+      // Keep the backend's device view fresh while running headless — the
+      // NotificationsContext 60 s heartbeat only exists with a mounted UI
+      // (self-throttled to ~5 min inside the reporter).
+      if (refreshed) reportHeadlessHealth("maintenance_refresh");
+      return refreshed;
     } catch {
       return false;
     }
