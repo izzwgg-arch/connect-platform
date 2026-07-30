@@ -596,7 +596,28 @@ export class JsSipClient implements SipClient {
     this.events = events;
   }
 
+  /**
+   * PUBLIC register — strictly serialized. ROOT CAUSE of the ghost double
+   * registration (quad-notification incident, 2026-07-29): at app start
+   * several paths (SipContext mount, singleton auto-register, wake handler)
+   * call register() concurrently. The in-flight dedupe below only engages
+   * once `registerPromise` is assigned, which happens AFTER several awaits —
+   * two callers entering in the same tick both saw no UA and BOTH built one.
+   * The loser's UA was orphaned but stayed alive, registered, and refreshing
+   * forever → a second PBX contact → every inbound call forked/rang twice
+   * (or more, one ghost per race). Serializing makes the race impossible:
+   * caller B runs only after caller A's attempt fully settles, then hits the
+   * "already registered" fast path.
+   */
+  private registerSerial: Promise<unknown> = Promise.resolve();
+
   async register(options?: { forceRestart?: boolean }) {
+    const run = this.registerSerial.then(() => this.registerInner(options));
+    this.registerSerial = run.catch(() => undefined);
+    return run;
+  }
+
+  private async registerInner(options?: { forceRestart?: boolean }) {
     if (!this.bundle) throw new Error("Missing provisioning bundle");
     const forceRestart = options?.forceRestart === true;
 
