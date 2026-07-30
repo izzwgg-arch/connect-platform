@@ -91,10 +91,10 @@ const config: ExpoConfig = {
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       // App Store upload rejected "Connect" as an already-taken bundle name
-      // (ITMS-90129). CFBundleName is the unique internal name; the home-screen
-      // label stays "Connect" via CFBundleDisplayName.
-      CFBundleName: 'ConnectComms',
-      CFBundleDisplayName: 'Connect',
+      // (ITMS-90129). Owner decision 2026-07-30: the app is named "Loopcom" —
+      // App Store listing, internal bundle name, and home-screen label alike.
+      CFBundleName: 'Loopcom',
+      CFBundleDisplayName: 'Loopcom',
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
       NSMicrophoneUsageDescription: 'Microphone access is required for voice calls.',
       NSContactsUsageDescription:
