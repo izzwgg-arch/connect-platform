@@ -8,7 +8,10 @@ import ExpoModulesCore
 // class is compiled into the same pod and is always present. If the lookup
 // ever fails we log loudly — a silent no-op here means a fully cold-killed
 // iPhone will not ring.
-public class ConnectVoipAppDelegateSubscriber: NSObject, ExpoAppDelegateSubscriber {
+// Note: ExpoAppDelegateSubscriber is `BaseExpoAppDelegateSubscriber (UIResponder
+// subclass) & Protocol` in SDK 54 — subclass it directly, no extra NSObject base
+// (that caused "multiple inheritance" on the first SDK 54 build).
+public class ConnectVoipAppDelegateSubscriber: ExpoAppDelegateSubscriber {
   public func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
