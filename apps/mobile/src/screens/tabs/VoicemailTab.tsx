@@ -476,12 +476,6 @@ export function VoicemailTab() {
     refetchVoicemail().catch(() => undefined).finally(() => setUserRefreshing(false));
   }, [refetchVoicemail]);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!voicemailQuery.data || voicemailQuery.isStale) load();
-    }, [load, voicemailQuery.data, voicemailQuery.isStale]),
-  );
-
   // Cheap background check: fetch only page 1 of each folder (instead of a full
   // multi-page mailbox resync) and only escalate to the expensive full `load()`
   // when that shows something the current list doesn't already have. A mailbox
@@ -506,6 +500,22 @@ export function VoicemailTab() {
       /* transient poll error — the next 15s tick retries */
     }
   }, [load, token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!voicemailQuery.data || voicemailQuery.isStale) {
+        load();
+      } else {
+        // Fresh-looking cache can still be missing a voicemail that landed in
+        // the last minutes (observed 2026-07-29: VM arrived 20:52, tab opened
+        // 20:54, list — and therefore the preloader — never saw it, so Play
+        // fell to the slow remote stream). The light poll fetches only page 1
+        // per folder and escalates to a full load() only when it finds
+        // something new, so an always-on-focus check is cheap.
+        void lightPollVoicemails();
+      }
+    }, [load, lightPollVoicemails, voicemailQuery.data, voicemailQuery.isStale]),
+  );
 
   // Only poll while this tab is actually focused — it previously kept polling
   // (and, worse, kept fully resyncing) in the background on every other tab.
@@ -755,6 +765,26 @@ export function VoicemailTab() {
       }
     } else {
       console.log(`[VOICEMAIL_AUDIO] play_stream_fallback vmId=${vm.id} preloadStatus=${audioCache.preloadStatus(vm.id)} elapsedMs=${Date.now() - startMs}`);
+      // ── Path A2 (Android): cache miss → download the RAW file now ──────────
+      // The remote stream below waits on the server's ffmpeg transcode (seconds
+      // of silence after tapping Play — Izzy 2026-07-29). The raw download the
+      // preloader already uses is far faster and Android MediaPlayer decodes it
+      // directly, so fetch-then-play-local beats streaming. Any failure falls
+      // through to the remote stream exactly as before. iOS keeps streaming:
+      // its only playable source IS the transcoded MP3, so there is no faster
+      // file to fetch.
+      if (Platform.OS !== 'ios') {
+        try {
+          const downloaded = await audioCache.ensureLocal(vm, 5000);
+          if (downloaded) {
+            await loadFrom(downloaded, true, 6000);
+            console.log(`[VOICEMAIL_AUDIO] play_downloaded_raw vmId=${vm.id} elapsedMs=${Date.now() - startMs}`);
+            return;
+          }
+        } catch (rawErr: any) {
+          console.warn(`[VOICEMAIL_AUDIO] raw_download_play_failed vmId=${vm.id} error=${String(rawErr?.message ?? rawErr)}`);
+        }
+      }
     }
 
     // ── Path B: stream from remote (cache miss or cache_play_failed) ──────────

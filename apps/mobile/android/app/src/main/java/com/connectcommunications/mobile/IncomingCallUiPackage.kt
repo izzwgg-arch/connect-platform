@@ -12,6 +12,7 @@ class IncomingCallUiPackage : ReactPackage {
       DeviceContactsModule(reactContext),
       SipSocketModule(reactContext),
       DownloadsModule(reactContext),
+      ConnectToneModule(reactContext),
     )
   }
 

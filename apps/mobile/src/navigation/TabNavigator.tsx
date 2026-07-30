@@ -333,6 +333,14 @@ export function TabNavigator() {
         headerShown: false,
         lazy: true,
         unmountOnBlur: false,
+        // Freeze blurred tabs (react-freeze via react-native-screens): when
+        // the user sweeps across tabs, every previously-visited tab kept
+        // rendering its list fill-batches in the background — the combined
+        // layout storm blocked the JS thread for 0.5–2.4s per sweep (the
+        // "freezing when navigating", [JS_LAG] topLayout storms,
+        // 2026-07-29). A frozen tab does zero render work until refocused;
+        // its useFocusEffect hooks already re-sync data on focus.
+        freezeOnBlur: true,
       }}
     >
       <Tab.Screen name="Team" component={TeamTab} />

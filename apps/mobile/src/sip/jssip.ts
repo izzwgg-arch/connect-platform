@@ -21,6 +21,7 @@ import { audioRouteManager, getAudioDevicesSnapshot } from "../audio/audioRouteM
 import {
   markCallLatency,
   linkCallLatencyIds,
+  isCallLatencyEnabled,
 } from "../debug/callLatency";
 import {
   MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
@@ -1427,14 +1428,45 @@ export class JsSipClient implements SipClient {
     // seconds — observed live as "calls not connecting at all". This caps the
     // wait: 1.5s after the newest candidate, send with whatever paths exist.
     // Dead servers cost 1.5s, never the call.
+    //
+    // INBOUND FAST PATH (2026-07-30): the resetting 1.5s cap gated the 200 OK
+    // behind ≥1.5s of candidate silence — it single-handedly killed the
+    // instantaneous answer the 07-28 push achieved (which had unknowingly been
+    // riding the empty-pcConfig bug: no servers → gathering trivially done →
+    // answer out at tap). Owner bar: answer must be instantaneous. For inbound
+    // answers under the default "all" policy the answer SDP goes out at the
+    // first public-route (srflx/relay) candidate — typically ~100ms — or a
+    // hard, NON-resetting 500ms cap, whichever first. Host-only-after-500ms is
+    // exactly the SDP shape every call shipped for months pre-07-29, and the
+    // PBX has a public IP + full ICE (peer-reflexive), so media still connects.
+    // Outbound offers and relay-forced calls keep the 1.5s stall cap: under
+    // "relay" policy a relay candidate is mandatory, and that path is where
+    // the dead-creds stall incident actually happened. Do not remove either.
     let iceReadyTimer: ReturnType<typeof setTimeout> | null = null;
+    let iceReadyFired = false;
+    const fireIceReady = (ev: any, why: string) => {
+      if (iceReadyFired) return;
+      iceReadyFired = true;
+      if (iceReadyTimer) { clearTimeout(iceReadyTimer); iceReadyTimer = null; }
+      console.log(`[SIP] ice ready (${why}) — sending SDP with gathered candidates`);
+      try { ev.ready(); } catch { /* already completed */ }
+    };
     session.on("icecandidate", (ev: any) => {
-      if (typeof ev?.ready !== "function") return;
+      if (typeof ev?.ready !== "function" || iceReadyFired) return;
+      const policy = String((this.callPcConfig as any)?.iceTransportPolicy ?? "all");
+      if (!isOutboundSession && policy !== "relay") {
+        const candStr = String(ev?.candidate?.candidate ?? "");
+        if (/ typ (srflx|relay)/.test(candStr)) {
+          fireIceReady(ev, "answer: public-route candidate");
+          return;
+        }
+        if (!iceReadyTimer) {
+          iceReadyTimer = setTimeout(() => fireIceReady(ev, "answer: 500ms cap"), 500);
+        }
+        return;
+      }
       if (iceReadyTimer) clearTimeout(iceReadyTimer);
-      iceReadyTimer = setTimeout(() => {
-        console.log("[SIP] ice gathering capped at 1.5s — proceeding with gathered candidates");
-        try { ev.ready(); } catch { /* already completed */ }
-      }, 1500);
+      iceReadyTimer = setTimeout(() => fireIceReady(ev, "capped at 1.5s"), 1500);
     });
 
     const PREFER_OPUS_SDP = true;
@@ -1811,8 +1843,11 @@ export class JsSipClient implements SipClient {
       });
       // First-RTP probe — poll getStats for an inbound audio track.
       // Stops as soon as we see packets or after 5 s so we don't leak
-      // an interval on stalled calls.
-      if (typeof pc.getStats === "function") {
+      // an interval on stalled calls. Only runs when latency measurement is
+      // actually on: with it off this was still firing ~8 getStats bridge
+      // round-trips per second through the call-connect window for marks
+      // that would be discarded anyway.
+      if (isCallLatencyEnabled() && typeof pc.getStats === "function") {
         const startedAt = Date.now();
         const POLL_MS = 120;
         const TIMEOUT_MS = 5_000;

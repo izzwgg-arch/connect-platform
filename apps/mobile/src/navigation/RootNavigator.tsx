@@ -518,7 +518,15 @@ export function RootNavigator() {
   useEffect(() => {
     const queueRoute = (data: any) => {
       const target = notificationDataToRoute(data);
-      if (target) pendingNotificationRouteRef.current = target;
+      if (target) {
+        pendingNotificationRouteRef.current = target;
+        // WARM TAP FIX (2026-07-29): when the app is already running, nothing
+        // re-runs the nav-ready consumption effect (refs don't trigger
+        // effects), so a tray tap queued a destination that was never read —
+        // notification taps only ever navigated on cold start. Consume
+        // immediately whenever navigation is already up.
+        consumePendingRouteRef.current();
+      }
     };
 
     Notifications.getLastNotificationResponseAsync()
@@ -556,6 +564,7 @@ export function RootNavigator() {
       }
       if (url === 'com.connectcommunications.mobile://missed-call') {
         pendingNotificationRouteRef.current = { type: 'missed_call' };
+        consumePendingRouteRef.current(); // warm tap — navigate now (see queueRoute)
         return;
       }
       if (url.startsWith('com.connectcommunications.mobile://voicemail')) {
@@ -563,6 +572,7 @@ export function RootNavigator() {
         const params = new URLSearchParams(q);
         const voicemailId = params.get('voicemailId') || undefined;
         pendingNotificationRouteRef.current = { type: 'voicemail', voicemailId };
+        consumePendingRouteRef.current(); // warm tap — navigate now
         return;
       }
       if (url.startsWith('com.connectcommunications.mobile://chat')) {
@@ -576,6 +586,7 @@ export function RootNavigator() {
             conversationId,
             messageId,
           };
+          consumePendingRouteRef.current(); // warm tap — navigate now
         }
       }
     };
@@ -586,6 +597,23 @@ export function RootNavigator() {
     return () => sub.remove();
   }, []);
 
+  // Single consumer for a queued notification destination. Kept in a ref so
+  // the empty-dep listener effects above always call the CURRENT version
+  // (with fresh token/navReady/isLoading) — a warm tray tap navigates
+  // immediately; a cold-start tap stays queued until the nav-ready effect
+  // below drains it.
+  const consumePendingRoute = () => {
+    if (!token || !navReady || isLoading) return;
+    if (!navRef.isReady()) return;
+    const target = pendingNotificationRouteRef.current;
+    if (!target) return;
+    pendingNotificationRouteRef.current = null;
+    console.log('[CALL_NAV] notification route — navigating', JSON.stringify(target));
+    routeFromNotification(target);
+  };
+  const consumePendingRouteRef = useRef(consumePendingRoute);
+  consumePendingRouteRef.current = consumePendingRoute;
+
   useEffect(() => {
     if (!token || !navReady || isLoading) return;
     if (pendingActiveCallOpenRef.current) {
@@ -594,10 +622,7 @@ export function RootNavigator() {
       navRef.navigate('App', { screen: 'ActiveCall' });
       return;
     }
-    const target = pendingNotificationRouteRef.current;
-    if (!target) return;
-    pendingNotificationRouteRef.current = null;
-    routeFromNotification(target);
+    consumePendingRouteRef.current();
   }, [token, navReady, isLoading]);
 
   return (

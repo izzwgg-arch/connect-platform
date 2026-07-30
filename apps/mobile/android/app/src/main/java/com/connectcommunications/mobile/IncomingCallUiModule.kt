@@ -1045,12 +1045,39 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
    */
   private fun routeViaTelecom(route: Int, label: String): Boolean {
     return try {
+      // Remember the app's choice regardless of whether a connection exists
+      // yet — a Connection that activates later applies it immediately (see
+      // ConnectIncomingConnection.onCallAudioStateChanged), which closes the
+      // "Telecom resets to earpiece at ACTIVE" gap without JS timers.
+      TelecomBridge.lastRequestedRoute = route
       val conn = TelecomBridge.getAnyLiveConnection() ?: return false
+      // IDEMPOTENT: if call audio is already on the requested route, do not
+      // re-request it. Re-requests are not free — each one re-runs Telecom's
+      // pending-route state machine (and for Bluetooth can restart SCO
+      // negotiation), which is what turned the JS re-assert safety net into
+      // audible route flapping (observed live 2026-07-29, JBL headset).
+      val current = try { conn.callAudioState?.route } catch (_: Throwable) { null }
+      if (current == route) {
+        Log.i(TAG, "routeAudioTo$label: already on requested route — no-op")
+        return true
+      }
       conn.requestAudioRoute(route)
       Log.i(TAG, "routeAudioTo$label: routed via Telecom connection inviteId=${conn.inviteId}")
       true
     } catch (t: Throwable) {
       Log.w(TAG, "routeAudioTo$label: telecom route failed, falling back: ${t.message}")
+      false
+    }
+  }
+
+  /** Synchronous: does Telecom currently hold ANY live Connection for us?
+   *  Lets the JS route manager know whether Bluetooth routing would go
+   *  through Telecom (single owner) or the legacy AudioManager SCO path. */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun telecomHasAnyLiveConnection(): Boolean {
+    return try {
+      TelecomBridge.getAnyLiveConnection() != null
+    } catch (_: Throwable) {
       false
     }
   }

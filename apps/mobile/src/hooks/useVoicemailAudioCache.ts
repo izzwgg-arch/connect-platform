@@ -89,6 +89,15 @@ export interface VoicemailAudioCache {
    * card is expanded so the audio is ready before Play is even tapped.
    */
   warm: (vm: CacheableVoicemail) => void;
+  /**
+   * Play-time fast path for a cache miss: download the raw audio file NOW
+   * (same `raw=1` endpoint the preloader uses — skips the server-side ffmpeg
+   * transcode that makes the remote stream take seconds) and resolve with the
+   * local file URI, or null when the download fails/times out. If a preload
+   * for this voicemail is already in flight, waits for it instead of starting
+   * a duplicate download.
+   */
+  ensureLocal: (vm: CacheableVoicemail, timeoutMs?: number) => Promise<string | null>;
 }
 
 // Minimal Voicemail shape this hook needs — intentionally narrow.
@@ -467,6 +476,32 @@ export function useVoicemailAudioCache(
     return snd;
   }, []);
 
+  const ensureLocal = useCallback(async (vm: CacheableVoicemail, timeoutMs = 5000): Promise<string | null> => {
+    const tok = tokenRef.current;
+    if (!tok) return null;
+    if ((vm.durationSec ?? 1) <= 0) return null; // empty recording — nothing to fetch
+    const readyUri = () => {
+      const entry = cacheRef.current.get(vm.id);
+      return entry?.status === "ready" ? entry.localUri : null;
+    };
+    const existing = readyUri();
+    if (existing) return existing;
+    if (statusRef.current.get(vm.id) === "loading") {
+      // A preload is already downloading this file — wait for it rather than
+      // racing a second download into the same path.
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 100));
+        const st = statusRef.current.get(vm.id);
+        if (st === "ready") return readyUri();
+        if (st === "error" || st === "idle" || st === undefined) return null;
+      }
+      return null;
+    }
+    await preloadOne(vm.id, tok, /* wantSound */ false).catch(() => undefined);
+    return readyUri();
+  }, [preloadOne]);
+
   const warm = useCallback((vm: CacheableVoicemail): void => {
     const tok = tokenRef.current;
     if (!tok) return;
@@ -482,7 +517,7 @@ export function useVoicemailAudioCache(
   }, [preloadOne]);
 
   return useMemo(
-    () => ({ getLocalUri, preloadStatus, takeSound, warm }),
-    [getLocalUri, preloadStatus, takeSound, warm],
+    () => ({ getLocalUri, preloadStatus, takeSound, warm, ensureLocal }),
+    [getLocalUri, preloadStatus, takeSound, warm, ensureLocal],
   );
 }

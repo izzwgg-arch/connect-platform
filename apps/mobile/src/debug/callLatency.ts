@@ -62,7 +62,12 @@ export function isCallLatencyEnabled(): boolean {
     // the measurement campaign, flip back to false before shipping. Kept
     // as a single-line constant so a grep for `FORCE_ENABLE_IN_RELEASE`
     // shows where to turn it off.
-    const FORCE_ENABLE_IN_RELEASE = true;
+    // 2026-07-29: campaign complete (answer→audio measured at 76ms on the
+    // fast-path build). OFF for published builds — the per-event logging +
+    // timeline dumps + native log mirroring are heavy enough to contribute
+    // to JS-thread stalls during calls. Re-enable only for a supervised
+    // measurement session.
+    const FORCE_ENABLE_IN_RELEASE = false;
     if (FORCE_ENABLE_IN_RELEASE) return true;
     return false;
   } catch {

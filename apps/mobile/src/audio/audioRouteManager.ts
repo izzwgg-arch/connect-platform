@@ -43,6 +43,7 @@
  *   [audio_route] fallback
  */
 import { NativeModules, Platform } from 'react-native';
+import { isStandingRegistrationEnabled } from '../config/featureFlags';
 
 export type AudioRoute = 'earpiece' | 'speaker' | 'bluetooth' | 'wired';
 
@@ -112,9 +113,18 @@ export function getAudioDevicesSnapshot(): AudioDeviceSnapshot {
 }
 
 class AudioRouteManager {
+  /** How long after an intentional route apply device-presence flickers are
+   *  ignored (Bluetooth SCO setup makes BT vanish/reappear for ~1-2s). */
+  private static readonly SETTLE_WINDOW_MS = 2500;
   private currentRoute: AudioRoute = 'earpiece';
   private userOverride: AudioRoute | null = null;
+  private lastApplyAtMs = 0;
   private callActive = false;
+  private callDirection: 'inbound' | 'outbound' | null = null;
+  /** One-shot: has this call already deferred a Bluetooth apply to the
+   *  dial-time Telecom anchor? Guarantees a fallback to the legacy
+   *  AudioManager SCO path if the anchor never materializes. */
+  private btAnchorDeferUsed = false;
   private listeners: Set<RouteListener> = new Set();
   private lastSnapshot: AudioDeviceSnapshot = {
     bluetoothConnected: false,
@@ -128,6 +138,8 @@ class AudioRouteManager {
   noteCallStarted(direction: 'inbound' | 'outbound'): void {
     this.callActive = true;
     this.userOverride = null;
+    this.callDirection = direction;
+    this.btAnchorDeferUsed = false;
     log('call_started', { direction });
   }
 
@@ -142,6 +154,17 @@ class AudioRouteManager {
     }
     log('call_connected_reapply');
     this.applyRoute('call_connected');
+  }
+
+  /**
+   * Apply the computed desired route before the call is audible (dial-time
+   * Telecom anchor just activated). Same as noteCallConnected's re-apply but
+   * without faking a "connected" transition; lets Bluetooth SCO come up
+   * during ringback so nothing changes hands at the connect moment.
+   */
+  applyDesiredRouteEarly(reason: string): void {
+    if (!this.callActive) return;
+    this.applyRoute(reason);
   }
 
   /** Mark a call as ended; clear per-call user override. */
@@ -181,7 +204,18 @@ class AudioRouteManager {
         log('bluetooth_available', { available: snapshot.bluetoothConnected });
       }
       if (presenceChanged && this.callActive) {
-        this.applyRoute('device_change');
+        // Settle window: while a just-applied route is still being wired up
+        // natively, the device list FLICKERS (Bluetooth "disappears" for a
+        // beat mid-SCO-negotiation — observed live 2026-07-29, JBL headset).
+        // Reacting to those phantom transitions re-routed the call back and
+        // forth audibly. Ignore presence changes for a short window after an
+        // intentional apply; a real unplug persists and is handled by the
+        // next probe tick after the window.
+        if (Date.now() - this.lastApplyAtMs < AudioRouteManager.SETTLE_WINDOW_MS) {
+          log('device_change_ignored_settling', snapshot);
+        } else {
+          this.applyRoute('device_change');
+        }
       }
       this.notify();
     }
@@ -244,6 +278,7 @@ class AudioRouteManager {
     if (!this.callActive) return;
     if (Platform.OS === 'ios' && this.currentRoute !== 'speaker') return;
     log('reassert', { route: this.currentRoute, reason });
+    this.lastApplyAtMs = Date.now();
     this.applyRouteToNative(this.currentRoute);
   }
 
@@ -260,6 +295,14 @@ class AudioRouteManager {
   async verifyAndEnforce(reason: string): Promise<void> {
     if (!this.callActive) return;
     if (Platform.OS !== 'android') return;
+    // During the settle window the ACTUAL device reading flaps while the OS
+    // wires up the route we just asked for (esp. Bluetooth SCO). Enforcing
+    // against those transient readings re-routed the call audibly — wait for
+    // the dust to settle; drift that persists is caught by the next probe.
+    if (Date.now() - this.lastApplyAtMs < AudioRouteManager.SETTLE_WINDOW_MS) {
+      log('verify_skipped_settling', { reason });
+      return;
+    }
     const mod = (NativeModules as any)?.IncomingCallUi;
     if (typeof mod?.getCommunicationDeviceType !== 'function') return;
     let actual = 'unknown';
@@ -274,6 +317,7 @@ class AudioRouteManager {
     const desired = this.computeDesiredRoute();
     if (actual !== desired) {
       log('drift_detected', { desired, actual, reason });
+      this.lastApplyAtMs = Date.now();
       this.applyRouteToNative(desired);
       if (this.currentRoute !== desired) {
         this.currentRoute = desired;
@@ -309,6 +353,7 @@ class AudioRouteManager {
   private applyRoute(reason: string): void {
     const desired = this.computeDesiredRoute();
     log('selected', { route: desired, reason });
+    this.lastApplyAtMs = Date.now();
     this.applyRouteToNative(desired);
     if (this.currentRoute !== desired) {
       this.currentRoute = desired;
@@ -337,6 +382,32 @@ class AudioRouteManager {
   }
 
   private applyRouteToNative(route: AudioRoute): void {
+    // SINGLE-OWNER Bluetooth (2026-07-29, live-call capture): on outbound
+    // standing-mode calls the dial path used to start an app-owned SCO link
+    // via AudioManager; when the Telecom anchor activated it tore that link
+    // down and rebuilt it as its own — an audible earpiece-dip + Bluetooth
+    // cycle ("the jumping"). The anchor now dispatches at dial time, so the
+    // FIRST Bluetooth apply of an outbound call steps aside (once) when no
+    // Telecom connection exists yet — the anchor applies it moments later
+    // through Telecom, the only owner. If the anchor never comes, the next
+    // apply falls through to the legacy path (one-shot defer).
+    if (
+      route === 'bluetooth' &&
+      Platform.OS === 'android' &&
+      this.callDirection === 'outbound' &&
+      !this.btAnchorDeferUsed &&
+      isStandingRegistrationEnabled()
+    ) {
+      let hasTelecomConn = false;
+      try {
+        hasTelecomConn = !!(NativeModules as any)?.IncomingCallUi?.telecomHasAnyLiveConnection?.();
+      } catch { /* treat as absent */ }
+      if (!hasTelecomConn) {
+        this.btAnchorDeferUsed = true;
+        log('bt_deferred_to_anchor', {});
+        return;
+      }
+    }
     const native = getNativeRouter();
     if (native) {
       try {

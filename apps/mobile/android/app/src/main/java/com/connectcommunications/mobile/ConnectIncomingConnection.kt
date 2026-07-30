@@ -39,6 +39,7 @@ class ConnectIncomingConnection(
     Log.i(TAG, "onShowIncomingCallUi inviteId=$inviteId activateOnAdd=$activateOnAdd")
     if (activateOnAdd) {
       setActive()
+      noteActivatedAndApplyAppRoute()
       Log.i(TAG, "onShowIncomingCallUi inviteId=$inviteId — anchor flipped to ACTIVE")
     }
   }
@@ -46,6 +47,7 @@ class ConnectIncomingConnection(
   override fun onAnswer() {
     Log.i(TAG, "onAnswer inviteId=$inviteId — flipping to ACTIVE and notifying JS")
     setActive()
+    noteActivatedAndApplyAppRoute()
     TelecomBridge.notifyAnswer(inviteId, callerNumber, callerName, pbxCallId)
   }
 
@@ -75,6 +77,19 @@ class ConnectIncomingConnection(
     disconnectAndDestroy(DisconnectCause(DisconnectCause.OTHER))
   }
 
+  /**
+   * When this Connection flipped ACTIVE (0 = not yet). For a short window
+   * after activation, ANY route Telecom applies that differs from the app's
+   * chosen route is corrected — Telecom's SWITCH_BASELINE_ROUTE stomp is not
+   * synchronized with activation (observed live 2026-07-29: first audio
+   * state was still correct, the earpiece baseline landed ~500ms LATER, so a
+   * one-shot first-callback guard missed it and audio audibly dipped for
+   * half a second). After the window the Connection never interferes again,
+   * so genuine user/OS route changes (headset button, device change) are
+   * always respected — no fight loops.
+   */
+  private var activeAtMs: Long = 0L
+
   override fun onCallAudioStateChanged(state: CallAudioState?) {
     // Telecom is the routing authority while this Connection is ACTIVE.
     // Log every route flip so speaker/BT problems are diagnosable from
@@ -85,6 +100,35 @@ class ConnectIncomingConnection(
         (state?.let { CallAudioState.audioRouteToString(it.route) } ?: "null") +
         " muted=${state?.isMuted}",
     )
+    if (state == null || this.state != STATE_ACTIVE) return
+    val sinceActive = if (activeAtMs > 0) System.currentTimeMillis() - activeAtMs else Long.MAX_VALUE
+    if (sinceActive <= ROUTE_ENFORCE_WINDOW_MS) {
+      val want = TelecomBridge.lastRequestedRoute
+      if (want != null && want != state.route) {
+        Log.i(
+          TAG,
+          "onCallAudioStateChanged inviteId=$inviteId — enforcing app route " +
+            CallAudioState.audioRouteToString(want) + " over activation stomp (+${sinceActive}ms)",
+        )
+        setAudioRoute(want)
+      }
+    }
+  }
+
+  /**
+   * Mark activation and pre-empt Telecom's baseline route with the app's
+   * chosen route. Called right after every setActive() so the pending-route
+   * machinery resolves toward the app's choice instead of earpiece.
+   */
+  private fun noteActivatedAndApplyAppRoute() {
+    activeAtMs = System.currentTimeMillis()
+    val want = TelecomBridge.lastRequestedRoute ?: return
+    try {
+      Log.i(TAG, "activation — pre-applying app route " + CallAudioState.audioRouteToString(want))
+      setAudioRoute(want)
+    } catch (t: Throwable) {
+      Log.w(TAG, "activation route pre-apply failed: ${t.message}")
+    }
   }
 
   /**
@@ -106,6 +150,7 @@ class ConnectIncomingConnection(
   fun markActive() {
     Log.i(TAG, "markActive inviteId=$inviteId")
     setActive()
+    noteActivatedAndApplyAppRoute()
   }
 
   /**
@@ -150,5 +195,8 @@ class ConnectIncomingConnection(
 
   companion object {
     private const val TAG = "ConnectIncomingConn"
+    /** How long after ACTIVE the app's chosen route is enforced over Telecom
+     *  stomps. Short enough to never fight a real user/OS change. */
+    private const val ROUTE_ENFORCE_WINDOW_MS = 3000L
   }
 }

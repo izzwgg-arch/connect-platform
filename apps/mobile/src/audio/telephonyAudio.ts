@@ -183,6 +183,32 @@ let _callEndWav: string | null = null;
 let _vnoteStartWav: string | null = null;
 let _vnoteSentWav: string | null = null;
 
+// ── Native cue player (Android) ──────────────────────────────────────────────
+// expo-av playback rides the MEDIA stream, which Android silences while
+// InCallManager holds MODE_IN_COMMUNICATION — so in-call cues (DTMF, hang-up)
+// were synthesised but inaudible, and the voice-note cues raced expo-av's own
+// recorder session (observed live 2026-07-29: none of them ever sounded).
+// ConnectTone plays the exact same WAV bytes on a native AudioTrack with
+// voice-call attributes during a call and media attributes otherwise. Falls
+// back to expo-av (iOS / module missing).
+function playCueNative(dataUri: string, volume: number): boolean {
+  if (Platform.OS !== "android") return false;
+  try {
+    const mod = (NativeModules as any)?.ConnectTone;
+    if (!mod || typeof mod.playWavBase64 !== "function") return false;
+    const b64 = dataUri.replace(/^data:audio\/wav;base64,/, "");
+    mod.playWavBase64(b64, volume).catch?.(() => undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function playCue(dataUri: string, volume: number): void {
+  if (playCueNative(dataUri, volume)) return;
+  playOnce(dataUri, volume).catch(() => undefined);
+}
+
 /** Subtle descending two-note "call ended" cue (G4 → C4). */
 export function playCallEndTone(): void {
   if (!_callEndWav) {
@@ -191,7 +217,7 @@ export function playCallEndTone(): void {
       { freq: 261.63, ms: 170 },
     ], 0.5);
   }
-  playOnce(_callEndWav, 0.5).catch(() => undefined);
+  playCue(_callEndWav, 0.5);
 }
 
 /** Soft single-note tick when a voice note starts recording (A5). */
@@ -199,7 +225,7 @@ export function playVoiceNoteStartTone(): void {
   if (!_vnoteStartWav) {
     _vnoteStartWav = buildToneSequenceWav([{ freq: 880.0, ms: 95 }], 0.42);
   }
-  playOnce(_vnoteStartWav, 0.5).catch(() => undefined);
+  playCue(_vnoteStartWav, 0.5);
 }
 
 /** Bright ascending two-note "sent" cue when a voice note is released (E5 → C6). */
@@ -210,7 +236,7 @@ export function playVoiceNoteSentTone(): void {
       { freq: 1046.5, ms: 150 },
     ], 0.5);
   }
-  playOnce(_vnoteSentWav, 0.6).catch(() => undefined);
+  playCue(_vnoteSentWav, 0.6);
 }
 
 // ─── DTMF frequency table ─────────────────────────────────────────────────────
@@ -588,11 +614,14 @@ export async function startRingtone() {
   await cycle();
 }
 
-/** Play a single DTMF keypad tone (120ms). Non-blocking, fire-and-forget. */
+/** Play a single DTMF keypad tone (120ms). Non-blocking, fire-and-forget.
+ *  Routed through the native AudioTrack on Android so it is audible inside an
+ *  active call (expo-av's media stream is silenced in MODE_IN_COMMUNICATION —
+ *  the in-call keypad was completely mute; Izzy 2026-07-29). */
 export function playDtmfTone(digit: string): void {
   const uri = getDtmfWav(digit);
   if (!uri) return;
-  playOnce(uri, 0.6).catch(() => undefined);
+  playCue(uri, 0.6);
 }
 
 // Call-waiting alert: while another call is ringing during an active call, a

@@ -1790,6 +1790,45 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const prev = prevCallStateRef.current;
     prevCallStateRef.current = callState;
+    // ── OUTBOUND: dispatch the Telecom anchor at DIAL time ──────────────────
+    // Root fix for the audio-route "jumping" at connect (Izzy 2026-07-29,
+    // proven by live-call capture): the anchor used to be created seconds
+    // AFTER audio was already flowing. The app's pre-anchor code had set up
+    // Bluetooth via AudioManager; when the late anchor activated, Telecom
+    // tore that link down and rebuilt it as its own — an audible
+    // earpiece-dip + Bluetooth cycle mid-call. Creating the anchor while the
+    // call is still dialing gives Telecom sole ownership of routing BEFORE
+    // any audio exists: Bluetooth comes up once, during ringback, and the
+    // route never changes hands at connect. Outbound + standing-mode only;
+    // inbound keeps its proven answer-time anchoring untouched.
+    if (
+      (callState === "dialing" || callState === "ringing") &&
+      callDirection === "outbound" &&
+      prev !== "dialing" &&
+      prev !== "ringing" &&
+      Platform.OS === "android" &&
+      isStandingRegistrationEnabled() &&
+      !telecomAnchorIdRef.current
+    ) {
+      const anchorId = `tc-anchor-${Date.now()}`;
+      telecomAnchorIdRef.current = anchorId;
+      void startTelecomActiveCall({
+        inviteId: anchorId,
+        callerNumber: "",
+        callerName: remoteParty || "On a call",
+      }).then((ok) => {
+        if (!ok) {
+          if (telecomAnchorIdRef.current === anchorId) telecomAnchorIdRef.current = null;
+          return; // connected-time block below re-dispatches as fallback
+        }
+        console.log("[TELECOM] dial-time anchor up — applying desired route early");
+        // Route the (not-yet-audible) call audio to the desired sink now, so
+        // Bluetooth SCO is negotiated during ringback and the connect moment
+        // changes nothing. Conditional/no-op-safe: routeViaTelecom skips when
+        // already on the requested route.
+        setTimeout(() => audioRouteManager.applyDesiredRouteEarly("dial_time_anchor"), 250);
+      });
+    }
     if (callState === "connected" && prev !== "connected") {
       logCallFlow("SIP_CALL_STATE_CONNECTED", {
         inviteId: null,
@@ -1860,18 +1899,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             // Immediate + rapid re-asserts: the anchor stomps a pre-connect
             // speaker choice for the ~600ms gap the old timers left — audible
             // as "speaker dips to earpiece then returns" (Izzy 2026-07-29).
+            // 2026-07-29 rework: the old 9-shot re-assert barrage here is GONE.
+            // Each blind re-assert re-ran Telecom's pending-route machinery
+            // (restarting Bluetooth SCO negotiation on every shot) — the cure
+            // WAS the audible on/off/on route "jumping" Izzy reported. The
+            // activation stomp is now fixed at the source, natively:
+            // routeViaTelecom() no-ops when already on the requested route,
+            // and ConnectIncomingConnection applies the app's chosen route
+            // the moment the anchor's first ACTIVE audio state arrives.
+            // What remains here: one immediate assert (covers the pre-anchor
+            // AudioManager window) and two conditional drift checks that only
+            // touch routing when actual ≠ desired, after SCO has settled.
             audioRouteManager.reassertRoute("telecom_anchor_dispatch");
-            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_150"), 150);
-            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_350"), 350);
-            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active"), 600);
-            setTimeout(() => audioRouteManager.reassertRoute("telecom_anchor_active_late"), 1800);
-            // Blind re-asserts cover the common case; these VERIFY against the
-            // actual native output device and correct any remaining drift, so
-            // a speaker/BT route picked before connect always sticks.
-            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_300"), 300);
-            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_1200"), 1200);
+            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_800"), 800);
             setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_2500"), 2500);
-            setTimeout(() => void audioRouteManager.verifyAndEnforce("post_anchor_4000"), 4000);
           });
         }
       }

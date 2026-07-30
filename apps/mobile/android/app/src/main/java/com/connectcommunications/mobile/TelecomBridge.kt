@@ -285,11 +285,27 @@ object TelecomBridge {
 
   fun unregisterActiveConnection(inviteId: String) {
     if (inviteId.isEmpty()) return
-    synchronized(activeConnections) {
+    val remaining = synchronized(activeConnections) {
       activeConnections.remove(inviteId)
+      activeConnections.size
     }
-    Log.i(TAG, "unregisterActiveConnection inviteId=$inviteId remaining=${activeConnections.size}")
+    // Last call gone — the app's route choice must not leak into the next call.
+    if (remaining == 0) lastRequestedRoute = null
+    Log.i(TAG, "unregisterActiveConnection inviteId=$inviteId remaining=$remaining")
   }
+
+  /**
+   * The most recent audio route the APP asked for (CallAudioState.ROUTE_*),
+   * null when no explicit request was made this call. Written by
+   * IncomingCallUiModule.routeViaTelecom; read by ConnectIncomingConnection
+   * so a Connection that flips ACTIVE can immediately apply the app's choice
+   * instead of letting Telecom's baseline (earpiece) play first — that
+   * baseline stomp is what made the route audibly "jump" at connect and
+   * forced the JS side into a timer-based re-assert war (Izzy 2026-07-29:
+   * "speaker on, off, on, off — it has to stay where the user put it").
+   */
+  @Volatile
+  var lastRequestedRoute: Int? = null
 
   fun getActiveConnection(inviteId: String): ConnectIncomingConnection? {
     if (inviteId.isEmpty()) return null
