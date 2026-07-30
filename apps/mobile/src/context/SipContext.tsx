@@ -20,7 +20,7 @@ import {
   flightRecord,
   flightSetSipState,
 } from "../diagnostics/CallFlightRecorder";
-import { ensureMicPermission, ensureMicPermissionOrAlert } from "../sip/permissions";
+import { ensureMicPermissionOrAlert } from "../sip/permissions";
 import { showAppAlert } from "../components/ui/appAlert";
 import {
   classifyOutboundSipFailure,
@@ -269,20 +269,34 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // (2026-07-30, "microphone not working" on the first standalone install).
   // The prompt previously fired only on the first OUTBOUND dial; if the very
   // first call on a fresh install was an incoming CallKit answer, the mic had
-  // never been requested and the call connected with a dead mic. Asking up
-  // front guarantees every subsequent answer has a granted mic. One-shot per
-  // process; the OS only ever shows the dialog once per install anyway.
+  // never been requested and the call connected with a dead mic.
+  //
+  // MUST use expo-av's permission request — a PERMISSIONS-ONLY prompt.
+  // Build 22 used the WebRTC getUserMedia probe (ensureMicPermission) here and
+  // it KILLED ALL CALL AUDIO both ways: opening the WebRTC capture unit at
+  // launch, outside any call, left the iOS audio session wedged, and when
+  // CallKit later activated the real call the audio unit could not start (no
+  // mic, no speaker). Never touch WebRTC/getUserMedia outside the immediate
+  // dial/answer path on iOS.
   const micPrimedRef = useRef(false);
   useEffect(() => {
     if (Platform.OS !== "ios" || !authToken || micPrimedRef.current) return;
     micPrimedRef.current = true;
-    ensureMicPermission()
-      .then((res) => {
-        if (!res.granted) {
-          console.warn("[mic-perm] first-launch mic priming denied — incoming answers will have no mic until enabled in Settings");
-        }
-      })
-      .catch(() => undefined);
+    try {
+      // Lazy require keeps expo-av out of surfaces that never touch audio.
+      const { Audio } = require("expo-av");
+      Audio.requestPermissionsAsync()
+        .then((res: { granted?: boolean }) => {
+          if (!res?.granted) {
+            console.warn("[mic-perm] first-launch mic permission not granted — incoming answers will have no mic until enabled in Settings");
+          } else {
+            console.log("[mic-perm] first-launch mic permission granted (permissions-only prompt)");
+          }
+        })
+        .catch(() => undefined);
+    } catch {
+      /* expo-av unavailable — the dial-time preflight still covers outbound */
+    }
   }, [authToken]);
 
   // Mirror of callState read synchronously inside dial() so the
