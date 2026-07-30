@@ -87,7 +87,7 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '27',
+    buildNumber: '28',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
