@@ -2558,6 +2558,26 @@ export function NotificationsProvider({
         answerHandoffInviteIdRef.current = invite.id;
         suppressedIncomingInviteIdsRef.current.add(invite.id);
         answerInviteRef.current = invite;   // caller info fallback for ActiveCallScreen
+        // THIS device is answering — stamp it in local history NOW (before the
+        // server's answered-elsewhere ring-stop push can land: that push also
+        // reaches the ANSWERING device, whose breadcrumb then mislabeled its
+        // own call "Answered on another device" (Izzy 2026-07-30). Same
+        // `invite:<id>` key as the breadcrumb — appendCallRecord dedupes by id,
+        // so whichever writes first wins, and this write is always first (the
+        // ring-stop only fires AFTER the answer reaches the PBX). The merge
+        // guard in callHistory.ts also treats a local 'answered' overlap as
+        // "never promote to answered_elsewhere".
+        appendCallRecord({
+          id: 'invite:' + invite.id,
+          linkedId: invite.pbxCallId || null,
+          direction: 'inbound',
+          fromNumber: invite.fromNumber || '',
+          fromName: invite.fromDisplay || null,
+          toNumber: invite.toExtension || '',
+          startedAt: new Date(pushReceivedAt || Date.now()).toISOString(),
+          durationSec: 0,
+          disposition: 'answered',
+        }).catch(() => undefined);
         setAnswerHandoffTick((n) => n + 1);
         flightRecord('UI', 'ANSWER_HANDOFF_STARTED', {
           inviteId: invite.id,
@@ -4374,8 +4394,12 @@ export function NotificationsProvider({
         // push arrives we MUST report the call to CallKit promptly, then persist
         // the invite so the EXISTING answer/decline pipeline (CallKeep
         // answerCall/endCall → handleAcceptInvite/handleDeclineInvite) can act
-        // on it. We deliberately DO NOT connect SIP/WebRTC here — that only
-        // happens after the user taps Answer.
+        // on it. SIP *registration* is kicked at ring time (see below, owner
+        // directive 2026-07-30 "answer must be instantaneous like Android") so
+        // the INVITE is already live on the socket when the user answers —
+        // the warm fast-path in handleAcceptInvite then bridges immediately
+        // instead of paying register + backend-claim + requeue after the tap.
+        // WebRTC/mic is still only touched after the user answers.
         try {
           const callId = String(payload?.inviteId || (payload as any)?.callId || "");
           console.log("[VOIP_PUSH] incoming notification, callId:", callId || "(none)");
@@ -4439,6 +4463,18 @@ export function NotificationsProvider({
           // 2) Persist invite state so resolveInviteForAction can answer/decline
           //    without a race (safeSetInvite also dedupes via shownInviteIdRef).
           safeSetInvite(invite);
+          // 3) Prewarm SIP registration DURING the ring (owner 2026-07-30:
+          //    "answer must be instantaneous like Android"). register() is
+          //    serialized + a no-op when already registered, and touches no
+          //    mic/WebRTC. With the socket registered before the tap, Asterisk
+          //    delivers the INVITE during the ring and handleAcceptInvite's
+          //    warm fast-path answers with an immediate 200 OK — instead of
+          //    paying register + backend claim + PBX requeue after the tap.
+          try {
+            void sip.register?.();
+          } catch {
+            /* fall back to the tap-time register inside handleAcceptInvite */
+          }
         } catch (e) {
           console.warn(
             "[VOIP_PUSH] onIncoming handler error:",

@@ -1544,9 +1544,23 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         boolean preferFullScreen
     ) {
         ensureIncomingCallChannel();
-        // Show caller name AND number together in the floating/heads-up call
-        // notification (CallStyle renders this Person name as the big label).
+        // Each caller fact appears EXACTLY ONCE on the floating notification
+        // (Izzy 2026-07-30 — the old combined "NAME · number" label was set as
+        // BOTH the CallStyle Person name and the content text, so the number
+        // and caller-id rendered twice). Person (big label) = the name when we
+        // have one, else the number; the sub-line = the number, only when the
+        // big label isn't already the number.
         final String callerLabel = buildCallerLabel(displayName, fromNum);
+        String nameOnly = displayName == null ? "" : displayName.trim();
+        String numOnly = fromNum == null ? "" : fromNum.trim();
+        boolean labelNameIsNumber = !numOnly.isEmpty()
+            && (nameOnly.equals(numOnly) || nameOnly.equals(formatCallerNumberForDisplay(numOnly)));
+        final String personLabel = (!nameOnly.isEmpty() && !labelNameIsNumber)
+            ? nameOnly
+            : (!numOnly.isEmpty() ? formatCallerNumberForDisplay(numOnly) : "Unknown caller");
+        final String numberSubLine = (!nameOnly.isEmpty() && !labelNameIsNumber && !numOnly.isEmpty())
+            ? formatCallerNumberForDisplay(numOnly)
+            : null;
         int notificationId = notificationIdForInvite(inviteId);
         int pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1587,7 +1601,8 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.notification_icon)
             .setContentTitle("Incoming call")
-            .setContentText(callerLabel)
+            // Number once, and only when the big Person label is the name.
+            .setContentText(numberSubLine != null ? numberSubLine : null)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -1602,7 +1617,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         builder.setStyle(
             NotificationCompat.CallStyle.forIncomingCall(
                 new androidx.core.app.Person.Builder()
-                    .setName(callerLabel)
+                    .setName(personLabel)
                     .setImportant(true)
                     .build(),
                 declineIntent,

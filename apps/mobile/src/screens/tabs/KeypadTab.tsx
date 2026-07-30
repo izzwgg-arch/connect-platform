@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { useSip } from '../../context/SipContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -222,6 +223,33 @@ export function KeypadTab() {
   const { setMyStatus, isDnd } = usePresence();
   const insets = useSafeAreaInsets();
   const [number, setNumber] = useState('');
+  // Clipboard paste offer (long-press on the number display). Holds the
+  // CLEANED dialable string, or null when no offer is showing.
+  const [pasteOffer, setPasteOffer] = useState<string | null>(null);
+
+  const offerPasteFromClipboard = useCallback(async () => {
+    try {
+      const raw = (await Clipboard.getStringAsync()) || '';
+      // Keep digits, *, # and a LEADING + only — strip spaces, dashes,
+      // parentheses, dots and everything else people copy along with numbers.
+      const cleaned = raw
+        .trim()
+        .replace(/[^\d+*#]/g, '')
+        .replace(/(?!^)\+/g, '');
+      const digitCount = cleaned.replace(/\D/g, '').length;
+      if (digitCount >= 2 && cleaned.length <= 24) {
+        setPasteOffer(cleaned);
+        try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { /* ignore */ }
+      }
+    } catch { /* clipboard unavailable — no offer */ }
+  }, []);
+
+  // The offer auto-dismisses after a few seconds or when the user keeps typing.
+  useEffect(() => {
+    if (pasteOffer === null) return undefined;
+    const t = setTimeout(() => setPasteOffer(null), 6000);
+    return () => clearTimeout(t);
+  }, [pasteOffer]);
   const [dialing, setDialing] = useState(false);
   // Two-tap redial: first tap fills the last-dialed number, second tap calls it
   const [redialFilled, setRedialFilled] = useState(false);
@@ -713,7 +741,27 @@ export function KeypadTab() {
 
       {/* ── Display Area: sits directly above the keypad ── */}
       <View style={styles.displayArea}>
-        <View style={styles.numberRow}>
+        {/* Long-press the number area → offer to paste a phone number from the
+            clipboard (Izzy 2026-07-30). The pasted text is cleaned to just the
+            dialable characters: spaces, dashes, parens etc. are stripped; a
+            leading + survives. */}
+        {pasteOffer !== null && (
+          <TouchableOpacity
+            style={[styles.pasteChip, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            activeOpacity={0.8}
+            onPress={() => {
+              setNumber(pasteOffer);
+              setPasteOffer(null);
+              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch { /* ignore */ }
+            }}
+          >
+            <Ionicons name="clipboard-outline" size={16} color={colors.primary} />
+            <Text style={[styles.pasteChipText, { color: colors.text }]} numberOfLines={1}>
+              Paste {formatDisplay(pasteOffer)}
+            </Text>
+          </TouchableOpacity>
+        )}
+        <Pressable style={styles.numberRow} onLongPress={offerPasteFromClipboard} delayLongPress={350}>
           <Text
             style={[
               styles.displayText,
@@ -735,7 +783,7 @@ export function KeypadTab() {
             {displayValue || ' '}
           </Text>
 
-        </View>
+        </Pressable>
 
         {subHint && (
           <Text style={[styles.hintText, { color: colors.textTertiary }]} numberOfLines={1}>
@@ -910,6 +958,23 @@ const styles = StyleSheet.create({
     minHeight: 46,
     width: '100%',
     gap: 8,
+  },
+  pasteChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: 6,
+    maxWidth: '90%',
+    elevation: 3,
+  },
+  pasteChipText: {
+    fontSize: 15,
+    fontWeight: '600',
   },
   displayText: {
     fontWeight: '300',
