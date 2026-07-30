@@ -378,6 +378,46 @@ export function subscribeNativeCallActions(params: {
   onAnswer: (callId: string) => void;
   onEnd: (callId: string) => void;
 }) {
+  // iOS ONLY — MUST be attached BEFORE the answerCall/endCall listeners below.
+  //
+  // When the app is cold-killed and the user answers a CallKit call on the lock
+  // screen BEFORE the JS bridge finishes booting, RNCallKeep buffers the
+  // answer/end action natively (`_delayedEvents`) and delivers it ONLY through
+  // this one-shot `didLoadWithEvents` event, which fires when the FIRST JS
+  // listener attaches (startObserving). Without this subscription the tap is
+  // silently discarded: CallKit flips to "answered" but the SIP pipeline never
+  // runs — the exact "answered the call and nothing happened" lock-screen bug.
+  // Ordering matters: attaching answerCall first would trigger the flush with
+  // nobody listening.
+  let didLoadSub: { remove: () => void } | null = null;
+  if (Platform.OS === "ios") {
+    didLoadSub = RNCallKeep.addEventListener("didLoadWithEvents", (events: any) => {
+      const list = Array.isArray(events) ? events : [];
+      for (const evt of list) {
+        const name = evt?.name;
+        const callUUID = String(evt?.data?.callUUID || "");
+        if (!callUUID) continue;
+        if (name === "RNCallKeepPerformAnswerCallAction") {
+          console.log("[CALLKEEP_ANSWER] replaying buffered cold-start answer, uuid=" + callUUID);
+          params.onAnswer(callIdForCallKitUuid(callUUID) ?? callUUID);
+        } else if (name === "RNCallKeepPerformEndCallAction") {
+          console.log("[CALLKEEP_ANSWER] replaying buffered cold-start end, uuid=" + callUUID);
+          params.onEnd(callIdForCallKitUuid(callUUID) ?? callUUID);
+        }
+      }
+      // The native buffer is NOT cleared by the flush — a listener re-attach
+      // (remount) would replay the same taps into the answer pipeline again.
+      // Clear it once consumed; downstream accept/decline dedupe covers the
+      // same-mount double-delivery case.
+      if (list.length > 0) {
+        try {
+          (RNCallKeep as any).clearInitialEvents?.();
+        } catch {
+          // best-effort — dedupe keys downstream make replays harmless
+        }
+      }
+    });
+  }
   // Translate the CallKit UUID back to the backend callId before handing it to
   // the shared answer/decline pipeline. On Android the map is empty, so the raw
   // value (already the callId) passes straight through unchanged.
@@ -388,6 +428,7 @@ export function subscribeNativeCallActions(params: {
     params.onEnd(callIdForCallKitUuid(callUUID) ?? callUUID);
   });
   return () => {
+    try { didLoadSub?.remove(); } catch {}
     try { answerSub.remove(); } catch {}
     try { endSub.remove(); } catch {}
   };

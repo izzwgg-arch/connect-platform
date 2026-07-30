@@ -42,6 +42,10 @@ function resolveProfile(): string {
 
 const profile = resolveProfile();
 const isProdProfile = profile === 'production';
+// Dev-client builds only: the phone must fetch the JS bundle from Metro over
+// plain http (LAN or Tailscale IP), which iOS ATS blocks by default. Never on
+// for preview/production.
+const isDevClientProfile = profile === 'dev' || profile === 'ios-dev-device';
 const requestedVoiceSimulate = String(process.env.EXPO_PUBLIC_VOICE_SIMULATE || 'false').toLowerCase() === 'true';
 const voiceSimulate = isProdProfile ? false : requestedVoiceSimulate;
 const logLevel = (process.env.EXPO_PUBLIC_LOG_LEVEL || (isProdProfile ? 'warn' : profile === 'preview' ? 'info' : 'debug')).toLowerCase();
@@ -83,7 +87,7 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '19',
+    buildNumber: '20',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
@@ -96,6 +100,9 @@ const config: ExpoConfig = {
       // avoids the manual "export compliance" prompt on every TestFlight/App
       // Store build. If custom/non-exempt encryption is ever added, revisit this.
       ITSAppUsesNonExemptEncryption: false,
+      ...(isDevClientProfile
+        ? { NSAppTransportSecurity: { NSAllowsArbitraryLoads: true } }
+        : {}),
     },
     // App Store compliance: privacy manifest (required by Apple for apps that use
     // "required reason" APIs). Covers the common APIs pulled in by Expo/RN.

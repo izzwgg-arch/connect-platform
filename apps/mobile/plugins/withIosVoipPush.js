@@ -47,6 +47,7 @@ const PATCH_END = '// CONNECT_VOIP_PUSH_END';
 const IMPORT_BLOCK = `
 ${PATCH_BEGIN}
 #import <PushKit/PushKit.h>
+#import <CallKit/CallKit.h>
 #import <RNVoipPushNotificationManager.h>
 #import "RNCallKeep.h"
 #include <string.h>
@@ -81,6 +82,28 @@ static NSString *ConnectDeterministicCallKitUUID(NSString *callId)
     @"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
     out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
     out[8], out[9], out[10], out[11], out[12], out[13], out[14], out[15]];
+}
+
+// True when CallKit reports the given UUID as an ANSWERED, still-live call.
+// Used by the server-driven cancel branch below: a cancel push can race the
+// user's own answer (PBX "ANSWERED" fans out to every device, including the
+// one that just picked up), and ending a connected call here would hang up on
+// the user mid-sentence. Ringing (not-yet-connected) calls return NO and are
+// ended as usual. Fully wrapped — any failure means "not connected" so the
+// cancel still clears a stuck ring.
+static BOOL ConnectCallKitCallIsConnected(NSString *uuidStr)
+{
+  @try {
+    NSUUID *target = [[NSUUID alloc] initWithUUIDString:uuidStr];
+    if (target == nil) { return NO; }
+    CXCallObserver *observer = [[CXCallObserver alloc] init];
+    for (CXCall *call in observer.calls) {
+      if ([call.UUID isEqual:target] && call.hasConnected && !call.hasEnded) {
+        return YES;
+      }
+    }
+  } @catch (NSException *ex) {}
+  return NO;
 }
 ${PATCH_END}
 `;
@@ -201,10 +224,18 @@ ${PATCH_BEGIN}
                           fromPushKit:YES
                               payload:dict
                 withCompletionHandler:nil];
-    [RNCallKeep endCallWithUUID:cancelUuid reason:endReason];
-    NSString *altCancelId = dict[@"altCallId"];
+    // Connected-call guard: a cancel that races the user's own answer (PBX
+    // ANSWERED fans out to every device) must never hang up a live call.
+    // Only ringing / not-yet-connected calls are ended.
+    if (!ConnectCallKitCallIsConnected(cancelUuid)) {
+      [RNCallKeep endCallWithUUID:cancelUuid reason:endReason];
+    }
+    NSString *altCancelId = [dict[@"altCallId"] isKindOfClass:[NSString class]] ? dict[@"altCallId"] : nil;
     if (altCancelId != nil && altCancelId.length > 0 && ![altCancelId isEqualToString:callId]) {
-      [RNCallKeep endCallWithUUID:ConnectDeterministicCallKitUUID(altCancelId) reason:endReason];
+      NSString *altUuid = ConnectDeterministicCallKitUUID(altCancelId);
+      if (!ConnectCallKitCallIsConnected(altUuid)) {
+        [RNCallKeep endCallWithUUID:altUuid reason:endReason];
+      }
     }
     // Forward to JS too (when awake it clears invite state; the JS onIncoming
     // handler recognizes cancel payloads and never treats them as new calls).

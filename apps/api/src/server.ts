@@ -2783,7 +2783,7 @@ type MobilePushPayload =
   // UI is driven by either (a) the SIP INVITE itself or (b) a follow-up
   // INCOMING_CALL push from the telephony service.
   | { type: "INCOMING_CALL_WAKE"; pbxCallId: string; fromNumber: string; fromDisplay?: string | null; fromPrefix?: string | null; toExtension: string; tenantId: string; pbxVitalTenantId?: string | null; timestamp: string; wakeRequestedAt: string }
-  | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
+  | { type: "INVITE_CLAIMED"; inviteId: string; pbxCallId?: string | null; tenantId: string; timestamp: string }
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string }
   | { type: "voicemail"; voicemailId: string; tenantId: string; extensionId: string; recipientUserId?: string; callerNameOrNumber?: string | null; timestamp: string }
@@ -3012,9 +3012,13 @@ async function recordWakeEvent(input: {
  * (same shared `sendApnsVoipPush`, same token-invalidation semantics) but emits
  * `api_apns_voip_*` events so the two sources are distinguishable in logs.
  *
- * Only `INCOMING_CALL` reaches here. Never call this for INVITE_CANCELED /
- * MISSED_CALL / voicemail / chat / SMS — Apple terminates apps that receive a
- * VoIP push without promptly reporting a CallKit call.
+ * Two payload kinds reach here, both CallKit-compliant:
+ *   • INCOMING_CALL — reports/rings the call (pushKind VOIP_INCOMING_CALL);
+ *   • cancel="1" stop-ringing pushes (pushKind VOIP_CANCEL) — the native
+ *     AppDelegate satisfies Apple's report rule by re-reporting the ringing
+ *     UUID, then ends it immediately (guarded: never ends a connected call).
+ * Never call this for MISSED_CALL / voicemail / chat / SMS — Apple terminates
+ * apps that receive a VoIP push without promptly reporting a CallKit call.
  */
 async function sendApnsVoipPushesForIncomingCallApi(input: {
   tenantId: string;
@@ -3022,7 +3026,11 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
   callId: string;
   voipPayload: ApnsVoipCallPayload;
   devices: Array<{ id: string; platform: string; voipPushToken: string | null }>;
+  /** "VOIP_CANCEL" for stop-ringing pushes (cancel="1" in voipPayload) —
+   *  affects only the lastPushType stamp + log context. Default incoming. */
+  pushKind?: "VOIP_INCOMING_CALL" | "VOIP_CANCEL";
 }): Promise<void> {
+  const pushKind = input.pushKind ?? "VOIP_INCOMING_CALL";
   const iosDevices = input.devices.filter(
     (d) => d.platform === "IOS" && !!d.voipPushToken,
   );
@@ -3116,7 +3124,7 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
           where: { id: device.id },
           data: {
             lastPushSentAt: new Date(),
-            lastPushType: "VOIP_INCOMING_CALL",
+            lastPushType: pushKind,
             lastPushStatus: "APNS_VOIP_OK",
             lastPushError: null,
           } as any,
@@ -3157,7 +3165,7 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
           where: { id: device.id },
           data: {
             voipPushToken: null,
-            lastPushType: "VOIP_INCOMING_CALL",
+            lastPushType: pushKind,
             lastPushStatus: "APNS_VOIP_TOKEN_INVALID",
             lastPushError: result.reason ?? `status_${result.status ?? "unknown"}`,
           } as any,
@@ -3168,7 +3176,7 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
         .update({
           where: { id: device.id },
           data: {
-            lastPushType: "VOIP_INCOMING_CALL",
+            lastPushType: pushKind,
             lastPushStatus: "APNS_VOIP_FAILED",
             lastPushError: result.reason ?? result.error ?? `status_${result.status ?? "unknown"}`,
           } as any,
@@ -3489,9 +3497,53 @@ async function sendPushToUserDevices(input: {
     }
   });
 
+  // iOS STOP-RINGING wake (2026-07-29): INVITE_CANCELED / INVITE_CLAIMED also
+  // ride the VoIP channel with cancel="1" — the Expo data push CANNOT wake a
+  // suspended/killed iPhone, which left CallKit ringing forever after the
+  // caller hung up, voicemail answered, or another device took the call. The
+  // native AppDelegate cancel branch re-reports + ends the CallKit call (and
+  // its altCallId sibling), and skips any call that is already connected, so a
+  // racing cancel can never kill a call the user just answered. Android is
+  // untouched — this runs in addition to the Expo send above.
+  if (input.payload.type === "INVITE_CANCELED" || input.payload.type === "INVITE_CLAIMED") {
+    const p = input.payload as any;
+    const rawReason = String(p.reason || "").toLowerCase();
+    const cancelReason =
+      input.payload.type === "INVITE_CLAIMED"
+        ? "answered_elsewhere"
+        : rawReason.includes("expire") || rawReason.includes("noanswer") || rawReason.includes("timeout")
+          ? "missed_ring_timeout"
+          : "remote_hangup:" + (rawReason || "canceled");
+    await sendApnsVoipPushesForIncomingCallApi({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      callId: p.inviteId,
+      pushKind: "VOIP_CANCEL",
+      voipPayload: {
+        callId: p.inviteId,
+        tenantId: input.tenantId,
+        timestamp: p.timestamp ?? new Date().toISOString(),
+        cancel: "1",
+        reason: cancelReason,
+        altCallId: p.pbxCallId ?? null,
+      },
+      devices: filtered as Array<{ id: string; platform: string; voipPushToken: string | null }>,
+    }).catch((err) => {
+      app.log.error(
+        {
+          event: "api_apns_voip_cancel_fanout_error",
+          source: "api",
+          callId: p.inviteId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        "api_apns_voip_cancel_fanout_error",
+      );
+    });
+  }
+
   // iOS VoIP wake — CALL-ONLY, in addition to (not replacing) the Expo send
   // above. Only INCOMING_CALL wakes a killed/backgrounded iPhone for CallKit;
-  // cancel/missed/alert events stay on the Expo path. Wrapped so an APNs error
+  // missed/alert events stay on the Expo path. Wrapped so an APNs error
   // can never break the Expo/Android path or the call flow.
   if (input.payload.type === "INCOMING_CALL") {
     const p = input.payload as Extract<MobilePushPayload, { type: "INCOMING_CALL" }>;
@@ -3830,6 +3882,34 @@ async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WE
       }
     });
     await audit({ tenantId: invite.tenantId, action: "CALL_INVITE_ACCEPTED_BY_PBX", entityType: "CallInvite", entityId: invite.id, actorUserId: invite.userId });
+    // iOS STOP-RINGING (2026-07-29): the call was answered somewhere the claim
+    // path can't see (e.g. a desk phone on the same extension). A suspended
+    // iPhone would keep CallKit ringing forever — send the VoIP cancel push.
+    // The native handler skips connected calls, so if THIS iPhone answered
+    // (its own claim may still be in flight), its live call is never ended.
+    try {
+      const devices = await db.mobileDevice.findMany({ where: { tenantId: invite.tenantId, userId: invite.userId } });
+      await sendApnsVoipPushesForIncomingCallApi({
+        tenantId: invite.tenantId,
+        userId: invite.userId,
+        callId: invite.id,
+        pushKind: "VOIP_CANCEL",
+        voipPayload: {
+          callId: invite.id,
+          tenantId: invite.tenantId,
+          timestamp: now.toISOString(),
+          cancel: "1",
+          reason: "answered_elsewhere",
+          altCallId: invite.pbxCallId ?? null,
+        },
+        devices: devices as Array<{ id: string; platform: string; voipPushToken: string | null }>,
+      });
+    } catch (err) {
+      app.log.warn(
+        { inviteId: invite.id, err: err instanceof Error ? err.message : String(err) },
+        "apns voip cancel (answered_elsewhere) failed",
+      );
+    }
     return { ok: true, inviteId: invite.id, status: "ACCEPTED" };
   }
 
@@ -3847,6 +3927,34 @@ async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WE
 
   if (nextStatus === "EXPIRED") {
     await createMissedCallRecordForInvite(invite, "MISSED").catch(() => undefined);
+    // iOS STOP-RINGING (2026-07-29): the invite TTL lapsing is exactly the
+    // voicemail-takeover timing — the mobile leg is canceled after the invite
+    // has expired, this branch fired NO push, and a suspended iPhone kept
+    // CallKit ringing long after voicemail answered. Send only the VoIP
+    // cancel (no Expo INVITE_CANCELED here, preserving Android behavior).
+    try {
+      const expiredDevices = await db.mobileDevice.findMany({ where: { tenantId: invite.tenantId, userId: invite.userId } });
+      await sendApnsVoipPushesForIncomingCallApi({
+        tenantId: invite.tenantId,
+        userId: invite.userId,
+        callId: invite.id,
+        pushKind: "VOIP_CANCEL",
+        voipPayload: {
+          callId: invite.id,
+          tenantId: invite.tenantId,
+          timestamp: now.toISOString(),
+          cancel: "1",
+          reason: "missed_ring_timeout",
+          altCallId: invite.pbxCallId ?? null,
+        },
+        devices: expiredDevices as Array<{ id: string; platform: string; voipPushToken: string | null }>,
+      });
+    } catch (err) {
+      app.log.warn(
+        { inviteId: invite.id, err: err instanceof Error ? err.message : String(err) },
+        "apns voip cancel (expired) failed",
+      );
+    }
   } else {
     await createMissedCallRecordForInvite(invite, "CANCELED").catch(() => undefined);
     await sendPushToUserDevices({
@@ -15352,6 +15460,9 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
       payload: {
         type: "INVITE_CLAIMED",
         inviteId: existing.id,
+        // Sibling id: lets the iOS VoIP cancel push end the CallKit call that
+        // the prewake push reported under the PBX call-id.
+        pbxCallId: existing.pbxCallId ?? null,
         tenantId: user.tenantId,
         timestamp: now.toISOString()
       }
@@ -29875,6 +29986,21 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   // when it emits the outbound PSTN leg of a find-me/follow-me / call-forwarding scenario.
   const isForwardedLeg = /:out\d*$/.test(d.linkedId);
 
+  // ── Disposition priority merge (HARDENED, Izzy 2026-07-29) ────────────────
+  // The telephony service posts once per completed leg — a multi-device fork
+  // produces several posts for the SAME linkedId, and the unanswered devices'
+  // legs (NO ANSWER → "missed") can arrive AFTER the answering leg's post.
+  // The old last-write-wins update let that late "missed" OVERWRITE an
+  // "answered" verdict (live repro 2026-07-29: linkedId 1785376701.138512 —
+  // 84s of talk, stored "missed"). Rule: a disposition may only ever get
+  // STRONGER. Once any leg answered, the call is answered — no matter which
+  // device answered or in what order the leg reports arrive. Voicemail-only
+  // calls are unaffected: their every post is already downgraded to "missed"
+  // by the telephony classifier, so nothing ever posts "answered" for them.
+  const DISP_RANK: Record<string, number> = {
+    answered: 6, busy: 5, missed: 4, canceled: 3, failed: 2, unknown: 0,
+  };
+
   const existing = await db.connectCdr.findUnique({ where: { linkedId: d.linkedId } });
   const newDcx = [...(d.dcontexts || []).map((s) => String(s).trim()), d.dcontext ? String(d.dcontext).trim() : ""].filter(Boolean);
   const prevDcx = Array.isArray(existing?.dcontextsSeen) ? (existing!.dcontextsSeen as string[]) : [];
@@ -30010,7 +30136,20 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         fromPrefix:  d.fromPrefix ?? undefined,
         toNumber:    d.toNumber ?? undefined,
         direction:   resolvedDirection !== "unknown" ? resolvedDirection : undefined,
-        disposition: d.disposition !== "unknown" ? d.disposition : undefined,
+        disposition: (() => {
+          if (d.disposition === "unknown") return undefined;
+          const prev = existing?.disposition ?? null;
+          if (prev && (DISP_RANK[prev] ?? 0) >= (DISP_RANK[d.disposition] ?? 0)) {
+            if (prev === "answered" && d.disposition === "missed") {
+              app.log.info(
+                { linkedId: d.linkedId, prev, incoming: d.disposition },
+                "cdr-ingest: blocked missed-downgrade of answered call (late unanswered fork leg)",
+              );
+            }
+            return undefined; // keep the stronger existing verdict
+          }
+          return d.disposition;
+        })(),
         answeredAt:  d.answeredAt ? new Date(d.answeredAt) : undefined,
         durationSec: d.durationSec > 0 ? d.durationSec : undefined,
         talkSec:     d.talkSec > 0 ? d.talkSec : undefined,

@@ -44,12 +44,25 @@ export interface ApnsVoipCallPayload {
   /** Connect invite UUID — correlates CallKit / SIP / in-app across the call. */
   callId: string;
   tenantId: string;
-  /** Target user/extension identifier so the app can scope the CallKit report. */
-  toExtension: string;
+  /** Target user/extension identifier so the app can scope the CallKit report.
+   *  Optional for cancel pushes (the ring being killed was already scoped). */
+  toExtension?: string;
   callerNumber?: string | null;
   callerName?: string | null;
   /** ISO-8601 timestamp of the originating call event. */
   timestamp: string;
+  /** "1" → this is a STOP-RINGING push: the native AppDelegate re-reports the
+   *  CallKit call (Apple's every-VoIP-push-reports-a-call rule) then ends it
+   *  immediately. Sent when the caller hung up, the call was answered on
+   *  another device, or voicemail/ring-timeout took it. See the cancel branch
+   *  in apps/mobile/plugins/withIosVoipPush.js — it keys the CallKit end
+   *  reason off substrings of `reason`: "answered_elsewhere"/"claimed" → 4,
+   *  "voicemail"/"unanswered"/"missed" → 6, anything else → 2 (remote ended). */
+  cancel?: "1";
+  reason?: string | null;
+  /** Sibling backend id for the same phone call (inviteId vs pbxCallId) so the
+   *  native cancel branch can end BOTH CallKit reports. */
+  altCallId?: string | null;
 }
 
 export interface ApnsVoipSendResult {
@@ -215,10 +228,19 @@ export function sendApnsVoipPush(
       // CallKit-minimal payload. No alert/sound — VoIP pushes are silent wakes.
       callId: payload.callId,
       tenantId: payload.tenantId,
-      toExtension: payload.toExtension,
+      toExtension: payload.toExtension ?? null,
       callerNumber: payload.callerNumber ?? null,
       callerName: payload.callerName ?? null,
       timestamp: payload.timestamp,
+      // Cancel pushes only — absent on INCOMING_CALL so its envelope is
+      // byte-identical to the pre-cancel format.
+      ...(payload.cancel === "1"
+        ? {
+            cancel: "1",
+            reason: payload.reason ?? null,
+            ...(payload.altCallId ? { altCallId: payload.altCallId } : {}),
+          }
+        : {}),
     });
 
     let session: http2.ClientHttp2Session;

@@ -354,8 +354,9 @@ type WorkerMobilePushPayload =
  * iOS VoIP push fan-out for INCOMING_CALL only.
  *
  * VoIP pushes are CALL-ONLY. They wake a killed/backgrounded iPhone so the app
- * can report the call to CallKit. We never send VoIP for INVITE_CANCELED /
- * MISSED_CALL / SMS / voicemail — those stay on the Expo/APNs alert path.
+ * can report the call to CallKit. INVITE_CANCELED additionally rides the VoIP
+ * channel as a cancel="1" stop-ringing push (see sendVoipCancelPushes) — but
+ * MISSED_CALL / SMS / voicemail stay on the Expo/APNs alert path.
  *
  * This runs IN ADDITION to the existing Expo send (which is unchanged and still
  * covers Android). The JS side dedupes by callId, so a device receiving both an
@@ -503,6 +504,70 @@ async function sendVoipPushesForIncomingCall(input: {
   }
 }
 
+/**
+ * iOS STOP-RINGING wake (2026-07-29): VoIP push with cancel="1".
+ *
+ * The Expo INVITE_CANCELED data push cannot wake a suspended/killed iPhone, so
+ * CallKit kept ringing after the caller hung up, voicemail answered, or the
+ * call was picked up elsewhere. The native AppDelegate cancel branch
+ * (apps/mobile/plugins/withIosVoipPush.js) re-reports the ringing UUID (Apple's
+ * every-VoIP-push-reports-a-call rule) then ends it — and skips any call that
+ * is already connected, so a racing cancel never kills an answered call.
+ */
+async function sendVoipCancelPushes(input: {
+  tenantId: string;
+  userId: string;
+  devices: Array<{ id: string; platform: string; voipPushToken: string | null }>;
+  callId: string;
+  altCallId?: string | null;
+  reason: string;
+}): Promise<void> {
+  const iosDevices = input.devices.filter(
+    (d) => d.platform === "IOS" && !!d.voipPushToken,
+  );
+  if (!iosDevices.length) return;
+  if (!isApnsVoipConfigured()) return;
+
+  const voipPayload: ApnsVoipCallPayload = {
+    callId: input.callId,
+    tenantId: input.tenantId,
+    timestamp: new Date().toISOString(),
+    cancel: "1",
+    reason: input.reason,
+    altCallId: input.altCallId ?? null,
+  };
+
+  for (const device of iosDevices) {
+    const result = await sendApnsVoipPush(device.voipPushToken as string, voipPayload);
+    console.info(
+      JSON.stringify({
+        event: result.ok ? "apns_voip_cancel_sent" : "apns_voip_cancel_failed",
+        source: "worker",
+        callId: input.callId,
+        altCallId: input.altCallId ?? null,
+        reason: input.reason,
+        deviceId: device.id,
+        status: result.status,
+        apnsReason: result.reason ?? null,
+        error: result.error ?? null,
+      }),
+    );
+    if (result.tokenInvalid) {
+      await db.mobileDevice
+        .update({
+          where: { id: device.id },
+          data: {
+            voipPushToken: null,
+            lastPushType: "VOIP_CANCEL",
+            lastPushStatus: "APNS_VOIP_TOKEN_INVALID",
+            lastPushError: result.reason ?? `status_${result.status ?? "unknown"}`,
+          },
+        })
+        .catch(() => undefined);
+    }
+  }
+}
+
 async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
@@ -608,8 +673,37 @@ async function sendPushToUserDevices(input: {
     }
   });
 
+  // iOS STOP-RINGING wake (2026-07-29): INVITE_CANCELED also rides the VoIP
+  // channel with cancel="1" so a suspended iPhone stops CallKit ringing the
+  // moment the caller hangs up / voicemail answers. Android untouched.
+  if (input.payload.type === "INVITE_CANCELED") {
+    const p = input.payload;
+    const rawReason = String(p.reason || "").toLowerCase();
+    const cancelReason =
+      rawReason.includes("expire") || rawReason.includes("noanswer") || rawReason.includes("timeout")
+        ? "missed_ring_timeout"
+        : "remote_hangup:" + (rawReason || "canceled");
+    await sendVoipCancelPushes({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      devices,
+      callId: p.inviteId,
+      altCallId: p.pbxCallId ?? null,
+      reason: cancelReason,
+    }).catch((err) =>
+      console.error(
+        JSON.stringify({
+          event: "apns_voip_cancel_fanout_error",
+          source: "worker",
+          callId: p.inviteId,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      ),
+    );
+  }
+
   // iOS VoIP wake — CALL-ONLY, in addition to (not replacing) the Expo send
-  // above. Only INCOMING_CALL wakes the device for CallKit; cancel/missed stay
+  // above. Only INCOMING_CALL wakes the device for CallKit; missed stays
   // on the Expo/alert path. See sendVoipPushesForIncomingCall.
   if (input.payload.type === "INCOMING_CALL") {
     await sendVoipPushesForIncomingCall({
@@ -820,6 +914,22 @@ async function processPolledCall(link: any, call: { callId: string; state: strin
     if (state === "ANSWERED") {
       await db.callInvite.update({ where: { id: invite.id }, data: { status: "ACCEPTED", acceptedAt: invite.acceptedAt || new Date() } });
       await db.auditLog.create({ data: { tenantId: link.tenantId, action: "CALL_INVITE_ACCEPTED_BY_PBX", entityType: "CallInvite", entityId: invite.id } });
+      // iOS STOP-RINGING (2026-07-29): answered somewhere the claim path can't
+      // see (e.g. desk phone on the same extension) — stop suspended iPhones.
+      // The native handler skips connected calls, so the answering device is safe.
+      try {
+        const devices = await db.mobileDevice.findMany({ where: { tenantId: invite.tenantId, userId: invite.userId } });
+        await sendVoipCancelPushes({
+          tenantId: invite.tenantId,
+          userId: invite.userId,
+          devices,
+          callId: invite.id,
+          altCallId: invite.pbxCallId ?? null,
+          reason: "answered_elsewhere",
+        });
+      } catch {
+        /* never break the reconcile loop on push failure */
+      }
       return;
     }
     const now = new Date();
