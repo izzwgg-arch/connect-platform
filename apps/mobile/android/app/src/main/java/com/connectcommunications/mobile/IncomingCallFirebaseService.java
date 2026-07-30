@@ -278,6 +278,53 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      */
     public static volatile boolean inActiveCall = false;
 
+    /**
+     * Stale-ring guard (Trimpro 2026-07-30, invite cms7ms72g4k5lof13ww3pq95i):
+     * a server-side race delivered INVITE_CANCELED 241ms BEFORE the
+     * INCOMING_CALL push for the same invite. The cancel was a no-op (nothing
+     * ringing yet), then the ring push started a full ringtone + UI for a call
+     * that was already dead — with no future cancel ever coming, and an Answer
+     * tap that went nowhere. The server now suppresses the stale ring at the
+     * source; this map is the device-side belt-and-suspenders for older/broken
+     * servers: remember calls whose terminal push (CANCELED with a dead-call
+     * reason, or MISSED_CALL) was already processed, and drop a ring push for
+     * the same inviteId/pbxCallId arriving after it.
+     *
+     * INVITE_CLAIMED and answered_elsewhere cancels are deliberately NOT
+     * recorded — those calls are still alive and can legitimately re-ring this
+     * device within the same pbxCallId (e.g. transferred back). The short TTL
+     * exists for the same reason: the race this guards against is
+     * sub-second, so 60s covers it with margin while never blocking a genuine
+     * later re-ring of the same call id.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> terminatedCallKeys =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long TERMINATED_CALL_TTL_MS = 60_000L;
+
+    private static void markCallTerminated(String inviteId, String pbxCallId) {
+        long now = System.currentTimeMillis();
+        if (inviteId != null && !inviteId.isEmpty()) terminatedCallKeys.put("inv:" + inviteId, now);
+        if (pbxCallId != null && !pbxCallId.isEmpty()) terminatedCallKeys.put("pbx:" + pbxCallId, now);
+        if (terminatedCallKeys.size() > 64) {
+            for (Map.Entry<String, Long> e : terminatedCallKeys.entrySet()) {
+                if (now - e.getValue() > TERMINATED_CALL_TTL_MS) terminatedCallKeys.remove(e.getKey());
+            }
+        }
+    }
+
+    private static boolean wasCallTerminatedRecently(String inviteId, String pbxCallId) {
+        long now = System.currentTimeMillis();
+        for (String key : new String[] {
+            inviteId == null || inviteId.isEmpty() ? null : "inv:" + inviteId,
+            pbxCallId == null || pbxCallId.isEmpty() ? null : "pbx:" + pbxCallId,
+        }) {
+            if (key == null) continue;
+            Long at = terminatedCallKeys.get(key);
+            if (at != null && now - at <= TERMINATED_CALL_TTL_MS) return true;
+        }
+        return false;
+    }
+
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
         Map<String, String> data = remoteMessage.getData();
@@ -394,7 +441,14 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 // We present nothing and ring nothing; the PBX dial simply goes
                 // unanswered → DIALSTATUS=NOANSWER → voicemail. (The telephony
                 // requeue is gated on a live extension leg, so no ring-group loop.)
-                if (isDndEnabled(getApplicationContext())) {
+                if (wasCallTerminatedRecently(inviteForRing, appData.get("pbxCallId"))) {
+                    // Stale ring: this call's cancel/missed push was already
+                    // processed. Ring nothing, show nothing — there is no
+                    // future cancel coming to stop it.
+                    Log.i(TAG, "[CALL_INCOMING] stale INCOMING_CALL for already-terminated call — suppressed inviteId=" + inviteForRing);
+                    fcmMeta.put("stale_suppressed", true);
+                    emitCallFlowNative("FCM_INCOMING_SUPPRESSED_STALE", inviteForRing, fcmMeta);
+                } else if (isDndEnabled(getApplicationContext())) {
                     Log.i(TAG, "[CALL_INCOMING][DND] DND on — suppressing native ringtone + incoming UI; call diverts to voicemail (NOANSWER)");
                     fcmMeta.put("dnd_suppressed", true);
                     emitCallFlowNative("FCM_INCOMING_SUPPRESSED_DND", inviteForRing, fcmMeta);
@@ -1238,6 +1292,14 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         String pushReason = data.get("reason");
         Log.i(TAG, "[LOCK_CALL_CLEANUP] native_termination type=" + type + " inviteId=" + inviteId + " reason=" + pushReason);
         Log.i(TAG, "[CALL_INCOMING] native termination type=" + type + " inviteId=" + inviteId);
+        // Stale-ring guard: remember dead calls so a ring push that lost the
+        // server-side race and arrives AFTER its own cancel cannot start a
+        // ghost ringtone. Claimed / answered-elsewhere calls are still alive
+        // (may legitimately re-ring after a transfer) — never record those.
+        if ("MISSED_CALL".equals(type)
+                || ("INVITE_CANCELED".equals(type) && !"answered_elsewhere".equals(pushReason))) {
+            markCallTerminated(inviteId, data.get("pbxCallId"));
+        }
         // Answered-elsewhere breadcrumb (Izzy 2026-07-29): the ring-stop push
         // that ends this device's ring when another device answers is handled
         // ENTIRELY here — data-only FCMs never reach the Expo JS listener, and
