@@ -30567,6 +30567,36 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     return { ok: false, reason: "TARGET_NOT_FOUND" };
   }
 
+  // ── Contact-name resolution (Izzy 2026-07-30) ────────────────────────────────
+  // A saved contact's name beats carrier CNAM ("WIRELESS CALLER") on every
+  // incoming-call surface — full-screen, floating notification, lock screen,
+  // in-app — because they all render this invite's fromDisplay. Lean lookup:
+  // one indexed query on the tenant's contact phone numbers (last-10 match).
+  let resolvedFromDisplay = cleanedFromDisplay;
+  try {
+    const digits = String(input.fromNumber || "").replace(/\D/g, "");
+    if (digits.length >= 7) {
+      const cp = await db.contactPhone.findFirst({
+        where: {
+          contact: { tenantId: target.tenantId, active: true, archivedAt: null },
+          numberNormalized: { endsWith: digits.slice(-10) },
+        },
+        include: { contact: { select: { displayName: true, firstName: true, lastName: true, company: true } } },
+      });
+      const c = cp?.contact;
+      const contactName = (c?.displayName || [c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.company || "").trim();
+      if (contactName) {
+        resolvedFromDisplay = contactName;
+        app.log.info(
+          { linkedId: input.linkedId, fromNumber: input.fromNumber },
+          "mobile-ring-notify: caller resolved to tenant contact"
+        );
+      }
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message }, "mobile-ring-notify: contact resolution failed (non-fatal)");
+  }
+
   // ── Upsert CallInvite (unique on tenantId+pbxCallId) ─────────────────────────
   const existingInvite = await db.callInvite.findFirst({
     where: { tenantId: target.tenantId, pbxCallId: input.linkedId },
@@ -30585,7 +30615,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
           userId: target.userId,
           extensionId: target.extensionId,
           fromNumber: input.fromNumber || "unknown",
-          fromDisplay: cleanedFromDisplay,
+          fromDisplay: resolvedFromDisplay,
           fromPrefix: input.fromPrefix ?? null,
           toExtension: input.toExtension,
           status: "PENDING",
@@ -30603,7 +30633,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
           extensionId: target.extensionId,
           pbxCallId: input.linkedId,
           fromNumber: input.fromNumber || "unknown",
-          fromDisplay: cleanedFromDisplay,
+          fromDisplay: resolvedFromDisplay,
           fromPrefix: input.fromPrefix ?? null,
           toExtension: input.toExtension,
           status: "PENDING",
