@@ -26,11 +26,24 @@ export type DeviceFeatureFlags = {
    * beats direct for this device/carrier. Off = today's behavior ("all").
    */
   forceTurnRelay: boolean;
+  /**
+   * Server-observed keep-alive requirement. Set by the backend watchdog when
+   * this user's PBX endpoint sat unregistered while the device was supposed
+   * to be reachable (the DEVICE_REGISTRATION alert condition). Unlike the
+   * on-device gate latch (AsyncStorage, lost on reinstall/re-enrollment),
+   * this survives on the server and re-latches the gate on every register —
+   * closing the gap where a re-enrolled device silently lost its keep-alive
+   * protection (observed live 2026-07-30, Luxure T5_101_1 down 3h13m).
+   */
+  keepAliveRequired: boolean;
+  keepAliveRequiredReason: string;
 };
 
 const DEFAULT_FLAGS: DeviceFeatureFlags = {
   standingRegistration: false,
   forceTurnRelay: false,
+  keepAliveRequired: false,
+  keepAliveRequiredReason: "",
 };
 
 let cachedFlags: DeviceFeatureFlags = { ...DEFAULT_FLAGS };
@@ -55,6 +68,9 @@ function sanitize(raw: unknown): DeviceFeatureFlags {
   return {
     standingRegistration: obj.standingRegistration === true,
     forceTurnRelay: obj.forceTurnRelay === true,
+    keepAliveRequired: obj.keepAliveRequired === true,
+    keepAliveRequiredReason:
+      typeof obj.keepAliveRequiredReason === "string" ? obj.keepAliveRequiredReason.slice(0, 160) : "",
   };
 }
 
@@ -72,7 +88,8 @@ export async function applyServerFeatureFlags(raw: unknown): Promise<void> {
     const next = sanitize(raw);
     const changed =
       next.standingRegistration !== cachedFlags.standingRegistration ||
-      next.forceTurnRelay !== cachedFlags.forceTurnRelay;
+      next.forceTurnRelay !== cachedFlags.forceTurnRelay ||
+      next.keepAliveRequired !== cachedFlags.keepAliveRequired;
     cachedFlags = next;
     if (changed) {
       console.log(`${LOG} flags changed:`, JSON.stringify(next));
@@ -86,6 +103,20 @@ export async function applyServerFeatureFlags(raw: unknown): Promise<void> {
         console.log(`${LOG} native standingRegistration mirrored: ${next.standingRegistration}`);
       } else {
         console.warn(`${LOG} setStandingRegistrationEnabled bridge missing — native mirror skipped`);
+      }
+      // Server-observed keep-alive requirement → latch the adaptive gate.
+      // Lazy import keeps this module free of a hard sip/ dependency cycle.
+      if (next.keepAliveRequired) {
+        void import("../sip/keepAliveGate")
+          .then((gate) =>
+            gate.forceKeepAliveNeeded(`server:${next.keepAliveRequiredReason || "device_registration_watchdog"}`),
+          )
+          .then((state) => {
+            if (state.needed) console.log(`${LOG} keep-alive gate latched from server flag (${state.reason})`);
+          })
+          .catch((e) =>
+            console.warn(`${LOG} keep-alive gate latch failed:`, e instanceof Error ? e.message : String(e)),
+          );
       }
     }
   } catch (e) {

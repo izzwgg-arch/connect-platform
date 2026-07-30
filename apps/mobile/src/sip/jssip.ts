@@ -613,6 +613,18 @@ export class JsSipClient implements SipClient {
   private registerSerial: Promise<unknown> = Promise.resolve();
 
   async register(options?: { forceRestart?: boolean }) {
+    // A forceRestart register is the incoming-call wake path — a caller is
+    // literally waiting. It must NOT queue patiently behind an in-flight
+    // attempt whose socket is still dialing: serialization made the Luxure
+    // 2026-07-30 wake register take 27.2s (two stacked 12s connect watchdogs
+    // before its own attempt even started) while the PBX dialed a dead AOR
+    // and the caller went to voicemail. Abort the stalled attempt NOW so the
+    // wake's own attempt starts on a fresh socket immediately. A connected
+    // socket mid-REGISTER is left alone — that exchange settles in <1s and
+    // aborting it would only add work.
+    if (options?.forceRestart === true && this.registerPromise && !this.isConnected()) {
+      this.abortRegisterAttempt?.("superseded: forceRestart wake register");
+    }
     const run = this.registerSerial.then(() => this.registerInner(options));
     this.registerSerial = run.catch(() => undefined);
     return run;

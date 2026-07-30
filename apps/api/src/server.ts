@@ -5229,6 +5229,15 @@ async function runRelayUsageCheck(): Promise<void> {
           metadata: { attempts: t.attempts, relayCount: t.relayCount, ratio: t.ratio, windowMs: RELAY_USAGE_WINDOW_MS } as any,
         },
       }).catch((err) => app.log.error({ err: String((err as Error)?.message ?? err), tenantId: t.tenantId }, "relay_usage_alert_persist_failed"));
+      await sendAdminAlert(
+        `relay-usage-collapsed:${t.tenantId}`,
+        `TURN relay usage collapsed (tenant ${t.tenantId})`,
+        [
+          `Tenant: ${t.tenantId}`,
+          `${t.relayCount}/${t.attempts} calls used a relay (${Math.round(t.ratio * 100)}%) in the last ${Math.round(RELAY_USAGE_WINDOW_MS / 60000)}m.`,
+          `Likely no working TCP/TLS relay path for this tenant's clients.`,
+        ],
+      );
     }
   } catch (err) {
     app.log.error({ err: String((err as Error)?.message ?? err) }, "relay_usage_check_failed");
@@ -10004,6 +10013,13 @@ app.post("/voice/media-test/report", async (req, reply) => {
       metadata: details as any
     }
   }).catch(() => undefined);
+  if (!passed) {
+    await sendAdminAlert(
+      `media-test-failed:${user.tenantId}`,
+      `Media reliability test FAILED (tenant ${user.tenantId})`,
+      [`Tenant: ${user.tenantId}`, `Error: ${errorCode}`, `Detail: ${JSON.stringify(details).slice(0, 600)}`],
+    );
+  }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: passed ? "VOICE_MEDIA_TEST_PASSED" : "VOICE_MEDIA_TEST_FAILED", entityType: "MediaTestRun", entityId: run.id });
 
@@ -11724,6 +11740,13 @@ app.post("/voice/turn/validate/report", async (req, reply) => {
       metadata: { platform: input.platform || null, hasRelay: success, durationMs: input.durationMs || null, errorCode: success ? null : (input.errorCode || "NO_RELAY_CANDIDATE") } as any
     }
   }).catch(() => undefined);
+  if (!success) {
+    await sendAdminAlert(
+      `turn-validation-failed:${user.tenantId}`,
+      `TURN validation FAILED (tenant ${user.tenantId})`,
+      [`Tenant: ${user.tenantId}`, `Platform: ${input.platform || "?"}`, `Error: ${input.errorCode || "NO_RELAY_CANDIDATE"}`],
+    );
+  }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: success ? "VOICE_TURN_VALIDATED" : "VOICE_TURN_VALIDATION_FAILED", entityType: "TurnValidationJob", entityId: job.id });
 
@@ -14849,6 +14872,26 @@ app.post("/mobile/devices/register", async (req, reply) => {
       select: { featureFlags: true },
     }).catch(() => null);
     if (sibling?.featureFlags != null) inheritedFeatureFlags = sibling.featureFlags;
+  }
+  // Fallback: same physical hardware can come back with a DIFFERENT (or
+  // missing) deviceId after a factory reset / storage clear / some OEM
+  // reinstalls. Inherit from the user's newest same-model row so durable
+  // flags (keepAliveRequired, an explicit standingRegistration:false
+  // kill-switch) survive re-enrollment — observed 2026-07-30 on Luxure
+  // SM-X828U: fresh row lost the keep-alive latch its predecessor had earned.
+  if (inheritedFeatureFlags === undefined && input.model) {
+    const modelSibling = await (db.mobileDevice as any).findFirst({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        model: input.model,
+        platform: input.platform,
+        expoPushToken: { not: input.expoPushToken },
+      },
+      orderBy: { lastSeenAt: "desc" },
+      select: { featureFlags: true },
+    }).catch(() => null);
+    if (modelSibling?.featureFlags != null) inheritedFeatureFlags = modelSibling.featureFlags;
   }
 
   // Default for NEW Android device rows: standing registration ON. The
@@ -34631,6 +34674,11 @@ app.post("/webhooks/sola-cardknox", { config: { rawBody: true } }, async (req, r
     });
     await db.tenant.update({ where: { id: sub.tenantId }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: now } });
     await db.alert.create({ data: { tenantId: sub.tenantId, severity: "CRITICAL", category: "BILLING", message: "Subscription payment failed; tenant suspended.", metadata: { providerEventId: event.eventId } as any } });
+    await sendAdminAlert(
+      `billing-suspended:${sub.tenantId}`,
+      `CRITICAL: subscription payment failed — tenant suspended (${sub.tenantId})`,
+      [`Tenant: ${sub.tenantId}`, `Provider event: ${event.eventId}`, `The tenant has been suspended for non-payment.`],
+    );
     await audit({ tenantId: sub.tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: sub.tenantId });
   }
 
