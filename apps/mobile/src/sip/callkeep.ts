@@ -284,9 +284,14 @@ export function showIncomingNativeCall(callId: string, from: string, callerName?
       if (trimmedFrom) {
         try {
           const u = callKitUuidForCallId(callId);
-          // updateDisplay(uuid, displayName, handle): name on top, number
-          // underneath — falls back to the number when there's no name.
-          (RNCallKeep as any).updateDisplay?.(u, trimmedName || trimmedFrom, trimmedFrom);
+          // CallKit's lock screen renders ONE line (the display name) — so when
+          // a caller name exists, combine "Name · Number" so the number is
+          // always visible (Izzy 2026-07-30). Number-only callers show as-is.
+          const combined =
+            trimmedName && trimmedName !== trimmedFrom
+              ? `${trimmedName} · ${trimmedFrom}`
+              : trimmedFrom;
+          (RNCallKeep as any).updateDisplay?.(u, combined, trimmedFrom);
           callerlessReportedCallIds.delete(callId);
           console.log("[CALL_INCOMING] showIncomingNativeCall: refreshed CallKit label for already-reported callId=", callId, "from=", trimmedFrom, "name=", trimmedName);
         } catch (e) {
@@ -308,11 +313,18 @@ export function showIncomingNativeCall(callId: string, from: string, callerName?
   });
   try {
     void appendIosRingLog("IOS_JS_CALLKIT_REPORT", { callId, uuid, appState: AppState.currentState });
-    // displayIncomingCall(uuid, handle, localizedCallerName, …): handle = the
-    // NUMBER (shown under the name), localizedCallerName = name/CNAM on top.
-    // With no name this is (number, number) — identical to prior behavior.
+    // displayIncomingCall(uuid, handle, localizedCallerName, …): CallKit's
+    // lock screen shows ONLY localizedCallerName — so when a caller name/CNAM
+    // exists, combine "Name · Number" so the number is always visible
+    // (Izzy 2026-07-30). Number-only callers show the number alone.
     // Android never reaches here (all call sites are iOS-gated).
-    const displayName = Platform.OS === "ios" ? ((callerName || "").trim() || from) : from;
+    const trimmedCallerName = (callerName || "").trim();
+    const displayName =
+      Platform.OS === "ios"
+        ? trimmedCallerName && trimmedCallerName !== from
+          ? `${trimmedCallerName} · ${from}`
+          : from
+        : from;
     RNCallKeep.displayIncomingCall(uuid, from, displayName, "number", false);
     console.log("[CALL_INCOMING] showIncomingNativeCall: displayIncomingCall returned");
     logCallFlow("CALLKEEP_DISPLAY_DONE", {

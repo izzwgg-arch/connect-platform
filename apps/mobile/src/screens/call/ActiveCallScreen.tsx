@@ -223,8 +223,12 @@ export function ActiveCallScreen() {
   const activeSession = callSessions.activeCall;
   const topHeldSession = callSessions.heldCalls[0] ?? null;
   const primarySession = activeSession ?? topHeldSession;
-  const multiCallParty =
-    primarySession?.remoteName?.trim() || primarySession?.remoteNumber || '';
+  // Keep name and number SEPARATE (Izzy 2026-07-30): the old single
+  // `multiCallParty` field preferred the caller-ID name and silently dropped
+  // the number, so calls with a CNAM never showed the number underneath.
+  const sessionName = primarySession?.remoteName?.trim() || '';
+  const sessionNumber = (primarySession?.remoteNumber || '').trim();
+  const multiCallParty = sessionName || sessionNumber;
   const rawParty = multiCallParty || (sip.remoteParty ?? '');
   const inviteParty = incomingNotif.answerInviteRef.current?.fromNumber ?? '';
   // Strip the VitalPBX ring-group prefix the SIP From display-name carries
@@ -235,7 +239,14 @@ export function ActiveCallScreen() {
   // If the remote party is a bare number that's saved in the user's contacts,
   // show the contact name (with the number beneath) — matching call history.
   const resolveContactName = useContactNameResolver();
-  const resolvedContactName = resolveContactName(effectiveParty);
+  const looksLikeNumberStr = (s: string) => /^[+\d][\d\s().-]{4,}$/.test((s || '').trim());
+  // The best real phone number we know for this call, from any source.
+  const bestNumber =
+    sessionNumber ||
+    inviteParty ||
+    (looksLikeNumberStr(effectiveParty) ? effectiveParty : '');
+  const resolvedContactName =
+    resolveContactName(effectiveParty) || (bestNumber ? resolveContactName(bestNumber) : null);
   const partyOrName = resolvedContactName || effectiveParty;
   const displayName = partyOrName || (
     isAnswerInFlight
@@ -246,9 +257,14 @@ export function ActiveCallScreen() {
       ? 'Ringing…'
       : 'Connecting…'
   );
-  const displayNumber = resolvedContactName
-    ? effectiveParty
-    : (effectiveParty && effectiveParty !== displayName ? effectiveParty : '');
+  // Always surface the number under the name when we know one and it isn't
+  // already the top line (Izzy 2026-07-30: every call surface shows the number).
+  const displayNumber =
+    bestNumber && bestNumber !== displayName
+      ? bestNumber
+      : effectiveParty && effectiveParty !== displayName
+      ? effectiveParty
+      : '';
 
   // Initials for avatar (from the resolved name when available)
   const initials = partyOrName
@@ -569,7 +585,7 @@ export function ActiveCallScreen() {
             primarySession?.answeredAt ??
             (Platform.OS === 'ios' ? sip.callConnectedAt : null)
           }
-          style={{ marginTop: 6, opacity: isConnected ? 1 : 0 }}
+          style={{ marginTop: 6, opacity: isConnected ? 1 : 0, color: pal.number }}
         />
 
         {/* Hold badge */}

@@ -375,6 +375,7 @@ function TabsWrapper() {
       <OngoingCallBanner
         visible={showOngoingBanner}
         name={bannerName}
+        number={bannerSession?.remoteNumber ?? null}
         connectedAt={bannerConnectedAt}
         onPress={() => navigateOnce('ActiveCall')}
       />

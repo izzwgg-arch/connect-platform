@@ -5,7 +5,9 @@ export function teamFilterChipColors(active: boolean, accent: string, colors: Ap
   if (!active) {
     return {
       backgroundColor: colors.transparent,
-      borderColor: colors.borderSubtle,
+      // `border` (not `borderSubtle`): Izzy 2026-07-28 — idle chips need a
+      // clearly visible pill outline, especially in dark mode.
+      borderColor: colors.border,
     };
   }
   return {

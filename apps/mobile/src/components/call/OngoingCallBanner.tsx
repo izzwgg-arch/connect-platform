@@ -11,6 +11,9 @@ type Props = {
   visible: boolean;
   /** Display name/number of the ongoing call. */
   name: string;
+  /** Phone number shown under the name when it differs (Izzy 2026-07-30:
+   *  every call surface must always show the number). */
+  number?: string | null;
   /** Epoch ms when the call connected, or null while still connecting. */
   connectedAt: number | null;
   /** Re-open the ActiveCall screen. */
@@ -22,7 +25,7 @@ type Props = {
  * has minimized (backed out of) a live call. Tapping it restores the
  * ActiveCall screen; the SIP session keeps running the whole time.
  */
-export function OngoingCallBanner({ visible, name, connectedAt, onPress }: Props) {
+export function OngoingCallBanner({ visible, name, number, connectedAt, onPress }: Props) {
   const insets = useSafeAreaInsets();
   const [nowTs, setNowTs] = useState(() => Date.now());
 
@@ -52,9 +55,16 @@ export function OngoingCallBanner({ visible, name, connectedAt, onPress }: Props
         <View style={styles.iconWrap}>
           <Ionicons name="call" size={14} color="#052e16" />
         </View>
-        <Text style={styles.name} numberOfLines={1}>
-          {name || 'Ongoing call'}
-        </Text>
+        <View style={styles.identity}>
+          <Text style={styles.name} numberOfLines={1}>
+            {name || 'Ongoing call'}
+          </Text>
+          {number && number.trim() && number.trim() !== (name || '').trim() ? (
+            <Text style={styles.number} numberOfLines={1}>
+              {number.trim()}
+            </Text>
+          ) : null}
+        </View>
         <Text style={styles.timer}>{timerText}</Text>
         <Ionicons name="chevron-up" size={16} color="#052e16" style={styles.chevron} />
       </TouchableOpacity>
@@ -94,12 +104,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  identity: {
+    flexShrink: 1,
+  },
   name: {
     flexShrink: 1,
     color: '#052e16',
     fontSize: 14,
     fontWeight: '800',
     letterSpacing: -0.2,
+  },
+  number: {
+    color: '#052e16',
+    opacity: 0.72,
+    fontSize: 11,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   timer: {
     color: '#052e16',

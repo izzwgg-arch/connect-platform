@@ -187,8 +187,29 @@ function useTabBadges(): { Chat: number; Voicemail: number; Recent: number } {
   const vmNew = vmTotals ? Math.max(0, (vmTotals.inbox ?? 0) + (vmTotals.urgent ?? 0)) : 0;
 
   // Subscribe to the caches without fetching — RecentTab owns the fetches.
-  const historyQuery = useQuery<any>({ queryKey: mobileQueryKeys.callHistory, enabled: false });
-  const seenQuery = useQuery<number>({ queryKey: recentsSeenQueryKey, enabled: false });
+  // MUST carry a cache-echo queryFn (2026-07-30): with no queryFn at all,
+  // any code path that touches these keys (e.g. dndMissedCalls invalidating
+  // callHistory) made React Query log a "No queryFn was passed" ERROR pair on
+  // a loop — a render storm that re-created the row PanResponders mid-gesture
+  // and killed the Recents/Contacts swipe actions after the first use.
+  const historyQuery = useQuery<any>({
+    queryKey: mobileQueryKeys.callHistory,
+    enabled: false,
+    queryFn: async () => queryClient.getQueryData(mobileQueryKeys.callHistory) ?? null,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+  const seenQuery = useQuery<number>({
+    queryKey: recentsSeenQueryKey,
+    enabled: false,
+    queryFn: async () => (queryClient.getQueryData(recentsSeenQueryKey) as number | undefined) ?? 0,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
   const seenAt = typeof seenQuery.data === 'number' ? seenQuery.data : 0;
   let missedNew = 0;
   const historyRows: any[] = Array.isArray(historyQuery.data)

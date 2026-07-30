@@ -227,6 +227,18 @@ export function TeamTab() {
     nav.navigate('Chat', { composeNumber: ext, composeName: member.name, composeKind: 'internal' });
   }, [nav]);
 
+  // Stable renderItem (freeze investigation 2026-07-28): re-created only when
+  // presence/clock actually change, so TeamMemberCard's memo holds otherwise.
+  const renderTeamItem = useCallback(({ item }: { item: TeamDirectoryMember }) => (
+    <TeamMemberCard
+      member={item}
+      elapsed={formatElapsed(activeCallStartedAt(item, live), now)}
+      onPress={() => setMenuMember(item)}
+      onCall={() => callExtension(item.extension)}
+      onMessage={() => messageMember(item)}
+    />
+  ), [live, now, callExtension, messageMember]);
+
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
@@ -281,19 +293,14 @@ export function TeamTab() {
           bounces={Platform.OS === 'ios'}
           alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={60}
+          windowSize={5}
+          removeClippedSubviews
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} colors={[colors.primary]} progressBackgroundColor={colors.surface} />}
           contentContainerStyle={styles.list}
-          renderItem={({ item }) => {
-            return (
-              <TeamMemberCard
-                member={item}
-                elapsed={formatElapsed(activeCallStartedAt(item, live), now)}
-                onPress={() => setMenuMember(item)}
-                onCall={() => callExtension(item.extension)}
-                onMessage={() => messageMember(item)}
-              />
-            );
-          }}
+          renderItem={renderTeamItem}
         />
       )}
       <AppActionSheet

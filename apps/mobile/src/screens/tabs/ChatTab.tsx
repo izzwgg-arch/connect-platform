@@ -973,7 +973,27 @@ export function ChatTab() {
 
   const openThreadById = useCallback(async (threadId: string) => {
     if (!token) return;
-    await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads });
+    // Cache-first (2026-07-30, swipe-to-message lag): if the thread is already
+    // in the cached list, open it INSTANTLY and refresh the list in the
+    // background. The old path awaited an invalidate plus a full re-download
+    // of the thread list before the chat could appear — that round-trip was
+    // the visible "takes a while to open the chat" stall.
+    const cachedThreads =
+      (queryClient.getQueryData(mobileQueryKeys.chatThreads) as ChatThread[] | undefined) ?? [];
+    const cachedHit = cachedThreads.find((t) => t.id === threadId);
+    if (cachedHit) {
+      setActiveThread(cachedHit);
+      getChatThreads(token)
+        .then((next) => {
+          queryClient.setQueryData(mobileQueryKeys.chatThreads, next);
+          const fresh = next.find((t) => t.id === threadId);
+          if (fresh) {
+            setActiveThread((prev) => (prev && prev.id === threadId ? fresh : prev));
+          }
+        })
+        .catch(() => undefined);
+      return;
+    }
     const nextThreads = await getChatThreads(token!);
     queryClient.setQueryData(mobileQueryKeys.chatThreads, nextThreads);
     const found = nextThreads.find((t) => t.id === threadId);
@@ -1013,6 +1033,35 @@ export function ChatTab() {
       }
       const digits = number.replace(/\D/g, '');
       const looksInternal = kind === 'internal' || (kind !== 'external' && /^\d{2,6}$/.test(number));
+
+      // Instant-open fast path (2026-07-30, swipe-to-message lag): before any
+      // network work, look for the target thread in the cached list — a DM
+      // whose peer extension matches, or an SMS thread on the same number
+      // (last-10-digit match tolerates +1/formatting differences). A hit opens
+      // the chat with ZERO round-trips. Misses fall through to the original
+      // directory-resolve + create-or-reuse path, which dedupes server-side,
+      // so behavior is unchanged for never-seen threads.
+      const cachedThreads =
+        (queryClient.getQueryData(mobileQueryKeys.chatThreads) as ChatThread[] | undefined) ?? [];
+      const sameExternalNumber = (a: string, b: string) => {
+        const da = (a || '').replace(/\D/g, '');
+        const db = (b || '').replace(/\D/g, '');
+        if (!da || !db) return false;
+        if (da === db) return true;
+        return da.length >= 10 && db.length >= 10 && da.slice(-10) === db.slice(-10);
+      };
+      const cachedHit = looksInternal
+        ? cachedThreads.find(
+            (t) => t.type === 'DM' && (t.participantExtension || '').replace(/\D/g, '') === digits && digits.length > 0,
+          )
+        : cachedThreads.find(
+            (t) => t.type === 'SMS' && sameExternalNumber(t.externalSmsE164 || '', number),
+          );
+      if (cachedHit) {
+        setActiveThread(cachedHit);
+        return;
+      }
+
       try {
         let peerUserId: string | null = null;
         if (looksInternal) {
@@ -1044,7 +1093,7 @@ export function ChatTab() {
         showToast(friendlyComposeError(err?.message));
       }
     },
-    [openThreadById, showToast, token],
+    [openThreadById, queryClient, showToast, token],
   );
 
   useEffect(() => {

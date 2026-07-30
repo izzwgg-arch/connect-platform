@@ -2121,6 +2121,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         //      flow passes allowSecond) or the user confirms the prompt.
         const allowSecond = options?.allowSecond === true;
         if (dialInFlightRef.current) {
+          console.warn('[DIAL] SUPPRESSED — a dial is already in flight, this tap was dropped');
           flightRecord("USER", "OUTBOUND_DIAL_SUPPRESSED_DUPLICATE", {
             payload: { displayTarget, normalizedTarget },
           });
@@ -2134,6 +2135,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             activeState === "ringing" ||
             activeState === "connected";
           if (alreadyInCall && !allowSecond) {
+            console.warn('[DIAL] already-in-call prompt shown (activeState=' + activeState + ')');
             const proceed = await new Promise<boolean>((resolve) => {
               let settled = false;
               const done = (v: boolean) => {
@@ -2186,6 +2188,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
           const micOk = await ensureMicPermissionOrAlert();
           if (!micOk) {
+            console.warn('[DIAL] mic permission denied — call aborted');
             if (presentOptimistically) setCallState("ended");
             void flightBeginCall({
               callDirection: "outbound",
@@ -2301,6 +2304,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             }
           } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
+            console.warn('[DIAL] SIP client dial FAILED: ' + msg);
             const diagnosis = classifyOutboundSipFailure({ localReason: msg });
             flightRecord("SIP", "OUTBOUND_FAILED", {
               severity: "error",

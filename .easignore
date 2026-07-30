@@ -72,6 +72,16 @@ _latency_logs/
 .git/
 .git
 
+# 2026-07-29: desktop installer output (untracked) pushed the tarball from
+# 146MB to 382MB and the upload started dying with ECONNRESET on the filtered
+# line. None of this is mobile source.
+apps/desktop/release/
+_recents*.png
+scripts/onboarding/_*
+scripts/pbx/__pycache__/
+*.apk
+*.ipa
+
 # cowork: large non-source junk that was bloating the tarball to 470MB+
 _repo_archive/
 _moh_safety_backup/

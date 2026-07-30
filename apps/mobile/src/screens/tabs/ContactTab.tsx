@@ -5,7 +5,6 @@ import {
   FlatList,
   Linking,
   Modal,
-  PanResponder,
   Platform,
   RefreshControl,
   ScrollView,
@@ -15,7 +14,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { PanGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -178,7 +179,14 @@ export function ContactTab() {
 
   const callContact = useCallback((contact: Contact) => {
     const target = contactTarget(contact);
-    if (target && sip.registrationState === 'registered') sip.dial(target);
+    if (!target) return;
+    // No registration gate (2026-07-30): dial() self-registers when needed and
+    // presents the call screen immediately — the stale-snapshot guard here was
+    // silently eating swipe-to-call taps. See RecentTab.handleCall.
+    console.log('[DIAL] contacts swipe → dial ' + target);
+    sip.dial(target).catch((e) =>
+      console.warn('[DIAL] contacts dial rejected: ' + (e instanceof Error ? e.message : String(e))),
+    );
   }, [sip]);
 
   const messageContact = useCallback((contact: Contact) => {
@@ -439,18 +447,99 @@ const ContactCard = memo(function ContactCard({
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
 
-  const panResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 14 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
-    onPanResponderMove: (_, gesture) => {
-      translateX.setValue(Math.max(-112, Math.min(gesture.dx, 86)));
+  // Full parity with RecentTab's row swipe (2026-07-30): rubber-banded drag,
+  // early horizontal claim, arm haptic, flick-or-distance commit, and — the
+  // fix for rows freezing mid-swipe — an onPanResponderTerminate that springs
+  // the row home when the gesture is stolen (scroll, modal, navigation). The
+  // old copy had no terminate handler, so an interrupted swipe left the card
+  // stuck translated off-position.
+  const ACTION_THRESHOLD = 44;
+  const FLICK_MIN_DX = 24;
+  // gesture-handler velocityX is px/SECOND (PanResponder's vx was px/ms).
+  const FLICK_MIN_VX = 450;
+  const MAX_DRAG = 104;
+  const armedRef = useRef<null | 'call' | 'message'>(null);
+
+  // Live-callback refs — see RecentTab: the handlers read the latest props
+  // through refs so re-renders can never orphan an in-flight gesture.
+  const onCallRef = useRef(onCall);
+  onCallRef.current = onCall;
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
+  // MODERN GESTURE ENGINE (2026-07-30) — see RecentTab's CallCard for the full
+  // story: PanResponder was losing a native race against the FlatList scroll
+  // recognizer (granted → terminated, no release), so most swipes did nothing.
+  // PanGestureHandler locks the swipe natively after 12px horizontal travel.
+  // Tap-through guard — see RecentTab: a swipe must never also open the
+  // contact detail sheet on finger-up.
+  const suppressPressRef = useRef(false);
+
+  const onPanEvent = useCallback(
+    (e: any) => {
+      const dx = e.nativeEvent.translationX as number;
+      if (Math.abs(dx) > 6) suppressPressRef.current = true;
+      let v = dx;
+      if (v > ACTION_THRESHOLD) v = ACTION_THRESHOLD + (v - ACTION_THRESHOLD) * 0.35;
+      else if (v < -ACTION_THRESHOLD) v = -ACTION_THRESHOLD + (v + ACTION_THRESHOLD) * 0.35;
+      translateX.setValue(Math.max(-MAX_DRAG, Math.min(v, MAX_DRAG)));
+      const armed = dx > ACTION_THRESHOLD ? 'call' : dx < -ACTION_THRESHOLD ? 'message' : null;
+      if (armed !== armedRef.current) {
+        armedRef.current = armed;
+        if (armed) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+        }
+      }
     },
-    onPanResponderRelease: (_, gesture) => {
-      const action = gesture.dx > 54 ? 'call' : gesture.dx < -54 ? 'message' : null;
-      Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
-      if (action === 'call') onCall();
-      if (action === 'message') onMessage();
+    [translateX],
+  );
+
+  const onPanStateChange = useCallback(
+    (e: any) => {
+      const { state, translationX: dx, velocityX } = e.nativeEvent;
+      const done =
+        state === GestureState.END ||
+        state === GestureState.CANCELLED ||
+        state === GestureState.FAILED;
+      if (!done) return;
+      const springHome = () =>
+        Animated.spring(translateX, {
+          toValue: 0,
+          useNativeDriver: true,
+          speed: 18,
+          bounciness: 8,
+        }).start();
+      if (state !== GestureState.END) {
+        armedRef.current = null;
+        springHome();
+        return;
+      }
+      const rightCommit =
+        dx > ACTION_THRESHOLD || (dx > FLICK_MIN_DX && velocityX > FLICK_MIN_VX);
+      const leftCommit =
+        dx < -ACTION_THRESHOLD || (dx < -FLICK_MIN_DX && velocityX < -FLICK_MIN_VX);
+      const action = rightCommit ? 'call' : leftCommit ? 'message' : null;
+      console.log(
+        '[SWIPE] contacts release dx=' + dx.toFixed(0) +
+        ' vx=' + velocityX.toFixed(0) + ' action=' + (action || 'none'),
+      );
+      springHome();
+      armedRef.current = null;
+      // Release the tap guard once the touch sequence is safely over.
+      setTimeout(() => {
+        suppressPressRef.current = false;
+      }, 250);
+      if (action) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        // Defer so the row visibly springs back before we act/navigate.
+        setTimeout(() => {
+          if (action === 'call') onCallRef.current();
+          else onMessageRef.current();
+        }, 10);
+      }
     },
-  }), [onCall, onMessage, translateX]);
+    [translateX],
+  );
 
   const pressIn = useCallback(() => {
     Animated.spring(scale, { toValue: 0.98, speed: 30, bounciness: 0, useNativeDriver: true }).start();
@@ -459,21 +548,69 @@ const ContactCard = memo(function ContactCard({
     Animated.spring(scale, { toValue: 1, speed: 25, bounciness: 4, useNativeDriver: true }).start();
   }, [scale]);
 
+  const callHintOpacity = translateX.interpolate({
+    inputRange: [0, ACTION_THRESHOLD],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+  const callHintScale = translateX.interpolate({
+    inputRange: [0, ACTION_THRESHOLD],
+    outputRange: [0.6, 1],
+    extrapolate: 'clamp',
+  });
+  const msgHintOpacity = translateX.interpolate({
+    inputRange: [-ACTION_THRESHOLD, 0],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const msgHintScale = translateX.interpolate({
+    inputRange: [-ACTION_THRESHOLD, 0],
+    outputRange: [1, 0.6],
+    extrapolate: 'clamp',
+  });
+
   return (
     <View style={styles.swipeWrap}>
       <View style={styles.swipeBg}>
-        <View style={[styles.swipeHint, { backgroundColor: colors.successMuted }]}>
+        <Animated.View
+          style={[
+            styles.swipeHint,
+            {
+              backgroundColor: colors.successMuted,
+              opacity: callHintOpacity,
+              transform: [{ scale: callHintScale }],
+            },
+          ]}
+        >
           <Ionicons name="call-outline" size={16} color={colors.success} />
-        </View>
-        <View style={[styles.swipeHint, { backgroundColor: colors.tealMuted }]}>
+        </Animated.View>
+        <Animated.View
+          style={[
+            styles.swipeHint,
+            {
+              backgroundColor: colors.tealMuted,
+              opacity: msgHintOpacity,
+              transform: [{ scale: msgHintScale }],
+            },
+          ]}
+        >
           <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.teal} />
-        </View>
+        </Animated.View>
       </View>
 
-      <Animated.View style={{ transform: [{ translateX }, { scale }] }} {...panResponder.panHandlers}>
+      <PanGestureHandler
+        activeOffsetX={[-12, 12]}
+        failOffsetY={[-12, 12]}
+        onGestureEvent={onPanEvent}
+        onHandlerStateChange={onPanStateChange}
+      >
+        <Animated.View style={{ transform: [{ translateX }, { scale }] }}>
         <TouchableOpacity
           activeOpacity={0.92}
-          onPress={onPress}
+          onPress={() => {
+            if (suppressPressRef.current) return;
+            onPress();
+          }}
           onPressIn={pressIn}
           onPressOut={pressOut}
           style={[
@@ -532,7 +669,8 @@ const ContactCard = memo(function ContactCard({
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
-      </Animated.View>
+        </Animated.View>
+      </PanGestureHandler>
     </View>
   );
 });

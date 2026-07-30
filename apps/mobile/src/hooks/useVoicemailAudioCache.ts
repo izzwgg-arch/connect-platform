@@ -38,11 +38,14 @@ import { buildVoicemailPreloadUri, buildVoicemailStreamUri } from "../api/client
 // Preload the newest/unread voicemails so Play starts instantly. Downloads are
 // throttled to MAX_CONCURRENT_DOWNLOADS at a time so we don't saturate the
 // radio or drain the battery while still warming a healthy working set.
-const MAX_PRELOAD_COUNT = 15;
-const MAX_CACHED_FILES  = 25;
-const MAX_TOTAL_BYTES   = 60 * 1024 * 1024; // 60 MB
+// Widened 2026-07-30: with the voicemail list fetch capped (no more 90-request
+// stampede hogging the network) a deeper warm set is nearly free. Voicemail
+// MP3s average ~20-100KB, so 30 preloads ≈ a few MB.
+const MAX_PRELOAD_COUNT = 30;
+const MAX_CACHED_FILES  = 50;
+const MAX_TOTAL_BYTES   = 80 * 1024 * 1024; // 80 MB
 const MAX_FILE_BYTES    =  5 * 1024 * 1024; //  5 MB per file
-const MAX_CONCURRENT_DOWNLOADS = 3;
+const MAX_CONCURRENT_DOWNLOADS = 4;
 // Smallest plausible audio payload. The `raw=1` endpoint sometimes returns a
 // tiny placeholder/error body (observed: 44 bytes) for very recent voicemails
 // whose raw file isn't ready yet. Anything below this is not real audio.
@@ -381,16 +384,29 @@ export function useVoicemailAudioCache(
       lastTokenRef.current = token;
     }
 
-    // Pick top MAX_PRELOAD_COUNT candidates: unread first, then newest.
+    // Pick top MAX_PRELOAD_COUNT candidates. The set is a UNION of:
+    //   1. the first rows in CURRENT LIST ORDER — i.e. literally what is on
+    //      the user's screen right now (2026-07-30: live-traced play taps hit
+    //      voicemails with preloadStatus=idle → 4.5s server transcode stream,
+    //      because the unread-first ordering below had picked a different set
+    //      than the visible top of the list);
+    //   2. unread-first / newest — the prior heuristic, still valuable for
+    //      the "open app → play the new voicemail" flow.
     // Empty (0:00) voicemails are excluded outright — there's no audio to
     // fetch, and attempting it only churns the network + JS thread.
-    const ordered = [...rows]
-      .filter((vm) => (vm.durationSec ?? 1) > 0)
-      .sort((a, b) => {
-        if (a.listened !== b.listened) return a.listened ? 1 : -1;
-        return new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime();
-      })
-      .slice(0, MAX_PRELOAD_COUNT);
+    const playable = rows.filter((vm) => (vm.durationSec ?? 1) > 0);
+    const byHeuristic = [...playable].sort((a, b) => {
+      if (a.listened !== b.listened) return a.listened ? 1 : -1;
+      return new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime();
+    });
+    const seen = new Set<string>();
+    const ordered: typeof playable = [];
+    for (const vm of [...playable.slice(0, 10), ...byHeuristic]) {
+      if (ordered.length >= MAX_PRELOAD_COUNT) break;
+      if (seen.has(vm.id)) continue;
+      seen.add(vm.id);
+      ordered.push(vm);
+    }
 
     // The very top entries are kept as decoded Audio.Sound objects for instant
     // playback. Drop any pre-warmed sounds that are no longer in this set.

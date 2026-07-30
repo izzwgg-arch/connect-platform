@@ -357,7 +357,12 @@ export function VoicemailTab() {
   const voicemailQuery = useQuery({
     queryKey: mobileQueryKeys.voicemails('all', token),
     enabled: Boolean(token),
-    queryFn: () => getVoicemails(token!),
+    // maxPagesPerFolder: 2 (2026-07-30) — the uncapped fetch pulled up to 30
+    // pages × 100 voicemails × 3 folders (~90 requests) on EVERY list load,
+    // saturating the network for seconds; audio preloads and tap-to-play
+    // streams queued behind it, which is exactly the "5 seconds to start
+    // playing" complaint. 200 per folder is far beyond what the list renders.
+    queryFn: () => getVoicemails(token!, { maxPagesPerFolder: 2 }),
     staleTime: 3 * 60 * 1000,
     gcTime: 20 * 60 * 1000,
     refetchOnMount: false,
@@ -596,6 +601,30 @@ export function VoicemailTab() {
   // out of sync with the sound.
   const makeStatusHandler = useCallback((vmId: string, fallbackDurationSec: number) => (status: any) => {
     if (!status?.isLoaded) return;
+
+    // Finish FIRST, and exclusively (2026-07-30): the old order started the
+    // per-update glide AND the finish-reset on the same Animated.Value in the
+    // same tick — they fought, and the fill kept "traveling" after the audio
+    // had already ended. Now the finish path snaps the bar to full (visibly
+    // completing in sync with the sound), then clears it — and returns so no
+    // glide can race it.
+    if (status.didJustFinish) {
+      activeIdRef.current = null;
+      setActiveId(null);
+      progressAnim.stopAnimation(() => {
+        Animated.sequence([
+          Animated.timing(progressAnim, { toValue: 1, duration: 80, useNativeDriver: false }),
+          Animated.delay(140),
+          Animated.timing(progressAnim, { toValue: 0, duration: 180, useNativeDriver: false }),
+        ]).start();
+      });
+      return;
+    }
+
+    // Real decoded duration when the engine knows it (always true for local /
+    // pre-warmed files); the server's claimed duration only as a last resort —
+    // it is frequently wrong for streams, which is what made the bar pace
+    // ahead of / behind the audio.
     const durMs = status.durationMillis || fallbackDurationSec * 1000 || 1;
     const posMs = status.positionMillis || 0;
     const pct = Math.max(0, Math.min(1, posMs / Math.max(1, durMs)));
@@ -610,12 +639,6 @@ export function VoicemailTab() {
     if (status.isPlaying && activeIdRef.current !== vmId) {
       activeIdRef.current = vmId;
       setActiveId(vmId);
-    }
-
-    if (status.didJustFinish) {
-      activeIdRef.current = null;
-      setActiveId(null);
-      Animated.timing(progressAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
     }
   }, [progressAnim]);
 
@@ -684,14 +707,23 @@ export function VoicemailTab() {
     // Ensure the iOS audio session is in a loud playback state before we start.
     // A prior voice-note recording (allowsRecordingIOS) or the expo-av default
     // (playsInSilentModeIOS:false) would otherwise route voicemail audio to the
-    // quiet earpiece / silence it under the Ring/Silent switch. Fire-and-forget
-    // so it never delays the instant-play paths below.
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      shouldDuckAndroid: true,
-    }).catch(() => undefined);
+    // quiet earpiece / silence it under the Ring/Silent switch.
+    //
+    // AWAITED with a 250ms cap (2026-07-30): fire-and-forget RACED the playback
+    // start below, and when it lost — reliably right after a phone call, when
+    // the session is still in quiet call mode — the whole voicemail played
+    // through the earpiece pipeline at whisper volume ("speaker is really
+    // low"). The mode switch takes ~10-30ms; the cap keeps play effectively
+    // instant even if the audio session is being slow.
+    await Promise.race([
+      Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      }).catch(() => undefined),
+      new Promise<void>((r) => setTimeout(r, 250)),
+    ]);
 
     // Flip to the playing state the instant the button is tapped — for EVERY
     // path (pre-warmed, cached, or remote stream). There is no spinner: the
