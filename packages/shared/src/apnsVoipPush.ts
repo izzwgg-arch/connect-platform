@@ -7,11 +7,14 @@
 //
 // This module delivers **VoIP** pushes to iOS devices so the Connect app can
 // wake from a killed/backgrounded state and report an incoming call to CallKit.
+// (2026-07-30: it also hosts `sendApnsAlertPush` — a separate ALERT-type sender
+// for user notifications — so the ES256/JWT signing continues to live in
+// exactly one place. The rules below apply to the VoIP sender.)
 // It is intentionally:
-//   • CALL-ONLY — never use this for voicemail / SMS / missed-call / chat /
-//     general notifications. Apple terminates apps that receive a VoIP push
-//     without promptly reporting a CallKit call. Those events must continue to
-//     use the existing Expo/APNs *alert* path.
+//   • CALL-ONLY — never use sendApnsVoipPush for voicemail / SMS / missed-call /
+//     chat / general notifications. Apple terminates apps that receive a VoIP
+//     push without promptly reporting a CallKit call. Those events use
+//     `sendApnsAlertPush` (alert topic) or the Expo path.
 //   • Dependency-free — uses Node's built-in `http2` + `crypto` only, so no new
 //     npm packages are introduced.
 //
@@ -34,6 +37,7 @@
 
 import http2 from "http2";
 import { createPrivateKey, createSign, KeyObject } from "crypto";
+import { deriveUserAlertTitleBody } from "./expoMobilePushFormat";
 
 const APNS_PROD_HOST = "https://api.push.apple.com";
 const APNS_SANDBOX_HOST = "https://api.sandbox.push.apple.com";
@@ -334,6 +338,189 @@ export function sendApnsVoipPush(
     req.write(body);
     req.end();
   });
+}
+
+// ── Alert pushes (user-visible notifications) ────────────────────────────────
+//
+// Direct APNs ALERT sender for iOS user notifications (voicemail, missed call,
+// chat/SMS). Added 2026-07-30 after the Expo push relay's stored APNs key was
+// found invalid (every iOS alert died at Apple with InvalidProviderToken 403,
+// invisible behind "ok" Expo tickets). This path signs with the SAME .p8 that
+// already delivers VoIP pushes every day, so iOS alerts no longer depend on a
+// credential we don't control. Android is unaffected (stays on Expo/FCM).
+//
+// Topic is the plain bundle id (NOT the .voip topic) and apns-push-type is
+// "alert" — Apple hard-rejects mismatches. The routing data rides under the
+// top-level `body` key because expo-notifications on iOS maps
+// `userInfo["body"]` → `notification.request.content.data` for remote pushes
+// (EXNotificationSerializer), which keeps these pushes byte-compatible with
+// Expo-relayed ones: the app's handler + tap-routing work unchanged.
+
+export interface ApnsAlertPayload {
+  title: string;
+  body: string;
+  /** Routing data — becomes `content.data` in the app (see note above). */
+  data: Record<string, unknown>;
+  /** iOS notification grouping (optional). */
+  threadId?: string;
+}
+
+export function isApnsAlertConfigured(): boolean {
+  return isApnsVoipConfigured();
+}
+
+/** Send one user-visible alert push to one native APNs device token. */
+export function sendApnsAlertPush(
+  deviceToken: string,
+  payload: ApnsAlertPayload,
+): Promise<ApnsVoipSendResult> {
+  return new Promise((resolve) => {
+    const jwt = buildProviderJwt();
+    if (!jwt) {
+      resolve({
+        ok: false,
+        status: null,
+        apnsId: null,
+        reason: null,
+        tokenInvalid: false,
+        error: "apns_not_configured",
+      });
+      return;
+    }
+
+    const body = JSON.stringify({
+      aps: {
+        alert: { title: payload.title, body: payload.body },
+        sound: "default",
+        ...(payload.threadId ? { "thread-id": payload.threadId } : {}),
+      },
+      body: payload.data,
+    });
+
+    let session: http2.ClientHttp2Session;
+    try {
+      session = http2.connect(envHost());
+    } catch (err) {
+      resolve({
+        ok: false,
+        status: null,
+        apnsId: null,
+        reason: null,
+        tokenInvalid: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    let settled = false;
+    const finish = (result: ApnsVoipSendResult) => {
+      if (settled) return;
+      settled = true;
+      try {
+        session.close();
+      } catch {
+        /* ignore */
+      }
+      resolve(result);
+    };
+
+    session.on("error", (err) => {
+      finish({
+        ok: false,
+        status: null,
+        apnsId: null,
+        reason: null,
+        tokenInvalid: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    const req = session.request({
+      ":method": "POST",
+      ":path": `/3/device/${deviceToken}`,
+      authorization: `bearer ${jwt}`,
+      "apns-topic": envBundleId(),
+      "apns-push-type": "alert",
+      "apns-priority": "10",
+      // Alerts stay useful for a while (unlike call rings): 1 hour.
+      "apns-expiration": String(Math.floor(Date.now() / 1000) + 3600),
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body),
+    });
+
+    let status: number | null = null;
+    let apnsId: string | null = null;
+    let raw = "";
+
+    req.on("response", (headers) => {
+      status = Number(headers[":status"]) || null;
+      apnsId = (headers["apns-id"] as string) || null;
+    });
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      let reason: string | null = null;
+      if (raw) {
+        try {
+          reason = (JSON.parse(raw)?.reason as string) || null;
+        } catch {
+          reason = null;
+        }
+      }
+      const ok = status === 200;
+      const tokenInvalid =
+        status === 410 || (reason != null && APNS_INVALID_TOKEN_REASONS.has(reason));
+      finish({ ok, status, apnsId, reason, tokenInvalid });
+    });
+    req.on("error", (err) => {
+      finish({
+        ok: false,
+        status,
+        apnsId,
+        reason: null,
+        tokenInvalid: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Fan one user-alert payload (voicemail / missed_call / dm_message /
+ * sms_message) out to iOS devices via direct APNs. Shared by apps/api and
+ * apps/worker so the envelope (title/body derivation, data-under-`body`,
+ * thread grouping) never diverges between services.
+ *
+ * Returns one result per device, in input order. Callers own the DB
+ * bookkeeping (lastPush* columns, nulling tokens on `tokenInvalid`).
+ */
+export async function sendUserAlertApnsPushes(
+  devices: Array<{ deviceId: string; apnsAlertToken: string }>,
+  payload: Record<string, unknown>,
+): Promise<Array<{ deviceId: string; result: ApnsVoipSendResult }>> {
+  const type = String(payload.type || "");
+  const { title, body } = deriveUserAlertTitleBody(type, payload);
+  const data = { ...payload, alertTitle: title, alertBody: body };
+  const threadId =
+    type === "dm_message" || type === "sms_message"
+      ? String(payload.conversationId || "") || undefined
+      : undefined;
+  const out: Array<{ deviceId: string; result: ApnsVoipSendResult }> = [];
+  for (const d of devices) {
+    const result = await sendApnsAlertPush(d.apnsAlertToken, {
+      title,
+      body,
+      data,
+      ...(threadId ? { threadId } : {}),
+    });
+    out.push({ deviceId: d.deviceId, result });
+  }
+  return out;
 }
 
 /** Diagnostics helper — what topic/host/config we would use (no secrets). */

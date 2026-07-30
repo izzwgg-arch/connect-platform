@@ -47,6 +47,7 @@ import {
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
   pickCanonicalTenantSlug,
   buildExpoPushV2Item,
+  EXPO_PUSH_USER_ALERT_TYPES,
   buildGlobalDefaultKey,
   buildSourcePublishKeys,
   computeActiveScheduleOverrides,
@@ -69,6 +70,8 @@ import {
 import {
   isApnsVoipConfigured,
   sendApnsVoipPush,
+  isApnsAlertConfigured,
+  sendUserAlertApnsPushes,
   type ApnsVoipCallPayload,
 } from "@connect/shared/apnsVoipPush";
 import { processCrmEmailSendJob } from "./crmEmailSend";
@@ -528,9 +531,31 @@ async function sendVoipCancelPushes(input: {
   if (!iosDevices.length) return;
   if (!isApnsVoipConfigured()) return;
 
+  // Caller identity on the CANCEL too (Izzy 2026-07-30): the native cancel
+  // branch RE-REPORTS the ringing CallKit call before ending it (Apple's
+  // every-VoIP-push-reports-a-call rule). Without caller fields that
+  // re-report downgraded the on-screen caller ID to "Unknown" for the last
+  // second of the ring — and left "Unknown" on the CallKit-derived records.
+  // Best-effort lookup; a cancel must never fail on this.
+  let callerNumber: string | null = null;
+  let callerName: string | null = null;
+  try {
+    const invite = await db.callInvite.findFirst({
+      where: { OR: [{ id: input.callId }, { pbxCallId: input.callId }] },
+      orderBy: { createdAt: "desc" },
+      select: { fromNumber: true, fromDisplay: true },
+    });
+    callerNumber = invite?.fromNumber ?? null;
+    callerName = invite?.fromDisplay ?? null;
+  } catch {
+    /* best-effort only */
+  }
+
   const voipPayload: ApnsVoipCallPayload = {
     callId: input.callId,
     tenantId: input.tenantId,
+    callerNumber,
+    callerName,
     timestamp: new Date().toISOString(),
     cancel: "1",
     reason: input.reason,
@@ -600,7 +625,66 @@ async function sendPushToUserDevices(input: {
   // All FCM data values MUST be strings (Firebase spec). Expo silently
   // promotes the push to a notification message if values fail to serialize,
   // so we stringify every field explicitly via buildExpoPushV2Item.
-  const messages = devices.map((d) =>
+  // ── Direct-APNs alert path for iOS user notifications ─────────────────────
+  // Mirror of the api-side block (see apps/api sendPushToUserDevices): the
+  // Expo relay's stored APNs push key is invalid (InvalidProviderToken 403 on
+  // every iOS alert, found 2026-07-30), so iOS devices with a native APNs
+  // alert token get user alerts straight from us with the working VoIP .p8.
+  // Served devices drop out of the Expo fan-out; failures fall back to Expo.
+  let expoDevices = devices;
+  if (EXPO_PUSH_USER_ALERT_TYPES.has(String(input.payload.type)) && isApnsAlertConfigured()) {
+    const apnsTargets = devices.filter(
+      (d) => (d as any).platform === "IOS" && (d as any).apnsAlertToken,
+    );
+    if (apnsTargets.length > 0) {
+      const results = await sendUserAlertApnsPushes(
+        apnsTargets.map((d) => ({
+          deviceId: d.id,
+          apnsAlertToken: String((d as any).apnsAlertToken),
+        })),
+        input.payload as unknown as Record<string, unknown>,
+      ).catch((err: any): Array<{ deviceId: string; result: any }> => {
+        console.warn("[MOBILE_PUSH] APNS_ALERT_BATCH_FAILED — falling back to Expo:", err?.message || err);
+        return [];
+      });
+      const servedIds = new Set<string>();
+      for (const { deviceId, result } of results) {
+        console.info(
+          JSON.stringify({
+            event: "MOBILE_PUSH_AUDIT",
+            stage: result.ok ? "APNS_ALERT_OK" : "APNS_ALERT_FAILED",
+            source: "worker",
+            tenantId: input.tenantId,
+            userId: input.userId,
+            deviceId,
+            notificationType: input.payload.type,
+            status: result.status,
+            reason: result.reason,
+            apnsId: result.apnsId,
+            error: result.error ?? null,
+          }),
+        );
+        void db.mobileDevice
+          .update({
+            where: { id: deviceId },
+            data: {
+              lastPushSentAt: new Date(),
+              lastPushType: String(input.payload.type),
+              lastPushStatus: result.ok ? "APNS_ALERT_OK" : "APNS_ALERT_FAILED",
+              lastPushError: result.ok
+                ? null
+                : (result.reason ?? result.error ?? `status_${result.status ?? "unknown"}`),
+              ...(result.tokenInvalid ? { apnsAlertToken: null } : {}),
+            } as any,
+          })
+          .catch(() => undefined);
+        if (result.ok) servedIds.add(deviceId);
+      }
+      expoDevices = devices.filter((d) => !servedIds.has(d.id));
+    }
+  }
+
+  const messages = expoDevices.map((d) =>
     buildExpoPushV2Item({
       to: String(d.expoPushToken),
       payload: { ...(input.payload as unknown as Record<string, unknown>) },
@@ -641,29 +725,33 @@ async function sendPushToUserDevices(input: {
     })
   );
 
-  try {
-    const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(messages)
-    });
-    const expoBody = await expoRes.json().catch(() => null);
-    console.info(
-      "[CALL_TIMELINE]",
-      JSON.stringify({
-        callTimeline: true,
-        stage: "PUSH_EXPO_RESPONSE",
-        ts: new Date().toISOString(),
-        source: "worker",
-        inviteId: input.payload.inviteId,
-        payloadType: input.payload.type,
-        expoStatus: expoRes.status,
-        expoBody,
-        requestSample: messages[0]
-      })
-    );
-  } catch (err: any) {
-    console.error("[CALL_TIMELINE] push send failed", err?.message || err);
+  // messages can be empty when every device was served by the direct-APNs
+  // alert path above — Expo rejects an empty array, so skip the call.
+  if (messages.length > 0) {
+    try {
+      const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(messages)
+      });
+      const expoBody = await expoRes.json().catch(() => null);
+      console.info(
+        "[CALL_TIMELINE]",
+        JSON.stringify({
+          callTimeline: true,
+          stage: "PUSH_EXPO_RESPONSE",
+          ts: new Date().toISOString(),
+          source: "worker",
+          inviteId: input.payload.inviteId,
+          payloadType: input.payload.type,
+          expoStatus: expoRes.status,
+          expoBody,
+          requestSample: messages[0]
+        })
+      );
+    } catch (err: any) {
+      console.error("[CALL_TIMELINE] push send failed", err?.message || err);
+    }
   }
 
   await db.auditLog.create({
@@ -2064,26 +2152,91 @@ async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
     source: "fastpath:sms-poll",
   });
   if (!claimed) return;
+  // Full rows (no select): the generated Prisma client may predate the
+  // apnsAlertToken column — same access pattern as sendPushToUserDevices.
   const allDevices = await db.mobileDevice.findMany({
     where: { tenantId: input.tenantId, userId: input.userId, active: true },
-    select: { expoPushToken: true },
   });
-  const devices = allDevices.filter((d): d is { expoPushToken: string } => d.expoPushToken != null);
+  const devices = allDevices
+    .map((d) => ({
+      id: d.id,
+      expoPushToken: d.expoPushToken as string | null,
+      platform: String((d as any).platform || ""),
+      apnsAlertToken: ((d as any).apnsAlertToken ?? null) as string | null,
+    }))
+    .filter((d) => d.expoPushToken != null);
   if (!devices.length) return;
 
-  const messages = devices.map((d) =>
+  const payload = {
+    type: "sms_message",
+    conversationId: input.conversationId,
+    messageId: input.messageId,
+    phoneNumber: input.phoneNumber,
+    tenantId: input.tenantId,
+    recipientUserId: input.userId,
+    preview: input.preview,
+    timestamp: input.timestamp,
+  };
+
+  // Direct-APNs alert path for iOS (see sendPushToUserDevices — same reason:
+  // the Expo relay's stored APNs key is invalid; iOS alerts must go direct).
+  let expoDevices = devices;
+  if (isApnsAlertConfigured()) {
+    const apnsTargets = devices.filter((d) => d.platform === "IOS" && d.apnsAlertToken);
+    if (apnsTargets.length > 0) {
+      const results = await sendUserAlertApnsPushes(
+        apnsTargets.map((d) => ({ deviceId: d.id, apnsAlertToken: String(d.apnsAlertToken) })),
+        payload,
+      ).catch((err: any): Array<{ deviceId: string; result: any }> => {
+        console.warn("[MOBILE_PUSH] SMS APNS_ALERT_BATCH_FAILED — falling back to Expo:", err?.message || err);
+        return [];
+      });
+      const servedIds = new Set<string>();
+      for (const { deviceId, result } of results) {
+        console.info(
+          JSON.stringify({
+            event: "sms_push_apns_result",
+            userId: input.userId,
+            tenantId: input.tenantId,
+            conversationId: input.conversationId,
+            messageId: input.messageId,
+            deviceId,
+            ok: result.ok,
+            status: result.status,
+            reason: result.reason,
+            error: result.error ?? null,
+          }),
+        );
+        void db.mobileDevice
+          .update({
+            where: { id: deviceId },
+            data: {
+              lastPushSentAt: new Date(),
+              lastPushType: "sms_message",
+              lastPushStatus: result.ok ? "APNS_ALERT_OK" : "APNS_ALERT_FAILED",
+              lastPushError: result.ok
+                ? null
+                : (result.reason ?? result.error ?? `status_${result.status ?? "unknown"}`),
+              ...(result.tokenInvalid ? { apnsAlertToken: null } : {}),
+            } as any,
+          })
+          .catch(() => undefined);
+        if (result.ok) servedIds.add(deviceId);
+      }
+      expoDevices = devices.filter((d) => !servedIds.has(d.id));
+    }
+  }
+  if (!expoDevices.length) return;
+
+  const messages = expoDevices.map((d) =>
     buildExpoPushV2Item({
       to: String(d.expoPushToken),
-      payload: {
-        type: "sms_message",
-        conversationId: input.conversationId,
-        messageId: input.messageId,
-        phoneNumber: input.phoneNumber,
-        tenantId: input.tenantId,
-        recipientUserId: input.userId,
-        preview: input.preview,
-        timestamp: input.timestamp,
-      },
+      payload,
+      // iOS needs the visible title/body/sound envelope for user alerts —
+      // data-only pushes render NOTHING on iPhones (2026-07-30). This call
+      // previously omitted `platform`, silently sending iOS SMS alerts
+      // data-only (i.e. invisible) even when the Expo credential worked.
+      platform: d.platform ?? null,
     }),
   );
 

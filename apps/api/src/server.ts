@@ -101,10 +101,13 @@ import {
   vmNormalizeFolder,
   buildExpoPushV2Item,
   EXPO_PUSH_USER_ALERT_TYPES,
+  deriveUserAlertTitleBody,
 } from "@connect/shared";
 import {
   isApnsVoipConfigured,
   sendApnsVoipPush,
+  isApnsAlertConfigured,
+  sendUserAlertApnsPushes,
   type ApnsVoipCallPayload,
 } from "@connect/shared/apnsVoipPush";
 import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
@@ -3288,6 +3291,70 @@ async function sendPushToUserDevices(input: {
     }
   }
 
+  // ── Direct-APNs alert path for iOS user notifications ─────────────────────
+  // The Expo relay's stored APNs push key is invalid (every iOS alert died at
+  // Apple with InvalidProviderToken 403 behind "ok" Expo tickets, found
+  // 2026-07-30). iOS devices that reported a native APNs alert token get these
+  // pushes straight from us, signed with the same working .p8 that delivers
+  // VoIP pushes. Devices served here are removed from the Expo fan-out; a
+  // failed direct send falls back to Expo for that device.
+  if (EXPO_PUSH_USER_ALERT_TYPES.has(String(payloadType)) && isApnsAlertConfigured()) {
+    const apnsTargets = expoTargets.filter(
+      (d) => d.platform === "IOS" && (d as any).apnsAlertToken,
+    );
+    if (apnsTargets.length > 0) {
+      const results = await sendUserAlertApnsPushes(
+        apnsTargets.map((d) => ({
+          deviceId: d.id,
+          apnsAlertToken: String((d as any).apnsAlertToken),
+        })),
+        input.payload as unknown as Record<string, unknown>,
+      ).catch((err: any): Array<{ deviceId: string; result: any }> => {
+        app.log.warn(
+          { mobilePush: "apns-alert-direct", err: String(err?.message || err).slice(0, 200) },
+          "[MOBILE_PUSH] APNS_ALERT_BATCH_FAILED — falling back to Expo",
+        );
+        return [];
+      });
+      const servedIds = new Set<string>();
+      for (const { deviceId, result } of results) {
+        app.log.info(
+          {
+            mobilePush: "apns-alert-direct",
+            tenantId: input.tenantId,
+            userId: input.userId,
+            deviceId,
+            payloadType,
+            ok: result.ok,
+            status: result.status,
+            reason: result.reason,
+            apnsId: result.apnsId,
+            error: result.error ?? null,
+          },
+          `[MOBILE_PUSH] APNS_ALERT_${result.ok ? "OK" : "FAILED"}`,
+        );
+        void db.mobileDevice
+          .update({
+            where: { id: deviceId },
+            data: {
+              lastPushSentAt: new Date(),
+              lastPushType: String(payloadType),
+              lastPushStatus: result.ok ? "APNS_ALERT_OK" : "APNS_ALERT_FAILED",
+              lastPushError: result.ok
+                ? null
+                : (result.reason ?? result.error ?? `status_${result.status ?? "unknown"}`),
+              // 410/Unregistered — the alert token is permanently dead; null it
+              // so we stop pushing and the app re-reports on next register.
+              ...(result.tokenInvalid ? { apnsAlertToken: null } : {}),
+            } as any,
+          })
+          .catch(() => undefined);
+        if (result.ok) servedIds.add(deviceId);
+      }
+      expoTargets = expoTargets.filter((d) => !servedIds.has(d.id));
+    }
+  }
+
   const messages = expoTargets.map((d) =>
     buildExpoPushV2Item({
       to: String(d.expoPushToken),
@@ -3517,6 +3584,23 @@ async function sendPushToUserDevices(input: {
         : rawReason.includes("expire") || rawReason.includes("noanswer") || rawReason.includes("timeout")
           ? "missed_ring_timeout"
           : "remote_hangup:" + (rawReason || "canceled");
+    // Caller identity on the CANCEL too (Izzy 2026-07-30): the native cancel
+    // branch re-reports the ringing CallKit call before ending it — without
+    // these fields the caller ID flashed to "Unknown" in the last second.
+    // Best-effort; a cancel must never fail on this lookup.
+    let cancelCallerNumber: string | null = null;
+    let cancelCallerName: string | null = null;
+    try {
+      const cancelInvite = await db.callInvite.findFirst({
+        where: { OR: [{ id: String(p.inviteId) }, { pbxCallId: String(p.inviteId) }] },
+        orderBy: { createdAt: "desc" },
+        select: { fromNumber: true, fromDisplay: true },
+      });
+      cancelCallerNumber = cancelInvite?.fromNumber ?? null;
+      cancelCallerName = cancelInvite?.fromDisplay ?? null;
+    } catch {
+      /* best-effort only */
+    }
     await sendApnsVoipPushesForIncomingCallApi({
       tenantId: input.tenantId,
       userId: input.userId,
@@ -3525,6 +3609,8 @@ async function sendPushToUserDevices(input: {
       voipPayload: {
         callId: p.inviteId,
         tenantId: input.tenantId,
+        callerNumber: cancelCallerNumber,
+        callerName: cancelCallerName,
         timestamp: p.timestamp ?? new Date().toISOString(),
         cancel: "1",
         reason: cancelReason,
@@ -14665,6 +14751,9 @@ app.post("/mobile/devices/register", async (req, reply) => {
     expoPushToken: z.string().min(8),
     voipPushToken: z.string().optional(),
     nativeFcmToken: z.string().max(512).optional(),
+    // iOS: native APNs alert-environment device token (hex). Enables direct
+    // APNs alert pushes for user notifications, bypassing the Expo relay.
+    apnsAlertToken: z.string().max(200).optional(),
     deviceId: z.string().max(200).optional(),
     appVersion: z.string().max(80).optional(),
     deviceName: z.string().max(120).optional(),
@@ -14788,6 +14877,7 @@ app.post("/mobile/devices/register", async (req, reply) => {
       expoPushToken: input.expoPushToken,
       voipPushToken: input.voipPushToken || null,
       nativeFcmToken: input.nativeFcmToken || null,
+      apnsAlertToken: input.apnsAlertToken || null,
       deviceId: input.deviceId || null,
       appVersion: input.appVersion || null,
       deviceName: input.deviceName || null,
@@ -14804,6 +14894,9 @@ app.post("/mobile/devices/register", async (req, reply) => {
     update: {
       tenantId: user.tenantId,
       ...(input.nativeFcmToken ? { nativeFcmToken: input.nativeFcmToken } : {}),
+      // Only set when provided — an older app build must not null out a
+      // previously-reported token (same idempotency rule as nativeFcmToken).
+      ...(input.apnsAlertToken ? { apnsAlertToken: input.apnsAlertToken } : {}),
       userId: user.sub,
       extensionId: extension?.id ?? null,
       platform: input.platform,

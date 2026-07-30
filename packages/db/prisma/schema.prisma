@@ -2978,6 +2978,12 @@ model MobileDevice {
   platform              MobilePlatform
   expoPushToken         String               @unique
   voipPushToken         String?
+  /// Native APNs device token (iOS, alert environment) — reported by the app on
+  /// register. Enables direct APNs alert pushes for user notifications
+  /// (voicemail / missed call / chat / SMS), bypassing the Expo relay whose
+  /// stored push key went invalid 2026-07-30 (InvalidProviderToken 403 on every
+  /// iOS alert). Null on Android and on older iOS builds (those fall back to Expo).
+  apnsAlertToken        String?
   /// Native FCM registration token (Android) — enables direct high-priority
   /// FCM call wakes, bypassing the Expo relay. Null until the app reports it.
   nativeFcmToken        String?

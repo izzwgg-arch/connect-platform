@@ -218,11 +218,35 @@ ${PATCH_BEGIN}
       else if ([cancelReason containsString:@"voicemail"] || [cancelReason containsString:@"unanswered"] || [cancelReason containsString:@"missed"]) { endReason = 6; }
     }
     NSString *cancelUuid = ConnectDeterministicCallKitUUID(callId);
+    // Caller-ID preservation (Izzy 2026-07-30): this re-report UPDATES the
+    // already-ringing CallKit call's display. Passing an empty handle / nil
+    // name here downgraded the caller ID to "Unknown" for the final second
+    // of the ring (and into CallKit-derived history). Use the cancel
+    // payload's caller fields (server sends them now), falling back to the
+    // identity cached by the original INCOMING report below.
+    NSString *cancelHandle = handle;
+    NSString *cancelDisplayName = (callerName.length > 0 ? callerName : nil);
+    if (callerNumber.length == 0) {
+      @try {
+        NSDictionary *idCache = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"ConnectCallerIdCache"];
+        NSDictionary *cachedId = [idCache[callId] isKindOfClass:[NSDictionary class]] ? idCache[callId] : nil;
+        if (cachedId == nil) {
+          NSString *altForCache = [dict[@"altCallId"] isKindOfClass:[NSString class]] ? dict[@"altCallId"] : nil;
+          if (altForCache != nil && [idCache[altForCache] isKindOfClass:[NSDictionary class]]) { cachedId = idCache[altForCache]; }
+        }
+        if (cachedId != nil) {
+          NSString *ch = [cachedId[@"handle"] isKindOfClass:[NSString class]] ? cachedId[@"handle"] : nil;
+          NSString *cn = [cachedId[@"name"] isKindOfClass:[NSString class]] ? cachedId[@"name"] : nil;
+          if (ch.length > 0) { cancelHandle = ch; }
+          if (cn.length > 0) { cancelDisplayName = cn; }
+        }
+      } @catch (NSException *idEx) {}
+    }
     [RNCallKeep reportNewIncomingCall:cancelUuid
-                               handle:(handle.length > 0 ? handle : @"Unknown")
+                               handle:(cancelHandle.length > 0 ? cancelHandle : @"Unknown")
                            handleType:@"number"
                              hasVideo:NO
-                  localizedCallerName:nil
+                  localizedCallerName:cancelDisplayName
                       supportsHolding:NO
                          supportsDTMF:NO
                      supportsGrouping:NO
@@ -264,6 +288,28 @@ ${PATCH_BEGIN}
                           fromPushKit:YES
                               payload:dict
                 withCompletionHandler:nil];
+    // Cache this call's caller identity so a later CANCEL push (which may
+    // arrive with no caller fields, or cold after the app was killed) can
+    // re-report with the SAME name/number instead of "Unknown". Small
+    // NSUserDefaults dict, pruned to the newest ~24 entries. Best-effort.
+    @try {
+      NSUserDefaults *udCache = [NSUserDefaults standardUserDefaults];
+      NSMutableDictionary *idCache = [[udCache dictionaryForKey:@"ConnectCallerIdCache"] mutableCopy];
+      if (idCache == nil) { idCache = [NSMutableDictionary dictionary]; }
+      idCache[callId] = @{ @"handle": handle, @"name": (callerName != nil ? callerName : @""), @"ts": @([[NSDate date] timeIntervalSince1970]) };
+      if (idCache.count > 40) {
+        NSArray *oldKeys = [idCache keysSortedByValueUsingComparator:^NSComparisonResult(id a, id b) {
+          double ta = [[a objectForKey:@"ts"] doubleValue];
+          double tb = [[b objectForKey:@"ts"] doubleValue];
+          if (ta < tb) return NSOrderedAscending;
+          if (ta > tb) return NSOrderedDescending;
+          return NSOrderedSame;
+        }];
+        NSInteger removeCount = (NSInteger)idCache.count - 24;
+        for (NSInteger i = 0; i < removeCount && i < (NSInteger)oldKeys.count; i++) { [idCache removeObjectForKey:oldKeys[i]]; }
+      }
+      [udCache setObject:idCache forKey:@"ConnectCallerIdCache"];
+    } @catch (NSException *idCacheEx) {}
   }
 
   // Deliver the same payload to JS so NotificationsContext can hydrate invite

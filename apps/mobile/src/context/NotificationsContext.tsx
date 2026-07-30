@@ -4443,8 +4443,16 @@ export function NotificationsProvider({
                     linkedId: cachedInvite?.pbxCallId || altId || null,
                     tenantId: cachedInvite?.tenantId || (payload as any)?.tenantId || null,
                     direction: "inbound",
-                    fromNumber: cachedInvite?.fromNumber || "",
-                    fromName: cachedInvite?.fromDisplay || null,
+                    // Cancel pushes carry callerNumber/callerName since
+                    // 2026-07-30 — use them when the cached invite is gone so
+                    // Recents never shows "Unknown" for a known caller.
+                    fromNumber:
+                      cachedInvite?.fromNumber ||
+                      String((payload as any)?.callerNumber || "") ||
+                      "",
+                    fromName:
+                      cachedInvite?.fromDisplay ||
+                      ((payload as any)?.callerName ?? null),
                     toNumber: cachedInvite?.toExtension || "",
                     startedAt: new Date(
                       (cachedInvite as any)?._pushReceivedAt || stampTsMs,

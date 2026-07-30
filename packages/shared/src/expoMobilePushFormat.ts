@@ -38,7 +38,7 @@ function channelIdForUserAlert(type: string): string {
   return "connect-messages";
 }
 
-function deriveUserAlertTitleBody(type: string, p: Record<string, unknown>): { title: string; body: string } {
+export function deriveUserAlertTitleBody(type: string, p: Record<string, unknown>): { title: string; body: string } {
   if (type === "voicemail") {
     const caller = String(p.callerNameOrNumber || "Unknown caller");
     return { title: "New voicemail", body: `Voicemail from ${caller}` };

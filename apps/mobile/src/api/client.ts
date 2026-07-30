@@ -797,19 +797,35 @@ export async function registerMobileDevice(token: string, input: {
   // Android: also report the native FCM registration token so the server can
   // deliver call wakes via direct high-priority FCM (Doze-exempt) instead of
   // the Expo relay. Never blocks or fails registration — falls back to null.
+  // iOS: the same call returns the native APNs (alert-environment) device
+  // token — reported as apnsAlertToken so the server can deliver user
+  // notifications (voicemail / missed call / chat / SMS) via direct APNs,
+  // independent of the Expo relay's credential store (2026-07-30). Never
+  // blocks registration.
   let nativeFcmToken: string | null = null;
-  if (Platform.OS === "android") {
-    try {
-      const t = await ExpoNotifications.getDevicePushTokenAsync();
-      nativeFcmToken = typeof (t as { data?: unknown })?.data === "string" ? (t as { data: string }).data : null;
-    } catch {
-      nativeFcmToken = null;
-    }
+  let apnsAlertToken: string | null = null;
+  try {
+    // Cap the native-token fetch: on iOS it awaits an APNs registration
+    // round-trip that can stall on a bad network — registration itself must
+    // never wait on it (the next register call picks the token up).
+    const t = await Promise.race([
+      ExpoNotifications.getDevicePushTokenAsync(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]);
+    const data = typeof (t as { data?: unknown })?.data === "string" ? (t as { data: string }).data : null;
+    if (Platform.OS === "android") nativeFcmToken = data;
+    if (Platform.OS === "ios") apnsAlertToken = data;
+  } catch {
+    // fall through with nulls
   }
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ ...input, ...(nativeFcmToken ? { nativeFcmToken } : {}) })
+    body: JSON.stringify({
+      ...input,
+      ...(nativeFcmToken ? { nativeFcmToken } : {}),
+      ...(apnsAlertToken ? { apnsAlertToken } : {}),
+    })
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "MOBILE_REGISTER_FAILED");
