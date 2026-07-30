@@ -3292,6 +3292,9 @@ async function sendPushToUserDevices(input: {
     buildExpoPushV2Item({
       to: String(d.expoPushToken),
       payload: { ...(input.payload as unknown as Record<string, unknown>) },
+      // iOS needs the visible title/body/sound envelope for user alerts —
+      // data-only pushes render NOTHING on iPhones (2026-07-30).
+      platform: (d as any).platform ?? null,
     }),
   );
 

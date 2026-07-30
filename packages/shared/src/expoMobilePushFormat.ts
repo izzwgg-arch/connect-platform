@@ -63,10 +63,23 @@ function deriveUserAlertTitleBody(type: string, p: Record<string, unknown>): { t
 /**
  * Builds one Expo `push/send` array element for a device token + logical payload.
  * Returned object is JSON-serializable (for fetch body).
+ *
+ * `platform` (2026-07-30): iOS devices MUST receive user-alert pushes with a
+ * top-level title/body/sound envelope — iOS has no native FirebaseMessagingService
+ * equivalent, so the Android data-only design rendered NOTHING on iPhones:
+ * no missed-call, voicemail, or message notifications ever appeared (live-found
+ * on the first real iOS build). Android stays strict data-only so
+ * onMessageReceived keeps firing. Call-control types stay data-only on BOTH
+ * platforms (iOS calls ride the APNs VoIP path, not these).
  */
-export function buildExpoPushV2Item(input: { to: string; payload: Record<string, unknown> }): Record<string, unknown> {
+export function buildExpoPushV2Item(input: {
+  to: string;
+  payload: Record<string, unknown>;
+  platform?: string | null;
+}): Record<string, unknown> {
   const p = input.payload;
   const type = String(p.type || "");
+  const isIos = String(input.platform || "").toUpperCase() === "IOS";
 
   if (type === "INCOMING_CALL") {
     const data = stringifyFcmDataValues({
@@ -116,6 +129,20 @@ export function buildExpoPushV2Item(input: { to: string; payload: Record<string,
       alertBody: body,
       androidChannelId,
     });
+    if (isIos) {
+      // Visible APNs alert: title/body/sound at the top level, data kept for
+      // tap-routing (notificationDataToRoute). Without this envelope iOS shows
+      // nothing at all for these pushes.
+      return {
+        to: input.to,
+        title,
+        body,
+        sound: "default",
+        priority: "high",
+        ttl: 3600,
+        data,
+      };
+    }
     return {
       to: input.to,
       priority: "high",

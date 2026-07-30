@@ -20,7 +20,7 @@ import {
   flightRecord,
   flightSetSipState,
 } from "../diagnostics/CallFlightRecorder";
-import { ensureMicPermissionOrAlert } from "../sip/permissions";
+import { ensureMicPermission, ensureMicPermissionOrAlert } from "../sip/permissions";
 import { showAppAlert } from "../components/ui/appAlert";
 import {
   classifyOutboundSipFailure,
@@ -264,6 +264,26 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // list intentionally omits authToken, so read it through a ref).
   const authTokenRef = useRef<string | null>(null);
   useEffect(() => { authTokenRef.current = authToken ?? null; }, [authToken]);
+
+  // iOS ONLY — prime the microphone permission ONCE at first signed-in launch
+  // (2026-07-30, "microphone not working" on the first standalone install).
+  // The prompt previously fired only on the first OUTBOUND dial; if the very
+  // first call on a fresh install was an incoming CallKit answer, the mic had
+  // never been requested and the call connected with a dead mic. Asking up
+  // front guarantees every subsequent answer has a granted mic. One-shot per
+  // process; the OS only ever shows the dialog once per install anyway.
+  const micPrimedRef = useRef(false);
+  useEffect(() => {
+    if (Platform.OS !== "ios" || !authToken || micPrimedRef.current) return;
+    micPrimedRef.current = true;
+    ensureMicPermission()
+      .then((res) => {
+        if (!res.granted) {
+          console.warn("[mic-perm] first-launch mic priming denied — incoming answers will have no mic until enabled in Settings");
+        }
+      })
+      .catch(() => undefined);
+  }, [authToken]);
 
   // Mirror of callState read synchronously inside dial() so the
   // "already on a call" guard isn't fooled by a stale render closure.
