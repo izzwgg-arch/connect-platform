@@ -95,7 +95,10 @@
     "production": {
       "ios": {
         "ascAppId": "6796392950",
-        "appleTeamId": "PR63R6J84J"
+        "appleTeamId": "PR63R6J84J",
+        "ascApiKeyPath": "/root/.appstoreconnect/AuthKey_QL5RMY8675.p8",
+        "ascApiKeyId": "QL5RMY8675",
+        "ascApiKeyIssuerId": "c7b93db6-da90-460c-ba20-10d76f015a40"
       }
     }
   }
