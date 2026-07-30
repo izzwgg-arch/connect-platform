@@ -48,6 +48,7 @@ const IMPORT_BLOCK = `
 ${PATCH_BEGIN}
 #import <PushKit/PushKit.h>
 #import <CallKit/CallKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import <RNVoipPushNotificationManager.h>
 #import "RNCallKeep.h"
 #include <string.h>
@@ -105,6 +106,73 @@ static BOOL ConnectCallKitCallIsConnected(NSString *uuidStr)
   } @catch (NSException *ex) {}
   return NO;
 }
+
+// ── In-call loudness guardian (2026-07-30, Izzy: "speaker and earpiece very
+// quiet, sounds far away") ──────────────────────────────────────────────────
+// ROOT CAUSE: expo-av's EXAudioSessionManager configures the shared
+// AVAudioSession with setCategory:withOptions: and NO mode — which iOS defines
+// as resetting the session mode to Default. The WebRTC voice pipeline is tuned
+// for AVAudioSessionModeVoiceChat (voice-processing gain + receiver/speaker EQ
+// for speech); on Default the same call plays several dB quieter and sounds
+// distant. Any in-call expo-av touch (DTMF cue, ringback, a voicemail preload
+// finishing late) knocked the mode off and it NEVER came back for the rest of
+// the call.
+// FIX: observe route changes (every category/mode flip triggers one) and snap
+// the mode back to VoiceChat whenever a CallKit call is live. The re-assert
+// preserves an active loudspeaker route (setCategory clears the speaker
+// override, which would have yanked audio back to the earpiece mid-call).
+// Self-limiting: our own re-assert triggers one more notification which
+// no-ops (mode already VoiceChat). Fully wrapped — can never crash a call.
+static BOOL ConnectAnyCallKitCallLive(void)
+{
+  @try {
+    CXCallObserver *observer = [[CXCallObserver alloc] init];
+    for (CXCall *call in observer.calls) {
+      if (!call.hasEnded) { return YES; }
+    }
+  } @catch (NSException *ex) {}
+  return NO;
+}
+
+static void ConnectAssertVoiceChatModeIfInCall(void)
+{
+  @try {
+    if (!ConnectAnyCallKitCallLive()) { return; }
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    BOOL categoryOk = [session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord];
+    BOOL modeOk = [session.mode isEqualToString:AVAudioSessionModeVoiceChat];
+    if (categoryOk && modeOk) { return; }
+    BOOL speakerActive = NO;
+    for (AVAudioSessionPortDescription *out in session.currentRoute.outputs) {
+      if ([out.portType isEqualToString:AVAudioSessionPortBuiltInSpeaker]) { speakerActive = YES; break; }
+    }
+    NSError *err = nil;
+    [session setCategory:AVAudioSessionCategoryPlayAndRecord
+                    mode:AVAudioSessionModeVoiceChat
+                 options:(AVAudioSessionCategoryOptionAllowBluetooth | AVAudioSessionCategoryOptionAllowBluetoothA2DP)
+                   error:&err];
+    if (speakerActive) {
+      [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
+    }
+    NSLog(@"[CONNECT_AUDIO] voice-chat mode re-asserted (speaker=%d, categoryWas=%@, err=%@)",
+          speakerActive ? 1 : 0, session.category, err);
+  } @catch (NSException *ex) {}
+}
+
+static void ConnectInstallCallAudioModeGuardian(void)
+{
+  [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionRouteChangeNotification
+                                                    object:nil
+                                                     queue:[NSOperationQueue mainQueue]
+                                                usingBlock:^(NSNotification *note) {
+    // Small defer lets the change that triggered the notification settle
+    // before we inspect/correct — avoids fighting a transition mid-flight.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+      ConnectAssertVoiceChatModeIfInCall();
+    });
+  }];
+}
 ${PATCH_END}
 `;
 
@@ -115,6 +183,9 @@ const DID_LAUNCH_INJECT = `
   ${PATCH_BEGIN}
   // PushKit VoIP push registration — see plugins/withIosVoipPush.js.
   [RNVoipPushNotificationManager voipRegistration];
+  // In-call loudness guardian: keeps AVAudioSession in VoiceChat mode during
+  // live calls (expo-av knocks it to Default -> quiet/distant audio).
+  ConnectInstallCallAudioModeGuardian();
   ${PATCH_END}
 `;
 
