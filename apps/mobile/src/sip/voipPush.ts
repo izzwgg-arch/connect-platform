@@ -100,6 +100,24 @@ export function initVoipPushListener(handlers: VoipPushHandlers): () => void {
   const onDidLoadWithEvents = (events: any) => {
     const list = Array.isArray(events) ? events : [];
     for (const evt of list) {
+      // SDK 54 (2026-07-30): the VoIP TOKEN now ALWAYS arrives through this
+      // buffer. ConnectVoipPushHandler registers PushKit at app launch —
+      // before JS boots — so didUpdatePushCredentials fires pre-bridge and
+      // the register event lands in the native buffer instead of the live
+      // 'register' listener. The old build masked this by calling
+      // registerVoipToken() after listeners attached (re-emitting the token
+      // live), but that call is gone (it would hand a second PKPushRegistry
+      // to the Swift app delegate → unrecognized-selector crash). Dropping
+      // this event = voipPushToken never reaches the server = NO incoming
+      // calls at all (live-hit on the first SDK 54 device install).
+      if (evt?.name === 'RNVoipPushRemoteNotificationsRegisteredEvent') {
+        const token = typeof evt?.data === 'string' ? evt.data : '';
+        if (token) {
+          console.log('[voipPush] buffered register replay — token received');
+          onRegister(token);
+        }
+        continue;
+      }
       if (evt?.name !== 'RNVoipPushRemoteNotificationReceivedEvent') continue;
       const data = evt?.data ?? {};
       if (!isCancelPayload(data)) continue;
