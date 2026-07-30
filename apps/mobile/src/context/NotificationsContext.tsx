@@ -4417,6 +4417,44 @@ export function NotificationsProvider({
           if (cancelFlag === "1" || cancelFlag === "true" || (payload as any)?.type === "INVITE_CANCELED") {
             const altId = String((payload as any)?.altCallId || "");
             console.log("[VOIP_PUSH] cancel push — clearing invite state callId=", callId, "altCallId=", altId || "(none)");
+            // iOS Recents label parity with Android (Izzy 2026-07-30): a cancel
+            // whose reason says another device took the call leaves a local
+            // 'answered_elsewhere' record so Recent shows "Answered on another
+            // device" instead of nothing/Missed. Reason spellings covered:
+            // "answered_elsewhere" (ACCEPT fast path), "remote_hangup:
+            // answered_elsewhere" (INVITE_CANCELED relay), INVITE_CLAIMED →
+            // "answered_elsewhere"/"claimed" — same substrings the native
+            // AppDelegate cancel branch matches. The ANSWERING device is safe:
+            // its Answer tap already stamped `invite:<id>` as 'answered' and
+            // appendCallRecord dedupes by id, so this append is a no-op there.
+            // Caller info is best-effort from the cached pending invite (the
+            // cancel payload itself carries none) — read it BEFORE the
+            // teardown below clears the cache. When it misses, the record
+            // still merges with the server CDR row by start time, which
+            // supplies name/number for display.
+            const voipCancelReason = String((payload as any)?.reason || "").toLowerCase();
+            if (voipCancelReason.includes("answered_elsewhere") || voipCancelReason.includes("claimed")) {
+              const stampTsMs = Date.parse(String((payload as any)?.timestamp || "")) || Date.now();
+              readCachedInvite(callId)
+                .catch(() => null)
+                .then((cachedInvite) =>
+                  appendCallRecord({
+                    id: "invite:" + callId,
+                    linkedId: cachedInvite?.pbxCallId || altId || null,
+                    tenantId: cachedInvite?.tenantId || (payload as any)?.tenantId || null,
+                    direction: "inbound",
+                    fromNumber: cachedInvite?.fromNumber || "",
+                    fromName: cachedInvite?.fromDisplay || null,
+                    toNumber: cachedInvite?.toExtension || "",
+                    startedAt: new Date(
+                      (cachedInvite as any)?._pushReceivedAt || stampTsMs,
+                    ).toISOString(),
+                    durationSec: 0,
+                    disposition: "answered_elsewhere",
+                  }),
+                )
+                .catch(() => undefined);
+            }
             suppressedIncomingInviteIdsRef.current.add(callId);
             if (altId) suppressedIncomingInviteIdsRef.current.add(altId);
             endNativeCall(callId);

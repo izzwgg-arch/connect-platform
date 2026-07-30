@@ -83,6 +83,34 @@ export function initVoipPushListener(handlers: VoipPushHandlers): () => void {
     return () => undefined;
   }
 
+  // Cancel pushes (cancel="1" / INVITE_CANCELED) received while the app was
+  // FULLY KILLED never reach the 'notification' listener — the native module
+  // buffers them and flushes the buffer ONLY through the one-shot
+  // 'didLoadWithEvents' event, which fires the moment the FIRST JS listener
+  // attaches (startObserving). We replay ONLY cancel payloads from that
+  // buffer: the incoming-call report already happened natively in
+  // AppDelegate, and replaying an INCOMING_CALL here could resurrect a ring
+  // for a call that is long over. Cancel replay is idempotent end to end
+  // (suppression set, CallKit end, history append all dedupe). This is what
+  // lets a killed iPhone still label the call "Answered on another device".
+  const isCancelPayload = (p: any): boolean => {
+    const flag = String(p?.cancel ?? '');
+    return flag === '1' || flag === 'true' || p?.type === 'INVITE_CANCELED';
+  };
+  const onDidLoadWithEvents = (events: any) => {
+    const list = Array.isArray(events) ? events : [];
+    for (const evt of list) {
+      if (evt?.name !== 'RNVoipPushRemoteNotificationReceivedEvent') continue;
+      const data = evt?.data ?? {};
+      if (!isCancelPayload(data)) continue;
+      try {
+        handlers.onIncoming(data);
+      } catch (e) {
+        console.warn('[voipPush] buffered cancel replay handler threw:', e);
+      }
+    }
+  };
+
   // `register` fires when iOS issues (or re-issues) a VoIP push token. The
   // payload is a hex string suitable for APNs without further encoding.
   const onRegister = (token: string) => {
@@ -105,6 +133,11 @@ export function initVoipPushListener(handlers: VoipPushHandlers): () => void {
     }
   };
 
+  // didLoadWithEvents MUST be attached FIRST: the native buffer flushes when
+  // the first listener triggers startObserving, and only an already-attached
+  // didLoadWithEvents subscription can catch that flush (same trap as
+  // RNCallKeep in src/sip/callkeep.ts — see the LOCKED ordering note there).
+  Voip.addEventListener('didLoadWithEvents', onDidLoadWithEvents);
   Voip.addEventListener('register', onRegister);
   Voip.addEventListener('notification', onNotification);
 
@@ -119,6 +152,7 @@ export function initVoipPushListener(handlers: VoipPushHandlers): () => void {
 
   return () => {
     try {
+      Voip.removeEventListener('didLoadWithEvents');
       Voip.removeEventListener('register');
       Voip.removeEventListener('notification');
     } catch {
