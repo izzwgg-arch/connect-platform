@@ -21,6 +21,7 @@ import {
   flightSetSipState,
 } from "../diagnostics/CallFlightRecorder";
 import { ensureMicPermissionOrAlert } from "../sip/permissions";
+import { waitForIosAudioSessionActivation } from "../sip/callkeep";
 import { showAppAlert } from "../components/ui/appAlert";
 import {
   classifyOutboundSipFailure,
@@ -2368,6 +2369,23 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       answerIncomingInvite: async (match, timeoutMs = 5000, onTrace, deadlineHandle) => {
         setCallDirection("inbound");
+        // iOS DEAD-MIC FIX (2026-07-30, proven on-device: outbound mic fine,
+        // CallKit-answered incoming mic silent): release builds answered fast
+        // enough that getUserMedia opened the capture unit BEFORE CallKit's
+        // didActivateAudioSession handoff, so the mic recorded silence.
+        // Wait for the handoff before opening the mic — it lands ~100-300ms
+        // after the answer tap, inside the existing answer budget. Fail-open
+        // at 1200ms so a missing activation can never block the answer.
+        // Foreground in-app answers (app active, no CallKit handoff pending)
+        // skip the wait entirely, keeping the proven-instant path untouched.
+        if (Platform.OS === "ios" && AppState.currentState !== "active") {
+          const t0 = Date.now();
+          const seen = await waitForIosAudioSessionActivation(1200);
+          console.log(
+            "[CALLKEEP_AUDIO] answer gated on audio-session activation: seen=" +
+            String(seen) + " waitedMs=" + String(Date.now() - t0),
+          );
+        }
         return clientRef.current.answerIncoming(match, timeoutMs, onTrace, deadlineHandle);
       },
 

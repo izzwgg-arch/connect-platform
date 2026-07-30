@@ -284,9 +284,10 @@ export function showIncomingNativeCall(callId: string, from: string, callerName?
       if (trimmedFrom) {
         try {
           const u = callKitUuidForCallId(callId);
-          // CallKit's lock screen renders ONE line (the display name) — so when
-          // a caller name exists, combine "Name · Number" so the number is
-          // always visible (Izzy 2026-07-30). Number-only callers show as-is.
+          // CallKit's lock screen renders ONE line (a second line is reserved
+          // by Apple for the app name — stacking is impossible). NAME FIRST,
+          // number after (owner decision 2026-07-30). Number-only callers
+          // show the number alone.
           const combined =
             trimmedName && trimmedName !== trimmedFrom
               ? `${trimmedName} · ${trimmedFrom}`
@@ -314,10 +315,10 @@ export function showIncomingNativeCall(callId: string, from: string, callerName?
   try {
     void appendIosRingLog("IOS_JS_CALLKIT_REPORT", { callId, uuid, appState: AppState.currentState });
     // displayIncomingCall(uuid, handle, localizedCallerName, …): CallKit's
-    // lock screen shows ONLY localizedCallerName — so when a caller name/CNAM
-    // exists, combine "Name · Number" so the number is always visible
-    // (Izzy 2026-07-30). Number-only callers show the number alone.
-    // Android never reaches here (all call sites are iOS-gated).
+    // lock screen shows ONLY localizedCallerName (Apple reserves the second
+    // line for the app name — stacking is impossible). NAME FIRST, number
+    // after (owner decision 2026-07-30). Number-only callers show the
+    // number alone. Android never reaches here (all call sites are iOS-gated).
     const trimmedCallerName = (callerName || "").trim();
     const displayName =
       Platform.OS === "ios"
@@ -386,6 +387,46 @@ export function endNativeCall(callId: string) {
   forgetCallKitMapping(callId);
 }
 
+// ── iOS CallKit audio-session activation tracking (2026-07-30) ──────────────
+// THE dead-mic root cause on release builds: answering from the lock screen,
+// the (fast) release build ran getUserMedia BEFORE CallKit's
+// didActivateAudioSession handoff, so the capture unit opened against an
+// inactive session and recorded silence. (Debug/dev-client builds are slow
+// enough to always lose that race — mic "worked in dev, died in prod".)
+// Outbound calls never involve the CallKit handoff — proven on-device:
+// outbound mic fine, incoming mic dead. The answer path awaits this signal.
+let iosAudioSessionActive = false;
+let iosAudioSessionWaiters: Array<() => void> = [];
+
+function markIosAudioSessionActive(active: boolean) {
+  iosAudioSessionActive = active;
+  if (active) {
+    const waiters = iosAudioSessionWaiters;
+    iosAudioSessionWaiters = [];
+    for (const w of waiters) {
+      try { w(); } catch { /* ignore */ }
+    }
+  }
+}
+
+/** Resolves when CallKit has activated the audio session (immediately if it
+ *  already has), or after `timeoutMs` as a fail-open so an odd CallKit state
+ *  can never block answering. Returns whether activation was actually seen. */
+export function waitForIosAudioSessionActivation(timeoutMs: number): Promise<boolean> {
+  if (Platform.OS !== "ios") return Promise.resolve(true);
+  if (iosAudioSessionActive) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const done = (seen: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(seen);
+    };
+    iosAudioSessionWaiters.push(() => done(true));
+    setTimeout(() => done(false), Math.max(50, timeoutMs));
+  });
+}
+
 export function subscribeNativeCallActions(params: {
   onAnswer: (callId: string) => void;
   onEnd: (callId: string) => void;
@@ -402,11 +443,22 @@ export function subscribeNativeCallActions(params: {
   // Ordering matters: attaching answerCall first would trigger the flush with
   // nobody listening.
   let didLoadSub: { remove: () => void } | null = null;
+  let audioActivateSub: { remove: () => void } | null = null;
+  let audioDeactivateSub: { remove: () => void } | null = null;
   if (Platform.OS === "ios") {
+    // didLoadWithEvents MUST stay the FIRST RNCallKeep listener attached — the
+    // native buffer flushes on the first observer, and only this listener can
+    // catch it (cold-start answer taps live in that buffer).
     didLoadSub = RNCallKeep.addEventListener("didLoadWithEvents", (events: any) => {
       const list = Array.isArray(events) ? events : [];
       for (const evt of list) {
         const name = evt?.name;
+        // A buffered activation means CallKit handed us the audio session
+        // before JS booted — record it so the answer path doesn't wait.
+        if (name === "RNCallKeepDidActivateAudioSession") {
+          markIosAudioSessionActive(true);
+          continue;
+        }
         const callUUID = String(evt?.data?.callUUID || "");
         if (!callUUID) continue;
         if (name === "RNCallKeepPerformAnswerCallAction") {
@@ -429,6 +481,16 @@ export function subscribeNativeCallActions(params: {
         }
       }
     });
+    // Track CallKit's audio-session handoff so the answer path can wait for
+    // it before opening the mic (see waitForIosAudioSessionActivation above).
+    audioActivateSub = RNCallKeep.addEventListener("didActivateAudioSession", () => {
+      console.log("[CALLKEEP_AUDIO] didActivateAudioSession");
+      markIosAudioSessionActive(true);
+    });
+    audioDeactivateSub = RNCallKeep.addEventListener("didDeactivateAudioSession", () => {
+      console.log("[CALLKEEP_AUDIO] didDeactivateAudioSession");
+      markIosAudioSessionActive(false);
+    });
   }
   // Translate the CallKit UUID back to the backend callId before handing it to
   // the shared answer/decline pipeline. On Android the map is empty, so the raw
@@ -441,6 +503,8 @@ export function subscribeNativeCallActions(params: {
   });
   return () => {
     try { didLoadSub?.remove(); } catch {}
+    try { audioActivateSub?.remove(); } catch {}
+    try { audioDeactivateSub?.remove(); } catch {}
     try { answerSub.remove(); } catch {}
     try { endSub.remove(); } catch {}
   };

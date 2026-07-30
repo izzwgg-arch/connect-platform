@@ -1941,6 +1941,68 @@ export class JsSipClient implements SipClient {
       setTimeout(() => {
         markCallLatency(sid, "AUDIO_OUTPUT_STARTED");
       }, 160);
+
+      // ── [MIC_PROBE] iOS dead-mic evidence collector (2026-07-30) ──────────
+      // Prints, once per second for the first 15s of a confirmed call, the
+      // hard numbers that localize where outgoing audio dies:
+      //   trackLive/trackEnabled/trackMuted — did getUserMedia hand us a live
+      //     mic track and is it capturing?
+      //   audioLevel — is the capture unit hearing ANYTHING (0.00 = silence)?
+      //   packetsSent — is our voice actually leaving the phone as RTP?
+      // Diagnostic-only: reads state, never touches the session or routing.
+      try {
+        const pc: any = (session as any).connection;
+        if (pc && typeof pc.getStats === "function") {
+          const probeStart = Date.now();
+          const probe = setInterval(async () => {
+            if (Date.now() - probeStart > 15_000 || !pc || pc.connectionState === "closed") {
+              clearInterval(probe);
+              return;
+            }
+            try {
+              let trackInfo = "no-sender";
+              try {
+                const senders = typeof pc.getSenders === "function" ? pc.getSenders() : [];
+                const audioSender = (senders || []).find((s: any) => s?.track && s.track.kind === "audio");
+                const t = audioSender?.track;
+                if (t) {
+                  trackInfo =
+                    "live=" + String(t.readyState === "live") +
+                    " enabled=" + String(t.enabled) +
+                    " muted=" + String(!!t.muted);
+                }
+              } catch { trackInfo = "sender-err"; }
+              let packetsSent: number | null = null;
+              let audioLevel: number | null = null;
+              const stats = await pc.getStats();
+              const each = (cb: (r: any) => void) => {
+                if (stats && typeof (stats as any).forEach === "function") (stats as any).forEach(cb);
+                else if (Array.isArray(stats)) stats.forEach(cb);
+              };
+              each((r: any) => {
+                if (r?.type === "outbound-rtp" && (r.kind === "audio" || r.mediaType === "audio")) {
+                  if (typeof r.packetsSent === "number") packetsSent = r.packetsSent;
+                }
+                if (r?.type === "media-source" && (r.kind === "audio" || r.mediaType === "audio")) {
+                  if (typeof r.audioLevel === "number") audioLevel = r.audioLevel;
+                }
+              });
+              console.log(
+                "[MIC_PROBE] t=" + Math.round((Date.now() - probeStart) / 1000) + "s" +
+                " track(" + trackInfo + ")" +
+                " audioLevel=" + (audioLevel === null ? "n/a" : (audioLevel as number).toFixed(3)) +
+                " packetsSent=" + (packetsSent === null ? "n/a" : String(packetsSent)),
+              );
+            } catch (e) {
+              console.log("[MIC_PROBE] stats-err " + String((e as any)?.message ?? e));
+            }
+          }, 1000);
+        } else {
+          console.log("[MIC_PROBE] no peerconnection on confirmed session");
+        }
+      } catch (e) {
+        console.log("[MIC_PROBE] setup-err " + String((e as any)?.message ?? e));
+      }
     });
   }
 

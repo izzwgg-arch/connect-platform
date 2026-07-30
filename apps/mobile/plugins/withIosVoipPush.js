@@ -154,8 +154,8 @@ ${PATCH_BEGIN}
   NSString *callerNumber = [dict[@"callerNumber"] isKindOfClass:[NSString class]] ? dict[@"callerNumber"] : @"";
   NSString *callerName = [dict[@"callerName"] isKindOfClass:[NSString class]] ? dict[@"callerName"] : nil;
   if (callerName == nil || callerName.length == 0) { callerName = callerNumber; }
-  // CallKit's lock screen shows one line — combine "Name · Number" whenever a
-  // real caller name exists so the number is always visible (owner 2026-07-30).
+  // CallKit's lock screen shows one line (Apple reserves the second for the
+  // app name). NAME FIRST, number after (owner decision 2026-07-30).
   // Kept in lockstep with the JS combine in src/sip/callkeep.ts.
   if (callerName.length > 0 && callerNumber.length > 0 && ![callerName isEqualToString:callerNumber]) {
     callerName = [NSString stringWithFormat:@"%@ \\u00B7 %@", callerName, callerNumber];
