@@ -1502,24 +1502,37 @@ export class JsSipClient implements SipClient {
             const mLine = (sdp: string) => (sdp.match(/^m=audio.*$/m)?.[0] ?? "no-m-audio").slice(0, 90);
             if (e.originator === "local") {
               const before = mLine(e.sdp);
-              // Opus-only BOTH directions (supervised re-proof 2026-07-29
-              // late-night, Izzy present, USB+logcat). History: the opus-only
-              // ANSWER experiment (.3 build) was suspended because both
-              // mic-dead-on-incoming incidents rode builds carrying it — but
-              // the real culprit family was found tonight: phones stranded in
-              // stale MODE_IN_COMMUNICATION by leaked/phantom Telecom anchors
-              // (fixed + watchdogged, see nativeCallEndedCleanup / keepalive
-              // sweep). Data motive: CallQualityHourly shows inbound PCMU legs
-              // running ~2% loss with no FEC — audible as hiss — while opus
-              // outbound sits near 0%. preferOpusOnlyOffer is answer-safe by
-              // construction: it only ever KEEPS payloads already present in
-              // our local SDP (itself derived from the remote offer) and
-              // returns the SDP untouched when opus is absent.
+              // Opus-only BOTH directions — HD stays, per Izzy's explicit
+              // order (2026-07-30 ~01:10: "leave the HD audio and make the
+              // mic work — stop reverting"). A mic-dead/one-way report came
+              // in on both platforms right after this shipped; the fix for
+              // that MUST keep HD and address the actual transmit path —
+              // never regress this line to reorder-only again.
+              // preferOpusOnlyOffer is answer-safe: keeps only payloads
+              // already in our local SDP, untouched when opus is absent.
               e.sdp = preferOpusOnlyOffer(e.sdp);
               console.log(`[SIP_SDP] local ${e.type}: ${before} -> ${mLine(e.sdp)}`);
             } else {
-              // Remote SDP: log only — shows what the PBX offered/answered.
-              console.log(`[SIP_SDP] remote ${e.type}: ${mLine(e.sdp)}`);
+              // INCOMING OFFERS: strip narrowband from the PBX's offer BEFORE
+              // it reaches setRemoteDescription. THIS is the correct place to
+              // force HD on inbound — the local-answer munge below only edits
+              // the WIRE copy: JsSIP applies createAnswer's ORIGINAL output to
+              // setLocalDescription (verified in RTCSession.js), so libwebrtc
+              // kept sending PCMU while the PBX — told "opus only" by our
+              // munged answer — dropped every mic packet as an unknown payload
+              // type. That was the 2026-07-30 one-way-audio / dead-mic
+              // incident (PBX counters: rx climbing, zero frames bridged).
+              // Stripping the REMOTE offer instead makes libwebrtc's own
+              // answer genuinely opus-only — internal state and wire agree,
+              // mic path sends opus, HD both directions. Fail-safe: offers
+              // without opus pass through untouched (narrowband fallback).
+              if (e.type === "offer") {
+                const beforeR = mLine(e.sdp);
+                e.sdp = preferOpusOnlyOffer(e.sdp);
+                console.log(`[SIP_SDP] remote offer munged: ${beforeR} -> ${mLine(e.sdp)}`);
+              } else {
+                console.log(`[SIP_SDP] remote ${e.type}: ${mLine(e.sdp)}`);
+              }
             }
           }
         } catch (err) {
