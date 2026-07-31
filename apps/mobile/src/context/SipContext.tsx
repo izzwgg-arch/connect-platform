@@ -6,7 +6,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { getSipClient } from "../sip/sipClientSingleton";
 import { ensureSecondarySipRegistered, getSecondarySipClient, listSecondarySipClients } from "../sip/secondaryAccounts";
-import { getSipAccountProvisioning, getFreshIceServers, postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
+import { getSipAccountProvisioning, getFreshIceServers, resetSipPassword, postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
 import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle, OutboundTraceEvent } from "../sip/types";
@@ -192,6 +192,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const { token: authToken, isLoading: authLoading } = useAuth();
   // Throttle for the ICE-server freshness overlay (see ensureProvisioningLoaded).
   const lastIceRefreshAtRef = useRef(0);
+  // Throttle for self-provisioning (see ensureProvisioningLoaded). The server
+  // rate-limits this endpoint to 60/hour; ensureProvisioningLoaded runs on
+  // every register attempt, so an unprovisionable account must not hammer it.
+  const lastSelfProvisionAtRef = useRef(0);
 
   // Fresh-ICE injection the moment the auth token is available. The cold-boot
   // configure paths (module singleton + provisioning cache) run BEFORE auth
@@ -323,8 +327,45 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   } | null>(null);
 
   const ensureProvisioningLoaded = useCallback(async () => {
-    const raw = await SecureStore.getItemAsync(PROVISION_KEY).catch(() => null);
-    if (!raw) return false;
+    let raw = await SecureStore.getItemAsync(PROVISION_KEY).catch(() => null);
+
+    // ── Self-provision on first sign-in (2026-07-30) ────────────────────────
+    // Until now this function ONLY read the local cache, so SIP credentials
+    // reached a phone exclusively via the QR pairing flow. A user who signed
+    // in with just an email + password got a fully authenticated app with NO
+    // SIP registration — it could not ring or dial, silently. (Found while
+    // preparing the App Store demo account: Apple's reviewer has only the
+    // phone in hand, cannot scan a pairing QR, and would have reviewed a dead
+    // app.) The backend already issues credentials to any logged-in user via
+    // /voice/me/reset-sip-password, and api/client.ts already wrapped it —
+    // it was simply never called. Wire it here, the single choke point every
+    // register path funnels through, so signing in is enough to register.
+    //
+    // Throttled: this runs on every register attempt, and the endpoint is
+    // rate-limited server-side (60/hour). Failure is soft — the app keeps
+    // working exactly as before (QR pairing still available) and retries on
+    // the next register after the cooldown.
+    if (!raw) {
+      const tok = authTokenRef.current;
+      if (!tok) return false;
+      if (Date.now() - lastSelfProvisionAtRef.current < 60_000) return false;
+      lastSelfProvisionAtRef.current = Date.now();
+      try {
+        console.log("[SIP] no cached provisioning — self-provisioning from account");
+        const out = await resetSipPassword(tok);
+        const bundle = out?.provisioning as ProvisioningBundle | undefined;
+        if (!bundle || !bundle.sipUsername) {
+          console.warn("[SIP] self-provision returned no usable bundle");
+          return false;
+        }
+        raw = JSON.stringify(bundle);
+        await SecureStore.setItemAsync(PROVISION_KEY, raw).catch(() => undefined);
+        console.log("[SIP] self-provision OK — credentials stored");
+      } catch (e) {
+        console.warn("[SIP] self-provision failed:", e instanceof Error ? e.message : String(e));
+        return false;
+      }
+    }
     try {
       const parsed = JSON.parse(raw) as ProvisioningBundle;
       // Overlay FRESH ICE servers onto the cached bundle. The cached TURN
