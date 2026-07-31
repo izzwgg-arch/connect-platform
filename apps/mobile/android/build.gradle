@@ -2,11 +2,20 @@
 
 buildscript {
     ext {
-        buildToolsVersion = findProperty('android.buildToolsVersion') ?: '34.0.0'
-        minSdkVersion = Integer.parseInt(findProperty('android.minSdkVersion') ?: '23')
-        compileSdkVersion = Integer.parseInt(findProperty('android.compileSdkVersion') ?: '34')
-        targetSdkVersion = Integer.parseInt(findProperty('android.targetSdkVersion') ?: '34')
-        kotlinVersion = findProperty('android.kotlinVersion') ?: '1.9.23'
+        // Expo SDK 54 / React Native 0.81.5 toolchain (2026-07-31). The SDK
+        // 51->54 upgrade (ced70d7b) updated the app and iOS but left these at
+        // SDK 51 levels, so the FIRST Android build attempted from this branch
+        // failed inside Expo's own Gradle plugin with "Unresolved reference
+        // 'extensions'/'extra'" — that plugin is compiled by Gradle's EMBEDDED
+        // Kotlin, and Gradle 8.8 embeds Kotlin 1.9 while expo-modules-core 3.x
+        // needs 2.x. iOS never hit it because it builds on EAS in the cloud.
+        // Required versions are RN's own: node_modules/.../react-native/gradle/
+        // libs.versions.toml -> agp = "8.11.0", kotlin = "2.1.20".
+        buildToolsVersion = findProperty('android.buildToolsVersion') ?: '36.0.0'
+        minSdkVersion = Integer.parseInt(findProperty('android.minSdkVersion') ?: '24')
+        compileSdkVersion = Integer.parseInt(findProperty('android.compileSdkVersion') ?: '36')
+        targetSdkVersion = Integer.parseInt(findProperty('android.targetSdkVersion') ?: '36')
+        kotlinVersion = findProperty('android.kotlinVersion') ?: '2.1.20'
 
         ndkVersion = "26.1.10909125"
     }
