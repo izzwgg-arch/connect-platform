@@ -116,6 +116,13 @@ function TabItem({ route, isFocused, onPress, badge }: TabItemProps) {
           </View>
         )}
       </Animated.View>
+      {/* One line, always (Izzy 2026-07-31: "Contacts"/"Voicemail"/"Settings"
+          were wrapping to a second row on iPhone). Seven tabs across a narrow
+          screen leaves ~53pt per label, and the 10pt font needs ~57pt for
+          "Voicemail". numberOfLines={1} stops the wrap and adjustsFontSizeToFit
+          shrinks only the labels that need it (down to 8pt) instead of
+          shortening the words — so the row height never changes and the labels
+          stay readable on the smallest phones. */}
       <Text
         style={[
           styles.tabLabel,
@@ -124,6 +131,11 @@ function TabItem({ route, isFocused, onPress, badge }: TabItemProps) {
             fontWeight: isFocused ? '600' : '500',
           },
         ]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.8}
+        ellipsizeMode="clip"
+allowFontScaling={false}
       >
         {config.label}
       </Text>

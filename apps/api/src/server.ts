@@ -14971,12 +14971,33 @@ app.post("/mobile/devices/register", async (req, reply) => {
   // this is the remote kill-switch for the standing-registration rollout.
   // `as any`: column is newer than some generated Prisma clients (same pattern
   // as the other fresh MobileDevice columns in this file).
+  // canDownloadRecordings is DERIVED from the signed-in user's real portal
+  // permission, not stored per device (Izzy 2026-07-31). The app gates the
+  // "Download recording" entry in the Recents long-press menu on this flag,
+  // but nothing ever wrote it into MobileDevice.featureFlags — so the button
+  // stayed hidden for everyone, on both platforms, no matter who actually held
+  // `can_download_recordings`. Computing it here means the menu entry tracks
+  // the permission automatically and updates on the next register.
+  //
+  // The server still re-checks the permission on the download endpoint itself
+  // (with the same owner carve-out) — this flag only decides whether the UI is
+  // offered, never whether the file is released.
+  let canDownloadRecordings = false;
+  try {
+    canDownloadRecordings = await hasEffectivePortalPermission(
+      { role: user.role, sub: user.sub, tenantId: user.tenantId } as any,
+      "can_download_recordings" as any,
+    );
+  } catch {
+    canDownloadRecordings = false;
+  }
+
   return {
     ok: true,
     id: saved.id,
     platform: saved.platform,
     lastSeenAt: saved.lastSeenAt,
-    featureFlags: (saved as any).featureFlags ?? {},
+    featureFlags: { ...((saved as any).featureFlags ?? {}), canDownloadRecordings },
   };
 });
 
@@ -17677,6 +17698,37 @@ app.get("/voice/voicemail", async (req, reply) => {
 
   const take = 100;
   const skip = (q.page - 1) * take;
+
+  // ── Hide unplayable voicemails (Izzy 2026-07-31) ──────────────────────────
+  // "If a voicemail has no audio, or if it's 0:00, it shouldn't show. If the
+  // voicemail was deleted on the PBX it shouldn't show on the phone."
+  //
+  // A row is only listable when it can actually be PLAYED. streamVoicemailAudio
+  // resolves audio two ways: the helper spool (needs a msgNNNN pbxMsgNum) or a
+  // pbxRecfile path. A row with neither is a husk — it renders in the list, the
+  // user taps play, and gets "This voicemail has no audio to play." Zero-length
+  // recordings are equally useless. Both are now filtered at the source, so the
+  // list, the totals, and the unread badge all agree.
+  //
+  // PBX deletions: the ingest marks vanished messages with deletedAt, which the
+  // base `where` already excludes — this filter additionally covers rows whose
+  // recording reference was cleared without a full delete.
+  // Nested under AND rather than a bare top-level OR: the scoping code above
+  // owns `where`, and if it ever grows its own OR (mailbox scoping), a
+  // top-level OR here would REPLACE it and widen the query across mailboxes.
+  // AND-composition can never do that.
+  where = {
+    ...where,
+    durationSec: { gt: 0 },
+    AND: [
+      ...(Array.isArray((where as any).AND)
+        ? (where as any).AND
+        : (where as any).AND
+          ? [(where as any).AND]
+          : []),
+      { OR: [{ pbxRecfile: { not: null } }, { pbxMsgNum: { not: null } }] },
+    ],
+  };
 
   const [voicemailsRaw, total, unreadTotal] = await Promise.all([
     db.voicemail.findMany({ where, orderBy: { receivedAt: "desc" }, take, skip }),
@@ -28386,10 +28438,119 @@ type CreateContactOutcome =
  * duplicate phone, an empty contact, or a unique-constraint race all map to a
  * structured result so the batch importer can keep going instead of aborting.
  */
+/**
+ * Merge an imported device contact into the ONE existing contact it overlaps
+ * on phone number, adding any numbers/emails we do not already hold.
+ *
+ * Why this exists (Izzy 2026-07-31): a phone contact commonly carries several
+ * numbers (mobile + work + home). If ANY of them already existed in the tenant,
+ * assertNoDuplicateContactPhones rejected the entire contact as a duplicate and
+ * the import dropped it — so the numbers the user did NOT yet have were lost,
+ * every time, silently.
+ *
+ * Deliberately conservative:
+ *  - If the incoming numbers match MORE THAN ONE existing contact, we do not
+ *    guess which one owns them — fall back to the old duplicate outcome.
+ *  - Only ADDS. Never renames, never deletes, never reassigns a number that
+ *    already belongs to the contact.
+ *  - Nothing to add (a true duplicate) still reports "duplicate" so import
+ *    counts stay honest.
+ */
+async function mergeIntoExistingContactByPhone(
+  tenantId: string,
+  input: z.infer<typeof contactWriteInput>,
+): Promise<CreateContactOutcome | null> {
+  const incoming = input.phones
+    .map((p) => ({ raw: p.numberRaw, norm: normalizeContactPhone(p.numberRaw), type: p.type }))
+    .filter((p) => p.norm);
+  if (incoming.length === 0) return null;
+
+  const existingPhones = await (db as any).contactPhone.findMany({
+    where: {
+      numberNormalized: { in: [...new Set(incoming.map((p) => p.norm))] },
+      contact: { tenantId, active: true, archivedAt: null },
+    },
+    select: { contactId: true, numberNormalized: true },
+  });
+  const contactIds = [...new Set(existingPhones.map((p: any) => p.contactId))];
+  if (contactIds.length !== 1) return null;
+  const targetId = contactIds[0] as string;
+
+  const held = await (db as any).contactPhone.findMany({
+    where: { contactId: targetId },
+    select: { numberNormalized: true },
+  });
+  const heldSet = new Set(held.map((p: any) => p.numberNormalized));
+
+  const seen = new Set<string>();
+  const newPhones = incoming
+    .filter((p) => {
+      if (heldSet.has(p.norm) || seen.has(p.norm)) return false;
+      seen.add(p.norm);
+      return true;
+    })
+    .map((p) => ({
+      contactId: targetId,
+      type: p.type.toUpperCase(),
+      numberRaw: p.raw,
+      numberNormalized: p.norm,
+      isPrimary: false,
+    }));
+
+  const heldEmails = await (db as any).contactEmail.findMany({
+    where: { contactId: targetId },
+    select: { email: true },
+  });
+  const heldEmailSet = new Set(heldEmails.map((e: any) => String(e.email).toLowerCase()));
+  const seenEmail = new Set<string>();
+  const newEmails = input.emails
+    .map((e) => ({ email: e.email.trim().toLowerCase(), type: e.type }))
+    .filter((e) => {
+      if (!e.email || heldEmailSet.has(e.email) || seenEmail.has(e.email)) return false;
+      seenEmail.add(e.email);
+      return true;
+    })
+    .map((e) => ({ contactId: targetId, type: e.type.toUpperCase(), email: e.email, isPrimary: false }));
+
+  if (newPhones.length === 0 && newEmails.length === 0) return null;
+
+  try {
+    if (newPhones.length) {
+      await (db as any).contactPhone.createMany({ data: newPhones, skipDuplicates: true });
+    }
+    if (newEmails.length) {
+      await (db as any).contactEmail.createMany({ data: newEmails, skipDuplicates: true });
+    }
+  } catch {
+    return null;
+  }
+
+  const row = await (db as any).contact.findUnique({
+    where: { id: targetId },
+    include: CONTACT_INCLUDE,
+  });
+  app.log.info(
+    { contactsImport: "merged", tenantId, contactId: targetId, addedPhones: newPhones.length, addedEmails: newEmails.length },
+    "contacts-import: merged extra numbers into existing contact",
+  );
+  return { status: "created", contact: formatContact(row) };
+}
+
 async function createOneContact(
   tenantId: string,
   createdBy: string,
   rawBody: unknown,
+  /**
+   * Import-only behaviour (Izzy 2026-07-31: "if a contact has multiple phone
+   * numbers, I should import all the numbers they have"). When a device
+   * contact overlaps an existing contact on SOME of its numbers, the old code
+   * rejected the whole contact as a duplicate — silently discarding the
+   * numbers we did NOT already have. With this flag the overlapping contact is
+   * MERGED instead: any missing numbers/emails are added to the existing
+   * record. Left false for the manual single-contact endpoint, where
+   * "duplicate phone" is a useful warning rather than something to auto-merge.
+   */
+  mergeOnPhoneOverlap = false,
 ): Promise<CreateContactOutcome> {
   const parsed = contactWriteInput.safeParse(sanitizeContactBody(rawBody ?? {}));
   if (!parsed.success) {
@@ -28403,6 +28564,10 @@ async function createOneContact(
   try {
     await assertNoDuplicateContactPhones(tenantId, input.phones);
   } catch {
+    if (mergeOnPhoneOverlap) {
+      const merged = await mergeIntoExistingContactByPhone(tenantId, input);
+      if (merged) return merged;
+    }
     return { status: "duplicate" };
   }
   const contact = await (db as any).contact.create({
@@ -28469,7 +28634,7 @@ app.post("/contacts/import", async (req, reply) => {
   // concurrency. Avoids re-introducing the request flood this endpoint exists
   // to eliminate.
   for (let i = 0; i < parsed.data.contacts.length; i++) {
-    const outcome = await createOneContact(tenantId, user.sub, parsed.data.contacts[i]);
+    const outcome = await createOneContact(tenantId, user.sub, parsed.data.contacts[i], true);
     if (outcome.status === "created") {
       summary.created++;
       results.push({ index: i, status: "created", id: outcome.contact.id });

@@ -91,17 +91,30 @@ export function AddContactModal({
         phones: phone.trim() ? [{ type: 'mobile', numberRaw: phone.trim(), isPrimary: true }] : [],
         emails: email.trim() ? [{ type: 'work', email: email.trim(), isPrimary: true }] : [],
       });
-      // Also mirror into the device address book (Google/iCloud) so it backs
-      // up & syncs like WhatsApp. Best-effort — never blocks the save flow.
-      void saveContactToDevice({
+      // The Connect contact is now saved server-side. Close the sheet FIRST,
+      // then mirror into the device address book.
+      //
+      // APP-FREEZE FIX (Izzy 2026-07-31: "the phone app freezes, he has to
+      // close it out every time he hits Save Contact"): this mirror can raise
+      // the system Contacts permission dialog. Previously it was kicked off in
+      // the same tick as onCreated(), which dismisses this <Modal> — so iOS
+      // could be presenting the permission alert while the modal was still
+      // dismissing. That leaves no view controller owning the window and the
+      // app stops accepting touches: a hard freeze needing a force-quit.
+      //
+      // Deferring past the dismissal animation means the alert is only ever
+      // presented over a settled screen. The mirror stays best-effort: it is
+      // deliberately NOT awaited and can never fail the save.
+      const devicePayload = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         displayName,
         company: company.trim(),
         phones: phone.trim() ? [{ numberRaw: phone.trim(), type: 'mobile' }] : [],
         emails: email.trim() ? [{ email: email.trim(), type: 'work' }] : [],
-      });
+      };
       onCreated({ displayName });
+      setTimeout(() => { void saveContactToDevice(devicePayload); }, 700);
     } catch (e: any) {
       const msg = String(e?.message || '').toUpperCase();
       if (msg.includes('DUPLICATE_PHONE')) {

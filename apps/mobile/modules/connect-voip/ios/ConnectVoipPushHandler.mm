@@ -99,11 +99,13 @@ static BOOL ConnectCallKitCallIsConnected(NSString *uuidStr)
 // finishing late) knocked the mode off and it NEVER came back for the rest of
 // the call.
 // FIX: observe route changes (every category/mode flip triggers one) and snap
-// the mode back to VoiceChat whenever a CallKit call is live. The re-assert
-// preserves an active loudspeaker route (setCategory clears the speaker
-// override, which would have yanked audio back to the earpiece mid-call).
-// Self-limiting: our own re-assert triggers one more notification which
-// no-ops (mode already VoiceChat). Fully wrapped — can never crash a call.
+// the MODE back to VoiceChat when a CallKit call is live — mode only, never
+// the category, and never during the call's opening seconds. See the detailed
+// rules in ConnectAssertVoiceChatModeIfInCall: the first version of this
+// guardian used setCategory and caused a one-way-audio regression on incoming
+// calls (2026-07-31). Self-limiting: our own re-assert triggers one more
+// notification which no-ops (mode already VoiceChat). Fully wrapped — can
+// never crash a call.
 static BOOL ConnectAnyCallKitCallLive(void)
 {
   @try {
@@ -115,28 +117,57 @@ static BOOL ConnectAnyCallKitCallLive(void)
   return NO;
 }
 
+// When the current CallKit call was first seen alive. Used to keep our hands
+// completely off the audio session during the answer handoff (see below).
+static NSTimeInterval gConnectCallLiveSince = 0;
+
+// Hands-off window after a call goes live. The CallKit -> WebRTC audio handoff
+// (session activation, audio-unit start, initial route settle) happens inside
+// this window and MUST NOT be disturbed.
+static const NSTimeInterval kConnectAudioSettleSeconds = 6.0;
+
 static void ConnectAssertVoiceChatModeIfInCall(void)
 {
   @try {
-    if (!ConnectAnyCallKitCallLive()) { return; }
+    if (!ConnectAnyCallKitCallLive()) { gConnectCallLiveSince = 0; return; }
+
+    const NSTimeInterval nowTs = [[NSDate date] timeIntervalSince1970];
+    if (gConnectCallLiveSince == 0) { gConnectCallLiveSince = nowTs; }
+
+    // ── ONE-WAY AUDIO REGRESSION FIX (Izzy 2026-07-31) ──────────────────────
+    // Reported live: caller could hear the app user, the app user could NOT
+    // hear the caller, on incoming calls, 3/3 reproductions. Cause was this
+    // guardian's previous implementation calling
+    // `setCategory:mode:options:` from the route-change handler. setCategory
+    // RECONFIGURES THE WHOLE SESSION and can restart the audio I/O unit — and
+    // route changes fire exactly during the CallKit->WebRTC answer handoff, so
+    // it could orphan the playback side that WebRTC had just started while the
+    // capture side kept running. That is precisely "they hear me, I don't hear
+    // them".
+    //
+    // Two rules now, both essential:
+    //  1. NEVER call setCategory here. During a call the category is already
+    //     PlayAndRecord; only the MODE gets clobbered (expo-av's session
+    //     manager sets a category with no mode, which iOS defines as resetting
+    //     the mode to Default — the original quiet/distant-audio bug). setMode:
+    //     alone is a light-touch change that does not reconfigure the category
+    //     or its options, and does not clear the speaker override.
+    //  2. If the category is NOT PlayAndRecord, do NOTHING. That means CallKit
+    //     or WebRTC is mid-setup, or something else owns the session — fighting
+    //     it is what broke inbound audio in the first place.
+    //
+    // Plus a settle window: no touching the session at all for the first few
+    // seconds of a call. A mid-call expo-av clobber (DTMF cue, late voicemail
+    // preload) happens well after that and is still corrected.
+    if (nowTs - gConnectCallLiveSince < kConnectAudioSettleSeconds) { return; }
+
     AVAudioSession *session = [AVAudioSession sharedInstance];
-    BOOL categoryOk = [session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord];
-    BOOL modeOk = [session.mode isEqualToString:AVAudioSessionModeVoiceChat];
-    if (categoryOk && modeOk) { return; }
-    BOOL speakerActive = NO;
-    for (AVAudioSessionPortDescription *out in session.currentRoute.outputs) {
-      if ([out.portType isEqualToString:AVAudioSessionPortBuiltInSpeaker]) { speakerActive = YES; break; }
-    }
+    if (![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) { return; }
+    if ([session.mode isEqualToString:AVAudioSessionModeVoiceChat]) { return; }
+
     NSError *err = nil;
-    [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                    mode:AVAudioSessionModeVoiceChat
-                 options:(AVAudioSessionCategoryOptionAllowBluetooth | AVAudioSessionCategoryOptionAllowBluetoothA2DP)
-                   error:&err];
-    if (speakerActive) {
-      [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
-    }
-    NSLog(@"[CONNECT_AUDIO] voice-chat mode re-asserted (speaker=%d, categoryWas=%@, err=%@)",
-          speakerActive ? 1 : 0, session.category, err);
+    const BOOL ok = [session setMode:AVAudioSessionModeVoiceChat error:&err];
+    NSLog(@"[CONNECT_AUDIO] mode-only re-assert -> VoiceChat (ok=%d, err=%@)", ok ? 1 : 0, err);
   } @catch (NSException *ex) {}
 }
 

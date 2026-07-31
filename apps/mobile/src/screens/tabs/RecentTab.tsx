@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
+import * as Sharing from 'expo-sharing';
 import { markRecentsSeen } from '../../navigation/badges';
 import * as Haptics from 'expo-haptics';
 import {
@@ -571,8 +572,33 @@ export function RecentTab() {
           showAppAlert('Saved to Downloads', fileName);
           return;
         }
+
+        // ── iOS: hand it to the share sheet so "Save to Files" works ──────────
+        // (Izzy 2026-07-31, iPhone parity with the Android long-press menu.)
+        // iOS gives apps no writable public Downloads folder, so the previous
+        // documentDirectory copy put the file in the app's PRIVATE sandbox and
+        // still said "Downloaded" — the user could never find or play it. The
+        // share sheet is the supported route: "Save to Files" drops it into
+        // iCloud Drive / On My iPhone where the Files app can play it, and the
+        // same sheet also offers AirDrop/Messages/Voice Memos.
+        //
+        // Copy to a human-readable name first so the saved file is
+        // "Call 3479780090 2026-07-31.mp3" and not "rec-dl-<linkedId>.mp3".
+        const namedUri = `${FileSystem.cacheDirectory}${encodeURIComponent(fileName)}`;
+        await FileSystem.copyAsync({ from: tmpUri, to: namedUri }).catch(() => undefined);
+        const shareSource = (await FileSystem.getInfoAsync(namedUri)).exists ? namedUri : tmpUri;
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(shareSource, {
+            mimeType: 'audio/mpeg',
+            UTI: 'public.mp3',
+            dialogTitle: fileName,
+          });
+          return;
+        }
+        // Sharing unavailable: keep the sandbox copy but say so honestly
+        // instead of claiming a download the user cannot find.
         await FileSystem.copyAsync({ from: tmpUri, to: `${FileSystem.documentDirectory}${fileName}` });
-        showAppAlert('Downloaded', fileName);
+        showAppAlert('Saved inside the app', 'Sharing is unavailable on this device.');
       } catch {
         showAppAlert('Could not download', 'The recording could not be downloaded.');
       }

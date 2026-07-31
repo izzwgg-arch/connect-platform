@@ -728,16 +728,24 @@ function AddContactModal({
       });
       // Mirror into the device address book (Google/iCloud) so it backs up &
       // syncs like WhatsApp. Best-effort — never blocks the save flow.
-      void saveContactToDevice({
+      //
+      // APP-FREEZE FIX (Izzy 2026-07-31) — see the matching comment in
+      // components/AddContactModal.tsx. This mirror can raise the system
+      // Contacts permission dialog; kicking it off in the same tick as the
+      // sheet dismissal let iOS present that alert while the modal was still
+      // going away, leaving the app unable to accept touches. Close first,
+      // mirror after the animation settles.
+      const devicePayload = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         displayName: `${firstName.trim()} ${lastName.trim()}`.trim() || phone.trim(),
         company: company.trim(),
         phones: phone.trim() ? [{ numberRaw: phone.trim(), type: 'mobile' }] : [],
         emails: email.trim() ? [{ email: email.trim(), type: 'work' }] : [],
-      });
+      };
       reset();
       onCreated();
+      setTimeout(() => { void saveContactToDevice(devicePayload); }, 700);
     } catch (e: any) {
       const msg = String(e?.message || '').toUpperCase();
       if (msg.includes('DUPLICATE_PHONE')) {

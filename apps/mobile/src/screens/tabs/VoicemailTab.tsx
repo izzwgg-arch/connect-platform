@@ -17,6 +17,7 @@ import {
 import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1106,9 +1107,31 @@ export function VoicemailTab() {
         setPlaybackError('Saved to Downloads.');
         return;
       }
-      // iOS / fallback: keep the previous sandbox behavior.
+      // ── iOS: hand it to the share sheet so the user can "Save to Files" ────
+      // (Izzy 2026-07-31: "downloading voicemails is not working... it should
+      // always download on the download page in files".) Previously this
+      // branch copied the file into documentDirectory — the app's PRIVATE
+      // sandbox — and reported "Voicemail downloaded." The file was real but
+      // invisible: iOS has no public Downloads folder an app can write to, and
+      // nothing surfaced it in the Files app. The supported route is the share
+      // sheet, whose "Save to Files" lets the user drop it in iCloud Drive or
+      // On My iPhone. Copy under the human-readable name first so the saved
+      // file isn't called "vm-dl-<id>.wav".
+      const namedUri = `${FileSystem.cacheDirectory}${encodeURIComponent(fileName)}`;
+      await FileSystem.copyAsync({ from: tmpUri, to: namedUri }).catch(() => undefined);
+      const shareSource = (await FileSystem.getInfoAsync(namedUri)).exists ? namedUri : tmpUri;
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(shareSource, {
+          mimeType: 'audio/x-wav',
+          UTI: 'public.audio',
+          dialogTitle: fileName,
+        });
+        return;
+      }
+      // Last resort (sharing unavailable): keep the old sandbox copy so the
+      // file at least exists, and say so honestly rather than claiming success.
       await FileSystem.copyAsync({ from: tmpUri, to: `${FileSystem.documentDirectory}${fileName}` });
-      setPlaybackError('Voicemail downloaded.');
+      setPlaybackError('Saved inside the app — sharing unavailable.');
     } catch {
       setPlaybackError('Could not download voicemail.');
     }
