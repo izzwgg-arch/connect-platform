@@ -78,6 +78,18 @@
         "EXPO_PUBLIC_CALL_FLOW_DEBUG_OVERLAY": "true"
       }
     },
+    "ios-clean": {
+      "distribution": "internal",
+      "channel": "preview",
+      "credentialsSource": "remote",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "EXPO_PUBLIC_VOICE_SIMULATE": "false",
+        "EXPO_PUBLIC_LOG_LEVEL": "info"
+      }
+    },
     "ios-prod": {
       "distribution": "store",
       "channel": "production",
