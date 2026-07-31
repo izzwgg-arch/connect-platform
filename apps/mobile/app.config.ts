@@ -93,7 +93,7 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '36',
+    buildNumber: '37',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       // App Store upload rejected "Connect" as an already-taken bundle name

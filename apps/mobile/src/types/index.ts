@@ -77,6 +77,11 @@ export type Voicemail = {
 export type VoicemailResponse = {
   voicemails: Voicemail[];
   total: number;
+  /** Rows in this folder with listened=false. The tab badge uses THIS, not
+   *  `total` — listening marks a voicemail read but leaves it in the inbox,
+   *  so `total` never drops (Izzy 2026-07-31). Optional: older API builds
+   *  omit it, and callers fall back to 0 rather than showing a wrong count. */
+  unreadTotal?: number;
   page: number;
   /** API list scope (when present) — used client-side to filter stale/cached rows. */
   voicemailScopeVersion?: string;

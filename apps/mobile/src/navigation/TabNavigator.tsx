@@ -183,8 +183,14 @@ function useTabBadges(): { Chat: number; Voicemail: number; Recent: number } {
     refetchInterval: 3 * 60 * 1000,
     refetchOnWindowFocus: true,
   });
-  const vmTotals: any = (vmQuery.data as any)?.totals;
-  const vmNew = vmTotals ? Math.max(0, (vmTotals.inbox ?? 0) + (vmTotals.urgent ?? 0)) : 0;
+  // UNLISTENED count, not folder totals (Izzy 2026-07-31). Listening to a
+  // voicemail sets listened=true but leaves the row in "inbox", so the old
+  // `totals`-based badge stayed at the full count forever while the list
+  // header correctly showed "2 new, 2 old". `unreadTotals` comes from the
+  // server's listened=false count; it is absent on older API builds, in which
+  // case the badge reads 0 rather than a wrong number.
+  const vmUnread: any = (vmQuery.data as any)?.unreadTotals;
+  const vmNew = vmUnread ? Math.max(0, (vmUnread.inbox ?? 0) + (vmUnread.urgent ?? 0)) : 0;
 
   // Subscribe to the caches without fetching — RecentTab owns the fetches.
   // MUST carry a cache-echo queryFn (2026-07-30): with no queryFn at all,

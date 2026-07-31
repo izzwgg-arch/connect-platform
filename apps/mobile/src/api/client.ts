@@ -246,7 +246,7 @@ export async function probeVoicemailStreamStatus(token: string, vmId: string): P
 export async function getVoicemails(
   token: string,
   input: { folders?: VoicemailFolder[]; page?: number; maxPagesPerFolder?: number } = {},
-): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number>; scopeMeta?: VoicemailApiScopeMeta }> {
+): Promise<{ voicemails: Voicemail[]; totals: Record<VoicemailFolder, number>; unreadTotals: Record<VoicemailFolder, number>; scopeMeta?: VoicemailApiScopeMeta }> {
   const folders = input.folders ?? ["inbox", "urgent", "old"];
   const maxPages = Math.max(
     1,
@@ -255,7 +255,7 @@ export async function getVoicemails(
   let mergedScopeMeta: VoicemailApiScopeMeta | undefined;
   const responses = await Promise.all(
     folders.map(async (folder) => {
-      const fetchPage = async (page: number): Promise<{ batch: Voicemail[]; total: number }> => {
+      const fetchPage = async (page: number): Promise<{ batch: Voicemail[]; total: number; unread: number }> => {
         const params = new URLSearchParams({ folder, page: String(page) });
         const url = `${API_BASE}/voice/voicemail?${params.toString()}`;
         const res = await fetch(url, {
@@ -279,12 +279,15 @@ export async function getVoicemails(
             idsSample: voicemailIdsSample(batchPrev, 5),
           });
         }
-        return { batch: data.voicemails ?? [], total: data.total ?? 0 };
+        return { batch: data.voicemails ?? [], total: data.total ?? 0, unread: data.unreadTotal ?? 0 };
       };
 
       const first = await fetchPage(1);
       const merged: Voicemail[] = [...first.batch];
       let total = first.total;
+      // unreadTotal is a whole-folder count from the server, identical on every
+      // page — take it from page 1 and never accumulate it across pages.
+      const unread = first.unread;
       if (
         shouldFetchAnotherVoicemailPage(
           first.batch.length,
@@ -306,14 +309,16 @@ export async function getVoicemails(
           if (r.total) total = r.total;
         }
       }
-      return { folder, data: { voicemails: merged, total } as VoicemailResponse };
+      return { folder, data: { voicemails: merged, total, unreadTotal: unread } as VoicemailResponse };
     }),
   );
   const totals = { inbox: 0, urgent: 0, old: 0 } as Record<VoicemailFolder, number>;
+  const unreadTotals = { inbox: 0, urgent: 0, old: 0 } as Record<VoicemailFolder, number>;
   const seen = new Set<string>();
   const voicemails: Voicemail[] = [];
   for (const { folder, data } of responses) {
     totals[folder] = data.total ?? 0;
+    unreadTotals[folder] = data.unreadTotal ?? 0;
     for (const vm of data.voicemails ?? []) {
       if (seen.has(vm.id)) continue;
       seen.add(vm.id);
@@ -333,7 +338,7 @@ export async function getVoicemails(
       allow: mergedScopeMeta?.scopedMailboxesForUser,
     });
   }
-  return { voicemails: filtered, totals, scopeMeta: mergedScopeMeta };
+  return { voicemails: filtered, totals, unreadTotals, scopeMeta: mergedScopeMeta };
 }
 
 /**

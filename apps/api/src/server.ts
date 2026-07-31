@@ -17678,9 +17678,15 @@ app.get("/voice/voicemail", async (req, reply) => {
   const take = 100;
   const skip = (q.page - 1) * take;
 
-  const [voicemailsRaw, total] = await Promise.all([
+  const [voicemailsRaw, total, unreadTotal] = await Promise.all([
     db.voicemail.findMany({ where, orderBy: { receivedAt: "desc" }, take, skip }),
     db.voicemail.count({ where }),
+    // UNLISTENED count for this folder (Izzy 2026-07-31). `total` counts every
+    // row in the folder, listened or not — listening marks `listened: true`
+    // but does NOT move the row out of "inbox". The mobile tab badge was built
+    // on `total`, so it showed "4" forever while the list header correctly said
+    // "2 new, 2 old". Callers that want an unread badge must use this.
+    db.voicemail.count({ where: { ...where, listened: false } }),
   ]);
 
   let voicemails = voicemailsRaw;
@@ -17823,6 +17829,7 @@ app.get("/voice/voicemail", async (req, reply) => {
       };
     }),
     total,
+    unreadTotal,
     page: q.page,
     voicemailScopeVersion: listScopeVersion,
     scopedMailboxesForUser: listScopedMailboxes,
