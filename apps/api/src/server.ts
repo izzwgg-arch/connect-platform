@@ -3062,7 +3062,21 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
     // CallKit screen does NOT appear on top of the in-app Connect incoming
     // screen. FAILS OPEN: on any Redis miss/error we still send the push, so we
     // never risk missing a call. Android never reaches this function.
-    try {
+    //
+    // ⛔ NEVER GATE A CANCEL (Izzy 2026-07-31, live: called the demo account,
+    // voicemail answered AND the phone kept ringing). The gate's entire reason
+    // is cosmetic — avoid stacking the CallKit screen on top of the in-app
+    // incoming screen — and that reasoning applies ONLY to the incoming ring.
+    // A cancel push creates no UI; it TEARS DOWN a CallKit call that is already
+    // ringing. Skipping it removes the one mechanism that reliably stops a
+    // native ring, so the phone rang on past voicemail until the 45s watchdog.
+    //
+    // This is also why it looked device-specific: the gate only fires when the
+    // app happens to be foreground when the call lands. Whoever has the app
+    // open sees it; whoever has it backgrounded/locked never does. Nothing to
+    // do with which build is installed.
+    const foregroundGateApplies = pushKind !== "VOIP_CANCEL";
+    if (foregroundGateApplies) try {
       const fgActive = await redis.get("ios_fg_active:" + device.id);
       if (fgActive) {
         app.log.info(
