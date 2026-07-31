@@ -3260,6 +3260,9 @@ async function sendPushToUserDevices(input: {
   // keep the Expo path bit-for-bit unchanged.
   const callCriticalTypes = new Set(["INCOMING_CALL", "INCOMING_CALL_WAKE", "INVITE_CANCELED", "INVITE_CLAIMED"]);
   let expoTargets = filtered;
+  // How many devices this call actually reached over direct FCM. Callers treat
+  // queued>0 as "a device was reached" — see the early return below.
+  let directServedCount = 0;
   if (callCriticalTypes.has(String(payloadType)) && isFcmDirectConfigured()) {
     const directTargets = filtered.filter((d) => (d as any).nativeFcmToken && d.platform === "ANDROID");
     if (directTargets.length > 0) {
@@ -3287,6 +3290,7 @@ async function sendPushToUserDevices(input: {
           }, "[CALL_WAKE] FCM_DIRECT_FAILED — falling back to Expo for this device");
         }
       }));
+      directServedCount = directTargets.length - failedIds.size;
       expoTargets = filtered.filter((d) => !(d as any).nativeFcmToken || d.platform !== "ANDROID" || failedIds.has(d.id));
     }
   }
@@ -3366,8 +3370,12 @@ async function sendPushToUserDevices(input: {
   );
 
   if (messages.length === 0) {
-    app.log.info({ event: "MOBILE_PUSH_AUDIT", stage: "expo_skipped_all_direct", tenantId: input.tenantId, userId: input.userId, payloadType }, "mobile_push_audit.all_devices_served_by_direct_fcm");
-    return;
+    app.log.info({ event: "MOBILE_PUSH_AUDIT", stage: "expo_skipped_all_direct", tenantId: input.tenantId, userId: input.userId, payloadType, directServedCount }, "mobile_push_audit.all_devices_served_by_direct_fcm");
+    // Report the direct deliveries. This used to `return;` (undefined), so every
+    // caller reading `res?.queued ?? 0` saw 0 whenever direct FCM served every
+    // device — /internal/mobile-prewake reported `woken: 0` on pushes that were
+    // in fact delivered to both devices (observed 2026-07-31).
+    return { queued: directServedCount, simulated: false };
   }
 
   app.log.info(
@@ -3662,7 +3670,7 @@ async function sendPushToUserDevices(input: {
     });
   }
 
-  return { queued: messages.length, simulated: false };
+  return { queued: messages.length + directServedCount, simulated: false };
 }
 
 function getRequestSourceIp(req: any): string {
@@ -30974,7 +30982,17 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     if (ownerUserId) candidateUserIds = [ownerUserId];
   }
 
-  if (candidateUserIds.length === 0) {
+  // Owner request 2026-07-31: ALWAYS also wake the tenant's other asleep
+  // devices, not just the dialled extension's owner. A call that is later
+  // transferred, picked up by a colleague, or rolls to a ring group then finds
+  // those phones already awake instead of starting the wake clock from zero at
+  // the moment it moves. Bounded by the 45s staleness gate (already-online
+  // phones are skipped entirely), the per-user 12s cooldown, and
+  // PREWAKE_MAX_USERS. The dialled extension's owner stays FIRST in the list so
+  // that if the cap ever truncates, the person actually being called is never
+  // the one dropped.
+  const PREWAKE_TENANT_WIDE = (process.env.PBX_PREWAKE_TENANT_WIDE ?? "1") === "1";
+  if (PREWAKE_TENANT_WIDE || candidateUserIds.length === 0) {
     // Tenant-wide: only users with an asleep device (stale lastSeenAt or never
     // seen). Already-online phones (fresh lastSeenAt) are intentionally skipped.
     // NOTE: do the stale-check in JS. Prisma's null-filter handling on
@@ -30990,12 +31008,13 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
       return [] as Array<{ userId: string | null; lastSeenAt: Date | null }>;
     });
     const staleMs = staleCutoff.getTime();
-    candidateUserIds = Array.from(new Set(
-      (tenantDevices as Array<{ userId: string | null; lastSeenAt: Date | null }>)
-        .filter((d) => !d.lastSeenAt || new Date(d.lastSeenAt).getTime() < staleMs)
-        .map((d) => d.userId)
-        .filter((u): u is string => typeof u === "string" && u.length > 0),
-    ));
+    const asleepUserIds = (tenantDevices as Array<{ userId: string | null; lastSeenAt: Date | null }>)
+      .filter((d) => !d.lastSeenAt || new Date(d.lastSeenAt).getTime() < staleMs)
+      .map((d) => d.userId)
+      .filter((u): u is string => typeof u === "string" && u.length > 0);
+    // Dedupe with the dialled extension's owner FIRST (Set preserves insertion
+    // order), so PREWAKE_MAX_USERS truncation can never drop the callee.
+    candidateUserIds = Array.from(new Set([...candidateUserIds, ...asleepUserIds]));
   }
 
   if (candidateUserIds.length === 0) {

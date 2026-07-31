@@ -31,6 +31,7 @@ import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
 import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
+import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "../../api/src/fcmDirect";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { runNotificationReconcileCycle, runNotificationCanaryCycle } from "./notificationReconciler";
@@ -656,7 +657,11 @@ async function sendPushToUserDevices(input: {
   userId: string;
   payload: WorkerMobilePushPayload;
 }) {
-  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
+  // `active: true` — parity with the api's buildMobileDevicePushWhere. Without
+  // it the worker pushed to deactivated rows too (the Luxure user reported
+  // queued=6 when only 2 devices were active, 2026-07-31): wasted sends to dead
+  // Expo tokens, and ghost rows that can skew "answered on another device".
+  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId, active: true } });
   if (!devices.length) return { queued: 0, simulated: mobilePushSimulate };
 
   if (mobilePushSimulate) {
@@ -683,13 +688,75 @@ async function sendPushToUserDevices(input: {
   // All FCM data values MUST be strings (Firebase spec). Expo silently
   // promotes the push to a notification message if values fail to serialize,
   // so we stringify every field explicitly via buildExpoPushV2Item.
+  // ── Direct-FCM fast path for call-critical wakes (parity with apps/api) ────
+  // Until 2026-07-31 the worker had NO direct sender at all: every Android
+  // push it produced — real INCOMING_CALL rings, INVITE_CANCELED stop-ringing,
+  // and every registration-watchdog INCOMING_CALL_WAKE — went over the Expo
+  // relay (measured: 1,057 pushes in 24h, 100% relay), which aggressive OEMs
+  // deprioritize. Android devices that reported a native FCM token now get
+  // these straight from us; any failure falls back to Expo for that device, so
+  // devices without a token keep the relay path bit-for-bit unchanged.
+  const directServedIds = new Set<string>();
+  const callCriticalTypes = new Set(["INCOMING_CALL", "INCOMING_CALL_WAKE", "INVITE_CANCELED", "INVITE_CLAIMED"]);
+  if (callCriticalTypes.has(String(input.payload.type)) && isFcmDirectConfigured()) {
+    const directTargets = devices.filter(
+      (d: any) => d.nativeFcmToken && d.platform === "ANDROID",
+    );
+    if (directTargets.length > 0) {
+      const fcmData = buildFcmDataFromPayload(input.payload as unknown as Record<string, unknown>);
+      await Promise.all(
+        directTargets.map(async (d: any) => {
+          try {
+            await sendFcmDirectData(String((d as any).nativeFcmToken), fcmData);
+            directServedIds.add(d.id);
+            console.info(
+              JSON.stringify({
+                event: "MOBILE_PUSH_AUDIT",
+                stage: "FCM_DIRECT_DELIVERED",
+                source: "worker",
+                tenantId: input.tenantId,
+                userId: input.userId,
+                deviceId: d.id,
+                notificationType: input.payload.type,
+                model: (d as any).model ?? null,
+              }),
+            );
+            void db.mobileDevice
+              .update({
+                where: { id: d.id },
+                data: {
+                  lastPushSentAt: new Date(),
+                  lastPushType: String(input.payload.type),
+                  lastPushStatus: "fcm_direct_ok",
+                  lastPushError: null,
+                } as any,
+              })
+              .catch(() => undefined);
+          } catch (err: any) {
+            console.warn(
+              JSON.stringify({
+                event: "MOBILE_PUSH_AUDIT",
+                stage: "FCM_DIRECT_FAILED",
+                source: "worker",
+                tenantId: input.tenantId,
+                deviceId: d.id,
+                notificationType: input.payload.type,
+                error: String(err?.message || err).slice(0, 200),
+              }),
+            );
+          }
+        }),
+      );
+    }
+  }
+
   // ── Direct-APNs alert path for iOS user notifications ─────────────────────
   // Mirror of the api-side block (see apps/api sendPushToUserDevices): the
   // Expo relay's stored APNs push key is invalid (InvalidProviderToken 403 on
   // every iOS alert, found 2026-07-30), so iOS devices with a native APNs
   // alert token get user alerts straight from us with the working VoIP .p8.
   // Served devices drop out of the Expo fan-out; failures fall back to Expo.
-  let expoDevices = devices;
+  let expoDevices = devices.filter((d: any) => !directServedIds.has(d.id));
   if (EXPO_PUSH_USER_ALERT_TYPES.has(String(input.payload.type)) && isApnsAlertConfigured()) {
     const apnsTargets = devices.filter(
       (d) => (d as any).platform === "IOS" && (d as any).apnsAlertToken,
@@ -738,7 +805,10 @@ async function sendPushToUserDevices(input: {
           .catch(() => undefined);
         if (result.ok) servedIds.add(deviceId);
       }
-      expoDevices = devices.filter((d) => !servedIds.has(d.id));
+      // Filter from expoDevices (NOT devices) so the direct-FCM exclusions above
+      // survive — rebuilding from `devices` here would silently re-add every
+      // Android device already served over direct FCM.
+      expoDevices = expoDevices.filter((d: any) => !servedIds.has(d.id));
     }
   }
 
@@ -872,7 +942,11 @@ async function sendPushToUserDevices(input: {
     );
   }
 
-  return { queued: messages.length, simulated: false };
+  // Count direct-FCM deliveries too. Callers treat queued>0 as "a device was
+  // reached" (the watchdog and /internal/mobile-prewake both do) — counting only
+  // Expo messages reports 0 when every device was served directly, which is
+  // exactly the false negative seen on the api side on 2026-07-31.
+  return { queued: messages.length + directServedIds.size, simulated: false };
 }
 
 function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "CANCELED" | "UNKNOWN" {

@@ -146,6 +146,36 @@ export class MobilePushNotifier {
   private readonly answeredStopSent = new Set<string>();
   /** One-shot inbound pre-wake per call so we do not spam /internal/mobile-prewake. */
   private readonly preWoken = new Set<string>();
+  /** One-shot contact-liveness probe per call. */
+  private readonly qualified = new Set<string>();
+  /**
+   * AMI handle for the on-ring contact-liveness probe. Injected by
+   * telephony/index.ts; absent in tests, where the probe simply no-ops.
+   */
+  private ami: { sendAction(action: string, fields?: Record<string, string>): string } | null = null;
+  /**
+   * Ask the PBX to verify, at ring time, that a mobile endpoint's registered
+   * contacts are actually alive.
+   *
+   * WHY: a phone that slept and lost its socket leaves a contact bound for at
+   * least 10 minutes (`minimum_expiration=600`), and the PBX only re-checks on
+   * its own 30s `qualify_frequency` cycle. Inside that window the dead contact
+   * looks healthy, so the call is dialled straight into a dead socket →
+   * `cause 3 - No route to destination` → voicemail. That is the Luxure ext-101
+   * failure. One probe here (qualify_timeout=3) collapses the window from ≤30s
+   * to ~3s at the only moment it matters — far cheaper than raising
+   * `qualify_frequency` fleet-wide, which costs battery on every device
+   * continuously (phone radios idle ~10-20s after any packet).
+   *
+   * DEFAULT OFF: this makes the read-only PBX emit SIP OPTIONS and therefore
+   * needs the owner's explicit mandate. Set PBX_CONTACT_QUALIFY_ON_RING=1.
+   */
+  private readonly qualifyOnRing = process.env.PBX_CONTACT_QUALIFY_ON_RING === "1";
+
+  /** Injected after construction so the probe can use the existing AMI link. */
+  setAmi(ami: { sendAction(action: string, fields?: Record<string, string>): string }): void {
+    this.ami = ami;
+  }
 
   constructor() {
     const base = env.CDR_INGEST_URL
@@ -449,6 +479,8 @@ export class MobilePushNotifier {
       .map(extractShortExtension)
       .find((x): x is string => x !== null) ?? null;
 
+    this.maybeQualifyContacts(call);
+
     this.preWoken.add(call.linkedId);
     this.postPrewake({
       linkedId: call.linkedId,
@@ -466,6 +498,34 @@ export class MobilePushNotifier {
         "mobile-prewake: notify failed",
       );
     });
+  }
+
+  /**
+   * Fire one `PJSIPQualify` per mobile endpoint on this call (once per call).
+   * Fire-and-forget: we never block the call on the result — the PBX updates its
+   * own contact status, and the dialplan's wait loop reads it a few seconds
+   * later when the call actually reaches the extension.
+   *
+   * Scope: only `T<tenant>_<ext>_<n>` mobile siblings. Desk endpoints are wired
+   * and already qualified on the normal cycle; there is nothing to gain and a
+   * (tiny) packet to lose by probing them here.
+   */
+  private maybeQualifyContacts(call: NormalizedCall): void {
+    if (!this.qualifyOnRing || !this.ami) return;
+    if (this.qualified.has(call.linkedId)) return;
+
+    const mobileEndpoints = (call.extensions ?? []).filter((raw) => /^T\d+_\d{2,6}_\d+$/i.test(String(raw)));
+    if (mobileEndpoints.length === 0) return;
+
+    this.qualified.add(call.linkedId);
+    for (const endpoint of mobileEndpoints) {
+      try {
+        this.ami.sendAction("PJSIPQualify", { Endpoint: String(endpoint) });
+        log.info({ linkedId: call.linkedId, endpoint }, "contact-qualify: probe sent");
+      } catch (err: unknown) {
+        log.warn({ linkedId: call.linkedId, endpoint, err: (err as Error)?.message }, "contact-qualify: probe failed (non-fatal)");
+      }
+    }
   }
 
   private async postPrewake(payload: {
