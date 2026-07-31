@@ -324,6 +324,14 @@ const EXPO_PUSH_TOKEN_KEY = "cc_mobile_expo_push_token";
 const INSTALLATION_DEVICE_ID_KEY = "cc_mobile_device_id";
 
 const IOS_DECLINE_GRACE_MS = 1500;
+/** How often to re-check whether the SIP stack settled before declining. */
+const IOS_DECLINE_RECHECK_MS = 500;
+/**
+ * Hard cap on deferring a decline while the invite stays unresolvable.
+ * Comfortably inside the PBX's 30s ring window, so a call that truly cannot be
+ * resolved is still released to voicemail rather than ringing forever.
+ */
+const IOS_DECLINE_MAX_DEFER_MS = 12_000;
 type IncomingCallAction = "open" | "answer" | "decline" | "reply";
 
 type ParsedIncomingCallAction = {
@@ -4619,10 +4627,46 @@ export function NotificationsProvider({
         // unchanged.
         if (Platform.OS === "ios") {
           if (!pendingDeclineTimersRef.current.has(callId)) {
-            const timer = setTimeout(() => {
+            // ── Never decline a call that is still legitimately ringing ──────
+            // (Izzy 2026-07-31, proven from the device's own diagnostics.)
+            //
+            // The old code declined unconditionally 1.5s after ANY CallKit
+            // endCall. That is shorter than human reaction time, so a STRAY
+            // end-call auto-declined a call the user was still reaching for:
+            //   23:03:36.717 INCOMING_INVITE  (arrived mid-reconnect)
+            //   23:03:37.471 DECLINE          (app, not the user)
+            //   23:03:45.819 invite_unresolved_on_native_answer  (real tap, 8s late)
+            // The caller got voicemail while the phone kept ringing.
+            //
+            // The stray end-calls happen when the INVITE lands while the SIP
+            // socket is churning — the invite cannot be resolved yet, so
+            // CallKit tears its report down. A GENUINE user decline arrives on
+            // a settled stack with a resolvable invite, and still declines at
+            // the original 1.5s so the caller is released promptly.
+            //
+            // So: re-check instead of blindly firing. While the stack is
+            // unsettled (no resolvable invite) keep waiting, up to a cap that
+            // stays well inside the PBX's 30s ring window. onAnswer clears the
+            // timer the moment the user answers.
+            const startedAt = Date.now();
+            const recheck = async () => {
+              const settledInvite = invite || (await resolveInviteForAction(callId).catch(() => null));
+              const stackSettled = !!settledInvite;
+              const waited = Date.now() - startedAt;
+              if (!stackSettled && waited < IOS_DECLINE_MAX_DEFER_MS) {
+                const next = setTimeout(() => { void recheck(); }, IOS_DECLINE_RECHECK_MS);
+                pendingDeclineTimersRef.current.set(callId, next);
+                return;
+              }
               pendingDeclineTimersRef.current.delete(callId);
-              void handleDeclineInvite(invite, callId);
-            }, IOS_DECLINE_GRACE_MS);
+              if (!stackSettled) {
+                console.warn(
+                  `[CALLKEEP_DECLINE] invite never resolved after ${waited}ms — declining so the ring cannot outlive the call`,
+                );
+              }
+              void handleDeclineInvite(settledInvite, callId);
+            };
+            const timer = setTimeout(() => { void recheck(); }, IOS_DECLINE_GRACE_MS);
             pendingDeclineTimersRef.current.set(callId, timer);
           }
           return;
