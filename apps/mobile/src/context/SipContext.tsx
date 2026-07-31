@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
+import { mobileAppVersion, mobileAppBuild } from "../config/appVersion";
 import { getSipClient } from "../sip/sipClientSingleton";
 import { ensureSecondarySipRegistered, getSecondarySipClient, listSecondarySipClients } from "../sip/secondaryAccounts";
 import { getSipAccountProvisioning, getFreshIceServers, resetSipPassword, postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
@@ -398,8 +399,8 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           sipUsername: parsed.sipUsername ?? null,
           extensionNumber: parsed.sipUsername?.replace(/_\d+$/, "") ?? null,
           client: {
-            appVersion: Constants.expoConfig?.version ?? null,
-            nativeBuild: Constants.nativeBuildVersion ?? null,
+            appVersion: mobileAppVersion(),
+            nativeBuild: mobileAppBuild() || null,
             deviceModel: Device.modelName ?? null,
           },
         });

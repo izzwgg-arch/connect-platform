@@ -10,6 +10,7 @@ import React, {
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
+import { mobileAppVersion } from "../config/appVersion";
 import * as SecureStore from "expo-secure-store";
 import { AppState, Linking, NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import { showAppAlert } from "../components/ui/appAlert";
@@ -465,11 +466,9 @@ async function getStableInstallationDeviceId(): Promise<string> {
   return next;
 }
 
-function mobileAppVersion(): string {
-  const nativeVersion = Constants.nativeApplicationVersion || Constants.expoConfig?.version || "unknown";
-  const nativeBuild = Constants.nativeBuildVersion || "";
-  return nativeBuild ? `${nativeVersion}+${nativeBuild}` : nativeVersion;
-}
+// mobileAppVersion now lives in config/appVersion so SipContext and the voice
+// diagnostics session report the SAME string (see that file for why the old
+// Constants-only version made the whole fleet look like "1.0.0").
 
 /**
  * Returns the metadata sent to /mobile/devices/register on every app start.
@@ -4914,7 +4913,7 @@ export function NotificationsProvider({
         sessionId: diagSessionIdRef.current || undefined,
         platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
         deviceId: deviceIdRef.current || undefined,
-        appVersion: String(Constants.expoConfig?.version || ""),
+        appVersion: mobileAppVersion(),
         lastRegState: sip.registrationState,
         lastCallState: sip.callState,
       }).catch(() => null);
