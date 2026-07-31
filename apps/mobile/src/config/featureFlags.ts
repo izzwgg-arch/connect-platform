@@ -127,7 +127,15 @@ export async function applyServerFeatureFlags(raw: unknown): Promise<void> {
       }
       // Server-observed keep-alive requirement → latch the adaptive gate.
       // Lazy import keeps this module free of a hard sip/ dependency cycle.
-      if (next.keepAliveRequired) {
+      //
+      // ⛔ ANDROID ONLY (owner directive, Izzy 2026-07-31). The keep-alive gate
+      // exists to hold Android's standing SIP registration alive, because on
+      // Android that socket IS how a call arrives. iOS receives calls through
+      // APNs VoIP pushes and does not need to stay registered between calls, so
+      // latching a keep-alive requirement there only drives needless reconnects.
+      // The server sets this flag from the registration watchdog, which is an
+      // Android-shaped signal; iPhone must ignore it.
+      if (Platform.OS === "android" && next.keepAliveRequired) {
         void import("../sip/keepAliveGate")
           .then((gate) =>
             gate.forceKeepAliveNeeded(`server:${next.keepAliveRequiredReason || "device_registration_watchdog"}`),

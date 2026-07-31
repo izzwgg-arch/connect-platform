@@ -24,6 +24,7 @@
  * down the UA while an INVITE is in flight, so attaching from `SipContext` on
  * mount never clobbers a registration this module established during the ring.
  */
+import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 
 import { logCallFlow } from "../debug/callFlowDebug";
@@ -46,6 +47,14 @@ const PROVISION_KEY = "cc_mobile_provision";
  * self-throttles (~5 min) and never throws.
  */
 function reportHeadlessHealth(reason: string): void {
+  // ⛔ ANDROID ONLY (owner directive, Izzy 2026-07-31). This health re-report
+  // belongs to the Android registration-drop work — it keeps lastSeenAt and the
+  // keep-alive snapshot fresh so the server watchdog can tell a genuinely dead
+  // Android device from a quiet one. iOS is reachable via APNs VoIP regardless
+  // of registration, so it has no such watchdog relationship, and reporting
+  // from headless iOS paths only feeds the Android-shaped keep-alive signal
+  // back to a phone that must ignore it.
+  if (Platform.OS !== "android") return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("../notifications/headlessDeviceReport") as typeof import("../notifications/headlessDeviceReport");

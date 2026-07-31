@@ -622,7 +622,32 @@ export class JsSipClient implements SipClient {
     // wake's own attempt starts on a fresh socket immediately. A connected
     // socket mid-REGISTER is left alone — that exchange settles in <1s and
     // aborting it would only add work.
-    if (options?.forceRestart === true && this.registerPromise && !this.isConnected()) {
+    //
+    // ⛔ ANDROID ONLY (owner directive, Izzy 2026-07-31). This abort belongs to
+    // the ANDROID registration-drop work and was never meant to run on iOS —
+    // it reached iPhone only because it landed in shared code. The platforms
+    // have fundamentally different reachability models:
+    //
+    //   Android must hold a standing SIP registration, because that socket is
+    //   how a call reaches the phone. A stalled connect there = a missed call,
+    //   so aborting and restarting is the right trade.
+    //
+    //   iOS does NOT need to be registered between calls. An incoming call
+    //   arrives as an APNs VoIP push, which wakes the app and reports the call
+    //   to CallKit whether or not SIP happened to be up. Aborting and rebuilding
+    //   the socket on iOS therefore buys nothing and costs a great deal: it
+    //   tore the UA down and rebuilt it every 20-60s (a new contact URI each
+    //   time, live-observed 2026-07-31), so a call landing in one of those gaps
+    //   found the AOR dead and went to voicemail after ~9s.
+    //
+    // Keep the platforms separate. iOS keeps the pre-existing serialized
+    // behaviour that was working.
+    if (
+      Platform.OS === "android" &&
+      options?.forceRestart === true &&
+      this.registerPromise &&
+      !this.isConnected()
+    ) {
       this.abortRegisterAttempt?.("superseded: forceRestart wake register");
     }
     const run = this.registerSerial.then(() => this.registerInner(options));
