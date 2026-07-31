@@ -9,6 +9,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -762,7 +763,21 @@ export function KeypadTab() {
           </TouchableOpacity>
         )}
         <Pressable style={styles.numberRow} onLongPress={offerPasteFromClipboard} delayLongPress={350}>
-          <Text
+          {/* A REAL TextInput, not a <Text> (Izzy 2026-07-31: "it doesn't let
+              you paste in"). The number used to be display-only text, so the
+              OS had nothing to paste into and the only route was an
+              undiscoverable long-press chip. As an editable field it gets the
+              standard iOS/Android tap-and-hold → Paste menu for free, plus
+              select/copy of a number you already typed.
+
+              showSoftInputOnFocus={false} is what makes this safe: the field
+              accepts focus, selection and paste, but the SYSTEM keyboard never
+              opens — the app's own dialpad below stays the way you type. The
+              long-press chip above is kept as a fallback for the area around
+              the field. Pasted text runs through the same clean-up as the chip
+              (digits, *, # and a single leading + survive), so a copied
+              "(347) 978-0090" or "+1 347-978-0090" both dial correctly. */}
+          <TextInput
             style={[
               styles.displayText,
               {
@@ -777,12 +792,21 @@ export function KeypadTab() {
                     : 42,
               },
             ]}
+            value={displayValue}
+            onChangeText={(text) => {
+              const cleaned = text
+                .replace(/[^\d+*#]/g, '')
+                .replace(/(?!^)\+/g, '');
+              setNumber(cleaned.slice(0, 24));
+            }}
+            showSoftInputOnFocus={false}
+            keyboardType="phone-pad"
+            returnKeyType="done"
+            autoCorrect={false}
+            autoCapitalize="none"
             numberOfLines={1}
-            adjustsFontSizeToFit
-          >
-            {displayValue || ' '}
-          </Text>
-
+            textAlign="center"
+          />
         </Pressable>
 
         {subHint && (
