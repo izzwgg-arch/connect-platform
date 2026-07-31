@@ -3500,8 +3500,24 @@ export function NotificationsProvider({
               id: 'invite:' + inviteId,
               linkedId: incomingInvite.pbxCallId || null,
               direction: 'inbound',
-              fromNumber: incomingInvite.fromNumber || '',
-              fromName: incomingInvite.fromDisplay || null,
+              // The caller can legitimately be blank here: an INCOMING_CALL_WAKE
+              // push is deliberately caller-less, so an invite built from one
+              // carries no number. Fall back to any caller the ring UI did
+              // resolve before writing an empty string. When it really is
+              // unknown the record still gets written — it is the only carrier
+              // of the answered-elsewhere signal — but mergeCallRecords now
+              // suppresses caller-less local records from rendering on their
+              // own, so this can no longer surface as a phantom "Unknown" row
+              // (Izzy 2026-07-31).
+              fromNumber:
+                incomingInvite.fromNumber ||
+                (incomingInvite as any)?.callerNumber ||
+                (incomingInvite as any)?.from ||
+                '',
+              fromName:
+                incomingInvite.fromDisplay ||
+                (incomingInvite as any)?.callerName ||
+                null,
               toNumber: incomingInvite.toExtension || '',
               startedAt: new Date((incomingInvite as any)?._pushReceivedAt || Date.now()).toISOString(),
               durationSec: 0,

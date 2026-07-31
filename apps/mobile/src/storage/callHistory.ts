@@ -57,9 +57,16 @@ export function mergeCallRecords(
   // so Recent shows the accurate label instead of a red Missed.
   const merged = remote.map((r) => {
     const rt = new Date(r.startedAt).getTime();
-    const overlapping = local.filter(
-      (l) => Math.abs(new Date(l.startedAt).getTime() - rt) < 90_000,
-    );
+    const rid = (r.linkedId || '').trim();
+    // linkedId is exact; the ±90s window stays as the fallback for records that
+    // predate linkedId or arrive without one. Matching on the id first also
+    // makes the promotion work when the local record's startedAt is the
+    // push-received time rather than the call's real start.
+    const overlapping = local.filter((l) => {
+      const lid = (l.linkedId || '').trim();
+      if (rid && lid) return lid === rid;
+      return Math.abs(new Date(l.startedAt).getTime() - rt) < 90_000;
+    });
     const hasLocal = (disp: string) =>
       overlapping.some((l) => (l.disposition || '').toLowerCase() === disp);
     if (hasLocal('answered_elsewhere')) {
@@ -85,10 +92,39 @@ export function mergeCallRecords(
   });
 
   const mergedMs = merged.map((r) => new Date(r.startedAt).getTime());
+  const mergedLinkedIds = new Set(
+    merged.map((r) => (r.linkedId || '').trim()).filter((x) => x.length > 0),
+  );
 
   const uniqueLocal = local.filter((l) => {
+    // Match on linkedId FIRST — it is the PBX's exact call identifier and both
+    // sides carry it. The old timestamp-only match (±90s) was the whole bug
+    // behind the "Unknown" phantom row (Izzy 2026-07-31, screenshot):
+    //
+    //   A call rings the app AND a parallel/virtual extension on the real
+    //   phone. The user answers on the phone, so this device writes a local
+    //   `answered_elsewhere` record. That record's caller is BLANK, because the
+    //   wake push is deliberately caller-less (INCOMING_CALL_WAKE carries no
+    //   fromNumber) — and its startedAt is the push-received time, which can
+    //   sit well outside 90s of the server's call start. No overlap was found,
+    //   so the blank record was appended as a standalone row rendering as
+    //   "Unknown" with no number and no name, while the SERVER record for the
+    //   very same call (which has both) sat right next to it.
+    const lid = (l.linkedId || '').trim();
+    if (lid && mergedLinkedIds.has(lid)) return false;
+
     const lt = new Date(l.startedAt).getTime();
-    return !mergedMs.some((rt) => Math.abs(lt - rt) < 90_000);
+    if (mergedMs.some((rt) => Math.abs(lt - rt) < 90_000)) return false;
+
+    // Signal-only records must never surface on their own. A local record with
+    // no caller number AND no caller name carries nothing a human can act on —
+    // it exists purely to colour a server record's disposition. If we get here
+    // its server twin has not arrived yet (CDR ingest lags 20-60s); drop it and
+    // let the next refresh show the real row rather than a phantom "Unknown".
+    const hasCaller = Boolean((l.fromNumber || '').trim() || (l.fromName || '').trim());
+    if (!hasCaller) return false;
+
+    return true;
   });
 
   return [...merged, ...uniqueLocal].sort(

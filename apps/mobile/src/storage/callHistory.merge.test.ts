@@ -92,3 +92,72 @@ describe('mergeCallRecords — ring_ended_unanswered promotion (2026-07-29 harde
     assert.equal(merged[0].disposition, 'answered');
   });
 });
+
+describe('mergeCallRecords — caller-less local records (2026-07-31 "Unknown" row)', () => {
+  it('matches local to server by linkedId even when the timestamps are far apart', () => {
+    // Real shape of the bug: a parallel/virtual extension rang the user's real
+    // phone as well as the app. They answered on the phone, so this device
+    // wrote an answered_elsewhere record whose caller is BLANK (the wake push
+    // is deliberately caller-less) and whose startedAt is the push-received
+    // time — here 6 minutes off the server's call start, far outside the old
+    // +/-90s window. The blank record used to survive as its own row and
+    // rendered as "Unknown" with no number and no name.
+    const remote = [
+      rec({
+        id: 'srv1',
+        linkedId: '1785500000.1',
+        startedAt: '2026-07-30T20:21:00.000Z',
+        disposition: 'answered',
+        fromNumber: '7187576299',
+      }),
+    ];
+    const local = [
+      rec({
+        id: 'invite:xyz',
+        linkedId: '1785500000.1',
+        startedAt: '2026-07-30T20:27:00.000Z',
+        disposition: 'answered_elsewhere',
+        fromNumber: '',
+        fromName: null,
+      }),
+    ];
+    const merged = mergeCallRecords(remote, local);
+    assert.equal(merged.length, 1, 'no phantom row');
+    assert.equal(merged[0].id, 'srv1');
+    assert.equal(merged[0].fromNumber, '7187576299', 'keeps the real caller');
+    assert.equal(merged[0].disposition, 'answered_elsewhere');
+  });
+
+  it('suppresses a caller-less local record that has no server twin yet', () => {
+    // CDR ingest lags 20-60s, so the server record may simply not be here yet.
+    // A record with no number AND no name carries nothing actionable — it only
+    // exists to colour a disposition — so it must not render on its own.
+    const remote: CallRecord[] = [];
+    const local = [
+      rec({
+        id: 'invite:xyz',
+        linkedId: '1785500000.9',
+        startedAt: '2026-07-30T20:27:00.000Z',
+        disposition: 'answered_elsewhere',
+        fromNumber: '',
+        fromName: null,
+      }),
+    ];
+    assert.equal(mergeCallRecords(remote, local).length, 0);
+  });
+
+  it('still keeps a local-only record that DOES have a caller', () => {
+    const remote: CallRecord[] = [];
+    const local = [
+      rec({
+        id: 'invite:xyz',
+        startedAt: '2026-07-30T20:27:00.000Z',
+        disposition: 'answered_elsewhere',
+        fromNumber: '7187576299',
+      }),
+    ];
+    const merged = mergeCallRecords(remote, local);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].fromNumber, '7187576299');
+  });
+});
