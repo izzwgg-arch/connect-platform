@@ -15022,12 +15022,29 @@ app.post("/mobile/devices/register", async (req, reply) => {
   // this is the remote kill-switch for the standing-registration rollout.
   // `as any`: column is newer than some generated Prisma clients (same pattern
   // as the other fresh MobileDevice columns in this file).
+  // Merge the USER's recording-download permission into the flags the app
+  // receives. It is computed per-request, never persisted on the device row —
+  // revoking the role permission takes effect on the phone's next register.
+  // Drives whether the Recents long-press sheet offers "Download recording"
+  // (Izzy 2026-07-31). Same `can_download_recordings` key the download endpoint
+  // itself enforces, so the button and the door can never disagree.
+  // Failure is non-fatal and defaults to false = button hidden.
+  let canDownloadRecordings = false;
+  try {
+    canDownloadRecordings = await hasEffectivePortalPermission(
+      user as any,
+      "can_download_recordings" as any,
+    );
+  } catch {
+    canDownloadRecordings = false;
+  }
+
   return {
     ok: true,
     id: saved.id,
     platform: saved.platform,
     lastSeenAt: saved.lastSeenAt,
-    featureFlags: (saved as any).featureFlags ?? {},
+    featureFlags: { ...((saved as any).featureFlags ?? {}), canDownloadRecordings },
   };
 });
 
