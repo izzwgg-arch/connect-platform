@@ -37,6 +37,24 @@ export type DeviceFeatureFlags = {
    */
   keepAliveRequired: boolean;
   keepAliveRequiredReason: string;
+  /**
+   * Whether this USER may download call recordings — server-computed from the
+   * `can_download_recordings` portal permission (the same key the download
+   * endpoint enforces), not a per-device toggle. Drives whether the Recents
+   * long-press sheet offers "Download recording" at all (Izzy 2026-07-31).
+   *
+   * Deliberately follows the module's safety contract: absent = false = hidden.
+   * So an APK that ships BEFORE the API change simply never shows the button,
+   * and it appears by itself once the server starts sending the field — no
+   * second app release needed.
+   *
+   * Note the server keeps an owner carve-out on the endpoint: you can always
+   * download recordings for your own extension. This flag reflects the
+   * permission only, so the button can be hidden for someone who would in fact
+   * be allowed their own — accepted, because the alternative (showing a button
+   * that 403s for other people's calls) is worse.
+   */
+  canDownloadRecordings: boolean;
 };
 
 const DEFAULT_FLAGS: DeviceFeatureFlags = {
@@ -44,6 +62,7 @@ const DEFAULT_FLAGS: DeviceFeatureFlags = {
   forceTurnRelay: false,
   keepAliveRequired: false,
   keepAliveRequiredReason: "",
+  canDownloadRecordings: false,
 };
 
 let cachedFlags: DeviceFeatureFlags = { ...DEFAULT_FLAGS };
@@ -71,6 +90,7 @@ function sanitize(raw: unknown): DeviceFeatureFlags {
     keepAliveRequired: obj.keepAliveRequired === true,
     keepAliveRequiredReason:
       typeof obj.keepAliveRequiredReason === "string" ? obj.keepAliveRequiredReason.slice(0, 160) : "",
+    canDownloadRecordings: obj.canDownloadRecordings === true,
   };
 }
 
@@ -89,7 +109,8 @@ export async function applyServerFeatureFlags(raw: unknown): Promise<void> {
     const changed =
       next.standingRegistration !== cachedFlags.standingRegistration ||
       next.forceTurnRelay !== cachedFlags.forceTurnRelay ||
-      next.keepAliveRequired !== cachedFlags.keepAliveRequired;
+      next.keepAliveRequired !== cachedFlags.keepAliveRequired ||
+      next.canDownloadRecordings !== cachedFlags.canDownloadRecordings;
     cachedFlags = next;
     if (changed) {
       console.log(`${LOG} flags changed:`, JSON.stringify(next));
@@ -144,4 +165,13 @@ export function isStandingRegistrationEnabled(): boolean {
  */
 export function isForceTurnRelayEnabled(): boolean {
   return cachedFlags.forceTurnRelay;
+}
+
+/**
+ * Sync read of the recording-download permission. Safe default: false, so the
+ * Recents "Download recording" action stays hidden on any build/serverpair that
+ * has not explicitly granted it.
+ */
+export function canDownloadRecordings(): boolean {
+  return cachedFlags.canDownloadRecordings;
 }

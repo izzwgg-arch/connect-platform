@@ -35,6 +35,7 @@ import {
   buildVoicemailStreamUri,
   getVoicemails,
   markVoicemailListened,
+  deleteVoicemail,
   mobileQueryKeys,
   probeVoicemailStreamStatus,
   voicemailQueryUserScope,
@@ -283,10 +284,38 @@ export function VoicemailTab() {
       }
     }
     persistReadOverrides();
-    // Keep the Voicemail tab-bar badge in sync with read/unread changes
-    // (Izzy 2026-07-28): the badge query refetches its light totals.
+  }, [persistReadOverrides]);
+
+  /**
+   * Move the tab-bar badge NOW by `delta` unread messages.
+   *
+   * WHY (Izzy 2026-07-31, "the badge doesn't update"): the badge reads
+   * `unreadTotals` from its OWN query (`vmBadgeQueryKey`), which is a different
+   * cache from this screen's voicemail list. Marking a message read used to
+   * invalidate that query immediately — i.e. BEFORE the PATCH telling the server
+   * the message was read had been sent. The refetch won the race, read the
+   * pre-change count back off the server, and the badge then sat wrong until its
+   * next scheduled poll up to 3 minutes later.
+   *
+   * So: adjust the badge cache optimistically here (instant, and it matches what
+   * the user just saw happen), and let callers reconcile with the server AFTER
+   * the mutation resolves via refreshBadgeFromServer(). Callers must pass a delta
+   * they actually know to be true — count only rows whose real read state flips.
+   */
+  const adjustBadgeUnread = useCallback((delta: number) => {
+    if (!delta) return;
+    queryClient.setQueryData(vmBadgeQueryKey(token), (prev: unknown) => {
+      const p = prev as { unreadTotals?: Record<string, number> } | undefined;
+      if (!p?.unreadTotals) return prev;
+      const inbox = Math.max(0, (p.unreadTotals.inbox ?? 0) + delta);
+      return { ...p, unreadTotals: { ...p.unreadTotals, inbox } };
+    });
+  }, [queryClient, token]);
+
+  /** Reconcile the badge with the server. Call AFTER a mutation resolves. */
+  const refreshBadgeFromServer = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: vmBadgeQueryKey(token) }).catch(() => undefined);
-  }, [persistReadOverrides, queryClient, token]);
+  }, [queryClient, token]);
 
   // Tear down any in-progress voicemail playback. Extracted so it can be
   // reused when a call becomes active (a playing voicemail must never keep
@@ -675,6 +704,9 @@ export function VoicemailTab() {
         markReadOverride([vm.id], true);
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
         patchVoicemailCache((row) => row.id === vm.id, { listened: true });
+        // Guarded by `!vm.listened` above, so this row really was unread — the
+        // badge must drop by exactly one, immediately (Izzy 2026-07-31).
+        adjustBadgeUnread(-1);
         // If the server reports the read state was NOT persisted (the listener
         // holds "see everybody's voicemails" but isn't this mailbox's owner),
         // undo the optimistic flip so the previewer's screen matches the real
@@ -685,9 +717,11 @@ export function VoicemailTab() {
               markReadOverride([vm.id], false);
               setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: false } : row));
               patchVoicemailCache((row) => row.id === vm.id, { listened: false });
+              adjustBadgeUnread(1);
             }
           })
-          .catch(() => undefined);
+          .catch(() => undefined)
+          .finally(() => refreshBadgeFromServer());
       }
     };
 
@@ -837,7 +871,7 @@ export function VoicemailTab() {
       }
       setPlaybackError('Could not play voicemail audio.');
     }
-  }, [audioCache, makeStatusHandler, markReadOverride, patchVoicemailCache, progressAnim, removeVoicemailRowEverywhere, token]);
+  }, [adjustBadgeUnread, audioCache, makeStatusHandler, markReadOverride, patchVoicemailCache, progressAnim, refreshBadgeFromServer, removeVoicemailRowEverywhere, token]);
 
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
@@ -846,6 +880,9 @@ export function VoicemailTab() {
     markReadOverride([vm.id], next);
     setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: next } : row));
     patchVoicemailCache((row) => row.id === vm.id, { listened: next });
+    // `prev` is the real read state, so this delta is known-correct: going
+    // listened means one fewer unread, going unlistened means one more.
+    adjustBadgeUnread(next ? -1 : 1);
     // Revert if the server refused to change read state (previewer isn't the
     // mailbox owner) — read/unread belongs to the owning extension only.
     markVoicemailListened(token, vm.id, next)
@@ -854,10 +891,14 @@ export function VoicemailTab() {
           markReadOverride([vm.id], prev);
           setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: prev } : row));
           patchVoicemailCache((row) => row.id === vm.id, { listened: prev });
+          adjustBadgeUnread(next ? 1 : -1);
         }
       })
-      .catch(() => undefined);
-  }, [markReadOverride, patchVoicemailCache, token]);
+      .catch(() => undefined)
+      // Reconcile only once the server has actually been told — invalidating
+      // before this point is what made the badge stick at the old count.
+      .finally(() => refreshBadgeFromServer());
+  }, [adjustBadgeUnread, markReadOverride, patchVoicemailCache, refreshBadgeFromServer, token]);
 
   const markSelectedRead = useCallback(async () => {
     if (!token || selectedIds.length === 0) return;
@@ -881,7 +922,118 @@ export function VoicemailTab() {
       setRows((current) => current.map((row) => skippedIds.includes(row.id) ? { ...row, listened: false } : row));
       patchVoicemailCache((row) => skippedIds.includes(row.id), { listened: false });
     }
-  }, [markReadOverride, patchVoicemailCache, rows, selectedIds, token]);
+    refreshBadgeFromServer();
+  }, [markReadOverride, patchVoicemailCache, refreshBadgeFromServer, rows, selectedIds, token]);
+
+  /**
+   * Bulk mark-unread. Mirror of markSelectedRead: only rows currently listened
+   * can become unread, so the badge delta is exactly that subset's length.
+   */
+  const markSelectedUnread = useCallback(async () => {
+    if (!token || selectedIds.length === 0) return;
+    const ids = selectedIds;
+    const selected = rows.filter((vm) => ids.includes(vm.id) && vm.listened);
+    markReadOverride(ids, false);
+    setRows((current) => current.map((row) => ids.includes(row.id) ? { ...row, listened: false } : row));
+    patchVoicemailCache((row) => ids.includes(row.id), { listened: false });
+    adjustBadgeUnread(selected.length);
+    setSelectedIds([]);
+    const results = await Promise.all(
+      selected.map(async (vm) => {
+        const res = await markVoicemailListened(token, vm.id, false).catch(() => undefined);
+        return { id: vm.id, skipped: !!res?.readStateSkipped };
+      }),
+    );
+    const skippedIds = results.filter((r) => r.skipped).map((r) => r.id);
+    if (skippedIds.length > 0) {
+      markReadOverride(skippedIds, true);
+      setRows((current) => current.map((row) => skippedIds.includes(row.id) ? { ...row, listened: true } : row));
+      patchVoicemailCache((row) => skippedIds.includes(row.id), { listened: true });
+      adjustBadgeUnread(-skippedIds.length);
+    }
+    refreshBadgeFromServer();
+  }, [adjustBadgeUnread, markReadOverride, patchVoicemailCache, refreshBadgeFromServer, rows, selectedIds, token]);
+
+  /**
+   * Bulk delete, behind a confirmation. Rows are removed optimistically and
+   * restored per-id if the server refuses (a previewer who does not own the
+   * mailbox gets a 403). Unread rows that go away also leave the badge, so the
+   * delta is the unread subset's length.
+   */
+  const deleteSelected = useCallback(() => {
+    if (!token || selectedIds.length === 0) return;
+    const ids = [...selectedIds];
+    const doomed = rows.filter((vm) => ids.includes(vm.id));
+    const unreadCount = doomed.filter((vm) => !vm.listened).length;
+    showAppAlert(
+      ids.length === 1 ? 'Delete voicemail?' : `Delete ${ids.length} voicemails?`,
+      'This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setSelectedIds([]);
+            setRows((current) => current.filter((row) => !ids.includes(row.id)));
+            patchVoicemailCache(() => false, {});
+            for (const id of ids) removeVoicemailRowEverywhere(id);
+            adjustBadgeUnread(-unreadCount);
+            void Promise.all(
+              ids.map(async (id) => {
+                const ok = await deleteVoicemail(token, id).then(() => true).catch(() => false);
+                return { id, ok };
+              }),
+            ).then((results) => {
+              const failed = results.filter((r) => !r.ok).map((r) => r.id);
+              if (failed.length > 0) {
+                // Could not delete (not the mailbox owner, or offline) — pull the
+                // truth back from the server rather than guessing what survived.
+                const restored = doomed.filter((vm) => failed.includes(vm.id));
+                setRows((current) => [...restored, ...current]);
+                adjustBadgeUnread(restored.filter((vm) => !vm.listened).length);
+                showAppAlert(
+                  'Some voicemails were not deleted',
+                  failed.length === 1
+                    ? 'One message could not be deleted. You can only delete messages from your own mailbox.'
+                    : `${failed.length} messages could not be deleted. You can only delete messages from your own mailbox.`,
+                );
+              }
+              refreshBadgeFromServer();
+              load();
+            });
+          },
+        },
+      ],
+    );
+  }, [adjustBadgeUnread, load, patchVoicemailCache, refreshBadgeFromServer, removeVoicemailRowEverywhere, rows, selectedIds, token]);
+
+  /** Single-row delete from the three-dots menu. Same rules as the bulk path. */
+  const deleteOne = useCallback((vm: Voicemail) => {
+    if (!token) return;
+    showAppAlert('Delete voicemail?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          setRows((current) => current.filter((row) => row.id !== vm.id));
+          removeVoicemailRowEverywhere(vm.id);
+          if (!vm.listened) adjustBadgeUnread(-1);
+          deleteVoicemail(token, vm.id)
+            .catch(() => {
+              setRows((current) => [vm, ...current]);
+              if (!vm.listened) adjustBadgeUnread(1);
+              showAppAlert('Could not delete', 'You can only delete messages from your own mailbox.');
+            })
+            .finally(() => {
+              refreshBadgeFromServer();
+              load();
+            });
+        },
+      },
+    ]);
+  }, [adjustBadgeUnread, load, refreshBadgeFromServer, removeVoicemailRowEverywhere, token]);
 
   // Stop any playing voicemail before dialing so the callback audio isn't
   // talking over the recording (Fix 3). The SIP call-state effect above is the
@@ -1001,7 +1153,15 @@ export function VoicemailTab() {
           <Text style={styles.selectionText}>{selectedIds.length} selected</Text>
           <TouchableOpacity style={styles.selectionButton} onPress={markSelectedRead} activeOpacity={0.8}>
             <Ionicons name="checkmark-done-outline" size={16} color={VM.text} />
-            <Text style={styles.selectionButtonText}>Mark read</Text>
+            <Text style={styles.selectionButtonText}>Read</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.selectionButton} onPress={markSelectedUnread} activeOpacity={0.8}>
+            <Ionicons name="mail-unread-outline" size={16} color={VM.text} />
+            <Text style={styles.selectionButtonText}>Unread</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.selectionButton} onPress={deleteSelected} activeOpacity={0.8}>
+            <Ionicons name="trash-outline" size={16} color={VM.red} />
+            <Text style={[styles.selectionButtonText, { color: VM.red }]}>Delete</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.selectionIconButton} onPress={() => setSelectedIds([])} activeOpacity={0.8}>
             <Ionicons name="close" size={18} color={VM.text2} />
@@ -1120,6 +1280,10 @@ export function VoicemailTab() {
         onDownload={(vm) => {
           setMenuVm(null);
           downloadVoicemail(vm);
+        }}
+        onDelete={(vm) => {
+          setMenuVm(null);
+          deleteOne(vm);
         }}
       />
     </View>
@@ -1528,11 +1692,13 @@ function VoicemailActionMenu({
   onClose,
   onToggleRead,
   onDownload,
+  onDelete,
 }: {
   vm: Voicemail | null;
   onClose: () => void;
   onToggleRead: (vm: Voicemail) => void;
   onDownload: (vm: Voicemail) => void;
+  onDelete: (vm: Voicemail) => void;
 }) {
   const { VM, styles } = useVm();
   const visible = Boolean(vm);
@@ -1557,6 +1723,12 @@ function VoicemailActionMenu({
                 icon="download-outline"
                 label="Download"
                 onPress={() => onDownload(vm)}
+              />
+              <MenuAction
+                icon="trash-outline"
+                label="Delete"
+                danger
+                onPress={() => onDelete(vm)}
               />
             </>
           )}

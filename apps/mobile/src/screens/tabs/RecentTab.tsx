@@ -43,6 +43,12 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { AddContactModal, type AddContactPrefill } from '../../components/AddContactModal';
 import type { CallRecord } from '../../types';
+// SDK 54: the classic cacheDirectory/documentDirectory API lives under
+// `expo-file-system/legacy` (same import VoicemailTab uses for its download).
+import * as FileSystem from 'expo-file-system/legacy';
+import { NativeModules } from 'react-native';
+import { API_BASE } from '../../api/client';
+import { canDownloadRecordings } from '../../config/featureFlags';
 import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { radius, spacing } from '../../theme/spacing';
@@ -497,6 +503,83 @@ export function RecentTab() {
       />
     ), [colors.textTertiary, handleCall, handleMessage]);
 
+  /** Copy the call's number to the clipboard (Izzy 2026-07-31). */
+  const handleCopyNumber = useCallback(
+    async (group: CallGroup) => {
+      const number = group.canonicalNumber || callDisplayNumber(group.calls[0], self);
+      if (!number) {
+        showAppAlert('No phone number', 'This recent call has no number to copy.');
+        return;
+      }
+      await Clipboard.setStringAsync(number).catch(() => undefined);
+      showAppAlert('Copied', number);
+    },
+    [self],
+  );
+
+  /**
+   * Download the call recording as a real audio file (Izzy 2026-07-31).
+   *
+   * Mirrors the voicemail download: pull to the cache with the auth header,
+   * then publish into the PUBLIC Downloads folder via the native module so the
+   * file is visible in Files — the app sandbox is invisible to the user.
+   *
+   * The menu entry is already permission-gated, but the SERVER is the real
+   * boundary: it re-checks `can_download_recordings` (with an owner carve-out
+   * for your own extension) and 403s otherwise, which surfaces here as the
+   * "not available" message rather than a corrupt file.
+   */
+  const handleDownloadRecording = useCallback(
+    async (group: CallGroup) => {
+      if (!token) return;
+      const call = group.calls.find((c) => c.linkedId) ?? group.calls[0];
+      const linkedId = call?.linkedId;
+      if (!linkedId) {
+        showAppAlert('No recording', 'This call has no recording available.');
+        return;
+      }
+      try {
+        const who = (group.canonicalNumber || 'unknown').replace(/[^a-zA-Z0-9+]/g, '');
+        const day = (call.startedAt || '').slice(0, 10) || 'undated';
+        const fileName = `Call ${who} ${day}.mp3`;
+        const tmpUri = `${FileSystem.cacheDirectory}rec-dl-${linkedId.replace(/[^a-zA-Z0-9_.-]/g, '') || Date.now()}.mp3`;
+        const url = `${API_BASE}/voice/recording/${encodeURIComponent(linkedId)}/download`;
+        const res = await FileSystem.downloadAsync(url, tmpUri, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.status === 403) {
+          FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => undefined);
+          showAppAlert('Not allowed', 'You do not have permission to download this recording.');
+          return;
+        }
+        if (res.status === 404) {
+          FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => undefined);
+          showAppAlert('No recording', 'This call was not recorded.');
+          return;
+        }
+        if (res.status >= 400) {
+          FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => undefined);
+          showAppAlert('Could not download', 'The recording could not be downloaded.');
+          return;
+        }
+        const downloadsModule = (NativeModules as {
+          ConnectDownloads?: { saveToDownloads: (src: string, name: string, mime: string) => Promise<string> };
+        }).ConnectDownloads;
+        if (Platform.OS === 'android' && downloadsModule?.saveToDownloads) {
+          await downloadsModule.saveToDownloads(tmpUri, fileName, 'audio/mpeg');
+          FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => undefined);
+          showAppAlert('Saved to Downloads', fileName);
+          return;
+        }
+        await FileSystem.copyAsync({ from: tmpUri, to: `${FileSystem.documentDirectory}${fileName}` });
+        showAppAlert('Downloaded', fileName);
+      } catch {
+        showAppAlert('Could not download', 'The recording could not be downloaded.');
+      }
+    },
+    [token],
+  );
+
   const handleAddContact = useCallback(
     (group: CallGroup) => {
       const primaryCall = group.calls[0];
@@ -707,7 +790,18 @@ export function RecentTab() {
             onPress: () => menuGroup && handleCall(menuGroup.canonicalNumber || callDisplayNumber(menuGroup.calls[0])),
           },
           { label: 'Message', icon: 'chatbubble-ellipses-outline', onPress: () => menuGroup && handleMessage(menuGroup) },
+          { label: 'Copy number', icon: 'copy-outline', onPress: () => menuGroup && handleCopyNumber(menuGroup) },
           { label: 'Add to contacts', icon: 'person-add-outline', onPress: () => menuGroup && handleAddContact(menuGroup) },
+          // Only offered when the server says this user holds
+          // `can_download_recordings`. Absent flag = hidden (see featureFlags
+          // safety contract), which is why an APK can ship ahead of the API.
+          ...(canDownloadRecordings()
+            ? [{
+                label: 'Download recording',
+                icon: 'download-outline' as const,
+                onPress: () => menuGroup && handleDownloadRecording(menuGroup),
+              }]
+            : []),
         ]}
       />
       <AddContactModal
@@ -1031,14 +1125,21 @@ const CallCard = memo(function CallCard({
           </View>
 
           <View style={styles.info}>
-            <View style={styles.nameRow}>
-              {group.prefixBadge ? (
+            {/* Ring-group prefix gets its OWN row (Izzy 2026-07-31). It used
+                to sit inline with the caller on nameRow, where a badge like
+                "DD Sales" ate over half the width and truncated the number to
+                "56220…". On its own line the badge is fully readable AND the
+                caller name/number keeps the entire row width. */}
+            {group.prefixBadge ? (
+              <View style={styles.prefixRow}>
                 <View style={[styles.prefixBadge, { backgroundColor: accent + '1f', borderColor: accent + '40' }]}>
                   <Text style={[styles.prefixBadgeText, { color: accent }]} numberOfLines={1}>
                     {group.prefixBadge}
                   </Text>
                 </View>
-              ) : null}
+              </View>
+            ) : null}
+            <View style={styles.nameRow}>
               <Text style={[styles.nameText, { color: colors.text }]} numberOfLines={1}>
                 {primaryName}
               </Text>
@@ -1367,6 +1468,9 @@ const styles = StyleSheet.create({
 
   info: { flex: 1, minWidth: 0 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  // Own line for the ring-group pill so it never competes with the caller
+  // name/number for width. alignSelf keeps the pill hugging its text.
+  prefixRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginBottom: 3 },
   nameText: {
     flexShrink: 1,
     fontSize: 15.5,
@@ -1382,8 +1486,10 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   prefixBadge: {
-    flexShrink: 0,
-    maxWidth: '52%',
+    flexShrink: 1,
+    // Was 52% when the pill shared a row with the caller name; on its own row
+    // it can use the full width before truncating.
+    maxWidth: '100%',
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: radius.full,

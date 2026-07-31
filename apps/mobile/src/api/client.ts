@@ -367,6 +367,22 @@ export async function markVoicemailListened(token: string, id: string, listened:
   return json;
 }
 
+/**
+ * Delete one voicemail. Server enforces ownership (DELETE /voice/voicemail/:id);
+ * a previewer who is not the mailbox owner gets a 403, which surfaces to the
+ * caller as a thrown error so the row can be restored optimistically.
+ */
+export async function deleteVoicemail(token: string, id: string) {
+  const res = await fetch(`${API_BASE}/voice/voicemail/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return { ok: true, alreadyGone: true };
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json?.error || "VOICEMAIL_DELETE_FAILED");
+  return json ?? { ok: true };
+}
+
 export async function getTeamDirectory(token: string): Promise<TeamDirectoryMember[]> {
   // IMPORTANT — tenant isolation:
   // We intentionally do NOT send `?global=1`. The Connect API
