@@ -398,6 +398,46 @@ export function endNativeCall(callId: string) {
 let iosAudioSessionActive = false;
 let iosAudioSessionWaiters: Array<() => void> = [];
 
+/**
+ * Hand CallKit's audio-session activation to WebRTC (iOS only).
+ *
+ * THE MISSING LINK (2026-07-31). Apple's and WebRTC's documented CallKit
+ * integration is: CallKit activates the shared AVAudioSession, then the app
+ * MUST tell WebRTC it happened, so WebRTC starts/stops its audio unit in step
+ * with the system instead of on its own timeline. react-native-webrtc exposes
+ * exactly this (`RTCAudioSession.audioSessionDidActivate/Deactivate`, which
+ * forward to the native RTCAudioSession) — and this app had never called
+ * either one.
+ *
+ * Everything we have been fighting by hand traces back to that gap: audio
+ * noticeably quieter than a normal iPhone call (a plainly-configured
+ * PlayAndRecord session runs a quieter profile than the one CallKit hands a
+ * VoIP app), one-way audio, and answer-time races. Wiring it is the difference
+ * between guessing at symptoms and using the supported contract.
+ *
+ * Best-effort by construction: if the module is missing or throws, we log and
+ * carry on exactly as before rather than breaking the answer path.
+ */
+function notifyWebrtcAudioSession(active: boolean): void {
+  if (Platform.OS !== "ios") return;
+  try {
+    // Required lazily: pulling react-native-webrtc in at module scope would
+    // drag the WebRTC bridge into cold-start push handling, which runs before
+    // the app is ready (this file is imported by the killed-app wake path).
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { RTCAudioSession } = require("react-native-webrtc");
+    if (!RTCAudioSession) {
+      console.warn("[CALLKEEP_AUDIO] RTCAudioSession unavailable — WebRTC not told about the session handoff");
+      return;
+    }
+    if (active) RTCAudioSession.audioSessionDidActivate();
+    else RTCAudioSession.audioSessionDidDeactivate();
+    console.log(`[CALLKEEP_AUDIO] WebRTC notified: session ${active ? "ACTIVE" : "INACTIVE"}`);
+  } catch (e) {
+    console.warn("[CALLKEEP_AUDIO] WebRTC session handoff failed:", e instanceof Error ? e.message : String(e));
+  }
+}
+
 function markIosAudioSessionActive(active: boolean) {
   iosAudioSessionActive = active;
   if (active) {
@@ -456,6 +496,11 @@ export function subscribeNativeCallActions(params: {
         // A buffered activation means CallKit handed us the audio session
         // before JS booted — record it so the answer path doesn't wait.
         if (name === "RNCallKeepDidActivateAudioSession") {
+          // Cold start: CallKit activated the session before JS existed, so
+          // WebRTC never got the handoff live. Replay it here too, or a
+          // lock-screen answer on a killed app runs with WebRTC unaware the
+          // session is active — the quiet/one-way case we kept chasing.
+          notifyWebrtcAudioSession(true);
           markIosAudioSessionActive(true);
           continue;
         }
@@ -482,13 +527,16 @@ export function subscribeNativeCallActions(params: {
       }
     });
     // Track CallKit's audio-session handoff so the answer path can wait for
-    // it before opening the mic (see waitForIosAudioSessionActivation above).
+    // it before opening the mic (see waitForIosAudioSessionActivation above),
+    // AND hand the same signal to WebRTC — see notifyWebrtcAudioSession.
     audioActivateSub = RNCallKeep.addEventListener("didActivateAudioSession", () => {
       console.log("[CALLKEEP_AUDIO] didActivateAudioSession");
+      notifyWebrtcAudioSession(true);
       markIosAudioSessionActive(true);
     });
     audioDeactivateSub = RNCallKeep.addEventListener("didDeactivateAudioSession", () => {
       console.log("[CALLKEEP_AUDIO] didDeactivateAudioSession");
+      notifyWebrtcAudioSession(false);
       markIosAudioSessionActive(false);
     });
   }
