@@ -360,6 +360,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         }
         raw = JSON.stringify(bundle);
         await SecureStore.setItemAsync(PROVISION_KEY, raw).catch(() => undefined);
+        // The bundle the server just built already carries freshly-minted TURN
+        // credentials (getEffectiveTurnConfig runs inside
+        // issueOneTimeProvisioningForUser), so the ICE overlay below would be a
+        // second, redundant network round trip serialized in front of REGISTER.
+        // Stamp it as just-refreshed to skip it — this is pure sign-in latency.
+        lastIceRefreshAtRef.current = Date.now();
         console.log("[SIP] self-provision OK — credentials stored");
       } catch (e) {
         console.warn("[SIP] self-provision failed:", e instanceof Error ? e.message : String(e));
@@ -1064,6 +1070,32 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Register the instant sign-in completes (2026-07-30) ─────────────────
+  // The boot effect above has `[]` deps, so it runs ONCE at mount — which on a
+  // fresh sign-in is BEFORE the auth token exists, so it bails at the
+  // no-token guard. Nothing then re-triggered provisioning + registration:
+  // the phone came online only when the 30 s keep-alive watchdog or an
+  // AppState background→active transition happened to fire, which is the
+  // "registered, but it took a little time" delay. The QR pairing path never
+  // exposed this because saveProvisioning() configures AND registers inline.
+  //
+  // register() is serialized and de-dupes an in-flight attempt, so overlapping
+  // with the boot effect on a warm start is a no-op, not double work.
+  const signinRegisterForTokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!authToken || authLoading) return;
+    if (signinRegisterForTokenRef.current === authToken) return;
+    signinRegisterForTokenRef.current = authToken;
+    void (async () => {
+      const loaded = await ensureProvisioningLoaded();
+      if (!loaded) return;
+      console.log("[SIP] post-signin register kick");
+      await clientRef.current.register().catch((e: any) => {
+        console.warn("[SIP] post-signin register failed:", e?.message);
+      });
+    })();
+  }, [authToken, authLoading, ensureProvisioningLoaded]);
 
   // ── Stage 1 keep-alive watchdog ─────────────────────────────────────────
   // Every 30 s, verify the UA is both socket-connected AND SIP-registered.
