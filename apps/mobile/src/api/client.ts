@@ -829,11 +829,28 @@ export async function registerMobileDevice(token: string, input: {
     // Cap the native-token fetch: on iOS it awaits an APNs registration
     // round-trip that can stall on a bad network — registration itself must
     // never wait on it (the next register call picks the token up).
-    const t = await Promise.race([
-      ExpoNotifications.getDevicePushTokenAsync(),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
-    ]);
-    const data = typeof (t as { data?: unknown })?.data === "string" ? (t as { data: string }).data : null;
+    //
+    // RETRY (2026-07-31): a census found 10 of 16 active Android devices with
+    // NO nativeFcmToken on the server, leaving them permanently on the
+    // deprioritized Expo relay for every incoming call. A single 5s attempt is
+    // fragile on a cold start — Play Services may still be waking, or the
+    // network may not be up yet — and a miss is silent, because the field is
+    // simply omitted and nothing retries until the next app launch. One short
+    // second attempt costs nothing when the first succeeds (the common case)
+    // and recovers the cold-start miss.
+    const grabToken = async (timeoutMs: number) => {
+      const t = await Promise.race([
+        ExpoNotifications.getDevicePushTokenAsync(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+      return typeof (t as { data?: unknown })?.data === "string" ? (t as { data: string }).data : null;
+    };
+    let data = await grabToken(5000);
+    if (!data) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      data = await grabToken(5000);
+      if (data) console.log("[PUSH_TOKEN] native token obtained on retry");
+    }
     if (Platform.OS === "android") nativeFcmToken = data;
     if (Platform.OS === "ios") apnsAlertToken = data;
   } catch {
