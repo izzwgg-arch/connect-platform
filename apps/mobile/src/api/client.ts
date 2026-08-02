@@ -432,16 +432,98 @@ export async function getTeamDirectory(token: string): Promise<TeamDirectoryMemb
     ) as TeamDirectoryMember[];
 }
 
-export async function getContacts(token: string, query = ""): Promise<ContactsResponse> {
+/** Contacts per request. Matches the server's max — see CONTACTS_MAX_PAGE. */
+const CONTACTS_PAGE_SIZE = 1000;
+/**
+ * Runaway guard. 40 pages = 40,000 contacts, far beyond any real tenant; it
+ * exists so a server bug that never clears `hasMore` cannot spin forever on a
+ * user's phone.
+ */
+const CONTACTS_MAX_PAGES = 40;
+
+/** One page of the directory. Internal — callers want {@link getContacts}. */
+async function getContactsPage(
+  token: string,
+  query: string,
+  cursor: string | null,
+): Promise<ContactsResponse> {
   const params = new URLSearchParams();
   if (query.trim()) params.set("q", query.trim());
-  const qs = params.toString();
-  const res = await fetch(`${API_BASE}/contacts${qs ? `?${qs}` : ""}`, {
+  params.set("limit", String(CONTACTS_PAGE_SIZE));
+  if (cursor) params.set("cursor", cursor);
+  const res = await fetch(`${API_BASE}/contacts?${params.toString()}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const json = await parseJson(res);
   if (!res.ok) throw new Error(json?.error || "CONTACTS_FAILED");
   return json as ContactsResponse;
+}
+
+/**
+ * Fetch the WHOLE tenant directory, walking the server's pages.
+ *
+ * Why (Izzy 2026-08-02, "Eli still can't save contacts, says there's a
+ * 1,000-contact limit"): GET /contacts used to hard-cut at 1,000 saved
+ * contacts. Eli's tenant holds 1,247, so 247 of them — everything after
+ * "Sruly Goldberger" alphabetically — never reached the phone. New contacts he
+ * saved landed past the cut and vanished, which looks exactly like a broken
+ * save. Every screen that reads the directory (Contacts tab, Recents and the
+ * caller-ID name resolver, the keypad, the phone-book importer's dedupe) shares
+ * this function and one react-query cache entry, so they are all fixed at once
+ * with no extra network.
+ *
+ * A mid-walk failure returns what was collected instead of throwing: on a phone
+ * a flaky page should cost a few contacts, not replace the whole tab with an
+ * error. The next refetch repairs it.
+ */
+export async function getContacts(token: string, query = ""): Promise<ContactsResponse> {
+  const first = await getContactsPage(token, query, null);
+  const rows = [...(first.rows ?? [])];
+  let cursor = first.nextCursor ?? null;
+  let pages = 1;
+
+  // An older server ignores `limit`/`cursor` and returns no `nextCursor`, so
+  // this loop simply never runs — the app keeps working against either build,
+  // in either deploy order.
+  while (cursor && pages < CONTACTS_MAX_PAGES) {
+    let next: ContactsResponse;
+    try {
+      next = await getContactsPage(token, query, cursor);
+    } catch (err) {
+      console.warn(
+        `[contacts] page ${pages + 1} failed after ${rows.length} rows — showing partial directory: ` +
+        (err instanceof Error ? err.message : String(err)),
+      );
+      break;
+    }
+    rows.push(...(next.rows ?? []));
+    pages++;
+    cursor = next.hasMore ? next.nextCursor ?? null : null;
+  }
+  if (pages >= CONTACTS_MAX_PAGES && cursor) {
+    console.warn(`[contacts] stopped at the ${CONTACTS_MAX_PAGES}-page guard with a cursor still pending`);
+  }
+
+  // Stats come from the first page and are already tenant-wide totals, not
+  // page-local counts, so they stay correct without recomputing here.
+  return { ...first, rows, nextCursor: null, hasMore: false };
+}
+
+/**
+ * Archive a saved contact (soft delete — the server sets archivedAt, nothing is
+ * destroyed). Extension "contacts" are live PBX extensions and are rejected by
+ * the server with `extension_contacts_are_read_only`.
+ */
+export async function deleteContact(token: string, contactId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/contacts/${encodeURIComponent(contactId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const json = await parseJson(res);
+    const code = typeof json?.error === "string" ? json.error : "CONTACT_DELETE_FAILED";
+    throw new Error(code);
+  }
 }
 
 export type CreateContactInput = {

@@ -169,6 +169,9 @@ export type ContactsResponse = {
   tenantId: string;
   rows: Contact[];
   tags: ContactTag[];
+  /** Paging cursor for the next page; absent/null on the last page (or on a pre-paging server). */
+  nextCursor?: string | null;
+  hasMore?: boolean;
   stats: { total: number; internalExtensions: number; external: number; companies: number; favorites: number };
 };
 

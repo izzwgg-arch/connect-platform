@@ -23,7 +23,8 @@ import { usePresence } from '../../context/PresenceContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { AppConfirmDialog } from '../../components/ui/AppPopup';
 import { showAppAlert } from '../../components/ui/appAlert';
-import { getContacts, getOutboundRoutes, getSipAccounts, getVoiceExtension, resolveOutboundDial, resolveSipAccountDial, type UserSipAccount } from '../../api/client';
+import { useQueryClient } from '@tanstack/react-query';
+import { getContacts, getOutboundRoutes, getSipAccounts, getVoiceExtension, mobileQueryKeys, resolveOutboundDial, resolveSipAccountDial, type UserSipAccount } from '../../api/client';
 import { loadLocalCallHistory } from '../../storage/callHistory';
 import type { Contact, CallRecord, OutboundDialRoute, VoiceExtension } from '../../types';
 import { spacing } from '../../theme/spacing';
@@ -221,6 +222,7 @@ export function KeypadTab() {
   const { colors, isDark } = useTheme();
   const sip = useSip();
   const { token } = useAuth();
+  const queryClient = useQueryClient();
   const { setMyStatus, isDnd } = usePresence();
   const insets = useSafeAreaInsets();
   const [number, setNumber] = useState('');
@@ -281,7 +283,18 @@ export function KeypadTab() {
         .then((h) => { if (alive) setRecent(h); })
         .catch(() => {});
       if (token) {
-        getContacts(token, '')
+        // Read the directory through the shared react-query cache rather than
+        // re-fetching it on every keypad focus. The Contacts tab, Recents and
+        // the caller-ID resolver already fill this exact key, and since the
+        // directory is now paged in whole (see getContacts) a per-focus refetch
+        // would pull every contact down again. Same best-effort contract: a
+        // failure just leaves the suggestion list empty.
+        queryClient
+          .fetchQuery({
+            queryKey: mobileQueryKeys.contacts(''),
+            queryFn: () => getContacts(token, ''),
+            staleTime: 3 * 60 * 1000,
+          })
           .then((res) => { if (alive) setContacts(res.rows ?? []); })
           .catch(() => {});
         getVoiceExtension(token)
@@ -310,7 +323,7 @@ export function KeypadTab() {
           });
       }
       return () => { alive = false; };
-    }, [token]),
+    }, [queryClient, token]),
   );
 
   useEffect(() => {

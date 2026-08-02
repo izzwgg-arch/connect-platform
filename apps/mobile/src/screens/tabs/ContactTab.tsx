@@ -26,10 +26,10 @@ import { useSip } from '../../context/SipContext';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
-import { AppActionSheet } from '../../components/ui/AppPopup';
+import { AppActionSheet, AppConfirmDialog } from '../../components/ui/AppPopup';
 import { showAppAlert } from '../../components/ui/appAlert';
 import * as Clipboard from 'expo-clipboard';
-import { createContact, getContacts, mobileQueryKeys } from '../../api/client';
+import { createContact, deleteContact, getContacts, mobileQueryKeys } from '../../api/client';
 import type { Contact } from '../../types';
 import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
@@ -76,6 +76,7 @@ export function ContactTab() {
   const [selected, setSelected] = useState<Contact | null>(null);
   const [menuContact, setMenuContact] = useState<Contact | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Contact | null>(null);
   const [showImportFromPhone, setShowImportFromPhone] = useState(false);
   const [resolvedImportPermission, setResolvedImportPermission] = useState<PermissionState | undefined>(undefined);
 
@@ -212,6 +213,57 @@ export function ContactTab() {
     const email = contact.primaryEmail?.email || contact.emails?.[0]?.email;
     if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);
   }, []);
+
+  /**
+   * Ask before deleting, and open the confirm dialog only AFTER the sheet that
+   * requested it has finished dismissing. Two React Native <Modal>s animating
+   * at once on iOS is the exact freeze documented in AddContactModal (no view
+   * controller owns the window, the app stops taking touches) — presenting over
+   * a settled screen avoids it.
+   */
+  const requestDeleteContact = useCallback((contact: Contact) => {
+    if (contact.type === 'internal_extension') return;
+    setSelected(null);
+    setMenuContact(null);
+    setTimeout(() => setPendingDelete(contact), 300);
+  }, []);
+
+  const confirmDeleteContact = useCallback(() => {
+    const contact = pendingDelete;
+    setPendingDelete(null);
+    if (!contact || !token) return;
+    // Drop the row from the cache first so the list responds instantly. On
+    // success the cache is already correct and needs no refetch — with the
+    // whole directory now paged in, an invalidate would re-download every
+    // contact just to learn about one deletion. Only a FAILURE refetches, to
+    // put the row back.
+    queryClient.setQueryData(mobileQueryKeys.contacts(''), (old: any) => {
+      if (!old?.rows) return old;
+      const rows = old.rows.filter((row: Contact) => row.id !== contact.id);
+      if (rows.length === old.rows.length) return old;
+      return {
+        ...old,
+        rows,
+        stats: old.stats ? { ...old.stats, total: Math.max(0, (old.stats.total ?? 1) - 1) } : old.stats,
+      };
+    });
+    deleteContact(token, contact.id)
+      .then(() => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      })
+      .catch((e: any) => {
+        const code = String(e?.message || '');
+        showAppAlert(
+          'Could not delete contact',
+          code.includes('extension_contacts_are_read_only')
+            ? 'Extensions belong to your phone system and cannot be deleted here.'
+            : code.includes('not_found')
+              ? 'That contact no longer exists.'
+              : 'Please try again.',
+        );
+        queryClient.invalidateQueries({ queryKey: mobileQueryKeys.contacts('') }).catch(() => undefined);
+      });
+  }, [pendingDelete, queryClient, token]);
 
   // Stable renderItem — an inline renderItem closure forces VirtualizedList to
   // re-render every mounted cell on each parent render (part of the measured
@@ -360,6 +412,7 @@ export function ContactTab() {
         onCall={callContact}
         onMessage={messageContact}
         onEmail={emailContact}
+        onDelete={requestDeleteContact}
       />
 
       <AddContactModal
@@ -393,7 +446,26 @@ export function ContactTab() {
           { label: 'Favorite', icon: 'star-outline', muted: true },
           { label: 'Message', icon: 'chatbubble-ellipses-outline', onPress: () => menuContact && messageContact(menuContact) },
           { label: 'Call', icon: 'call-outline', onPress: () => menuContact && callContact(menuContact) },
+          // Extensions are live PBX users, not saved contacts — the server
+          // refuses to delete them, so the option is not offered.
+          ...(menuContact && menuContact.type !== 'internal_extension'
+            ? [{
+                label: 'Delete Contact',
+                icon: 'trash-outline' as const,
+                destructive: true,
+                onPress: () => menuContact && requestDeleteContact(menuContact),
+              }]
+            : []),
         ]}
+      />
+      <AppConfirmDialog
+        visible={Boolean(pendingDelete)}
+        title="Delete contact?"
+        message={pendingDelete ? `${pendingDelete.displayName} will be removed from your company's contacts.` : undefined}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDeleteContact}
+        onClose={() => setPendingDelete(null)}
       />
     </View>
   );
@@ -914,12 +986,14 @@ function ContactDetailModal({
   onCall,
   onMessage,
   onEmail,
+  onDelete,
 }: {
   contact: Contact | null;
   onClose: () => void;
   onCall: (contact: Contact) => void;
   onMessage: (contact: Contact) => void;
   onEmail: (contact: Contact) => void;
+  onDelete: (contact: Contact) => void;
 }) {
   const { colors } = useTheme();
   return (
@@ -1003,6 +1077,18 @@ function ContactDetailModal({
                   </View>
                 ))}
               </View>
+            ) : null}
+            {contact.type !== 'internal_extension' ? (
+              <TouchableOpacity
+                activeOpacity={0.82}
+                onPress={() => onDelete(contact)}
+                style={[styles.deleteButton, { backgroundColor: colors.dangerMuted, borderColor: colors.danger + '33' }]}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${contact.displayName}`}
+              >
+                <Ionicons name="trash-outline" size={17} color={colors.danger} />
+                <Text style={[styles.deleteButtonText, { color: colors.danger }]}>Delete Contact</Text>
+              </TouchableOpacity>
             ) : null}
           </View>
         )}
@@ -1344,4 +1430,15 @@ const styles = StyleSheet.create({
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: spacing['4'] },
   tag: { borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 5 },
   tagText: { fontSize: 11, fontWeight: '800' },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: spacing['4'],
+    paddingVertical: 13,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  deleteButtonText: { fontSize: 15, fontWeight: '800' },
 });

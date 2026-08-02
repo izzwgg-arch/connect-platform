@@ -28499,6 +28499,40 @@ async function replaceContactChildren(contactId: string, tenantId: string, input
   });
 }
 
+/**
+ * Legacy page size. Clients that send no `limit` keep getting exactly this many
+ * manual contacts in one shot, exactly as before paging existed — the portal
+ * directory relies on it (it renders every row it is handed, unvirtualized).
+ */
+const CONTACTS_DEFAULT_PAGE = 1000;
+/**
+ * Upper bound for an explicit `?limit=`. Deliberately equal to the legacy page
+ * size: a 1,000-contact response is exactly what every client already received
+ * before paging existed, so a paging client's payload is never bigger than the
+ * one that is proven to work on these phones today.
+ */
+const CONTACTS_MAX_PAGE = 1000;
+
+/**
+ * GET /contacts — tenant directory (live extensions + saved contacts).
+ *
+ * PAGING (2026-08-02, Izzy: "Eli can't save contacts / says there's a
+ * 1,000-contact limit"): this endpoint used to cut the saved-contact list at a
+ * hard `take: 1000`. Displaydex holds 1,247, so 247 contacts — everything
+ * alphabetically after "Sruly Goldberger" — were never sent to the phone. They
+ * saved fine server-side and then simply never appeared, which reads exactly
+ * like "saving is broken". Relax Tires (4,010) and Create A Box (2,002) were
+ * losing far more.
+ *
+ * Opt-in and backwards compatible: send `limit` (+ `cursor` from the previous
+ * response's `nextCursor`) to walk the whole directory. Send neither and the
+ * response is byte-for-byte what it always was, apart from `stats` now being
+ * true totals rather than "however much fit in the page".
+ *
+ * Extension rows are returned on the FIRST page only (no cursor) — they are a
+ * bounded set that is fetched whole, so repeating them on every page would
+ * duplicate them in a paging client.
+ */
 app.get("/contacts", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -28509,29 +28543,54 @@ app.get("/contacts", async (req, reply) => {
     type: z.enum(["all", "extensions", "external", "companies", "favorites"]).optional(),
     tag: z.string().optional(),
     sort: z.enum(["name", "updated", "extension"]).optional(),
+    limit: z.string().optional(),
+    cursor: z.string().optional(),
   }).parse(req.query || {});
   const search = (query.q || "").trim().toLowerCase();
-  const [manualRows, extensionRows, tags] = await Promise.all([
-    (db as any).contact.findMany({
-      where: {
-        tenantId, archivedAt: null, active: true,
-        ...(query.type === "external" ? { type: "EXTERNAL" } : {}),
-        ...(query.type === "companies" ? { type: "COMPANY" } : {}),
-        ...(query.type === "favorites" ? { favorite: true } : {}),
-        ...(query.tag ? { tagLinks: { some: { tag: { name: query.tag } } } } : {}),
-        ...(search ? { OR: [
-          { displayName: { contains: search, mode: "insensitive" } },
-          { firstName: { contains: search, mode: "insensitive" } },
-          { lastName: { contains: search, mode: "insensitive" } },
-          { company: { contains: search, mode: "insensitive" } },
-          { title: { contains: search, mode: "insensitive" } },
-          { phones: { some: { OR: [{ numberRaw: { contains: search, mode: "insensitive" } }, { numberNormalized: { contains: search, mode: "insensitive" } }] } } },
-          { emails: { some: { email: { contains: search, mode: "insensitive" } } } },
-        ] } : {}),
-      },
+
+  // Parsed by hand rather than z.coerce so a junk `?limit=abc` degrades to the
+  // legacy page size instead of 400-ing a client that used to work.
+  const requestedLimit = Number.parseInt(query.limit ?? "", 10);
+  const pageSize = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(requestedLimit, CONTACTS_MAX_PAGE)
+    : CONTACTS_DEFAULT_PAGE;
+  const cursor = (query.cursor || "").trim() || null;
+  const firstPage = cursor === null;
+
+  // `type=extensions` asks for extensions only — skip the saved-contact work
+  // entirely (it was fetched and then thrown away before).
+  const extensionsOnly = query.type === "extensions";
+
+  const manualWhere = {
+    tenantId, archivedAt: null, active: true,
+    ...(query.type === "external" ? { type: "EXTERNAL" } : {}),
+    ...(query.type === "companies" ? { type: "COMPANY" } : {}),
+    ...(query.type === "favorites" ? { favorite: true } : {}),
+    ...(query.tag ? { tagLinks: { some: { tag: { name: query.tag } } } } : {}),
+    ...(search ? { OR: [
+      { displayName: { contains: search, mode: "insensitive" } },
+      { firstName: { contains: search, mode: "insensitive" } },
+      { lastName: { contains: search, mode: "insensitive" } },
+      { company: { contains: search, mode: "insensitive" } },
+      { title: { contains: search, mode: "insensitive" } },
+      { phones: { some: { OR: [{ numberRaw: { contains: search, mode: "insensitive" } }, { numberNormalized: { contains: search, mode: "insensitive" } }] } } },
+      { emails: { some: { email: { contains: search, mode: "insensitive" } } } },
+    ] } : {}),
+  };
+  // `id` is the tiebreaker so the sort is total — without it a keyset cursor can
+  // skip or repeat rows that share a displayName (this directory has plenty).
+  const manualOrderBy = query.sort === "updated"
+    ? [{ updatedAt: "desc" as const }, { id: "asc" as const }]
+    : [{ displayName: "asc" as const }, { id: "asc" as const }];
+
+  const [manualPage, extensionRows, tags, manualTotal, externalTotal, companyTotal, favoriteTotal] = await Promise.all([
+    extensionsOnly ? Promise.resolve([] as any[]) : (db as any).contact.findMany({
+      where: manualWhere,
       include: CONTACT_INCLUDE,
-      orderBy: query.sort === "updated" ? [{ updatedAt: "desc" }] : [{ displayName: "asc" }],
-      take: 1000,
+      orderBy: manualOrderBy,
+      // One extra row is a cheap, exact "is there another page?" answer.
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     }),
     db.extension.findMany({
       where: { tenantId, status: "ACTIVE" },
@@ -28540,8 +28599,19 @@ app.get("/contacts", async (req, reply) => {
       take: 500,
     }),
     (db as any).contactTag.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
+    // Real totals, independent of the page — the old counts were page-local, so
+    // an over-cap tenant saw "1000" as its contact count.
+    extensionsOnly ? Promise.resolve(0) : (db as any).contact.count({ where: manualWhere }),
+    extensionsOnly ? Promise.resolve(0) : (db as any).contact.count({ where: { ...manualWhere, type: "EXTERNAL" } }),
+    extensionsOnly ? Promise.resolve(0) : (db as any).contact.count({ where: { ...manualWhere, type: "COMPANY" } }),
+    extensionsOnly ? Promise.resolve(0) : (db as any).contact.count({ where: { ...manualWhere, favorite: true } }),
   ]);
-  const extensionContacts = extensionRows
+
+  const hasMore = manualPage.length > pageSize;
+  const manualRows = hasMore ? manualPage.slice(0, pageSize) : manualPage;
+  const nextCursor = hasMore ? String(manualRows[manualRows.length - 1]?.id ?? "") || null : null;
+
+  const matchingExtensions = extensionRows
     .filter((ext) => isValidContactExtension(ext.extNumber))
     .filter((ext) => !isSystemContactExtensionName(ext.displayName || ext.extNumber))
     .map(formatExtensionContact)
@@ -28550,7 +28620,11 @@ app.get("/contacts", async (req, reply) => {
       if (!search) return true;
       return [contact.displayName, contact.extension, contact.primaryEmail?.email ?? ""].some((v) => v.toLowerCase().includes(search));
     });
-  const manualContacts = query.type === "extensions" ? [] : manualRows.map((c: any) => formatContact(c));
+  // Counted on every page, returned only on the first — see the note above.
+  const extensionTotal = matchingExtensions.length;
+  const extensionContacts = firstPage ? matchingExtensions : [];
+
+  const manualContacts = extensionsOnly ? [] : manualRows.map((c: any) => formatContact(c));
   const rows = [...extensionContacts, ...manualContacts].sort((a, b) => {
     if (a.type === "internal_extension" && b.type === "internal_extension") return String(a.extension || "").localeCompare(String(b.extension || ""), undefined, { numeric: true });
     return a.displayName.localeCompare(b.displayName);
@@ -28559,12 +28633,14 @@ app.get("/contacts", async (req, reply) => {
     tenantId,
     rows,
     tags,
+    nextCursor,
+    hasMore,
     stats: {
-      total: rows.length,
-      internalExtensions: extensionContacts.length,
-      external: manualContacts.filter((c: any) => c.type === "external").length,
-      companies: manualContacts.filter((c: any) => c.type === "company").length,
-      favorites: manualContacts.filter((c: any) => c.favorite).length,
+      total: extensionTotal + manualTotal,
+      internalExtensions: extensionTotal,
+      external: externalTotal,
+      companies: companyTotal,
+      favorites: favoriteTotal,
     },
   });
 });
