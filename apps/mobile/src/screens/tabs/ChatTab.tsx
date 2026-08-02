@@ -931,8 +931,9 @@ export function ChatTab() {
       // message composer input gains focus (see Composer onInputFocus).
       atBottomRef.current = true;
       // Keep the newest message above the keyboard. Jump immediately and again
-      // after the window has finished resizing (Android adjustResize / iOS
-      // padding) so the last bubble is never left hidden behind the keyboard.
+      // after the window has finished resizing (Android: AndroidKeyboardInset
+      // at the app root — the OS stopped doing it at targetSdk 35+; iOS:
+      // KeyboardAvoidingView padding) so the last bubble is never left hidden.
       scrollToBottom(false);
       setTimeout(() => scrollToBottom(false), 120);
     });
@@ -1139,24 +1140,43 @@ export function ChatTab() {
     // iPhone, 2026-08-02). The primary cause was the keyboard covering the
     // sheet (see NewChatModal), but a button that can silently do nothing is
     // its own bug regardless of why the field ended up empty.
+    // ⛔ showToast is USELESS here. It renders inside the ChatTab tree, and this
+    // runs while the New-message <Modal> is open — a Modal is a separate native
+    // view hierarchy, so the toast is drawn BEHIND it and the user sees nothing.
+    // That is why "Open SMS thread does nothing" survived the keyboard fix: the
+    // button worked and the server answered 400, but the reason was invisible.
+    // Server log, 2026-08-02: POST /chat/threads -> 400, then a second tap 2s
+    // later -> 200 and the thread opened. Errors in this sheet must use
+    // showAppAlert, which presents in its own modal and stacks above this one.
     if (!token) {
-      showToast('Not signed in.');
+      showAppAlert('Not signed in', 'Sign in again and retry.');
       return;
     }
-    if (!newSmsPhone.trim()) {
-      showToast('Enter a phone number first.');
+    const phone = newSmsPhone.trim();
+    if (!phone) {
+      showAppAlert('Enter a phone number', 'Type the number you want to text, then tap Open SMS thread.');
       return;
     }
     try {
-      const res = await createChatThread(token, { type: 'sms', externalPhone: newSmsPhone.trim() });
+      const res = await createChatThread(token, { type: 'sms', externalPhone: phone });
       setNewSmsPhone('');
       setNewMode(null);
       setNewChatDirectorySearch('');
       await openThreadById(res.threadId);
     } catch (err: any) {
-      showToast(err?.message || 'Could not start SMS.');
+      const code = String(err?.message || '');
+      showAppAlert(
+        'Could not start SMS',
+        code.includes('INVALID_PHONE')
+          ? `"${phone}" is not a valid phone number.`
+          : code.includes('NO_SMS_NUMBER')
+            ? 'This account has no SMS number assigned to send from.'
+            : code.includes('FORBIDDEN')
+              ? 'This account is not allowed to send SMS.'
+              : code || 'Please try again.',
+      );
     }
-  }, [newSmsPhone, openThreadById, showToast, token]);
+  }, [newSmsPhone, openThreadById, token]);
 
   const uploadLocalFile = useCallback(async (file: { uri: string; name: string; type: string }) => {
     if (!token || !activeThread) return null;
@@ -2006,7 +2026,10 @@ export function ChatTab() {
             onRecordCancel={cancelRecording}
             recording={recording}
             compact={keyboardOpen}
-            bottomInset={Platform.OS === 'ios' ? (keyboardOpen ? 10 : 12) : Math.max(insets.bottom, 10)}
+            // With the keyboard up there is no navigation bar left to clear —
+            // it is behind the keyboard — so the safe-area inset would only
+            // open a dead gap between the composer and the keys.
+            bottomInset={keyboardOpen ? 10 : Platform.OS === 'ios' ? 12 : Math.max(insets.bottom, 10)}
           />
         </View>
       )}
@@ -2887,16 +2910,14 @@ function NewChatModal({
           With nothing lifting the sheet, iOS draws the keyboard straight over
           it: the phone-number field and the "Open SMS thread" button end up
           underneath, so taps aimed at the button land on the keyboard and
-          "nothing happens". Android is unaffected because its window
-          soft-input mode resizes automatically, which is exactly why it already
-          behaved the way he expects.
+          "nothing happens".
           The KeyboardAvoidingView must live INSIDE the Modal for this reason.
-          Android stays on `undefined` so its native resize keeps working —
-          stacking both would double-shift the sheet. */}
-      <KeyboardAvoidingView
-        style={styles.modalKeyboardWrap}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+          Android needs it too now: it used to be carried by the window's
+          automatic soft-input resize, but Android 15+ stopped resizing for apps
+          that target SDK 35+. The app-root AndroidKeyboardInset cannot help
+          here — a Modal is a separate native window and is not its child — so
+          this sheet lifts itself on both platforms. No double-shift results. */}
+      <KeyboardAvoidingView style={styles.modalKeyboardWrap} behavior="padding">
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable style={[styles.sheetCard, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => undefined}>
           <View style={styles.modalHeader}>
