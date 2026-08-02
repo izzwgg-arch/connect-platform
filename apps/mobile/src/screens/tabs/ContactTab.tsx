@@ -28,6 +28,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
 import { showAppAlert } from '../../components/ui/appAlert';
+import * as Clipboard from 'expo-clipboard';
 import { createContact, getContacts, mobileQueryKeys } from '../../api/client';
 import type { Contact } from '../../types';
 import { typography } from '../../theme/typography';
@@ -894,6 +895,19 @@ function AddContactModal({
   );
 }
 
+/**
+ * Copy a value to the clipboard with a short confirmation (Izzy 2026-08-01:
+ * "after I go into a contact, I should be able to copy-paste their name").
+ * Applied to the name, every phone number and every email in the detail sheet,
+ * since they are all things people copy out to paste somewhere else.
+ */
+async function copyContactValue(label: string, value: string | null | undefined) {
+  const v = (value || '').trim();
+  if (!v) return;
+  await Clipboard.setStringAsync(v).catch(() => undefined);
+  showAppAlert('Copied', v.length > 60 ? `${label} copied` : v);
+}
+
 function ContactDetailModal({
   contact,
   onClose,
@@ -921,7 +935,16 @@ function ContactDetailModal({
             </TouchableOpacity>
             <View style={styles.detailHeader}>
               <Avatar name={contact.displayName} size="xl" />
-              <Text style={[typography.h2, { color: colors.text, marginTop: 14, textAlign: 'center' }]}>{contact.displayName}</Text>
+              <TouchableOpacity
+                onPress={() => copyContactValue('Name', contact.displayName)}
+                activeOpacity={0.6}
+                accessibilityRole="button"
+                accessibilityLabel={`Copy name ${contact.displayName}`}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 }}
+              >
+                <Text style={[typography.h2, { color: colors.text, textAlign: 'center' }]}>{contact.displayName}</Text>
+                <Ionicons name="copy-outline" size={15} color={colors.textSecondary} />
+              </TouchableOpacity>
               <Text style={[typography.bodySm, { color: colors.textSecondary, textAlign: 'center' }]}>
                 {contact.company || contact.title || (contact.type === 'internal_extension' ? `Extension ${contact.extension}` : 'Contact')}
               </Text>
@@ -942,17 +965,33 @@ function ContactDetailModal({
             </View>
             <View style={[styles.detailBlock, { borderColor: colors.border, backgroundColor: colors.surfaceElevated }]}>
               {(contact.phones || []).map((phone) => (
-                <Text key={phone.id || phone.numberRaw} style={[typography.bodySm, { color: colors.text }]}>
-                  {phone.type}: {phone.numberRaw}
-                </Text>
+                <TouchableOpacity
+                  key={phone.id || phone.numberRaw}
+                  onPress={() => copyContactValue('Number', phone.numberRaw)}
+                  activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Copy number ${phone.numberRaw}`}
+                >
+                  <Text style={[typography.bodySm, { color: colors.text }]}>
+                    {phone.type}: {phone.numberRaw}
+                  </Text>
+                </TouchableOpacity>
               ))}
               {contact.type === 'internal_extension' && contact.extension ? (
                 <Text style={[typography.bodySm, { color: colors.text }]}>extension: {contact.extension}</Text>
               ) : null}
               {(contact.emails || []).map((email) => (
-                <Text key={email.id || email.email} style={[typography.bodySm, { color: colors.textSecondary }]}>
-                  {email.type}: {email.email}
-                </Text>
+                <TouchableOpacity
+                  key={email.id || email.email}
+                  onPress={() => copyContactValue('Email', email.email)}
+                  activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Copy email ${email.email}`}
+                >
+                  <Text style={[typography.bodySm, { color: colors.textSecondary }]}>
+                    {email.type}: {email.email}
+                  </Text>
+                </TouchableOpacity>
               ))}
               {contact.notes ? <Text style={[typography.bodySm, { color: colors.textSecondary, marginTop: 8 }]}>{contact.notes}</Text> : null}
             </View>

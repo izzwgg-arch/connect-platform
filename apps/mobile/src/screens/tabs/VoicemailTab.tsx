@@ -1189,7 +1189,12 @@ export function VoicemailTab() {
           <View style={styles.selectionCountChip}>
             <Text style={styles.selectionCountText}>{selectedIds.length}</Text>
           </View>
-          <Text style={styles.selectionText}>selected</Text>
+          {/* numberOfLines + no flex: with `flex: 1` this label was squeezed by
+              the five action buttons and wrapped mid-word ("selec / ted") on a
+              normal-width phone (Izzy 2026-08-01). It now keeps its natural
+              width on one line and the spacer below pushes the actions right. */}
+          <Text style={styles.selectionText} numberOfLines={1}>selected</Text>
+          <View style={styles.selectionSpacer} />
 
           <TouchableOpacity
             style={styles.selectionActionOutline}
@@ -2129,10 +2134,17 @@ function makeStyles(VM: VmPalette) {
     gap: spacing['2'],
   },
   selectionText: {
-    flex: 1,
+    // NOT flex:1 — that let the five action buttons squeeze it until "selected"
+    // wrapped onto two lines. Natural width, never shrinks, never wraps.
+    flexShrink: 0,
     color: VM.text2,
     fontSize: 13,
     fontWeight: '700',
+  },
+  /** Takes the slack so the action buttons stay right-aligned. */
+  selectionSpacer: {
+    flex: 1,
+    minWidth: spacing['2'],
   },
   // Count badge — carries the number so the label stays quiet and the row has
   // one clear anchor instead of four competing solid pills.

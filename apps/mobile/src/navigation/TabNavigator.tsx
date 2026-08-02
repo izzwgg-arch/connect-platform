@@ -201,8 +201,24 @@ function useTabBadges(): { Chat: number; Voicemail: number; Recent: number } {
   // header correctly showed "2 new, 2 old". `unreadTotals` comes from the
   // server's listened=false count; it is absent on older API builds, in which
   // case the badge reads 0 rather than a wrong number.
-  const vmUnread: any = (vmQuery.data as any)?.unreadTotals;
-  const vmNew = vmUnread ? Math.max(0, (vmUnread.inbox ?? 0) + (vmUnread.urgent ?? 0)) : 0;
+  // Count the unread rows we actually FETCHED, not the server's whole-mailbox
+  // totals (Izzy 2026-08-01). `unreadTotals` is honest but useless: Landau
+  // ext 101 has 6,179 unlistened messages going back to September 2025, of which
+  // only 15 arrived in the last 30 days. The list header therefore read
+  // "0 new · 270 total" while the tab badge showed "9+" — the two disagreed
+  // because they counted different things, and no amount of listening could
+  // ever clear the badge by hand.
+  //
+  // The badge now counts the same recent window the app itself shows (page 1 of
+  // each folder), so "New 0" in the header and an empty badge always agree.
+  // A historical backlog stays visible in the Old/All filters where it belongs.
+  const vmRows: any[] = Array.isArray((vmQuery.data as any)?.voicemails)
+    ? (vmQuery.data as any).voicemails
+    : [];
+  const vmNew = vmRows.reduce(
+    (n, v) => (v && v.listened === false && v.folder !== 'old' ? n + 1 : n),
+    0,
+  );
 
   // Subscribe to the caches without fetching — RecentTab owns the fetches.
   // MUST carry a cache-echo queryFn (2026-07-30): with no queryFn at all,

@@ -1045,6 +1045,78 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
    * fall back to the legacy AudioManager path otherwise (anchor dispatch
    * failed, standing-registration flag off, pre-connect ringback audio).
    */
+  /**
+   * The route the audio is PHYSICALLY on right now, as a CallAudioState.ROUTE_*
+   * value — or null when we cannot tell (API < 31, or an exotic device type).
+   *
+   * Same source as getCommunicationDeviceType(): AudioManager.communicationDevice
+   * is the hardware truth, unlike CallAudioState.route, which is Telecom's
+   * bookkeeping and can claim ROUTE_SPEAKER while sound still comes out of the
+   * earpiece (Samsung One UI 6 / Android 14 — the S23 report, 2026-08-01).
+   */
+  private fun physicalRoute(): Int? {
+    return try {
+      if (Build.VERSION.SDK_INT < 31) return null
+      val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        ?: return null
+      when (am.communicationDevice?.type) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> android.telecom.CallAudioState.ROUTE_SPEAKER
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_USB_HEADSET -> android.telecom.CallAudioState.ROUTE_WIRED_OR_EARPIECE
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> android.telecom.CallAudioState.ROUTE_BLUETOOTH
+        else -> null
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Move audio DIRECTLY with AudioManager, bypassing Telecom. Last resort for
+   * when Telecom accepts a route request and the hardware ignores it.
+   *
+   * SPEAKER / EARPIECE ONLY — never Bluetooth. Re-requesting a BT route restarts
+   * SCO negotiation, which shipped as audible flapping once already
+   * (2026-07-29, JBL headset); Bluetooth keeps its single-owner anchor design.
+   */
+  private fun applyDirectAudioRoute(route: Int, label: String) {
+    try {
+      val am = reactApplicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        ?: return
+      if (Build.VERSION.SDK_INT >= 31) {
+        val wanted = when (route) {
+          android.telecom.CallAudioState.ROUTE_SPEAKER -> listOf(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+          android.telecom.CallAudioState.ROUTE_WIRED_OR_EARPIECE -> listOf(
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+          )
+          else -> return
+        }
+        val available = am.availableCommunicationDevices
+        // Wired wins over the earpiece when both are present (listed in order).
+        val target = wanted.firstNotNullOfOrNull { t -> available.firstOrNull { it.type == t } }
+        if (target != null) {
+          val ok = am.setCommunicationDevice(target)
+          Log.i(TAG, "applyDirectAudioRoute$label: setCommunicationDevice(${target.type}) -> $ok")
+        } else {
+          Log.w(TAG, "applyDirectAudioRoute$label: no matching communication device available")
+        }
+      } else {
+        // Pre-31 only: isSpeakerphoneOn is deprecated from API 31 and widely
+        // ignored on Android 12+, so it is NOT used as the modern path.
+        am.isSpeakerphoneOn = route == android.telecom.CallAudioState.ROUTE_SPEAKER
+        Log.i(TAG, "applyDirectAudioRoute$label: legacy isSpeakerphoneOn=${am.isSpeakerphoneOn}")
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "applyDirectAudioRoute$label failed: ${t.message}")
+    }
+  }
+
   private fun routeViaTelecom(route: Int, label: String): Boolean {
     return try {
       // Remember the app's choice regardless of whether a connection exists
@@ -1059,12 +1131,45 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
       // negotiation), which is what turned the JS re-assert safety net into
       // audible route flapping (observed live 2026-07-29, JBL headset).
       val current = try { conn.callAudioState?.route } catch (_: Throwable) { null }
-      if (current == route) {
-        Log.i(TAG, "routeAudioTo$label: already on requested route — no-op")
+      // The guard now needs BOTH Telecom's paperwork AND the hardware to agree.
+      // Previously it trusted CallAudioState.route alone — and on Samsung One UI
+      // 6 / Android 14 a SELF_MANAGED Connection reports ROUTE_SPEAKER while
+      // audio physically stays on the earpiece. The guard then returned true
+      // forever: no Telecom request was ever re-sent and the AudioManager
+      // fallback below was never reached, so the Speaker button lit up and
+      // nothing moved (S23 report, 2026-08-01; introduced by 5ae4ead0).
+      // Keep the guard otherwise — it exists to stop route flapping and SCO
+      // renegotiation storms (live regression 2026-07-29, JBL headset).
+      val physical = physicalRoute()
+      if (current == route && (physical == null || physical == route)) {
+        Log.i(TAG, "routeAudioTo$label: already on requested route (telecom+physical) — no-op")
         return true
+      }
+      if (current == route && physical != route) {
+        Log.w(TAG, "routeAudioTo$label: telecom says $current but hardware says $physical — re-requesting")
       }
       conn.requestAudioRoute(route)
       Log.i(TAG, "routeAudioTo$label: routed via Telecom connection inviteId=${conn.inviteId}")
+
+      // ONE-SHOT physical verification. Telecom can accept the request and the
+      // hardware still not move; if that happens, apply the route directly.
+      // Exactly one retry — no loops, no repeating timers (a repeating
+      // re-assert is what caused the 2026-07-29 flapping).
+      // SPEAKER / EARPIECE only: Bluetooth is deliberately excluded so SCO
+      // negotiation is never restarted behind the anchor's back.
+      if (route == android.telecom.CallAudioState.ROUTE_SPEAKER ||
+        route == android.telecom.CallAudioState.ROUTE_WIRED_OR_EARPIECE
+      ) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+          val after = physicalRoute()
+          if (after != null && after != route) {
+            Log.w(TAG, "routeAudioTo$label: hardware still on $after 400ms after Telecom accepted — applying directly")
+            applyDirectAudioRoute(route, label)
+          } else {
+            Log.i(TAG, "routeAudioTo$label: hardware confirmed on route ($after)")
+          }
+        }, 400)
+      }
       true
     } catch (t: Throwable) {
       Log.w(TAG, "routeAudioTo$label: telecom route failed, falling back: ${t.message}")

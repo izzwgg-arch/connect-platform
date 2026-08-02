@@ -55,6 +55,22 @@ export type DeviceFeatureFlags = {
    * that 403s for other people's calls) is worse.
    */
   canDownloadRecordings: boolean;
+  /**
+   * Turn OFF the app's opus-preference SDP munging, so calls ride plain G.711
+   * (PCMU) — the codec every call used before 2026-07-28 and the one the owner
+   * remembers as flawless.
+   *
+   * WHY A SWITCH: opus is better on paper but is compressed and far more
+   * sensitive to loss and jitter, and our TURN relay currently sits in France
+   * while the PBX is in St. Louis. Whether opus actually sounds better on THIS
+   * network is an empirical question, and until now it could only be answered
+   * by shipping a new APK. Flip this per-device and compare by ear.
+   *
+   * Safety contract: absent = false = do NOT disable = today's exact behaviour
+   * (opus-only offers, opus-preferred answers). Installing this build changes
+   * nothing until the flag is set.
+   */
+  disableOpusSdp: boolean;
 };
 
 const DEFAULT_FLAGS: DeviceFeatureFlags = {
@@ -63,6 +79,7 @@ const DEFAULT_FLAGS: DeviceFeatureFlags = {
   keepAliveRequired: false,
   keepAliveRequiredReason: "",
   canDownloadRecordings: false,
+  disableOpusSdp: false,
 };
 
 let cachedFlags: DeviceFeatureFlags = { ...DEFAULT_FLAGS };
@@ -91,6 +108,7 @@ function sanitize(raw: unknown): DeviceFeatureFlags {
     keepAliveRequiredReason:
       typeof obj.keepAliveRequiredReason === "string" ? obj.keepAliveRequiredReason.slice(0, 160) : "",
     canDownloadRecordings: obj.canDownloadRecordings === true,
+    disableOpusSdp: obj.disableOpusSdp === true,
   };
 }
 
@@ -110,7 +128,8 @@ export async function applyServerFeatureFlags(raw: unknown): Promise<void> {
       next.standingRegistration !== cachedFlags.standingRegistration ||
       next.forceTurnRelay !== cachedFlags.forceTurnRelay ||
       next.keepAliveRequired !== cachedFlags.keepAliveRequired ||
-      next.canDownloadRecordings !== cachedFlags.canDownloadRecordings;
+      next.canDownloadRecordings !== cachedFlags.canDownloadRecordings ||
+      next.disableOpusSdp !== cachedFlags.disableOpusSdp;
     cachedFlags = next;
     if (changed) {
       console.log(`${LOG} flags changed:`, JSON.stringify(next));
@@ -182,4 +201,12 @@ export function isForceTurnRelayEnabled(): boolean {
  */
 export function canDownloadRecordings(): boolean {
   return cachedFlags.canDownloadRecordings;
+}
+
+/**
+ * Sync read of the opus kill-switch. Safe default: false — opus preference
+ * stays ON, exactly as today, until the server says otherwise.
+ */
+export function isOpusSdpDisabled(): boolean {
+  return cachedFlags.disableOpusSdp;
 }

@@ -2175,6 +2175,31 @@ export function NotificationsProvider({
           answerTappedAt;
         timingsRef.current[`answer_${invite.id}`] = answerTappedAt;
 
+        // Tell the server the user ACTUALLY TAPPED ANSWER (Izzy 2026-08-01).
+        // Without this a failed answer is indistinguishable from ignoring the
+        // call: the invite just expires and the CDR reads "missed". That gap is
+        // why "he answers and it doesn't connect" could not be confirmed or
+        // denied from the backend — 14 days of Simon's calls showed every
+        // ANSWERED call connecting, but a failed answer would never have
+        // appeared in that data at all.
+        // Fire-and-forget: never blocks or fails the answer path.
+        {
+          const tokenForEvent = tokenRef.current;
+          const pbxCallIdForEvent = (invite as any).pbxCallId || invite.id;
+          if (tokenForEvent && pbxCallIdForEvent) {
+            void postWakeEvent(tokenForEvent, {
+              pbxCallId: String(pbxCallIdForEvent),
+              stage: "DEVICE_ANSWER_TAPPED",
+              deviceId: deviceIdRef.current,
+              details: {
+                inviteId: invite.id,
+                appState: AppState.currentState,
+                msSincePush: Math.max(0, answerTappedAt - pushReceivedAt),
+              },
+            }).catch(() => undefined);
+          }
+        }
+
         // COWORK cold-answer fix - iOS killed/background ONLY. Android + warm
         // iOS are byte-for-byte unchanged: earlyColdAcceptSent stays false for
         // them and every branch that uses it is gated on it. On a swipe-killed

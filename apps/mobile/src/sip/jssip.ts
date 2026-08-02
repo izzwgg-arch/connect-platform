@@ -41,7 +41,7 @@ import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 import { preferOpusInSdp, preferOpusOnlyOffer } from "./preferOpusSdp";
 import * as SecureStore from "expo-secure-store";
-import { isStandingRegistrationEnabled, isForceTurnRelayEnabled, getFeatureFlags } from "../config/featureFlags";
+import { isStandingRegistrationEnabled, isForceTurnRelayEnabled, getFeatureFlags, isOpusSdpDisabled } from "../config/featureFlags";
 import { NativeSipSocket, isNativeSipSocketAvailable } from "./nativeSipSocket";
 
 // -- iOS stable SIP instance id (RFC 5626 outbound de-dup) ----------------------
@@ -1557,7 +1557,13 @@ export class JsSipClient implements SipClient {
       iceReadyTimer = setTimeout(() => fireIceReady(ev, "capped at 1.5s"), 1500);
     });
 
-    const PREFER_OPUS_SDP = true;
+    // Server-controlled codec switch (Izzy 2026-08-01). Read per call, not
+    // per app-start, so flipping the flag takes effect on the NEXT call with no
+    // reinstall. Default (flag absent) = true = today's exact behaviour.
+    // Set disableOpusSdp on the device row to fall back to plain G.711 (PCMU),
+    // the codec every call used before 2026-07-28.
+    const PREFER_OPUS_SDP = !isOpusSdpDisabled();
+    console.log(`[SIP_SDP] opus preference ${PREFER_OPUS_SDP ? "ON" : "OFF (G.711)"}`);
     if (PREFER_OPUS_SDP) {
       session.on("sdp", (e: any) => {
         try {

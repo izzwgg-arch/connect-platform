@@ -715,6 +715,22 @@ export function ChatTab() {
   // numbers everywhere, live from the shared contacts cache.
   const resolveContactName = useContactNameResolver();
 
+  /**
+   * Tapping the name/number at the top of a conversation opens Add Contact
+   * (Izzy 2026-08-01, asked for twice). Returns null — so the header is NOT
+   * tappable — unless this is an SMS thread with a real external number that is
+   * not already saved. Adding from inside the conversation is where people
+   * actually decide to save someone; the long-press on the thread list is
+   * outside it.
+   */
+  const openAddContactFromHeader = useMemo(() => {
+    const t = activeThread;
+    const num = t?.externalSmsE164;
+    if (!t || t.type !== 'SMS' || !num) return null;
+    if (resolveContactName(num)) return null; // already a contact — nothing to add
+    return () => setAddContactPrefill({ phone: num });
+  }, [activeThread, resolveContactName]);
+
   // Stable renderItem (freeze investigation 2026-07-28): keeps ThreadRow's
   // memo effective across unrelated ChatTab re-renders (poll ticks, typing).
   const renderThreadItem = useCallback(
@@ -1859,7 +1875,20 @@ export function ChatTab() {
               <Ionicons name="chevron-back" size={23} color={colors.text} />
             </TouchableOpacity>
             <Avatar name={resolveContactName(activeThread.externalSmsE164) || displayThreadName(activeThread)} size="md" online={activeThread.type === 'DM'} />
-            <View style={styles.chatHeaderInfo}>
+            {/* Tap the name/number to add this caller to contacts (Izzy
+                2026-08-01). Previously you could only do it by long-pressing the
+                thread from OUTSIDE the conversation, which is not where you are
+                when you decide you want to save someone. Only offered for SMS
+                threads with a real number that is NOT already a contact — for a
+                known contact this is a no-op so the header stays quiet. */}
+            <TouchableOpacity
+              style={styles.chatHeaderInfo}
+              activeOpacity={openAddContactFromHeader ? 0.6 : 1}
+              onPress={openAddContactFromHeader ?? undefined}
+              disabled={!openAddContactFromHeader}
+              accessibilityRole={openAddContactFromHeader ? 'button' : undefined}
+              accessibilityLabel={openAddContactFromHeader ? 'Add this number to contacts' : undefined}
+            >
               <Text style={[styles.chatTitle, { color: colors.text }]} numberOfLines={1}>
                 {resolveContactName(activeThread.externalSmsE164) || displayThreadName(activeThread)}
               </Text>
@@ -1878,7 +1907,12 @@ export function ChatTab() {
                       return `${threadKind(activeThread)}${target && !titleIsTarget ? ` · ${target}` : ''}`;
                     })()}
               </Text>
-            </View>
+              {openAddContactFromHeader ? (
+                <Text style={[styles.chatSubtitle, { color: colors.primary, marginTop: 1 }]} numberOfLines={1}>
+                  Tap to add to contacts
+                </Text>
+              ) : null}
+            </TouchableOpacity>
             <TouchableOpacity style={styles.chatHeaderIcon} onPress={callThread}>
               <Ionicons name="call-outline" size={20} color={colors.text} />
             </TouchableOpacity>
