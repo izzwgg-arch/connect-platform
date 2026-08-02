@@ -5130,6 +5130,79 @@ registerShutdownTimer(setTimeout(() => {
 registerShutdownTimer(setTimeout(() => { void runWakeHealthSweep(); }, 120_000));
 registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 3600_000));
 
+// ── Hourly inbound-DID sync + unattributed-call alarm ────────────────────────
+// Owner directive 2026-08-02: "there should never be a reason why the system
+// shouldn't be able to identify a call" + "make the phone numbers auto sync
+// once an hour".
+//
+// WHY calls were going unidentified: the inbound-DID sync ONLY ran as a
+// fire-and-forget side effect of someone opening the admin PBX tenants page. If
+// nobody visited it, numbers the PBX was actively routing were never learned.
+// That is exactly what happened — 15 calls in 30 days landed with no owner,
+// every one of them inbound on a DID the PBX knew about and we did not
+// (8452870706 / 8455577096 -> Comfort control). Tenant attribution now reads the
+// dialled DID before it will consider any caller's claim, so a COMPLETE DID list
+// is what makes "every call is identifiable" true rather than aspirational.
+//
+// Runs hourly against every PBX instance, and audits for calls that still landed
+// without an owner. Unattributed must be ZERO; if it is not, this pages us
+// instead of the record quietly belonging to nobody.
+const INBOUND_DID_SYNC_INTERVAL_MS = 3600_000;
+let inboundDidSyncRunning = false;
+
+async function runHourlyInboundDidSync(): Promise<void> {
+  if (inboundDidSyncRunning) return;
+  inboundDidSyncRunning = true;
+  try {
+    const instances = await db.pbxInstance.findMany({ select: { id: true, name: true } });
+    let upserted = 0;
+    for (const instance of instances) {
+      try {
+        const res = await syncPbxTenantInboundDids(db, instance.id);
+        upserted += res.numbersUpserted ?? 0;
+        if (res.errors?.length) {
+          app.log.warn(
+            { event: "inbound_did_sync_partial", instance: instance.name, errors: res.errors.slice(0, 3) },
+            "hourly inbound-DID sync: some tenants failed",
+          );
+        }
+      } catch (err: any) {
+        app.log.warn({ event: "inbound_did_sync_failed", instance: instance.name, err: err?.message }, "hourly inbound-DID sync failed for instance");
+      }
+    }
+    const total = await db.pbxTenantInboundDid.count({ where: { active: true } });
+    app.log.info({ event: "inbound_did_sync_done", instances: instances.length, upserted, activeDids: total }, "hourly inbound-DID sync complete");
+
+    // Every call must be identifiable. Anything unattributed in the last day is
+    // a hole in that promise — surface it loudly rather than let it sit ownerless.
+    const orphaned = await db.connectCdr.count({
+      where: { tenantId: null, startedAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    });
+    if (orphaned > 0) {
+      app.log.error(
+        { event: "cdr_unattributed_calls_present", count: orphaned, windowHours: 24 },
+        "UNATTRIBUTED CALLS: records landed with no owning tenant — a DID the PBX routes is probably still missing from the synced list",
+      );
+      void sendAdminAlert(
+        "cdr_unattributed",
+        `${orphaned} call record(s) could not be assigned to a company`,
+        [
+          `${orphaned} call(s) in the last 24h were stored with no owning tenant, so nobody can see them.`,
+          "Usual cause: the PBX routed an inbound DID that is not in our synced number list.",
+          "The hourly DID sync should self-heal this; if the count persists, the number is missing on the PBX side.",
+        ],
+        0,
+      ).catch(() => undefined);
+    }
+  } finally {
+    inboundDidSyncRunning = false;
+  }
+}
+
+// First run shortly after boot (staggered past DB/PBX warm-up), then hourly.
+registerShutdownTimer(setTimeout(() => { void runHourlyInboundDidSync(); }, 150_000));
+registerShutdownTimer(setInterval(() => { void runHourlyInboundDidSync(); }, INBOUND_DID_SYNC_INTERVAL_MS));
+
 app.get("/admin/wake-health", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
