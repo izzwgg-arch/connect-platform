@@ -7217,6 +7217,84 @@ app.post("/admin/users/:id/role", async (req, reply) => {
   return { ok: true, user: { id: updated.id, email: updated.email, role: updated.role } };
 });
 
+// ── Per-user call-audio codec (Izzy 2026-08-01) ───────────────────────────────
+// "HD" = opus (today's default); "standard" = plain G.711/PCMU, the codec every
+// call used before 2026-07-28 and the one the owner remembers as flawless.
+// Opus is better on paper but compressed and far more sensitive to loss/jitter,
+// and the TURN relay currently sits in France while the PBX is in St. Louis —
+// so which one actually sounds better is an empirical, per-user question.
+//
+// Stored as `disableOpusSdp` in each of the user's mobile devices' featureFlags
+// (the same channel as standingRegistration). The app reads it per CALL, so a
+// change takes effect on the next call with no reinstall. Absent = HD = today.
+const codecModeFromFlags = (devices: Array<{ featureFlags?: unknown }>): "hd" | "standard" | "mixed" => {
+  const vals = devices.map((d) => ((d.featureFlags as any)?.disableOpusSdp === true));
+  if (vals.length === 0) return "hd";
+  if (vals.every((v) => v)) return "standard";
+  if (vals.every((v) => !v)) return "hd";
+  return "mixed";
+};
+
+app.get("/admin/users/:id/codec", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const user = await db.user.findFirst({
+    where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId },
+    select: { id: true },
+  });
+  if (!user) return reply.status(404).send({ error: "user_not_found" });
+  const devices = await db.mobileDevice.findMany({
+    where: { userId: id, active: true },
+    select: { id: true, platform: true, model: true, featureFlags: true } as any,
+  });
+  return {
+    ok: true,
+    mode: codecModeFromFlags(devices as any),
+    deviceCount: devices.length,
+    devices: (devices as any[]).map((d) => ({
+      id: d.id,
+      platform: d.platform,
+      model: d.model,
+      mode: (d.featureFlags as any)?.disableOpusSdp === true ? "standard" : "hd",
+    })),
+  };
+});
+
+app.post("/admin/users/:id/codec", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ mode: z.enum(["hd", "standard"]) }).parse(req.body || {});
+  const user = await db.user.findFirst({
+    where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId },
+    select: { id: true, tenantId: true },
+  });
+  if (!user) return reply.status(404).send({ error: "user_not_found" });
+
+  const devices = await db.mobileDevice.findMany({
+    where: { userId: id, active: true },
+    select: { id: true, featureFlags: true } as any,
+  });
+  const disable = input.mode === "standard";
+  for (const d of devices as any[]) {
+    const merged = { ...((d.featureFlags as any) ?? {}), disableOpusSdp: disable };
+    await (db.mobileDevice as any).update({ where: { id: d.id }, data: { featureFlags: merged } });
+  }
+
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: admin.sub,
+    action: "USER_CALL_CODEC_SET",
+    entityType: "User",
+    entityId: id,
+    metadata: { mode: input.mode, devices: devices.length },
+  });
+  app.log.info({ userId: id, mode: input.mode, devices: devices.length }, "[CODEC] per-user call codec set");
+
+  return { ok: true, mode: input.mode, deviceCount: devices.length };
+});
+
 app.post("/admin/users/:id/resend-invite", async (req, reply) => {
   const admin = await requirePermission(req, reply, canManageUsers);
   if (!admin) return;

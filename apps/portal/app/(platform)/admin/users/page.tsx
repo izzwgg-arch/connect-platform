@@ -172,6 +172,7 @@ export default function AdminUsersPage() {
   const [selected, setSelected] = useState<AdminUser | null>(null);
   const [routeUser, setRouteUser] = useState<AdminUser | null>(null);
   const [crmUser, setCrmUser] = useState<AdminUser | null>(null);
+  const [codecUser, setCodecUser] = useState<AdminUser | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [message, setMessage] = useState("");
@@ -418,6 +419,13 @@ export default function AdminUsersPage() {
                             </button>
                             <button
                               className="btn ghost"
+                              onClick={() => setCodecUser(u)}
+                              title="Call audio quality for this user's phones (HD/Opus or Standard/G.711)"
+                            >
+                              Codecs
+                            </button>
+                            <button
+                              className="btn ghost"
                               disabled={syncingIds.has(u.id)}
                               onClick={() => syncUser(u.id)}
                               title="Sync SIP/WebRTC credentials from VitalPBX"
@@ -529,6 +537,7 @@ export default function AdminUsersPage() {
           />
         ) : null}
         {crmUser ? <CrmAccessModal user={crmUser} onClose={() => setCrmUser(null)} /> : null}
+        {codecUser ? <CodecModal user={codecUser} onClose={() => setCodecUser(null)} /> : null}
         {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId === "ALL" ? "" : effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); load(); }} /> : null}
         {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
       </div>
@@ -593,6 +602,145 @@ const CRM_ROLE_LABELS: Record<string, string> = {
   MANAGER: "Manager",
   ADMIN: "CRM Admin",
 };
+
+type CodecResponse = {
+  ok: boolean;
+  mode: "hd" | "standard" | "mixed";
+  deviceCount: number;
+  devices: Array<{ id: string; platform: string; model: string | null; mode: "hd" | "standard" }>;
+};
+
+/**
+ * Per-user call-audio codec (Izzy 2026-08-01).
+ *
+ * "HD" = Opus (today's default). "Standard" = G.711/PCMU, the codec every call
+ * used before 2026-07-28 and the one the owner remembers as flawless. Opus is
+ * better on paper but compressed and much more sensitive to packet loss and
+ * jitter — and the TURN relay currently sits in France while the PBX is in
+ * St. Louis. Which sounds better is an empirical, per-user question, so this
+ * gives an admin the switch instead of requiring a new app build.
+ *
+ * Applies to the user's phones and takes effect on their NEXT call — no
+ * reinstall, no sign-out.
+ */
+function CodecModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [data, setData] = useState<CodecResponse | null>(null);
+  const [mode, setMode] = useState<"hd" | "standard">("hd");
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setToast(null);
+    try {
+      const res = await apiGet<CodecResponse>(`/admin/users/${user.id}/codec`);
+      setData(res);
+      setMode(res.mode === "standard" ? "standard" : "hd");
+    } catch (e: any) {
+      setToast({ kind: "err", text: e?.message || "Failed to load audio setting" });
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [user.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setToast(null);
+    try {
+      const res = await apiPost<CodecResponse>(`/admin/users/${user.id}/codec`, { mode });
+      setToast({
+        kind: "ok",
+        text: res.deviceCount > 0
+          ? `Saved — applies to ${res.deviceCount} phone${res.deviceCount === 1 ? "" : "s"} on their next call`
+          : "Saved — this user has no active phones yet",
+      });
+      await load();
+    } catch (e: any) {
+      setToast({ kind: "err", text: e?.message || "Failed to save" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <aside
+        className="modal"
+        style={{ marginLeft: "auto", width: "min(560px, 96vw)", height: "100vh", borderRadius: "22px 0 0 22px", overflow: "auto" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button className="btn ghost" style={{ float: "right" }} onClick={onClose}>Close</button>
+        <div style={{ width: 56, height: 56, borderRadius: 20, background: "linear-gradient(135deg,#0ea5e9,#2563eb)", color: "#fff", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 22 }}>
+          {user.displayName.slice(0, 1).toUpperCase()}
+        </div>
+        <h2>Call Audio</h2>
+        <p className="muted" style={{ marginTop: -4 }}>
+          {user.displayName} · {user.email}
+        </p>
+
+        {loading ? (
+          <div className="state-box" style={{ marginTop: 16 }}>Loading audio setting…</div>
+        ) : (
+          <div className="stack" style={{ gap: 14, marginTop: 18 }}>
+            {data && data.mode === "mixed" ? (
+              <div className="state-box" style={{ padding: 12 }}>
+                This user&apos;s phones are currently set differently from each other. Saving will
+                put them all on the same setting.
+              </div>
+            ) : null}
+
+            <label className="state-box stack" style={{ gap: 6, padding: 14, cursor: "pointer" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <input type="radio" name="codec" checked={mode === "hd"} onChange={() => setMode("hd")} />
+                <strong>HD audio (Opus)</strong>
+              </div>
+              <span className="muted" style={{ marginLeft: 26 }}>
+                Current default. Higher quality on a clean connection, but more sensitive to a
+                weak or lossy network.
+              </span>
+            </label>
+
+            <label className="state-box stack" style={{ gap: 6, padding: 14, cursor: "pointer" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <input type="radio" name="codec" checked={mode === "standard"} onChange={() => setMode("standard")} />
+                <strong>Standard audio (G.711)</strong>
+              </div>
+              <span className="muted" style={{ marginLeft: 26 }}>
+                The classic telephone codec. Uses more bandwidth but copes far better with a
+                poor connection. Use this if calls sound choppy or robotic.
+              </span>
+            </label>
+
+            {data ? (
+              <p className="muted" style={{ marginTop: 2 }}>
+                {data.deviceCount === 0
+                  ? "This user has no active phones yet — the setting will apply when they sign in."
+                  : `Applies to ${data.deviceCount} phone${data.deviceCount === 1 ? "" : "s"}. Takes effect on their next call — no reinstall needed.`}
+              </p>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn" disabled={saving} onClick={save}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button className="btn ghost" onClick={onClose}>Cancel</button>
+            </div>
+
+            {toast ? (
+              <div className="state-box" style={{ padding: 10, color: toast.kind === "err" ? "#ef4444" : undefined }}>
+                {toast.text}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
 
 function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
