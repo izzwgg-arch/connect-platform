@@ -1,0 +1,22 @@
+diff --git a/android/build.gradle b/android/build.gradle
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -102,6 +102,18 @@
+   externalNativeBuild {
+     cmake {
+       path "CMakeLists.txt"
++      // Windows MAX_PATH workaround (2026-07-31): pnpm package dir names plus
++      // AGP's prefab nesting put generated native paths at 263 chars, past
++      // Windows' 260 limit ("Filename longer than 260 characters"). CMake 3.22.1
++      // hid this as an endless build.ninja regeneration loop; 3.31.6 reports it.
++      // NOT caused by the repo's location - a checkout at any normal path still
++      // exceeds the limit. Windows only: macOS/Linux/EAS have no such limit and
++      // must keep the default location. This cannot be set from the app's root
++      // build.gradle - AGP reads buildStagingDirectory during evaluation
++      // ("It is too late to set buildStagingDirectory"), so it lives here.
++      if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
++        buildStagingDirectory file((System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home")) + "/CxN/expo-modules-core")
++      }
+     }
+   }
+ 

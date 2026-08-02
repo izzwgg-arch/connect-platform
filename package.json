@@ -43,7 +43,10 @@
   },
   "pnpm": {
     "patchedDependencies": {
-      "react-native-callkeep@4.3.16": "patches/react-native-callkeep@4.3.16.patch"
+      "react-native-callkeep@4.3.16": "patches/react-native-callkeep@4.3.16.patch",
+      "expo-av@16.0.8": "patches/expo-av@16.0.8.patch",
+      "expo-modules-core@3.0.30": "patches/expo-modules-core@3.0.30.patch",
+      "react-native-screens@4.16.0": "patches/react-native-screens@4.16.0.patch"
     }
   }
 }
