@@ -65,9 +65,28 @@ react {
     cliFile = new File(["node", "--print", "require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })"].execute(null, rootDir).text.trim())
     bundleCommand = "export:embed"
 
+    // Force an ABSOLUTE --entry-file (2026-07-31). The RN plugin passes
+    // `--entry-file index.js` relative to `root`, and in this monorepo Expo CLI
+    // resolves that against the REPO root instead of apps/mobile, failing with
+    //   Error: Unable to resolve module ./index.js from C:\dev\projects\Connect 2/.
+    // even though the working directory it launches in is already apps/mobile.
+    // The same command with an absolute entry bundles fine (1406 modules), so
+    // append it here — Expo's parser takes the last occurrence of a flag.
+    extraPackagerArgs = ["--entry-file", file("../../index.js").absolutePath]
+
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '..'
-    // root = file("../")
+    // EXPLICIT (2026-07-31): in this monorepo the release bundle step resolved the
+    // project root as the REPO root and failed with
+    //   Error: Unable to resolve module ./index.js from C:\dev\projects\Connect 2/.
+    // apps/mobile/index.js exists and is package.json "main"; the problem is that
+    // Expo CLI was handed the wrong root, so it never loaded apps/mobile's
+    // metro.config.js (which sets projectRoot/watchFolders for exactly this
+    // layout). Pinning root here keeps the bundler inside apps/mobile.
+    // NB: this file lives in android/app, so "../.." is apps/mobile (where
+    // package.json and index.js are). "../" would be android/ — which fails with
+    // "The expected package.json path: .../android/package.json does not exist".
+    root = file("../../")
     //   The folder where the react-native NPM package is. Default is ../node_modules/react-native
     // reactNativeDir = file("../node_modules/react-native")
     //   The folder where the react-native Codegen package is. Default is ../node_modules/@react-native/codegen

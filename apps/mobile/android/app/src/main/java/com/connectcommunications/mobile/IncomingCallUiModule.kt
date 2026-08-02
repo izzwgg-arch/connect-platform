@@ -614,7 +614,9 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
         promise.resolve(true)
         return
       }
-      val activity = currentActivity
+      // RN 0.81 / SDK 54: the inherited `currentActivity` synthetic property no
+      // longer resolves here; go through the react context, which still exposes it.
+      val activity = reactApplicationContext.currentActivity
       val intentTarget: Context = activity ?: ctx
       val directIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
         data = Uri.parse("package:${ctx.packageName}")
@@ -1584,7 +1586,9 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
         promise.resolve(true)
         return
       }
-      val activity = currentActivity
+      // RN 0.81 / SDK 54: the inherited `currentActivity` synthetic property no
+      // longer resolves here; go through the react context, which still exposes it.
+      val activity = reactApplicationContext.currentActivity
       val target: Context = activity ?: ctx
       val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
         data = Uri.parse("package:${ctx.packageName}")

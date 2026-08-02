@@ -10,6 +10,7 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.ReactHost
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.load
 import com.facebook.react.defaults.DefaultReactNativeHost
+import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
 
 import expo.modules.ApplicationLifecycleDispatcher
@@ -42,7 +43,13 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
-    SoLoader.init(this, false)
+    // RN 0.76+ merges every native library into a single libreactnative.so, so
+    // SoLoader needs the merged-SO mapping to resolve the old individual names.
+    // Without it the app dies on launch with
+    //   SoLoaderDSONotFoundError: couldn't find DSO to load: libreact_featureflagsjni.so
+    // because RN still asks for that name and only libreactnative.so exists.
+    // The SDK 51 -> 54 upgrade updated JS and iOS but missed this Android step.
+    SoLoader.init(this, OpenSourceMergedSoMapping)
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
       // If you opted-in for the New Architecture, we load the native entry point for this app.
       load()

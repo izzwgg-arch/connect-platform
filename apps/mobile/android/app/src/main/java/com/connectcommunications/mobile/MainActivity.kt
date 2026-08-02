@@ -143,7 +143,9 @@ class MainActivity : ReactActivity() {
     applyIncomingCallWindowFlags(intent)
   }
 
-  override fun onNewIntent(intent: Intent?) {
+  // RN 0.81 / SDK 54: ReactActivity.onNewIntent takes a NON-null Intent.
+  // Keeping `Intent?` here compiled before but now "overrides nothing".
+  override fun onNewIntent(intent: Intent) {
     Log.i(TAG, "[LOCK_CALL_STATE] onNewIntent action=${intent?.action} data=${intent?.data}")
     super.onNewIntent(intent)
     setIntent(intent)
