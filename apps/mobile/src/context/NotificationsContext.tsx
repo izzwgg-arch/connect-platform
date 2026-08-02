@@ -4838,7 +4838,19 @@ export function NotificationsProvider({
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') flightDrainQueue();
+      if (state !== 'active') return;
+      flightDrainQueue();
+      // Drain the native iOS ring log on EVERY foreground, not just when the
+      // auth token changes (Izzy 2026-08-02: "all logs about anything done in
+      // the app always should be uploaded to the server on every single user").
+      // The killed/locked-state call breadcrumbs are written natively and are
+      // the ONLY record of what the phone did while JS was not running — on the
+      // old token-only trigger they sat on the device until the next sign-in,
+      // which is why a live endless-ring report had no device-side evidence to
+      // read. Best-effort; never blocks the app.
+      const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
+      const tok = tokenRef.current;
+      if (tok) void uploadAndClearIosRingLog({ apiBaseUrl: API_BASE, token: tok });
     });
     return () => sub.remove();
   }, []);

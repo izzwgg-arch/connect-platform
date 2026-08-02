@@ -66,26 +66,138 @@ static NSString *ConnectDeterministicCallKitUUID(NSString *callId)
     out[8], out[9], out[10], out[11], out[12], out[13], out[14], out[15]];
 }
 
+// ── Ring-path breadcrumb (killed-safe) ──────────────────────────────────────
+// Appends one JSON line to Documents/connect_ios_ring_log.jsonl, which JS
+// uploads on the next app foreground (src/diagnostics/iosRingLog.ts).
+//
+// 2026-08-02: this used to be an inline block that recorded ONLY "a push
+// arrived" — not whether it was a cancel, not whether we tried to hang up, not
+// whether the hang-up worked. So an endless-ring report showed the push landing
+// and then nothing at all, and three separate sessions had to reason about this
+// code instead of reading what the phone did. Every branch below now logs, with
+// its outcome. Fully wrapped — logging can never affect a call.
+static void ConnectRingLog(NSString *stage, NSDictionary *extra)
+{
+  @try {
+    NSArray *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *path = [[docs firstObject] stringByAppendingPathComponent:@"connect_ios_ring_log.jsonl"];
+    UIApplicationState st = [UIApplication sharedApplication].applicationState;
+    NSString *stStr = (st == UIApplicationStateActive) ? @"active"
+                    : ((st == UIApplicationStateBackground) ? @"background" : @"inactive");
+    NSMutableDictionary *rec = [NSMutableDictionary dictionary];
+    rec[@"ts"] = [NSString stringWithFormat:@"%f", [[NSDate date] timeIntervalSince1970]];
+    rec[@"src"] = @"native";
+    rec[@"stage"] = (stage.length > 0 ? stage : @"IOS_NATIVE");
+    rec[@"appState"] = stStr;
+    if (extra != nil) { [rec addEntriesFromDictionary:extra]; }
+    NSData *json = [NSJSONSerialization dataWithJSONObject:rec options:0 error:nil];
+    if (json == nil) { return; }
+    NSMutableData *line = [NSMutableData dataWithData:json];
+    uint8_t nl = 0x0A;
+    [line appendBytes:&nl length:1];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) {
+      [line writeToFile:path atomically:YES];
+    } else {
+      NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+      if (fh != nil) { [fh seekToEndOfFile]; [fh writeData:line]; [fh closeFile]; }
+    }
+  } @catch (NSException *ex) {}
+}
+
+// ── Shared CXCallObserver ───────────────────────────────────────────────────
+// 2026-08-02 (Izzy: "one time it does hang up, one time it doesn't"): the
+// connected-check below used to construct a THROWAWAY CXCallObserver per query.
+// Apple does not guarantee a freshly-created observer has loaded current call
+// state, and it was deallocated immediately after — so the answer was a coin
+// flip. When it wrongly answered "connected", the cancel's endCall was SKIPPED
+// ENTIRELY and the phone rang forever. One retained observer, created at
+// install, keeps the state live and makes the answer deterministic.
+static CXCallObserver *ConnectSharedCallObserver(void)
+{
+  static CXCallObserver *observer = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ observer = [[CXCallObserver alloc] init]; });
+  return observer;
+}
+
 // True when CallKit reports the given UUID as an ANSWERED, still-live call.
-// Used by the server-driven cancel branch below: a cancel push can race the
-// user's own answer (PBX "ANSWERED" fans out to every device, including the
-// one that just picked up), and ending a connected call here would hang up on
-// the user mid-sentence. Ringing (not-yet-connected) calls return NO and are
-// ended as usual. Fully wrapped — any failure means "not connected" so the
-// cancel still clears a stuck ring.
+// A cancel push can race the user's own answer (PBX "ANSWERED" fans out to
+// every device, including the one that just picked up), and ending a connected
+// call here would hang up on the user mid-sentence. Ringing (not-yet-connected)
+// calls return NO and are ended as usual. Fully wrapped — any failure means
+// "not connected" so the cancel still clears a stuck ring.
 static BOOL ConnectCallKitCallIsConnected(NSString *uuidStr)
 {
   @try {
     NSUUID *target = [[NSUUID alloc] initWithUUIDString:uuidStr];
     if (target == nil) { return NO; }
-    CXCallObserver *observer = [[CXCallObserver alloc] init];
-    for (CXCall *call in observer.calls) {
+    for (CXCall *call in ConnectSharedCallObserver().calls) {
       if ([call.UUID isEqual:target] && call.hasConnected && !call.hasEnded) {
         return YES;
       }
     }
   } @catch (NSException *ex) {}
   return NO;
+}
+
+// True while CallKit still holds this UUID as a not-yet-ended call (ringing OR
+// connected). Used to VERIFY a hang-up actually took effect.
+static BOOL ConnectCallKitCallIsLive(NSString *uuidStr)
+{
+  @try {
+    NSUUID *target = [[NSUUID alloc] initWithUUIDString:uuidStr];
+    if (target == nil) { return NO; }
+    for (CXCall *call in ConnectSharedCallObserver().calls) {
+      if ([call.UUID isEqual:target] && !call.hasEnded) { return YES; }
+    }
+  } @catch (NSException *ex) {}
+  return NO;
+}
+
+// Max verify passes after the initial end. 4 × 400ms ≈ 1.6s of insistence,
+// which is far below any ring timeout and cannot outlive a call the user
+// answers (every pass re-checks "connected" and bails).
+static const int kConnectCancelMaxAttempts = 4;
+static const double kConnectCancelVerifyDelay = 0.4;
+
+// End a RINGING CallKit call and then CONFIRM it actually ended, re-issuing the
+// end if CallKit still holds it.
+//
+// 2026-08-02: the old code fired endCallWithUUID once and assumed it worked. It
+// often did not — the end was issued on the line directly after
+// reportNewIncomingCall, before CallKit had finished registering the call, so
+// it landed on a call the system did not yet know about and was dropped, while
+// the re-report kept ringing. Assuming is what made this bipolar; this verifies.
+//
+// ⛔ The connected-check is re-evaluated on EVERY pass, not once at scheduling
+// time. That is the standing rule from the build-43 zombie-call regression: a
+// deferred call action must re-verify its precondition at FIRE time, or it
+// eventually fires into a call the user has since answered.
+static void ConnectEndRingingCallVerified(NSString *uuidStr, int endReason, NSString *tag, int attempt)
+{
+  if (uuidStr.length == 0) { return; }
+  @try {
+    if (ConnectCallKitCallIsConnected(uuidStr)) {
+      ConnectRingLog(@"IOS_CANCEL_SKIPPED_CONNECTED", @{ @"uuid": uuidStr, @"tag": tag, @"attempt": @(attempt) });
+      return;
+    }
+    const BOOL live = ConnectCallKitCallIsLive(uuidStr);
+    if (attempt > 0 && !live) {
+      ConnectRingLog(@"IOS_CANCEL_CONFIRMED_ENDED", @{ @"uuid": uuidStr, @"tag": tag, @"attempt": @(attempt) });
+      return;
+    }
+    if (attempt >= kConnectCancelMaxAttempts) {
+      ConnectRingLog(@"IOS_CANCEL_GAVE_UP_STILL_LIVE", @{ @"uuid": uuidStr, @"tag": tag, @"attempt": @(attempt) });
+      return;
+    }
+    [RNCallKeep endCallWithUUID:uuidStr reason:endReason];
+    ConnectRingLog(@"IOS_CANCEL_END_SENT", @{ @"uuid": uuidStr, @"tag": tag, @"attempt": @(attempt), @"wasLive": @(live) });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kConnectCancelVerifyDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+      ConnectEndRingingCallVerified(uuidStr, endReason, tag, attempt + 1);
+    });
+  } @catch (NSException *ex) {}
 }
 
 // ── In-call loudness guardian (2026-07-30, Izzy: "speaker and earpiece very
@@ -199,6 +311,11 @@ static ConnectVoipPushHandler *gConnectVoipPushHandler = nil;
     gConnectVoipPushHandler = [[ConnectVoipPushHandler alloc] init];
     [gConnectVoipPushHandler start];
     ConnectInstallCallAudioModeGuardian();
+    // Create the shared call observer at launch so it is already tracking system
+    // call state by the time the first cancel push needs to ask it. Building it
+    // lazily inside a cancel is what made the connected-check unreliable.
+    (void)ConnectSharedCallObserver();
+    ConnectRingLog(@"IOS_VOIP_HANDLER_INSTALLED", @{});
     NSLog(@"[CONNECT_VOIP] PushKit handler installed");
   });
 }
@@ -248,40 +365,24 @@ static ConnectVoipPushHandler *gConnectVoipPushHandler = nil;
   }
   NSString *handle = (callerNumber.length > 0) ? callerNumber : @"Unknown";
 
-  // CONNECT iOS ring-diagnostic breadcrumb (killed-safe). Best-effort and fully
-  // wrapped so it can never affect the CallKit report. Appends one JSON line to
-  // Documents/connect_ios_ring_log.jsonl, which JS uploads on the next app open
-  // (see apps/mobile/src/diagnostics/iosRingLog.ts).
+  // CONNECT iOS ring-diagnostic breadcrumb (killed-safe). Now records WHAT KIND
+  // of push this is — the old version logged only "a push arrived", which is
+  // why an endless-ring report showed the cancel landing and then nothing.
   @try {
-    NSArray *cbDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *cbPath = [[cbDocs firstObject] stringByAppendingPathComponent:@"connect_ios_ring_log.jsonl"];
-    UIApplicationState cbState = [UIApplication sharedApplication].applicationState;
-    NSString *cbStateStr = (cbState == UIApplicationStateActive) ? @"active" : ((cbState == UIApplicationStateBackground) ? @"background" : @"inactive");
     NSDictionary *cbRnck = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"RNCallKeepSettings"];
-    NSString *cbRing = cbRnck[@"ringtoneSound"];
+    NSString *cbRing = [cbRnck[@"ringtoneSound"] isKindOfClass:[NSString class]] ? cbRnck[@"ringtoneSound"] : nil;
     NSString *cbCaf = [[NSBundle mainBundle] pathForResource:@"connect-default-ringtone" ofType:@"caf"];
-    NSDictionary *cbRec = @{
-      @"ts": [NSString stringWithFormat:@"%f", [[NSDate date] timeIntervalSince1970]],
-      @"src": @"native",
-      @"stage": @"IOS_VOIP_PUSH_NATIVE",
-      @"appState": cbStateStr,
+    NSString *cbCancel = [dict[@"cancel"] isKindOfClass:[NSString class]] ? dict[@"cancel"] : @"";
+    NSString *cbReason = [dict[@"reason"] isKindOfClass:[NSString class]] ? dict[@"reason"] : @"";
+    NSString *cbAlt = [dict[@"altCallId"] isKindOfClass:[NSString class]] ? dict[@"altCallId"] : @"";
+    ConnectRingLog(@"IOS_VOIP_PUSH_NATIVE", @{
       @"callId": (callId ? callId : @""),
+      @"cancel": cbCancel,
+      @"reason": cbReason,
+      @"altCallId": cbAlt,
       @"ringtoneSound": (cbRing ? cbRing : @"<nil>"),
       @"cafPresent": (cbCaf ? @"true" : @"false")
-    };
-    NSData *cbJson = [NSJSONSerialization dataWithJSONObject:cbRec options:0 error:nil];
-    if (cbJson != nil) {
-      NSMutableData *cbLine = [NSMutableData dataWithData:cbJson];
-      uint8_t cbNL = 0x0A;
-      [cbLine appendBytes:&cbNL length:1];
-      NSFileManager *cbFm = [NSFileManager defaultManager];
-      if (![cbFm fileExistsAtPath:cbPath]) {
-        [cbLine writeToFile:cbPath atomically:YES];
-      } else {
-        NSFileHandle *cbFh = [NSFileHandle fileHandleForWritingAtPath:cbPath];
-        if (cbFh != nil) { [cbFh seekToEndOfFile]; [cbFh writeData:cbLine]; [cbFh closeFile]; }
-      }
-    }
+    });
   } @catch (NSException *cbEx) {}
 
   // COWORK build 20 (2026-07-16, owner request): server-driven CANCEL push.
@@ -328,6 +429,45 @@ static ConnectVoipPushHandler *gConnectVoipPushHandler = nil;
         }
       } @catch (NSException *idEx) {}
     }
+    NSString *altCancelId = [dict[@"altCallId"] isKindOfClass:[NSString class]] ? dict[@"altCallId"] : nil;
+    NSString *altUuid = (altCancelId.length > 0 && ![altCancelId isEqualToString:callId])
+      ? ConnectDeterministicCallKitUUID(altCancelId) : nil;
+    ConnectRingLog(@"IOS_CANCEL_RECEIVED", @{
+      @"callId": callId, @"uuid": cancelUuid, @"altUuid": (altUuid ? altUuid : @""),
+      @"reason": (cancelReason ? cancelReason : @""), @"endReason": @(endReason)
+    });
+
+    // ⛔ ORDERING (2026-08-02) — the hang-up MUST happen inside this completion
+    // handler, never on the line after the report.
+    //
+    // The old code called endCallWithUUID immediately after reportNewIncomingCall.
+    // The report is asynchronous: CallKit had frequently not finished registering
+    // the call, so the end landed on a UUID the system did not yet know about and
+    // was silently dropped — while the re-report we had just issued kept ringing.
+    // That is the "sometimes it hangs up, sometimes it rings forever" behaviour,
+    // and it is a race, which is why it never reproduced reliably. Ending inside
+    // the completion handler removes the race entirely: by the time this block
+    // runs, CallKit definitively knows about the call.
+    //
+    // Apple's rule (every VoIP push must report a call before the PushKit
+    // completion returns) is still satisfied — the report is issued first, and
+    // the PushKit completion is deferred into this block so iOS cannot suspend
+    // us between reporting and hanging up.
+    __block BOOL finished = NO;
+    void (^finishCancel)(NSString *) = ^(NSString *via) {
+      if (finished) { return; }
+      finished = YES;
+      ConnectRingLog(@"IOS_CANCEL_FINISHING", @{ @"uuid": cancelUuid, @"via": via });
+      ConnectEndRingingCallVerified(cancelUuid, endReason, @"primary", 0);
+      if (altUuid != nil) {
+        ConnectEndRingingCallVerified(altUuid, endReason, @"alt", 0);
+      }
+      // Forward to JS too (when awake it clears invite state; the JS onIncoming
+      // handler recognizes cancel payloads and never treats them as new calls).
+      [RNVoipPushNotificationManager didReceiveIncomingPushWithPayload:payload forType:(NSString *)type];
+      completion();
+    };
+
     [RNCallKeep reportNewIncomingCall:cancelUuid
                                handle:(cancelHandle.length > 0 ? cancelHandle : @"Unknown")
                            handleType:@"number"
@@ -339,24 +479,17 @@ static ConnectVoipPushHandler *gConnectVoipPushHandler = nil;
                    supportsUngrouping:NO
                           fromPushKit:YES
                               payload:dict
-                withCompletionHandler:nil];
-    // Connected-call guard: a cancel that races the user's own answer (PBX
-    // ANSWERED fans out to every device) must never hang up a live call.
-    // Only ringing / not-yet-connected calls are ended.
-    if (!ConnectCallKitCallIsConnected(cancelUuid)) {
-      [RNCallKeep endCallWithUUID:cancelUuid reason:endReason];
-    }
-    NSString *altCancelId = [dict[@"altCallId"] isKindOfClass:[NSString class]] ? dict[@"altCallId"] : nil;
-    if (altCancelId != nil && altCancelId.length > 0 && ![altCancelId isEqualToString:callId]) {
-      NSString *altUuid = ConnectDeterministicCallKitUUID(altCancelId);
-      if (!ConnectCallKitCallIsConnected(altUuid)) {
-        [RNCallKeep endCallWithUUID:altUuid reason:endReason];
-      }
-    }
-    // Forward to JS too (when awake it clears invite state; the JS onIncoming
-    // handler recognizes cancel payloads and never treats them as new calls).
-    [RNVoipPushNotificationManager didReceiveIncomingPushWithPayload:payload forType:(NSString *)type];
-    completion();
+                withCompletionHandler:^{
+      dispatch_async(dispatch_get_main_queue(), ^{ finishCancel(@"report_completion"); });
+    }];
+
+    // Safety net: if the report's completion handler never fires (a duplicate
+    // report of an already-ringing UUID is a legitimate CXProvider error, and an
+    // errored report may not call back), we must STILL hang up and — critically —
+    // still call the PushKit completion. Failing to call it gets the app killed
+    // by iOS. Idempotent via `finished`.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ finishCancel(@"timeout_fallback"); });
     return;
   }
 

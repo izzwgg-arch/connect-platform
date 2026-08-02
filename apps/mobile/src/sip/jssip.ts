@@ -222,17 +222,41 @@ function nativeCallEndedCleanup(reason: string, noLiveSessions?: () => boolean):
   // Fires only when the LAST live session ended, and re-verifies liveness
   // after a short settle so a back-to-back inbound call is never killed.
   if (Platform.OS === "ios") {
-    setTimeout(() => {
-      try {
-        if (noLiveSessions && !noLiveSessions()) return; // a new call is up — leave it alone
-        console.log(`[CALLKIT_ORPHAN] no live SIP session after ${reason} — ending stale CallKit calls`);
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const ck = require("./callkeep") as typeof import("./callkeep");
-        ck.endAllNativeCalls();
-      } catch {
-        /* best effort */
-      }
-    }, 1200);
+    // VERIFIED teardown (2026-08-02, Izzy: "when I hang up the Connect, I have
+    // to go separately and hang up the native active call screen for the green
+    // pill to go away"). This used to be ONE unverified shot: end the CallKit
+    // calls at 1.2s and assume it worked. When that single end did not take,
+    // the system call — and the pill — survived the whole Connect call, and the
+    // only way out was hanging up a second time by hand.
+    //
+    // Now it re-checks and re-issues. Every pass re-evaluates `noLiveSessions()`
+    // FIRST (the standing rule from the build-43 zombie-call regression: a
+    // deferred call action must re-verify its precondition at fire time), so a
+    // back-to-back inbound call is never torn down by a previous call's cleanup.
+    //
+    // ⛔ The FIRST pass stays at 1200ms on purpose. On iOS the CallKit call is
+    // reported from the VoIP push BEFORE the SIP session exists, so a shorter
+    // settle can see "no live sessions" for a call that is legitimately arriving
+    // and kill its ring. Do not shorten it — the retries below are what make the
+    // teardown reliable, not an earlier first attempt.
+    const ATTEMPT_DELAYS_MS = [1200, 800, 800];
+    let elapsed = 0;
+    ATTEMPT_DELAYS_MS.forEach((gap, index) => {
+      elapsed += gap;
+      setTimeout(() => {
+        try {
+          if (noLiveSessions && !noLiveSessions()) return; // a new call is up — leave it alone
+          console.log(
+            `[CALLKIT_ORPHAN] no live SIP session after ${reason} — ending stale CallKit calls (pass ${index + 1}/${ATTEMPT_DELAYS_MS.length})`,
+          );
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const ck = require("./callkeep") as typeof import("./callkeep");
+          ck.endAllNativeCalls();
+        } catch {
+          /* best effort */
+        }
+      }, elapsed);
+    });
     return;
   }
   if (Platform.OS !== "android") return;
