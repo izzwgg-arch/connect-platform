@@ -24,6 +24,51 @@ function normSlug(s: string): string {
   return s.toLowerCase().replace(/-/g, "_");
 }
 
+/**
+ * The owning PBX tenant code as stamped BY ASTERISK into the call itself —
+ * dcontext `T102_cos-all`, channel `PJSIP/T102_101_1-0000abcd`.
+ *
+ * This is the only ownership signal in a CDR that a caller cannot influence, so
+ * it is the one we treat as authoritative (see the leak note in
+ * resolveCdrTenant). Returns null when the call carries no marker, or when it
+ * carries CONFLICTING markers — a call whose legs disagree about who owns it
+ * must never be silently assigned to one of them.
+ */
+export function observedPbxTenantCodeFromCall(
+  dcontexts: string[] | null | undefined,
+  channels: string[] | null | undefined,
+): string | null {
+  const found = new Set<string>();
+  const scan = (value: unknown) => {
+    const text = String(value || "");
+    if (!text) return;
+    const re = /(?:^|[^A-Za-z0-9])(T\d+)_/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) found.add(m[1]!.toUpperCase());
+  };
+  for (const d of dcontexts ?? []) scan(d);
+  for (const c of channels ?? []) scan(c);
+  if (found.size !== 1) return null;
+  return [...found][0]!;
+}
+
+/**
+ * Called when a caller-supplied tenant is rejected because the call's own PBX
+ * marker says otherwise. Wired to a logger by the API so every rejection is
+ * visible — this is the alarm for the leak that made this check necessary.
+ */
+export type TenantClaimRejection = {
+  claimedTenantId: string;
+  claimedCode: string;
+  observedCode: string;
+  dcontexts: string[];
+  channels: string[];
+};
+let onTenantClaimRejected: ((r: TenantClaimRejection) => void) | null = null;
+export function setTenantClaimRejectionHandler(fn: ((r: TenantClaimRejection) => void) | null): void {
+  onTenantClaimRejected = fn;
+}
+
 /** PJSIP endpoint → match directory (same idea as server resolveTenantFromChannels). */
 function resolveVitalFromChannels(channels: string[], byVital: Map<string, DirRow>, normSlugMap: Map<string, DirRow>): string | null {
   const normMap = new Map<string, DirRow>();
@@ -177,22 +222,59 @@ export async function resolveCdrTenant(
   const maps = await loadDirectoryMaps(db, pbxInstanceId);
   const { byVital, byCode, bySlug, normSlugMap, connectByVital } = maps;
 
+  // ── THE PBX IS THE SOURCE OF TRUTH ──────────────────────────────────────────
+  // Owner directive, 2026-08-02, after a confirmed CROSS-TENANT LEAK: calls were
+  // written into other companies' call history. PBX-verified over 7 days: 3,517
+  // matched records, 116 filed under the WRONG company (3.3%), affecting 11 real
+  // customers in both directions — and recordings ride along on the record.
+  //
+  // ALL 116 came through the `telephony_connect_tenant_id` branch below and NONE
+  // through any other path, because that branch TRUSTED a caller-supplied tenant
+  // id outright. It checked only that the claimed tenant had *some* linked PBX
+  // record — never that the link matched THIS call. The call's own ownership
+  // markers were passed into this function and thrown away.
+  //
+  // Asterisk stamps the owning tenant into the call itself: dcontext `T102_...`
+  // and channels `PJSIP/T102_101_1-...`. That marker comes from the PBX, cannot
+  // be forged by a caller, and is therefore authoritative. Read it FIRST.
+  const observedCode = observedPbxTenantCodeFromCall(input.dcontexts, input.channels);
+  if (observedCode) {
+    const dir = byCode.get(observedCode);
+    if (dir) return packResult(dir.vitalTenantId, dir, connectByVital, "pbx_observed_tenant_code");
+  }
+
   const telephony = String(input.telephonyTenantId || "").trim();
   if (telephony && !telephony.startsWith("vpbx:")) {
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId: telephony } });
     if (link?.status === "LINKED") {
       const vid = (link.pbxTenantId || "").trim();
       const code = (link.pbxTenantCode || "").trim().toUpperCase();
-      const dir =
-        (vid && byVital.get(vid.toLowerCase())) ||
-        (code ? byCode.get(code) : undefined) ||
-        null;
-      return {
-        tenantId: telephony,
-        pbxVitalTenantId: (dir?.vitalTenantId ?? vid) || null,
-        pbxTenantCode: (dir?.tenantCode ?? code) || null,
-        tenantResolutionSource: "telephony_connect_tenant_id",
-      };
+      // FAIL CLOSED: if the call itself says one tenant and the caller claims a
+      // different one, the caller is wrong. Never guess and never prefer the
+      // claim — drop it and fall through to the evidence-based paths below
+      // (DID/channel/dcontext). If none of those resolve, the record ends up
+      // unattributed, which is recoverable. A record in the wrong company's
+      // history is not.
+      if (observedCode && code && observedCode !== code) {
+        onTenantClaimRejected?.({
+          claimedTenantId: telephony,
+          claimedCode: code,
+          observedCode,
+          dcontexts: input.dcontexts,
+          channels: input.channels,
+        });
+      } else {
+        const dir =
+          (vid && byVital.get(vid.toLowerCase())) ||
+          (code ? byCode.get(code) : undefined) ||
+          null;
+        return {
+          tenantId: telephony,
+          pbxVitalTenantId: (dir?.vitalTenantId ?? vid) || null,
+          pbxTenantCode: (dir?.tenantCode ?? code) || null,
+          tenantResolutionSource: "telephony_connect_tenant_id",
+        };
+      }
     }
   }
 

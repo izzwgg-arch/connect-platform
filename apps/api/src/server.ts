@@ -150,7 +150,7 @@ import { computeVoicemailPatchUpdate } from "./voicemailAccessPolicy";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
-import { resolveCdrTenant } from "./pbxTenantResolve";
+import { resolveCdrTenant, setTenantClaimRejectionHandler } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx, type ExtensionSyncResult } from "./pbxExtensionSync";
 import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "./fcmDirect";
 import {
@@ -277,6 +277,25 @@ app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 // Route-scoped raw body capture (Meta webhook only). Not enabled globally.
 app.register(fastifyRawBody as any, { field: "rawBody", global: false, encoding: false, runFirst: true });
 app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
+
+// Alarm for the cross-tenant leak (2026-08-02). Every time a CDR arrives
+// claiming to belong to one company while the PBX's own marker on the call says
+// another, the claim is dropped and it is logged HERE. Silence on this line is
+// the healthy state; anything appearing on it is a would-be leak that was
+// caught. See resolveCdrTenant for the full incident note.
+setTenantClaimRejectionHandler((r) => {
+  app.log.error(
+    {
+      event: "cdr_tenant_claim_rejected_cross_tenant",
+      claimedTenantId: r.claimedTenantId,
+      claimedCode: r.claimedCode,
+      observedCode: r.observedCode,
+      dcontexts: r.dcontexts?.slice(0, 6),
+      channels: r.channels?.slice(0, 6),
+    },
+    "cdr-ingest: REJECTED cross-tenant claim — PBX marker disagrees with claimed tenant",
+  );
+});
 app.register(formbody);
 
 app.setErrorHandler((error, _req, reply) => {
