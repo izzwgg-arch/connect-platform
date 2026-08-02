@@ -585,7 +585,16 @@ export async function createContact(token: string, input: CreateContactInput): P
   const json = await parseJson(res);
   if (!res.ok) {
     const code = typeof json?.error === "string" ? json.error : "CONTACT_CREATE_FAILED";
-    throw new Error(code === "CONTACT_CREATE_FAILED" ? `${code}_${res.status}` : code);
+    const err = new Error(code === "CONTACT_CREATE_FAILED" ? `${code}_${res.status}` : code) as Error & {
+      existingContactName?: string;
+    };
+    // On a duplicate the server names the contact already holding the number —
+    // pass it up so the sheet can say WHO instead of a dead-end "already exists".
+    const existingName = json?.existingContact?.displayName;
+    if (typeof existingName === "string" && existingName.trim()) {
+      err.existingContactName = existingName.trim();
+    }
+    throw err;
   }
   return json as { contact: any };
 }

@@ -28437,6 +28437,17 @@ async function ensureContactTags(tenantId: string, names: string[]) {
   return out;
 }
 
+/**
+ * Reject a phone number that another contact in the tenant already holds.
+ *
+ * The thrown error carries WHO owns the number (2026-08-02). Eli spent a month
+ * unable to save contacts: he had imported his whole phone book, could only see
+ * the first 1,000 of 1,247, and kept re-adding people sitting in the invisible
+ * tail. Every attempt came back "a contact with this phone number already
+ * exists" — true, unhelpful, and impossible to act on, because the contact it
+ * collided with was one he could not see or search for. Naming it turns a dead
+ * end into an answer.
+ */
 async function assertNoDuplicateContactPhones(tenantId: string, phones: Array<{ numberRaw: string }>, excludeContactId?: string) {
   const numbers = [...new Set(phones.map((p) => normalizeContactPhone(p.numberRaw)).filter(Boolean))];
   if (numbers.length === 0) return;
@@ -28445,8 +28456,15 @@ async function assertNoDuplicateContactPhones(tenantId: string, phones: Array<{ 
       numberNormalized: { in: numbers },
       contact: { tenantId, active: true, archivedAt: null, ...(excludeContactId ? { id: { not: excludeContactId } } : {}) },
     },
+    include: { contact: { select: { id: true, displayName: true } } },
   });
-  if (existing) throw new Error("duplicate_phone");
+  if (existing) {
+    const err = new Error("duplicate_phone") as Error & { existingContact?: { id: string; displayName: string } };
+    if (existing.contact) {
+      err.existingContact = { id: existing.contact.id, displayName: existing.contact.displayName };
+    }
+    throw err;
+  }
 }
 
 async function replaceContactChildren(contactId: string, tenantId: string, input: z.infer<typeof contactWriteInput>) {
@@ -28647,7 +28665,7 @@ app.get("/contacts", async (req, reply) => {
 
 type CreateContactOutcome =
   | { status: "created"; contact: any }
-  | { status: "duplicate" }
+  | { status: "duplicate"; existingContact?: { id: string; displayName: string } }
   | { status: "invalid"; error: string }
   | { status: "error"; error: string };
 
@@ -28782,12 +28800,12 @@ async function createOneContact(
   }
   try {
     await assertNoDuplicateContactPhones(tenantId, input.phones);
-  } catch {
+  } catch (err: any) {
     if (mergeOnPhoneOverlap) {
       const merged = await mergeIntoExistingContactByPhone(tenantId, input);
       if (merged) return merged;
     }
-    return { status: "duplicate" };
+    return { status: "duplicate", existingContact: err?.existingContact };
   }
   const contact = await (db as any).contact.create({
     data: {
@@ -28818,7 +28836,11 @@ app.post("/contacts", async (req, reply) => {
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
   const result = await createOneContact(tenantId, user.sub, req.body);
   if (result.status === "invalid") return reply.code(400).send({ error: result.error });
-  if (result.status === "duplicate") return reply.code(409).send({ error: "duplicate_phone" });
+  if (result.status === "duplicate") {
+    // Name the contact that already owns the number so the client can say who
+    // it is instead of a dead-end "already exists".
+    return reply.code(409).send({ error: "duplicate_phone", existingContact: result.existingContact });
+  }
   if (result.status === "error") return reply.code(500).send({ error: "internal_error" });
   return reply.code(201).send({ contact: result.contact });
 });

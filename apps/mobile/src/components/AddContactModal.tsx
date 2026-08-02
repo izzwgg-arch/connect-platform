@@ -13,6 +13,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { createContact } from '../api/client';
 import { saveContactToDevice } from '../contacts/deviceContactsWrite';
+import { duplicatePhoneMessage } from '../contacts/duplicatePhoneMessage';
 import { showAppAlert } from './ui/appAlert';
 import { spacing } from '../theme/spacing';
 
@@ -118,7 +119,7 @@ export function AddContactModal({
     } catch (e: any) {
       const msg = String(e?.message || '').toUpperCase();
       if (msg.includes('DUPLICATE_PHONE')) {
-        showAppAlert('Duplicate phone', 'A contact with this phone number already exists.');
+        showAppAlert('Already in your contacts', duplicatePhoneMessage(e?.existingContactName));
       } else if (msg.includes('NAME_PHONE_OR_EMAIL_REQUIRED')) {
         showAppAlert('Missing info', 'Please provide a name plus a phone or email.');
       } else {

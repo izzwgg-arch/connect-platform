@@ -41,6 +41,7 @@ import {
   type PermissionState,
 } from '../../contacts/phoneContactsImport';
 import { saveContactToDevice } from '../../contacts/deviceContactsWrite';
+import { duplicatePhoneMessage } from '../../contacts/duplicatePhoneMessage';
 
 type ContactFilter = 'all' | 'extensions' | 'external' | 'favorites';
 type ContactListItem =
@@ -63,6 +64,7 @@ function contactSubtitle(contact: Contact): string {
 function isExternal(contact: Contact): boolean {
   return contact.type !== 'internal_extension';
 }
+
 
 export function ContactTab() {
   const { colors } = useTheme();
@@ -822,7 +824,7 @@ function AddContactModal({
     } catch (e: any) {
       const msg = String(e?.message || '').toUpperCase();
       if (msg.includes('DUPLICATE_PHONE')) {
-        showAppAlert('Duplicate phone', 'A contact with this phone number already exists.');
+        showAppAlert('Already in your contacts', duplicatePhoneMessage(e?.existingContactName));
       } else if (msg.includes('NAME_PHONE_OR_EMAIL_REQUIRED')) {
         showAppAlert('Missing info', 'Please provide a name plus a phone or email.');
       } else {
