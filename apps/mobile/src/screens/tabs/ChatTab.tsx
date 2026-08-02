@@ -1133,7 +1133,20 @@ export function ChatTab() {
   }, [openThreadById, showToast, token]);
 
   const startSms = useCallback(async () => {
-    if (!token || !newSmsPhone.trim()) return;
+    // Never fail silently. This used to `return` with no feedback whenever the
+    // field was empty, which is indistinguishable from a dead button — and
+    // "Open SMS thread does nothing" is exactly how it was reported (Izzy,
+    // iPhone, 2026-08-02). The primary cause was the keyboard covering the
+    // sheet (see NewChatModal), but a button that can silently do nothing is
+    // its own bug regardless of why the field ended up empty.
+    if (!token) {
+      showToast('Not signed in.');
+      return;
+    }
+    if (!newSmsPhone.trim()) {
+      showToast('Enter a phone number first.');
+      return;
+    }
     try {
       const res = await createChatThread(token, { type: 'sms', externalPhone: newSmsPhone.trim() });
       setNewSmsPhone('');
@@ -2865,6 +2878,25 @@ function NewChatModal({
   const { colors } = useTheme();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      {/* Izzy 2026-08-02 (iPhone): "when the keyboard opens, that whole thing
+          gets hidden... and when I hit Open SMS thread, nothing happens."
+          BOTH symptoms are one bug. This sheet is pinned to the bottom
+          (modalBackdrop uses justifyContent:'flex-end'), and a React Native
+          <Modal> renders in its OWN native view hierarchy — so the screen-level
+          KeyboardAvoidingView further up this file does NOT reach inside it.
+          With nothing lifting the sheet, iOS draws the keyboard straight over
+          it: the phone-number field and the "Open SMS thread" button end up
+          underneath, so taps aimed at the button land on the keyboard and
+          "nothing happens". Android is unaffected because its window
+          soft-input mode resizes automatically, which is exactly why it already
+          behaved the way he expects.
+          The KeyboardAvoidingView must live INSIDE the Modal for this reason.
+          Android stays on `undefined` so its native resize keeps working —
+          stacking both would double-shift the sheet. */}
+      <KeyboardAvoidingView
+        style={styles.modalKeyboardWrap}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable style={[styles.sheetCard, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => undefined}>
           <View style={styles.modalHeader}>
@@ -2927,6 +2959,7 @@ function NewChatModal({
           )}
         </Pressable>
       </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -3462,6 +3495,9 @@ const styles = StyleSheet.create({
   recordSlideHint: { flex: 1, fontSize: 12, fontWeight: '800', textAlign: 'center', opacity: 0.85 },
   recordCancelChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
   recordCancelText: { fontSize: 12, fontWeight: '900' },
+  // Fills the Modal so the KeyboardAvoidingView inside it has a height to work
+  // against — without flex:1 it collapses and lifts nothing.
+  modalKeyboardWrap: { flex: 1 },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)', padding: spacing['5'] },
   sheetCard: { borderRadius: 24, borderWidth: 1, padding: spacing['4'], maxHeight: '82%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing['3'] },
