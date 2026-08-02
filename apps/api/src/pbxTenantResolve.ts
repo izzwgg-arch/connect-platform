@@ -243,6 +243,27 @@ export async function resolveCdrTenant(
     if (dir) return packResult(dir.vitalTenantId, dir, connectByVital, "pbx_observed_tenant_code");
   }
 
+  // ── Second-strongest evidence: the phone number the PBX actually routed on ──
+  // (Izzy 2026-08-02: "how does the PBX know which one to ring? There's got to
+  // be some marker.") Correct — an inbound call is routed by the DID that was
+  // dialled, and those DIDs are SYNCED FROM THE PBX into PbxTenantInboundDid.
+  // A caller cannot forge which number the PBX rang. On an outbound call the
+  // tenant's own DID is the caller ID, so `fromNumber` identifies it the same
+  // way — that is exactly the signal that would have caught the leak: the demo
+  // tenant's calls carried its own DID 3479780090 in fromNumber the whole time.
+  //
+  // This lookup already existed but ran AFTER the unverified claim, so the claim
+  // won first and the evidence was never consulted. Moving it ahead of the claim
+  // is the fix for calls that carry no `T<n>_` marker (a trunk-only channel like
+  // `PJSIP/344022_Comfortcont` has none). Order is now:
+  //   1. PBX tenant marker stamped on the call   (unforgeable)
+  //   2. the DID the PBX routed on               (unforgeable, PBX-synced)
+  //   3. the caller's claim                      (only when there is NO evidence)
+  const toDidEarly = await tryResolveFromSyncedInboundDid(db, pbxInstanceId, maps, input.toNumber, "ombu_inbound_did_to");
+  if (toDidEarly) return toDidEarly;
+  const fromDidEarly = await tryResolveFromSyncedInboundDid(db, pbxInstanceId, maps, input.fromNumber, "ombu_inbound_did_from");
+  if (fromDidEarly) return fromDidEarly;
+
   const telephony = String(input.telephonyTenantId || "").trim();
   if (telephony && !telephony.startsWith("vpbx:")) {
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId: telephony } });
