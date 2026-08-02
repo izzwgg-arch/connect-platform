@@ -2198,60 +2198,11 @@ export class JsSipClient implements SipClient {
     return this.sessionsById.get(id) ?? null;
   }
 
-  /**
-   * True when JsSIP itself considers the session finished, whatever our own
-   * bookkeeping still says.
-   *
-   * `removeSession` gives up silently when it cannot resolve an id for the
-   * session being torn down, and the "ended"/"failed" handlers do not run at
-   * all if the JS tree is destroyed mid-teardown. Either way the entry stays in
-   * `sessionsById` frozen at its last known state — usually "connected" — and
-   * every reader downstream treats the corpse as a live call.
-   */
-  private isSessionDead(session: any): boolean {
-    try {
-      if (!session) return true;
-      if (typeof session.isEnded === "function" && session.isEnded()) return true;
-      // JsSIP RTCSession status: 8 = TERMINATED, 9 = CANCELED (older builds
-      // expose only the numeric status).
-      const status = (session as any).status;
-      if (typeof status === "number" && (status === 8 || status === 9)) return true;
-      return false;
-    } catch {
-      // An object that throws while being inspected is not a call we can use.
-      return true;
-    }
-  }
-
-  /**
-   * Live sessions only. Callers use this to answer "is a call in progress?" —
-   * most importantly the UI re-hydration that runs when the app's screens are
-   * rebuilt after Android destroys the activity. Handing that path a terminated
-   * session resurrects a finished call on screen: state forced to "connected",
-   * marked answered, and captioned "Unknown" because a torn-down session has no
-   * caller left on it (Izzy 2026-08-02 — answered, hung up, left the app, came
-   * back to a call screen for a call that was already over).
-   */
   listSessions(): SipSessionInfo[] {
     const out: SipSessionInfo[] = [];
-    const dead: any[] = [];
     for (const session of this.sessionsById.values()) {
-      if (this.isSessionDead(session)) {
-        dead.push(session);
-        continue;
-      }
       const info = this.buildSessionInfo(session);
       if (info) out.push(info);
-    }
-    // Reaped AFTER the walk: removeSession fires onSessionRemoved, and letting
-    // a listener re-enter while we are still iterating the map is how this kind
-    // of cleanup grows its own bugs.
-    for (const session of dead) {
-      try {
-        this.removeSession(session);
-      } catch (err) {
-        console.warn("[MULTICALL] reaping a dead session failed:", err);
-      }
     }
     return out;
   }

@@ -339,7 +339,52 @@ type ParsedIncomingCallAction = {
   inviteId: string;
   invite: CallInvite | null;
   url: string;
+  /** When the notification that carried this action was raised, if it said. */
+  timestampMs: number | null;
 };
+
+/**
+ * Notification actions we have already acted on, keyed `${action}:${inviteId}`.
+ *
+ * MODULE SCOPE ON PURPOSE (2026-08-02). This used to be a useRef inside the
+ * provider, and that is precisely why answering a call, hanging up, leaving the
+ * app and coming back put a dead call back on screen:
+ *
+ *   10:27:05.9  session ended, removed cleanly, sessions: 0
+ *   10:27:10.0  onHostDestroy            (left the app — React tree unmounted)
+ *   10:27:13.6  MainActivity onCreate
+ *               intent = ...incoming-call?action=answer&inviteId=cmsbw92ui...
+ *   10:27:14.8  navigating to 'IncomingCall'
+ *
+ * Android hands a relaunched activity the SAME intent that started the task, so
+ * `Linking.getInitialURL()` replays the original answer link. The guard against
+ * re-running it lived in the React tree that had just been destroyed, so it came
+ * back empty and the app obeyed a 19-second-old order to answer a finished call.
+ * At module scope the record outlives the tree, which is the same rule the
+ * in-call notification actions already follow (see inCallNotificationActions).
+ */
+const handledIncomingActionKeys = new Set<string>();
+/** Bounded — this set lives as long as the process. */
+const HANDLED_INCOMING_ACTION_KEYS_MAX = 50;
+
+function markIncomingActionHandled(key: string): void {
+  handledIncomingActionKeys.add(key);
+  while (handledIncomingActionKeys.size > HANDLED_INCOMING_ACTION_KEYS_MAX) {
+    const oldest = handledIncomingActionKeys.values().next().value;
+    if (oldest === undefined) break;
+    handledIncomingActionKeys.delete(oldest);
+  }
+}
+
+/**
+ * Second net, for the case module scope cannot cover: if the PROCESS is killed
+ * and relaunched, the set above is gone too, but Android can still hand us the
+ * old intent. An answer/decline is a response to a phone ringing right now, so
+ * one this old is never a real instruction. Deliberately generous — a cold
+ * start from the lock screen can legitimately take seconds, and refusing a real
+ * answer is far worse than showing a stale screen.
+ */
+const STALE_INCOMING_ACTION_MS = 60_000;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -455,11 +500,14 @@ function parseIncomingCallActionUrl(url: string | null): ParsedIncomingCallActio
           })
         : null;
 
+    const parsedTs = Date.parse(timestamp);
+
     return {
       action: rawAction,
       inviteId,
       invite,
       url,
+      timestampMs: Number.isFinite(parsedTs) ? parsedTs : null,
     };
   } catch {
     return null;
@@ -4795,27 +4843,65 @@ export function NotificationsProvider({
   // ── Native notification deep-link actions ──────────────────────────────────
 
   useEffect(() => {
-    const queueIncomingActionUrl = (url: string | null) => {
+    /**
+     * `source` matters, and it is the whole fix.
+     *
+     * "live"   — Linking's url event. The user just tapped something; it is by
+     *            definition current, so it keeps the original per-tree dedupe
+     *            (which is cleared when a call goes idle, so tapping answer
+     *            again after a failed attempt still works).
+     * "launch" — Linking.getInitialURL(), i.e. the intent the activity was
+     *            (re)created with. Android hands a relaunched activity the SAME
+     *            intent that started the task, so this can be an order minutes
+     *            old that the user already carried out. Only this path gets the
+     *            replay guards, so a stale answer can never be re-obeyed while a
+     *            genuine tap is never refused.
+     */
+    const queueIncomingActionUrl = (url: string | null, source: "live" | "launch") => {
       const action = parseIncomingCallActionUrl(url);
       if (!action) return;
       const actionKey = `${action.action}:${action.inviteId}`;
-      console.log("[Notif] Incoming action URL queued:", action.action, action.inviteId);
+      console.log("[Notif] Incoming action URL queued:", action.action, action.inviteId, "source=" + source);
+
+      if (source === "launch") {
+        if (handledIncomingActionKeys.has(actionKey)) {
+          console.log("[STALE_INTENT] launch intent already acted on — ignoring replay:", actionKey);
+          return;
+        }
+        const ageMs = action.timestampMs == null ? null : Date.now() - action.timestampMs;
+        if (
+          (action.action === "answer" || action.action === "decline") &&
+          ageMs != null &&
+          ageMs > STALE_INCOMING_ACTION_MS
+        ) {
+          console.log(
+            `[STALE_INTENT] ignoring ${action.action} for ${action.inviteId} — launch intent ${Math.round(ageMs / 1000)}s old`,
+          );
+          markIncomingActionHandled(actionKey);
+          return;
+        }
+      }
+
       if (handledIncomingActionKeysRef.current.has(actionKey)) {
         console.log("[Notif] Incoming action already handled:", action.action, action.inviteId);
         return;
       }
       handledIncomingActionKeysRef.current.add(actionKey);
+      // Remembered beyond this React tree so a relaunch cannot replay it — the
+      // per-tree record above dies with the tree, which is exactly how the
+      // finished call got back on screen.
+      markIncomingActionHandled(actionKey);
       setPendingIncomingAction(action);
     };
 
     Linking.getInitialURL()
       .then((url) => {
-        queueIncomingActionUrl(url);
+        queueIncomingActionUrl(url, "launch");
       })
       .catch(() => undefined);
 
     const sub = Linking.addEventListener("url", ({ url }) => {
-      queueIncomingActionUrl(url);
+      queueIncomingActionUrl(url, "live");
     });
 
     return () => sub.remove();
