@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
+  KeyboardAvoidingView,
   ActivityIndicator,
   Animated,
   FlatList,
@@ -837,6 +838,23 @@ function AddContactModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
+      {/* Izzy 2026-08-02 (iPhone): "when I add a contact and the keyboard opens,
+          the bottom fields from the contact are blocked, so I can't see what I'm
+          typing." Same trap as the New-message sheet: this sheet is anchored to
+          the bottom (modalBackdrop uses justifyContent:'flex-end') and a React
+          Native <Modal> renders in its OWN native view hierarchy, so no
+          KeyboardAvoidingView outside it can lift it. iOS draws the keyboard
+          straight over the lower fields — Notes and Company, the last things you
+          type. Android is unaffected: its window soft-input mode resizes
+          automatically.
+          Lifting alone is not enough on a short screen, so this pairs with the
+          ScrollView below (keyboardShouldPersistTaps="handled" so a tap on Save
+          registers while the keyboard is still up). Sheet rises, remaining
+          fields scroll. */}
+      <KeyboardAvoidingView
+        style={styles.modalKeyboardWrap}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
       <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
         <View style={[styles.addSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={styles.sheetHandleWrap}>
@@ -965,6 +983,7 @@ function AddContactModal({
           </ScrollView>
         </View>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1330,6 +1349,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  modalKeyboardWrap: { flex: 1 },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end' },
 
   addSheet: {
