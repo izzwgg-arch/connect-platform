@@ -1,5 +1,52 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — iOS CallKit zombie call + TestFlight release (2026-08-02) — READ FIRST for iOS call teardown or any EAS build
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_IOS_CALLKIT_TESTFLIGHT_2026-08-02.md`**
+
+- **iOS build 44 (`3d8103af…`, commit `695a53e6`) is VERIFIED ON DEVICE by Izzy.**
+  Its twin **build 45** (`27387fbe…`, commit `ecb6071f`, ios-prod) is on TestFlight,
+  beta review **APPROVED**, live to the external group "Loopcom Testers".
+- **Any deferred call action must re-verify its precondition at FIRE time.** The
+  12s deferred decline from build 43 outlived the answer and declined a CONNECTED
+  call (proven twice in `voiceDiagEvent`); a ring rejection cannot tear down a
+  confirmed dialog, so the SIP session AND the CallKit call both survived → stuck
+  green pill + a lock-screen call that had to be hung up by hand. Fixed `4640a04d`.
+- **`sip.callState` inside the CallKeep handlers is a STALE render closure.** Ground
+  liveness checks in the module-scope SIP singleton (`confirmedAtMs != null`) or refs.
+- `nativeCallEndedCleanup` was Android-only — iOS had **no last-session-ended safety
+  net** at all. It now ends orphaned CallKit calls, re-verifying no session is live
+  after a 1.2s settle.
+- ⛔ **`EAS_NO_VCS=1` uploads the WORKING TREE, not the commit — a green EAS build is
+  NOT proof the committed tree builds.** A stale `pnpm-lock.yaml` (declared 4
+  `patchedDependencies`, locked 1) made every clean checkout unbuildable; fixed
+  `0e5207d7`. Re-lock whenever patches change.
+- EAS build logs are **brotli**, not gzip. Poll builds by **explicit id**, never
+  "newest" — that misreads the previous build and reports phantom failures.
+
+## ⛔ AGENT HANDOFF — Android SDK 54 build + PBX push-and-wait (2026-08-01) — READ FIRST for Android builds or "calls don't ring"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANDROID_SDK54_PUSHWAIT_2026-08-01.md`**
+
+- **The PBX already had push-and-wait and it was dead code.** `[send-mobile-push]`
+  in the baseplan is bypassed by an unconditional `Goto` in `[parse-dial-string]`;
+  Connect's own `[connect-wake-core]` was allowlisted for T5_101 but structurally
+  unreachable. The killer: `PJSIP_DIAL_CONTACTS()` resolves **once** — no contacts
+  means `cause 3` in milliseconds and the ring timer never runs. A longer ring
+  timer fixes nothing. Live on **Luxure T5 ext 101 only** via
+  `[connect-mobile-wake-dial]`; rollback is one `database put`.
+- **The Android toolchain was a generation behind** after the SDK 51→54 upgrade
+  (iOS builds on EAS hid it). Gradle 8.13 / Kotlin 2.1.20 / SDK 36 / NDK 27.1 now
+  pinned. `local.properties` needs `cmake.dir=<SDK>/cmake/3.31.6` and is
+  **gitignored** — a fresh Windows clone must add it. Windows MAX_PATH (263 > 260)
+  is handled by pnpm patches; **never** try to set `buildStagingDirectory` from the
+  root build.gradle ("It is too late to set").
+- **Always build with `scripts/android-ship.ps1`** — without `SHIP_BUILD_ID` the
+  APK is literally version "1.0.0", which is half of why the whole fleet reported
+  that. The app now reports the real OS-level version.
+- Published `1.0.0+20260801-231353` **without a two-way call test** (owner's call);
+  rollback APK is `connectcomms-v1.0.0+20260730.4.apk`.
+
 ## ⛔ AGENT HANDOFF — registration drops & push delivery (2026-07-31) — READ FIRST for any "calls don't ring" report
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_REGISTRATION_PUSH_2026-07-31.md`**
