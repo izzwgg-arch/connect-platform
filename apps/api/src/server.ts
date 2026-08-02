@@ -31422,16 +31422,52 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     }
   }
 
-  // iOS killed-app wake via PushKit VoIP. The Expo INCOMING_CALL_WAKE above
-  // wakes Android + foreground/short-bg iOS, but it CANNOT wake a terminated
-  // iOS app - only a native APNs VoIP push (apns-push-type: voip) does that.
-  // Fire a real VoIP push to the ringing extension's iOS devices so a
-  // cold-killed iPhone wakes, registers SIP, and CallKit rings during the
-  // dialplan's wait-for-wake grace window. Reuses the Apple-compliant sender
-  // (fg-active gate + token invalidation + logging). SURGICAL: only when the
-  // target extension is known, so we never VoIP-push devices not being rung.
+  // ⛔ iOS VoIP PRE-WAKE IS DISABLED — it created a SECOND system call on every
+  // single call (2026-08-02, proven from the device's own native log).
+  //
+  // Izzy: "I just hung up the phone, and it's still going. It's not even on the
+  // lock screen; it's on the regular screen."
+  //
+  // WHY IT IS WRONG ON iOS, not just noisy:
+  // Every VoIP push MUST report a CallKit call before its completion handler
+  // returns or Apple terminates the app. The CallKit call's identity is derived
+  // deterministically from the push's `callId`. This block fired at ring time,
+  // BEFORE the CallInvite exists, so the only id available was the PBX
+  // `linkedId` — a DIFFERENT id from the `inviteId` the real INCOMING_CALL push
+  // sends moments later. Two ids => two derived identities => TWO separate
+  // ringing CallKit calls for ONE phone call:
+  //
+  //   real call  cmsbtysij07nzqe128y77e7ne -> d0b81c61-5c7c-5ff9-8c96-8ed53c76243d
+  //   pre-wake   1785676975.150051         -> a0caa00d-494e-550b-94e6-232d6afa1fef
+  //
+  // Hanging up in Connect tears down the call Connect is attached to; the other
+  // one survives — still ringing, still showing a call screen, still holding the
+  // green pill, and it has to be hung up by hand. It also gives the user a
+  // phantom call to answer that has NO SIP session behind it, which is the
+  // "answers and it connects to nothing / caller shows unknown" report in
+  // PLAN_PUSH_AND_WAIT_SIMON.md §0.
+  //
+  // It cannot be fixed by re-keying this push: at ring time the invite does not
+  // exist, so there is no shared id to derive from.
+  //
+  // Nothing is lost. Cold-killed wake is already the INCOMING_CALL VoIP push's
+  // job — that is the push the native handler reports from before JS boots, and
+  // it is what makes a terminated iPhone ring at all. Measured on Izzy's device,
+  // this pre-wake preceded the real push by 1ms, 1ms, 49ms, 90ms and 1000ms.
+  //
+  // Kept as dead-but-documented code behind one constant so it is one edit to
+  // restore, and the skip is logged so the cold-start wake can be measured.
+  // ⛔ Do NOT re-enable without first making both pushes derive the SAME CallKit
+  // identity — otherwise the duplicate call comes straight back.
+  const IOS_VOIP_PREWAKE_ENABLED = false;
   let voipWoken = 0;
-  if (input.toExtension && input.toExtension.trim() && isApnsVoipConfigured()) {
+  if (!IOS_VOIP_PREWAKE_ENABLED && input.toExtension && input.toExtension.trim() && isApnsVoipConfigured()) {
+    app.log.info(
+      { event: "prewake_voip_skipped_duplicate_callkit", linkedId: input.linkedId, tenantId, toExtension: input.toExtension.trim() },
+      "mobile-prewake: iOS VoIP pre-wake skipped (would create a duplicate CallKit call)",
+    );
+  }
+  if (IOS_VOIP_PREWAKE_ENABLED && input.toExtension && input.toExtension.trim() && isApnsVoipConfigured()) {
     try {
       const iosDevices = await db.mobileDevice.findMany({
         where: { tenantId, userId: { in: candidateUserIds }, active: true, platform: "IOS" } as any,
