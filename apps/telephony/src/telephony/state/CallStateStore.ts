@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { extractPbxTenantCodeFromCallFields } from "./pbxTenantMarker";
 import { childLogger } from "../../logging/logger";
 import { env } from "../../config/env";
 import type { NormalizedCall, CallState, CallDirection } from "../types";
@@ -280,6 +281,14 @@ export class CallStateStore extends EventEmitter {
    */
   setSlugToConnectIdResolver(resolver: (slug: string) => string | null): void {
     this.slugToConnectIdResolver = resolver;
+  }
+
+  /** Register the PBX-tenant-code→Connect-CUID resolver (e.g. "T102" → cuid).
+   *  Wired at startup from PbxTenantMapCache.resolveConnectTenant. This is the
+   *  authoritative path — see extractPbxTenantCodeFromCallFields. */
+  private tenantCodeToConnectIdResolver: ((tenantCode: string) => string | null) | null = null;
+  setTenantCodeToConnectIdResolver(resolver: (tenantCode: string) => string | null): void {
+    this.tenantCodeToConnectIdResolver = resolver;
   }
 
   // ── Read ────────────────────────────────────────────────────────────────────
@@ -1188,6 +1197,32 @@ export class CallStateStore extends EventEmitter {
     // `vpbx:<slug>` alias when we don't. This is critical so tenant-scoped WS
     // snapshots (which filter by strict CUID equality against the viewer's JWT
     // tenant) actually include these calls for regular users.
+    // ── Authoritative: the tenant marker the PBX stamps on the call ───────────
+    // This runs FIRST and is allowed to CORRECT a tenant already set from weaker
+    // evidence. The old code below is gated on `!call.tenantId`, i.e. the first
+    // leg to arrive won permanently and no later leg could fix it — so a call
+    // that opened on a shared or trunk leg kept the wrong company for its whole
+    // life. That is what mislabelled 116 calls into other tenants' history in a
+    // single week (~3% of matched calls: "how often a weak leg arrives first").
+    //
+    // Evidence beats arrival order. A `T<n>_` marker comes from Asterisk, cannot
+    // be forged upstream, and therefore overrides anything guessed earlier.
+    const pbxTenantCode = extractPbxTenantCodeFromCallFields(params.dcontext, (params as any).channel);
+    if (pbxTenantCode && this.tenantCodeToConnectIdResolver) {
+      const authoritative = this.tenantCodeToConnectIdResolver(pbxTenantCode);
+      if (authoritative && call.tenantId !== authoritative) {
+        if (call.tenantId) {
+          // Visible on purpose: every line here is a call that WOULD have been
+          // labelled with the wrong company under the old first-leg-wins rule.
+          console.warn(
+            "[TENANT_CORRECTED] call=%s was=%s now=%s marker=%s dcontext=%s",
+            call.linkedId, call.tenantId, authoritative, pbxTenantCode, params.dcontext ?? "",
+          );
+        }
+        call.tenantId = authoritative;
+      }
+    }
+
     if (!call.tenantId && (params.dcontext || params.accountCode)) {
       const resolved = resolveTenantFromCdrFields(params.dcontext, params.accountCode);
       if (resolved) {

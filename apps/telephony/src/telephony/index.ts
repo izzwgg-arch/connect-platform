@@ -60,6 +60,11 @@ export function createTelephonyModule(server: http.Server) {
   // alias. When the slug map hasn't warmed up yet, the `vpbx:` fallback still
   // applies and the downstream alias matcher below bridges the gap.
   callStore.setSlugToConnectIdResolver((slug) => pbxMapCache.resolveBySlug(slug));
+  // Authoritative tenant attribution: "T102" → Connect tenant CUID. See
+  // extractPbxTenantCodeFromCallFields — without this the call store cannot read
+  // the only unforgeable ownership marker on a call, which is how calls ended up
+  // labelled with the wrong company.
+  callStore.setTenantCodeToConnectIdResolver((tenantCode) => pbxMapCache.resolveConnectTenant({ tenantCode }));
 
   // Alias-aware matcher for snapshots + broadcasts. Lets a regular user whose
   // JWT carries a Connect CUID see calls/extensions tagged with an equivalent
