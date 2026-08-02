@@ -4650,6 +4650,54 @@ export function NotificationsProvider({
             // timer the moment the user answers.
             const startedAt = Date.now();
             const recheck = async () => {
+              // ⛔ ABANDON if the call has since been ANSWERED (Izzy 2026-08-02:
+              // stuck green pill / "lock-screen call still active after I hung
+              // up"). Proven from device diagnostics — twice in one session:
+              //   01:21:20.098 ANSWER_TAPPED ACCEPT
+              //   01:21:20.512 CALL_CONNECTED
+              //   01:21:21.386 ANSWER_TAPPED DECLINE   <-- 1.3s into a LIVE call
+              // The answered-check in onEnd runs at SCHEDULING time; widening
+              // the defer window to 12s let the timer outlive the answer, so it
+              // fired into a connected call. handleDeclineInvite is the wrong
+              // operation there — it sends a ring rejection (486) which cannot
+              // tear down a confirmed dialog, leaving CallKit showing an active
+              // call the user then has to hang up by hand.
+              //
+              // Re-evaluate the SAME condition onEnd uses, at FIRE time. A real
+              // hangup of a connected call already has its own path (the
+              // alreadyAnswered branch in onEnd -> endNativeCall + sip.hangup).
+              //
+              // `sip.callState` is captured from the render closure that
+              // registered these handlers, so it can be STALE by fire time —
+              // it cannot be the only signal. Ground truth is the module-scope
+              // SIP singleton: a session with a non-null `confirmedAtMs` has
+              // been ACK'd, i.e. the call is genuinely up. Refs are safe too
+              // (always current); only the closure value is not.
+              const answeredNow = () => {
+                const sipConfirmed = (() => {
+                  try {
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    const singleton = require("../sip/sipClientSingleton") as typeof import("../sip/sipClientSingleton");
+                    const client = singleton.peekSipClient() as any;
+                    if (!client || typeof client.listSessions !== "function") return false;
+                    return client
+                      .listSessions()
+                      .some((s: any) => !!s?.confirmedAtMs || s?.state === "connected");
+                  } catch {
+                    return false;
+                  }
+                })();
+                return (
+                  (!!acceptKey && consumedInviteActionRef.current.has(acceptKey)) ||
+                  lastCallStateRef.current === "connected" ||
+                  sipConfirmed
+                );
+              };
+              if (answeredNow()) {
+                pendingDeclineTimersRef.current.delete(callId);
+                console.log("[CALLKEEP_DECLINE] abandoned — call was answered while deferred");
+                return;
+              }
               const settledInvite = invite || (await resolveInviteForAction(callId).catch(() => null));
               const stackSettled = !!settledInvite;
               const waited = Date.now() - startedAt;
@@ -4659,6 +4707,13 @@ export function NotificationsProvider({
                 return;
               }
               pendingDeclineTimersRef.current.delete(callId);
+              // Re-check after the await above: resolveInviteForAction yields,
+              // and an answer landing inside that window would otherwise be
+              // declined into a live call (the exact stuck-green-pill bug).
+              if (answeredNow()) {
+                console.log("[CALLKEEP_DECLINE] abandoned at fire — answered during invite resolve");
+                return;
+              }
               if (!stackSettled) {
                 console.warn(
                   `[CALLKEEP_DECLINE] invite never resolved after ${waited}ms — declining so the ring cannot outlive the call`,

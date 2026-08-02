@@ -624,6 +624,19 @@ export function VoicemailTab() {
 
   const selectionMode = selectedIds.length > 0;
 
+  // Select-all operates on what the user can actually SEE (the filtered list),
+  // never the whole unfiltered set — selecting rows hidden behind a filter and
+  // then deleting them would destroy voicemails the user never looked at.
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every((vm) => selectedIds.includes(vm.id));
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) =>
+      filtered.length > 0 && filtered.every((vm) => prev.includes(vm.id))
+        ? []
+        : filtered.map((vm) => vm.id),
+    );
+  }, [filtered]);
+
   // Build a status listener bound to a specific voicemail. The audio engine is
   // the single source of truth: we flip to "playing" the instant the audio
   // actually starts, advance the fill to the real position on every tick, and
@@ -1173,21 +1186,65 @@ export function VoicemailTab() {
 
       {selectionMode && (
         <View style={styles.selectionBar}>
-          <Text style={styles.selectionText}>{selectedIds.length} selected</Text>
-          <TouchableOpacity style={styles.selectionButton} onPress={markSelectedRead} activeOpacity={0.8}>
-            <Ionicons name="checkmark-done-outline" size={16} color={VM.text} />
-            <Text style={styles.selectionButtonText}>Read</Text>
+          <View style={styles.selectionCountChip}>
+            <Text style={styles.selectionCountText}>{selectedIds.length}</Text>
+          </View>
+          <Text style={styles.selectionText}>selected</Text>
+
+          <TouchableOpacity
+            style={styles.selectionActionOutline}
+            onPress={toggleSelectAll}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={allVisibleSelected ? 'Deselect all' : 'Select all'}
+          >
+            <Ionicons
+              name={allVisibleSelected ? 'square-outline' : 'checkbox-outline'}
+              size={18}
+              color={VM.text2}
+            />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.selectionButton} onPress={markSelectedUnread} activeOpacity={0.8}>
-            <Ionicons name="mail-unread-outline" size={16} color={VM.text} />
-            <Text style={styles.selectionButtonText}>Unread</Text>
+
+          <TouchableOpacity
+            style={styles.selectionActionFilled}
+            onPress={markSelectedRead}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Mark selected as read"
+          >
+            <Ionicons name="mail-open-outline" size={18} color="#ffffff" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.selectionButton} onPress={deleteSelected} activeOpacity={0.8}>
-            <Ionicons name="trash-outline" size={16} color={VM.red} />
-            <Text style={[styles.selectionButtonText, { color: VM.red }]}>Delete</Text>
+
+          <TouchableOpacity
+            style={styles.selectionActionOutline}
+            onPress={markSelectedUnread}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Mark selected as unread"
+          >
+            <Ionicons name="mail-unread-outline" size={18} color={VM.text2} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.selectionIconButton} onPress={() => setSelectedIds([])} activeOpacity={0.8}>
-            <Ionicons name="close" size={18} color={VM.text2} />
+
+          <TouchableOpacity
+            style={styles.selectionActionDanger}
+            onPress={deleteSelected}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Delete selected"
+          >
+            <Ionicons name="trash-outline" size={18} color={VM.red} />
+          </TouchableOpacity>
+
+          <View style={styles.selectionDivider} />
+
+          <TouchableOpacity
+            style={styles.selectionActionGhost}
+            onPress={() => setSelectedIds([])}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel selection"
+          >
+            <Ionicons name="close" size={18} color={VM.text3} />
           </TouchableOpacity>
         </View>
       )}
@@ -2073,31 +2130,70 @@ function makeStyles(VM: VmPalette) {
   },
   selectionText: {
     flex: 1,
-    color: VM.text,
-    fontSize: 14,
-    fontWeight: '800',
+    color: VM.text2,
+    fontSize: 13,
+    fontWeight: '700',
   },
-  selectionButton: {
-    height: 34,
-    borderRadius: 15,
-    paddingHorizontal: spacing['3'],
+  // Count badge — carries the number so the label stays quiet and the row has
+  // one clear anchor instead of four competing solid pills.
+  selectionCountChip: {
+    minWidth: 26,
+    height: 26,
+    borderRadius: 13,
+    paddingHorizontal: spacing['1.5'],
     backgroundColor: VM.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing['1.5'],
-  },
-  selectionButtonText: {
-    color: VM.text,
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  selectionIconButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+  },
+  selectionCountText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  // One filled accent (the primary action), everything else recedes — the old
+  // bar painted all three actions solid blue, including Delete, which rendered
+  // red text on a blue pill and failed contrast outright in light mode.
+  selectionActionFilled: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: VM.primary,
+    borderWidth: 1,
+    borderColor: VM.primary,
+  },
+  selectionActionOutline: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: VM.border,
+  },
+  selectionActionDanger: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: VM.redSoft,
+    borderWidth: 1,
+    borderColor: VM.redSoft,
+  },
+  selectionActionGhost: {
+    width: 32,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionDivider: {
+    width: 1,
+    height: 22,
+    backgroundColor: VM.borderSoft,
+    marginHorizontal: spacing['0.5'],
   },
   list: {
     paddingHorizontal: spacing['5'],

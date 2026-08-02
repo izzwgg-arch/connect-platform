@@ -208,7 +208,33 @@ function notifyNativeInboundLeg(state: "gone" | "alive"): void {
  * notification and an ACTIVE phantom Telecom call. Both native calls are
  * idempotent, so running alongside SipContext's cleanup is harmless.
  */
-function nativeCallEndedCleanup(reason: string): void {
+function nativeCallEndedCleanup(reason: string, noLiveSessions?: () => boolean): void {
+  // ── iOS: tear down an orphaned CallKit call ───────────────────────────────
+  // (Izzy 2026-08-02: "that green pill on top is back. There is no active
+  // phone call." / "the lock-screen active call screen somehow also comes
+  // active. I have to hang it up separately.")
+  //
+  // This whole function was Android-only, so iOS had NO last-session-ended
+  // safety net: when the SIP session died without CallKit being told, the
+  // system call stayed up forever — green pill, live lock-screen call UI, and
+  // an AVAudioSession the OS still believes is in a call.
+  //
+  // Fires only when the LAST live session ended, and re-verifies liveness
+  // after a short settle so a back-to-back inbound call is never killed.
+  if (Platform.OS === "ios") {
+    setTimeout(() => {
+      try {
+        if (noLiveSessions && !noLiveSessions()) return; // a new call is up — leave it alone
+        console.log(`[CALLKIT_ORPHAN] no live SIP session after ${reason} — ending stale CallKit calls`);
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const ck = require("./callkeep") as typeof import("./callkeep");
+        ck.endAllNativeCalls();
+      } catch {
+        /* best effort */
+      }
+    }, 1200);
+    return;
+  }
   if (Platform.OS !== "android") return;
   try {
     const mod = (NativeModules as any)?.IncomingCallUi;
@@ -1734,7 +1760,7 @@ export class JsSipClient implements SipClient {
         // MODE_IN_COMMUNICATION forever and silenced all media playback
         // (live repro 2026-07-29: stuck TC@216, voicemails inaudible).
         if (this.sessionConfirmedAt.has(session) || !(session as any)._inboundRingLeg) {
-          nativeCallEndedCleanup("session_ended");
+          nativeCallEndedCleanup("session_ended", () => this.listSessions().length === 0);
         }
       }
       this.flushGhostRetryCallbacks("failed");
@@ -1834,7 +1860,7 @@ export class JsSipClient implements SipClient {
         // Outbound always cleans up — see the anchor-leak note there (a failed
         // outbound is exactly the busy/declined path that leaked TC@216).
         if (this.sessionConfirmedAt.has(session) || !(session as any)._inboundRingLeg) {
-          nativeCallEndedCleanup("session_failed");
+          nativeCallEndedCleanup("session_failed", () => this.listSessions().length === 0);
         }
       }
       this.events.onError?.(msg);
