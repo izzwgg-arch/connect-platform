@@ -1854,13 +1854,6 @@ export function ChatTab() {
             ]}
           />
 
-          <AddContactModal
-            visible={Boolean(addContactPrefill)}
-            prefill={addContactPrefill ?? undefined}
-            title="Add to Contacts"
-            onClose={() => setAddContactPrefill(null)}
-            onCreated={handleContactCreated}
-          />
         </View>
       ) : (
         <View style={styles.container}>
@@ -2004,6 +1997,24 @@ export function ChatTab() {
           />
         </View>
       )}
+
+      {/*
+        Outside the thread-list / open-chat branch on purpose (Izzy 2026-08-02:
+        "inside a chat I tap Add to Contacts and nothing comes up — it only
+        appears once I leave the chat"). It used to live inside the thread-list
+        branch, so with a chat open it was not rendered at all: the tap set the
+        prefill, no sheet existed to show it, and the sheet only appeared later
+        when closing the chat re-mounted that branch — arriving at exactly the
+        wrong moment. Rendered here it belongs to the screen, not to one half of
+        it, so it opens where it was asked for, in or out of a chat.
+      */}
+      <AddContactModal
+        visible={Boolean(addContactPrefill)}
+        prefill={addContactPrefill ?? undefined}
+        title="Add to Contacts"
+        onClose={() => setAddContactPrefill(null)}
+        onCreated={handleContactCreated}
+      />
 
       <NewChatModal
         visible={Boolean(newMode)}

@@ -202,6 +202,14 @@ export const mobileQueryKeys = {
     ["mobile", "voicemails", folder, voicemailQueryUserScope(token)] as const,
   teamDirectory: (scope: string) => ["mobile", "teamDirectory", scope] as const,
   contacts: (query = "") => ["mobile", "contacts", query] as const,
+  /**
+   * The signed-in user's own extension (their display name, number, etc).
+   * Shared by the dialer and Settings headers so the name is served from cache
+   * on every later visit instead of being refetched into an empty box — that
+   * refetch is what made both screens flash the "Connect User" placeholder for
+   * a second on every navigation (Izzy 2026-08-02).
+   */
+  voiceExtension: ["mobile", "voiceExtension"] as const,
   chatThreads: ["mobile", "chatThreads"] as const,
   chatMessages: (threadId: string) => ["mobile", "chatMessages", threadId] as const,
 };

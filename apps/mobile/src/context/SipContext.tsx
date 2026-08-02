@@ -994,9 +994,21 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     // (live failure 2026-07-28 08:36). Rebuild the legacy single-call state
     // and replay every live session into CallSessionManager.
     try {
+      // Re-verify liveness rather than trusting the state label alone. This
+      // path restores a call onto the screen, so it is exactly the kind of
+      // deferred action that must re-check its precondition at the moment it
+      // fires (the rule the iOS zombie-call fix was written around).
+      //
+      // `confirmedAtMs` is the wire truth: it is stamped when the call actually
+      // connected, so a session claiming "connected" without it never got
+      // there. Requiring it stops a finished call being rebuilt on screen —
+      // captioned "Unknown", because a torn-down session has no caller left on
+      // it (Izzy 2026-08-02: answered, hung up, left the app, came back to a
+      // call screen for a call that had already ended).
       const liveSessions = clientRef.current
         .listSessions()
-        .filter((s) => s.state === "connected" || s.state === "held" || s.isHeld);
+        .filter((s) => s.state === "connected" || s.state === "held" || s.isHeld)
+        .filter((s) => s.confirmedAtMs != null);
       if (liveSessions.length > 0) {
         const primary =
           liveSessions.find((s) => s.state === "connected" && !s.isHeld) ?? liveSessions[0];

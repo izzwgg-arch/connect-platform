@@ -258,7 +258,12 @@ export function KeypadTab() {
   const [redialFilled, setRedialFilled] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [recent, setRecent] = useState<CallRecord[]>([]);
-  const [voice, setVoice] = useState<VoiceExtension | null>(null);
+  // Seeded synchronously from the shared cache: the focus fetch below resolves
+  // a tick later at best, and starting from null is what made the header render
+  // the placeholder name for a frame on every visit.
+  const [voice, setVoice] = useState<VoiceExtension | null>(
+    () => queryClient.getQueryData<VoiceExtension>(mobileQueryKeys.voiceExtension) ?? null,
+  );
   const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
   // Selection encoding shared with the portal dialer:
   //   ''                        → primary line, no prefix
@@ -297,7 +302,14 @@ export function KeypadTab() {
           })
           .then((res) => { if (alive) setContacts(res.rows ?? []); })
           .catch(() => {});
-        getVoiceExtension(token)
+        // Through the shared cache, so returning to this tab shows the real
+        // name immediately instead of blanking to the placeholder first.
+        queryClient
+          .fetchQuery({
+            queryKey: mobileQueryKeys.voiceExtension,
+            queryFn: () => getVoiceExtension(token),
+            staleTime: 5 * 60 * 1000,
+          })
           .then((next) => { if (alive) setVoice(next); })
           .catch(() => {});
         getOutboundRoutes(token)
@@ -627,7 +639,9 @@ export function KeypadTab() {
     : registered
     ? 'Ready'
     : 'Not registered';
-  const userLabel = voice?.displayName?.trim() || 'Connect User';
+  // Empty (not "Connect User") until the real name is known — a wrong name that
+  // corrects itself a second later reads as a glitch; blank space does not.
+  const userLabel = voice?.displayName?.trim() || '';
 
   return (
     <View

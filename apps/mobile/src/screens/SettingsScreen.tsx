@@ -19,7 +19,8 @@ import { useIncomingNotifications, type CallReadiness } from '../context/Notific
 import { Avatar } from '../components/ui/Avatar';
 import { showAppAlert } from '../components/ui/appAlert';
 import { HeaderBar } from '../components/HeaderBar';
-import { getVoiceExtension } from '../api/client';
+import { useQueryClient } from '@tanstack/react-query';
+import { getVoiceExtension, mobileQueryKeys } from '../api/client';
 import {
   DEFAULT_MOBILE_RINGTONE_ID,
   getMobileIncomingRingtone,
@@ -170,8 +171,14 @@ export function SettingsScreen() {
   };
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
+  const queryClient = useQueryClient();
 
-  const [voice, setVoice] = useState<VoiceExtension | null>(null);
+  // Seeded synchronously from the shared cache — see KeypadTab: starting from
+  // null made this header show the placeholder name for a frame every time
+  // Settings was opened, then swap to the real one.
+  const [voice, setVoice] = useState<VoiceExtension | null>(
+    () => queryClient.getQueryData<VoiceExtension>(mobileQueryKeys.voiceExtension) ?? null,
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -179,10 +186,17 @@ export function SettingsScreen() {
       // rows are never stale (independent of auth).
       refreshDeviceReadiness().catch(() => {});
       if (!token) return;
-      getVoiceExtension(token).then(setVoice).catch(() => {});
+      queryClient
+        .fetchQuery({
+          queryKey: mobileQueryKeys.voiceExtension,
+          queryFn: () => getVoiceExtension(token),
+          staleTime: 5 * 60 * 1000,
+        })
+        .then(setVoice)
+        .catch(() => {});
       getMobileIncomingRingtone().then(setIncomingRingtoneId).catch(() => {});
       getQuickReplies().then(setQuickReplyDrafts).catch(() => {});
-    }, [token, refreshDeviceReadiness])
+    }, [queryClient, token, refreshDeviceReadiness])
   );
 
   const handleLogout = () => {
@@ -238,10 +252,13 @@ export function SettingsScreen() {
       >
         {/* Profile */}
         <View style={[styles.profileCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <Avatar name={voice?.displayName || 'Connect User'} size="xl" />
+          {/* Blank, not "Connect User", until the real name is known — the
+              placeholder flashing for a frame on every visit read as a bug.
+              Avatar renders a neutral person icon for an empty name. */}
+          <Avatar name={voice?.displayName || ''} size="xl" />
           <View style={styles.profileInfo}>
             <Text style={[typography.h2, { color: colors.text }]}>
-              {voice?.displayName || 'Connect User'}
+              {voice?.displayName || ''}
             </Text>
             {voice?.extensionNumber && (
               <Text style={[typography.body, { color: colors.textSecondary }]}>
