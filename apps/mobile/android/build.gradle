@@ -39,10 +39,35 @@ apply plugin: "com.facebook.react.rootproject"
 
 // NOTE (2026-07-31): CMake version is NOT pinned here on purpose. Setting it
 // from a `plugins.withId` hook fails with "It is too late to set version" —
-// AGP has already read the extension by then. AGP instead picks the HIGHEST
-// CMake installed in the SDK, so the fix is to install a newer one
-// (see docs/ai-context — 3.22.1 loops forever on expo-av's C++ under the SDK 54
-// toolchain: "manifest 'build.ninja' still dirty after 100 tries").
+// AGP has already read the extension by then. Use `cmake.dir` in
+// local.properties instead (AGP's supported override); AGP otherwise defaults
+// to 3.22.1, which loops forever on expo-av's C++ under the SDK 54 toolchain
+// ("manifest 'build.ninja' still dirty after 100 tries" — that loop was in fact
+// hiding a Windows MAX_PATH error, see below).
+
+// ── Windows MAX_PATH workaround for native (C++) modules ────────────────────
+// pnpm stores packages under names like
+//   node_modules/.pnpm/expo-av@16.0.8_expo@54.0.36_<32-char-hash>/node_modules/expo-av
+// and AGP then nests its prefab output under
+//   .cxx/RelWithDebInfo/<hash>/prefab/<abi>/prefab/lib/<triple>/cmake/ReactAndroid/
+// The result is 263 characters — past Windows' 260 limit — so every C++ module
+// fails with:
+//   ninja: error: rebuilding 'build.ninja': Stat(...): Filename longer than 260 characters
+// (CMake 3.22.1 never reported this; it just regenerated forever. CMake 3.31.6
+// surfaces it.) This is NOT caused by the repo's location: a checkout anywhere
+// with a normal-length path still exceeds the limit. It only started biting
+// with SDK 54, the first version whose modules actually compile C++ here.
+//
+// Redirect each native module's build output to a short path. Windows only —
+// macOS/Linux/EAS have no such limit and must keep the default location.
+// Done here rather than by patching node_modules so it survives `pnpm install`.
+// The fix lives in pnpm patches (patches/expo-av@*.patch,
+// patches/expo-modules-core@*.patch, patches/react-native-screens@*.patch), NOT
+// here. It CANNOT be done from this file: AGP reads buildStagingDirectory during
+// evaluation, so both a per-project afterEvaluate ("Cannot run
+// Project.afterEvaluate when the project is already evaluated") and a
+// gradle.projectsEvaluated hook ("It is too late to set buildStagingDirectory")
+// fail. Both were tried on 2026-07-31 — please don't try again.
 
 allprojects {
     repositories {
