@@ -3274,6 +3274,9 @@ async function sendPushToUserDevices(input: {
   // keep the Expo path bit-for-bit unchanged.
   const callCriticalTypes = new Set(["INCOMING_CALL", "INCOMING_CALL_WAKE", "INVITE_CANCELED", "INVITE_CLAIMED"]);
   let expoTargets = filtered;
+  // How many devices this call actually reached over direct FCM. Callers treat
+  // queued>0 as "a device was reached" — see the early return below.
+  let directServedCount = 0;
   if (callCriticalTypes.has(String(payloadType)) && isFcmDirectConfigured()) {
     const directTargets = filtered.filter((d) => (d as any).nativeFcmToken && d.platform === "ANDROID");
     if (directTargets.length > 0) {
@@ -3301,6 +3304,7 @@ async function sendPushToUserDevices(input: {
           }, "[CALL_WAKE] FCM_DIRECT_FAILED — falling back to Expo for this device");
         }
       }));
+      directServedCount = directTargets.length - failedIds.size;
       expoTargets = filtered.filter((d) => !(d as any).nativeFcmToken || d.platform !== "ANDROID" || failedIds.has(d.id));
     }
   }
@@ -3380,8 +3384,12 @@ async function sendPushToUserDevices(input: {
   );
 
   if (messages.length === 0) {
-    app.log.info({ event: "MOBILE_PUSH_AUDIT", stage: "expo_skipped_all_direct", tenantId: input.tenantId, userId: input.userId, payloadType }, "mobile_push_audit.all_devices_served_by_direct_fcm");
-    return;
+    app.log.info({ event: "MOBILE_PUSH_AUDIT", stage: "expo_skipped_all_direct", tenantId: input.tenantId, userId: input.userId, payloadType, directServedCount }, "mobile_push_audit.all_devices_served_by_direct_fcm");
+    // Report the direct deliveries. This used to `return;` (undefined), so every
+    // caller reading `res?.queued ?? 0` saw 0 whenever direct FCM served every
+    // device — /internal/mobile-prewake reported `woken: 0` on pushes that were
+    // in fact delivered to both devices (observed 2026-07-31).
+    return { queued: directServedCount, simulated: false };
   }
 
   app.log.info(
@@ -3676,7 +3684,7 @@ async function sendPushToUserDevices(input: {
     });
   }
 
-  return { queued: messages.length, simulated: false };
+  return { queued: messages.length + directServedCount, simulated: false };
 }
 
 function getRequestSourceIp(req: any): string {
@@ -5243,6 +5251,15 @@ async function runRelayUsageCheck(): Promise<void> {
           metadata: { attempts: t.attempts, relayCount: t.relayCount, ratio: t.ratio, windowMs: RELAY_USAGE_WINDOW_MS } as any,
         },
       }).catch((err) => app.log.error({ err: String((err as Error)?.message ?? err), tenantId: t.tenantId }, "relay_usage_alert_persist_failed"));
+      await sendAdminAlert(
+        `relay-usage-collapsed:${t.tenantId}`,
+        `TURN relay usage collapsed (tenant ${t.tenantId})`,
+        [
+          `Tenant: ${t.tenantId}`,
+          `${t.relayCount}/${t.attempts} calls used a relay (${Math.round(t.ratio * 100)}%) in the last ${Math.round(RELAY_USAGE_WINDOW_MS / 60000)}m.`,
+          `Likely no working TCP/TLS relay path for this tenant's clients.`,
+        ],
+      );
     }
   } catch (err) {
     app.log.error({ err: String((err as Error)?.message ?? err) }, "relay_usage_check_failed");
@@ -7212,6 +7229,84 @@ app.post("/admin/users/:id/role", async (req, reply) => {
   const updated = await db.user.update({ where: { id: target.id }, data: { role: input.role as any } });
   await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_ROLE_UPDATED", entityType: "User", entityId: updated.id, metadata: { role: input.role } });
   return { ok: true, user: { id: updated.id, email: updated.email, role: updated.role } };
+});
+
+// ── Per-user call-audio codec (Izzy 2026-08-01) ───────────────────────────────
+// "HD" = opus (today's default); "standard" = plain G.711/PCMU, the codec every
+// call used before 2026-07-28 and the one the owner remembers as flawless.
+// Opus is better on paper but compressed and far more sensitive to loss/jitter,
+// and the TURN relay currently sits in France while the PBX is in St. Louis —
+// so which one actually sounds better is an empirical, per-user question.
+//
+// Stored as `disableOpusSdp` in each of the user's mobile devices' featureFlags
+// (the same channel as standingRegistration). The app reads it per CALL, so a
+// change takes effect on the next call with no reinstall. Absent = HD = today.
+const codecModeFromFlags = (devices: Array<{ featureFlags?: unknown }>): "hd" | "standard" | "mixed" => {
+  const vals = devices.map((d) => ((d.featureFlags as any)?.disableOpusSdp === true));
+  if (vals.length === 0) return "hd";
+  if (vals.every((v) => v)) return "standard";
+  if (vals.every((v) => !v)) return "hd";
+  return "mixed";
+};
+
+app.get("/admin/users/:id/codec", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const user = await db.user.findFirst({
+    where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId },
+    select: { id: true },
+  });
+  if (!user) return reply.status(404).send({ error: "user_not_found" });
+  const devices = await db.mobileDevice.findMany({
+    where: { userId: id, active: true },
+    select: { id: true, platform: true, model: true, featureFlags: true } as any,
+  });
+  return {
+    ok: true,
+    mode: codecModeFromFlags(devices as any),
+    deviceCount: devices.length,
+    devices: (devices as any[]).map((d) => ({
+      id: d.id,
+      platform: d.platform,
+      model: d.model,
+      mode: (d.featureFlags as any)?.disableOpusSdp === true ? "standard" : "hd",
+    })),
+  };
+});
+
+app.post("/admin/users/:id/codec", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+  const { id } = req.params as { id: string };
+  const input = z.object({ mode: z.enum(["hd", "standard"]) }).parse(req.body || {});
+  const user = await db.user.findFirst({
+    where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId },
+    select: { id: true, tenantId: true },
+  });
+  if (!user) return reply.status(404).send({ error: "user_not_found" });
+
+  const devices = await db.mobileDevice.findMany({
+    where: { userId: id, active: true },
+    select: { id: true, featureFlags: true } as any,
+  });
+  const disable = input.mode === "standard";
+  for (const d of devices as any[]) {
+    const merged = { ...((d.featureFlags as any) ?? {}), disableOpusSdp: disable };
+    await (db.mobileDevice as any).update({ where: { id: d.id }, data: { featureFlags: merged } });
+  }
+
+  await audit({
+    tenantId: user.tenantId,
+    actorUserId: admin.sub,
+    action: "USER_CALL_CODEC_SET",
+    entityType: "User",
+    entityId: id,
+    metadata: { mode: input.mode, devices: devices.length },
+  });
+  app.log.info({ userId: id, mode: input.mode, devices: devices.length }, "[CODEC] per-user call codec set");
+
+  return { ok: true, mode: input.mode, deviceCount: devices.length };
 });
 
 app.post("/admin/users/:id/resend-invite", async (req, reply) => {
@@ -10018,6 +10113,13 @@ app.post("/voice/media-test/report", async (req, reply) => {
       metadata: details as any
     }
   }).catch(() => undefined);
+  if (!passed) {
+    await sendAdminAlert(
+      `media-test-failed:${user.tenantId}`,
+      `Media reliability test FAILED (tenant ${user.tenantId})`,
+      [`Tenant: ${user.tenantId}`, `Error: ${errorCode}`, `Detail: ${JSON.stringify(details).slice(0, 600)}`],
+    );
+  }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: passed ? "VOICE_MEDIA_TEST_PASSED" : "VOICE_MEDIA_TEST_FAILED", entityType: "MediaTestRun", entityId: run.id });
 
@@ -11738,6 +11840,13 @@ app.post("/voice/turn/validate/report", async (req, reply) => {
       metadata: { platform: input.platform || null, hasRelay: success, durationMs: input.durationMs || null, errorCode: success ? null : (input.errorCode || "NO_RELAY_CANDIDATE") } as any
     }
   }).catch(() => undefined);
+  if (!success) {
+    await sendAdminAlert(
+      `turn-validation-failed:${user.tenantId}`,
+      `TURN validation FAILED (tenant ${user.tenantId})`,
+      [`Tenant: ${user.tenantId}`, `Platform: ${input.platform || "?"}`, `Error: ${input.errorCode || "NO_RELAY_CANDIDATE"}`],
+    );
+  }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: success ? "VOICE_TURN_VALIDATED" : "VOICE_TURN_VALIDATION_FAILED", entityType: "TurnValidationJob", entityId: job.id });
 
@@ -14863,6 +14972,26 @@ app.post("/mobile/devices/register", async (req, reply) => {
       select: { featureFlags: true },
     }).catch(() => null);
     if (sibling?.featureFlags != null) inheritedFeatureFlags = sibling.featureFlags;
+  }
+  // Fallback: same physical hardware can come back with a DIFFERENT (or
+  // missing) deviceId after a factory reset / storage clear / some OEM
+  // reinstalls. Inherit from the user's newest same-model row so durable
+  // flags (keepAliveRequired, an explicit standingRegistration:false
+  // kill-switch) survive re-enrollment — observed 2026-07-30 on Luxure
+  // SM-X828U: fresh row lost the keep-alive latch its predecessor had earned.
+  if (inheritedFeatureFlags === undefined && input.model) {
+    const modelSibling = await (db.mobileDevice as any).findFirst({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        model: input.model,
+        platform: input.platform,
+        expoPushToken: { not: input.expoPushToken },
+      },
+      orderBy: { lastSeenAt: "desc" },
+      select: { featureFlags: true },
+    }).catch(() => null);
+    if (modelSibling?.featureFlags != null) inheritedFeatureFlags = modelSibling.featureFlags;
   }
 
   // Default for NEW Android device rows: standing registration ON. The
@@ -31117,7 +31246,17 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
     if (ownerUserId) candidateUserIds = [ownerUserId];
   }
 
-  if (candidateUserIds.length === 0) {
+  // Owner request 2026-07-31: ALWAYS also wake the tenant's other asleep
+  // devices, not just the dialled extension's owner. A call that is later
+  // transferred, picked up by a colleague, or rolls to a ring group then finds
+  // those phones already awake instead of starting the wake clock from zero at
+  // the moment it moves. Bounded by the 45s staleness gate (already-online
+  // phones are skipped entirely), the per-user 12s cooldown, and
+  // PREWAKE_MAX_USERS. The dialled extension's owner stays FIRST in the list so
+  // that if the cap ever truncates, the person actually being called is never
+  // the one dropped.
+  const PREWAKE_TENANT_WIDE = (process.env.PBX_PREWAKE_TENANT_WIDE ?? "1") === "1";
+  if (PREWAKE_TENANT_WIDE || candidateUserIds.length === 0) {
     // Tenant-wide: only users with an asleep device (stale lastSeenAt or never
     // seen). Already-online phones (fresh lastSeenAt) are intentionally skipped.
     // NOTE: do the stale-check in JS. Prisma's null-filter handling on
@@ -31133,12 +31272,13 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
       return [] as Array<{ userId: string | null; lastSeenAt: Date | null }>;
     });
     const staleMs = staleCutoff.getTime();
-    candidateUserIds = Array.from(new Set(
-      (tenantDevices as Array<{ userId: string | null; lastSeenAt: Date | null }>)
-        .filter((d) => !d.lastSeenAt || new Date(d.lastSeenAt).getTime() < staleMs)
-        .map((d) => d.userId)
-        .filter((u): u is string => typeof u === "string" && u.length > 0),
-    ));
+    const asleepUserIds = (tenantDevices as Array<{ userId: string | null; lastSeenAt: Date | null }>)
+      .filter((d) => !d.lastSeenAt || new Date(d.lastSeenAt).getTime() < staleMs)
+      .map((d) => d.userId)
+      .filter((u): u is string => typeof u === "string" && u.length > 0);
+    // Dedupe with the dialled extension's owner FIRST (Set preserves insertion
+    // order), so PREWAKE_MAX_USERS truncation can never drop the callee.
+    candidateUserIds = Array.from(new Set([...candidateUserIds, ...asleepUserIds]));
   }
 
   if (candidateUserIds.length === 0) {
@@ -34817,6 +34957,11 @@ app.post("/webhooks/sola-cardknox", { config: { rawBody: true } }, async (req, r
     });
     await db.tenant.update({ where: { id: sub.tenantId }, data: { smsSuspended: true, smsSuspendedReason: "BILLING_PAST_DUE", smsSuspendedAt: now } });
     await db.alert.create({ data: { tenantId: sub.tenantId, severity: "CRITICAL", category: "BILLING", message: "Subscription payment failed; tenant suspended.", metadata: { providerEventId: event.eventId } as any } });
+    await sendAdminAlert(
+      `billing-suspended:${sub.tenantId}`,
+      `CRITICAL: subscription payment failed — tenant suspended (${sub.tenantId})`,
+      [`Tenant: ${sub.tenantId}`, `Provider event: ${event.eventId}`, `The tenant has been suspended for non-payment.`],
+    );
     await audit({ tenantId: sub.tenantId, action: "SMS_TENANT_SUSPENDED", entityType: "Tenant", entityId: sub.tenantId });
   }
 

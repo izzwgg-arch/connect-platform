@@ -31,6 +31,7 @@ import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
 import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
+import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "../../api/src/fcmDirect";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { runNotificationReconcileCycle, runNotificationCanaryCycle } from "./notificationReconciler";
@@ -86,6 +87,57 @@ registerWhatsAppStatusWorker();
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
 const emailSyncQueue = new Queue("crm-email-sync", { connection: redis });
+
+// ── Admin alert email mirror ─────────────────────────────────────────────────
+// Every db.alert row the worker creates is also emailed to the operator inbox
+// (same recipient + EmailJob queue as the API's sendAdminAlert — the API's
+// email-job processor picks up rows this worker inserts). Owner decision
+// 2026-07-30: ALL alerts — device registration, PBX/voice diagnostics,
+// billing — go to ADMIN_ALERT_EMAIL. A per-key cooldown keeps a long outage
+// from flooding the inbox (the alert row is still created every cycle; only
+// the email is throttled).
+const ADMIN_ALERT_EMAIL = (process.env.ADMIN_ALERT_EMAIL || "tod10950@gmail.com").trim();
+const ADMIN_ALERT_TENANT_ID = "connect-admin-tenant-v1";
+const ADMIN_ALERT_EMAIL_COOLDOWN_MS = Math.max(5, Number(process.env.ADMIN_ALERT_EMAIL_COOLDOWN_MIN || 60)) * 60_000;
+const adminAlertEmailLastSentAt = new Map<string, number>();
+function escapeAlertHtml(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+async function queueAdminAlertEmail(key: string, subject: string, lines: string[]): Promise<void> {
+  try {
+    if (!ADMIN_ALERT_EMAIL) return;
+    const now = Date.now();
+    if (now - (adminAlertEmailLastSentAt.get(key) ?? 0) < ADMIN_ALERT_EMAIL_COOLDOWN_MS) return;
+    adminAlertEmailLastSentAt.set(key, now);
+    // Bound the cooldown map — keys are per endpoint/tenant and accumulate.
+    if (adminAlertEmailLastSentAt.size > 5000) {
+      for (const [k, ts] of adminAlertEmailLastSentAt) {
+        if (now - ts > ADMIN_ALERT_EMAIL_COOLDOWN_MS) adminAlertEmailLastSentAt.delete(k);
+      }
+    }
+    const textBody = lines.join("\n");
+    const htmlBody = `<div style="font-family:monospace;white-space:pre-wrap">${lines.map(escapeAlertHtml).join("<br/>")}</div>`;
+    // ADMIN_ALERT_TENANT_ID is the same synthetic tenant the API's admin
+    // alerts ride on; fall back to skipping (log only) if the row is missing
+    // so a FK failure can never break the alert cycle itself.
+    await db.emailJob.create({
+      data: {
+        tenantId: ADMIN_ALERT_TENANT_ID,
+        type: "ADMIN_ALERT",
+        toEmail: ADMIN_ALERT_EMAIL,
+        subject: `[Connect Alert] ${subject}`,
+        htmlBody,
+        textBody,
+        status: "QUEUED",
+        attempts: 0,
+        nextRunAt: new Date(),
+      },
+    });
+    console.log(`[ADMIN_ALERT] email queued key=${key} subject=${subject}`);
+  } catch (e: any) {
+    console.error(`[ADMIN_ALERT] email queue failed key=${key}: ${String(e?.message || e).slice(0, 200)}`);
+  }
+}
 
 const providerCache = new Map<string, { provider: SmsProvider; expiresAt: number }>();
 const providerCacheTtlMs = 60_000;
@@ -351,7 +403,14 @@ type WorkerMobilePushPayload =
   // Reconciler-sent user alerts — same shapes the API sends, so the app
   // handles fast-path and swept alerts identically.
   | { type: "voicemail"; inviteId?: string; voicemailId: string; tenantId: string; extensionId?: string | null; recipientUserId?: string; callerNameOrNumber?: string | null; timestamp: string }
-  | { type: "sms_message"; inviteId?: string; conversationId: string; messageId: string; phoneNumber: string; recipientUserId?: string; tenantId: string; preview?: string | null; timestamp: string };
+  | { type: "sms_message"; inviteId?: string; conversationId: string; messageId: string; phoneNumber: string; recipientUserId?: string; tenantId: string; preview?: string | null; timestamp: string }
+  // Caller-less re-register wake — same shape the API's /internal/mobile-prewake
+  // sends. The app re-registers SIP without showing any incoming-call UI
+  // (placeholder suppressed when caller info is absent). Sent by the device-
+  // registration watchdog to recover an endpoint that sits unregistered while
+  // its owner has an active device (the 2026-07-30 Luxure T5_101_1 outage sat
+  // 3h13m because nothing woke the frozen app until a real call arrived).
+  | { type: "INCOMING_CALL_WAKE"; inviteId?: string; pbxCallId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; pbxVitalTenantId?: string | null; timestamp: string; wakeRequestedAt: string };
 
 /**
  * iOS VoIP push fan-out for INCOMING_CALL only.
@@ -598,7 +657,11 @@ async function sendPushToUserDevices(input: {
   userId: string;
   payload: WorkerMobilePushPayload;
 }) {
-  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId } });
+  // `active: true` — parity with the api's buildMobileDevicePushWhere. Without
+  // it the worker pushed to deactivated rows too (the Luxure user reported
+  // queued=6 when only 2 devices were active, 2026-07-31): wasted sends to dead
+  // Expo tokens, and ghost rows that can skew "answered on another device".
+  const devices = await db.mobileDevice.findMany({ where: { tenantId: input.tenantId, userId: input.userId, active: true } });
   if (!devices.length) return { queued: 0, simulated: mobilePushSimulate };
 
   if (mobilePushSimulate) {
@@ -625,13 +688,75 @@ async function sendPushToUserDevices(input: {
   // All FCM data values MUST be strings (Firebase spec). Expo silently
   // promotes the push to a notification message if values fail to serialize,
   // so we stringify every field explicitly via buildExpoPushV2Item.
+  // ── Direct-FCM fast path for call-critical wakes (parity with apps/api) ────
+  // Until 2026-07-31 the worker had NO direct sender at all: every Android
+  // push it produced — real INCOMING_CALL rings, INVITE_CANCELED stop-ringing,
+  // and every registration-watchdog INCOMING_CALL_WAKE — went over the Expo
+  // relay (measured: 1,057 pushes in 24h, 100% relay), which aggressive OEMs
+  // deprioritize. Android devices that reported a native FCM token now get
+  // these straight from us; any failure falls back to Expo for that device, so
+  // devices without a token keep the relay path bit-for-bit unchanged.
+  const directServedIds = new Set<string>();
+  const callCriticalTypes = new Set(["INCOMING_CALL", "INCOMING_CALL_WAKE", "INVITE_CANCELED", "INVITE_CLAIMED"]);
+  if (callCriticalTypes.has(String(input.payload.type)) && isFcmDirectConfigured()) {
+    const directTargets = devices.filter(
+      (d: any) => d.nativeFcmToken && d.platform === "ANDROID",
+    );
+    if (directTargets.length > 0) {
+      const fcmData = buildFcmDataFromPayload(input.payload as unknown as Record<string, unknown>);
+      await Promise.all(
+        directTargets.map(async (d: any) => {
+          try {
+            await sendFcmDirectData(String((d as any).nativeFcmToken), fcmData);
+            directServedIds.add(d.id);
+            console.info(
+              JSON.stringify({
+                event: "MOBILE_PUSH_AUDIT",
+                stage: "FCM_DIRECT_DELIVERED",
+                source: "worker",
+                tenantId: input.tenantId,
+                userId: input.userId,
+                deviceId: d.id,
+                notificationType: input.payload.type,
+                model: (d as any).model ?? null,
+              }),
+            );
+            void db.mobileDevice
+              .update({
+                where: { id: d.id },
+                data: {
+                  lastPushSentAt: new Date(),
+                  lastPushType: String(input.payload.type),
+                  lastPushStatus: "fcm_direct_ok",
+                  lastPushError: null,
+                } as any,
+              })
+              .catch(() => undefined);
+          } catch (err: any) {
+            console.warn(
+              JSON.stringify({
+                event: "MOBILE_PUSH_AUDIT",
+                stage: "FCM_DIRECT_FAILED",
+                source: "worker",
+                tenantId: input.tenantId,
+                deviceId: d.id,
+                notificationType: input.payload.type,
+                error: String(err?.message || err).slice(0, 200),
+              }),
+            );
+          }
+        }),
+      );
+    }
+  }
+
   // ── Direct-APNs alert path for iOS user notifications ─────────────────────
   // Mirror of the api-side block (see apps/api sendPushToUserDevices): the
   // Expo relay's stored APNs push key is invalid (InvalidProviderToken 403 on
   // every iOS alert, found 2026-07-30), so iOS devices with a native APNs
   // alert token get user alerts straight from us with the working VoIP .p8.
   // Served devices drop out of the Expo fan-out; failures fall back to Expo.
-  let expoDevices = devices;
+  let expoDevices = devices.filter((d: any) => !directServedIds.has(d.id));
   if (EXPO_PUSH_USER_ALERT_TYPES.has(String(input.payload.type)) && isApnsAlertConfigured()) {
     const apnsTargets = devices.filter(
       (d) => (d as any).platform === "IOS" && (d as any).apnsAlertToken,
@@ -680,7 +805,10 @@ async function sendPushToUserDevices(input: {
           .catch(() => undefined);
         if (result.ok) servedIds.add(deviceId);
       }
-      expoDevices = devices.filter((d) => !servedIds.has(d.id));
+      // Filter from expoDevices (NOT devices) so the direct-FCM exclusions above
+      // survive — rebuilding from `devices` here would silently re-add every
+      // Android device already served over direct FCM.
+      expoDevices = expoDevices.filter((d: any) => !servedIds.has(d.id));
     }
   }
 
@@ -814,7 +942,11 @@ async function sendPushToUserDevices(input: {
     );
   }
 
-  return { queued: messages.length, simulated: false };
+  // Count direct-FCM deliveries too. Callers treat queued>0 as "a device was
+  // reached" (the watchdog and /internal/mobile-prewake both do) — counting only
+  // Expo messages reports 0 when every device was served directly, which is
+  // exactly the false negative seen on the api side on 2026-07-31.
+  return { queued: messages.length + directServedIds.size, simulated: false };
 }
 
 function normalizePbxCallState(v: string): "RINGING" | "ANSWERED" | "HANGUP" | "CANCELED" | "UNKNOWN" {
@@ -1303,6 +1435,16 @@ async function runVoiceDiagAlertCycle(): Promise<void> {
           entityId: tenantId
         }
       }).catch(() => undefined);
+      await queueAdminAlertEmail(
+        `voice-diag:${tenantId}:${alert.message}`,
+        `Voice diagnostics: ${alert.message}`,
+        [
+          `Tenant: ${tenantId}`,
+          `Severity: ${alert.severity}`,
+          `Alert: ${alert.message}`,
+          `Detail: ${JSON.stringify(alert.metadata)}`,
+        ],
+      );
     }
   }
 }
@@ -1318,6 +1460,10 @@ const DEVICE_REG_NOT_REGISTERED_ALERT_SEC = Number(
 );
 const DEVICE_REG_RECENT_DEVICE_MS = 24 * 60 * 60 * 1000;
 const DEVICE_REG_REALERT_MS = 30 * 60 * 1000;
+// Watchdog-initiated re-register wake pushes: at most one per endpoint per
+// cooldown while it stays down (the cycle runs every 60s).
+const DEVICE_REG_WAKE_COOLDOWN_MS = Math.max(60, Number(process.env.DEVICE_REG_WAKE_COOLDOWN_SEC || 300)) * 1000;
+const deviceRegWakeLastSentAt = new Map<string, number>();
 
 async function runDeviceRegistrationAlertCycle(): Promise<void> {
   const thresholdMs = DEVICE_REG_NOT_REGISTERED_ALERT_SEC * 1000;
@@ -1352,21 +1498,105 @@ async function runDeviceRegistrationAlertCycle(): Promise<void> {
         active: true,
         lastSeenAt: { gte: recentDeviceSince },
       },
-      select: { model: true, osVersion: true, lastSeenAt: true },
+      select: { id: true, userId: true, platform: true, model: true, osVersion: true, lastSeenAt: true, featureFlags: true },
     });
     if (!activeDevices.length) continue;
+
+    // ── Active recovery: wake the device so it re-registers ──────────────────
+    // Detection alone let the 2026-07-30 Luxure outage sit for 3h13m — the
+    // alert fired every minute while nothing re-registered the frozen app
+    // until a real call's wake push arrived (7s too late for that call). The
+    // same caller-less INCOMING_CALL_WAKE push the IVR prewake uses cold-boots
+    // the app from a dead process and triggers a SIP re-register, so send it
+    // from the watchdog too, rate-limited per endpoint.
+    const nowMs = Date.now();
+    if (nowMs - (deviceRegWakeLastSentAt.get(reg.endpoint) ?? 0) >= DEVICE_REG_WAKE_COOLDOWN_MS) {
+      deviceRegWakeLastSentAt.set(reg.endpoint, nowMs);
+      const wakeUserIds: string[] = Array.from(
+        new Set<string>(
+          activeDevices
+            .map((d: any) => d.userId)
+            .filter((u: any): u is string => typeof u === "string" && u.length > 0),
+        ),
+      );
+      const wakeRequestedAt = new Date().toISOString();
+      const pbxCallId = `watchdog-${reg.endpoint}-${nowMs}`;
+      for (const userId of wakeUserIds) {
+        try {
+          const res = await sendPushToUserDevices({
+            tenantId: reg.tenantId,
+            userId,
+            payload: {
+              type: "INCOMING_CALL_WAKE",
+              pbxCallId,
+              fromNumber: "",
+              fromDisplay: null,
+              toExtension: reg.extNumber ?? "",
+              tenantId: reg.tenantId,
+              pbxVitalTenantId: reg.pbxTenantNumber ?? null,
+              timestamp: wakeRequestedAt,
+              wakeRequestedAt,
+            },
+          });
+          await db.callWakeEvent.create({
+            data: {
+              tenantId: reg.tenantId,
+              pbxCallId,
+              userId,
+              extensionId: reg.extensionId,
+              stage: "WATCHDOG_REREGISTER_PUSH_QUEUED",
+              source: "worker",
+              details: { endpoint: reg.endpoint, status: reg.status, queued: res?.queued ?? 0 } as any,
+            },
+          }).catch(() => undefined);
+          console.log(
+            `[DEVICE_REG_WATCHDOG] re-register wake push queued endpoint=${reg.endpoint} user=${userId} queued=${res?.queued ?? 0}`,
+          );
+        } catch (err: any) {
+          console.error(
+            `[DEVICE_REG_WATCHDOG] wake push failed endpoint=${reg.endpoint}: ${String(err?.message || err).slice(0, 200)}`,
+          );
+        }
+      }
+    }
+
+    // ── Durable keep-alive requirement (survives reinstall/re-enrollment) ────
+    // The on-device adaptive-gate latch lives in AsyncStorage and dies with a
+    // reinstall; this server-side flag re-latches the gate on every register
+    // (applyServerFeatureFlags → forceKeepAliveNeeded). Merge, never clobber.
+    for (const dev of activeDevices) {
+      if (dev.platform !== "ANDROID") continue;
+      const flags = (dev.featureFlags && typeof dev.featureFlags === "object" ? dev.featureFlags : {}) as Record<string, unknown>;
+      if (flags.keepAliveRequired === true) continue;
+      await (db.mobileDevice as any).update({
+        where: { id: dev.id },
+        data: {
+          featureFlags: {
+            ...flags,
+            keepAliveRequired: true,
+            keepAliveRequiredReason: "device_registration_watchdog",
+            keepAliveRequiredAtMs: nowMs,
+          } as any,
+        },
+      }).catch(() => undefined);
+    }
 
     const notRegisteredForSec = Math.max(
       0,
       Math.round((Date.now() - new Date(reg.lastEventAt).getTime()) / 1000),
     );
-    const message = `Mobile device Not Registered at PBX: ${reg.endpoint} (${reg.status}) for ${notRegisteredForSec}s`;
+    // Message must be STABLE for the re-alert dedupe below to work: the old
+    // message embedded the growing seconds counter, so the findFirst never
+    // matched and a single outage created one alert row EVERY MINUTE
+    // (observed live 2026-07-30, Luxure T5_101_1 down 3h13m → ~190 rows).
+    // Duration lives in metadata instead.
+    const message = `Mobile device Not Registered at PBX: ${reg.endpoint} (${reg.status})`;
 
     const exists = await db.alert.findFirst({
       where: {
         tenantId: reg.tenantId,
         category: "DEVICE_REGISTRATION",
-        message,
+        message: { startsWith: `Mobile device Not Registered at PBX: ${reg.endpoint}` },
         createdAt: { gte: reAlertSince },
       },
     });
@@ -1401,6 +1631,27 @@ async function runDeviceRegistrationAlertCycle(): Promise<void> {
         entityId: reg.endpoint,
       },
     }).catch(() => undefined);
+
+    const tenantName = await db.tenant
+      .findUnique({ where: { id: reg.tenantId }, select: { name: true } })
+      .then((t) => t?.name || reg.tenantId)
+      .catch(() => reg.tenantId);
+    await queueAdminAlertEmail(
+      `device-registration:${reg.endpoint}`,
+      `Device not registered: ${reg.endpoint} (${tenantName})`,
+      [
+        `Tenant: ${tenantName}`,
+        `Endpoint: ${reg.endpoint} (ext ${reg.extNumber ?? "?"})`,
+        `Status: ${reg.status} for ${notRegisteredForSec}s`,
+        `Last registered: ${reg.lastRegisteredAt ? new Date(reg.lastRegisteredAt).toISOString() : "unknown"}`,
+        `Active device(s): ${activeDevices
+          .map((d: any) => `${d.model ?? "?"} (Android ${d.osVersion ?? "?"}, last seen ${new Date(d.lastSeenAt).toISOString()})`)
+          .join("; ")}`,
+        ``,
+        `Incoming calls to this extension will fail to ring the app until it re-registers.`,
+        `Dashboard: /admin/device-registration`,
+      ],
+    );
   }
 }
 
@@ -1515,6 +1766,15 @@ async function runMediaReliabilityMaintenanceCycle(): Promise<void> {
       }
     });
 
+    await queueAdminAlertEmail(
+      `media-gate:${tenant.id}`,
+      `Media reliability gate blocked: ${tenant.id}`,
+      [
+        `Tenant: ${tenant.id}`,
+        `Media test status: ${tenant.mediaTestStatus} (tested ${tenant.mediaTestedAt ? new Date(tenant.mediaTestedAt).toISOString() : "never"})`,
+        `Last error: ${tenant.mediaLastErrorCode || "none"}`,
+      ],
+    );
     await db.auditLog.create({
       data: {
         tenantId: tenant.id,
@@ -3455,6 +3715,16 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               metadata: { runId: run.id, paymentDate: schedule.paymentDate },
             },
           }).catch(() => null);
+          await queueAdminAlertEmail(
+            `billing-autopay-missing-invoice:${setting.tenantId}:${schedule.paymentDate}`,
+            `Autopay blocked — missing invoice (tenant ${setting.tenantId})`,
+            [
+              `Tenant: ${setting.tenantId}`,
+              `Autopay due date reached but no invoice exists for the billing period ending ${schedule.paymentDate}.`,
+              `Manual intervention required.`,
+              `Run: ${run.id}`,
+            ],
+          );
           results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "missing_invoice_on_due_date" });
           continue;
         }

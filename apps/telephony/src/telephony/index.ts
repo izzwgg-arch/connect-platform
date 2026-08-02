@@ -99,6 +99,9 @@ export function createTelephonyModule(server: http.Server) {
   const cdrNotifier = new CdrNotifier();
   // Mobile push notifier: fires an Expo push when an inbound call rings at an extension.
   const mobilePushNotifier = new MobilePushNotifier();
+  // Lets the notifier fire an on-ring contact-liveness probe over the AMI link
+  // we already hold. Inert unless PBX_CONTACT_QUALIFY_ON_RING=1.
+  mobilePushNotifier.setAmi(ami);
   callStore.on("callUpsert", (call) => {
     // Mobile push must run on every upsert so it can retry once the extension is resolved.
     mobilePushNotifier.notify(call);
