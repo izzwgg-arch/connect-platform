@@ -17135,13 +17135,26 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
     return { resource, rows: overrideRows };
   }
 
-  const cacheKey = `${user.tenantId}:${resource}`;
+  // Resolve WHOSE resources these are. This used to key off `user.tenantId` —
+  // the signed-in admin's own tenant — so a super-admin viewing a customer
+  // through the tenant switcher got their own (usually non-existent) PBX link
+  // and a 404. That is why the IVR Studio could never offer a queue: every
+  // tenant that has one is viewed this way. The extensions branch above already
+  // honours the query param; this path did not. The cache key has to move with
+  // it, or one customer's rows would be served to the next.
+  const qTenantRaw = String((req.query as any)?.tenantId || "").trim();
+  const scopedTenantId = qTenantRaw && isRole(user, ["SUPER_ADMIN"])
+    ? (qTenantRaw.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(qTenantRaw) : qTenantRaw)
+    : user.tenantId;
+  if (!scopedTenantId) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+
+  const cacheKey = `${scopedTenantId}:${resource}`;
   const cached = PBX_RESOURCE_CACHE.get(cacheKey);
   if (cached && Date.now() - cached.at < PBX_LIVE_TTL_RESOURCES) {
     return { resource, rows: cached.rows };
   }
 
-  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: scopedTenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
   const out = await vitalListByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, link.pbxTenantId || undefined);

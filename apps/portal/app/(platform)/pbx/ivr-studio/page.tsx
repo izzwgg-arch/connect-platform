@@ -205,12 +205,19 @@ export default function IvrStudioPage() {
         ...(q?.rows || []).map((x) => ({ number: String(x.number ?? x.queue_number ?? x.extension ?? ""), name: (x.name ?? x.description ?? null) as string | null, kind: "queue" as const })),
       ].filter((x) => x.number);
       setTeams(teamRows);
-      // Ring groups answer 200 + `skipReason` instead of an error when they
-      // can't be read, and queues 404 (which `safe` turns into null). Either
-      // way we did NOT learn whether this customer has teams.
+      // "A team" is a ring group OR a queue, so we only know this customer has
+      // none when BOTH lists were actually read. Ring groups answer 200 with a
+      // `skipReason` instead of an error when they can't be read; queues 404
+      // (which `safe` turns into null).
+      //
+      // Requiring both is not pedantry — Landau Home has zero ring groups and
+      // exactly one queue, and /voice/pbx/resources/queues answers 404
+      // PBX_LINK_NOT_FOUND for them even though ring groups resolve their
+      // VitalPBX tenant fine. Accepting one good source hid a team they really
+      // have. If we already found teams, the choice is offered regardless.
       const rgUnknown = rg === null || Boolean((rg as any)?.skipReason);
       const qUnknown = q === null;
-      setTeamsLoaded(!(rgUnknown && qUnknown) || teamRows.length > 0);
+      setTeamsLoaded((!rgUnknown && !qUnknown) || teamRows.length > 0);
       setPeopleLoaded(ext !== null);
 
       // Every menu's keys, so branches can be drawn without another round trip
