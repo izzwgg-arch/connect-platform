@@ -23165,22 +23165,37 @@ app.post("/voice/ivr/menus/build", async (req, reply) => {
       : null;
 
     if (d.hours || afterId) {
-      await tx.ivrScheduleConfig.upsert({
-        where: { tenantId },
-        create: {
-          tenantId,
-          timezone: d.hours?.timezone ?? "America/New_York",
-          businessHoursRules: d.hours?.rules ?? [],
-          defaultProfileId: mainId,
-          afterHoursProfileId: afterId,
-          isActive: true,
-        },
-        update: {
-          ...(d.hours ? { timezone: d.hours.timezone, businessHoursRules: d.hours.rules } : {}),
-          defaultProfileId: mainId,
-          ...(afterId ? { afterHoursProfileId: afterId } : {}),
-        },
-      });
+      const existing = await tx.ivrScheduleConfig.findUnique({ where: { tenantId } });
+      if (!existing) {
+        await tx.ivrScheduleConfig.create({
+          data: {
+            tenantId,
+            timezone: d.hours?.timezone ?? "America/New_York",
+            businessHoursRules: d.hours?.rules ?? [],
+            defaultProfileId: mainId,
+            afterHoursProfileId: afterId,
+            isActive: true,
+          },
+        });
+      } else {
+        // NEVER repoint a schedule that already chooses a menu. Building a new
+        // menu is not the same as saying "this is now the menu callers get" —
+        // that is a separate, deliberate decision made in the Studio.
+        //
+        // This bit me for real: a test build on A plus center silently
+        // replaced their opening hours with a single Mon 9-5 and repointed
+        // both open- and closed-hours menus at the test menus. Only the fact
+        // that their numbers were still routed to the PBX kept it off live
+        // calls. Hours are likewise only written when explicitly supplied.
+        await tx.ivrScheduleConfig.update({
+          where: { tenantId },
+          data: {
+            ...(d.hours ? { timezone: d.hours.timezone, businessHoursRules: d.hours.rules } : {}),
+            ...(existing.defaultProfileId ? {} : { defaultProfileId: mainId }),
+            ...(afterId && !existing.afterHoursProfileId ? { afterHoursProfileId: afterId } : {}),
+          },
+        });
+      }
     }
   });
 
