@@ -16,7 +16,12 @@ test("buildDestinationRef: extension uses tenant CoS context when derivable", ()
 test("buildDestinationRef: queue / ring_group / voicemail CEP shapes", () => {
   assert.equal(buildDestinationRef("queue", "900", "", {}), "ext-queues,900,1");
   assert.equal(buildDestinationRef("ring_group", "601", "", {}), "ext-group,601,1");
-  assert.equal(buildDestinationRef("voicemail", "101", "", {}), "ext-local,vmu101,1");
+  // Voicemail goes through VitalPBX's sub-extensions-vm, whose exten prefix
+  // picks the greeting (VM- default / VMB- busy / VMU- unavailable). The old
+  // `ext-local,vmu101,1` form was a FreePBX convention — grepping the live
+  // PBX on 2026-08-03 found NO [ext-local] context anywhere, so keys saved in
+  // that shape dropped the caller out of the dialplan.
+  assert.equal(buildDestinationRef("voicemail", "101", "", {}), "sub-extensions-vm,VM-101,1");
 });
 
 test("buildDestinationRef: terminate is fixed; external/ivr/announcement/custom pass through", () => {
@@ -30,6 +35,11 @@ test("parseDestinationRef round-trips the canonical shapes", () => {
   assert.deepEqual(parseDestinationRef("extension", "T21_cos-all,101,1"), { selected: "101", free: "" });
   assert.deepEqual(parseDestinationRef("extension", "from-internal,105,1"), { selected: "105", free: "" });
   assert.deepEqual(parseDestinationRef("queue", "ext-queues,900,1"), { selected: "900", free: "" });
+  assert.deepEqual(parseDestinationRef("voicemail", "sub-extensions-vm,VM-101,1"), { selected: "101", free: "" });
+  assert.deepEqual(parseDestinationRef("voicemail", "sub-extensions-vm,VMB-101,1"), { selected: "101", free: "" });
+  assert.deepEqual(parseDestinationRef("voicemail", "sub-extensions-vm,VMU-101,1"), { selected: "101", free: "" });
+  // Legacy dead form still parses, so the picker can show which mailbox was
+  // meant and re-saving the key repairs it.
   assert.deepEqual(parseDestinationRef("voicemail", "ext-local,vmu101,1"), { selected: "101", free: "" });
   assert.deepEqual(parseDestinationRef("external_number", "+18455551234"), { selected: "", free: "+18455551234" });
 });

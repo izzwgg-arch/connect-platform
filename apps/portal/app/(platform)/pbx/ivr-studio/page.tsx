@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
-import { apiGet, apiPost, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
 import {
   type DestinationType, DESTINATION_TYPES, DESTINATION_TYPE_LABELS,
   OPTION_DIGIT_ORDER, DIGIT_GLYPH, DIGIT_SUBLABEL,
@@ -30,6 +30,27 @@ interface OptionRow {
   destinationType: DestinationType; destinationRef: string; label: string | null; enabled: boolean;
 }
 interface PromptRow { id: string; promptRef: string; displayName: string; category: string; hasAudio?: boolean }
+interface ScheduleRow {
+  timezone: string;
+  businessHoursRules: Array<{ day: number; open: string; close: string }>;
+  holidayDates: string[];
+  defaultProfileId: string | null;
+  afterHoursProfileId: string | null;
+  holidayProfileId: string | null;
+  isActive: boolean;
+}
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+// Kept short on purpose — these are the zones Connect's tenants actually sit
+// in. A free-text zone would be a support ticket waiting to happen.
+const TIMEZONES = [
+  "America/New_York", "America/Chicago", "America/Denver", "America/Phoenix",
+  "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu",
+];
+const EMPTY_SCHEDULE: ScheduleRow = {
+  timezone: "America/New_York", businessHoursRules: [], holidayDates: [],
+  defaultProfileId: null, afterHoursProfileId: null, holidayProfileId: null, isActive: true,
+};
 
 // Inline SVG paths per destination type (24x24, stroke). Matches the mockup.
 const ICON: Record<DestinationType, string> = {
@@ -66,6 +87,7 @@ export default function IvrStudioPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null); // digit being edited
   const [recPickerFor, setRecPickerFor] = useState<null | "greeting">(null);
+  const [schedule, setSchedule] = useState<ScheduleRow | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const active = useMemo(() => profiles.find((p) => p.id === activeId) ?? null, [profiles, activeId]);
@@ -93,13 +115,17 @@ export default function IvrStudioPage() {
     if (!tenantId) return;
     setLoading(true); setError(null);
     try {
-      const [p, pr] = await Promise.all([
+      const [p, pr, sc] = await Promise.all([
         apiGet<{ profiles: RouteProfile[] }>(`/voice/ivr/route-profiles${qs}`),
         apiGet<{ prompts: PromptRow[] }>(`/voice/ivr/prompts${qs}`),
+        // A tenant with no hours set yet is normal, not an error — the card
+        // renders in its "always open" state and saving creates the row.
+        apiGet<{ schedule: ScheduleRow | null }>(`/voice/ivr/schedule${qs}`).catch(() => ({ schedule: null })),
       ]);
       const list = p.profiles || [];
       setProfiles(list);
       setPrompts(pr.prompts || []);
+      setSchedule(sc.schedule ? { ...EMPTY_SCHEDULE, ...sc.schedule } : null);
       setActiveId((cur) => cur && list.some((x) => x.id === cur) ? cur : (list.find((x) => x.isActive)?.id ?? list[0]?.id ?? null));
     } catch (e: any) {
       setError(e?.message || "Couldn't load IVR menus");
@@ -182,6 +208,44 @@ export default function IvrStudioPage() {
     } catch (e: any) { setError(e?.message || "Couldn't clear that key"); } finally { setSaving(false); }
   }
 
+  // Create a menu. `type` matters: "after_hours" is the menu the hours card
+  // plays when the tenant is closed, so creating one here is what makes the
+  // after-hours picker useful.
+  async function createProfile(type: "business_hours" | "after_hours") {
+    if (!tenantId) return;
+    const suggested = type === "after_hours" ? "After hours" : "New menu";
+    const name = (typeof window !== "undefined" ? window.prompt("Name this menu", suggested) : suggested)?.trim();
+    if (!name) return;
+    setSaving(true);
+    try {
+      const r = await apiPost<{ profile: RouteProfile }>(`/voice/ivr/route-profiles${qs}`, { tenantId, name, type });
+      setProfiles((ps) => [...ps, r.profile]);
+      setActiveId(r.profile.id);
+      setSelected(null);
+      setDirty(true);
+      flash(`"${name}" created`);
+      // A brand-new after-hours menu is only useful once the hours card knows
+      // about it — wire it up straight away rather than making that a second,
+      // easily-forgotten step.
+      if (type === "after_hours") {
+        const next = { ...(schedule ?? EMPTY_SCHEDULE), afterHoursProfileId: r.profile.id };
+        setSchedule(next);
+        await saveSchedule(next);
+      }
+    } catch (e: any) { setError(e?.message || "Couldn't create that menu"); } finally { setSaving(false); }
+  }
+
+  async function saveSchedule(next: ScheduleRow) {
+    if (!tenantId) return;
+    setSaving(true);
+    try {
+      await apiPut(`/voice/ivr/schedule`, { ...next, tenantId });
+      setSchedule(next);
+      setDirty(true);
+      flash("Hours saved");
+    } catch (e: any) { setError(e?.message || "Couldn't save the hours"); } finally { setSaving(false); }
+  }
+
   async function publish() {
     if (!active) return;
     setSaving(true);
@@ -224,8 +288,11 @@ export default function IvrStudioPage() {
           <div className="name-edit">
             <select className="name-select" value={activeId ?? ""} onChange={(e) => { setSelected(null); setActiveId(e.target.value || null); }}>
               {profiles.length === 0 && <option value="">No menus yet</option>}
-              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.type === "after_hours" ? " · after hours" : ""}</option>)}
             </select>
+            <button className="btn ghost" disabled={!canManage || saving} onClick={() => createProfile("business_hours")} title="Create another menu">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 5v14M5 12h14" /></svg>Add menu
+            </button>
           </div>
           <p>Build the menu callers hear, key by key. Everything here goes live the moment you publish — no rebuilds, no downtime.</p>
         </div>
@@ -372,6 +439,15 @@ export default function IvrStudioPage() {
               </div>
             </div>
           </div>
+
+          {/* opening hours + after-hours menu */}
+          <HoursCard
+            schedule={schedule}
+            profiles={profiles}
+            disabled={!canManage || saving}
+            onSave={saveSchedule}
+            onCreateAfterHours={() => createProfile("after_hours")}
+          />
         </div>
 
         {/* RIGHT: live flow + recordings */}
@@ -418,6 +494,144 @@ export default function IvrStudioPage() {
       </div>
 
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+// ── opening hours + after-hours menu ─────────────────────────────────────────
+// Connect's schedule model holds ONE open/close window per weekday
+// (computeCurrentMode does rules.find(r => r.day === dow)), so this editor
+// deliberately offers one window per day rather than pretending split shifts
+// work and quietly ignoring the second one.
+function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }: {
+  schedule: ScheduleRow | null;
+  profiles: RouteProfile[];
+  disabled?: boolean;
+  onSave: (next: ScheduleRow) => void;
+  onCreateAfterHours: () => void;
+}) {
+  const [draft, setDraft] = useState<ScheduleRow>(schedule ?? EMPTY_SCHEDULE);
+  const [newHoliday, setNewHoliday] = useState("");
+  const savedJson = useRef<string>(JSON.stringify(schedule ?? EMPTY_SCHEDULE));
+
+  // Re-seed when the tenant's schedule finishes loading (or the tenant
+  // changes), but never clobber edits the operator is midway through.
+  useEffect(() => {
+    const incoming = JSON.stringify(schedule ?? EMPTY_SCHEDULE);
+    if (incoming !== savedJson.current) {
+      savedJson.current = incoming;
+      setDraft(schedule ?? EMPTY_SCHEDULE);
+    }
+  }, [schedule]);
+
+  const changed = JSON.stringify(draft) !== savedJson.current;
+  const ruleFor = (day: number) => draft.businessHoursRules.find((r) => r.day === day) ?? null;
+
+  const setDay = (day: number, open: string | null, close?: string) => {
+    setDraft((d) => {
+      const rest = d.businessHoursRules.filter((r) => r.day !== day);
+      if (open === null) return { ...d, businessHoursRules: rest.sort((a, b) => a.day - b.day) };
+      const existing = d.businessHoursRules.find((r) => r.day === day);
+      const next = { day, open, close: close ?? existing?.close ?? "17:00" };
+      return { ...d, businessHoursRules: [...rest, next].sort((a, b) => a.day - b.day) };
+    });
+  };
+
+  const openCount = draft.businessHoursRules.length;
+
+  return (
+    <div className="card">
+      <div className="card-h">
+        <div className="ix"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></div>
+        <div><h2>Opening hours</h2><div className="sub">When to play this menu, and what to play when you&apos;re closed</div></div>
+        <div style={{ marginLeft: "auto" }} className="pill-mini">{openCount === 0 ? "no hours set" : `open ${openCount} day${openCount === 1 ? "" : "s"}`}</div>
+      </div>
+      <div className="card-b">
+        {openCount === 0 && (
+          <div className="kp-help" style={{ marginBottom: 14 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="M12 8h.01M11 12h1v4h1" /></svg>
+            No opening hours yet — every caller gets the after-hours menu, around the clock. Tick the days you&apos;re open below.
+          </div>
+        )}
+
+        <div className="rowmini" style={{ marginBottom: 14 }}>
+          <div className="field" style={{ flex: 1 }}>
+            <label>Time zone</label>
+            <select className="sel" disabled={disabled} value={draft.timezone} onChange={(e) => setDraft((d) => ({ ...d, timezone: e.target.value }))}>
+              {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz.split("/")[1].replace(/_/g, " ")}</option>)}
+              {!TIMEZONES.includes(draft.timezone) && <option value={draft.timezone}>{draft.timezone}</option>}
+            </select>
+          </div>
+        </div>
+
+        <div className="days">
+          {DAY_NAMES.map((name, day) => {
+            const rule = ruleFor(day);
+            return (
+              <div key={day} className={"dayrow" + (rule ? "" : " closed")}>
+                <label className="daytoggle">
+                  <input type="checkbox" disabled={disabled} checked={!!rule}
+                    onChange={(e) => setDay(day, e.target.checked ? "09:00" : null, e.target.checked ? "17:00" : undefined)} />
+                  <span>{name}</span>
+                </label>
+                {rule ? (
+                  <div className="daytimes">
+                    <input className="inp time" type="time" disabled={disabled} value={rule.open} onChange={(e) => setDay(day, e.target.value, rule.close)} />
+                    <span className="to">to</span>
+                    <input className="inp time" type="time" disabled={disabled} value={rule.close} onChange={(e) => setDay(day, rule.open, e.target.value)} />
+                  </div>
+                ) : <div className="daytimes closedtxt">Closed all day</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="fb" style={{ marginTop: 16 }}>
+          <div className="fbx">
+            <h3><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="m9 12 2 2 4-4" /></svg>While you&apos;re open</h3>
+            <p>The menu callers hear during the hours above.</p>
+            <select className="sel" disabled={disabled} value={draft.defaultProfileId ?? ""} onChange={(e) => setDraft((d) => ({ ...d, defaultProfileId: e.target.value || null }))}>
+              <option value="">Choose a menu…</option>
+              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="fbx">
+            <h3><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth={2}><path d="M12 3a9 9 0 1 0 9 9" /><path d="M12 7v5l3 2" /></svg>When you&apos;re closed</h3>
+            <p>The menu callers hear outside those hours.</p>
+            <select className="sel" disabled={disabled} value={draft.afterHoursProfileId ?? ""} onChange={(e) => setDraft((d) => ({ ...d, afterHoursProfileId: e.target.value || null }))}>
+              <option value="">Choose a menu…</option>
+              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {!profiles.some((p) => p.type === "after_hours") && (
+              <button className="btn ghost" style={{ marginTop: 9 }} disabled={disabled} onClick={onCreateAfterHours}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 5v14M5 12h14" /></svg>Add an after-hours menu
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="field" style={{ marginTop: 14 }}>
+          <label>Days you&apos;re closed all day (holidays)</label>
+          <div className="holidays">
+            {draft.holidayDates.length === 0 && <span className="emptxt">None yet</span>}
+            {draft.holidayDates.map((d) => (
+              <span key={d} className="hchip">{d}
+                <button disabled={disabled} onClick={() => setDraft((s) => ({ ...s, holidayDates: s.holidayDates.filter((x) => x !== d) }))} aria-label={`Remove ${d}`}>×</button>
+              </span>
+            ))}
+          </div>
+          <div className="rowmini" style={{ marginTop: 8 }}>
+            <input className="inp" type="date" disabled={disabled} value={newHoliday} onChange={(e) => setNewHoliday(e.target.value)} />
+            <button className="btn ghost" disabled={disabled || !newHoliday || draft.holidayDates.includes(newHoliday)}
+              onClick={() => { setDraft((s) => ({ ...s, holidayDates: [...s.holidayDates, newHoliday].sort() })); setNewHoliday(""); }}>Add</button>
+          </div>
+        </div>
+
+        <div className="foot">
+          {changed && <span className="pill-mini" style={{ alignSelf: "center", marginRight: "auto" }}>Not saved yet</span>}
+          <button className="btn primary" disabled={disabled || !changed} onClick={() => onSave(draft)}>Save hours</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -642,6 +856,20 @@ function StudioStyles() {
       .ivrs .type svg{width:18px;height:18px}
       .ivrs .foot{display:flex;gap:10px;justify-content:flex-end;margin-top:15px}
       .ivrs .hint{font-size:12px;margin-top:8px}.ivrs .hint.err{color:var(--danger)}
+      .ivrs .days{display:flex;flex-direction:column;gap:7px}
+      .ivrs .dayrow{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:8px 12px}
+      .ivrs .dayrow.closed{border-style:dashed}
+      .ivrs .daytoggle{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;min-width:118px;cursor:pointer}
+      .ivrs .daytoggle input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+      .ivrs .dayrow.closed .daytoggle{color:var(--dim);font-weight:500}
+      .ivrs .daytimes{display:flex;align-items:center;gap:9px;font-size:13px}
+      .ivrs .daytimes .to{color:var(--dim);font-size:12px}
+      .ivrs .daytimes.closedtxt{color:var(--dim);font-size:12.5px}
+      .ivrs .inp.time{width:auto;padding:6px 9px}
+      .ivrs .holidays{display:flex;flex-wrap:wrap;gap:7px;align-items:center;min-height:24px}
+      .ivrs .hchip{display:inline-flex;align-items:center;gap:7px;font-size:12px;background:var(--bg-soft);border:1px solid var(--border);border-radius:999px;padding:4px 6px 4px 11px}
+      .ivrs .hchip button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:15px;line-height:1;padding:0 4px}
+      .ivrs .hchip button:hover{color:var(--danger)}
       .ivrs .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);color:var(--text);padding:11px 18px;border-radius:12px;box-shadow:var(--shadow);font-size:13.5px;font-weight:600;z-index:60}
     `}</style>
   );

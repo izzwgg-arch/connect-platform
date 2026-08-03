@@ -3330,6 +3330,14 @@ model IvrRouteProfile {
   invalidDestinationRef  String? // CEP or E.164; consumed after max_retries on invalid digits
   timeoutDestinationType String? // same module enum as invalid
   timeoutDestinationRef  String? // CEP or E.164; consumed after max_retries on timeouts
+  // ── Migration provenance (IVR takeover) ──
+  // Set when this profile was copied from an existing VitalPBX menu rather
+  // than built from scratch. It is what makes "Copy from PBX" idempotent
+  // (re-running updates the same profile instead of creating a duplicate) and
+  // what lets other menus point AT this profile once it exists, instead of
+  // handing the caller back to the PBX. Null = hand-built in the Studio.
+  pbxSourceIvrId         Int? // VitalPBX ombu_ivrs.ivr_id
+  pbxSourceImportedAt    DateTime?
   isActive               Boolean  @default(true)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -3346,6 +3354,9 @@ model IvrRouteProfile {
   @@index([tenantId])
   @@index([tenantId, type])
   @@index([tenantId, isActive])
+  // One Connect profile per source menu per tenant, so a repeated "Copy from
+  // PBX" updates in place instead of quietly stacking up duplicate menus.
+  @@unique([tenantId, pbxSourceIvrId])
 }
 
 /// Per-digit option routing for a tenant's IVR profile.

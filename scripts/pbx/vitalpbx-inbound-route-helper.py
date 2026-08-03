@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.07.28.5"
+VERSION = "2026.08.03.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2329,6 +2329,259 @@ def tenant_catalog(body):
         ]
     return out
 
+# ── IVR migration mapping ── READ-ONLY. Produces the complete call-flow graph
+# for a tenant (or every tenant) so Connect can rebuild an existing VitalPBX
+# menu inside the IVR Studio without anyone retyping it.
+#
+# `tenant_catalog` above is deliberately NOT reused: it is the agent's
+# name→id resolver and returns only the fields the agent grounds on. A
+# migration needs the parts it omits — the retry/timeout/invalid prompt ids
+# and their fall-through destinations, the time-condition match/mismatch
+# branches, the weekly schedule strings behind each time group, and the
+# on-disk path of every recording. Widening tenant_catalog to carry all of
+# that would change the payload the agent already depends on, so this is a
+# separate read.
+#
+# Recording files: VitalPBX stores each recording at
+#   /var/lib/vitalpbx/static/<tenant.path>/recordings/<md5(recording_id)>
+# with NO extension (Asterisk picks the format). Verified live 2026-08-03
+# against tenant 2's generated dialplan:
+#   BackGround(/var/lib/vitalpbx/static/f3df739ac62197cd/recordings/
+#              c81e728d9d4c2f636f067f89cc14862c)   # md5("2"), welcome_msg_id=2
+# The path is reported, never opened — the caller decides what to do with it.
+
+def _rec_static_path(tenant_path, recording_id):
+    """On-disk path of a VitalPBX recording. Returns None when unknowable."""
+    if not tenant_path or recording_id in (None, "", 0, "0"):
+        return None
+    digest = hashlib.md5(str(int(recording_id)).encode("utf-8")).hexdigest()
+    return "%s/%s/recordings/%s" % (str(CFG.static_dir).rstrip("/"), tenant_path, digest)
+
+def _nullable_int(value):
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+def _flow_map_for_tenant(conn, tenant_row):
+    tenant_id = int(tenant_row["tenant_id"])
+    tenant_path = str(tenant_row.get("path") or "").strip()
+    out = {
+        "tenantId": tenant_id,
+        "tenantSlug": str(tenant_row.get("name") or ""),
+        "tenantName": str(tenant_row.get("description") or tenant_row.get("name") or ""),
+        "enabled": str(tenant_row.get("enabled") or "yes") == "yes",
+    }
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT recording_id, name, original_filename, duration FROM ombu_recordings WHERE tenant_id = %s ORDER BY recording_id",
+            (tenant_id,),
+        )
+        recordings = [
+            {
+                "id": int(r["recording_id"]),
+                "name": str(r["name"] or ""),
+                "originalFilename": str(r["original_filename"] or ""),
+                "durationSec": int(r["duration"] or 0),
+                "staticPath": _rec_static_path(tenant_path, r["recording_id"]),
+            }
+            for r in cur.fetchall()
+        ]
+        rec_by_id = {r["id"]: r for r in recordings}
+
+        def rec_ref(recording_id):
+            rid = _nullable_int(recording_id)
+            if rid is None:
+                return None
+            row = rec_by_id.get(rid)
+            return {
+                "id": rid,
+                "name": row["name"] if row else None,
+                "staticPath": row["staticPath"] if row else _rec_static_path(tenant_path, rid),
+                "durationSec": row["durationSec"] if row else None,
+                "known": row is not None,
+            }
+
+        cur.execute(
+            """
+            SELECT ivr_id, description, welcome_msg_id, instructions_msg_id, freedial,
+                   invalid_tries, invalid_retry_msg_id, invalid_destination_id, invalid_msg_id,
+                   timeout, timeout_msg_id, timeout_retry_msg_id, timeout_destination_id, timeout_tries
+            FROM ombu_ivrs WHERE tenant_id = %s ORDER BY ivr_id
+            """,
+            (tenant_id,),
+        )
+        ivr_rows = cur.fetchall()
+
+        cur.execute(
+            "SELECT id, ivr_id, `option`, destination_id, enabled, sort FROM ombu_ivr_entries "
+            "WHERE ivr_id IN (SELECT ivr_id FROM ombu_ivrs WHERE tenant_id = %s) ORDER BY ivr_id, sort",
+            (tenant_id,),
+        )
+        entries_by_ivr = {}
+        for r in cur.fetchall():
+            entries_by_ivr.setdefault(int(r["ivr_id"]), []).append(r)
+
+        cur.execute(
+            """
+            SELECT time_condition_id, code, description, time_group_id, timezone, status,
+                   match_destination_id, mismatch_destination_id
+            FROM ombu_time_conditions WHERE tenant_id = %s ORDER BY time_condition_id
+            """,
+            (tenant_id,),
+        )
+        tc_rows = cur.fetchall()
+
+        cur.execute("SELECT time_group_id, description FROM ombu_time_groups WHERE tenant_id = %s ORDER BY time_group_id", (tenant_id,))
+        tg_rows = cur.fetchall()
+        cur.execute(
+            "SELECT time_group_id, `time`, sort FROM ombu_time_groups_schedules "
+            "WHERE time_group_id IN (SELECT time_group_id FROM ombu_time_groups WHERE tenant_id = %s) ORDER BY time_group_id, sort",
+            (tenant_id,),
+        )
+        sched_by_group = {}
+        for r in cur.fetchall():
+            sched_by_group.setdefault(int(r["time_group_id"]), []).append(str(r["time"] or ""))
+
+        cur.execute(
+            "SELECT inbound_route_id, did, description, destination_id FROM ombu_inbound_routes "
+            "WHERE tenant_id = %s AND did IS NOT NULL AND did != '' ORDER BY did",
+            (tenant_id,),
+        )
+        route_rows = cur.fetchall()
+
+        # Directory: row-id → dialable number. _decode_destination reports the
+        # ROW id (extension_id / queue_id / ring_group_id), but a Connect
+        # destination ref needs the NUMBER you would dial. Its `label` happens
+        # to start with that number today, but parsing a display string to
+        # build live call routing is exactly the kind of guess that silently
+        # misroutes calls, so resolve it properly here.
+        cur.execute("SELECT extension_id, extension, name FROM ombu_extensions WHERE tenant_id = %s ORDER BY extension", (tenant_id,))
+        directory_extensions = [
+            {"id": int(r["extension_id"]), "number": str(r["extension"]), "name": str(r["name"] or "")}
+            for r in cur.fetchall()
+        ]
+        cur.execute("SELECT queue_id, extension, description FROM ombu_queues WHERE tenant_id = %s ORDER BY extension", (tenant_id,))
+        directory_queues = [
+            {"id": int(r["queue_id"]), "number": str(r["extension"]), "name": str(r["description"] or "")}
+            for r in cur.fetchall()
+        ]
+        cur.execute("SELECT ring_group_id, extension, description FROM ombu_ring_groups WHERE tenant_id = %s ORDER BY extension", (tenant_id,))
+        directory_ring_groups = [
+            {"id": int(r["ring_group_id"]), "number": str(r["extension"]), "name": str(r["description"] or "")}
+            for r in cur.fetchall()
+        ]
+        cur.execute(
+            "SELECT custom_application_id, extension, description FROM ombu_custom_applications WHERE tenant_id = %s ORDER BY extension",
+            (tenant_id,),
+        )
+        directory_custom_apps = [
+            {"id": int(r["custom_application_id"]), "number": str(r["extension"]), "name": str(r["description"] or "")}
+            for r in cur.fetchall()
+        ]
+
+    out["directory"] = {
+        "extensions": directory_extensions,
+        "queues": directory_queues,
+        "ringGroups": directory_ring_groups,
+        "customApplications": directory_custom_apps,
+    }
+    out["recordings"] = recordings
+    out["ivrs"] = [
+        {
+            "id": int(v["ivr_id"]),
+            "description": str(v["description"] or ""),
+            "directDialEnabled": str(v["freedial"] or "no") == "yes",
+            "welcome": rec_ref(v["welcome_msg_id"]),
+            "instructions": rec_ref(v["instructions_msg_id"]),
+            "timeoutSec": _nullable_int(v["timeout"]),
+            "timeoutTries": _nullable_int(v["timeout_tries"]),
+            "timeoutPrompt": rec_ref(v["timeout_msg_id"]),
+            "timeoutRetryPrompt": rec_ref(v["timeout_retry_msg_id"]),
+            "timeoutTarget": _decode_destination(conn, v["timeout_destination_id"]),
+            "invalidTries": _nullable_int(v["invalid_tries"]),
+            "invalidPrompt": rec_ref(v["invalid_msg_id"]),
+            "invalidRetryPrompt": rec_ref(v["invalid_retry_msg_id"]),
+            "invalidTarget": _decode_destination(conn, v["invalid_destination_id"]),
+            "options": [
+                {
+                    "entryId": int(e["id"]),
+                    "digit": str(e["option"] or ""),
+                    "enabled": str(e["enabled"] or "yes") == "yes",
+                    "sort": _nullable_int(e["sort"]),
+                    "target": _decode_destination(conn, e["destination_id"]),
+                }
+                for e in entries_by_ivr.get(int(v["ivr_id"]), [])
+            ],
+        }
+        for v in ivr_rows
+    ]
+
+    tg_by_id = {
+        int(g["time_group_id"]): {
+            "id": int(g["time_group_id"]),
+            "description": str(g["description"] or ""),
+            # Raw Asterisk GotoIfTime strings, e.g. "09:30-17:00,mon-thu,*,*".
+            # Parsed on the Connect side so the mapping is unit-testable.
+            "schedules": sched_by_group.get(int(g["time_group_id"]), []),
+        }
+        for g in tg_rows
+    }
+    out["timeGroups"] = list(tg_by_id.values())
+    out["timeConditions"] = [
+        {
+            "id": int(t["time_condition_id"]),
+            "code": str(t["code"] or ""),
+            "description": str(t["description"] or ""),
+            "timezone": str(t["timezone"] or ""),
+            # "default" = follow the schedule. Anything else is a manual
+            # override an operator left engaged on the PBX — the copy must
+            # surface it rather than silently assume normal hours.
+            "status": str(t["status"] or "default"),
+            "timeGroup": tg_by_id.get(_nullable_int(t["time_group_id"])),
+            "matchTarget": _decode_destination(conn, t["match_destination_id"]),
+            "mismatchTarget": _decode_destination(conn, t["mismatch_destination_id"]),
+        }
+        for t in tc_rows
+    ]
+    out["routes"] = [
+        {
+            "routeId": int(r["inbound_route_id"]),
+            "did": str(r["did"]),
+            "description": str(r["description"] or ""),
+            "target": _decode_destination(conn, r["destination_id"]),
+        }
+        for r in route_rows
+    ]
+    return out
+
+def flow_map(body):
+    """READ-ONLY full call-flow map: inbound routes → time conditions → IVRs →
+    per-digit destinations, plus every recording and weekly schedule behind
+    them. Omit tenantId to map every enabled tenant on the PBX."""
+    raw_tenant = body.get("tenantId")
+    tenant_id = require_num("tenant_id", raw_tenant) if raw_tenant not in (None, "") else None
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            if tenant_id is None:
+                cur.execute(
+                    "SELECT tenant_id, name, description, path, enabled FROM ombu_tenants "
+                    "WHERE enabled = 'yes' ORDER BY tenant_id"
+                )
+            else:
+                cur.execute(
+                    "SELECT tenant_id, name, description, path, enabled FROM ombu_tenants WHERE tenant_id = %s",
+                    (tenant_id,),
+                )
+            tenant_rows = cur.fetchall()
+        if tenant_id is not None and not tenant_rows:
+            raise LookupError("tenant_not_found:%s" % tenant_id)
+        tenants = [_flow_map_for_tenant(conn, row) for row in tenant_rows]
+    return {"ok": True, "version": VERSION, "capturedAt": utc_now(), "tenants": tenants}
+
 def agent_set_route_destination_v2(body):
     """M3 v2: route a DID to ANY tenant-owned target (extension / queue /
     ring_group / ivr / time_condition / custom_application) by TYPE + ID.
@@ -2892,6 +3145,7 @@ class Handler(BaseHTTPRequestHandler):
             "/route-set-destination-v2": agent_set_route_destination_v2,
             "/route-restore-destination": agent_restore_route_destination,
             "/tenant-catalog": tenant_catalog,
+            "/flow-map": flow_map,
             "/ivr-action": ivr_action,
             "/queue-action": queue_action,
             "/get-diversion": ext_feature_get,

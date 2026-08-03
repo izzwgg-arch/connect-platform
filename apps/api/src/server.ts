@@ -231,6 +231,7 @@ import {
   agentSetPbxRouteDestinationV2,
   agentRestorePbxRouteDestination,
   getPbxTenantCatalog,
+  getPbxFlowMap,
   pbxNativeIvrAction,
   pbxNativeQueueAction,
   getPbxDiversion,
@@ -246,6 +247,7 @@ import {
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
+import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import {
   buildVmRecordJobPublicView,
   createVmRecordJob,
@@ -22990,6 +22992,385 @@ app.post("/voice/ivr/events", async (req, reply) => {
     return reply.code(202).send({ ok: false, reason: "insert_failed" });
   }
   return reply.send({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IVR MIGRATION — take a live VitalPBX menu over into the Connect IVR Studio
+//
+// Three endpoints, deliberately split so nothing surprising happens:
+//
+//   GET  /voice/ivr/migration/map     read-only survey of the PBX. Touches no
+//                                     Connect rows and no PBX rows.
+//   POST /voice/ivr/migration/plan    read-only "what would happen" — the exact
+//                                     menus, keys, hours and phone numbers a
+//                                     copy would produce, plus anything it
+//                                     can't reproduce.
+//   POST /voice/ivr/migration/import  writes Connect rows ONLY. Callers stay on
+//                                     the PBX until someone separately presses
+//                                     "Take over" on the DID.
+//
+// The split is the safety property: importing never changes what a live caller
+// hears. The flip is the existing, already-audited
+// POST /voice/did/:id/switch-to-connect, which snapshots the PBX destination
+// first and can put it back in one click.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Resolve the PBX helper for a migration request. Migration is a cross-tenant
+ *  ops tool, so it falls back to the global helper env when the Connect tenant
+ *  isn't linked to a PBX instance yet (most PBX tenants aren't). */
+async function ivrMigrationHelper(connectTenantId: string | null) {
+  let pbxInstanceId: string | null = null;
+  if (connectTenantId) {
+    const link = await (db as any).tenantPbxLink.findUnique({
+      where: { tenantId: connectTenantId },
+      select: { pbxInstanceId: true },
+    });
+    pbxInstanceId = link?.pbxInstanceId ?? null;
+  }
+  return resolvePbxRouteHelperConfig(pbxInstanceId);
+}
+
+/** Fetch one tenant's flow map from the PBX helper. */
+async function ivrMigrationFetchMap(
+  connectTenantId: string | null,
+  pbxTenantId: number | null,
+): Promise<{ capturedAt: string; tenants: PbxTenantFlowMap[] } | { error: string; detail?: string }> {
+  const cfg = await ivrMigrationHelper(connectTenantId);
+  if (!cfg) return { error: "pbx_helper_not_configured" };
+  try {
+    const resp = await getPbxFlowMap(cfg, pbxTenantId == null ? {} : { tenantId: pbxTenantId });
+    return { capturedAt: String((resp as any).capturedAt ?? ""), tenants: ((resp as any).tenants ?? []) as PbxTenantFlowMap[] };
+  } catch (err: any) {
+    // A helper that predates /flow-map answers 404 rather than something
+    // useful. Say so plainly — "unknown error" would send whoever is reading
+    // this hunting through the wrong system.
+    if (err?.httpStatus === 404) {
+      return { error: "pbx_helper_too_old", detail: "The PBX helper doesn't have the call-flow reader yet. Install the current helper on the PBX and try again." };
+    }
+    return { error: "pbx_helper_unreachable", detail: String(err?.message ?? "unknown") };
+  }
+}
+
+// ── GET /voice/ivr/migration/map ─────────────────────────────────────────────
+// Survey the PBX. `pbxTenantId` maps one tenant; omit it to map every tenant
+// (slow — it decodes every destination on the box — but it is the whole point
+// of the screen: see every menu on the estate and how far each one has got).
+app.get("/voice/ivr/migration/map", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  const q = z.object({
+    pbxTenantId: z.coerce.number().int().positive().optional(),
+    connectTenantId: z.string().optional(),
+  }).safeParse(req.query || {});
+  if (!q.success) return reply.code(400).send({ error: "invalid_query" });
+
+  const result = await ivrMigrationFetchMap(q.data.connectTenantId ?? null, q.data.pbxTenantId ?? null);
+  if ("error" in result) return reply.code(503).send(result);
+
+  // Overlay Connect's side: which menus have already been copied, and which
+  // of their phone numbers Connect has already taken over. Without this the
+  // screen can't tell "not started" from "copied but not live".
+  const profiles = await (db as any).ivrRouteProfile.findMany({
+    where: { pbxSourceIvrId: { not: null } },
+    select: { id: true, tenantId: true, name: true, pbxSourceIvrId: true, pbxSourceImportedAt: true, isActive: true },
+  });
+  const dids = await (db as any).didRouteMapping.findMany({
+    select: { id: true, e164: true, tenantId: true, routingMode: true, ivrProfileId: true },
+  });
+  const didByE164 = new Map<string, any>();
+  for (const d of dids) didByE164.set(String(d.e164).replace(/[^\d]/g, ""), d);
+
+  // ombu_ivrs.ivr_id is the table's primary key, so a menu id identifies one
+  // menu across the whole PBX — a single lookup is correct for every tenant.
+  const copied = new Map<number, any>();
+  for (const p of profiles) if (p.pbxSourceIvrId != null) copied.set(Number(p.pbxSourceIvrId), p);
+
+  const tenants = result.tenants.map((t) => {
+    return {
+      ...t,
+      ivrs: t.ivrs.map((ivr) => {
+        const profile = copied.get(ivr.id) ?? null;
+        // Numbers that reach this menu — directly, or through a time
+        // condition that lands on it. The Go-live button needs the Connect
+        // DID mapping id, which only exists once the menu has been copied.
+        const tcIds = new Set(
+          t.timeConditions
+            .filter((tc) => [tc.matchTarget, tc.mismatchTarget].some((d) => d?.type === "ivr" && Number(d.targetId) === ivr.id))
+            .map((tc) => tc.id),
+        );
+        const routeDids = t.routes.filter((r) =>
+          (r.target?.type === "ivr" && Number(r.target.targetId) === ivr.id)
+          || (r.target?.type === "time_condition" && tcIds.has(Number(r.target.targetId))),
+        );
+        const dids = routeDids.map((r) => {
+          const mapping = didByE164.get(String(r.did).replace(/[^\d]/g, "")) ?? null;
+          return {
+            did: r.did,
+            description: r.description,
+            mappingId: mapping?.id ?? null,
+            routingMode: mapping?.routingMode ?? "pbx",
+            readyToGoLive: Boolean(mapping && profile && mapping.ivrProfileId === profile.id && mapping.routingMode !== "connect"),
+          };
+        });
+        const liveDids = dids.filter((d) => d.routingMode === "connect");
+        return {
+          ...ivr,
+          connectProfileId: profile?.id ?? null,
+          connectProfileName: profile?.name ?? null,
+          copiedAt: profile?.pbxSourceImportedAt ?? null,
+          dids,
+          status: profile ? (liveDids.length > 0 ? "live" : "copied") : "not_started",
+        };
+      }),
+    };
+  });
+
+  return reply.send({ ok: true, capturedAt: result.capturedAt, tenants });
+});
+
+/** Shared body for plan + import. */
+const IvrMigrationTargetBody = z.object({
+  /** Connect tenant that will OWN the copied menus. */
+  tenantId: z.string().min(1),
+  /** VitalPBX tenant + menu to copy. */
+  pbxTenantId: z.coerce.number().int().positive(),
+  pbxIvrId: z.coerce.number().int().positive(),
+});
+
+/** Resolve the request to (connectTenantId, flow map, plan) or a reply-ready error. */
+async function ivrMigrationResolvePlan(
+  user: JwtUser,
+  input: z.infer<typeof IvrMigrationTargetBody>,
+): Promise<
+  | { ok: true; connectTenantId: string; map: PbxTenantFlowMap; plan: ReturnType<typeof buildImportPlan> }
+  | { ok: false; status: number; body: Record<string, unknown> }
+> {
+  const connectTenantId = input.tenantId.startsWith("vpbx:")
+    ? await resolveConnectTenantIdFromScope(input.tenantId)
+    : input.tenantId;
+  if (!connectTenantId) {
+    return { ok: false, status: 400, body: { error: "tenant_not_linked", detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before copying its menus." } };
+  }
+  assertIvrTenantAccess(user, connectTenantId);
+
+  const fetched = await ivrMigrationFetchMap(connectTenantId, input.pbxTenantId);
+  if ("error" in fetched) return { ok: false, status: 503, body: fetched };
+  const map = fetched.tenants[0];
+  if (!map) return { ok: false, status: 404, body: { error: "pbx_tenant_not_found" } };
+
+  // Menus already copied for THIS tenant are linked to directly instead of
+  // handing the caller back to the PBX, so migrating a tenant menu-by-menu
+  // progressively pulls the flow inside Connect.
+  const existing = await (db as any).ivrRouteProfile.findMany({
+    where: { tenantId: connectTenantId, pbxSourceIvrId: { not: null } },
+    select: { id: true, pbxSourceIvrId: true },
+  });
+  const connectProfileByPbxIvrId: Record<number, string> = {};
+  for (const p of existing) connectProfileByPbxIvrId[Number(p.pbxSourceIvrId)] = p.id;
+
+  const plan = buildImportPlan(map, input.pbxIvrId, { connectProfileByPbxIvrId });
+  return { ok: true, connectTenantId, map, plan };
+}
+
+// ── POST /voice/ivr/migration/plan ───────────────────────────────────────────
+// Read-only. Exactly what "Copy from PBX" would create, plus everything it
+// can't reproduce. Writes nothing anywhere.
+app.post("/voice/ivr/migration/plan", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  const body = IvrMigrationTargetBody.safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
+
+  const resolved = await ivrMigrationResolvePlan(user, body.data);
+  if (!resolved.ok) return reply.code(resolved.status).send(resolved.body);
+
+  // Which of the required recordings are already in Connect's prompt catalog?
+  // A missing one doesn't block the copy (the menu is still worth having), but
+  // it DOES block publish — the publish endpoint refuses refs that aren't in
+  // the catalog precisely so a menu can't dead-air on a live call.
+  const refs = resolved.plan.requiredRecordings.map((r) => r.promptRef);
+  const present = refs.length
+    ? await (db as any).tenantPbxPrompt.findMany({ where: { tenantId: resolved.connectTenantId, promptRef: { in: refs }, isActive: true }, select: { promptRef: true } })
+    : [];
+  const presentSet = new Set(present.map((p: any) => String(p.promptRef)));
+
+  return reply.send({
+    ok: true,
+    connectTenantId: resolved.connectTenantId,
+    plan: {
+      ...resolved.plan,
+      requiredRecordings: resolved.plan.requiredRecordings.map((r) => ({ ...r, inConnectCatalog: presentSet.has(r.promptRef) })),
+    },
+  });
+});
+
+// ── POST /voice/ivr/migration/import ─────────────────────────────────────────
+// Writes Connect rows only. Callers keep hearing the PBX until someone
+// separately presses "Take over" on the DID.
+app.post("/voice/ivr/migration/import", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  const body = IvrMigrationTargetBody.extend({
+    /** Copy even when some keys couldn't be reproduced. Off by default: a
+     *  half-copied menu that nobody was warned about is how callers end up in
+     *  dead ends. */
+    allowPartial: z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
+
+  const resolved = await ivrMigrationResolvePlan(user, body.data);
+  if (!resolved.ok) return reply.code(resolved.status).send(resolved.body);
+  const { connectTenantId, plan } = resolved;
+
+  if (plan.profiles.length === 0) {
+    return reply.code(422).send({ error: "nothing_to_copy", problems: plan.problems });
+  }
+  if (plan.problems.length > 0 && !body.data.allowPartial) {
+    return reply.code(422).send({
+      error: "plan_has_problems",
+      detail: "Some parts of this menu can't be reproduced in Connect. Review them, then copy again confirming you want the rest.",
+      problems: plan.problems,
+      warnings: plan.warnings,
+    });
+  }
+
+  const now = new Date();
+  const written: Array<{ profileId: string; pbxIvrId: number; name: string; options: number }> = [];
+
+  // One transaction: a menu with its greeting but none of its keys would
+  // answer the phone and then strand the caller, so the whole copy lands or
+  // none of it does.
+  await db.$transaction(async (tx: any) => {
+    for (const p of plan.profiles) {
+      const data = {
+        tenantId: connectTenantId,
+        name: p.name,
+        type: p.type,
+        // Every copied menu IS a Connect-owned menu, so its own entry point is
+        // the shared Connect IVR context. The per-digit refs carry the routing.
+        pbxDestination: "connect-tenant-ivr,s,1",
+        pbxPromptRef: p.promptRef,
+        timeoutSeconds: p.timeoutSeconds,
+        maxRetries: p.maxRetries,
+        directDialEnabled: p.directDialEnabled,
+        timeoutDestinationType: p.timeoutDestinationType,
+        timeoutDestinationRef: p.timeoutDestinationRef,
+        invalidDestinationType: p.invalidDestinationType,
+        invalidDestinationRef: p.invalidDestinationRef,
+        pbxSourceIvrId: p.pbxIvrId,
+        pbxSourceImportedAt: now,
+        isActive: true,
+      };
+      const profile = await tx.ivrRouteProfile.upsert({
+        where: { tenantId_pbxSourceIvrId: { tenantId: connectTenantId, pbxSourceIvrId: p.pbxIvrId } },
+        create: { ...data, createdBy: (user as any).id ?? null },
+        update: data,
+      });
+
+      // Replace the key map wholesale. A key REMOVED on the PBX must disappear
+      // here too; merging would leave a stale key live in Connect that nobody
+      // can see on the PBX side any more.
+      await tx.ivrOptionRoute.deleteMany({ where: { profileId: profile.id } });
+      if (p.options.length > 0) {
+        await tx.ivrOptionRoute.createMany({
+          data: p.options.map((o) => ({
+            tenantId: connectTenantId,
+            profileId: profile.id,
+            optionDigit: o.optionDigit,
+            destinationType: o.destinationType,
+            destinationRef: o.destinationRef,
+            label: o.label,
+            enabled: true,
+          })),
+        });
+      }
+      written.push({ profileId: profile.id, pbxIvrId: p.pbxIvrId, name: p.name, options: p.options.length });
+    }
+
+    // Second pass: now that every profile in this batch exists, re-point any
+    // key that referenced a sibling menu by handing back to the PBX. Without
+    // this, copying a menu and its after-hours partner together would still
+    // bounce the caller out to VitalPBX between the two.
+    const idByPbxIvr = new Map<number, string>(written.map((w) => [w.pbxIvrId, w.profileId]));
+    for (const w of written) {
+      const rows = await tx.ivrOptionRoute.findMany({ where: { profileId: w.profileId } });
+      for (const row of rows) {
+        const m = String(row.destinationRef).match(/^T\d+_app-ivr,IVR-(\d+),1$/);
+        const sibling = m ? idByPbxIvr.get(Number(m[1])) : undefined;
+        if (sibling) {
+          await tx.ivrOptionRoute.update({
+            where: { id: row.id },
+            data: { destinationType: "ivr", destinationRef: `connect-tenant-ivr,${sibling},1` },
+          });
+        }
+      }
+    }
+
+    // Point every DID that reaches this menu at the copied profile, WITHOUT
+    // flipping it live (routingMode stays whatever it was — "pbx" for a fresh
+    // row). Going live is the separate, already-audited
+    // POST /voice/did/:id/switch-to-connect, which snapshots the PBX
+    // destination first; doing that here would turn a copy into a cutover.
+    const rootProfileId = written.find((w) => w.pbxIvrId === plan.rootPbxIvrId)?.profileId;
+    if (rootProfileId) {
+      for (const d of plan.dids) {
+        const e164 = `+${String(d.did).replace(/[^\d]/g, "")}`;
+        await tx.didRouteMapping.upsert({
+          where: { e164 },
+          create: { tenantId: connectTenantId, e164, ivrProfileId: rootProfileId, enabled: true, createdBy: (user as any).id ?? null },
+          // Only ever set the menu. Never touch routingMode, the captured
+          // originalPbx* snapshot, or MOH — a re-copy must not disturb a DID
+          // that is already live on Connect.
+          update: { ivrProfileId: rootProfileId, updatedBy: (user as any).id ?? null },
+        });
+      }
+    }
+
+    // Opening hours + which menu each side of them plays.
+    if (plan.schedule) {
+      const businessProfile = written.find((w) => plan.profiles.find((p) => p.pbxIvrId === w.pbxIvrId)?.type === "business_hours");
+      const afterProfile = written.find((w) => plan.profiles.find((p) => p.pbxIvrId === w.pbxIvrId)?.type === "after_hours");
+      const scheduleData = {
+        tenantId: connectTenantId,
+        timezone: plan.schedule.timezone,
+        businessHoursRules: plan.schedule.rules,
+        defaultProfileId: businessProfile?.profileId ?? null,
+        afterHoursProfileId: afterProfile?.profileId ?? null,
+        isActive: true,
+      };
+      await tx.ivrScheduleConfig.upsert({
+        where: { tenantId: connectTenantId },
+        create: scheduleData,
+        // holidayDates and holidayProfileId are intentionally left alone —
+        // holidays are a Connect-side decision the PBX time group has no
+        // equivalent for, and a re-copy must not wipe them.
+        update: {
+          timezone: scheduleData.timezone,
+          businessHoursRules: scheduleData.businessHoursRules,
+          defaultProfileId: scheduleData.defaultProfileId,
+          afterHoursProfileId: scheduleData.afterHoursProfileId,
+        },
+      });
+    }
+  });
+
+  app.log.info(
+    { connectTenantId, pbxTenantId: body.data.pbxTenantId, pbxIvrId: body.data.pbxIvrId, profiles: written.length, problems: plan.problems.length },
+    "ivr-migration: copied from PBX",
+  );
+
+  return reply.send({
+    ok: true,
+    connectTenantId,
+    profiles: written,
+    schedule: plan.schedule,
+    dids: plan.dids,
+    requiredRecordings: plan.requiredRecordings,
+    problems: plan.problems,
+    warnings: plan.warnings,
+    // Said explicitly so nobody reads a successful copy as a cutover.
+    note: "Copied into Connect. Callers still hear the PBX until you take over the phone number.",
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

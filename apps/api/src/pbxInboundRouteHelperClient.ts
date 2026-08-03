@@ -137,6 +137,7 @@ async function callHelper<T>(
     | "/route-set-destination-v2"
     | "/route-restore-destination"
     | "/tenant-catalog"
+    | "/flow-map"
     | "/ivr-action"
     | "/queue-action"
     | "/get-diversion"
@@ -278,6 +279,22 @@ export type PbxTenantCatalog = {
 
 /** Native config writes run VitalPBX's own per-tenant apply_changes regen — allow for it. */
 const NATIVE_WRITE_TIMEOUT_MS = 200_000;
+
+/**
+ * READ-ONLY full call-flow map used by the IVR migration screen: inbound
+ * routes → time conditions → menus → per-digit destinations, plus recordings
+ * and weekly schedules. Omit tenantId to map every enabled tenant.
+ *
+ * Mapping all tenants walks every menu on the PBX and decodes each
+ * destination individually, so it is far heavier than a single-tenant read —
+ * hence the longer ceiling. It stays a pure read: no writes, no reloads.
+ */
+export function getPbxFlowMap(
+  cfg: PbxRouteHelperConfig,
+  body: { tenantId?: string | number } = {},
+): Promise<{ ok: true; version: string; capturedAt: string; tenants: unknown[] }> {
+  return callHelper(cfg, "/flow-map", body as Record<string, unknown>, body.tenantId ? 45_000 : 180_000);
+}
 
 export function getPbxTenantCatalog(
   cfg: PbxRouteHelperConfig,

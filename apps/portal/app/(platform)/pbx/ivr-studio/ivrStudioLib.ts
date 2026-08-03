@@ -56,6 +56,13 @@ export function parseDestinationRef(type: DestinationType | "", ref: string): { 
     return { selected: "", free: r };
   }
   if (type === "voicemail") {
+    // Current form (VitalPBX): sub-extensions-vm,VM|VMB|VMU-<ext>,1
+    const v = r.match(/^sub-extensions-vm,VM[BU]?-([^,]+),\d+$/i);
+    if (v) return { selected: v[1], free: "" };
+    // Legacy form written before 2026-08-03. `ext-local` does not exist in
+    // this PBX's dialplan at all, so anything still stored in this shape is a
+    // dead destination — parse it so the picker can show which mailbox was
+    // meant, and re-saving the key rewrites it to the working form.
     const m = r.match(/^ext-local,vmu([^,]+),\d+$/i);
     if (m) return { selected: m[1], free: "" };
   }
@@ -95,7 +102,13 @@ export function buildDestinationRef(
   if (type === "queue" && s) return `${tenantDialContext ?? "ext-queues"},${s},1`;
   if (type === "ring_group" && s) return `${tenantDialContext ?? "ext-group"},${s},1`;
   if (type === "ring_group") return f;
-  if (type === "voicemail" && s) return `ext-local,vmu${s},1`;
+  // VitalPBX routes voicemail through sub-extensions-vm, which splits the
+  // exten prefix into the greeting to play (VM- default, VMB- busy, VMU-
+  // unavailable). Verified live 2026-08-03 against the generated dialplan:
+  // Goto(sub-extensions-vm,VM-101,1). The previous `ext-local,vmu<ext>,1`
+  // form was a FreePBX convention — that context does not exist on this PBX,
+  // so keys written that way dropped the caller out of the dialplan.
+  if (type === "voicemail" && s) return `sub-extensions-vm,VM-${s},1`;
   if (type === "ivr") return f;
   if (type === "announcement") return f;
   if (type === "external_number") return f;
