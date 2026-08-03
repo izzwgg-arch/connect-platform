@@ -200,9 +200,16 @@ export default function IvrStudioPage() {
       }
       setPbxTenantId(pbxT);
 
+      // The two sources name things differently, verified live 2026-08-03:
+      //   ring groups → { name: "Sales", number: "1010" }        name IS the label
+      //   queues      → { name: "T2_Q600", description: "main q",
+      //                   extension: "600" }                     name is an internal id
+      // Reading `name` first for both would offer a customer "T2_Q600" as a
+      // place to send callers, which is precisely the jargon this screen exists
+      // to get rid of. So queues prefer `description`.
       const teamRows = [
         ...(rg?.rows || []).map((x) => ({ number: String(x.number ?? x.group_number ?? x.extension ?? ""), name: (x.name ?? x.description ?? null) as string | null, kind: "ring_group" as const })),
-        ...(q?.rows || []).map((x) => ({ number: String(x.number ?? x.queue_number ?? x.extension ?? ""), name: (x.name ?? x.description ?? null) as string | null, kind: "queue" as const })),
+        ...(q?.rows || []).map((x) => ({ number: String(x.number ?? x.queue_number ?? x.extension ?? ""), name: (x.description ?? x.name ?? null) as string | null, kind: "queue" as const })),
       ].filter((x) => x.number);
       setTeams(teamRows);
       // "A team" is a ring group OR a queue, so we only know this customer has
