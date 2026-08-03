@@ -13,6 +13,7 @@ export * from "./mohProvision";
 export * from "./mohSourcePublish";
 export * from "./mohCatalog";
 export * from "./canonicalTenantSlug";
+export * from "./ivrPlainLanguage";
 export * from "./ariBridgedSnapshot";
 export * from "./expoMobilePushFormat";
 export * from "./crmEmailTemplates";

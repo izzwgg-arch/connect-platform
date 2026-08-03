@@ -248,6 +248,7 @@ import {
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
+import { explainCallFlow, narrateCallFlow, summariseHours, type TenantDirectory } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
   createVmRecordJob,
@@ -22992,6 +22993,110 @@ app.post("/voice/ivr/events", async (req, reply) => {
     return reply.code(202).send({ ok: false, reason: "insert_failed" });
   }
   return reply.send({ ok: true });
+});
+
+// ── GET /voice/ivr/explain ───────────────────────────────────────────────────
+// The A-to-Z account of what happens on a call, in plain English.
+//
+// This exists so the AI agent can answer "what happens when someone calls?"
+// and, after building a menu for a customer, hand them a link to review it
+// before anything goes live. It returns the SAME sentences the IVR Studio
+// renders, because both come from @connect/shared's ivrPlainLanguage — if the
+// agent had its own wording, it and the screen would eventually describe the
+// same menu differently, and one of them would be wrong.
+app.get("/voice/ivr/explain", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional(), profileId: z.string().optional() }).safeParse(req.query || {});
+  if (!q.success) return reply.code(400).send({ error: "invalid_query" });
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const raw = (isSuperAdmin ? q.data.tenantId : null) ?? user.tenantId ?? null;
+  if (!raw) return reply.code(400).send({ error: "tenantId required" });
+  const tenantId = raw.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(raw) : raw;
+  if (!tenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertIvrTenantAccess(user, tenantId);
+
+  const [profiles, schedule, link] = await Promise.all([
+    (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true }, orderBy: { createdAt: "asc" } }),
+    (db as any).ivrScheduleConfig.findUnique({ where: { tenantId } }),
+    (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true, pbxInstanceId: true } }),
+  ]);
+  if (profiles.length === 0) {
+    return reply.send({ ok: true, hasMenu: false, narration: "This customer doesn't have a phone menu yet, so callers go straight through without hearing any options." });
+  }
+
+  const profile = q.data.profileId
+    ? profiles.find((p: any) => p.id === q.data.profileId)
+    : (schedule?.defaultProfileId ? profiles.find((p: any) => p.id === schedule.defaultProfileId) : null) ?? profiles[0];
+  if (!profile) return reply.code(404).send({ error: "menu_not_found" });
+
+  // A real directory is required. Explaining a menu against an EMPTY directory
+  // would describe every destination as "which no longer exists" — telling a
+  // customer their extensions were deleted when in fact we just couldn't read
+  // the phone system. Fail out loud instead.
+  const pbxTenantId = link?.pbxTenantId ? String(link.pbxTenantId).trim() : null;
+  if (!pbxTenantId) {
+    return reply.code(409).send({ error: "tenant_not_linked_to_pbx", detail: "This customer isn't linked to the phone system yet, so I can't describe their menu accurately." });
+  }
+  const cfg = resolvePbxRouteHelperConfig(link?.pbxInstanceId ?? null);
+  if (!cfg) return reply.code(503).send({ error: "pbx_helper_not_configured" });
+  let flow: any = null;
+  try {
+    const resp = await getPbxFlowMap(cfg, { tenantId: pbxTenantId });
+    flow = (resp as any).tenants?.[0] ?? null;
+  } catch (err: any) {
+    return reply.code(503).send({ error: "pbx_unreachable", detail: "I couldn't reach the phone system just now, so I can't describe this menu accurately." });
+  }
+  if (!flow) return reply.code(503).send({ error: "pbx_tenant_not_found" });
+
+  const directory: TenantDirectory = {
+    pbxTenantId,
+    people: (flow.directory?.extensions ?? []).map((e: any) => ({ extension: String(e.number), name: e.name ?? null })),
+    teams: [
+      ...(flow.directory?.ringGroups ?? []).map((t: any) => ({ number: String(t.number), name: t.name ?? null, kind: "ring_group" as const })),
+      ...(flow.directory?.queues ?? []).map((t: any) => ({ number: String(t.number), name: t.name ?? null, kind: "queue" as const })),
+    ],
+    menus: profiles.map((p: any) => ({ id: p.id, name: p.name })),
+  };
+
+  const [options, prompts, didRows] = await Promise.all([
+    (db as any).ivrOptionRoute.findMany({ where: { profileId: profile.id } }),
+    (db as any).tenantPbxPrompt.findMany({ where: { tenantId, isActive: true }, select: { promptRef: true, displayName: true } }),
+    (db as any).didRouteMapping.findMany({ where: { tenantId, ivrProfileId: profile.id }, select: { e164: true } }),
+  ]);
+
+  const hoursSummary = schedule?.defaultProfileId === profile.id && Array.isArray(schedule?.businessHoursRules)
+    ? summariseHours(schedule.businessHoursRules as any, schedule.timezone)
+    : null;
+
+  const steps = explainCallFlow({
+    id: profile.id,
+    name: profile.name,
+    greetingName: prompts.find((p: any) => p.promptRef === profile.pbxPromptRef)?.displayName ?? profile.pbxPromptRef ?? null,
+    timeoutSeconds: profile.timeoutSeconds,
+    options,
+    timeoutDestination: profile.timeoutDestinationType && profile.timeoutDestinationRef
+      ? { destinationType: profile.timeoutDestinationType, destinationRef: profile.timeoutDestinationRef } : null,
+    invalidDestination: profile.invalidDestinationType && profile.invalidDestinationRef
+      ? { destinationType: profile.invalidDestinationType, destinationRef: profile.invalidDestinationRef } : null,
+  }, { dir: directory, phoneNumbers: didRows.map((d: any) => String(d.e164)), hoursSummary });
+
+  // Where to send the customer to look at it. `from=assistant` makes the Studio
+  // say "your assistant set this up — read it, then press Publish".
+  const portalBase = String(process.env.PORTAL_PUBLIC_URL || "https://app.connectcomunications.com").replace(/\/+$/, "");
+  const reviewUrl = `${portalBase}/pbx/ivr-studio?menu=${encodeURIComponent(profile.id)}&from=assistant`;
+
+  return reply.send({
+    ok: true,
+    hasMenu: true,
+    menu: { id: profile.id, name: profile.name, type: profile.type },
+    steps,
+    narration: narrateCallFlow(steps),
+    hoursSummary,
+    phoneNumbers: didRows.map((d: any) => String(d.e164)),
+    reviewUrl,
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
