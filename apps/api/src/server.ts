@@ -23246,10 +23246,12 @@ app.get("/voice/ivr/migration/map", async (req, reply) => {
   return reply.send({ ok: true, capturedAt: result.capturedAt, tenants });
 });
 
-/** Shared body for plan + import. */
+/** Shared body for plan + import.
+ *  `tenantId` is accepted for backwards compatibility but IGNORED — the
+ *  destination is resolved from `pbxTenantId` via TenantPbxLink so a menu can
+ *  never be filed under the wrong customer. */
 const IvrMigrationTargetBody = z.object({
-  /** Connect tenant that will OWN the copied menus. */
-  tenantId: z.string().min(1),
+  tenantId: z.string().min(1).optional(),
   /** VitalPBX tenant + menu to copy. */
   pbxTenantId: z.coerce.number().int().positive(),
   pbxIvrId: z.coerce.number().int().positive(),
@@ -23263,12 +23265,23 @@ async function ivrMigrationResolvePlan(
   | { ok: true; connectTenantId: string; map: PbxTenantFlowMap; plan: ReturnType<typeof buildImportPlan> }
   | { ok: false; status: number; body: Record<string, unknown> }
 > {
-  const connectTenantId = input.tenantId.startsWith("vpbx:")
-    ? await resolveConnectTenantIdFromScope(input.tenantId)
-    : input.tenantId;
+  // The destination is derived from the SOURCE, never from what the caller
+  // sent. The migration screen lists every tenant on the PBX at once while the
+  // portal's tenant switcher sits on some unrelated customer — so trusting the
+  // client's tenantId meant clicking "copy" on one customer's menu could file
+  // it under another customer's account. The link table is the only thing that
+  // knows which Connect tenant owns VitalPBX tenant N.
+  const link = await (db as any).tenantPbxLink.findFirst({
+    where: { pbxTenantId: String(input.pbxTenantId) },
+    select: { tenantId: true },
+  });
+  const connectTenantId = link?.tenantId ?? null;
   if (!connectTenantId) {
-    return { ok: false, status: 400, body: { error: "tenant_not_linked", detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before copying its menus." } };
+    return { ok: false, status: 400, body: { error: "tenant_not_linked", detail: "This phone-system customer isn't linked to a Connect account yet. Link it in Admin → PBX before copying its menus." } };
   }
+  // A non-super-admin may only copy into their own tenant; assertIvrTenantAccess
+  // throws otherwise. Super-admins are unrestricted, which is the normal case
+  // for this screen.
   assertIvrTenantAccess(user, connectTenantId);
 
   const fetched = await ivrMigrationFetchMap(connectTenantId, input.pbxTenantId);

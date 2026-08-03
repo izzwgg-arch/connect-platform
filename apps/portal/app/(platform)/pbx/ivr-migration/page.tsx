@@ -13,7 +13,6 @@
 // including anything that can't be reproduced.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 
 type MenuStatus = "not_started" | "copied" | "live";
@@ -69,7 +68,6 @@ const STATUS_LABEL: Record<MenuStatus, string> = {
 };
 
 export default function IvrMigrationPage() {
-  const { tenantId } = useAppContext();
   const [tenants, setTenants] = useState<MappedTenant[]>([]);
   const [capturedAt, setCapturedAt] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -77,7 +75,7 @@ export default function IvrMigrationPage() {
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [openTenant, setOpenTenant] = useState<number | null>(null);
-  const [plan, setPlan] = useState<{ pbxTenantId: number; pbxIvrId: number; plan: Plan } | null>(null);
+  const [plan, setPlan] = useState<{ pbxTenantId: number; pbxIvrId: number; plan: Plan; tenantName: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3200); };
@@ -113,11 +111,14 @@ export default function IvrMigrationPage() {
   }, [tenants]);
 
   async function preview(t: MappedTenant, ivr: MappedIvr) {
-    if (!tenantId) { setError("Pick a tenant in the switcher first — that's the Connect account the menu gets copied into."); return; }
+    // No tenantId is sent: the server resolves the destination from the PBX
+    // tenant being copied. This screen shows every customer at once while the
+    // portal's tenant switcher sits on an unrelated one, so sending the
+    // switcher's tenant would file a menu under the wrong account.
     setBusy(`plan:${ivr.id}`); setError(null);
     try {
-      const r = await apiPost<{ plan: Plan }>("/voice/ivr/migration/plan", { tenantId, pbxTenantId: t.tenantId, pbxIvrId: ivr.id });
-      setPlan({ pbxTenantId: t.tenantId, pbxIvrId: ivr.id, plan: r.plan });
+      const r = await apiPost<{ plan: Plan }>("/voice/ivr/migration/plan", { pbxTenantId: t.tenantId, pbxIvrId: ivr.id });
+      setPlan({ pbxTenantId: t.tenantId, pbxIvrId: ivr.id, plan: r.plan, tenantName: t.tenantName });
     } catch (e: any) {
       setError(e?.payload?.detail || e?.message || "Couldn't work out what copying this menu would do");
     } finally { setBusy(null); }
@@ -163,11 +164,14 @@ export default function IvrMigrationPage() {
   }
 
   async function copyIn(allowPartial: boolean) {
-    if (!plan || !tenantId) return;
+    // Deliberately does NOT depend on the tenant switcher — the destination is
+    // the Connect account linked to the PBX tenant being copied, resolved
+    // server-side. Gating on the switcher here would silently do nothing.
+    if (!plan) return;
     setBusy("import"); setError(null);
     try {
       const r = await apiPost<{ profiles: Array<{ name: string }> }>("/voice/ivr/migration/import", {
-        tenantId, pbxTenantId: plan.pbxTenantId, pbxIvrId: plan.pbxIvrId, allowPartial,
+        pbxTenantId: plan.pbxTenantId, pbxIvrId: plan.pbxIvrId, allowPartial,
       });
       flash(`Copied ${r.profiles.length} menu${r.profiles.length === 1 ? "" : "s"} into Connect. Callers still hear the PBX until you go live.`);
       setPlan(null);
@@ -278,6 +282,7 @@ export default function IvrMigrationPage() {
       {plan && (
         <PlanModal
           plan={plan.plan}
+          tenantName={plan.tenantName}
           busy={busy === "import"}
           onClose={() => setPlan(null)}
           onCopy={copyIn}
@@ -290,8 +295,8 @@ export default function IvrMigrationPage() {
 }
 
 // ── "here's exactly what will happen" ────────────────────────────────────────
-function PlanModal({ plan, busy, onClose, onCopy }: {
-  plan: Plan; busy: boolean; onClose: () => void; onCopy: (allowPartial: boolean) => void;
+function PlanModal({ plan, tenantName, busy, onClose, onCopy }: {
+  plan: Plan; tenantName: string; busy: boolean; onClose: () => void; onCopy: (allowPartial: boolean) => void;
 }) {
   const [confirmPartial, setConfirmPartial] = useState(false);
   const blocked = plan.problems.length > 0 && !confirmPartial;
@@ -301,7 +306,7 @@ function PlanModal({ plan, busy, onClose, onCopy }: {
     <div className="backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="mhead">
-          <div><b>What copying this menu will do</b><span>Nothing changes for callers yet.</span></div>
+          <div><b>What copying this menu will do</b><span>Into <b>{tenantName}</b>&apos;s Connect account. Nothing changes for callers yet.</span></div>
           <button className="btn ghost iconbtn" onClick={onClose} aria-label="Close">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M18 6 6 18M6 6l12 12" /></svg>
           </button>
