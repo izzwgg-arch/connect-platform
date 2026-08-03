@@ -248,7 +248,7 @@ import {
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
-import { explainCallFlow, narrateCallFlow, summariseHours, type TenantDirectory } from "@connect/shared";
+import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, type TenantDirectory } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
   createVmRecordJob,
@@ -23006,6 +23006,196 @@ app.post("/voice/ivr/events", async (req, reply) => {
     return reply.code(202).send({ ok: false, reason: "insert_failed" });
   }
   return reply.send({ ok: true });
+});
+
+/** Load the tenant's real directory (people / teams / menus) for agent builds
+ *  and explanations. Returns null when the phone system can't be read — every
+ *  caller MUST treat that as "refuse", never as "empty directory", or a menu
+ *  gets built against nothing. */
+async function ivrLoadDirectory(tenantId: string): Promise<
+  { ok: true; dir: TenantDirectory } | { ok: false; status: number; body: Record<string, unknown> }
+> {
+  const link = await (db as any).tenantPbxLink.findUnique({
+    where: { tenantId },
+    select: { pbxTenantId: true, pbxInstanceId: true },
+  });
+  const pbxTenantId = link?.pbxTenantId ? String(link.pbxTenantId).trim() : null;
+  if (!pbxTenantId) {
+    return { ok: false, status: 409, body: { error: "tenant_not_linked_to_pbx", detail: "This customer isn't linked to the phone system yet." } };
+  }
+  const cfg = resolvePbxRouteHelperConfig(link?.pbxInstanceId ?? null);
+  if (!cfg) return { ok: false, status: 503, body: { error: "pbx_helper_not_configured" } };
+  let flow: any = null;
+  try {
+    const resp = await getPbxFlowMap(cfg, { tenantId: pbxTenantId });
+    flow = (resp as any).tenants?.[0] ?? null;
+  } catch {
+    return { ok: false, status: 503, body: { error: "pbx_unreachable", detail: "I couldn't reach the phone system just now." } };
+  }
+  if (!flow) return { ok: false, status: 503, body: { error: "pbx_tenant_not_found" } };
+  const profiles = await (db as any).ivrRouteProfile.findMany({ where: { tenantId }, select: { id: true, name: true } });
+  return {
+    ok: true,
+    dir: {
+      pbxTenantId,
+      people: (flow.directory?.extensions ?? []).map((e: any) => ({ extension: String(e.number), name: e.name ?? null })),
+      teams: [
+        ...(flow.directory?.ringGroups ?? []).map((t: any) => ({ number: String(t.number), name: t.name ?? null, kind: "ring_group" as const })),
+        ...(flow.directory?.queues ?? []).map((t: any) => ({ number: String(t.number), name: t.name ?? null, kind: "queue" as const })),
+      ],
+      menus: profiles.map((p: any) => ({ id: p.id, name: p.name })),
+    },
+  };
+}
+
+// ── POST /voice/ivr/menus/build ──────────────────────────────────────────────
+// Build a whole phone menu from scratch. This is what the AI agent calls when
+// a customer asks it to set one up.
+//
+// The agent describes INTENT — "key 1 goes to a person, extension 101" — and
+// never a dialplan reference. The reference is derived here by the same shared
+// builder the Studio uses, against the customer's live directory. So the agent
+// structurally cannot invent a destination, point a key at an extension that
+// doesn't exist, or use a context that isn't real: `buildDestination` returns
+// null and the key is rejected by name.
+//
+// It NEVER publishes. The menu lands as an unpublished draft and the response
+// carries a review link; a human presses Publish. That division is the whole
+// safety model — the agent can compose, but only a person can make live
+// callers hear it.
+app.post("/voice/ivr/menus/build", async (req, reply) => {
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
+  if (!user) return;
+
+  const KeySchema = z.object({
+    digit: z.enum(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "hash"]),
+    kind: z.enum(["person", "team", "voicemail", "menu", "hangup"]),
+    /** Extension number, team number, or an existing menu id. Not needed for hangup. */
+    targetId: z.string().trim().max(80).optional(),
+  });
+  const body = z.object({
+    tenantId: z.string().min(1),
+    name: z.string().trim().min(1).max(100),
+    greetingPromptRef: z.string().trim().max(128).nullable().optional(),
+    timeoutSeconds: z.number().int().min(3).max(60).optional(),
+    keys: z.array(KeySchema).max(12).default([]),
+    /** Optional companion menu for out-of-hours, created and wired in one go. */
+    afterHours: z.object({
+      name: z.string().trim().min(1).max(100),
+      greetingPromptRef: z.string().trim().max(128).nullable().optional(),
+      keys: z.array(KeySchema).max(12).default([]),
+    }).optional(),
+    hours: z.object({
+      timezone: z.string().min(1).max(64),
+      rules: z.array(z.object({
+        day: z.number().int().min(0).max(6),
+        open: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        close: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+      })).max(7),
+    }).optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
+  const d = body.data;
+
+  const tenantId = d.tenantId.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(d.tenantId) : d.tenantId;
+  if (!tenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertIvrTenantAccess(user, tenantId);
+
+  const loaded = await ivrLoadDirectory(tenantId);
+  if (!loaded.ok) return reply.code(loaded.status).send(loaded.body);
+  const dir = loaded.dir;
+
+  // Duplicate digits would silently overwrite each other — reject rather than
+  // let the last one quietly win.
+  const seen = new Set<string>();
+  for (const k of d.keys) {
+    if (seen.has(k.digit)) return reply.code(400).send({ error: "duplicate_key", detail: `Key ${k.digit} is listed twice.` });
+    seen.add(k.digit);
+  }
+
+  // Resolve every key BEFORE writing anything, so a bad key can't leave a
+  // half-built menu that answers the phone and strands the caller.
+  const resolveKeys = (keys: typeof d.keys, menuLabel: string) => {
+    const out: Array<{ digit: string; dest: NonNullable<ReturnType<typeof buildDestination>> }> = [];
+    for (const k of keys) {
+      const dest = buildDestination(k.kind, k.targetId ?? "", dir);
+      if (!dest) {
+        return { error: `On "${menuLabel}", key ${k.digit}: I couldn't find ${k.kind === "team" ? "that team" : k.kind === "menu" ? "that menu" : `extension ${k.targetId}`} for this customer.` };
+      }
+      out.push({ digit: k.digit, dest });
+    }
+    return { keys: out };
+  };
+
+  const main = resolveKeys(d.keys, d.name);
+  if ("error" in main) return reply.code(422).send({ error: "unknown_target", detail: main.error });
+  const after = d.afterHours ? resolveKeys(d.afterHours.keys, d.afterHours.name) : null;
+  if (after && "error" in after) return reply.code(422).send({ error: "unknown_target", detail: after.error });
+
+  const created: Array<{ id: string; name: string; type: string }> = [];
+  await db.$transaction(async (tx: any) => {
+    const mk = async (name: string, type: string, promptRef: string | null | undefined, keys: Array<{ digit: string; dest: any }>) => {
+      const profile = await tx.ivrRouteProfile.create({
+        data: {
+          tenantId, name, type,
+          pbxDestination: "connect-tenant-ivr,s,1",
+          pbxPromptRef: promptRef ?? null,
+          timeoutSeconds: d.timeoutSeconds ?? 7,
+          maxRetries: 3,
+          isActive: true,
+          createdBy: (user as any).id ?? null,
+        },
+      });
+      if (keys.length) {
+        await tx.ivrOptionRoute.createMany({
+          data: keys.map((k) => ({
+            tenantId, profileId: profile.id, optionDigit: k.digit,
+            destinationType: k.dest.destinationType, destinationRef: k.dest.destinationRef,
+            label: k.dest.label ?? null, enabled: true,
+          })),
+        });
+      }
+      created.push({ id: profile.id, name, type });
+      return profile.id;
+    };
+
+    const mainId = await mk(d.name, "business_hours", d.greetingPromptRef, main.keys);
+    const afterId = d.afterHours && after && "keys" in after
+      ? await mk(d.afterHours.name, "after_hours", d.afterHours.greetingPromptRef, after.keys)
+      : null;
+
+    if (d.hours || afterId) {
+      await tx.ivrScheduleConfig.upsert({
+        where: { tenantId },
+        create: {
+          tenantId,
+          timezone: d.hours?.timezone ?? "America/New_York",
+          businessHoursRules: d.hours?.rules ?? [],
+          defaultProfileId: mainId,
+          afterHoursProfileId: afterId,
+          isActive: true,
+        },
+        update: {
+          ...(d.hours ? { timezone: d.hours.timezone, businessHoursRules: d.hours.rules } : {}),
+          defaultProfileId: mainId,
+          ...(afterId ? { afterHoursProfileId: afterId } : {}),
+        },
+      });
+    }
+  });
+
+  const portalBase = String(process.env.PORTAL_PUBLIC_URL || "https://app.connectcomunications.com").replace(/\/+$/, "");
+  const mainProfile = created[0];
+  app.log.info({ tenantId, menus: created.length, by: (user as any).id }, "ivr: menu built from scratch (unpublished)");
+
+  return reply.send({
+    ok: true,
+    tenantId,
+    menus: created,
+    published: false,
+    reviewUrl: `${portalBase}/pbx/ivr-studio?menu=${encodeURIComponent(mainProfile.id)}&from=assistant`,
+    note: "Built and saved as a draft. Nothing has changed for callers — open the review link, read it through, and press Publish when it looks right.",
+  });
 });
 
 // ── GET /voice/ivr/explain ───────────────────────────────────────────────────
