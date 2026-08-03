@@ -104,6 +104,14 @@ export default function IvrStudioPage() {
   const [schedule, setSchedule] = useState<ScheduleRow | null>(null);
   const [people, setPeople] = useState<Array<{ extension: string; name: string | null }>>([]);
   const [teams, setTeams] = useState<Array<{ number: string; name: string | null; kind: "ring_group" | "queue" }>>([]);
+  /** Whether each list was actually READ, as opposed to came back empty.
+   *  These are different facts and must not be conflated: "this customer has
+   *  no teams" means hide the choice, but "we couldn't find out" means show it
+   *  and say so. /voice/pbx/ring-groups answers 200 with `rows: []` and a
+   *  `skipReason` when the tenant isn't linked — a soft failure that looks
+   *  exactly like success, so it has to be checked explicitly. */
+  const [peopleLoaded, setPeopleLoaded] = useState(true);
+  const [teamsLoaded, setTeamsLoaded] = useState(true);
   const [pbxTenantId, setPbxTenantId] = useState<string | null>(null);
   const [dids, setDids] = useState<string[]>([]);
 
@@ -197,6 +205,13 @@ export default function IvrStudioPage() {
         ...(q?.rows || []).map((x) => ({ number: String(x.number ?? x.queue_number ?? x.extension ?? ""), name: (x.name ?? x.description ?? null) as string | null, kind: "queue" as const })),
       ].filter((x) => x.number);
       setTeams(teamRows);
+      // Ring groups answer 200 + `skipReason` instead of an error when they
+      // can't be read, and queues 404 (which `safe` turns into null). Either
+      // way we did NOT learn whether this customer has teams.
+      const rgUnknown = rg === null || Boolean((rg as any)?.skipReason);
+      const qUnknown = q === null;
+      setTeamsLoaded(!(rgUnknown && qUnknown) || teamRows.length > 0);
+      setPeopleLoaded(ext !== null);
 
       // Every menu's keys, so branches can be drawn without another round trip
       // each time someone opens one.
@@ -512,6 +527,8 @@ export default function IvrStudioPage() {
                             digit={digit}
                             current={o}
                             directory={directory}
+                            peopleLoaded={peopleLoaded}
+                            teamsLoaded={teamsLoaded}
                             disabled={saving}
                             onSave={(kind, target) => saveKey(digit, kind, target)}
                             onClear={() => clearKey(digit)}
@@ -547,6 +564,8 @@ export default function IvrStudioPage() {
                           digit={editingDigit}
                           current={null}
                           directory={directory}
+                          peopleLoaded={peopleLoaded}
+                          teamsLoaded={teamsLoaded}
                           disabled={saving}
                           onSave={(kind, target) => saveKey(editingDigit, kind, target)}
                           onClear={() => setEditingDigit(null)}
@@ -661,10 +680,12 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, disabled, onSave, onClear, onClose, onCreateMenu }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, disabled, onSave, onClear, onClose, onCreateMenu }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
+  peopleLoaded: boolean;
+  teamsLoaded: boolean;
   disabled?: boolean;
   onSave: (kind: MenuChoiceKind, targetId: string) => void;
   onClear: () => void;
@@ -675,13 +696,30 @@ function KeyEditor({ digit, current, directory, disabled, onSave, onClear, onClo
   const [kind, setKind] = useState<MenuChoiceKind>(read && read.kind !== "other" ? read.kind : "person");
   const [target, setTarget] = useState<string>(read?.targetId ?? "");
 
-  /** A choice with nothing behind it is not offered. Showing "a team" to a
-   *  customer with no teams invites them to pick something that can't work. */
-  const available = OFFERABLE_KINDS.filter((k) => {
-    if (k === "person" || k === "voicemail") return directory.people.length > 0;
-    if (k === "team") return directory.teams.length > 0;
-    return true; // menu + hangup always possible
-  });
+  /**
+   * Three states per choice, and they must stay distinct:
+   *   offered   — this customer has some, pick one
+   *   hidden    — this customer genuinely has none (checked and empty)
+   *   blocked   — we couldn't find out, so say so
+   *
+   * Collapsing "blocked" into "hidden" is how a customer with six ring groups
+   * ends up seeing no "A team" option and concluding the feature doesn't
+   * exist. /voice/pbx/ring-groups returns 200 with an empty list and a
+   * skipReason when it can't read the PBX, so this is not hypothetical.
+   */
+  const shown = OFFERABLE_KINDS.map((k) => {
+    if (k === "person" || k === "voicemail") {
+      if (!peopleLoaded) return { k, blocked: "Couldn't load this customer's extensions — refresh and try again." };
+      return directory.people.length > 0 ? { k, blocked: null } : null;
+    }
+    if (k === "team") {
+      if (!teamsLoaded) return { k, blocked: "Couldn't load this customer's teams — check they're linked to the phone system." };
+      return directory.teams.length > 0 ? { k, blocked: null } : null;
+    }
+    return { k, blocked: null }; // another menu + hang up always possible
+  }).filter(Boolean) as Array<{ k: MenuChoiceKind; blocked: string | null }>;
+
+  const blockedReason = shown.find((s) => s.k === kind)?.blocked ?? null;
 
   const targets: Array<{ id: string; name: string; meta: string }> =
     kind === "person" || kind === "voicemail"
@@ -693,7 +731,7 @@ function KeyEditor({ digit, current, directory, disabled, onSave, onClear, onClo
           : [];
 
   const preview = target || kind === "hangup" ? buildDestination(kind, target, directory) : null;
-  const canSave = kind === "hangup" ? true : Boolean(preview);
+  const canSave = blockedReason ? false : kind === "hangup" ? true : Boolean(preview);
 
   return (
     <div className="editor">
@@ -704,17 +742,19 @@ function KeyEditor({ digit, current, directory, disabled, onSave, onClear, onClo
       </div>
       <div className="editor-b">
         <div className="choices">
-          {available.map((k) => (
-            <button key={k} className={"choice" + (kind === k ? " on" : "")}
+          {shown.map(({ k, blocked }) => (
+            <button key={k} className={"choice" + (kind === k ? " on" : "") + (blocked ? " blocked" : "")}
               onClick={() => { setKind(k); setTarget(""); }}>
               <span className="glyph">{KIND_GLYPH[k]}</span>
               <b>{KIND_LABEL[k]}</b>
-              <span>{KIND_BLURB[k]}</span>
+              <span>{blocked ?? KIND_BLURB[k]}</span>
             </button>
           ))}
         </div>
 
-        {kind !== "hangup" && (
+        {blockedReason && <div className="blocknote">{blockedReason}</div>}
+
+        {!blockedReason && kind !== "hangup" && (
           <div className="picker">
             <div className="plabel">
               {kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : "Which menu?"}
@@ -741,7 +781,9 @@ function KeyEditor({ digit, current, directory, disabled, onSave, onClear, onClo
         <div className={"readback" + (canSave ? "" : " idle")}>
           {canSave
             ? <>When a caller presses <span className="k">{digitGlyph(digit)}</span> {kind === "hangup" ? "the call ends politely." : <>they&apos;ll reach <b>{preview?.label}</b>.</>}</>
-            : <>Choose where key {digitGlyph(digit)} should send the caller.</>}
+            : blockedReason
+              ? <>Can&apos;t set key {digitGlyph(digit)} to this until the list above loads.</>
+              : <>Choose where key {digitGlyph(digit)} should send the caller.</>}
         </div>
 
         <div className="foot">
@@ -999,6 +1041,10 @@ function StudioStyles() {
         background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);transition:.14s}
       .ivrs .choice:hover{border-color:var(--accent-line)}
       .ivrs .choice.on{border-color:var(--accent);background:var(--accent-soft)}
+      .ivrs .choice.blocked{border-style:dashed;opacity:.75}
+      .ivrs .choice.blocked span{color:var(--vm)}
+      .ivrs .blocknote{margin-top:12px;padding:11px 13px;border-radius:10px;font-size:13px;
+        color:var(--vm);background:color-mix(in srgb,var(--vm) 10%,transparent);border:1px solid color-mix(in srgb,var(--vm) 34%,transparent)}
       .ivrs .choice .glyph{font-size:19px}
       .ivrs .choice b{font-size:14px;font-weight:660}
       .ivrs .choice span{font-size:12px;color:var(--dim);line-height:1.45}
