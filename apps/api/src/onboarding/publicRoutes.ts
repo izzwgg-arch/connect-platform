@@ -323,12 +323,33 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     }
     if (!filePart) return reply.code(400).send({ error: "file_missing" });
 
+    // Only the documents a port actually needs (PDF or a photo of the bill),
+    // and no bigger than 10 MB — this is a public, unauthenticated endpoint.
+    const originalName = sanitizeFileName(filePart.filename || "upload.bin");
+    const allowedMime = new Set(["application/pdf", "image/jpeg", "image/png"]);
+    const allowedExt = new Set([".pdf", ".jpg", ".jpeg", ".png"]);
+    const mime = String(filePart.mimetype || "").toLowerCase();
+    const ext = path.extname(originalName).toLowerCase();
+    if (!allowedMime.has(mime) && !allowedExt.has(ext)) {
+      return reply.code(400).send({ error: "unsupported_file_type", detail: "Please upload a PDF, JPEG, or PNG." });
+    }
+
+    const maxBytes = 10 * 1024 * 1024;
     const bufs: Buffer[] = [];
+    let totalBytes = 0;
     for await (const chunk of filePart.file) {
-      bufs.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      totalBytes += buf.length;
+      if (totalBytes > maxBytes) {
+        filePart.file.resume?.();
+        return reply.code(413).send({ error: "file_too_large", detail: "The file is over 10 MB. Please upload a smaller copy." });
+      }
+      bufs.push(buf);
+    }
+    if (filePart.file.truncated) {
+      return reply.code(413).send({ error: "file_too_large", detail: "The file is over 10 MB. Please upload a smaller copy." });
     }
     const buffer = Buffer.concat(bufs);
-    const originalName = sanitizeFileName(filePart.filename || "upload.bin");
     const storageKey = buildStorageKey(row.id, originalName);
     const absolutePath = resolveOnboardingStoragePath(storageKey);
     await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });

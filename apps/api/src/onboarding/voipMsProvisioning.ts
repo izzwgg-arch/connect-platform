@@ -56,7 +56,16 @@ async function loadMasterCreds(): Promise<VmsCreds | null> {
   }
 }
 
-/** One VoIP.ms REST call. Throws with VoIP.ms's own status text on failure. */
+/**
+ * One VoIP.ms REST call. Throws with VoIP.ms's own status text on failure.
+ *
+ * Hardened: every request carries a 30s timeout (a hung call here pins the
+ * whole number stage), and transport failures — timeouts, connection errors,
+ * and the HTML error pages Cloudflare serves during VoIP.ms outages (521/522,
+ * body starts with "<" so it isn't JSON) — are retried up to 3 times with
+ * exponential backoff. A real API answer with a non-success status is NOT
+ * retried; that's VoIP.ms saying no, not an outage.
+ */
 async function vms(creds: VmsCreds, method: string, params: Record<string, string> = {}): Promise<any> {
   const base = (creds.apiBaseUrl || VMS_BASE_DEFAULT).replace(/\/$/, "");
   const url = new URL(base);
@@ -64,12 +73,30 @@ async function vms(creds: VmsCreds, method: string, params: Record<string, strin
   url.searchParams.set("api_password", creds.password);
   url.searchParams.set("method", method);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url.toString(), { method: "GET" });
-  const json: any = await res.json().catch(() => ({}));
-  if (String(json?.status || "").toLowerCase() !== "success") {
-    throw new Error(`voipms ${method} failed: ${json?.status || "no_response"}`);
+
+  const attempts = 3;
+  const backoffBase = Number(process.env.VOIPMS_RETRY_BASE_MS || 1000);
+  let lastTransport = "";
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let json: any = null;
+    try {
+      const res = await fetch(url.toString(), { method: "GET", signal: AbortSignal.timeout(30_000) });
+      json = await res.json();
+    } catch (e: any) {
+      // Timeout, connection failure, or a non-JSON (HTML) body — all outages.
+      lastTransport = String(e?.name === "TimeoutError" ? "timeout" : e?.message || e).slice(0, 120);
+      if (attempt < attempts) {
+        await new Promise((r) => setTimeout(r, backoffBase * 2 ** (attempt - 1)));
+        continue;
+      }
+      throw new Error(`voipms ${method} failed: provider_unreachable (${lastTransport})`);
+    }
+    if (String(json?.status || "").toLowerCase() !== "success") {
+      throw new Error(`voipms ${method} failed: ${json?.status || "no_response"}`);
+    }
+    return json;
   }
-  return json;
+  throw new Error(`voipms ${method} failed: provider_unreachable (${lastTransport})`);
 }
 
 /** VoIP.ms subaccount name = sanitized company name + index (BobsPlumbing1). */
@@ -93,6 +120,19 @@ async function logEvent(submissionId: string, message: string): Promise<void> {
   } catch {
     /* event logging is best-effort */
   }
+}
+
+/**
+ * Durable per-submission provisioning state, kept inside the answers JSON
+ * (answers.provisioning). This is what makes retries safe: the port id and
+ * the temporary DID survive a crash, so a re-run reuses them instead of
+ * filing a second port or buying a second number.
+ */
+async function mergeProvisioningState(row: any, patch: Record<string, any>): Promise<void> {
+  const answers = { ...(row.answers || {}) };
+  answers.provisioning = { ...(answers.provisioning || {}), ...patch };
+  row.answers = answers;
+  await (db as any).onboardingSubmission.update({ where: { id: row.id }, data: { answers } });
 }
 
 /** Find the VoIP.ms POP id for New York 1 (falls back to a blank/default POP). */
@@ -269,12 +309,77 @@ export async function listSpareDids(creds: VmsCreds): Promise<SpareDid[]> {
 }
 
 /**
- * Pick a spare DID for a port-in customer. Returns "" when nothing spare is
- * available.
+ * Pick a spare DID, preferring the customer's own area code so a Monsey
+ * business doesn't end up on a Texas number. Returns "" when nothing spare
+ * is available.
  */
-async function findSpareDid(creds: VmsCreds): Promise<string> {
-  const [first] = await listSpareDids(creds);
-  return first?.did || "";
+async function findSpareDid(creds: VmsCreds, areaCode = ""): Promise<string> {
+  const spares = await listSpareDids(creds);
+  const local = areaCode ? spares.find((s) => s.did.startsWith(areaCode)) : undefined;
+  return (local || spares[0])?.did || "";
+}
+
+/**
+ * The area code new/temporary numbers should be bought in: the number being
+ * ported, falling back to the company's main phone. An unseeded searchDIDsUSA
+ * returns the first DID anywhere in the US — that's how a customer porting a
+ * 212 number could be handed a random out-of-state temporary.
+ */
+function preferredAreaCode(row: any): string {
+  const ported = tenDigits(row?.answers?.phone?.details?.numbers);
+  if (ported.length === 10) return ported.slice(0, 3);
+  const main = tenDigits(row?.mainPhone);
+  return main.length === 10 ? main.slice(0, 3) : "";
+}
+
+/**
+ * Buy a new DID for the subaccount: search the preferred area code first,
+ * fall back to a nationwide search only when that area code has no stock.
+ */
+async function searchAndOrderDid(
+  creds: VmsCreds,
+  submissionId: string,
+  areaCode: string,
+  subUsername: string,
+  failCode: string,
+): Promise<string> {
+  const queries = areaCode ? [areaCode, ""] : [""];
+  for (const q of queries) {
+    const search = await vms(creds, "searchDIDsUSA", { type: "starts", query: q }).catch(() => null);
+    const first = Array.isArray(search?.dids) ? tenDigits(search.dids[0]?.did) : "";
+    if (!first) continue;
+    if (q && q !== first.slice(0, 3)) continue; // provider ignored the seed — don't trust it
+    await orderDid(creds, submissionId, first, subUsername);
+    return first;
+  }
+  throw new Error(failCode);
+}
+
+/**
+ * Temporary number for a port-in customer: reuse the one a previous run
+ * already assigned (persisted in answers.provisioning), else route a spare,
+ * else buy one in the customer's area code.
+ */
+async function ensureTemporaryDid(creds: VmsCreds, submissionId: string, row: any, subUsername: string): Promise<string> {
+  const persisted = tenDigits(row?.answers?.provisioning?.tempDid);
+  if (persisted.length === 10) {
+    await logEvent(submissionId, `Reusing temporary number ${persisted} from the earlier run.`);
+    await routeDid(creds, submissionId, persisted, subUsername);
+    return persisted;
+  }
+  const areaCode = preferredAreaCode(row);
+  const spare = await findSpareDid(creds, areaCode);
+  let did: string;
+  if (spare) {
+    await logEvent(submissionId, `Using spare number ${spare} as temporary number until the port completes.`);
+    await routeDid(creds, submissionId, spare, subUsername);
+    did = spare;
+  } else {
+    did = await searchAndOrderDid(creds, submissionId, areaCode, subUsername, "no_temporary_did_available");
+    await logEvent(submissionId, `No spare number in the account — bought ${did} as temporary number.`);
+  }
+  await mergeProvisioningState(row, { tempDid: did });
+  return did;
 }
 
 /** Order a brand-new DID routed straight to the subaccount, POP New York 1. */
@@ -338,28 +443,48 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
     return;
   }
 
-  const submit = await vms(creds, "addLNPPort", {
-    did,
-    carrier: String(port.carrier || ""),
-    account_number: String(port.accountNumber || ""),
-    pin: String(port.portPin || ""),
-    name: String(port.nameOnAccount || row.companyName || ""),
-    service_address: String(port.serviceAddress || ""),
-  });
-  const portId = String(submit?.portid ?? submit?.port_id ?? "");
-  await logEvent(submissionId, `Port-in submitted for ${did} (id ${portId || "?"}).`);
+  // A port for this number may already be on file from an earlier run that
+  // died later in the stage — filing again would open a SECOND port on the
+  // customer's live number. The filed flag + port id persist in
+  // answers.provisioning, so a retry only picks up what's left (attachments).
+  const prov: any = answers?.provisioning || {};
+  let portId = String(prov.portId || "");
+  if (prov.portFiled) {
+    await logEvent(submissionId, `Port-in for ${did} already on file (id ${portId || "?"}) — not filing a second one.`);
+  } else {
+    const submit = await vms(creds, "addLNPPort", {
+      did,
+      carrier: String(port.carrier || ""),
+      account_number: String(port.accountNumber || ""),
+      pin: String(port.portPin || ""),
+      name: String(port.nameOnAccount || row.companyName || ""),
+      service_address: String(port.serviceAddress || ""),
+    });
+    portId = String(submit?.portid ?? submit?.port_id ?? "");
+    await mergeProvisioningState(row, { portFiled: true, portId });
+    await logEvent(submissionId, `Port-in submitted for ${did} (id ${portId || "?"}).`);
+  }
 
-  // Attach LOA + bill (addLNPFile expects base64 file content).
+  // Attach LOA + bill (addLNPFile expects base64 file content). Successful
+  // attachments are remembered so a retry doesn't re-send them; failures are
+  // flagged so the owner's sign-up report says to chase the documents.
+  const attached: string[] = Array.isArray(prov.attachedFileIds) ? [...prov.attachedFileIds] : [];
+  const attachFailures: string[] = [];
   for (const f of files) {
+    const fileKey = String(f.id ?? f.storageKey ?? f.filename ?? "");
+    if (fileKey && attached.includes(fileKey)) continue;
     try {
       const full = path.resolve(onboardingStorageRoot(), String(f.storageKey || ""));
       const b64 = fs.readFileSync(full).toString("base64");
       await vms(creds, "addLNPFile", { portid: portId, file: b64, filename: String(f.filename || "document") });
+      if (fileKey) attached.push(fileKey);
       await logEvent(submissionId, `Attached ${f.kind === "PORTING_LOA" ? "authorization" : "bill"} (${f.filename}) to port ${portId || "?"}.`);
     } catch (e: any) {
+      attachFailures.push(String(f.filename || "document"));
       await logEvent(submissionId, `Could not attach ${f.filename}: ${String(e?.message || e).slice(0, 160)}`);
     }
   }
+  await mergeProvisioningState(row, { attachedFileIds: attached, portDocAttachFailures: attachFailures });
 }
 
 // ── Main entry ────────────────────────────────────────────────────────────────
@@ -410,25 +535,17 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
     let temporary = false;
 
     if (choice === "port") {
-      // File the port, then hand out a temporary number immediately.
-      await submitPortIn(creds, row, live);
+      // Temporary number FIRST, port second. The port is the irreversible
+      // half — if it were filed first and the temporary-number step failed,
+      // the retry would file a SECOND port on the customer's live number.
       temporary = true;
       if (live) {
-        did = await findSpareDid(creds);
-        if (did) {
-          await logEvent(submissionId, `Using spare number ${did} as temporary number until the port completes.`);
-          await routeDid(creds, submissionId, did, sub.username);
-        } else {
-          const search = await vms(creds, "searchDIDsUSA", { type: "starts", query: "" }).catch(() => null);
-          const first = Array.isArray(search?.dids) ? tenDigits(search.dids[0]?.did) : "";
-          if (!first) throw new Error("no_temporary_did_available");
-          did = first;
-          await logEvent(submissionId, `No spare number in the account — buying ${did} as temporary number.`);
-          await orderDid(creds, submissionId, did, sub.username);
-        }
+        did = await ensureTemporaryDid(creds, submissionId, row, sub.username);
+        await submitPortIn(creds, row, live);
       } else {
         did = tenDigits(answers?.phone?.details?.numbers) || "8450000000";
         await logEvent(submissionId, `[dry-run] Assign a temporary number (spare or newly bought) → route to ${sub.username}.`);
+        await submitPortIn(creds, row, live);
       }
     } else {
       did = tenDigits(answers?.phone?.selectedNumber);
@@ -439,12 +556,27 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
           // Already ours (spare in the master account) — no purchase, just
           // point it. But NEVER steal a number that another subaccount is
           // already using (two customers can pick the same spare from a
-          // cached search).
+          // cached search). Exact account match — a substring test let
+          // "Acme1" claim a number routed to "Acme10".
           const routing = String(owned.routing || "");
-          if (routing.includes("_") && !routing.includes(sub.username)) {
-            throw new Error("selected_number_already_assigned");
+          const routedAccount = routing.startsWith("account:") ? routing.slice("account:".length) : "";
+          if (routedAccount.includes("_") && routedAccount !== sub.username) {
+            // The customer already PAID — don't dead-end the build over a
+            // stale search result. Hand them the next best number in the
+            // same area code and say so in the timeline.
+            const areaCode = did.slice(0, 3);
+            await logEvent(submissionId, `Number ${did} was taken by another customer meanwhile — picking a replacement in area code ${areaCode}.`);
+            const spare = await findSpareDid(creds, areaCode);
+            if (spare) {
+              await routeDid(creds, submissionId, spare, sub.username);
+              did = spare;
+            } else {
+              did = await searchAndOrderDid(creds, submissionId, areaCode, sub.username, "no_replacement_did_available");
+            }
+            await logEvent(submissionId, `Replacement number ${did} assigned instead of the taken one.`);
+          } else {
+            await routeDid(creds, submissionId, did, sub.username);
           }
-          await routeDid(creds, submissionId, did, sub.username);
         } else {
           await orderDid(creds, submissionId, did, sub.username);
         }

@@ -101,6 +101,10 @@ export class PanelSession {
 
   async fetchPanel(pathPart: string, opts: RequestInit = {}): Promise<Response> {
     (opts as any).redirect = "manual";
+    // A hung panel request would pin this robot account forever — and the
+    // orchestrator's account pool then starves EVERY later build. Time out
+    // instead and let the step fail loudly.
+    if (!opts.signal) opts.signal = AbortSignal.timeout(30_000);
     opts.headers = Object.assign(
       {
         "User-Agent": BROWSER_UA,
