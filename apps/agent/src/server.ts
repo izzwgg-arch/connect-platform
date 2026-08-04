@@ -180,6 +180,7 @@ async function main() {
       everettApiKey: (await secrets.get("ivrit_api_key")) ?? cfg.everettApiKey,
       everettEndpointId: process.env.IVRIT_ENDPOINT_ID || cfg.everettEndpointId || "536xyqv8oyqygx",
       yiddishLabsApiKey: (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey,
+      elevenLabsApiKey: (await secrets.get("elevenlabs_api_key")) ?? cfg.elevenLabsApiKey,
     };
     const anthropicResolved = (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey;
     router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: anthropicResolved });
@@ -349,7 +350,45 @@ async function main() {
 
     // Voice Studio (owner-only). Manage voices + render prompt audio (guarded
     // until ElevenLabs key). Deploy-to-IVR is action A12/P14 — not here.
-    const voiceStudio = new VoiceStudio(prisma, { elevenLabsApiKey: cfg.elevenLabsApiKey, openaiApiKey: cfg.openaiApiKey }, audit);
+    const voiceStudio = new VoiceStudio(prisma, providerKeys as any, audit);
+
+    // ── ElevenLabs: connection check + voice list ─────────────────────────
+    // Proves the saved key actually works and shows what it can reach, so the
+    // settings page never just says "saved" and leaves someone guessing.
+    app.get("/agent/voice/elevenlabs/status", async (req, reply) => {
+      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      const key = providerKeys.elevenLabsApiKey;
+      if (!key) return { configured: false, reachable: false, reason: "no_key" };
+      try {
+        const [subRes, voicesRes] = await Promise.all([
+          fetch("https://api.elevenlabs.io/v1/user/subscription", { headers: { "xi-api-key": key } }),
+          fetch("https://api.elevenlabs.io/v1/voices", { headers: { "xi-api-key": key } }),
+        ]);
+        if (!subRes.ok) {
+          return { configured: true, reachable: false, reason: subRes.status === 401 ? "invalid_key" : `http_${subRes.status}` };
+        }
+        const sub: any = await subRes.json();
+        const voicesJson: any = voicesRes.ok ? await voicesRes.json() : { voices: [] };
+        return {
+          configured: true,
+          reachable: true,
+          tier: sub?.tier ?? null,
+          characterCount: sub?.character_count ?? null,
+          characterLimit: sub?.character_limit ?? null,
+          // Cloning is a plan feature; the UI needs to know before offering it.
+          canClone: !!sub?.can_use_instant_voice_cloning,
+          voices: (voicesJson.voices ?? []).map((v: any) => ({
+            voiceId: v.voice_id,
+            name: v.name,
+            category: v.category ?? null,
+            labels: v.labels ?? {},
+            previewUrl: v.preview_url ?? null,
+          })),
+        };
+      } catch (err: any) {
+        return { configured: true, reachable: false, reason: "unreachable", detail: String(err?.message ?? "").slice(0, 200) };
+      }
+    });
     const requireOwner = (req: any) => {
       const auth = req.headers.authorization;
       const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
@@ -661,7 +700,7 @@ async function main() {
       const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
       if (id?.role !== "owner") return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
-      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key", "chat_model"];
+      const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key", "elevenlabs_api_key", "chat_model"];
       if (!valid.includes(b.key) || typeof b.value !== "string") return reply.code(400).send({ error: "bad_request" });
       const { parseChatModelPick } = await import("./llm/router");
       if (b.key === "chat_model" && b.value.trim() && !parseChatModelPick(b.value)) {

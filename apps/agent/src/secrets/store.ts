@@ -8,13 +8,14 @@
  *  - The agent resolves each key from the store first, falling back to env.
  *  - Never logged. status() reports only which keys are set + a masked hint.
  */
-export type SecretKey = "anthropic_api_key" | "openai_api_key" | "yiddishlabs_api_key" | "ivrit_api_key" | "chat_model";
+export type SecretKey = "anthropic_api_key" | "openai_api_key" | "yiddishlabs_api_key" | "ivrit_api_key" | "elevenlabs_api_key" | "chat_model";
 
 export const SECRET_ENV_FALLBACK: Record<SecretKey, string> = {
   anthropic_api_key: "ANTHROPIC_API_KEY",
   openai_api_key: "OPENAI_API_KEY",
   yiddishlabs_api_key: "YIDDISHLABS_API_KEY",
   ivrit_api_key: "EVERETT_API_KEY", // ivrit.ai RunPod key (a.k.a. Everett)
+  elevenlabs_api_key: "ELEVENLABS_API_KEY", // voices for IVR greetings
   // Not a secret — the owner's chat-model pick ("provider:modelId") from the
   // Assistant page. Rides this store for its encryption/persist/hot-reload
   // plumbing; no env fallback (unset = code defaults in llm/router.ts).
@@ -77,7 +78,7 @@ export class SecretStore {
 
   /** Masked status for the UI — configured? source? last 4 chars only. */
   async status(): Promise<Record<SecretKey, { configured: boolean; source: "store" | "env" | "none"; hint?: string }>> {
-    const keys: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key", "chat_model"];
+    const keys: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key", "elevenlabs_api_key", "chat_model"];
     const out: any = {};
     for (const k of keys) {
       let source: "store" | "env" | "none" = "none";
