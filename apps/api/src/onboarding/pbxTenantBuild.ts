@@ -51,6 +51,21 @@ export type PbxPerson = {
 
 export type PbxBuildJob = {
   company: string;
+  /**
+   * Unique per-submission tenant name (stored on the submission — see
+   * provisioningIdentity.ts). Falls back to slugify(company) for legacy
+   * resumes only.
+   */
+  slug?: string;
+  /**
+   * Unique per-submission description used on the trunk / outbound route /
+   * route selection / tenant. Falls back to the bare company name for legacy
+   * resumes only. Two customers can share a company name — matching panel
+   * objects by that name alone made the second sign-up ADOPT the first
+   * customer's PBX (and the panel rejects duplicate trunk names anyway, so a
+   * same-named second build could never even create its own).
+   */
+  label?: string;
   voipms: { user: string; pass: string; server: string };
   did: string;
   people: PbxPerson[];
@@ -80,15 +95,17 @@ const TRUNK_SELECT = "trklist[]"; // in trunk_group (outbound route) add form
 const ROUTE_SELECT = /^members\[\d+\]\[outbound_route_id\]$/; // in ars add form
 const ARS_SELECT = "outbound_profiles[]"; // in tenants add form
 
-async function createTrunk(s: PanelSession, co: string, vm: PbxBuildJob["voipms"]): Promise<string> {
+async function createTrunk(s: PanelSession, label: string, vm: PbxBuildJob["voipms"]): Promise<string> {
   // Idempotent resume: if a previous (interrupted) run already created this
   // trunk, reuse it instead of failing on the panel's duplicate-name error.
-  const pre = findOptionInSelect(await s.loadForm("trunk_group", "add"), TRUNK_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
+  // Safe only because the label is unique per submission — matching on the
+  // bare company name here made a same-named second customer adopt this one.
+  const pre = findOptionInSelect(await s.loadForm("trunk_group", "add"), TRUNK_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("trunks");
   const p: Pairs = [
     ["trunk_mode", "visual"], ["class", "trunks"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
-    ["technology", "pjsip"], ["description", co], ["tenant_trunk_id", "2"], ["class_of_service_id", ""], ["cos_id_current", ""],
+    ["technology", "pjsip"], ["description", label], ["tenant_trunk_id", "2"], ["class_of_service_id", ""], ["cos_id_current", ""],
     ["ringtimer", "90"], ["dial_profile_id", "1"], ["profile_id", "1"], ["music_group_id", ""],
   ];
   for (const c of CODECS) p.push(["codecs[]", c]);
@@ -115,19 +132,21 @@ async function createTrunk(s: PanelSession, co: string, vm: PbxBuildJob["voipms"
   assertSaved("trunk", await s.post(p));
   await applyChanges(s, "trunk");
   const h = await s.loadForm("trunk_group", "add");
-  const id = findOptionInSelect(h, TRUNK_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
-  if (!id) throw new PanelStepError("trunk", `trunk "${co}" not found in outbound-route form after create`);
+  const id = findOptionInSelect(h, TRUNK_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
+  if (!id) throw new PanelStepError("trunk", `trunk "${label}" not found in outbound-route form after create`);
   return id;
 }
 
-async function createOutboundRoute(s: PanelSession, co: string, did: string, trunkId: string): Promise<string> {
-  const pre = findOptionInSelect(await s.loadForm("ars", "add"), ROUTE_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
+async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkId: string): Promise<string> {
+  const pre = findOptionInSelect(await s.loadForm("ars", "add"), ROUTE_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("trunk_group");
   const p: Pairs = [
     ["class", "trunk_group"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
-    ["description", co], ["trklist[]", trunkId], ["pin_list_id", ""], ["csv", ""],
-    ["cid_name", co], ["cid_number", did], ["overwrite_cid", "if_not_provided"],
+    ["description", label], ["trklist[]", trunkId], ["pin_list_id", ""], ["csv", ""],
+    // cid_name is what callees SEE on outbound calls — keep it the clean
+    // company name; only the description carries the submission tag.
+    ["cid_name", cidName], ["cid_number", did], ["overwrite_cid", "if_not_provided"],
     [`trkpattern[${PH}][prepend]`, ""], [`trkpattern[${PH}][prefix]`, ""], [`trkpattern[${PH}][pattern]`, ""], [`trkpattern[${PH}][cid_pattern]`, ""],
     ["trkpattern[0][prepend]", "845"], ["trkpattern[0][prefix]", ""], ["trkpattern[0][pattern]", "nxxxxxx"], ["trkpattern[0][cid_pattern]", ""],
     ["trkpattern[1][prepend]", ""], ["trkpattern[1][prefix]", ""], ["trkpattern[1][pattern]", "nxxnxxxxxx"], ["trkpattern[1][cid_pattern]", ""],
@@ -139,27 +158,27 @@ async function createOutboundRoute(s: PanelSession, co: string, did: string, tru
   assertSaved("outbound-route", await s.post(p));
   await applyChanges(s, "outbound-route");
   const h = await s.loadForm("ars", "add");
-  const id = findOptionInSelect(h, ROUTE_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
-  if (!id) throw new PanelStepError("outbound-route", `route "${co}" not found in route-selection form after create`);
+  const id = findOptionInSelect(h, ROUTE_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
+  if (!id) throw new PanelStepError("outbound-route", `route "${label}" not found in route-selection form after create`);
   return id;
 }
 
-async function createRouteSelection(s: PanelSession, co: string, routeId: string): Promise<string> {
-  const pre = findOptionInSelect(await s.loadForm("tenants", "add"), ARS_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
+async function createRouteSelection(s: PanelSession, label: string, routeId: string): Promise<string> {
+  const pre = findOptionInSelect(await s.loadForm("tenants", "add"), ARS_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("ars");
   assertSaved(
     "route-selection",
     await s.post([
-      ["class", "ars"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf], ["description", co],
+      ["class", "ars"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf], ["description", label],
       [`members[${PH}][outbound_route_id]`, ""], [`members[${PH}][time_group_id]`, ""], [`members[${PH}][enabled]`, "1"],
       ["members[0][outbound_route_id]", routeId], ["members[0][time_group_id]", ""], ["members[0][enabled]", "1"],
     ]),
   );
   await applyChanges(s, "route-selection");
   const h = await s.loadForm("tenants", "add");
-  const id = findOptionInSelect(h, ARS_SELECT, (t) => t.toLowerCase() === co.toLowerCase());
-  if (!id) throw new PanelStepError("route-selection", `selection "${co}" not found in tenant form after create`);
+  const id = findOptionInSelect(h, ARS_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
+  if (!id) throw new PanelStepError("route-selection", `selection "${label}" not found in tenant form after create`);
   return id;
 }
 
@@ -169,23 +188,23 @@ async function createRouteSelection(s: PanelSession, co: string, routeId: string
  * tenants form does NOT render path hashes, so a resolver is the reliable
  * source; the HTML scrape below stays only as a last-ditch fallback.
  */
-export type TenantPathResolver = (slug: string, company: string) => Promise<string | null>;
+export type TenantPathResolver = (slug: string, label: string) => Promise<string | null>;
 
-/** Scan the tenants page for the slug/company and return its 16-hex path. */
+/** Scan the tenants page for the slug/label and return its 16-hex path. */
 async function findTenantPath(
   s: PanelSession,
-  co: string,
+  label: string,
   slug: string,
   resolve?: TenantPathResolver,
 ): Promise<string | null> {
   if (resolve) {
-    const viaApi = await resolve(slug, co).catch(() => null);
+    const viaApi = await resolve(slug, label).catch(() => null);
     if (viaApi && /^[a-f0-9]{16}$/i.test(viaApi)) return viaApi;
   }
   const h = await s.loadForm("tenants", "read");
   for (const m of h.matchAll(/value=["']([a-f0-9]{16})["'][^>]*>([\s\S]{0,120}?)</gi)) {
     const t = decodeEntities(m[2]).trim().toLowerCase();
-    if (t === slug || t === co.toLowerCase()) return m[1];
+    if (t === slug || t === label.toLowerCase()) return m[1];
   }
   const m =
     h.match(new RegExp("([a-f0-9]{16})[^a-f0-9]{0,200}?" + slug, "i")) ||
@@ -195,20 +214,20 @@ async function findTenantPath(
 
 async function createTenant(
   s: PanelSession,
-  co: string,
+  label: string,
   slug: string,
   did: string,
   arsId: string,
   resolve?: TenantPathResolver,
 ): Promise<string> {
-  const pre = await findTenantPath(s, co, slug, resolve);
+  const pre = await findTenantPath(s, label, slug, resolve);
   if (pre) return pre;
   const csrf = await s.ensureCsrf("tenants");
   assertSaved(
     "tenant",
     await s.post([
       ["class", "tenants"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
-      ["name", slug], ["description", co], ["prefix", ""], ["enabled", "1"],
+      ["name", slug], ["description", label], ["prefix", ""], ["enabled", "1"],
       ["assign_to_existing_user", ""], ["user_id", "45"], ["user_email", ""], ["user_password", ""], ["full_name", ""], ["role", "4"],
       ["startapp", "dashboard"], ["startapp_custom", ""], ["send_welcome_email", "1"],
       ["settings[extensions]", ""], ["settings[trunks]", ""], ["settings[queues]", ""], ["settings[ivrs]", ""],
@@ -224,7 +243,7 @@ async function createTenant(
   await applyChanges(s, "tenant");
   // The REST tenants list can lag a beat behind Apply Changes — retry briefly.
   for (let attempt = 1; attempt <= 6; attempt++) {
-    const tenantPath = await findTenantPath(s, co, slug, resolve);
+    const tenantPath = await findTenantPath(s, label, slug, resolve);
     if (tenantPath) return tenantPath;
     await new Promise((r) => setTimeout(r, Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000)));
   }
@@ -440,7 +459,10 @@ export async function buildPbxTenant(
   resolveTenantPath?: TenantPathResolver,
 ): Promise<PbxBuildResult> {
   const co = job.company;
-  const slug = slugify(co);
+  // Unique-per-submission identities (legacy resumes fall back to the old
+  // company-derived names so they keep matching their existing objects).
+  const slug = job.slug || slugify(co);
+  const label = String(job.label || co).trim();
   if (!co || !job.did || !job.voipms || !job.voipms.user || !job.voipms.pass || !job.voipms.server) {
     throw new PanelStepError("input", "job needs company, did, voipms{user,pass,server}");
   }
@@ -449,13 +471,13 @@ export async function buildPbxTenant(
   }
 
   s.setTenant(mainTenant);
-  const trunkId = await createTrunk(s, co, job.voipms);
+  const trunkId = await createTrunk(s, label, job.voipms);
   log(`trunk ok (id ${trunkId})`);
-  const routeId = await createOutboundRoute(s, co, job.did, trunkId);
+  const routeId = await createOutboundRoute(s, label, co, job.did, trunkId);
   log(`outbound route ok (id ${routeId})`);
-  const arsId = await createRouteSelection(s, co, routeId);
+  const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
-  const tenantPath = await createTenant(s, co, slug, job.did, arsId, resolveTenantPath);
+  const tenantPath = await createTenant(s, label, slug, job.did, arsId, resolveTenantPath);
   log(`tenant ok (path ${tenantPath})`);
 
   s.setTenant(tenantPath);

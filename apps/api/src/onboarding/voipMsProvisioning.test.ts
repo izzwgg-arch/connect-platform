@@ -145,7 +145,7 @@ test("dry-run new number: ready state + credentials generated, ZERO VoIP.ms call
   assert.equal(row.provisionedDid, "8455577726");
   assert.equal(row.didIsTemporary, false);
   const sub = JSON.parse(row.voipmsSubaccountEncrypted.replace(/^enc:/, ""));
-  assert.equal(sub.username, "344022_BobsPlumbing1");
+  assert.equal(sub.username, "344022_BobsPlumsub1");
   assert.equal(sub.server, "newyork1.voip.ms");
   assert.ok(sub.password.length >= 12);
   assert.ok(state.events.some((e) => e.message.includes("[dry-run]")));
@@ -177,7 +177,7 @@ test("live new number (not owned): subaccount + orderDID with NY pop, routed to 
 
   const create = calls("createSubAccount");
   assert.equal(create.length, 1);
-  assert.equal(create[0].params.username, "BobsPlumbing1");
+  assert.equal(create[0].params.username, "BobsPlumsub1");
   assert.equal(create[0].params.device_type, "1"); // Asterisk / IP-PBX (2 would be ATA/IP phone)
   assert.equal(create[0].params.protocol, "1");
   assert.equal(create[0].params.callerid_number, undefined); // own-device CallerID: not set
@@ -185,7 +185,7 @@ test("live new number (not owned): subaccount + orderDID with NY pop, routed to 
   const order = calls("orderDID");
   assert.equal(order.length, 1);
   assert.equal(order[0].params.did, "8455577726");
-  assert.equal(order[0].params.routing, "account:344022_BobsPlumbing1");
+  assert.equal(order[0].params.routing, "account:344022_BobsPlumsub1");
   assert.equal(order[0].params.pop, "23"); // New York 1
   assert.equal(calls("setDIDRouting").length, 0);
   assert.equal(calls("setSMS").length, 0); // sms off
@@ -206,7 +206,7 @@ test("live new number ALREADY in our account: routed, not re-purchased", async (
   assert.equal(calls("orderDID").length, 0);
   const route = calls("setDIDRouting");
   assert.equal(route.length, 1);
-  assert.equal(route[0].params.routing, "account:344022_BobsPlumbing1");
+  assert.equal(route[0].params.routing, "account:344022_BobsPlumsub1");
 });
 
 test("listSpareDids: only unassigned account DIDs count as spare (stock to use up first)", async () => {
@@ -247,7 +247,7 @@ test("resume: number already routed to OUR OWN subaccount is re-routed without e
   reset({ live: true });
   vmsHandlers.getDIDsInfo = () => ({
     status: "success",
-    dids: [{ did: "8455577726", routing: "account:344022_BobsPlumbing1" }],
+    dids: [{ did: "8455577726", routing: "account:344022_BobsPlumsub1" }],
   });
   const id = seedSubmission();
   const res = await mod.applyOnboardingNumber(id);
@@ -290,7 +290,7 @@ test("live port with a spare DID in the account: port filed + spare used as temp
   assert.equal(calls("orderDID").length, 0); // spare found — nothing bought
   const route = calls("setDIDRouting");
   assert.equal(route[0].params.did, "9145550002");
-  assert.equal(route[0].params.routing, "account:344022_BobsPlumbing1");
+  assert.equal(route[0].params.routing, "account:344022_BobsPlumsub1");
 
   const row = state.submissions.get(id);
   assert.equal(row.provisionedDid, "9145550002");
@@ -320,7 +320,7 @@ test("live: existing subaccount is reused with a rotated password (idempotent re
   reset({ live: true });
   vmsHandlers.getSubAccounts = () => ({
     status: "success",
-    accounts: [{ id: "77", account: "344022_BobsPlumbing1" }],
+    accounts: [{ id: "77", account: "344022_BobsPlumsub1" }],
   });
   const id = seedSubmission();
   await mod.applyOnboardingNumber(id);
@@ -344,7 +344,7 @@ test("REGRESSION: createSubAccount used_username self-heals by reusing (live 202
   vmsHandlers.getSubAccounts = () => {
     subLookups++;
     if (subLookups === 1) return { status: "fail" }; // transient pre-lookup failure
-    return { status: "success", accounts: [{ id: "99", account: "344022_BobsPlumbing1", device_type: "1" }] };
+    return { status: "success", accounts: [{ id: "99", account: "344022_BobsPlumsub1", device_type: "1" }] };
   };
   vmsHandlers.createSubAccount = () => ({ status: "used_username" });
   const id = seedSubmission();
@@ -352,14 +352,14 @@ test("REGRESSION: createSubAccount used_username self-heals by reusing (live 202
   assert.equal(res.ok, true);
   assert.equal(calls("setSubAccount")[0].params.id, "99"); // reused after self-heal
   const sub = JSON.parse(state.submissions.get(id).voipmsSubaccountEncrypted.replace(/^enc:/, ""));
-  assert.equal(sub.username, "344022_BobsPlumbing1");
+  assert.equal(sub.username, "344022_BobsPlumsub1");
 });
 
 test("rotation failure on reuse surfaces the REAL error instead of a misleading used_username", async () => {
   reset({ live: true });
   vmsHandlers.getSubAccounts = () => ({
     status: "success",
-    accounts: [{ id: "77", account: "344022_BobsPlumbing1" }],
+    accounts: [{ id: "77", account: "344022_BobsPlumsub1" }],
   });
   vmsHandlers.setSubAccount = () => ({ status: "missing_device_type" });
   const id = seedSubmission();
@@ -373,12 +373,12 @@ test("live: existing-subaccount match works when the master username is a login 
   // VoIP.ms prefixes subaccounts with the ACCOUNT NUMBER, never the API
   // username — when the API username is an email ("izzy@x.com"), the old
   // exact-match ("izzy@x.com_BobsPlumbing1") never hit and re-runs crashed
-  // on duplicate creation. Suffix matching must find "123456_BobsPlumbing1".
+  // on duplicate creation. Suffix matching must find "123456_BobsPlumsub1".
   reset({ live: true });
   state.voipmsConfig = { credentialsEncrypted: "enc:" + JSON.stringify({ username: "izzy@x.com", password: "pw" }) };
   vmsHandlers.getSubAccounts = () => ({
     status: "success",
-    accounts: [{ id: "88", account: "123456_BobsPlumbing1" }],
+    accounts: [{ id: "88", account: "123456_BobsPlumsub1" }],
   });
   vmsHandlers.getDIDsInfo = () => ({ status: "success", dids: [] });
   const id = seedSubmission();
@@ -387,7 +387,7 @@ test("live: existing-subaccount match works when the master username is a login 
   assert.equal(calls("createSubAccount").length, 0); // reused, not duplicated
   assert.equal(calls("setSubAccount")[0].params.id, "88");
   const sub = JSON.parse(state.submissions.get(id).voipmsSubaccountEncrypted.replace(/^enc:/, ""));
-  assert.equal(sub.username, "123456_BobsPlumbing1"); // provider's name, not email-derived
+  assert.equal(sub.username, "123456_BobsPlumsub1"); // provider's name, not email-derived
 });
 
 // ── Guards, idempotency, failure ─────────────────────────────────────────────
@@ -461,10 +461,81 @@ test("failed stage can be retried and succeed", async () => {
   assert.equal(state.submissions.get(id).numberStatus, "ready");
 });
 
-test("subaccount naming strips punctuation and caps length", () => {
-  assert.equal(mod.subAccountName("Bob's Plumbing & Heating"), "BobsPlumbingHeatin1");
-  assert.equal(mod.subAccountName(""), "account1");
-  assert.equal(mod.subAccountName("J&J"), "JJ1");
+test("subaccount naming: strips punctuation, carries the submission tag, total ≤12 chars", () => {
+  assert.equal(mod.subAccountName("Bob's Plumbing & Heating", "abc123"), "BobsPlabc123");
+  assert.equal(mod.subAccountName("", "abc123"), "acctabc123");
+  assert.equal(mod.subAccountName("J&J", "abc123"), "JJabc123");
+  // VoIP.ms silently truncates usernames past 12 chars (live 2026-07-28), and
+  // the tag is what makes the name collision-proof — it must never be the
+  // part that gets cut off.
+  for (const c of ["Thequickbrownfoxjumped", "Bobs Plumbing", "X", ""]) {
+    const name = mod.subAccountName(c, "abc123");
+    assert.ok(name.length <= 12, `${name} exceeds VoIP.ms's silent 12-char cap`);
+    assert.ok(name.endsWith("abc123"), `${name} lost its submission tag`);
+  }
+});
+
+// ── Per-submission identity: the same-company-name collision class ───────────
+
+test("CATASTROPHE GUARD: two submissions with the SAME company name get different subaccounts — neither rotates the other's password", async () => {
+  reset({ live: true });
+  // getSubAccounts reflects what create has made so far, like the real API —
+  // so submission B's pre-lookup CAN see submission A's subaccount.
+  const created: any[] = [];
+  let nextId = 50;
+  vmsHandlers.getSubAccounts = () => ({ status: "success", accounts: [...created] });
+  vmsHandlers.createSubAccount = (p) => {
+    const account = `344022_${p.username}`;
+    created.push({ id: String(nextId++), account });
+    return { status: "success", account };
+  };
+  const a = seedSubmission({ id: "suba", answers: { phone: { choice: "new", selectedNumber: "8455551001" } } });
+  const b = seedSubmission({ id: "subb", answers: { phone: { choice: "new", selectedNumber: "8455551002" } } });
+
+  assert.equal((await mod.applyOnboardingNumber(a)).ok, true);
+  assert.equal((await mod.applyOnboardingNumber(b)).ok, true);
+
+  const names = calls("createSubAccount").map((c) => c.params.username);
+  assert.equal(names.length, 2, "each submission must create its OWN subaccount");
+  assert.notEqual(names[0], names[1]);
+  // The old failure mode: B "found" A's company-named subaccount and rotated
+  // its password, killing A's live trunk. Must never happen again.
+  assert.equal(calls("setSubAccount").length, 0, "a submission rotated another submission's password");
+  const subA = JSON.parse(state.submissions.get(a).voipmsSubaccountEncrypted.replace(/^enc:/, "")).username;
+  const subB = JSON.parse(state.submissions.get(b).voipmsSubaccountEncrypted.replace(/^enc:/, "")).username;
+  assert.notEqual(subA, subB);
+});
+
+test("first run STORES the chosen names on the submission (answers.provisioning)", async () => {
+  reset();
+  const id = seedSubmission();
+  await mod.applyOnboardingNumber(id);
+  const p = state.submissions.get(id).answers?.provisioning;
+  assert.ok(p, "identity was not stored on the submission");
+  assert.equal(p.voipmsSubName, "BobsPlumsub1");
+  assert.equal(p.tenantSlug, "bobs_plumbing_sub1");
+  assert.equal(p.pbxLabel, "Bobs Plumbing sub1");
+});
+
+test("stored identity wins: a retry uses the SAME name even after the company was renamed mid-wizard", async () => {
+  reset({ live: true });
+  const id = seedSubmission({
+    answers: {
+      phone: { choice: "new", selectedNumber: "8455577726" },
+      provisioning: { suffix: "zz", voipmsSubName: "OrigNamezz", tenantSlug: "orig_zz", pbxLabel: "Orig zz" },
+    },
+  });
+  state.submissions.get(id).companyName = "Totally Different Co";
+  await mod.applyOnboardingNumber(id);
+  assert.equal(calls("createSubAccount")[0].params.username, "OrigNamezz");
+});
+
+test("LEGACY: a submission whose PBX tenant already exists keeps the old company-derived name", async () => {
+  reset({ live: true });
+  const id = seedSubmission({ pbxTenantPath: "feedfacefeedface" }); // built pre-suffix
+  await mod.applyOnboardingNumber(id);
+  assert.equal(calls("createSubAccount")[0].params.username, "BobsPlumbing1"); // old scheme
+  assert.equal(state.submissions.get(id).answers.provisioning.tenantSlug, "bobs_plumbing");
 });
 
 test("stress: 20 parallel dry-run submissions all land ready with distinct subaccounts", async () => {

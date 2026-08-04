@@ -608,6 +608,49 @@ test("stress: 40-person tenant builds every extension and device", async () => {
   assert.equal(result.firstExtId, fake.extensions[0].id);
 });
 
+test("CATASTROPHE GUARD: same company name, different submissions — the second build creates its OWN objects and adopts NOTHING", async () => {
+  const fake = new FakePanel();
+  // Customer A: legacy build, everything named "Bobs Plumbing".
+  const first = await run(fake);
+
+  // Customer B: same company name, but carries its unique per-submission
+  // identity (as the orchestrator now always passes for new submissions).
+  const jobB = job({
+    slug: "bobs_plumbing_zz9k2f",
+    label: "Bobs Plumbing zz9k2f",
+    did: "9145550123",
+    voipms: { user: "344022_BobsPlumzz9k2f", pass: "otherpw9a", server: "newyork1.voip.ms" },
+    people: [{ name: "Other Bob", ext: "201", email: "otherbob@x.com" }],
+  });
+  const second = await run(fake, jobB);
+
+  // The old failure mode: B's pre-checks matched A's company-named objects and
+  // built B's extensions inside A's tenant. Every object must now be B's own.
+  assert.equal(fake.trunks.length, 2, "second customer adopted the first customer's trunk");
+  assert.equal(fake.routes.length, 2);
+  assert.equal(fake.selections.length, 2);
+  assert.equal(fake.tenants.length, 2, "second customer built inside the first customer's tenant");
+  assert.notEqual(second.tenantPath, first.tenantPath);
+  assert.equal(fake.tenants[1].slug, "bobs_plumbing_zz9k2f");
+  assert.equal(fake.tenants[1].description, "Bobs Plumbing zz9k2f");
+  assert.equal(fake.trunks[1].name, "Bobs Plumbing zz9k2f");
+  // B's trunk carries B's OWN VoIP.ms credentials:
+  const trunkB = fake.puts.filter((p) => p.cls === "trunks")[1];
+  assert.equal(get(trunkB.fields, "outgoing[username]"), "344022_BobsPlumzz9k2f");
+  // …but the outbound CallerID name customers see stays the CLEAN company name:
+  const routeB = fake.puts.filter((p) => p.cls === "trunk_group")[1];
+  assert.equal(get(routeB.fields, "cid_name"), "Bobs Plumbing");
+  assert.equal(get(routeB.fields, "description"), "Bobs Plumbing zz9k2f");
+
+  // And B's OWN resume still reuses B's objects (no duplicates on retry):
+  const putsBefore = fake.puts.length;
+  const secondAgain = await run(fake, jobB);
+  assert.equal(fake.puts.length, putsBefore, "B's resume must not create anything new");
+  assert.equal(fake.tenants.length, 2);
+  assert.equal(secondAgain.tenantPath, second.tenantPath);
+  assert.equal(secondAgain.trunkId, second.trunkId);
+});
+
 test("REGRESSION: route selection is never confused with the same-named trunk (live 2026-07-26)", async () => {
   const fake = new FakePanel();
   // Resume scenario: the trunk (named exactly like the company) already

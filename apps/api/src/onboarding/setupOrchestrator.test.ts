@@ -293,8 +293,10 @@ mock.module("./pbxTenantBuild", {
 });
 
 let orchestrator: typeof import("./setupOrchestrator");
+let identityMod: typeof import("./provisioningIdentity");
 test.before(async () => {
   orchestrator = await import("./setupOrchestrator");
+  identityMod = await import("./provisioningIdentity");
 });
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -358,7 +360,12 @@ function seedSubmission(over: Partial<any> = {}): string {
     setupError: null,
     createdTenantId: null,
     updatedAt: new Date(),
-    answers: { phone: { choice: "new", selectedNumber: "8455577726" } },
+    // The number stage stamps the provisioning identity long before submit, so
+    // a submission reaching the orchestrator normally carries stored names.
+    answers: {
+      phone: { choice: "new", selectedNumber: "8455577726" },
+      provisioning: { suffix: "t1", voipmsSubName: "BobsPlumt1", tenantSlug: "bobs_plumbing", pbxLabel: "Bobs Plumbing" },
+    },
     requestedExtensions: [
       { extNumber: "101", displayName: "John Doe", email: "john@x.com", vmPassword: "4321", cellMode: null, cellNumber: null },
       { extNumber: "102", displayName: "Jane Roe", email: "jane@x.com", cellMode: "also", cellNumber: "5622096644" },
@@ -864,6 +871,55 @@ test("failed runs CAN be retried", async () => {
   assert.equal(row.setupError, null);
 });
 
+// ── Per-submission identity (the same-company-name collision class) ──────────
+
+test("identity: a submission without stored names derives UNIQUE ones, stores them, and builds under them", async () => {
+  reset();
+  const id = seedSubmission({
+    id: "fresh01",
+    answers: { phone: { choice: "new", selectedNumber: "8455577726" } }, // no stored identity
+  });
+  const idn = identityMod.computeProvisioningIdentity("fresh01", "Bobs Plumbing");
+  assert.notEqual(idn.tenantSlug, "bobs_plumbing", "derived slug must not be the bare company slug");
+  state.pbxDirs = [{ vitalTenantId: "9", tenantSlug: idn.tenantSlug, displayName: idn.pbxLabel }];
+  syncBehavior = () => {
+    const link = state.tenantLinks.find((l) => l.pbxTenantId === "9");
+    if (!link) return;
+    for (const extNumber of ["101", "102"]) {
+      if (!findExt(link.tenantId, extNumber)) {
+        state.extensions.push({ id: nid("ext"), tenantId: link.tenantId, extNumber, ownerUserId: null, pbxLink: { pbxSipUsername: `${extNumber}_1`, webrtcEnabled: true, sipPasswordEncrypted: "enc:sip" } });
+      }
+    }
+  };
+
+  await orchestrator.runOnboardingSetup(id);
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done", row.setupError);
+  // build ran under the unique identity, not the bare company name
+  assert.equal(buildCalls[0].job.slug, idn.tenantSlug);
+  assert.equal(buildCalls[0].job.label, idn.pbxLabel);
+  assert.equal(buildCalls[0].job.company, "Bobs Plumbing"); // CallerID stays clean
+  // and the chosen names were stored for every future retry
+  assert.deepEqual(row.answers.provisioning, idn);
+});
+
+test("LEGACY: a pre-suffix submission that already started its build keeps the company-derived names on resume", async () => {
+  reset();
+  const id = seedSubmission({
+    id: "old01",
+    pbxSetupStatus: "building", // the old code got this far before dying
+    updatedAt: new Date(Date.now() - 20 * 60_000), // stale → resumed
+    answers: { phone: { choice: "new", selectedNumber: "8455577726" } }, // pre-suffix: nothing stored
+  });
+  wireHealthySync(); // directory still lists the OLD names: bobs_plumbing / Bobs Plumbing
+  await orchestrator.runOnboardingSetup(id);
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done", row.setupError);
+  assert.equal(buildCalls[0].job.slug, "bobs_plumbing");
+  assert.equal(buildCalls[0].job.label, "Bobs Plumbing");
+  assert.equal(row.answers.provisioning.tenantSlug, "bobs_plumbing"); // stamped so later retries stay stable
+});
+
 // ── verifyAndRepairTenantExtensions (direct) ─────────────────────────────────
 
 test("verifyAndRepair reports exactly what's missing without inventing success", async () => {
@@ -901,10 +957,15 @@ test("stress: 6 concurrent onboardings share the panel account pool safely", asy
   state.pbxDirs = [];
   const companies = ["Alpha Co", "Beta LLC", "Gamma Inc", "Delta Corp", "Epsilon Ltd", "Zeta Group"];
   const ids = companies.map((company, i) => {
-    state.pbxDirs.push({ vitalTenantId: String(10 + i), tenantSlug: company.toLowerCase().replace(/[^a-z0-9]+/g, "_"), displayName: company });
+    const slug = company.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    state.pbxDirs.push({ vitalTenantId: String(10 + i), tenantSlug: slug, displayName: company });
     return seedSubmission({
       id: `par_${i}`,
       companyName: company,
+      answers: {
+        phone: { choice: "new", selectedNumber: "8455577726" },
+        provisioning: { suffix: `p${i}`, voipmsSubName: `Sub${i}`, tenantSlug: slug, pbxLabel: company },
+      },
       requestedExtensions: [{ extNumber: "101", displayName: `P${i}`, email: `p${i}@x.com` }],
     });
   });

@@ -3,6 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson } from "@connect/security";
+import { ensureProvisioningIdentity, subAccountName } from "./provisioningIdentity";
+
+export { subAccountName };
 
 /**
  * VoIP.ms number provisioning for an onboarding submission.
@@ -12,9 +15,11 @@ import { decryptJson, encryptJson } from "@connect/security";
  * DID + subaccount credentials — is what the VitalPBX build stage uses for
  * the tenant trunk.
  *
- *  Every path creates ONE subaccount named after the company (BobsPlumbing1):
- *    username + generated password, device type "Asterisk/IP-PBX", CallerID
- *    left to the device ("I have my own CallerID"), nothing more.
+ *  Every path creates ONE subaccount per SUBMISSION (company + submission tag,
+ *    e.g. BobsPlumk3f9a2 — see provisioningIdentity.ts; never the company name
+ *    alone, so two same-named customers can never collide): username +
+ *    generated password, device type "Asterisk/IP-PBX", CallerID left to the
+ *    device ("I have my own CallerID"), nothing more.
  *
  *  New number  → order the selected DID (or just route it if it already sits
  *                unassigned in our master account), point it at the subaccount,
@@ -72,12 +77,6 @@ async function vms(creds: VmsCreds, method: string, params: Record<string, strin
   return json;
 }
 
-/** VoIP.ms subaccount name = sanitized company name + index (BobsPlumbing1). */
-export function subAccountName(company: string, index = 1): string {
-  const clean = String(company || "account").replace(/[^A-Za-z0-9]+/g, "").slice(0, 18) || "account";
-  return `${clean}${index}`;
-}
-
 function generatePassword(): string {
   // Strong, symbol-free (VoIP.ms subaccount passwords are alphanumeric-safe).
   return randomBytes(16).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 18) + "9a";
@@ -126,19 +125,22 @@ export function readSubaccount(row: any): ProvisionedSubaccount | null {
 // ── Subaccount ────────────────────────────────────────────────────────────────
 
 /**
- * Create (or find) the per-company subaccount. Returns full SIP username
- * ("<master>_<CompanyName1>") + password + server. Only the settings Izzy
- * specified are sent: username, password, Asterisk/IP-PBX device type; the
- * CallerID number is deliberately left unset so the device's own CallerID is
- * used ("I have my own CallerID"), everything else stays at VoIP.ms defaults.
+ * Create (or find) the per-submission subaccount. Returns full SIP username
+ * ("<master>_<subName>") + password + server. subName is the submission's
+ * stored provisioning identity (unique per submission — see
+ * provisioningIdentity.ts), so the reuse path below can only ever touch THIS
+ * submission's own subaccount, never another customer's. Only the settings
+ * Izzy specified are sent: username, password, Asterisk/IP-PBX device type;
+ * the CallerID number is deliberately left unset so the device's own CallerID
+ * is used ("I have my own CallerID"), everything else stays at VoIP.ms
+ * defaults.
  */
 async function ensureSubaccount(
   creds: VmsCreds,
   submissionId: string,
-  company: string,
+  subName: string,
   live: boolean,
 ): Promise<ProvisionedSubaccount> {
-  const subName = subAccountName(company, 1);
   const password = generatePassword();
 
   if (!live) {
@@ -199,6 +201,9 @@ async function findExistingSubaccount(creds: VmsCreds, subName: string): Promise
 
 /**
  * Reuse an existing subaccount: we can't read its password back, so rotate it.
+ * Rotation is safe ONLY because subaccount names are unique per submission —
+ * the account being rotated is this submission's own earlier creation, never
+ * another customer's live trunk (rotating that would kill their dial tone).
  * VoIP.ms setSubAccount is a full update — resend the account's own current
  * settings (from getSubAccounts) alongside the new password, otherwise the
  * call fails and the old code swallowed that and died on used_username.
@@ -399,12 +404,15 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
   }
 
   const answers: any = row.answers || {};
-  const company: string = row.companyName || answers?.company?.companyName || answers?.submit?.companyName || "account";
   const choice = String(row.phoneNumberChoice || answers?.phone?.choice || "new");
   const smsEnabled = !!(row.smsEnabled || answers?.addons?.smsEnabled);
 
   try {
-    const sub = await ensureSubaccount(creds, submissionId, company, live);
+    // The names this submission provisions under — stored on the submission,
+    // so retries always match what an earlier attempt created, and two
+    // customers with the same company name can never share a subaccount.
+    const identity = await ensureProvisioningIdentity(row);
+    const sub = await ensureSubaccount(creds, submissionId, identity.voipmsSubName, live);
 
     let did = "";
     let temporary = false;
