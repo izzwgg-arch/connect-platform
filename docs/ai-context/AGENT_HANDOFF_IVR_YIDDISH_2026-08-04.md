@@ -183,6 +183,15 @@ are the customer's data, not interface wording.
 - **`deploy-direct.sh` serialises on a heavy-job lock.** Firing a second deploy
   while one is building fails with `HEAVY JOB ALREADY RUNNING`, not a queue.
   Wait on `pgrep -f 'deploy-direct.sh <app>'` first.
+- **An import of a package apps/api does not DECLARE kills the container on
+  boot, and only once something reaches the file.** `pbx/teamBuilder.ts`
+  imported `FormData` from `undici` — fine for months because nothing in the
+  running server touched it; the moment a route registered it the API died on
+  `Cannot find module 'undici'` and blue/green refused to cut over (live
+  traffic was never affected). `tsc --noEmit` cannot see this: it resolves
+  types, not runtime installs. Neither can `require.resolve` locally — the dev
+  machine's pnpm store hoists `undici` and resolves it happily; the container's
+  layout does not. Guarded now by `apps/api/src/dependencyHygiene.test.ts`.
 - **`packages/shared` tests run under `tsx --test`, not vitest.** `npx vitest
   run` there reports "No test suite found" for all 43 files, which looks like a
   catastrophe and is nothing. Use `npm test` (235 tests; the single
