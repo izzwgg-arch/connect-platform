@@ -1,0 +1,288 @@
+"use client";
+
+// ── First-time setup ─────────────────────────────────────────────────────────
+//
+// Someone who has just paid should not meet the full Studio. This asks five
+// questions, one per screen, and builds a working menu from the answers — the
+// Ring-style walkthrough Izzy asked for.
+//
+// Rules it follows, and why:
+//
+//   • ONE question per screen. Two is a form, and a form is what we're avoiding.
+//   • Skippable on every screen. Someone who wants to explore should not be
+//     trapped, and a half-finished menu is worse than the honest default of
+//     "ring the owner".
+//   • Nothing is written until the last screen. Backing out leaves no debris.
+//   • The last screen reads the whole thing back in plain English, using the
+//     same wording the assistant and the Studio use — so all three describe the
+//     call identically.
+//   • It never publishes. The customer presses "Turn it on", exactly like the
+//     Studio's Publish, so the moment callers are affected is always a
+//     deliberate human action.
+
+import { useMemo, useState } from "react";
+import { KIND_LABEL, type MenuChoiceKind, type TenantDirectory } from "@connect/shared";
+
+export interface FirstRunAnswers {
+  /** What callers hear first. */
+  opening: "greeting" | "straight";
+  /** Who the call goes to when there's no menu, or on key 1. */
+  answerKind: MenuChoiceKind;
+  answerTarget: string;
+  /** Where callers land if nobody picks up. */
+  fallbackKind: MenuChoiceKind;
+  fallbackTarget: string;
+  /** Skipped = always open. */
+  hours: "always" | "weekdays" | "custom";
+}
+
+const DEFAULTS: FirstRunAnswers = {
+  opening: "greeting",
+  answerKind: "person",
+  answerTarget: "",
+  fallbackKind: "voicemail",
+  fallbackTarget: "",
+  hours: "always",
+};
+
+export function FirstRunSetup({
+  directory,
+  phoneNumber,
+  busy,
+  onFinish,
+  onSkip,
+}: {
+  directory: TenantDirectory;
+  phoneNumber: string | null;
+  busy?: boolean;
+  onFinish: (a: FirstRunAnswers) => void;
+  onSkip: () => void;
+}) {
+  const [i, setI] = useState(0);
+  const [a, setA] = useState<FirstRunAnswers>(DEFAULTS);
+  const set = (patch: Partial<FirstRunAnswers>) => setA((prev) => ({ ...prev, ...patch }));
+
+  const people = directory.people;
+  const teams = directory.teams;
+  const hasTeams = teams.length > 0;
+
+  // Pre-select the only sensible answer when there IS only one, so a one-person
+  // business isn't asked to choose from a list of one.
+  const soleExtension = people.length === 1 ? people[0].extension : "";
+
+  const answerName = useMemo(() => {
+    if (a.answerKind === "team") return teams.find((t) => t.number === a.answerTarget)?.name ?? "your team";
+    const p = people.find((x) => x.extension === (a.answerTarget || soleExtension));
+    return p?.name || (a.answerTarget ? `extension ${a.answerTarget}` : "whoever you choose");
+  }, [a.answerKind, a.answerTarget, people, teams, soleExtension]);
+
+  const fallbackName = useMemo(() => {
+    const p = people.find((x) => x.extension === (a.fallbackTarget || soleExtension));
+    return p?.name ? `${p.name}'s voicemail` : "voicemail";
+  }, [a.fallbackTarget, people, soleExtension]);
+
+  const screens = [
+    {
+      title: "When someone calls, what should they hear first?",
+      sub: "You can change any of this later.",
+      body: (
+        <>
+          <Option on={a.opening === "greeting"} glyph="🔊" title="A short greeting"
+            desc="“Thanks for calling Acme.” Then the call goes through."
+            onClick={() => set({ opening: "greeting" })} />
+          <Option on={a.opening === "straight"} glyph="📞" title="Ring straight away"
+            desc="No recording — the phone just rings, like a normal call."
+            onClick={() => set({ opening: "straight" })} />
+        </>
+      ),
+      canGo: true,
+    },
+    {
+      title: "Who should answer?",
+      sub: hasTeams ? "One person, or a group of phones ringing together." : "Pick the person who picks up the phone.",
+      body: (
+        <>
+          <Option on={a.answerKind === "person"} glyph="👤" title="One person"
+            desc="Rings their phone. If they don't pick up it goes to voicemail."
+            onClick={() => set({ answerKind: "person", answerTarget: soleExtension })} />
+          {hasTeams && (
+            <Option on={a.answerKind === "team"} glyph="👥" title="A group"
+              desc="Several phones ring at once. Whoever's free answers."
+              onClick={() => set({ answerKind: "team", answerTarget: "" })} />
+          )}
+          <Picker
+            label={a.answerKind === "team" ? "Which group?" : "Which person?"}
+            options={a.answerKind === "team"
+              ? teams.map((t) => ({ id: t.number, name: t.name || `Team ${t.number}`, meta: t.number }))
+              : people.map((p) => ({ id: p.extension, name: p.name || `Extension ${p.extension}`, meta: p.extension }))}
+            value={a.answerTarget || (a.answerKind === "person" ? soleExtension : "")}
+            onChange={(v) => set({ answerTarget: v })}
+          />
+        </>
+      ),
+      canGo: Boolean(a.answerTarget || (a.answerKind === "person" && soleExtension)),
+    },
+    {
+      title: "What if nobody picks up?",
+      sub: "Everyone misses calls. This is where those callers go.",
+      body: (
+        <>
+          <Option on={a.fallbackKind === "voicemail"} glyph="📼" title="Take a message"
+            desc="They hear voicemail and can leave a message."
+            onClick={() => set({ fallbackKind: "voicemail" })} />
+          <Option on={a.fallbackKind === "hangup"} glyph="⛔" title="End the call politely"
+            desc="No voicemail. Use this if nobody checks messages."
+            onClick={() => set({ fallbackKind: "hangup", fallbackTarget: "" })} />
+          {a.fallbackKind === "voicemail" && (
+            <Picker
+              label="Whose voicemail?"
+              options={people.map((p) => ({ id: p.extension, name: p.name || `Extension ${p.extension}`, meta: p.extension }))}
+              value={a.fallbackTarget || soleExtension}
+              onChange={(v) => set({ fallbackTarget: v })}
+            />
+          )}
+        </>
+      ),
+      canGo: a.fallbackKind === "hangup" || Boolean(a.fallbackTarget || soleExtension),
+    },
+    {
+      title: "When are you open?",
+      sub: "Outside these hours callers go straight to voicemail.",
+      body: (
+        <>
+          <Option on={a.hours === "always"} glyph="🕐" title="Always"
+            desc="Calls come through at any time of day."
+            onClick={() => set({ hours: "always" })} />
+          <Option on={a.hours === "weekdays"} glyph="📅" title="Normal business hours"
+            desc="Monday to Friday, 9 to 5. You can fine-tune this later."
+            onClick={() => set({ hours: "weekdays" })} />
+        </>
+      ),
+      canGo: true,
+    },
+    {
+      title: "That's your phone system",
+      sub: phoneNumber ? `Here's what happens when someone calls ${phoneNumber}:` : "Here's what happens when someone calls:",
+      body: (
+        <div className="fr-readback">
+          {a.opening === "greeting"
+            ? <>They hear a short greeting, then we ring <b>{answerName}</b>.</>
+            : <>We ring <b>{answerName}</b> straight away.</>}
+          <br />
+          {a.fallbackKind === "hangup"
+            ? <>If nobody picks up, the call ends politely.</>
+            : <>If nobody picks up, they reach <b>{fallbackName}</b>.</>}
+          {a.hours === "weekdays" && <><br />Outside Monday–Friday 9–5, callers go straight to voicemail.</>}
+        </div>
+      ),
+      canGo: true,
+    },
+  ];
+
+  const s = screens[i];
+  const last = i === screens.length - 1;
+
+  return (
+    <div className="fr-backdrop">
+      <div className="fr-card">
+        <div className="fr-body">
+          <h3>{s.title}</h3>
+          <p className="fr-sub">{s.sub}</p>
+          <div className="fr-options">{s.body}</div>
+        </div>
+
+        <div className="fr-foot">
+          <div className="fr-dots" aria-hidden>
+            {screens.map((_, n) => <i key={n} className={n === i ? "on" : ""} />)}
+          </div>
+          <div className="fr-actions">
+            {i > 0 && <button className="fr-btn" onClick={() => setI(i - 1)} disabled={busy}>Back</button>}
+            {last ? (
+              <button className="fr-btn primary" disabled={busy} onClick={() => onFinish(a)}>
+                {busy ? "Setting it up…" : "Turn it on"}
+              </button>
+            ) : (
+              <button className="fr-btn primary" disabled={!s.canGo || busy} onClick={() => setI(i + 1)}>Next</button>
+            )}
+          </div>
+          <button className="fr-skip" onClick={onSkip} disabled={busy}>
+            Skip — I&apos;ll set this up myself
+          </button>
+        </div>
+      </div>
+      <FirstRunStyles />
+    </div>
+  );
+}
+
+function Option({ on, glyph, title, desc, onClick }: { on: boolean; glyph: string; title: string; desc: string; onClick: () => void }) {
+  return (
+    <button className={"fr-opt" + (on ? " on" : "")} onClick={onClick} type="button">
+      <span className="fr-glyph" aria-hidden>{glyph}</span>
+      <span className="fr-opt-text"><b>{title}</b><span>{desc}</span></span>
+    </button>
+  );
+}
+
+function Picker({ label, options, value, onChange }: {
+  label: string;
+  options: { id: string; name: string; meta: string }[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  if (options.length === 0) return null;
+  // One option is not a choice — say who it is instead of asking.
+  if (options.length === 1) {
+    return <p className="fr-only">That&apos;ll be <b>{options[0].name}</b>.</p>;
+  }
+  return (
+    <div className="fr-picker">
+      <label>{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Choose…</option>
+        {options.map((o) => <option key={o.id} value={o.id}>{o.name} · {o.meta}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function FirstRunStyles() {
+  return (
+    <style jsx global>{`
+      .fr-backdrop{position:fixed;inset:0;background:rgba(6,12,20,.55);display:grid;place-items:center;padding:20px;z-index:90}
+      .fr-card{background:var(--panel,#fff);border:1px solid var(--line,rgba(19,32,48,.13));border-radius:18px;
+        width:min(520px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;
+        box-shadow:0 30px 70px -30px rgba(0,0,0,.45)}
+      .fr-body{padding:30px 28px 8px;overflow:auto;text-align:center}
+      .fr-body h3{font-size:21px;font-weight:710;margin:0 0 7px;letter-spacing:-.015em;line-height:1.25}
+      .fr-sub{color:var(--dim,#5d6f84);font-size:14.5px;margin:0 0 20px;line-height:1.55}
+      .fr-options{display:flex;flex-direction:column;gap:10px;text-align:left}
+      .fr-opt{display:flex;gap:14px;align-items:center;padding:15px;border-radius:14px;cursor:pointer;
+        border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel-2,#f6f9fc);font:inherit;
+        color:inherit;transition:.14s;text-align:left}
+      .fr-opt:hover{border-color:var(--accent,#2f6bff)}
+      .fr-opt.on{border-color:var(--accent,#2f6bff);background:var(--accent-soft,rgba(47,107,255,.08))}
+      .fr-glyph{font-size:24px;flex:none}
+      .fr-opt-text b{display:block;font-size:15px;font-weight:660}
+      .fr-opt-text span{display:block;font-size:12.5px;color:var(--dim,#5d6f84);margin-top:2px;line-height:1.5}
+      .fr-picker{margin-top:6px}
+      .fr-picker label{display:block;font-size:12px;font-weight:640;color:var(--dim,#5d6f84);margin-bottom:6px}
+      .fr-picker select{width:100%;font:inherit;font-size:14px;padding:11px 12px;border-radius:11px;
+        border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel,#fff);color:inherit}
+      .fr-only{font-size:13.5px;color:var(--dim,#5d6f84);margin:4px 0 0}
+      .fr-readback{text-align:left;border:1px solid var(--line,rgba(19,32,48,.13));border-radius:13px;
+        padding:16px;background:var(--panel-2,#f6f9fc);font-size:14.5px;line-height:1.75}
+      .fr-foot{padding:16px 28px 22px;border-top:1px solid var(--line-soft,rgba(19,32,48,.07));text-align:center}
+      .fr-dots{display:flex;gap:6px;justify-content:center;margin-bottom:14px}
+      .fr-dots i{width:6px;height:6px;border-radius:50%;background:var(--line,rgba(19,32,48,.2));display:block;transition:.2s}
+      .fr-dots i.on{background:var(--accent,#2f6bff);width:18px;border-radius:99px}
+      .fr-actions{display:flex;gap:10px;justify-content:center}
+      .fr-btn{font:inherit;font-size:14.5px;font-weight:650;padding:12px 22px;border-radius:11px;cursor:pointer;
+        border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel,#fff);color:inherit}
+      .fr-btn.primary{background:var(--accent,#2f6bff);border-color:var(--accent,#2f6bff);color:#fff}
+      .fr-btn:disabled{opacity:.5;cursor:not-allowed}
+      .fr-skip{margin-top:14px;background:none;border:none;font:inherit;font-size:12.5px;
+        color:var(--faint,#94a3b8);text-decoration:underline;cursor:pointer}
+    `}</style>
+  );
+}

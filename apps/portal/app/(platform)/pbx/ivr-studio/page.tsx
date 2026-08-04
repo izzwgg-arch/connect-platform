@@ -35,6 +35,7 @@ import {
 } from "@connect/shared";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
+import { FirstRunSetup, type FirstRunAnswers } from "./FirstRunSetup";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
 
 interface RouteProfile {
@@ -155,6 +156,10 @@ export default function IvrStudioPage() {
 
   /** The assistant sends the customer here after building a menu for them. */
   const fromAssistant = search?.get("from") === "assistant";
+  /** Sent here straight after paying — walk them through it rather than
+   *  dropping someone who has never seen a phone system into the full Studio. */
+  const [firstRun, setFirstRun] = useState(search?.get("firstrun") === "1");
+  const [firstRunBusy, setFirstRunBusy] = useState(false);
   const deepLinkProfile = search?.get("menu");
 
   const active = useMemo(() => profiles.find((p) => p.id === activeId) ?? null, [profiles, activeId]);
@@ -413,6 +418,50 @@ export default function IvrStudioPage() {
       await apiPut(`/voice/ivr/schedule`, { ...next, tenantId });
       setSchedule(next); setDirty(true); flash("Opening hours saved");
     } catch (e: any) { setError(e?.message || "Couldn't save the hours"); } finally { setSaving(false); }
+  }
+
+  /**
+   * Turn the five answers into a working menu.
+   *
+   * Uses the same server-side builder the assistant uses, so a menu made by the
+   * walkthrough and one made by the assistant are identical — there is no
+   * second, lesser way to create a menu.
+   */
+  async function finishFirstRun(a: FirstRunAnswers) {
+    if (!tenantId) return;
+    setFirstRunBusy(true);
+    try {
+      const soleExt = people.length === 1 ? people[0].extension : "";
+      const answerTarget = a.answerTarget || soleExt;
+      const fallbackTarget = a.fallbackTarget || soleExt;
+
+      const keys: Array<{ digit: string; kind: string; targetId?: string }> = [];
+      if (answerTarget || a.answerKind === "hangup") {
+        keys.push({ digit: "1", kind: a.answerKind, targetId: answerTarget });
+      }
+
+      await apiPost(`/voice/ivr/menus/build${qs}`, {
+        tenantId,
+        name: "Main menu",
+        timeoutSeconds: 7,
+        keys,
+        ...(a.hours === "weekdays"
+          ? {
+              hours: {
+                timezone: schedule?.timezone || "America/New_York",
+                rules: [1, 2, 3, 4, 5].map((day) => ({ day, open: "09:00", close: "17:00" })),
+              },
+            }
+          : {}),
+      });
+
+      await loadAll();
+      setFirstRun(false);
+      flash("Your phone menu is set up. Press Publish when you're happy with it.");
+    } catch (e: any) {
+      setError(e?.payload?.detail || e?.message || "Couldn't set that up — you can build it here instead.");
+      setFirstRun(false);
+    } finally { setFirstRunBusy(false); }
   }
 
   async function publish() {
@@ -688,6 +737,16 @@ export default function IvrStudioPage() {
           busy={saving}
           onCancel={() => setNamingFor(null)}
           onSubmit={(name, type) => namingFor.mode === "rename" ? renameMenu(name) : createMenu(name, type, namingFor.forDigit)}
+        />
+      )}
+
+      {firstRun && (
+        <FirstRunSetup
+          directory={directory}
+          phoneNumber={dids[0] ?? null}
+          busy={firstRunBusy}
+          onFinish={finishFirstRun}
+          onSkip={() => setFirstRun(false)}
         />
       )}
 

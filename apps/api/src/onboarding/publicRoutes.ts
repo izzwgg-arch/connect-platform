@@ -323,6 +323,53 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     return { ok: true, fileId: saved.id };
   });
 
+  // ── Live build progress ───────────────────────────────────────────────────
+  // Drives the "we're setting up your phone system" screen. Reports the real
+  // stages rather than an indeterminate spinner: waiting is much easier when
+  // you can see what is happening and that it is still moving.
+  app.get("/onboarding/:token/progress", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+
+    const full = await (db as any).onboardingSubmission.findUnique({
+      where: { id: row.id },
+      include: { requestedExtensions: true, events: { orderBy: { createdAt: "desc" }, take: 8 } },
+    });
+
+    const numberReady = ["ready", "ready_dryrun", "ported_pending"].includes(String(full?.numberStatus || ""));
+    const setup = String(full?.pbxSetupStatus || "");
+    const built = setup === "done" || setup === "dry_run_done";
+    const failed = setup === "failed";
+
+    // Named, in the order they actually happen, so the screen can say which
+    // one is running rather than "please wait".
+    const steps = [
+      { key: "paid", label: "Payment received", done: !!full?.paidAt,
+        detail: full?.paidAmountCents ? `$${(full.paidAmountCents / 100).toFixed(2)}` : null },
+      { key: "number", label: "Your number is yours", done: numberReady,
+        detail: full?.provisionedDid ? String(full.provisionedDid) : null },
+      { key: "extensions", label: "Creating your team's phone lines", done: built,
+        detail: full?.requestedExtensions?.length ? `${full.requestedExtensions.length} ${full.requestedExtensions.length === 1 ? "person" : "people"}` : null },
+      { key: "invites", label: "Sending everyone their login", done: built, detail: null },
+    ];
+    const current = steps.find((s) => !s.done)?.key ?? null;
+
+    return {
+      ok: true,
+      paid: !!full?.paidAt,
+      built,
+      failed,
+      // Only surfaced when something actually went wrong — a half-finished
+      // build should never look finished.
+      error: failed ? (full?.setupError || "Setup didn't complete.") : null,
+      steps,
+      current,
+      tenantId: full?.createdTenantId ?? null,
+      recentActivity: (full?.events ?? []).map((e: any) => ({ at: e.createdAt, message: e.message })).filter((e: any) => e.message),
+    };
+  });
+
   // ── Card gateway config ───────────────────────────────────────────────────
   // The browser needs the iFields key to tokenise the card in-page. Mirrors the
   // public pay-link config route: it exposes ONLY the publishable tokenising
