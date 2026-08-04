@@ -7,7 +7,8 @@ import { syncPbxTenantDirectoryFromRows } from "../pbxTenantDirectorySync";
 import { syncExtensionsFromPbx } from "../pbxExtensionSync";
 import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
 import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
-import { buildPbxTenant, slugify, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
+import { buildPbxTenant, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
+import { ensureProvisioningIdentity } from "./provisioningIdentity";
 import { readSubaccount, applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { queueOnboardingSignupReport } from "./adminSignupReport";
 
@@ -171,7 +172,7 @@ async function findPbxDirectoryEntry(
   instanceId: string,
   client: VitalPbxClient,
   slug: string,
-  company: string,
+  label: string,
   attempts = 6,
 ): Promise<any | null> {
   for (let i = 0; i < attempts; i++) {
@@ -182,10 +183,13 @@ async function findPbxDirectoryEntry(
       /* transient — retry below */
     }
     const dirs = await (db as any).pbxTenantDirectory.findMany({ where: { pbxInstanceId: instanceId } });
+    // slug and label are the submission's UNIQUE provisioning identity, never
+    // the bare company name — matching by company name here adopted the wrong
+    // customer's tenant when two sign-ups shared a name.
     const hit = dirs.find(
       (d: any) =>
-        String(d.tenantSlug || "").toLowerCase() === slug ||
-        String(d.displayName || "").trim().toLowerCase() === company.trim().toLowerCase(),
+        String(d.tenantSlug || "").toLowerCase() === slug.toLowerCase() ||
+        String(d.displayName || "").trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (hit) return hit;
     await sleep(Math.min(retryBaseMs() * 5, retryBaseMs() * (i + 1)));
@@ -441,6 +445,11 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
   }));
 
   try {
+    // The unique names this submission provisions under. Resolved BEFORE the
+    // first status write: the legacy fallback inside (for pre-suffix builds)
+    // reads pbxSetupStatus as loaded, and setPbxStatus would clobber it.
+    const identity = await ensureProvisioningIdentity(row);
+
     await setPbxStatus(submissionId, "queued", { setupError: null });
 
     // ── 1. The number stage must be ready ───────────────────────────────────
@@ -468,7 +477,14 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
 
     // ── 2. Build the PBX tenant ─────────────────────────────────────────────
     await setPbxStatus(submissionId, "building");
-    const job: PbxBuildJob = { company, did, voipms: { user: sub.username, pass: sub.password, server: sub.server }, people };
+    const job: PbxBuildJob = {
+      company,
+      slug: identity.tenantSlug,
+      label: identity.pbxLabel,
+      did,
+      voipms: { user: sub.username, pass: sub.password, server: sub.server },
+      people,
+    };
 
     if (!live) {
       await logEvent(
@@ -489,13 +505,15 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // hashes (the panel's tenants form doesn't render them).
     const pbx = await loadPbxInstanceClient();
     if (!pbx) throw new Error("no_enabled_pbx_instance");
-    const resolveTenantPath = async (slug: string, companyName: string): Promise<string | null> => {
+    const resolveTenantPath = async (slug: string, label: string): Promise<string | null> => {
+      // slug/label are the unique per-submission identity (buildPbxTenant
+      // passes them through) — never match on the bare company name here.
       try {
         const tenants = (await pbx.client.listTenants()) as any[];
         const hit = tenants.find(
           (t) =>
             String(t?.name || "").toLowerCase() === slug.toLowerCase() ||
-            String(t?.description || "").trim().toLowerCase() === companyName.trim().toLowerCase(),
+            String(t?.description || "").trim().toLowerCase() === label.trim().toLowerCase(),
         );
         return hit?.path ? String(hit.path) : null;
       } catch {
@@ -525,8 +543,8 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
 
     // ── 3. Sync + hard-verify into Connect ──────────────────────────────────
 
-    const slug = slugify(company);
-    const dirEntry = await findPbxDirectoryEntry(pbx.instanceId, pbx.client, slug, company);
+    const slug = identity.tenantSlug;
+    const dirEntry = await findPbxDirectoryEntry(pbx.instanceId, pbx.client, slug, identity.pbxLabel);
     if (!dirEntry) throw new Error(`pbx_tenant_not_in_directory (slug ${slug})`);
 
     // The wizard's language question rides in the answers JSON, so no extra
