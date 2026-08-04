@@ -248,7 +248,7 @@ import {
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
-import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, type TenantDirectory } from "@connect/shared";
+import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
   createVmRecordJob,
@@ -23006,6 +23006,66 @@ app.post("/voice/ivr/events", async (req, reply) => {
     return reply.code(202).send({ ok: false, reason: "insert_failed" });
   }
   return reply.send({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEAMS — creating ring groups and queues for a customer
+//
+// A "team" is one idea to the person setting it up ("several phones ring"),
+// and two objects on the PBX. Ring groups have no API at all and the queue
+// REST create can't be trusted (apply_changes is broken on this build), so
+// both replay the panel's own save — see
+// docs/ai-context/PBX_PANEL_RING_GROUP_QUEUE_CONTRACT.md.
+//
+// ⛔ Apply Changes is NEVER fired from here. It regenerates the whole PBX and
+//    stays a human decision; a team created here is pending until then, and
+//    every response says so rather than implying it is live.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Numbers already spoken for in a tenant's dial plan, read live off the PBX. */
+async function teamUsedNumbers(pbxTenantId: string, pbxInstanceId: string | null): Promise<UsedNumbers | null> {
+  const cfg = resolvePbxRouteHelperConfig(pbxInstanceId);
+  if (!cfg) return null;
+  try {
+    const resp = await getPbxFlowMap(cfg, { tenantId: pbxTenantId });
+    const flow: any = (resp as any).tenants?.[0];
+    if (!flow) return null;
+    return {
+      extensions: (flow.directory?.extensions ?? []).map((e: any) => String(e.number)),
+      ringGroups: (flow.directory?.ringGroups ?? []).map((t: any) => String(t.number)),
+      queues: (flow.directory?.queues ?? []).map((t: any) => String(t.number)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── GET /voice/teams/next-number ─────────────────────────────────────────────
+// What number a new team would get, and why — so the screen can show it before
+// anyone commits.
+app.get("/voice/teams/next-number", async (req, reply) => {
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional(), kind: z.enum(["ring_group", "queue"]) }).safeParse(req.query || {});
+  if (!q.success) return reply.code(400).send({ error: "invalid_query" });
+
+  const raw = q.data.tenantId ?? user.tenantId ?? null;
+  if (!raw) return reply.code(400).send({ error: "tenantId required" });
+  const tenantId = raw.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(raw) : raw;
+  if (!tenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+  assertIvrTenantAccess(user, tenantId);
+
+  const link = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true, pbxInstanceId: true } });
+  if (!link?.pbxTenantId) return reply.code(409).send({ error: "tenant_not_linked_to_pbx" });
+
+  // Refuse rather than guess: allocating from a partial picture could hand out
+  // a number that is already ringing somewhere.
+  const used = await teamUsedNumbers(String(link.pbxTenantId), link.pbxInstanceId ?? null);
+  if (!used) return reply.code(503).send({ error: "pbx_unreachable", detail: "I couldn't read the phone system, so I can't pick a free number safely." });
+
+  const number = nextTeamNumber(q.data.kind, used);
+  if (!number) return reply.code(409).send({ error: "no_free_number" });
+  return reply.send({ number, why: explainChosenNumber(q.data.kind, number, used), used });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
