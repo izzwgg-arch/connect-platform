@@ -193,9 +193,17 @@ async function findPbxDirectoryEntry(
 }
 
 /**
- * Ensure the Connect Tenant + TenantPbxLink for the new PBX tenant. Reuses a
- * tenant that the background auto-sync may have already auto-provisioned (and
- * fixes its name to the real company name).
+ * Ensure the Connect Tenant + TenantPbxLink for the new PBX tenant.
+ *
+ * Priority order:
+ *   1. A tenant already linked to this PBX tenant (a re-run, or the background
+ *      auto-sync raced us) — reuse it and fix its name.
+ *   2. The tenant checkout already created (`preferredTenantId` =
+ *      submission.createdTenantId) — the customer's invoice, vaulted card, and
+ *      autopay hang off THIS tenant, so the phone system must land on it too.
+ *      Creating a fresh tenant here instead was the double-tenant bug: the
+ *      card-on-file stayed on an empty orphan and month-2 autopay never ran.
+ *   3. Only when neither exists: create a fresh tenant.
  */
 async function ensureConnectTenant(
   instanceId: string,
@@ -205,6 +213,7 @@ async function ensureConnectTenant(
    *  Only ever turns the offer ON here — a customer who later switched it off
    *  should not have it switched back on by a re-run of setup. */
   yiddish?: boolean,
+  preferredTenantId?: string | null,
 ): Promise<string> {
   const existingLink = await (db as any).tenantPbxLink.findFirst({
     where: { pbxInstanceId: instanceId, pbxTenantId: String(dirEntry.vitalTenantId) },
@@ -218,6 +227,35 @@ async function ensureConnectTenant(
       await (db as any).tenantPbxLink.update({ where: { id: existingLink.id }, data: { status: "LINKED", lastError: null } }).catch(() => {});
     }
     return String(existingLink.tenantId);
+  }
+  if (preferredTenantId) {
+    const existing = await (db as any).tenant.findUnique({ where: { id: preferredTenantId }, select: { id: true } });
+    if (existing) {
+      await (db as any).tenant.update({
+        where: { id: preferredTenantId },
+        data: { name: company, ...(yiddish ? { yiddishEnabled: true } : {}) },
+      }).catch(() => {});
+      // Upsert on tenantId (it's unique): a rebuilt PBX tenant gets the link
+      // re-pointed instead of a unique-violation failing the whole setup.
+      await (db as any).tenantPbxLink.upsert({
+        where: { tenantId: preferredTenantId },
+        create: {
+          tenantId: preferredTenantId,
+          pbxInstanceId: instanceId,
+          pbxTenantId: String(dirEntry.vitalTenantId),
+          pbxTenantCode: dirEntry.tenantCode ?? null,
+          status: "LINKED",
+        },
+        update: {
+          pbxInstanceId: instanceId,
+          pbxTenantId: String(dirEntry.vitalTenantId),
+          pbxTenantCode: dirEntry.tenantCode ?? null,
+          status: "LINKED",
+          lastError: null,
+        },
+      });
+      return preferredTenantId;
+    }
   }
   const created = await (db as any).$transaction(async (tx: any) => {
     const t = await tx.tenant.create({ data: { name: company, kind: "CUSTOMER", isApproved: true, yiddishEnabled: !!yiddish } });
@@ -493,7 +531,25 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // The wizard's language question rides in the answers JSON, so no extra
     // column was needed on the submission.
     const wantsYiddish = String(((fresh?.answers as any)?.language ?? "")).toLowerCase() === "yi";
-    const tenantId = await ensureConnectTenant(pbx.instanceId, dirEntry, company, wantsYiddish);
+    const checkoutTenantId = fresh?.createdTenantId ? String(fresh.createdTenantId) : null;
+    const tenantId = await ensureConnectTenant(pbx.instanceId, dirEntry, company, wantsYiddish, checkoutTenantId);
+    if (checkoutTenantId && tenantId !== checkoutTenantId) {
+      // The background auto-sync provisioned its own tenant for the new PBX
+      // tenant before we got here, so the phone system is NOT on the tenant
+      // that holds the sign-up invoice and card. Move the billing across —
+      // otherwise autopay points at an empty orphan and month 2 never charges.
+      const { adoptOnboardingBilling, deleteTenantIfEmpty } = await import("./onboardingBillingAdoption");
+      const moved = await adoptOnboardingBilling(db as any, checkoutTenantId, tenantId);
+      await logEvent(
+        submissionId,
+        `Moved sign-up billing to the live tenant (${moved.invoicesMoved} invoice(s), ${moved.paymentMethodsMoved} card(s) on file` +
+          `${moved.autoBillingCarried ? ", autopay" : ""}).`,
+      );
+      const cleanup = await deleteTenantIfEmpty(db as any, checkoutTenantId).catch((e: any) => ({ deleted: false, reason: String(e?.message || e) }));
+      if (!cleanup.deleted) {
+        await logEvent(submissionId, `Checkout tenant ${checkoutTenantId} left in place (${cleanup.reason}).`);
+      }
+    }
     await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { createdTenantId: tenantId } });
 
     // Retry the extension sync until every requested extension is present and
