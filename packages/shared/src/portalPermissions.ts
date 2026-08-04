@@ -34,7 +34,11 @@ export const SIDEBAR_ITEMS = [
   { id: "pbx.time_conditions", section: "pbx", label: "Time Conditions", href: "/pbx/time-conditions", permission: "can_view_pbx_time_conditions" },
   { id: "pbx.softphone", section: "pbx", label: "WebRTC Softphone", href: "/pbx/softphone", permission: "can_view_pbx_softphone" },
   { id: "pbx.sbc_connectivity", section: "pbx", label: "SBC Connectivity", href: "/pbx/sbc-connectivity", permission: "can_view_pbx_sbc_connectivity" },
-  { id: "pbx.ivr_routing", section: "pbx", label: "IVR Routing", href: "/pbx/ivr-routing", permission: "can_view_pbx_ivr_routing" },
+  // Label and href follow the page: the Studio replaced the old IVR Routing
+  // screen (whose /pbx/ivr-routing route no longer exists). The permission KEY
+  // deliberately keeps its old name — renaming it would silently strip the
+  // page from every custom role that already grants it.
+  { id: "pbx.ivr_routing", section: "pbx", label: "IVR Studio", href: "/pbx/ivr-studio", permission: "can_view_pbx_ivr_routing" },
   { id: "pbx.did_routing", section: "pbx", label: "DID Routing", href: "/pbx/did-routing", permission: "can_view_pbx_did_routing" },
   { id: "pbx.moh_scheduling", section: "pbx", label: "MOH Scheduling", href: "/pbx/moh-scheduling", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", section: "pbx", label: "Call Recordings", href: "/pbx/call-recordings", permission: "can_view_pbx_call_recordings" },
