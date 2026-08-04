@@ -142,6 +142,10 @@ export const ACTION_PERMISSION_KEYS = [
   "can_publish_ivr_routing",
   "can_override_ivr_routing",
   "can_manage_ivr_prompts",
+  // Lets a person switch the customer-facing screens into Yiddish. Separate
+  // from the tenant-level switch: the tenant chooses at sign-up whether
+  // Yiddish is offered at all, this decides who inside it may use it.
+  "can_use_yiddish",
   "can_view_moh",
   "can_manage_moh",
   "can_publish_moh",
@@ -327,6 +331,12 @@ const END_USER_ACTIONS: PortalPermissionKey[] = [
   "can_view_ivr_routing",
   "can_view_moh",
   "can_view_did_routing",
+  // Granted to everyone by default: reading your own phone system in your own
+  // language is not a privilege to be rationed. The tenant-level switch, set
+  // at sign-up, still decides whether Yiddish is offered at all — this only
+  // says that if it IS offered, an ordinary user may use it. Revoke per-user
+  // or per-role like any other permission.
+  "can_use_yiddish",
 ];
 
 const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [

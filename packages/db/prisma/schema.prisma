@@ -720,6 +720,10 @@ model Tenant {
   name                            String
   /// Customer-facing business tenant vs. internal/test workspaces. Admin dropdowns default to CUSTOMER.
   kind                            TenantKind                        @default(CUSTOMER)
+  /// Whether this customer was set up to be offered Yiddish. Asked once during
+  /// the onboarding wizard. False means the language toggle never appears for
+  /// anyone in the tenant, regardless of individual permissions.
+  yiddishEnabled                  Boolean                           @default(false)
   isApproved                      Boolean                           @default(false)
   dailySmsCap                     Int                               @default(100)
   perSecondRate                   Float                             @default(1.0)
@@ -921,6 +925,11 @@ model User {
   firstName                      String?
   lastName                       String?
   displayName                    String?
+  /// Which language this person reads the screens in: "en" or "yi". Only has
+  /// an effect when their tenant has yiddishEnabled AND they hold
+  /// can_use_yiddish — otherwise the screens stay English. Also what the AI
+  /// assistant reads to decide which language to answer them in.
+  uiLanguage                     String                            @default("en")
   avatarUrl                      String?
   avatarStorageKey               String?
   phone                          String?
