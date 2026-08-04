@@ -134,6 +134,25 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
   // The quote can legitimately change between visits (they went back and added
   // a person), so an UNPAID invoice is re-lined to match. A paid one is never
   // touched — the money already moved for what it listed.
+  // Line items carry their own tenantId and a typed category (the schema
+  // requires both — the enum powers billing reports).
+  const LINE_TYPE: Record<string, string> = {
+    extensions: "EXTENSION",
+    e911: "E911_FEE",
+    sms: "SMS_PACKAGE",
+    additional_numbers: "PHONE_NUMBER",
+  };
+  const lineItemRows = () =>
+    quote.lines.map((l) => ({
+      tenantId,
+      type: LINE_TYPE[l.key] || "MANUAL_ADJUSTMENT",
+      description: l.label,
+      quantity: l.quantity,
+      unitPriceCents: l.unitCents,
+      amountCents: l.totalCents,
+      metadata: { key: l.key, note: l.note ?? null },
+    }));
+
   const alreadyPaid = !!invoice && (invoice.status === "PAID" || (invoice.balanceDueCents ?? 0) <= 0);
   if (invoice && !alreadyPaid && invoice.totalCents !== quote.monthlyTotalCents) {
     await (db as any).billingInvoiceLineItem.deleteMany({ where: { invoiceId: invoice.id } });
@@ -144,15 +163,7 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
         taxCents: 0,
         totalCents: quote.monthlyTotalCents,
         balanceDueCents: quote.monthlyTotalCents,
-        lineItems: {
-          create: quote.lines.map((l) => ({
-            description: l.label,
-            quantity: l.quantity,
-            unitPriceCents: l.unitCents,
-            amountCents: l.totalCents,
-            metadata: { key: l.key, note: l.note ?? null },
-          })),
-        },
+        lineItems: { create: lineItemRows() },
       },
     });
   }
@@ -173,15 +184,7 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
           totalCents: quote.monthlyTotalCents,
           balanceDueCents: quote.monthlyTotalCents,
           metadata: { onboardingSubmissionId: submissionId, source: "onboarding_signup" },
-          lineItems: {
-            create: quote.lines.map((l) => ({
-              description: l.label,
-              quantity: l.quantity,
-              unitPriceCents: l.unitCents,
-              amountCents: l.totalCents,
-              metadata: { key: l.key, note: l.note ?? null },
-            })),
-          },
+          lineItems: { create: lineItemRows() },
         },
       }),
     );
