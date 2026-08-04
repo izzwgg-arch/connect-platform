@@ -19859,6 +19859,12 @@ app.get("/voice/recording/:linkedId/download", async (req, reply) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// ⚠ Role check ONLY — a custom role granting can_manage_ivr_routing is NOT
+// seen here. Gate write routes with
+//   requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing")
+// never requirePermission(canManageIvr) alone: half the Studio's write routes
+// once used the bare form, so a role with the permission could open the Studio
+// and then fail on every save.
 function canManageIvr(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN"]);
 }
@@ -20652,7 +20658,7 @@ app.get("/voice/ivr/route-profiles", async (req, reply) => {
 
 // ── POST /voice/ivr/route-profiles ────────────────────────────────────────────
 app.post("/voice/ivr/route-profiles", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
   if (!user) return;
   const body = z.object({
     tenantId:            z.string(),
@@ -20753,8 +20759,13 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
 // update — avoids the "why didn't my change save?" support ticket.
 app.patch("/voice/ivr/route-profiles/:id", async (req, reply) => {
   const user = getUser(req);
-  const hasFullEdit   = canManageIvr(user);
-  const hasPromptEdit = canManageIvrPrompts(user);
+  // Role OR the custom-role portal permission — the same dual gate as every
+  // other Studio write. The tiering below (prompt-only vs full edit) applies
+  // identically whichever way each capability was earned.
+  const hasFullEdit =
+    canManageIvr(user) || (await userHasActionPermission(user, "can_manage_ivr_routing"));
+  const hasPromptEdit =
+    canManageIvrPrompts(user) || (await userHasActionPermission(user, "can_manage_ivr_prompts"));
   if (!hasFullEdit && !hasPromptEdit) {
     return reply.code(403).send({ error: "forbidden" });
   }
@@ -21060,7 +21071,7 @@ app.get("/voice/ivr/prompts", async (req, reply) => {
 // from the UI. Tenant admins can't fabricate entries because we won't trust a
 // fake catalog to bypass cross-tenant validation.
 app.post("/voice/ivr/prompts", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts");
   if (!user) return;
   const body = z.object({
     tenantId:    z.string().nullable().optional(),
@@ -21176,7 +21187,7 @@ app.post("/voice/ivr/prompts", async (req, reply) => {
 // Rename/recategorise/deactivate a prompt row. Super-admin can move a prompt
 // between tenants (for fixing mis-assigned rows after a slug rename).
 app.patch("/voice/ivr/prompts/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts");
   if (!user) return;
   const { id } = req.params as { id: string };
   const body = z.object({
@@ -21215,7 +21226,7 @@ app.patch("/voice/ivr/prompts/:id", async (req, reply) => {
 // existing IvrRouteProfile rows referencing it keep working. No physical
 // delete — we never want to lose the audit trail.
 app.delete("/voice/ivr/prompts/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts");
   if (!user) return;
   const { id } = req.params as { id: string };
   const existing = await (db as any).tenantPbxPrompt.findUnique({ where: { id } });
@@ -21631,7 +21642,7 @@ app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
 //   4. Persist sha256 + sync status on the catalog row so admins can see
 //      whether the PBX side actually got the file.
 app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvrPrompts);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts");
   if (!user) return;
 
   const { id } = req.params as { id: string };
@@ -21820,7 +21831,7 @@ app.post("/billing/card-test/start", async (req, reply) => {
 registerElevenLabsRoutes({
   app,
   db,
-  requirePromptManager: (req, reply) => requirePermission(req, reply, canManageIvrPrompts),
+  requirePromptManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts"),
   resolvePbxRouteHelperConfig,
   pushPromptToHelper,
   PromptPushError,
@@ -22174,7 +22185,7 @@ app.get("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
 
 // ── POST /voice/ivr/route-profiles/:profileId/options ────────────────────────
 app.post("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
   if (!user) return;
   const { profileId } = req.params as { profileId: string };
   const gate = await loadIvrProfileForWrite(user, profileId);
@@ -22216,7 +22227,7 @@ app.post("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
 
 // ── PATCH /voice/ivr/route-profiles/:profileId/options/:optionId ─────────────
 app.patch("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
   if (!user) return;
   const { profileId, optionId } = req.params as { profileId: string; optionId: string };
   const gate = await loadIvrProfileForWrite(user, profileId);
@@ -22251,7 +22262,7 @@ app.patch("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, 
 
 // ── DELETE /voice/ivr/route-profiles/:profileId/options/:optionId ────────────
 app.delete("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
   if (!user) return;
   const { profileId, optionId } = req.params as { profileId: string; optionId: string };
   const gate = await loadIvrProfileForWrite(user, profileId);
@@ -22266,7 +22277,7 @@ app.delete("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req,
 
 // ── DELETE /voice/ivr/route-profiles/:id ─────────────────────────────────────
 app.delete("/voice/ivr/route-profiles/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
   if (!user) return;
   const { id } = req.params as { id: string };
   const existing = await (db as any).ivrRouteProfile.findUnique({ where: { id } });
@@ -22292,7 +22303,7 @@ app.get("/voice/ivr/schedule", async (req, reply) => {
 
 // ── PUT /voice/ivr/schedule ───────────────────────────────────────────────────
 app.put("/voice/ivr/schedule", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
   if (!user) return;
   const body = z.object({
     tenantId:            z.string(),

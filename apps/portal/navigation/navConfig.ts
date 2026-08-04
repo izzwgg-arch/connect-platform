@@ -191,5 +191,11 @@ export function isNavItemVisibleForUser(
     if (!jwtAdmin) return false;
   }
   if (item.id === "admin.billing" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // Migration copies a customer's live PBX call flow into Connect — a wrong
+  // click can overwrite a real business's routing (it happened once, to A plus
+  // center). It shares the Studio's view permission in the catalog, so without
+  // this line ANY role granted "IVR Studio" also saw Migration. Super admin
+  // only, always; there is deliberately no permission that can grant it.
+  if (item.id === "pbx.ivr_migration" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

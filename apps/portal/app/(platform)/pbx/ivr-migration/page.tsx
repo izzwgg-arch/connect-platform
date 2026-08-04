@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../../../../services/apiClient";
+import { useAppContext } from "../../../../hooks/useAppContext";
 
 type MenuStatus = "not_started" | "copied" | "live";
 
@@ -68,6 +69,20 @@ const STATUS_LABEL: Record<MenuStatus, string> = {
 };
 
 export default function IvrMigrationPage() {
+  // Every API route behind this page is already super-admin only, so for
+  // anyone else the screen could only ever be a wall of 403s around controls
+  // that rewrite live call routing. Refuse to render instead — hiding the nav
+  // entry is not a permission check, someone can still type the URL.
+  const { backendJwtRole } = useAppContext();
+  if (backendJwtRole !== "SUPER_ADMIN") {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim, #64748b)" }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Not available</h2>
+        <p style={{ fontSize: 14 }}>IVR Migration is restricted to platform administrators.</p>
+      </div>
+    );
+  }
+
   const [tenants, setTenants] = useState<MappedTenant[]>([]);
   const [capturedAt, setCapturedAt] = useState<string>("");
   const [loading, setLoading] = useState(false);
