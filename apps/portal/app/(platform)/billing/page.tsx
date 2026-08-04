@@ -21,6 +21,7 @@ import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
+import { useUiLanguage, LanguageToggle } from "../../../hooks/useUiLanguage";
 import { BillingActivityList } from "../../../components/billing/BillingActivityList";
 import { CRMPageHeader } from "../../../components/crm/CRMPageHeader";
 import {
@@ -40,6 +41,21 @@ import {
   worstOpenInvoice, nextBillingSummary,
   nextOpenInvoiceDueSummary,
 } from "../../../lib/billingUi";
+
+/** Registered up front so the page arrives translated in one batch rather than
+ *  a line at a time. Amounts, dates and invoice numbers are never sent — they
+ *  are the customer's own data, not interface wording. */
+const PHRASES = [
+  "You do not have billing access.", "Billing", "Billing workspace", "billing workspace",
+  "Invoices", "Payment methods", "Pay", "View all", "View invoices", "Review billing settings",
+  "Estimated next invoice", "Item", "Qty", "Unit price", "Amount", "Estimated total",
+  "No estimate available", "We'll show your next invoice preview as soon as it's ready.",
+  "Timeline", "No recent billing activity", "You'll see payments and invoice updates here.",
+  "Billing status", "Status", "Autopay", "Open invoices",
+  "Recent invoices", "No invoices yet", "Your invoices will appear here once generated.",
+  "Services", "Extensions", "phone numbers", "Preview pending", "Billing summary",
+  "Includes", "in taxes and fees.",
+];
 
 type PreviewLineItem = {
   type: string;
@@ -300,6 +316,7 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
 
 export default function BillingOverviewPage() {
   const { tenantId, tenant } = useAppContext();
+  const { t } = useUiLanguage(PHRASES);
   const tenantScopeKey = tenantId;
   const tenantResourceOpts = { keepPreviousData: false as const };
 
@@ -355,7 +372,7 @@ export default function BillingOverviewPage() {
   const timelineData = demoData?.timeline ?? (timeline.status === "success" ? timeline.data : null);
 
   return (
-    <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">You do not have billing access.</div>}>
+    <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">{t("You do not have billing access.")}</div>}>
       <CRMPageShell
         className={cn("campaigns-page-shell billing-page-shell", crm.queueWorkspace)}
         innerClassName={cn(crm.pageInnerQueue, mk.workspace, "campaigns-page-inner billing-workspace")}
@@ -368,18 +385,21 @@ export default function BillingOverviewPage() {
                 compact
                 className={cn(crm.contactsHeaderPanel, "campaigns-command-header billing-header-panel")}
                 icon={<WalletCards className="h-6 w-6" aria-hidden />}
-                title="Billing"
-                subtitle={tenant?.name ? `${tenant.name} billing workspace` : "Billing workspace"}
+                title={t("Billing")}
+                subtitle={tenant?.name ? `${tenant.name} ${t("billing workspace")}` : t("Billing workspace")}
                 actions={(
                   <div className="campaigns-hero-actions billing-hero-actions">
-                    <Link className="campaigns-btn-secondary" href="/billing/invoices">Invoices</Link>
+                    {/* Renders nothing unless this customer was set up for
+                        Yiddish and this person is allowed to use it. */}
+                    <LanguageToggle />
+                    <Link className="campaigns-btn-secondary" href="/billing/invoices">{t("Invoices")}</Link>
                     <Link className="campaigns-btn-secondary billing-action-button" href="/billing/payments">
                       <Plus className="h-4 w-4" />
-                      Payment methods
+                      {t("Payment methods")}
                     </Link>
                     {openBalance > 0 && worst ? (
                       <Link className="campaigns-btn-primary" href={invoicePayHref(worst)}>
-                        Pay {dollars(openBalance)}
+                        {t("Pay")} {dollars(openBalance)}
                       </Link>
                     ) : null}
                   </div>
@@ -395,7 +415,7 @@ export default function BillingOverviewPage() {
               {!loading ? (
                 <section
                   className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4"
-                  aria-label="Billing summary"
+                  aria-label={t("Billing summary")}
                 >
                   <BillingKpiTile
                     label="Balance"
@@ -427,15 +447,15 @@ export default function BillingOverviewPage() {
                     micro={
                       previewData
                         ? `${formatDate(previewData.periodStart)} - ${formatDate(previewData.periodEnd)}`
-                        : "Preview pending"
+                        : t("Preview pending")
                     }
                   />
                   <BillingKpiTile
-                    label="Services"
+                    label={t("Services")}
                     value={activeExtensions ?? "—"}
                     accent="green"
                     icon={<PhoneCall className="h-4 w-4" />}
-                    micro={activePhoneNumbers != null ? `${activePhoneNumbers} phone numbers` : "Extensions"}
+                    micro={activePhoneNumbers != null ? `${activePhoneNumbers} ${t("phone numbers")}` : t("Extensions")}
                   />
                 </section>
               ) : null}
@@ -450,7 +470,7 @@ export default function BillingOverviewPage() {
                 <div className="billing-card bw-panel bw-estimate-panel" id="estimate">
                   <div className="bw-section-head">
                     <div>
-                      <h2>Estimated next invoice</h2>
+                      <h2>{t("Estimated next invoice")}</h2>
                     </div>
                   </div>
                   <div className="bw-card-scroll">
@@ -461,10 +481,10 @@ export default function BillingOverviewPage() {
                         <table className="bw-estimate-table">
                           <thead>
                             <tr>
-                              <th>Item</th>
-                              <th>Qty</th>
-                              <th>Unit price</th>
-                              <th>Amount</th>
+                              <th>{t("Item")}</th>
+                              <th>{t("Qty")}</th>
+                              <th>{t("Unit price")}</th>
+                              <th>{t("Amount")}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -481,13 +501,13 @@ export default function BillingOverviewPage() {
                           </tbody>
                           <tfoot>
                             <tr>
-                              <td colSpan={3}>Estimated total</td>
+                              <td colSpan={3}>{t("Estimated total")}</td>
                               <td className="num">{dollars(previewData.totalCents)}</td>
                             </tr>
                           </tfoot>
                         </table>
                         {previewData.taxCents > 0 ? (
-                          <p className="muted" style={{ marginTop: 8 }}>Includes {dollars(previewData.taxCents)} in taxes and fees.</p>
+                          <p className="muted" style={{ marginTop: 8 }}>{t("Includes")} {dollars(previewData.taxCents)} {t("in taxes and fees.")}</p>
                         ) : null}
                       </div>
                     ) : (
@@ -495,9 +515,9 @@ export default function BillingOverviewPage() {
                         <div className="state-illus" aria-hidden>
                           <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
                         </div>
-                        <div className="state-title">No estimate available</div>
-                        <div className="state-text">We’ll show your next invoice preview as soon as it’s ready.</div>
-                        <div className="state-actions"><Link className="campaigns-btn-secondary" href="/billing/invoices">View invoices</Link></div>
+                        <div className="state-title">{t("No estimate available")}</div>
+                        <div className="state-text">{t("We'll show your next invoice preview as soon as it's ready.")}</div>
+                        <div className="state-actions"><Link className="campaigns-btn-secondary" href="/billing/invoices">{t("View invoices")}</Link></div>
                       </div>
                     )}
                   </div>
@@ -506,7 +526,7 @@ export default function BillingOverviewPage() {
                 <div className="billing-card bw-panel bw-timeline-panel">
                   <div className="bw-section-head">
                     <div>
-                      <h2>Timeline</h2>
+                      <h2>{t("Timeline")}</h2>
                     </div>
                   </div>
                   <div className="bw-card-scroll">
@@ -518,8 +538,8 @@ export default function BillingOverviewPage() {
                         <div className="state-illus" aria-hidden>
                           <svg viewBox="0 0 24 24" fill="none"><path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
                         </div>
-                        <div className="state-title">No recent billing activity</div>
-                        <div className="state-text">You’ll see payments and invoice updates here.</div>
+                        <div className="state-title">{t("No recent billing activity")}</div>
+                        <div className="state-text">{t("You'll see payments and invoice updates here.")}</div>
                       </div>
                     )}
                   </div>
@@ -530,24 +550,24 @@ export default function BillingOverviewPage() {
                 <div className="billing-card bw-panel bw-panel--summary">
                   <div className="bw-section-head">
                     <div>
-                      <h2>Billing status</h2>
+                      <h2>{t("Billing status")}</h2>
                     </div>
                   </div>
                   <div className="bw-card-scroll">
                     <div className="bw-status-grid">
                       <div className="bw-status-item">
-                        <span><ShieldCheck size={15} />Status</span>
+                        <span><ShieldCheck size={15} />{t("Status")}</span>
                         <strong className={balanceTone === "danger" ? "neg" : balanceTone === "warn" ? "warn" : "pos"}>
                           {worst ? invoiceStatusLabel(worst.status) : "Good standing"}
                         </strong>
                       </div>
                       <div className="bw-status-item">
-                        <span><CalendarDays size={15} />Autopay</span>
+                        <span><CalendarDays size={15} />{t("Autopay")}</span>
                         <strong>{s?.autoBillingEnabled ? (s.billingDayOfMonth ? `Day ${s.billingDayOfMonth}` : "Enabled") : "Off"}</strong>
                         <small>{nextBill || (s?.autoBillingEnabled ? "Auto-billing on" : "Manual payments")}</small>
                       </div>
                       <div className="bw-status-item">
-                        <span><FileText size={15} />Open invoices</span>
+                        <span><FileText size={15} />{t("Open invoices")}</span>
                         <strong>{unpaid.length}</strong>
                         <small>{openBalance > 0 ? `${dollars(openBalance)} due` : "Nothing due"}</small>
                       </div>
@@ -558,9 +578,9 @@ export default function BillingOverviewPage() {
                 <div className="billing-card bw-panel bw-recent-panel">
                   <div className="bw-section-head">
                     <div>
-                      <h2>Recent invoices</h2>
+                      <h2>{t("Recent invoices")}</h2>
                     </div>
-                    <Link className="campaigns-btn-secondary" href="/billing/invoices">View all</Link>
+                    <Link className="campaigns-btn-secondary" href="/billing/invoices">{t("View all")}</Link>
                   </div>
                   <div className="bw-card-scroll">
                     {!loading && allInvoices.slice(0, 5).length ? (
@@ -583,9 +603,9 @@ export default function BillingOverviewPage() {
                         <div className="state-illus" aria-hidden>
                           <svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M6 12h12M6 17h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
                         </div>
-                        <div className="state-title">No invoices yet</div>
-                        <div className="state-text">Your invoices will appear here once generated.</div>
-                        <div className="state-actions"><Link className="campaigns-btn-secondary" href="/billing/settings">Review billing settings</Link></div>
+                        <div className="state-title">{t("No invoices yet")}</div>
+                        <div className="state-text">{t("Your invoices will appear here once generated.")}</div>
+                        <div className="state-actions"><Link className="campaigns-btn-secondary" href="/billing/settings">{t("Review billing settings")}</Link></div>
                       </div>
                     )}
                   </div>
