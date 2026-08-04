@@ -260,6 +260,7 @@ import {
 import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
+import { registerTeamRoutes } from "./pbx/teamRoutes";
 import {
   publishTenantMohReverseMap,
   type TenantMohEnforcementEvidence,
@@ -23062,6 +23063,46 @@ async function teamUsedNumbers(pbxTenantId: string, pbxInstanceId: string | null
     return null;
   }
 }
+
+/**
+ * The same read, but keeping everything creating a team needs: the free-number
+ * picture, the extension row ids the panel form wants, and the tenant path the
+ * robot must switch to. One read, so there is no window in which the pieces
+ * could disagree with each other.
+ */
+async function readTeamDirectory(
+  pbxTenantId: string,
+  pbxInstanceId: string | null,
+): Promise<{ used: UsedNumbers; extensions: { id: number; number: string; name: string }[]; tenantPath: string | null } | null> {
+  const cfg = resolvePbxRouteHelperConfig(pbxInstanceId);
+  if (!cfg) return null;
+  try {
+    const resp = await getPbxFlowMap(cfg, { tenantId: pbxTenantId });
+    const flow: any = (resp as any).tenants?.[0];
+    if (!flow) return null;
+    const ext = (flow.directory?.extensions ?? []) as any[];
+    return {
+      used: {
+        extensions: ext.map((e) => String(e.number)),
+        ringGroups: (flow.directory?.ringGroups ?? []).map((t: any) => String(t.number)),
+        queues: (flow.directory?.queues ?? []).map((t: any) => String(t.number)),
+      },
+      extensions: ext.map((e) => ({ id: Number(e.id), number: String(e.number), name: String(e.name ?? "") })),
+      tenantPath: flow.tenantPath ? String(flow.tenantPath) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+registerTeamRoutes({
+  app,
+  db,
+  requireIvrManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing"),
+  assertIvrTenantAccess,
+  resolveConnectTenantIdFromScope,
+  readTeamDirectory,
+});
 
 // ── GET /voice/teams/next-number ─────────────────────────────────────────────
 // What number a new team would get, and why — so the screen can show it before

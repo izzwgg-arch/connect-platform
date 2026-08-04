@@ -37,6 +37,7 @@ import { useAppContext } from "../../../../hooks/useAppContext";
 import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
 import { FirstRunSetup, type FirstRunAnswers } from "./FirstRunSetup";
 import { MakeRecording } from "./MakeRecording";
+import { MakeTeam } from "./MakeTeam";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
 
 interface RouteProfile {
@@ -163,6 +164,8 @@ export default function IvrStudioPage() {
   const [firstRunBusy, setFirstRunBusy] = useState(false);
   /** Generate a greeting instead of recording one — see MakeRecording.tsx. */
   const [makeRecOpen, setMakeRecOpen] = useState(false);
+  /** Create a ring group or a waiting line - see MakeTeam.tsx. */
+  const [makeTeamOpen, setMakeTeamOpen] = useState(false);
   const deepLinkProfile = search?.get("menu");
 
   const active = useMemo(() => profiles.find((p) => p.id === activeId) ?? null, [profiles, activeId]);
@@ -723,6 +726,29 @@ export default function IvrStudioPage() {
             </div>
 
             <div className="card">
+              <div className="card-h">
+                <div><h2>{t("Teams")}</h2><div className="sub">{directory.teams.length} set up</div></div>
+                <button className="btn sm" disabled={!canManage} onClick={() => setMakeTeamOpen(true)}>{t("New team")}</button>
+              </div>
+              <div className="card-b">
+                <div className="reclist flat">
+                  {directory.teams.length === 0 && (
+                    <div className="dimtxt">
+                      {t("No teams yet - a team is several phones ringing instead of one.")}
+                    </div>
+                  )}
+                  {directory.teams.map((tm) => (
+                    <div key={tm.number} className="recrow" style={{ cursor: "default" }}>
+                      <span className="p">{tm.kind === "queue" ? "⏳" : "\u{1f4f3}"}</span>
+                      <span className="nm">{tm.name || `Team ${tm.number}`}</span>
+                      <span className="cur">{tm.number}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="card">
               <div className="card-h"><div><h2>{t("Recordings")}</h2><div className="sub">{prompts.length} available</div></div></div>
               <div className="card-b">
                 <div className="reclist flat">
@@ -748,6 +774,21 @@ export default function IvrStudioPage() {
           busy={saving}
           onCancel={() => setNamingFor(null)}
           onSubmit={(name, type) => namingFor.mode === "rename" ? renameMenu(name) : createMenu(name, type, namingFor.forDigit)}
+        />
+      )}
+
+      {makeTeamOpen && (
+        <MakeTeam
+          people={directory.people}
+          tenantQs={qs}
+          apiBase={getPortalApiBaseUrl()}
+          authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
+          onCreated={async (_team, message) => {
+            await loadAll();
+            setMakeTeamOpen(false);
+            flash(message);
+          }}
+          onClose={() => setMakeTeamOpen(false)}
         />
       )}
 
