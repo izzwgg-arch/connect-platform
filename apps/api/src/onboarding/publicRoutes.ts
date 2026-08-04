@@ -381,7 +381,15 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const { token } = (req.params as any) as { token: string };
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
-    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked" });
+    // Checkout happens AFTER submit locks the form, so a SUBMITTED row is
+    // exactly the state that needs paying — the general write-block would 409
+    // it. Templates never check out; anything past SUBMITTED only passes when
+    // it's already paid (prepareOnboardingCheckout answers alreadyPaid and the
+    // wizard forwards to the progress screen).
+    const checkoutStatus = String((row as any).status || "");
+    const checkoutAllowed =
+      ["INVITE_SENT", "IN_PROGRESS", "SUBMITTED"].includes(checkoutStatus) || !!(row as any).paidAt;
+    if (isReusableTemplate(row) || !checkoutAllowed) return reply.code(409).send({ error: "write_blocked" });
 
     const result = await prepareOnboardingCheckout(row.id);
     if (!result.ok) return reply.code(result.code).send({ error: result.error, message: result.message });
@@ -518,16 +526,19 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       });
     });
 
-    // Full automated setup, in the background:
-    //  1. make sure the VoIP.ms number stage finished (retry if it failed/never ran),
-    //  2. sync the SMS add-on onto the DID,
-    //  3. build the whole VitalPBX tenant (trunk → routes → tenant → extensions →
-    //     inbound route), sync extensions into Connect, SIP-sync, send invites.
-    void (async () => {
-      await applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
-      await syncOnboardingSms(row.id).catch(() => { /* logged inside */ });
-      await runOnboardingSetup(row.id).catch(() => { /* logged inside */ });
-    })();
+    // Nothing is bought or built until the invoice is paid. The pay route is
+    // what kicks number purchase / port filing + the PBX build once the card
+    // clears (finalize → applyOnboardingNumber → resumeSetupIfSubmitted).
+    // Kicking it here too used to buy DIDs and build tenants for sign-ups that
+    // never paid. The only submit that runs the pipeline is one on an
+    // already-paid row (pay page finished in another tab first).
+    if ((row as any).paidAt) {
+      void (async () => {
+        await applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+        await syncOnboardingSms(row.id).catch(() => { /* logged inside */ });
+        await runOnboardingSetup(row.id).catch(() => { /* logged inside */ });
+      })();
+    }
 
     return { ok: true };
   });

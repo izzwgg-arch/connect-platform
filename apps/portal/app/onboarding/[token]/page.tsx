@@ -392,11 +392,19 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             cellNumber: e.cellMode ? e.cellNumber.replace(/\D/g, "").replace(/^1/, "") : undefined,
           })),
       });
-      window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
+      // Saved and locked — on to the payment step, which hands off to the
+      // real checkout page. /success is where the PAY page lands afterwards;
+      // going there from here skipped payment entirely.
+      setStep(6);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("write_blocked") || msg.includes("already been submitted")) {
-        setSubmitError("This form has already been submitted. Contact your Connect Communications representative for a new link.");
+        // Already submitted — e.g. they came back after an interrupted
+        // checkout. Everything is saved; what's missing is the payment, so
+        // carry on to it. Checkout itself knows how to treat a paid row.
+        setStep(6);
+        window.scrollTo({ top: 0, behavior: "smooth" });
       } else {
         setSubmitError(msg || "Submission failed. Please try again.");
       }
