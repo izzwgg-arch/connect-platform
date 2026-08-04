@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, getPortalApiBaseUrl } from "../../../../../services/apiClient";
+import { apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 
 async function downloadCsv(apiBase: string, id: string) {
   const token =
@@ -38,18 +38,38 @@ export default function AdminOnboardingDetailPage({ params }: { params: { id: st
   const [csvError, setCsvError] = useState<string | null>(null);
   const [csvDownloading, setCsvDownloading] = useState(false);
   const [csvRegenerating, setCsvRegenerating] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryNotice, setRetryNotice] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  async function reload() {
+    try {
+      const r = await apiGet<any>(`/admin/onboarding/submissions/${encodeURIComponent(id)}`);
+      setRow(r);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
-    async function run() {
-      try {
-        const r = await apiGet<any>(`/admin/onboarding/submissions/${encodeURIComponent(id)}`);
-        setRow(r);
-      } catch (e: any) {
-        setError(e?.message || String(e));
-      }
-    }
-    run();
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  async function retrySetup() {
+    setRetryError(null);
+    setRetryNotice(null);
+    setRetrying(true);
+    try {
+      await apiPost<any>(`/admin/onboarding/submissions/${encodeURIComponent(id)}/retry-setup`);
+      setRetryNotice("Retry started — the setup pipeline is running again. Check the events below for progress.");
+      await reload();
+    } catch (e: any) {
+      setRetryError(e?.message || "Retry failed");
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   function copy(text: string) { try { navigator.clipboard?.writeText(text); } catch {} }
 
@@ -98,6 +118,21 @@ export default function AdminOnboardingDetailPage({ params }: { params: { id: st
             {csvRegenerating ? "Regenerating…" : "Regenerate CSV"}
           </button>
           {csvError && <span style={{ color: "red" }}>{csvError}</span>}
+        </div>
+      </div>
+
+      <h2>Phone System Setup</h2>
+      <div className="card">
+        <div><b>Paid:</b> {row.paidAt ? `${row.paidAt}${row.paidAmountCents ? ` ($${(row.paidAmountCents / 100).toFixed(2)})` : ""}` : "not paid"}</div>
+        <div><b>Number:</b> {row.provisionedDid || "—"} {row.numberStatus ? `(${row.numberStatus})` : ""}</div>
+        <div><b>Build status:</b> {row.pbxSetupStatus || "not started"}</div>
+        {row.setupError ? <div style={{ color: "red" }}><b>Setup error:</b> {row.setupError}</div> : null}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          <button disabled={retrying} onClick={retrySetup}>
+            {retrying ? "Retrying…" : "Retry setup"}
+          </button>
+          {retryNotice && <span style={{ color: "green" }}>{retryNotice}</span>}
+          {retryError && <span style={{ color: "red" }}>{retryError}</span>}
         </div>
       </div>
 

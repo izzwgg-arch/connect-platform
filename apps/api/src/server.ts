@@ -112,6 +112,7 @@ import {
 } from "@connect/shared/apnsVoipPush";
 import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
 import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
+import { sweepStalledOnboardingSetups } from "./onboarding/setupWatchdog";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -36248,6 +36249,24 @@ const invoiceOverdueTimer = registerShutdownTimer(
   }, 60_000),
 );
 invoiceOverdueTimer.unref();
+
+// Onboarding setup watchdog — a paid sign-up whose build died mid-run (API
+// restart between "building" and "done") never recovers on its own: the
+// orchestrator's stale-run detection only fires when something calls it. This
+// sweep re-kicks any paid, unfinished submission untouched past the stale
+// window, and escalates to an admin alert email after 5 fruitless resumes.
+const onboardingWatchdogTimer = registerShutdownTimer(
+  setInterval(() => {
+    sweepStalledOnboardingSetups()
+      .then((summary) => {
+        if (summary.resumed > 0 || summary.alerted > 0) {
+          app.log.warn({ onboardingWatchdog: summary }, "onboarding setup watchdog took action");
+        }
+      })
+      .catch((e) => app.log.error({ err: e }, "onboarding setup watchdog failed"));
+  }, 60_000),
+);
+onboardingWatchdogTimer.unref();
 
 async function processIvrScheduleBatch(): Promise<void> {
   const now = new Date();
