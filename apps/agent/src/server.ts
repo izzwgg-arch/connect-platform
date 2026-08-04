@@ -510,6 +510,71 @@ async function main() {
       return { ok: true, language };
     });
 
+    // ── UI translation ────────────────────────────────────────────────────
+    // Translate interface text into Yiddish with Yiddish Labs. Screens are
+    // translated by YL and NOTHING else — the model never writes Yiddish, the
+    // same rule the chat bridge already follows. YL's own wording is markedly
+    // better than a literal rendering ("Opening hours" comes back as "our
+    // hours when we are open"), which is the whole reason for routing through
+    // it rather than having something else translate.
+    //
+    // Batched and cache-first because a screen has dozens of labels and an
+    // uncached YL call takes ~7-10s. Results are PINNED: interface text is a
+    // fixed vocabulary, so once a page is translated it should never be paid
+    // for again. Concurrency is capped so warming a whole screen doesn't open
+    // sixty sockets at once.
+    app.post("/agent/ui/translate", async (req, reply) => {
+      if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
+      const body = (req.body ?? {}) as { strings?: unknown; warm?: unknown };
+      const raw = Array.isArray(body.strings) ? body.strings : [];
+      const strings = Array.from(new Set(
+        raw.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0 && s.length <= 400),
+      )).slice(0, 400);
+      if (strings.length === 0) return { translations: {}, cached: 0, fresh: 0, configured: !!providerKeys.yiddishLabsApiKey };
+
+      const translations: Record<string, string> = {};
+      const missing: string[] = [];
+      for (const s of strings) {
+        const hit = await translationCache.get("translate-yiddish", s);
+        if (hit != null) translations[s] = hit; else missing.push(s);
+      }
+
+      // Without a key we return what is cached and say so. We never invent
+      // Yiddish and never fall back to the English string dressed up as a
+      // translation — the caller decides what to do with the gap.
+      if (!providerKeys.yiddishLabsApiKey) {
+        return { translations, cached: Object.keys(translations).length, fresh: 0, missing: missing.length, configured: false };
+      }
+      // `warm: false` (the default for a live page load) answers from cache
+      // only, so a customer flipping the toggle never waits on YL. Warming is
+      // an explicit, admin-triggered pass.
+      if (body.warm !== true) {
+        return { translations, cached: Object.keys(translations).length, fresh: 0, missing: missing.length, configured: true };
+      }
+
+      const cli = new YLClient(providerKeys.yiddishLabsApiKey);
+      let fresh = 0;
+      const failed: string[] = [];
+      const queue = missing.slice();
+      const worker = async () => {
+        for (;;) {
+          const s = queue.shift();
+          if (s === undefined) return;
+          try {
+            const r = await cli.toYiddish(s);
+            if (r.text) {
+              await translationCache.set("translate-yiddish", s, r.text, true); // pinned
+              translations[s] = r.text;
+              fresh++;
+            } else failed.push(s);
+          } catch { failed.push(s); }
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+      await audit.record({ actor: "system", event: "ui.translated", payload: { requested: strings.length, fresh, failed: failed.length } });
+      return { translations, cached: strings.length - missing.length, fresh, failed: failed.length, configured: true };
+    });
+
     // Yiddish Labs admin — status + recent transcripts by detected language.
     app.get("/agent/yiddishlabs/status", async (req, reply) => {
       if (!corpusAuth(req)) return reply.code(403).send({ error: "forbidden" });
