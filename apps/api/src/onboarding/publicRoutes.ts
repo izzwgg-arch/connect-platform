@@ -8,6 +8,8 @@ import type { OnboardingStatus } from "@prisma/client";
 import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { takeOnboardingPayment, quoteForSubmission } from "./onboardingPayment";
 import { describeQuote } from "@connect/shared";
+import { hasCredentialsMasterKey } from "@connect/security";
+import { resolveBillingGatewayConfig } from "../billing/solaGateway";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
@@ -319,6 +321,32 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     });
 
     return { ok: true, fileId: saved.id };
+  });
+
+  // ── Card gateway config ───────────────────────────────────────────────────
+  // The browser needs the iFields key to tokenise the card in-page. Mirrors the
+  // public pay-link config route: it exposes ONLY the publishable tokenising
+  // key, never the API secret.
+  //
+  // The platform gateway is used (no tenant argument) because at this point in
+  // sign-up the customer has no tenant yet — the tenant is created when the
+  // payment succeeds.
+  app.get("/onboarding/:token/pay-config", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+    if (!hasCredentialsMasterKey()) return reply.code(503).send({ error: "credential_crypto_unavailable" });
+    // Empty tenant id on purpose: the per-tenant lookup misses and the
+    // resolver falls through to the platform tokenising key, which is what a
+    // customer who does not have a tenant yet must use.
+    const gateway = await resolveBillingGatewayConfig("", { forTokenizing: true });
+    if (!gateway.ifieldsKey) return reply.code(503).send({ error: "payment_gateway_not_configured" });
+    return {
+      ifieldsKey: gateway.ifieldsKey,
+      ifieldsVersion: "3.4.2602.2001",
+      mode: gateway.mode || "sandbox",
+      alreadyPaid: !!row.paidAt,
+    };
   });
 
   // ── What they'll pay ──────────────────────────────────────────────────────

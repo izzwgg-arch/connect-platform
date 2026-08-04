@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
 import { apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -47,6 +48,12 @@ const EMPTY_FORM: FormData = {
   smsEnabled: false,
 };
 
+/** Cents → "$30.00". Never floats anywhere near money. */
+function money(cents: number): string {
+  const abs = Math.abs(Math.round(cents || 0));
+  return `${cents < 0 ? "-" : ""}$${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+}
+
 const STEPS = [
   { id: "company",    label: "Company"    },
   { id: "contact",    label: "Contact"    },
@@ -54,6 +61,9 @@ const STEPS = [
   { id: "extensions", label: "Extensions" },
   { id: "addons",     label: "Add-ons"    },
   { id: "review",     label: "Review"     },
+  // Payment is LAST and mandatory: nothing is bought on the customer's behalf
+  // until the card clears.
+  { id: "payment",    label: "Payment"    },
 ];
 
 // ── Inline SVG icons ─────────────────────────────────────────────────────────
@@ -311,6 +321,63 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   function goBack() { setStepError(null); setStep((s) => Math.max(0, s - 1)); window.scrollTo({ top: 0, behavior: "smooth" }); }
 
   // ── Submit ──────────────────────────────────────────────────────────────────
+  /**
+   * Saves everything, then moves to payment. It deliberately does NOT finish
+   * the sign-up: the number and the phone system are only bought once the card
+   * clears, so this is the last step that costs nothing.
+   */
+  // ── Payment ───────────────────────────────────────────────────────────────
+  // The quote and the charge come from the same server-side function, so the
+  // figure someone agrees to is the figure they are charged.
+  const [quote, setQuote] = useState<any | null>(null);
+  const [payConfig, setPayConfig] = useState<{ ifieldsKey: string } | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
+  const paidRef = useRef(false);
+  /** Stable for the life of this page: the server uses it to collapse a
+   *  retried submit into the same charge rather than a second one. */
+  const clientOpId = useRef<string>(
+    typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `ob-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+
+  useEffect(() => {
+    if (step !== 6) return;
+    let dead = false;
+    (async () => {
+      try {
+        const [q, c] = await Promise.all([
+          apiGet<{ quote: any }>(`/onboarding/${encodeURIComponent(token)}/quote`),
+          apiGet<{ ifieldsKey: string }>(`/onboarding/${encodeURIComponent(token)}/pay-config`),
+        ]);
+        if (dead) return;
+        setQuote(q.quote);
+        setPayConfig(c);
+      } catch {
+        if (!dead) setPayError("We couldn't load the payment page. Please refresh and try again.");
+      }
+    })();
+    return () => { dead = true; };
+  }, [step, token]);
+
+  async function handlePay(payload: { cardToken: string; billing: any }) {
+    // A second charge is the one mistake this flow must never make.
+    if (paidRef.current) return;
+    paidRef.current = true;
+    setPayError(null);
+    try {
+      await apiPost(`/onboarding/${encodeURIComponent(token)}/pay`, {
+        xSut: payload.cardToken,
+        xExp: [payload.billing?.expMonth, payload.billing?.expYear].filter(Boolean).join("") || undefined,
+        cardholderName: payload.billing?.cardholderName || undefined,
+        billingZip: payload.billing?.billingZip || undefined,
+        clientOperationId: clientOpId.current,
+      });
+      window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
+    } catch (e: any) {
+      paidRef.current = false; // let them fix the card and try again
+      setPayError(e?.payload?.message || e?.message || "We couldn't take the payment. Nothing has been charged.");
+    }
+  }
+
   async function handleSubmit() {
     setSubmitError(null);
     // Re-check every step before launching: autosaved data can predate newer
@@ -397,17 +464,18 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     );
   }
 
-  const stepIcons = [IconBuilding, IconContact, IconPhone, IconExtensions, IconSms, IconCheck];
+  const stepIcons = [IconBuilding, IconContact, IconPhone, IconExtensions, IconSms, IconCheck, IconCheck];
   const StepIcon = stepIcons[step] ?? IconCheck;
-  const eyebrows = ["About you", "Reach you", "Your number", "Your team", "Extras", "Confirm"];
-  const stepTitles = ["Tell us about your company", "How can we reach you?", "Choose your phone number", "Add your team's extensions", "Business messaging", "Review & launch"];
+  const eyebrows = ["About you", "Reach you", "Your number", "Your team", "Extras", "Confirm", "Payment"];
+  const stepTitles = ["Tell us about your company", "How can we reach you?", "Choose your phone number", "Add your team's extensions", "Business messaging", "Review & launch", "Your card"];
   const stepSubtitles = [
     "We'll use this to build your account and phone system.",
     "Your billing contact can be different from your main contact.",
     "Bring your existing number, or grab a fresh one — set up instantly.",
     "Each person gets their own extension. We create them all automatically.",
     "Turn on texting for your business number — you can change this anytime.",
-    "Here's everything. When you launch, your system builds itself in the background.",
+    "Here's everything. Next you'll add a card — nothing is bought until then.",
+    "Your card stays on file — that's how each month is paid. Nothing has been bought yet.",
   ];
 
   return (
@@ -713,17 +781,77 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
           </div>
         )}
 
+
+        {step === 6 && (
+          <div className="ob-pay">
+            {quote === null ? (
+              <div className="ob-pay-loading">Working out what you'll pay…</div>
+            ) : (
+              <>
+                <div className="ob-pay-receipt">
+                  {quote.lines.map((l: any) => (
+                    <div className="ob-pay-row" key={l.key}>
+                      <div className="ob-pay-what">
+                        <b>{l.label}</b>
+                        {l.note && <span>{l.note}</span>}
+                      </div>
+                      <div className="ob-pay-qty">{l.quantity > 1 ? `${l.quantity} × ${money(l.unitCents)}` : money(l.unitCents)}</div>
+                      <div className="ob-pay-amt">{money(l.totalCents)}</div>
+                    </div>
+                  ))}
+                  <div className="ob-pay-total">
+                    <div className="ob-pay-what"><b>Every month</b></div>
+                    <div className="ob-pay-amt">{money(quote.monthlyTotalCents)}</div>
+                  </div>
+                </div>
+
+                <div className="ob-pay-note">
+                  <span aria-hidden>🔒</span>
+                  <p><b>Your card stays on file.</b> That&apos;s how the monthly bill is paid — there&apos;s
+                  nothing to switch on and nothing to remember each month. Your card details go
+                  straight to our payment provider; they never touch our servers.</p>
+                </div>
+
+                {payError && <div className="ob-error">{payError}</div>}
+
+                {payConfig?.ifieldsKey ? (
+                  <CardknoxIFieldsForm
+                    ifieldsKey={payConfig.ifieldsKey}
+                    variant="customer"
+                    fieldTheme="light"
+                    showBillingAddress={false}
+                    showEmail={false}
+                    submitLabel={`Pay ${money(quote.monthlyTotalCents)} and build my phone system`}
+                    busyLabel="Taking payment…"
+                    onSubmitCardToken={handlePay}
+                  />
+                ) : (
+                  <div className="ob-warn">
+                    Card payments aren&apos;t available right now. Please contact us and we&apos;ll finish
+                    setting you up.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {stepError && <div className="ob-error">{stepError}</div>}
 
         {/* Navigation */}
         <div className="ob-actions">
           {step > 0 ? (<button className="ob-btn-back" onClick={goBack}><IconArrowLeft /> Back</button>) : <div />}
-          {step < STEPS.length - 1 ? (
+          {step < STEPS.length - 2 ? (
             <button className="ob-btn-next" onClick={goNext}>Continue <IconArrowRight /></button>
-          ) : (
+          ) : step === STEPS.length - 2 ? (
             <button className="ob-btn-next ob-btn-submit" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Launching…" : "Launch my phone system"}{!submitting && <IconArrowRight />}
+              {submitting ? "Saving…" : "Continue to payment"}{!submitting && <IconArrowRight />}
             </button>
+          ) : (
+            /* The payment step submits through the card form itself, so the
+               footer carries no button — a second "pay" control would be a
+               second way to charge someone. */
+            <div />
           )}
         </div>
       </div>

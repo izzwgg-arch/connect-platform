@@ -306,3 +306,25 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
   .ob-spinner { animation:ob-spin 1.5s linear infinite; }
   .ob-shell * { transition-duration:.01ms !important; }
 }
+
+/* ── Payment step ──────────────────────────────────────────────────────────
+   Money is the moment a customer is most likely to hesitate, so the receipt
+   is plain, itemised, and every line says what it is in words. */
+.ob-pay-loading { color: #64748b; font-size: 14px; padding: 18px 0; }
+.ob-pay-receipt { border: 1px solid rgba(15,23,42,.12); border-radius: 14px; overflow: hidden; }
+.ob-pay-row { display: flex; align-items: baseline; gap: 14px; padding: 13px 16px; border-bottom: 1px solid rgba(15,23,42,.07); }
+.ob-pay-row:last-of-type { border-bottom: none; }
+.ob-pay-what { flex: 1; min-width: 0; }
+.ob-pay-what b { display: block; font-size: 14.5px; font-weight: 640; }
+.ob-pay-what span { display: block; font-size: 12.5px; color: #64748b; margin-top: 2px; line-height: 1.5; }
+.ob-pay-qty { font-size: 12.5px; color: #94a3b8; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ob-pay-amt { font-size: 15px; font-weight: 660; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ob-pay-total { display: flex; align-items: baseline; gap: 14px; padding: 15px 16px;
+  background: rgba(47,107,255,.07); border-top: 1px solid rgba(47,107,255,.28); }
+.ob-pay-total .ob-pay-what b { font-size: 15.5px; font-weight: 700; }
+.ob-pay-total .ob-pay-amt { font-size: 21px; font-weight: 760; }
+.ob-pay-note { display: flex; gap: 11px; align-items: flex-start; margin-top: 16px; padding: 13px 15px;
+  border-radius: 12px; background: #f6f9fc; border: 1px solid rgba(15,23,42,.10); font-size: 13.5px; color: #64748b; }
+.ob-pay-note b { color: #132030; }
+.ob-pay-note p { margin: 0; line-height: 1.55; }
+.ob-pay > form { margin-top: 18px; }
