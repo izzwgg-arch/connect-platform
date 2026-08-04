@@ -46,6 +46,38 @@ const TUNING_SCHEMA = z
   })
   .optional();
 
+/**
+ * Every synthesis call spends real money from a monthly character allowance
+ * shared by the whole platform, and each one can hold a connection to the
+ * provider for up to a minute. Two independent guards:
+ *
+ *  - a per-caller rate limit (route config, enforced by @fastify/rate-limit,
+ *    which server.ts already registers globally) — stops one stuck client or
+ *    script from draining the quota;
+ *  - a small global concurrency gate — stops a burst from many callers piling
+ *    up minute-long provider calls. Auditioning voices is one call every few
+ *    seconds; four in flight at once is already unusual.
+ */
+const SYNTH_RATE_LIMIT = { max: 12, timeWindow: "1 minute" as const };
+const MAX_CONCURRENT_SYNTH = 4;
+let synthInFlight = 0;
+
+async function withSynthSlot<T>(reply: any, fn: () => Promise<T>): Promise<T | undefined> {
+  if (synthInFlight >= MAX_CONCURRENT_SYNTH) {
+    reply.code(429).send({
+      error: "busy",
+      message: "A few recordings are being generated right now. Give it a moment and try again.",
+    });
+    return undefined;
+  }
+  synthInFlight += 1;
+  try {
+    return await fn();
+  } finally {
+    synthInFlight -= 1;
+  }
+}
+
 export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
   const { app, db, requirePromptManager, resolvePbxRouteHelperConfig, pushPromptToHelper, PromptPushError } = deps;
 
@@ -104,7 +136,7 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       return reply.send({ voices: await listElevenLabsVoices(key) });
     } catch (err: any) {
       if (err instanceof ElevenLabsError) {
-        return reply.code(err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+        return reply.code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
       }
       return reply.code(502).send({ error: "elevenlabs_failed", message: "Couldn't load the voice list." });
     }
@@ -115,7 +147,7 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
   // usable — hearing a candidate voice read your own words before it becomes a
   // prompt row, a file on disk and a push to the PBX. Nothing here touches the
   // database or the PBX, so someone can audition freely.
-  app.post("/voice/elevenlabs/preview", async (req: any, reply: any) => {
+  app.post("/voice/elevenlabs/preview", { config: { rateLimit: SYNTH_RATE_LIMIT } }, async (req: any, reply: any) => {
     const user = await requirePromptManager(req, reply);
     if (!user) return;
 
@@ -128,32 +160,34 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     if (!key) return;
 
     const { synthesiseSpeech, pcmToWav, ElevenLabsError, isTtsModelId } = await import("./elevenLabs");
-    try {
-      const out = await synthesiseSpeech(key, {
-        voiceId: body.data.voiceId,
-        text: body.data.text,
-        model: isTtsModelId(body.data.model) ? body.data.model : undefined,
-        tuning: body.data.tuning,
-      });
-      const wav = pcmToWav(out.pcm, out.sampleRate);
-      reply.header("Content-Type", "audio/wav");
-      reply.header("Content-Length", String(wav.byteLength));
-      // A preview is never a file to keep — it isn't even saved server-side.
-      reply.header("Content-Disposition", "inline");
-      reply.header("Cache-Control", "no-store");
-      return reply.send(wav);
-    } catch (err: any) {
-      if (err instanceof ElevenLabsError) {
-        return reply.code(err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+    return withSynthSlot(reply, async () => {
+      try {
+        const out = await synthesiseSpeech(key, {
+          voiceId: body.data.voiceId,
+          text: body.data.text,
+          model: isTtsModelId(body.data.model) ? body.data.model : undefined,
+          tuning: body.data.tuning,
+        });
+        const wav = pcmToWav(out.pcm, out.sampleRate);
+        reply.header("Content-Type", "audio/wav");
+        reply.header("Content-Length", String(wav.byteLength));
+        // A preview is never a file to keep — it isn't even saved server-side.
+        reply.header("Content-Disposition", "inline");
+        reply.header("Cache-Control", "no-store");
+        return reply.send(wav);
+      } catch (err: any) {
+        if (err instanceof ElevenLabsError) {
+          return reply.code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+        }
+        app.log.error({ err: err?.message }, "[ELEVENLABS_PREVIEW] failed");
+        return reply.code(500).send({ error: "preview_failed", message: "Couldn't generate the preview." });
       }
-      app.log.error({ err: err?.message }, "[ELEVENLABS_PREVIEW] failed");
-      return reply.code(500).send({ error: "preview_failed", message: "Couldn't generate the preview." });
-    }
+    });
   });
 
   // ── POST /voice/ivr/prompts/generate ──────────────────────────────────────
   // Turn text into a real, playable, PBX-installed greeting.
-  app.post("/voice/ivr/prompts/generate", async (req: any, reply: any) => {
+  app.post("/voice/ivr/prompts/generate", { config: { rateLimit: SYNTH_RATE_LIMIT } }, async (req: any, reply: any) => {
     const user = await requirePromptManager(req, reply);
     if (!user) return;
 
@@ -190,23 +224,28 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     const { sanitizeBaseName, writeAndNormalisePromptFile, writePromptFile, readPromptFile } = await import("../promptStorage");
 
     // 1) Synthesise. Nothing is written anywhere until this succeeds, so a
-    //    provider failure leaves no half-made greeting behind.
+    //    provider failure leaves no half-made greeting behind. The concurrency
+    //    slot covers only this step — storage and the PBX push are ours and
+    //    don't need to hold a provider slot.
     let wav: Buffer;
     let seconds = 0;
     let sampleRate = 8000;
     try {
-      const out = await synthesiseSpeech(key, {
-        voiceId: body.data.voiceId,
-        text: body.data.text,
-        model: isTtsModelId(body.data.model) ? body.data.model : undefined,
-        tuning: body.data.tuning,
-      });
+      const out = await withSynthSlot(reply, () =>
+        synthesiseSpeech(key, {
+          voiceId: body.data.voiceId,
+          text: body.data.text,
+          model: isTtsModelId(body.data.model) ? body.data.model : undefined,
+          tuning: body.data.tuning,
+        }),
+      );
+      if (!out) return; // over the concurrency cap — a 429 has already been sent
       wav = pcmToWav(out.pcm, out.sampleRate);
       seconds = pcmDurationSeconds(out.pcm, out.sampleRate);
       sampleRate = out.sampleRate;
     } catch (err: any) {
       if (err instanceof ElevenLabsError) {
-        return reply.code(err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+        return reply.code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
       }
       app.log.error({ err: err?.message }, "[ELEVENLABS_GENERATE] synthesis failed");
       return reply.code(500).send({ error: "generate_failed", message: "Couldn't generate the audio. Nothing was changed." });

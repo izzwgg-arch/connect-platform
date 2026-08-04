@@ -360,9 +360,10 @@ async function main() {
       const key = providerKeys.elevenLabsApiKey;
       if (!key) return { configured: false, reachable: false, reason: "no_key" };
       try {
+        // Bounded: a hung provider must never hang the settings page with it.
         const [subRes, voicesRes] = await Promise.all([
-          fetch("https://api.elevenlabs.io/v1/user/subscription", { headers: { "xi-api-key": key } }),
-          fetch("https://api.elevenlabs.io/v1/voices", { headers: { "xi-api-key": key } }),
+          fetch("https://api.elevenlabs.io/v1/user/subscription", { headers: { "xi-api-key": key }, signal: AbortSignal.timeout(15_000) }),
+          fetch("https://api.elevenlabs.io/v1/voices", { headers: { "xi-api-key": key }, signal: AbortSignal.timeout(15_000) }),
         ]);
         if (!subRes.ok) {
           return { configured: true, reachable: false, reason: subRes.status === 401 ? "invalid_key" : `http_${subRes.status}` };
@@ -734,6 +735,9 @@ async function main() {
       providerKeys.openaiApiKey = (await secrets.get("openai_api_key")) ?? cfg.openaiApiKey;
       providerKeys.yiddishLabsApiKey = (await secrets.get("yiddishlabs_api_key")) ?? cfg.yiddishLabsApiKey;
       providerKeys.everettApiKey = (await secrets.get("ivrit_api_key")) ?? cfg.everettApiKey;
+      // ElevenLabs was missing from this list, so a just-saved key wasn't seen
+      // until the next restart and the settings page kept judging the OLD key.
+      providerKeys.elevenLabsApiKey = (await secrets.get("elevenlabs_api_key")) ?? cfg.elevenLabsApiKey;
       router.reload({ openaiApiKey: providerKeys.openaiApiKey, anthropicApiKey: (await secrets.get("anthropic_api_key")) ?? cfg.anthropicApiKey });
       // Apply the chat-model pick (or reset to defaults when cleared).
       router.setChatModel(parseChatModelPick(await secrets.get("chat_model")));

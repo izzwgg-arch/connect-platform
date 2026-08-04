@@ -29,6 +29,11 @@ const API_ROOT = "https://api.elevenlabs.io/v1";
  *  a long greeting is genuinely slow — but not unbounded. */
 const REQUEST_TIMEOUT_MS = 60_000;
 
+/** Account checks and voice lists are quick calls that gate page loads; if
+ *  they haven't answered in this long they aren't going to. Synthesis keeps
+ *  the generous default. */
+const METADATA_TIMEOUT_MS = 15_000;
+
 /** Guard against someone pasting an essay into the greeting box. ElevenLabs
  *  charges per character and a phone greeting is never this long. */
 export const MAX_TTS_CHARS = 2_500;
@@ -162,10 +167,10 @@ export function classify(body: string): string | null {
 async function call(
   apiKey: string,
   path: string,
-  init: { method?: string; body?: unknown; accept?: string } = {},
+  init: { method?: string; body?: unknown; accept?: string; timeoutMs?: number } = {},
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${API_ROOT}${path}`, {
       method: init.method ?? "GET",
@@ -196,15 +201,58 @@ async function call(
 }
 
 /**
- * Is this key real, AND can the account actually make a recording?
- *
- * Those are two different questions and the settings page needs both. A key
- * whose account is `past_due` answers this endpoint happily with 200 — so
- * checking only "did the request succeed" produces a green "connected" badge on
- * a system that fails the moment anyone presses Generate. `status` and
- * `has_open_invoices` say so up front, for free, without spending a character.
+ * Retry a READ once on the failures that are usually transient — rate limits,
+ * provider 5xx, network drops. Never used for synthesis: retrying a POST that
+ * may already have been billed spends the customer's characters twice.
  */
-export async function checkElevenLabsKey(apiKey: string): Promise<{
+async function callRead(apiKey: string, path: string): Promise<Response> {
+  try {
+    return await call(apiKey, path, { timeoutMs: METADATA_TIMEOUT_MS });
+  } catch (err: any) {
+    const transient = err instanceof ElevenLabsError && (err.httpStatus === 429 || err.httpStatus >= 500);
+    if (!transient) throw err;
+    await new Promise((r) => setTimeout(r, 400));
+    return call(apiKey, path, { timeoutMs: METADATA_TIMEOUT_MS });
+  }
+}
+
+/**
+ * Short-lived caches for the two read calls.
+ *
+ * The status endpoint is hit every time the recording modal or the settings
+ * page opens, and each hit was two live round-trips to ElevenLabs. Caching for
+ * half a minute makes those opens instant, stops a page-refresh storm from
+ * tripping their rate limiter, and rides out short provider blips. Thirty
+ * seconds is short enough that a just-paid invoice or a just-added voice still
+ * shows up while the person is looking at the page.
+ *
+ * Only successes are cached — a failure must stay a live question, or saving a
+ * corrected key would keep reporting the old failure for half a minute.
+ */
+const READ_CACHE_MS = 30_000;
+const subscriptionCache = new Map<string, { at: number; value: KeyCheck }>();
+const voicesCache = new Map<string, { at: number; value: ElevenVoice[] }>();
+
+/** Tests (and a key change mid-session) need a clean slate. */
+export function clearElevenLabsReadCaches(): void {
+  subscriptionCache.clear();
+  voicesCache.clear();
+}
+
+function cacheGet<T>(map: Map<string, { at: number; value: T }>, key: string): T | null {
+  const hit = map.get(key);
+  if (hit && Date.now() - hit.at < READ_CACHE_MS) return hit.value;
+  if (hit) map.delete(key);
+  return null;
+}
+
+function cacheSet<T>(map: Map<string, { at: number; value: T }>, key: string, value: T): void {
+  // One key exists in practice; the bound is just a leak guard for key churn.
+  if (map.size > 8) map.clear();
+  map.set(key, { at: Date.now(), value });
+}
+
+export interface KeyCheck {
   ok: boolean;
   /** The key works AND the account is in a state that can synthesise. */
   usable?: boolean;
@@ -213,9 +261,22 @@ export async function checkElevenLabsKey(apiKey: string): Promise<{
   tier?: string;
   /** Present whenever `usable` is false — always says what to do about it. */
   userMessage?: string;
-}> {
+}
+
+/**
+ * Is this key real, AND can the account actually make a recording?
+ *
+ * Those are two different questions and the settings page needs both. A key
+ * whose account is `past_due` answers this endpoint happily with 200 — so
+ * checking only "did the request succeed" produces a green "connected" badge on
+ * a system that fails the moment anyone presses Generate. `status` and
+ * `has_open_invoices` say so up front, for free, without spending a character.
+ */
+export async function checkElevenLabsKey(apiKey: string): Promise<KeyCheck> {
+  const cached = cacheGet(subscriptionCache, apiKey);
+  if (cached) return cached;
   try {
-    const res = await call(apiKey, "/user/subscription");
+    const res = await callRead(apiKey, "/user/subscription");
     const j: any = await res.json();
     const used = Number(j?.character_count ?? 0);
     const limit = Number(j?.character_limit ?? 0);
@@ -227,33 +288,40 @@ export async function checkElevenLabsKey(apiKey: string): Promise<{
     };
 
     const status = String(j?.status ?? "").toLowerCase();
+    let result: KeyCheck;
     if (status === "past_due" || j?.has_open_invoices === true) {
-      return {
+      result = {
         ...base,
         usable: false,
         userMessage:
           "ElevenLabs has an unpaid invoice on the account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again.",
       };
-    }
-    if (limit > 0 && used >= limit) {
-      return {
+    } else if (limit > 0 && used >= limit) {
+      result = {
         ...base,
         usable: false,
         userMessage:
           "The ElevenLabs account has used all its characters for this month. It resets on the next billing date, or you can upgrade the plan.",
       };
+    } else {
+      result = { ...base, usable: true };
     }
-    return { ...base, usable: true };
+    // "Not usable" is still a definitive answer from the provider, so it
+    // caches too; only a failure to ASK stays uncached.
+    cacheSet(subscriptionCache, apiKey, result);
+    return result;
   } catch (err: any) {
     return { ok: false, usable: false, userMessage: err?.userMessage || "Couldn't check the key." };
   }
 }
 
 export async function listElevenLabsVoices(apiKey: string): Promise<ElevenVoice[]> {
-  const res = await call(apiKey, "/voices");
+  const cached = cacheGet(voicesCache, apiKey);
+  if (cached) return cached;
+  const res = await callRead(apiKey, "/voices");
   const j: any = await res.json();
   const raw: any[] = Array.isArray(j?.voices) ? j.voices : [];
-  return raw
+  const voices = raw
     .map((v) => ({
       voiceId: String(v?.voice_id ?? ""),
       name: String(v?.name ?? "Unnamed"),
@@ -262,6 +330,8 @@ export async function listElevenLabsVoices(apiKey: string): Promise<ElevenVoice[
       category: typeof v?.category === "string" ? v.category : null,
     }))
     .filter((v) => v.voiceId);
+  cacheSet(voicesCache, apiKey, voices);
+  return voices;
 }
 
 /**

@@ -45,6 +45,9 @@ const PHRASES = [
   "Saved and live - the next caller will hear it.",
   "Saved. It'll be live on your phone system within a few minutes.",
   "Couldn't load the voices.", "Couldn't play that.", "Couldn't save that recording.",
+  "Ready - press the play button to hear it.",
+  "If nothing plays, close your browser completely and open it again.",
+  "The preview took too long. Try again.",
 ];
 
 interface Voice {
@@ -78,6 +81,42 @@ export interface Tuning {
 }
 
 const FALLBACK_TUNING: Tuning = { stability: 0.75, similarityBoost: 0.75, style: 0, useSpeakerBoost: true, speed: 0.95 };
+
+/** Give up on a preview request after this long. The server's own provider
+ *  timeout is 60s; a button that can spin for a minute with no way out is a
+ *  bug of its own. */
+const PREVIEW_FETCH_TIMEOUT_MS = 45_000;
+
+/**
+ * Start playback, but never TRUST it to start.
+ *
+ * Real incident (2026-08-04): a wedged browser media pipeline left
+ * `audio.play()`'s promise pending forever — not resolved, not rejected — so
+ * `await play()` hung the button with no error and the customer heard nothing.
+ * The only reliable signal that sound is actually coming out is the `playing`
+ * event, so this races that event against a short clock and reports honestly.
+ * The visible player stays either way; a person can always press ▶ themselves.
+ */
+function startPlayback(el: HTMLAudioElement | null, src: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!el) return resolve(false);
+    let settled = false;
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      el.removeEventListener("playing", onPlaying);
+      resolve(ok);
+    };
+    const onPlaying = () => settle(true);
+    const timer = setTimeout(() => settle(false), 4_000);
+    el.addEventListener("playing", onPlaying);
+    el.src = src;
+    // Autoplay refusal rejects; a wedged pipeline just never answers. Both
+    // end the same way: the watchdog reports "didn't start".
+    el.play().then(() => settle(true)).catch(() => settle(false));
+  });
+}
 
 /** Starting points, so the box is never blank. Wording matters more than people
  *  expect: these are the sentences callers judge a business by. */
@@ -121,10 +160,12 @@ export function MakeRecording({
 
   const { t } = useUiLanguage(PHRASES);
 
-  // One audio element, reused. Two previews playing over each other is a
-  // confusing way to compare voices.
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // One VISIBLE audio element, reused. Two previews playing over each other is
+  // a confusing way to compare voices — and a visible player means playback
+  // never depends on autoplay being allowed or the media pipeline being alive.
+  const inlineAudioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
 
   const api = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -143,25 +184,31 @@ export function MakeRecording({
 
   useEffect(() => {
     let cancelled = false;
+    // A modal stuck on "Loading voices..." with no way out is the same bug as
+    // a play button that never answers. If the server hasn't replied in 20s,
+    // stop waiting and say so.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20_000);
     (async () => {
       try {
-        const s: Status = await (await api("/voice/elevenlabs/status")).json();
+        const s: Status = await (await api("/voice/elevenlabs/status", { signal: ctrl.signal })).json();
         if (cancelled) return;
         setStatus(s);
         if (s.defaultTuning) setTuning(s.defaultTuning);
         if (s.configured && s.keyWorks && s.usable) {
-          const v: { voices: Voice[] } = await (await api("/voice/elevenlabs/voices")).json();
+          const v: { voices: Voice[] } = await (await api("/voice/elevenlabs/voices", { signal: ctrl.signal })).json();
           if (cancelled) return;
           setVoices(v.voices || []);
           if (v.voices?.length) setVoiceId(v.voices[0].voiceId);
         }
       } catch (e: any) {
-        if (!cancelled) setErr(e?.message || t("Couldn't load the voices."));
+        if (!cancelled) setErr(e?.name === "AbortError" ? t("Couldn't load the voices.") : e?.message || t("Couldn't load the voices."));
       } finally {
+        clearTimeout(timer);
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ctrl.abort(); clearTimeout(timer); };
   }, [api]);
 
   // Release the blob when this closes — a preview is not something to keep.
@@ -174,18 +221,31 @@ export function MakeRecording({
   async function preview() {
     setErr(null); setNote(null); setPreviewing(true);
     try {
-      const r = await api("/voice/elevenlabs/preview", {
-        method: "POST",
-        body: JSON.stringify({ voiceId, text, model, tuning }),
-      });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PREVIEW_FETCH_TIMEOUT_MS);
+      let r: Response;
+      try {
+        r = await api("/voice/elevenlabs/preview", {
+          method: "POST",
+          body: JSON.stringify({ voiceId, text, model, tuning }),
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
       const blob = await r.blob();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
       objectUrlRef.current = URL.createObjectURL(blob);
-      if (!audioRef.current) audioRef.current = new Audio();
-      audioRef.current.src = objectUrlRef.current;
-      await audioRef.current.play();
+      setPreviewReady(true);
+      const started = await startPlayback(inlineAudioRef.current, objectUrlRef.current);
+      if (!started) {
+        // The recording exists and the player is on screen — say so, and say
+        // what to do if the browser itself is the problem.
+        setNote(`${t("Ready - press the play button to hear it.")} ${t("If nothing plays, close your browser completely and open it again.")}`);
+      }
     } catch (e: any) {
-      setErr(e?.message || t("Couldn't play that."));
+      if (e?.name === "AbortError") setErr(t("The preview took too long. Try again."));
+      else setErr(e?.message || t("Couldn't play that."));
     } finally {
       setPreviewing(false);
     }
@@ -306,6 +366,18 @@ export function MakeRecording({
                 </div>
               )}
 
+              {/* Mounted from the start (hidden until a preview exists) so the
+                  ref is live the moment the first preview needs it. Download is
+                  off — generated audio never gets a one-click way out. */}
+              <audio
+                ref={inlineAudioRef}
+                className="mr-player"
+                controls
+                preload="auto"
+                controlsList="nodownload noplaybackrate"
+                style={{ display: previewReady ? "block" : "none" }}
+              />
+
               {err && <div className="mr-note bad">{err}</div>}
               {note && <div className="mr-note ok">{note}</div>}
               <p className="mr-fine">
@@ -393,6 +465,7 @@ function MakeRecordingStyles() {
       .mr-slider-head span{color:var(--faint,#94a3b8);font-variant-numeric:tabular-nums}
       .mr-slider input[type=range]{width:100%}
       .mr-slider p{margin:4px 0 0;font-size:11.5px;color:var(--faint,#94a3b8);line-height:1.5}
+      .mr-player{width:100%;margin-top:14px;height:36px}
       .mr-dim{font-size:13px;color:var(--dim,#5d6f84);line-height:1.6;margin:0 0 12px}
       .mr-note{margin-top:14px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.55}
       .mr-note.bad{color:#c9414c;background:rgba(201,65,76,.08);border:1px solid rgba(201,65,76,.28)}
