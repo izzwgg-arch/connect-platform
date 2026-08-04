@@ -138,8 +138,9 @@ export function MakeRecording({
   tenantQs: string;
   apiBase: string;
   authToken: string;
-  /** Called with the new prompt's dialplan ref once it's installed. */
-  onCreated: (promptRef: string, displayName: string) => void;
+  /** Called with the new catalog row once it's installed — the whole row, so
+   *  the Studio can splice it into its list instead of refetching everything. */
+  onCreated: (prompt: { id: string; promptRef: string; displayName: string; category: string }) => void;
   onClose: () => void;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
@@ -272,7 +273,7 @@ export function MakeRecording({
       // The PBX push can lag; the greeting is real either way, so say which.
       if (j?.pbxPush?.status === "pushed") setNote(t("Saved and live - the next caller will hear it."));
       else setNote(t("Saved. It'll be live on your phone system within a few minutes."));
-      onCreated(j.prompt.promptRef, j.prompt.displayName);
+      onCreated(j.prompt);
     } catch (e: any) {
       setErr(e?.message || t("Couldn't save that recording."));
     } finally {

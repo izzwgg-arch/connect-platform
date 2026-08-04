@@ -117,6 +117,7 @@ const UI_PHRASES = [
   "This is the menu to play when we're closed", "Days you're closed all day (holidays)",
   "Not set — callers always get the closed menu",
   "Something else", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+  "not live yet", "Teams marked “not live yet” start taking calls the next time changes are applied to the phone system.",
 ];
 
 export default function IvrStudioPage() {
@@ -164,6 +165,19 @@ export default function IvrStudioPage() {
    *  dropping someone who has never seen a phone system into the full Studio. */
   const [firstRun, setFirstRun] = useState(search?.get("firstrun") === "1");
   const [firstRunBusy, setFirstRunBusy] = useState(false);
+  /** Shown inside the walkthrough. While set, the modal stays open with the
+   *  customer's answers intact and the button reads "Try again" — right after
+   *  a build the PBX link is often not ready for a minute, and throwing the
+   *  five answers away over that would mean starting from scratch. */
+  const [firstRunError, setFirstRunError] = useState<string | null>(null);
+  /** Teams made in this session that exist on the phone system but don't take
+   *  calls until changes are applied there. The list endpoints can't say this
+   *  (they read the same tables whether applied or not), so the create
+   *  response's live:false is remembered here and shown as a badge. */
+  const [pendingTeamNumbers, setPendingTeamNumbers] = useState<string[]>([]);
+  /** Things that make Publish's "this is what callers hear from now on" claim
+   *  untrue — asked about up front instead of discovered by a caller. */
+  const [publishWarnings, setPublishWarnings] = useState<string[] | null>(null);
   /** Generate a greeting instead of recording one — see MakeRecording.tsx. */
   const [makeRecOpen, setMakeRecOpen] = useState(false);
   /** Create a ring group or a waiting line - see MakeTeam.tsx. */
@@ -213,7 +227,7 @@ export default function IvrStudioPage() {
     setLoading(true); setError(null);
     const safe = async <T,>(path: string): Promise<T | null> => { try { return await apiGet<T>(path); } catch { return null; } };
     try {
-      const [p, pr, sc, ext, q, rg, dm] = await Promise.all([
+      const [p, pr, sc, ext, q, rg, dm, nums] = await Promise.all([
         apiGet<{ profiles: RouteProfile[] }>(`/voice/ivr/route-profiles${qs}`),
         apiGet<{ prompts: PromptRow[] }>(`/voice/ivr/prompts${qs}`),
         safe<{ schedule: ScheduleRow | null }>(`/voice/ivr/schedule${qs}`),
@@ -221,7 +235,10 @@ export default function IvrStudioPage() {
         safe<{ rows: any[] }>(`/voice/pbx/resources/queues${qs}`),
         safe<{ rows: any[] }>(`/voice/pbx/ring-groups${qs}`),
         safe<{ mappings: any[] }>(`/voice/did/mappings${qs}`),
+        safe<{ numbers: TenantNumber[] }>(`/voice/ivr/numbers${qs}`),
       ]);
+      setTenantNumbers(nums?.numbers ?? []);
+      setNumbersError(nums ? null : "Couldn't read your numbers just now.");
 
       const list = p.profiles || [];
       setProfiles(list);
@@ -286,10 +303,6 @@ export default function IvrStudioPage() {
 
       const chosen = deepLinkProfile && list.some((x) => x.id === deepLinkProfile) ? deepLinkProfile : null;
       setActiveId((cur) => chosen ?? (cur && list.some((x) => x.id === cur) ? cur : (list.find((x) => x.isActive)?.id ?? list[0]?.id ?? null)));
-
-      const nums = await safe<{ numbers: TenantNumber[] }>(`/voice/ivr/numbers${qs}`);
-      setTenantNumbers(nums?.numbers ?? []);
-      setNumbersError(nums ? null : "Couldn't read your numbers just now.");
 
       const mappings = dm?.mappings || [];
       const profIds = new Set(list.map((x) => x.id));
@@ -485,6 +498,14 @@ export default function IvrStudioPage() {
       // the walkthrough's read-back would be a promise the menu doesn't keep:
       // it says the call reaches a person, or voicemail, and this is the part
       // that actually makes it true.
+      //
+      // It can fail to be written: buildDestination refuses when the PBX
+      // tenant number is unknown (the extensions read is a soft-fail), and the
+      // patch itself can error. Neither failure may be silent — a menu that
+      // quietly drops no-input callers is exactly what commit 17d87774 fixed —
+      // but neither is a reason to re-run the build, which would make a second
+      // "Main menu". So the gap is surfaced instead of retried.
+      let wiringGap = false;
       const mainProfile = (built?.menus ?? []).find((x) => x.type === "business_hours");
       if (mainProfile) {
         const onNoInput = a.opening === "straight"
@@ -493,19 +514,41 @@ export default function IvrStudioPage() {
             ? buildDestination("hangup", "", directory)
             : buildDestination("voicemail", fallbackTarget, directory);
         if (onNoInput) {
-          await apiPatch(`/voice/ivr/route-profiles/${mainProfile.id}${qs}`, {
-            timeoutDestinationType: onNoInput.destinationType,
-            timeoutDestinationRef: onNoInput.destinationRef,
-          });
+          try {
+            await apiPatch(`/voice/ivr/route-profiles/${mainProfile.id}${qs}`, {
+              timeoutDestinationType: onNoInput.destinationType,
+              timeoutDestinationRef: onNoInput.destinationRef,
+            });
+          } catch { wiringGap = true; }
+        } else {
+          wiringGap = true;
         }
       }
 
       await loadAll();
       setFirstRun(false);
-      flash("Your phone menu is set up. Press Publish when you're happy with it.");
+      setFirstRunError(null);
+      // The menu is a draft until Publish. The "Not published yet" pill is the
+      // reminder that outlives the 3-second toast, and it only shows if dirty
+      // is set here.
+      setDirty(true);
+      if (wiringGap) {
+        setError(
+          "Your menu is made, but one part couldn't be wired up: where the call goes when the caller presses nothing. " +
+          "In the map below, find the “They press nothing” step and set it to a person or voicemail, then press Publish.",
+        );
+      } else {
+        flash("Your phone menu is set up. Press Publish when you're happy with it.");
+      }
     } catch (e: any) {
-      setError(e?.payload?.detail || e?.message || "Couldn't set that up — you can build it here instead.");
-      setFirstRun(false);
+      // Build failure: keep the modal open with the answers intact. Right
+      // after sign-up these three are usually just the PBX link catching up.
+      const code = e?.payload?.error;
+      const notReady = code === "tenant_not_linked_to_pbx" || code === "pbx_helper_not_configured" ||
+        code === "pbx_unreachable" || code === "pbx_tenant_not_found";
+      setFirstRunError(notReady
+        ? "Your phone system is still being set up — give it a minute, then press Try again."
+        : (e?.payload?.detail || e?.payload?.message || e?.message || "Couldn't set that up — try again in a moment."));
     } finally { setFirstRunBusy(false); }
   }
 
@@ -571,6 +614,52 @@ export default function IvrStudioPage() {
     }
   }
 
+  /**
+   * Publish's message is "this is what callers hear from now on". Before
+   * saying that, check it's true — anything that makes it a lie is put in
+   * front of the person as a question, not left for a caller to discover.
+   */
+  function requestPublish() {
+    if (!active) return;
+    const warnings: string[] = [];
+
+    const hasNumber = Boolean(numberPlan && numberPlan.when === "now")
+      || tenantNumbers.some((n) => n.ivrProfileId === active.id && n.routingMode === "connect")
+      || tenantNumbers.some((n) => n.pendingSwitch?.ivrProfileId === active.id);
+    if (!hasNumber) {
+      warnings.push(
+        "No phone number points at this menu yet, so publishing won't change anything for callers. " +
+        "You can publish now and connect a number later with “Change number” at the top of the map.",
+      );
+    }
+
+    if (pendingTeamNumbers.length > 0) {
+      const dests = [
+        ...(optionsByProfile[active.id] ?? []),
+        ...(active.timeoutDestinationType && active.timeoutDestinationRef
+          ? [{ destinationType: active.timeoutDestinationType, destinationRef: active.timeoutDestinationRef }] : []),
+        ...(active.invalidDestinationType && active.invalidDestinationRef
+          ? [{ destinationType: active.invalidDestinationType, destinationRef: active.invalidDestinationRef }] : []),
+      ];
+      const pendingHit = new Set<string>();
+      for (const d of dests) {
+        const r = readDestination(d, directory);
+        if (r.kind === "team" && r.targetId && pendingTeamNumbers.includes(r.targetId)) {
+          pendingHit.add(r.name ?? `Team ${r.targetId}`);
+        }
+      }
+      for (const name of pendingHit) {
+        warnings.push(
+          `“${name}” is brand new and doesn't take calls until changes are applied on the phone system. ` +
+          "Callers sent there before that won't get through.",
+        );
+      }
+    }
+
+    if (warnings.length > 0) { setPublishWarnings(warnings); return; }
+    void publish();
+  }
+
   async function publish() {
     if (!active) return;
     setSaving(true);
@@ -591,7 +680,12 @@ export default function IvrStudioPage() {
         await loadAll();
         return;
       }
-      setDirty(false); flash("Published — this is what callers hear from now on");
+      setDirty(false);
+      // Only claim callers hear it if a number actually rings this menu.
+      const pointed = tenantNumbers.some((n) => n.ivrProfileId === active.id && n.routingMode === "connect");
+      flash(pointed
+        ? "Published — this is what callers hear from now on"
+        : "Published — callers will hear it once a phone number points at this menu.");
     } catch (e: any) {
       setError(e?.payload?.detail || e?.message || "Couldn't publish");
     } finally { setSaving(false); }
@@ -610,7 +704,7 @@ export default function IvrStudioPage() {
         <div className="spacer" />
         {dirty && <span className="pill warn"><i />{t("Not published yet")}</span>}
         <LanguageToggle />
-        <button className="btn primary" disabled={!canPublish || saving || !active} onClick={publish}>
+        <button className="btn primary" disabled={!canPublish || saving || !active} onClick={requestPublish}>
           {numberPlan && numberPlan.when === "now"
             ? `${t("Publish and switch")} ${fmtUs(numberPlan.e164)}`
             : t("Publish")}
@@ -794,6 +888,7 @@ export default function IvrStudioPage() {
                             directory={directory}
                             peopleLoaded={peopleLoaded}
                             teamsLoaded={teamsLoaded}
+                            pendingTeamNumbers={pendingTeamNumbers}
                             disabled={saving}
                             onSave={(kind, target) => saveKey(digit, kind, target)}
                             onClear={() => clearKey(digit)}
@@ -831,6 +926,7 @@ export default function IvrStudioPage() {
                           directory={directory}
                           peopleLoaded={peopleLoaded}
                           teamsLoaded={teamsLoaded}
+                          pendingTeamNumbers={pendingTeamNumbers}
                           disabled={saving}
                           onSave={(kind, target) => saveKey(editingDigit, kind, target)}
                           onClear={() => setEditingDigit(null)}
@@ -902,9 +998,15 @@ export default function IvrStudioPage() {
                     <div key={tm.number} className="recrow" style={{ cursor: "default" }}>
                       <span className="p">{tm.kind === "queue" ? "⏳" : "\u{1f4f3}"}</span>
                       <span className="nm">{tm.name || `Team ${tm.number}`}</span>
+                      {pendingTeamNumbers.includes(tm.number) && <span className="tag voicemail">{t("not live yet")}</span>}
                       <span className="cur">{tm.number}</span>
                     </div>
                   ))}
+                  {directory.teams.some((tm) => pendingTeamNumbers.includes(tm.number)) && (
+                    <div className="dimtxt">
+                      {t("Teams marked “not live yet” start taking calls the next time changes are applied to the phone system.")}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -922,6 +1024,21 @@ export default function IvrStudioPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {publishWarnings && (
+        <div className="backdrop" onClick={() => setPublishWarnings(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Before you publish</h3>
+            {publishWarnings.map((w, i) => (
+              <p key={i} className="dimtxt" style={{ margin: "10px 0 0", fontSize: 13.5, lineHeight: 1.6 }}>{w}</p>
+            ))}
+            <div className="foot">
+              <button className="btn ghost" onClick={() => setPublishWarnings(null)}>{t("Cancel")}</button>
+              <button className="btn primary" onClick={() => { setPublishWarnings(null); void publish(); }}>Publish anyway</button>
             </div>
           </div>
         </div>
@@ -956,7 +1073,10 @@ export default function IvrStudioPage() {
           tenantQs={qs}
           apiBase={getPortalApiBaseUrl()}
           authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
-          onCreated={async (_team, message) => {
+          onCreated={async (team, message) => {
+            // The create response said live:false — remember it so the badge
+            // and the publish warning can say so long after this toast fades.
+            setPendingTeamNumbers((p) => (p.includes(team.number) ? p : [...p, team.number]));
             await loadAll();
             setMakeTeamOpen(false);
             flash(message);
@@ -970,13 +1090,18 @@ export default function IvrStudioPage() {
           tenantQs={qs}
           apiBase={getPortalApiBaseUrl()}
           authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
-          onCreated={async (promptRef, displayName) => {
+          onCreated={async (prompt) => {
             // Point the menu at what was just made — nobody generates a
             // greeting and then wants to go and select it separately.
-            await patchProfile({ pbxPromptRef: promptRef });
-            await loadAll();
+            await patchProfile({ pbxPromptRef: prompt.promptRef });
+            // Splice the one new row in rather than reloading everything —
+            // Play and the picker need it now, and nothing else changed.
+            setPrompts((ps) => [
+              ...ps.filter((p) => p.id !== prompt.id),
+              { id: prompt.id, promptRef: prompt.promptRef, displayName: prompt.displayName, category: prompt.category, hasAudio: true },
+            ]);
             setMakeRecOpen(false);
-            flash(`“${displayName}” is now your greeting.`);
+            flash(`“${prompt.displayName}” is now your greeting.`);
           }}
           onClose={() => setMakeRecOpen(false)}
         />
@@ -987,8 +1112,10 @@ export default function IvrStudioPage() {
           directory={directory}
           phoneNumber={dids[0] ?? null}
           busy={firstRunBusy}
+          errorText={firstRunError}
+          onRefresh={loadAll}
           onFinish={finishFirstRun}
-          onSkip={() => setFirstRun(false)}
+          onSkip={() => { setFirstRun(false); setFirstRunError(null); }}
         />
       )}
 
@@ -1023,12 +1150,14 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, disabled, onSave, onClear, onClose, onCreateMenu }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
   peopleLoaded: boolean;
   teamsLoaded: boolean;
+  /** Teams that exist but don't take calls until PBX changes are applied. */
+  pendingTeamNumbers?: string[];
   disabled?: boolean;
   onSave: (kind: MenuChoiceKind, targetId: string) => void;
   onClear: () => void;
@@ -1069,7 +1198,11 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, disab
     kind === "person" || kind === "voicemail"
       ? directory.people.map((p) => ({ id: p.extension, name: p.name || `Extension ${p.extension}`, meta: p.extension }))
       : kind === "team"
-        ? directory.teams.map((t) => ({ id: t.number, name: t.name || `Team ${t.number}`, meta: t.kind === "queue" ? "queue" : "rings together" }))
+        ? directory.teams.map((t) => ({
+            id: t.number,
+            name: t.name || `Team ${t.number}`,
+            meta: pendingTeamNumbers?.includes(t.number) ? "not live yet" : t.kind === "queue" ? "queue" : "rings together",
+          }))
         : kind === "menu"
           ? directory.menus.map((m) => ({ id: m.id, name: m.name, meta: "menu" }))
           : [];
