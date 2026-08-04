@@ -54,8 +54,9 @@ const PHRASES = [
   "If nobody picks up, they reach the voicemail for",
   "Outside Monday-Friday 9-5, callers go straight to voicemail.",
   "your team", "whoever you choose", "extension",
-  "Back", "Next", "Turn it on", "Setting it up...",
+  "Back", "Next", "Turn it on", "Try again", "Setting it up...",
   "Skip - I'll set this up myself",
+  "Your phone lines are still being set up - give it a minute.", "Check again",
 ];
 
 export interface FirstRunAnswers {
@@ -84,12 +85,20 @@ export function FirstRunSetup({
   directory,
   phoneNumber,
   busy,
+  errorText,
+  onRefresh,
   onFinish,
   onSkip,
 }: {
   directory: TenantDirectory;
   phoneNumber: string | null;
   busy?: boolean;
+  /** A failure from the last "Turn it on" press. The answers are kept, the
+   *  modal stays open, and the button becomes "Try again" — see finishFirstRun. */
+  errorText?: string | null;
+  /** Re-reads the directory. Right after sign-up the extensions often haven't
+   *  synced yet, and without this the person picker is empty with no way out. */
+  onRefresh?: () => void;
   onFinish: (a: FirstRunAnswers) => void;
   onSkip: () => void;
 }) {
@@ -159,6 +168,17 @@ export function FirstRunSetup({
             value={a.answerTarget || (a.answerKind === "person" ? soleExtension : "")}
             onChange={(v) => set({ answerTarget: v })}
           />
+          {/* Zero extensions is a dead-end otherwise: the picker renders
+              nothing and Next stays greyed out with no explanation. Right
+              after sign-up this just means the sync hasn't finished. */}
+          {people.length === 0 && (
+            <p className="fr-wait">
+              {t("Your phone lines are still being set up - give it a minute.")}
+              {onRefresh && (
+                <> <button type="button" className="fr-link" onClick={onRefresh} disabled={busy}>{t("Check again")}</button></>
+              )}
+            </p>
+          )}
         </>
       ),
       canGo: Boolean(a.answerTarget || (a.answerKind === "person" && soleExtension)),
@@ -238,6 +258,7 @@ export function FirstRunSetup({
         </div>
 
         <div className="fr-foot">
+          {last && errorText && <div className="fr-err">{errorText}</div>}
           <div className="fr-dots" aria-hidden>
             {screens.map((_, n) => <i key={n} className={n === i ? "on" : ""} />)}
           </div>
@@ -245,7 +266,7 @@ export function FirstRunSetup({
             {i > 0 && <button className="fr-btn" onClick={() => setI(i - 1)} disabled={busy}>{t("Back")}</button>}
             {last ? (
               <button className="fr-btn primary" disabled={busy} onClick={() => onFinish(a)}>
-                {t(busy ? "Setting it up..." : "Turn it on")}
+                {t(busy ? "Setting it up..." : errorText ? "Try again" : "Turn it on")}
               </button>
             ) : (
               <button className="fr-btn primary" disabled={!s.canGo || busy} onClick={() => setI(i + 1)}>{t("Next")}</button>
@@ -331,6 +352,12 @@ function FirstRunStyles() {
       .fr-btn:disabled{opacity:.5;cursor:not-allowed}
       .fr-skip{margin-top:14px;background:none;border:none;font:inherit;font-size:12.5px;
         color:var(--faint,#94a3b8);text-decoration:underline;cursor:pointer}
+      .fr-err{margin:0 0 14px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.55;text-align:left;
+        color:#c9414c;background:rgba(201,65,76,.08);border:1px solid rgba(201,65,76,.28)}
+      .fr-wait{font-size:13px;color:var(--dim,#5d6f84);line-height:1.6;margin:4px 0 0;text-align:center}
+      .fr-link{background:none;border:none;font:inherit;font-size:13px;font-weight:640;
+        color:var(--accent,#2f6bff);text-decoration:underline;cursor:pointer;padding:0}
+      .fr-link:disabled{opacity:.5;cursor:not-allowed}
     `}</style>
   );
 }
