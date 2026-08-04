@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useUiLanguage } from "../hooks/useUiLanguage";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { usePathname } from "next/navigation";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
@@ -31,6 +32,91 @@ function navLinkActive(pathname: string, href: string) {
   return pathname.startsWith(`${href}/`);
 }
 
+
+/** Every sidebar label and section heading, generated from navConfig so the
+ *  two can't drift apart. Registered once; the whole sidebar arrives in a
+ *  single cached call. */
+const NAV_PHRASES = [
+  "AI Assistant",
+  "AI Trainer",
+  "Admin",
+  "Admin Billing",
+  "Admin Console",
+  "Apps",
+  "Audio Intelligence",
+  "Audit Log",
+  "Billing",
+  "Billing Overview",
+  "Billing Settings",
+  "CDR Tenant Map",
+  "CRM",
+  "CRM Dashboard",
+  "CRM Diagnostics",
+  "CRM Settings",
+  "Call Flight Recorder",
+  "Call History",
+  "Call Recordings",
+  "Call Reports",
+  "Call Timeline",
+  "Campaigns",
+  "Chat",
+  "Checklists",
+  "Contacts",
+  "Custom Roles",
+  "Customer Hub",
+  "DID Routing",
+  "Dashboard",
+  "Deploy Center",
+  "Drivers",
+  "Email",
+  "Email Settings",
+  "Exceptions",
+  "Extensions",
+  "Forms",
+  "Funders",
+  "IVR Migration",
+  "IVR Studio",
+  "Incident Center",
+  "Install",
+  "Live Call Workspace",
+  "Live Map",
+  "Live Wallboard",
+  "MOH Scheduling",
+  "Messaging Settings",
+  "My Queue",
+  "Onboarding",
+  "Ops Center",
+  "Orders",
+  "Overview",
+  "PBX",
+  "PBX Events",
+  "PBX Instances",
+  "Permissions",
+  "Phone Numbers",
+  "Reports",
+  "Runs",
+  "SBC Connectivity",
+  "SMS Campaigns",
+  "Scripts",
+  "Server Health",
+  "Settings",
+  "Storage Health",
+  "System Health",
+  "Tasks",
+  "Team Directory",
+  "Tenant Settings",
+  "Tenants",
+  "Time Conditions",
+  "Tracking",
+  "Users",
+  "VoIP.ms",
+  "Voicemail",
+  "Voicemail Drops",
+  "WebRTC Softphone",
+  "WhatsApp Inbox",
+  "Workspace",
+];
+
 export function SidebarNav({
   items,
   mobileOpen,
@@ -42,6 +128,10 @@ export function SidebarNav({
 }: SidebarNavProps) {
   const pathname = usePathname();
   const { user, setUserAvatarUrl } = useAppContext();
+  // Every nav label + section heading is registered so the whole sidebar is
+  // fetched in one cached call. It shows on every page, so this is the single
+  // highest-value place to translate.
+  const { t } = useUiLanguage(NAV_PHRASES);
   const { isExpanded, toggle } = useNavSectionExpansion();
   const displayName = getPreferredUserDisplayName(user);
 
@@ -128,7 +218,7 @@ export function SidebarNav({
                         download={item.download ? "" : undefined}
                         prefetch={item.download ? false : undefined}
                         className={`drawer-nav-link drawer-nav-link-rail ${active ? "active" : ""}`}
-                        title={item.id === "workspace.install" && installChip ? `${item.label} — ${installChip}` : item.label}
+                        title={item.id === "workspace.install" && installChip ? `${t(item.label)} — ${installChip}` : t(item.label)}
                         onClick={(event) => { handleInstallItemClick(item, event); onCloseMobile(); }}
                       >
                         <span className="drawer-nav-icon drawer-nav-icon-lucide" style={{ position: "relative" }}>
@@ -185,7 +275,7 @@ export function SidebarNav({
           NAV_SECTION_ORDER.map((section) => {
             const sectionItems = items.filter((item) => item.section === section);
             if (sectionItems.length === 0) return null;
-            const label = navSectionMeta[section].label;
+            const label = t(navSectionMeta[section].label);
             const expanded = isExpanded(section);
             return (
               <CollapsibleNavSection
@@ -212,7 +302,7 @@ export function SidebarNav({
                       <span className="drawer-nav-icon drawer-nav-icon-lucide">
                         <Icon size={18} strokeWidth={1.85} />
                       </span>
-                      <span className="drawer-nav-label">{item.label}</span>
+                      <span className="drawer-nav-label">{t(item.label)}</span>
                       {item.id === "workspace.install" && installChip && (
                         <span
                           style={{

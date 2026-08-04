@@ -1,6 +1,7 @@
 "use client";
 
 import { Menu } from "lucide-react";
+import { LanguageToggle } from "../hooks/useUiLanguage";
 import { ConnectLogo } from "./ConnectLogo";
 import { FloatingDialer } from "./FloatingDialer";
 import { GlobalSearch } from "./GlobalSearch";
@@ -33,6 +34,10 @@ export function Topbar({ onToggleNav }: TopbarProps) {
       </div>
 
       <div className="topbar-right">
+        {/* Renders nothing unless this customer was set up for Yiddish AND
+            this person may use it — so it costs nothing on every other
+            account, but is present on every screen for those who need it. */}
+        <LanguageToggle />
         <QRPairingModal />
         <FloatingDialer />
         <NotificationPanel />

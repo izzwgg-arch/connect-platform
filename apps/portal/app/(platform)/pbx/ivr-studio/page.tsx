@@ -103,6 +103,15 @@ const UI_PHRASES = [
   "A person", "A team", "Voicemail", "Another menu", "Hang up",
   "Which person?", "Whose voicemail?", "Which team?", "Which menu?",
   "Remove this key", "Cancel", "Save name", "Loading…",
+  "Your phone number", "Your recording", "No recording set — callers hear a stand-in message",
+  "No number points at this menu yet", "We replay the menu, then the call ends",
+  "They press a key you haven't set up", "We tell them it wasn't valid and replay the menu",
+  "Which key should the caller press?", "No recordings yet.", "Nothing to choose yet.",
+  "This menu has no keys set up yet.", "None yet", "Add",
+  "Callers never hear this name. It's only so you can find it later.",
+  "This is the menu to play when we're closed", "Days you're closed all day (holidays)",
+  "Not set — callers always get the closed menu",
+  "Something else", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 ];
 
 export default function IvrStudioPage() {
@@ -490,14 +499,14 @@ export default function IvrStudioPage() {
                     sub={greetingRow ? "Your recording" : "No recording set — callers hear a stand-in message"}
                     actions={
                       <>
-                        <button className="btn sm" onClick={() => play(active.pbxPromptRef)}>Play</button>
-                        <button className="btn sm" disabled={!canManage} onClick={() => setRecPickerOpen(!recPickerOpen)}>Change</button>
+                        <button className="btn sm" onClick={() => play(active.pbxPromptRef)}>{t("Play")}</button>
+                        <button className="btn sm" disabled={!canManage} onClick={() => setRecPickerOpen(!recPickerOpen)}>{t("Change")}</button>
                       </>
                     } />
 
                   {recPickerOpen && (
                     <div className="reclist">
-                      {prompts.length === 0 && <div className="dimtxt">No recordings yet for this customer.</div>}
+                      {prompts.length === 0 && <div className="dimtxt">{t("No recordings yet for this customer.")}</div>}
                       {prompts.map((r) => (
                         <button key={r.id} className={"recrow" + (active.pbxPromptRef === r.promptRef ? " on" : "")}
                           onClick={() => { patchProfile({ pbxPromptRef: r.promptRef }); setRecPickerOpen(false); }}>
@@ -534,7 +543,7 @@ export default function IvrStudioPage() {
                         {branchMenu && branchOpen && (
                           <div className="branch">
                             <div className="bhead">Inside “{branchMenu.name}”</div>
-                            {branchKeys.length === 0 && <div className="dimtxt">This menu has no keys set up yet.</div>}
+                            {branchKeys.length === 0 && <div className="dimtxt">{t("This menu has no keys set up yet.")}</div>}
                             {branchKeys
                               .slice()
                               .sort((a, b) => DIGITS.indexOf(a.optionDigit) - DIGITS.indexOf(b.optionDigit))
@@ -544,7 +553,7 @@ export default function IvrStudioPage() {
                                   <div key={bo.id} className="bkey">
                                     <span className="d">{digitGlyph(bo.optionDigit)}</span>
                                     <span className="t">{br.name ?? KIND_LABEL[br.kind]}</span>
-                                    <span className={`tag ${br.kind}`}>{KIND_LABEL[br.kind]}</span>
+                                    <span className={`tag ${br.kind}`}>{t(KIND_LABEL[br.kind])}</span>
                                   </div>
                                 );
                               })}
@@ -576,12 +585,12 @@ export default function IvrStudioPage() {
                   {canManage && freeDigits.length > 0 && (
                     <>
                       <Step add
-                        title="Add another key"
+                        title={t("Add another key")}
                         sub={`${freeDigits.length} key${freeDigits.length === 1 ? "" : "s"} still free`}
                         onClick={() => setEditingDigit(editingDigit === "__new" ? null : "__new")} />
                       {editingDigit === "__new" && (
                         <div className="editor">
-                          <div className="editor-h"><b>Which key should the caller press?</b></div>
+                          <div className="editor-h"><b>{t("Which key should the caller press?")}</b></div>
                           <div className="editor-b">
                             <div className="digitgrid">
                               {freeDigits.map((d) => (
@@ -615,7 +624,7 @@ export default function IvrStudioPage() {
                       : "We replay the menu, then the call ends"} />
 
                   <Step glyph="⚠️" muted last
-                    title="They press a key you haven't set up"
+                    title={t("They press a key you haven't set up")}
                     sub={active.invalidDestinationRef
                       ? `After a few tries we send them to ${describeDestination({ destinationType: active.invalidDestinationType || "", destinationRef: active.invalidDestinationRef }, directory)}`
                       : "We tell them it wasn't valid and replay the menu"} />
@@ -657,7 +666,7 @@ export default function IvrStudioPage() {
               <div className="card-h"><div><h2>{t("Recordings")}</h2><div className="sub">{prompts.length} available</div></div></div>
               <div className="card-b">
                 <div className="reclist flat">
-                  {prompts.length === 0 && <div className="dimtxt">No recordings yet.</div>}
+                  {prompts.length === 0 && <div className="dimtxt">{t("No recordings yet.")}</div>}
                   {prompts.map((r) => (
                     <button key={r.id} className="recrow" onClick={() => play(r.promptRef)}>
                       <span className="p">▶</span><span className="nm">{r.displayName}</span>
@@ -692,6 +701,7 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
   digit?: string; glyph?: string; title: string; sub: string; kind?: MenuChoiceKind;
   actions?: React.ReactNode; onClick?: () => void; muted?: boolean; add?: boolean; last?: boolean; warn?: boolean;
 }) {
+  const { t } = useUiLanguage();
   const Tag: any = onClick ? "button" : "div";
   return (
     <div className="steprow">
@@ -724,6 +734,7 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, disab
   onClose: () => void;
   onCreateMenu: () => void;
 }) {
+  const { t } = useUiLanguage();
   const read = current ? readDestination(current, directory) : null;
   const [kind, setKind] = useState<MenuChoiceKind>(read && read.kind !== "other" ? read.kind : "person");
   const [target, setTarget] = useState<string>(read?.targetId ?? "");
@@ -778,8 +789,8 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, disab
             <button key={k} className={"choice" + (kind === k ? " on" : "") + (blocked ? " blocked" : "")}
               onClick={() => { setKind(k); setTarget(""); }}>
               <span className="glyph">{KIND_GLYPH[k]}</span>
-              <b>{KIND_LABEL[k]}</b>
-              <span>{blocked ?? KIND_BLURB[k]}</span>
+              <b>{t(KIND_LABEL[k])}</b>
+              <span>{blocked ?? t(KIND_BLURB[k])}</span>
             </button>
           ))}
         </div>
@@ -789,10 +800,10 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, disab
         {!blockedReason && kind !== "hangup" && (
           <div className="picker">
             <div className="plabel">
-              {kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : "Which menu?"}
+              {t(kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : "Which menu?")}
             </div>
             {targets.length === 0 ? (
-              <div className="dimtxt">Nothing to choose yet.</div>
+              <div className="dimtxt">{t("Nothing to choose yet.")}</div>
             ) : (
               <div className="targets">
                 {targets.map((t) => (
@@ -834,6 +845,7 @@ function NameDialog({ mode, initial, forDigit, busy, onCancel, onSubmit }: {
   mode: "create" | "rename"; initial: string; forDigit: string | null; busy?: boolean;
   onCancel: () => void; onSubmit: (name: string, type: "business_hours" | "after_hours") => void;
 }) {
+  const { t } = useUiLanguage();
   const [name, setName] = useState(initial);
   const [afterHours, setAfterHours] = useState(false);
   const ok = name.trim().length > 0;
@@ -953,7 +965,7 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
         <div className="field">
           <label>Days you&apos;re closed all day (holidays)</label>
           <div className="holidays">
-            {draft.holidayDates.length === 0 && <span className="dimtxt">None yet</span>}
+            {draft.holidayDates.length === 0 && <span className="dimtxt">{t("None yet")}</span>}
             {draft.holidayDates.map((d) => (
               <span key={d} className="hchip">{d}
                 <button disabled={disabled} onClick={() => setDraft((s) => ({ ...s, holidayDates: s.holidayDates.filter((x) => x !== d) }))} aria-label={`Remove ${d}`}>×</button>
@@ -963,7 +975,7 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
           <div className="rowmini" style={{ marginTop: 8 }}>
             <input className="inp" type="date" disabled={disabled} value={newHoliday} onChange={(e) => setNewHoliday(e.target.value)} />
             <button className="btn sm" disabled={disabled || !newHoliday || draft.holidayDates.includes(newHoliday)}
-              onClick={() => { setDraft((s) => ({ ...s, holidayDates: [...s.holidayDates, newHoliday].sort() })); setNewHoliday(""); }}>Add</button>
+              onClick={() => { setDraft((s) => ({ ...s, holidayDates: [...s.holidayDates, newHoliday].sort() })); setNewHoliday(""); }}>{t("Add")}</button>
           </div>
         </div>
 

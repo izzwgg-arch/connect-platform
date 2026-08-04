@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { useUiLanguage } from "../hooks/useUiLanguage";
 import { usePathname } from "next/navigation";
 import type { NavItem } from "../navigation/navConfig";
 
 export function SidebarNavGroup({ label, items }: { label: string; items: NavItem[] }) {
+  const { t } = useUiLanguage();
   const pathname = usePathname();
 
   return (
     <div className="sidebar-group">
-      <div className="sidebar-group-label">{label}</div>
+      <div className="sidebar-group-label">{t(label)}</div>
       {items.map((item) => {
         const active = pathname === item.href;
         const Icon = item.lucide;
@@ -18,7 +20,7 @@ export function SidebarNavGroup({ label, items }: { label: string; items: NavIte
             <span className="nav-icon">
               <Icon size={18} strokeWidth={1.85} />
             </span>
-            <span>{item.label}</span>
+            <span>{t(item.label)}</span>
           </Link>
         );
       })}
