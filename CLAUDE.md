@@ -1,5 +1,69 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — cross-tenant leak + iOS modal keyboard trap (2026-08-02) — READ FIRST for CDR tenant attribution, contacts, or any iOS modal
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CROSS_TENANT_LEAK_2026-08-02.md`**
+
+- ⛔ **Calls were being written into OTHER COMPANIES' call history.** PBX-verified
+  over 7 days: 3,517 matched records, **116 filed under the wrong company (3.3%)**,
+  11 real customers, both directions — recordings ride along on the record.
+  100% came through `tenantResolutionSource = telephony_connect_tenant_id`, which
+  **trusted a caller-supplied tenant id outright**. Fixed `05952fb5` + `d6c657ff`
+  (API) and `bfaed99e` (telephony). 116 records corrected; reversal at
+  `loopcom:/root/cdr_refile_backup_2026-08-02.json`.
+- **THE PBX IS THE SOURCE OF TRUTH.** Asterisk stamps the owner into the call
+  (`dcontext T102_cos-all`, `PJSIP/T102_101_1-…`) and it cannot be forged.
+  Attribution order: **PBX marker → the DID the PBX routed on → the claim (last
+  resort only)**. A claim that disagrees is REJECTED. Conflicting markers resolve
+  to NOTHING rather than picking a side. **Fail closed** — unattributed is
+  recoverable, wrong-company is not.
+- ⛔ **A React Native `<Modal>` is its own view hierarchy — this bit 3× in one
+  session.** A screen-level `KeyboardAvoidingView` cannot reach inside it (every
+  bottom-anchored sheet with an input needs its OWN, iOS-only). A ScrollView does
+  not save you if the scroll area is itself under the keyboard. And **`showToast`
+  is drawn BEHIND a modal** — use `showAppAlert` inside modals, or failures are
+  silent by construction (this made "Open SMS thread does nothing" unexplainable
+  for two builds).
+- **Check the account can do the thing before debugging the app.** "SMS does
+  nothing" was `TenantSmsNumber` having no row for the tenant → 400 every time.
+  Two builds were spent on real-but-unrelated UI bugs first.
+- **Sanity-check every audit query against the table total.** A voicemail check
+  joined on extension NUMBER (not unique across tenants), fanned out, and reported
+  30,000+ phantom leaks — more rows than the table holds. Voicemail is CLEAN:
+  0 of 34,094.
+- iOS: the pre-wake was reporting a **second CallKit call** per call (different id
+  → different call identity) — that is the green pill / hang-up-twice. Disabled
+  `18fedd9d`. Contacts 1,000-row cap + duplicate-that-named-nobody fixed
+  `6e07adfe` + `bab31854`. iOS builds this session: 46 → 51.
+
+## ⛔ AGENT HANDOFF — Android keyboard covers the screen (2026-08-04) — READ FIRST for any Android layout that sits above the keyboard
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANDROID_KEYBOARD_INSET_2026-08-04.md`**
+
+- **`adjustResize` is dead on Android 15+.** `d111c179` moved the app to
+  targetSdk 36; Android 15 (API 35) enforces edge-to-edge for targetSdk 35+ and
+  stops resizing the window for the keyboard. The manifest still says
+  `adjustResize` and the system ignores it, so the IME draws ON TOP of every
+  bottom-anchored control. Nothing in the chat code changed — the chat screen's
+  `KeyboardAvoidingView` is iOS-only and had always relied on the OS resize.
+- Fixed at the app root by `apps/mobile/src/components/AndroidKeyboardInset.tsx`
+  (wraps the navigator in `App.tsx`). Two rules inside it must not be
+  "simplified": it applies **only on API 35+** (Android 12–14 still resize
+  themselves — padding on top of that shifts every screen up twice), and it pads
+  by **`keyboardHeight + insets.bottom`** because RN measures the keyboard from
+  the top of the gesture bar, so its number is short by exactly that inset
+  (45 px / 15 dp on the S24 — this is what left the composer clipped).
+- **A React Native `<Modal>` is its own native window** — the root fix cannot
+  reach inside it. Modals with inputs need their own `KeyboardAvoidingView`,
+  now `behavior="padding"` on BOTH platforms (`NewChatModal` done;
+  `ContactPicker` still has none).
+- **Measure, do not eyeball.** Screenshot with `adb exec-out screencap -p` and
+  scan the pixels; a by-eye adjustment shipped a build that was still 15 dp low.
+- ⛔ **Build with `scripts/android-ship.ps1 -SkipJunction`** — Metro cannot
+  resolve the entry file through the `.connect-mobile-build` junction.
+- Verified on device: `1.0.0+20260802-143118` (the `20260802` stamp is the build
+  shell's slow clock, not a stale build).
+
 ## ⛔ AGENT HANDOFF — contacts 1,000-cap + ghost call screen (2026-08-02) — READ FIRST for contacts, Android builds, or any "can't save" report
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONTACTS_GHOSTCALL_2026-08-02.md`**
