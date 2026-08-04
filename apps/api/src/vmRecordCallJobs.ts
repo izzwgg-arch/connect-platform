@@ -507,14 +507,14 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     // exact-header matching is skipped, but the fallback fires when exactly one
     // answerable session is present — which is always the case for vm-record).
     //
-    // Instant-originate exception: when the requesting device is already Avail
-    // we suppress this push too. The push makes the mobile show a ring UI that
-    // is NOT backed by a SIP session on its socket, and the wake side-effects
-    // can churn the shared AOR's contacts mid-ring — the user then taps Answer
-    // into nothing and hangs on "answering" forever (T21_101, 2026-08-04).
-    // The requesting device gets a real SIP INVITE from the Dial fan-out and
-    // rings natively.
-    if (hadMobileDevices && !callerEndpointAvail) {
+    // This push is NOT optional (proven live 2026-08-04, second regression):
+    // the Android app deliberately renders no ring UI for a bare SIP INVITE —
+    // its incoming-call screen is push-driven. When the instant-originate path
+    // briefly suppressed this push, the phone logged INCOMING_INVITE and sat
+    // silent while the PBX rang it for 28s. The instant path skips only the
+    // WAKE push (the one that forces a SIP reconnect and churned the AOR
+    // mid-ring); this UI push stays, for every mobile device, on every path.
+    if (hadMobileDevices) {
       const vmInviteId = "vmr-" + jobId;
       try {
         await deps.sendPush({
