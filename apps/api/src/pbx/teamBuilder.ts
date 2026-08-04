@@ -15,7 +15,6 @@
 //    the whole PBX and is Izzy's click, always. These writes sit pending until
 //    he applies them.
 
-import { FormData as UndiciFormData } from "undici";
 import {
   PanelSession, assertSaved, findOptionInSelect,
 } from "../onboarding/panelClient";
@@ -84,9 +83,17 @@ const NOT_APPLIED =
  * Multipart, because that is what the panel's own save sends. A url-encoded
  * body is silently mis-parsed, which is how a whole recording session was lost
  * to "[object FormData]".
+ *
+ * The GLOBAL FormData, deliberately — not `undici`'s. They are the same
+ * implementation (Node's global comes from undici), but `undici` is not a
+ * declared dependency of apps/api, so importing it here only worked while
+ * nothing in the running server reached this file. The moment a route did, the
+ * API container died on `Cannot find module 'undici'` and the blue/green
+ * rollout refused to cut over. The global also matches `postForm`'s signature,
+ * so the `as any` casts at the call sites can go.
  */
-function form(fields: Array<[string, string]>): UndiciFormData {
-  const fd = new UndiciFormData();
+function form(fields: Array<[string, string]>): FormData {
+  const fd = new FormData();
   for (const [k, v] of fields) fd.append(k, v);
   return fd;
 }
@@ -147,7 +154,7 @@ export async function createRingGroup(
     fields.push(["destination", spec.lastDestination.targetId]);
   }
 
-  const res = await session.postForm(form(fields) as any);
+  const res = await session.postForm(form(fields));
   assertSaved(`create ring group ${number}`, res);
   return { ok: true, kind: "ring_group", number, name: spec.name, applied: false, note: NOT_APPLIED };
 }
@@ -224,7 +231,7 @@ export async function createQueue(
     fields.push(["destination", spec.lastDestination.targetId]);
   }
 
-  const res = await session.postForm(form(fields) as any);
+  const res = await session.postForm(form(fields));
   assertSaved(`create queue ${number}`, res);
   return { ok: true, kind: "queue", number, name: spec.name, applied: false, note: NOT_APPLIED };
 }
