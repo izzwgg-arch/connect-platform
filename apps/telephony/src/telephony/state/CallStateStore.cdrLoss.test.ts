@@ -188,6 +188,7 @@ test("orphan Cdr: an AMI Cdr event for an unknown call is synthesized and filed"
   // fully forgotten it, and this Cdr event was silently dropped.
   store.onCdr({
     linkedId: "1785860821.162724",
+    uniqueid: "1785860840.162726", // Local leg carrying its PARENT's linkedId — a real call record
     duration: "312",
     billableSeconds: "304",
     disposition: "ANSWERED",
@@ -239,6 +240,54 @@ test("orphan Cdr: NO ANSWER leg synthesizes without answeredAt", () => {
   assert.equal(orphans.length, 1);
   assert.equal(orphans[0]!.answeredAt, null);
   assert.equal(orphans[0]!.durationSec, 25);
+});
+
+test("orphan Cdr skips self-rooted Local fork legs (queue agent attempts)", () => {
+  const store = new CallStateStore();
+  const orphans: NormalizedCall[] = [];
+  store.on("orphanCdr", (c) => orphans.push(c));
+
+  // Live phantom case 2026-08-04: a Gesheft queue rang 8 agents; each unanswered
+  // Local fork leg's Cdr event carried no parent linkage (linkedId == uniqueid)
+  // and filed as its own "missed call" row while the real call's record
+  // (1785865079.163486) already existed. These must be skipped.
+  store.onCdr({
+    linkedId: "1785865090.163488",
+    uniqueid: "1785865090.163488",
+    duration: "12",
+    billableSeconds: "0",
+    disposition: "NO ANSWER",
+    source: "8452386391",
+    destination: "111",
+    dcontext: "T8_queue-call-to-agents",
+    channel: "Local/111@T8_queue-call-to-agents-0000aaf9;2",
+    destChannel: "PJSIP/T8_111-000110bc",
+    lastApplication: "Dial",
+  });
+
+  assert.equal(orphans.length, 0, "queue fork legs must not become phantom missed calls");
+});
+
+test("orphan Cdr still files a self-rooted NON-Local call (outbound extension dial)", () => {
+  const store = new CallStateStore();
+  const orphans: NormalizedCall[] = [];
+  store.on("orphanCdr", (c) => orphans.push(c));
+
+  store.onCdr({
+    linkedId: "1785861000.500000",
+    uniqueid: "1785861000.500000", // self-rooted is NORMAL for the originating leg
+    duration: "40",
+    billableSeconds: "35",
+    disposition: "ANSWERED",
+    source: "101",
+    destination: "8455551234",
+    dcontext: "T25_cos-all",
+    channel: "PJSIP/T25_101_1-00010aaa",
+    destChannel: "PJSIP/0001-00010aab",
+    lastApplication: "Dial",
+  });
+
+  assert.equal(orphans.length, 1, "a real originating leg files even when self-rooted");
 });
 
 test("orphan Cdr does NOT fire when the store still tracks the call", () => {

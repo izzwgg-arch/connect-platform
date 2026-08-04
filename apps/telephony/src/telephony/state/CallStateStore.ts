@@ -1151,6 +1151,7 @@ export class CallStateStore extends EventEmitter {
   // so CdrNotifier will run again with the updated (better) data.
   onCdr(params: {
     linkedId: string;
+    uniqueid?: string;
     duration: string;
     billableSeconds: string;
     disposition: string;
@@ -1173,6 +1174,25 @@ export class CallStateStore extends EventEmitter {
       // history — 71 calls on Aug 4, 179 on Aug 3. Synthesize a minimal call
       // and hand it to CdrNotifier; the API upserts by linkedId, so several
       // orphan legs (and any provisional eviction record) merge into one row.
+      //
+      // EXCEPT self-rooted Local fork legs: a queue/ring-group agent attempt is
+      // a Local/ channel whose Cdr event carries no parent linkage, so its
+      // linkedId collapses to its own uniqueid. Filing those creates one
+      // phantom "missed call" row PER AGENT for every queue ring (verified
+      // live: 1785865090.16349x — six phantom rows for one Gesheft call whose
+      // real record 1785865079.163486 already existed). A Local leg that DOES
+      // carry its parent's linkedId (e.g. the ring-group forward legs that are
+      // a forwarded call's only Cdr records) still files normally.
+      const isSelfRootedLocalFork =
+        /^Local\//i.test(String(params.channel ?? "")) &&
+        !!params.uniqueid &&
+        params.linkedId === params.uniqueid;
+      if (isSelfRootedLocalFork) {
+        if (env.ENABLE_TELEPHONY_DEBUG) {
+          log.debug({ linkedId: params.linkedId, channel: params.channel }, "cdr: orphan local fork leg skipped");
+        }
+        return;
+      }
       this.emit("orphanCdr", this.synthesizeCallFromCdrEvent(params));
       return;
     }

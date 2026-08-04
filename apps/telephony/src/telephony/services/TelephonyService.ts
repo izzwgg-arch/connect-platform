@@ -406,6 +406,7 @@ export class TelephonyService {
       case "Cdr": {
         this.calls.onCdr({
           linkedId: effectiveLinkedId(typed.linkedid, typed.uniqueid),
+          uniqueid: typed.uniqueid,
           duration: typed.duration,
           billableSeconds: typed.billableSeconds,
           disposition: typed.disposition,
