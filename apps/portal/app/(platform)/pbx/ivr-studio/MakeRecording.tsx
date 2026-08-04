@@ -191,18 +191,28 @@ export function MakeRecording({
     const timer = setTimeout(() => ctrl.abort(), 20_000);
     (async () => {
       try {
-        const s: Status = await (await api("/voice/elevenlabs/status", { signal: ctrl.signal })).json();
+        // One round-trip: /status now carries the voice list too (fetched in
+        // parallel server-side). The old flow was two strictly sequential
+        // calls — most of the "Loading voices…" wait was that second trip.
+        const s: Status & { voices?: Voice[] | null } = await (await api("/voice/elevenlabs/status", { signal: ctrl.signal })).json();
         if (cancelled) return;
         setStatus(s);
         if (s.defaultTuning) setTuning(s.defaultTuning);
         if (s.configured && s.keyWorks && s.usable) {
-          const v: { voices: Voice[] } = await (await api("/voice/elevenlabs/voices", { signal: ctrl.signal })).json();
-          if (cancelled) return;
-          setVoices(v.voices || []);
-          if (v.voices?.length) setVoiceId(v.voices[0].voiceId);
+          let voiceList: Voice[] | null = Array.isArray(s.voices) ? s.voices : null;
+          if (!voiceList) {
+            // The list didn't ride along (older API, or a voices hiccup the
+            // status answer survived) — fall back to the dedicated route.
+            const v: { voices: Voice[] } = await (await api("/voice/elevenlabs/voices", { signal: ctrl.signal })).json();
+            if (cancelled) return;
+            voiceList = v.voices || [];
+          }
+          setVoices(voiceList);
+          if (voiceList.length) setVoiceId(voiceList[0].voiceId);
         }
       } catch (e: any) {
-        if (!cancelled) setErr(e?.name === "AbortError" ? t("Couldn't load the voices.") : e?.message || t("Couldn't load the voices."));
+        // A timeout must not masquerade as "this account has no voices".
+        if (!cancelled) setErr(e?.name === "AbortError" ? t("The voice service is taking too long — close this and try again.") : e?.message || t("Couldn't load the voices."));
       } finally {
         clearTimeout(timer);
         if (!cancelled) setLoading(false);

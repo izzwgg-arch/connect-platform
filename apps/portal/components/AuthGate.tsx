@@ -40,7 +40,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setReady(false);
 
     if (!isDesktopPassiveWindow) {
-      const next = encodeURIComponent(pathname || "/dashboard");
+      // Keep the query string: "?firstrun=1" on IVR Studio is what opens the
+      // new-customer walkthrough — dropping it sent every fresh sign-up to the
+      // bare Studio with no guidance after their first login.
+      const search = typeof window !== "undefined" ? window.location.search : "";
+      const next = encodeURIComponent(`${pathname || "/dashboard"}${search || ""}`);
       router.replace(`/login?next=${next}`);
       return undefined;
     }

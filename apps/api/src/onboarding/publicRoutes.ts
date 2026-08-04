@@ -106,7 +106,10 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       exists: true,
       submission: {
         id: row.id,
-        currentStep: typeof row.currentStep === "number" ? row.currentStep : 0,
+        // The column is a STRING (autosave coerces it) — the old typeof-number
+        // check meant this was always 0, so every refresh dumped the customer
+        // back to step 1 with their answers filled in but their place lost.
+        currentStep: Number(row.currentStep ?? 0) || 0,
         answers: row.answers ?? null,
       },
     };
@@ -365,6 +368,28 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       include: { requestedExtensions: true, events: { orderBy: { createdAt: "desc" }, take: 8 } },
     });
 
+    // Self-heal the worst dead-end: card charged, but the post-payment kick
+    // died before marking the submission paid (process restart, crash in the
+    // detached finalize). The invoice knows the truth — if it's PAID and we
+    // aren't, finalize + kick the pipeline right here. The customer's own
+    // progress polling becomes the retry loop.
+    if (full && !full.paidAt) {
+      void (async () => {
+        try {
+          const inv = await (db as any).billingInvoice.findFirst({
+            where: { status: "PAID", metadata: { path: ["onboardingSubmissionId"], equals: full.id } },
+          });
+          if (!inv) return;
+          const { finalizeOnboardingInvoicePaid } = await import("./onboardingPayment");
+          const done = await finalizeOnboardingInvoicePaid(inv);
+          if (done) {
+            await applyOnboardingNumber(done.submissionId).catch(() => { /* logged inside */ });
+            await resumeSetupIfSubmitted(done.submissionId).catch(() => { /* logged inside */ });
+          }
+        } catch { /* next poll retries */ }
+      })();
+    }
+
     const numberReady = ["ready", "ready_dryrun", "ported_pending"].includes(String(full?.numberStatus || ""));
     const setup = String(full?.pbxSetupStatus || "");
     const built = setup === "done" || setup === "dry_run_done";
@@ -542,8 +567,12 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       // sign-up. "yi" switches Yiddish ON for the whole tenant; anything else
       // leaves it English. Stored in answers so the orchestrator can read it
       // when it creates the Connect tenant.
-      if (typeof (body as any).language === "string") {
-        answers.language = String((body as any).language).toLowerCase() === "yi" ? "yi" : "en";
+      if (typeof body.language === "string") {
+        answers.language = String(body.language).toLowerCase() === "yi" ? "yi" : "en";
+      }
+      // The E911 address must survive submit even if an autosave was missed.
+      if (typeof body.address === "string" && body.address.trim()) {
+        answers.contact = { ...(answers.contact || {}), address: body.address.trim() };
       }
       answers.phone = {
         ...(answers.phone || {}),

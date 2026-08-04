@@ -31,7 +31,7 @@ export interface ElevenLabsRouteDeps {
   db: any;
   /** Resolves the caller and enforces the IVR-prompt permission, or replies. */
   requirePromptManager: (req: any, reply: any) => Promise<any | undefined>;
-  resolvePbxRouteHelperConfig: () => any;
+  resolvePbxRouteHelperConfig: (pbxInstanceId?: string | null) => any;
   pushPromptToHelper: (cfg: any, body: any, bytes: Buffer) => Promise<unknown>;
   PromptPushError: any;
 }
@@ -70,6 +70,44 @@ const SYNTH_RATE_LIMIT = { max: 12, timeWindow: "1 minute" as const };
 const MAX_CONCURRENT_SYNTH = 4;
 let synthInFlight = 0;
 
+/**
+ * Preview → save reuse. "Use this recording" used to synthesise the SAME
+ * text/voice/tuning a second time from scratch — the slowest button in the
+ * flow paid full provider latency twice and burned double the characters.
+ * The preview's PCM is kept for a few minutes keyed by exactly what produced
+ * it; a save with identical inputs reuses the bytes the customer just heard
+ * (which is also more honest: they get the take they approved, not a re-roll).
+ */
+const PREVIEW_CACHE_TTL_MS = 10 * 60_000;
+const PREVIEW_CACHE_MAX = 40; // ~0.5 MB per 30s greeting at 8 kHz — bounded memory
+const previewCache = new Map<string, { pcm: Buffer; sampleRate: number; model: string; at: number }>();
+
+function previewCacheKey(input: { voiceId: string; text: string; model?: string; tuning?: unknown }): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify([input.voiceId, input.text, input.model ?? "", input.tuning ?? {}]))
+    .digest("hex");
+}
+
+function previewCacheGet(key: string): { pcm: Buffer; sampleRate: number; model: string } | null {
+  const hit = previewCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > PREVIEW_CACHE_TTL_MS) {
+    previewCache.delete(key);
+    return null;
+  }
+  return hit;
+}
+
+function previewCacheSet(key: string, value: { pcm: Buffer; sampleRate: number; model: string }): void {
+  previewCache.set(key, { ...value, at: Date.now() });
+  while (previewCache.size > PREVIEW_CACHE_MAX) {
+    const oldest = previewCache.keys().next().value;
+    if (oldest === undefined) break;
+    previewCache.delete(oldest);
+  }
+}
+
 async function withSynthSlot<T>(reply: any, fn: () => Promise<T>): Promise<T | undefined> {
   if (synthInFlight >= MAX_CONCURRENT_SYNTH) {
     reply.code(429).send({
@@ -106,7 +144,11 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
 
   // ── GET /voice/elevenlabs/status ──────────────────────────────────────────
   // Whether generation is available at all, plus how many characters are left.
-  // Never returns the key.
+  // Never returns the key. Also carries the voice list: the modal used to make
+  // TWO strictly sequential round-trips (status, then voices) before showing
+  // anything — folding them into one request, fetched in parallel, roughly
+  // halves the "Loading voices…" wait. The separate /voices route stays for
+  // compatibility and as the client's fallback when `voices` is null here.
   app.get("/voice/elevenlabs/status", async (req: any, reply: any) => {
     const user = await requirePromptManager(req, reply);
     if (!user) return;
@@ -115,8 +157,12 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     const key = await resolveElevenLabsKey(db);
     if (!key) return reply.send({ configured: false });
 
-    const { checkElevenLabsKey, TTS_MODELS, IVR_VOICE_TUNING } = await import("./elevenLabs");
-    const check = await checkElevenLabsKey(key);
+    const { checkElevenLabsKey, listElevenLabsVoices, TTS_MODELS, IVR_VOICE_TUNING } = await import("./elevenLabs");
+    const [check, voices] = await Promise.all([
+      checkElevenLabsKey(key),
+      // Best-effort: a voice-list hiccup must not break the status answer.
+      listElevenLabsVoices(key).catch(() => null),
+    ]);
     return reply.send({
       configured: true,
       keyWorks: check.ok,
@@ -129,6 +175,8 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       tier: check.tier ?? null,
       models: TTS_MODELS,
       defaultTuning: IVR_VOICE_TUNING,
+      /** null = list unavailable right now; the client falls back to /voices. */
+      voices,
     });
   });
 
@@ -176,6 +224,12 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
           model: isTtsModelId(body.data.model) ? body.data.model : undefined,
           tuning: body.data.tuning,
         });
+        // Keep the take: if they save these exact words in this exact voice,
+        // /prompts/generate reuses this audio instead of synthesising again.
+        previewCacheSet(
+          previewCacheKey({ voiceId: body.data.voiceId, text: body.data.text, model: body.data.model, tuning: body.data.tuning }),
+          { pcm: out.pcm, sampleRate: out.sampleRate, model: out.model },
+        );
         const wav = pcmToWav(out.pcm, out.sampleRate);
         reply.header("Content-Type", "audio/wav");
         reply.header("Content-Length", String(wav.byteLength));
@@ -239,14 +293,22 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     let seconds = 0;
     let sampleRate = 8000;
     try {
-      const out = await withSynthSlot(reply, () =>
-        synthesiseSpeech(key, {
-          voiceId: body.data.voiceId,
-          text: body.data.text,
-          model: isTtsModelId(body.data.model) ? body.data.model : undefined,
-          tuning: body.data.tuning,
-        }),
+      // The take the customer just previewed (identical text/voice/tuning) is
+      // reused verbatim — no second synthesis, no second wait, no double
+      // character spend, and they get exactly the audio they approved.
+      const cached = previewCacheGet(
+        previewCacheKey({ voiceId: body.data.voiceId, text: body.data.text, model: body.data.model, tuning: body.data.tuning }),
       );
+      const out =
+        cached ??
+        (await withSynthSlot(reply, () =>
+          synthesiseSpeech(key, {
+            voiceId: body.data.voiceId,
+            text: body.data.text,
+            model: isTtsModelId(body.data.model) ? body.data.model : undefined,
+            tuning: body.data.tuning,
+          }),
+        ));
       if (!out) return; // over the concurrency cap — a 429 has already been sent
       wav = pcmToWav(out.pcm, out.sampleRate);
       seconds = pcmDurationSeconds(out.pcm, out.sampleRate);
@@ -320,7 +382,14 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     let pushStatus: "pushed" | "skipped_no_helper" | "failed" = "skipped_no_helper";
     let pushDetail: string | null = null;
     try {
-      const helperCfg = resolvePbxRouteHelperConfig();
+      // Resolve the helper for THIS tenant's PBX instance — every other push
+      // site passes the instance id; calling with none silently falls back to
+      // the global helper, which is the wrong box once per-instance helpers
+      // are configured.
+      const link = await db.tenantPbxLink
+        .findFirst({ where: { tenantId }, select: { pbxInstanceId: true } })
+        .catch(() => null);
+      const helperCfg = resolvePbxRouteHelperConfig(link?.pbxInstanceId);
       if (helperCfg) {
         const wavBytes = await readPromptFile(stored.storageKey);
         await pushPromptToHelper(

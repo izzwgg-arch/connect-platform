@@ -109,11 +109,16 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
     const { id } = (req.params as any) as { id: string };
     const row = await (db as any).onboardingSubmission.findUnique({
       where: { id },
-      select: { id: true, status: true, pbxSetupStatus: true, updatedAt: true },
+      select: { id: true, status: true, paidAt: true, pbxSetupStatus: true, updatedAt: true },
     });
     if (!row) return reply.code(404).send({ error: "not_found" });
-    if (row.status !== "SUBMITTED" && row.status !== "APPROVED" && row.status !== "PROVISIONING") {
-      return reply.code(409).send({ error: "not_submitted", detail: `status is ${row.status}` });
+    // Gate on what matters: paid, and not finished. The old allowlist named
+    // two statuses that don't exist in the enum ("APPROVED"/"PROVISIONING")
+    // and rejected the REAL recovery states (AWAITING_PBX_SETUP, ACTIVE with
+    // a later partial failure) — the retry button 409'd exactly when needed.
+    const retryableStatus = ["SUBMITTED", "AWAITING_PBX_SETUP", "AWAITING_PORT", "READY_TO_SYNC", "ACTIVE"].includes(String(row.status));
+    if (!retryableStatus || !row.paidAt) {
+      return reply.code(409).send({ error: "not_retryable", detail: `status is ${row.status}${row.paidAt ? "" : ", not paid"}` });
     }
     if (row.pbxSetupStatus === "done") return reply.code(409).send({ error: "already_done" });
     const inFlight = ["building", "syncing", "inviting"].includes(String(row.pbxSetupStatus || ""));

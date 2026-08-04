@@ -36,6 +36,13 @@ export const publicSubmitSchema = z.object({
   // Optional — when omitted, billing goes to the main email.
   billingEmail: z.string().email().optional(),
   mainPhone: z.string().optional(),
+  // The E911 registration address. Without this field zod STRIPPED the value
+  // the wizard sent, leaving the 911 address to survive only via autosave —
+  // one missed autosave and it was silently gone.
+  address: z.string().max(300).optional(),
+  // "yi" switches the tenant's screens to Yiddish. Also used to be stripped
+  // here, which made the whole language feature unreachable dead code.
+  language: z.string().max(8).optional(),
   phoneNumberChoice: z.string().optional(),
   selectedNumber: z.string().optional(),
   porting: z.unknown().optional(),

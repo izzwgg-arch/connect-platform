@@ -266,7 +266,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       track("number_search", { detail: query || "(blank)", count: list.length });
     } catch {
       setNumbers([]);
-      setNumbersError("We couldn't load available numbers just now. Try another area code, or continue and we'll assign one.");
+      // Honest copy: Continue is blocked until a number is picked, so don't
+      // promise "we'll assign one" — offer the retry that actually helps.
+      setNumbersError("We couldn't load available numbers just now — the number service may be briefly busy. Tap Search to try again in a few seconds.");
       track("number_search", { detail: query || "(blank)", count: -1 });
     } finally {
       setNumbersLoading(false);
@@ -317,7 +319,14 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       fd.append("file", file);
       const res = await fetch(`${getPortalApiBaseUrl()}/onboarding/${encodeURIComponent(token)}/upload-bill?kind=${kind}`, { method: "POST", body: fd, cache: "no-store" });
       if (!res.ok) throw new Error("upload_failed");
-      updateForm({ porting: { ...form.porting, [kind === "loa" ? "loaFileName" : "billFileName"]: file.name } });
+      // Functional update: uploading the authorization and the bill back to
+      // back used to lose the first filename (stale closure over `form`).
+      const field = kind === "loa" ? "loaFileName" : "billFileName";
+      setForm((prev) => {
+        const next = { ...prev, porting: { ...prev.porting, [field]: file.name } };
+        scheduleAutosave(next, step);
+        return next;
+      });
     } catch {
       setStepError("That file couldn't upload. Please check the file and try again.");
     } finally {
@@ -395,7 +404,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         : r.payPath;
     } catch (e: any) {
       checkoutFired.current = false; // allow a retry
-      setCheckoutError(e?.payload?.message || e?.message || "We couldn't prepare your checkout. Please try again.");
+      // ApiError carries the server's friendly text in .body — .message is
+      // "code: text" and rendered raw codes like "charges_disabled: …".
+      setCheckoutError(e?.body?.message || "We couldn't prepare your checkout. Please try again.");
     }
   }, [token]);
 
@@ -620,8 +631,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                 <div className="ob-searchbar">
                   <input className="ob-input" placeholder="e.g. 305 or Miami" value={numbersQuery}
                     onChange={(e) => setNumbersQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && searchNumbers(numbersQuery)} />
-                  <button className="ob-btn-ghost" onClick={() => searchNumbers(numbersQuery)}>Search</button>
+                    onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery)} />
+                  {/* Disabled while a search runs: each one can take 20s+, and
+                      impatient re-clicks used to stack concurrent requests. */}
+                  <button className="ob-btn-ghost" disabled={numbersLoading} onClick={() => searchNumbers(numbersQuery)}>
+                    {numbersLoading ? "Searching…" : "Search"}
+                  </button>
                 </div>
                 {numbersLoading && <div className="ob-field-hint">Finding available numbers… this can take up to 30 seconds.</div>}
                 {numbersError && <div className="ob-field-hint">{numbersError}</div>}
