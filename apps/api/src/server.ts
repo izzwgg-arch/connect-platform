@@ -23036,7 +23036,8 @@ async function yiddishAvailableFor(user: JwtUser): Promise<boolean> {
 app.get("/me/language", async (req, reply) => {
   const user = await requirePermission(req, reply, () => true); // any signed-in user
   if (!user) return;
-  const row = await (db as any).user.findUnique({ where: { id: (user as any).id }, select: { uiLanguage: true } });
+  // The JWT carries the user id as `sub`, not `id`.
+  const row = await (db as any).user.findUnique({ where: { id: user.sub }, select: { uiLanguage: true } });
   const available = await yiddishAvailableFor(user);
   // If Yiddish stopped being available (permission revoked, tenant switched
   // off), report English regardless of what is stored — the screens must match
@@ -23054,7 +23055,7 @@ app.patch("/me/language", async (req, reply) => {
   if (body.data.uiLanguage === "yi" && !(await yiddishAvailableFor(user))) {
     return reply.code(403).send({ error: "yiddish_not_available", detail: "Yiddish isn't switched on for this account." });
   }
-  await (db as any).user.update({ where: { id: (user as any).id }, data: { uiLanguage: body.data.uiLanguage } });
+  await (db as any).user.update({ where: { id: user.sub }, data: { uiLanguage: body.data.uiLanguage } });
   return reply.send({ ok: true, uiLanguage: body.data.uiLanguage });
 });
 
