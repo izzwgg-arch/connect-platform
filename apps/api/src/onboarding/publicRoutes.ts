@@ -406,6 +406,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
 
       // Keep the latest number choice in answers too (provisioning reads it there).
       const answers: any = { ...(row.answers as any || {}) };
+      // Which language should this customer's screens be in? Asked once, at
+      // sign-up. "yi" switches Yiddish ON for the whole tenant; anything else
+      // leaves it English. Stored in answers so the orchestrator can read it
+      // when it creates the Connect tenant.
+      if (typeof (body as any).language === "string") {
+        answers.language = String((body as any).language).toLowerCase() === "yi" ? "yi" : "en";
+      }
       answers.phone = {
         ...(answers.phone || {}),
         choice: body.phoneNumberChoice || answers.phone?.choice || "",

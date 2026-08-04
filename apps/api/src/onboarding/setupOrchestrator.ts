@@ -201,19 +201,26 @@ async function ensureConnectTenant(
   instanceId: string,
   dirEntry: any,
   company: string,
+  /** Answered in the wizard: does this customer want Yiddish offered at all?
+   *  Only ever turns the offer ON here — a customer who later switched it off
+   *  should not have it switched back on by a re-run of setup. */
+  yiddish?: boolean,
 ): Promise<string> {
   const existingLink = await (db as any).tenantPbxLink.findFirst({
     where: { pbxInstanceId: instanceId, pbxTenantId: String(dirEntry.vitalTenantId) },
   });
   if (existingLink) {
-    await (db as any).tenant.update({ where: { id: existingLink.tenantId }, data: { name: company } }).catch(() => {});
+    await (db as any).tenant.update({
+      where: { id: existingLink.tenantId },
+      data: { name: company, ...(yiddish ? { yiddishEnabled: true } : {}) },
+    }).catch(() => {});
     if (existingLink.status !== "LINKED") {
       await (db as any).tenantPbxLink.update({ where: { id: existingLink.id }, data: { status: "LINKED", lastError: null } }).catch(() => {});
     }
     return String(existingLink.tenantId);
   }
   const created = await (db as any).$transaction(async (tx: any) => {
-    const t = await tx.tenant.create({ data: { name: company, kind: "CUSTOMER", isApproved: true } });
+    const t = await tx.tenant.create({ data: { name: company, kind: "CUSTOMER", isApproved: true, yiddishEnabled: !!yiddish } });
     await tx.tenantPbxLink.create({
       data: {
         tenantId: t.id,
@@ -483,7 +490,10 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     const dirEntry = await findPbxDirectoryEntry(pbx.instanceId, pbx.client, slug, company);
     if (!dirEntry) throw new Error(`pbx_tenant_not_in_directory (slug ${slug})`);
 
-    const tenantId = await ensureConnectTenant(pbx.instanceId, dirEntry, company);
+    // The wizard's language question rides in the answers JSON, so no extra
+    // column was needed on the submission.
+    const wantsYiddish = String(((fresh?.answers as any)?.language ?? "")).toLowerCase() === "yi";
+    const tenantId = await ensureConnectTenant(pbx.instanceId, dirEntry, company, wantsYiddish);
     await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { createdTenantId: tenantId } });
 
     // Retry the extension sync until every requested extension is present and

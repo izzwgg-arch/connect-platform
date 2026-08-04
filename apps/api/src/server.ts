@@ -23008,6 +23008,101 @@ app.post("/voice/ivr/events", async (req, reply) => {
   return reply.send({ ok: true });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// YIDDISH INTERFACE
+//
+// Screens are translated by Yiddish Labs and by nothing else. The model never
+// writes Yiddish — the same rule the chat bridge has always followed, and it
+// matters: asked for "Hold music", YL returns "music while waiting on the
+// line", which is what a person would actually say. A literal translation is
+// not the same product.
+//
+// Three conditions must ALL hold before a person sees Yiddish:
+//   1. their tenant was set up to be offered it   (Tenant.yiddishEnabled)
+//   2. they personally may use it                 (can_use_yiddish)
+//   3. they have chosen it                        (User.uiLanguage)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Is Yiddish even on the table for this person? Both the tenant switch and
+ *  the individual permission have to say yes. */
+async function yiddishAvailableFor(user: JwtUser): Promise<boolean> {
+  if (!user.tenantId) return false;
+  const t = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { yiddishEnabled: true } });
+  if (!t?.yiddishEnabled) return false;
+  return userHasActionPermission(user, "can_use_yiddish");
+}
+
+// ── GET /me/language ─────────────────────────────────────────────────────────
+app.get("/me/language", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true); // any signed-in user
+  if (!user) return;
+  const row = await (db as any).user.findUnique({ where: { id: (user as any).id }, select: { uiLanguage: true } });
+  const available = await yiddishAvailableFor(user);
+  // If Yiddish stopped being available (permission revoked, tenant switched
+  // off), report English regardless of what is stored — the screens must match
+  // what we say here or the toggle lies.
+  const stored = String(row?.uiLanguage ?? "en");
+  return reply.send({ uiLanguage: available && stored === "yi" ? "yi" : "en", available });
+});
+
+// ── PATCH /me/language ───────────────────────────────────────────────────────
+app.patch("/me/language", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true);
+  if (!user) return;
+  const body = z.object({ uiLanguage: z.enum(["en", "yi"]) }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  if (body.data.uiLanguage === "yi" && !(await yiddishAvailableFor(user))) {
+    return reply.code(403).send({ error: "yiddish_not_available", detail: "Yiddish isn't switched on for this account." });
+  }
+  await (db as any).user.update({ where: { id: (user as any).id }, data: { uiLanguage: body.data.uiLanguage } });
+  return reply.send({ ok: true, uiLanguage: body.data.uiLanguage });
+});
+
+// ── POST /ui/translate ───────────────────────────────────────────────────────
+// The screens' door to Yiddish Labs. Permission-checked here, then forwarded
+// to the agent, which owns the key and the shared translation cache.
+//
+// A page load never warms: it asks for what is already translated and gets it
+// in milliseconds. Anything missing comes back untranslated and the screen
+// leaves that label in English — a half-Yiddish screen is honest, whereas
+// making the customer wait 10 seconds a label, or inventing Yiddish to fill
+// the gap, is not.
+app.post("/ui/translate", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true);
+  if (!user) return;
+  const body = z.object({
+    strings: z.array(z.string()).max(400),
+    /** Only super-admins may warm; it spends Yiddish Labs credits. */
+    warm: z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  if (!isSuperAdmin && !(await yiddishAvailableFor(user))) {
+    return reply.code(403).send({ error: "yiddish_not_available" });
+  }
+  const warm = body.data.warm === true && isSuperAdmin;
+
+  const secret = process.env.AGENT_INTERNAL_SECRET;
+  const base = process.env.AGENT_BASE_URL || "http://agent:3920";
+  if (!secret) return reply.code(503).send({ error: "agent_not_configured" });
+  try {
+    const resp = await fetch(`${base}/agent/ui/translate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-agent-internal-secret": secret },
+      body: JSON.stringify({ strings: body.data.strings, warm }),
+      signal: AbortSignal.timeout(warm ? 300_000 : 15_000),
+    });
+    if (!resp.ok) return reply.code(502).send({ error: "translate_failed", status: resp.status });
+    return reply.send(await resp.json());
+  } catch (err: any) {
+    // Never fabricate. An empty map means "no Yiddish available right now",
+    // and the screen stays in English.
+    app.log.warn({ err: err?.message }, "ui-translate: agent unreachable");
+    return reply.send({ translations: {}, cached: 0, fresh: 0, configured: false, unreachable: true });
+  }
+});
+
 /** Load the tenant's real directory (people / teams / menus) for agent builds
  *  and explanations. Returns null when the phone system can't be read — every
  *  caller MUST treat that as "refuse", never as "empty directory", or a menu

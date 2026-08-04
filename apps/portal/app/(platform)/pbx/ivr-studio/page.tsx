@@ -34,6 +34,7 @@ import {
   type MenuChoiceKind, type TenantDirectory, type CallStep,
 } from "@connect/shared";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
 
 interface RouteProfile {
@@ -89,8 +90,24 @@ function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/** Every fixed phrase this screen shows, so they're fetched in one batch.
+ *  Anything not yet translated by Yiddish Labs simply stays in English. */
+const UI_PHRASES = [
+  "Phone menus", "IVR Studio", "Publish", "Not published yet", "Rename", "New menu",
+  "No phone menu yet", "Create my first menu", "What happens on a call",
+  "Read it top to bottom — this is exactly what a caller goes through",
+  "Someone calls in", "They hear your greeting", "Play", "Change", "Add another key",
+  "Explain it to me", "The whole call, in plain words", "Read it", "Hide",
+  "Recordings", "Opening hours", "Time zone", "Save hours", "Closed all day",
+  "While you're open", "When you're closed", "Choose a menu…", "Not saved yet",
+  "A person", "A team", "Voicemail", "Another menu", "Hang up",
+  "Which person?", "Whose voicemail?", "Which team?", "Which menu?",
+  "Remove this key", "Cancel", "Save name", "Loading…",
+];
+
 export default function IvrStudioPage() {
   const { tenantId, tenant, can } = useAppContext();
+  const { t } = useUiLanguage(UI_PHRASES);
   const search = useSearchParams();
   const canManage = can("can_manage_ivr_routing");
   const canPublish = can("can_publish_ivr_routing") || canManage;
@@ -409,11 +426,12 @@ export default function IvrStudioPage() {
       <StudioStyles />
 
       <div className="topbar">
-        <div className="crumbs">Phone menus<span>›</span><b>{tenant?.name ?? "—"}</b></div>
+        <div className="crumbs">{t("Phone menus")}<span>›</span><b>{tenant?.name ?? "—"}</b></div>
         <div className="spacer" />
-        {dirty && <span className="pill warn"><i />Not published yet</span>}
+        {dirty && <span className="pill warn"><i />{t("Not published yet")}</span>}
+        <LanguageToggle />
         <button className="btn primary" disabled={!canPublish || saving || !active} onClick={publish}>
-          Publish
+          {t("Publish")}
         </button>
       </div>
 
@@ -429,13 +447,13 @@ export default function IvrStudioPage() {
 
       <div className="titlerow">
         <div>
-          <div className="eyebrow">IVR Studio</div>
+          <div className="eyebrow">{t("IVR Studio")}</div>
           <div className="menupick">
             <select className="menusel" value={activeId ?? ""} onChange={(e) => { setEditingDigit(null); setActiveId(e.target.value || null); }}>
               {profiles.length === 0 && <option value="">No menus yet</option>}
               {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.type === "after_hours" ? " · after hours" : ""}</option>)}
             </select>
-            {active && <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "rename" })}>Rename</button>}
+            {active && <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "rename" })}>{t("Rename")}</button>}
             <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "create", forDigit: null })}>+ New menu</button>
           </div>
         </div>
@@ -447,9 +465,9 @@ export default function IvrStudioPage() {
       {!loading && profiles.length === 0 && (
         <div className="empty">
           <div className="eglyph">☎️</div>
-          <h2>No phone menu yet</h2>
+          <h2>{t("No phone menu yet")}</h2>
           <p>A phone menu is the recorded message callers hear — “press 1 for sales, press 2 for accounts”. Make your first one and set up what each key does.</p>
-          <button className="btn primary big" disabled={!canManage} onClick={() => setNamingFor({ mode: "create", forDigit: null })}>Create my first menu</button>
+          <button className="btn primary big" disabled={!canManage} onClick={() => setNamingFor({ mode: "create", forDigit: null })}>{t("Create my first menu")}</button>
         </div>
       )}
 
@@ -459,7 +477,7 @@ export default function IvrStudioPage() {
             {/* ── the map ── */}
             <div className="card">
               <div className="card-h">
-                <div><h2>What happens on a call</h2><div className="sub">Read it top to bottom — this is exactly what a caller goes through</div></div>
+                <div><h2>{t("What happens on a call")}</h2><div className="sub">Read it top to bottom — this is exactly what a caller goes through</div></div>
               </div>
               <div className="card-b">
                 <div className="flow">
@@ -618,7 +636,7 @@ export default function IvrStudioPage() {
           <div className="sticky">
             <div className="card">
               <div className="card-h">
-                <div><h2>Explain it to me</h2><div className="sub">The whole call, in plain words</div></div>
+                <div><h2>{t("Explain it to me")}</h2><div className="sub">{t("The whole call, in plain words")}</div></div>
                 <button className="btn ghost sm" style={{ marginLeft: "auto" }} onClick={() => setShowScript(!showScript)}>
                   {showScript ? "Hide" : "Read it"}
                 </button>
@@ -636,7 +654,7 @@ export default function IvrStudioPage() {
             </div>
 
             <div className="card">
-              <div className="card-h"><div><h2>Recordings</h2><div className="sub">{prompts.length} available</div></div></div>
+              <div className="card-h"><div><h2>{t("Recordings")}</h2><div className="sub">{prompts.length} available</div></div></div>
               <div className="card-b">
                 <div className="reclist flat">
                   {prompts.length === 0 && <div className="dimtxt">No recordings yet.</div>}
@@ -854,6 +872,7 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
   onSave: (next: ScheduleRow) => void;
   onCreateAfterHours: () => void;
 }) {
+  const { t } = useUiLanguage();
   const [draft, setDraft] = useState<ScheduleRow>(schedule ?? EMPTY_SCHEDULE);
   const [newHoliday, setNewHoliday] = useState("");
   const savedJson = useRef<string>(JSON.stringify(schedule ?? EMPTY_SCHEDULE));
@@ -878,11 +897,11 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
   return (
     <div className="card">
       <div className="card-h">
-        <div><h2>Opening hours</h2><div className="sub">{openCount === 0 ? "Not set — callers always get the closed menu" : summariseHours(draft.businessHoursRules, draft.timezone)}</div></div>
+        <div><h2>{t("Opening hours")}</h2><div className="sub">{openCount === 0 ? "Not set — callers always get the closed menu" : summariseHours(draft.businessHoursRules, draft.timezone)}</div></div>
       </div>
       <div className="card-b">
         <div className="field" style={{ maxWidth: 280 }}>
-          <label>Time zone</label>
+          <label>{t("Time zone")}</label>
           <select className="sel" disabled={disabled} value={draft.timezone} onChange={(e) => setDraft((d) => ({ ...d, timezone: e.target.value }))}>
             {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz.split("/")[1].replace(/_/g, " ")}</option>)}
             {!TIMEZONES.includes(draft.timezone) && <option value={draft.timezone}>{draft.timezone}</option>}
@@ -905,7 +924,7 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
                     <span className="to">to</span>
                     <input className="inp time" type="time" disabled={disabled} value={r.close} onChange={(e) => setDay(day, r.open, e.target.value)} />
                   </div>
-                ) : <div className="daytimes closedtxt">Closed all day</div>}
+                ) : <div className="daytimes closedtxt">{t("Closed all day")}</div>}
               </div>
             );
           })}
@@ -950,7 +969,7 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
 
         <div className="foot">
           {changed && <span className="pill" style={{ marginRight: "auto" }}>Not saved yet</span>}
-          <button className="btn primary" disabled={disabled || !changed} onClick={() => onSave(draft)}>Save hours</button>
+          <button className="btn primary" disabled={disabled || !changed} onClick={() => onSave(draft)}>{t("Save hours")}</button>
         </div>
       </div>
     </div>

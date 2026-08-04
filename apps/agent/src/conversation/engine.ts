@@ -96,6 +96,15 @@ export interface ChatContext {
   clientUserId: string | null;
   role: Role;
   channel?: string;
+  /**
+   * The language this person reads their screens in (User.uiLanguage). When
+   * it is "yi" the assistant answers in Yiddish even if they happened to type
+   * in English — someone who has set their account to Yiddish should not have
+   * to write Yiddish to be answered in it. Unset falls back to detecting the
+   * language of the message, which still catches a Yiddish message from an
+   * English-set account.
+   */
+  preferredLanguage?: "en" | "yi";
 }
 
 /** Finished chat-widget upload, resolved tenant-scoped by the route layer. */
@@ -196,7 +205,10 @@ export class ConversationEngine {
   }
 
   async handleMessage(ctx: ChatContext, text: string, attachments: ChatAttachmentRef[] = []): Promise<ChatResult> {
-    const language = detectLanguage(text);
+    // A stored Yiddish preference wins; otherwise fall back to reading the
+    // message. Never the reverse — an English-looking message from someone
+    // whose account is Yiddish is still answered in Yiddish.
+    const language = ctx.preferredLanguage === "yi" ? "yi" : detectLanguage(text);
     const bridging = this.bridging(language);
 
     // Per-tenant rate cap (Phase 7) — checked before any work. Owners exempt.

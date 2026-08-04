@@ -37,7 +37,15 @@ export function resolveIdentity(req: FastifyRequest): AgentIdentity | null {
   return null;
 }
 
-export function registerChatRoutes(app: FastifyInstance, engine: ConversationEngine, uploads: ChatUploadStore | null = null) {
+export function registerChatRoutes(
+  app: FastifyInstance,
+  engine: ConversationEngine,
+  uploads: ChatUploadStore | null = null,
+  /** Reads User.uiLanguage so someone whose account is set to Yiddish is
+   *  answered in Yiddish even when they type in English. Optional: without it
+   *  the engine falls back to detecting the language of each message. */
+  prisma: any = null,
+) {
   app.post("/agent/chat/message", async (req, reply) => {
     const identity = resolveIdentity(req);
     if (!identity) return reply.code(403).send({ error: "forbidden" });
@@ -55,7 +63,17 @@ export function registerChatRoutes(app: FastifyInstance, engine: ConversationEng
     const attachments = (body.data.attachments ?? [])
       .map((id) => uploads?.get(id, identity.tenantId) ?? null)
       .filter((a): a is NonNullable<typeof a> => a !== null);
-    return engine.handleMessage({ ...identity, channel: body.data.channel }, body.data.text, attachments);
+    // Someone who set their account to Yiddish should not have to write
+    // Yiddish to be answered in it. Failure here is non-fatal — the engine
+    // just falls back to detecting the message's own language.
+    let preferredLanguage: "en" | "yi" | undefined;
+    if (prisma && identity.clientUserId) {
+      try {
+        const u = await prisma.user.findUnique({ where: { id: identity.clientUserId }, select: { uiLanguage: true } });
+        if (u?.uiLanguage === "yi") preferredLanguage = "yi";
+      } catch { /* fall back to detection */ }
+    }
+    return engine.handleMessage({ ...identity, channel: body.data.channel, preferredLanguage }, body.data.text, attachments);
   });
 
   // ── Chunked file upload (chat widget). nginx caps /agent-api/* bodies at
