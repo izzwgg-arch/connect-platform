@@ -15,33 +15,49 @@ function decodeBase64Url(input: string): string {
   return Buffer.from(padded, "base64").toString("utf-8");
 }
 
+// Every localStorage touch is wrapped: Safari's "Block All Cookies", some
+// private modes, and storage-disabled webviews make the calls THROW, and this
+// module is imported by public pages (sign-up wizard, pay page) that must keep
+// working with no storage at all — they just behave as signed-out.
 export function readAuthToken(): string {
   if (typeof window === "undefined") return "";
-  return (
-    localStorage.getItem("token") ||
-    localStorage.getItem("cc-token") ||
-    localStorage.getItem("authToken") ||
-    ""
-  );
+  try {
+    return (
+      localStorage.getItem("token") ||
+      localStorage.getItem("cc-token") ||
+      localStorage.getItem("authToken") ||
+      ""
+    );
+  } catch {
+    return "";
+  }
 }
 
 export function writeAuthToken(token: string): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem("token", token);
-  localStorage.setItem("cc-token", token);
-  localStorage.setItem("authToken", token);
+  try {
+    localStorage.setItem("token", token);
+    localStorage.setItem("cc-token", token);
+    localStorage.setItem("authToken", token);
+  } catch { /* storage blocked — session lives only as long as the page */ }
 }
 
 export function clearAuthSession(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("token");
-  localStorage.removeItem("cc-token");
-  localStorage.removeItem("authToken");
+  try {
+    localStorage.removeItem("token");
+    localStorage.removeItem("cc-token");
+    localStorage.removeItem("authToken");
+  } catch { /* storage blocked — nothing was stored to clear */ }
 }
 
 export function readTenantContext(): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem("cc-tenant-id") || "";
+  try {
+    return localStorage.getItem("cc-tenant-id") || "";
+  } catch {
+    return "";
+  }
 }
 
 export function readJwtPayload(): JwtPayload | null {

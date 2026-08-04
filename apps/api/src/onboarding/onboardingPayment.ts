@@ -35,6 +35,7 @@ import { createBillingInvoiceRowWithUniqueNumber } from "../billing/invoiceEngin
 import { createBillingInvoicePayToken } from "../billing/billingPayToken";
 import { billingLiveChargesDisabled } from "../billing/solaBillingPayments";
 import { ensureOnboardingBillingDefaults } from "./onboardingBillingDefaults";
+import { quoteInputForSubmission } from "./quoteInput";
 
 /** Long enough to sleep on the decision; short enough that a stale link from a
  *  half-finished sign-up doesn't survive for a month. */
@@ -53,20 +54,16 @@ export type OnboardingCheckout =
     }
   | { ok: false; code: number; error: string; message: string };
 
-/** What this submission owes, from the choices they made in the wizard. */
+/** What this submission owes, from the choices they made in the wizard.
+ *  Derivation lives in ./quoteInput (pure, tested) so the review-step /quote
+ *  route can price a not-yet-submitted row from its autosaved answers. */
 export function quoteForSubmission(sub: {
   requestedExtensions?: Array<unknown> | null;
   smsEnabled?: boolean | null;
   answers?: any;
   provisionedDid?: string | null;
 }): OnboardingQuote {
-  const extensions = Array.isArray(sub.requestedExtensions) ? sub.requestedExtensions.length : 0;
-  // One number today. Extra numbers are an explicit choice; when the wizard
-  // grows that option it sets answers.phone.extraNumbers and this picks it up
-  // without the pricing needing to change.
-  const extra = Number(sub.answers?.phone?.extraNumbers ?? 0);
-  const phoneNumbers = 1 + (Number.isFinite(extra) && extra > 0 ? Math.floor(extra) : 0);
-  return quoteOnboarding({ extensions, phoneNumbers, smsEnabled: !!sub.smsEnabled });
+  return quoteOnboarding(quoteInputForSubmission(sub));
 }
 
 /**
@@ -137,8 +134,11 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
 
   // One invoice per submission. A revisit to the checkout step reuses it —
   // otherwise every visit creates another invoice for the same first month.
+  // Looked up by the dedicated UNIQUE column (not the metadata path) so the
+  // database itself forbids a second one — two concurrent checkouts used to
+  // both pass a findFirst race and each create an invoice: a double charge.
   let invoice = await (db as any).billingInvoice.findFirst({
-    where: { tenantId, metadata: { path: ["onboardingSubmissionId"], equals: submissionId } },
+    where: { onboardingSubmissionId: submissionId },
   });
 
   // The quote can legitimately change between visits (they went back and added
@@ -180,25 +180,39 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
   }
 
   if (!invoice) {
-    invoice = await createBillingInvoiceRowWithUniqueNumber(tenantId, async (invoiceNumber: string) =>
-      (db as any).billingInvoice.create({
-        data: {
-          tenantId,
-          invoiceNumber,
-          status: "OPEN",
-          issueDate: now,
-          dueDate: now,
-          periodStart: now,
-          periodEnd,
-          subtotalCents: quote.monthlyTotalCents,
-          taxCents: 0, // the quoted per-line prices already include tax
-          totalCents: quote.monthlyTotalCents,
-          balanceDueCents: quote.monthlyTotalCents,
-          metadata: { onboardingSubmissionId: submissionId, source: "onboarding_signup" },
-          lineItems: { create: lineItemRows() },
-        },
-      }),
-    );
+    try {
+      invoice = await createBillingInvoiceRowWithUniqueNumber(tenantId, async (invoiceNumber: string) =>
+        (db as any).billingInvoice.create({
+          data: {
+            tenantId,
+            invoiceNumber,
+            status: "OPEN",
+            issueDate: now,
+            dueDate: now,
+            periodStart: now,
+            periodEnd,
+            subtotalCents: quote.monthlyTotalCents,
+            taxCents: 0, // the quoted per-line prices already include tax
+            totalCents: quote.monthlyTotalCents,
+            balanceDueCents: quote.monthlyTotalCents,
+            onboardingSubmissionId: submissionId,
+            metadata: { onboardingSubmissionId: submissionId, source: "onboarding_signup" },
+            lineItems: { create: lineItemRows() },
+          },
+        }),
+      );
+    } catch (err: any) {
+      // Two checkouts raced (slow prepare + a client retry): the loser hits
+      // the unique constraint. Re-read the winner's invoice — never a second
+      // charge. (invoiceNumber P2002s are retried inside the helper; only the
+      // submission-id collision lands here.)
+      const target = String((err?.meta as any)?.target ?? "");
+      if (err?.code !== "P2002" || !target.includes("onboardingSubmissionId")) throw err;
+      invoice = await (db as any).billingInvoice.findFirst({
+        where: { onboardingSubmissionId: submissionId },
+      });
+      if (!invoice) throw err;
+    }
   }
 
   const token = createBillingInvoicePayToken(invoice.id, tenantId, CHECKOUT_LINK_TTL_MS);
@@ -209,7 +223,9 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
     invoiceNumber: invoice.invoiceNumber,
     amountCents: invoice.totalCents,
     payPath: `/pay/invoice/${encodeURIComponent(token)}`,
-    alreadyPaid,
+    // From the final row, not the earlier snapshot — a raced re-read may have
+    // landed on an invoice the other tab already paid.
+    alreadyPaid: invoice.status === "PAID" || (invoice.balanceDueCents ?? 0) <= 0,
   };
 }
 

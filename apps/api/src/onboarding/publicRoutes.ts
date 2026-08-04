@@ -7,7 +7,8 @@ import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
 import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { prepareOnboardingCheckout, quoteForSubmission } from "./onboardingPayment";
-import { describeQuote } from "@connect/shared";
+import { quoteInputForSubmission } from "./quoteInput";
+import { describeQuote, quoteOnboarding } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
@@ -421,6 +422,36 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       tenantId: full?.createdTenantId ?? null,
       recentActivity: (full?.events ?? []).map((e: any) => ({ at: e.createdAt, message: e.message })).filter((e: any) => e.message),
     };
+  });
+
+  // ── What they'll pay ──────────────────────────────────────────────────────
+  // Review-step receipt: itemized monthly lines + total, priced server-side by
+  // the SAME code the first invoice uses — a quote that disagrees with the
+  // charge is the kind of thing a customer never forgets. The wizard passes
+  // its live extension count and SMS flag because autosave is debounced: the
+  // stored answers can be a second behind what's on screen.
+  app.get("/onboarding/:token/quote", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+
+    const full = await (db as any).onboardingSubmission.findUnique({
+      where: { id: row.id },
+      include: { requestedExtensions: true },
+    });
+    const derived = quoteInputForSubmission(full || row);
+
+    const q: any = req.query || {};
+    const extParam = Number(q.extensions);
+    const smsParam = String(q.sms ?? "");
+    const input = {
+      extensions:
+        Number.isFinite(extParam) && extParam >= 0 ? Math.min(500, Math.floor(extParam)) : derived.extensions,
+      phoneNumbers: derived.phoneNumbers,
+      smsEnabled: smsParam === "1" ? true : smsParam === "0" ? false : derived.smsEnabled,
+    };
+    const quote = quoteOnboarding(input);
+    return { ok: true, lines: quote.lines, monthlyTotalCents: quote.monthlyTotalCents, summary: describeQuote(quote) };
   });
 
   // ── Checkout ──────────────────────────────────────────────────────────────

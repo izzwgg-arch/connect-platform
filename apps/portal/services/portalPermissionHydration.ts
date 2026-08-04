@@ -51,7 +51,11 @@ export function writeCachedPortalPermissions(permissions: Permission[]): void {
 
 export function clearCachedPortalPermissions(): void {
   if (typeof window === "undefined") return;
-  sessionStorage.removeItem(CACHE_KEY);
+  try {
+    sessionStorage.removeItem(CACHE_KEY);
+  } catch {
+    /* storage blocked — nothing cached to clear */
+  }
 }
 
 export function notifyPortalPermissionsHydrated(permissions?: Permission[]): void {

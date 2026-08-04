@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
+import { ApiError, apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -158,8 +158,17 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   const [stepError, setStepError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "retrying" | "failed">("idle");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped on every new save (and on submit) so an in-flight retry loop from
+  // an older edit knows to stand down instead of clobbering the indicator.
+  const saveSeq = useRef(0);
+  // True from the moment an edit is made until the server confirms it —
+  // drives the "you have unsaved changes" warning on close/refresh.
+  const unsavedRef = useRef(false);
+  // The form was submitted in ANOTHER tab: /save answers 409 and every edit
+  // here is silently lost — so stop the wizard with a blocking banner.
+  const [conflict, setConflict] = useState(false);
 
   // Number search state
   const [numbers, setNumbers] = useState<AvailableNumber[]>([]);
@@ -170,6 +179,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   // Porting: portability check + document uploads
   const [portability, setPortability] = useState<"idle" | "checking" | "portable" | "unknown">("idle");
   const [uploading, setUploading] = useState<{ loa: boolean; bill: boolean }>({ loa: false, bill: false });
+
+  // Review step: the itemized monthly price, fetched from the server so the
+  // number shown is computed by the SAME pricing code as the first invoice.
+  type QuoteLine = { key: string; label: string; quantity: number; unitCents: number; totalCents: number; note?: string };
+  const [quote, setQuote] = useState<{ lines: QuoteLine[]; monthlyTotalCents: number } | null>(null);
+  const [quoteFailed, setQuoteFailed] = useState(false);
 
   // ── Token validation ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -221,28 +236,61 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   const secondsOnStep = () => Math.min(86_400, Math.max(0, Math.round((Date.now() - stepEnteredAt.current) / 1000)));
 
   // ── Autosave ────────────────────────────────────────────────────────────────
+  // A failed save is never silent: it retries 3 times with backoff (a phone
+  // dropping Wi-Fi for a moment must not lose answers), shows "Not saved" while
+  // it does, and arms the leave-page warning until the server has the data.
   const scheduleAutosave = useCallback((f: FormData, currentStep: number) => {
+    unsavedRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    const seq = ++saveSeq.current;
     saveTimer.current = setTimeout(async () => {
       setSaveState("saving");
-      try {
-        await apiPut(`/onboarding/${encodeURIComponent(token)}/save`, {
-          currentStep,
-          answers: {
-            company:    { companyName: f.companyName, firstName: f.firstName, lastName: f.lastName },
-            contact:    { mainPhone: f.mainPhone, address: f.address, mainEmail: f.mainEmail, billingEmail: f.billingEmail },
-            phone:      { choice: f.numberChoice, selectedNumber: f.selectedNumber, details: f.porting },
-            extensions: f.extensions,
-            addons:     { smsEnabled: f.smsEnabled },
-          },
-        });
-        setSaveState("saved");
-        setTimeout(() => setSaveState("idle"), 2500);
-      } catch {
-        setSaveState("idle");
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await apiPut(`/onboarding/${encodeURIComponent(token)}/save`, {
+            currentStep,
+            answers: {
+              company:    { companyName: f.companyName, firstName: f.firstName, lastName: f.lastName },
+              contact:    { mainPhone: f.mainPhone, address: f.address, mainEmail: f.mainEmail, billingEmail: f.billingEmail },
+              phone:      { choice: f.numberChoice, selectedNumber: f.selectedNumber, details: f.porting },
+              extensions: f.extensions,
+              addons:     { smsEnabled: f.smsEnabled },
+            },
+          });
+          if (seq !== saveSeq.current) return; // a newer save owns the state now
+          unsavedRef.current = false;
+          setSaveState("saved");
+          setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 2500);
+          return;
+        } catch (e) {
+          if (seq !== saveSeq.current) return;
+          if (e instanceof ApiError && e.status === 409) {
+            // Submitted in another tab — retrying can never succeed.
+            unsavedRef.current = false;
+            setConflict(true);
+            return;
+          }
+          if (attempt >= 3) {
+            setSaveState("failed");
+            return;
+          }
+          setSaveState("retrying");
+          await new Promise((r) => setTimeout(r, 1200 * 2 ** attempt));
+        }
       }
     }, 900);
   }, [token]);
+
+  // Unsaved answers + closing the tab = lost work; let the browser ask first.
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (!unsavedRef.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, []);
 
   function updateForm(patch: Partial<FormData>) {
     setForm((prev) => { const next = { ...prev, ...patch }; scheduleAutosave(next, step); return next; });
@@ -310,6 +358,24 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.porting.numbers, form.numberChoice, step]);
+
+  // Fetch the price on entering the review step. The wizard passes its live
+  // extension count + SMS flag — autosave is debounced, so the server's stored
+  // answers can be a moment behind what's on this screen.
+  useEffect(() => {
+    if (step !== 5) return;
+    let cancelled = false;
+    setQuote(null);
+    setQuoteFailed(false);
+    const extCount = form.extensions.filter((e) => e.displayName.trim() && e.extNumber.trim()).length;
+    apiGet<{ lines: QuoteLine[]; monthlyTotalCents: number }>(
+      `/onboarding/${encodeURIComponent(token)}/quote?extensions=${extCount}&sms=${form.smsEnabled ? 1 : 0}`,
+    )
+      .then((r) => { if (!cancelled) setQuote({ lines: r.lines || [], monthlyTotalCents: r.monthlyTotalCents || 0 }); })
+      .catch(() => { if (!cancelled) setQuoteFailed(true); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, token]);
 
   async function uploadPortDoc(kind: "loa" | "bill", file: File) {
     setStepError(null);
@@ -394,9 +460,15 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     checkoutFired.current = true;
     setCheckoutError(null);
     try {
+      // Preparing checkout creates the tenant + first invoice server-side and
+      // can legitimately be slow — the default 10s client timeout made a slow
+      // prepare look failed, and the retry is exactly what used to mint a
+      // second invoice.
       const r = await apiPost<{ payPath: string; alreadyPaid: boolean }>(
         `/onboarding/${encodeURIComponent(token)}/checkout`,
         {},
+        undefined,
+        { timeoutMs: 30_000 },
       );
       // Already paid (e.g. back-button after paying): straight to progress.
       window.location.href = r.alreadyPaid
@@ -413,6 +485,21 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   useEffect(() => {
     if (step === 6) void startCheckout();
   }, [step, startCheckout]);
+
+  // Back-button traps: coming BACK from the pay page can restore this page
+  // from the bfcache exactly as it was left — checkoutFired stuck true, so the
+  // step-6 auto-fire never ran again and the customer stared at a spinner
+  // with no button. Same trap re-entering payment from the review step.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) checkoutFired.current = false;
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+  useEffect(() => {
+    if (step !== 6) checkoutFired.current = false;
+  }, [step]);
 
   async function handleSubmit() {
     setSubmitError(null);
@@ -453,9 +540,15 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             isOwner: e.isOwner || undefined,
           })),
       });
-      // Saved and locked — on to the payment step, which hands off to the
-      // real checkout page. /success is where the PAY page lands afterwards;
-      // going there from here skipped payment entirely.
+      // Saved and locked — a still-pending autosave would now 409 against the
+      // submitted row and read as a false "another tab" conflict. Everything
+      // it carried is inside the submit that just succeeded.
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveSeq.current++;
+      unsavedRef.current = false;
+      // On to the payment step, which hands off to the real checkout page.
+      // /success is where the PAY page lands afterwards; going there from
+      // here skipped payment entirely.
       track("step_viewed", { step: STEPS[6].label, fromStep: STEPS[5].label, seconds: secondsOnStep() });
       stepEnteredAt.current = Date.now();
       setStep(6);
@@ -466,6 +559,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         // Already submitted — e.g. they came back after an interrupted
         // checkout. Everything is saved; what's missing is the payment, so
         // carry on to it. Checkout itself knows how to treat a paid row.
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        saveSeq.current++;
+        unsavedRef.current = false;
         setStep(6);
         window.scrollTo({ top: 0, behavior: "smooth" });
       } else {
@@ -517,6 +613,24 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     );
   }
 
+  if (conflict) {
+    // The form was submitted from another tab. Anything typed here can no
+    // longer be saved — say so loudly instead of letting edits vanish.
+    return (
+      <div className="ob-invalid-wrap">
+        <div className="ob-invalid-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+        </div>
+        <div className="ob-invalid-title">This sign-up was already submitted in another tab</div>
+        <p className="ob-invalid-body">
+          Everything submitted there is safe — but changes made on <b>this</b> screen can&apos;t be saved
+          any more. Reload to pick up exactly where the other tab left off.
+        </p>
+        <button className="ob-btn-next" onClick={() => window.location.reload()}>Reload this page</button>
+      </div>
+    );
+  }
+
   const stepIcons = [IconBuilding, IconContact, IconPhone, IconExtensions, IconSms, IconCheck, IconCheck];
   const StepIcon = stepIcons[step] ?? IconCheck;
   const eyebrows = ["About you", "Reach you", "Your number", "Your team", "Extras", "Confirm", "Payment"];
@@ -549,9 +663,10 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         </div>
         <div className="ob-header-tools">
           <div className="ob-save-indicator" style={{ opacity: saveState !== "idle" ? 1 : 0 }}>
-            {saveState === "saving"
-              ? (<><div className="ob-spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /><span>Saving…</span></>)
-              : (<><div className="ob-save-dot" /><span>Saved</span></>)}
+            {saveState === "saving" && (<><div className="ob-spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /><span>Saving…</span></>)}
+            {saveState === "saved" && (<><div className="ob-save-dot" /><span>Saved</span></>)}
+            {saveState === "retrying" && (<><div className="ob-spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /><span className="ob-save-warn">Not saved — retrying…</span></>)}
+            {saveState === "failed" && (<><div className="ob-save-dot ob-save-dot-err" /><span className="ob-save-warn">Not saved</span></>)}
           </div>
           <button className="ob-theme-toggle" onClick={toggleTheme} aria-label="Toggle light or dark theme">
             {themeLabel === "dark" ? <IconMoon /> : <IconSun />} {themeLabel === "dark" ? "Dark" : "Light"}
@@ -716,8 +831,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <tbody>
                 {form.extensions.map((ext, i) => (
                   <Fragment key={i}>
+                    {/* data-label + the ob-ext-*-td classes exist for phones:
+                        below 640px the CSS stacks this table into cards and
+                        paints each field's label from data-label. */}
                     <tr className="ob-ext-row">
-                      <td style={{ textAlign: "center" }}>
+                      <td className="ob-ext-owner-td" style={{ textAlign: "center" }}>
                         <input
                           type="radio"
                           name="ob-owner-ext"
@@ -727,10 +845,10 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                           style={{ width: 16, height: 16, accentColor: "#2f6bff", cursor: "pointer" }}
                         />
                       </td>
-                      <td><input className="ob-input" placeholder="Jane Smith" value={ext.displayName} onChange={(e) => updateExt(i, { displayName: e.target.value })} /></td>
-                      <td><input className="ob-input" placeholder="101" value={ext.extNumber} onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })} style={{ textAlign: "center" }} /></td>
-                      <td><input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email} onChange={(e) => updateExt(i, { email: e.target.value })} /></td>
-                      <td>{form.extensions.length > 1 && (<button className="ob-ext-remove" onClick={() => removeExt(i)} title="Remove">×</button>)}</td>
+                      <td data-label="Name"><input className="ob-input" placeholder="Jane Smith" value={ext.displayName} onChange={(e) => updateExt(i, { displayName: e.target.value })} /></td>
+                      <td data-label="Ext #"><input className="ob-input" placeholder="101" value={ext.extNumber} onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })} style={{ textAlign: "center" }} /></td>
+                      <td data-label="Email"><input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email} onChange={(e) => updateExt(i, { email: e.target.value })} /></td>
+                      <td className="ob-ext-remove-td">{form.extensions.length > 1 && (<button className="ob-ext-remove" onClick={() => removeExt(i)} title="Remove">×</button>)}</td>
                     </tr>
                     <tr className="ob-ext-cell-row">
                       <td colSpan={5}>
@@ -817,6 +935,13 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                 <span className="ob-review-val">{form.numberChoice === "port" ? (form.porting.numbers || "—") : (form.selectedNumber || "—")}</span>
               </div>
               <div className="ob-review-row"><span className="ob-review-key">Server</span><span className="ob-review-val">New York 1{form.smsEnabled ? " · SMS on" : ""}</span></div>
+              {form.numberChoice === "port" && (
+                <div className="ob-field-hint" style={{ marginTop: 8 }}>
+                  While your number transfers — typically <b>3–5 business days</b> — you&apos;ll be live on a
+                  temporary number right away, so calls work from day one. Your current number keeps working
+                  until the transfer completes.
+                </div>
+              )}
             </div>
             <div className="ob-review-section">
               <div className="ob-review-section-title">Extensions ({form.extensions.filter((e) => e.extNumber).length})</div>
@@ -847,6 +972,37 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <div className="ob-review-section-title">Add-ons</div>
               <div className="ob-review-row"><span className="ob-review-key">SMS messaging</span><span className={`ob-review-val${form.smsEnabled ? " ob-auto" : ""}`}>{form.smsEnabled ? "Enabled" : "Not added"}</span></div>
             </div>
+            <div className="ob-review-section">
+              <div className="ob-review-section-title">What you&apos;ll pay</div>
+              {quote ? (
+                <div className="ob-quote">
+                  {quote.lines.map((l) => (
+                    <div key={l.key} className="ob-quote-row">
+                      <span className="ob-quote-label">
+                        {l.label}
+                        {l.note && <span className="ob-quote-note">{l.note}</span>}
+                      </span>
+                      {l.quantity > 1 && <span className="ob-quote-qty">{l.quantity} × {money(l.unitCents)}</span>}
+                      <span className="ob-quote-amt">{money(l.totalCents)}</span>
+                    </div>
+                  ))}
+                  <div className="ob-quote-row ob-quote-total">
+                    <span className="ob-quote-label">
+                      <b>Monthly total</b>
+                      <span className="ob-quote-note">Charged when you add your card, then every month. Tax included.</span>
+                    </span>
+                    <span className="ob-quote-amt">{money(quote.monthlyTotalCents)}</span>
+                  </div>
+                </div>
+              ) : quoteFailed ? (
+                <div className="ob-field-hint">
+                  We couldn&apos;t load your price just now — the payment step will show the exact amount before
+                  your card is charged.
+                </div>
+              ) : (
+                <div className="ob-field-hint">Working out your monthly price…</div>
+              )}
+            </div>
             <div className="ob-callout">
               <span>On launch, Connect builds your tenant, creates every extension from your list, {form.numberChoice === "port" ? "ports" : "buys & wires"} your number, and sets your routing — <b className="ob-auto">all automatically</b>.</span>
             </div>
@@ -871,6 +1027,20 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   You&apos;ll pay on our standard checkout page, and your card stays on file — that&apos;s how the
                   monthly bill is paid. Card details go straight to the payment provider; they never touch our
                   servers.
+                </p>
+                {/* The auto-handoff can be left stranded (back-button from the
+                    pay page restores this screen from the browser cache with
+                    nothing running) — a visible button means the customer is
+                    never stuck watching a spinner. */}
+                <button
+                  className="ob-btn-next"
+                  style={{ marginTop: 16 }}
+                  onClick={() => { checkoutFired.current = false; void startCheckout(); }}
+                >
+                  Continue to payment <IconArrowRight />
+                </button>
+                <p className="ob-field-hint" style={{ marginTop: 10 }}>
+                  Not moving after a few seconds? Tap the button.
                 </p>
               </div>
             )}

@@ -88,6 +88,9 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-save-indicator { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px; transition:opacity .3s ease; }
 .ob-save-dot { width:6px; height:6px; border-radius:50%; background:var(--good); animation:ob-pulse 2s ease-in-out infinite; }
 @keyframes ob-pulse { 0%,100% { opacity:.5; transform:scale(.85); } 50% { opacity:1; transform:scale(1); } }
+/* Autosave in trouble: the indicator must read as a warning, not blend in */
+.ob-save-dot-err { background:var(--danger); animation:none; }
+.ob-save-warn { color:var(--danger); font-weight:600; }
 
 .ob-theme-toggle {
   appearance:none; cursor:pointer; border:1px solid var(--border); background:var(--surface-2); color:var(--text-2);
@@ -244,6 +247,19 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-review-ext-num { font-weight:650; color:var(--accent); font-size:11px; background:var(--accent-soft); border-radius:4px; padding:1px 5px; }
 .ob-review-ext-cell { font-size:10.5px; font-weight:640; color:var(--good); }
 
+/* ── Review: what you'll pay ────────────────────────────────────────────────
+   Token-based (unlike the pay-step receipt) so it reads right in both themes. */
+.ob-quote { border:1.5px solid var(--border); border-radius:13px; overflow:hidden; background:var(--surface-2); }
+.ob-quote-row { display:flex; align-items:baseline; gap:12px; padding:11px 15px; border-bottom:1px solid var(--border-soft); font-size:13.5px; }
+.ob-quote-row:last-child { border-bottom:none; }
+.ob-quote-label { flex:1; min-width:0; color:var(--text); font-weight:560; }
+.ob-quote-label b { font-size:14.5px; font-weight:700; }
+.ob-quote-note { display:block; font-size:11.5px; color:var(--muted); margin-top:2px; font-weight:400; line-height:1.45; }
+.ob-quote-qty { color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.ob-quote-amt { color:var(--text); font-weight:640; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.ob-quote-total { background:var(--accent-soft); border-top:1px solid var(--accent-ring); padding:13px 15px; }
+.ob-quote-total .ob-quote-amt { font-size:18px; font-weight:740; }
+
 /* ── Actions ────────────────────────────────────────────────────────────────── */
 .ob-actions { display:flex; align-items:center; justify-content:space-between; margin-top:26px; }
 .ob-btn-back { background:none; border:1.5px solid var(--border); color:var(--text-2); font-size:14px; font-weight:560; border-radius:10px; padding:0 18px; height:43px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:border-color .15s, color .15s, background .15s; }
@@ -290,6 +306,30 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-success-note a { color:var(--accent); text-decoration:none; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────────── */
+@media (max-width:640px) {
+  /* iOS zooms the whole page when focusing any input under 16px — every
+     input in the wizard must be 16px on phones (repeated selectors so the
+     smaller table/cell sizes are overridden too). */
+  .ob-shell .ob-input, .ob-shell .ob-textarea,
+  .ob-ext-table .ob-input, .ob-ext-cell .ob-input { font-size:16px; }
+
+  /* The 5-column extensions table becomes stacked cards: each person is one
+     card (main fields + the cell-routing row fused underneath). */
+  .ob-ext-table, .ob-ext-table tbody, .ob-ext-table tr, .ob-ext-table td { display:block; width:100%; box-sizing:border-box; }
+  .ob-ext-table thead { display:none; }
+  .ob-ext-row { position:relative; background:var(--surface-2); border:1.5px solid var(--border); border-bottom:none; border-radius:13px 13px 0 0; padding:14px 14px 2px; }
+  .ob-ext-row td { padding:0 0 12px; text-align:left !important; }
+  .ob-ext-row td[data-label]::before { content:attr(data-label); display:block; font-size:10.5px; font-weight:640; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-bottom:5px; }
+  .ob-ext-row td .ob-input { text-align:left !important; }
+  .ob-ext-owner-td { display:flex !important; align-items:center; gap:8px; width:auto; }
+  .ob-ext-owner-td::after { content:"Account owner"; font-size:12.5px; font-weight:580; color:var(--text-2); }
+  .ob-ext-row td.ob-ext-remove-td { position:absolute; top:6px; right:8px; width:auto; padding:0; }
+  .ob-ext-cell-row { background:var(--surface-2); border:1.5px solid var(--border); border-top:none; border-radius:0 0 13px 13px; padding:0 14px 14px; margin-bottom:12px; }
+  .ob-ext-cell-row td { padding:0; }
+  .ob-ext-cell { flex-direction:column; gap:9px; }
+  .ob-ext-cell-select { flex:none; width:100%; }
+  .ob-ext-cell .ob-input { height:41px; }
+}
 @media (max-width:480px) {
   .ob-header { padding:20px 0 18px; }
   .ob-step-title { font-size:19px; }

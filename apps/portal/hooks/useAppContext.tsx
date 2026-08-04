@@ -20,6 +20,22 @@ import {
 } from "../services/visualQaMode";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
 
+/** localStorage helpers that can't throw — Safari "Block All Cookies" and
+ *  storage-disabled webviews raise SecurityError on every touch, and the app
+ *  shell must still render there (it just forgets preferences on reload). */
+function safeStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function safeStorageSet(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch { /* storage blocked */ }
+}
+
 function readInitialRole(): Role {
   if (typeof window === "undefined") return "END_USER";
   const jwt = readJwtPayload();
@@ -117,13 +133,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPermissionsHydrated(true);
     }
 
-    const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
+    const stored = typeof window !== "undefined" ? safeStorageGet("cc-theme") : null;
     if (stored === "dark" || stored === "light") setThemeState(stored);
     setThemeHydrated(true);
 
     const jwt = readJwtPayload();
 
-    const storedScope = typeof window !== "undefined" ? localStorage.getItem("cc-admin-scope") : null;
+    const storedScope = typeof window !== "undefined" ? safeStorageGet("cc-admin-scope") : null;
     // Default to scoped primary workspace (TENANT). GLOBAL is opt-in and only restored from localStorage.
     if (storedScope === "GLOBAL" || storedScope === "TENANT") {
       setAdminScopeState(storedScope);
@@ -137,7 +153,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } else {
       setBackendJwtRole(undefined);
     }
-    const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
+    const storedTenant = typeof window !== "undefined" ? safeStorageGet("cc-tenant-id") : null;
     // For super-admins the stored value is their chosen workspace tenant, which must
     // win over jwt.tenantId (their home/platform tenant). For regular users the JWT
     // tenant is authoritative and storedTenant is a stable echo of it.
@@ -358,7 +374,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    if (themeHydrated) localStorage.setItem("cc-theme", theme);
+    if (themeHydrated) safeStorageSet("cc-theme", theme);
     // Desktop app: mirror the theme to the pop-out mini dialer, which is a separate
     // BrowserWindow that can't reliably read this window's theme. Only the full window
     // pushes (the mini has no theme toggle), avoiding an echo loop.
@@ -371,13 +387,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [theme, themeHydrated]);
 
   useEffect(() => {
-    localStorage.setItem("cc-tenant-id", tenantId);
+    safeStorageSet("cc-tenant-id", tenantId);
   }, [tenantId]);
 
   useEffect(() => {
     const normalized = role === "SUPER_ADMIN" ? adminScope : "TENANT";
     if (normalized !== adminScope) setAdminScopeState(normalized);
-    localStorage.setItem("cc-admin-scope", normalized);
+    safeStorageSet("cc-admin-scope", normalized);
   }, [adminScope, role]);
 
   useEffect(() => {

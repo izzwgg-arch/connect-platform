@@ -51,12 +51,25 @@ function parseJsonResponse<T>(res: Response, text: string): T {
   }
 }
 
+/** localStorage GETTER that can't throw. Safari's "Block All Cookies", some
+ *  private modes, and storage-disabled webviews make every localStorage touch
+ *  throw a SecurityError — and this runs on EVERY api call, including the
+ *  public sign-up wizard, where an unguarded read killed the first request and
+ *  rendered the whole wizard as "This onboarding link is not active". */
+function safeStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 function browserToken(): string {
   if (typeof window === "undefined") return "";
   return (
-    localStorage.getItem("token") ||
-    localStorage.getItem("cc-token") ||
-    localStorage.getItem("authToken") ||
+    safeStorageGet("token") ||
+    safeStorageGet("cc-token") ||
+    safeStorageGet("authToken") ||
     ""
   );
 }
@@ -74,9 +87,9 @@ export function hasBrowserAuthToken(): boolean {
 
 export function browserTenantContext(): string {
   if (typeof window === "undefined") return "";
-  const scope = localStorage.getItem("cc-admin-scope") || "TENANT";
+  const scope = safeStorageGet("cc-admin-scope") || "TENANT";
   if (scope === "GLOBAL") return "";
-  return localStorage.getItem("cc-tenant-id") || "";
+  return safeStorageGet("cc-tenant-id") || "";
 }
 
 type ApiRequestOptions = {
