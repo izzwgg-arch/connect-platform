@@ -529,6 +529,34 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     }
     await logEvent(submissionId, `All ${verifications.length} extension(s) verified in Connect (users + SIP synced).`);
 
+    // ── 3b. Account owner ───────────────────────────────────────────────────
+    // The wizard marks one extension as the owner (defaulting to the first).
+    // That person is promoted to TENANT_ADMIN — without this, every user the
+    // build creates is a plain USER and the brand-new account has nobody who
+    // can administer it (or even open IVR Studio for the first-run setup).
+    const ownerExtNumber = String(
+      ((fresh?.answers as any)?.ownerExtNumber ?? "") || (fresh.requestedExtensions?.[0]?.extNumber ?? ""),
+    ).trim();
+    if (ownerExtNumber) {
+      const ownerExt = await (db as any).extension.findUnique({
+        where: { tenantId_extNumber: { tenantId, extNumber: ownerExtNumber } },
+      });
+      const ownerUser = ownerExt?.ownerUserId
+        ? await (db as any).user.findUnique({ where: { id: ownerExt.ownerUserId } })
+        : null;
+      // Never demote, and never touch platform staff: only a plain USER on
+      // THIS tenant (i.e. someone this build just created or synced) goes up.
+      if (ownerUser && ownerUser.tenantId === tenantId && ownerUser.role === "USER") {
+        await (db as any).user.update({ where: { id: ownerUser.id }, data: { role: "TENANT_ADMIN" } });
+        await logEvent(submissionId, `Owner: ${ownerUser.email || "user"} (ext ${ownerExtNumber}) is the account admin.`);
+      } else if (!ownerUser) {
+        await logEvent(
+          submissionId,
+          `Owner extension ${ownerExtNumber} has no login (no email, or the email belongs to another organization) — no account admin was created. Assign one from the admin panel.`,
+        );
+      }
+    }
+
     // ── 4. Invitations ──────────────────────────────────────────────────────
     await setPbxStatus(submissionId, "inviting");
     let invited = 0;

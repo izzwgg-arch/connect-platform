@@ -21,6 +21,10 @@ export const extensionInputSchema = z.object({
   // desk/app; only = calls go straight to the cell.
   cellMode: z.enum(["also", "only"]).optional(),
   cellNumber: z.string().regex(/^[0-9]{10}$/).optional(),
+  // Exactly one extension is the account owner — that person becomes the
+  // tenant's admin when the system is built. The wizard defaults it to the
+  // first extension and lets the customer move it.
+  isOwner: z.boolean().optional(),
 });
 
 // Public submit payload

@@ -6,7 +6,7 @@ import { apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type CellMode = "" | "also" | "only";
-type Extension = { displayName: string; extNumber: string; email: string; vmPassword: string; cellMode: CellMode; cellNumber: string };
+type Extension = { displayName: string; extNumber: string; email: string; vmPassword: string; cellMode: CellMode; cellNumber: string; isOwner: boolean };
 
 type PortingDetails = {
   carrier: string;
@@ -36,14 +36,21 @@ type FormData = {
   smsEnabled: boolean;
 };
 
-const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "", vmPassword: "", cellMode: "", cellNumber: "" };
+const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "", vmPassword: "", cellMode: "", cellNumber: "", isOwner: false };
+
+/** Exactly one extension is the owner: keep the marked one, else the first. */
+function withOneOwner(exts: Extension[]): Extension[] {
+  if (!exts.length) return exts;
+  const ownerIdx = Math.max(0, exts.findIndex((e) => e.isOwner));
+  return exts.map((e, i) => ({ ...e, isOwner: i === ownerIdx }));
+}
 
 const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
   mainPhone: "", address: "", mainEmail: "", billingEmail: "",
   numberChoice: "", selectedNumber: "",
   porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", portPin: "", loaFileName: "", billFileName: "" },
-  extensions: [{ ...EMPTY_EXT }],
+  extensions: [{ ...EMPTY_EXT, isOwner: true }],
   smsEnabled: false,
 };
 
@@ -122,6 +129,12 @@ function validateStep(step: number, f: FormData): string | null {
     }
     const nums = f.extensions.map((e) => e.extNumber.trim());
     if (new Set(nums).size !== nums.length) return "Extension numbers must be unique.";
+    // The owner becomes the account admin — without an email there is no
+    // login to attach that to, and the account would have nobody in charge.
+    const owner = f.extensions.find((e) => e.isOwner) || f.extensions[0];
+    if (owner && !owner.email.trim()) {
+      return `${owner.displayName.trim() || "The owner"} is the account owner and needs an email address — that's where the admin login goes.`;
+    }
   }
   return null;
 }
@@ -180,7 +193,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             numberChoice:  a.phone?.choice         || prev.numberChoice,
             selectedNumber:a.phone?.selectedNumber || prev.selectedNumber,
             porting:       { ...prev.porting, ...(a.phone?.details || {}) },
-            extensions:    Array.isArray(a.extensions) && a.extensions.length ? a.extensions.map((e: any) => ({ ...EMPTY_EXT, ...e })) : prev.extensions,
+            extensions:    Array.isArray(a.extensions) && a.extensions.length ? withOneOwner(a.extensions.map((e: any) => ({ ...EMPTY_EXT, ...e }))) : prev.extensions,
             smsEnabled:    a.addons?.smsEnabled    ?? prev.smsEnabled,
           }));
         }
@@ -390,6 +403,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             vmPassword: e.vmPassword.trim() || undefined,
             cellMode: e.cellMode || undefined,
             cellNumber: e.cellMode ? e.cellNumber.replace(/\D/g, "").replace(/^1/, "") : undefined,
+            isOwner: e.isOwner || undefined,
           })),
       });
       // Saved and locked — on to the payment step, which hands off to the
@@ -414,9 +428,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   }
 
   // ── Extension + upload + theme helpers ────────────────────────────────────
-  function addExt() { updateForm({ extensions: [...form.extensions, { ...EMPTY_EXT }] }); }
-  function removeExt(i: number) { updateForm({ extensions: form.extensions.filter((_, idx) => idx !== i) }); }
+  function addExt() { updateForm({ extensions: withOneOwner([...form.extensions, { ...EMPTY_EXT }]) }); }
+  // Removing the owner row hands ownership to the first remaining extension.
+  function removeExt(i: number) { updateForm({ extensions: withOneOwner(form.extensions.filter((_, idx) => idx !== i)) }); }
   function updateExt(i: number, patch: Partial<Extension>) { updateForm({ extensions: form.extensions.map((e, idx) => idx === i ? { ...e, ...patch } : e) }); }
+  function setOwnerExt(i: number) { updateForm({ extensions: form.extensions.map((e, idx) => ({ ...e, isOwner: idx === i })) }); }
 
   function toggleTheme() {
     const shell = document.querySelector(".ob-shell");
@@ -643,18 +659,28 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         {step === 3 && (
           <div>
             <table className="ob-ext-table">
-              <thead><tr><th>Name</th><th>Ext #</th><th>Email <span className="ob-label-optional">optional</span></th><th /></tr></thead>
+              <thead><tr><th style={{ width: 52, textAlign: "center" }}>Owner</th><th>Name</th><th>Ext #</th><th>Email <span className="ob-label-optional">optional</span></th><th /></tr></thead>
               <tbody>
                 {form.extensions.map((ext, i) => (
                   <Fragment key={i}>
                     <tr className="ob-ext-row">
+                      <td style={{ textAlign: "center" }}>
+                        <input
+                          type="radio"
+                          name="ob-owner-ext"
+                          checked={ext.isOwner}
+                          onChange={() => setOwnerExt(i)}
+                          title="This person owns the account"
+                          style={{ width: 16, height: 16, accentColor: "#2f6bff", cursor: "pointer" }}
+                        />
+                      </td>
                       <td><input className="ob-input" placeholder="Jane Smith" value={ext.displayName} onChange={(e) => updateExt(i, { displayName: e.target.value })} /></td>
                       <td><input className="ob-input" placeholder="101" value={ext.extNumber} onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })} style={{ textAlign: "center" }} /></td>
                       <td><input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email} onChange={(e) => updateExt(i, { email: e.target.value })} /></td>
                       <td>{form.extensions.length > 1 && (<button className="ob-ext-remove" onClick={() => removeExt(i)} title="Remove">×</button>)}</td>
                     </tr>
                     <tr className="ob-ext-cell-row">
-                      <td colSpan={4}>
+                      <td colSpan={5}>
                         <div className="ob-ext-cell">
                           <select
                             className="ob-input ob-ext-cell-select"
@@ -688,6 +714,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               </tbody>
             </table>
             <button className="ob-ext-add" onClick={addExt}>+ Add another extension</button>
+            <div className="ob-field-hint" style={{ marginTop: 8 }}>
+              The <b>owner</b> is the person in charge of the account — they get admin access to manage the
+              phone system, billing, and everyone&apos;s settings. It starts as the first person; tap a
+              different row&apos;s circle to change it.
+            </div>
             <div className="ob-callout">
               <IconCheck />
               <span>These are created on your phone system <b className="ob-auto">automatically</b> the moment you launch — no files to upload, no waiting.</span>
@@ -741,6 +772,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   <div key={i} className="ob-review-ext-chip">
                     <span className="ob-review-ext-num">{e.extNumber}</span>
                     {e.displayName}
+                    {e.isOwner && <span className="ob-review-ext-cell" style={{ fontWeight: 700 }}>Owner</span>}
                     {e.cellMode && <span className="ob-review-ext-cell">{e.cellMode === "only" ? "→ cell" : "+ cell"}</span>}
                   </div>
                 ))}

@@ -504,6 +504,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         selectedNumber: body.selectedNumber || answers.phone?.selectedNumber || "",
         details: body.porting ?? answers.phone?.details ?? {},
       };
+      // Which extension is the account owner (becomes the tenant admin when
+      // the system is built). Defaults to the first extension when the wizard
+      // didn't mark one — an account with nobody in charge helps no one.
+      answers.ownerExtNumber =
+        (body.extensions || []).find((e) => (e as any).isOwner)?.extNumber ||
+        (body.extensions || [])[0]?.extNumber ||
+        null;
 
       await tx.onboardingSubmission.update({
         where: { id: row.id },
