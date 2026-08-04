@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildMobileDevicePushWhere,
   buildVmRecordWakePushInput,
+  callerEndpointIsAvail,
   classifyHelperOriginateFailure,
   decideVmRecordWake,
   greetingFileChanged,
@@ -10,6 +11,7 @@ import {
   isSyntheticVmrInviteId,
   parseReachablePjsipContacts,
   shouldAllowOriginate,
+  STALE_DEVICE_WAKE_CUTOFF_MS,
   validateCallerSipEndpoint,
 } from "./vmRecordCallHelpers";
 
@@ -159,6 +161,55 @@ test("decideVmRecordWake — Phase A regression guard: AOR Avail must NOT block 
   assert.equal(r.attempt, true, "must attempt wake even when AOR appears Avail");
 });
 
+// ── instant-originate (2026-08-04) ────────────────────────────────────────
+
+test("decideVmRecordWake — caller's own endpoint Avail: skip wake entirely", () => {
+  // The user pressed Call-to-Record from a device that is registered and
+  // reachable right now. Waking the mobile burned ~17s and churned the
+  // shared AOR mid-ring, breaking answer — never wake in this case.
+  const r = decideVmRecordWake({
+    deviceRowCount: 23,
+    activeDeviceCount: 1,
+    preWakeContactOk: true,
+    callerEndpointAvail: true,
+  });
+  assert.equal(r.attempt, false, "must NOT wake when the requesting device is already Avail");
+  assert.equal(r.reason, "skipped_caller_endpoint_avail");
+  assert.equal(r.deviceRowCount, 23);
+  assert.equal(r.endpointAlreadyAvail, true);
+});
+
+test("decideVmRecordWake — callerEndpointAvail=false behaves exactly like Phase A", () => {
+  const r = decideVmRecordWake({
+    deviceRowCount: 2,
+    activeDeviceCount: 1,
+    preWakeContactOk: true,
+    callerEndpointAvail: false,
+  });
+  assert.equal(r.attempt, true);
+  assert.equal(r.reason, "send");
+});
+
+test("callerEndpointIsAvail — accepted endpoint present in Avail list", () => {
+  assert.equal(callerEndpointIsAvail("T21_101_1", ["T21_101_1", "T21_101"]), true);
+});
+
+test("callerEndpointIsAvail — accepted endpoint NOT in Avail list", () => {
+  // The desktop says it is T21_101_1 but only the base AOR shows Avail —
+  // do not trust the claim; fall back to the wake flow.
+  assert.equal(callerEndpointIsAvail("T21_101_1", ["T21_101"]), false);
+});
+
+test("callerEndpointIsAvail — no accepted endpoint (older client): never skips wake", () => {
+  assert.equal(callerEndpointIsAvail(null, ["T21_101_1"]), false);
+  assert.equal(callerEndpointIsAvail(undefined, ["T21_101_1"]), false);
+  assert.equal(callerEndpointIsAvail("", ["T21_101_1"]), false);
+});
+
+test("callerEndpointIsAvail — empty Avail list", () => {
+  assert.equal(callerEndpointIsAvail("T21_101_1", []), false);
+});
+
 // ── buildMobileDevicePushWhere (Phase A.5) ────────────────────────────────
 
 test("buildMobileDevicePushWhere — default: preserves active=true filter (current behavior)", () => {
@@ -178,6 +229,21 @@ test("buildMobileDevicePushWhere — flag=true: drops active filter (vm-record o
   assert.equal(w.tenantId, "t1");
   assert.equal(w.userId, "u1");
   assert.equal(w.active, undefined, "active filter MUST be omitted when including inactive devices");
+});
+
+test("buildMobileDevicePushWhere — flag=true: bounds fan-out to recently-seen devices", () => {
+  // 23 rows / 1 active on Landau Home made the wake fan-out cost ~4.5s.
+  // Inactive rows still qualify, but only if seen in the last 30 days.
+  const now = new Date("2026-08-04T12:00:00Z");
+  const w = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1", includeInactiveDevices: true, now });
+  assert.ok(w.lastSeenAt?.gte instanceof Date, "must carry a lastSeenAt lower bound");
+  assert.equal(w.lastSeenAt!.gte.getTime(), now.getTime() - STALE_DEVICE_WAKE_CUTOFF_MS);
+});
+
+test("buildMobileDevicePushWhere — default active-only path has NO lastSeenAt bound", () => {
+  // Normal call pushes must keep their exact pre-existing semantics.
+  const w = buildMobileDevicePushWhere({ tenantId: "t1", userId: "u1" });
+  assert.equal(w.lastSeenAt, undefined, "active-only callers must not gain a staleness filter");
 });
 
 test("buildMobileDevicePushWhere — never relaxes tenant/user scoping", () => {

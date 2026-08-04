@@ -10,6 +10,7 @@ import {
 } from "./pbxInboundRouteHelperClient";
 import {
   buildVmRecordWakePushInput,
+  callerEndpointIsAvail,
   classifyHelperOriginateFailure,
   decideVmRecordWake,
   greetingFileChanged,
@@ -261,6 +262,7 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     // registered desktop makes the AOR appear Avail even when the mobile is
     // asleep — gating on it suppressed mobile fan-out in the common case.
     let preWakeContactOk = false;
+    let preWakeAvailEndpoints: string[] = [];
     try {
       const preDiag = await getPbxVoicemailGreetingDiag(helperCfg);
       if (preDiag?.ok) {
@@ -270,6 +272,7 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
           job.extNumber,
         );
         preWakeContactOk = parsed.ok;
+        preWakeAvailEndpoints = parsed.availEndpoints;
         if (preWakeContactOk) {
           job.matchedEndpoints = parsed.availEndpoints;
           job.pjsipContactOk = true;
@@ -279,6 +282,13 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     } catch {
       // Pre-check failure is non-fatal — fall through to normal wake flow.
     }
+
+    // Instant-originate: the client that pressed the button told us which
+    // endpoint it is (validated), and that endpoint is Avail right now.
+    // Ring it immediately — no wake push, no registration wait, no synthetic
+    // INCOMING_CALL push. The push-driven dance exists for a device that is
+    // asleep, and the requesting device by definition is not.
+    const callerEndpointAvail = callerEndpointIsAvail(job.callerSipEndpointAccepted, preWakeAvailEndpoints);
 
     // Phase A: query ALL MobileDevice rows for the user/tenant (no `active`
     // filter). A stale row may still hold a working push token and is a
@@ -297,6 +307,7 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
       deviceRowCount: deviceIds.length,
       activeDeviceCount: activeDeviceIds.length,
       preWakeContactOk,
+      callerEndpointAvail,
     });
     wakeMeta.attempted = wakeDecision.attempt;
     wakeMeta.deviceRowCount = wakeDecision.deviceRowCount;
@@ -314,6 +325,8 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
         deviceRowCount: wakeDecision.deviceRowCount,
         activeDeviceCount: wakeDecision.activeDeviceCount,
         endpointAlreadyAvail: wakeDecision.endpointAlreadyAvail,
+        callerEndpointAvail,
+        callerSipEndpointAccepted: job.callerSipEndpointAccepted ?? null,
         matchedEndpoints: job.matchedEndpoints,
         decision: wakeDecision.attempt ? "send_wake" : wakeDecision.reason,
       },
@@ -493,7 +506,15 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
     // (no X-Connect-Invite-ID header is present in the vm-record INVITE, so
     // exact-header matching is skipped, but the fallback fires when exactly one
     // answerable session is present — which is always the case for vm-record).
-    if (hadMobileDevices) {
+    //
+    // Instant-originate exception: when the requesting device is already Avail
+    // we suppress this push too. The push makes the mobile show a ring UI that
+    // is NOT backed by a SIP session on its socket, and the wake side-effects
+    // can churn the shared AOR's contacts mid-ring — the user then taps Answer
+    // into nothing and hangs on "answering" forever (T21_101, 2026-08-04).
+    // The requesting device gets a real SIP INVITE from the Dial fan-out and
+    // rings natively.
+    if (hadMobileDevices && !callerEndpointAvail) {
       const vmInviteId = "vmr-" + jobId;
       try {
         await deps.sendPush({

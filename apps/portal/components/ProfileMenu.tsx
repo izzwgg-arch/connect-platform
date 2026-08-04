@@ -80,19 +80,16 @@ type VmRecordJobStatus = {
 function vmRecordStateLabel(state: string): string {
   switch (state) {
     case "preparing_call":
-      return "Preparing call…";
     case "waking_device":
-      return "Waking device…";
     case "checking_registration":
-      return "Checking registration…";
     case "checking_endpoint":
-      return "Checking PBX registration…";
+      return "Calling…";
     case "calling_extension":
-      return "Calling your extension…";
+      return "Calling your devices…";
     case "answer_and_follow_prompts":
       return "Answer the call and follow the prompts";
     case "waiting_for_saved_greeting":
-      return "Waiting for saved greeting on PBX…";
+      return "Recording — press 1 on the call to save";
     case "saved":
       return "Saved successfully";
     case "failed":
@@ -102,7 +99,7 @@ function vmRecordStateLabel(state: string): string {
     case "cancelled":
       return "Cancelled";
     default:
-      return state ? `${state}` : "…";
+      return "Calling…";
   }
 }
 
@@ -339,6 +336,12 @@ export function ProfileMenu() {
     }
   }
 
+  // Support-only diagnostics: the vm-record job readout was built while we had
+  // no visibility into the PBX. Customers see only the friendly status line;
+  // set localStorage.ecpVmDebug = "1" in the console to bring the readout back.
+  const showVmRecordDebug =
+    typeof window !== "undefined" && window.localStorage?.getItem("ecpVmDebug") === "1";
+
   return (
     <div className="menu-wrap">
       <button ref={triggerRef} className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={displayName}>
@@ -422,7 +425,7 @@ export function ProfileMenu() {
 
           {uploading ? <div className="ecp-progress"><span /></div> : null}
           {uploadMessage ? <div className="ecp-muted">{uploadMessage}</div> : null}
-          {vmRecordJob ? (
+          {vmRecordJob && showVmRecordDebug ? (
             <div className="ecp-muted" style={{ fontSize: 12, lineHeight: 1.45, marginTop: 6 }}>
               <div>
                 <strong>Job</strong> {vmRecordJob.jobId}{" "}

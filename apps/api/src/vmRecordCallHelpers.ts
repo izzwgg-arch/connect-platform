@@ -88,6 +88,25 @@ export function parseReachablePjsipContacts(
   return { ok: availEndpoints.length > 0, availEndpoints };
 }
 
+/**
+ * True when the endpoint the requesting client says it is registered as
+ * (validated via `validateCallerSipEndpoint`) shows up in the pre-wake
+ * `pjsip show contacts` Avail list. This is the "the user clicked the
+ * button from a device that is already reachable" signal: the wake push
+ * and the synthetic INCOMING_CALL push are both unnecessary then, and the
+ * wake push is actively harmful — it makes the mobile app tear down and
+ * rebuild its SIP socket mid-ring, orphaning the in-flight INVITE (proven
+ * live on T21_101, 2026-08-04).
+ *
+ * Pure function — no I/O, safe for unit tests.
+ */
+export function callerEndpointIsAvail(
+  callerSipEndpointAccepted: string | null | undefined,
+  availEndpoints: string[],
+): boolean {
+  return !!callerSipEndpointAccepted && availEndpoints.includes(callerSipEndpointAccepted);
+}
+
 export function shouldAllowOriginate(args: {
   contactOk: boolean;
   wakeSent: boolean;
@@ -138,16 +157,30 @@ export function isDirectPjsipChannelSource(value: string | null | undefined): bo
  *
  * Pure function — no I/O, safe for unit tests.
  */
+/**
+ * When `includeInactiveDevices` is set, inactive rows only qualify if the
+ * device checked in within this window. Landau Home had 23 MobileDevice
+ * rows (1 active) on 2026-08-04; fanning the wake push to all of them cost
+ * ~4.5s before the recording call could even start.
+ */
+export const STALE_DEVICE_WAKE_CUTOFF_MS = 30 * 24 * 60 * 60 * 1000;
+
 export function buildMobileDevicePushWhere(args: {
   tenantId: string;
   userId: string;
   includeInactiveDevices?: boolean;
-}): { tenantId: string; userId: string; active?: true } {
-  const where: { tenantId: string; userId: string; active?: true } = {
+  now?: Date;
+}): { tenantId: string; userId: string; active?: true; lastSeenAt?: { gte: Date } } {
+  const where: { tenantId: string; userId: string; active?: true; lastSeenAt?: { gte: Date } } = {
     tenantId: args.tenantId,
     userId: args.userId,
   };
-  if (!args.includeInactiveDevices) where.active = true;
+  if (!args.includeInactiveDevices) {
+    where.active = true;
+  } else {
+    const now = args.now ?? new Date();
+    where.lastSeenAt = { gte: new Date(now.getTime() - STALE_DEVICE_WAKE_CUTOFF_MS) };
+  }
   return where;
 }
 
@@ -203,13 +236,30 @@ export function decideVmRecordWake(args: {
   deviceRowCount: number;
   activeDeviceCount: number;
   preWakeContactOk: boolean;
+  /**
+   * Instant-originate (2026-08-04): the requesting client's own validated
+   * endpoint is already Avail on the PBX. The user is holding a reachable
+   * device — skip the wake entirely and ring it now. Waking the mobile in
+   * this situation burned ~17s AND made the app rebuild its SIP socket
+   * mid-ring, which is exactly what broke answering.
+   */
+  callerEndpointAvail?: boolean;
 }): {
   attempt: boolean;
-  reason: "send" | "skipped_no_devices";
+  reason: "send" | "skipped_no_devices" | "skipped_caller_endpoint_avail";
   deviceRowCount: number;
   activeDeviceCount: number;
   endpointAlreadyAvail: boolean;
 } {
+  if (args.callerEndpointAvail) {
+    return {
+      attempt: false,
+      reason: "skipped_caller_endpoint_avail",
+      deviceRowCount: args.deviceRowCount,
+      activeDeviceCount: args.activeDeviceCount,
+      endpointAlreadyAvail: args.preWakeContactOk,
+    };
+  }
   const attempt = args.deviceRowCount > 0;
   return {
     attempt,
