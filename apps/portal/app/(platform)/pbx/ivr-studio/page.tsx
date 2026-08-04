@@ -36,6 +36,7 @@ import {
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
 import { FirstRunSetup, type FirstRunAnswers } from "./FirstRunSetup";
+import { MakeRecording } from "./MakeRecording";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
 
 interface RouteProfile {
@@ -160,6 +161,8 @@ export default function IvrStudioPage() {
    *  dropping someone who has never seen a phone system into the full Studio. */
   const [firstRun, setFirstRun] = useState(search?.get("firstrun") === "1");
   const [firstRunBusy, setFirstRunBusy] = useState(false);
+  /** Generate a greeting instead of recording one — see MakeRecording.tsx. */
+  const [makeRecOpen, setMakeRecOpen] = useState(false);
   const deepLinkProfile = search?.get("menu");
 
   const active = useMemo(() => profiles.find((p) => p.id === activeId) ?? null, [profiles, activeId]);
@@ -550,12 +553,20 @@ export default function IvrStudioPage() {
                       <>
                         <button className="btn sm" onClick={() => play(active.pbxPromptRef)}>{t("Play")}</button>
                         <button className="btn sm" disabled={!canManage} onClick={() => setRecPickerOpen(!recPickerOpen)}>{t("Change")}</button>
+                        <button className="btn sm" disabled={!canManage} onClick={() => setMakeRecOpen(true)}>{t("Make one")}</button>
                       </>
                     } />
 
                   {recPickerOpen && (
                     <div className="reclist">
-                      {prompts.length === 0 && <div className="dimtxt">{t("No recordings yet for this customer.")}</div>}
+                      {prompts.length === 0 && (
+                        <div className="dimtxt">
+                          {t("No recordings yet for this customer.")}{" "}
+                          <button className="linkbtn" onClick={() => { setRecPickerOpen(false); setMakeRecOpen(true); }}>
+                            {t("Make one now")}
+                          </button>
+                        </div>
+                      )}
                       {prompts.map((r) => (
                         <button key={r.id} className={"recrow" + (active.pbxPromptRef === r.promptRef ? " on" : "")}
                           onClick={() => { patchProfile({ pbxPromptRef: r.promptRef }); setRecPickerOpen(false); }}>
@@ -737,6 +748,23 @@ export default function IvrStudioPage() {
           busy={saving}
           onCancel={() => setNamingFor(null)}
           onSubmit={(name, type) => namingFor.mode === "rename" ? renameMenu(name) : createMenu(name, type, namingFor.forDigit)}
+        />
+      )}
+
+      {makeRecOpen && (
+        <MakeRecording
+          tenantQs={qs}
+          apiBase={getPortalApiBaseUrl()}
+          authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
+          onCreated={async (promptRef, displayName) => {
+            // Point the menu at what was just made — nobody generates a
+            // greeting and then wants to go and select it separately.
+            await patchProfile({ pbxPromptRef: promptRef });
+            await loadAll();
+            setMakeRecOpen(false);
+            flash(`“${displayName}” is now your greeting.`);
+          }}
+          onClose={() => setMakeRecOpen(false)}
         />
       )}
 
@@ -1185,6 +1213,8 @@ function StudioStyles() {
       .ivrs .recrow .nm{flex:1;font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .ivrs .recrow .cur{font-size:11.5px;color:var(--faint)}
       .ivrs .dimtxt{color:var(--dim);font-size:12.5px}
+      .ivrs .linkbtn{background:none;border:none;font:inherit;font-size:12.5px;font-weight:640;
+        color:var(--ac);text-decoration:underline;cursor:pointer;padding:0}
       /* hours */
       .ivrs .field{margin-top:12px}
       .ivrs .field label{display:block;font-size:11.5px;color:var(--dim);margin-bottom:6px;font-weight:640}

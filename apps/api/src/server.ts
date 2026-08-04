@@ -259,6 +259,7 @@ import {
 } from "./vmRecordCallJobs";
 import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
+import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import {
   publishTenantMohReverseMap,
   type TenantMohEnforcementEvidence,
@@ -21473,6 +21474,16 @@ app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
     return reply.code(403).send({ error: "ownership_unconfirmed" });
   }
 
+  // Audio generated through Connect is play-only. `inline` stops the browser
+  // treating it as an attachment, and `no-store` keeps a copy out of the disk
+  // cache where it could be lifted later. Neither is DRM — a determined person
+  // can capture anything that plays — but together they remove every ordinary
+  // route by which the file leaves the product.
+  if (row.source === "generated") {
+    reply.header("Content-Disposition", "inline");
+    reply.header("Cache-Control", "no-store, private");
+  }
+
   // 1) Fast path — the row already knows which file it owns on disk.
   //    We only honour the direct storageKey if it is tenant-scoped AND
   //    lives under THIS row's tenant directory. Legacy flat keys from
@@ -21504,7 +21515,7 @@ app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
       reply.header("Content-Type", ct);
       reply.header("Content-Length", String(buf.byteLength));
       reply.header("Accept-Ranges", "bytes");
-      reply.header("Cache-Control", "private, max-age=3600");
+      reply.header("Cache-Control", row.source === "generated" ? "no-store, private" : "private, max-age=3600");
       return reply.send(buf);
     } catch (err: any) {
       app.log.warn(
@@ -21576,7 +21587,7 @@ app.get("/voice/ivr/prompts/:id/stream", async (req, reply) => {
     reply.header("Content-Type", match.contentType);
     reply.header("Content-Length", String(buf.byteLength));
     reply.header("Accept-Ranges", "bytes");
-    reply.header("Cache-Control", "private, max-age=3600");
+    reply.header("Cache-Control", row.source === "generated" ? "no-store, private" : "private, max-age=3600");
     return reply.send(buf);
   }
 
@@ -21773,6 +21784,18 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
     },
     pbxPush: { status: pushStatus, detail: pushDetail },
   });
+});
+
+// ═══ ElevenLabs greeting generation ════════════════════════════
+// Lives in its own module (voice/elevenLabsRoutes.ts) with the pieces that
+// belong to this file passed in, rather than the module reaching back in here.
+registerElevenLabsRoutes({
+  app,
+  db,
+  requirePromptManager: (req, reply) => requirePermission(req, reply, canManageIvrPrompts),
+  resolvePbxRouteHelperConfig,
+  pushPromptToHelper,
+  PromptPushError,
 });
 
 // ── GET /voice/ivr/prompts/sync-manifest ────────────────────────────────────
