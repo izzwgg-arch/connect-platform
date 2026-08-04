@@ -189,6 +189,12 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
             persistPaymentMethod: true,
             makeDefault: enableAutopay || false,
             customerIdentity: `tenant:${invoice.tenantId}`,
+            // A declined card must be retryable forever — the customer fixes
+            // the card and tries again. The operation lock still replays an
+            // APPROVED charge (no double-billing) and still 409s a charge
+            // that is mid-flight; without this flag it also "replayed" old
+            // DECLINEs, so every retry failed without reaching the gateway.
+            allowRetry: true,
           },
         );
         const savedPaymentMethodId = (transaction?.rawResponseSafeJson as any)?.savedPaymentMethodId;
@@ -212,14 +218,17 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
             cardholderName: input.cardholderName,
             billingZip: input.billingZip,
           },
-          { adapter, note: "public_pay_link", customerIdentity: `tenant:${invoice.tenantId}` },
+          // allowRetry: same reasoning as the saved-card branch above.
+          { adapter, note: "public_pay_link", customerIdentity: `tenant:${invoice.tenantId}`, allowRetry: true },
         );
       }
 
       await logBillingEvent({
         tenantId: invoice.tenantId,
         invoiceId: invoice.id,
-        type: "payment.public_pay_succeeded",
+        // "succeeded" used to be logged for declines too, which made the
+        // timeline lie during forensics.
+        type: transaction?.status === "APPROVED" ? "payment.public_pay_succeeded" : "payment.public_pay_declined",
         message: `Public pay link payment for invoice ${invoice.invoiceNumber}`,
         metadata: {
           transactionId: transaction?.id,
