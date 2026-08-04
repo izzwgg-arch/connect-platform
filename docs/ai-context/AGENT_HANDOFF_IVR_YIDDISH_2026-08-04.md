@@ -191,7 +191,12 @@ are the customer's data, not interface wording.
 ## Still open
 
 1. Record the queue **callback** screen (Izzy pinned it).
-2. `one_by_one` was never captured — first robot run should verify the literal.
+2. ~~`one_by_one` was never captured.~~ **Verified 2026-08-04** by a read-only
+   query on the PBX: `SELECT DISTINCT strategy FROM ombutel.ombu_ring_groups`
+   returns exactly `one_by_one` and `ringall`, both written by the panel itself
+   on real ring groups. The column is a plain `varchar(255)`, not an enum, so
+   those two are what the panel uses rather than what it merely permits. The
+   Studio offers both.
 3. Yiddish on the **workspace** pages (dashboard, calls, voicemail, chat, SMS).
    Their text lives in shared components rather than the page files, so it is a
    component-library pass, not a page pass. The older `/pbx` screens (IVR
