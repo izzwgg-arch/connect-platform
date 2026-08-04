@@ -23195,6 +23195,27 @@ async function yiddishAvailableFor(user: JwtUser): Promise<boolean> {
 }
 
 // ── GET /me/language ─────────────────────────────────────────────────────────
+// ── GET /me/onboarding-setup-state ───────────────────────────────────────────
+// Tells the portal whether to offer the one-time "finish your setup" nudge:
+// the signed-in user administers a tenant that came out of the onboarding
+// wizard, and that tenant still has no IVR menu (they never reached — or
+// closed — the first-run setup the success page points at).
+app.get("/me/onboarding-setup-state", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true); // any signed-in user
+  if (!user) return;
+  const row = await (db as any).user.findUnique({ where: { id: user.sub }, select: { tenantId: true, role: true } });
+  if (!row?.tenantId) return reply.send({ show: false });
+  // Only the people who can actually fix it get nudged.
+  if (!["TENANT_ADMIN", "ADMIN", "SUPER_ADMIN"].includes(String(row.role))) return reply.send({ show: false });
+  const fromOnboarding = await (db as any).onboardingSubmission.findFirst({
+    where: { createdTenantId: row.tenantId, status: "ACTIVE" },
+    select: { id: true },
+  });
+  if (!fromOnboarding) return reply.send({ show: false });
+  const menus = await (db as any).ivrRouteProfile.count({ where: { tenantId: row.tenantId } });
+  return reply.send({ show: menus === 0 });
+});
+
 app.get("/me/language", async (req, reply) => {
   const user = await requirePermission(req, reply, () => true); // any signed-in user
   if (!user) return;

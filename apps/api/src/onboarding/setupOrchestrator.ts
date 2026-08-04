@@ -9,6 +9,7 @@ import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
 import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
 import { buildPbxTenant, slugify, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
 import { readSubaccount, applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
+import { queueOnboardingSignupReport } from "./adminSignupReport";
 
 /**
  * setupOrchestrator — everything that happens after the customer presses
@@ -572,9 +573,14 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     await setPbxStatus(submissionId, "done");
     await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { status: "ACTIVE" } }).catch(() => {});
     await logEvent(submissionId, `Setup complete — tenant "${company}" is live with ${people.length} extension(s) on ${did}.`);
+    // The owner's plain-English sign-up report — one per finished sign-up.
+    await queueOnboardingSignupReport(submissionId, "success");
   } catch (e: any) {
     const msg = String(e?.message || e).slice(0, 300);
     await setPbxStatus(submissionId, "failed", { setupError: msg }).catch(() => {});
     await logEvent(submissionId, `Setup failed: ${msg}`);
+    // Failures get reported too — a paid customer without a working system is
+    // exactly what the owner wants to hear about immediately.
+    await queueOnboardingSignupReport(submissionId, "failed");
   }
 }

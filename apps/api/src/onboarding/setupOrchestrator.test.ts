@@ -30,6 +30,16 @@ function findExt(tenantId: string, extNumber: string) {
   return state.extensions.find((e) => e.tenantId === tenantId && e.extNumber === extNumber) || null;
 }
 
+/** Invitation emails only — every finished/failed run ALSO queues one
+ *  ADMIN_ALERT sign-up report, which the invite-count assertions must not
+ *  accidentally count. */
+function inviteJobs() {
+  return state.emailJobs.filter((j) => j.type !== "ADMIN_ALERT");
+}
+function reportJobs() {
+  return state.emailJobs.filter((j) => j.type === "ADMIN_ALERT");
+}
+
 const dbMock: any = {
   onboardingSubmission: {
     findUnique: async ({ where }: any) => {
@@ -318,7 +328,7 @@ test("gate off: fully-logged dry run, nothing created, status dry_run_done", asy
   assert.equal(row.pbxSetupStatus, "dry_run_done");
   assert.equal(buildCalls.length, 0);
   assert.equal(state.tenants.size, 0);
-  assert.equal(state.emailJobs.length, 0);
+  assert.equal(inviteJobs().length, 0);
   assert.match(events(), /\[dry-run\] Build VitalPBX tenant "Bobs Plumbing"/);
   assert.match(events(), /trunk 344022_BobsPlumbing1@newyork1\.voip\.ms/);
   assert.match(events(), /DID 8455577726/);
@@ -361,9 +371,9 @@ test("happy path: build → link → sync → verify → invites → ACTIVE", as
   for (const ext of state.extensions) assert.ok(ext.ownerUserId, `ext ${ext.extNumber} has no owner`);
   assert.equal(state.passwordTokens.length, 2);
   assert.ok(state.passwordTokens.every((t) => t.type === "INVITE"));
-  assert.equal(state.emailJobs.length, 2);
-  assert.ok(state.emailJobs.every((j) => j.type === "USER_INVITE" && j.status === "QUEUED"));
-  assert.match(state.emailJobs[0].subject, /ext 101/);
+  assert.equal(inviteJobs().length, 2);
+  assert.ok(inviteJobs().every((j) => j.type === "USER_INVITE" && j.status === "QUEUED"));
+  assert.match(inviteJobs()[0].subject, /ext 101/);
 
   // invited users carry the same flags the admin invite path sets
   for (const email of ["john@x.com", "jane@x.com"]) {
@@ -389,7 +399,7 @@ test("sync lag: extensions only appear on the 3rd attempt — retries make it su
   await orchestrator.runOnboardingSetup(id);
   assert.equal(state.submissions.get(id).pbxSetupStatus, "done");
   assert.equal(syncAttempts, 3);
-  assert.equal(state.emailJobs.length, 2);
+  assert.equal(inviteJobs().length, 2);
 });
 
 test("user repair: sync brings extensions but never creates users — orchestrator creates + owns + invites them", async () => {
@@ -431,8 +441,8 @@ test("email conflict: address owned by ANOTHER tenant — no hijack, no invite, 
   await orchestrator.runOnboardingSetup(id);
   const row = state.submissions.get(id);
   assert.equal(row.pbxSetupStatus, "done");
-  assert.equal(state.emailJobs.length, 1); // only jane
-  assert.equal(state.emailJobs[0].toEmail, "jane@x.com");
+  assert.equal(inviteJobs().length, 1); // only jane
+  assert.equal(inviteJobs()[0].toEmail, "jane@x.com");
   assert.match(events(), /Email already in use by another organization.*101.*john@x\.com/);
   const ext101 = state.extensions.find((e) => e.extNumber === "101")!;
   assert.equal(ext101.ownerUserId, null); // never hijacked
@@ -449,7 +459,7 @@ test("extension without an email: provisioned but simply not invited", async () 
   wireHealthySync();
   await orchestrator.runOnboardingSetup(id);
   assert.equal(state.submissions.get(id).pbxSetupStatus, "done");
-  assert.equal(state.emailJobs.length, 1);
+  assert.equal(inviteJobs().length, 1);
   // ...but the event log must SAY so — "Sent 0/1 invitation email(s)" alone
   // left the owner guessing (live confusion 2026-07-27).
   assert.match(events(), /No email entered for extension\(s\) 102 — they cannot receive a login invite/);
@@ -514,7 +524,7 @@ test("RACE: concurrent kicks run the setup exactly once", async () => {
   ]);
   assert.equal(state.submissions.get(id).pbxSetupStatus, "done");
   assert.equal(buildCalls.length, 1);
-  assert.equal(state.emailJobs.length, 2, "invites must not be duplicated");
+  assert.equal(inviteJobs().length, 2, "invites must not be duplicated");
 });
 
 test("RACE: wait for number stage times out — fails, but a later resume kick succeeds", async () => {
@@ -568,7 +578,7 @@ test("PBX build failure surfaces the step error and marks failed", async () => {
   const row = state.submissions.get(id);
   assert.equal(row.pbxSetupStatus, "failed");
   assert.match(row.setupError, /trunk name already exists/);
-  assert.equal(state.emailJobs.length, 0);
+  assert.equal(inviteJobs().length, 0);
 });
 
 test("new PBX tenant never appears in the directory: fails with pbx_tenant_not_in_directory", async () => {
@@ -589,7 +599,7 @@ test("extensions never sync: fails with the missing list, no invites go out", as
   assert.equal(row.pbxSetupStatus, "failed");
   assert.match(row.setupError, /extensions_missing_after_sync: 101, 102/);
   assert.equal(syncAttempts, 5); // exhausted all retries
-  assert.equal(state.emailJobs.length, 0);
+  assert.equal(inviteJobs().length, 0);
 });
 
 test("extension exists but SIP never syncs: fails with sip_not_synced", async () => {
@@ -634,7 +644,7 @@ test("WebRTC device exists but SIP password never captured: fails sip_not_synced
   const row = state.submissions.get(id);
   assert.equal(row.pbxSetupStatus, "failed");
   assert.match(row.setupError, /sip_not_synced: 101, 102/);
-  assert.equal(state.emailJobs.length, 0); // never invite before SIP is truly ready
+  assert.equal(inviteJobs().length, 0); // never invite before SIP is truly ready
 });
 
 test("throwing sync attempts are logged and retried, and a late success still completes", async () => {
@@ -675,7 +685,7 @@ test("gate flipped on after a dry run: the same submission provisions for REAL o
   const row = state.submissions.get(id);
   assert.equal(row.pbxSetupStatus, "done");
   assert.equal(buildCalls.length, 1); // actually built this time
-  assert.equal(state.emailJobs.length, 2);
+  assert.equal(inviteJobs().length, 2);
 });
 
 test("gate still off: a finished dry run is NOT spammed again", async () => {
@@ -770,7 +780,8 @@ test("stress: 6 concurrent onboardings share the panel account pool safely", asy
   }
   assert.equal(state.tenantLinks.length, 6);
   assert.equal(new Set(state.tenantLinks.map((l) => l.tenantId)).size, 6);
-  assert.equal(state.emailJobs.length, 6);
+  assert.equal(inviteJobs().length, 6);
+  assert.equal(reportJobs().length, 6); // one plain-English sign-up report per run
   // both pool accounts were exercised
   assert.ok(panelLogins.includes("robot-1") && panelLogins.includes("robot-2"));
 });
