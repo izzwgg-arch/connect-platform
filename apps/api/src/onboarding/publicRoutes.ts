@@ -12,6 +12,7 @@ import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
+import { isSetupStalled } from "./setupWatchdog";
 import { toPublicUrl } from "./provisioning";
 import { recordLinkOpened, recordJourneyBeacon } from "./journeyTracking";
 
@@ -394,6 +395,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const setup = String(full?.pbxSetupStatus || "");
     const built = setup === "done" || setup === "dry_run_done";
     const failed = setup === "failed";
+    // Honesty over optimism: a paid build that nothing has touched for longer
+    // than the stale window has no live run behind it. Say "we hit a snag"
+    // instead of spinning forever — the watchdog sweep is already re-kicking
+    // it, so "we're on it" is literally true.
+    const stalled = !built && !failed && isSetupStalled(full);
 
     // Named, in the order they actually happen, so the screen can say which
     // one is running rather than "please wait".
@@ -412,10 +418,14 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       ok: true,
       paid: !!full?.paidAt,
       built,
-      failed,
+      failed: failed || stalled,
       // Only surfaced when something actually went wrong — a half-finished
       // build should never look finished.
-      error: failed ? (full?.setupError || "Setup didn't complete.") : null,
+      error: failed
+        ? (full?.setupError || "Setup didn't complete.")
+        : stalled
+          ? "We hit a snag finishing your setup. Our team has been notified and is on it — we'll email you as soon as your phone system is ready."
+          : null,
       steps,
       current,
       tenantId: full?.createdTenantId ?? null,
