@@ -139,9 +139,9 @@ export async function queueOnboardingSignupReport(
     }
     lines.push("");
 
-    lines.push("PLAY-BY-PLAY");
+    lines.push("PLAY-BY-PLAY (their whole journey, oldest first)");
     const interesting = (sub.events || []).filter((e: any) => e.type !== "AUTOSAVED" && e.message);
-    for (const e of interesting.slice(-18)) {
+    for (const e of interesting.slice(-40)) {
       lines.push(`${nyTime(e.createdAt)} — ${humanizeEventLine(String(e.message))}`);
     }
 

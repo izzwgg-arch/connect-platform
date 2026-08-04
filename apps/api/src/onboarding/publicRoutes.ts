@@ -13,6 +13,17 @@ import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrati
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
 import { toPublicUrl } from "./provisioning";
+import { recordLinkOpened, recordJourneyBeacon } from "./journeyTracking";
+
+// Journey-beacon payload (see journeyTracking.ts for how each becomes a line).
+const publicTrackSchema = z.object({
+  kind: z.enum(["step_viewed", "validation_blocked", "number_search", "portability", "went_back"]),
+  step: z.string().max(60).optional(),
+  fromStep: z.string().max(60).optional(),
+  seconds: z.number().int().min(0).max(86_400).optional(),
+  detail: z.string().max(300).optional(),
+  count: z.number().int().min(-1).max(100_000).optional(),
+});
 
 function sanitizeFileName(name: string): string {
   const base = path.basename(name || "");
@@ -86,6 +97,10 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       }
       return reply.code(404).send({ error: "invalid_token" });
     }
+    // Every wizard page-load lands here — the "customer opened the link"
+    // moment. First open also emails the owner. Templates are spawn-only
+    // shells, never opened by a customer themselves.
+    if (!isReusableTemplate(row)) void recordLinkOpened(row);
     return {
       ok: true,
       exists: true,
@@ -100,6 +115,21 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // Public config — card capture disabled for now
   app.get("/onboarding/:token/public-config", async (req, reply) => {
     return { canTokenize: false };
+  });
+
+  // Journey beacons: the wizard reports what the customer is doing — step
+  // reached (with time spent), going back, the exact validation message that
+  // blocked them, number searches. Deliberately allowed AFTER submit too
+  // (payment-stage friction is the interesting part), but never on templates,
+  // and capped per submission so a runaway client can't flood the table.
+  app.post("/onboarding/:token/track", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row || isReusableTemplate(row)) return reply.code(404).send({ error: "invalid_token" });
+    const parsed = publicTrackSchema.safeParse(req.body || {});
+    if (!parsed.success) return { ok: false };
+    await recordJourneyBeacon(row.id, parsed.data as any);
+    return { ok: true };
   });
 
   // Reusable TEST link: mints a brand-new submission (own token) on every call,
@@ -392,7 +422,24 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     if (isReusableTemplate(row) || !checkoutAllowed) return reply.code(409).send({ error: "write_blocked" });
 
     const result = await prepareOnboardingCheckout(row.id);
-    if (!result.ok) return reply.code(result.code).send({ error: result.error, message: result.message });
+    if (!result.ok) {
+      // Journey: a customer who reached payment and got an error is a
+      // customer about to give up — make sure the timeline says so.
+      await (db as any).onboardingEvent.create({
+        data: { submissionId: row.id, type: "STATUS_CHANGED", message: `Payment page FAILED to open: ${String(result.message || result.error).slice(0, 200)}` },
+      }).catch(() => {});
+      return reply.code(result.code).send({ error: result.error, message: result.message });
+    }
+
+    await (db as any).onboardingEvent.create({
+      data: {
+        submissionId: row.id,
+        type: "STATUS_CHANGED",
+        message: result.alreadyPaid
+          ? "Came back to payment — already paid, sent to the progress screen"
+          : `Handed to the payment page — $${(Number(result.amountCents || 0) / 100).toFixed(2)} due`,
+      },
+    }).catch(() => {});
 
     return {
       ok: true,

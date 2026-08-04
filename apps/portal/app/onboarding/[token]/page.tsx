@@ -209,6 +209,17 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     validate();
   }, [token]);
 
+  // ── Journey beacons ─────────────────────────────────────────────────────────
+  // Everything the customer does becomes one plain-English line on the
+  // sign-up's timeline (admin page + the owner's report email): steps reached
+  // with time spent, going back, the exact message that blocked them, number
+  // searches. Fire-and-forget; a lost beacon must never affect the wizard.
+  const stepEnteredAt = useRef<number>(Date.now());
+  const track = useCallback((kind: string, payload: Record<string, unknown> = {}) => {
+    void apiPost(`/onboarding/${encodeURIComponent(token)}/track`, { kind, ...payload }).catch(() => { /* silent */ });
+  }, [token]);
+  const secondsOnStep = () => Math.min(86_400, Math.max(0, Math.round((Date.now() - stepEnteredAt.current) / 1000)));
+
   // ── Autosave ────────────────────────────────────────────────────────────────
   const scheduleAutosave = useCallback((f: FormData, currentStep: number) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -250,14 +261,17 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         undefined,
         { timeoutMs: 45_000 },
       );
-      setNumbers(Array.isArray(r.numbers) ? r.numbers : []);
+      const list = Array.isArray(r.numbers) ? r.numbers : [];
+      setNumbers(list);
+      track("number_search", { detail: query || "(blank)", count: list.length });
     } catch {
       setNumbers([]);
       setNumbersError("We couldn't load available numbers just now. Try another area code, or continue and we'll assign one.");
+      track("number_search", { detail: query || "(blank)", count: -1 });
     } finally {
       setNumbersLoading(false);
     }
-  }, [token]);
+  }, [token, track]);
 
   // Auto-search when the customer chooses "new number".
   useEffect(() => {
@@ -283,7 +297,10 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
           undefined,
           { timeoutMs: 30_000 },
         );
-        if (!cancelled) setPortability(r.portable === true ? "portable" : "unknown");
+        if (!cancelled) {
+          setPortability(r.portable === true ? "portable" : "unknown");
+          track("portability", { detail: `${digits} — ${r.portable === true ? "can be transferred" : "couldn't confirm, told them we'd handle it"}` });
+        }
       } catch {
         if (!cancelled) setPortability("unknown");
       }
@@ -311,7 +328,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   // ── Navigation ────────────────────────────────────────────────────────────
   function goNext() {
     const err = validateStep(step, form);
-    if (err) { setStepError(err); return; }
+    if (err) {
+      setStepError(err);
+      track("validation_blocked", { step: STEPS[step].label, detail: err });
+      return;
+    }
     setStepError(null);
     // Leaving the number step: start setting up their number in the background
     // (buy / route / temporary number for ports). Fire-and-forget — the customer
@@ -326,11 +347,22 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       }).catch(() => { /* retried on final submit */ });
     }
     const next = step + 1;
+    track("step_viewed", { step: STEPS[next].label, fromStep: STEPS[step].label, seconds: secondsOnStep() });
+    stepEnteredAt.current = Date.now();
     setStep(next);
     scheduleAutosave(form, next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-  function goBack() { setStepError(null); setStep((s) => Math.max(0, s - 1)); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  function goBack() {
+    setStepError(null);
+    setStep((s) => {
+      const prev = Math.max(0, s - 1);
+      if (prev !== s) track("went_back", { step: STEPS[prev].label, fromStep: STEPS[s].label });
+      stepEnteredAt.current = Date.now();
+      return prev;
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   // ── Submit ──────────────────────────────────────────────────────────────────
   /**
@@ -377,7 +409,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     // validation, and fields edited on earlier steps shouldn't fail server-side.
     for (let s = 0; s <= 3; s++) {
       const err = validateStep(s, form);
-      if (err) { setSubmitError(err); return; }
+      if (err) {
+        setSubmitError(err);
+        track("validation_blocked", { step: STEPS[5].label, detail: err });
+        return;
+      }
     }
     setSubmitting(true);
     try {
@@ -409,6 +445,8 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       // Saved and locked — on to the payment step, which hands off to the
       // real checkout page. /success is where the PAY page lands afterwards;
       // going there from here skipped payment entirely.
+      track("step_viewed", { step: STEPS[6].label, fromStep: STEPS[5].label, seconds: secondsOnStep() });
+      stepEnteredAt.current = Date.now();
       setStep(6);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e: any) {

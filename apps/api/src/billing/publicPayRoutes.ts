@@ -238,6 +238,21 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
         },
       });
 
+      // Journey: a decline on a sign-up invoice is the #1 place customers give
+      // up — put it on the submission's timeline in plain English.
+      if (isOnboardingInvoice && transaction?.status !== "APPROVED") {
+        void (async () => {
+          try {
+            const sid = String((invoice.metadata as any)?.onboardingSubmissionId || "");
+            if (!sid) return;
+            const why = String(transaction?.responseMessage || "the card was declined").slice(0, 120);
+            await (db as any).onboardingEvent.create({
+              data: { submissionId: sid, type: "STATUS_CHANGED", message: `Card DECLINED (${why}) — they can retry` },
+            });
+          } catch { /* telemetry only */ }
+        })();
+      }
+
       // Sign-up paid → NOW buy the number and start building. Everything after
       // this line already existed (provisioning, PBX build, welcome emails);
       // paying on this page simply became the thing that triggers it.
