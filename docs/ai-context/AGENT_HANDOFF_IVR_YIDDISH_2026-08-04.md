@@ -107,3 +107,97 @@ builder, and the queue **callback** (that panel screen was never recorded).
    the DB but the first robot run should verify it.
 4. Billing/workspace string coverage for Yiddish.
 5. The A plus center **go-live flip on 8457823064** is still pending Izzy.
+
+---
+
+# Session 2 — post-payment flow, ElevenLabs, team builder (2026-08-04, later)
+
+## What shipped
+
+**The gap after paying.** A customer who had just handed over a card sat on a
+static thank-you page with no idea whether anything was happening, then landed
+in the full IVR Studio — a screen built for someone who already knows what an
+IVR is.
+
+- `GET /onboarding/:token/progress` returns named build stages (paid, number,
+  extensions, invites) plus `current` / `built` / `failed`.
+- `apps/portal/app/onboarding/[token]/success/page.tsx` polls it every 4s and
+  ticks each stage off. On failure it leads with "your payment went through and
+  your number is safe", because that is the only thing the customer is actually
+  worried about at that moment.
+- It hands to `/pbx/ivr-studio?firstrun=1`.
+
+**`FirstRunSetup.tsx` — the five questions.** What callers hear first, who
+answers, what happens if nobody picks up, opening hours, then a plain-English
+read-back before anything is turned on. One question per screen; skippable on
+every screen; **nothing is written until the last screen**, so backing out
+leaves no debris. It builds through the same `/voice/ivr/menus/build` the
+assistant uses — there is no second, lesser way to make a menu.
+
+**ElevenLabs — generating a greeting instead of recording one.**
+- `apps/api/src/voice/elevenLabs.ts` — TTS client. Asks for **`pcm_8000`**,
+  which is the native rate of the phone network, and writes the WAV header
+  itself, so at that rate there is **no conversion step at all**. Plans without
+  8 kHz fall back to `pcm_16000` + one ffmpeg downsample rather than failing.
+- `elevenLabsKey.ts` — reads the key the agent stored in `AgentSecret`
+  (both processes share `CREDENTIALS_MASTER_KEY` and the database). The env
+  fallback rejects placeholders, exactly as the agent's SecretStore does; if
+  the two ever disagree the feature is on in one process and off in the other.
+- `elevenLabsRoutes.ts` — `/voice/elevenlabs/status`, `/voices`, `/preview`
+  (saves nothing — audition freely), and `/voice/ivr/prompts/generate` which
+  reuses the whole existing upload pipeline: store tenant-scoped → push to the
+  PBX helper → record sync status on the catalog row.
+- Defaults are tuned for a menu, not an audiobook: stability .75, style 0,
+  speed .95. Those knobs live behind "Advanced".
+- **Generated audio is play-only.** `source: "generated"` on the row drives it:
+  no download button, `Content-Disposition: inline`, `Cache-Control: no-store`
+  on both send paths of the stream route. Honest limit — anything that plays in
+  a browser can be captured; this removes the ordinary way a file walks out.
+
+**`MakeTeam.tsx` + `POST /voice/teams` — ring groups and waiting lines.**
+The panel contract and the number allocator already existed; nothing could
+reach them. The UI never asks "ring group or queue" — it asks what should
+happen to the caller. Members are drag-ordered (that order IS the ring order
+for `one_by_one`), with arrow buttons alongside so it works on a phone and with
+a keyboard. Server side, members arrive as extension NUMBERS and are resolved
+to row ids against **one** live read that also supplies the free-number picture
+and the tenant path. An unknown extension refuses the whole request rather than
+creating a team that silently rings nobody.
+
+**Yiddish.** 174 new phrases warmed through Yiddish Labs (0 failures) across
+the three new Studio screens and the billing workspace, which now carries the
+toggle. Amounts, dates, invoice numbers and tenant names are never sent — they
+are the customer's data, not interface wording.
+
+## Traps found this session
+
+- **Writing a file non-atomically truncated it to zero bytes** when the write
+  threw mid-way (a surrogate pair in the content). Every scripted edit now
+  writes `<file>.tmp` and `os.replace`s it. Recovered from git.
+- **`teams.map((t) => …)` shadows the translator `t`** and would have silently
+  left that whole branch in English. Any file using `useUiLanguage` must not
+  bind `t` as a callback parameter.
+- **A phrase handed to `t()` but missing from that file's `PHRASES` list is
+  never fetched** and stays English forever. `scratchpad/checkphrases.py`
+  compares the two; run it after touching either.
+- **`deploy-direct.sh` serialises on a heavy-job lock.** Firing a second deploy
+  while one is building fails with `HEAVY JOB ALREADY RUNNING`, not a queue.
+  Wait on `pgrep -f 'deploy-direct.sh <app>'` first.
+- **`packages/shared` tests run under `tsx --test`, not vitest.** `npx vitest
+  run` there reports "No test suite found" for all 43 files, which looks like a
+  catastrophe and is nothing. Use `npm test` (235 tests; the single
+  `can_view_admin_roles` failure is pre-existing).
+
+## Still open
+
+1. Record the queue **callback** screen (Izzy pinned it).
+2. `one_by_one` was never captured — first robot run should verify the literal.
+3. Yiddish on the **workspace** pages (dashboard, calls, voicemail, chat, SMS).
+   Their text lives in shared components rather than the page files, so it is a
+   component-library pass, not a page pass. The older `/pbx` screens (IVR
+   Builder, queues, ring-groups, MOH scheduling) are deliberately NOT in scope:
+   they are ops screens full of PBX jargon and superseded for customers by the
+   Studio.
+4. The A Plus Center **go-live flip on 8457823064** is still pending Izzy.
+5. A **test card transaction** through the new payment gate — Izzy's to do; an
+   agent must never enter card details.
