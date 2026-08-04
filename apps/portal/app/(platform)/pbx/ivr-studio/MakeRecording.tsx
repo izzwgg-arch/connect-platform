@@ -58,6 +58,10 @@ interface Voice {
 interface Status {
   configured: boolean;
   keyWorks?: boolean;
+  /** The account can synthesise RIGHT NOW. A valid key on an account with an
+   *  unpaid invoice is keyWorks:true, usable:false — and pressing Generate on
+   *  that combination fails with a 401 that looks like a bad key. */
+  usable?: boolean;
   message?: string | null;
   charactersUsed?: number | null;
   characterLimit?: number | null;
@@ -145,7 +149,7 @@ export function MakeRecording({
         if (cancelled) return;
         setStatus(s);
         if (s.defaultTuning) setTuning(s.defaultTuning);
-        if (s.configured && s.keyWorks) {
+        if (s.configured && s.keyWorks && s.usable) {
           const v: { voices: Voice[] } = await (await api("/voice/elevenlabs/voices")).json();
           if (cancelled) return;
           setVoices(v.voices || []);
@@ -231,8 +235,10 @@ export function MakeRecording({
               {t("Voice generation isn't set up yet. An administrator needs to add an ElevenLabs key on the ElevenLabs settings page. You can still upload your own recording instead.")}
             </div>
           </div>
-        ) : !status.keyWorks ? (
+        ) : !status.keyWorks || !status.usable ? (
           <div className="mr-body">
+            {/* status.message is written by the server and already says what to
+                do about it — show it in preference to our generic fallback. */}
             <div className="mr-note bad">{status.message || t("The ElevenLabs key isn't working. An administrator needs to check it.")}</div>
           </div>
         ) : (

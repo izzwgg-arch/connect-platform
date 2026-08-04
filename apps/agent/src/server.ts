@@ -369,9 +369,28 @@ async function main() {
         }
         const sub: any = await subRes.json();
         const voicesJson: any = voicesRes.ok ? await voicesRes.json() : { voices: [] };
+        // "Reachable" is not the same as "will actually make a recording".
+        // An account with an unpaid invoice answers this endpoint with 200 and
+        // then returns 401 on synthesis, so a badge based on reachability alone
+        // reads "connected" on a system that fails the moment anyone presses
+        // Generate — and sends the owner off checking a key that was never the
+        // problem. `status` and `has_open_invoices` say so here, for free.
+        const subStatus = String(sub?.status ?? "").toLowerCase();
+        const used = Number(sub?.character_count ?? 0);
+        const limit = Number(sub?.character_limit ?? 0);
+        const blocked =
+          subStatus === "past_due" || sub?.has_open_invoices === true
+            ? "ElevenLabs has an unpaid invoice on this account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again."
+            : limit > 0 && used >= limit
+              ? "This account has used all its characters for the month. It resets on the next billing date, or you can upgrade the plan."
+              : null;
         return {
           configured: true,
           reachable: true,
+          /** Reachable AND able to synthesise right now. */
+          usable: !blocked,
+          blockedReason: blocked,
+          subscriptionStatus: sub?.status ?? null,
           tier: sub?.tier ?? null,
           characterCount: sub?.character_count ?? null,
           characterLimit: sub?.character_limit ?? null,

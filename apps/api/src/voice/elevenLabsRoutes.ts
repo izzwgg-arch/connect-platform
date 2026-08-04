@@ -80,6 +80,9 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     return reply.send({
       configured: true,
       keyWorks: check.ok,
+      /** The account can actually synthesise right now — a valid key on an
+       *  unpaid account is `keyWorks: true, usable: false`. */
+      usable: check.usable ?? false,
       message: check.userMessage ?? null,
       charactersUsed: check.characterCount ?? null,
       characterLimit: check.characterLimit ?? null,

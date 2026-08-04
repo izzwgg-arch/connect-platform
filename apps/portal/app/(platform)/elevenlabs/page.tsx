@@ -34,6 +34,8 @@ async function agentApi<T>(path: string, init?: RequestInit): Promise<T> {
 interface Voice { voiceId: string; name: string; category: string | null; labels: Record<string, string>; previewUrl: string | null }
 interface Status {
   configured: boolean; reachable: boolean; reason?: string;
+  /** Reachable AND able to synthesise. An unpaid invoice makes these differ. */
+  usable?: boolean; blockedReason?: string | null; subscriptionStatus?: string | null;
   tier?: string | null; characterCount?: number | null; characterLimit?: number | null;
   canClone?: boolean; voices?: Voice[];
 }
@@ -85,8 +87,14 @@ export default function ElevenLabsPage() {
           <p>Generate the recordings callers hear — greetings, menus and hold messages — in a voice you choose.</p>
         </div>
         {status && (
-          <span className={`el-pill ${status.reachable ? "ok" : status.configured ? "bad" : ""}`}>
-            {status.reachable ? "connected" : status.configured ? "key not working" : "no key yet"}
+          <span className={`el-pill ${status.reachable && status.usable ? "ok" : status.configured ? "bad" : ""}`}>
+            {status.reachable && status.usable
+              ? "connected"
+              : status.reachable
+                ? "can't make recordings"
+                : status.configured
+                  ? "key not working"
+                  : "no key yet"}
           </span>
         )}
       </div>
@@ -118,6 +126,11 @@ export default function ElevenLabsPage() {
             </button>
           )}
         </div>
+        {status?.reachable && status.blockedReason && (
+          <div className="el-note bad" style={{ marginTop: 12 }}>
+            {status.blockedReason}
+          </div>
+        )}
         {status?.configured && !status.reachable && (
           <div className="el-note bad" style={{ marginTop: 12 }}>
             {status.reason === "invalid_key"
@@ -135,6 +148,12 @@ export default function ElevenLabsPage() {
               <div className="el-stat"><b>{status.tier ?? "—"}</b><span>Plan</span></div>
               <div className="el-stat"><b>{limit ? `${used.toLocaleString()} / ${limit.toLocaleString()}` : "—"}</b><span>Characters used</span></div>
               <div className="el-stat"><b>{status.canClone ? "Yes" : "No"}</b><span>Voice cloning</span></div>
+              <div className="el-stat">
+                <b style={status.usable ? undefined : { color: "var(--bad)" }}>
+                  {status.usable ? "Good" : status.subscriptionStatus === "past_due" ? "Unpaid" : "Blocked"}
+                </b>
+                <span>Account standing</span>
+              </div>
             </div>
             {limit > 0 && (
               <div className="el-bar"><i style={{ width: `${pct}%` }} /></div>

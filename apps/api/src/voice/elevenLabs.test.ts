@@ -7,6 +7,7 @@ import {
   IVR_VOICE_TUNING,
   TTS_MODELS,
   MAX_TTS_CHARS,
+  classify,
 } from "./elevenLabs";
 
 describe("pcmToWav", () => {
@@ -116,5 +117,63 @@ describe("length cap", () => {
   it("is long enough for a real greeting and short enough to stop an essay", () => {
     expect(MAX_TTS_CHARS).toBeGreaterThan(500);
     expect(MAX_TTS_CHARS).toBeLessThanOrEqual(5000);
+  });
+});
+
+describe("classifying provider failures", () => {
+  // The real body ElevenLabs returned on 2026-08-04, verbatim. A valid key,
+  // /voices answering 200, and synthesis refused — reported by status code
+  // alone this reads as "bad key" and sends someone to re-paste a key that was
+  // never wrong.
+  const PAYMENT_ISSUE = JSON.stringify({
+    detail: {
+      type: "payment_required",
+      code: "payment_issue",
+      message: "Your subscription has a failed or incomplete payment. Complete the latest invoice to continue usage.",
+      status: "payment_issue",
+      request_id: "ce1da67573a307d04360d8addcaaf61b",
+    },
+  });
+
+  it("names the unpaid invoice rather than blaming the key", () => {
+    const msg = classify(PAYMENT_ISSUE);
+    expect(msg).toBeTruthy();
+    expect(msg).toMatch(/unpaid invoice/i);
+    expect(msg).toMatch(/key is fine/i);
+    expect(msg).not.toMatch(/rejected/i);
+  });
+
+  it("tells someone where to go about it", () => {
+    expect(classify(PAYMENT_ISSUE)).toMatch(/elevenlabs\.io/);
+  });
+
+  it("separates running out of characters from not paying", () => {
+    const quota = JSON.stringify({ detail: { status: "quota_exceeded", message: "character limit reached" } });
+    expect(classify(quota)).toMatch(/characters for this month/i);
+    expect(classify(quota)).not.toMatch(/unpaid/i);
+  });
+
+  it("still calls a genuinely bad key a bad key", () => {
+    const bad = JSON.stringify({ detail: { status: "invalid_api_key", message: "Invalid API key" } });
+    expect(classify(bad)).toMatch(/rejected/i);
+  });
+
+  it("points at the voice picker when a voice has been deleted", () => {
+    expect(classify(JSON.stringify({ detail: { status: "voice_not_found" } }))).toMatch(/Pick another one/i);
+  });
+
+  it("reads plain-text bodies too, not just JSON", () => {
+    expect(classify("Your subscription has a failed or incomplete payment.")).toMatch(/unpaid invoice/i);
+  });
+
+  it("says nothing when it recognises nothing, so the status code still decides", () => {
+    expect(classify("")).toBeNull();
+    expect(classify("some unrelated upstream error")).toBeNull();
+    expect(classify("<html>502 Bad Gateway</html>")).toBeNull();
+  });
+
+  it("never throws on a malformed body", () => {
+    expect(() => classify("{not json")).not.toThrow();
+    expect(classify("{not json")).toBeNull();
   });
 });

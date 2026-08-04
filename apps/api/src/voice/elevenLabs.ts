@@ -108,14 +108,55 @@ export class ElevenLabsError extends Error {
   }
 }
 
-/** Turn a provider failure into something a non-technical person can act on. */
+/**
+ * Turn a provider failure into something a non-technical person can act on.
+ *
+ * The status code alone is not enough, and reading it as though it were sends
+ * people to fix the wrong thing. A real example: a perfectly valid key with an
+ * unpaid ElevenLabs invoice returns **401** on synthesis while `/voices` and
+ * `/user/subscription` both answer 200. Reported as "the key was rejected",
+ * that costs someone an afternoon re-pasting a key that was never wrong.
+ * ElevenLabs puts the actual reason in `detail.status` / `detail.code`, so we
+ * read that first and fall back to the status code.
+ */
 function explain(status: number, body: string): string {
+  const reason = classify(body);
+  if (reason) return reason;
   if (status === 401) return "The ElevenLabs key was rejected. Check it on the ElevenLabs settings page.";
   if (status === 429) return "ElevenLabs is rate-limiting us right now. Try again in a moment.";
   if (status === 422 && /quota|credit/i.test(body)) return "The ElevenLabs account is out of credits.";
   if (status === 422) return "ElevenLabs couldn't read that text. Try shortening it or removing unusual characters.";
   if (status >= 500) return "ElevenLabs is having trouble at their end. Try again shortly.";
   return "Couldn't generate the audio. Nothing was changed.";
+}
+
+/** Read ElevenLabs' structured `detail` object, when there is one. */
+export function classify(body: string): string | null {
+  let code = "";
+  try {
+    const j = JSON.parse(body);
+    code = String(j?.detail?.status || j?.detail?.code || j?.detail?.type || "");
+  } catch {
+    // Some errors come back as plain text; the substring checks below still work.
+  }
+  const hay = `${code} ${body}`.toLowerCase();
+
+  if (/payment_issue|payment_required|past_due|failed or incomplete payment/.test(hay)) {
+    return "ElevenLabs has an unpaid invoice on the account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again.";
+  }
+  if (/quota_exceeded|character limit|out of credits/.test(hay)) {
+    return "The ElevenLabs account has used all its characters for this month. It resets on the next billing date, or you can upgrade the plan.";
+  }
+  if (/detected_unusual_activity|abuse/.test(hay)) {
+    return "ElevenLabs has flagged unusual activity on the account and paused it. You'll need to sort that out with them directly.";
+  }
+  if (/invalid_api_key|missing_api_key|needs_authorization/.test(hay)) {
+    return "The ElevenLabs key was rejected. Check it on the ElevenLabs settings page.";
+  }
+  if (/voice_not_found/.test(hay)) {
+    return "That voice is no longer on the ElevenLabs account. Pick another one.";
+  }
+  return null;
 }
 
 async function call(
@@ -154,25 +195,57 @@ async function call(
   }
 }
 
-/** Is this key real? Used by the settings page to show live status. */
+/**
+ * Is this key real, AND can the account actually make a recording?
+ *
+ * Those are two different questions and the settings page needs both. A key
+ * whose account is `past_due` answers this endpoint happily with 200 — so
+ * checking only "did the request succeed" produces a green "connected" badge on
+ * a system that fails the moment anyone presses Generate. `status` and
+ * `has_open_invoices` say so up front, for free, without spending a character.
+ */
 export async function checkElevenLabsKey(apiKey: string): Promise<{
   ok: boolean;
+  /** The key works AND the account is in a state that can synthesise. */
+  usable?: boolean;
   characterCount?: number;
   characterLimit?: number;
   tier?: string;
+  /** Present whenever `usable` is false — always says what to do about it. */
   userMessage?: string;
 }> {
   try {
     const res = await call(apiKey, "/user/subscription");
     const j: any = await res.json();
-    return {
-      ok: true,
-      characterCount: Number(j?.character_count ?? 0),
-      characterLimit: Number(j?.character_limit ?? 0),
+    const used = Number(j?.character_count ?? 0);
+    const limit = Number(j?.character_limit ?? 0);
+    const base = {
+      ok: true as const,
+      characterCount: used,
+      characterLimit: limit,
       tier: typeof j?.tier === "string" ? j.tier : undefined,
     };
+
+    const status = String(j?.status ?? "").toLowerCase();
+    if (status === "past_due" || j?.has_open_invoices === true) {
+      return {
+        ...base,
+        usable: false,
+        userMessage:
+          "ElevenLabs has an unpaid invoice on the account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again.",
+      };
+    }
+    if (limit > 0 && used >= limit) {
+      return {
+        ...base,
+        usable: false,
+        userMessage:
+          "The ElevenLabs account has used all its characters for this month. It resets on the next billing date, or you can upgrade the plan.",
+      };
+    }
+    return { ...base, usable: true };
   } catch (err: any) {
-    return { ok: false, userMessage: err?.userMessage || "Couldn't check the key." };
+    return { ok: false, usable: false, userMessage: err?.userMessage || "Couldn't check the key." };
   }
 }
 
