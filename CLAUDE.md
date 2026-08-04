@@ -1,5 +1,26 @@
 # Connect 2 — working rules for Claude
 
+## AGENT HANDOFF — Voicemail greeting upload + Call-to-Record (2026-08-04) — READ FIRST for greeting work
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VM_GREETING_2026-08-04.md`**.
+
+- **VERIFIED WORKING by Izzy 2026-08-04** on T21 "Landau Home" ext 101 (desktop +
+  Android rang simultaneously; greeting saved on the PBX). Fix commits: api
+  `707820cb` (instant-originate) + `b6034b7b` (UI push restore), helper
+  v2026.08.04.2 `1f216a80` (ring-all contacts).
+- ⛔ **The Android ring screen is PUSH-DRIVEN.** A bare SIP INVITE renders NO
+  incoming-call UI — the synthetic `INCOMING_CALL` push (inviteId `vmr-<jobId>`)
+  must be sent for every mobile device on every vm-record path. Only the WAKE
+  push is skipped (it forces a SIP reconnect and churns the shared AOR mid-ring,
+  which is what broke answering).
+- ⛔ **Dial CONTACTS, not endpoints.** `Dial(PJSIP/<endpoint>)` creates one
+  channel even when the AOR holds several registrations. The vm-greeting
+  dispatch context expands `PJSIP_DIAL_CONTACTS(base)` + `(base_1)` at dial
+  time. The dispatch dialplan lives in THREE synced copies: helper py + two
+  embeds in `install-vitalpbx-inbound-route-helper.sh`.
+- PBX rollback backups: `/root/helper-backup-20260804-141045.py` and
+  `/root/vm-dialplan-backup-20260804-141045.conf` on the PBX.
+
 ## ⛔ AGENT HANDOFF — cross-tenant leak + iOS modal keyboard trap (2026-08-02) — READ FIRST for CDR tenant attribution, contacts, or any iOS modal
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CROSS_TENANT_LEAK_2026-08-02.md`**
