@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.04.1"
+VERSION = "2026.08.04.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -3217,6 +3217,15 @@ CONNECT_VM_DIALPLAN_BODY = """; Auto-managed by connect-pbx-helper. Do not edit 
 ; the correct spool path (e.g. test-voicemail/101/) instead of the wrong
 ; numeric path (21/101/). Falls back to the numeric tenant id if the key
 ; is absent (backward compat for tenants not yet re-originated).
+;
+; Phase D (2026-08-04): dial CONTACTS, not endpoints. Dial(PJSIP/<endpoint>)
+; creates ONE channel even when the AOR holds several registrations, so only
+; one of the user's devices ever rang (proven live: two Avail contacts on
+; T21_101_1, one channel created, nothing visibly rang). PJSIP_DIAL_CONTACTS
+; expands every currently-registered contact of the base endpoint (desk
+; phones) and the _1 device endpoint (mobile + WebRTC share it) at the moment
+; of the Dial, so every live device rings simultaneously. The AstDB dial
+; string remains as a fallback for endpoints that expand to nothing.
 [connect-vm-greeting-dispatch]
 exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_TENANT=${CUT(EXTEN,_,1)})
@@ -3224,10 +3233,17 @@ exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
  same => n,Set(CALLERID(name)=Voicemail Greeting Recording)
  same => n,Set(CALLERID(num)=${CONNECT_VM_EXT})
- same => n,Wait(2)
+ same => n,Wait(1)
+ same => n,Set(CONNECT_VM_BASE_EP=T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
+ same => n,Set(CONNECT_VM_C1=${PJSIP_DIAL_CONTACTS(${CONNECT_VM_BASE_EP})})
+ same => n,Set(CONNECT_VM_C2=${PJSIP_DIAL_CONTACTS(${CONNECT_VM_BASE_EP}_1)})
+ same => n,Set(CONNECT_VM_DIAL=${CONNECT_VM_C1})
+ same => n,ExecIf($[${LEN(${CONNECT_VM_C2})} > 0 & ${LEN(${CONNECT_VM_DIAL})} > 0]?Set(CONNECT_VM_DIAL=${CONNECT_VM_DIAL}&${CONNECT_VM_C2}))
+ same => n,ExecIf($[${LEN(${CONNECT_VM_C2})} > 0 & ${LEN(${CONNECT_VM_DIAL})} = 0]?Set(CONNECT_VM_DIAL=${CONNECT_VM_C2}))
+ same => n,GotoIf($[${LEN(${CONNECT_VM_DIAL})} > 0]?resolve_context)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n(resolve_context),Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_context)
  same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
  same => n(have_context),Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))

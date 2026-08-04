@@ -2211,10 +2211,17 @@ exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
  same => n,Set(CALLERID(name)=Voicemail Greeting Recording)
  same => n,Set(CALLERID(num)=${CONNECT_VM_EXT})
- same => n,Wait(2)
+ same => n,Wait(1)
+ same => n,Set(CONNECT_VM_BASE_EP=T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
+ same => n,Set(CONNECT_VM_C1=${PJSIP_DIAL_CONTACTS(${CONNECT_VM_BASE_EP})})
+ same => n,Set(CONNECT_VM_C2=${PJSIP_DIAL_CONTACTS(${CONNECT_VM_BASE_EP}_1)})
+ same => n,Set(CONNECT_VM_DIAL=${CONNECT_VM_C1})
+ same => n,ExecIf($[${LEN(${CONNECT_VM_C2})} > 0 & ${LEN(${CONNECT_VM_DIAL})} > 0]?Set(CONNECT_VM_DIAL=${CONNECT_VM_DIAL}&${CONNECT_VM_C2}))
+ same => n,ExecIf($[${LEN(${CONNECT_VM_C2})} > 0 & ${LEN(${CONNECT_VM_DIAL})} = 0]?Set(CONNECT_VM_DIAL=${CONNECT_VM_C2}))
+ same => n,GotoIf($[${LEN(${CONNECT_VM_DIAL})} > 0]?resolve_context)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n(resolve_context),Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_context)
  same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
  same => n(have_context),Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
@@ -2501,10 +2508,17 @@ exten => _X!,1,NoOp(Connect VM dispatch ${EXTEN})
  same => n,Set(CONNECT_VM_FILE=${CUT(EXTEN,_,3)})
  same => n,Set(CALLERID(name)=Voicemail Greeting Recording)
  same => n,Set(CALLERID(num)=${CONNECT_VM_EXT})
- same => n,Wait(2)
+ same => n,Wait(1)
+ same => n,Set(CONNECT_VM_BASE_EP=T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})
+ same => n,Set(CONNECT_VM_C1=${PJSIP_DIAL_CONTACTS(${CONNECT_VM_BASE_EP})})
+ same => n,Set(CONNECT_VM_C2=${PJSIP_DIAL_CONTACTS(${CONNECT_VM_BASE_EP}_1)})
+ same => n,Set(CONNECT_VM_DIAL=${CONNECT_VM_C1})
+ same => n,ExecIf($[${LEN(${CONNECT_VM_C2})} > 0 & ${LEN(${CONNECT_VM_DIAL})} > 0]?Set(CONNECT_VM_DIAL=${CONNECT_VM_DIAL}&${CONNECT_VM_C2}))
+ same => n,ExecIf($[${LEN(${CONNECT_VM_C2})} > 0 & ${LEN(${CONNECT_VM_DIAL})} = 0]?Set(CONNECT_VM_DIAL=${CONNECT_VM_C2}))
+ same => n,GotoIf($[${LEN(${CONNECT_VM_DIAL})} > 0]?resolve_context)
  same => n,Set(CONNECT_VM_DIAL=${DB(connect_vm_dial/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_DIAL}" = ""]?nodevices)
- same => n,Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
+ same => n(resolve_context),Set(CONNECT_VM_CONTEXT=${DB(connect_vm_context/T${CONNECT_VM_TENANT}_${CONNECT_VM_EXT})})
  same => n,GotoIf($["${CONNECT_VM_CONTEXT}" != ""]?have_context)
  same => n,Set(CONNECT_VM_CONTEXT=${CONNECT_VM_TENANT})
  same => n(have_context),Dial(${CONNECT_VM_DIAL},30,U(connect-vm-greeting-record-sub^s^1^${CONNECT_VM_CONTEXT}^${CONNECT_VM_EXT}^${CONNECT_VM_FILE}))
@@ -2638,7 +2652,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom /var/spool/asterisk/voicemail /run/asterisk /etc/asterisk
+ReadWritePaths=/var/lib/connect-pbx-helper /var/lib/asterisk/sounds/custom /var/spool/asterisk/voicemail /run/asterisk /etc/asterisk /var/lib/vitalpbx/static
 SupplementaryGroups=asterisk
 
 [Install]
