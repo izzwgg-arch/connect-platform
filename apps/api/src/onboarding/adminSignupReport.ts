@@ -94,6 +94,12 @@ export async function queueOnboardingSignupReport(
       }
       lines.push(`Account number on file: ${porting.accountNumber ? "yes" : "NO — you may need to chase this"}. Transfer PIN: ${porting.portPin ? "yes" : "not given"}.`);
       lines.push(`Signed authorization: ${porting.loaFileName ? "uploaded" : "NOT uploaded — chase it"}. Copy of their bill: ${porting.billFileName ? "uploaded" : "NOT uploaded — chase it"}.`);
+      const attachFailures: string[] = Array.isArray(answers?.provisioning?.portDocAttachFailures)
+        ? answers.provisioning.portDocAttachFailures
+        : [];
+      if (attachFailures.length) {
+        lines.push(`CHASE THIS: the customer uploaded ${attachFailures.join(", ")}, but sending ${attachFailures.length === 1 ? "it" : "them"} to the carrier FAILED. The transfer will stall until the paperwork is sent to VoIP.ms by hand.`);
+      }
       lines.push("Remember: finishing the transfer (swapping the temporary number for their real one when the carrier releases it) is a manual step.");
     } else if (sub.provisionedDid) {
       lines.push(`They picked a new number and it is live: ${prettyPhone(sub.provisionedDid)}.`);

@@ -68,7 +68,14 @@ function installVmsFetch() {
     vmsCalls.push({ method, params });
     const handler = vmsHandlers[method];
     const body = handler ? handler(params) : { status: "success" };
-    return { json: async () => body } as any;
+    return {
+      // A handler returning a STRING simulates a Cloudflare outage page —
+      // HTML instead of JSON, so .json() rejects exactly like the real thing.
+      json: async () => {
+        if (typeof body === "string") throw new SyntaxError("Unexpected token '<'");
+        return body;
+      },
+    } as any;
   };
 }
 
@@ -101,12 +108,15 @@ function reset(opts: { live?: boolean } = {}) {
   fetchForbidden = !opts.live && false;
   if (opts.live) process.env.VOIPMS_AUTO_PROVISION = "on";
   else delete process.env.VOIPMS_AUTO_PROVISION;
+  process.env.VOIPMS_RETRY_BASE_MS = "1"; // keep the outage-retry backoff instant in tests
   installVmsFetch();
 }
 
 test.afterEach(() => {
   (globalThis as any).fetch = realFetch;
   delete process.env.VOIPMS_AUTO_PROVISION;
+  delete process.env.VOIPMS_RETRY_BASE_MS;
+  delete process.env.ONBOARDING_STORAGE_DIR;
 });
 
 function seedSubmission(over: Partial<any> = {}): string {
@@ -227,7 +237,10 @@ test("listSpareDids: only unassigned account DIDs count as spare (stock to use u
   assert.equal(spares[1].sms, false);
 });
 
-test("GUARD: spare grabbed by ANOTHER customer meanwhile → fails, never steals the number", async () => {
+test("GUARD: spare grabbed by ANOTHER customer meanwhile → never steals it, auto-assigns a replacement", async () => {
+  // The customer has already PAID by the time this runs — a hard failure here
+  // used to dead-end the whole build. Now: keep the number safe AND continue
+  // with the next best DID.
   reset({ live: true });
   vmsHandlers.getDIDsInfo = () => ({
     status: "success",
@@ -235,12 +248,59 @@ test("GUARD: spare grabbed by ANOTHER customer meanwhile → fails, never steals
   });
   const id = seedSubmission();
   const res = await mod.applyOnboardingNumber(id);
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, true);
+  assert.equal(calls("setDIDRouting").length, 0); // the taken number is never touched
+  const order = calls("orderDID");
+  assert.equal(order.length, 1); // no spare in the account → a new number is bought
+  assert.notEqual(order[0].params.did, "8455577726");
   const row = state.submissions.get(id);
-  assert.equal(row.numberStatus, "failed");
-  assert.match(row.setupError, /selected_number_already_assigned/);
-  assert.equal(calls("setDIDRouting").length, 0);
-  assert.equal(calls("orderDID").length, 0);
+  assert.equal(row.numberStatus, "ready");
+  assert.equal(row.provisionedDid, order[0].params.did);
+  assert.ok(state.events.some((e) => /taken by another customer/i.test(e.message)));
+});
+
+test("GUARD is EXACT: Acme1 must not match a number routed to Acme10 (substring trap)", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = (p) =>
+    p.did === "8455577726"
+      ? { status: "success", dids: [{ did: "8455577726", routing: "account:344022_BobsPlumbing10" }] }
+      : {
+          status: "success",
+          dids: [
+            { did: "8455577726", routing: "account:344022_BobsPlumbing10" },
+            { did: "8455550009", routing: "account:344022", ratecenter: "MONROE", state: "NY" }, // spare, same area code
+          ],
+        };
+  const id = seedSubmission(); // subaccount 344022_BobsPlumbing1
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  // The old substring test ("BobsPlumbing1" inside "BobsPlumbing10") routed
+  // the taken number away from its owner. It must fall back instead.
+  const route = calls("setDIDRouting");
+  assert.equal(route.length, 1);
+  assert.equal(route[0].params.did, "8455550009"); // same-area-code spare, not the stolen number
+  assert.equal(route[0].params.routing, "account:344022_BobsPlumbing1");
+  assert.equal(state.submissions.get(id).provisionedDid, "8455550009");
+});
+
+test("collision with NO spares: buys a replacement seeded with the SAME area code", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "8455577726", routing: "account:344022_SomeoneElse1" }],
+  });
+  vmsHandlers.searchDIDsUSA = (p) =>
+    p.query === "845"
+      ? { status: "success", dids: [{ did: "8455551111" }] }
+      : { status: "success", dids: [{ did: "9295551234" }] };
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  const search = calls("searchDIDsUSA");
+  assert.equal(search[0].params.query, "845"); // seeded with the selected number's area code
+  const order = calls("orderDID");
+  assert.equal(order.length, 1);
+  assert.equal(order[0].params.did, "8455551111");
 });
 
 test("resume: number already routed to OUR OWN subaccount is re-routed without error", async () => {
@@ -314,6 +374,172 @@ test("live port with NO spare DID: buys a temporary number", async () => {
   const row = state.submissions.get(id);
   assert.equal(row.provisionedDid, "9295551234");
   assert.equal(row.didIsTemporary, true);
+});
+
+test("temporary-number purchase is seeded with the ported number's area code, not a blank nationwide search", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({ status: "success", dids: [] }); // no spares
+  vmsHandlers.searchDIDsUSA = (p) =>
+    p.query === "212"
+      ? { status: "success", dids: [{ did: "2125559999" }] }
+      : { status: "success", dids: [{ did: "9295551234" }] };
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+  });
+  await mod.applyOnboardingNumber(id);
+  const search = calls("searchDIDsUSA");
+  assert.equal(search[0].params.type, "starts");
+  assert.equal(search[0].params.query, "212");
+  assert.equal(calls("orderDID")[0].params.did, "2125559999"); // same area code as the ported number
+  assert.equal(state.submissions.get(id).provisionedDid, "2125559999");
+});
+
+test("area code out of stock: falls back to a nationwide search instead of failing the build", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({ status: "success", dids: [] });
+  vmsHandlers.searchDIDsUSA = (p) =>
+    p.query === "212" ? { status: "success", dids: [] } : { status: "success", dids: [{ did: "9295551234" }] };
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("orderDID")[0].params.did, "9295551234");
+});
+
+test("SAFETY ORDER: temporary number comes FIRST — a temp-number failure files NO port, and the retry files exactly one", async () => {
+  // The old order (port first, temp second) meant a temp-number failure left
+  // a filed port behind, and the retry filed a SECOND port on the customer's
+  // live number.
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({ status: "success", dids: [] }); // no spares
+  vmsHandlers.searchDIDsUSA = () => ({ status: "fail" }); // and nothing to buy → temp step dies
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+  });
+  const first = await mod.applyOnboardingNumber(id);
+  assert.equal(first.ok, false);
+  assert.match(state.submissions.get(id).setupError, /no_temporary_did_available/);
+  assert.equal(calls("addLNPPort").length, 0); // the port was NOT filed
+
+  vmsHandlers.searchDIDsUSA = () => ({ status: "success", dids: [{ did: "2125559999" }] });
+  const second = await mod.applyOnboardingNumber(id);
+  assert.equal(second.ok, true);
+  assert.equal(calls("addLNPPort").length, 1); // filed exactly once, on the run that could finish
+});
+
+test("RETRY SAFETY: a re-run after the port was filed reuses the port id and temp number — no second port, no second number", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "9145550002", routing: "account:344022" }], // one spare
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+  });
+  const first = await mod.applyOnboardingNumber(id);
+  assert.equal(first.ok, true);
+  assert.equal(calls("addLNPPort").length, 1);
+  const prov = state.submissions.get(id).answers.provisioning;
+  assert.equal(prov.portFiled, true);
+  assert.equal(prov.portId, "P123");
+  assert.equal(prov.tempDid, "9145550002");
+
+  // Simulate a later stage failing → the whole number stage gets retried.
+  state.submissions.get(id).numberStatus = "failed";
+  const second = await mod.applyOnboardingNumber(id);
+  assert.equal(second.ok, true);
+  assert.equal(calls("addLNPPort").length, 1); // still ONE port on file
+  assert.equal(calls("orderDID").length, 0); // and no number was bought
+  assert.equal(state.submissions.get(id).provisionedDid, "9145550002"); // same temp number
+  assert.ok(state.events.some((e) => /already on file/i.test(e.message)));
+});
+
+test("LOA/bill attach failure: flagged in answers.provisioning for the owner report, stage still completes", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "9145550002", routing: "account:344022" }],
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+    // storageKey points nowhere → reading the file throws → attach fails
+    uploadedFiles: [{ id: "f1", filename: "signed-loa.pdf", kind: "PORTING_LOA", storageKey: "missing/signed-loa.pdf" }],
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true); // a paperwork hiccup must not kill the build
+  const prov = state.submissions.get(id).answers.provisioning;
+  assert.deepEqual(prov.portDocAttachFailures, ["signed-loa.pdf"]);
+  assert.ok(state.events.some((e) => /could not attach signed-loa\.pdf/i.test(e.message)));
+});
+
+test("attachments that DID reach the carrier are not re-sent on retry", async () => {
+  const os = await import("node:os");
+  const fsMod = await import("node:fs");
+  const pathMod = await import("node:path");
+  const dir = fsMod.mkdtempSync(pathMod.join(os.tmpdir(), "onb-test-"));
+  fsMod.writeFileSync(pathMod.join(dir, "bill.pdf"), "fake-bill");
+  process.env.ONBOARDING_STORAGE_DIR = dir;
+
+  reset({ live: true });
+  process.env.ONBOARDING_STORAGE_DIR = dir;
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "9145550002", routing: "account:344022" }],
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+    uploadedFiles: [{ id: "f1", filename: "bill.pdf", kind: "PORTING_BILL", storageKey: "bill.pdf" }],
+  });
+  await mod.applyOnboardingNumber(id);
+  assert.equal(calls("addLNPFile").length, 1);
+  assert.deepEqual(state.submissions.get(id).answers.provisioning.attachedFileIds, ["f1"]);
+
+  state.submissions.get(id).numberStatus = "failed";
+  await mod.applyOnboardingNumber(id);
+  assert.equal(calls("addLNPFile").length, 1); // not attached twice
+});
+
+// ── Outage resilience (Cloudflare 521/522 HTML, timeouts) ────────────────────
+
+test("OUTAGE: HTML error pages from VoIP.ms are retried and the call succeeds when the API comes back", async () => {
+  reset({ live: true });
+  let attempts = 0;
+  vmsHandlers.createSubAccount = (p) => {
+    attempts++;
+    if (attempts <= 2) return "<html>521 Web server is down</html>" as any; // Cloudflare page, not JSON
+    return { status: "success", account: `344022_${p.username}` };
+  };
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("createSubAccount").length, 3); // two outage pages + one real answer
+});
+
+test("OUTAGE: a dead provider fails the stage with provider_unreachable after 3 attempts — it does not hang or lie", async () => {
+  reset({ live: true });
+  vmsHandlers.getSubAccounts = () => "<html>522 Connection timed out</html>" as any;
+  vmsHandlers.createSubAccount = () => "<html>522 Connection timed out</html>" as any;
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, false);
+  assert.match(state.submissions.get(id).setupError, /provider_unreachable/);
+  assert.equal(calls("createSubAccount").length, 3); // bounded — no infinite retry
+});
+
+test("a REAL VoIP.ms rejection (JSON error status) is NOT retried", async () => {
+  reset({ live: true });
+  vmsHandlers.createSubAccount = () => ({ status: "invalid_credentials" });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, false);
+  assert.equal(calls("createSubAccount").length, 1); // one call, one answer, no retry storm
 });
 
 test("live: existing subaccount is reused with a rotated password (idempotent re-run)", async () => {
