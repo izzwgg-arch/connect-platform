@@ -6,6 +6,8 @@ import { db } from "@connect/db";
 import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
 import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
+import { takeOnboardingPayment, quoteForSubmission } from "./onboardingPayment";
+import { describeQuote } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
@@ -319,9 +321,64 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     return { ok: true, fileId: saved.id };
   });
 
-  // Card capture — disabled for now
-  app.post("/onboarding/:token/card", async (_req, reply) => {
-    return reply.code(503).send({ error: "card_disabled" });
+  // ── What they'll pay ──────────────────────────────────────────────────────
+  // Read-only. Drives the receipt on the payment step so the figure they agree
+  // to and the figure they are charged come from the same function.
+  app.get("/onboarding/:token/quote", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+    const full = await (db as any).onboardingSubmission.findUnique({
+      where: { id: row.id },
+      include: { requestedExtensions: true },
+    });
+    const quote = quoteForSubmission(full);
+    return {
+      ok: true,
+      quote,
+      summary: describeQuote(quote),
+      alreadyPaid: !!full?.paidAt,
+    };
+  });
+
+  // ── Take payment ──────────────────────────────────────────────────────────
+  // Raw card details never reach this server: the browser tokenises through
+  // Cardknox iFields and posts a single-use token. Nothing is purchased on the
+  // customer's behalf until this succeeds.
+  app.post("/onboarding/:token/pay", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row) return reply.code(404).send({ error: "invalid_token" });
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked" });
+
+    const body = z.object({
+      xSut: z.string().min(8).max(400),
+      xExp: z.string().max(8).optional().nullable(),
+      cardholderName: z.string().max(120).optional().nullable(),
+      billingZip: z.string().max(16).optional().nullable(),
+      clientOperationId: z.string().max(64).optional().nullable(),
+    }).safeParse(req.body || {});
+    // Deliberately does NOT echo the failing value — it would put a card token
+    // in an error body and, from there, into somebody's logs.
+    if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+
+    const result = await takeOnboardingPayment(row.id, body.data);
+    if (!result.ok) return reply.code(result.code).send({ error: result.error, message: result.message });
+
+    // Paid — NOW buy the number and start building. Fire-and-forget so the
+    // customer moves straight to the progress screen.
+    void (async () => {
+      await applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });
+      await resumeSetupIfSubmitted(row.id).catch(() => { /* logged inside */ });
+    })();
+
+    return {
+      ok: true,
+      invoiceNumber: result.invoiceNumber,
+      amountCents: result.amountCents,
+      last4: result.last4,
+      alreadyPaid: result.alreadyPaid ?? false,
+    };
   });
 
   // Apply the chosen number — fires when the customer leaves the "Your number"
@@ -352,6 +409,12 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         companyName: row.companyName || body.companyName || null,
       },
     });
+
+    // The choice is SAVED here, but nothing is BOUGHT. Buying used to start
+    // the moment someone left this step, which meant an abandoned sign-up left
+    // us holding a paid-for VoIP.ms number. Provisioning now waits for payment
+    // and is kicked off by the pay route instead.
+    if (!row.paidAt) return { ok: true, status: "saved_awaiting_payment" };
 
     void (async () => {
       await applyOnboardingNumber(row.id).catch(() => { /* logged inside */ });

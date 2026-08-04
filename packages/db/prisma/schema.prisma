@@ -5033,6 +5033,11 @@ model OnboardingSubmission {
   internalNotes         Json?
   cardTokenPreview      String?
   createdTenantId       String?
+  /// Sign-up payment. Nothing is purchased on a customer's behalf until paidAt
+  /// is set — see apps/api/src/onboarding/onboardingPayment.ts.
+  paidAt                DateTime?
+  paidInvoiceId         String?
+  paidAmountCents       Int?
   submittedAt           DateTime?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
