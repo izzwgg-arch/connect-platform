@@ -127,27 +127,31 @@ export default function OnboardingSuccessPage() {
         <a href="mailto:support@connectcomunications.com">support@connectcomunications.com</a>
       </p>
 
+      {/* Everything below rides the onboarding theme tokens (onboarding.css),
+          so dark and light both come out right — the old hardcoded light
+          palette rendered white cards on the dark shell. */}
       <style jsx global>{`
-        .ob-prog-bar { height: 7px; border-radius: 99px; background: rgba(15,23,42,.08);
-          margin: 22px auto 18px; max-width: 420px; overflow: hidden; }
-        .ob-prog-bar i { display: block; height: 100%; background: #2f6bff; transition: width .5s ease; }
+        .ob-prog-bar { height: 7px; border-radius: 99px; background: var(--surface-3);
+          border: 1px solid var(--border-soft); margin: 22px auto 18px; max-width: 420px; overflow: hidden; }
+        .ob-prog-bar i { display: block; height: 100%; background: var(--accent-strong); transition: width .5s ease; }
         .ob-prog-steps { display: flex; flex-direction: column; gap: 9px; max-width: 420px; margin: 0 auto; text-align: left; }
         .ob-prog-step { display: flex; gap: 12px; align-items: center; padding: 12px 14px;
-          border: 1px solid rgba(15,23,42,.10); border-radius: 12px; background: #f8fafc; }
+          border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+        .ob-prog-step.now { border-color: var(--accent-ring); }
         .ob-prog-step .ob-prog-dot { width: 24px; height: 24px; border-radius: 50%; flex: none;
           display: grid; place-items: center; font-size: 12px; font-weight: 750;
-          background: #fff; border: 1px solid rgba(15,23,42,.14); color: #94a3b8; }
-        .ob-prog-step.done .ob-prog-dot { background: #16a34a; border-color: #16a34a; color: #fff; }
-        .ob-prog-step.now .ob-prog-dot { background: #2f6bff; border-color: #2f6bff; color: #fff; }
-        .ob-prog-text b { display: block; font-size: 14px; font-weight: 620; }
-        .ob-prog-text span { display: block; font-size: 12.5px; color: #64748b; margin-top: 2px; }
-        .ob-prog-step.wait .ob-prog-text b { color: #94a3b8; font-weight: 550; }
+          background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+        .ob-prog-step.done .ob-prog-dot { background: var(--good); border-color: var(--good); color: var(--good-ink); }
+        .ob-prog-step.now .ob-prog-dot { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+        .ob-prog-text b { display: block; font-size: 14px; font-weight: 620; color: var(--text); }
+        .ob-prog-text span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+        .ob-prog-step.wait .ob-prog-text b { color: var(--muted); font-weight: 550; }
         .ob-prog-cta { display: inline-block; margin-top: 20px; padding: 13px 24px; border-radius: 12px;
-          background: #2f6bff; color: #fff; font-weight: 660; font-size: 15px; text-decoration: none; }
+          background: var(--accent-strong); color: #fff; font-weight: 660; font-size: 15px; text-decoration: none; }
         .ob-prog-cta:hover { filter: brightness(1.07); }
-        .ob-prog-skip { margin-top: 12px; font-size: 12.5px; color: #94a3b8; }
+        .ob-prog-skip { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
         .ob-prog-error { max-width: 420px; margin: 16px auto 0; padding: 12px 14px; border-radius: 11px;
-          font-size: 13px; color: #c9414c; background: rgba(201,65,76,.08); border: 1px solid rgba(201,65,76,.3); }
+          font-size: 13px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); }
       `}</style>
     </div>
   );

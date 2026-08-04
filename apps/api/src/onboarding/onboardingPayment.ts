@@ -237,7 +237,10 @@ export async function finalizeOnboardingInvoicePaid(invoice: {
       paidAt: new Date(),
       paidInvoiceId: invoice.id,
       paidAmountCents: invoice.totalCents ?? quote.monthlyTotalCents,
-      events: { create: { type: "PAID", message: `${describeQuote(quote)} — paid on the checkout page` } },
+      // STATUS_CHANGED, not "PAID": the OnboardingEventType enum has no PAID
+      // member, and an invalid type made this whole update throw — payment
+      // approved but the submission never marked paid, build never started.
+      events: { create: { type: "STATUS_CHANGED", message: `Paid: ${describeQuote(quote)} — on the checkout page` } },
     },
   });
 
