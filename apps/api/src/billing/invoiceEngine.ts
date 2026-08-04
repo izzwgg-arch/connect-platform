@@ -421,6 +421,15 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
 
   const subtotalCents = lineItems.reduce((sum, item) => sum + item.amountCents, 0);
   const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
+  // The `per_phone_number` fee basis (E911 on onboarding tenants) is owed on
+  // EVERY active number, including the first-free one — and onboarding numbers
+  // live only in PbxTenantInboundDid, never in the Connect phoneNumber table,
+  // so count both sources. max() (not a sum) because a number present in both
+  // tables must not be charged twice.
+  const totalActivePhoneNumberCount = Math.max(
+    billingQuantities.suggested.phoneNumbersTotal + billingQuantities.suggested.tollFreeNumbersTotal,
+    pbxDids.length,
+  );
   const telecomFees = parseBillingTelecomFees(settings.metadata);
   const taxResult = telecomFees
     ? (() => {
@@ -431,6 +440,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
               extensionCount: scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount),
               phoneNumberCount: scaledBillingQuantity(billingQuantities.billing.phoneNumbers, periodFactor.monthCount),
               tollFreeNumberCount: scaledBillingQuantity(billingQuantities.billing.tollFreeNumbers, periodFactor.monthCount),
+              totalPhoneNumberCount: scaledBillingQuantity(totalActivePhoneNumberCount, periodFactor.monthCount),
               lineCount:
                 scaledBillingQuantity(
                   billingQuantities.billing.extensions

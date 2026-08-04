@@ -553,6 +553,18 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     }
     await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { createdTenantId: tenantId } });
 
+    // Whichever tenant the phone system landed on (checkout's, the auto-sync
+    // race's, or a fresh one) must bill month 2 exactly like the sign-up quote:
+    // E911 per number + the flat telecom fee. Guarded inside — a tenant whose
+    // billing an operator already configured is left alone.
+    {
+      const { ensureOnboardingBillingDefaults } = await import("./onboardingBillingDefaults");
+      const stamp = await ensureOnboardingBillingDefaults(db as any, tenantId, { smsEnabled: !!fresh.smsEnabled });
+      if (stamp.stamped) {
+        await logEvent(submissionId, "Monthly billing set up to match the sign-up quote (E911 per number + telecom & regulatory fees).");
+      }
+    }
+
     // Retry the extension sync until every requested extension is present and
     // SIP-synced (VitalPBX can lag right after Apply Changes). Then repair
     // anything the sync skipped (users, ownership) deterministically.
