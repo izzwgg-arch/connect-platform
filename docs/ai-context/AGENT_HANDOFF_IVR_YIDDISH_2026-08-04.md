@@ -215,3 +215,55 @@ are the customer's data, not interface wording.
 4. The A Plus Center **go-live flip on 8457823064** is still pending Izzy.
 5. A **test card transaction** through the new payment gate — Izzy's to do; an
    agent must never enter card details.
+
+---
+
+# Session 3 — number↔menu scheduling + pre-menu announcements (2026-08-04, later)
+
+## What shipped (commit 0322728b)
+
+**The Studio's top step is now the DID control.** Pick which number rings the
+menu (each row states what the number does RIGHT NOW), or "No phone number"
+for sub-menus. Timing is exactly two options on Izzy's instruction — start
+right now, or a date and time — with an end of "never" or "on a date".
+
+**Key architecture — the scheduler does NOT reimplement the flip.**
+`didSwitchSchedule.ts` mints a short-lived SUPER_ADMIN service JWT
+(`app.jwt.sign`, sub `scheduler:<id>`) and drives the EXISTING
+`/voice/did/:id/switch-to-connect` / `switch-to-pbx` routes via `app.inject`
+— an in-process request, no network. One code path for manual and scheduled
+flips. "Right now" is held client-side and executes inside publish() right
+after `/voice/ivr/publish` succeeds; the button reads "Publish and switch
+(845) …". Dated switches are booked server-side (`DidSwitchSchedule` table)
+and executed by a 60s tick; failures alert ADMIN_ALERT_EMAIL and retry for 30
+minutes, then mark failed. A failed HAND-BACK leaves the number on Connect
+(the direction that keeps answering calls) — deliberate.
+
+**Announcements** (`IvrAnnouncementSchedule`): a recording played before the
+menu, bookable start/stop. Runtime = one AstDB key
+`connect/t_<slug>/pre_announce` set/cleared via `publishToAstDb`. ⛔ **The
+dialplan does not read that key yet.** The patch is committed at
+`scripts/pbx/patch-connect-ivr-pre-announce.sh` (backup + idempotence +
+verify + reload, plays via Playback once per call before the `(prompt)`
+label) and MUST NOT be run without Izzy's explicit go — PBX hard guardrail.
+Until then announcements are booked and keys written but callers hear
+nothing: the intended rollout order.
+
+## Traps
+
+- The deploy queue REFUSES deploy-direct while another job runs
+  (`runningCount=1`). A parallel server session deploys the same branch;
+  wait on `curl 127.0.0.1:3910/ops/deploy/status`, never `--skip-queue-check`.
+- `pgrep`/`pkill -f` waiters self-match when the SAME compound command also
+  contains the literal pattern later in the line. Poll the queue endpoint or a
+  container label instead. (Cost three dead SSH sessions tonight.)
+- New page files verify with `next build`, tests with the runner in
+  package.json (`node --experimental-test-module-mocks --import tsx --test`),
+  and every new `t()` phrase must be in that file's PHRASES list —
+  `scratchpad/checkphrases.py` pattern.
+
+## Open
+
+1. Dialplan patch for pre_announce — awaiting Izzy's go, then run on PBX host.
+2. Queue callback recording (still pinned).
+3. A Plus Center go-live flip on 8457823064 (still held).
