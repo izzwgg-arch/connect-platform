@@ -264,6 +264,11 @@ nothing: the intended rollout order.
 
 ## Open
 
-1. Dialplan patch for pre_announce — awaiting Izzy's go, then run on PBX host.
+1. ~~Dialplan patch for pre_announce.~~ **APPLIED 2026-08-04 under Izzy's
+   one-time mandate.** Verified in the compiled dialplan (priorities 27-33 of
+   connect-tenant-ivr: DB read → empty-skip → STAT checks → Playback), whole
+   dialplan intact (1538 contexts), 4 live calls unharmed. Backup:
+   `/etc/asterisk/extensions__60_custom.conf.bak.pre-announce.20260804T150419Z`.
+   Announcements are now END-TO-END live.
 2. Queue callback recording (still pinned).
 3. A Plus Center go-live flip on 8457823064 (still held).
