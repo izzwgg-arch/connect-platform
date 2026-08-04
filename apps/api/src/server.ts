@@ -21787,6 +21787,76 @@ app.post("/voice/ivr/prompts/:id/audio", async (req, reply) => {
   });
 });
 
+// ═══ Card gateway test ═══════════════════════════════════════
+// A $1 charge through the SAME gateway call the signup wizard uses, so the
+// answer to "does the processor take money" is proven rather than assumed.
+// The wizard itself cannot answer it: its amount comes from the agreed quote
+// on purpose, and the smallest real basket is $33.
+//
+// Amount is a server-side constant, super-admin only, charged against the
+// caller's own tenant. See billing/cardGatewayTest.ts for why each of those
+// matters.
+
+// ── GET /billing/card-test/config ──────────────────────────────────────
+// The tokenising key the card fields need, plus whether a charge would even
+// reach the processor — so the page can say "switched off" instead of failing
+// after someone has typed a card in.
+app.get("/billing/card-test/config", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+
+  const { billingLiveChargesDisabled } = await import("./billing/solaBillingPayments");
+  const { CARD_TEST_AMOUNT_CENTS } = await import("./billing/cardGatewayTest");
+  const { resolveBillingGatewayConfig } = await import("./billing/solaGateway");
+
+  const gateway = await resolveBillingGatewayConfig(user.tenantId || "", { forTokenizing: true });
+  return reply.send({
+    amountCents: CARD_TEST_AMOUNT_CENTS,
+    ifieldsKey: gateway.ifieldsKey ?? null,
+    ifieldsVersion: "3.4.2602.2001",
+    mode: gateway.mode || "sandbox",
+    liveChargesEnabled: !billingLiveChargesDisabled(),
+  });
+});
+
+// ── POST /billing/card-test ────────────────────────────────────────────
+app.post("/billing/card-test", async (req, reply) => {
+  const user = await requireSuperAdmin(req, reply);
+  if (!user) return;
+  if (!user.tenantId) return reply.code(400).send({ error: "no_tenant", message: "Your account isn't attached to a customer, so there's nowhere to file the test invoice." });
+
+  // NOTE: no amount field. That is the point.
+  const body = z
+    .object({
+      xSut: z.string().min(1),
+      xExp: z.string().optional(),
+      cardholderName: z.string().max(120).optional(),
+      billingZip: z.string().max(20).optional(),
+      clientOperationId: z.string().max(120).optional(),
+    })
+    .safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
+
+  const { runCardGatewayTest } = await import("./billing/cardGatewayTest");
+  const result = await runCardGatewayTest(db, user.tenantId, `user:${user.sub}`, {
+    xSut: body.data.xSut,
+    xExp: body.data.xExp ?? null,
+    cardholderName: body.data.cardholderName ?? null,
+    billingZip: body.data.billingZip ?? null,
+    clientOperationId: body.data.clientOperationId ?? null,
+  });
+
+  if (!result.ok) {
+    app.log.warn({ by: user.sub, error: result.error }, "[CARD_TEST] failed");
+    return reply.code(result.code).send({ error: result.error, message: result.message });
+  }
+  app.log.info(
+    { by: user.sub, invoiceNumber: result.invoiceNumber, processorRef: result.processorRef, last4: result.last4 },
+    "[CARD_TEST] $1 charge approved",
+  );
+  return reply.send(result);
+});
+
 // ═══ ElevenLabs greeting generation ════════════════════════════
 // Lives in its own module (voice/elevenLabsRoutes.ts) with the pieces that
 // belong to this file passed in, rather than the module reaching back in here.
