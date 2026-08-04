@@ -1,19 +1,30 @@
-// ── Taking payment during sign-up ────────────────────────────────────────────
+// ── Payment during sign-up ───────────────────────────────────────────────────
 //
-// Nothing is bought until this succeeds. Before this existed, the VoIP.ms
-// number was purchased the moment someone left the number step — so an
-// abandoned sign-up left us holding a paid-for number nobody asked for.
+// The wizard does NOT have its own payment screen any more. It had one — a
+// card form inline in the final step — and Izzy had it deleted, correctly:
+// `/pay/invoice/[token]` already exists, it is the checkout every customer
+// uses to pay an invoice, and it already handles the card fields, the receipt
+// email, and "Payment received". Two payment screens means two things to keep
+// correct, and the wizard's copy was the one nobody else exercised.
 //
-// PCI: raw card details never reach this server. The browser tokenises through
-// Cardknox iFields and sends a single-use token (`xSut`). That token is
-// forwarded and never logged, never stored, never echoed back.
+// So the flow is now:
 //
-// The Connect tenant is created HERE, at payment, rather than later during PBX
-// provisioning. That is deliberate: charging needs a tenant to hang the
-// invoice, payment method, idempotency key and audit trail on, and inventing a
-// parallel "pre-tenant" payment path would mean a second, less-tested way for
-// money to move. The submission records the tenant id so the provisioning
-// orchestrator adopts it instead of creating a second one.
+//   1. The wizard reaches checkout → `prepareOnboardingCheckout` creates the
+//      tenant and the first invoice in the background and mints a pay link.
+//   2. The customer pays on the REAL checkout page.
+//   3. The public pay route sees the invoice is an onboarding one and calls
+//      `finalizeOnboardingInvoicePaid`, which marks the submission paid — the
+//      caller then kicks number purchase + PBX build + welcome emails, all of
+//      which already existed.
+//
+// Nothing is bought until the card clears. That rule predates this refactor
+// and survives it: the number purchase and the PBX build are triggered by the
+// paid event, never by reaching checkout.
+//
+// The Connect tenant is created at checkout-preparation rather than later:
+// charging needs a tenant to hang the invoice, payment method, and audit trail
+// on, and the submission records the tenant id so provisioning adopts it
+// instead of creating a second one.
 
 import { db } from "@connect/db";
 import {
@@ -21,19 +32,24 @@ import {
   type OnboardingQuote,
 } from "@connect/shared";
 import { createBillingInvoiceRowWithUniqueNumber } from "../billing/invoiceEngine";
-import { chargeBillingInvoiceWithSut, billingLiveChargesDisabled } from "../billing/solaBillingPayments";
+import { createBillingInvoicePayToken } from "../billing/billingPayToken";
+import { billingLiveChargesDisabled } from "../billing/solaBillingPayments";
 
-export interface OnboardingPaymentInput {
-  xSut: string;
-  xExp?: string | null;
-  cardholderName?: string | null;
-  billingZip?: string | null;
-  /** From the browser, so a double-click can't charge twice. */
-  clientOperationId?: string | null;
-}
+/** Long enough to sleep on the decision; short enough that a stale link from a
+ *  half-finished sign-up doesn't survive for a month. */
+const CHECKOUT_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type OnboardingPaymentResult =
-  | { ok: true; tenantId: string; invoiceId: string; invoiceNumber: string; amountCents: number; last4: string | null; alreadyPaid?: true }
+export type OnboardingCheckout =
+  | {
+      ok: true;
+      tenantId: string;
+      invoiceId: string;
+      invoiceNumber: string;
+      amountCents: number;
+      /** Relative portal path to the real customer checkout. */
+      payPath: string;
+      alreadyPaid: boolean;
+    }
   | { ok: false; code: number; error: string; message: string };
 
 /** What this submission owes, from the choices they made in the wizard. */
@@ -55,7 +71,7 @@ export function quoteForSubmission(sub: {
 /**
  * Create the tenant if this submission hasn't got one yet.
  *
- * Idempotent on `createdTenantId`: a retried payment must never create a
+ * Idempotent on `createdTenantId`: a retried checkout must never create a
  * second tenant for the same customer.
  */
 async function ensureTenantForSubmission(sub: { id: string; companyName?: string | null; createdTenantId?: string | null; answers?: any }): Promise<string> {
@@ -80,19 +96,14 @@ async function ensureTenantForSubmission(sub: { id: string; companyName?: string
 }
 
 /**
- * Charge the first month and put the card on file.
+ * Everything checkout needs, created in the background before the customer
+ * sees the payment screen: the tenant, the first month's invoice, and a signed
+ * link to the real checkout page.
  *
- * A card on file is not optional — it is how every following month is paid, so
- * autopay is switched on as part of this rather than offered as a choice the
- * customer could leave off and then be surprised by.
+ * Idempotent end to end — re-entering the checkout step reuses the same
+ * tenant and the same invoice, and just mints a fresh link.
  */
-export async function takeOnboardingPayment(
-  submissionId: string,
-  input: OnboardingPaymentInput,
-): Promise<OnboardingPaymentResult> {
-  if (!input.xSut || input.xSut.length < 8) {
-    return { ok: false, code: 400, error: "card_token_missing", message: "Your card details didn't come through. Please re-enter them." };
-  }
+export async function prepareOnboardingCheckout(submissionId: string): Promise<OnboardingCheckout> {
   if (billingLiveChargesDisabled()) {
     return { ok: false, code: 503, error: "charges_disabled", message: "Payments are paused right now. Please try again shortly." };
   }
@@ -102,14 +113,6 @@ export async function takeOnboardingPayment(
     include: { requestedExtensions: true },
   });
   if (!sub) return { ok: false, code: 404, error: "submission_not_found", message: "We couldn't find your sign-up." };
-
-  // Already paid? Say so plainly instead of charging again.
-  if (sub.paidAt && sub.paidInvoiceId) {
-    const inv = await (db as any).billingInvoice.findUnique({ where: { id: sub.paidInvoiceId }, select: { id: true, invoiceNumber: true, totalCents: true } });
-    if (inv) {
-      return { ok: true, tenantId: sub.createdTenantId, invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, amountCents: inv.totalCents, last4: null, alreadyPaid: true };
-    }
-  }
 
   const quote = quoteForSubmission(sub);
   if (quote.monthlyTotalCents <= 0) {
@@ -122,11 +125,38 @@ export async function takeOnboardingPayment(
   const periodEnd = new Date(now);
   periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-  // One invoice per submission. If a previous attempt made one, reuse it —
-  // otherwise a retried card creates a second invoice for the same month.
+  // One invoice per submission. A revisit to the checkout step reuses it —
+  // otherwise every visit creates another invoice for the same first month.
   let invoice = await (db as any).billingInvoice.findFirst({
     where: { tenantId, metadata: { path: ["onboardingSubmissionId"], equals: submissionId } },
   });
+
+  // The quote can legitimately change between visits (they went back and added
+  // a person), so an UNPAID invoice is re-lined to match. A paid one is never
+  // touched — the money already moved for what it listed.
+  const alreadyPaid = !!invoice && (invoice.status === "PAID" || (invoice.balanceDueCents ?? 0) <= 0);
+  if (invoice && !alreadyPaid && invoice.totalCents !== quote.monthlyTotalCents) {
+    await (db as any).billingInvoiceLineItem.deleteMany({ where: { invoiceId: invoice.id } });
+    invoice = await (db as any).billingInvoice.update({
+      where: { id: invoice.id },
+      data: {
+        subtotalCents: quote.monthlyTotalCents,
+        taxCents: 0,
+        totalCents: quote.monthlyTotalCents,
+        balanceDueCents: quote.monthlyTotalCents,
+        lineItems: {
+          create: quote.lines.map((l) => ({
+            description: l.label,
+            quantity: l.quantity,
+            unitPriceCents: l.unitCents,
+            amountCents: l.totalCents,
+            metadata: { key: l.key, note: l.note ?? null },
+          })),
+        },
+      },
+    });
+  }
+
   if (!invoice) {
     invoice = await createBillingInvoiceRowWithUniqueNumber(tenantId, async (invoiceNumber: string) =>
       (db as any).billingInvoice.create({
@@ -157,65 +187,58 @@ export async function takeOnboardingPayment(
     );
   }
 
-  try {
-    const tx = await chargeBillingInvoiceWithSut(
-      invoice,
-      {
-        xSut: input.xSut,
-        xExp: input.xExp ?? null,
-        cardholderName: input.cardholderName ?? null,
-        billingZip: input.billingZip ?? null,
-      },
-      {
-        // Vault the card so every following month can be charged without
-        // asking again — this IS the "card on file" requirement, and it makes
-        // it the tenant's default method.
-        persistPaymentMethod: true,
-        makeDefault: true,
-        cardholderName: input.cardholderName ?? null,
-        billingZip: input.billingZip ?? null,
-        clientOperationId: input.clientOperationId ?? null,
-      },
-    );
+  const token = createBillingInvoicePayToken(invoice.id, tenantId, CHECKOUT_LINK_TTL_MS);
+  return {
+    ok: true,
+    tenantId,
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoiceNumber,
+    amountCents: invoice.totalCents,
+    payPath: `/pay/invoice/${encodeURIComponent(token)}`,
+    alreadyPaid,
+  };
+}
 
-    // A card on file is mandatory, so autopay is simply ON. There is no
-    // customer-facing switch for it anywhere.
-    await (db as any).tenantBillingSettings.upsert({
-      where: { tenantId },
-      create: { tenantId, autoBillingEnabled: true },
-      update: { autoBillingEnabled: true },
-    }).catch(() => null);
+/**
+ * Called by the public pay route the moment an onboarding invoice is paid on
+ * the real checkout page. Marks the submission paid; the CALLER is responsible
+ * for kicking provisioning (number purchase, PBX build, welcome emails),
+ * because those fire-and-forget jobs live with the route, not here.
+ *
+ * Idempotent: a webhook replay or a double-submit marks paid once.
+ */
+export async function finalizeOnboardingInvoicePaid(invoice: {
+  id: string;
+  totalCents?: number | null;
+  metadata?: any;
+}): Promise<{ submissionId: string; publicToken: string | null } | null> {
+  const submissionId = String(invoice?.metadata?.onboardingSubmissionId ?? "");
+  if (!submissionId) return null;
 
-    await (db as any).onboardingSubmission.update({
-      where: { id: submissionId },
-      data: {
-        paidAt: new Date(),
-        paidInvoiceId: invoice.id,
-        paidAmountCents: quote.monthlyTotalCents,
-        events: { create: { type: "PAID", message: `${describeQuote(quote)} — invoice ${invoice.invoiceNumber}` } },
-      },
-    });
+  const sub = await (db as any).onboardingSubmission.findUnique({
+    where: { id: submissionId },
+    select: { id: true, publicToken: true, paidAt: true },
+  });
+  if (!sub) return null;
+  if (sub.paidAt) return { submissionId: sub.id, publicToken: sub.publicToken ?? null };
 
-    return {
-      ok: true,
-      tenantId,
-      invoiceId: invoice.id,
-      invoiceNumber: invoice.invoiceNumber,
-      amountCents: quote.monthlyTotalCents,
-      last4: tx?.paymentMethod?.last4 ?? tx?.last4 ?? null,
-    };
-  } catch (err: any) {
-    const code = String(err?.code || "");
-    // Card declines are the customer's problem to fix and must read as such;
-    // everything else is ours and must not blame them for it.
-    if (code === "CARD_TOKENIZATION_FAILED" || code === "CHARGE_DECLINED") {
-      return { ok: false, code: 402, error: "card_declined", message: err?.userMessage || "That card was declined. Please check the details or try another card." };
-    }
-    if (code === "INVOICE_ALREADY_PAID") {
-      return { ok: true, tenantId, invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber, amountCents: quote.monthlyTotalCents, last4: null, alreadyPaid: true };
-    }
-    return { ok: false, code: 502, error: "payment_failed", message: "We couldn't take the payment just now. Nothing has been charged — please try again." };
-  }
+  const full = await (db as any).onboardingSubmission.findUnique({
+    where: { id: submissionId },
+    include: { requestedExtensions: true },
+  });
+  const quote = quoteForSubmission(full);
+
+  await (db as any).onboardingSubmission.update({
+    where: { id: submissionId },
+    data: {
+      paidAt: new Date(),
+      paidInvoiceId: invoice.id,
+      paidAmountCents: invoice.totalCents ?? quote.monthlyTotalCents,
+      events: { create: { type: "PAID", message: `${describeQuote(quote)} — paid on the checkout page` } },
+    },
+  });
+
+  return { submissionId: sub.id, publicToken: sub.publicToken ?? null };
 }
 
 export { formatCents };

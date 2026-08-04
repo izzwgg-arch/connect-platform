@@ -25,6 +25,20 @@ async function loadInvoiceForPayToken(token: string) {
   return { invoice, parsed };
 }
 
+
+/** Is this the first invoice of a sign-up? If so, where does the customer go
+ *  after paying it? The wizard's own payment screen is gone — this page IS the
+ *  sign-up checkout now — so the hand-back to the sign-up flow lives here. */
+async function onboardingContinuePath(invoice: { metadata?: any }): Promise<string | null> {
+  const submissionId = String(invoice?.metadata?.onboardingSubmissionId ?? "");
+  if (!submissionId) return null;
+  const sub = await (db as any).onboardingSubmission.findUnique({
+    where: { id: submissionId },
+    select: { publicToken: true },
+  });
+  return sub?.publicToken ? `/onboarding/${encodeURIComponent(sub.publicToken)}/success` : null;
+}
+
 /** Public (JWT-free) routes for customer self-pay on BillingInvoice. */
 export function registerBillingPublicPayRoutes(app: FastifyInstance) {
   app.get("/billing/platform/invoices/pay/:token", async (req, reply) => {
@@ -50,7 +64,11 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
     const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
     const canPay = balanceDueCents > 0 && !["PAID", "VOID"].includes(invoice.status);
     const brand = resolveInvoiceEmailBranding(invoice.tenant?.billingSettings || {}, invoice.tenant?.name);
+    // A sign-up invoice carries the customer somewhere specific afterwards:
+    // the build-progress screen, not the dashboard they can't log into yet.
+    const continuePath = await onboardingContinuePath(invoice);
     return {
+      continuePath,
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       companyName: brand.displayName || invoice.tenant?.name || "Connect Communications",
@@ -144,9 +162,19 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       }).catch(() => null);
     }
 
+    // A sign-up invoice is different in one non-negotiable way: the card goes
+    // on file and autopay is ON, because that is how every following month is
+    // paid. It is not a checkbox the customer can leave off and be surprised
+    // by later — so for these invoices the client's saveCard/enableAutopay
+    // flags are overridden rather than trusted.
+    const isOnboardingInvoice = String((invoice.metadata as any)?.source ?? "") === "onboarding_signup"
+      && !!(invoice.metadata as any)?.onboardingSubmissionId;
+    const saveCard = isOnboardingInvoice ? true : input.saveCard;
+    const enableAutopay = isOnboardingInvoice ? true : input.enableAutopay;
+
     try {
       let transaction: any;
-      if (input.saveCard) {
+      if (saveCard) {
         transaction = await chargeBillingInvoiceWithSut(
           invoice,
           {
@@ -159,15 +187,20 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
             adapter,
             note: "public_pay_link_saved_card",
             persistPaymentMethod: true,
-            makeDefault: input.enableAutopay || false,
+            makeDefault: enableAutopay || false,
             customerIdentity: `tenant:${invoice.tenantId}`,
           },
         );
         const savedPaymentMethodId = (transaction?.rawResponseSafeJson as any)?.savedPaymentMethodId;
-        if (input.enableAutopay) {
-          await (db as any).tenantBillingSettings.update({
+        if (enableAutopay) {
+          // Upsert, not update: a brand-new sign-up tenant has no settings row
+          // yet, and update on a missing row throws — which would have made
+          // "autopay mandatory" silently false for exactly the customers it
+          // was mandatory for.
+          await (db as any).tenantBillingSettings.upsert({
             where: { tenantId: invoice.tenantId },
-            data: { autoBillingEnabled: true, ...(savedPaymentMethodId ? { defaultPaymentMethodId: savedPaymentMethodId } : {}) },
+            create: { tenantId: invoice.tenantId, autoBillingEnabled: true, ...(savedPaymentMethodId ? { defaultPaymentMethodId: savedPaymentMethodId } : {}) },
+            update: { autoBillingEnabled: true, ...(savedPaymentMethodId ? { defaultPaymentMethodId: savedPaymentMethodId } : {}) },
           }).catch(() => null);
         }
       } else {
@@ -190,10 +223,34 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
         message: `Public pay link payment for invoice ${invoice.invoiceNumber}`,
         metadata: {
           transactionId: transaction?.id,
-          saveCardRequested: input.saveCard,
-          enableAutopayRequested: input.enableAutopay,
+          saveCardRequested: saveCard,
+          enableAutopayRequested: enableAutopay,
+          onboarding: isOnboardingInvoice || undefined,
         },
       });
+
+      // Sign-up paid → NOW buy the number and start building. Everything after
+      // this line already existed (provisioning, PBX build, welcome emails);
+      // paying on this page simply became the thing that triggers it.
+      // Fire-and-forget: the customer is being redirected to the progress
+      // screen, which watches the build rather than this request.
+      // Dynamic imports keep billing from depending on onboarding at load time.
+      if (isOnboardingInvoice && transaction?.status === "APPROVED") {
+        void (async () => {
+          try {
+            const { finalizeOnboardingInvoicePaid } = await import("../onboarding/onboardingPayment");
+            const done = await finalizeOnboardingInvoicePaid(invoice);
+            if (done) {
+              const { applyOnboardingNumber } = await import("../onboarding/voipMsProvisioning");
+              const { resumeSetupIfSubmitted } = await import("../onboarding/setupOrchestrator");
+              await applyOnboardingNumber(done.submissionId).catch(() => { /* logged inside */ });
+              await resumeSetupIfSubmitted(done.submissionId).catch(() => { /* logged inside */ });
+            }
+          } catch (err) {
+            app.log.error({ err: (err as any)?.message, invoiceId: invoice.id }, "[ONBOARDING] post-payment kick failed");
+          }
+        })();
+      }
 
       return {
         ok: true,

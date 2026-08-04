@@ -13,6 +13,9 @@ import "./pay-invoice.css";
 const apiBase = (process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api").replace(/\/$/, "");
 
 type InvoicePayView = {
+  /** Set on sign-up invoices: where the customer continues after paying —
+   *  the build-progress screen, not a dashboard they can't log into yet. */
+  continuePath?: string | null;
   invoiceNumber: string;
   companyName: string;
   status: string;
@@ -131,12 +134,14 @@ export default function PublicBillingInvoicePayPage() {
 
   useEffect(() => {
     if (!paymentCompleted && result !== "success") return;
-    const target = readAuthToken() ? "/dashboard" : "/login";
+    // A sign-up invoice continues the sign-up: the server says where. Everyone
+    // else goes to their dashboard, or to login if they aren't signed in.
+    const target = invoice?.continuePath || (readAuthToken() ? "/dashboard" : "/login");
     const timeout = window.setTimeout(() => {
       window.location.assign(target);
     }, 3000);
     return () => window.clearTimeout(timeout);
-  }, [paymentCompleted, result]);
+  }, [paymentCompleted, result, invoice?.continuePath]);
 
   async function submitPayment(payload: {
     cardToken: string;
@@ -252,13 +257,26 @@ export default function PublicBillingInvoicePayPage() {
                   <span>{amountDue}</span>
                 </div>
               </section>
+              {invoice.continuePath ? (
+                /* Sign-up checkout: the card going on file is how every
+                   following month is paid, so it is stated, not offered. The
+                   server enforces it regardless of what this form sends —
+                   showing an optional checkbox here would be a lie. */
+                <div className="billing-pay-secure-note" style={{ marginBottom: 12 }}>
+                  <Lock size={14} />
+                  <span>
+                    <b>Your card stays on file.</b> That&apos;s how your monthly bill is paid — nothing to
+                    remember each month.
+                  </span>
+                </div>
+              ) : null}
               <CardknoxIFieldsForm
                 ifieldsKey={config.ifieldsKey}
                 variant="customer"
                 fieldTheme={payTheme}
                 showBillingAddress
                 showEmail
-                showSaveOptions
+                showSaveOptions={!invoice.continuePath}
                 autoEnableAutopayWhenSaving
                 saveCard={saveCard}
                 onSaveCardChange={setSaveCard}

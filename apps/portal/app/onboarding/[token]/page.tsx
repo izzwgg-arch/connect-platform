@@ -1,7 +1,6 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
 import { apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -326,57 +325,38 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
    * the sign-up: the number and the phone system are only bought once the card
    * clears, so this is the last step that costs nothing.
    */
-  // ── Payment ───────────────────────────────────────────────────────────────
-  // The quote and the charge come from the same server-side function, so the
-  // figure someone agrees to is the figure they are charged.
-  const [quote, setQuote] = useState<any | null>(null);
-  const [payConfig, setPayConfig] = useState<{ ifieldsKey: string } | null>(null);
-  const [payError, setPayError] = useState<string | null>(null);
-  const paidRef = useRef(false);
-  /** Stable for the life of this page: the server uses it to collapse a
-   *  retried submit into the same charge rather than a second one. */
-  const clientOpId = useRef<string>(
-    typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `ob-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  );
+  // ── Checkout ──────────────────────────────────────────────────────────────
+  // The wizard doesn't render a payment form. Reaching this step asks the
+  // server to create the tenant and the first invoice in the background, then
+  // sends the customer to /pay/invoice/[token] — the same checkout page every
+  // customer pays invoices on. The card fields, the receipt email and the
+  // "Payment received" screen all live THERE; a second copy of them here was
+  // deleted on Izzy's instruction, and rightly: it was the copy nobody used.
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const checkoutFired = useRef(false);
+
+  const startCheckout = useCallback(async () => {
+    if (checkoutFired.current) return;
+    checkoutFired.current = true;
+    setCheckoutError(null);
+    try {
+      const r = await apiPost<{ payPath: string; alreadyPaid: boolean }>(
+        `/onboarding/${encodeURIComponent(token)}/checkout`,
+        {},
+      );
+      // Already paid (e.g. back-button after paying): straight to progress.
+      window.location.href = r.alreadyPaid
+        ? `/onboarding/${encodeURIComponent(token)}/success`
+        : r.payPath;
+    } catch (e: any) {
+      checkoutFired.current = false; // allow a retry
+      setCheckoutError(e?.payload?.message || e?.message || "We couldn't prepare your checkout. Please try again.");
+    }
+  }, [token]);
 
   useEffect(() => {
-    if (step !== 6) return;
-    let dead = false;
-    (async () => {
-      try {
-        const [q, c] = await Promise.all([
-          apiGet<{ quote: any }>(`/onboarding/${encodeURIComponent(token)}/quote`),
-          apiGet<{ ifieldsKey: string }>(`/onboarding/${encodeURIComponent(token)}/pay-config`),
-        ]);
-        if (dead) return;
-        setQuote(q.quote);
-        setPayConfig(c);
-      } catch {
-        if (!dead) setPayError("We couldn't load the payment page. Please refresh and try again.");
-      }
-    })();
-    return () => { dead = true; };
-  }, [step, token]);
-
-  async function handlePay(payload: { cardToken: string; billing: any }) {
-    // A second charge is the one mistake this flow must never make.
-    if (paidRef.current) return;
-    paidRef.current = true;
-    setPayError(null);
-    try {
-      await apiPost(`/onboarding/${encodeURIComponent(token)}/pay`, {
-        xSut: payload.cardToken,
-        xExp: [payload.billing?.expMonth, payload.billing?.expYear].filter(Boolean).join("") || undefined,
-        cardholderName: payload.billing?.cardholderName || undefined,
-        billingZip: payload.billing?.billingZip || undefined,
-        clientOperationId: clientOpId.current,
-      });
-      window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
-    } catch (e: any) {
-      paidRef.current = false; // let them fix the card and try again
-      setPayError(e?.payload?.message || e?.message || "We couldn't take the payment. Nothing has been charged.");
-    }
-  }
+    if (step === 6) void startCheckout();
+  }, [step, startCheckout]);
 
   async function handleSubmit() {
     setSubmitError(null);
@@ -784,54 +764,22 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
 
         {step === 6 && (
           <div className="ob-pay">
-            {quote === null ? (
-              <div className="ob-pay-loading">Working out what you'll pay…</div>
-            ) : (
+            {checkoutError ? (
               <>
-                <div className="ob-pay-receipt">
-                  {quote.lines.map((l: any) => (
-                    <div className="ob-pay-row" key={l.key}>
-                      <div className="ob-pay-what">
-                        <b>{l.label}</b>
-                        {l.note && <span>{l.note}</span>}
-                      </div>
-                      <div className="ob-pay-qty">{l.quantity > 1 ? `${l.quantity} × ${money(l.unitCents)}` : money(l.unitCents)}</div>
-                      <div className="ob-pay-amt">{money(l.totalCents)}</div>
-                    </div>
-                  ))}
-                  <div className="ob-pay-total">
-                    <div className="ob-pay-what"><b>Every month</b></div>
-                    <div className="ob-pay-amt">{money(quote.monthlyTotalCents)}</div>
-                  </div>
-                </div>
-
-                <div className="ob-pay-note">
-                  <span aria-hidden>🔒</span>
-                  <p><b>Your card stays on file.</b> That&apos;s how the monthly bill is paid — there&apos;s
-                  nothing to switch on and nothing to remember each month. Your card details go
-                  straight to our payment provider; they never touch our servers.</p>
-                </div>
-
-                {payError && <div className="ob-error">{payError}</div>}
-
-                {payConfig?.ifieldsKey ? (
-                  <CardknoxIFieldsForm
-                    ifieldsKey={payConfig.ifieldsKey}
-                    variant="customer"
-                    fieldTheme="light"
-                    showBillingAddress={false}
-                    showEmail={false}
-                    submitLabel={`Pay ${money(quote.monthlyTotalCents)} and build my phone system`}
-                    busyLabel="Taking payment…"
-                    onSubmitCardToken={handlePay}
-                  />
-                ) : (
-                  <div className="ob-warn">
-                    Card payments aren&apos;t available right now. Please contact us and we&apos;ll finish
-                    setting you up.
-                  </div>
-                )}
+                <div className="ob-error">{checkoutError}</div>
+                <button className="ob-btn-next" onClick={() => void startCheckout()}>
+                  Try again
+                </button>
               </>
+            ) : (
+              <div className="ob-pay-loading">
+                Preparing your secure checkout…
+                <p className="ob-pay-handoff">
+                  You&apos;ll pay on our standard checkout page, and your card stays on file — that&apos;s how the
+                  monthly bill is paid. Card details go straight to the payment provider; they never touch our
+                  servers.
+                </p>
+              </div>
             )}
           </div>
         )}
@@ -848,9 +796,8 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               {submitting ? "Saving…" : "Continue to payment"}{!submitting && <IconArrowRight />}
             </button>
           ) : (
-            /* The payment step submits through the card form itself, so the
-               footer carries no button — a second "pay" control would be a
-               second way to charge someone. */
+            /* The payment step hands off to the real checkout page on its
+               own, so the footer carries no button. */
             <div />
           )}
         </div>
