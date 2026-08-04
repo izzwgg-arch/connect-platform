@@ -530,6 +530,65 @@ Takes effect on the next call; no reload needed. The context can stay (inert).
    where the battery win lives.
 6. Then tenant-by-tenant rollout, each with before/after evidence.
 
+## Phase 4 RESULTS — measured 2026-08-03 over the day of 2026-08-02
+
+Full write-up: **`AGENT_HANDOFF_FILTERED_INTERNET_2026-08-03.md`**. This closes Phase 4
+step 4 ("Simon runs on it several days; watch registration history and CDRs").
+
+### The wake half is PROVEN. Close it.
+
+| Metric | Before (the complaint) | Measured 2026-08-02 |
+|---|---|---|
+| Wake push → device ready | **28 s** (`wake_register_slow:28419ms`) | **0.9 s / 2.0 s / 0.2 s** |
+| Endpoint registered when the call arrived | routinely no | **yes, all five calls** |
+
+The hold-the-call loop **never had to engage** — the endpoint was already REGISTERED at
+every call. On the 17:27 call the wake push still earned its place: the device reported
+`sipStackHealthy: false, previousRegState: "registering"` and the push forced a stack
+restart that recovered in ~2 s.
+
+§5 dependency 2 ("wake-to-register must fit in the window") is **satisfied**. §0b's timing
+budget is obsolete — the gap the loop was built to cover no longer exists.
+
+### ⛔ The premise of §0c was wrong in an important way
+
+This plan assumed the enemy was a **stale contact on a sleeping device**. On the measured
+day the enemy was the **transport**: 128 of 129 register sessions came through a
+content-filtering proxy (Cologuard `192.157.80.0/20`) rotating across six addresses.
+Exactly one session went direct over his real ISP.
+
+Consequences for this document:
+
+- **§0c "Why him specifically" (two devices on one AOR) is not the main driver.** The
+  churn is the proxy rotating egress, not device sleep.
+- **§3.3 `max_contacts` 5→3 stays correctly un-applied.** It would not touch this.
+- **Phase 2.3 (deregister on background, the 3CX model) should NOT ship on this evidence.**
+  It is designed for a device that sleeps cleanly. Against a rotating proxy it would add
+  deregistrations to a connection that is already being cut for it.
+- **Phase 5's "US relay server" and the Kamailio item are no longer just audio-quality
+  work** — serving **WSS on 443 + TURN over TCP 443** is now the load-bearing reliability
+  fix, because filtered internet is the norm across the user base, not this one customer.
+
+### Reading the registration history — do this before alarming anyone
+
+129 sessions / 74.5% uptime sounds catastrophic and mostly isn't:
+
+- **80 of 128 gaps were under 5 seconds** — lease renewal, invisible to callers.
+- 55 sessions sat at a clean **~840 s (14 min) metronome**. A fixed interval is a timer.
+- Only **33 gaps were ≥30 s**. Excluding a 3.4 h **app-update** window (he returned on
+  `1.0.0+20260801-231353`), that is **~2 h genuinely unreachable, in clusters**.
+
+### What still blocks "answered on the app"
+
+Zero of the day's calls were answered on the phone, and the wake path is no longer why:
+`UI_SHOWN` landed **3.75 s** after the invite on the one call we can see it, and was
+**absent entirely** on the call that rang a full 30 s cycle. A ring the user is never shown
+is indistinguishable from a ring ignored. Plus a `ANSWER_TAPPED {action: DECLINE}` recorded
+**241 ms** after the screen appeared, which no human produces.
+
+**Do not roll this plan out to another tenant on "it worked for Simon" grounds** — it
+demonstrably fixed the wake, and the extension still answered nothing.
+
 ## Phase 5 — bigger projects (not this week, decide separately)
 
 | Project | Why it matters |

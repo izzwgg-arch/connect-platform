@@ -1,5 +1,33 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — filtered internet + reading registration data (2026-08-03) — READ FIRST for any "phone drops / didn't ring" report
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FILTERED_INTERNET_2026-08-03.md`**
+
+- ⛔ **Content-filtering internet is the NORM across Connect's user base** (confirmed by
+  Izzy 2026-08-03), not an edge case. Assume a filter is in the path until disproven.
+- **The one command that settles it:** take the device's contact IP from
+  `PbxEndpointRegistrationEvent.contactUri` and **`whois` it**. Datacenter/colo block =
+  filtering proxy. Residential ISP = their line. Cellular carrier = genuinely moving.
+  Luxure ext 101 on 2026-08-02: **128 of 129 registrations came through one filter**
+  (Cologuard `192.157.80.0/20`, Old Bridge NJ) rotating across six addresses; exactly
+  **one** went direct over his real ISP. "Unstable Wi-Fi" and "the tablet leaves the
+  house" were both concluded — and both wrong — before the whois was run.
+- ⛔ **Never report a raw reconnect count as instability. Split it first.** 80 of 128
+  reconnects were **under 5 seconds** (lease renewal, invisible to callers); only 33 were
+  ≥30 s. 55 sessions sat at a clean **~840 s / 14-minute metronome — a fixed interval is a
+  timer, not weather.** Real outages arrive in *clusters* (proxy); a moving device gives
+  isolated single drops.
+- **The wake-and-wait work (`PLAN_PUSH_AND_WAIT_SIMON.md` Phase 3) is CONFIRMED WORKING** —
+  wake→ready measured **0.9 s / 2.0 s / 0.2 s** vs the original 28 s, and the endpoint was
+  already REGISTERED at all five calls. **The transport is the bottleneck now, not the wake.**
+- Top open items: **WSS/TURN on port 443** (`webrtcRouteViaSbc`) is the platform fix and
+  the highest-leverage item; a **241 ms `ANSWER_TAPPED {DECLINE}`** that no human could
+  produce; `UI_SHOWN` **3.75 s** after the invite (and absent entirely on another call);
+  **outbound app calls produce no `ConnectCdr` row**; voicemail ingest wrote nothing Aug 1–3.
+- ⛔ Ext 104 dials Simon's cell but **nothing routes to it — that is deliberate, per Izzy.
+  Do not add it to a ring group.**
+
 ## AGENT HANDOFF — Voicemail greeting upload + Call-to-Record (2026-08-04) — READ FIRST for greeting work
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_VM_GREETING_2026-08-04.md`**.
