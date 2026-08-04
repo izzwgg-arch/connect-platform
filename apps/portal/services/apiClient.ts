@@ -61,6 +61,17 @@ function browserToken(): string {
   );
 }
 
+/**
+ * Whether this browser is signed in at all. Background engines (SIP phone,
+ * telephony polling) must check this BEFORE calling authenticated endpoints:
+ * on public pages (sign-up wizard, pay page, login) every such call is a
+ * guaranteed 401 — and enough of those in 5 minutes trips the nginx auto-ban,
+ * which locked a real customer out of the wizard mid-sign-up (2026-08-04).
+ */
+export function hasBrowserAuthToken(): boolean {
+  return !!browserToken();
+}
+
 export function browserTenantContext(): string {
   if (typeof window === "undefined") return "";
   const scope = localStorage.getItem("cc-admin-scope") || "TENANT";

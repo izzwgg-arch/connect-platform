@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { apiGet, apiPost, ApiError } from "../services/apiClient";
+import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
 import { splitRingGroupPrefix } from "../lib/ringGroupPrefix";
 import { useTelephonyAudio } from "./useTelephonyAudio";
 import { useTelephonySocket } from "./useTelephonySocket";
@@ -1455,8 +1455,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
+    // 401 retry backoff: starts at the historical 2.5s (auth-token startup
+    // race) but doubles up to a minute — the fixed 2.5s loop turned any tab
+    // with a dead token into a 401 firehose that tripped the nginx auto-ban.
+    let authRetryDelayMs = 2_500;
 
     async function init() {
+      // Signed out (public wizard, pay page, login screen): the phone engine
+      // has nobody to register. Do not call authenticated endpoints at all —
+      // those guaranteed 401s are what got a customer's office IP auto-banned
+      // mid-sign-up. A login navigates/reloads, which re-runs this effect.
+      if (!hasBrowserAuthToken()) return;
+
       // Off-screen audio element for remote media — display:none can block playback
       // in some browsers, so we keep it in the layout but invisible.
       if (!audioRef.current) {
@@ -1485,13 +1495,16 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         ext = await apiGet<VoiceExtension>("/voice/me/extension");
       } catch (e: unknown) {
         if (cancelled) return;
-        // 401 means the auth token wasn't ready yet (race condition on startup).
-        // Retry silently after a short delay instead of surfacing an error.
+        // 401 means the auth token wasn't ready yet (race condition on startup)
+        // — or is dead. Retry silently, but back off: a fixed short loop here
+        // once produced 401s every 2.5s from parked tabs, tripping the ban.
         if (e instanceof ApiError && e.status === 401) {
+          const delay = authRetryDelayMs;
+          authRetryDelayMs = Math.min(60_000, authRetryDelayMs * 2);
           setTimeout(() => {
             if (cancelled) return;
             try { init(); } catch { /* ignore */ }
-          }, 2_500);
+          }, delay);
           return;
         }
         const fromBody =
