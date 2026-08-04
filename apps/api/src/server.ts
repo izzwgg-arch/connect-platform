@@ -261,6 +261,7 @@ import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEn
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
+import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler } from "./didSwitchSchedule";
 import {
   publishTenantMohReverseMap,
   type TenantMohEnforcementEvidence,
@@ -23133,6 +23134,26 @@ async function readTeamDirectory(
   }
 }
 
+// ═══ Number ↔ menu scheduling ═════════════════════════════════
+// Which DID rings which menu, switched now or on a booked date. The scheduler
+// drives the SAME switch-to-connect / switch-to-pbx routes an admin clicks —
+// one code path for manual and scheduled flips. See didSwitchSchedule.ts.
+const didSwitchDeps = {
+  app,
+  db,
+  requirePublisher: (req: any, reply: any) => requireRoleOrPortalPermission(req, reply, canPublishDidRouting, "can_publish_ivr_routing"),
+  requireManager: (req: any, reply: any) => requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing"),
+  assertIvrTenantAccess,
+  resolveConnectTenantIdFromScope,
+  sendAdminAlert,
+  getTenantSlug: (tenantId: string) => getIvrSlugForTenant(tenantId),
+  publishAstDbKeys: (tenantSlug: string, keys: Array<{ family: string; key: string; value: string }>) =>
+    publishToAstDb(tenantSlug, keys),
+};
+registerDidSwitchScheduleRoutes(didSwitchDeps);
+const didSwitchSchedulerTimer = registerShutdownTimer(startDidSwitchScheduler(didSwitchDeps));
+void didSwitchSchedulerTimer;
+
 registerTeamRoutes({
   app,
   db,
@@ -24236,7 +24257,7 @@ app.delete("/voice/did/mappings/:id", async (req, reply) => {
 // and (if PBX_INBOUND_API is enabled AND a pbxInstance is linked) upserts the
 // VitalPBX inbound route so the DID enters the shared custom destination.
 app.post("/voice/did/publish", async (req, reply) => {
-  const user = await requirePermission(req, reply, canPublishDidRouting);
+  const user = await requireRoleOrPortalPermission(req, reply, canPublishDidRouting, "can_publish_ivr_routing");
   if (!user) return;
   const body = z.object({ mappingId: z.string().min(1) }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
@@ -24662,7 +24683,7 @@ app.get("/voice/did/:id/inspect", async (req, reply) => {
 // didmap AstDB keys, and PATCHes the VitalPBX inbound_number so the DID now
 // enters `[connect-tenant-ivr]` with TENANT_SLUG preset.
 app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
-  const user = await requirePermission(req, reply, canPublishDidRouting);
+  const user = await requireRoleOrPortalPermission(req, reply, canPublishDidRouting, "can_publish_ivr_routing");
   if (!user) return;
   const { id } = req.params as { id: string };
 
@@ -24915,7 +24936,7 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
 // Connect took over. Accepts an optional override body for the rare case
 // where the stored snapshot is stale (e.g. PBX was reinstalled).
 app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
-  const user = await requirePermission(req, reply, canPublishDidRouting);
+  const user = await requireRoleOrPortalPermission(req, reply, canPublishDidRouting, "can_publish_ivr_routing");
   if (!user) return;
   const { id } = req.params as { id: string };
 

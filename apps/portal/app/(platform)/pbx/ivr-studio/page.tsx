@@ -38,6 +38,7 @@ import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
 import { FirstRunSetup, type FirstRunAnswers } from "./FirstRunSetup";
 import { MakeRecording } from "./MakeRecording";
 import { MakeTeam } from "./MakeTeam";
+import { NumberStep, fmtUs, type TenantNumber, type NumberPlan, type AnnouncementPlan } from "./NumberStep";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
 
 interface RouteProfile {
@@ -100,6 +101,7 @@ const UI_PHRASES = [
   "No phone menu yet", "Create my first menu", "What happens on a call",
   "Read it top to bottom — this is exactly what a caller goes through",
   "Someone calls in", "They hear your greeting", "Play", "Change", "Add another key",
+  "Change number", "Switches over", "ends", "Cancel switch", "Publish and switch",
   "Explain it to me", "The whole call, in plain words", "Read it", "Hide",
   "Recordings", "Opening hours", "Time zone", "Save hours", "Closed all day",
   "While you're open", "When you're closed", "Choose a menu…", "Not saved yet",
@@ -166,6 +168,13 @@ export default function IvrStudioPage() {
   const [makeRecOpen, setMakeRecOpen] = useState(false);
   /** Create a ring group or a waiting line - see MakeTeam.tsx. */
   const [makeTeamOpen, setMakeTeamOpen] = useState(false);
+  /** Which number rings this menu + when it switches — see NumberStep.tsx. */
+  const [numberStepOpen, setNumberStepOpen] = useState(false);
+  const [tenantNumbers, setTenantNumbers] = useState<TenantNumber[]>([]);
+  const [numbersError, setNumbersError] = useState<string | null>(null);
+  /** Held until Publish when the switch is "now"; a dated switch is booked at
+   *  save time and shown as a banner. */
+  const [numberPlan, setNumberPlan] = useState<NumberPlan | null>(null);
   const deepLinkProfile = search?.get("menu");
 
   const active = useMemo(() => profiles.find((p) => p.id === activeId) ?? null, [profiles, activeId]);
@@ -277,6 +286,10 @@ export default function IvrStudioPage() {
 
       const chosen = deepLinkProfile && list.some((x) => x.id === deepLinkProfile) ? deepLinkProfile : null;
       setActiveId((cur) => chosen ?? (cur && list.some((x) => x.id === cur) ? cur : (list.find((x) => x.isActive)?.id ?? list[0]?.id ?? null)));
+
+      const nums = await safe<{ numbers: TenantNumber[] }>(`/voice/ivr/numbers${qs}`);
+      setTenantNumbers(nums?.numbers ?? []);
+      setNumbersError(nums ? null : "Couldn't read your numbers just now.");
 
       const mappings = dm?.mappings || [];
       const profIds = new Set(list.map((x) => x.id));
@@ -496,11 +509,88 @@ export default function IvrStudioPage() {
     } finally { setFirstRunBusy(false); }
   }
 
+  /**
+   * The modal saved. A dated switch is BOOKED immediately (the scheduler keeps
+   * the promise even if this browser tab never comes back); a "now" switch
+   * waits for Publish, which is the moment routing is allowed to change. The
+   * announcement is booked immediately either way — it isn't routing.
+   */
+  async function saveNumberChoice(plan: NumberPlan | null, announcement: AnnouncementPlan | null) {
+    setNumberStepOpen(false);
+    try {
+      if (announcement) {
+        await apiPost(`/voice/ivr/announcement${qs}`, {
+          tenantId,
+          promptRef: announcement.promptRef,
+          startAt: announcement.startAt,
+          endAt: announcement.endAt,
+        });
+        flash(announcement.startAt === "now" ? "Announcement is on." : "Announcement booked.");
+      }
+      if (!plan) {
+        setNumberPlan(null);
+        // Un-point every number that aims at this menu. Draft only — a number
+        // already LIVE on Connect keeps ringing until someone publishes or
+        // switches it elsewhere; silently going dark is never the right move.
+        if (active) {
+          const pointing = tenantNumbers.filter((n) => n.ivrProfileId === active.id);
+          for (const n of pointing) {
+            await apiPost(`/voice/ivr/numbers/${encodeURIComponent(n.mappingId)}/assign${qs}`, { profileId: null }).catch(() => null);
+          }
+        }
+        await loadAll();
+        return;
+      }
+      if (plan.when === "now") {
+        // Assign as a draft now; the flip itself belongs to Publish.
+        await apiPost(`/voice/ivr/numbers/${encodeURIComponent(plan.mappingId)}/assign${qs}`, { profileId: active?.id ?? null });
+        setNumberPlan(plan);
+        flash(`${fmtUs(plan.e164)} will switch to this menu when you publish.`);
+      } else {
+        await apiPost(`/voice/ivr/numbers/${encodeURIComponent(plan.mappingId)}/schedule${qs}`, {
+          profileId: active?.id,
+          activateAt: plan.when,
+          endAt: plan.endAt,
+        });
+        setNumberPlan(null);
+        flash(`${fmtUs(plan.e164)} is booked to switch to this menu.`);
+      }
+      await loadAll();
+    } catch (e: any) {
+      setError(e?.payload?.message || e?.message || "Couldn't save that.");
+    }
+  }
+
+  async function cancelPendingSwitch(scheduleId: string) {
+    try {
+      await apiPost(`/voice/ivr/numbers/schedule/${encodeURIComponent(scheduleId)}/cancel${qs}`, {});
+      flash("Booked switch canceled.");
+      await loadAll();
+    } catch (e: any) {
+      setError(e?.payload?.message || e?.message || "Couldn't cancel that.");
+    }
+  }
+
   async function publish() {
     if (!active) return;
     setSaving(true);
     try {
       await apiPost(`/voice/ivr/publish${qs}`, { tenantId, profileId: active.id });
+      // The held "switch right now" plan executes here — Publish is the one
+      // moment routing is allowed to change, so this is where the inbound
+      // route flips to the menu's custom context.
+      if (numberPlan && numberPlan.when === "now") {
+        try {
+          await apiPost(`/voice/did/${encodeURIComponent(numberPlan.mappingId)}/switch-to-connect${qs}`, {});
+          setNumberPlan(null);
+          flash(`Published — ${fmtUs(numberPlan.e164)} now rings this menu.`);
+        } catch (e: any) {
+          setError(e?.payload?.detail || e?.payload?.message || e?.message ||
+            "The menu is published, but the number couldn't be switched. Nothing changed for callers — try the switch again.");
+        }
+        await loadAll();
+        return;
+      }
       setDirty(false); flash("Published — this is what callers hear from now on");
     } catch (e: any) {
       setError(e?.payload?.detail || e?.message || "Couldn't publish");
@@ -521,7 +611,9 @@ export default function IvrStudioPage() {
         {dirty && <span className="pill warn"><i />{t("Not published yet")}</span>}
         <LanguageToggle />
         <button className="btn primary" disabled={!canPublish || saving || !active} onClick={publish}>
-          {t("Publish")}
+          {numberPlan && numberPlan.when === "now"
+            ? `${t("Publish and switch")} ${fmtUs(numberPlan.e164)}`
+            : t("Publish")}
         </button>
       </div>
 
@@ -571,9 +663,52 @@ export default function IvrStudioPage() {
               </div>
               <div className="card-b">
                 <div className="flow">
-                  <Step glyph="☎️" muted
-                    title={dids.length ? `Someone calls ${dids.join(" or ")}` : "Someone calls in"}
-                    sub={dids.length ? "Your phone number" : "No number points at this menu yet"} />
+                  {(() => {
+                    const mine = tenantNumbers.filter((n) => n.ivrProfileId === active.id && n.routingMode === "connect");
+                    const booked = tenantNumbers.find((n) => n.pendingSwitch?.ivrProfileId === active.id);
+                    const title = numberPlan
+                      ? `Someone calls ${fmtUs(numberPlan.e164)}`
+                      : mine.length
+                        ? `Someone calls ${mine.map((n) => fmtUs(n.e164)).join(" or ")}`
+                        : booked
+                          ? `Someone calls ${fmtUs(booked.e164)}`
+                          : "Someone calls in";
+                    const sub = numberPlan
+                      ? "Switches to this menu when you publish"
+                      : mine.length
+                        ? "Your phone number"
+                        : booked
+                          ? "Booked to switch to this menu"
+                          : "No phone number — reached from another menu";
+                    return (
+                      <>
+                        <Step glyph="☎️"
+                          title={title}
+                          sub={numbersError ?? sub}
+                          actions={
+                            <button className="btn sm" disabled={!canManage} onClick={() => setNumberStepOpen(true)}>
+                              {t("Change number")}
+                            </button>
+                          } />
+                        {booked?.pendingSwitch && (
+                          <div className="switchbanner">
+                            <span aria-hidden>⏰</span>
+                            <span className="sb-txt">
+                              {t("Switches over")} {new Date(booked.pendingSwitch.activateAt).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                              {booked.pendingSwitch.endAt
+                                ? ` · ${t("ends")} ${new Date(booked.pendingSwitch.endAt).toLocaleDateString([], { month: "short", day: "numeric" })}`
+                                : ""}
+                            </span>
+                            {canPublish && (
+                              <button className="btn sm" onClick={() => cancelPendingSwitch(booked.pendingSwitch!.id)}>
+                                {t("Cancel switch")}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
 
                   <Step glyph="♪"
                     title={greetingRow ? `They hear “${greetingRow.displayName}”` : "They hear your greeting"}
@@ -800,6 +935,18 @@ export default function IvrStudioPage() {
           busy={saving}
           onCancel={() => setNamingFor(null)}
           onSubmit={(name, type) => namingFor.mode === "rename" ? renameMenu(name) : createMenu(name, type, namingFor.forDigit)}
+        />
+      )}
+
+      {numberStepOpen && active && (
+        <NumberStep
+          numbers={tenantNumbers}
+          loading={loading}
+          loadError={numbersError}
+          currentProfileId={active.id}
+          recordings={prompts.map((r) => ({ promptRef: r.promptRef, displayName: r.displayName }))}
+          onSave={saveNumberChoice}
+          onClose={() => setNumberStepOpen(false)}
         />
       )}
 
@@ -1280,6 +1427,11 @@ function StudioStyles() {
       .ivrs .recrow .nm{flex:1;font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .ivrs .recrow .cur{font-size:11.5px;color:var(--faint)}
       .ivrs .dimtxt{color:var(--dim);font-size:12.5px}
+      .ivrs .switchbanner{display:flex;align-items:center;gap:9px;margin:6px 0 0 46px;padding:8px 12px;
+        border-radius:10px;font-size:12.5px;color:#8a6a12;background:rgba(239,159,39,.12);
+        border:1px solid rgba(239,159,39,.35)}
+      :root[data-theme="dark"] .ivrs .switchbanner{color:#fac775;background:rgba(239,159,39,.12);border-color:rgba(239,159,39,.4)}
+      .ivrs .switchbanner .sb-txt{flex:1}
       .ivrs .linkbtn{background:none;border:none;font:inherit;font-size:12.5px;font-weight:640;
         color:var(--ac);text-decoration:underline;cursor:pointer;padding:0}
       /* hours */
