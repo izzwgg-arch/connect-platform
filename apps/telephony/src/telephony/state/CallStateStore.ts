@@ -1109,6 +1109,10 @@ export class CallStateStore extends EventEmitter {
     // Asterisk may send linkedid that doesn't match our canonical call (e.g. after merge),
     // so lookup by linkedId can miss; channelIndex always points at the call we have for this channel.
     const callIdByChannel = this.channelIndex.get(params.uniqueid);
+    // The name the store recorded for this uniqueid — may differ from the
+    // Hangup event's channel string when Asterisk renamed the channel
+    // (masquerade / <ZOMBIE> suffix). Read BEFORE deleting the mapping.
+    const recordedChannelName = this.channelByUniqueId.get(params.uniqueid);
     this.channelIndex.delete(params.uniqueid);
     this.channelByUniqueId.delete(params.uniqueid);
 
@@ -1118,7 +1122,27 @@ export class CallStateStore extends EventEmitter {
     }
     if (!call) return;
 
-    call.channels = call.channels.filter((ch) => ch !== params.channel);
+    // Remove by BOTH names: the event's channel string and whatever name the
+    // store recorded for this uniqueid. Exact-name-only matching left renamed
+    // channels in the list forever — the call never emptied, never went
+    // hungup, and sat "stuck" on Active Calls until the 60s sweeper.
+    call.channels = call.channels.filter(
+      (ch) => ch !== params.channel && (recordedChannelName === undefined || ch !== recordedChannelName),
+    );
+
+    // A call with no live channel in the index is OVER, no matter what
+    // stale strings remain in call.channels (renames, missed events). This is
+    // the exact-second hangup invariant: the last real channel's Hangup ends
+    // the call NOW, not at the next cleanup sweep.
+    if (call.channels.length > 0 && !this.hasLiveChannelIndex(call.id)) {
+      if (env.ENABLE_TELEPHONY_DEBUG) {
+        log.debug(
+          { callId: call.id, staleChannels: call.channels },
+          "live_call: no_live_channel_invariant_forced_hangup",
+        );
+      }
+      call.channels = [];
+    }
 
     // Only mark call ended when all channels are gone
     if (call.channels.length === 0) {
@@ -1279,6 +1303,13 @@ export class CallStateStore extends EventEmitter {
             "[TENANT_CORRECTED] call=%s was=%s now=%s marker=%s dcontext=%s",
             call.linkedId, call.tenantId, authoritative, pbxTenantCode, params.dcontext ?? "",
           );
+          // ISOLATION: while mislabelled, this call was broadcast to the WRONG
+          // tenant's screens. callRemove goes to ALL clients, so emitting it
+          // here clears the row from the wrong tenant the second the marker
+          // corrects it; the callUpsert at the end of this method re-adds it
+          // for the right tenant only. Without this, the wrong company watched
+          // someone else's call sit on their Active Calls for its whole life.
+          this.emit("callRemove", call.id);
         }
         call.tenantId = authoritative;
       }
@@ -1914,36 +1945,56 @@ export class CallStateStore extends EventEmitter {
   }
 
   /**
-   * ARI bridges are the PBX's live-time truth for connected calls. AMI can miss
-   * a Hangup/BridgeLeave edge and leave a bridged call in `up`, which makes BLF
-   * stay red after the real PBX bridge is gone. Evict only calls that already
-   * had bridgeIds; ringing/unbridged calls remain AMI-driven.
+   * Zombie reconciliation against the RAW ARI channel list — the unfilterable
+   * liveness truth. AMI can miss a Hangup edge and leave a call stuck in `up`;
+   * this catches those within ~2 polls so Active Calls and BLF clear fast.
    *
-   * HARDENED 2026-08-04: the poll snapshot can be stale (taken before several
-   * awaits inside the poller tick), and `computeBridgedActiveCalls` can exclude
-   * a REAL bridge mid-formation. Eviction now requires the bridge to be absent
-   * from two consecutive polls AND the call's newest bridge to be older than
-   * the grace window. A wrongly-evicted live call loses its CDR forever once it
-   * outlives the retention window — 71 calls were erased this way on Aug 4 alone.
+   * REWRITTEN 2026-08-04 (was reconcileActiveBridges): membership in the
+   * QUALIFYING-bridge list is the wrong liveness signal — a queue/ring-group
+   * call is two half-bridges (trunk↔Local, Local↔agent), each with one
+   * non-Local leg, so `computeBridgedActiveCalls` excludes BOTH by design and
+   * the old reconciler force-evicted the live call (265 evictions on Aug 3; a
+   * Gesheft call was killed 40s into a talk even with strikes+grace). A call is
+   * dead only when NONE of its channels exist in ARI's raw /channels snapshot —
+   * Local helpers included, no qualifying rules.
+   *
+   * Kept guards: two consecutive absent polls, plus a young-call/young-bridge
+   * grace window (a channel created moments before the snapshot round-trip may
+   * legitimately be missing from it).
    */
   private reconcileAbsentStrikes = new Map<string, number>();
 
-  reconcileActiveBridges(activeBridgeIds: Iterable<string>): void {
-    const active = new Set(activeBridgeIds);
+  reconcileLiveChannels(rawChannelIds: Iterable<string>): void {
+    const live = new Set(rawChannelIds);
     const seenThisRound = new Set<string>();
+    const now = Date.now();
+
+    // uniqueids per call, from the index (the store's own liveness bookkeeping).
+    const uidsByCall = new Map<string, string[]>();
+    for (const [uid, cid] of this.channelIndex) {
+      const arr = uidsByCall.get(cid);
+      if (arr) arr.push(uid);
+      else uidsByCall.set(cid, [uid]);
+    }
+
     for (const call of this.getActive()) {
-      if (call.bridgeIds.length === 0) continue;
       seenThisRound.add(call.id);
-      if (call.bridgeIds.some((bridgeId) => active.has(bridgeId))) {
+
+      const uids = uidsByCall.get(call.id) ?? [];
+      if (uids.some((uid) => live.has(uid))) {
         this.reconcileAbsentStrikes.delete(call.id);
         continue;
       }
+
+      const startedMs = new Date(call.startedAt).getTime();
+      const callAgeOk = !isNaN(startedMs) && now - startedMs >= RECONCILE_BRIDGE_GRACE_MS;
       const lastBridgeEnterAtMs = Number(call.metadata["lastBridgeEnterAtMs"] ?? 0);
-      if (lastBridgeEnterAtMs && Date.now() - lastBridgeEnterAtMs < RECONCILE_BRIDGE_GRACE_MS) {
-        // Bridge formed moments ago — almost certainly newer than the snapshot.
+      const bridgeAgeOk = !lastBridgeEnterAtMs || now - lastBridgeEnterAtMs >= RECONCILE_BRIDGE_GRACE_MS;
+      if (!callAgeOk || !bridgeAgeOk) {
         this.reconcileAbsentStrikes.delete(call.id);
         continue;
       }
+
       const strikes = (this.reconcileAbsentStrikes.get(call.id) ?? 0) + 1;
       if (strikes < RECONCILE_ABSENT_STRIKES_REQUIRED) {
         this.reconcileAbsentStrikes.set(call.id, strikes);
@@ -1952,7 +2003,7 @@ export class CallStateStore extends EventEmitter {
       this.reconcileAbsentStrikes.delete(call.id);
       this.forceEvictZombie(
         call.id,
-        `ari_bridge_absent bridgeIds=${call.bridgeIds.join(",")} strikes=${strikes}`,
+        `ari_no_live_channel uids=${uids.join(",") || "(none)"} strikes=${strikes}`,
       );
     }
     // Drop strike entries for calls that left the store between polls.

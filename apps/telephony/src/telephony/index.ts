@@ -96,7 +96,10 @@ export function createTelephonyModule(server: http.Server) {
   });
   ariBridgedPoller.on("update", (result) => {
     if (!ari._isConnected) return;
-    callStore.reconcileActiveBridges(result.bridges.map((bridge) => bridge.bridgeId));
+    // Liveness truth = RAW channel ids, never the qualifying-bridge list (which
+    // excludes queue/ring-group half-bridges by design and used to get live
+    // calls force-evicted). See CallStateStore.reconcileLiveChannels.
+    callStore.reconcileLiveChannels(result.rawChannelIds);
   });
   const healthService = new HealthService(ami, ari, callStore, extStore, queueStore, ariBridgedPoller);
 
@@ -172,20 +175,21 @@ export function createTelephonyModule(server: http.Server) {
     healthService,
     tenantAliasMatcher,
     () => {
-      const ariCalls = ariBridgedPoller.getCallsForSnapshot();
-      if (ariCalls.length === 0) return callStore.getActive();
-      // Reconcile each ARI bridge row to the AMI call that owns its bridge so the
-      // initial snapshot shares ONE id namespace with the live upsert/remove
-      // deltas. Without this the snapshot ships `bridge:<id>` while AMI removes by
-      // `linkedId`, so a hung-up call the client received at page-load never gets
-      // cleared (and can show duplicated). See CallStateStore.getCallIdByBridgeId.
-      return ariCalls.map((c) => {
-        for (const bridgeId of c.bridgeIds) {
-          const amiCallId = callStore.getCallIdByBridgeId(bridgeId);
-          if (amiCallId) return { ...c, id: amiCallId };
-        }
-        return c;
-      });
+      // UNION of both sources (2026-08-04; was either/or, which dropped every
+      // AMI-tracked call the moment ARI had ONE qualifying bridge — queue and
+      // ring-group calls never qualify, so a portal opened mid-queue-call
+      // showed nothing until the next AMI event):
+      //   1. The AMI store: rich rows (tenant, direction, ringing state) for
+      //      every tracked call — this is the primary source.
+      //   2. ARI qualifying bridges NOT owned by any tracked call: covers
+      //      calls AMI never saw (event gap during reconnect), shipped under
+      //      their `bridge:<id>` namespace so the poller's bridge-diff remove
+      //      can clear them.
+      const storeCalls = callStore.getActive();
+      const ariOnly = ariBridgedPoller
+        .getCallsForSnapshot()
+        .filter((c) => !c.bridgeIds.some((bridgeId) => callStore.getCallIdByBridgeId(bridgeId)));
+      return [...storeCalls, ...ariOnly];
     },
   );
   const userExtensionsUrl = env.CDR_INGEST_URL
@@ -240,7 +244,7 @@ export function createTelephonyModule(server: http.Server) {
 
   // Safety net for calls AMI never tracked (e.g. during an AMI reconnect gap):
   // such calls reach the client only via the ARI snapshot under a `bridge:<id>`
-  // id, so AMI Hangup/reconcileActiveBridges (which key off linkedId) can never
+  // id, so AMI Hangup/reconcileLiveChannels (which key off linkedId) can never
   // clear them. Diff the ARI bridge set between polls and broadcast an explicit
   // remove for any `bridge:<id>` that disappeared so the portal/mobile list stays
   // exactly in sync with ARI. This is NOT a periodic full-snapshot replacement

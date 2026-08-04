@@ -204,6 +204,7 @@ export class AriBridgedActivePoller extends EventEmitter {
         this.emit("update", {
           activeCalls: 0,
           bridges: [],
+          rawChannelIds: [],
           debug: {
             totalChannels: 0,
             totalBridges: 0,
@@ -246,6 +247,13 @@ export class AriBridgedActivePoller extends EventEmitter {
       for (const b of result.bridges) {
         if (!this.firstSeenAt.has(b.bridgeId)) this.firstSeenAt.set(b.bridgeId, now);
       }
+
+      // Emit BEFORE the channel-variable fetches / endpoint counts below: those
+      // add HTTP round-trips between the snapshot and its consumers, and the
+      // zombie reconciler compares live state against this snapshot — every ms
+      // of staleness widens the window in which a just-created channel looks
+      // absent. (The fetches only enrich FUTURE getCallsForSnapshot reads.)
+      this.emit("update", result);
 
       // Fetch CALLERID(num) for extension channels (PJSIP/T{n}_) to get the inbound DID.
       // VitalPBX sets CALLERID(num) on the internal extension channel to the originally-dialed DID.
@@ -326,8 +334,6 @@ export class AriBridgedActivePoller extends EventEmitter {
           rawChannelCount: channels.length,
         });
       }
-
-      this.emit("update", result);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.warn({ err: msg }, "ari_bridged_active_poll_failed");

@@ -37,7 +37,7 @@ import type { NormalizedCall } from "../types";
 const OLD_BRIDGE_MS = Date.now() - 60_000;
 
 /** Boot a store holding one bridged, answered call. Returns store + live call ref. */
-function storeWithBridgedCall(opts?: { bridgeAgeMs?: number }) {
+function storeWithBridgedCall(opts?: { bridgeAgeMs?: number; fresh?: boolean }) {
   const store = new CallStateStore();
   const call = store.upsertFromNewchannel({
     linkedId: "1785860821.162724",
@@ -81,27 +81,32 @@ function storeWithBridgedCall(opts?: { bridgeAgeMs?: number }) {
   });
   // onBridgeEnter stamps "now"; tests that need an old bridge override it.
   call.metadata["lastBridgeEnterAtMs"] = opts?.bridgeAgeMs ?? OLD_BRIDGE_MS;
+  // Reconcile also has a young-CALL grace window; default the call to old so
+  // eviction tests exercise the strike logic, not the grace.
+  call.startedAt = opts?.fresh ? call.startedAt : new Date(OLD_BRIDGE_MS).toISOString();
   return { store, call };
 }
 
-test("reconcile: first absent poll is a strike, not an eviction", () => {
+const CALL_UIDS = ["1785860821.162724", "1785860840.162729"];
+
+test("reconcile: first channel-absent poll is a strike, not an eviction", () => {
   const { store } = storeWithBridgedCall();
   const evicted: NormalizedCall[] = [];
   store.on("callEvicted", (c) => evicted.push(c));
 
-  store.reconcileActiveBridges([]); // snapshot says: no bridges
+  store.reconcileLiveChannels([]); // ARI raw channel list says: nothing alive
 
   assert.equal(evicted.length, 0, "one stale snapshot must not kill a live call");
   assert.equal(store.getActive().length, 1);
 });
 
-test("reconcile: two consecutive absent polls evict — and the CDR is filed", () => {
+test("reconcile: two consecutive channel-absent polls evict — and the CDR is filed", () => {
   const { store } = storeWithBridgedCall();
   const evicted: NormalizedCall[] = [];
   store.on("callEvicted", (c) => evicted.push(c));
 
-  store.reconcileActiveBridges([]);
-  store.reconcileActiveBridges([]);
+  store.reconcileLiveChannels([]);
+  store.reconcileLiveChannels([]);
 
   assert.equal(evicted.length, 1, "second consecutive absence confirms the zombie");
   assert.equal(evicted[0]!.state, "hungup");
@@ -110,61 +115,103 @@ test("reconcile: two consecutive absent polls evict — and the CDR is filed", (
   assert.equal(store.getActive().length, 0);
 });
 
-test("reconcile: a bridge present in the poll resets the strike counter", () => {
+test("THE GESHEFT KILL: a live call whose bridges are all non-qualifying survives — raw channels are the truth", () => {
   const { store } = storeWithBridgedCall();
   const evicted: NormalizedCall[] = [];
   store.on("callEvicted", (c) => evicted.push(c));
 
-  store.reconcileActiveBridges([]);           // strike 1
-  store.reconcileActiveBridges(["bridge-1"]); // seen again — reset
-  store.reconcileActiveBridges([]);           // strike 1 again
+  // The old reconciler keyed off the QUALIFYING bridge list; a queue call's two
+  // half-bridges never qualify, so a connected call got force-evicted 40s into
+  // a talk. The raw channel list still contains the call's channels — that
+  // must keep it alive no matter what the bridge filter thinks.
+  for (let i = 0; i < 5; i++) {
+    store.reconcileLiveChannels(CALL_UIDS); // channels alive, zero qualifying bridges
+  }
+
+  assert.equal(evicted.length, 0, "a call with live channels must NEVER be evicted");
+  assert.equal(store.getActive().length, 1);
+});
+
+test("reconcile: a channel present in the poll resets the strike counter", () => {
+  const { store } = storeWithBridgedCall();
+  const evicted: NormalizedCall[] = [];
+  store.on("callEvicted", (c) => evicted.push(c));
+
+  store.reconcileLiveChannels([]);          // strike 1
+  store.reconcileLiveChannels(CALL_UIDS);   // seen again — reset
+  store.reconcileLiveChannels([]);          // strike 1 again
 
   assert.equal(evicted.length, 0);
   assert.equal(store.getActive().length, 1);
 });
 
-test("THE BUG: a freshly-bridged call survives stale snapshots (grace window)", () => {
-  const { store } = storeWithBridgedCall({ bridgeAgeMs: Date.now() }); // bridged just now
+test("THE BUG: a freshly-started call survives stale snapshots (grace window)", () => {
+  const { store } = storeWithBridgedCall({ bridgeAgeMs: Date.now(), fresh: true }); // bridged just now
   const evicted: NormalizedCall[] = [];
   store.on("callEvicted", (c) => evicted.push(c));
 
-  // The live incident: the poll snapshot predates the bridge, reconcile ran
-  // 0.8s after BridgeEnter and evicted a connected 5-minute call.
-  store.reconcileActiveBridges([]);
-  store.reconcileActiveBridges([]);
-  store.reconcileActiveBridges([]);
+  // The live incident: the poll snapshot predates the call's channels,
+  // reconcile ran 0.8s after BridgeEnter and evicted a connected 5-minute call.
+  store.reconcileLiveChannels([]);
+  store.reconcileLiveChannels([]);
+  store.reconcileLiveChannels([]);
 
-  assert.equal(evicted.length, 0, "grace window must protect a just-bridged call");
+  assert.equal(evicted.length, 0, "grace window must protect a just-started call");
   assert.equal(store.getActive().length, 1);
 });
 
-test("ghost cleanup (missed/renamed hangup) files the CDR", () => {
+test("EXACT-SECOND HANGUP: a renamed (masqueraded) channel cannot leave a stuck call", () => {
   const { store, call } = storeWithBridgedCall();
-  const evicted: NormalizedCall[] = [];
-  store.on("callEvicted", (c) => evicted.push(c));
+  const hungupUpserts: NormalizedCall[] = [];
+  store.on("callUpsert", (c) => { if (c.state === "hungup") hungupUpserts.push(c); });
 
-  // Masquerade scenario: Asterisk renamed the trunk channel, so its Hangup
-  // event's channel string doesn't match what the store recorded — the channel
-  // list never empties. The second leg hangs up normally. Result: no live
-  // channelIndex entries but a non-empty channel list = ghost.
+  // Asterisk renamed the trunk channel (<ZOMBIE> masquerade), so the Hangup
+  // event's channel string doesn't match what the store recorded. The old
+  // exact-name matching left the channel in the list forever — the call sat
+  // "stuck" on Active Calls until the 60s sweeper. Now the store resolves the
+  // recorded name by uniqueid, and the no-live-channel invariant ends the call
+  // the second its last real channel hangs up.
   store.onHangup({
     linkedId: "1785860821.162724",
     uniqueid: "1785860821.162724",
     channel: "PJSIP/344022_Comfortcont-00010f3b<ZOMBIE>",
     cause: "16",
   });
+  assert.equal(call.state, "up", "one leg still alive — call still up");
+
   store.onHangup({
     linkedId: "1785860821.162724",
     uniqueid: "1785860840.162729",
     channel: "PJSIP/0001-00010f3c",
     cause: "16",
   });
-  assert.equal(call.state, "up", "precondition: missed hangup leaves the call active");
 
-  store.runStaleCleanup();
+  assert.equal(call.state, "hungup", "last real hangup ends the call NOW, not at the next sweep");
+  assert.equal(hungupUpserts.length, 1, "the hungup upsert fires immediately (drives CDR + UI removal)");
+  assert.equal(store.getActive().length, 0);
+});
 
-  assert.equal(evicted.length, 1, "ghost cleanup must file the record, not eat it");
-  assert.equal(evicted[0]!.state, "hungup");
+test("ISOLATION: correcting a mislabelled tenant clears the call off the wrong tenant's screens", () => {
+  const { store, call } = storeWithBridgedCall();
+  store.setTenantCodeToConnectIdResolver((code) => (code === "T25" ? "tenant-relax-tires" : null));
+  call.tenantId = "tenant-WRONG-company";
+  const removes: string[] = [];
+  store.on("callRemove", (id) => removes.push(id));
+
+  store.onCdr({
+    linkedId: "1785860821.162724",
+    uniqueid: "1785860840.162726",
+    duration: "10",
+    billableSeconds: "5",
+    disposition: "ANSWERED",
+    source: "8456623080",
+    destination: "101",
+    dcontext: "T25_ring-group-dial",
+    channel: "Local/101@T25_ring-group-dial-0000aa60;2",
+  });
+
+  assert.equal(call.tenantId, "tenant-relax-tires", "marker corrected the tenant");
+  assert.ok(removes.includes(call.id), "a callRemove cleared the row from the wrong tenant's clients");
 });
 
 test("clearAll (AMI disconnect) files provisional CDRs for active calls", () => {

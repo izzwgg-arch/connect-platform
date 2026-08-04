@@ -93,6 +93,16 @@ export type BridgedActiveVerification = {
 export type BridgedActiveResult = {
   activeCalls: number;
   bridges: BridgedActiveCallRow[];
+  /**
+   * EVERY channel id (uniqueid) in the raw ARI /channels snapshot — no
+   * qualifying filters, Local helpers included. This is the liveness truth for
+   * zombie reconciliation: the qualifying-bridge list above deliberately
+   * excludes half-bridges (a queue call is trunk↔Local + Local↔agent, each
+   * with ONE non-Local leg), so bridge membership must never decide whether a
+   * tracked call is alive — that exact mistake force-evicted live calls for
+   * months (265 on 2026-08-03 alone).
+   */
+  rawChannelIds: string[];
   debug: {
     totalChannels: number;
     totalBridges: number;
@@ -351,6 +361,7 @@ export function computeBridgedActiveCalls(
   return {
     activeCalls: rows.length,
     bridges: rows,
+    rawChannelIds: channels.map((c) => String(c.id ?? "")).filter(Boolean),
     debug: {
       totalChannels: channels.length,
       totalBridges: bridges.length,
