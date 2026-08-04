@@ -18,6 +18,49 @@
 // which is why the list is reorderable rather than a set of checkboxes.
 
 import { useEffect, useMemo, useState } from "react";
+import { useUiLanguage } from "../../../../hooks/useUiLanguage";
+
+/** Registered up front so the whole screen arrives translated at once, rather
+ *  than switching to Yiddish a phrase at a time as the customer clicks. */
+const PHRASES = [
+  "Ring more than one phone", "Two ways to do it. Pick what should happen to the caller.",
+  "Ring a few phones",
+  "Several phones ring. Whoever picks up first gets the call. If nobody answers, the caller goes wherever you choose - usually voicemail.",
+  "Best for a small team answering their own calls.",
+  "Put callers in a line",
+  "Callers wait, hear music, and are answered in the order they called. You can tell them where they are in the line.",
+  "Best when you get more calls than people to answer them.",
+  "The difference in one sentence: with a group the caller either gets answered or moves on; in a line the caller waits.",
+  "New waiting line", "New ring group", "Back", "Create it", "Setting up...",
+  "What should it be called?", "Just for you - callers never hear it.",
+  "Who's in it?", "Tick everyone whose phone should be involved.", "No extensions set up yet.",
+  "Order they're offered calls", "Ring order",
+  "Drag to reorder. The person at the top is offered a waiting caller first.",
+  "Drag to reorder. Phones ring one at a time, from the top down.",
+  "All these phones ring together, so the order doesn't matter unless you switch to one at a time below.",
+  "How should they ring?", "All at once", "Every phone rings together. Fastest to answer.",
+  "One at a time", "Rings the first person, then the next, and so on. Use when someone should always get first refusal.",
+  "How long each person's phone rings", "How long to keep ringing",
+  "If they don't pick up in this time, the call is offered to the next person.",
+  "After this, the caller goes wherever you choose below. Around 20 seconds is four or five rings.",
+  "If nobody answers, then what?", "Take a message", "The caller reaches voicemail and can leave a message.",
+  "Ring one more person", "Try someone else - an owner or a mobile - before giving up.", "Choose...",
+  "While they wait", "Tell them their place in the line",
+  "“You are third in line.” People wait longer when they know where they are.",
+  "Say something every so often",
+  "A short message on repeat - “Thanks for holding, we'll be with you shortly.”",
+  "Never", "Play it over the music", "The music keeps going underneath. Sounds more natural.",
+  "Stop the music while it plays", "The message gets the caller's full attention. Use for something important.",
+  "More options", "Show something on the phone screen",
+  "Put in front of the caller's name on your handset, so you can tell which line rang before you pick up. Left blank, the team's name is used.",
+  "Gap before trying again", "None", "A breather after a full round, so phones aren't ringing non-stop.",
+  "Most callers allowed to wait",
+  "0 means no limit. Above this, extra callers are sent on rather than joining a line they'll never get through.",
+  "Longest anyone should wait",
+  "In seconds. 0 means no limit. After this the caller stops waiting and goes wherever you chose above.",
+  "This is set up on your phone system straight away, and starts taking calls the next time changes are applied.",
+  "Couldn't set that up.",
+];
 
 export type TeamKind = "ring_group" | "queue";
 
@@ -64,6 +107,7 @@ export function MakeTeam({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [drag, setDrag] = useState<number | null>(null);
+  const { t } = useUiLanguage(PHRASES);
 
   const api = useMemo(
     () => async (path: string, init?: RequestInit) => {
@@ -138,7 +182,7 @@ export function MakeTeam({
       const j = await api(`/voice/teams${tenantQs}`, { method: "POST", body: JSON.stringify(body) });
       onCreated(j.team, j.message);
     } catch (e: any) {
-      setErr(e?.message || "Couldn't set that up.");
+      setErr(e?.message || t("Couldn't set that up."));
     } finally {
       setSaving(false);
     }
@@ -150,25 +194,25 @@ export function MakeTeam({
   // ── Screen 1: which kind, asked as what callers experience ────────────────
   if (!kind) {
     return (
-      <Shell title="Ring more than one phone" sub="Two ways to do it. Pick what should happen to the caller." onClose={onClose}>
+      <Shell title={t("Ring more than one phone")} sub={t("Two ways to do it. Pick what should happen to the caller.")} onClose={onClose}>
         <button className="mt-pick" onClick={() => { setKind("ring_group"); setName("Sales team"); }}>
           <span className="mt-pick-glyph" aria-hidden>📳</span>
           <span>
-            <b>Ring a few phones</b>
-            <i>Several phones ring. Whoever picks up first gets the call. If nobody answers, the caller goes wherever you choose — usually voicemail.</i>
-            <u>Best for a small team answering their own calls.</u>
+            <b>{t("Ring a few phones")}</b>
+            <i>{t("Several phones ring. Whoever picks up first gets the call. If nobody answers, the caller goes wherever you choose - usually voicemail.")}</i>
+            <u>{t("Best for a small team answering their own calls.")}</u>
           </span>
         </button>
         <button className="mt-pick" onClick={() => { setKind("queue"); setName("Support line"); }}>
           <span className="mt-pick-glyph" aria-hidden>⏳</span>
           <span>
-            <b>Put callers in a line</b>
-            <i>Callers wait, hear music, and are answered in the order they called. You can tell them where they are in the line.</i>
-            <u>Best when you get more calls than people to answer them.</u>
+            <b>{t("Put callers in a line")}</b>
+            <i>{t("Callers wait, hear music, and are answered in the order they called. You can tell them where they are in the line.")}</i>
+            <u>{t("Best when you get more calls than people to answer them.")}</u>
           </span>
         </button>
         <p className="mt-fine">
-          The difference in one sentence: with a group the caller either gets answered or moves on; in a line the caller waits.
+          {t("The difference in one sentence: with a group the caller either gets answered or moves on; in a line the caller waits.")}
         </p>
         <MakeTeamStyles />
       </Shell>
@@ -179,24 +223,24 @@ export function MakeTeam({
 
   return (
     <Shell
-      title={isQueue ? "New waiting line" : "New ring group"}
+      title={t(isQueue ? "New waiting line" : "New ring group")}
       sub={nextNumber ? `Staff will be able to dial ${nextNumber} to reach it.` : undefined}
       onClose={onClose}
       foot={
         <>
-          <button className="mt-btn" onClick={() => setKind(null)} disabled={saving}>Back</button>
+          <button className="mt-btn" onClick={() => setKind(null)} disabled={saving}>{t("Back")}</button>
           <button className="mt-btn primary" onClick={save} disabled={!canSave}>
-            {saving ? "Setting up…" : "Create it"}
+            {t(saving ? "Setting up..." : "Create it")}
           </button>
         </>
       }
     >
-      <label className="mt-lbl">What should it be called?</label>
+      <label className="mt-lbl">{t("What should it be called?")}</label>
       <input className="mt-in" value={name} onChange={(e) => setName(e.target.value)} placeholder={isQueue ? "Support line" : "Sales team"} />
-      <p className="mt-hint">Just for you — callers never hear it.</p>
+      <p className="mt-hint">{t("Just for you - callers never hear it.")}</p>
 
-      <label className="mt-lbl">Who&apos;s in it?</label>
-      <p className="mt-hint">Tick everyone whose phone should be involved.</p>
+      <label className="mt-lbl">{t("Who's in it?")}</label>
+      <p className="mt-hint">{t("Tick everyone whose phone should be involved.")}</p>
       <div className="mt-people">
         {people.map((p) => (
           <button key={p.extension} className={"mt-person" + (members.includes(p.extension) ? " on" : "")}
@@ -205,18 +249,18 @@ export function MakeTeam({
             <span>{p.extension}</span>
           </button>
         ))}
-        {people.length === 0 && <p className="mt-hint">No extensions set up yet.</p>}
+        {people.length === 0 && <p className="mt-hint">{t("No extensions set up yet.")}</p>}
       </div>
 
       {members.length > 1 && (
         <>
-          <label className="mt-lbl">{isQueue ? "Order they're offered calls" : "Ring order"}</label>
+          <label className="mt-lbl">{t(isQueue ? "Order they're offered calls" : "Ring order")}</label>
           <p className="mt-hint">
-            {isQueue
+            {t(isQueue
               ? "Drag to reorder. The person at the top is offered a waiting caller first."
               : strategy === "one_by_one"
                 ? "Drag to reorder. Phones ring one at a time, from the top down."
-                : "All these phones ring together, so the order doesn't matter unless you switch to one at a time below."}
+                : "All these phones ring together, so the order doesn't matter unless you switch to one at a time below.")}
           </p>
           <div className="mt-order">
             {members.map((ext, i) => (
@@ -245,38 +289,38 @@ export function MakeTeam({
 
       {!isQueue && (
         <>
-          <label className="mt-lbl">How should they ring?</label>
-          <Choice on={strategy === "ringall"} title="All at once"
-            desc="Every phone rings together. Fastest to answer."
+          <label className="mt-lbl">{t("How should they ring?")}</label>
+          <Choice on={strategy === "ringall"} title={t("All at once")}
+            desc={t("Every phone rings together. Fastest to answer.")}
             onClick={() => setStrategy("ringall")} />
-          <Choice on={strategy === "one_by_one"} title="One at a time"
-            desc="Rings the first person, then the next, and so on. Use when someone should always get first refusal."
+          <Choice on={strategy === "one_by_one"} title={t("One at a time")}
+            desc={t("Rings the first person, then the next, and so on. Use when someone should always get first refusal.")}
             onClick={() => setStrategy("one_by_one")} />
         </>
       )}
 
-      <label className="mt-lbl">{isQueue ? "How long each person's phone rings" : "How long to keep ringing"}</label>
+      <label className="mt-lbl">{t(isQueue ? "How long each person's phone rings" : "How long to keep ringing")}</label>
       <div className="mt-secs">
         {(isQueue ? [10, 15, 20, 30] : [15, 20, 30, 45]).map((n) => (
           <button key={n} className={"mt-sec" + (ringTime === n ? " on" : "")} onClick={() => setRingTime(n)}>{n}s</button>
         ))}
       </div>
       <p className="mt-hint">
-        {isQueue
+        {t(isQueue
           ? "If they don't pick up in this time, the call is offered to the next person."
-          : "After this, the caller goes wherever you choose below. Around 20 seconds is four or five rings."}
+          : "After this, the caller goes wherever you choose below. Around 20 seconds is four or five rings.")}
       </p>
 
-      <label className="mt-lbl">If nobody answers, then what?</label>
-      <Choice on={lastDest?.kind === "voicemail"} title="Take a message"
-        desc="The caller reaches voicemail and can leave a message."
+      <label className="mt-lbl">{t("If nobody answers, then what?")}</label>
+      <Choice on={lastDest?.kind === "voicemail"} title={t("Take a message")}
+        desc={t("The caller reaches voicemail and can leave a message.")}
         onClick={() => setLastDest({ kind: "voicemail", target: members[0] ?? people[0]?.extension ?? "" })} />
-      <Choice on={lastDest?.kind === "extension"} title="Ring one more person"
-        desc="Try someone else — an owner or a mobile — before giving up."
+      <Choice on={lastDest?.kind === "extension"} title={t("Ring one more person")}
+        desc={t("Try someone else - an owner or a mobile - before giving up.")}
         onClick={() => setLastDest({ kind: "extension", target: people[0]?.extension ?? "" })} />
       {lastDest && (
         <select className="mt-in" value={lastDest.target} onChange={(e) => setLastDest({ ...lastDest, target: e.target.value })}>
-          <option value="">Choose…</option>
+          <option value="">{t("Choose...")}</option>
           {people.map((p) => (
             <option key={p.extension} value={p.extension}>{p.name || `Extension ${p.extension}`} · {p.extension}</option>
           ))}
@@ -285,27 +329,27 @@ export function MakeTeam({
 
       {isQueue && (
         <>
-          <label className="mt-lbl">While they wait</label>
+          <label className="mt-lbl">{t("While they wait")}</label>
           <Toggle on={announcePosition} onClick={() => setAnnouncePosition(!announcePosition)}
-            title="Tell them their place in the line"
-            desc="“You are third in line.” People wait longer when they know where they are." />
+            title={t("Tell them their place in the line")}
+            desc={t("“You are third in line.” People wait longer when they know where they are.")} />
 
-          <label className="mt-lbl">Say something every so often</label>
-          <p className="mt-hint">A short message on repeat — “Thanks for holding, we&apos;ll be with you shortly.”</p>
+          <label className="mt-lbl">{t("Say something every so often")}</label>
+          <p className="mt-hint">{t("A short message on repeat - “Thanks for holding, we'll be with you shortly.”")}</p>
           <div className="mt-secs">
             {[0, 30, 45, 60, 90].map((n) => (
               <button key={n} className={"mt-sec" + (periodicSeconds === n ? " on" : "")} onClick={() => setPeriodicSeconds(n)}>
-                {n === 0 ? "Never" : `${n}s`}
+                {n === 0 ? t("Never") : `${n}s`}
               </button>
             ))}
           </div>
           {periodicSeconds > 0 && (
             <>
-              <Choice on={overMusic} title="Play it over the music"
-                desc="The music keeps going underneath. Sounds more natural."
+              <Choice on={overMusic} title={t("Play it over the music")}
+                desc={t("The music keeps going underneath. Sounds more natural.")}
                 onClick={() => setOverMusic(true)} />
-              <Choice on={!overMusic} title="Stop the music while it plays"
-                desc="The message gets the caller's full attention. Use for something important."
+              <Choice on={!overMusic} title={t("Stop the music while it plays")}
+                desc={t("The message gets the caller's full attention. Use for something important.")}
                 onClick={() => setOverMusic(false)} />
             </>
           )}
@@ -313,42 +357,41 @@ export function MakeTeam({
       )}
 
       <button className="mt-adv" onClick={() => setAdvanced(!advanced)}>
-        {advanced ? "▾" : "▸"} More options
+        {advanced ? "▾" : "▸"} {t("More options")}
       </button>
       {advanced && (
         <div className="mt-advbox">
-          <label className="mt-lbl">Show something on the phone screen</label>
+          <label className="mt-lbl">{t("Show something on the phone screen")}</label>
           <input className="mt-in" value={prefix} onChange={(e) => setPrefix(e.target.value)}
             placeholder={name || "Sales"} maxLength={20} />
           <p className="mt-hint">
-            Put in front of the caller&apos;s name on your handset, so you can tell which line rang before you pick up.
-            Left blank, the team&apos;s name is used.
+            {t("Put in front of the caller's name on your handset, so you can tell which line rang before you pick up. Left blank, the team's name is used.")}
           </p>
 
           {isQueue && (
             <>
-              <label className="mt-lbl">Gap before trying again</label>
+              <label className="mt-lbl">{t("Gap before trying again")}</label>
               <div className="mt-secs">
                 {[0, 5, 10, 15].map((n) => (
                   <button key={n} className={"mt-sec" + (retry === n ? " on" : "")} onClick={() => setRetry(n)}>
-                    {n === 0 ? "None" : `${n}s`}
+                    {n === 0 ? t("None") : `${n}s`}
                   </button>
                 ))}
               </div>
-              <p className="mt-hint">A breather after a full round, so phones aren&apos;t ringing non-stop.</p>
+              <p className="mt-hint">{t("A breather after a full round, so phones aren't ringing non-stop.")}</p>
 
-              <label className="mt-lbl">Most callers allowed to wait</label>
+              <label className="mt-lbl">{t("Most callers allowed to wait")}</label>
               <input className="mt-in" type="number" min={0} max={999} value={maxCallers}
                 onChange={(e) => setMaxCallers(Math.max(0, Number(e.target.value) || 0))} />
               <p className="mt-hint">
-                0 means no limit. Above this, extra callers are sent on rather than joining a line they&apos;ll never get through.
+                {t("0 means no limit. Above this, extra callers are sent on rather than joining a line they'll never get through.")}
               </p>
 
-              <label className="mt-lbl">Longest anyone should wait</label>
+              <label className="mt-lbl">{t("Longest anyone should wait")}</label>
               <input className="mt-in" type="number" min={0} max={7200} value={maxWait}
                 onChange={(e) => setMaxWait(Math.max(0, Number(e.target.value) || 0))} />
               <p className="mt-hint">
-                In seconds. 0 means no limit. After this the caller stops waiting and goes wherever you chose above.
+                {t("In seconds. 0 means no limit. After this the caller stops waiting and goes wherever you chose above.")}
               </p>
             </>
           )}
@@ -358,7 +401,7 @@ export function MakeTeam({
       {numberWhy && <p className="mt-fine">{numberWhy}</p>}
       {err && <div className="mt-err">{err}</div>}
       <p className="mt-fine">
-        This is set up on your phone system straight away, and starts taking calls the next time changes are applied.
+        {t("This is set up on your phone system straight away, and starts taking calls the next time changes are applied.")}
       </p>
       <MakeTeamStyles />
     </Shell>

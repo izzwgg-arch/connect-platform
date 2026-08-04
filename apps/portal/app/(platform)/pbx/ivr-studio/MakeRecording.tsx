@@ -22,6 +22,30 @@
 // "similarity boost" — the IVR preset is already the right answer.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useUiLanguage } from "../../../../hooks/useUiLanguage";
+
+/** Registered up front so the whole screen arrives translated at once, rather
+ *  than switching to Yiddish a phrase at a time as the customer clicks. */
+const PHRASES = [
+  "Make a recording", "Type what callers should hear and choose a voice. No microphone needed.",
+  "Loading voices...",
+  "Voice generation isn't set up yet. An administrator needs to add an ElevenLabs key on the ElevenLabs settings page. You can still upload your own recording instead.",
+  "The ElevenLabs key isn't working. An administrator needs to check it.",
+  "What should it be called?", "What should callers hear?",
+  "Main greeting", "With a menu", "After hours", "Nobody answered",
+  "characters", "left this month",
+  "Which voice?", "No voices on this account yet.",
+  "Advanced settings", "These are already set for phone menus. Change them only if something sounds wrong.",
+  "Speaking speed", "Lower is slower and clearer on a bad line.",
+  "Consistency", "Higher reads it the same way every time. Too high sounds flat.",
+  "Expression", "Emotion in the delivery. A menu rarely needs any.",
+  "Quality",
+  "Recordings made here can be played in Connect but not downloaded.",
+  "Generating...", "Hear it", "Saving...", "Use this recording",
+  "Saved and live - the next caller will hear it.",
+  "Saved. It'll be live on your phone system within a few minutes.",
+  "Couldn't load the voices.", "Couldn't play that.", "Couldn't save that recording.",
+];
 
 interface Voice {
   voiceId: string;
@@ -91,6 +115,8 @@ export function MakeRecording({
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
+  const { t } = useUiLanguage(PHRASES);
+
   // One audio element, reused. Two previews playing over each other is a
   // confusing way to compare voices.
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -126,7 +152,7 @@ export function MakeRecording({
           if (v.voices?.length) setVoiceId(v.voices[0].voiceId);
         }
       } catch (e: any) {
-        if (!cancelled) setErr(e?.message || "Couldn't load the voices.");
+        if (!cancelled) setErr(e?.message || t("Couldn't load the voices."));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -155,7 +181,7 @@ export function MakeRecording({
       audioRef.current.src = objectUrlRef.current;
       await audioRef.current.play();
     } catch (e: any) {
-      setErr(e?.message || "Couldn't play that.");
+      setErr(e?.message || t("Couldn't play that."));
     } finally {
       setPreviewing(false);
     }
@@ -170,11 +196,11 @@ export function MakeRecording({
       });
       const j = await r.json();
       // The PBX push can lag; the greeting is real either way, so say which.
-      if (j?.pbxPush?.status === "pushed") setNote("Saved and live — the next caller will hear it.");
-      else setNote("Saved. It'll be live on your phone system within a few minutes.");
+      if (j?.pbxPush?.status === "pushed") setNote(t("Saved and live - the next caller will hear it."));
+      else setNote(t("Saved. It'll be live on your phone system within a few minutes."));
       onCreated(j.prompt.promptRef, j.prompt.displayName);
     } catch (e: any) {
-      setErr(e?.message || "Couldn't save that recording.");
+      setErr(e?.message || t("Couldn't save that recording."));
     } finally {
       setSaving(false);
     }
@@ -191,46 +217,45 @@ export function MakeRecording({
       <div className="mr-card" onClick={(e) => e.stopPropagation()}>
         <div className="mr-head">
           <div>
-            <h3>Make a recording</h3>
-            <p>Type what callers should hear and choose a voice. No microphone needed.</p>
+            <h3>{t("Make a recording")}</h3>
+            <p>{t("Type what callers should hear and choose a voice. No microphone needed.")}</p>
           </div>
           <button className="mr-x" onClick={onClose} aria-label="Close">×</button>
         </div>
 
         {loading ? (
-          <div className="mr-body"><p className="mr-dim">Loading voices…</p></div>
+          <div className="mr-body"><p className="mr-dim">{t("Loading voices...")}</p></div>
         ) : !status?.configured ? (
           <div className="mr-body">
             <div className="mr-note bad">
-              Voice generation isn&apos;t set up yet. An administrator needs to add an ElevenLabs key on the
-              ElevenLabs settings page. You can still upload your own recording instead.
+              {t("Voice generation isn't set up yet. An administrator needs to add an ElevenLabs key on the ElevenLabs settings page. You can still upload your own recording instead.")}
             </div>
           </div>
         ) : !status.keyWorks ? (
           <div className="mr-body">
-            <div className="mr-note bad">{status.message || "The ElevenLabs key isn't working. An administrator needs to check it."}</div>
+            <div className="mr-note bad">{status.message || t("The ElevenLabs key isn't working. An administrator needs to check it.")}</div>
           </div>
         ) : (
           <>
             <div className="mr-body">
-              <label className="mr-lbl">What should it be called?</label>
+              <label className="mr-lbl">{t("What should it be called?")}</label>
               <input className="mr-in" value={name} onChange={(e) => setName(e.target.value)} placeholder="Main greeting" />
 
-              <label className="mr-lbl">What should callers hear?</label>
+              <label className="mr-lbl">{t("What should callers hear?")}</label>
               <div className="mr-chips">
                 {TEMPLATES.map((tpl) => (
                   <button key={tpl.label} className="mr-chip" onClick={() => { setText(tpl.text); setName(tpl.label); }}>
-                    {tpl.label}
+                    {t(tpl.label)}
                   </button>
                 ))}
               </div>
               <textarea className="mr-ta" rows={4} value={text} onChange={(e) => setText(e.target.value)} />
               <div className="mr-meta">
-                <span>{chars} characters</span>
-                {left != null && <span>{left.toLocaleString()} left this month</span>}
+                <span>{chars} {t("characters")}</span>
+                {left != null && <span>{left.toLocaleString()} {t("left this month")}</span>}
               </div>
 
-              <label className="mr-lbl">Which voice?</label>
+              <label className="mr-lbl">{t("Which voice?")}</label>
               <div className="mr-voices">
                 {voices.map((v) => (
                   <button
@@ -242,31 +267,31 @@ export function MakeRecording({
                     <span>{describeVoice(v)}</span>
                   </button>
                 ))}
-                {voices.length === 0 && <p className="mr-dim">No voices on this account yet.</p>}
+                {voices.length === 0 && <p className="mr-dim">{t("No voices on this account yet.")}</p>}
               </div>
 
               <button className="mr-adv" onClick={() => setAdvanced(!advanced)}>
-                {advanced ? "▾" : "▸"} Advanced settings
+                {advanced ? "▾" : "▸"} {t("Advanced settings")}
               </button>
               {advanced && (
                 <div className="mr-advbox">
                   <p className="mr-dim">
-                    These are already set for phone menus. Change them only if something sounds wrong.
+                    {t("These are already set for phone menus. Change them only if something sounds wrong.")}
                   </p>
 
-                  <Slider label="Speaking speed" hint="Lower is slower and clearer on a bad line."
+                  <Slider label={t("Speaking speed")} hint={t("Lower is slower and clearer on a bad line.")}
                     min={0.7} max={1.2} step={0.05} value={tuning.speed}
                     onChange={(v) => setTuning({ ...tuning, speed: v })} />
 
-                  <Slider label="Consistency" hint="Higher reads it the same way every time. Too high sounds flat."
+                  <Slider label={t("Consistency")} hint={t("Higher reads it the same way every time. Too high sounds flat.")}
                     min={0} max={1} step={0.05} value={tuning.stability}
                     onChange={(v) => setTuning({ ...tuning, stability: v })} />
 
-                  <Slider label="Expression" hint="Emotion in the delivery. A menu rarely needs any."
+                  <Slider label={t("Expression")} hint={t("Emotion in the delivery. A menu rarely needs any.")}
                     min={0} max={1} step={0.05} value={tuning.style}
                     onChange={(v) => setTuning({ ...tuning, style: v })} />
 
-                  <label className="mr-lbl">Quality</label>
+                  <label className="mr-lbl">{t("Quality")}</label>
                   <select className="mr-in" value={model} onChange={(e) => setModel(e.target.value)}>
                     {(status.models ?? []).map((m) => (
                       <option key={m.id} value={m.id}>{m.label} — {m.detail}</option>
@@ -278,16 +303,16 @@ export function MakeRecording({
               {err && <div className="mr-note bad">{err}</div>}
               {note && <div className="mr-note ok">{note}</div>}
               <p className="mr-fine">
-                Recordings made here can be played in Connect but not downloaded.
+                {t("Recordings made here can be played in Connect but not downloaded.")}
               </p>
             </div>
 
             <div className="mr-foot">
               <button className="mr-btn" onClick={preview} disabled={!canGenerate}>
-                {previewing ? "Generating…" : "▶ Hear it"}
+                {previewing ? t("Generating...") : `\u25b6 ${t("Hear it")}`}
               </button>
               <button className="mr-btn primary" onClick={save} disabled={!canGenerate}>
-                {saving ? "Saving…" : "Use this recording"}
+                {t(saving ? "Saving..." : "Use this recording")}
               </button>
             </div>
           </>

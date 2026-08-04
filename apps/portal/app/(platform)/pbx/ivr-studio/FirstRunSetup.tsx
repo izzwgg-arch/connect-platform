@@ -21,7 +21,42 @@
 //     deliberate human action.
 
 import { useMemo, useState } from "react";
+import { useUiLanguage } from "../../../../hooks/useUiLanguage";
 import { KIND_LABEL, type MenuChoiceKind, type TenantDirectory } from "@connect/shared";
+
+/** Registered up front so the whole walkthrough arrives translated at once,
+ *  rather than switching to Yiddish a screen at a time.
+ *
+ *  The read-back on the last screen is written as short fragments with names
+ *  interpolated between them, rather than one sentence with a placeholder,
+ *  because Yiddish reads right-to-left and a fixed placeholder position would
+ *  put the name in the wrong place. */
+const PHRASES = [
+  "When someone calls, what should they hear first?", "You can change any of this later.",
+  "A short greeting", "“Thanks for calling Acme.” Then the call goes through.",
+  "Ring straight away", "No recording - the phone just rings, like a normal call.",
+  "Who should answer?", "One person, or a group of phones ringing together.",
+  "Pick the person who picks up the phone.",
+  "One person", "Rings their phone. If they don't pick up it goes to voicemail.",
+  "A group", "Several phones ring at once. Whoever's free answers.",
+  "Which group?", "Which person?", "Whose voicemail?", "That'll be",
+  "What if nobody picks up?", "Everyone misses calls. This is where those callers go.",
+  "Take a message", "They hear voicemail and can leave a message.",
+  "End the call politely", "No voicemail. Use this if nobody checks messages.",
+  "When are you open?", "Outside these hours callers go straight to voicemail.",
+  "Always", "Calls come through at any time of day.",
+  "Normal business hours", "Monday to Friday, 9 to 5. You can fine-tune this later.",
+  "That's your phone system",
+  "Here's what happens when someone calls", "Here's what happens when someone calls this number",
+  "They hear a short greeting, then we ring", "We ring", "straight away.",
+  "If nobody picks up, the call ends politely.",
+  "If nobody picks up, they reach voicemail.",
+  "If nobody picks up, they reach the voicemail for",
+  "Outside Monday-Friday 9-5, callers go straight to voicemail.",
+  "your team", "whoever you choose", "extension",
+  "Back", "Next", "Turn it on", "Setting it up...",
+  "Skip - I'll set this up myself",
+];
 
 export interface FirstRunAnswers {
   /** What callers hear first. */
@@ -58,6 +93,7 @@ export function FirstRunSetup({
   onFinish: (a: FirstRunAnswers) => void;
   onSkip: () => void;
 }) {
+  const { t } = useUiLanguage(PHRASES);
   const [i, setI] = useState(0);
   const [a, setA] = useState<FirstRunAnswers>(DEFAULTS);
   const set = (patch: Partial<FirstRunAnswers>) => setA((prev) => ({ ...prev, ...patch }));
@@ -71,50 +107,55 @@ export function FirstRunSetup({
   const soleExtension = people.length === 1 ? people[0].extension : "";
 
   const answerName = useMemo(() => {
-    if (a.answerKind === "team") return teams.find((t) => t.number === a.answerTarget)?.name ?? "your team";
+    if (a.answerKind === "team") return teams.find((x) => x.number === a.answerTarget)?.name ?? t("your team");
     const p = people.find((x) => x.extension === (a.answerTarget || soleExtension));
-    return p?.name || (a.answerTarget ? `extension ${a.answerTarget}` : "whoever you choose");
-  }, [a.answerKind, a.answerTarget, people, teams, soleExtension]);
+    return p?.name || (a.answerTarget ? `${t("extension")} ${a.answerTarget}` : t("whoever you choose"));
+  }, [a.answerKind, a.answerTarget, people, teams, soleExtension, t]);
 
-  const fallbackName = useMemo(() => {
+  /** The person whose mailbox takes the message, or null when we only know it
+   *  is voicemail — the read-back below says a different sentence for each. */
+  const fallbackPerson = useMemo(() => {
     const p = people.find((x) => x.extension === (a.fallbackTarget || soleExtension));
-    return p?.name ? `${p.name}'s voicemail` : "voicemail";
+    return p?.name || null;
   }, [a.fallbackTarget, people, soleExtension]);
 
   const screens = [
     {
-      title: "When someone calls, what should they hear first?",
-      sub: "You can change any of this later.",
+      title: t("When someone calls, what should they hear first?"),
+      sub: t("You can change any of this later."),
       body: (
         <>
-          <Option on={a.opening === "greeting"} glyph="🔊" title="A short greeting"
-            desc="“Thanks for calling Acme.” Then the call goes through."
+          <Option on={a.opening === "greeting"} glyph="🔊" title={t("A short greeting")}
+            desc={t("“Thanks for calling Acme.” Then the call goes through.")}
             onClick={() => set({ opening: "greeting" })} />
-          <Option on={a.opening === "straight"} glyph="📞" title="Ring straight away"
-            desc="No recording — the phone just rings, like a normal call."
+          <Option on={a.opening === "straight"} glyph="📞" title={t("Ring straight away")}
+            desc={t("No recording - the phone just rings, like a normal call.")}
             onClick={() => set({ opening: "straight" })} />
         </>
       ),
       canGo: true,
     },
     {
-      title: "Who should answer?",
-      sub: hasTeams ? "One person, or a group of phones ringing together." : "Pick the person who picks up the phone.",
+      title: t("Who should answer?"),
+      sub: t(hasTeams ? "One person, or a group of phones ringing together." : "Pick the person who picks up the phone."),
       body: (
         <>
-          <Option on={a.answerKind === "person"} glyph="👤" title="One person"
-            desc="Rings their phone. If they don't pick up it goes to voicemail."
+          <Option on={a.answerKind === "person"} glyph="👤" title={t("One person")}
+            desc={t("Rings their phone. If they don't pick up it goes to voicemail.")}
             onClick={() => set({ answerKind: "person", answerTarget: soleExtension })} />
           {hasTeams && (
-            <Option on={a.answerKind === "team"} glyph="👥" title="A group"
-              desc="Several phones ring at once. Whoever's free answers."
+            <Option on={a.answerKind === "team"} glyph="👥" title={t("A group")}
+              desc={t("Several phones ring at once. Whoever's free answers.")}
               onClick={() => set({ answerKind: "team", answerTarget: "" })} />
           )}
           <Picker
-            label={a.answerKind === "team" ? "Which group?" : "Which person?"}
+            label={t(a.answerKind === "team" ? "Which group?" : "Which person?")}
+            onlyLabel={t("That'll be")}
             options={a.answerKind === "team"
-              ? teams.map((t) => ({ id: t.number, name: t.name || `Team ${t.number}`, meta: t.number }))
-              : people.map((p) => ({ id: p.extension, name: p.name || `Extension ${p.extension}`, meta: p.extension }))}
+              // `tm`, not `t` — `t` is the translator in this scope and shadowing
+              // it here would silently leave this whole branch in English.
+              ? teams.map((tm) => ({ id: tm.number, name: tm.name || `${t("A group")} ${tm.number}`, meta: tm.number }))
+              : people.map((p) => ({ id: p.extension, name: p.name || `${t("extension")} ${p.extension}`, meta: p.extension }))}
             value={a.answerTarget || (a.answerKind === "person" ? soleExtension : "")}
             onChange={(v) => set({ answerTarget: v })}
           />
@@ -123,19 +164,20 @@ export function FirstRunSetup({
       canGo: Boolean(a.answerTarget || (a.answerKind === "person" && soleExtension)),
     },
     {
-      title: "What if nobody picks up?",
-      sub: "Everyone misses calls. This is where those callers go.",
+      title: t("What if nobody picks up?"),
+      sub: t("Everyone misses calls. This is where those callers go."),
       body: (
         <>
-          <Option on={a.fallbackKind === "voicemail"} glyph="📼" title="Take a message"
-            desc="They hear voicemail and can leave a message."
+          <Option on={a.fallbackKind === "voicemail"} glyph="📼" title={t("Take a message")}
+            desc={t("They hear voicemail and can leave a message.")}
             onClick={() => set({ fallbackKind: "voicemail" })} />
-          <Option on={a.fallbackKind === "hangup"} glyph="⛔" title="End the call politely"
-            desc="No voicemail. Use this if nobody checks messages."
+          <Option on={a.fallbackKind === "hangup"} glyph="⛔" title={t("End the call politely")}
+            desc={t("No voicemail. Use this if nobody checks messages.")}
             onClick={() => set({ fallbackKind: "hangup", fallbackTarget: "" })} />
           {a.fallbackKind === "voicemail" && (
             <Picker
-              label="Whose voicemail?"
+              label={t("Whose voicemail?")}
+              onlyLabel={t("That'll be")}
               options={people.map((p) => ({ id: p.extension, name: p.name || `Extension ${p.extension}`, meta: p.extension }))}
               value={a.fallbackTarget || soleExtension}
               onChange={(v) => set({ fallbackTarget: v })}
@@ -146,33 +188,37 @@ export function FirstRunSetup({
       canGo: a.fallbackKind === "hangup" || Boolean(a.fallbackTarget || soleExtension),
     },
     {
-      title: "When are you open?",
-      sub: "Outside these hours callers go straight to voicemail.",
+      title: t("When are you open?"),
+      sub: t("Outside these hours callers go straight to voicemail."),
       body: (
         <>
-          <Option on={a.hours === "always"} glyph="🕐" title="Always"
-            desc="Calls come through at any time of day."
+          <Option on={a.hours === "always"} glyph="🕐" title={t("Always")}
+            desc={t("Calls come through at any time of day.")}
             onClick={() => set({ hours: "always" })} />
-          <Option on={a.hours === "weekdays"} glyph="📅" title="Normal business hours"
-            desc="Monday to Friday, 9 to 5. You can fine-tune this later."
+          <Option on={a.hours === "weekdays"} glyph="📅" title={t("Normal business hours")}
+            desc={t("Monday to Friday, 9 to 5. You can fine-tune this later.")}
             onClick={() => set({ hours: "weekdays" })} />
         </>
       ),
       canGo: true,
     },
     {
-      title: "That's your phone system",
-      sub: phoneNumber ? `Here's what happens when someone calls ${phoneNumber}:` : "Here's what happens when someone calls:",
+      title: t("That's your phone system"),
+      sub: phoneNumber
+        ? `${t("Here's what happens when someone calls this number")} ${phoneNumber}:`
+        : `${t("Here's what happens when someone calls")}:`,
       body: (
         <div className="fr-readback">
           {a.opening === "greeting"
-            ? <>They hear a short greeting, then we ring <b>{answerName}</b>.</>
-            : <>We ring <b>{answerName}</b> straight away.</>}
+            ? <>{t("They hear a short greeting, then we ring")} <b>{answerName}</b>.</>
+            : <>{t("We ring")} <b>{answerName}</b> {t("straight away.")}</>}
           <br />
           {a.fallbackKind === "hangup"
-            ? <>If nobody picks up, the call ends politely.</>
-            : <>If nobody picks up, they reach <b>{fallbackName}</b>.</>}
-          {a.hours === "weekdays" && <><br />Outside Monday–Friday 9–5, callers go straight to voicemail.</>}
+            ? <>{t("If nobody picks up, the call ends politely.")}</>
+            : fallbackPerson
+              ? <>{t("If nobody picks up, they reach the voicemail for")} <b>{fallbackPerson}</b>.</>
+              : <>{t("If nobody picks up, they reach voicemail.")}</>}
+          {a.hours === "weekdays" && <><br />{t("Outside Monday-Friday 9-5, callers go straight to voicemail.")}</>}
         </div>
       ),
       canGo: true,
@@ -196,17 +242,17 @@ export function FirstRunSetup({
             {screens.map((_, n) => <i key={n} className={n === i ? "on" : ""} />)}
           </div>
           <div className="fr-actions">
-            {i > 0 && <button className="fr-btn" onClick={() => setI(i - 1)} disabled={busy}>Back</button>}
+            {i > 0 && <button className="fr-btn" onClick={() => setI(i - 1)} disabled={busy}>{t("Back")}</button>}
             {last ? (
               <button className="fr-btn primary" disabled={busy} onClick={() => onFinish(a)}>
-                {busy ? "Setting it up…" : "Turn it on"}
+                {t(busy ? "Setting it up..." : "Turn it on")}
               </button>
             ) : (
-              <button className="fr-btn primary" disabled={!s.canGo || busy} onClick={() => setI(i + 1)}>Next</button>
+              <button className="fr-btn primary" disabled={!s.canGo || busy} onClick={() => setI(i + 1)}>{t("Next")}</button>
             )}
           </div>
           <button className="fr-skip" onClick={onSkip} disabled={busy}>
-            Skip — I&apos;ll set this up myself
+            {t("Skip - I'll set this up myself")}
           </button>
         </div>
       </div>
@@ -224,8 +270,10 @@ function Option({ on, glyph, title, desc, onClick }: { on: boolean; glyph: strin
   );
 }
 
-function Picker({ label, options, value, onChange }: {
+function Picker({ label, onlyLabel, options, value, onChange }: {
   label: string;
+  /** Leading words for the one-option case, already translated by the caller. */
+  onlyLabel: string;
   options: { id: string; name: string; meta: string }[];
   value: string;
   onChange: (v: string) => void;
@@ -233,7 +281,7 @@ function Picker({ label, options, value, onChange }: {
   if (options.length === 0) return null;
   // One option is not a choice — say who it is instead of asking.
   if (options.length === 1) {
-    return <p className="fr-only">That&apos;ll be <b>{options[0].name}</b>.</p>;
+    return <p className="fr-only">{onlyLabel} <b>{options[0].name}</b>.</p>;
   }
   return (
     <div className="fr-picker">
