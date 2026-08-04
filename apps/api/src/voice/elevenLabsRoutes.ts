@@ -58,6 +58,14 @@ const TUNING_SCHEMA = z
  *    up minute-long provider calls. Auditioning voices is one call every few
  *    seconds; four in flight at once is already unusual.
  */
+/** Mirror of server.ts `toIvrSlug`: catalog rows only line up with the rest of
+ *  the prompt catalog (list scoping, PBX prefix matching) when every writer
+ *  normalises the tenant name the same way. */
+function toTenantSlug(name: string): string | null {
+  const slug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug.length > 0 ? slug : null;
+}
+
 const SYNTH_RATE_LIMIT = { max: 12, timeWindow: "1 minute" as const };
 const MAX_CONCURRENT_SYNTH = 4;
 let synthInFlight = 0;
@@ -214,7 +222,7 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       return reply.code(400).send({ error: "tenant_required", message: "Choose which customer this greeting belongs to." });
     }
 
-    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true, slug: true } });
+    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true } });
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
 
     const key = await keyOr503(reply);
@@ -272,25 +280,39 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     // 4) Catalog row. `source: "generated"` is what tells the UI never to offer
     //    a download; `ownershipConfidence: "manual"` reflects that a person in
     //    this tenant deliberately created it.
-    const row = await db.tenantPbxPrompt.create({
-      data: {
-        tenantId,
-        tenantSlug: tenant.slug ? String(tenant.slug).toLowerCase() : null,
-        promptRef,
-        fileBaseName,
-        relativePath: promptRef,
-        displayName: body.data.displayName.trim(),
-        category: body.data.category || "greeting",
-        source: "generated",
-        isActive: true,
-        storageKey: stored.storageKey,
-        sha256: stored.sha256,
-        sizeBytes: stored.sizeBytes,
-        contentType: stored.contentType,
-        syncedAt: new Date(),
-        ownershipConfidence: "manual",
-      },
-    });
+    let row: any;
+    try {
+      row = await db.tenantPbxPrompt.create({
+        data: {
+          tenantId,
+          // Same normalisation the manual-upload path uses (toIvrSlug in
+          // server.ts): the Tenant model has no slug column, so the catalog
+          // slug is always derived from the tenant's name.
+          tenantSlug: toTenantSlug(tenant.name),
+          promptRef,
+          fileBaseName,
+          relativePath: promptRef,
+          displayName: body.data.displayName.trim(),
+          category: body.data.category || "greeting",
+          source: "generated",
+          isActive: true,
+          storageKey: stored.storageKey,
+          sha256: stored.sha256,
+          sizeBytes: stored.sizeBytes,
+          contentType: stored.contentType,
+          syncedAt: new Date(),
+          ownershipConfidence: "manual",
+        },
+      });
+    } catch (err: any) {
+      // An uncaught throw here becomes Fastify's default 500, whose message is
+      // the raw ORM error — and the dialog renders that verbatim to customers.
+      app.log.error({ err: err?.message, tenantId, promptRef }, "[ELEVENLABS_GENERATE] catalog write failed");
+      return reply.code(500).send({
+        error: "catalog_write_failed",
+        message: "The audio was generated and saved, but couldn't be added to the recordings list. Try again.",
+      });
+    }
 
     // 5) Push to the PBX so the very next caller hears it. A failed push is not
     //    a failed generation — the cron catch-up retries, and the status we
