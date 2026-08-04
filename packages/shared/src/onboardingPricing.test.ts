@@ -12,13 +12,23 @@ test("the agreed prices, exactly as stated", () => {
   assert.equal(ONBOARDING_PRICES.e911MonthlyCents, 300);               // $3
   assert.equal(ONBOARDING_PRICES.smsMonthlyCents, 1000);               // $10
   assert.equal(ONBOARDING_PRICES.additionalNumberMonthlyCents, 1000);  // $10
+  assert.equal(ONBOARDING_PRICES.telecomFeesMonthlyCents, 200);        // $2 flat fees
+});
+
+test("the floor Izzy set: one person, one number = exactly $35", () => {
+  const q = quoteOnboarding({ extensions: 1, phoneNumbers: 1, smsEnabled: false });
+  // $30 line + $3 E911 + $2 telecom & regulatory fees.
+  assert.equal(q.monthlyTotalCents, 3500);
+  assert.equal(describeQuote(q), "$35.00 a month, including tax.");
+  const fees = q.lines.find((l) => l.key === "telecom_fees")!;
+  assert.equal(fees.totalCents, 200);
 });
 
 test("a typical small business: 3 people, one number, no texting", () => {
   const q = quoteOnboarding({ extensions: 3, phoneNumbers: 1, smsEnabled: false });
-  // 3 × $30 = $90, plus $3 E911 on the one number.
-  assert.equal(q.monthlyTotalCents, 9300);
-  assert.equal(describeQuote(q), "$93.00 a month, including tax.");
+  // 3 × $30 = $90, plus $3 E911 on the one number, plus $2 flat fees.
+  assert.equal(q.monthlyTotalCents, 9500);
+  assert.equal(describeQuote(q), "$95.00 a month, including tax.");
 });
 
 test("the first phone number is included; only extras are charged", () => {
@@ -51,8 +61,9 @@ test("everything at once adds up", () => {
   //  2 × $3  =   $6   (E911 on both numbers)
   //  1 × $10 =  $10   (the second number)
   //  1 × $10 =  $10   (texting)
-  assert.equal(q.monthlyTotalCents, 15000 + 600 + 1000 + 1000);
-  assert.equal(q.monthlyTotalCents, 17600);
+  //  1 × $2  =   $2   (telecom & regulatory fees, flat)
+  assert.equal(q.monthlyTotalCents, 15000 + 600 + 1000 + 1000 + 200);
+  assert.equal(q.monthlyTotalCents, 17800);
 });
 
 test("an empty quote charges nothing rather than inventing a minimum", () => {

@@ -29,6 +29,12 @@ export const ONBOARDING_PRICES = {
   smsMonthlyCents: 1000,
   /** Each phone number BEYOND the first. The first is included. */
   additionalNumberMonthlyCents: 1000,
+  /**
+   * Telecom & regulatory fees, per month, flat per account. Izzy 2026-08-04:
+   * one extension must always come to $35 — $30 the line, $3 E911, and $2
+   * covering taxes and carrier/regulatory fees.
+   */
+  telecomFeesMonthlyCents: 200,
 } as const;
 
 export interface OnboardingQuoteInput {
@@ -40,7 +46,7 @@ export interface OnboardingQuoteInput {
 }
 
 export interface QuoteLine {
-  key: "extensions" | "e911" | "sms" | "additional_numbers";
+  key: "extensions" | "e911" | "sms" | "additional_numbers" | "telecom_fees";
   /** Plain-English, customer-facing. */
   label: string;
   quantity: number;
@@ -113,6 +119,18 @@ export function quoteOnboarding(input: OnboardingQuoteInput): OnboardingQuote {
       unitCents: ONBOARDING_PRICES.smsMonthlyCents,
       totalCents: ONBOARDING_PRICES.smsMonthlyCents,
       note: "Send and receive texts on your business number.",
+    });
+  }
+  // Flat, per-account, always on any real quote: it is what makes the promised
+  // "one line = $35" arithmetic land ($30 + $3 E911 + $2 fees).
+  if (lines.length > 0) {
+    lines.push({
+      key: "telecom_fees",
+      label: "Telecom & regulatory fees",
+      quantity: 1,
+      unitCents: ONBOARDING_PRICES.telecomFeesMonthlyCents,
+      totalCents: ONBOARDING_PRICES.telecomFeesMonthlyCents,
+      note: "Covers taxes and carrier fees.",
     });
   }
 

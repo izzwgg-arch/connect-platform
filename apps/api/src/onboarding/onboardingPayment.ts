@@ -141,6 +141,7 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
     e911: "E911_FEE",
     sms: "SMS_PACKAGE",
     additional_numbers: "PHONE_NUMBER",
+    telecom_fees: "REGULATORY_FEE",
   };
   const lineItemRows = () =>
     quote.lines.map((l) => ({
