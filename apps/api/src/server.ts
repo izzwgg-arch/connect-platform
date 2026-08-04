@@ -304,19 +304,24 @@ setTenantClaimRejectionHandler((r) => {
 });
 app.register(formbody);
 
-app.setErrorHandler((error, _req, reply) => {
+app.setErrorHandler((error, req, reply) => {
   const status = Number((error as { statusCode?: number }).statusCode) || 500;
-  const message = String((error as Error).message || "internal_error");
   if (status >= 500) {
-    app.log.error({ err: error, status }, "request_failed");
+    // Unexpected failure (e.g. an ORM error thrown mid-handler). The raw
+    // message can contain schema/internal details and the portal renders the
+    // "message" field verbatim in customer-facing dialogs, so clients only
+    // ever get a generic body — never gate this on NODE_ENV (the api
+    // container does not set it).
+    app.log.error({ err: error, status, method: req.method, url: req.url }, "request_failed");
+    return reply.status(500).send({
+      error: "internal_error",
+      message: "Something went wrong on our end. Try again.",
+    });
   }
-  if (process.env.NODE_ENV === "production") {
-    return reply.status(status).send({ error: status >= 500 ? "internal_error" : message });
-  }
-  return reply.status(status).send({
-    error: status >= 500 ? "internal_error" : message,
-    message: status >= 500 ? message : undefined,
-  });
+  // 4xx thrown by Fastify itself (schema validation, rate limit, bad JWT)
+  // keeps its message. Routes that shape their own reply.code(...).send(...)
+  // responses never reach this handler.
+  return reply.status(status).send({ error: String((error as Error).message || "internal_error") });
 });
 // File-upload support for MOH asset uploads. 50 MB cap per file covers
 // typical 10-30 min AAC/MP3/WAV hold-music tracks with generous headroom.
