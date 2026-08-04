@@ -35,6 +35,8 @@ function makePreviewDb(overrides: { settings?: Record<string, unknown>; extensio
     },
     extension: { findMany: async () => exts },
     phoneNumber: { findMany: async () => [] as Array<{ id: string; phoneNumber: string }> },
+    tenantPbxLink: { findUnique: async () => null },
+    pbxTenantInboundDid: { findMany: async () => [] },
     tenant: {
       findUnique: async (args: { select?: Record<string, boolean> }) => {
         if (args?.select?.billingSettings) return { name: "T", billingSettings: { billingEmail: null } };
@@ -117,6 +119,8 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
       findMany: async () => [{ id: "e1", extNumber: "101", displayName: "Sales" }],
     },
     phoneNumber: { findMany: async () => phoneNumberRows },
+    tenantPbxLink: { findUnique: async () => null },
+    pbxTenantInboundDid: { findMany: async () => [] },
     tenant: {
       findUnique: async (args: { select?: Record<string, boolean> }) => {
         if (args?.select?.billingSettings) return { name: "Tenant", billingSettings: { billingEmail: null } };

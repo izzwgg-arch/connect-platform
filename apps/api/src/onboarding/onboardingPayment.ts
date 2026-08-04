@@ -34,6 +34,7 @@ import {
 import { createBillingInvoiceRowWithUniqueNumber } from "../billing/invoiceEngine";
 import { createBillingInvoicePayToken } from "../billing/billingPayToken";
 import { billingLiveChargesDisabled } from "../billing/solaBillingPayments";
+import { ensureOnboardingBillingDefaults } from "./onboardingBillingDefaults";
 
 /** Long enough to sleep on the decision; short enough that a stale link from a
  *  half-finished sign-up doesn't survive for a month. */
@@ -74,10 +75,15 @@ export function quoteForSubmission(sub: {
  * Idempotent on `createdTenantId`: a retried checkout must never create a
  * second tenant for the same customer.
  */
-async function ensureTenantForSubmission(sub: { id: string; companyName?: string | null; createdTenantId?: string | null; answers?: any }): Promise<string> {
+async function ensureTenantForSubmission(sub: { id: string; companyName?: string | null; createdTenantId?: string | null; smsEnabled?: boolean | null; answers?: any }): Promise<string> {
   if (sub.createdTenantId) {
     const existing = await (db as any).tenant.findUnique({ where: { id: sub.createdTenantId }, select: { id: true } });
-    if (existing) return existing.id;
+    if (existing) {
+      // Self-heal: tenants created before fee-stamping shipped get the stamp on
+      // their next checkout visit (the guards inside make this a no-op after).
+      await ensureOnboardingBillingDefaults(db as any, existing.id, { smsEnabled: !!sub.smsEnabled });
+      return existing.id;
+    }
   }
   const wantsYiddish = String(sub.answers?.language ?? "").toLowerCase() === "yi";
   const tenant = await (db as any).tenant.create({
@@ -88,6 +94,10 @@ async function ensureTenantForSubmission(sub: { id: string; companyName?: string
       yiddishEnabled: wantsYiddish,
     },
   });
+  // Without this stamp the month-2 automatic bill would be bare $30/extension —
+  // no E911, no $2 fee line — breaking the "$35 a month, including tax" promise
+  // the checkout and report email make.
+  await ensureOnboardingBillingDefaults(db as any, tenant.id, { smsEnabled: !!sub.smsEnabled });
   await (db as any).onboardingSubmission.update({
     where: { id: sub.id },
     data: { createdTenantId: tenant.id },

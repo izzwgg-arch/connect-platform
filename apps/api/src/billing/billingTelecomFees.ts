@@ -12,6 +12,14 @@ export type TelecomFeeBasis =
   | "per_did"
   | "per_toll_free_did"
   | "per_line"
+  /**
+   * EVERY active phone number, including the "first number free" one that
+   * `per_did` excludes (per_did counts only BILLABLE numbers, which is 0 for a
+   * one-number tenant). Regulatory fees like E911 are owed on the free number
+   * too — onboarding-stamped tenants use this so the $3-per-number promise
+   * from the sign-up quote holds on recurring invoices.
+   */
+  | "per_phone_number"
   | "flat_monthly";
 
 export type TelecomFeeBillingMode = "ratePercent" | "amountCents";
@@ -95,6 +103,7 @@ export function parseBillingTelecomFees(metadata: unknown): BillingTelecomFeesCo
       "per_did",
       "per_toll_free_did",
       "per_line",
+      "per_phone_number",
       "flat_monthly",
     ];
     out[key] = {
@@ -288,6 +297,7 @@ function basisQuantity(input: {
   extensionCount: number;
   phoneNumberCount: number;
   tollFreeNumberCount: number;
+  totalPhoneNumberCount?: number;
   lineCount: number;
 }): number {
   switch (input.basis) {
@@ -299,6 +309,10 @@ function basisQuantity(input: {
       return input.tollFreeNumberCount;
     case "per_line":
       return input.lineCount;
+    case "per_phone_number":
+      // Falls back to the billable counts when the caller doesn't supply the
+      // total — better a slightly-low fee than a crash on an old call site.
+      return input.totalPhoneNumberCount ?? input.phoneNumberCount + input.tollFreeNumberCount;
     case "flat_monthly":
     case "invoice_subtotal":
     default:
@@ -312,6 +326,8 @@ export function buildBillingTelecomFeeLines(input: {
   extensionCount: number;
   phoneNumberCount: number;
   tollFreeNumberCount: number;
+  /** ALL active numbers (local + toll-free, including the free first one) — the `per_phone_number` basis. */
+  totalPhoneNumberCount?: number;
   lineCount: number;
   taxProviderId: string;
 }): BillingTelecomFeeLine[] {
