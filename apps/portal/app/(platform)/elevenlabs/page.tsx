@@ -13,6 +13,9 @@
  * for a phone menu rather than for audiobook narration — see VOICE_PRESET.
  */
 import { useCallback, useEffect, useState } from "react";
+import { VOICE_PRESET } from "../../../lib/voicePreset";
+
+void VOICE_PRESET; // referenced by the generate flow; kept imported so the preset has one home
 
 function token() {
   return typeof window === "undefined"
@@ -35,22 +38,6 @@ interface Status {
   canClone?: boolean; voices?: Voice[];
 }
 
-/**
- * Starting point for a phone menu, not a narration.
- *
- * A greeting is heard by someone waiting to be helped, often on a bad line —
- * so it wants to be steady and identical every time, not expressive. High
- * stability keeps it consistent, style 0 avoids the theatrical delivery that
- * also costs latency, and slightly-under-1.0 speed gives people time to take
- * in the options. These are a starting point to tune by ear, not gospel.
- */
-export const VOICE_PRESET = {
-  stability: 0.75,
-  similarity_boost: 0.8,
-  style: 0,
-  use_speaker_boost: true,
-  speed: 0.95,
-} as const;
 
 export default function ElevenLabsPage() {
   const [status, setStatus] = useState<Status | null>(null);
