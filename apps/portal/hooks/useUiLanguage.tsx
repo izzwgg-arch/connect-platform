@@ -45,7 +45,16 @@ export function UiLanguageProvider({ children }: { children: React.ReactNode }) 
   const [lang, setLangState] = useState<Lang>("en");
   const [available, setAvailable] = useState(false);
   const [ready, setReady] = useState(false);
-  const [, forceRender] = useState(0);
+  /**
+   * Bumped whenever translations land. It MUST be part of the context value's
+   * memo deps: `children` is a stable element passed in from the layout, so
+   * re-rendering this provider does not re-render the tree below it. Without a
+   * changing context value the sidebar kept its English labels forever even
+   * though the translations had arrived — screens that happened to re-render
+   * for their own reasons looked fine, which is what made it look like it
+   * worked.
+   */
+  const [version, setVersion] = useState(0);
   const pending = useRef<Set<string>>(new Set());
   const inFlight = useRef(false);
 
@@ -77,7 +86,7 @@ export function UiLanguageProvider({ children }: { children: React.ReactNode }) 
       for (const [en, yi] of Object.entries(r.translations || {})) {
         if (yi && yi.trim()) memo.set(en, yi);
       }
-      forceRender((n) => n + 1);
+      setVersion((n) => n + 1);
     } catch {
       // Leave everything in English. Deliberately silent — a translation
       // outage must not put an error in front of someone using their phone
@@ -106,9 +115,12 @@ export function UiLanguageProvider({ children }: { children: React.ReactNode }) 
   const t = useCallback((english: string) => {
     if (lang !== "yi") return english;
     return memo.get((english ?? "").trim()) ?? english;
-  }, [lang]);
+  }, [lang, version]); // eslint-disable-line react-hooks/exhaustive-deps -- version forces a fresh reader when translations land
 
-  const value = useMemo<Ctx>(() => ({ lang, available, ready, setLang, t, register }), [lang, available, ready, setLang, t, register]);
+  const value = useMemo<Ctx>(
+    () => ({ lang, available, ready, setLang, t, register }),
+    [lang, available, ready, setLang, t, register],
+  );
 
   return (
     <LanguageContext.Provider value={value}>
