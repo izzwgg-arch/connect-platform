@@ -1,9 +1,29 @@
+import Redis from "ioredis";
 import { childLogger } from "../../logging/logger";
 import { env } from "../../config/env";
 import type { NormalizedCall } from "../types";
 import { isLocalOnlyCall, hasValidChannel } from "../normalizers/normalizeCallEvent";
 
 const log = childLogger("CdrNotifier");
+
+// ── Durable retry queue (2026-08-04) ─────────────────────────────────────────
+// The in-process retry (3 attempts, ~7s) cannot survive an API deploy — every
+// call that ended during a restart window was permanently lost ("cdr: ingest
+// failed after all retries"). Failed payloads now go to a Redis list and are
+// re-posted every RETRY_DRAIN_INTERVAL_MS until the API accepts them. The list
+// survives both API and telephony restarts.
+const RETRY_QUEUE_KEY = "telephony:cdr:retry:v1";
+const RETRY_DRAIN_INTERVAL_MS = 30_000;
+const RETRY_DRAIN_BATCH = 50;
+// ~7 days at one drain attempt per 30s round. A payload this old means the API
+// rejected or the queue was stuck for a week — log loudly and drop.
+const RETRY_MAX_ATTEMPTS = 20_160;
+
+type QueuedCdr = {
+  payload: CdrPayload;
+  attempts: number;
+  firstFailedAt: string;
+};
 
 // Direction mapping: telephony service uses "inbound"/"outbound"; DB/KPI uses "incoming"/"outgoing"
 function normalizeDirection(dir: string): "incoming" | "outgoing" | "internal" | "unknown" {
@@ -173,15 +193,113 @@ export type CdrPayload = {
 export class CdrNotifier {
   private readonly url: string | undefined;
   private readonly secret: string | undefined;
+  private readonly redis: Redis | null = null;
+  private drainTimer: ReturnType<typeof setInterval> | null = null;
+  private draining = false;
 
-  constructor() {
+  constructor(opts?: { redisUrl?: string }) {
     this.url = env.CDR_INGEST_URL;
     this.secret = env.CDR_INGEST_SECRET;
+
+    const redisUrl = opts?.redisUrl?.trim();
+    if (this.url && redisUrl) {
+      this.redis = new Redis(redisUrl, {
+        lazyConnect: true,
+        maxRetriesPerRequest: 2,
+        enableOfflineQueue: false,
+      });
+      // A broken Redis must never break call handling — queueing is best-effort
+      // on top of the in-process retries.
+      this.redis.on("error", (err) => {
+        log.warn({ err: err?.message }, "cdr-retry-queue: redis error");
+      });
+      this.startRetryDrain();
+    }
 
     if (!this.url) {
       log.info("CDR_INGEST_URL not set — CDR persistence disabled");
     } else {
-      log.info({ url: this.url }, "CdrNotifier ready");
+      log.info({ url: this.url, durableRetry: this.redis != null }, "CdrNotifier ready");
+    }
+  }
+
+  startRetryDrain(): void {
+    if (!this.redis || this.drainTimer) return;
+    this.drainTimer = setInterval(() => {
+      void this.drainRetryQueue().catch((err: unknown) => {
+        log.warn({ err: (err as Error)?.message }, "cdr-retry-queue: drain error");
+      });
+    }, RETRY_DRAIN_INTERVAL_MS);
+    if (this.drainTimer.unref) this.drainTimer.unref();
+  }
+
+  stopRetryDrain(): void {
+    if (this.drainTimer) {
+      clearInterval(this.drainTimer);
+      this.drainTimer = null;
+    }
+    if (this.redis) void this.redis.quit().catch(() => undefined);
+  }
+
+  private async enqueueForDurableRetry(payload: CdrPayload, cause: string): Promise<boolean> {
+    if (!this.redis) return false;
+    try {
+      const item: QueuedCdr = { payload, attempts: 0, firstFailedAt: new Date().toISOString() };
+      const depth = await this.redis.rpush(RETRY_QUEUE_KEY, JSON.stringify(item));
+      log.warn(
+        { linkedId: payload.linkedId, cause, queueDepth: depth },
+        "cdr: ingest failed after in-process retries — queued for durable retry",
+      );
+      return true;
+    } catch (err: unknown) {
+      log.error(
+        { linkedId: payload.linkedId, err: (err as Error)?.message },
+        "cdr-retry-queue: enqueue failed — call may be missing from Connect until backfill",
+      );
+      return false;
+    }
+  }
+
+  /** Re-post queued payloads. Stops the round on the first failure (API still down). */
+  async drainRetryQueue(): Promise<void> {
+    if (!this.redis || !this.url || this.draining) return;
+    this.draining = true;
+    try {
+      let recovered = 0;
+      for (let i = 0; i < RETRY_DRAIN_BATCH; i++) {
+        const raw = await this.redis.lpop(RETRY_QUEUE_KEY);
+        if (!raw) break;
+        let item: QueuedCdr;
+        try {
+          item = JSON.parse(raw) as QueuedCdr;
+        } catch {
+          log.error({ raw: raw.slice(0, 200) }, "cdr-retry-queue: dropping unparseable item");
+          continue;
+        }
+        const outcome = await this.tryPostOnce(item.payload);
+        if (outcome === "ok" || outcome === "fatal") {
+          // fatal = 4xx: the API examined and rejected the payload; retrying
+          // forever cannot fix it. It is already logged by tryPostOnce.
+          if (outcome === "ok") recovered++;
+          continue;
+        }
+        item.attempts += 1;
+        if (item.attempts >= RETRY_MAX_ATTEMPTS) {
+          log.error(
+            { linkedId: item.payload.linkedId, attempts: item.attempts, firstFailedAt: item.firstFailedAt },
+            "cdr-retry-queue: giving up after max attempts — call missing from Connect",
+          );
+          continue;
+        }
+        await this.redis.rpush(RETRY_QUEUE_KEY, JSON.stringify(item));
+        break; // API still unreachable — try again next round
+      }
+      const depth = await this.redis.llen(RETRY_QUEUE_KEY);
+      if (recovered > 0 || depth > 0) {
+        log.info({ recovered, queueDepth: depth }, "cdr-retry-queue: drain round finished");
+      }
+    } finally {
+      this.draining = false;
     }
   }
 
@@ -415,58 +533,64 @@ export class CdrNotifier {
     }
   }
 
-  private async postAsync(payload: CdrPayload): Promise<void> {
-    // Retry up to 3 times with brief exponential backoff (1s, 2s, 4s).
-    // Covers transient network blips and brief API container restarts during deploys.
-    const MAX_ATTEMPTS = 3;
+  /** One POST attempt. "fatal" = 4xx (API rejected the payload; retrying can't fix it). */
+  private async tryPostOnce(payload: CdrPayload): Promise<"ok" | "retryable" | "fatal"> {
     const TIMEOUT_MS = 8000;
-    let lastErr: unknown;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(this.url!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(this.secret ? { "x-cdr-secret": this.secret } : {}),
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        _stats.postedOk++;
+        return "ok";
+      }
+      _stats.httpErrors++;
+      log.warn({ linkedId: payload.linkedId, status: res.status }, "cdr: ingest HTTP error");
+      return res.status < 500 ? "fatal" : "retryable";
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      if ((err as Error)?.name === "AbortError") {
+        _stats.httpTimeouts++;
+        log.warn({ linkedId: payload.linkedId }, "cdr: ingest POST timed out (8s)");
+      } else {
+        _stats.httpErrors++;
+      }
+      return "retryable";
+    }
+  }
+
+  private async postAsync(payload: CdrPayload): Promise<void> {
+    // Fast path: up to 3 in-process attempts with brief backoff (covers network
+    // blips). Anything that still fails goes to the durable Redis queue, which
+    // survives API deploys and telephony restarts — the old 3-and-done behavior
+    // permanently lost every call that ended during an API restart window.
+    const MAX_ATTEMPTS = 3;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-      try {
-        const res = await fetch(this.url!, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(this.secret ? { "x-cdr-secret": this.secret } : {}),
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        if (!res.ok) {
-          _stats.httpErrors++;
-          log.warn({ linkedId: payload.linkedId, status: res.status, attempt }, "cdr: ingest HTTP error");
-          // 4xx errors are not retryable (bad payload); 5xx are retryable
-          if (res.status < 500) return;
-          lastErr = new Error(`HTTP ${res.status}`);
-        } else {
-          _stats.postedOk++;
-          return;
-        }
-      } catch (err: unknown) {
-        clearTimeout(timer);
-        if ((err as Error)?.name === "AbortError") {
-          _stats.httpTimeouts++;
-          log.warn({ linkedId: payload.linkedId, attempt }, "cdr: ingest POST timed out (8s)");
-          lastErr = err;
-        } else {
-          _stats.httpErrors++;
-          lastErr = err;
-        }
-      }
-
+      const outcome = await this.tryPostOnce(payload);
+      if (outcome === "ok" || outcome === "fatal") return;
       if (attempt < MAX_ATTEMPTS) {
         const delayMs = 1000 * Math.pow(2, attempt - 1); // 1s, 2s
         await new Promise((r) => setTimeout(r, delayMs));
       }
     }
 
-    log.error(
-      { linkedId: payload.linkedId, err: (lastErr as Error)?.message, attempts: MAX_ATTEMPTS },
-      "cdr: ingest failed after all retries — call will be missing from Connect",
-    );
+    const queued = await this.enqueueForDurableRetry(payload, "in_process_retries_exhausted");
+    if (!queued) {
+      // Kept verbatim so existing log-based monitoring still fires on the worst case.
+      log.error(
+        { linkedId: payload.linkedId, attempts: MAX_ATTEMPTS },
+        "cdr: ingest failed after all retries — call will be missing from Connect",
+      );
+    }
   }
 }

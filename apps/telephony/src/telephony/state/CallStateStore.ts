@@ -20,14 +20,39 @@ const ACTIVE_STATES: CallState[] = ["ringing", "dialing", "up", "held"];
 // Emitted events:
 //   'callUpsert'   (call: NormalizedCall) — call was created or updated
 //   'callRemove'   (callId: string)       — call was permanently removed
+//   'callEvicted'  (call: NormalizedCall) — call was force-removed by a cleanup
+//                  path (zombie/ghost/stale/clearAll) WITHOUT a normal hangup.
+//                  Fired so the CDR is filed with whatever data exists; a later
+//                  AMI Cdr event for the same linkedId corrects it via upsert.
+//   'orphanCdr'    (call: NormalizedCall) — an AMI Cdr event arrived for a call
+//                  the store no longer (or never) tracked. The event is the
+//                  PBX's own end-of-call report, so it is synthesized into a
+//                  minimal call and filed — no call may vanish from history
+//                  just because the live tracker lost it.
 export declare interface CallStateStore {
   on(event: "callUpsert", listener: (call: NormalizedCall) => void): this;
   on(event: "callRemove", listener: (callId: string) => void): this;
+  on(event: "callEvicted", listener: (call: NormalizedCall) => void): this;
+  on(event: "orphanCdr", listener: (call: NormalizedCall) => void): this;
 }
 
 // How long (ms) to keep a hung-up call in the store before evicting it.
 // Downstream consumers can read it during this window.
 const HANGUP_RETAIN_MS = 30_000;
+
+// ── ARI bridge-reconcile safety margins ──────────────────────────────────────
+// The ARI poll snapshot is taken BEFORE extra awaits (channel-var fetches,
+// endpoint counts, afterPoll publish) run, so by the time reconcile sees it the
+// bridge list can be a second or more stale. A call whose bridge formed inside
+// that window looks "absent" and used to be force-evicted mid-call (live case
+// 2026-08-04: Relax Tires linkedId 1785860821.162724 — evicted 0.8s after its
+// bridges formed, 20s into a 5-minute call; its CDR was permanently lost).
+// Two independent guards:
+//   1. A bridge must be absent from TWO CONSECUTIVE polls before eviction.
+//   2. A call whose most recent BridgeEnter is younger than the grace window is
+//      never evicted by reconcile, regardless of strikes.
+const RECONCILE_ABSENT_STRIKES_REQUIRED = 2;
+const RECONCILE_BRIDGE_GRACE_MS = 15_000;
 
 /** Max call duration (seconds) for duration-based stale cleanup. Only used when call has no live channel. */
 const MAX_CALL_DURATION_SECONDS = 8000;
@@ -957,6 +982,9 @@ export class CallStateStore extends EventEmitter {
     if (!call.bridgeIds.includes(bridgeId)) {
       call.bridgeIds.push(bridgeId);
     }
+    // Reconcile grace anchor: a freshly-bridged call must never be evicted by a
+    // stale ARI snapshot (see RECONCILE_BRIDGE_GRACE_MS).
+    call.metadata["lastBridgeEnterAtMs"] = Date.now();
     const bridgeChannel = this.channelByUniqueId.get(params.uniqueid);
     markExtensionLegSeen(call, bridgeChannel);
     const bridgeExt = normalizeExtensionFromChannel(bridgeChannel);
@@ -1131,10 +1159,23 @@ export class CallStateStore extends EventEmitter {
     dcontext?: string;
     accountCode?: string;
     channel?: string;
+    destChannel?: string;
     lastApplication?: string;
   }): void {
     const call = this.calls.get(params.linkedId);
-    if (!call) return;
+    if (!call) {
+      // ── Orphan-CDR safety net (2026-08-04) ─────────────────────────────────
+      // The Cdr event is Asterisk's own end-of-call report; it fires whether or
+      // not the live tracker still knows the call. A call can be gone here
+      // because it was force-evicted (stale ARI snapshot), because this service
+      // restarted mid-call, or because the Cdr arrived after the retention
+      // window. Losing the event = the call vanishes from every customer's
+      // history — 71 calls on Aug 4, 179 on Aug 3. Synthesize a minimal call
+      // and hand it to CdrNotifier; the API upserts by linkedId, so several
+      // orphan legs (and any provisional eviction record) merge into one row.
+      this.emit("orphanCdr", this.synthesizeCallFromCdrEvent(params));
+      return;
+    }
 
     const dur = parseInt(params.duration, 10);
     const bill = parseInt(params.billableSeconds, 10);
@@ -1353,6 +1394,109 @@ export class CallStateStore extends EventEmitter {
     }
 
     this.emit("callUpsert", { ...call });
+  }
+
+  /**
+   * Build a minimal NormalizedCall from a raw AMI Cdr event for a call the
+   * store no longer tracks (see the orphan-CDR net in {@link onCdr}). Times
+   * avoid trusting the PBX's local-time strings: startedAt comes from the
+   * linkedId's epoch prefix (Asterisk linkedids are `<epoch>.<seq>`), endedAt
+   * is "now" (the Cdr event fires at call end), answeredAt is back-computed
+   * from billableSeconds. Direction is left "unknown" — CdrNotifier derives it
+   * from the dcontext exactly as it does for tracked calls, and the API's
+   * resolver re-derives tenant attribution from the same fields.
+   */
+  private synthesizeCallFromCdrEvent(params: {
+    linkedId: string;
+    duration: string;
+    billableSeconds: string;
+    disposition: string;
+    source?: string;
+    destination?: string;
+    dcontext?: string;
+    accountCode?: string;
+    channel?: string;
+    destChannel?: string;
+    lastApplication?: string;
+  }): NormalizedCall {
+    const dur = Math.max(0, parseInt(params.duration, 10) || 0);
+    const bill = Math.max(0, parseInt(params.billableSeconds, 10) || 0);
+    const nowMs = Date.now();
+    const epochMatch = /^(\d{10})\.\d+$/.exec(params.linkedId);
+    const startedMs = epochMatch ? Number(epochMatch[1]) * 1000 : nowMs - dur * 1000;
+    const disp = String(params.disposition ?? "").toUpperCase().trim();
+    const answeredMs = disp === "ANSWERED" && bill > 0 ? nowMs - bill * 1000 : null;
+
+    let tenantId: string | null = null;
+    const pbxTenantCode = extractPbxTenantCodeFromCallFields(
+      params.dcontext,
+      params.channel,
+      params.destChannel,
+    );
+    if (pbxTenantCode && this.tenantCodeToConnectIdResolver) {
+      tenantId = this.tenantCodeToConnectIdResolver(pbxTenantCode);
+    }
+    if (!tenantId && (params.dcontext || params.accountCode)) {
+      const resolved = resolveTenantFromCdrFields(params.dcontext, params.accountCode);
+      if (resolved) {
+        if (this.slugToConnectIdResolver && resolved.startsWith("vpbx:")) {
+          tenantId = this.slugToConnectIdResolver(resolved.slice(5)) ?? resolved;
+        } else {
+          tenantId = resolved;
+        }
+      }
+    }
+
+    const leg = {
+      source: (params.source ?? "").trim(),
+      destination: (params.destination ?? "").trim(),
+      dcontext: (params.dcontext ?? "").trim(),
+      duration: dur,
+      billableSec: bill,
+      disposition: (params.disposition ?? "").trim(),
+      lastApplication: (params.lastApplication ?? "").trim(),
+    };
+
+    const channels = [params.channel, params.destChannel]
+      .map((c) => String(c ?? "").trim())
+      .filter(Boolean);
+
+    return {
+      id: params.linkedId,
+      linkedId: params.linkedId,
+      tenantId,
+      tenantSlug: null,
+      tenantName: null,
+      direction: "unknown",
+      state: "hungup",
+      from: params.source?.trim() || null,
+      fromName: null,
+      fromPrefix: null,
+      to: params.destination?.trim() || null,
+      connectedLine: null,
+      source_extension: looksLikeExtension(params.source) ? params.source!.trim() : null,
+      destination_extension: looksLikeExtension(params.destination) ? params.destination!.trim() : null,
+      channelState: null,
+      channels,
+      bridgeIds: [],
+      extensions: [],
+      queueId: null,
+      trunk: null,
+      startedAt: new Date(startedMs).toISOString(),
+      answeredAt: answeredMs ? new Date(answeredMs).toISOString() : null,
+      extensionAnsweredAt: null,
+      endedAt: new Date(nowMs).toISOString(),
+      durationSec: dur,
+      billableSec: bill,
+      metadata: {
+        source: "ami_cdr_orphan",
+        cdrDisposition: params.disposition,
+        ...(params.dcontext ? { cdrDcontext: params.dcontext, cdrDcontexts: [params.dcontext] } : {}),
+        ...(params.accountCode ? { cdrAccountCode: params.accountCode } : {}),
+        ...(pbxTenantCode ? { pbxTenantCode } : {}),
+        cdrLegs: leg.source || leg.destination ? [leg] : [],
+      },
+    };
   }
 
   // Called when AMI reports the MIXMONITOR_FILENAME (or equivalent) VarSet.
@@ -1596,6 +1740,18 @@ export class CallStateStore extends EventEmitter {
     for (const t of this.evictTimers.values()) clearTimeout(t);
     this.evictTimers.clear();
     this.bridgeIndex.clear();
+    // An AMI disconnect must not erase in-flight calls from history: file a
+    // provisional CDR for every active call before dropping state. If the call
+    // is still live, post-reconnect AMI events rebuild it and the eventual Cdr
+    // event corrects the record via linkedId upsert.
+    for (const call of this.calls.values()) {
+      if (call.state === "hungup") continue;
+      if (!ACTIVE_STATES.includes(call.state)) continue;
+      call.state = "hungup";
+      call.endedAt = new Date().toISOString();
+      call.metadata["staleEvictReason"] = "ami_disconnect_clear_all";
+      this.emit("callEvicted", { ...call });
+    }
     const ids = [...this.calls.keys()];
     this.calls.clear();
     this.channelIndex.clear();
@@ -1675,6 +1831,13 @@ export class CallStateStore extends EventEmitter {
       }
     }
     for (const id of toEvictNow) {
+      const call = this.calls.get(id);
+      if (call && call.state !== "hungup") {
+        call.state = "hungup";
+        call.endedAt = new Date().toISOString();
+        call.metadata["staleEvictReason"] = "stale_duration";
+        this.emit("callEvicted", { ...call });
+      }
       this.evictCallNow(id);
     }
     for (const id of toMarkHungupAndSchedule) {
@@ -1682,6 +1845,9 @@ export class CallStateStore extends EventEmitter {
       if (!call) continue;
       call.state = "hungup";
       call.endedAt = new Date().toISOString();
+      call.metadata["staleEvictReason"] = "ghost_no_live_channel";
+      // Same contract as forceEvictZombie: cleanup must never eat the CDR.
+      this.emit("callEvicted", { ...call });
       this.emitCallRemove(id);
       this.scheduleEvict(id);
     }
@@ -1713,6 +1879,14 @@ export class CallStateStore extends EventEmitter {
       "live_call: zombie_force_evicted",
     );
 
+    // File the CDR with whatever this call knows. Eviction used to emit only
+    // callRemove — CdrNotifier listens for hungup callUpserts, so an evicted
+    // call whose real AMI Cdr event arrived after the retention window was
+    // permanently missing from history (the 2026-08-04 loss). The record is
+    // provisional; the AMI Cdr event (via the store or the orphanCdr net)
+    // upserts the same linkedId later with authoritative duration/disposition.
+    this.emit("callEvicted", { ...call });
+
     this.emitCallRemove(callId);
     this.scheduleEvict(callId);
 
@@ -1724,16 +1898,46 @@ export class CallStateStore extends EventEmitter {
    * a Hangup/BridgeLeave edge and leave a bridged call in `up`, which makes BLF
    * stay red after the real PBX bridge is gone. Evict only calls that already
    * had bridgeIds; ringing/unbridged calls remain AMI-driven.
+   *
+   * HARDENED 2026-08-04: the poll snapshot can be stale (taken before several
+   * awaits inside the poller tick), and `computeBridgedActiveCalls` can exclude
+   * a REAL bridge mid-formation. Eviction now requires the bridge to be absent
+   * from two consecutive polls AND the call's newest bridge to be older than
+   * the grace window. A wrongly-evicted live call loses its CDR forever once it
+   * outlives the retention window — 71 calls were erased this way on Aug 4 alone.
    */
+  private reconcileAbsentStrikes = new Map<string, number>();
+
   reconcileActiveBridges(activeBridgeIds: Iterable<string>): void {
     const active = new Set(activeBridgeIds);
+    const seenThisRound = new Set<string>();
     for (const call of this.getActive()) {
       if (call.bridgeIds.length === 0) continue;
-      if (call.bridgeIds.some((bridgeId) => active.has(bridgeId))) continue;
+      seenThisRound.add(call.id);
+      if (call.bridgeIds.some((bridgeId) => active.has(bridgeId))) {
+        this.reconcileAbsentStrikes.delete(call.id);
+        continue;
+      }
+      const lastBridgeEnterAtMs = Number(call.metadata["lastBridgeEnterAtMs"] ?? 0);
+      if (lastBridgeEnterAtMs && Date.now() - lastBridgeEnterAtMs < RECONCILE_BRIDGE_GRACE_MS) {
+        // Bridge formed moments ago — almost certainly newer than the snapshot.
+        this.reconcileAbsentStrikes.delete(call.id);
+        continue;
+      }
+      const strikes = (this.reconcileAbsentStrikes.get(call.id) ?? 0) + 1;
+      if (strikes < RECONCILE_ABSENT_STRIKES_REQUIRED) {
+        this.reconcileAbsentStrikes.set(call.id, strikes);
+        continue;
+      }
+      this.reconcileAbsentStrikes.delete(call.id);
       this.forceEvictZombie(
         call.id,
-        `ari_bridge_absent bridgeIds=${call.bridgeIds.join(",")}`,
+        `ari_bridge_absent bridgeIds=${call.bridgeIds.join(",")} strikes=${strikes}`,
       );
+    }
+    // Drop strike entries for calls that left the store between polls.
+    for (const id of this.reconcileAbsentStrikes.keys()) {
+      if (!seenThisRound.has(id)) this.reconcileAbsentStrikes.delete(id);
     }
   }
 

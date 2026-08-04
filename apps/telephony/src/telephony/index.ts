@@ -101,7 +101,8 @@ export function createTelephonyModule(server: http.Server) {
   const healthService = new HealthService(ami, ari, callStore, extStore, queueStore, ariBridgedPoller);
 
   // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.
-  const cdrNotifier = new CdrNotifier();
+  // REDIS_URL enables the durable retry queue — failed posts survive API deploys.
+  const cdrNotifier = new CdrNotifier({ redisUrl: env.REDIS_URL });
   // Mobile push notifier: fires an Expo push when an inbound call rings at an extension.
   const mobilePushNotifier = new MobilePushNotifier();
   // Lets the notifier fire an on-ring contact-liveness probe over the AMI link
@@ -127,6 +128,8 @@ export function createTelephonyModule(server: http.Server) {
     // ── Metrics: completed call counters ───────────────────────────────────
     if (call.state === "hungup") {
       cdrNotifier.notify(call);
+      // (Eviction/orphan filings arrive via the dedicated events below, not here —
+      // cleanup paths emit callRemove without a hungup upsert.)
       // Count completed calls — direction resolved by CDR notifier; use raw here
       const dir = call.direction ?? "unknown";
       const disp = call.answeredAt ? "answered" : "missed";
@@ -138,6 +141,29 @@ export function createTelephonyModule(server: http.Server) {
         metrics.callTalkSeconds.labels(dir).observe(talkSec);
       }
     }
+  });
+  // ── CDR loss hardening (2026-08-04) ───────────────────────────────────────
+  // Force-evictions (stale ARI snapshot, ghost cleanup, AMI disconnect) used to
+  // emit only callRemove — no hungup upsert, so CdrNotifier never fired and any
+  // call whose real AMI Cdr event arrived after the 30s retention window was
+  // permanently missing from history (71 calls on Aug 4, 179 on Aug 3).
+  // These two events go straight to the notifier and ONLY the notifier: no
+  // mobile-push side effects, no broadcast churn.
+  callStore.on("callEvicted", (call) => {
+    log.info(
+      { linkedId: call.linkedId, tenantId: call.tenantId, reason: call.metadata?.["staleEvictReason"] ?? null },
+      "cdr: filing provisional record for evicted call",
+    );
+    cdrNotifier.notify(call);
+  });
+  // A Cdr event for a call the store no longer tracks is the PBX's own
+  // end-of-call report — file it no matter what the live tracker thinks.
+  callStore.on("orphanCdr", (call) => {
+    log.info(
+      { linkedId: call.linkedId, tenantId: call.tenantId, from: call.from, to: call.to },
+      "cdr: filing orphan AMI-Cdr record (call not in store)",
+    );
+    cdrNotifier.notify(call);
   });
   const snapshotService = new SnapshotService(
     callStore,
@@ -287,6 +313,7 @@ export function createTelephonyModule(server: http.Server) {
     log.info("Stopping telephony module");
     if (_presenceRefreshInterval) { clearInterval(_presenceRefreshInterval); _presenceRefreshInterval = null; }
     if (_metricsInterval) { clearInterval(_metricsInterval); _metricsInterval = null; }
+    cdrNotifier.stopRetryDrain();
     callStore.stopPeriodicStaleCleanup();
     healingEngine.stop();
     connectWakeConsumer.stop();

@@ -414,6 +414,7 @@ export class TelephonyService {
           dcontext: typed.dcontext,
           accountCode: typed.accountCode,
           channel: typed.channel,
+          destChannel: typed.destChannel,
           lastApplication: typed.lastApplication,
         });
         break;
