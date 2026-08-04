@@ -147,22 +147,43 @@ export async function runCardGatewayTest(
       },
     );
 
+    // Field names taken from what chargeBillingInvoiceWithSut actually writes,
+    // not from what they sound like they should be: the reference lives on
+    // `processorTransactionId`, and the card details are inside
+    // `rawResponseSafeJson` because an ephemeral (unvaulted) card has no
+    // PaymentMethod row to carry them.
+    const safe = (tx?.rawResponseSafeJson ?? {}) as Record<string, unknown>;
+    const approved = String(tx?.status ?? "").toUpperCase() === "APPROVED";
+    if (!approved) {
+      return {
+        ok: false,
+        code: 402,
+        error: "declined",
+        message: tx?.responseMessage || "The processor declined this card.",
+      };
+    }
+
     return {
       ok: true,
       amountCents: CARD_TEST_AMOUNT_CENTS,
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       transactionId: tx?.id ?? null,
-      processorRef: tx?.processorRef ?? tx?.externalId ?? null,
-      last4: tx?.cardLast4 ?? null,
-      cardBrand: tx?.cardBrand ?? null,
+      processorRef: tx?.processorTransactionId ?? null,
+      last4: (safe.cardLast4 as string) ?? null,
+      cardBrand: (safe.cardBrand as string) ?? null,
     };
   } catch (err: any) {
     // A decline is a RESULT, not a crash — the whole point is to find out.
     // Surface the processor's own wording; it is what a cardholder needs.
+    // The charge path already turns a processor refusal into a sentence and
+    // hangs it on `processorMessage` (with the raw payload on `response`) —
+    // reaching for a field that doesn't exist would have thrown away the one
+    // piece of text a cardholder can act on.
     const { solaProcessorUserMessage } = await import("./solaBillingPayments");
     const message =
-      err?.processorResponse ? solaProcessorUserMessage(err.processorResponse)
+      err?.processorMessage ? String(err.processorMessage)
+      : err?.response ? solaProcessorUserMessage(err.response)
       : err?.code === "BILLING_LIVE_CHARGES_DISABLED" ? "Live card charges are switched off on this server."
       : err?.message || "The card was not charged.";
     return { ok: false, code: 402, error: "charge_failed", message };
