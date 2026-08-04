@@ -261,25 +261,28 @@ test("GUARD: spare grabbed by ANOTHER customer meanwhile → never steals it, au
 
 test("GUARD is EXACT: Acme1 must not match a number routed to Acme10 (substring trap)", async () => {
   reset({ live: true });
+  // Names follow the per-submission identity scheme (id "sub1" → subaccount
+  // "BobsPlumsub1"); the other customer's account is ours + "0" so an exact
+  // comparison is the ONLY thing telling them apart.
   vmsHandlers.getDIDsInfo = (p) =>
     p.did === "8455577726"
-      ? { status: "success", dids: [{ did: "8455577726", routing: "account:344022_BobsPlumbing10" }] }
+      ? { status: "success", dids: [{ did: "8455577726", routing: "account:344022_BobsPlumsub10" }] }
       : {
           status: "success",
           dids: [
-            { did: "8455577726", routing: "account:344022_BobsPlumbing10" },
+            { did: "8455577726", routing: "account:344022_BobsPlumsub10" },
             { did: "8455550009", routing: "account:344022", ratecenter: "MONROE", state: "NY" }, // spare, same area code
           ],
         };
-  const id = seedSubmission(); // subaccount 344022_BobsPlumbing1
+  const id = seedSubmission(); // subaccount 344022_BobsPlumsub1
   const res = await mod.applyOnboardingNumber(id);
   assert.equal(res.ok, true);
-  // The old substring test ("BobsPlumbing1" inside "BobsPlumbing10") routed
+  // A substring comparison ("BobsPlumsub1" inside "BobsPlumsub10") would rout
   // the taken number away from its owner. It must fall back instead.
   const route = calls("setDIDRouting");
   assert.equal(route.length, 1);
   assert.equal(route[0].params.did, "8455550009"); // same-area-code spare, not the stolen number
-  assert.equal(route[0].params.routing, "account:344022_BobsPlumbing1");
+  assert.equal(route[0].params.routing, "account:344022_BobsPlumsub1");
   assert.equal(state.submissions.get(id).provisionedDid, "8455550009");
 });
 
