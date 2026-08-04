@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.03.1"
+VERSION = "2026.08.04.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2372,6 +2372,11 @@ def _flow_map_for_tenant(conn, tenant_row):
         "tenantId": tenant_id,
         "tenantSlug": str(tenant_row.get("name") or ""),
         "tenantName": str(tenant_row.get("description") or tenant_row.get("name") or ""),
+        # The 16-char path hash. The panel switches tenant purely by setting
+        # the `vpbx_tenant` cookie to this, so anything automating the panel
+        # (creating ring groups / queues) needs it and cannot derive it from
+        # the numeric tenant id.
+        "tenantPath": tenant_path,
         "enabled": str(tenant_row.get("enabled") or "yes") == "yes",
     }
 
