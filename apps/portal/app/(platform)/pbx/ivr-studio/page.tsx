@@ -446,20 +446,46 @@ export default function IvrStudioPage() {
         keys.push({ digit: "1", kind: a.answerKind, targetId: answerTarget });
       }
 
-      await apiPost(`/voice/ivr/menus/build${qs}`, {
-        tenantId,
-        name: "Main menu",
-        timeoutSeconds: 7,
-        keys,
-        ...(a.hours === "weekdays"
-          ? {
-              hours: {
-                timezone: schedule?.timezone || "America/New_York",
-                rules: [1, 2, 3, 4, 5].map((day) => ({ day, open: "09:00", close: "17:00" })),
-              },
-            }
-          : {}),
-      });
+      const built = await apiPost<{ menus?: Array<{ id: string; name: string; type: string }> }>(
+        `/voice/ivr/menus/build${qs}`,
+        {
+          tenantId,
+          name: "Main menu",
+          // "Ring straight away" means the caller should not sit through a menu
+          // they were never offered — give the shortest wait the builder allows
+          // and let the timeout exit below carry them to a person.
+          timeoutSeconds: a.opening === "straight" ? 3 : 7,
+          keys,
+          ...(a.hours === "weekdays"
+            ? {
+                hours: {
+                  timezone: schedule?.timezone || "America/New_York",
+                  rules: [1, 2, 3, 4, 5].map((day) => ({ day, open: "09:00", close: "17:00" })),
+                },
+              }
+            : {}),
+        },
+      );
+
+      // The builder has no field for what happens when a caller presses
+      // nothing, and "nothing" is what almost every caller does. Without this
+      // the walkthrough's read-back would be a promise the menu doesn't keep:
+      // it says the call reaches a person, or voicemail, and this is the part
+      // that actually makes it true.
+      const mainProfile = (built?.menus ?? []).find((x) => x.type === "business_hours");
+      if (mainProfile) {
+        const onNoInput = a.opening === "straight"
+          ? buildDestination(a.answerKind, answerTarget, directory)
+          : a.fallbackKind === "hangup"
+            ? buildDestination("hangup", "", directory)
+            : buildDestination("voicemail", fallbackTarget, directory);
+        if (onNoInput) {
+          await apiPatch(`/voice/ivr/route-profiles/${mainProfile.id}${qs}`, {
+            timeoutDestinationType: onNoInput.destinationType,
+            timeoutDestinationRef: onNoInput.destinationRef,
+          });
+        }
+      }
 
       await loadAll();
       setFirstRun(false);
