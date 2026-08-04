@@ -24,7 +24,24 @@ const state = {
   passwordTokens: [] as any[],
   emailJobs: [] as any[],
   voipmsConfig: null as any,
+  // Billing world for the checkout-tenant adoption paths:
+  invoices: [] as any[],
+  invoiceLineItems: [] as any[],
+  paymentMethods: [] as any[],
+  paymentTransactions: [] as any[],
+  chargeOperations: [] as any[],
+  billingEventLogs: [] as any[],
+  billingSettings: new Map<string, any>(), // by tenantId
 };
+
+/** updateMany({where:{tenantId}, data}) over an in-memory table. */
+const updateManyByTenant = (rows: () => any[]) => async ({ where, data }: any) => {
+  const hits = rows().filter((r) => r.tenantId === where.tenantId);
+  for (const r of hits) Object.assign(r, data);
+  return { count: hits.length };
+};
+const countByTenant = (rows: () => any[]) => async ({ where }: any) =>
+  rows().filter((r) => r.tenantId === where.tenantId).length;
 
 function findExt(tenantId: string, extNumber: string) {
   return state.extensions.find((e) => e.tenantId === tenantId && e.extNumber === extNumber) || null;
@@ -63,9 +80,7 @@ const dbMock: any = {
   pbxTenantDirectory: { findMany: async () => state.pbxDirs },
   tenantPbxLink: {
     findFirst: async ({ where }: any) =>
-      state.tenantLinks.find(
-        (l) => l.pbxInstanceId === where.pbxInstanceId && l.pbxTenantId === where.pbxTenantId,
-      ) || null,
+      state.tenantLinks.find((l) => Object.entries(where).every(([k, v]) => l[k] === v)) || null,
     update: async ({ where, data }: any) => {
       const l = state.tenantLinks.find((x) => x.id === where.id);
       Object.assign(l, data);
@@ -76,8 +91,22 @@ const dbMock: any = {
       state.tenantLinks.push(l);
       return l;
     },
+    upsert: async ({ where, create, update }: any) => {
+      const l = state.tenantLinks.find((x) => x.tenantId === where.tenantId);
+      if (l) {
+        Object.assign(l, update);
+        return l;
+      }
+      const created = { id: nid("link"), ...create };
+      state.tenantLinks.push(created);
+      return created;
+    },
   },
   tenant: {
+    findUnique: async ({ where }: any) => {
+      const t = state.tenants.get(where.id);
+      return t ? { ...t } : null;
+    },
     create: async ({ data }: any) => {
       const t = { id: nid("tenant"), ...data };
       state.tenants.set(t.id, t);
@@ -89,12 +118,50 @@ const dbMock: any = {
       Object.assign(t, data);
       return t;
     },
+    delete: async ({ where }: any) => {
+      const t = state.tenants.get(where.id);
+      if (!t) throw new Error("tenant_not_found");
+      state.tenants.delete(where.id);
+      return t;
+    },
+  },
+  billingInvoice: {
+    updateMany: updateManyByTenant(() => state.invoices),
+    count: countByTenant(() => state.invoices),
+  },
+  billingInvoiceLineItem: { updateMany: updateManyByTenant(() => state.invoiceLineItems) },
+  paymentMethod: {
+    updateMany: updateManyByTenant(() => state.paymentMethods),
+    count: countByTenant(() => state.paymentMethods),
+  },
+  paymentTransaction: { updateMany: updateManyByTenant(() => state.paymentTransactions) },
+  billingChargeOperation: { updateMany: updateManyByTenant(() => state.chargeOperations) },
+  billingEventLog: { updateMany: updateManyByTenant(() => state.billingEventLogs) },
+  tenantBillingSettings: {
+    findUnique: async ({ where }: any) => state.billingSettings.get(where.tenantId) || null,
+    update: async ({ where, data }: any) => {
+      const s = state.billingSettings.get(where.tenantId);
+      if (!s) throw new Error("settings_not_found");
+      Object.assign(s, data);
+      return s;
+    },
+    upsert: async ({ where, create, update }: any) => {
+      const s = state.billingSettings.get(where.tenantId);
+      if (s) {
+        Object.assign(s, update);
+        return s;
+      }
+      const created = { tenantId: where.tenantId, ...create };
+      state.billingSettings.set(where.tenantId, created);
+      return created;
+    },
   },
   extension: {
     findUnique: async ({ where }: any) => {
       const e = findExt(where.tenantId_extNumber.tenantId, where.tenantId_extNumber.extNumber);
       return e ? { ...e } : null;
     },
+    count: async ({ where }: any) => state.extensions.filter((e) => e.tenantId === where.tenantId).length,
     update: async ({ where, data }: any) => {
       const e = state.extensions.find((x) => x.id === where.id);
       Object.assign(e, data);
@@ -103,6 +170,7 @@ const dbMock: any = {
   },
   user: {
     findUnique: async ({ where }: any) => state.users.get(where.email) || null,
+    count: async ({ where }: any) => [...state.users.values()].filter((u) => u.tenantId === where.tenantId).length,
     create: async ({ data }: any) => {
       const u = { id: nid("user"), ...data };
       state.users.set(u.email, u);
@@ -243,6 +311,13 @@ function reset(opts: { live?: boolean } = {}) {
   state.passwordTokens = [];
   state.emailJobs = [];
   state.voipmsConfig = { credentialsEncrypted: "enc:" + JSON.stringify({ username: "344022", password: "pw" }) };
+  state.invoices = [];
+  state.invoiceLineItems = [];
+  state.paymentMethods = [];
+  state.paymentTransactions = [];
+  state.chargeOperations = [];
+  state.billingEventLogs = [];
+  state.billingSettings.clear();
   dirSyncCalls.length = 0;
   buildCalls.length = 0;
   panelLogins.length = 0;
@@ -430,6 +505,76 @@ test("tenant reuse: background auto-sync already provisioned a slug-named tenant
   assert.equal(state.tenants.get(t.id).name, "Bobs Plumbing"); // renamed to the real company
   assert.equal(state.tenantLinks[0].status, "LINKED"); // un-poisoned
   assert.equal(state.submissions.get(id).createdTenantId, t.id);
+});
+
+test("checkout tenant reuse: submission.createdTenantId set — the PBX link lands on THAT tenant, no second tenant (the double-tenant regression)", async () => {
+  reset();
+  // Checkout already created the customer's tenant and hung the sign-up
+  // invoice + vaulted card + autopay on it:
+  const checkout = { id: nid("tenant"), name: "Bobs Plumbing", kind: "CUSTOMER", isApproved: true };
+  state.tenants.set(checkout.id, checkout);
+  state.invoices.push({ id: nid("inv"), tenantId: checkout.id, metadata: { source: "onboarding_signup" } });
+  state.paymentMethods.push({ id: "pm_1", tenantId: checkout.id, active: true });
+  state.billingSettings.set(checkout.id, { tenantId: checkout.id, autoBillingEnabled: true, defaultPaymentMethodId: "pm_1" });
+
+  const id = seedSubmission({ createdTenantId: checkout.id });
+  wireHealthySync();
+  await orchestrator.runOnboardingSetup(id);
+
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done");
+  // ONE tenant total, and it is the checkout tenant:
+  assert.equal(state.tenants.size, 1, "a second tenant was created for the same sign-up");
+  assert.equal(row.createdTenantId, checkout.id);
+  assert.equal(state.tenantLinks.length, 1);
+  assert.equal(state.tenantLinks[0].tenantId, checkout.id);
+  assert.equal(state.tenantLinks[0].pbxTenantId, "9");
+  assert.equal(state.tenantLinks[0].status, "LINKED");
+  // The billing never had to move — it was on the right tenant all along:
+  assert.equal(state.invoices[0].tenantId, checkout.id);
+  assert.equal(state.paymentMethods[0].tenantId, checkout.id);
+  assert.equal(state.billingSettings.get(checkout.id).autoBillingEnabled, true);
+  // Extensions/users landed on the same tenant:
+  assert.ok(state.extensions.every((e) => e.tenantId === checkout.id));
+});
+
+test("auto-sync race: link already on an auto-provisioned tenant — billing (invoice, card, autopay) migrates to the live tenant, orphan deleted", async () => {
+  reset();
+  const checkout = { id: nid("tenant"), name: "Bobs Plumbing", kind: "CUSTOMER", isApproved: true };
+  state.tenants.set(checkout.id, checkout);
+  state.invoices.push({ id: nid("inv"), tenantId: checkout.id, metadata: { source: "onboarding_signup" } });
+  state.invoiceLineItems.push({ id: nid("li"), tenantId: checkout.id });
+  state.paymentMethods.push({ id: "pm_1", tenantId: checkout.id, active: true });
+  state.paymentTransactions.push({ id: nid("tx"), tenantId: checkout.id });
+  state.billingSettings.set(checkout.id, { tenantId: checkout.id, autoBillingEnabled: true, defaultPaymentMethodId: "pm_1", billingEmail: "owner@x.com" });
+
+  // The background auto-sync raced the orchestrator and provisioned its own
+  // tenant + link for PBX tenant 9:
+  const auto = { id: nid("tenant"), name: "Bobs Plumbing (auto)", kind: "CUSTOMER" };
+  state.tenants.set(auto.id, auto);
+  state.tenantLinks.push({ id: nid("link"), tenantId: auto.id, pbxInstanceId: "inst1", pbxTenantId: "9", status: "LINKED" });
+
+  const id = seedSubmission({ createdTenantId: checkout.id });
+  wireHealthySync();
+  await orchestrator.runOnboardingSetup(id);
+
+  const row = state.submissions.get(id);
+  assert.equal(row.pbxSetupStatus, "done");
+  // The phone system stayed on the auto-provisioned tenant (its link won)…
+  assert.equal(row.createdTenantId, auto.id);
+  // …and every billing artifact followed it there:
+  assert.equal(state.invoices[0].tenantId, auto.id);
+  assert.equal(state.invoiceLineItems[0].tenantId, auto.id);
+  assert.equal(state.paymentMethods[0].tenantId, auto.id);
+  assert.equal(state.paymentTransactions[0].tenantId, auto.id);
+  const liveSettings = state.billingSettings.get(auto.id);
+  assert.ok(liveSettings, "live tenant got no billing settings");
+  assert.equal(liveSettings.autoBillingEnabled, true);
+  assert.equal(liveSettings.defaultPaymentMethodId, "pm_1");
+  assert.equal(liveSettings.billingEmail, "owner@x.com");
+  // The emptied checkout tenant is gone (no clutter in the admin list):
+  assert.ok(!state.tenants.has(checkout.id), "orphan checkout tenant was not deleted");
+  assert.match(events(), /Moved sign-up billing to the live tenant/);
 });
 
 test("email conflict: address owned by ANOTHER tenant — no hijack, no invite, flow still completes, conflict logged", async () => {
