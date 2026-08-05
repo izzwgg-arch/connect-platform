@@ -94,6 +94,10 @@ export async function queueOnboardingSignupReport(
       }
       lines.push(`Account number on file: ${porting.accountNumber ? "yes" : "NO — you may need to chase this"}. Transfer PIN: ${porting.portPin ? "yes" : "not given"}.`);
       lines.push(`Signed authorization: ${porting.loaFileName ? "uploaded" : "NOT uploaded — chase it"}. Copy of their bill: ${porting.billFileName ? "uploaded" : "NOT uploaded — chase it"}.`);
+      const portSubmissionFailure = String(answers?.provisioning?.portSubmissionFailure || "").trim();
+      if (portSubmissionFailure) {
+        lines.push(`CHASE THIS: VoIP.ms did not accept the port request (${portSubmissionFailure}). The customer's phone system still finished on the temporary number, but the transfer must be corrected and filed by hand.`);
+      }
       const attachFailures: string[] = Array.isArray(answers?.provisioning?.portDocAttachFailures)
         ? answers.provisioning.portDocAttachFailures
         : [];

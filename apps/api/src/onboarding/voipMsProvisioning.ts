@@ -97,7 +97,11 @@ async function vms(creds: VmsCreds, method: string, params: Record<string, strin
       throw new Error(`voipms ${method} failed: provider_unreachable (${lastTransport})`);
     }
     if (String(json?.status || "").toLowerCase() !== "success") {
-      throw new Error(`voipms ${method} failed: ${json?.status || "no_response"}`);
+      const status = String(json?.status || "no_response").trim();
+      const detail = [json?.error, json?.message, json?.description, json?.reason]
+        .map((v) => String(v || "").replace(/\s+/g, " ").trim())
+        .find((v) => v && v.toLowerCase() !== status.toLowerCase());
+      throw new Error(`voipms ${method} failed: ${status}${detail ? ` (${detail.slice(0, 160)})` : ""}`);
     }
     return json;
   }
@@ -455,6 +459,7 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
   const prov: any = answers?.provisioning || {};
   let portId = String(prov.portId || "");
   if (prov.portFiled) {
+    await mergeProvisioningState(row, { portSubmissionFailure: null, portSubmissionFailedAt: null });
     await logEvent(submissionId, `Port-in for ${did} already on file (id ${portId || "?"}) — not filing a second one.`);
   } else {
     const submit = await vms(creds, "addLNPPort", {
@@ -466,7 +471,12 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
       service_address: String(port.serviceAddress || ""),
     });
     portId = String(submit?.portid ?? submit?.port_id ?? "");
-    await mergeProvisioningState(row, { portFiled: true, portId });
+    await mergeProvisioningState(row, {
+      portFiled: true,
+      portId,
+      portSubmissionFailure: null,
+      portSubmissionFailedAt: null,
+    });
     await logEvent(submissionId, `Port-in submitted for ${did} (id ${portId || "?"}).`);
   }
 
@@ -541,6 +551,7 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
 
     let did = "";
     let temporary = false;
+    let portNeedsFollowUp = false;
 
     if (choice === "port") {
       // Temporary number FIRST, port second. The port is the irreversible
@@ -549,7 +560,23 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
       temporary = true;
       if (live) {
         did = await ensureTemporaryDid(creds, submissionId, row, sub.username);
-        await submitPortIn(creds, row, live);
+        try {
+          await submitPortIn(creds, row, live);
+        } catch (e: any) {
+          // A carrier/API rejection must not strand a paid customer. Their
+          // temporary DID is already live, so finish the phone-system build
+          // and surface the port as an explicit operator follow-up.
+          portNeedsFollowUp = true;
+          const portError = String(e?.message || e).slice(0, 300);
+          await mergeProvisioningState(row, {
+            portSubmissionFailure: portError,
+            portSubmissionFailedAt: new Date().toISOString(),
+          });
+          await logEvent(
+            submissionId,
+            `Port-in needs manual follow-up: ${portError}. Continuing setup on temporary number ${did}.`,
+          );
+        }
       } else {
         did = tenDigits(answers?.phone?.details?.numbers) || "8450000000";
         await logEvent(submissionId, `[dry-run] Assign a temporary number (spare or newly bought) → route to ${sub.username}.`);
@@ -606,7 +633,13 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
       },
     });
     await logEvent(submissionId, `${live ? "" : "[dry-run] "}Number stage ready — ${did}${temporary ? " (temporary until port completes)" : ""} on ${sub.username}.`);
-    return { ok: true, live, detail: choice === "port" ? "port_submitted_temp_assigned" : "number_ready" };
+    return {
+      ok: true,
+      live,
+      detail: choice === "port"
+        ? (portNeedsFollowUp ? "port_follow_up_temp_assigned" : "port_submitted_temp_assigned")
+        : "number_ready",
+    };
   } catch (e: any) {
     const msg = String(e?.message || e).slice(0, 300);
     await (db as any).onboardingSubmission.update({

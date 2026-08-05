@@ -412,6 +412,40 @@ test("area code out of stock: falls back to a nationwide search instead of faili
   assert.equal(calls("orderDID")[0].params.did, "9295551234");
 });
 
+test("port rejection is recorded for follow-up but the temporary-number setup still completes", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "9145550002", routing: "account:344022" }],
+  });
+  vmsHandlers.addLNPPort = () => ({
+    status: "invalid",
+    message: "Account number is required",
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: {
+      phone: {
+        choice: "port",
+        details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "" },
+      },
+    },
+  });
+
+  const res = await mod.applyOnboardingNumber(id);
+  const row = state.submissions.get(id);
+
+  assert.equal(res.ok, true);
+  assert.equal(res.detail, "port_follow_up_temp_assigned");
+  assert.equal(row.numberStatus, "ready");
+  assert.equal(row.provisionedDid, "9145550002");
+  assert.equal(row.didIsTemporary, true);
+  assert.equal(row.answers.provisioning.portFiled, undefined);
+  assert.match(row.answers.provisioning.portSubmissionFailure, /invalid \(Account number is required\)/);
+  assert.ok(state.events.some((e) => /continuing setup on temporary number 9145550002/i.test(e.message)));
+  assert.ok(state.events.some((e) => /number stage ready/i.test(e.message)));
+});
+
 test("SAFETY ORDER: temporary number comes FIRST — a temp-number failure files NO port, and the retry files exactly one", async () => {
   // The old order (port first, temp second) meant a temp-number failure left
   // a filed port behind, and the retry filed a SECOND port on the customer's
