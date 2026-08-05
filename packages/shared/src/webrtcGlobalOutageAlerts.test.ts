@@ -31,7 +31,7 @@ function outboundFail(tenantId: string, agoMs = 0) {
   return row(tenantId, { kind: "WEBRTC_CALL_DEBUG", debugKind: "WEBRTC_OUTBOUND_FAIL", direction: "outbound" }, agoMs);
 }
 
-function sdpFail(tenantId: string, agoMs = 0) {
+function sdpFail(tenantId: string, agoMs = 0, id?: string) {
   return row(
     tenantId,
     {
@@ -41,6 +41,7 @@ function sdpFail(tenantId: string, agoMs = 0) {
       sipFailure: { sipStatusCode: 488, failedCause: "Incompatible SDP" },
     },
     agoMs,
+    id,
   );
 }
 
