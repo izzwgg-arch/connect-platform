@@ -98,6 +98,35 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELI_IOS_443_PASTE_2026-08-05.md`*
   row. It was assigned to Yehuda by mistake — now Eli-only (not default). A
   duplicate QSR route sits in the QSR tenant itself as clutter.
 
+## AGENT HANDOFF — onboarding round 2 deploy + worktree cleanup (2026-08-05) — READ FIRST for wizard/checkout work, deploys, or worktree hygiene
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_ROUND2_DEPLOY_2026-08-05.md`**
+
+- **Production runs merged tip `7f3c7970`** (api job `1ba4879a` container-verified +
+  portal): wizard audit round 2 (`cf16ab12`), per-submission provisioning identities
+  (`6f5644f2`), port-in retry safety (`3a099489`), stranded-paid-signup watchdog
+  (`100a5071`), IVR Studio first-run (`32696a85`), and the rescued api error-leak
+  fix (`4fb512ed` — never gate safety behavior on NODE_ENV; the container doesn't set it).
+- **`BillingInvoice.onboardingSubmissionId` is UNIQUE** (migration `20260804090000`,
+  applied): one first-month invoice per sign-up, enforced by the DB. Checkout
+  looks up by that column, catches the P2002 race, and the client checkout POST
+  uses a 30 s timeout. Never reintroduce findFirst→create without it.
+- Review-step pricing comes from **`GET /onboarding/:token/quote`**; the pure
+  input derivation is `apps/api/src/onboarding/quoteInput.ts` (pre-submit reads
+  autosaved `answers`, post-submit reads `requestedExtensions` — the `smsEnabled`
+  COLUMN is false until submit, don't trust it pre-submit).
+- ⛔ **Merging parallel sessions: run tests after EVERY merge** — two clean
+  auto-merges still conflicted semantically (subaccount naming vs a new guard
+  test; reconciled in `110786d4`). `git merge` succeeding proves nothing.
+- **SSH alias is `ssh connect`** (root@45.14.194.179) — "loopcom" does NOT
+  resolve on this machine. Deploy queue: token in
+  `/opt/connectcomms/env/.env.platform`, api before portal, terminal status is
+  the string `success`, api runs `prisma migrate deploy` itself.
+- Worktrees cleared 2026-08-05; uncommitted APK-era work is preserved on
+  `rescue/cb-voicemail-apk-worktree` + `rescue/connect2build-apk-worktree`.
+  ⛔ Branch `cursor/cloud-agent-1773439170847-tqkex` is LOCAL-ONLY on purpose —
+  it contains a hardcoded AMI password; scrub before any push.
+
 ## ⛔ AGENT HANDOFF — CDR silent loss + live-call sync (2026-08-04) — READ FIRST for "calls missing from history", stuck/vanishing Active Calls, BLF sync, or ANY CallStateStore / CdrNotifier / ARI-poller work
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CDR_LIVESYNC_2026-08-04.md`**
@@ -223,7 +252,6 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_SINGLE_TENANT_2026-08-
 - ⛔ Never re-introduce a fresh `tenant.create` in the orchestrator path while
   `createdTenantId` is set; the regression tests in `setupOrchestrator.test.ts`
   ("checkout tenant reuse", "auto-sync race") guard this.
-
 ## ⛔ AGENT HANDOFF — filtered internet + reading registration data (2026-08-03) — READ FIRST for any "phone drops / didn't ring" report
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FILTERED_INTERNET_2026-08-03.md`**
