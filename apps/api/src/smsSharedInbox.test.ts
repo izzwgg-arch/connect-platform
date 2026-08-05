@@ -260,6 +260,16 @@ mock.module("@connect/db", {
         },
         upsert: async () => ({}),
         update: async () => ({}),
+        updateMany: async ({ where, data }: any) => {
+          let count = 0;
+          for (const p of state.parts) {
+            if (where.threadId && p.threadId !== where.threadId) continue;
+            if (where.archivedForUser !== undefined && p.archivedForUser !== where.archivedForUser) continue;
+            Object.assign(p, data);
+            count++;
+          }
+          return { count };
+        },
       },
       connectChatMessage: {
         findMany: async ({ where }: any) => (state.messages.get(where.threadId) || []),
