@@ -48,7 +48,7 @@ test("portal ContactDocumentSummary fetches document-summary endpoint", () => {
   assert.match(portalSource, /document-summary/);
   assert.match(portalSource, /Verified CRM fields/);
   assert.match(portalSource, /From imported documents/);
-  assert.match(portalSource, /All phones on file/);
+  assert.match(portalSource, /All phones \(/);
 });
 
 test("portal documents SSN masking notice without reveal control", () => {

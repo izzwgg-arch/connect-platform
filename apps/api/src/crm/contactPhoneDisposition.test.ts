@@ -127,5 +127,5 @@ test("GET /crm/contacts list maps formatContact without passing array index", ()
     source.indexOf('app.post("/crm/contacts"'),
   );
   assert.doesNotMatch(block, /rows\.map\(formatContact\)/);
-  assert.match(block, /rows\.map\(\(c\) => formatContact\(c\)\)/);
+  assert.match(block, /rows\.map\(\(c(?::\s*any)?\) => formatContact\(c\)\)/);
 });

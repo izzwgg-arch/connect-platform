@@ -17,10 +17,13 @@ function readRoute(relativePath: string): string {
   return readFileSync(join(repoRoot, relativePath), "utf8");
 }
 
-const restrictedAgent = {
+// Since a3302b65 every CRM access role (AGENT/MANAGER/ADMIN) bypasses campaign
+// restriction; the list scope only fires for a campaign-restricted user with no
+// bypassing CRM role (defense-in-depth for role-less or future-role users).
+const restrictedUser = {
   userId: "agent-1",
   platformRole: "EXTENSION_USER",
-  crmAccessRole: "AGENT",
+  crmAccessRole: null,
   campaignRestriction: ["camp-a", "camp-b"],
 };
 
@@ -31,21 +34,25 @@ const managerCtx = {
   campaignRestriction: ["camp-a"],
 };
 
-test("shouldApplyCrmContactListScope: restricted agent yes, manager/admin no", () => {
-  assert.equal(shouldApplyCrmContactListScope(restrictedAgent), true);
+test("shouldApplyCrmContactListScope: restricted role-less user yes, any CRM role/admin no", () => {
+  assert.equal(shouldApplyCrmContactListScope(restrictedUser), true);
   assert.equal(shouldApplyCrmContactListScope(managerCtx), false);
   assert.equal(
-    shouldApplyCrmContactListScope({ ...restrictedAgent, platformRole: "TENANT_ADMIN" }),
+    shouldApplyCrmContactListScope({ ...restrictedUser, crmAccessRole: "AGENT" }),
     false,
   );
   assert.equal(
-    shouldApplyCrmContactListScope({ ...restrictedAgent, campaignRestriction: null }),
+    shouldApplyCrmContactListScope({ ...restrictedUser, platformRole: "TENANT_ADMIN" }),
+    false,
+  );
+  assert.equal(
+    shouldApplyCrmContactListScope({ ...restrictedUser, campaignRestriction: null }),
     false,
   );
 });
 
 test("buildCrmContactListScopeWhere: assigned OR allowed campaign membership", () => {
-  const where = buildCrmContactListScopeWhere("tenant-1", restrictedAgent);
+  const where = buildCrmContactListScopeWhere("tenant-1", restrictedUser);
   assert.ok(where);
   assert.ok(Array.isArray(where!.OR));
   assert.equal((where!.OR as unknown[]).length, 2);
@@ -62,14 +69,14 @@ test("buildCrmContactListScopeWhere: manager returns null (tenant-wide)", () => 
 });
 
 test("buildCrmContactMetaListScopeWhere: stats scope mirrors contact scope", () => {
-  const where = buildCrmContactMetaListScopeWhere("tenant-1", restrictedAgent);
+  const where = buildCrmContactMetaListScopeWhere("tenant-1", restrictedUser);
   assert.ok(where?.OR);
   assert.equal((where!.OR as any[])[0].assignedToUserId, "agent-1");
 });
 
 test("mergeAndWhereClauses: combines search + scope without clobbering OR", () => {
   const searchWhere = { OR: [{ displayName: { contains: "acme" } }] };
-  const scopeWhere = buildCrmContactListScopeWhere("tenant-1", restrictedAgent);
+  const scopeWhere = buildCrmContactListScopeWhere("tenant-1", restrictedUser);
   const merged = mergeAndWhereClauses({ tenantId: "tenant-1" }, searchWhere, scopeWhere);
   assert.ok(Array.isArray(merged.AND));
   assert.equal((merged.AND as unknown[]).length, 3);
@@ -121,7 +128,7 @@ test("contactRoutes: duplicates search respects contact list scope", () => {
 });
 
 test("tenant isolation: scope where always includes tenantId on relations", () => {
-  const where = buildCrmContactListScopeWhere("tenant-x", restrictedAgent)!;
+  const where = buildCrmContactListScopeWhere("tenant-x", restrictedUser)!;
   assert.equal((where.OR as any[])[0].crmMeta.is.tenantId, "tenant-x");
   assert.equal((where.OR as any[])[1].crmCampaignMembers.some.tenantId, "tenant-x");
 });
