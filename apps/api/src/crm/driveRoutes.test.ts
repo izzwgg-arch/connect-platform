@@ -95,7 +95,7 @@ function deriveCapabilityFlags(connections: { scopes: string[]; emailAddress: st
   return {
     gmailConnected: gmailConn !== null,
     gmailEmail: gmailConn?.emailAddress ?? null,
-    driveConnected: driveConn !== null,
+    driveConnected: driveConn != null,
     driveEmail: driveConn?.emailAddress ?? null,
   };
 }

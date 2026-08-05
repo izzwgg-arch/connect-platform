@@ -152,7 +152,7 @@ export async function registerCrmDriveRoutes(app: FastifyInstance) {
     return {
       gmailConnected: gmailConnection !== null,
       gmailEmail: gmailConnection?.emailAddress ?? null,
-      driveConnected: driveConnection !== null,
+      driveConnected: driveConnection != null,
       driveEmail: driveConnection?.emailAddress ?? null,
       driveConnectionId: driveConnection?.id ?? null,
       folderConfig: folderConfig
