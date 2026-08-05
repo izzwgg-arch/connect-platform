@@ -9,6 +9,12 @@ import { selectPlaybackChannelName } from "./telephonyPlaybackHelpers";
 import { classifyVoicemailDropLegs } from "./voicemailDropLegs";
 import { parseDndPublishRequest } from "./dndPublish";
 import { parseWakeCanaryPublishRequest, buildWakeCanaryKeyWrites } from "./wakeCanaryPublish";
+import {
+  parseWakeDialPublishRequest,
+  transformDialValue,
+  discoverDialKeyFamily,
+  DIAL_DISCOVERY_CLI,
+} from "./wakeDialPublish";
 import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
 
 export function registerTelephonyRoutes(
@@ -740,6 +746,106 @@ export function registerTelephonyRoutes(
       written++;
     }
     res.json({ ok: true, written, key: parsed.key });
+  });
+
+  // ── Mobile wake-dial publish ─────────────────────────────────────────────
+  // Second half of wake-and-wait enrollment (see wakeDialPublish.ts). Rewrites
+  // ONLY the extension's mobile leg in its AstDB `dial` string so native
+  // VitalPBX call paths route through [connect-mobile-wake-dial]:
+  //   PJSIP/T<t>_<e>_1  <->  Local/T<t>_<e>_1@connect-mobile-wake-dial/n
+  // The tenant's AstDB family hash is discovered per request from the
+  // read-only CLI `database showkey dial` (constant string, AMI Command
+  // action); the current value is read back after the write to verify it
+  // landed. Fail-closed: an ambiguous or absent dial key, or an unrecognized
+  // dial shape, publishes nothing.
+  //
+  // Auth: x-cdr-secret. Body: { pbxTenantId, extension: digit strings,
+  // enable: "0" | "1" }. Resp: { ok, changed, key, before, after } or a typed
+  // error reason the auto-enroll worker treats as a skip, not a failure.
+  router.post("/telephony/internal/wake-dial-publish", async (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const parsed = parseWakeDialPublishRequest(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    if (!telephony.ami._isConnected) {
+      res.status(503).json({ error: "ami_not_connected" });
+      return;
+    }
+    try {
+      const show = await telephony.ami.command(DIAL_DISCOVERY_CLI, 8_000);
+      if (!show.ok) {
+        res.status(502).json({ error: "discovery_failed", detail: show.error });
+        return;
+      }
+      const found = discoverDialKeyFamily(show.output, parsed.extension, parsed.mobileEndpoint);
+      if (!found.ok) {
+        res.status(404).json({
+          error: found.error,
+          key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+        });
+        return;
+      }
+      const family = found.family;
+      const cur = await telephony.ami.dbGet(family, "dial", 3_000);
+      if (!cur.ok) {
+        res.status(404).json({ error: "dial_key_missing", key: `T${parsed.pbxTenantId}_${parsed.extension}` });
+        return;
+      }
+      const transformed = transformDialValue(cur.value, parsed.mobileEndpoint, parsed.enable);
+      if (!transformed.ok) {
+        res.status(409).json({
+          error: transformed.error,
+          key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+          before: cur.value,
+        });
+        return;
+      }
+      if (!transformed.changed) {
+        res.json({
+          ok: true,
+          changed: false,
+          key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+          before: cur.value,
+          after: cur.value,
+        });
+        return;
+      }
+      telephony.ami.sendAction("DBPut", { Family: family, Key: "dial", Val: transformed.value });
+      // Read back to verify the write landed (DBPut is fire-and-forget).
+      const verify = await telephony.ami.dbGet(family, "dial", 3_000);
+      const landed = verify.ok && verify.value === transformed.value;
+      if (!landed) {
+        res.status(502).json({
+          error: "verify_failed",
+          key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+          before: cur.value,
+          expected: transformed.value,
+          observed: verify.ok ? verify.value : null,
+        });
+        return;
+      }
+      console.log(JSON.stringify({
+        msg: "wake-dial-publish",
+        key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+        enable: parsed.enable,
+        before: cur.value,
+        after: transformed.value,
+      }));
+      res.json({
+        ok: true,
+        changed: true,
+        key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+        before: cur.value,
+        after: transformed.value,
+      });
+    } catch (err) {
+      res.status(502).json({ error: "ami_error", detail: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // ── IVR AstDB snapshot read ───────────────────────────────────────────────

@@ -98,6 +98,61 @@ export class AmiClient extends EventEmitter {
     return id;
   }
 
+  // Run a read-only Asterisk CLI command over AMI (Action: Command) and return
+  // its full output. The CLI string must be a CONSTANT chosen by our code —
+  // never caller input — because Command can execute any CLI verb. Current sole
+  // consumer: wake-dial-publish's `database showkey dial` tenant-hash discovery.
+  //
+  // Asterisk 14+ returns the output as repeated "Output:" headers on the
+  // Response frame; parseFrame accumulates those into one newline-joined
+  // string. Success with no Output resolves to "".
+  command(
+    cli: string,
+    timeoutMs = 5_000,
+  ): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.authenticated) {
+        reject(new Error("AMI not connected"));
+        return;
+      }
+      const id = `cc-${++this.actionSeq}`;
+      let settled = false;
+
+      const onResponse = (frame: AmiFrame) => {
+        if (frame["ActionID"] !== id) return;
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (frame["Response"] === "Success" || frame["Response"] === "Follows") {
+          resolve({ ok: true, output: frame["Output"] ?? "" });
+        } else {
+          resolve({ ok: false, error: frame["Message"] ?? `Response: ${frame["Response"] ?? "unknown"}` });
+        }
+      };
+      const onDisconnect = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("AMI disconnected before Command completed"));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`AMI Command timed out: ${cli}`));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("response", onResponse);
+        this.off("disconnected", onDisconnect);
+      };
+      this.on("response", onResponse);
+      this.on("disconnected", onDisconnect);
+
+      this.socket.write(`Action: Command\r\nActionID: ${id}\r\nCommand: ${cli}\r\n\r\n`);
+    });
+  }
+
   // Read a single AstDB value by Family + Key. Resolves with { ok: true, value }
   // on success, { ok: false } if the key is absent, and rejects on timeout or
   // disconnect.
@@ -401,7 +456,16 @@ export class AmiClient extends EventEmitter {
       }
       const key = line.slice(0, colon).trim();
       const value = line.slice(colon + 2);
-      if (key) frame[key] = value;
+      if (!key) continue;
+      // AMI Command responses (Asterisk 14+) carry their CLI output as MANY
+      // "Output:" headers in one frame. A plain Record would keep only the
+      // last line, so accumulate Output specifically. No other header repeats
+      // within a frame, and nothing consumed "Output" before this existed.
+      if (key === "Output" && frame[key] !== undefined) {
+        frame[key] += "\n" + value;
+      } else {
+        frame[key] = value;
+      }
     }
     return Object.keys(frame).length > 0 ? frame : null;
   }

@@ -198,6 +198,74 @@ export async function runWakeCanaryEnrollCycle(): Promise<void> {
       failed,
       warnings: safety.warnings,
     }));
+
+    // ── Wake-dial bridge (second half of enrollment) ─────────────────────────
+    // The canary key above only arms [connect-wake-core] for calls that travel
+    // Connect's own IVR/tenant-router contexts. Calls on NATIVE VitalPBX paths
+    // (VitalPBX IVRs, ring groups, direct dials) resolve the extension's AstDB
+    // `dial` string instead — this pass rewrites its mobile leg to route through
+    // [connect-mobile-wake-dial] (fleet rollout mandated by Izzy 2026-08-05).
+    // Separately gated so either half can be turned off alone. Idempotent: the
+    // publish route returns changed=false when already enrolled, and re-asserts
+    // enrollment if a VitalPBX panel edit reverted the dial key. Typed
+    // not-applicable outcomes (no mobile leg, unknown tenant hash, missing dial
+    // key) are SKIPS — expected for desk-only or not-yet-mapped extensions —
+    // never failures.
+    if ((process.env.WAKE_DIAL_AUTOENROLL_ENABLED || "").trim() === "1") {
+      const SKIP_REASONS = new Set([
+        "no_mobile_leg",
+        "extension_not_enrollable",
+        "ambiguous_extension",
+        "dial_key_missing",
+        "empty_dial_value",
+      ]);
+      let dialEnrolled = 0;
+      let dialAlready = 0;
+      let dialSkipped = 0;
+      let dialFailed = 0;
+      for (const t of targets) {
+        try {
+          const resp = await fetch(`${base}/telephony/internal/wake-dial-publish`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(secret ? { "x-cdr-secret": secret } : {}) },
+            body: JSON.stringify({ pbxTenantId: t.pbxTenantId, extension: t.extNumber, enable: "1" }),
+            signal: AbortSignal.timeout(10_000),
+          });
+          const body: any = await resp.json().catch(() => ({}));
+          if (resp.ok && body?.ok) {
+            if (body.changed) {
+              dialEnrolled++;
+              console.log(JSON.stringify({
+                msg: "wake-dial-autoenroll",
+                ok: true,
+                key: t.key,
+                before: body.before,
+                after: body.after,
+              }));
+            } else {
+              dialAlready++;
+            }
+          } else if (SKIP_REASONS.has(String(body?.error))) {
+            dialSkipped++;
+          } else {
+            throw new Error(`wake-dial-publish HTTP ${resp.status} ${String(body?.error ?? "")}`.trim());
+          }
+        } catch (pubErr: any) {
+          dialFailed++;
+          console.error(JSON.stringify({ msg: "wake-dial-autoenroll", ok: false, key: t.key, error: String(pubErr?.message || pubErr) }));
+        }
+      }
+      console.log(JSON.stringify({
+        msg: "wake-autoenroll-cycle",
+        phase: "wake_dial_publish",
+        ok: dialFailed === 0,
+        targets: targets.length,
+        enrolled: dialEnrolled,
+        already: dialAlready,
+        skipped: dialSkipped,
+        failed: dialFailed,
+      }));
+    }
   } finally {
     _wakeEnrollRunning = false;
   }
