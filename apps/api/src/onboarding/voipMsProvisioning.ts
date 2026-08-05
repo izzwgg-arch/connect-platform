@@ -439,6 +439,124 @@ async function enableSms(creds: VmsCreds, submissionId: string, did: string, liv
 
 // ── Port-in ───────────────────────────────────────────────────────────────────
 
+/**
+ * addLNPPort parameter NAMES and types come from the public WSDL
+ * (https://voip.ms/api/v1/server.wsdl, complexType addLNPPortInput). The old
+ * names (did/carrier/account_number/…) were wrong and VoIP.ms answered
+ * status "invalid" on every real filing (first live port, 2026-08-05).
+ *
+ * The integer CODES below could NOT be confirmed anywhere public — the value
+ * tables sit behind the customer login at voip.ms/m/apidocs.php. They follow
+ * VoIP.ms's conventions everywhere else in the API (yes/no flags are 0/1,
+ * type enums are 1-based) and the porting form's own wording. UNVERIFIED: if
+ * a live filing rejects one of these fields, the provider's message lands in
+ * answers.provisioning.portSubmissionFailure — correct the code HERE and
+ * nowhere else.
+ */
+const LNP_CODES = {
+  portTypeLocal: "1",    // porting a local number (toll-free would be its own type)
+  fullPort: "0",         // isPartial=0: everything on the losing account comes over
+  partialPort: "1",
+  locationBusiness: "1", // locationType: every Connect sign-up is a business
+  notMobile: "0",
+  mobile: "1",
+  tfTypeNone: "0",       // toll-free subtype — meaningless for a local port
+};
+
+/**
+ * "Bob J Smith" → first "Bob", last "J Smith". VoIP.ms requires both fields,
+ * so a single-word (or business) name is sent as both.
+ */
+function splitPersonName(name: string): { firstName: string; lastName: string } {
+  const parts = String(name || "").trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  const firstName = parts[0] || "";
+  const lastName = parts.length > 1 ? parts.slice(1).join(" ") : firstName;
+  return { firstName, lastName };
+}
+
+export type ParsedPortAddress = { address1: string; city: string; state: string; zip: string };
+
+/**
+ * Legacy fallback: older submissions collected the service address as ONE
+ * free-text line ("123 Main St, Monsey, NY 10952"). Pull the ZIP and 2-letter
+ * state off the end, take the last comma part as the city, and leave the rest
+ * as the street. Best-effort — a miss just means the LNP desk sees the pieces
+ * in the wrong boxes plus the original line in the notes.
+ */
+export function parseServiceAddressLine(line: string): ParsedPortAddress {
+  let rest = String(line || "").replace(/\s+/g, " ").trim();
+  const zipMatch = rest.match(/\b(\d{5})(?:-\d{4})?\s*$/);
+  const zip = zipMatch ? zipMatch[1] : "";
+  if (zipMatch) rest = rest.slice(0, zipMatch.index).replace(/[\s,]+$/, "");
+  const stateMatch = rest.match(/[,\s]([A-Za-z]{2})\.?\s*$/);
+  const state = stateMatch ? stateMatch[1].toUpperCase() : "";
+  if (stateMatch) rest = rest.slice(0, stateMatch.index).replace(/[\s,]+$/, "");
+  const parts = rest.split(",").map((p) => p.trim()).filter(Boolean);
+  const city = parts.length > 1 ? parts.pop()! : "";
+  return { address1: parts.join(", "), city, state, zip };
+}
+
+/**
+ * The full addLNPPort parameter set for a submission. The wizard collects a
+ * structured address (serviceAddress=street, serviceCity/State/Zip) and a
+ * cell-number flag; anything missing falls back to the legacy one-line
+ * address or the contact step's business address.
+ */
+function buildLnpPortParams(row: any, did: string): Record<string, string> {
+  const answers: any = row.answers || {};
+  const port = answers?.phone?.details || {};
+
+  const street = String(port.serviceAddress || "").trim();
+  const structured: ParsedPortAddress = {
+    address1: street,
+    city: String(port.serviceCity || "").trim(),
+    state: String(port.serviceState || "").trim().toUpperCase(),
+    zip: String(port.serviceZip || "").replace(/\D/g, "").slice(0, 5),
+  };
+  const notes: string[] = [];
+  let address = structured;
+  if (!structured.city || !structured.zip) {
+    // Legacy one-line address (or nothing): parse it, but hand the LNP desk
+    // the original line too so a bad parse can't lose information.
+    const line = street || String(answers?.contact?.address || answers?.submit?.address || "");
+    address = parseServiceAddressLine(line);
+    if (line) notes.push(`Service address as entered by the customer: ${line}`);
+  }
+
+  const isMobile = port.isMobile === true || ["yes", "true", "1"].includes(String(port.isMobile || "").toLowerCase());
+  const accountName = String(port.nameOnAccount || row.companyName || "").trim();
+  const { firstName, lastName } = splitPersonName(accountName);
+
+  return {
+    portType: LNP_CODES.portTypeLocal,
+    numbers: did,
+    isPartial: LNP_CODES.fullPort,
+    locationType: LNP_CODES.locationBusiness,
+    isMobile: isMobile ? LNP_CODES.mobile : LNP_CODES.notMobile,
+    pin: String(port.portPin || ""),
+    // No separate billing telephone number is collected — for a single-number
+    // port the BTN is the number itself.
+    btn: did,
+    // Full port: nothing stays behind with the losing carrier.
+    services: "",
+    tfType: LNP_CODES.tfTypeNone,
+    // Business ports only (the wizard is for companies) — the statement name
+    // is the business name on the carrier's records.
+    statementName: String(row.companyName || accountName),
+    firstName,
+    lastName,
+    address1: address.address1,
+    address2: "",
+    city: address.city,
+    zip: address.zip,
+    state: address.state,
+    country: "US",
+    providerName: String(port.carrier || ""),
+    providerAccount: String(port.accountNumber || ""),
+    notes: notes.join(" | "),
+  };
+}
+
 async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<void> {
   const submissionId = row.id;
   const answers: any = row.answers || {};
@@ -462,14 +580,7 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
     await mergeProvisioningState(row, { portSubmissionFailure: null, portSubmissionFailedAt: null });
     await logEvent(submissionId, `Port-in for ${did} already on file (id ${portId || "?"}) — not filing a second one.`);
   } else {
-    const submit = await vms(creds, "addLNPPort", {
-      did,
-      carrier: String(port.carrier || ""),
-      account_number: String(port.accountNumber || ""),
-      pin: String(port.portPin || ""),
-      name: String(port.nameOnAccount || row.companyName || ""),
-      service_address: String(port.serviceAddress || ""),
-    });
+    const submit = await vms(creds, "addLNPPort", buildLnpPortParams(row, did));
     portId = String(submit?.portid ?? submit?.port_id ?? "");
     await mergeProvisioningState(row, {
       portFiled: true,
@@ -491,7 +602,9 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
     try {
       const full = path.resolve(onboardingStorageRoot(), String(f.storageKey || ""));
       const b64 = fs.readFileSync(full).toString("base64");
-      await vms(creds, "addLNPFile", { portid: portId, file: b64, filename: String(f.filename || "document") });
+      // addLNPFile takes exactly {portid, file} per the WSDL — the old extra
+      // "filename" param was at best ignored.
+      await vms(creds, "addLNPFile", { portid: portId, file: b64 });
       if (fileKey) attached.push(fileKey);
       await logEvent(submissionId, `Attached ${f.kind === "PORTING_LOA" ? "authorization" : "bill"} (${f.filename}) to port ${portId || "?"}.`);
     } catch (e: any) {
