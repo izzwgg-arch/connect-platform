@@ -1,5 +1,36 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — ElevenLabs "didn't play" + pipeline hardening (2026-08-04) — READ FIRST for ElevenLabs, IVR Studio recordings, or any "audio didn't play in the browser" report
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md`**
+
+- **"Didn't play" was Izzy's CHROME, not the product.** His Chrome's media
+  pipeline wedged globally: every `<audio>`/`<video>` stalled at `readyState 0`
+  with no error, `play()` pending forever — while `decodeAudioData` worked and
+  the server had delivered valid WAV with 200s all four times. Same probe in a
+  second browser on the same machine played instantly. Fix = full Chrome
+  restart (**unconfirmed at handoff — ask first**); next suspect is his filter
+  extension. ⛔ Run the silent-WAV probe (handoff §1) before shipping ANY fix
+  for a "didn't play" report.
+- Hardening shipped as `16f05d2d` on `feat/ivr-migration-takeover`, **NOT
+  deployed** (api + portal + agent all changed; another session was mid-deploy).
+  Highlights: visible preview player + 4s playing-event watchdog + honest
+  stall message; timeouts on every modal fetch; 30s server-side read cache +
+  single read retry; 12/min per-IP + 4-concurrent synthesis guards; client
+  faults 400 not 502; agent hot-reload was missing the ElevenLabs key (saved
+  keys were invisible until restart — fixed).
+- ⛔ **Never retry a synthesis POST** (double-bills characters) and **never
+  stress-test against prod** (real money; the offline fake-provider suite in
+  `elevenLabsRoutes.stress.test.ts` IS the stress test). 49/49 tests green via
+  `node --experimental-test-module-mocks --import tsx --test` in apps/api.
+- **`elevenLabs.test.ts` had never run** — it imported vitest, which apps/api
+  doesn't install (suite runs node:test via tsx). Rewritten. Same disease
+  still in `dependencyHygiene.test.ts`; `smsSharedInbox.test.ts` has one
+  pre-existing failure. Both have task chips filed.
+- Two status routes look alike: `/api/voice/elevenlabs/status` (API — IVR
+  Studio modal) vs `/agent-api/voice/elevenlabs/status` (agent — owner
+  settings page). Don't conflate them.
+
 ## ⛔ AGENT HANDOFF — voicemail playback wedge / phantom Telecom call (2026-08-04) — READ FIRST for "voicemail shows playing but no audio" or any Telecom Connection work
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_WEDGE_2026-08-04.md`**
