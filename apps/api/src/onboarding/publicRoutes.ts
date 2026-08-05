@@ -15,6 +15,7 @@ import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipM
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
 import { isSetupStalled } from "./setupWatchdog";
 import { toPublicUrl } from "./provisioning";
+import { resolveOnboardingStoragePath } from "./storage";
 import { recordLinkOpened, recordJourneyBeacon } from "./journeyTracking";
 
 // Journey-beacon payload (see journeyTracking.ts for how each becomes a line).
@@ -32,25 +33,10 @@ function sanitizeFileName(name: string): string {
   return base.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 140) || "upload.bin";
 }
 
-function onboardingStorageRoot(): string {
-  return (process.env.ONBOARDING_STORAGE_DIR || path.resolve(process.cwd(), "data/onboarding-files")).replace(/\\/g, "/");
-}
-
 function buildStorageKey(submissionId: string, original: string): string {
   const ts = Date.now();
   const safe = sanitizeFileName(original);
   return `onboarding/${submissionId}/${ts}_${safe}`;
-}
-
-function resolveOnboardingStoragePath(storageKey: string): string {
-  const clean = String(storageKey || "").replace(/\\/g, "/");
-  if (clean.includes("..")) throw new Error("invalid_storage_key");
-  const root = onboardingStorageRoot();
-  const full = path.resolve(root, clean);
-  if (!full.startsWith(root + path.sep) && full !== root) {
-    throw new Error("invalid_storage_key_scope");
-  }
-  return full;
 }
 
 async function ensureRowForToken(token: string): Promise<any | null> {

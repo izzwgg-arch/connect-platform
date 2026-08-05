@@ -4,6 +4,7 @@ import { db } from "@connect/db";
 import { createPublicLinkSchema, adminStatusUpdateSchema, adminChecklistUpdateSchema, adminNotesUpdateSchema } from "./validation";
 import { buildVitalPbxCsvForSubmission, listAdminSubmissions, readAdminSubmissionDetail, toPublicUrl, isValidStatusTransition } from "./provisioning";
 import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
+import { resolveOnboardingStoragePath } from "./storage";
 import { runOnboardingSetup } from "./setupOrchestrator";
 
 function user(req: any): { sub?: string; role?: string } { return req.user as any; }
@@ -159,8 +160,7 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
     const file = await (db as any).onboardingUploadedFile.findUnique({ where: { id: fileId } });
     if (!file || file.submissionId !== id) return reply.code(404).send({ error: "not_found" });
     // Local storage read (paired with public upload path)
-    const root = (process.env.ONBOARDING_STORAGE_DIR || require("node:path").resolve(process.cwd(), "data/onboarding-files")).replace(/\\/g, "/");
-    const full = require("node:path").resolve(root, String(file.storageKey || ""));
+    const full = resolveOnboardingStoragePath(String(file.storageKey || ""));
     const fs = require("node:fs");
     if (!fs.existsSync(full)) return reply.code(404).send({ error: "missing_file" });
     reply.header("content-type", file.mimeType || "application/octet-stream");

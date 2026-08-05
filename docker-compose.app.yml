@@ -87,6 +87,12 @@ services:
       # Shared chat attachment storage. The worker mounts the same volume so
       # it can transcode voice notes before VoIP.ms MMS submission.
       CHAT_STORAGE_DIR: ${CHAT_STORAGE_DIR:-/var/lib/connect/chat-attachments}
+      # Onboarding wizard uploads (porting bills / LOAs). MUST stay on the
+      # onboarding-files volume: without it the files land in the container's
+      # writable layer and every api deploy destroys them while the DB row
+      # survives (2026-08-05: a customer's Verizon bill needed for a number
+      # port was lost exactly this way).
+      ONBOARDING_STORAGE_DIR: ${ONBOARDING_STORAGE_DIR:-/var/lib/connect/onboarding-files}
       # Public URL the PBX-host helper can actually reach. MUST be set in
       # production or signed URLs will point at http://localhost:3001.
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
@@ -154,6 +160,9 @@ services:
       # the published binary.
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
+      # Onboarding wizard uploads (porting bills / LOAs) — must survive
+      # deploys; the DB rows that point at these files certainly do.
+      - onboarding-files:/var/lib/connect/onboarding-files
       # Persistent CRM lead document storage. Tenant document files survive
       # container rebuilds and blue/green API rollouts.
       - crm-lead-docs:/var/lib/connect/crm-lead-docs
@@ -235,6 +244,9 @@ services:
       MOH_SYNC_SHARED_SECRET: ${MOH_SYNC_SHARED_SECRET:-}
       MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}
       CHAT_STORAGE_DIR: ${CHAT_STORAGE_DIR:-/var/lib/connect/chat-attachments}
+      # Same onboarding upload volume as the stable api service — port
+      # documents must survive blue/green cutovers too.
+      ONBOARDING_STORAGE_DIR: ${ONBOARDING_STORAGE_DIR:-/var/lib/connect/onboarding-files}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
       PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
@@ -273,6 +285,7 @@ services:
       - ivr-prompts:/var/lib/connect/ivr-prompts
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
+      - onboarding-files:/var/lib/connect/onboarding-files
       - crm-lead-docs:/var/lib/connect/crm-lead-docs
       - crm-voicemail-drops:/var/lib/connect/crm-voicemail-drops
       # Read-only host inventory for Storage Health scanner (Phase 1.6). No writes.
@@ -453,6 +466,11 @@ volumes:
   ivr-prompts:
     driver: local
   chat-attachments:
+    driver: local
+  # Onboarding wizard uploads (porting bills / LOAs). Shared between api and
+  # api_candidate so files survive deploys and blue/green cutovers. Before
+  # this volume existed every api deploy silently destroyed these documents.
+  onboarding-files:
     driver: local
   # Persistent storage for CRM imported lead documents (Drive files pulled into
   # tenant-scoped local storage). Survives container rebuilds and blue/green rollouts.
