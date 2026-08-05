@@ -44,6 +44,60 @@ export interface DidSwitchDeps {
 const RETRY_WINDOW_MS = 30 * 60 * 1000;
 const TICK_MS = 60 * 1000;
 
+/** Same normalisation the DID mapping routes use: digits only, "+"-prefixed. */
+export function normalizeDidNumber(raw: string): string | null {
+  const digits = String(raw || "").replace(/[^\d]/g, "");
+  if (digits.length < 7 || digits.length > 20) return null;
+  return `+${digits}`;
+}
+
+/**
+ * The Studio's picker must offer every number the tenant already owns on the
+ * PBX — the synced list the Phone Numbers page shows (PbxTenantInboundDid) —
+ * not just numbers someone hand-registered in DidRouteMapping. Any owned
+ * number without a mapping row gets one created here: a draft-only row
+ * (routingMode "pbx") that changes nothing for callers until a switch.
+ *
+ * A number whose e164 is already mapped elsewhere (another tenant, or a
+ * deliberately disabled row) is skipped — the unique e164 constraint is the
+ * arbiter, and hijacking is not on offer.
+ */
+export async function ensureMappingsForOwnedNumbers(
+  db: any,
+  tenantId: string,
+  existingMappings: any[],
+  createdBy: string | null,
+  log?: (msg: string, e164: string) => void,
+): Promise<any[]> {
+  const owned = await db.pbxTenantInboundDid.findMany({
+    where: { connectTenantId: tenantId, active: true },
+  });
+  const mapped = new Set(existingMappings.map((m: any) => String(m.e164)));
+  const added: any[] = [];
+  for (const d of owned) {
+    const e164 = normalizeDidNumber(d.e164);
+    if (!e164 || mapped.has(e164)) continue;
+    try {
+      const created = await db.didRouteMapping.create({
+        data: {
+          tenantId,
+          e164,
+          pbxInstanceId: d.pbxInstanceId ?? null,
+          enabled: true,
+          createdBy,
+        },
+      });
+      mapped.add(e164);
+      added.push(created);
+      log?.("auto-registered PBX-synced number for the Studio picker", e164);
+    } catch {
+      // Unique-e164 violation: mapped under another tenant or disabled here.
+      // Either way this number is not ours to offer.
+    }
+  }
+  return added;
+}
+
 /** In-process call to a real route, as a short-lived service principal. The
  *  switch log then shows exactly who acted: "scheduler:<scheduleId>". */
 async function injectAsService(
@@ -88,6 +142,21 @@ export function registerDidSwitchScheduleRoutes(deps: DidSwitchDeps): void {
       db.ivrRouteProfile.findMany({ where: { tenantId }, select: { id: true, name: true } }),
       db.didSwitchSchedule.findMany({ where: { tenantId, status: "pending" } }),
     ]);
+
+    // Numbers the tenant owns on the PBX but nobody ever registered for
+    // routing appear here too — otherwise the picker is empty for every
+    // tenant that never went through the migration screen.
+    const autoAdded = await ensureMappingsForOwnedNumbers(
+      db,
+      tenantId,
+      mappings,
+      String((user as any).id ?? user.sub ?? "") || null,
+      (msg, e164) => app.log.info({ e164, tenantId }, `[DID_ASSIGN] ${msg}`),
+    );
+    if (autoAdded.length > 0) {
+      mappings.push(...autoAdded);
+      mappings.sort((a: any, b: any) => String(a.e164).localeCompare(String(b.e164)));
+    }
     const nameById = new Map(profiles.map((p: any) => [p.id, p.name]));
     const scheduleByMapping = new Map<string, any>(schedules.map((s: any) => [String(s.mappingId), s]));
 
