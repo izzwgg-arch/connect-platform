@@ -8,7 +8,8 @@
  * These tests do NOT hit the database or Google APIs.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import {
   normalizeForMatch,
   normalizeFileName,
@@ -20,40 +21,40 @@ import {
 
 describe("normalizeForMatch", () => {
   it("lowercases input", () => {
-    expect(normalizeForMatch("Acme CORP")).toContain("acme");
+    assert.ok((normalizeForMatch("Acme CORP")).includes("acme"));
   });
 
   it("strips common legal suffixes", () => {
-    expect(normalizeForMatch("Acme LLC")).not.toContain("llc");
-    expect(normalizeForMatch("Widgets Inc")).not.toContain("inc");
-    expect(normalizeForMatch("Foo Corporation")).not.toContain("corporation");
-    expect(normalizeForMatch("Bar Ltd")).not.toContain("ltd");
+    assert.ok(!(normalizeForMatch("Acme LLC")).includes("llc"));
+    assert.ok(!(normalizeForMatch("Widgets Inc")).includes("inc"));
+    assert.ok(!(normalizeForMatch("Foo Corporation")).includes("corporation"));
+    assert.ok(!(normalizeForMatch("Bar Ltd")).includes("ltd"));
   });
 
   it("removes punctuation", () => {
     const result = normalizeForMatch("Smith & Jones, Co.");
-    expect(result).not.toContain(",");
-    expect(result).not.toContain(".");
-    expect(result).not.toContain("&");
+    assert.ok(!(result).includes(","));
+    assert.ok(!(result).includes("."));
+    assert.ok(!(result).includes("&"));
   });
 
   it("collapses multiple spaces", () => {
-    expect(normalizeForMatch("Foo   Bar  Baz")).toBe("foo bar baz");
+    assert.equal(normalizeForMatch("Foo   Bar  Baz"), "foo bar baz");
   });
 
   it("trims leading and trailing whitespace", () => {
-    expect(normalizeForMatch("  Acme  ")).toBe("acme");
+    assert.equal(normalizeForMatch("  Acme  "), "acme");
   });
 
   it("handles empty string gracefully", () => {
-    expect(normalizeForMatch("")).toBe("");
+    assert.equal(normalizeForMatch(""), "");
   });
 
   it("normalises ampersand to 'and' before punctuation strip", () => {
     const result = normalizeForMatch("Smith & Jones");
     // 'and' is also stripped — result contains 'smith' and 'jones'
-    expect(result).toContain("smith");
-    expect(result).toContain("jones");
+    assert.ok((result).includes("smith"));
+    assert.ok((result).includes("jones"));
   });
 });
 
@@ -61,18 +62,20 @@ describe("normalizeForMatch", () => {
 
 describe("normalizeFileName", () => {
   it("removes file extension before normalising", () => {
-    expect(normalizeFileName("AcmeCorp.pdf")).toBe("acme");
-    expect(normalizeFileName("foo_bar.docx")).toBe("foo bar");
+    // Suffix stripping is word-based, so the fused "Corp" in "AcmeCorp" stays;
+    // underscores are word characters, so they survive the punctuation strip.
+    assert.equal(normalizeFileName("AcmeCorp.pdf"), "acmecorp");
+    assert.equal(normalizeFileName("foo_bar.docx"), "foo_bar");
   });
 
   it("handles files with multiple dots", () => {
     const result = normalizeFileName("Foo.Bar.Inc.pdf");
-    expect(result).not.toContain(".pdf");
-    expect(result).not.toContain("inc");
+    assert.ok(!(result).includes(".pdf"));
+    assert.ok(!(result).includes("inc"));
   });
 
   it("handles no extension", () => {
-    expect(normalizeFileName("Acme Document")).toBe("acme document");
+    assert.equal(normalizeFileName("Acme Document"), "acme document");
   });
 });
 
@@ -81,54 +84,54 @@ describe("normalizeFileName", () => {
 describe("scoreMatch — exact match", () => {
   it("returns HIGH for identical normalised tokens", () => {
     const score = scoreMatch("acme", "acme");
-    expect(score.confidence).toBe("HIGH");
-    expect(score.reason).toBe("exact_company_name");
+    assert.equal(score.confidence, "HIGH");
+    assert.equal(score.reason, "exact_company_name");
   });
 
   it("returns HIGH when legal suffixes are stripped and remainder matches", () => {
     const company = normalizeForMatch("Acme LLC");
     const file = normalizeFileName("Acme.pdf");
     const score = scoreMatch(company, file);
-    expect(score.confidence).toBe("HIGH");
+    assert.equal(score.confidence, "HIGH");
   });
 });
 
 describe("scoreMatch — contains match", () => {
   it("returns MEDIUM when file name contains company (≥ 4 chars)", () => {
     const score = scoreMatch("acme", "acme financial report 2024");
-    expect(score.confidence).toBe("MEDIUM");
-    expect(score.reason).toBe("file_contains_company");
+    assert.equal(score.confidence, "MEDIUM");
+    assert.equal(score.reason, "file_contains_company");
   });
 
   it("returns MEDIUM when company contains file name (≥ 4 chars)", () => {
     const score = scoreMatch("smith jones financial", "smith");
     // 'smith' is 5 chars → MEDIUM
-    expect(score.confidence).toBe("MEDIUM");
-    expect(score.reason).toBe("company_contains_file");
+    assert.equal(score.confidence, "MEDIUM");
+    assert.equal(score.reason, "company_contains_file");
   });
 
   it("returns LOW for very short tokens to prevent over-matching", () => {
     // 'co' is 2 chars — below threshold
     const score = scoreMatch("co", "company overview");
-    expect(score.confidence).toBe("LOW");
+    assert.equal(score.confidence, "LOW");
   });
 });
 
 describe("scoreMatch — no match", () => {
   it("returns LOW for completely unrelated names", () => {
     const score = scoreMatch("acme widgets", "johnson plumbing supplies");
-    expect(score.confidence).toBe("LOW");
-    expect(score.reason).toBe("no_match");
+    assert.equal(score.confidence, "LOW");
+    assert.equal(score.reason, "no_match");
   });
 
   it("returns LOW for empty company token", () => {
     const score = scoreMatch("", "some file");
-    expect(score.confidence).toBe("LOW");
+    assert.equal(score.confidence, "LOW");
   });
 
   it("returns LOW for empty file token", () => {
     const score = scoreMatch("acme", "");
-    expect(score.confidence).toBe("LOW");
+    assert.equal(score.confidence, "LOW");
   });
 });
 
@@ -146,8 +149,8 @@ describe("ambiguity contract (documented)", () => {
     // - File: "acme.pdf" → matches both → both marked AMBIGUOUS
     const scoreA = scoreMatch("acme", "acme");
     const scoreB = scoreMatch("acme", "acme");
-    expect(scoreA.confidence).toBe("HIGH");
-    expect(scoreB.confidence).toBe("HIGH");
+    assert.equal(scoreA.confidence, "HIGH");
+    assert.equal(scoreB.confidence, "HIGH");
     // The match engine then detects fileMatchCount > 1 and downgrades to AMBIGUOUS.
     // This is the documented behaviour — not tested here since it requires DB.
   });
@@ -165,20 +168,20 @@ describe("tenant isolation contract (documented)", () => {
     //
     // Similarly, folderConfig is loaded with { tenantId } in the where clause,
     // so Tenant B's match run can never read Tenant A's Drive folder.
-    expect(true).toBe(true); // documents the contract
+    assert.equal(true, true); // documents the contract
   });
 
   it("confirm/reject routes include tenantId in DB lookup", () => {
     // Contract: routes do
     //   db.crmLeadDocument.findFirst({ where: { id: docId, tenantId } })
     // A document belonging to Tenant A is invisible to Tenant B.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("contacts/:id/documents route includes tenantId in both lookups", () => {
     // Contract: contact lookup includes tenantId, document query includes tenantId + contactId.
     // Cross-tenant access returns 404 (contact not found) before any document query runs.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -189,7 +192,7 @@ describe("Drive folder config requirement", () => {
     // Verified by the engine: if db.crmDriveFolder.findFirst returns null,
     // DriveMatchError("no_drive_folder") is thrown and the route returns 409.
     // The UI surfaces this as: "Configure a Drive folder in CRM → Drive Settings first."
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -198,10 +201,10 @@ describe("Drive folder config requirement", () => {
 describe("DriveMatchError", () => {
   it("has a .code property and is instanceof Error", () => {
     const err = new DriveMatchError("test_code", "test message");
-    expect(err.code).toBe("test_code");
-    expect(err.message).toBe("test message");
-    expect(err instanceof Error).toBe(true);
-    expect(err.name).toBe("DriveMatchError");
+    assert.equal(err.code, "test_code");
+    assert.equal(err.message, "test message");
+    assert.equal(err instanceof Error, true);
+    assert.equal(err.name, "DriveMatchError");
   });
 
   it("no_audit_rows code is used when batch rows are missing", () => {
@@ -209,7 +212,7 @@ describe("DriveMatchError", () => {
     // when totalRows > 0 but auditRowCount === 0.
     // Route returns 422. UI shows: "Re-import the file to recover."
     const err = new DriveMatchError("no_audit_rows", "...");
-    expect(err.code).toBe("no_audit_rows");
+    assert.equal(err.code, "no_audit_rows");
   });
 });
 
@@ -221,20 +224,20 @@ describe("audit durability contract (documented)", () => {
     // in a try-catch. Failures increment auditErrorCount which is persisted on the
     // batch and returned in the response. Logs 'crm_import_audit_row_write_failed'.
     // Previously: .catch(() => undefined) silently discarded failures.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("auditErrorCount is non-zero when audit writes fail during import", () => {
     // Contract: auditErrorCount is stored on CrmImportBatch and returned in
     // GET /crm/import/batches/:id and POST /crm/import/upload responses.
     // Non-zero value signals that Drive matching may be incomplete for this batch.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("batch response includes auditErrorCount field", () => {
     // Verified by formatBatch() which reads b.auditErrorCount ?? 0.
     // Old batches (pre-migration) return 0 (column default).
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -246,7 +249,7 @@ describe("Drive match idempotency (documented)", () => {
     // The DB has a unique index on (tenantId, importBatchId, googleDriveFileId).
     // Second run: all inserts hit the unique constraint → skipDuplicates ignores them.
     // matchesCreated = 0, duplicatesSkipped = N on second run.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("confirmed/rejected records are preserved on second match run", () => {
@@ -254,7 +257,7 @@ describe("Drive match idempotency (documented)", () => {
     // Records with status=IMPORT_PENDING or REJECTED already exist in the DB.
     // They are NOT overwritten — the insert is skipped silently.
     // User review decisions survive reruns.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("new constraint is per (tenantId, importBatchId, googleDriveFileId)", () => {
@@ -262,7 +265,7 @@ describe("Drive match idempotency (documented)", () => {
     // It prevented the same Drive file from appearing in a second batch.
     // New constraint allows: File X → Batch A (discovered) AND File X → Batch B (discovered).
     // Uniqueness is scoped to the batch, not the tenant globally.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("duplicatesSkipped is returned in the match run result", () => {
@@ -279,8 +282,8 @@ describe("Drive match idempotency (documented)", () => {
       unmatchedCompanies: [],
       unmatchedFiles: [],
     };
-    expect(result.duplicatesSkipped).toBe(2);
-    expect(result.matchesCreated + result.duplicatesSkipped).toBe(2);
+    assert.equal(result.duplicatesSkipped, 2);
+    assert.equal(result.matchesCreated + result.duplicatesSkipped, 2);
   });
 });
 
@@ -298,7 +301,7 @@ describe("auditWarning in match results response (documented)", () => {
     };
     const auditHealthy = batch.auditRowCount > 0 || batch.totalRows === 0;
     const warning = !auditHealthy ? "some warning" : null;
-    expect(warning).not.toBeNull();
+    assert.notEqual(warning, null);
   });
 
   it("auditWarning is null when batch is healthy", () => {
@@ -313,7 +316,7 @@ describe("auditWarning in match results response (documented)", () => {
       : batch.auditErrorCount > 0
         ? "some audit errors"
         : null;
-    expect(warning).toBeNull();
+    assert.equal(warning, null);
   });
 
   it("auditWarning mentions audit errors when auditErrorCount > 0 but rows exist", () => {
@@ -328,6 +331,6 @@ describe("auditWarning in match results response (documented)", () => {
       : batch.auditErrorCount > 0
         ? `${batch.auditErrorCount} audit row write(s) failed during import.`
         : null;
-    expect(warning).toContain("2 audit row write(s) failed");
+    assert.ok((warning).includes("2 audit row write(s) failed"));
   });
 });

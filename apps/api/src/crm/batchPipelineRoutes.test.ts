@@ -15,7 +15,8 @@
  *  - tenant isolation contracts
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
 import {
   PIPELINE_STEPS,
   PipelineError,
@@ -36,7 +37,7 @@ import {
 
 describe("PIPELINE_STEPS constant", () => {
   it("contains exactly the five expected steps in order", () => {
-    expect(PIPELINE_STEPS).toEqual([
+    assert.deepEqual(PIPELINE_STEPS, [
       "drive_match",
       "document_import",
       "text_extraction",
@@ -47,13 +48,13 @@ describe("PIPELINE_STEPS constant", () => {
 
   it("each step is a non-empty string", () => {
     for (const step of PIPELINE_STEPS) {
-      expect(typeof step).toBe("string");
-      expect(step.length).toBeGreaterThan(0);
+      assert.equal(typeof step, "string");
+      assert.ok((step.length) > (0));
     }
   });
 
   it("has exactly 5 steps (progress math assumes 5)", () => {
-    expect(PIPELINE_STEPS.length).toBe(5);
+    assert.equal(PIPELINE_STEPS.length, 5);
   });
 });
 
@@ -62,13 +63,13 @@ describe("PIPELINE_STEPS constant", () => {
 describe("PipelineError", () => {
   it("stores code and message correctly", () => {
     const err = new PipelineError("batch_not_found", "Batch not found.");
-    expect(err.code).toBe("batch_not_found");
-    expect(err.message).toBe("Batch not found.");
-    expect(err.name).toBe("PipelineError");
+    assert.equal(err.code, "batch_not_found");
+    assert.equal(err.message, "Batch not found.");
+    assert.equal(err.name, "PipelineError");
   });
 
   it("is instanceof Error", () => {
-    expect(new PipelineError("test", "msg")).toBeInstanceOf(Error);
+    assert.ok((new PipelineError("test", "msg")) instanceof Error);
   });
 });
 
@@ -90,55 +91,55 @@ describe("loadPipelineConfig", () => {
   it("returns default staleMinutes=30 when env var not set", () => {
     delete process.env.CRM_PIPELINE_STALE_MINUTES;
     const config = loadPipelineConfig();
-    expect(config.staleMinutes).toBe(30);
+    assert.equal(config.staleMinutes, 30);
   });
 
   it("returns default maxStepItems=20 when env var not set", () => {
     delete process.env.CRM_PIPELINE_MAX_STEP_ITEMS;
     const config = loadPipelineConfig();
-    expect(config.maxStepItems).toBe(20);
+    assert.equal(config.maxStepItems, 20);
   });
 
   it("reads CRM_PIPELINE_STALE_MINUTES from env", () => {
     process.env.CRM_PIPELINE_STALE_MINUTES = "45";
     const config = loadPipelineConfig();
-    expect(config.staleMinutes).toBe(45);
+    assert.equal(config.staleMinutes, 45);
   });
 
   it("reads CRM_PIPELINE_MAX_STEP_ITEMS from env", () => {
     process.env.CRM_PIPELINE_MAX_STEP_ITEMS = "10";
     const config = loadPipelineConfig();
-    expect(config.maxStepItems).toBe(10);
+    assert.equal(config.maxStepItems, 10);
   });
 
   it("clamps staleMinutes to minimum 1", () => {
     process.env.CRM_PIPELINE_STALE_MINUTES = "0";
     const config = loadPipelineConfig();
-    expect(config.staleMinutes).toBeGreaterThanOrEqual(1);
+    assert.ok((config.staleMinutes) >= (1));
   });
 
   it("clamps maxStepItems to minimum 1", () => {
     process.env.CRM_PIPELINE_MAX_STEP_ITEMS = "0";
     const config = loadPipelineConfig();
-    expect(config.maxStepItems).toBeGreaterThanOrEqual(1);
+    assert.ok((config.maxStepItems) >= (1));
   });
 
   it("clamps maxStepItems to maximum 50", () => {
     process.env.CRM_PIPELINE_MAX_STEP_ITEMS = "999";
     const config = loadPipelineConfig();
-    expect(config.maxStepItems).toBeLessThanOrEqual(50);
+    assert.ok((config.maxStepItems) <= (50));
   });
 
   it("handles non-numeric staleMinutes gracefully (falls back to default)", () => {
     process.env.CRM_PIPELINE_STALE_MINUTES = "not_a_number";
     const config = loadPipelineConfig();
-    expect(config.staleMinutes).toBe(30);
+    assert.equal(config.staleMinutes, 30);
   });
 
   it("handles non-numeric maxStepItems gracefully (falls back to default)", () => {
     process.env.CRM_PIPELINE_MAX_STEP_ITEMS = "abc";
     const config = loadPipelineConfig();
-    expect(config.maxStepItems).toBe(20);
+    assert.equal(config.maxStepItems, 20);
   });
 });
 
@@ -146,7 +147,7 @@ describe("loadPipelineConfig", () => {
 
 describe("calculateProgressPercent", () => {
   it("returns 0 for empty steps", () => {
-    expect(calculateProgressPercent({})).toBe(0);
+    assert.equal(calculateProgressPercent({}), 0);
   });
 
   it("returns 100 for all 5 steps complete", () => {
@@ -164,7 +165,7 @@ describe("calculateProgressPercent", () => {
     for (const s of PIPELINE_STEPS as PipelineStepName[]) {
       steps[s] = { ...complete };
     }
-    expect(calculateProgressPercent(steps)).toBe(100);
+    assert.equal(calculateProgressPercent(steps), 100);
   });
 
   it("returns 100 when all steps are skipped", () => {
@@ -182,7 +183,7 @@ describe("calculateProgressPercent", () => {
     for (const s of PIPELINE_STEPS as PipelineStepName[]) {
       steps[s] = { ...skipped };
     }
-    expect(calculateProgressPercent(steps)).toBe(100);
+    assert.equal(calculateProgressPercent(steps), 100);
   });
 
   it("returns 0 for all failed steps", () => {
@@ -200,7 +201,7 @@ describe("calculateProgressPercent", () => {
     for (const s of PIPELINE_STEPS as PipelineStepName[]) {
       steps[s] = { ...failed };
     }
-    expect(calculateProgressPercent(steps)).toBe(0);
+    assert.equal(calculateProgressPercent(steps), 0);
   });
 
   it("returns 20 for exactly 1 of 5 steps complete", () => {
@@ -216,7 +217,7 @@ describe("calculateProgressPercent", () => {
         errorSummary: null,
       },
     };
-    expect(calculateProgressPercent(steps)).toBe(20);
+    assert.equal(calculateProgressPercent(steps), 20);
   });
 
   it("returns 40 for 2 complete steps", () => {
@@ -230,7 +231,7 @@ describe("calculateProgressPercent", () => {
       failed: 0,
       errorSummary: null,
     };
-    expect(calculateProgressPercent({ drive_match: complete, document_import: complete })).toBe(40);
+    assert.equal(calculateProgressPercent({ drive_match: complete, document_import: complete }), 40);
   });
 
   it("returns 10 for a single partial step (half credit)", () => {
@@ -246,7 +247,7 @@ describe("calculateProgressPercent", () => {
         errorSummary: null,
       },
     };
-    expect(calculateProgressPercent(steps)).toBe(10);
+    assert.equal(calculateProgressPercent(steps), 10);
   });
 
   it("returns 5 for a single running step (quarter credit)", () => {
@@ -262,7 +263,7 @@ describe("calculateProgressPercent", () => {
         errorSummary: null,
       },
     };
-    expect(calculateProgressPercent(steps)).toBe(5);
+    assert.equal(calculateProgressPercent(steps), 5);
   });
 
   it("mixed states: 2 complete + 1 partial + 1 failed = 50", () => {
@@ -270,19 +271,19 @@ describe("calculateProgressPercent", () => {
     const complete: StepRecord = { status: "complete", startedAt: null, completedAt: null, attempted: 1, succeeded: 1, skipped: 0, failed: 0, errorSummary: null };
     const partial: StepRecord = { ...complete, status: "partial" };
     const failed: StepRecord = { ...complete, status: "failed" };
-    expect(calculateProgressPercent({
+    assert.equal(calculateProgressPercent({
       drive_match: complete,
       document_import: complete,
       text_extraction: partial,
       contact_discovery: failed,
-    })).toBe(50);
+    }), 50);
   });
 
   it("never exceeds 100", () => {
     const complete: StepRecord = { status: "complete", startedAt: null, completedAt: null, attempted: 1, succeeded: 1, skipped: 0, failed: 0, errorSummary: null };
     const steps: StepsJson = {};
     for (const s of PIPELINE_STEPS as PipelineStepName[]) steps[s] = { ...complete };
-    expect(calculateProgressPercent(steps)).toBeLessThanOrEqual(100);
+    assert.ok((calculateProgressPercent(steps)) <= (100));
   });
 });
 
@@ -305,8 +306,8 @@ describe("PipelineRunResult shape", () => {
       completedAt: null,
       recoveredAt: null,
     };
-    expect(result.overallProgressPercent).toBe(100);
-    expect(result.recoveredAt).toBeNull();
+    assert.equal(result.overallProgressPercent, 100);
+    assert.equal(result.recoveredAt, null);
   });
 
   it("recoveredAt is a string when run was stale-recovered", () => {
@@ -325,8 +326,8 @@ describe("PipelineRunResult shape", () => {
       completedAt: "2026-06-08T09:00:00Z",
       recoveredAt: "2026-06-08T09:00:00Z",
     };
-    expect(typeof result.recoveredAt).toBe("string");
-    expect(result.errors[0]?.error).toBe("stale_run_recovered");
+    assert.equal(typeof result.recoveredAt, "string");
+    assert.equal(result.errors[0]?.error, "stale_run_recovered");
   });
 });
 
@@ -342,9 +343,9 @@ describe("PipelineHealthResult shape", () => {
       hasMore: false,
       lastUpdatedAt: "2026-06-08T09:00:00Z",
     };
-    expect(health.healthy).toBe(true);
-    expect(health.staleDetected).toBe(false);
-    expect(health.activeRunCount).toBe(0);
+    assert.equal(health.healthy, true);
+    assert.equal(health.staleDetected, false);
+    assert.equal(health.activeRunCount, 0);
   });
 
   it("healthy=false when staleDetected=true", () => {
@@ -356,8 +357,8 @@ describe("PipelineHealthResult shape", () => {
       hasMore: false,
       lastUpdatedAt: "2026-06-08T07:00:00Z",
     };
-    expect(health.healthy).toBe(false);
-    expect(health.staleDetected).toBe(true);
+    assert.equal(health.healthy, false);
+    assert.equal(health.staleDetected, true);
   });
 });
 
@@ -366,8 +367,8 @@ describe("PipelineHealthResult shape", () => {
 describe("PipelineConfig shape", () => {
   it("has staleMinutes and maxStepItems fields", () => {
     const cfg: PipelineConfig = { staleMinutes: 30, maxStepItems: 20 };
-    expect(cfg.staleMinutes).toBe(30);
-    expect(cfg.maxStepItems).toBe(20);
+    assert.equal(cfg.staleMinutes, 30);
+    assert.equal(cfg.maxStepItems, 20);
   });
 });
 
@@ -380,7 +381,7 @@ describe("PipelineErrorEntry step field", () => {
       error: "Drive token expired",
       at: new Date().toISOString(),
     };
-    expect(entry.step).toBe("document_import");
+    assert.equal(entry.step, "document_import");
   });
 
   it("accepts 'system' as step for stale recovery entries", () => {
@@ -389,7 +390,7 @@ describe("PipelineErrorEntry step field", () => {
       error: "stale_run_recovered",
       at: new Date().toISOString(),
     };
-    expect(entry.step).toBe("system");
+    assert.equal(entry.step, "system");
   });
 });
 
@@ -400,7 +401,7 @@ describe("recoverStaleRuns contracts", () => {
     // Verified by: fresh batch with no runs → recoverStaleRuns returns 0.
     // Because the DB query filters { status: RUNNING, updatedAt: { lt: threshold } }
     // and finds nothing.
-    expect(typeof recoverStaleRuns).toBe("function");
+    assert.equal(typeof recoverStaleRuns, "function");
   });
 
   it("[contract] marks stale RUNNING runs as FAILED with recoveredAt set", () => {
@@ -409,23 +410,23 @@ describe("recoverStaleRuns contracts", () => {
     // - run.status === 'FAILED'
     // - run.recoveredAt !== null
     // - run.errors contains { step: 'system', error: 'stale_run_recovered' }
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] does NOT recover runs updated within the stale window", () => {
     // A run with updatedAt = now() - (staleMinutes - 1) min should not be recovered.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] emits crm_pipeline_stale_recovered audit event per recovered run", () => {
     // Each recovered run triggers pipelineAuditLog('crm_pipeline_stale_recovered', {...}).
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] recovery happens before active-run check in startBatchPipeline", () => {
     // startBatchPipeline calls recoverStaleRuns before querying for RUNNING runs.
     // So a stale RUNNING run is cleared, and a new run can start without getting 409.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] recovery threshold respects CRM_PIPELINE_STALE_MINUTES env var", () => {
@@ -435,7 +436,7 @@ describe("recoverStaleRuns contracts", () => {
     const config60: PipelineConfig = { staleMinutes: 60, maxStepItems: 20 };
     const threshold5 = new Date(Date.now() - config5.staleMinutes * 60_000);
     const threshold60 = new Date(Date.now() - config60.staleMinutes * 60_000);
-    expect(threshold5 > threshold60).toBe(true); // 5-min window is more recent
+    assert.equal(threshold5 > threshold60, true); // 5-min window is more recent
   });
 });
 
@@ -445,46 +446,46 @@ describe("cancellation rules contracts", () => {
   it("[contract] PENDING runs can be cancelled", () => {
     // cancelBatchPipeline queries { status: { in: ['PENDING', 'RUNNING', 'PARTIAL'] } }
     // A PENDING run matches → cancelled: true.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] RUNNING runs can be cancelled", () => {
     // A RUNNING run (e.g. mid-execution if somehow queried) → cancelled: true.
     // This prevents a stuck RUNNING run from blocking new starts indefinitely
     // when stale recovery hasn't kicked in yet.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] PARTIAL runs can be cancelled", () => {
     // A PARTIAL run (waiting for Continue) → cancelled: true.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] COMPLETE runs cannot be cancelled", () => {
     // cancelBatchPipeline only finds { status: { in: ['PENDING', 'RUNNING', 'PARTIAL'] } }.
     // A COMPLETE run is not found → { cancelled: false, reason: 'no_cancellable_run' }.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] FAILED runs cannot be cancelled", () => {
     // Same: FAILED not in cancellable set → no_cancellable_run.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] CANCELLED runs cannot be cancelled again", () => {
     // Same: CANCELLED not in cancellable set → no_cancellable_run.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] cancel emits crm_pipeline_cancelled audit event", () => {
     // When a run IS cancelled, pipelineAuditLog('crm_pipeline_cancelled', {...}) fires.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] cancel is honest: does not pretend to stop already-completed work", () => {
     // Cancel only marks the run record as CANCELLED; individual step results are preserved.
     // A PARTIAL run with 3 complete steps stays with those steps complete after cancellation.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -495,13 +496,13 @@ describe("single active run protection", () => {
     // After stale recovery, if a RUNNING run still exists (updated recently),
     // startBatchPipeline throws PipelineError{ code: 'already_running' }.
     // Route maps this to HTTP 409.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] stale RUNNING runs are cleared before the 409 check", () => {
     // recoverStaleRuns is called before the RUNNING query.
     // So if the only RUNNING run is stale, it gets recovered and the new start proceeds.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -513,17 +514,17 @@ describe("health endpoint contracts", () => {
     // - activeRunCount <= 1
     // - staleCount === 0
     // - latestRun?.status !== 'FAILED'
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] healthy=false when stale run detected", () => {
     // staleCount > 0 → healthy=false.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] health endpoint requires valid tenant JWT (requireCrmAccess)", () => {
     // Route is registered with requireCrmAccess. Unauthenticated calls → 401.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] health response contains no sensitive data", () => {
@@ -538,12 +539,12 @@ describe("health endpoint contracts", () => {
       hasMore: false,
       lastUpdatedAt: null,
     };
-    expect("healthy" in health).toBe(true);
-    expect("latestRunStatus" in health).toBe(true);
-    expect("staleDetected" in health).toBe(true);
-    expect("activeRunCount" in health).toBe(true);
-    expect("hasMore" in health).toBe(true);
-    expect("lastUpdatedAt" in health).toBe(true);
+    assert.equal("healthy" in health, true);
+    assert.equal("latestRunStatus" in health, true);
+    assert.equal("staleDetected" in health, true);
+    assert.equal("activeRunCount" in health, true);
+    assert.equal("hasMore" in health, true);
+    assert.equal("lastUpdatedAt" in health, true);
   });
 });
 
@@ -561,8 +562,8 @@ describe("pipeline audit event names (documented)", () => {
 
   it("documents all expected pipeline audit event names", () => {
     for (const event of EXPECTED_EVENTS) {
-      expect(typeof event).toBe("string");
-      expect(event.startsWith("crm_pipeline_")).toBe(true);
+      assert.equal(typeof event, "string");
+      assert.equal(event.startsWith("crm_pipeline_"), true);
     }
   });
 
@@ -571,7 +572,7 @@ describe("pipeline audit event names (documented)", () => {
     // storage paths, or API keys. Only: tenantId, batchId, runId, durationMs,
     // staleMinutes, reason.
     // Enforced by pipelineAuditLog signature which only accepts safe fields.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -585,16 +586,16 @@ describe("CRM_PIPELINE_MAX_STEP_ITEMS enforcement", () => {
     const naturalImport = 20;
     const naturalExtract = 5;
 
-    expect(Math.min(naturalImport, 5)).toBe(5); // constrained by maxStepItems
-    expect(Math.min(naturalExtract, 20)).toBe(5); // constrained by natural limit
+    assert.equal(Math.min(naturalImport, 5), 5); // constrained by maxStepItems
+    assert.equal(Math.min(naturalExtract, 20), 5); // constrained by natural limit
   });
 
   it("[contract] when maxStepItems=1, each step processes at most 1 item", () => {
     // config.maxStepItems=1 → all steps process exactly 1 item per call.
     // Verified by: set CRM_PIPELINE_MAX_STEP_ITEMS=1, run pipeline.
-    expect(Math.min(20, 1)).toBe(1);
-    expect(Math.min(5, 1)).toBe(1);
-    expect(Math.min(10, 1)).toBe(1);
+    assert.equal(Math.min(20, 1), 1);
+    assert.equal(Math.min(5, 1), 1);
+    assert.equal(Math.min(10, 1), 1);
   });
 });
 
@@ -604,23 +605,23 @@ describe("tenant isolation contracts", () => {
   it("[contract] start pipeline 404s for cross-tenant batchId", () => {
     // startBatchPipeline: db.crmImportBatch.findFirst({ where: { id, tenantId } })
     // Cross-tenant batch not found → PipelineError{ code: 'batch_not_found' } → HTTP 404.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] status endpoint 404s for cross-tenant batchId", () => {
     // getBatchPipelineStatus: same batch ownership check.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] health endpoint 404s for cross-tenant batchId", () => {
     // getBatchPipelineHealth: same batch ownership check.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] all DB queries include tenantId filter", () => {
     // countRemainingWork, recoverStaleRuns, executePipelineSteps all use tenantId
     // in every DB query. There is no cross-tenant data access path.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -630,13 +631,13 @@ describe("recovery after stale failure contracts", () => {
   it("[contract] a new run can start after a stale run is recovered to FAILED", () => {
     // After recoverStaleRuns marks a run as FAILED, it no longer appears in
     // { status: RUNNING } query → startBatchPipeline succeeds without 409.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 
   it("[contract] prior step state from recovered run is NOT reused in new run", () => {
     // startBatchPipeline always creates a fresh run with {} steps and empty totals.
     // The old stale run's step data is preserved in its own DB record.
-    expect(true).toBe(true);
+    assert.equal(true, true);
   });
 });
 
@@ -645,11 +646,11 @@ describe("recovery after stale failure contracts", () => {
 describe("compile/runtime contracts", () => {
   it("batchPipelineService exports compile against expected signatures", () => {
     // These imports succeed at compile time, verifying the module exports correctly.
-    expect(typeof PIPELINE_STEPS).toBe("object");
-    expect(typeof PipelineError).toBe("function");
-    expect(typeof loadPipelineConfig).toBe("function");
-    expect(typeof calculateProgressPercent).toBe("function");
-    expect(typeof recoverStaleRuns).toBe("function");
+    assert.equal(typeof PIPELINE_STEPS, "object");
+    assert.equal(typeof PipelineError, "function");
+    assert.equal(typeof loadPipelineConfig, "function");
+    assert.equal(typeof calculateProgressPercent, "function");
+    assert.equal(typeof recoverStaleRuns, "function");
   });
 
   it("PipelineTotals shape has all 6 expected numeric fields", () => {
@@ -661,6 +662,6 @@ describe("compile/runtime contracts", () => {
       discoveriesFound: 0,
       aiReportsGenerated: 0,
     };
-    expect(Object.keys(t).length).toBe(6);
+    assert.equal(Object.keys(t).length, 6);
   });
 });
