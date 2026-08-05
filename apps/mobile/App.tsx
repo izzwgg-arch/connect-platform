@@ -13,6 +13,7 @@ import { NotificationsProvider } from './src/context/NotificationsContext';
 import { PresenceProvider } from './src/context/PresenceContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { AppAlertHost } from './src/components/ui/AppPopup';
+import { AndroidKeyboardInset } from './src/components/AndroidKeyboardInset';
 import { CallFlowDebugOverlay } from './src/debug/CallFlowDebugOverlay';
 import { ensureCallFlowAppStateHook, logCallFlowBootDiagnostics } from './src/debug/callFlowDebug';
 import { PENDING_CALL_STORAGE_KEY } from './src/notifications/backgroundCallTask';
@@ -147,7 +148,9 @@ export default function App() {
                   <SipProvider>
                     <CallSessionProvider>
                       <NotificationsProvider>
-                        <DeferredRootNavigator />
+                        <AndroidKeyboardInset>
+                          <DeferredRootNavigator />
+                        </AndroidKeyboardInset>
                         <AppAlertHost />
                         <CallFlowDebugOverlay />
                       </NotificationsProvider>

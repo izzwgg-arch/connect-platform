@@ -2029,7 +2029,10 @@ export function ChatTab() {
             // With the keyboard up there is no navigation bar left to clear —
             // it is behind the keyboard — so the safe-area inset would only
             // open a dead gap between the composer and the keys.
-            bottomInset={keyboardOpen ? 10 : Platform.OS === 'ios' ? 12 : Math.max(insets.bottom, 10)}
+            // Keyboard down, the tab bar sits below and already carries the
+            // safe-area inset itself; repeating it here (15dp on the S24) only
+            // pushed the composer away from the tabs. 8 keeps them close.
+            bottomInset={keyboardOpen ? 10 : Platform.OS === 'ios' ? 12 : 8}
           />
         </View>
       )}
