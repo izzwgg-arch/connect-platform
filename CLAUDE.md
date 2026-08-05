@@ -45,13 +45,26 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md
   restart (**unconfirmed at handoff — ask first**); next suspect is his filter
   extension. ⛔ Run the silent-WAV probe (handoff §1) before shipping ANY fix
   for a "didn't play" report.
-- Hardening shipped as `16f05d2d` on `feat/ivr-migration-takeover`, **NOT
-  deployed** (api + portal + agent all changed; another session was mid-deploy).
+- Hardening shipped as `16f05d2d` on `feat/ivr-migration-takeover`; **ALL
+  THREE HALVES DEPLOYED as of 2026-08-05**: api (container at `9b521176`),
+  portal (hardening markers grep-verified inside the live `.next` build), and
+  agent (manual compose rebuild 2026-08-05 ~00:30 ET under Izzy's explicit
+  permission — the deploy queue has NO agent service, agent is always a manual
+  `docker compose -f docker-compose.app.yml -f docker-compose.agent.yml build
+  agent && up -d agent`; new container verified healthy with both fixes).
   Highlights: visible preview player + 4s playing-event watchdog + honest
   stall message; timeouts on every modal fetch; 30s server-side read cache +
   single read retry; 12/min per-IP + 4-concurrent synthesis guards; client
   faults 400 not 502; agent hot-reload was missing the ElevenLabs key (saved
   keys were invisible until restart — fixed).
+- **2026-08-05: the generate route had never worked** — it selected `slug`
+  from Tenant, and **the Tenant model has NO slug column**, so every
+  `POST /voice/ivr/prompts/generate` died in PrismaClientValidationError (and
+  the portal dialog rendered the raw Prisma dump to the customer). Fixed
+  `9b521176`, deployed + live-verified same day. ⛔ `TenantPbxPrompt.tenantSlug`
+  is ALWAYS derived from `Tenant.name` via the `toIvrSlug` normalisation
+  (lowercase, non-alnum → `_`) — a differently-formatted slug makes rows
+  invisible to the prompt list and PBX prefix matching. Handoff doc §5.
 - ⛔ **Never retry a synthesis POST** (double-bills characters) and **never
   stress-test against prod** (real money; the offline fake-provider suite in
   `elevenLabsRoutes.stress.test.ts` IS the stress test). 49/49 tests green via

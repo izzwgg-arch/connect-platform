@@ -59,11 +59,14 @@ wrong fixes (see the device-logcat rule in the contacts/ghost-call handoff).
 
 ## 2. What shipped — commit `16f05d2d` on `feat/ivr-migration-takeover`
 
-**NOT DEPLOYED at handoff.** Another session was actively deploying (api
-container restarted ~16:10, portal ~16:36 server time), so nothing was pushed
-to loopcom from here. Deploy needs api + portal + agent (all three changed).
-Remember the branch-drift rule: merge/rebase against what the server actually
-runs before deploying.
+**FULLY DEPLOYED as of 2026-08-05 ~01:30 ET.** The api + portal halves rode a
+later session's deploy (verified by grepping the hardening markers inside the
+live containers — server repo at `85a14982`, which contains `16f05d2d` via the
+`7f3c7970` merge). The agent half was rebuilt manually on 2026-08-05 (compose
+build+up of the `agent` service under Izzy's explicit permission; the deploy
+queue does NOT know the agent — its services are api/portal/telephony/
+realtime/worker/full-stack, so agent stays a manual compose rebuild). New
+agent container verified healthy with both fixes present.
 
 ### apps/portal — `pbx/ivr-studio/MakeRecording.tsx` (the bug Izzy hit)
 
@@ -156,3 +159,36 @@ runs before deploying.
   modules) is NOT from this work; the touched files typecheck clean.
 - ElevenLabs account at check time: creator tier, 124 / 211,000 chars used,
   paid up, 38 voices, key healthy.
+
+---
+
+## 5. 2026-08-05 follow-up — the generate route had NEVER worked (Tenant.slug crash)
+
+Separate session, after the hardening above was deployed. Izzy's screenshot
+showed the "Make a recording" dialog rendering a full raw Prisma error.
+
+- **`POST /voice/ivr/prompts/generate` crashed on EVERY call**:
+  `elevenLabsRoutes.ts` selected `slug` from Tenant, and **the Tenant model has
+  no `slug` column** (never had one). `PrismaClientValidationError` before a
+  single character was synthesised. Preview/Hear-it worked; only the save path
+  died — so the feature demoed fine and failed at the moment of commitment.
+- **Fix `9b521176`** (deployed to api 2026-08-05, live-verified): select
+  `name`, derive the catalog row's `tenantSlug` with the SAME normalisation
+  the manual-upload path uses (`toIvrSlug` in server.ts: lowercase,
+  non-alphanumeric → `_`, trim). ⛔ The normalisation matching matters:
+  `GET /voice/ivr/prompts` scopes lists by `tenantSlug`, and PBX prefix
+  matching uses it — a differently-formatted slug makes new rows invisible in
+  the UI ("legacy (not in catalog)", Play disabled). Any new writer of
+  `TenantPbxPrompt.tenantSlug` must use the same formula.
+- **Verified in prod minutes after deploy**: the same tenant from the error
+  screenshot generated `custom/main_greeting_0c9882` (3.3 s, voice Sarah),
+  catalog row written, `pushStatus: "pushed"` to the PBX.
+- **Raw ORM errors render VERBATIM in customer dialogs.** The uncaught throw
+  became Fastify's default 500 whose `message` is the raw Prisma dump, and the
+  portal modal displays `message` as-is. The catalog write in the generate
+  route now has its own try/catch with a plain-English message; a repo-wide
+  `setErrorHandler` safety net is a separate task (chip filed 2026-08-05,
+  running in its own session).
+- The 49-test suite still passes with the fix; api typecheck clean for the
+  touched file (the ~72 repo-wide errors are pre-existing, unrelated webrtc
+  test files).
