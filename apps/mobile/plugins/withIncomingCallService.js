@@ -1,21 +1,21 @@
 /**
  * withIncomingCallService.js
  *
- * Expo config plugin that injects a native Android Java service:
- *   IncomingCallFirebaseService extends ExpoFirebaseMessagingService
+ * Expo config plugin that injects the native Android incoming-call service.
  *
  * This service receives FCM data messages directly in Java (onMessageReceived),
- * detects INCOMING_CALL payloads, and calls TelecomManager.addNewIncomingCall()
- * WITHOUT waiting for JavaScript to start. This bypasses Samsung Freecess
- * process-freezing delays that prevent the JS background task from firing in time.
+ * detects INCOMING_CALL payloads, and posts the branded Connect full-screen or
+ * heads-up incoming call notification WITHOUT waiting for JavaScript to start.
+ * This bypasses Samsung Freecess process-freezing delays that prevent the JS
+ * background task from firing in time.
  *
  * Flow:
  *   FCM high-priority data message
  *     → IncomingCallFirebaseService.onMessageReceived()  [JAVA, ~100ms]
  *         → writes call data to <cacheDir>/pending_call_native.json
- *         → TelecomManager.addNewIncomingCall()           [native call UI shown]
+ *         → native incoming UI posted                    [native call UI shown]
  *         → super.onMessageReceived()                    [Expo still schedules BG task]
- *     → (later) JS background task runs                  [writes AsyncStorage, skips duplicate CallKeep]
+ *     → (later) JS background task runs                  [writes AsyncStorage, skips duplicate native UI]
  *     → User answers → app starts → reads cache file or AsyncStorage → SIP connects
  */
 
@@ -29,12 +29,25 @@ const SERVICE_CLASS_FULL = `${APP_PACKAGE}.${SERVICE_CLASS_SHORT}`;
 const EXPO_FCM_SERVICE = 'expo.modules.notifications.service.ExpoFirebaseMessagingService';
 const RINGTONE_SOURCE = path.join(__dirname, '..', 'assets', 'connect-default-ringtone.mp4');
 const RINGTONE_RESOURCE_NAME = 'connect_default_ringtone.mp4';
+const JAVA_SOURCE_PATH = path.join(
+    __dirname,
+    '..',
+    'android',
+    'app',
+    'src',
+    'main',
+    'java',
+    'com',
+    'connectcommunications',
+    'mobile',
+    `${SERVICE_CLASS_SHORT}.java`
+);
 
 // ---------------------------------------------------------------------------
 // Java source for the native FCM handler
 // ---------------------------------------------------------------------------
 function getJavaSource() {
-    return fs.readFileSync(path.join(__dirname, 'IncomingCallFirebaseService.java'), 'utf8');
+    return fs.readFileSync(JAVA_SOURCE_PATH, 'utf8');
 }
 
 // ---------------------------------------------------------------------------

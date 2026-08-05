@@ -9,6 +9,7 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
+import { clearAndroidLockScreenCallPresentation } from '../../sip/callkeep';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -173,6 +174,14 @@ export function ActiveCallScreen() {
     }
   }, [inProgress]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    clearAndroidLockScreenCallPresentation();
+    return () => {
+      clearAndroidLockScreenCallPresentation();
+    };
+  }, []);
+
   // Auto-dismiss is handled by RootNavigator which removes this screen from
   // the stack when isCallActive becomes false (on 'idle'). Calling goBack()
   // here races with that and causes a crash — do nothing.
@@ -205,6 +214,9 @@ export function ActiveCallScreen() {
 
   const handleHangup = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    if (Platform.OS === 'android') {
+      clearAndroidLockScreenCallPresentation();
+    }
     await sip.hangup();
   };
 

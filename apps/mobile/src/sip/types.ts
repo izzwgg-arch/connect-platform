@@ -26,7 +26,7 @@ export type SipAnswerTraceEvent = {
 
 export type SipClient = {
   configure: (bundle: ProvisioningBundle) => void;
-  register: () => Promise<void>;
+  register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
   dial: (target: string) => Promise<void>;
   answer: () => Promise<void>;

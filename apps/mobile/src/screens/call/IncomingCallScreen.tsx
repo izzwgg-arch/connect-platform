@@ -7,6 +7,8 @@ import {
   Dimensions,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
+  NativeModules,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useIncomingNotifications } from '../../context/NotificationsContext';
+import { clearAndroidLockScreenCallPresentation } from '../../sip/callkeep';
 import { useAuth } from '../../context/AuthContext';
 import { startRingtone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
 import { postVoiceDiagEvent } from '../../api/client';
@@ -26,10 +29,30 @@ const { width } = Dimensions.get('window');
 
 export function IncomingCallScreen() {
   const { token } = useAuth();
-  const { incomingInvite, incomingCallUiState, clearIncomingInvite, answerIncomingCall, declineIncomingCall } = useIncomingNotifications();
+  const {
+    incomingInvite,
+    incomingCallUiState,
+    answerIncomingCall,
+    declineIncomingCall,
+    answerHandoffInviteIdRef,
+    answerHandoffTick,
+  } = useIncomingNotifications();
   const insets = useSafeAreaInsets();
+  const [displayInvite, setDisplayInvite] = useState(incomingInvite);
   // Remaining-time countdown (seconds until invite expires)
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL_S);
+
+  useEffect(() => {
+    if (incomingInvite) {
+      setDisplayInvite(incomingInvite);
+      return;
+    }
+    if (incomingCallUiState.phase !== 'idle') {
+      return;
+    }
+    const timer = setTimeout(() => setDisplayInvite(null), 450);
+    return () => clearTimeout(timer);
+  }, [incomingInvite, incomingCallUiState.phase]);
 
   // Animations
   const ring1 = useRef(new Animated.Value(1)).current;
@@ -46,10 +69,10 @@ export function IncomingCallScreen() {
   // ── UI_SHOWN telemetry + countdown timer ─────────────────────────────────
 
   useEffect(() => {
-    if (!incomingInvite) return;
+    if (!displayInvite) return;
 
     const uiShownAt = Date.now();
-    const pushReceivedAt = (incomingInvite as any)._pushReceivedAt as number | undefined;
+    const pushReceivedAt = (displayInvite as any)._pushReceivedAt as number | undefined;
 
     // Post UI_SHOWN event with latency data
     if (token) {
@@ -59,7 +82,7 @@ export function IncomingCallScreen() {
           sessionId: sid,
           type: 'UI_SHOWN',
           payload: {
-            inviteId: incomingInvite.id,
+            inviteId: displayInvite.id,
             screen: 'IncomingCallScreen',
             uiShownAt,
             pushReceivedAt,
@@ -73,8 +96,8 @@ export function IncomingCallScreen() {
     // Compute seconds remaining from the invite's expiresAt timestamp.
     // Updates every second so the user knows how long they have to answer.
     const computeLeft = () => {
-      if (!incomingInvite.expiresAt) return INVITE_TTL_S;
-      const ms = new Date(incomingInvite.expiresAt).getTime() - Date.now();
+      if (!displayInvite?.expiresAt) return INVITE_TTL_S;
+      const ms = new Date(displayInvite.expiresAt).getTime() - Date.now();
       return Math.max(0, Math.ceil(ms / 1000));
     };
 
@@ -87,15 +110,33 @@ export function IncomingCallScreen() {
 
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incomingInvite?.id]);
+  }, [displayInvite?.id]);
 
   useEffect(() => {
-    if (!incomingInvite) return;
-    startRingtone().catch(() => undefined);
+    if (!incomingInvite || incomingCallUiState.phase !== 'incoming') return;
+    if (Platform.OS !== 'android') {
+      startRingtone().catch(() => undefined);
+      return () => {
+        stopAllTelephonyAudio().catch(() => undefined);
+      };
+    }
+    // Android: FCM already started native ring. Start JS tone first, then stop native
+    // so we never leave a silent gap (stop-before-start made home-screen rings inaudible).
+    let cancelled = false;
+    (async () => {
+      try {
+        await startRingtone();
+        if (cancelled) return;
+        NativeModules.IncomingCallUi?.stopRingtone?.();
+      } catch {
+        /* keep native ring if expo-av path fails */
+      }
+    })();
     return () => {
+      cancelled = true;
       stopAllTelephonyAudio().catch(() => undefined);
     };
-  }, [incomingInvite?.id]);
+  }, [incomingInvite?.id, incomingCallUiState.phase, answerHandoffTick]);
 
   useEffect(() => {
     // Content entrance
@@ -165,16 +206,48 @@ export function IncomingCallScreen() {
     stopAllTelephonyAudio().catch(() => undefined);
     Animated.timing(declineScale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start();
     await declineIncomingCall(incomingInvite).catch(() => undefined);
+    if (Platform.OS === 'android') {
+      clearAndroidLockScreenCallPresentation();
+    }
   };
 
-  const callerName = incomingInvite?.fromDisplay || incomingInvite?.fromNumber || 'Unknown';
-  const callerNumber = incomingInvite?.fromNumber || '';
-  const toExt = incomingInvite?.toExtension || '';
-  const isConnecting = incomingCallUiState.phase === 'connecting' && incomingCallUiState.inviteId === incomingInvite?.id;
-  const hasFailure = incomingCallUiState.phase === 'failed' && incomingCallUiState.inviteId === incomingInvite?.id;
+  const callerName = displayInvite?.fromDisplay || displayInvite?.fromNumber || 'Unknown';
+  const callerNumber = displayInvite?.fromNumber || '';
+  const toExt = displayInvite?.toExtension || '';
+  const inAnswerHandoff =
+    !!displayInvite?.id && answerHandoffInviteIdRef.current === displayInvite.id;
+  const isConnecting =
+    (incomingCallUiState.phase === 'connecting' && incomingCallUiState.inviteId === displayInvite?.id) ||
+    inAnswerHandoff;
+  const isEnded =
+    !inAnswerHandoff &&
+    incomingCallUiState.phase === 'ended' &&
+    incomingCallUiState.inviteId === displayInvite?.id;
+  const hasFailure =
+    !inAnswerHandoff &&
+    incomingCallUiState.phase === 'failed' &&
+    incomingCallUiState.inviteId === displayInvite?.id;
+  const rawError = incomingCallUiState.error;
+  const terminalMessage = rawError || 'Call ended';
+  const failureSubtitle =
+    hasFailure &&
+    rawError &&
+    (rawError.length > 90 ||
+      rawError.includes('respond_invite') ||
+      rawError.includes('sip_') ||
+      rawError.includes('INVITE_'))
+      ? "We couldn't connect this call. Check signal or Wi‑Fi, then try again."
+      : terminalMessage;
+  const showActions = !!incomingInvite && !isConnecting && !isEnded && !hasFailure;
 
-  if (!incomingInvite) {
-    return null;
+  if (!displayInvite && incomingCallUiState.phase === 'idle') {
+    return <View style={[styles.container, { backgroundColor: '#040810' }]} />;
+  }
+
+  // Answer-from-notification: invite is cleared immediately while SIP connects.
+  // Avoid "CALL ENDED" / connecting chrome — ActiveCall is pushed on the app stack.
+  if (inAnswerHandoff) {
+    return <View style={[styles.container, { backgroundColor: '#040810' }]} />;
   }
 
   const initials = callerName
@@ -222,7 +295,13 @@ export function IncomingCallScreen() {
       >
         {/* Label */}
         <Text style={[typography.label, { color: 'rgba(34,197,94,0.9)', letterSpacing: 3 }]}>
-          {isConnecting ? 'CONNECTING…' : hasFailure ? 'ANSWER FAILED' : 'INCOMING CALL'}
+          {isConnecting
+            ? 'Joining call…'
+            : isEnded
+              ? 'Call ended'
+              : hasFailure
+                ? "Couldn't connect"
+                : 'Incoming call'}
         </Text>
 
         {/* Avatar */}
@@ -253,19 +332,21 @@ export function IncomingCallScreen() {
         {isConnecting ? (
           <View style={styles.statusPill}>
             <ActivityIndicator size="small" color="#93c5fd" />
-            <Text style={[typography.caption, styles.statusPillText]}>
-              Waiting for PBX + SIP answer confirmation
+            <Text style={[typography.caption, styles.statusPillText]}>One moment…</Text>
+          </View>
+        ) : null}
+
+        {(isEnded || hasFailure) ? (
+          <View style={[styles.statusPill, styles.statusPillError]}>
+            <Ionicons name="checkmark-circle-outline" size={14} color="#bfdbfe" />
+            <Text style={[typography.caption, styles.statusPillErrorText]}>
+              {hasFailure ? failureSubtitle : terminalMessage}
             </Text>
           </View>
         ) : null}
 
-        {hasFailure && incomingCallUiState.error ? (
-          <View style={[styles.statusPill, styles.statusPillError]}>
-            <Ionicons name="alert-circle-outline" size={14} color="#fca5a5" />
-            <Text style={[typography.caption, styles.statusPillErrorText]}>
-              {incomingCallUiState.error}
-            </Text>
-          </View>
+        {(isEnded || hasFailure) ? (
+          <Text style={[typography.caption, styles.returningText]}>Back to Quick Actions…</Text>
         ) : null}
 
         {/* Expiry countdown — shows when 10s or less remain */}
@@ -282,7 +363,8 @@ export function IncomingCallScreen() {
         <View style={{ flex: 1 }} />
 
         {/* Action buttons */}
-        <View style={styles.actions}>
+        {showActions ? (
+          <View style={styles.actions}>
           {/* Decline */}
           <View style={styles.actionItem}>
             <Animated.View style={{ transform: [{ scale: declineScale }] }}>
@@ -302,7 +384,8 @@ export function IncomingCallScreen() {
             </Animated.View>
             <Text style={styles.actionLabel}>{isConnecting ? 'Connecting…' : 'Answer'}</Text>
           </View>
-        </View>
+          </View>
+        ) : null}
       </Animated.View>
     </LinearGradient>
   );
@@ -377,7 +460,11 @@ const styles = StyleSheet.create({
     color: 'rgba(191,219,254,0.95)',
   },
   statusPillErrorText: {
-    color: 'rgba(254,202,202,0.95)',
+    color: 'rgba(219,234,254,0.95)',
+  },
+  returningText: {
+    color: 'rgba(191,219,254,0.72)',
+    marginTop: 10,
   },
   countdownPill: {
     flexDirection: 'row',

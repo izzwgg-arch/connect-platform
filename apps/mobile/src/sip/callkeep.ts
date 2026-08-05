@@ -1,4 +1,25 @@
+import { NativeModules, Platform } from "react-native";
 import RNCallKeep from "react-native-callkeep";
+
+/** Android: cancel native incoming notification + stop native ringtone immediately. */
+export function dismissNativeIncomingUi(callId: string | null | undefined) {
+  if (Platform.OS !== "android" || !callId) return;
+  try {
+    NativeModules.IncomingCallUi?.dismiss?.(callId);
+  } catch {
+    // ignore
+  }
+}
+
+/** Android: clear show-when-locked / turn-screen-on after calls (avoids blank trap after hangup). */
+export function clearAndroidLockScreenCallPresentation() {
+  if (Platform.OS !== "android") return;
+  try {
+    NativeModules.IncomingCallUi?.clearLockScreenCallPresentation?.();
+  } catch {
+    // ignore
+  }
+}
 
 let configured = false;
 
@@ -36,6 +57,7 @@ export function showIncomingNativeCall(callId: string, from: string) {
 }
 
 export function endNativeCall(callId: string) {
+  dismissNativeIncomingUi(callId);
   try {
     RNCallKeep.endCall(callId);
   } catch {
