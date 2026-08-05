@@ -13,7 +13,15 @@ type PortingDetails = {
   numbers: string;
   accountNumber: string;
   nameOnAccount: string;
+  // serviceAddress is the STREET line. Older saves stored the whole address in
+  // it as one line — the server still parses that shape, so hydrating an old
+  // draft into these fields is safe.
   serviceAddress: string;
+  serviceCity: string;
+  serviceState: string;
+  serviceZip: string;
+  // The carrier files wireless transfers differently, so we must ask.
+  isMobile: boolean;
   portPin: string;
   loaFileName: string;
   billFileName: string;
@@ -49,7 +57,7 @@ const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
   mainPhone: "", address: "", mainEmail: "", billingEmail: "",
   numberChoice: "", selectedNumber: "",
-  porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", portPin: "", loaFileName: "", billFileName: "" },
+  porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", serviceCity: "", serviceState: "", serviceZip: "", isMobile: false, portPin: "", loaFileName: "", billFileName: "" },
   extensions: [{ ...EMPTY_EXT, isOwner: true }],
   smsEnabled: false,
 };
@@ -112,6 +120,13 @@ function validateStep(step: number, f: FormData): string | null {
       if (f.porting.numbers.trim().length < 7) return "Enter the number you'd like to bring over.";
       if (f.porting.carrier.trim().length < 2) return "Your current carrier is required.";
       if (f.porting.accountNumber.trim().length < 1) return "Your carrier account number is required.";
+      // The carrier rejects transfers whose address doesn't match their file —
+      // collect it in pieces so it can be filed exactly.
+      if (f.porting.serviceAddress.trim().length < 3) return "The street address from your carrier bill is required.";
+      if (f.porting.serviceCity.trim().length < 2) return "The city from your carrier bill is required.";
+      if (!/^[A-Za-z]{2}$/.test(f.porting.serviceState.trim())) return "Enter the 2-letter state (like NY) from your carrier bill.";
+      if (!/^\d{5}$/.test(f.porting.serviceZip.trim())) return "Enter the 5-digit ZIP code from your carrier bill.";
+      if (f.porting.isMobile && !f.porting.portPin.trim()) return "Cell number transfers need the transfer PIN from your current carrier.";
     }
   }
   if (step === 3) {
@@ -799,7 +814,19 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   <div><label className="ob-label">Porting PIN<span className="ob-label-optional">if any</span></label><input className="ob-input" placeholder="PIN" value={form.porting.portPin} onChange={(e) => updateForm({ porting: { ...form.porting, portPin: e.target.value } })} /></div>
                 </div>
                 <div className="ob-field"><label className="ob-label">Name on account</label><input className="ob-input" placeholder="As it appears on your phone bill" value={form.porting.nameOnAccount} onChange={(e) => updateForm({ porting: { ...form.porting, nameOnAccount: e.target.value } })} /></div>
-                <div className="ob-field" style={{ marginBottom: 0 }}><label className="ob-label">Service address on the bill</label><input className="ob-input" placeholder="Billing address on your current carrier account" value={form.porting.serviceAddress} onChange={(e) => updateForm({ porting: { ...form.porting, serviceAddress: e.target.value } })} /></div>
+                <div className="ob-field"><label className="ob-label">Street address on the bill</label><input className="ob-input" placeholder="123 Main St, Suite 2" value={form.porting.serviceAddress} onChange={(e) => updateForm({ porting: { ...form.porting, serviceAddress: e.target.value } })} /></div>
+                <div className="ob-field-row" style={{ gridTemplateColumns: "2fr 1fr 1fr" }}>
+                  <div><label className="ob-label">City</label><input className="ob-input" placeholder="City" value={form.porting.serviceCity} onChange={(e) => updateForm({ porting: { ...form.porting, serviceCity: e.target.value } })} /></div>
+                  <div><label className="ob-label">State</label><input className="ob-input" placeholder="NY" maxLength={2} value={form.porting.serviceState} onChange={(e) => updateForm({ porting: { ...form.porting, serviceState: e.target.value.toUpperCase().replace(/[^A-Z]/g, "") } })} /></div>
+                  <div><label className="ob-label">ZIP</label><input className="ob-input" placeholder="10952" inputMode="numeric" maxLength={5} value={form.porting.serviceZip} onChange={(e) => updateForm({ porting: { ...form.porting, serviceZip: e.target.value.replace(/\D/g, "") } })} /></div>
+                </div>
+                <label className="ob-field" style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>
+                  <input type="checkbox" checked={form.porting.isMobile} onChange={(e) => updateForm({ porting: { ...form.porting, isMobile: e.target.checked } })} style={{ width: 16, height: 16, accentColor: "#2f6bff", cursor: "pointer" }} />
+                  <span className="ob-label" style={{ marginBottom: 0 }}>This is a cell phone (wireless) number</span>
+                </label>
+                {form.porting.isMobile && (
+                  <div className="ob-field-hint" style={{ marginTop: -6, marginBottom: 14 }}>Cell transfers need the transfer PIN from your carrier — dial 611 or check their app if you don&apos;t have it.</div>
+                )}
                 <div className="ob-uploads">
                   <label className={`ob-upl${form.porting.loaFileName ? " done" : ""}`}>
                     <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} disabled={uploading.loa}

@@ -329,7 +329,7 @@ test("live new number with SMS add-on: setSMS enable=1 on the DID", async () => 
   assert.equal(sms[0].params.enable, "1");
 });
 
-test("live port with a spare DID in the account: port filed + spare used as temporary", async () => {
+test("live port with a spare DID in the account: port filed with the WSDL parameter set + spare used as temporary", async () => {
   reset({ live: true });
   vmsHandlers.getDIDsInfo = () => ({
     status: "success",
@@ -340,15 +340,48 @@ test("live port with a spare DID in the account: port filed + spare used as temp
   });
   const id = seedSubmission({
     phoneNumberChoice: "port",
-    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9", portPin: "1234", nameOnAccount: "Bob", serviceAddress: "1 Main St" } } },
+    answers: {
+      phone: {
+        choice: "port",
+        details: {
+          numbers: "2125550000", carrier: "Verizon", accountNumber: "V9", portPin: "1234",
+          nameOnAccount: "Bob J Smith",
+          serviceAddress: "1 Main St, Suite 4", serviceCity: "Monsey", serviceState: "ny", serviceZip: "10952",
+          isMobile: false,
+        },
+      },
+    },
   });
   await mod.applyOnboardingNumber(id);
 
+  // The parameter names come from the WSDL's addLNPPortInput — the old
+  // did/carrier/account_number guesses were rejected "invalid" on every real
+  // filing (live 2026-08-05).
   const port = calls("addLNPPort");
   assert.equal(port.length, 1);
-  assert.equal(port[0].params.did, "2125550000");
-  assert.equal(port[0].params.carrier, "Verizon");
-  assert.equal(port[0].params.pin, "1234");
+  const p = port[0].params;
+  assert.equal(p.did, undefined); // the OLD wrong name must be gone
+  assert.equal(p.carrier, undefined);
+  assert.equal(p.account_number, undefined);
+  assert.equal(p.numbers, "2125550000");
+  assert.equal(p.portType, "1"); // local number
+  assert.equal(p.isPartial, "0"); // full port
+  assert.equal(p.isMobile, "0");
+  assert.equal(p.pin, "1234");
+  assert.equal(p.btn, "2125550000"); // no separate BTN collected → the number itself
+  assert.equal(p.services, ""); // nothing stays with the losing carrier
+  assert.equal(p.tfType, "0");
+  assert.equal(p.statementName, "Bobs Plumbing"); // the business name
+  assert.equal(p.firstName, "Bob");
+  assert.equal(p.lastName, "J Smith");
+  assert.equal(p.address1, "1 Main St, Suite 4");
+  assert.equal(p.city, "Monsey");
+  assert.equal(p.state, "NY"); // uppercased
+  assert.equal(p.zip, "10952");
+  assert.equal(p.country, "US");
+  assert.equal(p.providerName, "Verizon");
+  assert.equal(p.providerAccount, "V9");
+  assert.equal(p.notes, ""); // structured address → nothing to explain
 
   assert.equal(calls("orderDID").length, 0); // spare found — nothing bought
   const route = calls("setDIDRouting");
@@ -358,6 +391,65 @@ test("live port with a spare DID in the account: port filed + spare used as temp
   const row = state.submissions.get(id);
   assert.equal(row.provisionedDid, "9145550002");
   assert.equal(row.didIsTemporary, true);
+});
+
+test("LEGACY port answers (one-line address, no name): parsed into the structured fields + original line kept in notes", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "9145550002", routing: "account:344022" }],
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: {
+      phone: {
+        choice: "port",
+        // The pre-2026-08 wizard collected the whole address as ONE line and
+        // never asked about mobile. These submissions must still file.
+        details: { numbers: "2125550000", carrier: "AT&T", accountNumber: "A7", serviceAddress: "1 Main St, Monsey, NY 10952" },
+      },
+    },
+  });
+  await mod.applyOnboardingNumber(id);
+  const p = calls("addLNPPort")[0].params;
+  assert.equal(p.address1, "1 Main St");
+  assert.equal(p.city, "Monsey");
+  assert.equal(p.state, "NY");
+  assert.equal(p.zip, "10952");
+  assert.equal(p.isMobile, "0"); // never asked → default landline
+  assert.match(p.notes, /1 Main St, Monsey, NY 10952/); // the LNP desk sees the original
+  // No nameOnAccount → the company name fills both required name fields.
+  assert.equal(p.firstName, "Bobs");
+  assert.equal(p.lastName, "Plumbing");
+  assert.equal(p.statementName, "Bobs Plumbing");
+});
+
+test("mobile port: isMobile=1 goes to the carrier", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "9145550002", routing: "account:344022" }],
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: {
+      phone: {
+        choice: "port",
+        details: { numbers: "2125550000", carrier: "T-Mobile", accountNumber: "T1", portPin: "9999", isMobile: true, serviceAddress: "5 Elm St", serviceCity: "Spring Valley", serviceState: "NY", serviceZip: "10977" },
+      },
+    },
+  });
+  await mod.applyOnboardingNumber(id);
+  assert.equal(calls("addLNPPort")[0].params.isMobile, "1");
+});
+
+test("parseServiceAddressLine: the legacy one-line shapes we actually stored", () => {
+  assert.deepEqual(mod.parseServiceAddressLine("1 Main St, Monsey, NY 10952"), { address1: "1 Main St", city: "Monsey", state: "NY", zip: "10952" });
+  assert.deepEqual(mod.parseServiceAddressLine("123 Main St Apt 2, Spring Valley NY 10977-1234"), { address1: "123 Main St Apt 2", city: "Spring Valley", state: "NY", zip: "10977" });
+  assert.deepEqual(mod.parseServiceAddressLine("48 Bakertown Rd, Suite 301, Monroe, ny 10950"), { address1: "48 Bakertown Rd, Suite 301", city: "Monroe", state: "NY", zip: "10950" });
+  // No commas, no zip — everything stays in the street line rather than guessing.
+  assert.deepEqual(mod.parseServiceAddressLine("1 Main Street"), { address1: "1 Main Street", city: "", state: "", zip: "" });
+  assert.deepEqual(mod.parseServiceAddressLine(""), { address1: "", city: "", state: "", zip: "" });
 });
 
 test("live port with NO spare DID: buys a temporary number", async () => {
@@ -535,7 +627,11 @@ test("attachments that DID reach the carrier are not re-sent on retry", async ()
     uploadedFiles: [{ id: "f1", filename: "bill.pdf", kind: "PORTING_BILL", storageKey: "bill.pdf" }],
   });
   await mod.applyOnboardingNumber(id);
-  assert.equal(calls("addLNPFile").length, 1);
+  const attach = calls("addLNPFile");
+  assert.equal(attach.length, 1);
+  assert.equal(attach[0].params.portid, "P123");
+  assert.equal(attach[0].params.file, Buffer.from("fake-bill").toString("base64"));
+  assert.equal(attach[0].params.filename, undefined); // WSDL: {portid, file} only
   assert.deepEqual(state.submissions.get(id).answers.provisioning.attachedFileIds, ["f1"]);
 
   state.submissions.get(id).numberStatus = "failed";
