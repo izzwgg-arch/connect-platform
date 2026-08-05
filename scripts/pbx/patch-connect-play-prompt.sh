@@ -89,8 +89,11 @@ io.open(p, "w", encoding="utf-8").write(s)
 print("patched")
 PY
 
+# APPLIED LIVE 2026-08-05 (backup extensions__60_custom.conf.bak.play-prompt2.20260805T195557Z).
+# The first run's 1s post-reload sleep raced the reload and self-rolled-back on a
+# false negative; give the reload room before declaring failure.
 asterisk -rx "dialplan reload" >/dev/null
-sleep 1
+sleep 3
 if asterisk -rx "dialplan show connect-play-prompt" | grep -q "play-prompt" \
    && asterisk -rx "dialplan show connect-tenant-ivr" | grep -q "IVR_DID"; then
   echo "OK — connect-play-prompt live, IVR_DID saved on menu entry."
