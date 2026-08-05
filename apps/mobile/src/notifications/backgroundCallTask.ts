@@ -15,6 +15,7 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Notifications from 'expo-notifications';
 import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -165,10 +166,10 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
     const now = Date.now();
 
     // ── Check if the native Java handler already showed the call UI ───────
-    // IncomingCallFirebaseService.java writes pending_call_native.json and
-    // calls TelecomManager.addNewIncomingCall() before JS runs. If that file
-    // exists and is fresh we skip displayIncomingCall to avoid a duplicate
-    // call screen, but still write to AsyncStorage so SIP can connect.
+    // IncomingCallFirebaseService.java writes pending_call_native.json before
+    // JS runs. If it already presented the full-screen incoming UI we skip
+    // RNCallKeep to avoid a duplicate call screen, but still write to
+    // AsyncStorage so SIP can connect.
     const nativeCache = await readNativeCallCache();
     const nativeFired =
       nativeCache?._nativeCallAdded === true &&
@@ -177,7 +178,7 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       now - nativeCache._storedAt < 60_000;
 
     if (nativeFired) {
-      console.log(`${LOG} native Java handler already called TelecomManager for ${inviteId} — skipping displayIncomingCall`);
+      console.log(`${LOG} native Java handler already presented full-screen UI for ${inviteId} — skipping displayIncomingCall`);
     }
 
     // ── Duplicate guard (JS-only path) ────────────────────────────────────
@@ -228,6 +229,18 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       await AsyncStorage.setItem(BG_WAKE_EVENTS_KEY, JSON.stringify(prevWakeEvents.slice(-10))).catch(() => {});
       console.log(`${LOG} invite ${inviteId} written to AsyncStorage; native UI already visible — done`);
       await deleteNativeCallCache();
+      return;
+    }
+
+    // Android incoming UI is owned by IncomingCallFirebaseService + the in-app
+    // screen. CallKeep.displayIncomingCall duplicated a legacy "floating" call
+    // that did not dismiss reliably when answering from the real notification.
+    if (Platform.OS === 'android') {
+      console.log(
+        `${LOG} Android: skipping CallKeep.displayIncomingCall (native/in-app incoming UI only) uuid=`,
+        inviteId,
+      );
+      await deleteNativeCallCache().catch(() => undefined);
       return;
     }
 

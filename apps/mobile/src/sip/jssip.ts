@@ -1,6 +1,7 @@
 import type { SipAnswerTraceEvent, SipClient, SipEvents, SipMatch } from "./types";
 import type { ProvisioningBundle } from "../types";
 import { registerGlobals as registerWebRTCGlobals } from "react-native-webrtc";
+import { Platform } from "react-native";
 import JsSIP from "jssip";
 import {
   startRingback,
@@ -96,8 +97,9 @@ export class JsSipClient implements SipClient {
     this.events = events;
   }
 
-  async register() {
+  async register(options?: { forceRestart?: boolean }) {
     if (!this.bundle) throw new Error("Missing provisioning bundle");
+    const forceRestart = options?.forceRestart === true;
 
     if (this.registerPromise) {
       return this.registerPromise;
@@ -105,7 +107,7 @@ export class JsSipClient implements SipClient {
 
     // If already registered and an incoming call is pending, do not tear down
     // the UA — stopping it would terminate the pending SIP INVITE.
-    if (this.ua && this.incomingSessions.length > 0) {
+    if (!forceRestart && this.ua && this.incomingSessions.length > 0) {
       console.log('[SIP] Skipping re-register — incoming session in progress');
       return;
     }
@@ -113,9 +115,13 @@ export class JsSipClient implements SipClient {
     // If the UA is already registered and connected, skip the expensive
     // stop/restart cycle. A UA that is registered responds correctly to
     // incoming INVITEs without needing a fresh connection.
-    if (this.ua && this.ua.isRegistered?.()) {
+    if (!forceRestart && this.ua && this.ua.isRegistered?.()) {
       console.log('[SIP] Already registered, skipping re-register');
       return;
+    }
+
+    if (forceRestart) {
+      console.log('[SIP] Force re-register requested');
     }
 
     // Tear down any existing UA before creating a new one
@@ -211,8 +217,13 @@ export class JsSipClient implements SipClient {
         this.incomingSessions.push(e.session);
         this.events.onIncomingCall?.(callerNumber);
         this.events.onCallState?.("ringing");
-        // Play incoming ringtone
-        initAudioSession().then(() => startRingtone()).catch(() => undefined);
+        // Android inbound ringing is owned by the native incoming-call service.
+        // Starting JS ringtone here causes late or duplicate ringing once the app opens.
+        if (Platform.OS !== "android") {
+          initAudioSession().then(() => startRingtone()).catch(() => undefined);
+        } else {
+          console.log("[SIP] Android inbound INVITE received — leaving ringtone to native incoming-call flow");
+        }
       }
       this.bindSession(this.session);
     });
@@ -296,6 +307,15 @@ export class JsSipClient implements SipClient {
     return String(session?.local_identity?.uri?.user || this.bundle?.sipUsername || "");
   }
 
+  private describeIncomingSession(session: any) {
+    return {
+      from: this.getSessionFrom(session),
+      fromNormalized: this.normalizeNumber(this.getSessionFrom(session)),
+      to: this.getSessionTo(session),
+      hasAnswer: typeof session?.answer === "function",
+    };
+  }
+
   private matchesIncoming(session: any, match?: SipMatch): boolean {
     if (!match) return true;
     const from = this.normalizeNumber(this.getSessionFrom(session));
@@ -322,10 +342,42 @@ export class JsSipClient implements SipClient {
   }
 
   private findIncoming(match?: SipMatch): any | null {
-    for (const s of this.incomingSessions) {
+    const sessions = [...this.incomingSessions];
+    if (this.session && !sessions.includes(this.session)) {
+      sessions.push(this.session);
+    }
+
+    for (const s of sessions) {
       if (this.matchesIncoming(s, match)) return s;
     }
-    if (this.session && this.matchesIncoming(this.session, match)) return this.session;
+
+    if (match && sessions.length === 1) {
+      const fallback = sessions[0];
+      console.warn(
+        "[SIP] findIncoming: using single-session fallback after match miss",
+        JSON.stringify({
+          expectedFrom: this.normalizeNumber(match.fromNumber || ""),
+          expectedToExtension: String(match.toExtension || ""),
+          inviteId: match.inviteId || null,
+          session: this.describeIncomingSession(fallback),
+        }),
+      );
+      return fallback;
+    }
+
+    if (match && sessions.length > 0) {
+      console.warn(
+        "[SIP] findIncoming: no incoming session matched",
+        JSON.stringify({
+          expectedFrom: this.normalizeNumber(match.fromNumber || ""),
+          expectedToExtension: String(match.toExtension || ""),
+          inviteId: match.inviteId || null,
+          candidateCount: sessions.length,
+          candidates: sessions.map((session) => this.describeIncomingSession(session)),
+        }),
+      );
+    }
+
     return null;
   }
 
@@ -453,7 +505,7 @@ export class JsSipClient implements SipClient {
 
         return confirmed;
       }
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      await new Promise((resolve) => setTimeout(resolve, 55));
     }
     onTrace?.({
       phase: "failed",

@@ -1,10 +1,18 @@
 package com.connectcommunications.mobile;
 
+import android.app.ActivityOptions;
 import android.app.Notification;
 import android.app.NotificationChannel;
+import android.app.KeyguardManager;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.ActivityManager;
+import android.content.pm.ResolveInfo;
+import android.content.pm.PackageManager;
+import android.os.PowerManager;
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.content.Context;
@@ -26,6 +34,7 @@ import java.io.FileWriter;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -43,7 +52,14 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     private static final String CHANNEL_ID = "connect-incoming-ui-v3";
     private static final int NOTIFICATION_ID_BASE = 41001;
     private static final String EXTRA_SHOW_INCOMING_CALL = "connect_show_incoming_call";
+    private static final String PRESENTATION_FULL_SCREEN = "full_screen";
+    private static final String PRESENTATION_HEADS_UP = "heads_up";
+    private static final String PRESENTATION_FOREGROUND_JS = "foreground_js";
     private static MediaPlayer ringtonePlayer = null;
+    private static android.media.Ringtone systemRingtoneFallback = null;
+    private static PowerManager.WakeLock incomingRingWakeLock = null;
+    private static AudioManager ringAudioManager = null;
+    private static AudioFocusRequest ringFocusRequest = null;
 
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
@@ -77,6 +93,11 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
 
         if ("INCOMING_CALL".equals(type)) {
             try {
+                // First audible sample ASAP (before disk / notification / full-screen work).
+                // When the process is only alive for FCM, MainActivity is not resumed yet.
+                if (!MainActivity.isHostResumedForIncoming()) {
+                    startIncomingCallRingtone();
+                }
                 handleIncomingCallNative(appData);
             } catch (Exception e) {
                 Log.e(TAG, "[CALL_INCOMING] handleIncomingCallNative failed: " + e.getMessage(), e);
@@ -125,23 +146,52 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         String displayName = (fromDisp != null && !fromDisp.isEmpty())
             ? fromDisp
             : (fromNum != null && !fromNum.isEmpty() ? fromNum : "Unknown");
+        boolean appInForeground = isAppInForeground();
+        boolean preferFullScreen = !appInForeground && shouldUseFullScreenUi();
+        String presentationMode = appInForeground
+            ? PRESENTATION_FOREGROUND_JS
+            : (preferFullScreen ? PRESENTATION_FULL_SCREEN : PRESENTATION_HEADS_UP);
 
         Log.i(TAG, "[CALL_INCOMING] native handler inviteId=" + inviteId + " from=" + fromNum);
-        writeCacheFile(data, inviteId, fromNum, fromDisp);
-        startIncomingCallRingtone();
-        launchIncomingCallUi(data, inviteId, displayName, fromNum);
+        if (PRESENTATION_FOREGROUND_JS.equals(presentationMode)) {
+            Log.i(TAG, "[CALL_INCOMING] app already foregrounded; leaving incoming UI to React");
+            writeCacheFile(
+                data,
+                inviteId,
+                fromNum,
+                fromDisp,
+                false,
+                presentationMode
+            );
+            stopIncomingCallRingtone("foreground_js_takeover");
+            return;
+        }
+        writeCacheFile(
+            data,
+            inviteId,
+            fromNum,
+            fromDisp,
+            true,
+            presentationMode
+        );
+        launchIncomingCallUi(data, inviteId, displayName, fromNum, preferFullScreen);
     }
 
     private void handleCallTerminationNative(String type, Map<String, String> data) {
         String inviteId = data.get("inviteId");
         if (inviteId == null || inviteId.isEmpty()) inviteId = data.get("callId");
         Log.i(TAG, "[CALL_INCOMING] native termination type=" + type + " inviteId=" + inviteId);
-        cancelIncomingCallNotification(inviteId);
-        stopIncomingCallRingtone();
+        dismissIncomingCallUi(this, inviteId, "native_termination:" + type);
         deleteCacheFile();
     }
 
-    private void launchIncomingCallUi(Map<String, String> data, String inviteId, String displayName, String fromNum) {
+    private void launchIncomingCallUi(
+        Map<String, String> data,
+        String inviteId,
+        String displayName,
+        String fromNum,
+        boolean preferFullScreen
+    ) {
         ensureIncomingCallChannel();
         int notificationId = notificationIdForInvite(inviteId);
         int pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
@@ -181,13 +231,45 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             .setOnlyAlertOnce(true)
             .setVibrate(new long[] { 0, 350, 250, 350 })
             .setTimeoutAfter(45_000)
-            .setContentIntent(fullScreenIntent)
-            .setFullScreenIntent(fullScreenIntent, true)
-            .addAction(0, "Decline", declineIntent)
-            .addAction(0, "Answer", answerIntent);
+            .setContentIntent(fullScreenIntent);
+
+        // Always use CallStyle so heads-up + full-screen paths share the same modern call UI.
+        builder.setStyle(
+            NotificationCompat.CallStyle.forIncomingCall(
+                new androidx.core.app.Person.Builder()
+                    .setName(displayName)
+                    .setImportant(true)
+                    .build(),
+                declineIntent,
+                answerIntent
+            )
+        );
+        if (preferFullScreen) {
+            builder.setFullScreenIntent(fullScreenIntent, true);
+        }
 
         NotificationManagerCompat.from(this).notify(notificationId, builder.build());
-        Log.i(TAG, "[CALL_INCOMING] posted full-screen incoming call notification");
+        Log.i(TAG, "[CALL_INCOMING] posted incoming call notification mode=" + (preferFullScreen ? "full_screen" : "heads_up"));
+        if (preferFullScreen) {
+            triggerFullScreenIntent(fullScreenIntent, launchIntent);
+        }
+    }
+
+    private void triggerFullScreenIntent(PendingIntent fullScreenIntent, Intent launchIntent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ActivityOptions options = ActivityOptions.makeBasic();
+                options.setPendingIntentBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                );
+                fullScreenIntent.send(this, 0, launchIntent, null, null, null, options.toBundle());
+            } else {
+                fullScreenIntent.send();
+            }
+            Log.i(TAG, "[CALL_INCOMING] requested branded full-screen launch via pending intent");
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] full-screen pending intent launch failed: " + e.getMessage());
+        }
     }
 
     private Intent buildIncomingCallIntent(
@@ -223,12 +305,6 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         return intent;
     }
 
-    private void appendQueryParameter(Uri.Builder builder, String key, String value) {
-        if (value != null && !value.isEmpty()) {
-            builder.appendQueryParameter(key, value);
-        }
-    }
-
     private void ensureIncomingCallChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
@@ -248,63 +324,344 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         manager.createNotificationChannel(channel);
     }
 
-    private synchronized void startIncomingCallRingtone() {
-        stopIncomingCallRingtone();
+    private boolean shouldUseFullScreenUi() {
         try {
-            MediaPlayer player = MediaPlayer.create(this, R.raw.connect_default_ringtone);
-            if (player == null) {
-                Log.w(TAG, "[CALL_INCOMING] could not create native ringtone player");
-                return;
+            KeyguardManager keyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            boolean deviceLocked = false;
+            boolean isInteractive = true;
+
+            if (keyguardManager != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                    deviceLocked = keyguardManager.isDeviceLocked();
+                } else {
+                    deviceLocked = keyguardManager.inKeyguardRestrictedInputMode();
+                }
             }
-            player.setAudioAttributes(
-                new AudioAttributes.Builder()
+
+            if (powerManager != null) {
+                isInteractive = powerManager.isInteractive();
+            }
+
+            String foregroundPackage = getForegroundPackageName();
+            String homePackage = getDefaultHomePackage();
+            boolean isHomeIdle =
+                (foregroundPackage != null &&
+                    homePackage != null &&
+                    homePackage.equals(foregroundPackage)) ||
+                isLikelyLauncherPackage(foregroundPackage);
+            boolean isConfidentOtherAppForeground =
+                foregroundPackage != null &&
+                !foregroundPackage.isEmpty() &&
+                !foregroundPackage.equals(getPackageName()) &&
+                !isLikelyLauncherPackage(foregroundPackage) &&
+                (homePackage == null || !foregroundPackage.equals(homePackage)) &&
+                !foregroundPackage.startsWith("com.android.systemui");
+
+            // Default to full-screen unless we are confident another app is
+            // actively foregrounded. This keeps home-screen / launcher / unknown
+            // Samsung task states in the full-screen bucket instead of silently
+            // dropping into the CallKeep floating path.
+            boolean preferFullScreen =
+                deviceLocked ||
+                !isInteractive ||
+                isHomeIdle ||
+                !isConfidentOtherAppForeground;
+            Log.i(
+                TAG,
+                "[CALL_INCOMING] presentation_decision"
+                    + " locked=" + deviceLocked
+                    + " interactive=" + isInteractive
+                    + " foregroundPackage=" + foregroundPackage
+                    + " homePackage=" + homePackage
+                    + " otherAppForeground=" + isConfidentOtherAppForeground
+                    + " fullScreen=" + preferFullScreen
+            );
+            return preferFullScreen;
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] shouldUseFullScreenUi failed: " + e.getMessage());
+            return true;
+        }
+    }
+
+    /** OEM launchers often differ from resolveActivity(CATEGORY_HOME); treat them as home idle. */
+    private boolean isLikelyLauncherPackage(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return false;
+        String lower = pkg.toLowerCase(Locale.US);
+        if (lower.contains("launcher") && !lower.contains("settings")) {
+            return true;
+        }
+        return lower.startsWith("com.sec.android.app.launcher")
+            || lower.startsWith("com.huawei.android.launcher")
+            || lower.startsWith("com.miui.home");
+    }
+
+    /**
+     * True when the user is actually inside our React UI (MainActivity resumed).
+     * Do not use RunningAppProcessInfo alone: FCM delivery often runs with the
+     * process temporarily marked IMPORTANCE_FOREGROUND even when the app was
+     * swiped away, which incorrectly skipped the native ringtone + CallStyle UI.
+     */
+    private boolean isAppInForeground() {
+        try {
+            return MainActivity.isHostResumedForIncoming();
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] isAppInForeground failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private String getDefaultHomePackage() {
+        try {
+            Intent homeIntent = new Intent(Intent.ACTION_MAIN);
+            homeIntent.addCategory(Intent.CATEGORY_HOME);
+            ResolveInfo resolveInfo = getPackageManager().resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY);
+            if (resolveInfo != null && resolveInfo.activityInfo != null && resolveInfo.activityInfo.packageName != null) {
+                return resolveInfo.activityInfo.packageName;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] getDefaultHomePackage failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private String getForegroundPackageName() {
+        try {
+            ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (activityManager == null) return null;
+            ActivityManager.RunningAppProcessInfo best = null;
+            for (ActivityManager.RunningAppProcessInfo processInfo : activityManager.getRunningAppProcesses()) {
+                if (processInfo == null || processInfo.pkgList == null || processInfo.pkgList.length == 0) continue;
+                if (
+                    processInfo.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+                    processInfo.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+                ) {
+                    continue;
+                }
+                if (best == null || processInfo.importance < best.importance) {
+                    best = processInfo;
+                }
+            }
+            if (best != null && best.pkgList.length > 0) {
+                return best.pkgList[0];
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] getForegroundPackageName failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private void requestRingtoneAudioFocus() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            ringAudioManager = am;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AudioAttributes aa = new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            );
-            player.setLooping(true);
-            player.setOnCompletionListener((mp) -> stopIncomingCallRingtone());
-            player.setOnErrorListener((mp, what, extra) -> {
-                Log.w(TAG, "[CALL_INCOMING] native ringtone playback error what=" + what + " extra=" + extra);
-                stopIncomingCallRingtone();
-                return true;
-            });
-            player.start();
-            ringtonePlayer = player;
-            Log.i(TAG, "[CALL_INCOMING] native ringtone playback started");
+                    .build();
+                AudioFocusRequest req = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(aa)
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener(focusChange -> { })
+                    .build();
+                ringFocusRequest = req;
+                am.requestAudioFocus(req);
+            } else {
+                @SuppressWarnings("deprecation")
+                int ignored = am.requestAudioFocus(
+                    null,
+                    AudioManager.STREAM_RING,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                );
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] requestRingtoneAudioFocus: " + e.getMessage());
+        }
+    }
+
+    private static void abandonRingtoneAudioFocus() {
+        try {
+            if (ringAudioManager == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ringFocusRequest != null) {
+                ringAudioManager.abandonAudioFocusRequest(ringFocusRequest);
+                ringFocusRequest = null;
+            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                @SuppressWarnings("deprecation")
+                int ignored = ringAudioManager.abandonAudioFocus(null);
+            }
+            ringAudioManager = null;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private synchronized void startIncomingCallRingtone() {
+        stopIncomingCallRingtone("restart_before_new_call");
+        try {
+            requestRingtoneAudioFocus();
+            Context appCtx = getApplicationContext();
+            MediaPlayer player = MediaPlayer.create(appCtx, R.raw.connect_default_ringtone);
+            if (player != null) {
+                player.setAudioAttributes(
+                    new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                );
+                player.setLooping(true);
+                player.setVolume(1f, 1f);
+                player.setOnCompletionListener((mp) -> stopIncomingCallRingtone("native_completion"));
+                player.setOnErrorListener((mp, what, extra) -> {
+                    Log.w(TAG, "[CALL_INCOMING] native ringtone playback error what=" + what + " extra=" + extra);
+                    stopIncomingCallRingtone("native_error");
+                    return true;
+                });
+                player.start();
+                ringtonePlayer = player;
+                acquireIncomingRingWakeLock();
+                Log.i(TAG, "[CALL_INCOMING] native ringtone playback started (media_player)");
+                return;
+            }
+            Log.w(TAG, "[CALL_INCOMING] MediaPlayer.create returned null — trying system default ringtone");
+            startSystemDefaultRingtoneFallback();
         } catch (Exception e) {
             Log.w(TAG, "[CALL_INCOMING] startIncomingCallRingtone failed: " + e.getMessage());
-            stopIncomingCallRingtone();
+            startSystemDefaultRingtoneFallback();
+        }
+    }
+
+    private void startSystemDefaultRingtoneFallback() {
+        try {
+            Uri uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE);
+            if (uri == null) {
+                uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+            }
+            if (uri == null) {
+                Log.w(TAG, "[CALL_INCOMING] no system default ringtone URI");
+                return;
+            }
+            android.media.Ringtone rt = RingtoneManager.getRingtone(getApplicationContext(), uri);
+            if (rt == null) {
+                Log.w(TAG, "[CALL_INCOMING] RingtoneManager.getRingtone returned null");
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                rt.setAudioAttributes(
+                    new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                );
+                rt.setLooping(true);
+            }
+            rt.play();
+            systemRingtoneFallback = rt;
+            acquireIncomingRingWakeLock();
+            Log.i(TAG, "[CALL_INCOMING] native ringtone playback started (system_fallback)");
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] system ringtone fallback failed: " + e.getMessage());
+        }
+    }
+
+    private void acquireIncomingRingWakeLock() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            synchronized (IncomingCallFirebaseService.class) {
+                if (incomingRingWakeLock == null) {
+                    incomingRingWakeLock = pm.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        "Connect:IncomingCallRing"
+                    );
+                    incomingRingWakeLock.setReferenceCounted(false);
+                }
+                if (!incomingRingWakeLock.isHeld()) {
+                    incomingRingWakeLock.acquire(180_000L);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] acquireIncomingRingWakeLock: " + e.getMessage());
+        }
+    }
+
+    private static void releaseIncomingRingWakeLock() {
+        try {
+            synchronized (IncomingCallFirebaseService.class) {
+                if (incomingRingWakeLock != null && incomingRingWakeLock.isHeld()) {
+                    incomingRingWakeLock.release();
+                }
+            }
+        } catch (Exception ignored) {
         }
     }
 
     public static synchronized void stopIncomingCallRingtone() {
-        if (ringtonePlayer == null) return;
-        try {
-            if (ringtonePlayer.isPlaying()) {
-                ringtonePlayer.stop();
+        stopIncomingCallRingtone("unspecified");
+    }
+
+    public static synchronized void stopIncomingCallRingtone(String reason) {
+        if (systemRingtoneFallback != null) {
+            Log.i(TAG, "[CALL_INCOMING] stopping system fallback ringtone reason=" + reason);
+            try {
+                systemRingtoneFallback.stop();
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
+            systemRingtoneFallback = null;
         }
-        try {
-            ringtonePlayer.release();
-        } catch (Exception ignored) {
+        if (ringtonePlayer != null) {
+            Log.i(TAG, "[CALL_INCOMING] native ringtone playback stopped reason=" + reason);
+            try {
+                if (ringtonePlayer.isPlaying()) {
+                    ringtonePlayer.stop();
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                ringtonePlayer.release();
+            } catch (Exception ignored) {
+            }
+            ringtonePlayer = null;
         }
-        ringtonePlayer = null;
+        releaseIncomingRingWakeLock();
+        abandonRingtoneAudioFocus();
     }
 
-    private void cancelIncomingCallNotification(String inviteId) {
-        NotificationManagerCompat.from(this).cancel(notificationIdForInvite(inviteId));
+    private static void cancelIncomingCallNotification(Context context, String inviteId) {
+        NotificationManagerCompat.from(context).cancel(notificationIdForInvite(inviteId));
     }
 
-    private int notificationIdForInvite(String inviteId) {
+    /** Removes the ongoing incoming notification only (keeps native ringtone playing). */
+    public static void cancelIncomingCallNotificationOnly(Context context, String inviteId) {
+        cancelIncomingCallNotification(context, inviteId);
+        Log.i(TAG, "[CALL_INCOMING] cancelled incoming notification only inviteId=" + inviteId);
+    }
+
+    public static synchronized void dismissIncomingCallUi(
+        Context context,
+        String inviteId,
+        String reason
+    ) {
+        cancelIncomingCallNotification(context, inviteId);
+        stopIncomingCallRingtone(reason);
+        Log.i(TAG, "[CALL_INCOMING] dismissed incoming ui inviteId=" + inviteId + " reason=" + reason);
+    }
+
+    private static int notificationIdForInvite(String inviteId) {
         if (inviteId == null || inviteId.isEmpty()) return NOTIFICATION_ID_BASE;
         int hash = inviteId.hashCode();
         if (hash == Integer.MIN_VALUE) hash = 0;
         return NOTIFICATION_ID_BASE + Math.abs(hash % 10000);
     }
 
-    private void writeCacheFile(Map<String, String> data, String inviteId, String fromNum, String fromDisp) {
+    private void writeCacheFile(
+        Map<String, String> data,
+        String inviteId,
+        String fromNum,
+        String fromDisp,
+        boolean nativeCallAdded,
+        String presentationMode
+    ) {
         try {
             JSONObject json = new JSONObject();
             for (Map.Entry<String, String> e : data.entrySet()) {
@@ -313,7 +670,8 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             if (inviteId != null) json.put("inviteId", inviteId);
             if (fromNum != null) json.put("fromNumber", fromNum);
             if (fromDisp != null) json.put("fromDisplay", fromDisp);
-            json.put("_nativeCallAdded", true);
+            json.put("_nativeCallAdded", nativeCallAdded);
+            json.put("_nativePresentation", presentationMode);
             json.put("_storedAt", System.currentTimeMillis());
 
             File cacheFile = new File(getCacheDir(), CACHE_FILE);
@@ -341,5 +699,11 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     public void onDestroy() {
         stopIncomingCallRingtone();
         super.onDestroy();
+    }
+
+    private static void appendQueryParameter(Uri.Builder builder, String key, String value) {
+        if (value != null && !value.isEmpty()) {
+            builder.appendQueryParameter(key, value);
+        }
     }
 }

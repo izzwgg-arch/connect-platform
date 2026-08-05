@@ -1,9 +1,9 @@
 package com.connectcommunications.mobile
 
-import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 
 import com.facebook.react.ReactActivity
@@ -14,7 +14,34 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  companion object {
+    private const val TAG = "ConnectMainActivity"
+
+    /**
+     * True while this activity is in the resumed portion of its lifecycle.
+     * Used from [IncomingCallFirebaseService] because FCM often runs with the
+     * process marked IMPORTANCE_FOREGROUND even when the user has not opened
+     * the app — that must still use the native incoming-call + ringtone path.
+     */
+    @Volatile
+    private var hostActivityResumed: Boolean = false
+
+    @JvmStatic
+    fun isHostResumedForIncoming(): Boolean = hostActivityResumed
+  }
+
+  override fun onResume() {
+    super.onResume()
+    hostActivityResumed = true
+  }
+
+  override fun onPause() {
+    hostActivityResumed = false
+    super.onPause()
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
+    dismissIncomingCallFromIntent(intent, "onCreate")
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
     // This is required for expo-splash-screen.
@@ -26,6 +53,7 @@ class MainActivity : ReactActivity() {
   override fun onNewIntent(intent: Intent?) {
     super.onNewIntent(intent)
     setIntent(intent)
+    dismissIncomingCallFromIntent(intent, "onNewIntent")
     applyIncomingCallWindowFlags(intent)
   }
 
@@ -69,25 +97,47 @@ class MainActivity : ReactActivity() {
       super.invokeDefaultOnBackPressed()
   }
 
+  /**
+   * Answer/Decline from the notification must stop ringtone + remove shade immediately.
+   * "open" must NOT stop ringtone — JS / user actions stop it once the in-app UI owns audio.
+   */
+  private fun dismissIncomingCallFromIntent(intent: Intent?, source: String) {
+    val data = intent?.data ?: return
+    if (data.scheme != "com.connectcommunications.mobile") return
+    if (data.host != "incoming-call") return
+    val action = data.getQueryParameter("action") ?: return
+    if (action != "answer" && action != "decline") return
+    val inviteId =
+      data.getQueryParameter("inviteId")
+        ?: data.getQueryParameter("callId")
+        ?: intent.getStringExtra("inviteId")
+    IncomingCallFirebaseService.dismissIncomingCallUi(this, inviteId, "intent_$action:$source")
+  }
+
   private fun applyIncomingCallWindowFlags(intent: Intent?) {
     val showIncomingCall = intent?.getBooleanExtra("connect_show_incoming_call", false) == true
+    val inviteId = intent?.getStringExtra("inviteId")
     if (showIncomingCall) {
-      IncomingCallFirebaseService.stopIncomingCallRingtone()
+      val action = intent?.data?.getQueryParameter("action") ?: "open"
+      if (action == "answer" || action == "decline") {
+        // Already fully dismissed in dismissIncomingCallFromIntent
+      } else {
+        // Remove the ongoing notification but keep ringing until the in-app screen stops audio.
+        IncomingCallFirebaseService.cancelIncomingCallNotificationOnly(this, inviteId)
+      }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-        val keyguardManager = getSystemService(KeyguardManager::class.java)
-        keyguardManager?.requestDismissKeyguard(this, null)
       } else {
         @Suppress("DEPRECATION")
         window.addFlags(
           WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         )
       }
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      Log.i(TAG, "[CALL_INCOMING] applied lock-screen window flags without keyguard dismissal")
       return
     }
 

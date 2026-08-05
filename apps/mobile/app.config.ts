@@ -57,7 +57,7 @@ const config: ExpoConfig = {
   updates: {
     enabled: true,
     url: `https://u.expo.dev/${easProjectId}`,
-    checkAutomatically: 'ON_LOAD',
+    checkAutomatically: 'ON_ERROR_RECOVERY',
     fallbackToCacheTimeout: 0,
   },
   orientation: 'portrait',

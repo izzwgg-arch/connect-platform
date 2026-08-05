@@ -1,0 +1,16 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index 11e7574a92f6baeed488f288484e7ec74dfd5a9d..97ce0d32ff709eb7a39a620eb139b334ac8081b1 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -40,8 +40,10 @@ android {
+       cmake {
+         cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all"
+         abiFilters (*reactNativeArchitectures())
++        // Windows/Ninja: pass a stable, forward-slash path so CMake does not regenerate build.ninja every pass.
++        def reactNativeDirForCmake = file(REACT_NATIVE_DIR).canonicalFile.absolutePath.replace("\\", "/")
+         arguments "-DANDROID_STL=c++_shared",
+-            "-DREACT_NATIVE_DIR=${REACT_NATIVE_DIR}"
++            "-DREACT_NATIVE_DIR=${reactNativeDirForCmake}"
+       }
+     }
+   }

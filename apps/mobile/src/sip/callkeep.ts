@@ -1,4 +1,15 @@
+import { NativeModules, Platform } from "react-native";
 import RNCallKeep from "react-native-callkeep";
+
+/** Android: cancel native incoming notification + stop native ringtone immediately. */
+export function dismissNativeIncomingUi(callId: string | null | undefined) {
+  if (Platform.OS !== "android" || !callId) return;
+  try {
+    NativeModules.IncomingCallUi?.dismiss?.(callId);
+  } catch {
+    // ignore
+  }
+}
 
 let configured = false;
 
@@ -36,6 +47,7 @@ export function showIncomingNativeCall(callId: string, from: string) {
 }
 
 export function endNativeCall(callId: string) {
+  dismissNativeIncomingUi(callId);
   try {
     RNCallKeep.endCall(callId);
   } catch {

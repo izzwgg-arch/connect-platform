@@ -28,7 +28,7 @@ type SipState = {
   /** Current audio output route during a call */
   audioRoute: AudioRoute;
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
-  register: () => Promise<void>;
+  register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
   dial: (target: string) => Promise<void>;
   answer: () => Promise<void>;
@@ -78,8 +78,8 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     remoteParty: null as string | null,
   });
 
-  // Auto-reset callState from 'ended' back to 'idle' after a brief pause
-  // so the ended-call screen can show a farewell state before dismissing.
+  // Auto-reset callState from 'ended' back to 'idle' after a short pause so
+  // the UI can show a graceful ended state without feeling like a restart.
   useEffect(() => {
     if (callState === "ended") {
       setCallDirection(null);
@@ -117,7 +117,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      const t = setTimeout(() => setCallState("idle"), 2500);
+      const t = setTimeout(() => setCallState("idle"), 1200);
       return () => clearTimeout(t);
     }
   }, [callState]);
@@ -197,7 +197,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         const raw = await SecureStore.getItemAsync(PROVISION_KEY).catch(() => null);
         if (!raw) return;
         // Force a fresh re-register; jssip.register() tears down any broken UA first
-        await clientRef.current.register().catch(() => undefined);
+        await clientRef.current.register({ forceRestart: true }).catch(() => undefined);
       }
     });
 
@@ -224,13 +224,13 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         clientRef.current.configure(bundle);
         setHasProvisioning(true);
         // Immediately re-register with the new credentials
-        await clientRef.current.register().catch((e) => {
+        await clientRef.current.register({ forceRestart: true }).catch((e) => {
           console.warn("[SIP] Re-register after provisioning failed:", e?.message);
         });
       },
 
-      register: async () => {
-        await clientRef.current.register();
+      register: async (options) => {
+        await clientRef.current.register(options);
       },
 
       unregister: async () => {
