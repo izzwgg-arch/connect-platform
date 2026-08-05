@@ -317,9 +317,14 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md
   `elevenLabsRoutes.stress.test.ts` IS the stress test). 49/49 tests green via
   `node --experimental-test-module-mocks --import tsx --test` in apps/api.
 - **`elevenLabs.test.ts` had never run** — it imported vitest, which apps/api
-  doesn't install (suite runs node:test via tsx). Rewritten. Same disease
-  still in `dependencyHygiene.test.ts`; `smsSharedInbox.test.ts` has one
-  pre-existing failure. Both have task chips filed.
+  doesn't install (suite runs node:test via tsx). Rewritten. The follow-up
+  chips are DONE: `smsSharedInbox.test.ts` fixed `6976a905` (stale fake-db
+  mock, route was fine); vitest imports purged across apps/api in `2b4e9232`.
+  ⛔ The `6d3d0b05` merge from feat/ai-agent CLOBBERED the converted
+  `dependencyHygiene.test.ts` back to the vitest version — restored from
+  `2b4e9232` right after. When merging feat/ai-agent, ALWAYS take the
+  node:test version of any test file (grep `from "vitest"` after every merge;
+  apps/api must have zero hits).
 - Two status routes look alike: `/api/voice/elevenlabs/status` (API — IVR
   Studio modal) vs `/agent-api/voice/elevenlabs/status` (agent — owner
   settings page). Don't conflate them.

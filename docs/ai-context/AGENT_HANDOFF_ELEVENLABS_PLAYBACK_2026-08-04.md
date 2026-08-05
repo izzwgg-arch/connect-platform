@@ -145,16 +145,21 @@ agent container verified healthy with both fixes present.
 - ⛔ **Never "stress test" against prod** — every real synthesis spends the
   shared monthly character allowance (211,000 chars on the current plan). The
   offline fake-provider suite is the stress test.
-- Same vitest disease still present elsewhere: `src/dependencyHygiene.test.ts`
-  (task chip filed). `smsSharedInbox.test.ts` has one PRE-EXISTING failure
-  (500 where 200 expected, ~line 457) — verified present with this session's
-  changes stashed; not ours (chip filed).
+- Both follow-up chips are DONE (2026-08-05): `smsSharedInbox.test.ts` fixed
+  in `6976a905` (the fake-db mock lacked `updateMany` for the
+  unarchive-on-send path — the route was never broken); vitest imports purged
+  across apps/api in `2b4e9232` (9 files, incl. the CRM suites).
+  ⛔ Standing trap: the `6d3d0b05` merge from feat/ai-agent brought the
+  vitest version of `dependencyHygiene.test.ts` BACK and it sat broken again
+  until re-restored from `2b4e9232`. After ANY merge touching apps/api tests,
+  run `grep -rn 'from "vitest"' apps/api/src` — the correct hit count is 0.
 
 ## 4. Known state / open items
 
 - Chrome-restart outcome for Izzy: **unconfirmed** — first question to ask.
-- Deploy of `16f05d2d`: **not done**, waiting for a quiet window (api, portal,
-  agent all changed).
+- Deploy of `16f05d2d`: **DONE — all three services live as of 2026-08-05**
+  (see §2: api + portal rode a later deploy; agent rebuilt manually under
+  Izzy's explicit permission and verified healthy with both fixes inside).
 - Pre-existing repo-wide `tsc` noise (`unref` on `number`, delivery/ops
   modules) is NOT from this work; the touched files typecheck clean.
 - ElevenLabs account at check time: creator tier, 124 / 211,000 chars used,

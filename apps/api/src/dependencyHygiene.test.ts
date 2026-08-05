@@ -17,8 +17,14 @@
  *     developer machine, because the local pnpm store hoists it. The container
  *     has a stricter layout. So "can I resolve it here?" is the wrong question;
  *     "did we declare it?" is the right one.
+ *
+ * History note: this file originally imported vitest, which apps/api does not
+ * install — so the file failed at import time under the real runner and none
+ * of its assertions had ever run. It now uses node:test like every other test
+ * in this app.
  */
-import { describe, it, expect } from "vitest";
+import test from "node:test";
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { builtinModules } from "node:module";
@@ -58,8 +64,8 @@ function walk(dir: string, out: string[] = []): string[] {
       if (entry.name === "node_modules" || entry.name === "dist") continue;
       walk(full, out);
     } else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-      // Test files are skipped: they import vitest and friends, which the
-      // container never loads.
+      // Test files are skipped: the container never loads them, so their
+      // imports can't kill a boot.
       out.push(full);
     }
   }
@@ -83,37 +89,36 @@ const PATTERNS = [
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
 ];
 
-describe("the API only imports packages it declares", () => {
-  const files = walk(SRC);
+const files = walk(SRC);
 
-  it("finds source files to check", () => {
-    expect(files.length).toBeGreaterThan(50);
-  });
+test("finds source files to check", () => {
+  assert.ok(files.length > 50, `expected > 50 source files, found ${files.length}`);
+});
 
-  it("has no import of an undeclared package", () => {
-    const offenders: string[] = [];
+test("has no import of an undeclared package", () => {
+  const offenders: string[] = [];
 
-    for (const file of files) {
-      const text = fs.readFileSync(file, "utf8");
-      const specs = new Set<string>();
-      for (const re of PATTERNS) {
-        for (const m of text.matchAll(re)) specs.add(m[1]);
-      }
-      for (const spec of specs) {
-        if (!spec || spec.startsWith(".") || spec.startsWith("/")) continue;
-        if (spec.startsWith("node:") || BUILTIN.has(spec)) continue;
-        const pkg = packageOf(spec);
-        if (DECLARED.has(pkg) || GRANDFATHERED.has(pkg)) continue;
-        offenders.push(`${path.relative(SRC, file)} imports "${spec}"`);
-      }
+  for (const file of files) {
+    const text = fs.readFileSync(file, "utf8");
+    const specs = new Set<string>();
+    for (const re of PATTERNS) {
+      for (const m of text.matchAll(re)) specs.add(m[1]);
     }
+    for (const spec of specs) {
+      if (!spec || spec.startsWith(".") || spec.startsWith("/")) continue;
+      if (spec.startsWith("node:") || BUILTIN.has(spec)) continue;
+      const pkg = packageOf(spec);
+      if (DECLARED.has(pkg) || GRANDFATHERED.has(pkg)) continue;
+      offenders.push(`${path.relative(SRC, file)} imports "${spec}"`);
+    }
+  }
 
-    // Named in full rather than counted: the point is that the fix is obvious
-    // from the failure message without re-running anything.
-    expect(
-      offenders,
-      `These packages are imported but not declared in apps/api/package.json.\n` +
-        `The container will die on boot with "Cannot find module".\n  ${offenders.join("\n  ")}`,
-    ).toEqual([]);
-  });
+  // Named in full rather than counted: the point is that the fix is obvious
+  // from the failure message without re-running anything.
+  assert.deepEqual(
+    offenders,
+    [],
+    `These packages are imported but not declared in apps/api/package.json.\n` +
+      `The container will die on boot with "Cannot find module".\n  ${offenders.join("\n  ")}`,
+  );
 });
