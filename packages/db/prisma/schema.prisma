@@ -3382,6 +3382,12 @@ model IvrOptionRoute {
   destinationType String // extension|queue|ring_group|voicemail|ivr|announcement|external_number|terminate|custom
   destinationRef  String // "context,exten,priority" | E.164 | etc.
   label           String? // optional human label, e.g. "Sales"
+  // "Play a recording" keys (destinationType announcement → [connect-play-prompt]):
+  // the recording to play, and where the caller goes after it ends. Empty
+  // after-destination means "replay this menu".
+  announcePromptRef    String?
+  afterDestinationType String?
+  afterDestinationRef  String?
   enabled         Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

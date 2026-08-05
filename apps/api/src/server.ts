@@ -20001,6 +20001,10 @@ type IvrActiveOption = {
   destinationType: string;
   destinationRef: string;
   enabled: boolean;
+  // "Play a recording" keys ([connect-play-prompt]) only.
+  announcePromptRef?: string | null;
+  afterDestinationType?: string | null;
+  afterDestinationRef?: string | null;
 };
 
 function normalizeTenantDestinationRef(type: string | null | undefined, ref: string | null | undefined, tenantDialContext: string | null): string {
@@ -20109,6 +20113,15 @@ function buildIvrKeys(
       value: normalizeTenantDestinationRef(opt?.destinationType, opt?.destinationRef, tenantDialContext),
     });
     keys.push({ family: fam, key: `opt_${digit}/type`, value: opt?.destinationType ?? "" });
+    // Recording keys: what [connect-play-prompt] plays for this digit, and
+    // where the caller goes after (empty = replay this menu). Always written
+    // so a repointed digit clears its stale recording.
+    keys.push({ family: fam, key: `opt_${digit}/announce`, value: opt?.announcePromptRef ?? "" });
+    keys.push({
+      family: fam,
+      key: `opt_${digit}/after`,
+      value: normalizeTenantDestinationRef(opt?.afterDestinationType, opt?.afterDestinationRef, tenantDialContext),
+    });
   }
 
   return keys;
@@ -20174,6 +20187,31 @@ function ivrValidateOptionalDestination(
   if (hasType && !hasRef)  return "destinationRef is required when destinationType is set";
   if (!hasType && hasRef)  return "destinationType is required when destinationRef is set";
   return ivrValidateDestinationRef(String(type), String(ref));
+}
+
+/** "Play a recording" keys: destinationRef connect-play-prompt,s,1 REQUIRES a
+ *  recording to play; any other destination must not carry announce fields
+ *  (they'd publish stale AstDB keys for the digit). The after-destination is
+ *  optional (empty = replay the menu) but must be a valid pair when present. */
+function ivrValidateAnnounceFields(
+  destinationType: string,
+  destinationRef: string,
+  announcePromptRef: string | null | undefined,
+  afterDestinationType: string | null | undefined,
+  afterDestinationRef: string | null | undefined,
+): string | null {
+  const isRecordingDest = destinationType === "announcement" && String(destinationRef ?? "").startsWith("connect-play-prompt,");
+  const hasAnnounce = announcePromptRef != null && String(announcePromptRef).trim() !== "";
+  if (!isRecordingDest) return null; // stale fields are cleared by the caller, not rejected
+  if (!hasAnnounce) return "announcePromptRef is required for a connect-play-prompt destination";
+  const promptErr = ivrValidatePromptRef(String(announcePromptRef));
+  if (promptErr) return promptErr;
+  const afterErr = ivrValidateOptionalDestination(afterDestinationType, afterDestinationRef);
+  if (afterErr) return `after-destination: ${afterErr}`;
+  if (afterDestinationType != null && String(afterDestinationType).trim() === "announcement") {
+    return "after-destination cannot be another recording";
+  }
+  return null;
 }
 
 /** Validate an optional prompt recording ref (greeting / invalid / timeout).
@@ -22204,11 +22242,17 @@ app.post("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
     destinationRef:  z.string().min(1).max(200),
     label:           z.string().max(60).nullable().optional(),
     enabled:         z.boolean().optional(),
+    // "Play a recording" keys ([connect-play-prompt]) only.
+    announcePromptRef:    z.string().max(128).nullable().optional(),
+    afterDestinationType: z.string().max(40).nullable().optional(),
+    afterDestinationRef:  z.string().max(200).nullable().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
   const refErr = ivrValidateDestinationRef(d.destinationType, d.destinationRef);
   if (refErr) return reply.code(400).send({ error: "invalid_destination", detail: refErr });
+  const annErr = ivrValidateAnnounceFields(d.destinationType, d.destinationRef, d.announcePromptRef, d.afterDestinationType, d.afterDestinationRef);
+  if (annErr) return reply.code(400).send({ error: "invalid_destination", detail: annErr });
 
   try {
     const option = await (db as any).ivrOptionRoute.create({
@@ -22220,6 +22264,9 @@ app.post("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
         destinationRef:  d.destinationRef,
         label:           d.label ?? null,
         enabled:         d.enabled ?? true,
+        announcePromptRef:    d.announcePromptRef ?? null,
+        afterDestinationType: d.afterDestinationType ?? null,
+        afterDestinationRef:  d.afterDestinationRef ?? null,
       },
     });
     return reply.code(201).send({ option });
@@ -22249,6 +22296,9 @@ app.patch("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, 
     destinationRef:  z.string().min(1).max(200).optional(),
     label:           z.string().max(60).nullable().optional(),
     enabled:         z.boolean().optional(),
+    announcePromptRef:    z.string().max(128).nullable().optional(),
+    afterDestinationType: z.string().max(40).nullable().optional(),
+    afterDestinationRef:  z.string().max(200).nullable().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
@@ -22256,14 +22306,32 @@ app.patch("/voice/ivr/route-profiles/:profileId/options/:optionId", async (req, 
   // If either type or ref moved, re-validate using the effective (new+existing)
   // values. Validating only the new field would miss "change type to
   // external_number without updating the ref" style mistakes.
+  const effectiveType = d.destinationType ?? existing.destinationType;
+  const effectiveRef  = d.destinationRef  ?? existing.destinationRef;
   if (d.destinationType !== undefined || d.destinationRef !== undefined) {
-    const effectiveType = d.destinationType ?? existing.destinationType;
-    const effectiveRef  = d.destinationRef  ?? existing.destinationRef;
     const refErr = ivrValidateDestinationRef(effectiveType, effectiveRef);
     if (refErr) return reply.code(400).send({ error: "invalid_destination", detail: refErr });
   }
+  const annErr = ivrValidateAnnounceFields(
+    effectiveType,
+    effectiveRef,
+    d.announcePromptRef    !== undefined ? d.announcePromptRef    : existing.announcePromptRef,
+    d.afterDestinationType !== undefined ? d.afterDestinationType : existing.afterDestinationType,
+    d.afterDestinationRef  !== undefined ? d.afterDestinationRef  : existing.afterDestinationRef,
+  );
+  if (annErr) return reply.code(400).send({ error: "invalid_destination", detail: annErr });
 
-  const updated = await (db as any).ivrOptionRoute.update({ where: { id: optionId }, data: d });
+  // A key repointed away from a recording must not keep stale announce fields —
+  // they'd still be published to AstDB for this digit.
+  const data: Record<string, unknown> = { ...d };
+  const isRecordingDest = effectiveType === "announcement" && String(effectiveRef).startsWith("connect-play-prompt,");
+  if (!isRecordingDest) {
+    data.announcePromptRef = null;
+    data.afterDestinationType = null;
+    data.afterDestinationRef = null;
+  }
+
+  const updated = await (db as any).ivrOptionRoute.update({ where: { id: optionId }, data });
   return reply.send({ option: updated });
 });
 
@@ -22664,6 +22732,13 @@ app.post("/voice/ivr/publish", async (req, reply) => {
       promptCandidates.push({ key: "active_prompt_retry", ref: String(p.pbxRetryPromptRef), profileType: p.type });
     }
   }
+  // Recording keys dead-air the same way a missing greeting does — the digit
+  // plays nothing and bounces the caller back — so they get the same gate.
+  for (const opt of activeOptions as any[]) {
+    if (opt.enabled && opt.announcePromptRef && !IVR_DEFAULT_PROMPT_REFS.has(opt.announcePromptRef)) {
+      promptCandidates.push({ key: `opt_${opt.optionDigit}/announce`, ref: String(opt.announcePromptRef) });
+    }
+  }
   const missingPrompts = await ivrResolveMissingPromptRefs(tenantId, promptCandidates);
   if (missingPrompts.length > 0) {
     app.log.warn({ tenantId, slug, missing: missingPrompts.map((m) => m.ref) }, "ivr: publish blocked — missing recordings in catalog");
@@ -22741,6 +22816,11 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   for (const p of profiles as any[]) {
     for (const [key, ref] of [["active_prompt", p.pbxPromptRef], ["active_prompt_invalid", p.pbxInvalidPromptRef], ["active_prompt_timeout", p.pbxTimeoutPromptRef], ["active_prompt_retry", p.pbxRetryPromptRef]] as const) {
       if (ref && !IVR_DEFAULT_PROMPT_REFS.has(ref)) promptCandidates.push({ key, ref: String(ref), profileType: p.type });
+    }
+  }
+  for (const opt of activeOptions as any[]) {
+    if (opt.enabled && opt.announcePromptRef && !IVR_DEFAULT_PROMPT_REFS.has(opt.announcePromptRef)) {
+      promptCandidates.push({ key: `opt_${opt.optionDigit}/announce`, ref: String(opt.announcePromptRef) });
     }
   }
   const missingPrompts = await ivrResolveMissingPromptRefs(tenantId, promptCandidates);

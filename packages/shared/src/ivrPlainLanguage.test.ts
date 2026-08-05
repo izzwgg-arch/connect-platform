@@ -121,6 +121,74 @@ test("a destination from the PBX we don't offer still describes itself", () => {
   assert.equal(OFFERABLE_KINDS.includes("other" as never), false);
 });
 
+// ── recording keys ───────────────────────────────────────────────────────────
+
+const REC_DIR: TenantDirectory = {
+  ...DIR,
+  recordings: [
+    { promptRef: "custom/a_plus_center_hours", name: "Opening hours" },
+    { promptRef: "custom/a_plus_center_directions", name: "Directions" },
+  ],
+};
+
+test("a recording key stores the play-prompt context with what plays and replay-by-default", () => {
+  const d = buildDestination("recording", "custom/a_plus_center_hours", REC_DIR);
+  assert.equal(d?.destinationType, "announcement");
+  assert.equal(d?.destinationRef, "connect-play-prompt,s,1");
+  assert.equal(d?.announcePromptRef, "custom/a_plus_center_hours");
+  // No after-destination = the menu plays again.
+  assert.equal(d?.afterDestinationType ?? null, null);
+  assert.equal(d?.afterDestinationRef ?? null, null);
+  assert.equal(d?.label, "Opening hours");
+});
+
+test("a recording key can send the caller to a voicemail or hang up afterwards", () => {
+  const vm = buildDestination("recording", "custom/a_plus_center_hours", REC_DIR, { kind: "voicemail", extension: "101" });
+  assert.equal(vm?.afterDestinationType, "voicemail");
+  assert.equal(vm?.afterDestinationRef, "sub-extensions-vm,VM-101,1");
+  const bye = buildDestination("recording", "custom/a_plus_center_hours", REC_DIR, { kind: "hangup" });
+  assert.equal(bye?.afterDestinationType, "terminate");
+  assert.equal(bye?.afterDestinationRef, "connect-default-fallback,s,1");
+});
+
+test("a recording key refuses to build when the recording or after-voicemail is unknown", () => {
+  assert.equal(buildDestination("recording", "custom/never_uploaded", REC_DIR), null);
+  assert.equal(buildDestination("recording", "custom/a_plus_center_hours", REC_DIR, { kind: "voicemail", extension: "999" }), null);
+  // A tenant with no recordings simply can't build one.
+  assert.equal(buildDestination("recording", "custom/a_plus_center_hours", DIR), null);
+});
+
+test("reading a recording key back distinguishes it from PBX announcement objects", () => {
+  const stored = buildDestination("recording", "custom/a_plus_center_directions", REC_DIR)!;
+  const r = readDestination(stored, REC_DIR);
+  assert.equal(r.kind, "recording");
+  assert.equal(r.targetId, "custom/a_plus_center_directions");
+  assert.equal(r.name, "Directions");
+  assert.equal(r.known, true);
+  // The VitalPBX announcement shape must keep reading as "other".
+  assert.equal(readDestination({ destinationType: "announcement", destinationRef: "T2_app-announcement,announcement-3,1" }, REC_DIR).kind, "other");
+});
+
+test("a recording key reads back in plain words, including what happens after", () => {
+  const replay = buildDestination("recording", "custom/a_plus_center_hours", REC_DIR)!;
+  assert.equal(
+    explainKeyPress("4", replay, REC_DIR),
+    "If they press 4, we play the “Opening hours” recording, then the menu plays again.",
+  );
+  const vm = buildDestination("recording", "custom/a_plus_center_hours", REC_DIR, { kind: "voicemail", extension: "101" })!;
+  assert.match(explainKeyPress("4", vm, REC_DIR), /then they go to Leah Fulop's voicemail/);
+  const bye = buildDestination("recording", "custom/a_plus_center_hours", REC_DIR, { kind: "hangup" })!;
+  assert.match(explainKeyPress("4", bye, REC_DIR), /then the call ends politely/);
+});
+
+test("a deleted recording is flagged, never named confidently", () => {
+  const stored = { destinationType: "announcement", destinationRef: "connect-play-prompt,s,1", announcePromptRef: "custom/deleted_one", label: "Old notice" };
+  const r = readDestination(stored, REC_DIR);
+  assert.equal(r.kind, "recording");
+  assert.equal(r.known, false);
+  assert.match(describeDestination(stored, REC_DIR), /no longer exists/);
+});
+
 // ── the English ──────────────────────────────────────────────────────────────
 
 test("a key press is explained the way a person would say it", () => {

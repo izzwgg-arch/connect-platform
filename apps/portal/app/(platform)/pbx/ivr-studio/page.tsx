@@ -28,10 +28,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  buildDestination, readDestination, describeDestination,
+  buildDestination, readDestination, describeDestination, describeAfterRecording,
   explainCallFlow, summariseHours, digitGlyph,
   KIND_LABEL, KIND_BLURB, OFFERABLE_KINDS,
-  type MenuChoiceKind, type TenantDirectory, type CallStep,
+  type MenuChoiceKind, type TenantDirectory, type CallStep, type AfterRecordingChoice,
 } from "@connect/shared";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
@@ -52,6 +52,10 @@ interface RouteProfile {
 interface OptionRow {
   id: string; profileId: string; optionDigit: string;
   destinationType: string; destinationRef: string; label: string | null; enabled: boolean;
+  // Recording keys only: what plays, and where the caller goes after.
+  announcePromptRef?: string | null;
+  afterDestinationType?: string | null;
+  afterDestinationRef?: string | null;
 }
 interface PromptRow { id: string; promptRef: string; displayName: string; category: string; hasAudio?: boolean }
 interface ScheduleRow {
@@ -77,7 +81,7 @@ const EMPTY_SCHEDULE: ScheduleRow = {
 const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "0", "hash"];
 
 const KIND_GLYPH: Record<MenuChoiceKind, string> = {
-  person: "👤", team: "👥", voicemail: "📼", menu: "🔢", hangup: "⛔", other: "⚙️",
+  person: "👤", team: "👥", voicemail: "📼", recording: "📣", menu: "🔢", hangup: "⛔", other: "⚙️",
 };
 
 /** Stable colour per name for the little person avatars. */
@@ -105,8 +109,10 @@ const UI_PHRASES = [
   "Explain it to me", "The whole call, in plain words", "Read it", "Hide",
   "Recordings", "Opening hours", "Time zone", "Save hours", "Closed all day",
   "While you're open", "When you're closed", "Choose a menu…", "Not saved yet",
-  "A person", "A team", "Voicemail", "Another menu", "Hang up",
-  "Which person?", "Whose voicemail?", "Which team?", "Which menu?",
+  "A person", "A team", "Voicemail", "A recording", "Another menu", "Hang up",
+  "Which person?", "Whose voicemail?", "Which team?", "Which menu?", "Which recording?",
+  "After it plays, what happens?", "Back to this menu", "A voicemail",
+  "Plays a recording — directions, hours, an announcement — then continues.",
   "Remove this key", "Cancel", "Save name", "Loading…",
   "Your phone number", "Your recording", "No recording set — callers hear a stand-in message",
   "No number points at this menu yet", "We replay the menu, then the call ends",
@@ -205,7 +211,8 @@ export default function IvrStudioPage() {
     people,
     teams,
     menus: profiles.map((p) => ({ id: p.id, name: p.name })),
-  }), [pbxTenantId, people, teams, profiles]);
+    recordings: prompts.map((p) => ({ promptRef: p.promptRef, name: p.displayName })),
+  }), [pbxTenantId, people, teams, profiles, prompts]);
 
   const streamUrl = useCallback((promptId: string) => {
     const base = getPortalApiBaseUrl();
@@ -358,14 +365,21 @@ export default function IvrStudioPage() {
     } catch (e: any) { setError(e?.message || "Couldn't save that"); } finally { setSaving(false); }
   }
 
-  async function saveKey(digit: string, kind: MenuChoiceKind, targetId: string) {
+  async function saveKey(digit: string, kind: MenuChoiceKind, targetId: string, after?: AfterRecordingChoice) {
     if (!active) return;
-    const dest = buildDestination(kind, targetId, directory);
+    const dest = buildDestination(kind, targetId, directory, after);
     if (!dest) { flash("Pick where that key should go first"); return; }
     setSaving(true);
     try {
       const existing = optionByDigit.get(digit);
-      const body = { destinationType: dest.destinationType, destinationRef: dest.destinationRef, label: dest.label ?? null };
+      const body = {
+        destinationType: dest.destinationType, destinationRef: dest.destinationRef, label: dest.label ?? null,
+        // Recording keys carry what plays + what happens after; explicit nulls
+        // on every other kind clear stale fields when a key is repointed.
+        announcePromptRef: dest.announcePromptRef ?? null,
+        afterDestinationType: dest.afterDestinationType ?? null,
+        afterDestinationRef: dest.afterDestinationRef ?? null,
+      };
       let row: OptionRow;
       if (existing) {
         const r = await apiPatch<{ option: OptionRow }>(`/voice/ivr/route-profiles/${active.id}/options/${existing.id}${qs}`, body);
@@ -1162,7 +1176,7 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   /** Teams that exist but don't take calls until PBX changes are applied. */
   pendingTeamNumbers?: string[];
   disabled?: boolean;
-  onSave: (kind: MenuChoiceKind, targetId: string) => void;
+  onSave: (kind: MenuChoiceKind, targetId: string, after?: AfterRecordingChoice) => void;
   onClear: () => void;
   onClose: () => void;
   onCreateMenu: () => void;
@@ -1171,6 +1185,19 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   const read = current ? readDestination(current, directory) : null;
   const [kind, setKind] = useState<MenuChoiceKind>(read && read.kind !== "other" ? read.kind : "person");
   const [target, setTarget] = useState<string>(read?.targetId ?? "");
+  // Recording keys: what happens after the recording finishes. Initialised
+  // from the saved key so reopening the editor shows the truth, not the default.
+  const savedAfter = ((): { kind: "replay" | "voicemail" | "hangup"; ext: string } => {
+    if (read?.kind !== "recording" || !current?.afterDestinationType || !current?.afterDestinationRef) {
+      return { kind: "replay", ext: "" };
+    }
+    const a = readDestination({ destinationType: current.afterDestinationType, destinationRef: current.afterDestinationRef }, directory);
+    if (a.kind === "voicemail" && a.targetId) return { kind: "voicemail", ext: a.targetId };
+    if (a.kind === "hangup") return { kind: "hangup", ext: "" };
+    return { kind: "replay", ext: "" };
+  })();
+  const [afterKind, setAfterKind] = useState<"replay" | "voicemail" | "hangup">(savedAfter.kind);
+  const [afterExt, setAfterExt] = useState<string>(savedAfter.ext);
 
   /**
    * Three states per choice, and they must stay distinct:
@@ -1192,6 +1219,11 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
       if (!teamsLoaded) return { k, blocked: "Couldn't load this customer's teams — check they're linked to the phone system." };
       return directory.teams.length > 0 ? { k, blocked: null } : null;
     }
+    if (k === "recording") {
+      // No recordings yet = genuinely nothing to play; the choice hides
+      // itself the same way "a team" does for a customer with no teams.
+      return (directory.recordings ?? []).length > 0 ? { k, blocked: null } : null;
+    }
     return { k, blocked: null }; // another menu + hang up always possible
   }).filter(Boolean) as Array<{ k: MenuChoiceKind; blocked: string | null }>;
 
@@ -1206,11 +1238,16 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
             name: t.name || `Team ${t.number}`,
             meta: pendingTeamNumbers?.includes(t.number) ? "not live yet" : t.kind === "queue" ? "queue" : "rings together",
           }))
-        : kind === "menu"
-          ? directory.menus.map((m) => ({ id: m.id, name: m.name, meta: "menu" }))
-          : [];
+        : kind === "recording"
+          ? (directory.recordings ?? []).map((r) => ({ id: r.promptRef, name: r.name || r.promptRef, meta: "recording" }))
+          : kind === "menu"
+            ? directory.menus.map((m) => ({ id: m.id, name: m.name, meta: "menu" }))
+            : [];
 
-  const preview = target || kind === "hangup" ? buildDestination(kind, target, directory) : null;
+  const after: AfterRecordingChoice | undefined = kind === "recording"
+    ? (afterKind === "voicemail" ? { kind: "voicemail", extension: afterExt } : { kind: afterKind })
+    : undefined;
+  const preview = target || kind === "hangup" ? buildDestination(kind, target, directory, after) : null;
   const canSave = blockedReason ? false : kind === "hangup" ? true : Boolean(preview);
 
   return (
@@ -1237,7 +1274,7 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
         {!blockedReason && kind !== "hangup" && (
           <div className="picker">
             <div className="plabel">
-              {t(kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : "Which menu?")}
+              {t(kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : kind === "recording" ? "Which recording?" : "Which menu?")}
             </div>
             {targets.length === 0 ? (
               <div className="dimtxt">{t("Nothing to choose yet.")}</div>
@@ -1254,21 +1291,58 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
             {kind === "menu" && (
               <button className="btn sm" style={{ marginTop: 10 }} onClick={onCreateMenu}>+ Make a new menu for this key</button>
             )}
+
+            {kind === "recording" && (
+              <div className="afterbox">
+                <div className="plabel">{t("After it plays, what happens?")}</div>
+                <div className="afterrow">
+                  {([
+                    { k: "replay" as const, label: t("Back to this menu") },
+                    { k: "voicemail" as const, label: t("A voicemail") },
+                    { k: "hangup" as const, label: t("Hang up") },
+                  ]).map((c) => (
+                    <button key={c.k} className={"afterbtn" + (afterKind === c.k ? " on" : "")}
+                      onClick={() => { setAfterKind(c.k); if (c.k !== "voicemail") setAfterExt(""); }}>
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+                {afterKind === "voicemail" && (
+                  <div className="targets" style={{ marginTop: 8 }}>
+                    {directory.people.map((p) => {
+                      const nm = p.name || `Extension ${p.extension}`;
+                      return (
+                        <button key={p.extension} className={"target" + (afterExt === p.extension ? " on" : "")} onClick={() => setAfterExt(p.extension)}>
+                          <span className="av" style={{ background: avatarColor(nm) }}>{initials(nm)}</span>
+                          <span className="nm"><b>{nm}</b><span>{p.extension}</span></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
         {/* the safety net: read the choice back before it's saved */}
         <div className={"readback" + (canSave ? "" : " idle")}>
           {canSave
-            ? <>When a caller presses <span className="k">{digitGlyph(digit)}</span> {kind === "hangup" ? "the call ends politely." : <>they&apos;ll reach <b>{preview?.label}</b>.</>}</>
+            ? kind === "hangup"
+              ? <>When a caller presses <span className="k">{digitGlyph(digit)}</span> the call ends politely.</>
+              : kind === "recording"
+                ? <>When a caller presses <span className="k">{digitGlyph(digit)}</span> we play <b>{preview?.label}</b>, {preview ? describeAfterRecording(preview, directory) : ""}.</>
+                : <>When a caller presses <span className="k">{digitGlyph(digit)}</span> they&apos;ll reach <b>{preview?.label}</b>.</>
             : blockedReason
               ? <>Can&apos;t set key {digitGlyph(digit)} to this until the list above loads.</>
-              : <>Choose where key {digitGlyph(digit)} should send the caller.</>}
+              : kind === "recording" && target && afterKind === "voicemail" && !afterExt
+                ? <>Choose whose voicemail the caller lands in after the recording.</>
+                : <>Choose where key {digitGlyph(digit)} should send the caller.</>}
         </div>
 
         <div className="foot">
           {current && <button className="btn ghost" disabled={disabled} onClick={onClear}>Remove this key</button>}
-          <button className="btn primary" disabled={disabled || !canSave} onClick={() => onSave(kind, target)}>
+          <button className="btn primary" disabled={disabled || !canSave} onClick={() => onSave(kind, target, after)}>
             Save key {digitGlyph(digit)}
           </button>
         </div>
@@ -1506,6 +1580,12 @@ function StudioStyles() {
       .ivrs .tag.voicemail{color:var(--vm);border-color:color-mix(in srgb,var(--vm) 40%,transparent);background:color-mix(in srgb,var(--vm) 12%,transparent)}
       .ivrs .tag.menu{color:var(--menu);border-color:color-mix(in srgb,var(--menu) 42%,transparent);background:color-mix(in srgb,var(--menu) 13%,transparent)}
       .ivrs .tag.hangup{color:var(--stop);border-color:color-mix(in srgb,var(--stop) 40%,transparent);background:color-mix(in srgb,var(--stop) 12%,transparent)}
+      .ivrs .tag.recording{color:var(--vm);border-color:color-mix(in srgb,var(--vm) 40%,transparent);background:color-mix(in srgb,var(--vm) 12%,transparent)}
+      .ivrs .afterbox{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+      .ivrs .afterrow{display:flex;gap:8px;flex-wrap:wrap}
+      .ivrs .afterbtn{font:inherit;font-size:13px;font-weight:620;padding:8px 14px;border-radius:999px;cursor:pointer;
+        border:1px solid var(--line);background:var(--panel-2);color:var(--text)}
+      .ivrs .afterbtn.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
       /* branch */
       .ivrs .branch{margin:0 0 10px 70px;border-left:2px solid var(--accent-line);padding:6px 0 8px 16px}
       .ivrs .bhead{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:720;color:var(--faint);margin-bottom:9px}

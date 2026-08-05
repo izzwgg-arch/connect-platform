@@ -2337,6 +2337,11 @@ async function runIvrScheduleCycle(): Promise<void> {
           const o = optByDigit.get(digit);
           keys.push({ family: fam, key: `opt_${digit}/dest`, value: o?.destinationRef  ?? "" });
           keys.push({ family: fam, key: `opt_${digit}/type`, value: o?.destinationType ?? "" });
+          // Recording keys ([connect-play-prompt]): what this digit plays and
+          // where the caller goes after. Always written so a repointed digit
+          // clears its stale recording.
+          keys.push({ family: fam, key: `opt_${digit}/announce`, value: o?.announcePromptRef   ?? "" });
+          keys.push({ family: fam, key: `opt_${digit}/after`,    value: o?.afterDestinationRef ?? "" });
         }
 
         // Snapshot pre-publish AstDB state so an operator-initiated rollback

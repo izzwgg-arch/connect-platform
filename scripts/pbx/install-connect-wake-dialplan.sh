@@ -157,7 +157,15 @@ exten => _X!,1,NoOp(Connect Phase 2 IVR — tenant=${TENANT_SLUG} dnid=${EXTEN})
  same =>      n,Set(R_MAX=${IF($[${LEN(${R_MAX})}>0]?${R_MAX}:3)})
  same =>      n,Set(RETRIES=0)
  same =>      n,Answer()
+ same =>      n,Set(IVR_DID=${EXTEN})   ; Connect play-prompt return point
  same =>      n,Wait(1)
+ same =>      n,Set(PRE_ANNOUNCE=${DB(${FAMILY}/pre_announce)})   ; Connect pre-menu announcement
+ same =>      n,GotoIf($["${PRE_ANNOUNCE}" = ""]?prompt)
+ same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${PRE_ANNOUNCE}.wav)}" = "1"]?play_pre)
+ same =>      n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${PRE_ANNOUNCE}.ulaw)}" = "1"]?play_pre)
+ same =>      n,NoOp(Connect pre-announce file missing ref=${PRE_ANNOUNCE} — skipping)
+ same =>      n,Goto(prompt)
+ same =>      n(play_pre),Playback(${PRE_ANNOUNCE})
  same =>      n(prompt),GotoIf($[${RETRIES} > 0 & ${LEN(${RETRY_PROMPT})} > 0]?play_retry)
  same =>      n,GotoIf($["${GREETING}" = ""]?default_greet)
  same =>      n,NoOp(Connect IVR greeting attempt tenant=${TENANT_SLUG} ref=${GREETING})
@@ -279,6 +287,31 @@ exten => s,1,NoOp(Connect option router — tenant=${TENANT_SLUG} digit=${OPT_DI
  same =>    n(extnum),Dial(PJSIP/${OPT_DEST},30)
  same =>    n,Hangup()
  same =>    n(fallback),Goto(connect-default-fallback,s,1)
+
+[connect-play-prompt]
+; Connect "play a recording" menu key. Reads what to play and where to go
+; after from the same per-digit AstDB family the option router used:
+;   connect/t_<slug>/opt_<digit>/announce → recording ref (under sounds/)
+;   connect/t_<slug>/opt_<digit>/after    → Goto target after playback;
+;                                           empty = replay the caller's menu
+; Jumping back targets the (prompt) label so the greeting replays without
+; re-running Answer/Wait or the once-per-call pre-announce.
+exten => s,1,NoOp(Connect play-prompt — tenant=${TENANT_SLUG} digit=${OPT_DIGIT} did=${IVR_DID})
+ same =>    n,Set(PP_REF=${DB(connect/t_${TENANT_SLUG}/opt_${OPT_DIGIT}/announce)})
+ same =>    n,Set(PP_AFTER=${DB(connect/t_${TENANT_SLUG}/opt_${OPT_DIGIT}/after)})
+ same =>    n,GotoIf($["${PP_REF}" = ""]?back)
+ same =>    n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${PP_REF}.ulaw)}" = "1"]?play)
+ same =>    n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${PP_REF}.wav)}" = "1"]?play)
+ same =>    n,NoOp(Connect play-prompt file missing ref=${PP_REF} — returning to menu)
+ same =>    n,Goto(back)
+ same =>    n(play),Playback(${PP_REF})
+ same =>    n,GotoIf($["${PP_AFTER}" = ""]?back)
+ same =>    n,NoOp(Connect play-prompt after — dest=${PP_AFTER})
+ same =>    n,Goto(${PP_AFTER})
+ same =>    n(back),GotoIf($[$["${IVR_DID}" = ""] | $["${IVR_DID}" = "s"]]?bye)
+ same =>    n,Set(RETRIES=0)
+ same =>    n,Goto(connect-tenant-ivr,${IVR_DID},prompt)
+ same =>    n(bye),Goto(connect-default-fallback,s,1)
 
 [connect-exit-router]
 exten => s,1,NoOp(Connect exit router — tenant=${TENANT_SLUG} type=${EXIT_TYPE} dest=${EXIT_DEST})

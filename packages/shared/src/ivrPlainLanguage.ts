@@ -37,6 +37,8 @@
 //   team/rg   T<t>_ext-ringgroups,<number>,1    exten => 800,1,NoOp(Ring Group: main)
 //   team/q    T<t>_ext-queues,<number>,1        exten => 600,1,NoOp(Queue: main q)
 //   voicemail sub-extensions-vm,VM-<ext>,1      Goto(sub-extensions-vm,VM-101,1)
+//   recording connect-play-prompt,s,1           plays opt_<digit>/announce, then
+//                                               opt_<digit>/after (empty = replay menu)
 //   menu      connect-tenant-ivr,<profileId>,1  Connect's own IVR context
 //   hangup    connect-default-fallback,s,1
 //
@@ -44,17 +46,18 @@
 // convention from different phone software. There is no [ext-local] context on
 // this PBX at all, so every caller sent to voicemail fell out of the dialplan.
 
-export type MenuChoiceKind = "person" | "team" | "voicemail" | "menu" | "hangup" | "other";
+export type MenuChoiceKind = "person" | "team" | "voicemail" | "recording" | "menu" | "hangup" | "other";
 
 /** The kinds a person is offered when assigning a key. "other" is readable but
  *  never offered — it exists so menus imported from the PBX still describe
  *  themselves rather than showing a blank. */
-export const OFFERABLE_KINDS: Exclude<MenuChoiceKind, "other">[] = ["person", "team", "voicemail", "menu", "hangup"];
+export const OFFERABLE_KINDS: Exclude<MenuChoiceKind, "other">[] = ["person", "team", "voicemail", "recording", "menu", "hangup"];
 
 export const KIND_LABEL: Record<MenuChoiceKind, string> = {
   person: "A person",
   team: "A team",
   voicemail: "Voicemail",
+  recording: "A recording",
   menu: "Another menu",
   hangup: "Hang up",
   other: "Something else",
@@ -64,14 +67,29 @@ export const KIND_BLURB: Record<MenuChoiceKind, string> = {
   person: "Rings one person's phone. If they don't pick up it goes to their voicemail.",
   team: "Rings several phones at once. Whoever answers first gets the call.",
   voicemail: "Goes straight to someone's voicemail without ringing.",
+  recording: "Plays a recording — directions, hours, an announcement — then continues.",
   menu: "Plays another set of choices, like \"press 1 for…\".",
   hangup: "Politely ends the call.",
   other: "Set up outside the Studio.",
 };
 
+/** The Goto target every "play a recording" key stores. The context reads the
+ *  recording and the after-destination from the same per-digit AstDB keys the
+ *  publish writes (`opt_<digit>/announce`, `opt_<digit>/after`), so the ref
+ *  itself never varies. Installed by scripts/pbx/patch-connect-play-prompt.sh. */
+export const PLAY_PROMPT_DESTINATION_REF = "connect-play-prompt,s,1";
+
+/** Where the caller goes after a recording key finishes playing.
+ *  "replay" is the default: the same menu's choices play again. */
+export type AfterRecordingChoice =
+  | { kind: "replay" }
+  | { kind: "voicemail"; extension: string }
+  | { kind: "hangup" };
+
 export interface DirectoryPerson { extension: string; name?: string | null }
 export interface DirectoryTeam { number: string; name?: string | null; kind: "ring_group" | "queue" }
 export interface DirectoryMenu { id: string; name: string }
+export interface DirectoryRecording { promptRef: string; name?: string | null }
 
 /** Everything this tenant actually has. A kind with an empty list is not
  *  offered — showing "A team" to a customer with no teams invites them to pick
@@ -82,12 +100,20 @@ export interface TenantDirectory {
   people: DirectoryPerson[];
   teams: DirectoryTeam[];
   menus: DirectoryMenu[];
+  /** The tenant's recording library. Optional because most callers of this
+   *  module don't offer recording keys; leaving it out only disables them. */
+  recordings?: DirectoryRecording[];
 }
 
 export interface StoredDestination {
   destinationType: string;
   destinationRef: string;
   label?: string | null;
+  /** Recording keys only: what plays, and where the caller goes after.
+   *  Empty after-destination = replay the same menu. */
+  announcePromptRef?: string | null;
+  afterDestinationType?: string | null;
+  afterDestinationRef?: string | null;
 }
 
 /** What a stored destination turns back into for the UI and the agent. */
@@ -130,6 +156,8 @@ export function buildDestination(
   kind: MenuChoiceKind,
   targetId: string,
   dir: TenantDirectory,
+  /** Recording keys only: what happens after the recording ends. */
+  after?: AfterRecordingChoice,
 ): StoredDestination | null {
   const id = String(targetId ?? "").trim();
   const prefix = ctxPrefix(dir);
@@ -138,6 +166,29 @@ export function buildDestination(
     return { destinationType: "terminate", destinationRef: "connect-default-fallback,s,1", label: "Hang up" };
   }
   if (!id) return null;
+
+  if (kind === "recording") {
+    const rec = (dir.recordings ?? []).find((x) => x.promptRef === id);
+    if (!rec) return null;
+    // The after-destination reuses the exact refs the direct kinds write, so
+    // the dialplan's generic Goto handles it with no new cases.
+    let afterDest: StoredDestination | null = null;
+    const choice = after ?? { kind: "replay" as const };
+    if (choice.kind === "voicemail") {
+      afterDest = buildDestination("voicemail", choice.extension, dir);
+      if (!afterDest) return null; // refuse rather than save a recording that dead-ends
+    } else if (choice.kind === "hangup") {
+      afterDest = buildDestination("hangup", "", dir);
+    }
+    return {
+      destinationType: "announcement",
+      destinationRef: PLAY_PROMPT_DESTINATION_REF,
+      label: rec.name || "A recording",
+      announcePromptRef: id,
+      afterDestinationType: afterDest?.destinationType ?? null,
+      afterDestinationRef: afterDest?.destinationRef ?? null,
+    };
+  }
 
   if (kind === "person") {
     const p = dir.people.find((x) => x.extension === id);
@@ -171,6 +222,23 @@ export function readDestination(stored: StoredDestination | null | undefined, di
 
   if (type === "terminate") return { kind: "hangup", targetId: null, name: "Hang up", known: true };
 
+  // Connect-owned recording keys. VitalPBX announcement objects also store
+  // type "announcement" but point at T<t>_app-announcement — those keep
+  // falling through to "other" (readable, never offered).
+  if (type === "announcement" && ref.startsWith("connect-play-prompt,")) {
+    const promptRef = String(stored?.announcePromptRef ?? "").trim() || null;
+    const rec = promptRef ? (dir.recordings ?? []).find((x) => x.promptRef === promptRef) : undefined;
+    return {
+      kind: "recording",
+      targetId: promptRef,
+      name: rec?.name || stored?.label || (promptRef ? "A recording" : null),
+      // A directory without a recordings list can't tell whether the recording
+      // still exists — only flag "unknown" when the list was provided and the
+      // recording genuinely isn't in it.
+      known: dir.recordings ? Boolean(rec) : Boolean(promptRef),
+    };
+  }
+
   if (type === "extension") {
     const m = ref.match(/^[A-Za-z0-9_\-]+,([^,]+),\d+$/);
     const ext = m?.[1] ?? null;
@@ -200,6 +268,16 @@ export function readDestination(stored: StoredDestination | null | undefined, di
   return { kind: "other", targetId: null, name: stored?.label ?? null, known: false };
 }
 
+/** How a recording key's "afterwards" reads in a sentence. */
+export function describeAfterRecording(stored: StoredDestination | null | undefined, dir: TenantDirectory): string {
+  const afterType = String(stored?.afterDestinationType ?? "").trim();
+  const afterRef = String(stored?.afterDestinationRef ?? "").trim();
+  if (!afterType || !afterRef) return "then the menu plays again";
+  const after = readDestination({ destinationType: afterType, destinationRef: afterRef }, dir);
+  if (after.kind === "hangup") return "then the call ends politely";
+  return `then they go to ${describeDestination({ destinationType: afterType, destinationRef: afterRef }, dir)}`;
+}
+
 /** Short phrase naming where a caller ends up: "Leah Fulop on extension 101". */
 export function describeDestination(stored: StoredDestination | null | undefined, dir: TenantDirectory): string {
   const d = readDestination(stored, dir);
@@ -212,6 +290,10 @@ export function describeDestination(stored: StoredDestination | null | undefined
       return d.known ? `the ${d.name} team` : `a team on ${d.targetId} — which no longer exists`;
     case "voicemail":
       return d.known ? String(d.name) : `voicemail for ${d.targetId} — which no longer exists`;
+    case "recording":
+      return d.known
+        ? `the “${d.name}” recording, ${describeAfterRecording(stored, dir)}`
+        : "a recording that no longer exists — the caller is sent back to the menu";
     case "menu":
       return d.known ? `the “${d.name}” menu` : "another menu — which has been deleted";
     default:
@@ -228,6 +310,7 @@ export function explainKeyPress(digit: string, stored: StoredDestination | null 
   if (d.kind === "person") return `${press}, we ring ${where}. If nobody answers, the caller goes to that person's voicemail.`;
   if (d.kind === "team") return `${press}, we ring every phone in ${where} at once, and whoever picks up first gets the call.`;
   if (d.kind === "voicemail") return `${press}, they go straight to ${where} without any phone ringing.`;
+  if (d.kind === "recording") return `${press}, we play ${where}.`;
   if (d.kind === "menu") return `${press}, they hear ${where} and choose again from there.`;
   return `${press}, they go to ${where}.`;
 }
