@@ -18,17 +18,23 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONNECT_DOORWAY_2026-08-05.md`**
   health. Connect side at `e9ab55ca` (deployed api+portal): picker auto-fills
   from PBX-synced numbers, switch failures are LOUD in the Studio
   (`lastSwitchError` on the numbers list).
-- ⛔ **BLOCKED AT HANDOFF — one command Izzy must run himself** (classifier
-  hard-blocks agents from GRANTs and raw PBX-DB INSERTs even with verbal
-  permission): the GRANT in the handoff doc §"THE ONE BLOCKING STEP". Until it
-  runs, `ombu_custom_contexts` has 0 rows and the flip of (845) 723-1213 is
-  NOT DONE — Izzy's menu is still unreachable.
-- After the grant: flip via a `DidSwitchSchedule` INSERT (the 60s tick drives
-  the real switch route — never raw helper curl), verify the render of
-  `_8457231213` in `extensions__50-35-dialplan.conf` becomes
-  `Goto(connect-doorway,s,1)` (⛔ the ONE unproven assumption — custom-context
-  render has never been observed on this box; `/restore` rolls back if wrong),
-  prove a connect→pbx→connect cycle, leave on Connect, have Izzy call.
+- ✅ **UNBLOCKED AND DONE 2026-08-05 (evening session)**: Izzy ran the GRANT +
+  two helper installs via Run buttons. The doorway needed TWO more fixes to
+  actually work, both shipped as helper **v2026.08.05.3** (deployed, commit
+  `3399f0df`, backups `/root/helper-backup-{moduleid,bake}-20260805.py`):
+  (1) the doorway `ombu_destinations` INSERT was missing `module_id`;
+  (2) ⛔ **retarget/restore never regenerated the dialplan** — they updated the
+  DB then ran the legacy apply (reload only), so every "successful" switch
+  left callers on the OLD routing. Now both directions run the real
+  per-tenant regen + Goto bake (agent_set pattern). The custom-context render
+  IS `Goto(connect-doorway,s,1)` — proven live. Full connect→pbx→connect
+  cycle proven on (845) 723-1213; left ON CONNECT.
+- ⛔ **api-side: switches take ~35-40s now (full regen).** The 15s helper
+  timeout filed phantom failures that the scheduler retry healed (noop
+  convergence). Fixed to 90s in `pbxInboundRouteHelperClient.ts` (`3399f0df`)
+  — **committed, NOT yet deployed**; until an api deploy, expect one transient
+  `helper_*_failed: operation was aborted` per switch that self-heals within
+  ~2 min.
 - **Landau's mapping was stale** (said connect, PBX rings ext 101 directly —
   route was rebuilt as id 68) — corrected to `pbx` this session. PBX ssh that
   works: repo key `.connect-ssh/connect2_server2_ed25519`, port 22 (the `pbx`
