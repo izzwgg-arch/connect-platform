@@ -26,6 +26,22 @@ Read this before diagnosing any "my phone didn't ring" / "keeps dropping" report
 Do **not** infer "unstable Wi-Fi" or "user is moving around" from a high reconnect count.
 Both wrong answers were reached in this session before the whois was run.
 
+### ⛔ EXPIRY DATE ON THIS TEST — added 2026-08-05
+
+**The whois only means anything while the device registers DIRECTLY to the PBX.** As of
+2026-08-05 Displaydex is live on the 443 route (`webrtcRouteViaSbc=true, sipWsUrl=null`;
+nginx `location /sip` on loopcom proxying to `m.connectcomunications.com:8089/ws`). For
+any tenant on that route **every `contactUri` is loopcom `45.14.194.179`** — our own
+server — and the whois tells you nothing whatsoever about the customer's network.
+
+**Check the tenant's `webrtcRouteViaSbc` flag before trusting a contact IP.** If it is on,
+the customer-side evidence lives in **loopcom nginx logs**, not in `contactUri`. See
+`AGENT_HANDOFF_ELI_IOS_443_PASTE_2026-08-05.md`.
+
+This is a good problem: it means the fix landed. But a future agent running the §0 test on
+a migrated tenant would conclude "datacenter block → filtering proxy" and be reading our
+own load balancer.
+
 ---
 
 ## 1. Identifiers
@@ -126,10 +142,17 @@ Five calls hit the main DID. **Zero answered on the mobile app.**
 
 ## 6. Open items in priority order
 
-1. **Move WSS/TURN to port 443** (`webrtcRouteViaSbc`, TURN over TCP 443). This is the
-   platform fix for filtered internet and it is the highest-leverage item here — it plausibly
-   lifts reliability across a large share of the customer base, not just this extension.
-   Filters pass 443 because blocking it breaks the whole web.
+1. ~~**Move WSS/TURN to port 443**~~ — **DONE for one tenant on 2026-08-05. Copy it to
+   Luxure.** Displaydex now runs on the 443 route: nginx `location /sip` on loopcom proxies
+   direct to `https://m.connectcomunications.com:8089/ws`, tenant set
+   `webrtcRouteViaSbc=true, sipWsUrl=null`, proven by a raw-REGISTER probe returning 401.
+   Filters pass 443 because blocking it breaks the whole web. This is now a
+   copy-the-recipe job, not a design job.
+   ⛔ **The app never refreshes a cached `sipWsUrl`** — the user must sign out and back in
+   after the flip, or nothing changes for them.
+   ⛔ Do **not** route at the `sbc-kamailio` container on loopcom `:7443` — it is an
+   unfinished experiment that dispatches to a nonexistent docker host and answers
+   `503 PBX Unavailable`. Full recipe + backups: `AGENT_HANDOFF_ELI_IOS_443_PASTE_2026-08-05.md`.
 2. **The 241 ms decline.** A human cannot read an incoming-call screen and decline it in a
    quarter second. We have shipped an auto-decline bug of exactly this shape on iOS before
    (see memory `ios-background-call-autodecline`). Determine whether Simon declined or the
