@@ -134,8 +134,10 @@ Other regen-bug facts learned the hard way:
 
 ### PBX (209.145.60.79) — writes ONLY under explicit owner mandate
 - Helper: `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py`
-  (**v2026.07.28.5**, repo copy `scripts/pbx/vitalpbx-inbound-route-helper.py`
-  is in sync), systemd `connect-pbx-helper`, port `8799`, auth header
+  (**v2026.08.04.2** since the vm-greeting engagement — see
+  `AGENT_HANDOFF_VM_GREETING_2026-08-04.md`; repo copy
+  `scripts/pbx/vitalpbx-inbound-route-helper.py` is in sync),
+  systemd `connect-pbx-helper`, port `8799`, auth header
   `x-connect-pbx-helper-secret`, env `/etc/connect-pbx-helper.env`
   (includes `CONNECT_PBX_VITALPBX_API_KEY` extracted from Connect's encrypted
   `PbxInstance` row).
