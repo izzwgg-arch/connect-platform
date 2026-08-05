@@ -32009,6 +32009,56 @@ app.post("/internal/pbx-event-ingest", async (req, reply) => {
   }
 });
 
+// ── Ring-vs-cancel race guard for /internal/mobile-ring-notify ───────────────
+// Live failure (Trimpro T11, invite cms7ms72g4k5lof13ww3pq95i, 2026-07-30
+// 14:50:46): the PBX had zero registered contacts, diverted the call to
+// voicemail instantly, and telephony's "ringing" and "hungup" notifies raced.
+// The cancel path canceled the freshly created invite and pushed
+// INVITE_CANCELED at .060; the still-running ring path (delayed by the
+// INCOMING_CALL_WAKE send) pushed INCOMING_CALL at .301. The device processed
+// cancel (no-op) then ring — full ringtone for a dead call, Answer tap into
+// nothing, no cancel ever coming. Two guarantees below (single API process,
+// in-memory state is authoritative):
+//   1. serializeMobileRingNotify: ring and cancel processing for one pbxCallId
+//      never interleave, so a cancel that arrives mid-ring waits and its
+//      INVITE_CANCELED push always post-dates the INCOMING_CALL push.
+//   2. Cancel tombstones: once a cancel for a pbxCallId is processed, a ring
+//      notify for that same (unique-per-call) id is dead on arrival — covers
+//      the opposite ordering where the cancel fully completes first, finds no
+//      invite to cancel, and the late ring would otherwise ring unopposed.
+const mobileRingNotifyChains = new Map<string, Promise<void>>();
+function serializeMobileRingNotify<T>(pbxCallId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = mobileRingNotifyChains.get(pbxCallId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail: Promise<void> = run.then(() => undefined, () => undefined);
+  mobileRingNotifyChains.set(pbxCallId, tail);
+  void tail.then(() => {
+    if (mobileRingNotifyChains.get(pbxCallId) === tail) mobileRingNotifyChains.delete(pbxCallId);
+  });
+  return run;
+}
+
+const canceledPbxCallTombstones = new Map<string, number>();
+const CANCELED_PBX_CALL_TOMBSTONE_TTL_MS = 10 * 60_000;
+function markPbxCallCanceled(pbxCallId: string): void {
+  const now = Date.now();
+  canceledPbxCallTombstones.set(pbxCallId, now);
+  if (canceledPbxCallTombstones.size > 2000) {
+    for (const [k, at] of canceledPbxCallTombstones) {
+      if (now - at > CANCELED_PBX_CALL_TOMBSTONE_TTL_MS) canceledPbxCallTombstones.delete(k);
+    }
+  }
+}
+function wasPbxCallCanceled(pbxCallId: string): boolean {
+  const at = canceledPbxCallTombstones.get(pbxCallId);
+  if (at == null) return false;
+  if (Date.now() - at > CANCELED_PBX_CALL_TOMBSTONE_TTL_MS) {
+    canceledPbxCallTombstones.delete(pbxCallId);
+    return false;
+  }
+  return true;
+}
+
 // Internal: telephony service POSTs when an inbound call rings at an extension.
 // Creates a CallInvite and sends an Expo push to the owner's mobile devices.
 // Secured by the same CDR_INGEST_SECRET shared header.
@@ -32054,7 +32104,13 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
 
   // ── Hangup / voicemail-divert fast-path: cancel any PENDING invite for this
   // pbxCallId and push INVITE_CANCELED so the native ringtone stops immediately.
+  // Runs under the per-call lock so it can never interleave with the ring path
+  // for the same call (see the race-guard comment above the endpoint).
   if (input.state === "hungup" || input.state === "diverted_to_voicemail" || input.state === "answered_elsewhere") {
+    return serializeMobileRingNotify(input.linkedId, async () => {
+    // pbxCallId (Asterisk linkedid) is unique per call, so any ring notify for
+    // this id that arrives from here on is stale — tombstone it permanently.
+    markPbxCallCanceled(input.linkedId);
     const pending = await db.callInvite.findMany({
       where: {
         pbxCallId: input.linkedId,
@@ -32112,6 +32168,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     }
     app.log.info({ linkedId: input.linkedId, canceled, answered: !!input.answered }, "mobile-ring-notify: hangup — invites canceled + push sent");
     return { ok: true, hungup: true, canceled };
+    });
   }
 
   if (!input.toExtension) {
@@ -32221,6 +32278,25 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     app.log.warn({ err: err?.message }, "mobile-ring-notify: contact resolution failed (non-fatal)");
   }
 
+  // Everything from invite creation to the INCOMING_CALL push runs under the
+  // per-call lock: a concurrent cancel notify for this call queues behind us,
+  // so its INVITE_CANCELED push always post-dates our INCOMING_CALL push.
+  const resolvedTarget = target;
+  return serializeMobileRingNotify(input.linkedId, async () => {
+  const target = resolvedTarget;
+
+  // Ring-after-cancel guard: the hangup notify for this call already ran to
+  // completion (possibly before we created any invite for it to cancel). This
+  // ring is for a dead call — pushing it would ring the device with no cancel
+  // ever coming.
+  if (wasPbxCallCanceled(input.linkedId)) {
+    app.log.warn(
+      { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId },
+      "mobile-ring-notify: ring notify arrived after cancel for the same call — suppressed",
+    );
+    return { ok: true, suppressed: "ring_after_cancel" };
+  }
+
   // ── Upsert CallInvite (unique on tenantId+pbxCallId) ─────────────────────────
   const existingInvite = await db.callInvite.findFirst({
     where: { tenantId: target.tenantId, pbxCallId: input.linkedId },
@@ -32300,6 +32376,23 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     );
   }
 
+  // The wake push + wake-event write above take real time (the observed race
+  // window was 241ms). The lock protects against the cancel path in THIS
+  // endpoint; this re-read also covers every other path that can terminate an
+  // invite (worker, pbx-event ingest, expiry). Never push INCOMING_CALL for an
+  // invite that is no longer PENDING.
+  const inviteNow = await db.callInvite.findUnique({
+    where: { id: invite.id },
+    select: { status: true },
+  });
+  if (!inviteNow || inviteNow.status !== "PENDING") {
+    app.log.warn(
+      { inviteId: invite.id, pbxCallId: invite.pbxCallId, status: inviteNow?.status ?? "MISSING" },
+      "mobile-ring-notify: invite went terminal before INCOMING_CALL push — suppressed",
+    );
+    return { ok: true, suppressed: "invite_terminal_before_ring_push", inviteId: invite.id };
+  }
+
   const push = await sendPushToUserDevices({
     tenantId: target.tenantId,
     userId: target.userId,
@@ -32332,6 +32425,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   });
 
   return { ok: true, inviteId: invite.id, push };
+  });
 });
 
 // ─── Inbound pre-wake (server-side; no PBX changes, every tenant) ────────────

@@ -2820,9 +2820,22 @@ export function NotificationsProvider({
             if (reason === "TURN_REQUIRED_NOT_VERIFIED" || reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
               await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
             }
+            // Ghost-ring answer (Trimpro 2026-07-30): a stale INCOMING_CALL
+            // push that raced past its own cancel rang this device for a call
+            // that was already dead, and the Answer tap landed on a CANCELED
+            // invite. Kill any ring surface a late stale push may have
+            // re-armed and say the caller is gone instead of the generic
+            // "Call ended".
+            const callerGone =
+              reason === "INVITE_EXPIRED" ||
+              (reason === "INVITE_ALREADY_HANDLED" &&
+                (resp?.status === "CANCELED" || resp?.status === "EXPIRED"));
+            if (callerGone) {
+              dismissNativeIncomingUi(invite.id);
+            }
             showEndedState(
               invite,
-              "Call ended",
+              callerGone ? "Caller hung up" : "Call ended",
               { reason: `respond_invite_failed:${reason}` },
               1200,
             );
@@ -2851,7 +2864,8 @@ export function NotificationsProvider({
         }
 
         if (!inviteReady) {
-          const inviteWaitFailureReason = answerFlowAborted()
+          const answerAbortedByUser = answerFlowAborted();
+          const inviteWaitFailureReason = answerAbortedByUser
             ? "answer_aborted_by_user"
             : "sip_invite_not_received";
           setCallFlowLastError(inviteWaitFailureReason);
@@ -2892,7 +2906,20 @@ export function NotificationsProvider({
               sipCallTarget: invite.sipCallTarget,
             }).catch(() => undefined);
           }
-          showEndedState(invite, "Call ended", { reason: inviteWaitFailureReason });
+          // Answer pipeline exhausted every invite wait without a session.
+          // Unless the user aborted, the call is gone (canceled/voicemail
+          // took it — Trimpro 2026-07-30 ghost ring). Force-stop any ring
+          // surface a stale INCOMING_CALL push may have re-armed after the
+          // tap-time dismiss, and tell the user the caller is gone instead
+          // of leaving the generic ended splash.
+          if (!answerAbortedByUser) {
+            dismissNativeIncomingUi(invite.id);
+          }
+          showEndedState(
+            invite,
+            answerAbortedByUser ? "Call ended" : "Caller hung up",
+            { reason: inviteWaitFailureReason },
+          );
           void flightEndCall('failed');
           endNativeCall(callId);
           markCallLatency(invite.id, "CALL_FAILED", { reason: inviteWaitFailureReason });
