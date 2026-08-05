@@ -1,5 +1,39 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — Connect doorway rebuild: DID switch-to-connect was broken platform-wide (2026-08-05) — READ FIRST for IVR Studio number switching, "published but callers hear the old routing", the PBX route helper, or the connect-doorway dialplan
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONNECT_DOORWAY_2026-08-05.md`**
+
+- **Every switch-to-connect had been dead since ~May**: the PBX doorway
+  destination (id 607, an April-era T21 custom app) was panel-deleted — FK
+  cascade emptied `ombu_custom_contexts` — and the pinned env id made every
+  flip fail `connect_destination_not_found`. Nobody flipped a number between
+  April and August, so it surfaced only when Izzy tested the Studio.
+- **Rebuilt as a global self-healing doorway** (helper v2026.08.05.1 DEPLOYED,
+  backup `/root/helper-backup-doorway-20260805.py` on the PBX): Custom Context
+  `connect-doorway` discovered BY NAME at flip time (stale pinned ids are
+  skipped, never fatal), dialplan shim self-installs to
+  `/etc/asterisk/vitalpbx/extensions__96-connect-doorway.conf` (verified live),
+  rows self-create inside the retarget transaction, `POST /doorway-status` for
+  health. Connect side at `e9ab55ca` (deployed api+portal): picker auto-fills
+  from PBX-synced numbers, switch failures are LOUD in the Studio
+  (`lastSwitchError` on the numbers list).
+- ⛔ **BLOCKED AT HANDOFF — one command Izzy must run himself** (classifier
+  hard-blocks agents from GRANTs and raw PBX-DB INSERTs even with verbal
+  permission): the GRANT in the handoff doc §"THE ONE BLOCKING STEP". Until it
+  runs, `ombu_custom_contexts` has 0 rows and the flip of (845) 723-1213 is
+  NOT DONE — Izzy's menu is still unreachable.
+- After the grant: flip via a `DidSwitchSchedule` INSERT (the 60s tick drives
+  the real switch route — never raw helper curl), verify the render of
+  `_8457231213` in `extensions__50-35-dialplan.conf` becomes
+  `Goto(connect-doorway,s,1)` (⛔ the ONE unproven assumption — custom-context
+  render has never been observed on this box; `/restore` rolls back if wrong),
+  prove a connect→pbx→connect cycle, leave on Connect, have Izzy call.
+- **Landau's mapping was stale** (said connect, PBX rings ext 101 directly —
+  route was rebuilt as id 68) — corrected to `pbx` this session. PBX ssh that
+  works: repo key `.connect-ssh/connect2_server2_ed25519`, port 22 (the `pbx`
+  alias pins port 2222 and times out).
+
 ## ⛔ AGENT HANDOFF — Create A Box (T7) desk-phone outage + ext 102 app failure (2026-08-05) — READ FIRST for Create A Box, "phones don't ring / straight to voicemail", the WireGuard-tunnel office, or any PENDING PBX registration-expiry fix
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CREATEABOX_T7_OUTAGE_2026-08-05.md`**
