@@ -163,6 +163,15 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md
   is ALWAYS derived from `Tenant.name` via the `toIvrSlug` normalisation
   (lowercase, non-alnum → `_`) — a differently-formatted slug makes rows
   invisible to the prompt list and PBX prefix matching. Handoff doc §5.
+- **Global error-handler safety net is COMMITTED (`4fb512ed`, handoff §6) but
+  NOT DEPLOYED** — the live api container is `9b521176`, which predates it, so
+  an uncaught route error can still show raw internals in customer dialogs
+  until the next api deploy. Root cause of the leak: the api container sets NO
+  `NODE_ENV` (only telephony does in docker-compose.app.yml), so the old
+  handler's "production" branch never ran — June-era protection sat dead for
+  months. ⛔ Never gate safety behavior on `NODE_ENV` in apps/api; the portal
+  (`services/apiClient.ts`, `MakeRecording.tsx`) renders the server `message`
+  field verbatim by design, so the server body IS the customer-facing text.
 - ⛔ **Never retry a synthesis POST** (double-bills characters) and **never
   stress-test against prod** (real money; the offline fake-provider suite in
   `elevenLabsRoutes.stress.test.ts` IS the stress test). 49/49 tests green via

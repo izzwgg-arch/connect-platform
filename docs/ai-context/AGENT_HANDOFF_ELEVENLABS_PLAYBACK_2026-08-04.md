@@ -186,9 +186,50 @@ showed the "Make a recording" dialog rendering a full raw Prisma error.
 - **Raw ORM errors render VERBATIM in customer dialogs.** The uncaught throw
   became Fastify's default 500 whose `message` is the raw Prisma dump, and the
   portal modal displays `message` as-is. The catalog write in the generate
-  route now has its own try/catch with a plain-English message; a repo-wide
-  `setErrorHandler` safety net is a separate task (chip filed 2026-08-05,
-  running in its own session).
+  route now has its own try/catch with a plain-English message; the repo-wide
+  `setErrorHandler` safety net landed as `4fb512ed` — see §6.
 - The 49-test suite still passes with the fix; api typecheck clean for the
   touched file (the ~72 repo-wide errors are pre-existing, unrelated webrtc
   test files).
+
+---
+
+## 6. 2026-08-05 follow-up — global error-handler safety net (why raw errors could leak AT ALL)
+
+Commit **`4fb512ed`** on `feat/ivr-migration-takeover`
+("fix(api): unexpected errors never leak internals — and never gate on NODE_ENV").
+
+- **The twist: apps/api ALREADY HAD a leak-proof `setErrorHandler`** — since
+  June (`f1fff8e0`). It was env-gated: the safe branch only ran when
+  `process.env.NODE_ENV === "production"`. **The api container never sets
+  NODE_ENV** (check `docker-compose.app.yml`: only `telephony` sets it, and
+  `apps/api/Dockerfile` doesn't either), so production ran the "dev" branch,
+  which helpfully attaches the raw error text as `message` on every 500.
+  The protection sat dead for ~2 months while looking correct in review.
+- **The fix**: the handler in `apps/api/src/server.ts` no longer consults
+  NODE_ENV at all. Behavior now, unconditionally:
+  - **5xx (uncaught throw)** → logs the full error server-side (with method +
+    url) and sends only
+    `{ error: "internal_error", message: "Something went wrong on our end. Try again." }`.
+  - **4xx thrown by Fastify** (schema validation, rate limit 429, bad JWT)
+    → keeps its real message in `error`, unchanged from before.
+  - **Routes that shape their own `reply.code(...).send(...)`** never reach the
+    handler — untouched.
+- **Why the server fix is the load-bearing one**: the portal deliberately
+  shows the server's words. `apps/portal/services/apiClient.ts` composes the
+  visible text as `"<error>: <message>"` from the response body, and
+  `MakeRecording.tsx` throws `body?.message || body?.error` straight into the
+  dialog. No portal change needed or made — whatever `message` the api sends
+  IS what the customer reads.
+- **Verified**: repo typecheck identical before/after (the known ~72
+  pre-existing errors, zero new); 49/49 ElevenLabs tests green; a live
+  Fastify smoke test with a simulated mid-handler Prisma crash returned only
+  the generic body (no "prisma"/"Argument" text), while a thrown 400 and a
+  shaped 422 passed through byte-identical.
+- ⛔ **Deploy state at write time: NOT live.** The running api container is
+  `9b521176` (built 08-04 12:44), which predates `4fb512ed` (08-04 19:55).
+  Until the next api deploy, an uncaught route error still reaches customers
+  raw. Deploy via the queue as usual.
+- ⛔ **Never env-gate safety behavior in apps/api.** If a protection matters,
+  it runs unconditionally; NODE_ENV in this codebase is a trap that fails
+  silently in the exact environment it was written for.
