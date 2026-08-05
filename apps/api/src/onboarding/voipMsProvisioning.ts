@@ -71,7 +71,7 @@ async function loadMasterCreds(): Promise<VmsCreds | null> {
  * exponential backoff. A real API answer with a non-success status is NOT
  * retried; that's VoIP.ms saying no, not an outage.
  */
-async function vms(creds: VmsCreds, method: string, params: Record<string, string> = {}): Promise<any> {
+async function vms(creds: VmsCreds, method: string, params: Record<string, string> = {}, timeoutMs = 30_000): Promise<any> {
   const base = (creds.apiBaseUrl || VMS_BASE_DEFAULT).replace(/\/$/, "");
   const url = new URL(base);
   url.searchParams.set("api_username", creds.username);
@@ -85,7 +85,7 @@ async function vms(creds: VmsCreds, method: string, params: Record<string, strin
   for (let attempt = 1; attempt <= attempts; attempt++) {
     let json: any = null;
     try {
-      const res = await fetch(url.toString(), { method: "GET", signal: AbortSignal.timeout(30_000) });
+      const res = await fetch(url.toString(), { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
       json = await res.json();
     } catch (e: any) {
       // Timeout, connection failure, or a non-JSON (HTML) body — all outages.
@@ -219,7 +219,7 @@ async function ensureSubaccount(
       allowed_codecs: "ulaw;g729",
       dtmf_mode: "auto",
       nat: "yes",
-    });
+    }, 120_000);
     const account = String(r?.account || "");
     if (!account) throw new Error("voipms createSubAccount returned no account name");
     await logEvent(submissionId, `Subaccount ${account} created (Asterisk/IP-PBX, own device CallerID).`);
@@ -272,7 +272,10 @@ async function reuseSubaccount(
     nat: String(hit.nat || "yes"),
     ...(hit.internal_extension ? { internal_extension: String(hit.internal_extension) } : {}),
     ...(hit.description ? { description: String(hit.description) } : {}),
-  });
+    // 120s: setSubAccount is VoIP.ms's slowest write — under their 2026-08-05
+    // degradation it kept blowing the default 30s while eventually completing
+    // server-side (aborting the request does not cancel their operation).
+  }, 120_000);
   await logEvent(submissionId, `Subaccount ${hit.account} already existed — password rotated.`);
   return { username: String(hit.account), password, server: VOIPMS_TRUNK_SERVER };
 }
@@ -660,7 +663,27 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
     // so retries always match what an earlier attempt created, and two
     // customers with the same company name can never share a subaccount.
     const identity = await ensureProvisioningIdentity(row);
-    const sub = await ensureSubaccount(creds, submissionId, identity.voipmsSubName, live);
+    // Reuse credentials from an earlier partial run instead of rotating the
+    // password again: rotation goes through setSubAccount, and when VoIP.ms's
+    // write path degrades (2026-08-05: every setSubAccount timed out for 40+
+    // minutes while reads answered in 2s) re-rotating on every retry blocks
+    // the whole build for no gain. Stored creds are per-submission and only
+    // ever written after a successful create/rotate of this submission's own
+    // subaccount, so they can't belong to another customer.
+    let sub = live ? readSubaccount(row) : null;
+    if (sub) {
+      await logEvent(submissionId, `Reusing subaccount ${sub.username} from the earlier run — password already set.`);
+    } else {
+      sub = await ensureSubaccount(creds, submissionId, identity.voipmsSubName, live);
+      if (live) {
+        // Persist immediately — losing a successful rotation because a LATER
+        // step failed is what forced every retry back through setSubAccount.
+        await (db as any).onboardingSubmission.update({
+          where: { id: submissionId },
+          data: { voipmsSubaccountEncrypted: encryptJson(sub) },
+        });
+      }
+    }
 
     let did = "";
     let temporary = false;
