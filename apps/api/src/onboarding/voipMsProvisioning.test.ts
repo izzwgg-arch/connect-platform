@@ -724,6 +724,38 @@ test("failed stage can be retried and succeed", async () => {
   assert.equal(state.submissions.get(id).numberStatus, "ready");
 });
 
+test("REGRESSION 2026-08-05: stored subaccount creds are reused on retry — no rotation through a degraded VoIP.ms", async () => {
+  reset({ live: true });
+  const id = seedSubmission({
+    voipmsSubaccountEncrypted: "enc:" + JSON.stringify({ username: "344022_BobsPlsub1", password: "keptpw", server: "newyork1.voip.ms" }),
+  });
+  // Both subaccount writes are down (the real outage shape: reads fine,
+  // writes timing out) — the stage must complete without touching either.
+  vmsHandlers.setSubAccount = () => ({ status: "boom" });
+  vmsHandlers.createSubAccount = () => ({ status: "boom" });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(state.submissions.get(id).numberStatus, "ready");
+  assert.equal(calls("setSubAccount").length, 0);
+  assert.equal(calls("createSubAccount").length, 0);
+  const sub = JSON.parse(state.submissions.get(id).voipmsSubaccountEncrypted.replace(/^enc:/, ""));
+  assert.equal(sub.password, "keptpw");
+});
+
+test("REGRESSION 2026-08-05: a successful subaccount create is persisted even when a LATER step fails", async () => {
+  reset({ live: true });
+  const id = seedSubmission();
+  vmsHandlers.orderDID = () => ({ status: "boom" });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, false);
+  assert.equal(state.submissions.get(id).numberStatus, "failed");
+  // The creds survived the failure — the retry must not rotate again.
+  const stored = state.submissions.get(id).voipmsSubaccountEncrypted;
+  assert.ok(stored, "subaccount creds were not persisted after the successful create");
+  const sub = JSON.parse(stored.replace(/^enc:/, ""));
+  assert.ok(sub.username && sub.password);
+});
+
 test("subaccount naming: strips punctuation, carries the submission tag, total ≤12 chars", () => {
   assert.equal(mod.subAccountName("Bob's Plumbing & Heating", "abc123"), "BobsPlabc123");
   assert.equal(mod.subAccountName("", "abc123"), "acctabc123");
