@@ -674,8 +674,11 @@ export default function IvrStudioPage() {
           setNumberPlan(null);
           flash(`Published — ${fmtUs(numberPlan.e164)} now rings this menu.`);
         } catch (e: any) {
-          setError(e?.payload?.detail || e?.payload?.message || e?.message ||
-            "The menu is published, but the number couldn't be switched. Nothing changed for callers — try the switch again.");
+          const detail = e?.payload?.detail || e?.payload?.error || e?.message || "";
+          setError(
+            `The menu is published, but ${fmtUs(numberPlan.e164)} could NOT be switched — callers still get the old routing. ` +
+            `Open “Change number”, pick it again, and publish to retry.` + (detail ? ` (Technical detail: ${detail})` : ""),
+          );
         }
         await loadAll();
         return;

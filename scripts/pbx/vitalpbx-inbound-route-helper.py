@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.04.2"
+VERSION = "2026.08.05.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -228,6 +228,225 @@ def music_group_exists(conn, music_group_id):
     with conn.cursor() as cur:
         cur.execute("SELECT music_group_id FROM ombu_music_groups WHERE music_group_id = %s", (music_group_id,))
         return cur.fetchone() is not None
+
+# ────────────────────────── Connect doorway (2026-08-05) ─────────────────────
+# The single PBX object that hands an inbound route to Connect's tenant IVR.
+#
+# History: the original doorway was a per-tenant Custom Application (T21 ext
+# 8001, ombu_destinations id 607) created by hand in April 2026. A panel
+# cleanup deleted it — the FK cascade took the destination row with it — and
+# from that moment every switch-to-connect on the platform failed with
+# connect_destination_not_found (nobody noticed until 2026-08-05, because
+# nobody had flipped a number since).
+#
+# The replacement is designed so that class of failure cannot recur:
+#   • The doorway is a GLOBAL Custom Context (context "connect-doorway") —
+#     tenant-agnostic; the dialplan resolves the owning tenant from the
+#     connect/didmap AstDB family that Connect publishes BEFORE every switch.
+#   • It is DISCOVERED BY NAME, never by a pinned id: retarget looks the
+#     destination up by context name at flip time, so a recreated row with a
+#     new id is found automatically. Explicit/env ids are honoured only if
+#     they still exist; a stale id silently falls through to discovery
+#     instead of failing the switch.
+#   • It is SELF-HEALING: if the DB rows or the dialplan file are missing at
+#     flip time, the helper recreates them (rows in the same transaction as
+#     the flip, dialplan file + reload just before) — a panel deletion costs
+#     one automatic rebuild, not an outage.
+#   • /doorway-status reports all of it read-only for monitoring.
+
+CONNECT_DOORWAY_CONTEXT = "connect-doorway"
+CONNECT_DOORWAY_DESCRIPTION = "Connect IVR doorway - managed by connect-pbx-helper, auto-recreated if deleted"
+CONNECT_DOORWAY_DIALPLAN_PATH = "/etc/asterisk/vitalpbx/extensions__96-connect-doorway.conf"
+# Double-underscore prefix REQUIRED: it is what VitalPBX's
+# `#include vitalpbx/extensions__*.conf` glob matches (same as extensions__95).
+CONNECT_DOORWAY_DIALPLAN_BODY = """\
+; ============================================================================
+; Connect doorway — the single entry point that hands a VitalPBX inbound route
+; to Connect's tenant IVR ([connect-tenant-ivr] in extensions__60_custom.conf).
+;
+; MANAGED BY connect-pbx-helper (ensure_connect_doorway): if this file is
+; deleted, or the [connect-doorway] context vanishes from the running
+; dialplan, the helper rewrites this file and reloads before the next number
+; switch. Hand-edits are overwritten on the next self-heal — change the
+; embedded copy in vitalpbx-inbound-route-helper.py instead.
+; ============================================================================
+
+[connect-doorway]
+; VitalPBX renders a Custom Context destination as Goto(connect-doorway,s,1),
+; so the dialled number is no longer in ${EXTEN} — recover it from DNID (the
+; same variable the April-era custom-app doorway used, proven on T21), resolve
+; the owning tenant from the didmap Connect published before the switch, then
+; enter the tenant IVR with the DID as the extension.
+exten => s,1,NoOp(Connect doorway - dnid=${CALLERID(dnid)} slug=${TENANT_SLUG})
+ same => n,Set(CONNECT_DOORWAY_DID=${FILTER(0-9,${CALLERID(dnid)})})
+ same => n,GotoIf($["${CONNECT_DOORWAY_DID}" = ""]?nodid)
+ same => n,Set(DOORWAY_DID_TENANT=${DB(connect/didmap/${CONNECT_DOORWAY_DID}/tenant)})
+ same => n,ExecIf($["${DOORWAY_DID_TENANT}" != ""]?Set(__TENANT_SLUG=${DOORWAY_DID_TENANT}))
+ same => n,Goto(connect-tenant-ivr,${CONNECT_DOORWAY_DID},1)
+ same => n(nodid),NoOp(Connect doorway: no DNID on channel - fallback)
+ same => n,Goto(connect-default-fallback,s,1)
+
+; Direct-DID entry: works if a future render (or a hand-built Goto) passes the
+; dialled number through as the extension instead of "s".
+exten => _[+0-9].,1,NoOp(Connect doorway direct - did=${EXTEN})
+ same => n,Set(CONNECT_DOORWAY_DID=${FILTER(0-9,${EXTEN})})
+ same => n,Set(DOORWAY_DID_TENANT=${DB(connect/didmap/${CONNECT_DOORWAY_DID}/tenant)})
+ same => n,ExecIf($["${DOORWAY_DID_TENANT}" != ""]?Set(__TENANT_SLUG=${DOORWAY_DID_TENANT}))
+ same => n,Goto(connect-tenant-ivr,${CONNECT_DOORWAY_DID},1)
+
+exten => i,1,Goto(connect-default-fallback,s,1)
+exten => t,1,Goto(connect-default-fallback,s,1)
+"""
+
+def _doorway_context_live():
+    """READ-ONLY: is [connect-doorway] present in the running dialplan?"""
+    try:
+        proc = subprocess.run(
+            ["asterisk", "-rx", "dialplan show " + CONNECT_DOORWAY_CONTEXT],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return ("'" + CONNECT_DOORWAY_CONTEXT + "'" in out) and ("no existence" not in out.lower())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+def ensure_connect_doorway_dialplan(strict=False):
+    """Idempotent: doorway dialplan file present with the embedded content and
+    the context live in Asterisk. Reloads only when something actually changed.
+    strict=True (the retarget path) raises instead of soft-logging, because a
+    flip must never proceed toward a doorway the dialplan cannot answer."""
+    evidence = {"filePath": CONNECT_DOORWAY_DIALPLAN_PATH, "fileRewritten": False, "reloaded": False}
+    try:
+        target = Path(CONNECT_DOORWAY_DIALPLAN_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        existing = target.read_text() if target.is_file() else ""
+        changed = existing != CONNECT_DOORWAY_DIALPLAN_BODY
+        if changed:
+            # Atomic write: never leave a half-written dialplan for Asterisk to read.
+            tmp = target.with_name(target.name + ".tmp")
+            tmp.write_text(CONNECT_DOORWAY_DIALPLAN_BODY)
+            os.replace(str(tmp), str(target))
+            evidence["fileRewritten"] = True
+        _apply_dialplan_owner(target)
+        live = _doorway_context_live()
+        if changed or not live:
+            subprocess.run(["asterisk", "-rx", "dialplan reload"], capture_output=True, timeout=15, check=False)
+            evidence["reloaded"] = True
+            live = _doorway_context_live()
+        evidence["contextLive"] = live
+        if strict and not live:
+            raise RuntimeError("doorway_dialplan_install_failed")
+        return evidence
+    except (OSError, PermissionError) as exc:
+        evidence["error"] = str(exc)
+        if strict:
+            raise RuntimeError("doorway_dialplan_install_failed: " + str(exc))
+        sys.stderr.write("ensure_connect_doorway_dialplan_failed: " + str(exc) + "\n")
+        return evidence
+
+def _find_doorway_rows(conn):
+    """All custom-context rows named connect-doorway joined to their (FK-live)
+    destination rows, oldest first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT cc.cc_id, cc.destination_id, d.id AS dest_id
+            FROM ombu_custom_contexts cc
+            JOIN ombu_destinations d ON d.id = cc.destination_id
+            WHERE cc.context = %s
+            ORDER BY cc.cc_id ASC
+            """,
+            (CONNECT_DOORWAY_CONTEXT,),
+        )
+        return cur.fetchall()
+
+def ensure_connect_doorway_rows(conn, evidence):
+    """Return the ombu_destinations id routes should point at, creating the
+    Custom Context + destination pair when missing. Runs inside the caller's
+    transaction so a failed flip never leaves half a doorway behind."""
+    rows = _find_doorway_rows(conn)
+    if rows:
+        evidence["doorwayCreated"] = False
+        evidence["doorwayDestinationId"] = int(rows[0]["dest_id"])
+        return str(rows[0]["dest_id"])
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.id FROM ombu_destinations_category c JOIN ombu_modules m ON m.module_id = c.module_id WHERE m.name = 'custom_contexts'"
+        )
+        cat = cur.fetchone()
+        if not cat:
+            raise RuntimeError("custom_contexts_module_missing")
+        # The pair is circular (cc.destination_id NOT NULL ⇄ d.index = cc_id):
+        # placeholder index first, then backfill once the cc_id exists.
+        cur.execute("INSERT INTO ombu_destinations (category_id, `index`) VALUES (%s, %s)", (int(cat["id"]), "0"))
+        dest_id = int(cur.lastrowid)
+        cur.execute("SELECT tenant_id FROM ombu_tenants WHERE name = 'vitalpbx'")
+        main_tenant = cur.fetchone()
+        cur.execute(
+            "INSERT INTO ombu_custom_contexts (description, context, extension, priority, destination_id, tenant_id) VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                CONNECT_DOORWAY_DESCRIPTION,
+                CONNECT_DOORWAY_CONTEXT,
+                "s",
+                "1",
+                dest_id,
+                int(main_tenant["tenant_id"]) if main_tenant else None,
+            ),
+        )
+        cc_id = int(cur.lastrowid)
+        cur.execute("UPDATE ombu_destinations SET `index` = %s WHERE id = %s", (str(cc_id), dest_id))
+    evidence["doorwayCreated"] = True
+    evidence["doorwayDestinationId"] = dest_id
+    evidence["doorwayCustomContextId"] = cc_id
+    return str(dest_id)
+
+def resolve_connect_destination(conn, requested, evidence):
+    """The destination id a flip should use. Explicit request first, then the
+    env pin — each honoured ONLY if the row still exists — then the doorway
+    discovered by name (created if missing). A stale pinned id is recorded and
+    skipped, never fatal: that staleness is exactly what broke every switch
+    between April and August 2026."""
+    for source, raw in (("request", requested), ("config", CFG.connect_destination_id)):
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        if NUM_RE.match(value) and destination_exists(conn, value):
+            evidence["connectDestinationSource"] = source
+            return value
+        evidence.setdefault("staleDestinationIdsIgnored", []).append({"source": source, "id": value})
+    dest = ensure_connect_doorway_rows(conn, evidence)
+    evidence["connectDestinationSource"] = "doorway"
+    return dest
+
+def doorway_status(body):
+    """READ-ONLY doorway health: dialplan file, running context, DB rows, and
+    what id a flip would use right now. Never creates anything."""
+    target = Path(CONNECT_DOORWAY_DIALPLAN_PATH)
+    file_present = target.is_file()
+    file_current = False
+    if file_present:
+        try:
+            file_current = target.read_text() == CONNECT_DOORWAY_DIALPLAN_BODY
+        except OSError:
+            pass
+    with db_conn() as conn:
+        rows = _find_doorway_rows(conn)
+        env_id = str(CFG.connect_destination_id or "").strip()
+        env_id_exists = bool(env_id) and destination_exists(conn, env_id)
+    return {
+        "ok": True,
+        "version": VERSION,
+        "context": CONNECT_DOORWAY_CONTEXT,
+        "dialplanFilePath": CONNECT_DOORWAY_DIALPLAN_PATH,
+        "dialplanFilePresent": file_present,
+        "dialplanFileCurrent": file_current,
+        "contextLive": _doorway_context_live(),
+        "rows": [{"customContextId": int(r["cc_id"]), "destinationId": int(r["dest_id"])} for r in rows],
+        "envPinnedId": env_id or None,
+        "envPinnedIdExists": env_id_exists,
+        "wouldUse": (env_id if env_id_exists else (str(rows[0]["dest_id"]) if rows else None)),
+        "healthy": _doorway_context_live() and (env_id_exists or bool(rows)),
+    }
 
 def queue_moh_table_name(conn):
     """Queue hold music comes from queues.conf / this table, not inbound CHANNEL(musicclass)."""
@@ -838,19 +1057,26 @@ def inspect_route(body):
 def retarget_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
     tenant_id = require_num("tenant_id", body.get("tenantId"))
-    connect_dest = require_num("connect_destination_id", body.get("connectDestinationId") or CFG.connect_destination_id)
     force = bool(body.get("force", False))
     actor = str(body.get("actor") or "")[:128]
     request_id = str(body.get("requestId") or "")[:128]
+    # Doorway self-heal, dialplan half: BEFORE the transaction (it shells out
+    # to Asterisk). strict — never flip a route toward a context that is not
+    # answering in the running dialplan.
+    doorway = {"dialplan": ensure_connect_doorway_dialplan(strict=True)}
     with db_conn() as conn:
         try:
             conn.begin()
             route = find_route(conn, tenant_id, did_digits)
             route_id = int(route["inbound_route_id"])
             current_dest = str(route["destination_id"])
+            # Doorway self-heal, DB half: resolve by request id → env pin →
+            # discovery by name (creating the rows inside THIS transaction if
+            # they are missing). Stale pinned ids are skipped, not fatal.
+            connect_dest = resolve_connect_destination(conn, body.get("connectDestinationId"), doorway)
             if current_dest == connect_dest:
-                conn.rollback()
-                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route}
+                conn.commit()  # keep any doorway rows created during resolution
+                return {"ok": True, "noop": True, "did": did_e164, "tenantId": tenant_id, "route": route, "doorway": doorway}
             if not destination_exists(conn, connect_dest):
                 raise RuntimeError("connect_destination_not_found")
             with snap_conn() as sconn:
@@ -884,7 +1110,7 @@ def retarget_route(body):
     apply_result = apply_changes()
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
-    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "connectDestinationId": connect_dest, "apply": apply_result}
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "connectDestinationId": connect_dest, "doorway": doorway, "apply": apply_result}
 
 def restore_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
@@ -933,11 +1159,19 @@ def restore_route(body):
 
 def _route_is_connect_managed(route_id, current_dest):
     """Defense-in-depth: refuse if this route is currently Connect-dispatched
-    (its destination equals a stored current_connect_destination_id, or equals
-    the configured connect destination). The Connect side already fences this;
-    this is the belt-and-suspenders check on the PBX itself."""
+    (its destination equals a stored current_connect_destination_id, equals
+    the configured connect destination, or IS the named Connect doorway). The
+    Connect side already fences this; this is the belt-and-suspenders check on
+    the PBX itself."""
     if CFG.connect_destination_id and str(current_dest) == str(CFG.connect_destination_id):
         return True
+    try:
+        with db_conn() as conn:
+            for row in _find_doorway_rows(conn):
+                if str(row["dest_id"]) == str(current_dest):
+                    return True
+    except Exception:
+        pass  # doorway lookup is best-effort here; the snapshot check below still runs
     with snap_conn() as sconn:
         row = sconn.execute("SELECT current_connect_destination_id FROM inbound_route_snapshots WHERE route_id = ?", (route_id,)).fetchone()
     return bool(row and row[0] and str(row[0]) == str(current_dest))
@@ -3146,6 +3380,7 @@ class Handler(BaseHTTPRequestHandler):
             "/inspect": inspect_route,
             "/retarget": retarget_route,
             "/restore": restore_route,
+            "/doorway-status": doorway_status,
             "/route-set-destination": agent_set_route_destination,
             "/route-set-destination-v2": agent_set_route_destination_v2,
             "/route-restore-destination": agent_restore_route_destination,
@@ -3399,6 +3634,10 @@ def main():
     with snap_conn():
         pass
     ensure_connect_vm_dialplan()
+    # Doorway dialplan installs/heals at boot too, so the shim is answering
+    # before the first switch even on a fresh install (soft: boot must not die
+    # on a transient Asterisk hiccup — retarget re-runs this strictly).
+    ensure_connect_doorway_dialplan(strict=False)
     if "--check" in sys.argv:
         print(json.dumps({"ok": True, "version": VERSION, "bind": CFG.bind, "port": CFG.port}))
         return

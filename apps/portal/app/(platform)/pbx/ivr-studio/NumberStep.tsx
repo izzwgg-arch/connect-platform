@@ -39,6 +39,7 @@ const PHRASES = [
   "It plays before the menu on every call until it stops.",
   "Save choice", "Cancel", "Loading your numbers...",
   "No numbers are set up for this customer yet.",
+  "The last switch of this number failed - picking it again will retry.",
   "Pick a date and time first.",
   "The end date has to be after the start date.",
   "Pick which recording to play first.",
@@ -52,6 +53,9 @@ export interface TenantNumber {
   ivrProfileName: string | null;
   currentlyLabel: string;
   pendingSwitch: { id: string; ivrProfileId: string; activateAt: string; endAt: string | null } | null;
+  /** Set when the most recent switch attempt failed — cleared by a success. */
+  lastSwitchError?: string | null;
+  lastSwitchedAt?: string | null;
 }
 
 /** What the page carries until Publish. */
@@ -192,6 +196,9 @@ export function NumberStep({
                   <span className="ns-txt">
                     <b>{fmtUs(n.e164)}</b>
                     <span>{n.currentlyLabel}</span>
+                    {n.lastSwitchError && n.routingMode !== "connect" && (
+                      <span className="ns-warn">⚠ {t("The last switch of this number failed - picking it again will retry.")}</span>
+                    )}
                   </span>
                   {!none && picked === n.mappingId && <span className="ns-check" aria-hidden>✓</span>}
                 </button>
@@ -324,6 +331,7 @@ function NumberStepStyles() {
       .ns-txt{flex:1;min-width:0}
       .ns-txt b{display:block;font-size:14.5px;font-weight:660}
       .ns-txt span{display:block;font-size:12.5px;color:var(--dim,#5d6f84);margin-top:2px}
+      .ns-txt .ns-warn{color:#c9414c;font-weight:600}
       .ns-check{color:var(--accent,#2f6bff);font-weight:800}
       .ns-lbl{font-size:12px;font-weight:660;color:var(--dim,#5d6f84);margin:18px 0 8px}
       .ns-chips{display:flex;gap:7px;flex-wrap:wrap}

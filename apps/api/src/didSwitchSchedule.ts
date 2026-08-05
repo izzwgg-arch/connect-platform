@@ -169,6 +169,9 @@ export function registerDidSwitchScheduleRoutes(deps: DidSwitchDeps): void {
           routingMode: m.routingMode,
           ivrProfileId: m.ivrProfileId,
           ivrProfileName: m.ivrProfileId ? (nameById.get(m.ivrProfileId) ?? null) : null,
+          /** Honest history: a failed flip must stay visible until one succeeds. */
+          lastSwitchError: m.lastSwitchError ?? null,
+          lastSwitchedAt: m.lastSwitchedAt ?? null,
           /** One plain sentence for the picker row. */
           currentlyLabel:
             m.routingMode === "connect"
