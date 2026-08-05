@@ -1,5 +1,13 @@
 # PLAN — "Hold the call while the phone wakes up", tested on Simon's extension only
 
+> **2026-08-05 UPDATE — SUPERSEDED BY THE FLEET ROLLOUT.** This is no longer
+> Simon-only: wake-and-wait is live for ALL active users and self-maintaining
+> for future devices (deployed `68fc38b5`, Izzy's mandate). See
+> **`AGENT_HANDOFF_WAKE_DIAL_FLEET_2026-08-05.md`** for the current mechanism
+> (wake-dial-publish route + worker auto-enroll every 5 min), gates, rollback,
+> and the T34_101/RSBK skip. The §7/Phase-4 "roll out tenant-by-tenant" steps
+> below are historical.
+
 **Status: PROPOSAL. Nothing has been changed on the PBX. Needs Izzy's explicit mandate.**
 Written 2026-07-31. Scope: Luxure Management (VitalPBX tenant 5), extension 101, Simon
 Wertzberger. No other extension, no other tenant.
