@@ -577,7 +577,11 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // billing an operator already configured is left alone.
     {
       const { ensureOnboardingBillingDefaults } = await import("./onboardingBillingDefaults");
-      const stamp = await ensureOnboardingBillingDefaults(db as any, tenantId, { smsEnabled: !!fresh.smsEnabled });
+      const { quoteInputForSubmission } = await import("./quoteInput");
+      const stamp = await ensureOnboardingBillingDefaults(db as any, tenantId, {
+        smsEnabled: !!fresh.smsEnabled,
+        tollFreeNumber: quoteInputForSubmission(fresh).tollFreeNumber,
+      });
       if (stamp.stamped) {
         await logEvent(submissionId, "Monthly billing set up to match the sign-up quote (E911 per number + telecom & regulatory fees).");
       }

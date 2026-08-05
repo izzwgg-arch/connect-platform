@@ -12,6 +12,7 @@ test("the agreed prices, exactly as stated", () => {
   assert.equal(ONBOARDING_PRICES.e911MonthlyCents, 300);               // $3
   assert.equal(ONBOARDING_PRICES.smsMonthlyCents, 1000);               // $10
   assert.equal(ONBOARDING_PRICES.additionalNumberMonthlyCents, 1000);  // $10
+  assert.equal(ONBOARDING_PRICES.tollFreeNumberMonthlyCents, 1500);    // $15 toll-free / vanity
   assert.equal(ONBOARDING_PRICES.telecomFeesMonthlyCents, 200);        // $2 flat fees
 });
 
@@ -29,6 +30,40 @@ test("a typical small business: 3 people, one number, no texting", () => {
   // 3 × $30 = $90, plus $3 E911 on the one number, plus $2 flat fees.
   assert.equal(q.monthlyTotalCents, 9500);
   assert.equal(describeQuote(q), "$95.00 a month, including tax.");
+});
+
+test("toll-free floor: one person + a toll-free number = exactly $50", () => {
+  const q = quoteOnboarding({ extensions: 1, phoneNumbers: 1, smsEnabled: false, tollFreeNumber: true });
+  // $30 line + $3 E911 + $15 toll-free + $2 telecom & regulatory fees.
+  assert.equal(q.monthlyTotalCents, 5000);
+  assert.equal(describeQuote(q), "$50.00 a month, including tax.");
+  const tf = q.lines.find((l) => l.key === "tollfree_number")!;
+  assert.equal(tf.label, "Toll-free number");
+  assert.equal(tf.totalCents, 1500);
+  assert.equal(tf.unitCents, 1500);
+});
+
+test("a toll-free number is NEVER also charged the $10 additional-number price", () => {
+  const q = quoteOnboarding({ extensions: 1, phoneNumbers: 1, smsEnabled: false, tollFreeNumber: true });
+  assert.equal(q.lines.some((l) => l.key === "additional_numbers"), false);
+  // E911 still applies to the toll-free number.
+  assert.equal(q.lines.find((l) => l.key === "e911")!.totalCents, 300);
+});
+
+test("first-number-included applies to LOCAL numbers: toll-free main + one local = no $10 extra", () => {
+  // Toll-free main number pays its $15; the one local number is the first
+  // local number, which is included.
+  const q = quoteOnboarding({ extensions: 1, phoneNumbers: 2, smsEnabled: false, tollFreeNumber: true });
+  assert.equal(q.lines.some((l) => l.key === "additional_numbers"), false);
+  // $30 + 2 × $3 E911 + $15 toll-free + $2 fees.
+  assert.equal(q.monthlyTotalCents, 3000 + 600 + 1500 + 200);
+});
+
+test("a vanity pick prices exactly like toll-free (the flag is the same)", () => {
+  // The wizard stores numberKind "vanity"; pricing only sees tollFreeNumber.
+  const q = quoteOnboarding({ extensions: 2, phoneNumbers: 1, smsEnabled: true, tollFreeNumber: true });
+  // 2 × $30 + $3 + $15 + $10 SMS + $2.
+  assert.equal(q.monthlyTotalCents, 6000 + 300 + 1500 + 1000 + 200);
 });
 
 test("the first phone number is included; only extras are charged", () => {

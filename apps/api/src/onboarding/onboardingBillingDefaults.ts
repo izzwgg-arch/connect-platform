@@ -35,8 +35,25 @@ import {
 } from "../billing/billingTelecomFees";
 
 /** The recurring-billing mirror of the sign-up quote's fee lines. */
-export function onboardingTelecomFeesConfig(): BillingTelecomFeesConfig {
+export function onboardingTelecomFeesConfig(opts: { tollFreeNumber?: boolean } = {}): BillingTelecomFeesConfig {
   return {
+    // The wizard's toll-free (or vanity) pick recurs as its $15/month line.
+    // FLAT on purpose: the `per_toll_free_did` basis counts phoneNumber rows,
+    // and onboarding never writes those — a per-DID basis would quietly bill
+    // $0 in month 2 and break the quoted price.
+    ...(opts.tollFreeNumber
+      ? {
+          customFee: {
+            enabled: true,
+            customerVisible: true,
+            label: "Toll-free number",
+            description: "Your toll-free (8xx) number.",
+            mode: "amountCents" as const,
+            amountCents: ONBOARDING_PRICES.tollFreeNumberMonthlyCents,
+            basis: "flat_monthly" as const,
+          },
+        }
+      : {}),
     e911: {
       enabled: true,
       customerVisible: true,
@@ -76,12 +93,13 @@ export type OnboardingBillingStampResult = { stamped: boolean; reason: string };
  *
  * `smsEnabled` mirrors the wizard's messaging choice onto smsBillingEnabled so
  * the $10/month SMS line from the quote recurs too (it is only ever switched
- * ON here — never off).
+ * ON here — never off). `tollFreeNumber` does the same for a toll-free/vanity
+ * pick: the $15/month line recurs as a flat fee.
  */
 export async function ensureOnboardingBillingDefaults(
   dbc: any,
   tenantId: string,
-  opts: { smsEnabled?: boolean } = {},
+  opts: { smsEnabled?: boolean; tollFreeNumber?: boolean } = {},
 ): Promise<OnboardingBillingStampResult> {
   const settings = await dbc.tenantBillingSettings.findUnique({ where: { tenantId } });
 
@@ -96,7 +114,10 @@ export async function ensureOnboardingBillingDefaults(
     return { stamped: false, reason: "taxes already enabled on this tenant" };
   }
 
-  const metadata = mergeBillingTelecomFeesIntoMetadata(settings?.metadata, onboardingTelecomFeesConfig());
+  const metadata = mergeBillingTelecomFeesIntoMetadata(
+    settings?.metadata,
+    onboardingTelecomFeesConfig({ tollFreeNumber: !!opts.tollFreeNumber }),
+  );
   const smsPatch = opts.smsEnabled ? { smsBillingEnabled: true } : {};
   await dbc.tenantBillingSettings.upsert({
     where: { tenantId },

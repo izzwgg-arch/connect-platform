@@ -27,8 +27,14 @@ export const ONBOARDING_PRICES = {
   e911MonthlyCents: 300,
   /** Business messaging, per month, flat. */
   smsMonthlyCents: 1000,
-  /** Each phone number BEYOND the first. The first is included. */
+  /** Each LOCAL phone number BEYOND the first. The first local number is included. */
   additionalNumberMonthlyCents: 1000,
+  /**
+   * A toll-free (8xx) number — regular or vanity — per month. Izzy 2026-08-04:
+   * toll-free is $15/month, and it does NOT ride the "first number included"
+   * rule; that rule is for local numbers only.
+   */
+  tollFreeNumberMonthlyCents: 1500,
   /**
    * Telecom & regulatory fees, per month, flat per account. Izzy 2026-08-04:
    * one extension must always come to $35 — $30 the line, $3 E911, and $2
@@ -43,10 +49,16 @@ export interface OnboardingQuoteInput {
   /** How many phone numbers in total (1 = just the main one). */
   phoneNumbers: number;
   smsEnabled: boolean;
+  /**
+   * The MAIN number they picked is toll-free (regular or vanity). Adds the
+   * $15/month toll-free line; the "first number included" freebie then applies
+   * to the first LOCAL number instead.
+   */
+  tollFreeNumber?: boolean;
 }
 
 export interface QuoteLine {
-  key: "extensions" | "e911" | "sms" | "additional_numbers" | "telecom_fees";
+  key: "extensions" | "e911" | "sms" | "additional_numbers" | "tollfree_number" | "telecom_fees";
   /** Plain-English, customer-facing. */
   label: string;
   quantity: number;
@@ -78,7 +90,12 @@ export function formatCents(cents: number): string {
 export function quoteOnboarding(input: OnboardingQuoteInput): OnboardingQuote {
   const extensions = Math.max(0, Math.floor(input.extensions || 0));
   const numbers = Math.max(0, Math.floor(input.phoneNumbers || 0));
-  const extraNumbers = Math.max(0, numbers - 1); // the first number is included
+  const tollFree = !!input.tollFreeNumber && numbers > 0;
+  // The toll-free number is priced on its own $15 line — it neither consumes
+  // the "first number included" freebie (that's for local numbers) nor gets
+  // charged again as a $10 extra.
+  const localNumbers = numbers - (tollFree ? 1 : 0);
+  const extraNumbers = Math.max(0, localNumbers - 1); // the first LOCAL number is included
   const lines: QuoteLine[] = [];
 
   if (extensions > 0) {
@@ -99,6 +116,16 @@ export function quoteOnboarding(input: OnboardingQuoteInput): OnboardingQuote {
       unitCents: ONBOARDING_PRICES.e911MonthlyCents,
       totalCents: numbers * ONBOARDING_PRICES.e911MonthlyCents,
       note: "Required on every phone number so 911 knows where you are.",
+    });
+  }
+  if (tollFree) {
+    lines.push({
+      key: "tollfree_number",
+      label: "Toll-free number",
+      quantity: 1,
+      unitCents: ONBOARDING_PRICES.tollFreeNumberMonthlyCents,
+      totalCents: ONBOARDING_PRICES.tollFreeNumberMonthlyCents,
+      note: "Your toll-free (8xx) number.",
     });
   }
   if (extraNumbers > 0) {

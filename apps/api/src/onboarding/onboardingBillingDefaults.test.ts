@@ -146,6 +146,23 @@ test("wizard's SMS choice recurs: month-2 preview with messaging = quote with me
   assert.equal(preview.totalCents, quote.monthlyTotalCents, "SMS $10 from the quote must recur in month 2");
 });
 
+test("toll-free pick recurs: month-2 preview with a toll-free number = quote with toll-free ($50)", async () => {
+  await ensureOnboardingBillingDefaults(db, "t-tollfree", { tollFreeNumber: true });
+  const preview = await previewFor("t-tollfree");
+  const quote = quoteOnboarding({ extensions: 1, phoneNumbers: 1, smsEnabled: false, tollFreeNumber: true });
+  assert.equal(quote.monthlyTotalCents, 5000, "the quote itself must be $50 for 1 ext + toll-free");
+  assert.equal(preview.totalCents, quote.monthlyTotalCents, "the $15 toll-free line must recur in month 2");
+  const tf = preview.lineItems.find((l) => l.description === "Toll-free number");
+  assert.equal(tf?.amountCents, 1500, "the recurring toll-free line must be exactly $15");
+});
+
+test("no toll-free pick → no $15 line stamped (the flag is opt-in)", async () => {
+  await ensureOnboardingBillingDefaults(db, "t-local-only");
+  const preview = await previewFor("t-local-only");
+  assert.equal(preview.lineItems.find((l) => l.description === "Toll-free number"), undefined);
+  assert.equal(preview.totalCents, 3500);
+});
+
 test("stamp is idempotent and never overwrites operator-configured billing", async () => {
   // Fresh tenant → stamped.
   const first = await ensureOnboardingBillingDefaults(db, "t1");
@@ -187,4 +204,13 @@ test("stamped config matches the quote's constants exactly", () => {
   assert.equal(cfg.regulatory?.basis, "flat_monthly");
   assert.equal(cfg.regulatory?.enabled, true);
   assert.equal(cfg.salesTax?.enabled, false, "tax is included in the $30 — never added on top");
+  assert.equal(cfg.customFee, undefined, "no toll-free line unless the wizard picked one");
+
+  const tf = onboardingTelecomFeesConfig({ tollFreeNumber: true });
+  assert.equal(tf.customFee?.enabled, true);
+  assert.equal(tf.customFee?.amountCents, 1500);
+  // FLAT on purpose: per_toll_free_did counts phoneNumber rows, which
+  // onboarding never writes — that basis would bill $0 and break the promise.
+  assert.equal(tf.customFee?.basis, "flat_monthly");
+  assert.equal(tf.customFee?.label, "Toll-free number");
 });

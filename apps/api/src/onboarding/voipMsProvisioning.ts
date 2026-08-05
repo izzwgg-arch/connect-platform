@@ -313,15 +313,27 @@ export async function listSpareDids(creds: VmsCreds): Promise<SpareDid[]> {
   }
 }
 
+/** Toll-free NPAs — sold (and priced) differently from local numbers. */
+function isTollFreeDid(did: string): boolean {
+  return /^(800|833|844|855|866|877|888)/.test(did);
+}
+
 /**
- * Pick a spare DID, preferring the customer's own area code so a Monsey
- * business doesn't end up on a Texas number. Returns "" when nothing spare
- * is available.
+ * Pick a spare LOCAL DID, preferring the customer's own area code so a Monsey
+ * business doesn't end up on a Texas number. Toll-free spares are never handed
+ * out here — they cost $15/month and would ambush a local-price customer.
+ * Returns "" when nothing spare is available.
  */
 async function findSpareDid(creds: VmsCreds, areaCode = ""): Promise<string> {
-  const spares = await listSpareDids(creds);
+  const spares = (await listSpareDids(creds)).filter((s) => !isTollFreeDid(s.did));
   const local = areaCode ? spares.find((s) => s.did.startsWith(areaCode)) : undefined;
   return (local || spares[0])?.did || "";
+}
+
+/** Pick a spare TOLL-FREE DID (for a toll-free pick that got taken meanwhile). */
+async function findSpareTollFreeDid(creds: VmsCreds): Promise<string> {
+  const spares = await listSpareDids(creds);
+  return spares.find((s) => isTollFreeDid(s.did))?.did || "";
 }
 
 /**
@@ -399,6 +411,56 @@ async function orderDid(creds: VmsCreds, submissionId: string, did: string, subU
     billing_type: "1",
   });
   await logEvent(submissionId, `DID ${did} ordered → routed to ${subUsername} (POP New York 1).`);
+}
+
+/**
+ * Order a toll-free (or vanity) number. Same shape as orderDID, but VoIP.ms
+ * sells 8xx stock through its own methods: orderTollFree for a searched
+ * toll-free number, orderVanity for one found via searchVanity.
+ */
+async function orderTollFreeDid(
+  creds: VmsCreds,
+  submissionId: string,
+  did: string,
+  subUsername: string,
+  vanity: boolean,
+): Promise<void> {
+  const pop = await resolveNewYorkPop(creds);
+  await vms(creds, vanity ? "orderVanity" : "orderTollFree", {
+    did,
+    routing: `account:${subUsername}`,
+    pop,
+    dialtime: "60",
+    cnam: "1",
+    billing_type: "1",
+  });
+  await logEvent(
+    submissionId,
+    `Toll-free${vanity ? " vanity" : ""} number ${did} ordered → routed to ${subUsername} (POP New York 1).`,
+  );
+}
+
+/**
+ * Toll-free replacement when the picked 8xx number was taken meanwhile: route
+ * a spare toll-free number if we hold one, else buy the next available one.
+ * (A vanity word can't be re-picked automatically — the replacement is a
+ * plain toll-free number, and the timeline says so.)
+ */
+async function findOrOrderReplacementTollFree(
+  creds: VmsCreds,
+  submissionId: string,
+  subUsername: string,
+): Promise<string> {
+  const spare = await findSpareTollFreeDid(creds);
+  if (spare) {
+    await routeDid(creds, submissionId, spare, subUsername);
+    return spare;
+  }
+  const search = await vms(creds, "searchTollFreeUSA", { type: "starts", query: "" }).catch(() => null);
+  const first = Array.isArray(search?.dids) ? tenDigits(search.dids[0]?.did) : "";
+  if (first.length !== 10) throw new Error("no_replacement_tollfree_available");
+  await orderTollFreeDid(creds, submissionId, first, subUsername, false);
+  return first;
 }
 
 /** Point an already-owned DID at the subaccount. */
@@ -558,6 +620,12 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
     } else {
       did = tenDigits(answers?.phone?.selectedNumber);
       if (did.length !== 10) throw new Error("no_number_selected");
+      // What KIND of number they picked: local (default), toll-free, or a
+      // toll-free vanity word. Stored by the wizard at select/apply/submit —
+      // it decides the VoIP.ms purchase method (orderDID vs orderTollFree vs
+      // orderVanity) and, on the billing side, the $15/month toll-free line.
+      const numberKind = String(answers?.phone?.numberKind || "local");
+      const tollFree = numberKind === "tollfree" || numberKind === "vanity";
       if (live) {
         const owned = await findAccountDid(creds, did);
         if (owned) {
@@ -570,26 +638,35 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
           const routedAccount = routing.startsWith("account:") ? routing.slice("account:".length) : "";
           if (routedAccount.includes("_") && routedAccount !== sub.username) {
             // The customer already PAID — don't dead-end the build over a
-            // stale search result. Hand them the next best number in the
-            // same area code and say so in the timeline.
-            const areaCode = did.slice(0, 3);
-            await logEvent(submissionId, `Number ${did} was taken by another customer meanwhile — picking a replacement in area code ${areaCode}.`);
-            const spare = await findSpareDid(creds, areaCode);
-            if (spare) {
-              await routeDid(creds, submissionId, spare, sub.username);
-              did = spare;
+            // stale search result. Hand them the next best number of the SAME
+            // KIND and say so in the timeline (a toll-free customer must not
+            // silently land on a local number, or the reverse).
+            if (tollFree) {
+              await logEvent(submissionId, `Toll-free number ${did} was taken by another customer meanwhile — picking a replacement toll-free number.`);
+              did = await findOrOrderReplacementTollFree(creds, submissionId, sub.username);
             } else {
-              did = await searchAndOrderDid(creds, submissionId, areaCode, sub.username, "no_replacement_did_available");
+              const areaCode = did.slice(0, 3);
+              await logEvent(submissionId, `Number ${did} was taken by another customer meanwhile — picking a replacement in area code ${areaCode}.`);
+              const spare = await findSpareDid(creds, areaCode);
+              if (spare) {
+                await routeDid(creds, submissionId, spare, sub.username);
+                did = spare;
+              } else {
+                did = await searchAndOrderDid(creds, submissionId, areaCode, sub.username, "no_replacement_did_available");
+              }
             }
             await logEvent(submissionId, `Replacement number ${did} assigned instead of the taken one.`);
           } else {
             await routeDid(creds, submissionId, did, sub.username);
           }
+        } else if (tollFree) {
+          await orderTollFreeDid(creds, submissionId, did, sub.username, numberKind === "vanity");
         } else {
           await orderDid(creds, submissionId, did, sub.username);
         }
       } else {
-        await logEvent(submissionId, `[dry-run] Order/route DID ${did} → ${sub.username} (POP New York 1).`);
+        const kindLabel = numberKind === "vanity" ? "toll-free vanity number" : numberKind === "tollfree" ? "toll-free number" : "DID";
+        await logEvent(submissionId, `[dry-run] Order/route ${kindLabel} ${did} → ${sub.username} (POP New York 1).`);
       }
     }
 

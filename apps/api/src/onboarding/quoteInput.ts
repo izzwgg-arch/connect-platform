@@ -5,7 +5,13 @@
 // submit — before that, the autosaved answers are the truth. The same goes for
 // the smsEnabled column, which is stamped at submit and stays false until then.
 
-export type QuoteInput = { extensions: number; phoneNumbers: number; smsEnabled: boolean };
+export type QuoteInput = { extensions: number; phoneNumbers: number; smsEnabled: boolean; tollFreeNumber: boolean };
+
+/** "tollfree" and "vanity" picks both price as the $15/month toll-free number. */
+export function isTollFreeNumberKind(kind: unknown): boolean {
+  const k = String(kind ?? "").toLowerCase();
+  return k === "tollfree" || k === "vanity";
+}
 
 export function quoteInputForSubmission(sub: {
   requestedExtensions?: Array<unknown> | null;
@@ -36,5 +42,11 @@ export function quoteInputForSubmission(sub: {
         ? !!sub.answers.addons.smsEnabled
         : !!sub?.smsEnabled;
 
-  return { extensions, phoneNumbers, smsEnabled };
+  // The $15 toll-free line only applies to a NEW toll-free/vanity pick — a
+  // stale numberKind left behind after switching to "bring my number" must
+  // never surcharge a port.
+  const choice = String(sub?.answers?.phone?.choice ?? "");
+  const tollFreeNumber = choice !== "port" && isTollFreeNumberKind(sub?.answers?.phone?.numberKind);
+
+  return { extensions, phoneNumbers, smsEnabled, tollFreeNumber };
 }

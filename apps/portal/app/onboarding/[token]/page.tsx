@@ -19,7 +19,9 @@ type PortingDetails = {
   billFileName: string;
 };
 
-type AvailableNumber = { number: string; location: string; sms: boolean; voice: boolean; inStock?: boolean };
+type NumberKind = "local" | "tollfree" | "vanity";
+type SearchMode = "starts" | "contains" | "ends";
+type AvailableNumber = { number: string; location: string; sms: boolean; voice: boolean; inStock?: boolean; kind?: NumberKind };
 
 type FormData = {
   companyName: string;
@@ -31,6 +33,8 @@ type FormData = {
   billingEmail: string;
   numberChoice: "new" | "port" | "";
   selectedNumber: string;
+  // What kind of number was picked — a toll-free/vanity number bills $15/month.
+  numberKind: NumberKind | "";
   porting: PortingDetails;
   extensions: Extension[];
   smsEnabled: boolean;
@@ -48,7 +52,7 @@ function withOneOwner(exts: Extension[]): Extension[] {
 const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
   mainPhone: "", address: "", mainEmail: "", billingEmail: "",
-  numberChoice: "", selectedNumber: "",
+  numberChoice: "", selectedNumber: "", numberKind: "",
   porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", portPin: "", loaFileName: "", billFileName: "" },
   extensions: [{ ...EMPTY_EXT, isOwner: true }],
   smsEnabled: false,
@@ -145,6 +149,16 @@ function areaCodeFrom(phone: string): string {
   return t.slice(0, 3);
 }
 
+/** Phone-keypad letters → digits ("PIZZA" → "74992") for the vanity preview. */
+function vanityToDigits(word: string): string {
+  const keypad: Record<string, string> = {
+    a: "2", b: "2", c: "2", d: "3", e: "3", f: "3", g: "4", h: "4", i: "4",
+    j: "5", k: "5", l: "5", m: "6", n: "6", o: "6", p: "7", q: "7", r: "7", s: "7",
+    t: "8", u: "8", v: "8", w: "9", x: "9", y: "9", z: "9",
+  };
+  return word.toLowerCase().split("").map((c) => (/[0-9]/.test(c) ? c : keypad[c] || "")).join("").slice(0, 7);
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 export default function PublicOnboardingPage({ params }: { params: { token: string } }) {
@@ -175,6 +189,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   const [numbersLoading, setNumbersLoading] = useState(false);
   const [numbersQuery, setNumbersQuery] = useState("");
   const [numbersError, setNumbersError] = useState<string | null>(null);
+  // Local vs toll-free tab, where in the number the digits should sit, and the
+  // "spell a word" input (toll-free vanity search).
+  const [numbersTab, setNumbersTab] = useState<"local" | "tollfree">("local");
+  const [searchMode, setSearchMode] = useState<SearchMode>("starts");
+  const [vanityWord, setVanityWord] = useState("");
 
   // Porting: portability check + document uploads
   const [portability, setPortability] = useState<"idle" | "checking" | "portable" | "unknown">("idle");
@@ -207,6 +226,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             billingEmail:  a.submit?.billingEmail  || a.contact?.billingEmail  || prev.billingEmail,
             numberChoice:  a.phone?.choice         || prev.numberChoice,
             selectedNumber:a.phone?.selectedNumber || prev.selectedNumber,
+            numberKind:    a.phone?.numberKind     || prev.numberKind,
             porting:       { ...prev.porting, ...(a.phone?.details || {}) },
             extensions:    Array.isArray(a.extensions) && a.extensions.length ? withOneOwner(a.extensions.map((e: any) => ({ ...EMPTY_EXT, ...e }))) : prev.extensions,
             smsEnabled:    a.addons?.smsEnabled    ?? prev.smsEnabled,
@@ -252,7 +272,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             answers: {
               company:    { companyName: f.companyName, firstName: f.firstName, lastName: f.lastName },
               contact:    { mainPhone: f.mainPhone, address: f.address, mainEmail: f.mainEmail, billingEmail: f.billingEmail },
-              phone:      { choice: f.numberChoice, selectedNumber: f.selectedNumber, details: f.porting },
+              phone:      { choice: f.numberChoice, selectedNumber: f.selectedNumber, numberKind: f.numberKind || undefined, details: f.porting },
               extensions: f.extensions,
               addons:     { smsEnabled: f.smsEnabled },
             },
@@ -298,26 +318,37 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   }
 
   // ── Number search ─────────────────────────────────────────────────────────
-  const searchNumbers = useCallback(async (query: string) => {
+  const searchNumbers = useCallback(async (
+    query: string,
+    opts: { tab?: "local" | "tollfree"; mode?: SearchMode; vanity?: string } = {},
+  ) => {
     setNumbersLoading(true);
     setNumbersError(null);
+    const tab = opts.tab || "local";
+    const detail = opts.vanity
+      ? `vanity "${opts.vanity}"`
+      : `${tab === "tollfree" ? "toll-free " : ""}${query || "(blank)"}${opts.mode ? ` (${opts.mode})` : ""}`;
     try {
       // VoIP.ms availability search regularly takes 15-25s — far beyond the
       // client's default 10s timeout, which made this look like "no numbers".
+      const params = new URLSearchParams({ q: query });
+      params.set("type", tab);
+      if (opts.mode && tab === "local") params.set("mode", opts.mode);
+      if (opts.vanity) params.set("vanity", opts.vanity);
       const r = await apiGet<{ numbers?: AvailableNumber[] }>(
-        `/onboarding/${encodeURIComponent(token)}/numbers?q=${encodeURIComponent(query)}`,
+        `/onboarding/${encodeURIComponent(token)}/numbers?${params.toString()}`,
         undefined,
         { timeoutMs: 45_000 },
       );
       const list = Array.isArray(r.numbers) ? r.numbers : [];
       setNumbers(list);
-      track("number_search", { detail: query || "(blank)", count: list.length });
+      track("number_search", { detail, count: list.length });
     } catch {
       setNumbers([]);
       // Honest copy: Continue is blocked until a number is picked, so don't
       // promise "we'll assign one" — offer the retry that actually helps.
       setNumbersError("We couldn't load available numbers just now — the number service may be briefly busy. Tap Search to try again in a few seconds.");
-      track("number_search", { detail: query || "(blank)", count: -1 });
+      track("number_search", { detail, count: -1 });
     } finally {
       setNumbersLoading(false);
     }
@@ -326,12 +357,24 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   // Auto-search when the customer chooses "new number".
   useEffect(() => {
     if (step === 2 && form.numberChoice === "new" && numbers.length === 0 && !numbersLoading && !numbersError) {
-      const seed = areaCodeFrom(form.mainPhone) || "";
+      const seed = numbersTab === "local" ? areaCodeFrom(form.mainPhone) || "" : "";
       setNumbersQuery(seed);
-      searchNumbers(seed);
+      searchNumbers(seed, { tab: numbersTab, mode: searchMode });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, form.numberChoice]);
+
+  // Switching Local ↔ Toll-free: clear the old tab's results and search fresh.
+  function switchNumbersTab(tab: "local" | "tollfree") {
+    if (tab === numbersTab) return;
+    setNumbersTab(tab);
+    setNumbers([]);
+    setNumbersError(null);
+    setVanityWord("");
+    const seed = tab === "local" ? areaCodeFrom(form.mainPhone) || "" : "";
+    setNumbersQuery(seed);
+    searchNumbers(seed, { tab, mode: searchMode });
+  }
 
   // Debounced portability check when the customer is porting a number in.
   useEffect(() => {
@@ -368,8 +411,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     setQuote(null);
     setQuoteFailed(false);
     const extCount = form.extensions.filter((e) => e.displayName.trim() && e.extNumber.trim()).length;
+    // The kind rides along like extensions/sms: apply-number is fire-and-forget
+    // and autosave debounced, so the server's stored answers can lag the screen
+    // — and the toll-free $15 line must never lag the review price.
+    const kindParam = form.numberChoice === "new" ? `&numberKind=${form.numberKind || "local"}` : "";
     apiGet<{ lines: QuoteLine[]; monthlyTotalCents: number }>(
-      `/onboarding/${encodeURIComponent(token)}/quote?extensions=${extCount}&sms=${form.smsEnabled ? 1 : 0}`,
+      `/onboarding/${encodeURIComponent(token)}/quote?extensions=${extCount}&sms=${form.smsEnabled ? 1 : 0}${kindParam}`,
     )
       .then((r) => { if (!cancelled) setQuote({ lines: r.lines || [], monthlyTotalCents: r.monthlyTotalCents || 0 }); })
       .catch(() => { if (!cancelled) setQuoteFailed(true); });
@@ -416,6 +463,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       void apiPost(`/onboarding/${encodeURIComponent(token)}/apply-number`, {
         choice: form.numberChoice,
         selectedNumber: form.numberChoice === "new" ? form.selectedNumber : undefined,
+        numberKind: form.numberChoice === "new" ? form.numberKind || "local" : undefined,
         porting: form.numberChoice === "port" ? form.porting : undefined,
         smsEnabled: form.smsEnabled,
         companyName: form.companyName,
@@ -526,6 +574,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         billingEmail:       form.billingEmail.trim() || form.mainEmail,
         phoneNumberChoice:  form.numberChoice || undefined,
         selectedNumber:     form.numberChoice === "new" ? form.selectedNumber || undefined : undefined,
+        numberKind:         form.numberChoice === "new" ? form.numberKind || "local" : undefined,
         porting:            form.numberChoice === "port" ? form.porting : undefined,
         smsEnabled:         form.smsEnabled,
         extensions:         form.extensions
@@ -729,7 +778,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <div className={`ob-choice${form.numberChoice === "new" ? " selected" : ""}`} tabIndex={0} onClick={() => updateForm({ numberChoice: "new" })}
                 onKeyDown={(e) => e.key === "Enter" && updateForm({ numberChoice: "new" })}>
                 <div className="ob-choice-radio"><div className="ob-choice-radio-dot" /></div>
-                <div className="ob-choice-body"><div className="ob-choice-label">Get a new number</div><div className="ob-choice-desc">Pick a local number and it's live in minutes.</div></div>
+                <div className="ob-choice-body"><div className="ob-choice-label">Get a new number</div><div className="ob-choice-desc">Pick a local or toll-free number and it's live in minutes.</div></div>
                 <div className="ob-choice-badge">Instant</div>
               </div>
               <div className={`ob-choice${form.numberChoice === "port" ? " selected" : ""}`} tabIndex={0} onClick={() => updateForm({ numberChoice: "port" })}
@@ -739,38 +788,114 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               </div>
             </div>
 
-            {/* New number: search + pick */}
+            {/* New number: local / toll-free tabs + search + pick */}
             {form.numberChoice === "new" && (
               <div>
-                <label className="ob-label">Search by area code or city</label>
-                <div className="ob-searchbar">
-                  <input className="ob-input" placeholder="e.g. 305 or Miami" value={numbersQuery}
-                    onChange={(e) => setNumbersQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery)} />
-                  {/* Disabled while a search runs: each one can take 20s+, and
-                      impatient re-clicks used to stack concurrent requests. */}
-                  <button className="ob-btn-ghost" disabled={numbersLoading} onClick={() => searchNumbers(numbersQuery)}>
-                    {numbersLoading ? "Searching…" : "Search"}
+                <div className="ob-choice-group" style={{ marginBottom: 14, display: "flex", gap: 8 }}>
+                  <button
+                    className={`ob-btn-ghost${numbersTab === "local" ? " ob-tab-active" : ""}`}
+                    style={numbersTab === "local" ? { borderColor: "#2f6bff", color: "#2f6bff", fontWeight: 700 } : undefined}
+                    onClick={() => switchNumbersTab("local")}
+                  >
+                    Local number
+                  </button>
+                  <button
+                    className={`ob-btn-ghost${numbersTab === "tollfree" ? " ob-tab-active" : ""}`}
+                    style={numbersTab === "tollfree" ? { borderColor: "#2f6bff", color: "#2f6bff", fontWeight: 700 } : undefined}
+                    onClick={() => switchNumbersTab("tollfree")}
+                  >
+                    Toll-free · $15/mo
                   </button>
                 </div>
+
+                {numbersTab === "local" ? (
+                  <>
+                    <label className="ob-label">Search by digits</label>
+                    <div className="ob-searchbar">
+                      {/* Where the digits should sit — VoIP.ms searches all three ways. */}
+                      <select
+                        className="ob-input"
+                        style={{ maxWidth: 140, flexShrink: 0 }}
+                        value={searchMode}
+                        onChange={(e) => setSearchMode(e.target.value as SearchMode)}
+                        aria-label="Where the digits appear in the number"
+                      >
+                        <option value="starts">Starts with</option>
+                        <option value="contains">Contains</option>
+                        <option value="ends">Ends with</option>
+                      </select>
+                      <input className="ob-input" placeholder="e.g. 305" value={numbersQuery}
+                        onChange={(e) => setNumbersQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery, { tab: "local", mode: searchMode })} />
+                      {/* Disabled while a search runs: each one can take 20s+, and
+                          impatient re-clicks used to stack concurrent requests. */}
+                      <button className="ob-btn-ghost" disabled={numbersLoading} onClick={() => searchNumbers(numbersQuery, { tab: "local", mode: searchMode })}>
+                        {numbersLoading ? "Searching…" : "Search"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label className="ob-label">Search toll-free numbers</label>
+                    <div className="ob-searchbar">
+                      <input className="ob-input" placeholder="Digits, e.g. 833 or 2255" value={numbersQuery}
+                        onChange={(e) => setNumbersQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery, { tab: "tollfree" })} />
+                      <button className="ob-btn-ghost" disabled={numbersLoading} onClick={() => searchNumbers(numbersQuery, { tab: "tollfree" })}>
+                        {numbersLoading ? "Searching…" : "Search"}
+                      </button>
+                    </div>
+                    <label className="ob-label" style={{ marginTop: 12 }}>Or spell a word<span className="ob-label-optional">vanity — also $15/mo</span></label>
+                    <div className="ob-searchbar">
+                      <input className="ob-input" placeholder='e.g. "PIZZA"' value={vanityWord}
+                        onChange={(e) => setVanityWord(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && !numbersLoading && vanityToDigits(vanityWord) && searchNumbers("", { tab: "tollfree", vanity: vanityWord })} />
+                      <button className="ob-btn-ghost" disabled={numbersLoading || !vanityToDigits(vanityWord)}
+                        onClick={() => searchNumbers("", { tab: "tollfree", vanity: vanityWord })}>
+                        {numbersLoading ? "Searching…" : "Find my word"}
+                      </button>
+                    </div>
+                    {vanityWord && vanityToDigits(vanityWord) && (
+                      <div className="ob-field-hint">
+                        On a phone keypad, <b>{vanityWord.toUpperCase()}</b> is <b>{vanityToDigits(vanityWord)}</b> — we&apos;ll look for toll-free numbers ending in it.
+                      </div>
+                    )}
+                  </>
+                )}
+
                 {numbersLoading && <div className="ob-field-hint">Finding available numbers… this can take up to 30 seconds.</div>}
                 {numbersError && <div className="ob-field-hint">{numbersError}</div>}
                 {!numbersLoading && numbers.length > 0 && (
                   <>
                     <div className="ob-num-grid">
-                      {numbers.map((n) => (
-                        <div key={n.number} className={`ob-num${form.selectedNumber === n.number ? " selected" : ""}`} tabIndex={0}
-                          onClick={() => updateForm({ selectedNumber: n.number })} onKeyDown={(e) => e.key === "Enter" && updateForm({ selectedNumber: n.number })}>
-                          <div>
-                            <div className="ob-num-n">{n.number}</div>
-                            {n.location && <div className="ob-num-loc">{n.location}</div>}
-                            <div className="ob-caps">{n.inStock && <span className="ob-cap ob-cap-stock">Ready now</span>}{n.voice && <span className="ob-cap">Voice</span>}{n.sms && <span className="ob-cap">SMS</span>}</div>
+                      {numbers.map((n) => {
+                        const kind: NumberKind = n.kind || (numbersTab === "tollfree" ? "tollfree" : "local");
+                        const pick = () => updateForm({ selectedNumber: n.number, numberKind: kind });
+                        return (
+                          <div key={n.number} className={`ob-num${form.selectedNumber === n.number ? " selected" : ""}`} tabIndex={0}
+                            onClick={pick} onKeyDown={(e) => e.key === "Enter" && pick()}>
+                            <div>
+                              <div className="ob-num-n">{n.number}</div>
+                              {n.location && <div className="ob-num-loc">{n.location}</div>}
+                              <div className="ob-caps">
+                                {n.inStock && <span className="ob-cap ob-cap-stock">Ready now</span>}
+                                {kind !== "local" && <span className="ob-cap ob-cap-stock">$15/mo</span>}
+                                {n.voice && <span className="ob-cap">Voice</span>}
+                                {n.sms && <span className="ob-cap">SMS</span>}
+                              </div>
+                            </div>
+                            <div className="ob-num-tick"><IconTick /></div>
                           </div>
-                          <div className="ob-num-tick"><IconTick /></div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                    {form.selectedNumber && <div className="ob-field-hint" style={{ marginTop: 12 }}>Selected: <b>{form.selectedNumber}</b></div>}
+                    {form.selectedNumber && (
+                      <div className="ob-field-hint" style={{ marginTop: 12 }}>
+                        Selected: <b>{form.selectedNumber}</b>
+                        {form.numberKind === "tollfree" && <> — toll-free, $15.00/month</>}
+                        {form.numberKind === "vanity" && <> — toll-free vanity, $15.00/month</>}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -931,8 +1056,21 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             <div className="ob-review-section">
               <div className="ob-review-section-title">Your number</div>
               <div className="ob-review-row">
-                <span className="ob-review-key">{form.numberChoice === "port" ? "Porting in" : "New number"}</span>
-                <span className="ob-review-val">{form.numberChoice === "port" ? (form.porting.numbers || "—") : (form.selectedNumber || "—")}</span>
+                <span className="ob-review-key">
+                  {form.numberChoice === "port"
+                    ? "Porting in"
+                    : form.numberKind === "vanity"
+                      ? "Toll-free vanity number"
+                      : form.numberKind === "tollfree"
+                        ? "Toll-free number"
+                        : "New number"}
+                </span>
+                <span className="ob-review-val">
+                  {form.numberChoice === "port" ? (form.porting.numbers || "—") : (form.selectedNumber || "—")}
+                  {form.numberChoice !== "port" && (form.numberKind === "tollfree" || form.numberKind === "vanity") && (
+                    <span style={{ opacity: 0.75 }}> · $15.00/mo</span>
+                  )}
+                </span>
               </div>
               <div className="ob-review-row"><span className="ob-review-key">Server</span><span className="ob-review-val">New York 1{form.smsEnabled ? " · SMS on" : ""}</span></div>
               {form.numberChoice === "port" && (

@@ -87,6 +87,15 @@ export async function queueOnboardingSignupReport(
     lines.push("");
 
     lines.push("THEIR PHONE NUMBER");
+    // What kind of new number they picked ("Toll-free number (833) …") — a
+    // toll-free or vanity pick bills $15/month, so the owner should see it.
+    const numberKind = String(phone.numberKind || "");
+    const kindLabel =
+      numberKind === "vanity"
+        ? "toll-free vanity number ($15 a month)"
+        : numberKind === "tollfree"
+          ? "toll-free number ($15 a month)"
+          : "new number";
     if (isPort) {
       lines.push(`They are bringing their own number over: ${prettyPhone(porting.numbers)} from ${porting.carrier || "their current carrier"}.`);
       if (sub.provisionedDid) {
@@ -102,9 +111,9 @@ export async function queueOnboardingSignupReport(
       }
       lines.push("Remember: finishing the transfer (swapping the temporary number for their real one when the carrier releases it) is a manual step.");
     } else if (sub.provisionedDid) {
-      lines.push(`They picked a new number and it is live: ${prettyPhone(sub.provisionedDid)}.`);
+      lines.push(`They picked a ${kindLabel} and it is live: ${prettyPhone(sub.provisionedDid)}.`);
     } else if (phone.selectedNumber) {
-      lines.push(`They picked a new number: ${prettyPhone(phone.selectedNumber)} (not activated yet).`);
+      lines.push(`They picked a ${kindLabel}: ${prettyPhone(phone.selectedNumber)} (not activated yet).`);
     } else {
       lines.push("No number was chosen or activated.");
     }
