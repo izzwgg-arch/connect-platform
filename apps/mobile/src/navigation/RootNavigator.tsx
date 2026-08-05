@@ -28,6 +28,7 @@ import { OngoingCallBanner } from '../components/call/OngoingCallBanner';
 import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 import { useFullScreenCallPermissionPrompt } from '../hooks/useFullScreenCallPermissionPrompt';
 import { useBatteryOptimizationPrompt } from '../hooks/useBatteryOptimizationPrompt';
+import { usePastePermissionPrompt } from '../hooks/usePastePermissionPrompt';
 import { useDndMissedCallDrain } from '../notifications/dndMissedCalls';
 
 function hasActiveOrPendingCall(
@@ -87,8 +88,11 @@ function TabsWrapper() {
   //  - full-screen-intent (Android 14+) so incoming calls take over the screen
   //  - battery-optimization exemption so the keep-alive service survives in the
   //    background and calls keep ringing on aggressive OEMs.
+  //  - iOS paste explainer so "Don't Allow" on the system paste prompt doesn't
+  //    silently kill pasting in every field (no requestable permission exists).
   useFullScreenCallPermissionPrompt(true);
   useBatteryOptimizationPrompt(true);
+  usePastePermissionPrompt(true);
   // Fold DND-suppressed missed calls (recorded natively while the app was
   // backgrounded/killed) into local call history so they appear in Recent.
   useDndMissedCallDrain();

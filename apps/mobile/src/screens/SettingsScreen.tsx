@@ -30,6 +30,14 @@ import {
 } from '../audio/ringtonePreferences';
 import { applyIosRingtonePreference } from '../sip/callkeep';
 import { DEFAULT_QUICK_REPLIES, getQuickReplies, setQuickReplies } from '../calls/quickReplies';
+import {
+  DEFAULT_LAUNCH_TAB,
+  LAUNCH_TAB_OPTIONS,
+  getLaunchTab,
+  launchTabLabel,
+  setLaunchTab,
+  type LaunchTabId,
+} from '../config/launchTab';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
@@ -127,6 +135,7 @@ export function SettingsScreen() {
   const [retryingPushToken, setRetryingPushToken] = useState(false);
   const [incomingRingtone, setIncomingRingtoneId] =
     useState<MobileRingtoneId>(DEFAULT_MOBILE_RINGTONE_ID);
+  const [launchTab, setLaunchTabState] = useState<LaunchTabId>(DEFAULT_LAUNCH_TAB);
 
   // Quick replies (decline-with-message). Drafts edit in place; persisted on
   // end-editing. Empty rows are dropped by setQuickReplies, so re-hydrate the
@@ -196,6 +205,7 @@ export function SettingsScreen() {
         .catch(() => {});
       getMobileIncomingRingtone().then(setIncomingRingtoneId).catch(() => {});
       getQuickReplies().then(setQuickReplyDrafts).catch(() => {});
+      getLaunchTab().then(setLaunchTabState).catch(() => {});
     }, [queryClient, token, refreshDeviceReadiness])
   );
 
@@ -233,6 +243,13 @@ export function SettingsScreen() {
     // preference takes effect on the very next call, not just after an app
     // restart. No-op on Android.
     void applyIosRingtonePreference(nextId);
+  };
+
+  const handleCycleLaunchTab = async () => {
+    const idx = LAUNCH_TAB_OPTIONS.findIndex((o) => o.id === launchTab);
+    const next = LAUNCH_TAB_OPTIONS[(idx + 1 + LAUNCH_TAB_OPTIONS.length) % LAUNCH_TAB_OPTIONS.length].id;
+    await setLaunchTab(next);
+    setLaunchTabState(next);
   };
 
   return (
@@ -319,6 +336,14 @@ export function SettingsScreen() {
             subtitle="Change notification sounds for this app"
             iconColor={colors.warning}
             onPress={handleOpenNotificationSettings}
+          />
+          <SettingRow
+            icon="home-outline"
+            label="Launch Screen"
+            subtitle="Which screen the app opens on"
+            value={launchTabLabel(launchTab)}
+            iconColor={colors.primary}
+            onPress={handleCycleLaunchTab}
           />
         </SectionCard>
 

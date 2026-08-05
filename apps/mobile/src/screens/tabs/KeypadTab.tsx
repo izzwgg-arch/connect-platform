@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Animated,
   Dimensions,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -233,6 +234,22 @@ export function KeypadTab() {
   const offerPasteFromClipboard = useCallback(async () => {
     try {
       const raw = (await Clipboard.getStringAsync()) || '';
+      // iOS "Paste from Other Apps" = Deny makes reads return EMPTY with no
+      // error, so paste looks broken everywhere with nothing to debug (hit on
+      // build 48, 2026-08-05). hasStringAsync uses the detection API, which is
+      // exempt from the permission — content present + empty read = denied.
+      // Guide the user to the one switch that fixes it instead of no-opping.
+      if (Platform.OS === 'ios' && !raw && (await Clipboard.hasStringAsync().catch(() => false))) {
+        showAppAlert(
+          'Pasting is turned off',
+          'iPhone is blocking Loopcom from pasting. In Settings, set "Paste from Other Apps" to Allow.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => { Linking.openSettings().catch(() => undefined); } },
+          ],
+        );
+        return;
+      }
       // Keep digits, *, # and a LEADING + only — strip spaces, dashes,
       // parentheses, dots and everything else people copy along with numbers.
       const cleaned = raw

@@ -26,6 +26,7 @@ import { RecentTab } from '../screens/tabs/RecentTab';
 import { ChatTab } from '../screens/tabs/ChatTab';
 import { VoicemailTab } from '../screens/tabs/VoicemailTab';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { DEFAULT_LAUNCH_TAB, getLaunchTab, type LaunchTabId } from '../config/launchTab';
 import type { TabParamList } from './types';
 
 const Tab = createBottomTabNavigator<TabParamList>();
@@ -380,8 +381,24 @@ function usePhoneContactAutoSync() {
 export function TabNavigator() {
   useChatThreadsPreload();
   usePhoneContactAutoSync();
+  // User-chosen startup tab (Settings → Preferences → Launch Screen).
+  // initialRouteName is read by react-navigation exactly once at mount, so the
+  // preference must be loaded BEFORE the navigator renders — hence the
+  // one-frame null while AsyncStorage answers (single-digit ms; the app is
+  // still behind the splash/auth transition at that point). Everything after
+  // mount (deep links, call screens, badges) is unaffected.
+  const [initialTab, setInitialTab] = useState<LaunchTabId | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getLaunchTab()
+      .then((t) => { if (!cancelled) setInitialTab(t); })
+      .catch(() => { if (!cancelled) setInitialTab(DEFAULT_LAUNCH_TAB); });
+    return () => { cancelled = true; };
+  }, []);
+  if (initialTab === null) return null;
   return (
     <Tab.Navigator
+      initialRouteName={initialTab}
       tabBar={(props) => <CustomTabBar {...props} />}
       detachInactiveScreens={false}
       screenOptions={{
