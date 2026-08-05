@@ -1,5 +1,41 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — Eli iOS freezes → 443 route, paste-on-iOS-26, build 52 (2026-08-05) — READ FIRST for Displaydex, SIP-over-443, paste reports, voice diag telemetry, or TestFlight builds
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELI_IOS_443_PASTE_2026-08-05.md`**
+
+- **Displaydex is LIVE on SIP-over-443**: nginx `location /sip` on loopcom now
+  proxies DIRECTLY to `https://m.connectcomunications.com:8089/ws` (backup:
+  `/root/nginx-connectcomms-backup-20260805-0410.conf`); tenant flipped to
+  `webrtcRouteViaSbc=true, sipWsUrl=null`. Proven by raw-REGISTER probe → 401.
+  Eli must sign out/in (the app never refreshes a cached `sipWsUrl`). Success
+  signal: his `PbxEndpointRegistrationEvent.contactUri` = `45.14.194.179` —
+  which also means PBX-side contact-IP whois is now MEANINGLESS for this
+  tenant; use loopcom nginx logs.
+- ⛔ **The `sbc-kamailio` container (loopcom :7443) is an UNFINISHED
+  experiment** — dispatches to a nonexistent docker host `pbx`, answers
+  `503 PBX Unavailable`, has never carried a call. Never route at it without
+  finishing + testing.
+- ⛔ **Telemetry traps:** `iceHasTurn:false` in voice diag is meaningless (the
+  app never sends the field — server defaults false; RCA "TURN_missing"
+  verdicts inherit the lie). A session stuck REGISTERING never heartbeats
+  (effect ordering), so `alive:0s` ≠ app died. iOS CallFlightRecorder uploads
+  ONE native seed event per call (`deviceId: null` — query by tenant), never
+  the JS timeline.
+- **Paste broken on Eli's iOS 26.5 but fine on Izzy's older iOS, same build**
+  → OS-version incompatibility is the front-runner (permission theory
+  retired: menu-paste never needs permission; the Settings row only appears
+  after a programmatic clipboard read). Waiting on Eli's long-press
+  observation; candidate fix = RN 0.81.5→0.81.6 in build 53 (re-lock pnpm).
+- **Build 52 submitted** (launch-screen picker, paste explainer + Deny-wedge
+  detector, keyboard-inset commit), attached to "Loopcom Testers",
+  WAITING_FOR_REVIEW. Pipeline recipe + `asc-release-52.mjs` pattern in the
+  handoff §6. Bump `buildNumber` in **app.config.ts**; `npx --yes eas-cli`
+  (plain `eas` not installed on loopcom).
+- **QSR prefix route**: dialer only shows routes with a per-user permission
+  row. It was assigned to Yehuda by mistake — now Eli-only (not default). A
+  duplicate QSR route sits in the QSR tenant itself as clutter.
+
 ## ⛔ AGENT HANDOFF — CDR silent loss + live-call sync (2026-08-04) — READ FIRST for "calls missing from history", stuck/vanishing Active Calls, BLF sync, or ANY CallStateStore / CdrNotifier / ARI-poller work
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CDR_LIVESYNC_2026-08-04.md`**
