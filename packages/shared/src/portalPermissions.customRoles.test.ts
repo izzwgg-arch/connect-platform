@@ -51,12 +51,19 @@ test("can_view_admin legacy expansion includes can_view_admin_roles", () => {
   );
 });
 
-// ── PROTECTED_PLATFORM_ADMIN_PERMISSIONS does not include can_view_admin_roles ─
+// ── can_view_admin_roles IS platform-protected ──────────────────────────────
+// History: this test and the code shipped together in aceadc65 asserting
+// OPPOSITE things, and the test had failed since birth. Resolved 2026-08-05 in
+// the code's favour: the protected list is what production has enforced since
+// May, and a permission dispute resolves to the locked-down side. If a
+// TENANT_ADMIN is ever meant to grant this, remove it from
+// PROTECTED_PLATFORM_ADMIN_PERMISSIONS deliberately — with a migration note —
+// not by flipping this assertion.
 
-test("can_view_admin_roles is NOT in PROTECTED_PLATFORM_ADMIN_PERMISSIONS", () => {
+test("can_view_admin_roles IS in PROTECTED_PLATFORM_ADMIN_PERMISSIONS", () => {
   assert.ok(
-    !(PROTECTED_PLATFORM_ADMIN_PERMISSIONS as string[]).includes("can_view_admin_roles"),
-    "TENANT_ADMIN should be able to grant can_view_admin_roles (it is not platform-protected)",
+    (PROTECTED_PLATFORM_ADMIN_PERMISSIONS as string[]).includes("can_view_admin_roles"),
+    "only platform staff may grant can_view_admin_roles",
   );
 });
 
