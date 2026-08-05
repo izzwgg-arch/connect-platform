@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.05.1"
+VERSION = "2026.08.05.3"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -376,9 +376,19 @@ def ensure_connect_doorway_rows(conn, evidence):
         cat = cur.fetchone()
         if not cat:
             raise RuntimeError("custom_contexts_module_missing")
+        # ombu_destinations.module_id names the module that POINTS AT the
+        # destination (ivr=31, inbound_route=29, ...), not the category's own
+        # module. Doorway destinations are targeted by inbound routes.
+        cur.execute("SELECT module_id FROM ombu_modules WHERE name = 'inbound_route'")
+        mod = cur.fetchone()
+        if not mod:
+            raise RuntimeError("inbound_route_module_missing")
         # The pair is circular (cc.destination_id NOT NULL ⇄ d.index = cc_id):
         # placeholder index first, then backfill once the cc_id exists.
-        cur.execute("INSERT INTO ombu_destinations (category_id, `index`) VALUES (%s, %s)", (int(cat["id"]), "0"))
+        cur.execute(
+            "INSERT INTO ombu_destinations (category_id, module_id, `index`) VALUES (%s, %s, %s)",
+            (int(cat["id"]), int(mod["module_id"]), "0"),
+        )
         dest_id = int(cur.lastrowid)
         cur.execute("SELECT tenant_id FROM ombu_tenants WHERE name = 'vitalpbx'")
         main_tenant = cur.fetchone()
@@ -1107,10 +1117,20 @@ def retarget_route(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_changes()
+    # 2026-08-05: same lesson agent_set learned 2026-07-28 — the legacy apply
+    # only reloads, it never regenerates the tenant conf, so the DB retarget
+    # stayed invisible to callers. Real per-tenant regen + direct Goto bake.
+    apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
+    bake = None
+    with db_conn() as conn:
+        decoded = _decode_destination(conn, connect_dest)
+    if decoded and decoded.get("type") in BAKEABLE_TARGET_TYPES and decoded.get("targetId"):
+        bake = bake_route_goto(tenant_id, did_digits, decoded["type"], decoded["targetId"])
+        if bake.get("error"):
+            raise RuntimeError("route_bake_failed:%s" % bake["error"])
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
-    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "connectDestinationId": connect_dest, "doorway": doorway, "apply": apply_result}
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "connectDestinationId": connect_dest, "doorway": doorway, "apply": apply_result, "bake": bake}
 
 def restore_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
@@ -1146,10 +1166,19 @@ def restore_route(body):
         except Exception:
             conn.rollback()
             raise
-    apply_result = apply_changes()
+    # 2026-08-05: hand-back needs the same real regen + bake as the flip —
+    # see retarget_route above.
+    apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
+    bake = None
+    with db_conn() as conn:
+        decoded = _decode_destination(conn, original_dest)
+    if decoded and decoded.get("type") in BAKEABLE_TARGET_TYPES and decoded.get("targetId"):
+        bake = bake_route_goto(tenant_id, did_digits, decoded["type"], decoded["targetId"])
+        if bake.get("error"):
+            raise RuntimeError("route_bake_failed:%s" % bake["error"])
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
-    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result}
+    return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "restoredDestinationId": original_dest, "apply": apply_result, "bake": bake}
 
 # ?????? M3 (agent route change) ??? ISOLATED native-route destination change ?????????????????????
 # Changes ombu_inbound_routes.destination_id for a tenant's DID to a target the
@@ -2133,6 +2162,11 @@ DEST_TARGET_TYPES = {
     "time_condition": ("time_conditions", "ombu_time_conditions", "time_condition_id", "tenant_id", "COALESCE(description,'')"),
     "custom_application": ("custom_app", "ombu_custom_applications", "custom_application_id", "tenant_id", "CONCAT(extension, ' ', COALESCE(description,''))"),
 }
+# custom_context (the Connect doorway) is bakeable but deliberately NOT in
+# DEST_TARGET_TYPES: M3's tenant-scoped target validation must keep refusing
+# it (doorway rows live on the main tenant, and agents must never point a
+# route at an arbitrary custom context).
+BAKEABLE_TARGET_TYPES = frozenset(DEST_TARGET_TYPES) | {"custom_context"}
 # Verified live 2026-07-28: ombu_modules names are singular for these two.
 OWNER_MODULE_INBOUND_ROUTE = "inbound_route"
 OWNER_MODULE_IVR = "ivr"
@@ -2215,7 +2249,16 @@ def _decode_destination(conn, destination_id):
     if not row:
         return {"destinationId": int(destination_id), "type": "unknown", "targetId": None, "label": None}
     module_to_type = {spec[0]: t for t, spec in DEST_TARGET_TYPES.items()}
+    module_to_type["custom_contexts"] = "custom_context"
     ttype = module_to_type.get(str(row["target_module"]))
+    if ttype == "custom_context":
+        out = {"destinationId": int(row["id"]), "type": ttype, "targetId": str(row["idx"]), "label": None}
+        with conn.cursor() as cur:
+            cur.execute("SELECT description FROM ombu_custom_contexts WHERE cc_id = %s", (out["targetId"],))
+            cc = cur.fetchone()
+        if cc:
+            out["label"] = str(cc.get("description") or "").strip()
+        return out
     out = {"destinationId": int(row["id"]), "type": ttype or str(row["target_module"]), "targetId": str(row["idx"]), "label": None}
     if ttype:
         try:
@@ -2265,6 +2308,15 @@ def _goto_target_for(conn, tenant_id, target_type, target_id):
         return "T%d_app-ivr,IVR-%s,1" % (t, int(target_id))
     if target_type == "time_condition":
         return "T%d_app-time-condition,TC-%s,1" % (t, int(target_id))
+    if target_type == "custom_context":
+        # The Goto triple IS the custom-context row (doorway rows are
+        # (connect-doorway, s, 1) on the main tenant — not tenant-scoped).
+        with conn.cursor() as cur:
+            cur.execute("SELECT context, extension, priority FROM ombu_custom_contexts WHERE cc_id = %s", (target_id,))
+            row = cur.fetchone()
+        if not row:
+            raise LookupError("bake_target_not_found:custom_context:%s" % target_id)
+        return "%s,%s,%s" % (str(row["context"]), str(row["extension"] or "s"), str(row["priority"] or "1"))
     raise ValueError("unsupported_bake_target:%s" % target_type)
 
 def _patch_route_goto_text(text, did_digits, goto_target):

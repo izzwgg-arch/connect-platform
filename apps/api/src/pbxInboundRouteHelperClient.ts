@@ -217,17 +217,26 @@ export function retargetPbxInboundRoute(
   cfg: PbxRouteHelperConfig,
   body: { did: string; tenantId: string; requestId?: string; actor?: string; force?: boolean },
 ): Promise<PbxRouteHelperSwitchResponse> {
-  return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/retarget", {
-    ...body,
-    ...(cfg.connectDestinationId ? { connectDestinationId: cfg.connectDestinationId } : {}),
-  });
+  // 90s: since helper v2026.08.05.3 a switch runs a full VitalPBX per-tenant
+  // regen (~35-40s measured live) before returning; 15s aborted mid-regen and
+  // filed phantom failures that only the next scheduler retry healed.
+  return callHelper<PbxRouteHelperSwitchResponse>(
+    cfg,
+    "/retarget",
+    {
+      ...body,
+      ...(cfg.connectDestinationId ? { connectDestinationId: cfg.connectDestinationId } : {}),
+    },
+    90_000,
+  );
 }
 
 export function restorePbxInboundRoute(
   cfg: PbxRouteHelperConfig,
   body: { did: string; tenantId: string; requestId?: string; actor?: string; force?: boolean },
 ): Promise<PbxRouteHelperSwitchResponse> {
-  return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/restore", body);
+  // 90s: same full-regen duration as /retarget — see above.
+  return callHelper<PbxRouteHelperSwitchResponse>(cfg, "/restore", body, 90_000);
 }
 
 /** M3 (agent route change) — isolated native-route destination set (never touches connect-mode). */
