@@ -22,6 +22,24 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_WEDGE_2026-08-04.md`**
 - Interim advice for customers on old builds: Settings → Apps → Connect →
   **Force stop**, reopen — equivalent to their reinstall ritual.
 
+## ⛔ AGENT HANDOFF — one tenant per paid sign-up (2026-08-04) — READ FIRST for onboarding billing / tenant work
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_SINGLE_TENANT_2026-08-04.md`**
+
+- **FIXED + DEPLOYED (`1f215755` on feat/ai-agent):** paid sign-ups used to create
+  TWO tenants — invoice/card/autopay on the checkout tenant, phone system on a
+  second one, so month-2 autopay would have charged an empty orphan. The PBX
+  build's `ensureConnectTenant` now adopts `submission.createdTenantId`; if the
+  background auto-sync raced it, billing is auto-moved to the live tenant and
+  the bare orphan deleted (`onboardingBillingAdoption.ts`).
+- Historic splits: `apps/api/scripts/backfill-onboarding-split-tenants.ts`
+  (dry-run default, `--fix` applies, refuses non-bare orphans). Prod run
+  2026-08-04: **0 splits** — wiped test tenants cascade-delete their invoices,
+  so an empty result after a test wipe is expected, not suspicious.
+- ⛔ Never re-introduce a fresh `tenant.create` in the orchestrator path while
+  `createdTenantId` is set; the regression tests in `setupOrchestrator.test.ts`
+  ("checkout tenant reuse", "auto-sync race") guard this.
+
 ## ⛔ AGENT HANDOFF — filtered internet + reading registration data (2026-08-03) — READ FIRST for any "phone drops / didn't ring" report
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FILTERED_INTERNET_2026-08-03.md`**
