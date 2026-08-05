@@ -1,5 +1,27 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — voicemail playback wedge / phantom Telecom call (2026-08-04) — READ FIRST for "voicemail shows playing but no audio" or any Telecom Connection work
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_WEDGE_2026-08-04.md`**
+
+- **"Plays but no audio until APK reinstall" = a phantom Telecom call.** A ghost
+  ring (cancel push racing past the ring push) answered by the user flips a
+  Connection ACTIVE that no SIP session ever owns; Android then refuses ALL
+  media playback, and the FGS keeps the process (and the phantom) alive through
+  everything short of reinstall/force-stop. RSBK101 lived this for days.
+- Fixed 2026-08-04: merge `0cd7119b` (`fix/ring-cancel-race` `88d405a7`) +
+  four backstops `065bce23` (120s ring self-destruct, stale-aware Telecom
+  sweep, dead-invite answer teardown, voicemail playback-stall watchdog with
+  self-heal). APK `1.0.0+20260804-202642` published to the download page.
+- ⛔ **`telecomTerminateStale` may ONLY be called after verifying zero live SIP
+  sessions** — its age gates cannot distinguish a leaked ACTIVE ghost from a
+  real hour-long call. Both existing call sites assert this; any new one must.
+- `resetCallAudioStateIfIdle` skips while ANY Connection is registered — a
+  leaked Connection disarms it. That is WHY the stale sweep exists; never
+  "simplify" the sweep away in favor of the reset alone.
+- Interim advice for customers on old builds: Settings → Apps → Connect →
+  **Force stop**, reopen — equivalent to their reinstall ritual.
+
 ## ⛔ AGENT HANDOFF — filtered internet + reading registration data (2026-08-03) — READ FIRST for any "phone drops / didn't ring" report
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FILTERED_INTERNET_2026-08-03.md`**
