@@ -1392,6 +1392,23 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   }
 
   /**
+   * Stale-aware sweep: anchors PLUS leaked ring-time Connections (a ghost
+   * ring whose cancel push was never followed by any terminate — RSBK101
+   * 2026-08-04, wedged voicemail playback until reinstall).
+   *
+   * ⛔ JS must verify there are ZERO live SIP sessions immediately before
+   * calling — see TelecomBridge.terminateStaleConnections for why.
+   */
+  @ReactMethod
+  fun telecomTerminateStale(reason: String?) {
+    try {
+      TelecomBridge.terminateStaleConnections(reason ?: "stale_leak_watchdog")
+    } catch (t: Throwable) {
+      Log.w(TAG, "telecomTerminateStale failed: ${t.message}")
+    }
+  }
+
+  /**
    * Post-call audio-state watchdog (see TelecomBridge.resetCallAudioStateIfIdle).
    * Called from the module-scope call-ended cleanup in jssip.ts with a short
    * delay so the deferred Connection.destroy() has settled first.

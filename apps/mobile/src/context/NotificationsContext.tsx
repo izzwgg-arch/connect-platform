@@ -2832,6 +2832,13 @@ export function NotificationsProvider({
                 (resp?.status === "CANCELED" || resp?.status === "EXPIRED"));
             if (callerGone) {
               dismissNativeIncomingUi(invite.id);
+              // The Answer tap may have flipped the Telecom Connection ACTIVE
+              // (ConnectIncomingConnection.onAnswer fires before JS learns the
+              // invite is dead). dismiss() only clears notification+ringtone —
+              // the Connection itself must be terminated, or the OS holds a
+              // phantom "active call" that pins call-audio mode and silences
+              // all media playback until force-stop (RSBK101 2026-08-04).
+              terminateTelecomCall(invite.id, "canceled");
             }
             showEndedState(
               invite,
@@ -2914,6 +2921,11 @@ export function NotificationsProvider({
           // of leaving the generic ended splash.
           if (!answerAbortedByUser) {
             dismissNativeIncomingUi(invite.id);
+            // Same phantom-call teardown as the respond-failed path above: the
+            // Answer tap flipped the Telecom Connection ACTIVE and no SIP
+            // session ever arrived to own its lifecycle. Terminate it or it
+            // outlives the call forever and wedges media audio (RSBK101).
+            terminateTelecomCall(invite.id, "canceled");
           }
           showEndedState(
             invite,

@@ -32,6 +32,32 @@ class ConnectIncomingConnection(
   private val activateOnAdd: Boolean = false,
 ) : Connection() {
 
+  /** When this Connection was created — read by the stale-connection sweep. */
+  val createdAtMs: Long = System.currentTimeMillis()
+
+  init {
+    // Ring-phase self-destruct (RSBK101 2026-08-04): an INCOMING_CALL push
+    // that raced past its own cancel creates a Connection nothing will ever
+    // terminate — it then pins call-audio state process-wide (and disarms
+    // resetCallAudioStateIfIdle, which skips while any Connection lives),
+    // silencing all media playback until the app is force-stopped. No real
+    // ring lasts anywhere near this long (PBX ring timeout ≤ ~60s), so a
+    // Connection still RINGING at the deadline is a leak by definition.
+    // Anchors (activateOnAdd) go ACTIVE immediately and are exempt.
+    if (!activateOnAdd) {
+      android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        try {
+          if (state == STATE_RINGING) {
+            Log.w(TAG, "ring self-destruct inviteId=$inviteId — still RINGING after ${RING_SELF_DESTRUCT_MS}ms, terminating as missed")
+            terminate("missed")
+          }
+        } catch (t: Throwable) {
+          Log.w(TAG, "ring self-destruct failed inviteId=$inviteId: ${t.message}")
+        }
+      }, RING_SELF_DESTRUCT_MS)
+    }
+  }
+
   override fun onShowIncomingCallUi() {
     // System wants us to show our own UI. Telecom invokes this only AFTER the
     // call has been fully added, which makes it the guaranteed-timing hook to
@@ -88,7 +114,8 @@ class ConnectIncomingConnection(
    * so genuine user/OS route changes (headset button, device change) are
    * always respected — no fight loops.
    */
-  private var activeAtMs: Long = 0L
+  var activeAtMs: Long = 0L
+    private set
 
   override fun onCallAudioStateChanged(state: CallAudioState?) {
     // Telecom is the routing authority while this Connection is ACTIVE.
@@ -198,5 +225,8 @@ class ConnectIncomingConnection(
     /** How long after ACTIVE the app's chosen route is enforced over Telecom
      *  stomps. Short enough to never fight a real user/OS change. */
     private const val ROUTE_ENFORCE_WINDOW_MS = 3000L
+    /** A Connection still RINGING this long after creation is a leaked ghost
+     *  ring (cancel push beat the ring push) — no PBX ring runs this long. */
+    private const val RING_SELF_DESTRUCT_MS = 120_000L
   }
 }

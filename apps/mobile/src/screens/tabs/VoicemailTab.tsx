@@ -42,6 +42,7 @@ import {
   voicemailQueryUserScope,
 } from '../../api/client';
 import { useVoicemailAudioCache } from '../../hooks/useVoicemailAudioCache';
+import { hasActiveSipSession } from '../../sip/sipClientSingleton';
 import { consumeVoicemailScopeKeyChange } from '../../api/voicemailClientScope';
 import { subscribeToVoicemail } from '../../api/realtime';
 import { vmBadgeQueryKey } from '../../navigation/badges';
@@ -783,6 +784,61 @@ export function VoicemailTab() {
 
     const onStatus = makeStatusHandler(vm.id, vm.durationSec ?? 0);
 
+    // Playback-stall watchdog (RSBK101 2026-08-04): a leaked "phantom call"
+    // (ghost-ring Telecom Connection nothing terminated) makes Android refuse
+    // media playback — expo-av then loads fine but never starts, and because
+    // the playing state above is optimistic and play errors were swallowed,
+    // the user saw a pause icon with a frozen waveform and no explanation,
+    // recurring until they reinstalled the APK (only a process kill cleared
+    // the phantom). If the engine reports zero progress shortly after start:
+    // sweep stale Telecom connections + reset audio mode (gated on zero live
+    // SIP sessions so a real call is untouchable), retry once, and if it
+    // still won't move, revert the UI and say so instead of faking playback.
+    const armStallWatchdog = (path: string) => {
+      const snd = soundRef.current;
+      if (!snd) return;
+      const stalled = async (): Promise<boolean> => {
+        try {
+          const st: any = await snd.getStatusAsync();
+          if (st?.isLoaded && (st.isPlaying || (st.positionMillis ?? 0) > 0)) return false;
+        } catch { /* unloaded / broken player counts as stalled */ }
+        return true;
+      };
+      // Bail whenever the user paused, switched voicemails, playback finished
+      // (all of those clear/replace activeId), or a newer sound took over.
+      const superseded = () => activeIdRef.current !== vm.id || soundRef.current !== snd;
+      const giveUp = () => {
+        console.warn(`[VOICEMAIL_AUDIO] playback_stalled_final vmId=${vm.id} path=${path}`);
+        activeIdRef.current = null;
+        setActiveId(null);
+        setPlaybackError('Could not start audio playback. Please try again.');
+      };
+      setTimeout(async () => {
+        if (superseded() || !(await stalled())) return;
+        console.warn(`[VOICEMAIL_AUDIO] playback_stalled vmId=${vm.id} path=${path} — engine reports no progress after start`);
+        if (Platform.OS === 'android' && !hasActiveSipSession()) {
+          try {
+            const mod = (NativeModules as any)?.IncomingCallUi;
+            if (typeof mod?.telecomTerminateStale === 'function') {
+              mod.telecomTerminateStale('voicemail_playback_stalled');
+            }
+            setTimeout(() => { try { mod?.resetCallAudioState?.(); } catch { /* ignore */ } }, 400);
+          } catch { /* best effort */ }
+          setTimeout(() => {
+            if (superseded()) return;
+            snd.playAsync().catch(() => undefined);
+            setTimeout(async () => {
+              if (superseded()) return;
+              if (await stalled()) giveUp();
+              else console.log(`[VOICEMAIL_AUDIO] playback_recovered vmId=${vm.id} path=${path} — stale-call sweep unblocked audio`);
+            }, 1500);
+          }, 1000);
+          return;
+        }
+        giveUp();
+      }, 2000);
+    };
+
     const loadFrom = async (uri: string, isLocal: boolean, timeoutMs: number) => {
       console.log(`[VOICEMAIL_AUDIO] load_async_start vmId=${vm.id} isLocal=${isLocal} elapsedMs=${Date.now() - startMs}`);
       const next = new Audio.Sound();
@@ -816,9 +872,15 @@ export function VoicemailTab() {
       try {
         // Already decoded and sitting at position 0 — playAsync starts it
         // immediately (no stop/seek round-trip like replayAsync). Fire it
-        // without awaiting so nothing blocks the audio from starting.
-        warm.playAsync().catch(() => undefined);
+        // without awaiting so nothing blocks the audio from starting; the
+        // stall watchdog owns the UI if it never actually starts (a silent
+        // `.catch(() => undefined)` here is how the phantom-call wedge stayed
+        // invisible — at least leave the rejection in the log).
+        warm.playAsync().catch((err: any) =>
+          console.warn(`[VOICEMAIL_AUDIO] prewarm_play_rejected vmId=${vm.id} error=${String(err?.message ?? err)}`),
+        );
         console.log(`[VOICEMAIL_AUDIO] play_prewarmed vmId=${vm.id} elapsedMs=${Date.now() - startMs}`);
+        armStallWatchdog('prewarm');
         return;
       } catch (warmErr: any) {
         // Pre-warmed instance went bad — discard and fall through to a load.
@@ -837,6 +899,7 @@ export function VoicemailTab() {
     if (localUri) {
       try {
         await loadFrom(localUri, true, 6000);
+        armStallWatchdog('cache');
         return;
       } catch (cacheErr: any) {
         // Corrupt cache — fall back to the (slower) remote stream. Keep the
@@ -859,6 +922,7 @@ export function VoicemailTab() {
           if (downloaded) {
             await loadFrom(downloaded, true, 6000);
             console.log(`[VOICEMAIL_AUDIO] play_downloaded_raw vmId=${vm.id} elapsedMs=${Date.now() - startMs}`);
+            armStallWatchdog('raw_download');
             return;
           }
         } catch (rawErr: any) {
@@ -874,6 +938,7 @@ export function VoicemailTab() {
     // the stream genuinely fails.
     try {
       await loadFrom(remoteUri, false, 8000);
+      armStallWatchdog('stream');
     } catch {
       activeIdRef.current = null;
       setActiveId(null);

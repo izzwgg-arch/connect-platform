@@ -43,6 +43,12 @@ object TelecomBridge {
   private const val ACCOUNT_LABEL = "Connect"
   private const val SCHEME_TEL = "tel"
 
+  /** See terminateStaleConnections. RINGING longer than any real PBX ring. */
+  private const val STALE_RINGING_MS = 90_000L
+  /** ACTIVE with no SIP session for this long = an answer that went nowhere.
+   *  Only meaningful under the caller's zero-live-sessions assertion. */
+  private const val STALE_ACTIVE_MS = 30_000L
+
   /**
    * Telecom event names exposed to JS via DeviceEventEmitter. Listened to
    * by NotificationsContext / SipContext on the React Native side.
@@ -390,6 +396,44 @@ object TelecomBridge {
       }
     } catch (t: Throwable) {
       Log.w(TAG, "resetCallAudioStateIfIdle threw: ${t.message}")
+    }
+  }
+
+  /**
+   * Terminate every Connection that can no longer correspond to a real call:
+   *   - all answer-time anchors (tc-anchor-*), same as terminateAnchorConnections
+   *   - ring-time Connections still RINGING well past any real PBX ring timeout
+   *   - Connections flipped ACTIVE long ago (an answer that never produced a
+   *     SIP session — the ghost-ring Answer tap, RSBK101 2026-08-04)
+   *   - already-DISCONNECTED stragglers whose destroy never unregistered
+   *
+   * ⛔ Caller contract: invoke ONLY when the JS layer has just verified there
+   * are ZERO live SIP sessions. The age gates alone cannot distinguish a
+   * leaked ACTIVE ghost from a genuine hour-long call — the no-sessions
+   * assertion is what makes the ACTIVE case safe. (Both call sites — the
+   * keepalive leak watchdog and the voicemail playback-stall self-heal —
+   * check live sessions immediately before calling.)
+   */
+  fun terminateStaleConnections(reason: String) {
+    val now = System.currentTimeMillis()
+    val stale = synchronized(activeConnections) {
+      activeConnections.values.filter { conn ->
+        val ringingTooLong = conn.state == android.telecom.Connection.STATE_RINGING &&
+          now - conn.createdAtMs > STALE_RINGING_MS
+        val activeTooLong = conn.state == android.telecom.Connection.STATE_ACTIVE &&
+          conn.activeAtMs > 0 && now - conn.activeAtMs > STALE_ACTIVE_MS
+        conn.inviteId.startsWith("tc-anchor-") ||
+          conn.state == android.telecom.Connection.STATE_DISCONNECTED ||
+          ringingTooLong || activeTooLong
+      }.toList()
+    }
+    for (conn in stale) {
+      try {
+        Log.w(TAG, "terminateStaleConnections inviteId=${conn.inviteId} state=${conn.state} ageMs=${now - conn.createdAtMs} reason=$reason")
+        conn.terminate(reason)
+      } catch (t: Throwable) {
+        Log.w(TAG, "terminateStaleConnections failed for ${conn.inviteId}: ${t.message}")
+      }
     }
   }
 

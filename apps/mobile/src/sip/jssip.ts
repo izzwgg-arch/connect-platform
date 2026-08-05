@@ -1238,11 +1238,22 @@ export class JsSipClient implements SipClient {
             if (
               mod &&
               typeof mod.telecomHasAnyLiveConnection === "function" &&
-              mod.telecomHasAnyLiveConnection() === true &&
-              typeof mod.telecomTerminateAnchors === "function"
+              mod.telecomHasAnyLiveConnection() === true
             ) {
-              console.warn("[SIP_KEEPALIVE_PING] phantom Telecom anchor with zero SIP sessions — terminating (leak watchdog)");
-              mod.telecomTerminateAnchors();
+              // Prefer the stale-aware sweep: it also reaps leaked RING-time
+              // Connections — the ghost ring whose cancel push raced past the
+              // ring push (RSBK101 2026-08-04: the phantom pinned call-audio
+              // mode AND disarmed resetCallAudioStateIfIdle, so voicemail
+              // playback stayed dead until reinstall). Age gates inside the
+              // native side spare a genuinely-ringing young Connection whose
+              // SIP INVITE simply hasn't arrived yet.
+              if (typeof mod.telecomTerminateStale === "function") {
+                console.warn("[SIP_KEEPALIVE_PING] phantom Telecom connection with zero SIP sessions — stale sweep (leak watchdog)");
+                mod.telecomTerminateStale("keepalive_leak_watchdog");
+              } else if (typeof mod.telecomTerminateAnchors === "function") {
+                console.warn("[SIP_KEEPALIVE_PING] phantom Telecom anchor with zero SIP sessions — terminating (leak watchdog)");
+                mod.telecomTerminateAnchors();
+              }
               if (typeof mod.resetCallAudioState === "function") {
                 setTimeout(() => { try { mod.resetCallAudioState(); } catch { /* ignore */ } }, 1500);
               }
