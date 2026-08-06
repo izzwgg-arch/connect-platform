@@ -77,3 +77,7 @@ _pbx_installers/
 cb17/
 cb18/
 cb19/
+
+# Python bytecode (scripts/pbx helper runs)
+__pycache__/
+*.pyc
