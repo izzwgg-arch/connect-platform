@@ -29,7 +29,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   buildDestination, readDestination, describeDestination, describeAfterRecording,
-  explainCallFlow, summariseHours, digitGlyph,
+  explainCallFlow, summariseHours, digitGlyph, formatPhone,
   KIND_LABEL, KIND_BLURB, OFFERABLE_KINDS,
   type MenuChoiceKind, type TenantDirectory, type CallStep, type AfterRecordingChoice,
 } from "@connect/shared";
@@ -81,7 +81,7 @@ const EMPTY_SCHEDULE: ScheduleRow = {
 const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "0", "hash"];
 
 const KIND_GLYPH: Record<MenuChoiceKind, string> = {
-  person: "👤", team: "👥", voicemail: "📼", recording: "📣", menu: "🔢", hangup: "⛔", other: "⚙️",
+  person: "👤", team: "👥", forward: "📱", voicemail: "📼", recording: "📣", menu: "🔢", hangup: "⛔", other: "⚙️",
 };
 
 /** Stable colour per name for the little person avatars. */
@@ -113,6 +113,9 @@ const UI_PHRASES = [
   "Which person?", "Whose voicemail?", "Which team?", "Which menu?", "Which recording?",
   "After it plays, what happens?", "Back to this menu", "A voicemail",
   "Or add a new one:", "Upload a recording", "Uploading…", "Make one with AI",
+  "A phone number", "Which phone number?", "Or send it to a new number:",
+  "Add this number", "Setting it up…",
+  "Rings a phone outside the office — a cell, or another business.",
   "Plays a recording — directions, hours, an announcement — then continues.",
   "Remove this key", "Cancel", "Save name", "Loading…",
   "Your phone number", "Your recording", "No recording set — callers hear a stand-in message",
@@ -181,6 +184,10 @@ export default function IvrStudioPage() {
    *  exactly like success, so it has to be checked explicitly. */
   const [peopleLoaded, setPeopleLoaded] = useState(true);
   const [teamsLoaded, setTeamsLoaded] = useState(true);
+  /** Outside numbers this tenant can already reach (Custom Applications on the
+   *  PBX). `null` means we couldn't find out — which must not be shown as
+   *  "there are none", or a saved key reads as broken during a PBX hiccup. */
+  const [forwards, setForwards] = useState<Array<{ extension: string; phoneNumber: string; name: string }> | null>(null);
   const [pbxTenantId, setPbxTenantId] = useState<string | null>(null);
   const [dids, setDids] = useState<string[]>([]);
 
@@ -261,7 +268,10 @@ export default function IvrStudioPage() {
     teams,
     menus: profiles.map((p) => ({ id: p.id, name: p.name })),
     recordings: prompts.map((p) => ({ promptRef: p.promptRef, name: p.displayName })),
-  }), [pbxTenantId, people, teams, profiles, prompts]);
+    // Left undefined when unknown — the shared reader treats "no list" as
+    // "couldn't find out" rather than "deleted".
+    ...(forwards ? { forwards } : {}),
+  }), [pbxTenantId, people, teams, profiles, prompts, forwards]);
 
   const streamUrl = useCallback((promptId: string) => {
     const base = getPortalApiBaseUrl();
@@ -283,7 +293,7 @@ export default function IvrStudioPage() {
     setLoading(true); setError(null);
     const safe = async <T,>(path: string): Promise<T | null> => { try { return await apiGet<T>(path); } catch { return null; } };
     try {
-      const [p, pr, sc, ext, q, rg, dm, nums] = await Promise.all([
+      const [p, pr, sc, ext, q, rg, dm, nums, fwd] = await Promise.all([
         apiGet<{ profiles: RouteProfile[] }>(`/voice/ivr/route-profiles${qs}`),
         apiGet<{ prompts: PromptRow[] }>(`/voice/ivr/prompts${qs}`),
         safe<{ schedule: ScheduleRow | null }>(`/voice/ivr/schedule${qs}`),
@@ -292,7 +302,15 @@ export default function IvrStudioPage() {
         safe<{ rows: any[] }>(`/voice/pbx/ring-groups${qs}`),
         safe<{ mappings: any[] }>(`/voice/did/mappings${qs}`),
         safe<{ numbers: TenantNumber[] }>(`/voice/ivr/numbers${qs}`),
+        safe<{ forwards: any[]; read: boolean }>(`/voice/forwards${qs}`),
       ]);
+      // `read: false` means the PBX couldn't be reached — keep null so the map
+      // says "a phone outside the office" rather than claiming it's deleted.
+      setForwards(fwd?.read
+        ? (fwd.forwards || []).map((f: any) => ({
+            extension: String(f.extension), phoneNumber: String(f.phoneNumber ?? ""), name: String(f.name ?? ""),
+          }))
+        : null);
       setTenantNumbers(nums?.numbers ?? []);
       setNumbersError(nums ? null : "Couldn't read your numbers just now.");
 
@@ -485,6 +503,27 @@ export default function IvrStudioPage() {
       return row.promptRef;
     } catch (e: any) {
       setError(e?.message || "Couldn't upload that recording.");
+      return null;
+    }
+  }
+
+  /**
+   * Make the phone system able to reach an outside number, and hand back the
+   * internal number a key can point at. Nothing is wired to a key here — the
+   * editor selects the result and the person still presses Save.
+   */
+  async function createForward(phoneNumber: string, label: string): Promise<string | null> {
+    try {
+      const r = await apiPost<{ forward: { extension: string; phoneNumber: string; name: string }; message: string }>(
+        `/voice/forwards${qs}`,
+        { tenantId, phoneNumber, label },
+      );
+      const f = r.forward;
+      setForwards((cur) => [...(cur ?? []).filter((x) => x.extension !== f.extension), f]);
+      flash(r.message);
+      return f.extension;
+    } catch (e: any) {
+      setError(e?.body?.message || e?.message || "Couldn't set that number up on the phone system.");
       return null;
     }
   }
@@ -1071,6 +1110,7 @@ export default function IvrStudioPage() {
                             onUploadRecording={(file) => uploadRecordingForKey(digit, file)}
                             adoptPromptRef={adoptRecording?.digit === digit ? adoptRecording.promptRef : null}
                             onAdopted={() => setAdoptRecording(null)}
+                            onCreateForward={createForward}
                           />
                         )}
                       </div>
@@ -1113,6 +1153,7 @@ export default function IvrStudioPage() {
                           onUploadRecording={(file) => uploadRecordingForKey(editingDigit, file)}
                           adoptPromptRef={adoptRecording?.digit === editingDigit ? adoptRecording.promptRef : null}
                           onAdopted={() => setAdoptRecording(null)}
+                          onCreateForward={createForward}
                         />
                       )}
                     </>
@@ -1341,7 +1382,7 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
@@ -1361,6 +1402,9 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   /** A recording just made/uploaded for this key — select it. */
   adoptPromptRef?: string | null;
   onAdopted?: () => void;
+  /** Teach the phone system a new outside number; resolves with the internal
+   *  number to point this key at, or null if it couldn't be set up. */
+  onCreateForward?: (phoneNumber: string, label: string) => Promise<string | null>;
 }) {
   const { t } = useUiLanguage();
   const read = current ? readDestination(current, directory) : null;
@@ -1380,6 +1424,9 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   const [afterKind, setAfterKind] = useState<"replay" | "voicemail" | "hangup">(savedAfter.kind);
   const [afterExt, setAfterExt] = useState<string>(savedAfter.ext);
   const [uploading, setUploading] = useState(false);
+  /** Typing a brand-new outside number to forward to. */
+  const [newPhone, setNewPhone] = useState("");
+  const [addingPhone, setAddingPhone] = useState(false);
 
   // A recording made or uploaded for this key while the editor was open:
   // select it, but leave "afterwards" and Save to the person — the recording
@@ -1412,10 +1459,10 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
       if (!teamsLoaded) return { k, blocked: "Couldn't load this customer's teams — check they're linked to the phone system." };
       return directory.teams.length > 0 ? { k, blocked: null } : null;
     }
-    if (k === "recording") {
-      // Always offered — unlike a team, a recording can be made right here
-      // (upload a file or generate one), so an empty library is a starting
-      // point, not a dead end.
+    if (k === "recording" || k === "forward") {
+      // Always offered — unlike a team, these can be made right here (upload or
+      // generate a recording; type a phone number), so having none is a
+      // starting point, not a dead end.
       return { k, blocked: null };
     }
     return { k, blocked: null }; // another menu + hang up always possible
@@ -1434,6 +1481,12 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
           }))
         : kind === "recording"
           ? (directory.recordings ?? []).map((r) => ({ id: r.promptRef, name: r.name || r.promptRef, meta: "recording" }))
+        : kind === "forward"
+          ? (directory.forwards ?? []).map((f) => ({
+              id: f.extension,
+              name: f.name?.trim() || formatPhone(f.phoneNumber),
+              meta: "rings outside",
+            }))
           : kind === "menu"
             ? directory.menus.map((m) => ({ id: m.id, name: m.name, meta: "menu" }))
             : [];
@@ -1468,7 +1521,7 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
         {!blockedReason && kind !== "hangup" && (
           <div className="picker">
             <div className="plabel">
-              {t(kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : kind === "recording" ? "Which recording?" : "Which menu?")}
+              {t(kind === "person" ? "Which person?" : kind === "voicemail" ? "Whose voicemail?" : kind === "team" ? "Which team?" : kind === "recording" ? "Which recording?" : kind === "forward" ? "Which phone number?" : "Which menu?")}
             </div>
             {targets.length === 0 ? (
               <div className="dimtxt">{t("Nothing to choose yet.")}</div>
@@ -1484,6 +1537,36 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
             )}
             {kind === "menu" && (
               <button className="btn sm" style={{ marginTop: 10 }} onClick={onCreateMenu}>+ Make a new menu for this key</button>
+            )}
+
+            {kind === "forward" && onCreateForward && (
+              <div className="recmakerow">
+                <span className="dimtxt">{t("Or send it to a new number:")}</span>
+                <input
+                  className="inp"
+                  style={{ maxWidth: 190 }}
+                  placeholder="(845) 555-1234"
+                  value={newPhone}
+                  disabled={addingPhone || disabled}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}
+                />
+                <button
+                  className="btn sm"
+                  disabled={addingPhone || disabled || newPhone.replace(/\D/g, "").length < 10}
+                  onClick={async () => {
+                    setAddingPhone(true);
+                    try {
+                      // The label is only ever seen in the PBX panel; naming it
+                      // after the key is what makes a forward findable later.
+                      const ext = await onCreateForward(newPhone, `Key ${digitGlyph(digit)}`);
+                      if (ext) { setTarget(ext); setNewPhone(""); }
+                    } finally { setAddingPhone(false); }
+                  }}
+                >
+                  {addingPhone ? t("Setting it up…") : t("Add this number")}
+                </button>
+              </div>
             )}
 
             {kind === "recording" && (
@@ -1808,6 +1891,7 @@ function StudioStyles() {
       .ivrs .tag.menu{color:var(--menu);border-color:color-mix(in srgb,var(--menu) 42%,transparent);background:color-mix(in srgb,var(--menu) 13%,transparent)}
       .ivrs .tag.hangup{color:var(--stop);border-color:color-mix(in srgb,var(--stop) 40%,transparent);background:color-mix(in srgb,var(--stop) 12%,transparent)}
       .ivrs .tag.recording{color:var(--vm);border-color:color-mix(in srgb,var(--vm) 40%,transparent);background:color-mix(in srgb,var(--vm) 12%,transparent)}
+      .ivrs .tag.forward{color:var(--person);border-color:color-mix(in srgb,var(--person) 40%,transparent);background:color-mix(in srgb,var(--person) 12%,transparent)}
       .ivrs .recmakerow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:10px}
       .ivrs .recmakerow .btn{cursor:pointer}
       .ivrs .recmakerow .btn.disabled{opacity:.5;pointer-events:none}

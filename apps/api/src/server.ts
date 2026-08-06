@@ -268,6 +268,7 @@ import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
+import { registerForwardRoutes } from "./pbx/forwardRoutes";
 import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler, injectAsService as didInjectAsService } from "./didSwitchSchedule";
 import { startDidRouteReconciler, type ReconcilerMapping } from "./didRouteReconciler";
 import {
@@ -23418,7 +23419,16 @@ async function teamUsedNumbers(pbxTenantId: string, pbxInstanceId: string | null
 async function readTeamDirectory(
   pbxTenantId: string,
   pbxInstanceId: string | null,
-): Promise<{ used: UsedNumbers; extensions: { id: number; number: string; name: string }[]; tenantPath: string | null } | null> {
+): Promise<{
+  used: UsedNumbers;
+  extensions: { id: number; number: string; name: string }[];
+  /** Custom Applications — the internal numbers a "forward to a phone number"
+   *  answers on. Read from the PBX database by the helper, so this is truth,
+   *  not a guess: it is what stops a new forward being handed a number that is
+   *  already forwarding somewhere. */
+  customApplications: { id: number; number: string; name: string }[];
+  tenantPath: string | null;
+} | null> {
   const cfg = resolvePbxRouteHelperConfig(pbxInstanceId);
   if (!cfg) return null;
   try {
@@ -23426,6 +23436,7 @@ async function readTeamDirectory(
     const flow: any = (resp as any).tenants?.[0];
     if (!flow) return null;
     const ext = (flow.directory?.extensions ?? []) as any[];
+    const apps = (flow.directory?.customApplications ?? []) as any[];
     return {
       used: {
         extensions: ext.map((e) => String(e.number)),
@@ -23433,6 +23444,7 @@ async function readTeamDirectory(
         queues: (flow.directory?.queues ?? []).map((t: any) => String(t.number)),
       },
       extensions: ext.map((e) => ({ id: Number(e.id), number: String(e.number), name: String(e.name ?? "") })),
+      customApplications: apps.map((a) => ({ id: Number(a.id), number: String(a.number), name: String(a.name ?? "") })),
       tenantPath: flow.tenantPath ? String(flow.tenantPath) : null,
     };
   } catch {
@@ -23551,6 +23563,17 @@ const didReconcilerTimer = registerShutdownTimer(startDidRouteReconciler(didReco
 void didReconcilerTimer;
 
 registerTeamRoutes({
+  app,
+  db,
+  requireIvrManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing"),
+  assertIvrTenantAccess,
+  resolveConnectTenantIdFromScope,
+  readTeamDirectory,
+});
+
+// Forwarding a menu key to an outside phone number — same panel-replay path and
+// the same "never Apply Changes" rule as teams.
+registerForwardRoutes({
   app,
   db,
   requireIvrManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing"),

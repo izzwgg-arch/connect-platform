@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import {
   buildDestination, readDestination, describeDestination, explainKeyPress,
   explainCallFlow, narrateCallFlow, summariseHours, digitGlyph, digitSpoken,
-  OFFERABLE_KINDS, type TenantDirectory,
+  formatPhone, OFFERABLE_KINDS, type TenantDirectory,
 } from "./ivrPlainLanguage";
 
 // A plus center (VitalPBX tenant 2), real rows.
@@ -119,6 +119,87 @@ test("a destination from the PBX we don't offer still describes itself", () => {
   assert.equal(r.kind, "other");
   assert.equal(describeDestination({ destinationType: "announcement", destinationRef: "T2_app-announcement,announcement-3,1", label: "Opening hours notice" }, DIR), "Opening hours notice");
   assert.equal(OFFERABLE_KINDS.includes("other" as never), false);
+});
+
+// ── forwarding to an outside phone number ────────────────────────────────────
+// Recorded live from Izzy's panel session 2026-08-06 and verified in the
+// generated dialplan: 2000 → T2_app-custom-application → custom-dest-6 →
+// Goto(T2_cos-all,5622096644,1).
+
+const FWD_DIR: TenantDirectory = {
+  ...DIR,
+  forwards: [{ extension: "2000", phoneNumber: "5622096644" }],
+};
+
+test("a forward points at the custom application, NOT cos-all", () => {
+  const d = buildDestination("forward", "2000", FWD_DIR);
+  // cos-all would be typed "extension" and drag the call through the
+  // wake-and-wait dialer looking for a mobile app that doesn't exist.
+  assert.equal(d?.destinationRef, "T2_app-custom-application,2000,1");
+  assert.equal(d?.destinationType, "custom");
+  assert.equal(d?.label, "(562) 209-6644");
+});
+
+test("the stored type is one the option router jumps to plainly", () => {
+  // [connect-option-router] special-cases "extension" and "external_number";
+  // everything else falls through to a bare Goto, which is what we want.
+  const d = buildDestination("forward", "2000", FWD_DIR);
+  assert.notEqual(d?.destinationType, "extension");
+  assert.notEqual(d?.destinationType, "external_number");
+});
+
+test("a forward refuses to build for an unknown or un-numbered tenant", () => {
+  assert.equal(buildDestination("forward", "2099", FWD_DIR), null);
+  assert.equal(buildDestination("forward", "2000", DIR), null); // no forwards list
+  assert.equal(buildDestination("forward", "2000", { ...FWD_DIR, pbxTenantId: null }), null);
+});
+
+test("a forward reads back as a forward, and other custom refs do not", () => {
+  const stored = buildDestination("forward", "2000", FWD_DIR)!;
+  const r = readDestination(stored, FWD_DIR);
+  assert.equal(r.kind, "forward");
+  assert.equal(r.targetId, "2000");
+  assert.equal(r.known, true);
+  // Something hand-built outside the Studio must stay "other" — never claimed
+  // as a forward we could describe or re-point.
+  assert.equal(readDestination({ destinationType: "custom", destinationRef: "some-context,s,1" }, FWD_DIR).kind, "other");
+});
+
+test("a forward is explained as an outside phone, and promises the right caller ID", () => {
+  const stored = buildDestination("forward", "2000", FWD_DIR)!;
+  const s = explainKeyPress("5", stored, FWD_DIR);
+  assert.match(s, /\(562\) 209-6644/);
+  assert.match(s, /outside the office/);
+  // Caller ID is the business's, by design — customers can't set their own.
+  assert.match(s, /your business's number, not the caller's/);
+});
+
+test("a deleted forward is flagged rather than named confidently", () => {
+  const stored = { destinationType: "custom", destinationRef: "T2_app-custom-application,2050,1" };
+  const r = readDestination(stored, FWD_DIR);
+  assert.equal(r.kind, "forward");
+  assert.equal(r.known, false);
+  assert.match(describeDestination(stored, FWD_DIR), /no longer exists/);
+});
+
+test("an unreadable PBX does not make a good forward look deleted", () => {
+  // DIR has no `forwards` key at all — we couldn't find out, which is NOT the
+  // same as "it's gone". Claiming deletion here would make every key look
+  // broken during a brief PBX hiccup.
+  const stored = { destinationType: "custom", destinationRef: "T2_app-custom-application,2000,1" };
+  const r = readDestination(stored, DIR);
+  assert.equal(r.kind, "forward");
+  assert.equal(r.known, true);
+  assert.doesNotMatch(describeDestination(stored, DIR), /no longer exists/);
+  assert.match(describeDestination(stored, DIR), /outside the office/);
+});
+
+test("phone numbers are formatted for people, and odd ones left alone", () => {
+  assert.equal(formatPhone("5622096644"), "(562) 209-6644");
+  assert.equal(formatPhone("15622096644"), "(562) 209-6644");
+  assert.equal(formatPhone("+1 (562) 209-6644"), "(562) 209-6644");
+  assert.equal(formatPhone("101"), "101");
+  assert.equal(formatPhone(""), "");
 });
 
 // ── recording keys ───────────────────────────────────────────────────────────

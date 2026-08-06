@@ -64,6 +64,45 @@ export function nextTeamNumber(kind: TeamKind, used: UsedNumbers, maxWidth = 6):
 }
 
 /** Plain-English note for the UI, so the number doesn't look arbitrary. */
+// ── Forwarding numbers ───────────────────────────────────────────────────────
+// A "forward to a phone number" menu key is really an internal number that a
+// Custom Application answers on, which hands the call to a Custom Destination
+// that dials outside. Izzy reserved 2000–2099 for these (2026-08-06) so they
+// never collide with real extensions and are obvious in the PBX panel.
+
+export const FORWARD_RANGE_START = 2000;
+export const FORWARD_RANGE_END = 2099;
+
+/**
+ * First free number in the forwarding range.
+ *
+ * `used` must include everything that occupies the tenant's dial plan, and
+ * `existingForwards` the numbers already answered by Custom Applications —
+ * those live in their own table and are invisible to the extension/ring
+ * group/queue lists, so leaving them out would hand back a number that is
+ * already forwarding somewhere.
+ *
+ * Returns null when the range is full; callers must refuse rather than reach
+ * outside the reserved band.
+ */
+export function nextForwardExtension(used: UsedNumbers, existingForwards: string[] = []): string | null {
+  const taken = new Set<string>(
+    [
+      ...(used.extensions ?? []),
+      ...(used.ringGroups ?? []),
+      ...(used.queues ?? []),
+      ...existingForwards,
+    ]
+      .map((n) => String(n ?? "").trim())
+      .filter(Boolean),
+  );
+  for (let n = FORWARD_RANGE_START; n <= FORWARD_RANGE_END; n++) {
+    const c = String(n);
+    if (!taken.has(c)) return c;
+  }
+  return null;
+}
+
 export function explainChosenNumber(kind: TeamKind, chosen: string, used: UsedNumbers): string {
   const lead = TEAM_SERIES_DIGIT[kind];
   const first = `${lead}00`;

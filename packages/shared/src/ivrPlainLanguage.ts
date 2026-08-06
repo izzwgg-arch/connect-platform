@@ -46,16 +46,17 @@
 // convention from different phone software. There is no [ext-local] context on
 // this PBX at all, so every caller sent to voicemail fell out of the dialplan.
 
-export type MenuChoiceKind = "person" | "team" | "voicemail" | "recording" | "menu" | "hangup" | "other";
+export type MenuChoiceKind = "person" | "team" | "forward" | "voicemail" | "recording" | "menu" | "hangup" | "other";
 
 /** The kinds a person is offered when assigning a key. "other" is readable but
  *  never offered — it exists so menus imported from the PBX still describe
  *  themselves rather than showing a blank. */
-export const OFFERABLE_KINDS: Exclude<MenuChoiceKind, "other">[] = ["person", "team", "voicemail", "recording", "menu", "hangup"];
+export const OFFERABLE_KINDS: Exclude<MenuChoiceKind, "other">[] = ["person", "team", "forward", "voicemail", "recording", "menu", "hangup"];
 
 export const KIND_LABEL: Record<MenuChoiceKind, string> = {
   person: "A person",
   team: "A team",
+  forward: "A phone number",
   voicemail: "Voicemail",
   recording: "A recording",
   menu: "Another menu",
@@ -66,6 +67,7 @@ export const KIND_LABEL: Record<MenuChoiceKind, string> = {
 export const KIND_BLURB: Record<MenuChoiceKind, string> = {
   person: "Rings one person's phone. If they don't pick up it goes to their voicemail.",
   team: "Rings several phones at once. Whoever answers first gets the call.",
+  forward: "Rings a phone outside the office — a cell, or another business.",
   voicemail: "Goes straight to someone's voicemail without ringing.",
   recording: "Plays a recording — directions, hours, an announcement — then continues.",
   menu: "Plays another set of choices, like \"press 1 for…\".",
@@ -90,6 +92,19 @@ export interface DirectoryPerson { extension: string; name?: string | null }
 export interface DirectoryTeam { number: string; name?: string | null; kind: "ring_group" | "queue" }
 export interface DirectoryMenu { id: string; name: string }
 export interface DirectoryRecording { promptRef: string; name?: string | null }
+/** An outside phone number the PBX can already reach, via the internal number
+ *  a Custom Application answers on. `extension` is what the dialplan jumps to;
+ *  `phoneNumber` is only ever shown to a person. */
+export interface DirectoryForward { extension: string; phoneNumber: string; name?: string | null }
+
+/** "5622096644" → "(562) 209-6644". Anything that isn't a plain 10/11-digit US
+ *  number is handed back untouched rather than mangled. */
+export function formatPhone(raw: string | null | undefined): string {
+  const d = String(raw ?? "").replace(/\D/g, "");
+  const ten = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  if (ten.length !== 10) return String(raw ?? "").trim();
+  return `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`;
+}
 
 /** Everything this tenant actually has. A kind with an empty list is not
  *  offered — showing "A team" to a customer with no teams invites them to pick
@@ -103,6 +118,8 @@ export interface TenantDirectory {
   /** The tenant's recording library. Optional because most callers of this
    *  module don't offer recording keys; leaving it out only disables them. */
   recordings?: DirectoryRecording[];
+  /** Outside numbers already reachable through a Custom Application. */
+  forwards?: DirectoryForward[];
 }
 
 export interface StoredDestination {
@@ -201,6 +218,22 @@ export function buildDestination(
     const ctx = team.kind === "queue" ? `${prefix}_ext-queues` : `${prefix}_ext-ringgroups`;
     return { destinationType: team.kind, destinationRef: `${ctx},${id},1`, label: team.name || `Team ${id}` };
   }
+  if (kind === "forward") {
+    // `id` is the INTERNAL number a Custom Application answers on — never the
+    // outside number. The PBX reaches the outside world through the Custom
+    // Destination behind it, which is also what forces the call out on the
+    // system's own caller ID rather than the customer's choice.
+    const f = (dir.forwards ?? []).find((x) => x.extension === id);
+    if (!f || !prefix) return null;
+    return {
+      destinationType: "custom",
+      // Deliberately NOT `T<t>_cos-all,<ext>,1`: that form is typed "extension",
+      // which sends the call through the wake-and-wait dialer to rouse a mobile
+      // app that a forwarding number does not have. This ref is a plain jump.
+      destinationRef: `${prefix}_app-custom-application,${id},1`,
+      label: f.name?.trim() || formatPhone(f.phoneNumber),
+    };
+  }
   if (kind === "voicemail") {
     const p = dir.people.find((x) => x.extension === id);
     if (!p) return null;
@@ -259,6 +292,26 @@ export function readDestination(stored: StoredDestination | null | undefined, di
     const p = ext ? dir.people.find((x) => x.extension === ext) : undefined;
     return { kind: "voicemail", targetId: ext, name: p?.name ? `${p.name}'s voicemail` : (ext ? `Voicemail ${ext}` : null), known: Boolean(p) };
   }
+  // A forward is stored as type "custom" (so the option router does a plain
+  // Goto), so the REF is what distinguishes it from anything else hand-built
+  // outside the Studio. Only the Custom Application shape counts.
+  if (type === "custom") {
+    const m = ref.match(/^T\d+_app-custom-application,([^,]+),\d+$/i);
+    if (m) {
+      const ext = m[1];
+      const f = (dir.forwards ?? []).find((x) => x.extension === ext);
+      return {
+        kind: "forward",
+        targetId: ext,
+        name: f ? (f.name?.trim() || formatPhone(f.phoneNumber)) : null,
+        // "We have the list and it isn't in it" means deleted. "We have no
+        // list" means we couldn't find out — and must NOT be reported as
+        // deleted, or a perfectly good forward reads as broken every time the
+        // PBX is briefly unreachable.
+        known: dir.forwards ? Boolean(f) : true,
+      };
+    }
+  }
   if (type === "ivr") {
     const m = ref.match(/^connect-tenant-ivr,([^,]+),\d+$/);
     const id = m?.[1] ?? null;
@@ -288,6 +341,9 @@ export function describeDestination(stored: StoredDestination | null | undefined
       return d.known ? `${d.name} on extension ${d.targetId}` : `extension ${d.targetId} — which no longer exists`;
     case "team":
       return d.known ? `the ${d.name} team` : `a team on ${d.targetId} — which no longer exists`;
+    case "forward":
+      if (!d.known) return `an outside number set up on ${d.targetId} — which no longer exists`;
+      return d.name ? `${d.name} — a phone outside the office` : "a phone outside the office";
     case "voicemail":
       return d.known ? String(d.name) : `voicemail for ${d.targetId} — which no longer exists`;
     case "recording":
@@ -309,6 +365,11 @@ export function explainKeyPress(digit: string, stored: StoredDestination | null 
   if (d.kind === "hangup") return `${press}, the call ends politely.`;
   if (d.kind === "person") return `${press}, we ring ${where}. If nobody answers, the caller goes to that person's voicemail.`;
   if (d.kind === "team") return `${press}, we ring every phone in ${where} at once, and whoever picks up first gets the call.`;
+  if (d.kind === "forward") {
+    if (!d.known) return `${press}, we call an outside number set up on ${d.targetId} — which no longer exists.`;
+    const which = d.name ? `${d.name} — a phone outside the office` : "a phone outside the office";
+    return `${press}, we call ${which}. Whoever answers takes the call, and they'll see your business's number, not the caller's.`;
+  }
   if (d.kind === "voicemail") return `${press}, they go straight to ${where} without any phone ringing.`;
   if (d.kind === "recording") return `${press}, we play ${where}.`;
   if (d.kind === "menu") return `${press}, they hear ${where} and choose again from there.`;
