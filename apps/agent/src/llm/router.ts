@@ -385,41 +385,65 @@ export class ModelRouter {
     runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
   ) {
     if (!this.openai) throw new Error("OpenAI key not configured");
-    const convo: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
+    // ⛔ Tools go through /v1/responses, NOT /v1/chat/completions. Proven in
+    // production 2026-08-06 on gpt-5.6-luna, which rejects the combination:
+    //   "400 Function tools with reasoning_effort are not supported for
+    //    gpt-5.6-luna in /v1/chat/completions. To use function tools, use
+    //    /v1/responses or set reasoning_effort to 'none'."
+    // Setting reasoning_effort:'none' would "fix" it by making the model stop
+    // thinking — the opposite of the point. The plain (no-tools) path in
+    // callProvider stays on chat.completions, which works fine there.
+    //
+    // Shape differences from chat.completions, all load-bearing:
+    //   messages -> input, tools are FLAT ({type,name,description,parameters}),
+    //   replies arrive as items in `output`, and a tool result goes back as a
+    //   `function_call_output` item keyed by call_id.
+    const input: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
     let inputTokens = 0;
     let outputTokens = 0;
     let toolCalls = 0;
 
     for (let i = 0; i < maxIterations; i++) {
-      const res: any = await this.openai.chat.completions.create({
+      const res: any = await (this.openai as any).responses.create({
         model,
-        max_completion_tokens: maxTokens,
-        messages: convo,
+        max_output_tokens: maxTokens,
+        input,
         tools: tools.map((t) => ({
           type: "function" as const,
-          function: { name: t.name, description: t.description, parameters: t.parameters as any },
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters as any,
         })),
-      } as any);
-      inputTokens += res.usage?.prompt_tokens ?? 0;
-      outputTokens += res.usage?.completion_tokens ?? 0;
+      });
+      inputTokens += res.usage?.input_tokens ?? 0;
+      outputTokens += res.usage?.output_tokens ?? 0;
 
-      const msg = res.choices?.[0]?.message;
-      const calls = msg?.tool_calls ?? [];
+      const items: any[] = res.output ?? [];
+      const calls = items.filter((o) => o.type === "function_call");
       if (calls.length === 0) {
-        return this.toolLoopResult(msg?.content ?? "", inputTokens, outputTokens, toolCalls, false);
+        const text =
+          res.output_text ??
+          items
+            .filter((o) => o.type === "message")
+            .flatMap((o: any) => (o.content ?? []).filter((c: any) => c.type === "output_text").map((c: any) => c.text))
+            .join("");
+        return this.toolLoopResult(text ?? "", inputTokens, outputTokens, toolCalls, false);
       }
 
-      convo.push(msg);
+      // Echo the model's own output back before answering it, then append one
+      // function_call_output per call — same "all results together" rule as
+      // Anthropic, just a different envelope.
+      input.push(...items);
       for (const call of calls) {
         toolCalls++;
         let args: Record<string, unknown> = {};
         try {
-          args = JSON.parse(call.function?.arguments || "{}");
+          args = JSON.parse(call.arguments || "{}");
         } catch {
           // Malformed arguments are the model's error to recover from, not ours.
         }
-        const r = await runTool(call.function?.name ?? "", args);
-        convo.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(r.content ?? null) });
+        const r = await runTool(call.name ?? "", args);
+        input.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(r.content ?? null) });
       }
     }
     return this.toolLoopResult(

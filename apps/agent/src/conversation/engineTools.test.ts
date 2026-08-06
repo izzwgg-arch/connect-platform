@@ -64,20 +64,16 @@ function spyDeps() {
 function fakeOpenAI(toolName: string, toolArgs: Record<string, unknown>) {
   let n = 0;
   return {
-    chat: {
-      completions: {
-        create: async () => {
-          n++;
-          if (n === 1) {
-            return {
-              choices: [{ message: { role: "assistant", content: null, tool_calls: [
-                { id: "call_1", type: "function", function: { name: toolName, arguments: JSON.stringify(toolArgs) } },
-              ] } }],
-              usage: { prompt_tokens: 5, completion_tokens: 2 },
-            };
-          }
-          return { choices: [{ message: { role: "assistant", content: "Your extension 103 is registered." } }], usage: { prompt_tokens: 5, completion_tokens: 2 } };
-        },
+    responses: {
+      create: async () => {
+        n++;
+        if (n === 1) {
+          return {
+            output: [{ type: "function_call", call_id: "call_1", name: toolName, arguments: JSON.stringify(toolArgs) }],
+            usage: { input_tokens: 5, output_tokens: 2 },
+          };
+        }
+        return { output_text: "Your extension 103 is registered.", output: [], usage: { input_tokens: 5, output_tokens: 2 } };
       },
     },
   };

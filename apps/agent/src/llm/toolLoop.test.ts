@@ -197,20 +197,16 @@ test("openai: the model calls a tool, sees the result, then answers", async () =
   const r = mkRouter();
   const calls: any[] = [];
   (r as any).openai = {
-    chat: {
-      completions: {
-        create: async (params: any) => {
-          calls.push(params);
-          if (calls.length === 1) {
-            return {
-              choices: [{ message: { role: "assistant", content: null, tool_calls: [
-                { id: "call_1", type: "function", function: { name: "extension_status", arguments: '{"extension":"101"}' } },
-              ] } }],
-              usage: { prompt_tokens: 7, completion_tokens: 3 },
-            };
-          }
-          return { choices: [{ message: { role: "assistant", content: "101 is up." } }], usage: { prompt_tokens: 7, completion_tokens: 3 } };
-        },
+    responses: {
+      create: async (params: any) => {
+        calls.push(params);
+        if (calls.length === 1) {
+          return {
+            output: [{ type: "function_call", call_id: "call_1", name: "extension_status", arguments: '{"extension":"101"}' }],
+            usage: { input_tokens: 7, output_tokens: 3 },
+          };
+        }
+        return { output_text: "101 is up.", output: [], usage: { input_tokens: 7, output_tokens: 3 } };
       },
     },
   };
@@ -227,28 +223,28 @@ test("openai: the model calls a tool, sees the result, then answers", async () =
   assert.equal(out.text, "101 is up.");
   assert.equal(out.toolCalls, 1);
   assert.deepEqual(ranWith, { args: { extension: "101" }, tenantId: "T-REAL" });
-  const toolMsg = calls[1].messages.find((m: any) => m.role === "tool");
-  assert.equal(toolMsg.tool_call_id, "call_1");
+  // ⛔ Tools must ride /v1/responses with FLAT tool defs — chat.completions
+  // rejects tools+reasoning on gpt-5.6-luna (see router.ts).
+  assert.ok(Array.isArray(calls[0].input), "must send `input`, not `messages`");
+  assert.equal(calls[0].tools[0].name, "extension_status", "tool def must be flat, not nested under `function`");
+  const out2 = calls[1].input.find((m: any) => m.type === "function_call_output");
+  assert.equal(out2.call_id, "call_1");
 });
 
 test("openai: malformed tool arguments do not crash the loop", async () => {
   const r = mkRouter();
   let n = 0;
   (r as any).openai = {
-    chat: {
-      completions: {
-        create: async () => {
-          n++;
-          if (n === 1) {
-            return {
-              choices: [{ message: { role: "assistant", content: null, tool_calls: [
-                { id: "c1", type: "function", function: { name: "extension_status", arguments: "{not json" } },
-              ] } }],
-              usage: {},
-            };
-          }
-          return { choices: [{ message: { role: "assistant", content: "recovered" } }], usage: {} };
-        },
+    responses: {
+      create: async () => {
+        n++;
+        if (n === 1) {
+          return {
+            output: [{ type: "function_call", call_id: "c1", name: "extension_status", arguments: "{not json" }],
+            usage: {},
+          };
+        }
+        return { output_text: "recovered", output: [], usage: {} };
       },
     },
   };
