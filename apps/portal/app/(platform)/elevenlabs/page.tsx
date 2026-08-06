@@ -13,6 +13,11 @@
  * for a phone menu rather than for audiobook narration — see VOICE_PRESET.
  */
 import { useCallback, useEffect, useState } from "react";
+import {
+  ELEVENLABS_KEY_PREFIX,
+  ELEVENLABS_LEGACY_KEY_WARNING,
+  describeElevenLabsKey,
+} from "@connect/shared/elevenLabsKeyFormat";
 import { VOICE_PRESET } from "../../../lib/voicePreset";
 
 void VOICE_PRESET; // referenced by the generate flow; kept imported so the preset has one home
@@ -34,10 +39,14 @@ async function agentApi<T>(path: string, init?: RequestInit): Promise<T> {
 interface Voice { voiceId: string; name: string; category: string | null; labels: Record<string, string>; previewUrl: string | null }
 interface Status {
   configured: boolean; reachable: boolean; reason?: string;
+  /** Written by the server for a person to read; shown verbatim when present. */
+  message?: string | null;
   /** Reachable AND able to synthesise. An unpaid invoice makes these differ. */
   usable?: boolean; blockedReason?: string | null; subscriptionStatus?: string | null;
   tier?: string | null; characterCount?: number | null; characterLimit?: number | null;
   canClone?: boolean; voices?: Voice[];
+  /** Last four characters of the key that is actually stored, and its shape. */
+  keyHint?: string | null; keyLooksCurrent?: boolean; keyLooksLegacy?: boolean;
 }
 
 
@@ -73,6 +82,13 @@ export default function ElevenLabsPage() {
     } finally { setSaving(false); }
   }
 
+  // Checked as they type, before anything is saved. ElevenLabs retired their
+  // old key format and now refuse it outright, and their refusal looks exactly
+  // like a typo — so someone who pastes an old key gets sent round the loop of
+  // "check you copied it right" forever. Saying it here ends that in one step.
+  const typedShape = describeElevenLabsKey(keyInput);
+  const typedLooksWrong = !!typedShape && !typedShape.looksCurrent;
+
   const used = status?.characterCount ?? 0;
   const limit = status?.characterLimit ?? 0;
   const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
@@ -105,14 +121,20 @@ export default function ElevenLabsPage() {
       <div className="el-card">
         <h2>API key</h2>
         <p className="el-sub">
-          From your ElevenLabs account under Profile → API Keys. It&apos;s stored encrypted and can never be
-          read back — you can only replace it or remove it.
+          From your ElevenLabs account under Profile → API Keys. Theirs start with{" "}
+          <code>{ELEVENLABS_KEY_PREFIX}</code>. It&apos;s stored encrypted and can never be read back — you can
+          only replace it or remove it.
         </p>
         <div className="el-row">
           <input
             className="el-input"
             type="password"
-            autoComplete="off"
+            // "new-password" rather than "off": browsers and password managers
+            // ignore "off" on a password field and will happily refill the old
+            // key over a freshly pasted one — which looks like a successful
+            // save and is impossible to tell apart from one.
+            autoComplete="new-password"
+            name="elevenlabs-api-key"
             placeholder={status?.configured ? "A key is saved — type a new one to replace it" : "Paste your ElevenLabs API key"}
             value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
@@ -126,6 +148,20 @@ export default function ElevenLabsPage() {
             </button>
           )}
         </div>
+        {typedLooksWrong && (
+          <div className="el-note bad" style={{ marginTop: 12 }}>
+            {ELEVENLABS_LEGACY_KEY_WARNING}
+          </div>
+        )}
+        {/* What is actually stored, so a key that never made it in — mistyped,
+            half-pasted, or refilled by the browser — is visible rather than
+            inferred from a failure that looks the same either way. */}
+        {status?.configured && status.keyHint && (
+          <p className="el-sub" style={{ marginTop: 12, marginBottom: 0 }}>
+            Saved key ends in <b>{status.keyHint}</b>
+            {status.keyLooksCurrent === false && " — and does not start with sk_, so ElevenLabs will refuse it"}.
+          </p>
+        )}
         {status?.reachable && status.blockedReason && (
           <div className="el-note bad" style={{ marginTop: 12 }}>
             {status.blockedReason}
@@ -133,9 +169,13 @@ export default function ElevenLabsPage() {
         )}
         {status?.configured && !status.reachable && (
           <div className="el-note bad" style={{ marginTop: 12 }}>
-            {status.reason === "invalid_key"
-              ? "ElevenLabs rejected this key. Check you copied all of it, and that it hasn't been revoked."
-              : "Saved, but ElevenLabs couldn't be reached just now."}
+            {/* The server's message is written for a person and names the one
+                thing to do about it. Only fall back to a guess when there
+                isn't one. */}
+            {status.message
+              || (status.reason === "invalid_key"
+                ? "ElevenLabs rejected this key. Check you copied all of it, and that it hasn't been revoked."
+                : "Saved, but ElevenLabs couldn't be reached just now.")}
           </div>
         )}
       </div>

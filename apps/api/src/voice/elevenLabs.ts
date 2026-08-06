@@ -22,6 +22,7 @@
  */
 
 import { Buffer } from "node:buffer";
+import { classifyElevenLabsFailure } from "@connect/shared";
 
 const API_ROOT = "https://api.elevenlabs.io/v1";
 
@@ -107,9 +108,23 @@ export class ElevenLabsError extends Error {
     readonly httpStatus: number,
     /** Safe to show a customer — never contains the key or raw provider JSON. */
     readonly userMessage: string,
+    /** ElevenLabs' own `detail.status`, when they sent one ("quota_exceeded",
+     *  "invalid_api_key_prefix", …). Lets callers branch on the actual reason
+     *  rather than on a status code that means several different things. */
+    readonly providerCode: string = "",
   ) {
     super(message);
     this.name = "ElevenLabsError";
+  }
+}
+
+/** ElevenLabs' machine-readable reason, or "" if they didn't send one. */
+function providerCodeOf(body: string): string {
+  try {
+    const j = JSON.parse(body);
+    return String(j?.detail?.status || j?.detail?.code || j?.detail?.type || "");
+  } catch {
+    return "";
   }
 }
 
@@ -135,33 +150,16 @@ function explain(status: number, body: string): string {
   return "Couldn't generate the audio. Nothing was changed.";
 }
 
-/** Read ElevenLabs' structured `detail` object, when there is one. */
+/**
+ * Read ElevenLabs' structured `detail` object, when there is one.
+ *
+ * The rules themselves live in @connect/shared so the agent's settings page
+ * and this app cannot drift apart and describe the same failure two different
+ * ways — which is what let a retired-format key read as "unreachable" on one
+ * screen and "rejected" on the other.
+ */
 export function classify(body: string): string | null {
-  let code = "";
-  try {
-    const j = JSON.parse(body);
-    code = String(j?.detail?.status || j?.detail?.code || j?.detail?.type || "");
-  } catch {
-    // Some errors come back as plain text; the substring checks below still work.
-  }
-  const hay = `${code} ${body}`.toLowerCase();
-
-  if (/payment_issue|payment_required|past_due|failed or incomplete payment/.test(hay)) {
-    return "ElevenLabs has an unpaid invoice on the account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again.";
-  }
-  if (/quota_exceeded|character limit|out of credits/.test(hay)) {
-    return "The ElevenLabs account has used all its characters for this month. It resets on the next billing date, or you can upgrade the plan.";
-  }
-  if (/detected_unusual_activity|abuse/.test(hay)) {
-    return "ElevenLabs has flagged unusual activity on the account and paused it. You'll need to sort that out with them directly.";
-  }
-  if (/invalid_api_key|missing_api_key|needs_authorization/.test(hay)) {
-    return "The ElevenLabs key was rejected. Check it on the ElevenLabs settings page.";
-  }
-  if (/voice_not_found/.test(hay)) {
-    return "That voice is no longer on the ElevenLabs account. Pick another one.";
-  }
-  return null;
+  return classifyElevenLabsFailure(body);
 }
 
 async function call(
@@ -186,7 +184,7 @@ async function call(
       // Read at most a snippet: provider errors can be enormous, and the body
       // is only ever used to classify, never shown verbatim.
       const text = (await res.text().catch(() => "")).slice(0, 400);
-      throw new ElevenLabsError(`elevenlabs_${res.status}`, res.status, explain(res.status, text));
+      throw new ElevenLabsError(`elevenlabs_${res.status}`, res.status, explain(res.status, text), providerCodeOf(text));
     }
     return res;
   } catch (err: any) {
@@ -388,7 +386,15 @@ export async function synthesiseSpeech(
       }
       return { pcm, sampleRate: rate, model };
     } catch (err: any) {
-      const canRetryAtHigherRate = format === "pcm_8000" && err instanceof ElevenLabsError && (err.httpStatus === 400 || err.httpStatus === 403 || err.httpStatus === 422);
+      // Only the format is worth retrying at a higher rate. A rejected key
+      // also answers 400 — asking again in 16 kHz cannot possibly help, and
+      // the second failure is what buries the first, useful message.
+      const aboutTheKey = err instanceof ElevenLabsError && /api_key|authentication/i.test(err.providerCode);
+      const canRetryAtHigherRate =
+        format === "pcm_8000" &&
+        err instanceof ElevenLabsError &&
+        !aboutTheKey &&
+        (err.httpStatus === 400 || err.httpStatus === 403 || err.httpStatus === 422);
       if (!canRetryAtHigherRate) throw err;
     }
   }

@@ -358,6 +358,13 @@ async function main() {
     app.get("/agent/voice/elevenlabs/status", async (req, reply) => {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
       const key = providerKeys.elevenLabsApiKey;
+      const { describeElevenLabsKey, classifyElevenLabsFailure, isElevenLabsKeyFailure } = await import("@connect/shared");
+      // The saved key's shape, never the key. This is the only way for the
+      // owner to tell that what they pasted is what actually got stored — a
+      // password field silently refilled by a browser looks identical to a
+      // successful paste, and reads as "I saved a good key and it's broken".
+      const shape = describeElevenLabsKey(key);
+      const keyInfo = shape ? { keyHint: `…${shape.last4}`, keyLooksCurrent: shape.looksCurrent, keyLooksLegacy: shape.looksLegacy } : {};
       if (!key) return { configured: false, reachable: false, reason: "no_key" };
       try {
         // Bounded: a hung provider must never hang the settings page with it.
@@ -366,7 +373,21 @@ async function main() {
           fetch("https://api.elevenlabs.io/v1/voices", { headers: { "xi-api-key": key }, signal: AbortSignal.timeout(15_000) }),
         ]);
         if (!subRes.ok) {
-          return { configured: true, reachable: false, reason: subRes.status === 401 ? "invalid_key" : `http_${subRes.status}` };
+          // Read the body and say what THEY said. Mapping only 401 to
+          // "invalid_key" was the bug: a retired-format key answers 400, so
+          // this page told the owner the provider was unreachable — pointing
+          // the blame at Connect for a problem only they can fix, on their
+          // account. Anything 4xx is about the key; 5xx is genuinely them.
+          const body = await subRes.text().catch(() => "");
+          const message = classifyElevenLabsFailure(body.slice(0, 400));
+          return {
+            ...keyInfo,
+            configured: true,
+            reachable: false,
+            reason: isElevenLabsKeyFailure(subRes.status, body) ? "invalid_key" : `http_${subRes.status}`,
+            /** Written for the owner; the page shows it verbatim. */
+            message,
+          };
         }
         const sub: any = await subRes.json();
         const voicesJson: any = voicesRes.ok ? await voicesRes.json() : { voices: [] };
@@ -386,6 +407,7 @@ async function main() {
               ? "This account has used all its characters for the month. It resets on the next billing date, or you can upgrade the plan."
               : null;
         return {
+          ...keyInfo,
           configured: true,
           reachable: true,
           /** Reachable AND able to synthesise right now. */
@@ -406,7 +428,7 @@ async function main() {
           })),
         };
       } catch (err: any) {
-        return { configured: true, reachable: false, reason: "unreachable", detail: String(err?.message ?? "").slice(0, 200) };
+        return { ...keyInfo, configured: true, reachable: false, reason: "unreachable", detail: String(err?.message ?? "").slice(0, 200) };
       }
     });
     const requireOwner = (req: any) => {

@@ -171,6 +171,30 @@ test("classify still calls a genuinely bad key a bad key", () => {
   assert.match(classify(bad)!, /rejected/i);
 });
 
+// The body ElevenLabs returned on 2026-08-06, verbatim. Note the 400: a key in
+// their retired format is refused with a status code that reads like a bad
+// request, and `invalid_api_key_prefix` contains `invalid_api_key`, so both the
+// code and a careless classifier lose the one detail that matters.
+const LEGACY_KEY_PREFIX_BODY = JSON.stringify({
+  detail: {
+    type: "authentication_error",
+    code: "invalid_api_key",
+    message: "API key must start with 'sk_'.",
+    status: "invalid_api_key_prefix",
+  },
+});
+
+test("classify tells someone a retired-format key needs replacing, not re-checking", () => {
+  const msg = classify(LEGACY_KEY_PREFIX_BODY)!;
+  assert.match(msg, /sk_/);
+  assert.match(msg, /will not help/i);
+  assert.match(msg, /elevenlabs\.io/);
+});
+
+test("the retired-key message is distinct from the generic rejected-key one", () => {
+  assert.notEqual(classify(LEGACY_KEY_PREFIX_BODY), classify(JSON.stringify({ detail: { status: "invalid_api_key" } })));
+});
+
 test("classify points at the voice picker when a voice has been deleted", () => {
   assert.match(classify(JSON.stringify({ detail: { status: "voice_not_found" } }))!, /Pick another one/i);
 });
@@ -321,6 +345,25 @@ test("synthesiseSpeech falls back to 16 kHz when the plan refuses 8 kHz", async 
   const out = await synthesiseSpeech("k10", { voiceId: "v1", text: "Hello there" });
   assert.equal(out.sampleRate, 16000);
   assert.match(calls[1].url, /output_format=pcm_16000/);
+});
+
+test("synthesiseSpeech does NOT retry at 16 kHz when the KEY is what was refused", async () => {
+  // A rejected key answers 400, the same code an unsupported output format
+  // uses. Retrying asks a dead key the same question twice and buries the
+  // useful first message under the second failure.
+  queue(jsonRes({ detail: { status: "invalid_api_key_prefix", message: "API key must start with 'sk_'." } }, 400));
+  await assert.rejects(
+    () => synthesiseSpeech("legacy-key", { voiceId: "v1", text: "Hello" }),
+    (e: any) => e instanceof ElevenLabsError && /sk_/.test(e.userMessage),
+  );
+  assert.equal(calls.length, 1);
+});
+
+test("synthesiseSpeech still falls back at 16 kHz when it really is the format", async () => {
+  queue(jsonRes({ detail: { status: "invalid_output_format" } }, 400), bytesRes(new Uint8Array(3200)));
+  const out = await synthesiseSpeech("k10b", { voiceId: "v1", text: "Hello there" });
+  assert.equal(out.sampleRate, 16000);
+  assert.equal(calls.length, 2);
 });
 
 test("synthesiseSpeech does NOT fall back on a quota failure — that retry would just fail and confuse", async () => {
