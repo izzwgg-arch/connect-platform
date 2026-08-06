@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import type { ConnectChatRoutesDeps } from "../connectChatRoutes";
+import { invalidateAllPortalPermissions } from "../permissionCache";
 import { isAdminRole } from "./guard";
 import { registerCrmContactRoutes } from "./contactRoutes";
 import { registerCrmTimelineRoutes } from "./timelineRoutes";
@@ -168,6 +169,9 @@ export async function registerCrmRoutes(app: FastifyInstance, deps?: Pick<Connec
         ...(data.defaultQueueFilter !== undefined && { defaultQueueFilter: data.defaultQueueFilter }),
       },
     });
+
+    // `enabled` gates every CRM permission key for this tenant.
+    invalidateAllPortalPermissions();
 
     return {
       enabled: settings.enabled,

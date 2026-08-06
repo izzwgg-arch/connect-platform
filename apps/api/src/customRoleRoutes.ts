@@ -33,6 +33,7 @@ import {
   getEffectiveCustomRolePermissions,
 } from "./platformRolePermissions";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
+import { invalidateAllPortalPermissions } from "./permissionCache";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -244,6 +245,7 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
           updatedByUserId: actor.sub,
         },
       });
+      invalidateAllPortalPermissions();
       return reply.code(201).send({ role });
     } catch (err: any) {
       if (err?.code === "P2002") {
@@ -288,6 +290,7 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
 
     try {
       const role = await db.customRole.update({ where: { id }, data: updateData as any });
+      invalidateAllPortalPermissions();
       return { role };
     } catch (err: any) {
       if (err?.code === "P2002") {
@@ -332,6 +335,9 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
         updatedByUserId: actor.sub,
       },
     });
+    // Duplicates land inactive (granting nothing), but invalidate anyway so this
+    // stays correct if that default ever changes.
+    invalidateAllPortalPermissions();
     return reply.code(201).send({ role });
   });
 
@@ -352,6 +358,7 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
     if (existing.tenantId !== tenantId) return reply.code(403).send({ error: "forbidden" });
 
     await db.customRole.delete({ where: { id } });
+    invalidateAllPortalPermissions();
     return { ok: true };
   });
 
@@ -452,6 +459,7 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
       ),
     ]);
 
+    invalidateAllPortalPermissions();
     return { ok: true };
   });
 

@@ -11,6 +11,7 @@ import {
   getEffectiveCustomRolePermissions,
   jwtRoleToPortalPermissionBucket,
 } from "../platformRolePermissions";
+import { portalPermissionCacheKey, withCachedPortalPermissions } from "../permissionCache";
 
 /**
  * Pure authoritative-custom-role decision (no DB) — unit-testable.
@@ -47,10 +48,33 @@ export async function resolvePortalPermissionsWithCrmUserAccess(
   userId: string,
   tenantId: string | null | undefined,
 ): Promise<PortalPermissionKey[] | null> {
+  return withCachedPortalPermissions(
+    portalPermissionCacheKey(jwtRole, userId, tenantId),
+    () => resolvePortalPermissionsUncached(jwtRole, userId, tenantId),
+  );
+}
+
+async function resolvePortalPermissionsUncached(
+  jwtRole: string | undefined,
+  userId: string,
+  tenantId: string | null | undefined,
+): Promise<PortalPermissionKey[] | null> {
   let portalPermissionSet = await getEffectivePortalPermissionSetForJwtRole(jwtRole);
   if (!portalPermissionSet) return null;
 
   const bucket = jwtRoleToPortalPermissionBucket(jwtRole);
+
+  // Custom-role assignments were fetched TWICE per resolve (once for the
+  // authoritative check below, once for the union near the end) — the same query
+  // both times, because getEffectiveCustomRolePermissions ignores tenantId by
+  // design. Fetch at most once and reuse.
+  let customPermsMemo: PortalPermissionKey[] | null = null;
+  const loadCustomPerms = async (): Promise<PortalPermissionKey[]> => {
+    if (customPermsMemo === null) {
+      customPermsMemo = await getEffectiveCustomRolePermissions(userId, tenantId);
+    }
+    return customPermsMemo;
+  };
 
   // ── Authoritative custom roles ──────────────────────────────────────────────
   // If a non-SUPER_ADMIN user has one or more ACTIVE custom roles assigned, those
@@ -68,7 +92,7 @@ export async function resolvePortalPermissionsWithCrmUserAccess(
   // SUPER_ADMIN is exempt and always retains its full set (it can never be
   // weakened by a custom role), so platform owners can never lock themselves out.
   if (bucket !== "SUPER_ADMIN" && userId) {
-    const customPerms = await getEffectiveCustomRolePermissions(userId);
+    const customPerms = await loadCustomPerms();
     const authoritative = computeAuthoritativePortalPermissions(bucket, customPerms);
     if (authoritative) return authoritative;
   }
@@ -101,7 +125,7 @@ export async function resolvePortalPermissionsWithCrmUserAccess(
   }
 
   if (userId && tenantId) {
-    const customPerms = await getEffectiveCustomRolePermissions(userId, tenantId);
+    const customPerms = await loadCustomPerms();
     if (customPerms.length > 0) {
       portalPermissionSet = [...new Set([...portalPermissionSet, ...customPerms])] as PortalPermissionKey[];
     }

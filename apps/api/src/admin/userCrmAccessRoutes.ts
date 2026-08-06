@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
+import { invalidateAllPortalPermissions } from "../permissionCache";
 
 type RouteDeps = {
   requirePermission: (req: any, reply: any, checker: (user: any) => boolean) => Promise<any | null>;
@@ -162,6 +163,8 @@ export async function registerAdminUserCrmAccessRoutes(app: FastifyInstance, dep
       return row;
     });
 
+    invalidateAllPortalPermissions();
+
     await audit({
       tenantId: target.tenantId,
       actorUserId: admin.sub,
@@ -202,6 +205,9 @@ export async function registerAdminUserCrmAccessRoutes(app: FastifyInstance, dep
       update: { enabled: true },
       select: { enabled: true },
     });
+
+    // Tenant-wide CRM flag — changes the resolved set for every user in it.
+    invalidateAllPortalPermissions();
 
     await audit({
       tenantId: target.tenantId,

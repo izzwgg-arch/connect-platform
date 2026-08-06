@@ -11,6 +11,7 @@ import {
 } from "@connect/shared";
 import { portalBucketFromJwtRole, PORTAL_ROLE_BUCKETS as SHARED_PORTAL_ROLE_BUCKETS } from "./userManagementRoles";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
+import { invalidateAllPortalPermissions, withCachedRoleSnapshot } from "./permissionCache";
 
 const SNAPSHOT_ID = "default";
 const SNAPSHOT_VERSION = 2;
@@ -95,10 +96,17 @@ function normalizeRolePermissionSet(input: unknown, bucket: PortalRoleBucket): P
   return [...set];
 }
 
+/**
+ * Reads the ONE global snapshot row. Every permission check on the platform hits
+ * this, so it is memoized behind a short TTL — see permissionCache.ts. Writers
+ * (POST /admin/role-permissions) must invalidate.
+ */
 async function loadSnapshotRoles(): Promise<{ version: number; roles: SnapshotRoles } | null> {
-  const row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
-  if (!row || row.roles == null) return null;
-  return rolesPayload(row.roles);
+  return withCachedRoleSnapshot(async () => {
+    const row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
+    if (!row || row.roles == null) return null;
+    return rolesPayload(row.roles);
+  });
 }
 
 export async function getEffectivePortalPermissionListForBucket(bucket: PortalRoleBucket): Promise<PortalPermissionKey[]> {
@@ -236,6 +244,8 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
         create: { id: SNAPSHOT_ID, roles: { version: SNAPSHOT_VERSION, roles: normalized } },
         update: { roles: { version: SNAPSHOT_VERSION, roles: normalized } },
       });
+      // Global snapshot — this changes the answer for every user on the platform.
+      invalidateAllPortalPermissions();
       return { ok: true };
     } catch (err: any) {
       app.log.error({ err: err?.message }, "role-permissions: write failed");
