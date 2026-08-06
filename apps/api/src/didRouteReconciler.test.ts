@@ -56,6 +56,9 @@ test("reassertAllowed: first time yes, inside window no, after window yes", () =
 
 // ── cycle harness ───────────────────────────────────────────────────────────
 
+// Far enough in the past that the publish-settle guard never applies.
+const OLD_PUBLISH_AT = 1_000;
+
 const MAPPING: ReconcilerMapping = {
   id: "map1", tenantId: "ten1", e164: "+18457231213", enabled: true, routingMode: "connect", ivrProfileId: "prof1",
 };
@@ -84,7 +87,7 @@ function makeDeps(overrides: Partial<DidRouteReconcilerDeps> = {}) {
     },
     republishDidmap: async (m) => { calls.didmapRepublishes.push(m.id); },
     replayLastMenuPublish: async (tenantId) => { calls.menuReplays.push(tenantId); },
-    lastSuccessfulPublishKeys: async () => [{ family: "connect/t_slug1", key: "active_prompt", value: "custom/x" }],
+    lastSuccessfulPublishKeys: async () => ({ id: "pub1", publishedAt: OLD_PUBLISH_AT, keys: [{ family: "connect/t_slug1", key: "active_prompt", value: "custom/x" }] }),
     reassertRoute: async (id) => { calls.reasserts.push(id); return { statusCode: 200, body: {} }; },
     getTenantSlug: async () => "slug1",
     ...overrides,
@@ -185,7 +188,7 @@ test("drifted menu keys replay the LAST SUCCESSFUL publish verbatim (never recom
   ];
   let replayedWith: AstDbKV[] | null = null;
   const { deps, calls } = makeDeps({
-    lastSuccessfulPublishKeys: async () => published,
+    lastSuccessfulPublishKeys: async () => ({ id: "pub1", publishedAt: OLD_PUBLISH_AT, keys: published }),
     readAstDbKeys: async (_slug, family, keyNames) => {
       if (family.startsWith("connect/didmap/")) {
         return expectedDidmapKeys(MAPPING, "slug1"); // didmap fine
@@ -203,6 +206,61 @@ test("drifted menu keys replay the LAST SUCCESSFUL publish verbatim (never recom
   assert.ok(calls.alerts.includes("reconciler-menu-ten1"));
 });
 
+test("a FRESH publish is never overwritten by a repair (the silent-revert race)", async () => {
+  // The reconciler replays the LAST publish. If an owner publishes while a
+  // cycle is in flight, replaying writes the older values over the new ones
+  // and the change silently reverts — caught by the e2e suite on 2026-08-06
+  // when a greeting change vanished between publish and call.
+  const published: AstDbKV[] = [{ family: "connect/t_slug1", key: "active_prompt", value: "custom/old" }];
+  const { deps, calls } = makeDeps({
+    lastSuccessfulPublishKeys: async () => ({ id: "pub-fresh", publishedAt: Date.now(), keys: published }),
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
+      // Live shows the NEWER value — which the old code called "drift".
+      return keyNames.map((k) => ({ family, key: k, value: "custom/brand-new" }));
+    },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.menuReplays, [], "a just-published tenant must not be 'repaired'");
+});
+
+test("a publish landing mid-cycle aborts the replay", async () => {
+  const published: AstDbKV[] = [{ family: "connect/t_slug1", key: "active_prompt", value: "custom/old" }];
+  let call = 0;
+  const { deps, calls } = makeDeps({
+    lastSuccessfulPublishKeys: async () => {
+      call += 1;
+      // First read: an old publish (so the freshness guard passes). Re-check
+      // before writing: a different publish id — someone published meanwhile.
+      return call === 1
+        ? { id: "pub-old", publishedAt: OLD_PUBLISH_AT, keys: published }
+        : { id: "pub-newer", publishedAt: Date.now(), keys: published };
+    },
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
+      return keyNames.map((k) => ({ family, key: k, value: "something-else" }));
+    },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.menuReplays, [], "must stand down when the publish moved under us");
+});
+
+test("didmap reads pass the DID so the endpoint's scope check accepts them", async () => {
+  // Without didE164 the telephony read rejects a connect/didmap/* family, every
+  // key reads back empty, and the reconciler "repairs" the same two keys on
+  // every cycle forever.
+  let sawDid: string | undefined = "NOT_CALLED";
+  const { deps } = makeDeps({
+    readAstDbKeys: async (_slug, family, keyNames, didE164) => {
+      if (family.startsWith("connect/didmap/")) sawDid = didE164;
+      return keyNames.map((k) => ({ family, key: k, value: "" }));
+    },
+    lastSuccessfulPublishKeys: async () => null,
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.equal(sawDid, MAPPING.e164);
+});
+
 test("an unreadable AstDB (every key empty) is NOT treated as drift — no repair, no alert", async () => {
   // The telephony read endpoint 400s above 32 keys; that used to surface as
   // "every key is missing" and had the reconciler republishing healthy tenants
@@ -211,7 +269,7 @@ test("an unreadable AstDB (every key empty) is NOT treated as drift — no repai
     family: "connect/t_slug1", key: `k${i}`, value: `v${i}`,
   }));
   const { deps, calls } = makeDeps({
-    lastSuccessfulPublishKeys: async () => published,
+    lastSuccessfulPublishKeys: async () => ({ id: "pub1", publishedAt: OLD_PUBLISH_AT, keys: published }),
     readAstDbKeys: async (_slug, family, keyNames) => {
       if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
       return keyNames.map((k) => ({ family, key: k, value: "" }));
@@ -228,7 +286,7 @@ test("menu-key reads are chunked to 32 so large families are readable at all", a
   }));
   const batchSizes: number[] = [];
   const { deps } = makeDeps({
-    lastSuccessfulPublishKeys: async () => published,
+    lastSuccessfulPublishKeys: async () => ({ id: "pub1", publishedAt: OLD_PUBLISH_AT, keys: published }),
     readAstDbKeys: async (_slug, family, keyNames) => {
       if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
       batchSizes.push(keyNames.length);

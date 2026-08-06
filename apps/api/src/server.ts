@@ -23498,8 +23498,8 @@ const didReconcilerDeps = {
       return { ok: false as const, error: err?.message ?? "doorway_status_failed" };
     }
   },
-  readAstDbKeys: (tenantSlug: string, family: string, keyNames: string[]) =>
-    snapshotAstDbFamily(tenantSlug, family, keyNames),
+  readAstDbKeys: (tenantSlug: string, family: string, keyNames: string[], didE164?: string) =>
+    snapshotAstDbFamily(tenantSlug, family, keyNames, didE164 ? { didE164 } : {}),
   republishDidmap: async (mapping: ReconcilerMapping, tenantSlug: string) => {
     const full = await (db as any).didRouteMapping.findUnique({ where: { id: mapping.id } });
     if (!full || !full.enabled || full.routingMode !== "connect") return; // intent changed mid-cycle — never republish stale state
@@ -23513,10 +23513,15 @@ const didReconcilerDeps = {
     const rec = await (db as any).ivrPublishRecord.findFirst({
       where: { tenantId, status: "success", isRollback: false },
       orderBy: { publishedAt: "desc" },
-      select: { keysWritten: true },
+      select: { id: true, publishedAt: true, keysWritten: true },
     });
     const keys = rec?.keysWritten;
-    return Array.isArray(keys) ? (keys as Array<{ family: string; key: string; value: string }>) : null;
+    if (!rec || !Array.isArray(keys)) return null;
+    return {
+      id: String(rec.id),
+      publishedAt: new Date(rec.publishedAt).getTime(),
+      keys: keys as Array<{ family: string; key: string; value: string }>,
+    };
   },
   reassertRoute: (mappingId: string) =>
     didInjectAsService(app, "POST", `/voice/did/${encodeURIComponent(mappingId)}/switch-to-connect`, "reconciler"),
