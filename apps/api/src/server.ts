@@ -19969,6 +19969,8 @@ function normalizeTenantDestinationRef(type: string | null | undefined, ref: str
  *  the box so a fresh IVR behaves sensibly without any admin configuration.
  *  Stored as Asterisk built-in playable names (no `custom/` prefix). */
 const IVR_DEFAULT_PROMPT_INVALID = "pbx-invalid";
+/** Asterisk built-ins — they ship with the PBX, so never try to push audio for them. */
+const IVR_DEFAULT_PROMPT_REFS_FOR_AUDIO = new Set(["pbx-invalid", "vm-enter-num-to-call", "vm-goodbye", "one-moment-please"]);
 const IVR_DEFAULT_PROMPT_TIMEOUT = "vm-enter-num-to-call";
 
 /** Build the full set of AstDB key-value pairs for a publish.
@@ -20351,6 +20353,88 @@ async function ivrValidatePromptRefForTenant(
  *       library entry, still considered synced.
  *
  *  Returned shape lets the UI say exactly which profile + field is wrong. */
+/**
+ * Make sure every recording a publish references actually EXISTS on the PBX,
+ * under exactly the name we are about to publish.
+ *
+ * Why this has to happen at publish time
+ * ──────────────────────────────────────
+ * The dialplan does `STAT(/var/lib/asterisk/sounds/<ref>.wav)` and, when the
+ * file isn't there, quietly plays a generic stand-in instead. So a menu can be
+ * "published successfully" and still greet every caller with
+ * "one moment please / enter the number to call".
+ *
+ * That was live on A plus center (2026-08-06): the catalog held
+ * `promptRef: custom/104_VM` while the file written for it was `104_vm.wav` —
+ * Linux is case-sensitive, the STAT missed, and callers heard the stand-in.
+ * It was not one bad row: **86 of 112 active prompts** disagreed this way,
+ * every one from the PBX sync, and 84 of them had their audio sitting in
+ * Connect's own storage the whole time.
+ *
+ * Validating the CATALOG (ivrResolveMissingPromptRefs) never caught it, because
+ * the row was present and healthy — only the bytes on the PBX were missing.
+ *
+ * So: publish now pushes the audio itself, under the exact ref it emits. Ref
+ * and file agree by construction, every tenant self-heals on their next
+ * publish, and nobody has to rename a file by hand.
+ *
+ * Returns a map of requested-ref → ref to publish. Anything we can't back with
+ * real audio is returned unchanged and left to the missing-prompt gate.
+ */
+async function ivrEnsurePromptAudioOnPbx(
+  tenantId: string,
+  refs: string[],
+  pbxInstanceId: string | null,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const wanted = Array.from(new Set(refs.filter((r) => typeof r === "string" && r.length > 0)));
+  if (wanted.length === 0) return out;
+
+  let rows: Array<{ promptRef: string; fileBaseName: string | null; storageKey: string | null; tenantSlug: string | null; sha256: string | null; sizeBytes: number | null }>;
+  try {
+    rows = await (db as any).tenantPbxPrompt.findMany({
+      where: { tenantId, promptRef: { in: wanted }, isActive: true },
+      select: { promptRef: true, fileBaseName: true, storageKey: true, tenantSlug: true, sha256: true, sizeBytes: true },
+    });
+  } catch {
+    return out; // DB hiccup — publish unchanged rather than blocking routing.
+  }
+
+  const helperCfg = resolvePbxRouteHelperConfig(pbxInstanceId);
+  const { readPromptFile } = await import("./promptStorage");
+
+  for (const row of rows) {
+    // The file the bytes were stored as is the canonical name; the ref is only
+    // a label and is the half that drifted.
+    const base = (row.fileBaseName || String(row.promptRef).split("/").pop() || "").trim();
+    if (!base) continue;
+    const publishRef = `custom/${base}`;
+    if (publishRef !== row.promptRef) out.set(row.promptRef, publishRef);
+
+    if (!helperCfg || !row.storageKey) continue;
+    try {
+      const bytes = await readPromptFile(row.storageKey);
+      await pushPromptToHelper(
+        helperCfg,
+        {
+          fileBaseName: base,
+          sha256: row.sha256 ?? "",
+          sizeBytes: row.sizeBytes ?? bytes.length,
+          tenantSlug: row.tenantSlug,
+          promptRef: publishRef,
+          requestedBy: "publish:ensure-audio",
+        },
+        bytes,
+      );
+    } catch (err: any) {
+      // Never fail a publish over this: the ref still resolves if the file was
+      // already there, and the dialplan's own fallback covers the rest.
+      app.log.warn({ tenantId, promptRef: row.promptRef, err: err?.message }, "[IVR_PUBLISH] prompt audio push failed");
+    }
+  }
+  return out;
+}
+
 async function ivrResolveMissingPromptRefs(
   tenantId: string,
   candidates: Array<{ key: string; ref: string; profileType?: string | null }>,
@@ -22725,11 +22809,36 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   const slug = await getIvrSlugForTenant(tenantId);
   const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({
     where: { tenantId },
-    select: { pbxTenantId: true },
+    select: { pbxTenantId: true, pbxInstanceId: true },
   });
   const tenantDialContext = tenantPbxLink?.pbxTenantId
     ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all`
     : null;
+  // Put the audio on the PBX under the exact names we're about to publish, and
+  // correct any ref whose capitalisation drifted from its file. Without this a
+  // publish "succeeds" while callers hear the generic stand-in.
+  {
+    const wantedRefs: string[] = [];
+    for (const p of profiles as any[]) {
+      for (const r of [p.pbxPromptRef, p.pbxInvalidPromptRef, p.pbxTimeoutPromptRef, p.pbxRetryPromptRef]) {
+        if (r && !IVR_DEFAULT_PROMPT_REFS_FOR_AUDIO.has(String(r))) wantedRefs.push(String(r));
+      }
+    }
+    for (const o of allOptions as any[]) if (o?.announcePromptRef) wantedRefs.push(String(o.announcePromptRef));
+    const fixed = await ivrEnsurePromptAudioOnPbx(tenantId, wantedRefs, tenantPbxLink?.pbxInstanceId ?? null);
+    if (fixed.size > 0) {
+      const fix = (v: any) => (v && fixed.get(String(v))) || v;
+      for (const p of profiles as any[]) {
+        p.pbxPromptRef = fix(p.pbxPromptRef);
+        p.pbxInvalidPromptRef = fix(p.pbxInvalidPromptRef);
+        p.pbxTimeoutPromptRef = fix(p.pbxTimeoutPromptRef);
+        p.pbxRetryPromptRef = fix(p.pbxRetryPromptRef);
+      }
+      for (const o of allOptions as any[]) if (o?.announcePromptRef) o.announcePromptRef = fix(o.announcePromptRef);
+      app.log.info({ tenantId, corrected: fixed.size }, "[IVR_PUBLISH] prompt refs realigned to their stored audio");
+    }
+  }
+
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
 
   // STRICT PRE-PUBLISH CHECK — every non-default prompt ref we're about to
@@ -22884,8 +22993,33 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   for (const opt of allOptions) (menuOptionsByProfile[opt.profileId] ??= []).push(opt);
   const activeOptions = activeProfile ? (menuOptionsByProfile[activeProfile.id] ?? []) : [];
   const slug = await getIvrSlugForTenant(tenantId);
-  const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true } });
+  const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true, pbxInstanceId: true } });
   const tenantDialContext = tenantPbxLink?.pbxTenantId ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all` : null;
+  // Put the audio on the PBX under the exact names we're about to publish, and
+  // correct any ref whose capitalisation drifted from its file. Without this a
+  // publish "succeeds" while callers hear the generic stand-in.
+  {
+    const wantedRefs: string[] = [];
+    for (const p of profiles as any[]) {
+      for (const r of [p.pbxPromptRef, p.pbxInvalidPromptRef, p.pbxTimeoutPromptRef, p.pbxRetryPromptRef]) {
+        if (r && !IVR_DEFAULT_PROMPT_REFS_FOR_AUDIO.has(String(r))) wantedRefs.push(String(r));
+      }
+    }
+    for (const o of allOptions as any[]) if (o?.announcePromptRef) wantedRefs.push(String(o.announcePromptRef));
+    const fixed = await ivrEnsurePromptAudioOnPbx(tenantId, wantedRefs, tenantPbxLink?.pbxInstanceId ?? null);
+    if (fixed.size > 0) {
+      const fix = (v: any) => (v && fixed.get(String(v))) || v;
+      for (const p of profiles as any[]) {
+        p.pbxPromptRef = fix(p.pbxPromptRef);
+        p.pbxInvalidPromptRef = fix(p.pbxInvalidPromptRef);
+        p.pbxTimeoutPromptRef = fix(p.pbxTimeoutPromptRef);
+        p.pbxRetryPromptRef = fix(p.pbxRetryPromptRef);
+      }
+      for (const o of allOptions as any[]) if (o?.announcePromptRef) o.announcePromptRef = fix(o.announcePromptRef);
+      app.log.info({ tenantId, corrected: fixed.size }, "[IVR_PUBLISH] prompt refs realigned to their stored audio");
+    }
+  }
+
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
 
   const IVR_DEFAULT_PROMPT_REFS = new Set([IVR_DEFAULT_PROMPT_INVALID, IVR_DEFAULT_PROMPT_TIMEOUT, "vm-goodbye", "pbx-invalid", "vm-enter-num-to-call"]);
