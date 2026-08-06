@@ -68,6 +68,50 @@ const STATUS_LABEL: Record<MenuStatus, string> = {
   live: "Live on Connect",
 };
 
+/** Error codes these endpoints can return WITHOUT a human-readable `detail`.
+ *  Anything that does send a `detail` uses the server's own wording — this
+ *  only covers the bare-slug cases, so nobody has to guess what a screenful of
+ *  "pbx_tenant_not_found" is supposed to mean. */
+const ERROR_TEXT: Record<string, string> = {
+  forbidden: "Your account isn't allowed to migrate phone menus.",
+  invalid_query: "Connect asked the PBX for something it didn't understand. Reload the page and try again.",
+  invalid_payload: "Connect sent an incomplete request. Reload the page and try again.",
+  pbx_helper_not_configured: "Connect isn't set up to talk to the PBX helper.",
+  pbx_helper_too_old: "The PBX doesn't have the call-flow reader installed yet.",
+  pbx_helper_unreachable: "Connect couldn't reach the PBX.",
+  pbx_tenant_not_found: "That customer isn't on the PBX any more. Refresh and try again.",
+  nothing_to_copy: "There's nothing here Connect can copy — none of this menu could be reproduced.",
+  mapping_not_found: "Connect has no record of that phone number. Refresh and try again.",
+  mapping_disabled: "That phone number is switched off in Connect, so its routing can't be changed.",
+};
+
+/** The parsed JSON error body. `ApiError` exposes it as `.body` — `.payload`
+ *  has never existed, so every read of it was dead code that threw away the
+ *  server's explanation and left a bare slug on screen. */
+type ApiErrorBody = {
+  error?: string;
+  detail?: string;
+  message?: string;
+  problems?: PlanProblem[];
+  warnings?: string[];
+};
+
+function errBody(e: any): ApiErrorBody {
+  return (e?.body ?? {}) as ApiErrorBody;
+}
+
+/** The best human-readable sentence available for a failed call. `e.message`
+ *  comes last because apiRequest builds it from only the `error` and `message`
+ *  JSON fields — never `detail` — so on its own it is usually just the slug. */
+function errText(e: any, fallback: string): string {
+  const b = errBody(e);
+  return String(b.detail ?? "").trim()
+    || String(b.message ?? "").trim()
+    || ERROR_TEXT[String(b.error ?? "").trim()]
+    || String(e?.message ?? "").trim()
+    || fallback;
+}
+
 export default function IvrMigrationPage() {
   // Every API route behind this page is already super-admin only, so for
   // anyone else the screen could only ever be a wall of 403s around controls
@@ -92,6 +136,15 @@ export default function IvrMigrationPage() {
   const [openTenant, setOpenTenant] = useState<number | null>(null);
   const [plan, setPlan] = useState<{ pbxTenantId: number; pbxIvrId: number; plan: Plan; tenantName: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Why a copy was refused, shown INSIDE the plan modal — the modal's backdrop
+   *  covers the page, so the error banner behind it was invisible and a refused
+   *  copy looked like the button had simply done nothing. Carries the API's
+   *  `problems`/`warnings` lists, which used to be parsed and then dropped. */
+  const [copyError, setCopyError] = useState<{ text: string; problems: PlanProblem[]; warnings: string[] } | null>(null);
+  /** A copy that landed but couldn't bring everything with it — usually audio
+   *  left behind in VitalPBX's private tree, which makes the copied menu answer
+   *  with a generic prompt. Too important for a 3-second toast. */
+  const [copiedNotice, setCopiedNotice] = useState<{ menus: number; warnings: string[] } | null>(null);
 
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3200); };
 
@@ -102,15 +155,16 @@ export default function IvrMigrationPage() {
       setTenants(r.tenants || []);
       setCapturedAt(r.capturedAt || "");
     } catch (e: any) {
-      // The two failures worth telling apart: the reader isn't installed on
-      // the PBX yet, versus the PBX can't be reached at all.
-      const payload = e?.payload ?? {};
-      setError(
-        payload.error === "pbx_helper_too_old" ? "The PBX doesn't have the call-flow reader installed yet."
-          : payload.error === "pbx_helper_not_configured" ? "Connect isn't set up to talk to the PBX helper."
-          : "Couldn't read the PBX.",
-      );
-      setErrorDetail(payload.detail ?? e?.message ?? null);
+      // The failures worth telling apart: the reader isn't installed on the
+      // PBX yet, versus the PBX can't be reached at all.
+      const body = errBody(e);
+      const friendly = ERROR_TEXT[String(body.error ?? "").trim()];
+      setError(friendly || "Couldn't read the PBX.");
+      // The server's own detail when there is one. Otherwise `e.message`, but
+      // only when nothing friendlier was found — printing the slug underneath
+      // its own translation helps nobody.
+      const detail = String(body.detail ?? body.message ?? "").trim();
+      setErrorDetail(detail || (friendly ? null : (e?.message ?? null)));
     } finally { setLoading(false); }
   }, []);
 
@@ -130,12 +184,13 @@ export default function IvrMigrationPage() {
     // tenant being copied. This screen shows every customer at once while the
     // portal's tenant switcher sits on an unrelated one, so sending the
     // switcher's tenant would file a menu under the wrong account.
-    setBusy(`plan:${ivr.id}`); setError(null);
+    setBusy(`plan:${ivr.id}`); setError(null); setErrorDetail(null);
     try {
       const r = await apiPost<{ plan: Plan }>("/voice/ivr/migration/plan", { pbxTenantId: t.tenantId, pbxIvrId: ivr.id });
+      setCopyError(null);
       setPlan({ pbxTenantId: t.tenantId, pbxIvrId: ivr.id, plan: r.plan, tenantName: t.tenantName });
     } catch (e: any) {
-      setError(e?.payload?.detail || e?.message || "Couldn't work out what copying this menu would do");
+      setError(errText(e, "Couldn't work out what copying this menu would do"));
     } finally { setBusy(null); }
   }
 
@@ -157,13 +212,13 @@ export default function IvrMigrationPage() {
     );
     if (!ok) return;
 
-    setBusy(`flip:${ivr.id}`); setError(null);
+    setBusy(`flip:${ivr.id}`); setError(null); setErrorDetail(null);
     const failures: string[] = [];
     for (const d of targets) {
       try {
         await apiPost(`/voice/did/${encodeURIComponent(d.mappingId!)}/switch-to-${direction}`, {});
       } catch (e: any) {
-        failures.push(`${d.did}: ${e?.payload?.detail || e?.message || "failed"}`);
+        failures.push(`${d.did}: ${errText(e, "failed")}`);
       }
     }
     setBusy(null);
@@ -183,16 +238,30 @@ export default function IvrMigrationPage() {
     // the Connect account linked to the PBX tenant being copied, resolved
     // server-side. Gating on the switcher here would silently do nothing.
     if (!plan) return;
-    setBusy("import"); setError(null);
+    setBusy("import"); setError(null); setErrorDetail(null); setCopyError(null); setCopiedNotice(null);
     try {
-      const r = await apiPost<{ profiles: Array<{ name: string }> }>("/voice/ivr/migration/import", {
+      const r = await apiPost<{ profiles: Array<{ name: string }>; warnings?: string[] }>("/voice/ivr/migration/import", {
         pbxTenantId: plan.pbxTenantId, pbxIvrId: plan.pbxIvrId, allowPartial,
       });
-      flash(`Copied ${r.profiles.length} menu${r.profiles.length === 1 ? "" : "s"} into Connect. Callers still hear the PBX until you go live.`);
       setPlan(null);
+      // The server copies the menus' AUDIO after the rows land, and reports
+      // every recording it couldn't bring across in `warnings`. A menu missing
+      // its recording answers with a generic built-in prompt — the thing that
+      // caught A plus center out — so those never go in a 3-second toast.
+      const warnings = Array.isArray(r.warnings) ? r.warnings : [];
+      if (warnings.length > 0) setCopiedNotice({ menus: r.profiles.length, warnings });
+      else flash(`Copied ${r.profiles.length} menu${r.profiles.length === 1 ? "" : "s"} into Connect. Callers still hear the PBX until you go live.`);
       await load();
     } catch (e: any) {
-      setError(e?.payload?.detail || e?.message || "Couldn't copy that menu");
+      // Shown in the modal, which stays open: the backdrop hides the page's
+      // banner completely. 422s also carry the `problems` (and `warnings`)
+      // lists explaining exactly what blocked the copy — render them.
+      const body = errBody(e);
+      setCopyError({
+        text: errText(e, "Couldn't copy that menu"),
+        problems: Array.isArray(body.problems) ? body.problems : [],
+        warnings: Array.isArray(body.warnings) ? body.warnings : [],
+      });
     } finally { setBusy(null); }
   }
 
@@ -219,6 +288,19 @@ export default function IvrMigrationPage() {
         <div className="banner err">
           <div><b>{error}</b>{errorDetail && <div className="detail">{errorDetail}</div>}</div>
           <button onClick={() => { setError(null); setErrorDetail(null); }}>×</button>
+        </div>
+      )}
+
+      {copiedNotice && (
+        <div className="banner warn" role="status">
+          <div className="btxt">
+            <b>
+              Copied {copiedNotice.menus} menu{copiedNotice.menus === 1 ? "" : "s"} into Connect — but not everything came with it
+            </b>
+            <div className="detail">Callers still hear the PBX until you go live. Fix these first, or the copied menu answers with a generic prompt:</div>
+            <ul className="plain warn">{copiedNotice.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          </div>
+          <button onClick={() => setCopiedNotice(null)} aria-label="Dismiss">×</button>
         </div>
       )}
 
@@ -299,7 +381,8 @@ export default function IvrMigrationPage() {
           plan={plan.plan}
           tenantName={plan.tenantName}
           busy={busy === "import"}
-          onClose={() => setPlan(null)}
+          error={copyError}
+          onClose={() => { setPlan(null); setCopyError(null); }}
           onCopy={copyIn}
         />
       )}
@@ -310,8 +393,10 @@ export default function IvrMigrationPage() {
 }
 
 // ── "here's exactly what will happen" ────────────────────────────────────────
-function PlanModal({ plan, tenantName, busy, onClose, onCopy }: {
-  plan: Plan; tenantName: string; busy: boolean; onClose: () => void; onCopy: (allowPartial: boolean) => void;
+function PlanModal({ plan, tenantName, busy, error, onClose, onCopy }: {
+  plan: Plan; tenantName: string; busy: boolean;
+  error: { text: string; problems: PlanProblem[]; warnings: string[] } | null;
+  onClose: () => void; onCopy: (allowPartial: boolean) => void;
 }) {
   const [confirmPartial, setConfirmPartial] = useState(false);
   const blocked = plan.problems.length > 0 && !confirmPartial;
@@ -410,6 +495,26 @@ function PlanModal({ plan, tenantName, busy, onClose, onCopy }: {
           )}
         </div>
 
+        {/* Sits between the body and the buttons so it is on screen wherever
+            the plan happens to be scrolled to. The import re-reads the PBX, so
+            its problems can be ones this preview never showed. */}
+        {error && (
+          <div className="cerr" role="alert">
+            {/* "nothing changed for callers" and not "nothing was written":
+                the copy is one transaction, but the audio pass runs after it,
+                so a late failure can still leave Connect rows behind. What is
+                true on every path is that routing was never touched. */}
+            <b>Copy failed — nothing changed for callers</b>
+            <p>{error.text}</p>
+            {error.problems.length > 0 && (
+              <ul className="plain bad">{error.problems.map((p, i) => <li key={i}><b>{p.where}</b> — {p.reason}</li>)}</ul>
+            )}
+            {error.warnings.length > 0 && (
+              <ul className="plain warn">{error.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+            )}
+          </div>
+        )}
+
         <div className="mfoot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || blocked} onClick={() => onCopy(confirmPartial)}>
@@ -447,7 +552,11 @@ function MigrationStyles() {
       .ivrm .iconbtn{width:34px;height:34px;padding:0;justify-content:center}
       .ivrm .banner{margin:0 2px 14px;padding:12px 15px;border-radius:12px;background:var(--accent-soft);border:1px solid var(--border);color:var(--dim);font-size:13px;display:flex;align-items:flex-start;gap:10px}
       .ivrm .banner.err{background:rgba(234,96,104,.10);border-color:rgba(234,96,104,.35);color:var(--danger)}
+      .ivrm .banner.warn{background:rgba(240,182,85,.10);border-color:rgba(240,182,85,.35);color:var(--warning)}
       .ivrm .banner .detail{color:var(--dim);font-size:12.5px;margin-top:4px;font-weight:400}
+      .ivrm .banner .btxt{min-width:0}
+      .ivrm .banner .btxt > b{font-size:13.5px;display:block}
+      .ivrm .banner .btxt ul.plain{margin-top:7px}
       .ivrm .banner button{margin-left:auto;background:none;border:none;color:inherit;font-size:18px;cursor:pointer;line-height:1}
       .ivrm .tally{display:flex;gap:20px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin:0 2px 16px}
       .ivrm .tally b{color:var(--text);font-size:15px;margin-right:5px}
@@ -499,6 +608,10 @@ function MigrationStyles() {
       .ivrm .mbody p{margin:0 0 8px;font-size:12.5px}
       .ivrm .confirm{display:flex;align-items:center;gap:9px;margin-top:12px;font-size:12.5px;cursor:pointer}
       .ivrm .confirm input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+      .ivrm .cerr{flex:none;margin:0 17px 13px;padding:12px 14px;border-radius:12px;background:rgba(234,96,104,.10);border:1px solid rgba(234,96,104,.35);color:var(--danger);font-size:12.5px}
+      .ivrm .cerr > b{font-size:13.5px;display:block}
+      .ivrm .cerr p{margin:4px 0 0;color:var(--dim);font-size:12.5px}
+      .ivrm .cerr ul.plain{margin-top:8px}
       .ivrm .mfoot{display:flex;gap:10px;justify-content:flex-end;padding:14px 17px;border-top:1px solid var(--border-soft)}
       .ivrm .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);color:var(--text);padding:12px 19px;border-radius:12px;box-shadow:var(--shadow);font-size:13.5px;font-weight:600;z-index:80;max-width:min(560px,92vw);text-align:center}
     `}</style>
