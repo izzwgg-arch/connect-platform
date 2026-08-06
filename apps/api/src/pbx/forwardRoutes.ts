@@ -14,7 +14,10 @@
  *   • The internal number is allocated from the live picture of what's in use,
  *     including forwards that already exist. If the PBX can't be read we
  *     refuse, because guessing could hand out a number that already rings.
- *   • Apply Changes is never called — the standing rule for every PBX write.
+ *   • Apply Changes IS called here, unlike every other panel write. Izzy's
+ *     instruction 2026-08-06 and part of the flow he recorded: without it the
+ *     rows exist, the extension is in no dialplan, and callers get a busy
+ *     signal — which is exactly what happened on the first live test.
  */
 
 import { z } from "zod";
@@ -202,9 +205,11 @@ export function registerForwardRoutes(deps: ForwardRouteDeps): void {
         name: formatPhone(result.phoneNumber),
         description: result.description,
       },
-      /** Deliberately surfaced: it exists but callers won't reach it yet. */
-      live: false,
-      message: `Calls will go to ${formatPhone(result.phoneNumber)}. It starts working the next time changes are applied to the phone system.`,
+      /** True once Apply Changes has run — i.e. it will actually ring. */
+      live: result.applied,
+      message: result.applied
+        ? `Calls will go to ${formatPhone(result.phoneNumber)}.`
+        : `Calls are set to go to ${formatPhone(result.phoneNumber)}, but the phone system didn't finish applying it — press Apply Changes on the PBX or callers will get a busy signal.`,
     });
   });
 }

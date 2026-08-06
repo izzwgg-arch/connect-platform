@@ -25,10 +25,12 @@
 //    this by filling in the tenant's DID, and never expose a caller-ID field
 //    for forwards.
 //
-// ⛔ This module NEVER calls Apply Changes. `generateConfigurations` regenerates
-//    the whole PBX and is Izzy's click, always.
+// ⛔ This module DOES call Apply Changes, unlike every other panel writer.
+//    Izzy's explicit instruction 2026-08-06, and it was in the flow he
+//    recorded. Without it the rows exist and the extension is in no dialplan,
+//    so callers get a busy signal. The rule stands everywhere else.
 
-import { PanelSession, assertSaved, decodeEntities } from "../onboarding/panelClient";
+import { PanelSession, assertSaved, decodeEntities, applyChanges } from "../onboarding/panelClient";
 import { nextForwardExtension, type UsedNumbers } from "@connect/shared";
 
 /**
@@ -61,12 +63,9 @@ export interface ForwardCreateResult {
   description: string;
   /** ombu_custom_destinations row id. */
   customDestinationId: string;
-  applied: false;
+  applied: boolean;
   note: string;
 }
-
-const NOT_APPLIED =
-  "Created on the phone system but NOT yet live — it starts working when Apply Changes is pressed on the PBX.";
 
 function form(fields: Array<[string, string]>): FormData {
   // The global FormData, deliberately — `undici` is not a declared dependency
@@ -198,13 +197,46 @@ export async function createForward(
     throw e;
   }
 
+  // ── 3. make it real ──────────────────────────────────────────────────────
+  // Apply Changes regenerates the dialplan. Without it both rows exist in the
+  // panel's database and the extension is in NO dialplan, so a caller sent
+  // there gets a BUSY SIGNAL — which is exactly what happened on the first
+  // live test.
+  //
+  // Izzy's instruction (2026-08-06): the robot applies. It was in the session
+  // he recorded — he pressed Apply Changes after each save — and a forward the
+  // customer cannot use is not a forward. This is a deliberate, owner-granted
+  // exception to the usual "Apply Changes is Izzy's click" rule; it stays in
+  // force everywhere else.
+  //
+  // Applied ONCE at the end rather than after each save: the regen is
+  // whole-PBX, and one pass covers both rows. A failure here is reported
+  // rather than swallowed — the caller needs to know it isn't live.
+  let applied = false;
+  try {
+    await applyChanges(session, `apply forward ${extension}`);
+    applied = true;
+  } catch (err: any) {
+    return {
+      ok: true,
+      extension,
+      phoneNumber: number,
+      description,
+      customDestinationId,
+      applied: false,
+      note:
+        "Created, but the phone system didn't finish applying it, so it won't ring yet. " +
+        `Press Apply Changes on the PBX. (${String(err?.message || err)})`,
+    };
+  }
+
   return {
     ok: true,
     extension,
     phoneNumber: number,
     description,
     customDestinationId,
-    applied: false,
-    note: NOT_APPLIED,
+    applied,
+    note: "Ready — callers reaching this key will be put through to that number.",
   };
 }

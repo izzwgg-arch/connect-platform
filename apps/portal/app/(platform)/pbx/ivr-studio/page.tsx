@@ -538,7 +538,7 @@ export default function IvrStudioPage() {
    */
   async function createForward(phoneNumber: string, label: string): Promise<string | null> {
     try {
-      const r = await apiPost<{ forward: { extension: string; phoneNumber: string; name: string }; message: string }>(
+      const r = await apiPost<{ forward: { extension: string; phoneNumber: string; name: string }; live?: boolean; message: string }>(
         `/voice/forwards${qs}`,
         { tenantId, phoneNumber, label },
       );
@@ -546,7 +546,12 @@ export default function IvrStudioPage() {
       setForwards((cur) => [...(cur ?? []).filter((x) => x.extension !== f.extension), f]);
       // It exists on the phone system but will NOT ring until Apply Changes is
       // pressed there. Remembered so Publish can say so long after this toast.
-      setPendingForwards((p) => (p.some((x) => x.extension === f.extension) ? p : [...p, { extension: f.extension, phoneNumber: f.phoneNumber }]));
+      // Connect applies the change itself now, so this only fires when the
+      // phone system genuinely refused — in which case callers WOULD get a
+      // busy signal and Publish must say so.
+      if (r.live === false) {
+        setPendingForwards((p) => (p.some((x) => x.extension === f.extension) ? p : [...p, { extension: f.extension, phoneNumber: f.phoneNumber }]));
+      }
       flash(r.message);
       return f.extension;
     } catch (e: any) {
