@@ -125,7 +125,37 @@ const UI_PHRASES = [
   "Not set — callers always get the closed menu",
   "Something else", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
   "not live yet", "Teams marked “not live yet” start taking calls the next time changes are applied to the phone system.",
+  "Publishing…", "Published — live for callers now",
+  "This is what callers hear from now on.",
+  "Callers will hear it once a phone number points at this menu.",
+  "Not published — nothing changed for callers",
+  "These recordings aren't on the phone system yet:",
 ];
+
+/** Publish blockers the API can return WITHOUT a human-readable `detail`.
+ *  Anything with a `detail` uses the server's wording; this only covers the
+ *  bare-slug cases so an admin never sees "prompt_refs_not_in_catalog". */
+const PUBLISH_ERROR_TEXT: Record<string, string> = {
+  invalid_payload: "Something was missing from the publish request. Reload the page and try again.",
+  tenant_not_linked: "This customer isn't linked to the phone system yet, so there's nothing to publish to.",
+  no_active_menu_for_mode: "No menu is set to play right now. Open the opening-hours step and choose which menu answers while you're open and while you're closed.",
+  prompt_refs_not_in_catalog: "Some recordings this menu uses aren't on the phone system yet.",
+  publish_failed: "The phone system didn't accept the change, so callers still get the old routing. Try again in a moment.",
+  forbidden: "You don't have permission to publish phone menus.",
+};
+
+/** Turns an API blocker key ("active_prompt_invalid", "opt_3/announce") into
+ *  a spot on screen the admin can actually go fix. */
+function describeMissingSpot(key: string, profileType?: string | null): string {
+  const menu = profileType === "after_hours" ? "the after-hours menu" : "this menu";
+  if (key === "active_prompt") return `the greeting on ${menu}`;
+  if (key === "active_prompt_invalid") return `the “that wasn't a valid key” message on ${menu}`;
+  if (key === "active_prompt_timeout") return `the “nothing was pressed” message on ${menu}`;
+  if (key === "active_prompt_retry") return `the retry message on ${menu}`;
+  const opt = /^opt_(.+)\/announce$/.exec(key);
+  if (opt) return `the recording that plays when a caller presses ${opt[1]}`;
+  return key;
+}
 
 export default function IvrStudioPage() {
   const { tenantId, tenant, can } = useAppContext();
@@ -185,6 +215,18 @@ export default function IvrStudioPage() {
   /** Things that make Publish's "this is what callers hear from now on" claim
    *  untrue — asked about up front instead of discovered by a caller. */
   const [publishWarnings, setPublishWarnings] = useState<string[] | null>(null);
+  /** Proof the publish landed, kept on screen until the next edit. A 3-second
+   *  toast was the only signal before, and admins who missed it assumed the
+   *  publish had failed and clicked again — two duplicate publishes 16s apart
+   *  went live on 2026-08-06. */
+  const [published, setPublished] = useState<null | {
+    at: Date; keysWritten: number; switched: string | null; pointed: boolean;
+  }>(null);
+  /** Structured 422 from the API: the human-readable `detail` plus the list of
+   *  recordings that blocked the publish. */
+  const [publishBlocked, setPublishBlocked] = useState<null | {
+    detail: string; missing: Array<{ key: string; ref: string; profileType?: string | null }>;
+  }>(null);
   /** Generate a greeting instead of recording one — see MakeRecording.tsx. */
   const [makeRecOpen, setMakeRecOpen] = useState(false);
   /** Set when the recording modal/upload was opened FROM the key editor for a
@@ -607,12 +649,12 @@ export default function IvrStudioPage() {
     } catch (e: any) {
       // Build failure: keep the modal open with the answers intact. Right
       // after sign-up these three are usually just the PBX link catching up.
-      const code = e?.payload?.error;
+      const code = e?.body?.error;
       const notReady = code === "tenant_not_linked_to_pbx" || code === "pbx_helper_not_configured" ||
         code === "pbx_unreachable" || code === "pbx_tenant_not_found";
       setFirstRunError(notReady
         ? "Your phone system is still being set up — give it a minute, then press Try again."
-        : (e?.payload?.detail || e?.payload?.message || e?.message || "Couldn't set that up — try again in a moment."));
+        : (e?.body?.detail || e?.body?.message || e?.message || "Couldn't set that up — try again in a moment."));
     } finally { setFirstRunBusy(false); }
   }
 
@@ -664,7 +706,7 @@ export default function IvrStudioPage() {
       }
       await loadAll();
     } catch (e: any) {
-      setError(e?.payload?.message || e?.message || "Couldn't save that.");
+      setError(e?.body?.detail || e?.body?.message || e?.message || "Couldn't save that.");
     }
   }
 
@@ -674,7 +716,7 @@ export default function IvrStudioPage() {
       flash("Booked switch canceled.");
       await loadAll();
     } catch (e: any) {
-      setError(e?.payload?.message || e?.message || "Couldn't cancel that.");
+      setError(e?.body?.detail || e?.body?.message || e?.message || "Couldn't cancel that.");
     }
   }
 
@@ -726,21 +768,31 @@ export default function IvrStudioPage() {
 
   async function publish() {
     if (!active) return;
+    // `saving` also disables the button, but guard here too: the warnings
+    // dialog and the assistant deep-link can both call publish() directly.
+    if (saving) return;
     setSaving(true);
+    setError(null);
+    setPublishBlocked(null);
+    setPublished(null);
     try {
-      await apiPost(`/voice/ivr/publish${qs}`, { tenantId, profileId: active.id });
+      const res = await apiPost<{ keysWritten?: number }>(
+        `/voice/ivr/publish${qs}`, { tenantId, profileId: active.id });
+      const keysWritten = Number(res?.keysWritten ?? 0);
       // The held "switch right now" plan executes here — Publish is the one
       // moment routing is allowed to change, so this is where the inbound
       // route flips to the menu's custom context.
       if (numberPlan && numberPlan.when === "now") {
+        const e164 = numberPlan.e164;
         try {
           await apiPost(`/voice/did/${encodeURIComponent(numberPlan.mappingId)}/switch-to-connect${qs}`, {});
           setNumberPlan(null);
-          flash(`Published — ${fmtUs(numberPlan.e164)} now rings this menu.`);
+          setDirty(false);
+          setPublished({ at: new Date(), keysWritten, switched: e164, pointed: true });
         } catch (e: any) {
-          const detail = e?.payload?.detail || e?.payload?.error || e?.message || "";
+          const detail = e?.body?.detail || e?.body?.error || e?.message || "";
           setError(
-            `The menu is published, but ${fmtUs(numberPlan.e164)} could NOT be switched — callers still get the old routing. ` +
+            `The menu is published, but ${fmtUs(e164)} could NOT be switched — callers still get the old routing. ` +
             `Open “Change number”, pick it again, and publish to retry.` + (detail ? ` (Technical detail: ${detail})` : ""),
           );
         }
@@ -750,11 +802,20 @@ export default function IvrStudioPage() {
       setDirty(false);
       // Only claim callers hear it if a number actually rings this menu.
       const pointed = tenantNumbers.some((n) => n.ivrProfileId === active.id && n.routingMode === "connect");
-      flash(pointed
-        ? "Published — this is what callers hear from now on"
-        : "Published — callers will hear it once a phone number points at this menu.");
+      setPublished({ at: new Date(), keysWritten, switched: null, pointed });
     } catch (e: any) {
-      setError(e?.payload?.detail || e?.message || "Couldn't publish");
+      // ApiError carries the parsed JSON body on `.body`. Reading `.payload`
+      // (which never exists) is what collapsed every 422 down to the bare
+      // error slug, hiding the `detail` and `missing` list the API sends.
+      const body = (e?.body ?? null) as
+        | { error?: string; detail?: string; missing?: Array<{ key: string; ref: string; profileType?: string | null }> }
+        | null;
+      const missing = Array.isArray(body?.missing) ? body!.missing! : [];
+      const detail = String(body?.detail ?? "").trim()
+        || PUBLISH_ERROR_TEXT[String(body?.error ?? "").trim()]
+        || "";
+      if (detail || missing.length > 0) setPublishBlocked({ detail: detail || "Couldn't publish.", missing });
+      else setError(e?.message || "Couldn't publish");
     } finally { setSaving(false); }
   }
 
@@ -772,9 +833,11 @@ export default function IvrStudioPage() {
         {dirty && <span className="pill warn"><i />{t("Not published yet")}</span>}
         <LanguageToggle />
         <button className="btn primary" disabled={!canPublish || saving || !active} onClick={requestPublish}>
-          {numberPlan && numberPlan.when === "now"
-            ? `${t("Publish and switch")} ${fmtUs(numberPlan.e164)}`
-            : t("Publish")}
+          {saving
+            ? t("Publishing…")
+            : numberPlan && numberPlan.when === "now"
+              ? `${t("Publish and switch")} ${fmtUs(numberPlan.e164)}`
+              : t("Publish")}
         </button>
       </div>
 
@@ -803,6 +866,49 @@ export default function IvrStudioPage() {
       </div>
 
       {error && <div className="banner err">{error}<button onClick={() => setError(null)} aria-label="Dismiss">×</button></div>}
+
+      {/* Stays up until the next edit (any change sets `dirty`), so the answer
+          to "did that work?" is on screen rather than gone in 3 seconds. */}
+      {published && !dirty && (
+        <div className="banner ok" role="status">
+          <div className="btxt">
+            <b>{t("Published — live for callers now")}</b>
+            <p>
+              {published.switched
+                ? `${fmtUs(published.switched)} now rings this menu.`
+                : published.pointed
+                  ? t("This is what callers hear from now on.")
+                  : t("Callers will hear it once a phone number points at this menu.")}
+              {published.keysWritten > 0 && ` ${published.keysWritten} setting${published.keysWritten === 1 ? "" : "s"} written`}
+              {` at ${published.at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}
+            </p>
+          </div>
+          <button onClick={() => setPublished(null)} aria-label="Dismiss">×</button>
+        </div>
+      )}
+
+      {publishBlocked && (
+        <div className="banner err" role="alert">
+          <div className="btxt">
+            <b>{t("Not published — nothing changed for callers")}</b>
+            <p>{publishBlocked.detail}</p>
+            {publishBlocked.missing.length > 0 && (
+              <>
+                <p>{t("These recordings aren't on the phone system yet:")}</p>
+                <ul className="misslist">
+                  {publishBlocked.missing.map((m, i) => (
+                    <li key={`${m.key}-${m.ref}-${i}`}>
+                      <b>{m.ref}</b> — {describeMissingSpot(m.key, m.profileType)}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+          <button onClick={() => setPublishBlocked(null)} aria-label="Dismiss">×</button>
+        </div>
+      )}
+
       {loading && <div className="banner">Loading…</div>}
 
       {!loading && profiles.length === 0 && (
@@ -1620,13 +1726,13 @@ function StudioStyles() {
       .ivrs{--accent:#3ba0f2;--accent-soft:rgba(59,160,242,.14);--accent-line:rgba(59,160,242,.38);
         --panel:#16212e;--panel-2:#1c2937;--bg-soft:#111c27;--text:#e4ecf4;--dim:#8ba0b6;--faint:#64798f;
         --line:#2a3a4c;--line-soft:rgba(140,166,196,.16);
-        --person:#3ec37e;--team:#3ba0f2;--vm:#e8a33d;--menu:#a98fe0;--stop:#e2606a;
+        --person:#3ec37e;--team:#3ba0f2;--vm:#e8a33d;--menu:#a98fe0;--stop:#e2606a;--ok:#3ec37e;
         --r:16px;--shadow:0 20px 54px -34px rgba(0,0,0,.75),0 6px 18px -14px rgba(0,0,0,.55);
         color:var(--text);max-width:1240px;margin:0 auto;padding:6px 2px 70px}
       :root[data-theme="light"] .ivrs{--panel:#fff;--panel-2:#f6f9fc;--bg-soft:#eef2f7;--text:#132030;--dim:#5d6f84;--faint:#8496a8;
         --accent:#1f74d0;--accent-soft:rgba(31,116,208,.09);--accent-line:rgba(31,116,208,.30);
         --line:rgba(19,32,48,.13);--line-soft:rgba(19,32,48,.08);
-        --person:#1a9d5c;--team:#1f74d0;--vm:#b57718;--menu:#7659c4;--stop:#c9414c;
+        --person:#1a9d5c;--team:#1f74d0;--vm:#b57718;--menu:#7659c4;--stop:#c9414c;--ok:#1a9d5c;
         --shadow:0 20px 50px -38px rgba(28,45,68,.42),0 6px 18px -14px rgba(28,45,68,.14)}
       .ivrs *{box-sizing:border-box}
       .ivrs .topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 4px 0}
@@ -1652,6 +1758,12 @@ function StudioStyles() {
       .ivrs .menusel{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:9px 13px;font-size:16px;font-weight:660;color:var(--text);font-family:inherit;cursor:pointer}
       .ivrs .banner{margin:0 4px 14px;padding:12px 15px;border-radius:12px;background:var(--accent-soft);border:1px solid var(--line);color:var(--dim);font-size:13.5px;display:flex;align-items:flex-start;gap:11px}
       .ivrs .banner.err{background:color-mix(in srgb,var(--stop) 10%,transparent);border-color:color-mix(in srgb,var(--stop) 35%,transparent);color:var(--stop)}
+      .ivrs .banner.ok{background:color-mix(in srgb,var(--ok) 10%,transparent);border-color:color-mix(in srgb,var(--ok) 35%,transparent);color:var(--ok)}
+      .ivrs .banner .btxt{min-width:0}
+      .ivrs .banner .btxt b{display:block;font-size:14px;color:inherit}
+      .ivrs .banner .btxt p{margin:3px 0 0;color:var(--dim)}
+      .ivrs .misslist{margin:6px 0 0;padding-left:18px;color:var(--dim);font-size:13px;line-height:1.7}
+      .ivrs .misslist b{display:inline;font-size:13px;color:var(--text)}
       .ivrs .banner.assistant{background:var(--accent-soft);border-color:var(--accent-line)}
       .ivrs .banner.assistant b{color:var(--text);display:block;font-size:14px}
       .ivrs .banner.assistant p{margin:3px 0 0}
