@@ -441,11 +441,27 @@ services:
       PBX_SUPPORTS_ACTIVE_CALL_POLLING: ${PBX_SUPPORTS_ACTIVE_CALL_POLLING:-false}
       PBX_WEBHOOK_EVENT_TYPES: ${PBX_WEBHOOK_EVENT_TYPES:-}
       EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+      # ⛔ WITHOUT THESE TWO LINES THE WORKER'S DIRECT-FCM CODE IS DEAD CODE.
+      # The worker gained a direct-FCM sender on 2026-07-31 (see
+      # sendPushToUserDevices → callCriticalTypes block) but was never given the
+      # credential the api already had, so `isFcmDirectConfigured()` returned
+      # false on every call and 100% of worker pushes — INCOMING_CALL rings,
+      # INCOMING_CALL_WAKE, INVITE_CANCELED stop-ringing, INVITE_CLAIMED — fell
+      # back to the Expo relay for EVERY device, including the ones holding a
+      # native FCM token. Found 2026-08-06: env var empty, no mount, six days of
+      # silent fallback. `isFcmDirectConfigured()` fails closed and logs nothing,
+      # which is exactly why it went unnoticed — see the startup assertion in
+      # apps/worker/src/main.ts that now makes this loud.
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/host-inventory/opt/connectcomms/env/firebase-service-account.json}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
       CHAT_STORAGE_DIR: ${CHAT_STORAGE_DIR:-/var/lib/connect/chat-attachments}
     volumes:
       - chat-attachments:/var/lib/connect/chat-attachments
+      # Read-only, and scoped to `env/` only — the worker needs exactly one file
+      # (firebase-service-account.json). The api mounts all of /opt/connectcomms
+      # because its storage-preflight walks the tree; the worker does not.
+      - /opt/connectcomms/env:/host-inventory/opt/connectcomms/env:ro
     networks:
       - default
       - infra_default

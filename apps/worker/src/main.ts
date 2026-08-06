@@ -143,6 +143,48 @@ const providerCache = new Map<string, { provider: SmsProvider; expiresAt: number
 const providerCacheTtlMs = 60_000;
 const smsProviderTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
 const mobilePushSimulate = (process.env.MOBILE_PUSH_SIMULATE || "false").toLowerCase() === "true";
+
+// ── Boot assertion: is the direct-FCM call-wake channel actually armed? ──────
+// ⛔ The worker's direct-FCM sender (see sendPushToUserDevices) shipped
+// 2026-07-31 and did NOT send a single direct push for the six days that
+// followed: the container had no FCM_SERVICE_ACCOUNT_PATH and no mount for the
+// credential, so `isFcmDirectConfigured()` returned false every time and every
+// call-critical push silently fell back to the Expo relay — the exact
+// deprioritized channel the direct sender exists to bypass.
+//
+// It went unnoticed because the fallback is by design silent and per-push.
+// Say it ONCE, loudly, at boot instead. This is deliberately a `console.error`
+// on the unconfigured branch: it is a call-reliability regression for every
+// Android device on the fleet, not a debug detail.
+{
+  const fcmPath =
+    process.env.FCM_SERVICE_ACCOUNT_PATH ||
+    "/opt/connectcomms/env/firebase-service-account.json";
+  if (isFcmDirectConfigured()) {
+    console.info(
+      JSON.stringify({
+        event: "MOBILE_PUSH_AUDIT",
+        stage: "FCM_DIRECT_ARMED",
+        source: "worker",
+        path: fcmPath,
+      }),
+    );
+  } else {
+    console.error(
+      JSON.stringify({
+        event: "MOBILE_PUSH_AUDIT",
+        stage: "FCM_DIRECT_UNCONFIGURED",
+        source: "worker",
+        path: fcmPath,
+        impact:
+          "ALL call-critical Android pushes (INCOMING_CALL, INCOMING_CALL_WAKE, " +
+          "INVITE_CANCELED, INVITE_CLAIMED) will fall back to the Expo relay, " +
+          "including for devices that reported a nativeFcmToken.",
+        fix: "Mount /opt/connectcomms/env into the worker and set FCM_SERVICE_ACCOUNT_PATH (docker-compose.app.yml).",
+      }),
+    );
+  }
+}
 const expoPushAccessToken = process.env.EXPO_PUSH_ACCESS_TOKEN || "";
 const tokenBuckets = new Map<string, { tokens: number; lastRefillMs: number }>();
 const pbxPollCursorByInstance = new Map<string, string>();
