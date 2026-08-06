@@ -85,9 +85,34 @@ forbidden_for() { # slugOfOtherTenant  otherMenusSpaceSeparated
   echo "$pat"
 }
 
+mode_of() { # mappingId
+  prisma "const {PrismaClient}=require(\"@prisma/client\");const p=new PrismaClient();p.didRouteMapping.findUnique({where:{id:\"$1\"}}).then(m=>{console.log(m.routingMode);return p.\$disconnect()})" | tr -d '\r\n '
+}
+
+ensure_connect() { # mappingId label — a pointing test is meaningless if the
+  # number is still handed back to the PBX. Establish the precondition instead
+  # of assuming it: a leftover hand-back from an interrupted run sent the first
+  # two checks to PBX voicemail and looked like a product failure.
+  local m; m=$(mode_of "$1")
+  [ "$m" = "connect" ] && return 0
+  echo "    ..  $2 is on the PBX — bringing it over before testing"
+  prisma "const {PrismaClient}=require(\"@prisma/client\");const p=new PrismaClient();p.didSwitchSchedule.updateMany({where:{mappingId:\"$1\"},data:{status:\"pending\",activateAt:new Date(),endAt:null,activatedAt:null,endedAt:null,lastError:null}}).then(x=>{console.log(x.count);return p.\$disconnect()})" >/dev/null
+  for w in 1 2 3 4 5 6; do
+    sleep 20
+    m=$(mode_of "$1")
+    [ "$m" = "connect" ] && return 0
+  done
+  FAIL=$((FAIL+1)); FAILED="$FAILED
+      - $2 could not be brought over to Connect (stuck on $m)"
+  echo "    FAIL  $2 stuck on $m"
+  return 1
+}
+
 echo "########## NUMBER→IVR POINTING STRESS — $ROUNDS rounds ##########"
 for r in $(seq 1 "$ROUNDS"); do
   echo "═══ round $r/$ROUNDS ═══"
+  ensure_connect "$A_MAPPING" "A number"
+  ensure_connect "$B_MAPPING" "B number"
 
   # ── A: point across every menu, each must land exactly there ──────────────
   for i in "${!A_MENUS[@]}"; do
