@@ -249,6 +249,11 @@ export default function IvrStudioPage() {
    *  customer away to find the button. */
   const [makeTeamForKey, setMakeTeamForKey] = useState<string | null>(null);
   const [adoptTeam, setAdoptTeam] = useState<{ digit: string; number: string } | null>(null);
+  /** Forwards made in this session. They exist on the phone system but do NOT
+   *  ring until Apply Changes is pressed there — creating one deliberately
+   *  never fires it. A toast said so and vanished, and a real forward went out
+   *  to a caller as a busy signal, so it is now said again at Publish. */
+  const [pendingForwards, setPendingForwards] = useState<Array<{ extension: string; phoneNumber: string }>>([]);
   /** A recording just made/uploaded for a key, waiting for that key's editor
    *  to select it. Cleared by the editor once adopted. */
   const [adoptRecording, setAdoptRecording] = useState<{ digit: string; promptRef: string } | null>(null);
@@ -539,6 +544,9 @@ export default function IvrStudioPage() {
       );
       const f = r.forward;
       setForwards((cur) => [...(cur ?? []).filter((x) => x.extension !== f.extension), f]);
+      // It exists on the phone system but will NOT ring until Apply Changes is
+      // pressed there. Remembered so Publish can say so long after this toast.
+      setPendingForwards((p) => (p.some((x) => x.extension === f.extension) ? p : [...p, { extension: f.extension, phoneNumber: f.phoneNumber }]));
       flash(r.message);
       return f.extension;
     } catch (e: any) {
@@ -814,6 +822,13 @@ export default function IvrStudioPage() {
       warnings.push(
         `${h.where} sends the caller to ${h.what}. From there the old system decides what happens — ` +
         "you can't see or change it here, so this number isn't fully moved over yet.",
+      );
+    }
+
+    for (const f of pendingForwards) {
+      warnings.push(
+        `${formatPhone(f.phoneNumber)} is set up but won't ring yet. A new forwarding number only starts working ` +
+        "once Apply Changes is pressed on the phone system — until then callers sent there get a busy signal.",
       );
     }
 
