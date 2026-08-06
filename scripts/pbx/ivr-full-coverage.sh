@@ -50,7 +50,19 @@ del_option() { # profile digit
 }
 
 assign_menu() { # profileId  (which menu the DID rings)
-  prisma "const {PrismaClient}=require(\"@prisma/client\");const p=new PrismaClient();p.didRouteMapping.update({where:{id:\"$MAPPING\"},data:{ivrProfileId:\"$1\"}}).then(()=>p.\$disconnect())" >/dev/null
+  # VERIFY the write. An unverified config write is how a working product gets
+  # blamed: when this silently failed, the "re-assigned" test failed and the
+  # "assigned back" test passed trivially. Retries once, then fails loudly.
+  local want="$1" got
+  for attempt in 1 2; do
+    got=$(prisma "const {PrismaClient}=require(\"@prisma/client\");const p=new PrismaClient();p.didRouteMapping.update({where:{id:\"$MAPPING\"},data:{ivrProfileId:\"$want\"}}).then(r=>{console.log(r.ivrProfileId);return p.\$disconnect()}).catch(e=>{console.log(\"ERR \"+e.message);process.exit(1)})" | tr -d '
+ ')
+    [ "$got" = "$want" ] && return 0
+  done
+  FAIL=$((FAIL+1)); FAILED="$FAILED
+      - could not assign menu $want (got: $got)"
+  echo "    FAIL  assigning menu -> $got"
+  return 1
 }
 
 set_greeting() { # profile ref
