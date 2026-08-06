@@ -16,56 +16,25 @@
  *
  * So: agent drafts → portal asks for the password → API applies and re-checks.
  */
-import { createHash } from "node:crypto";
 import type { ToolSpec, ToolContext } from "./toolRegistry";
+import {
+  CHAT_GRANTABLE_PERMISSIONS,
+  NEVER_GRANTABLE_BY_CHAT,
+  resolveChatGrantablePermission,
+  GRANT_CAPABILITY_ID,
+} from "@connect/shared";
+import { permissionParamsHash } from "@connect/shared/chatPermissionGrantHash";
 
 /**
- * Permissions an owner may hand out by chat, mapped from how a person actually
- * says it. Keys are REAL — taken from the API/portal source, never invented
- * (CLAUDE.md: grep the enum first; a made-up value fails silently).
+ * ⛔ The allow-list, the deny-list and the approval hash live in
+ * `@connect/shared` — because the API re-checks all three when it applies the
+ * grant, and a second copy here is a copy that eventually drifts open.
+ * Re-exported under the original names so this module stays the one place the
+ * agent side reads them from.
  */
-export const GRANTABLE_PERMISSIONS: Record<string, { key: string; plain: string }> = {
-  ivr: { key: "can_manage_ivr_routing", plain: "change the phone menus (IVR routing)" },
-  ivr_publish: { key: "can_publish_ivr_routing", plain: "publish phone-menu changes so callers hear them" },
-  ivr_prompts: { key: "can_manage_ivr_prompts", plain: "change the recorded greetings used by the phone menus" },
-  moh: { key: "can_manage_moh", plain: "change the music on hold" },
-  moh_upload: { key: "can_upload_moh", plain: "upload new music on hold" },
-  moh_publish: { key: "can_publish_moh", plain: "publish music-on-hold changes" },
-  did_routing: { key: "can_manage_did_routing", plain: "change which phone number rings where" },
-  call_forwarding: { key: "can_manage_call_forwarding", plain: "change call forwarding" },
-  contacts: { key: "can_manage_contacts", plain: "manage the shared contact list" },
-  sms: { key: "can_send_sms", plain: "send text messages" },
-  tenant_settings: { key: "can_manage_tenant_settings", plain: "change company-wide settings" },
-};
-
-/**
- * Deliberately NOT grantable by chat, however the owner phrases it. These
- * either cross tenant boundaries or can take the platform down; they stay in
- * the portal where the full context is on screen.
- */
-export const NEVER_GRANTABLE_BY_CHAT: ReadonlySet<string> = new Set([
-  "can_manage_deploys",
-  "can_switch_tenants",
-  "can_manage_global_settings",
-  "can_manage_voip_ms",
-  "can_download_apk",
-]);
-
-export function resolvePermission(spoken: string): { key: string; plain: string } | null {
-  const s = String(spoken ?? "").trim().toLowerCase();
-  if (!s) return null;
-  if (GRANTABLE_PERMISSIONS[s]) return GRANTABLE_PERMISSIONS[s];
-  // Allow the raw permission key too, but only if it is on the allowlist.
-  const byKey = Object.values(GRANTABLE_PERMISSIONS).find((p) => p.key === s);
-  return byKey ?? null;
-}
-
-/** Binds an approval to this exact change — approving one grant can never apply another. */
-export function permissionParamsHash(tenantId: string, targetUserId: string, permissionKey: string): string {
-  return createHash("sha256").update(`grant_permission|${tenantId}|${targetUserId}|${permissionKey}`).digest("hex");
-}
-
-export const GRANT_CAPABILITY_ID = "action.grant_permission";
+export { NEVER_GRANTABLE_BY_CHAT, GRANT_CAPABILITY_ID, permissionParamsHash };
+export const GRANTABLE_PERMISSIONS = CHAT_GRANTABLE_PERMISSIONS;
+export const resolvePermission = resolveChatGrantablePermission;
 
 export interface PermissionGrantDeps {
   prisma: any;
@@ -109,6 +78,18 @@ export function buildPermissionTools(deps: PermissionGrantDeps): ToolSpec[] {
         const email = String(args.targetEmail ?? "").trim().toLowerCase();
         if (!email) return { ok: false, error: "no_target", message: "Tell me which person, by their email address." };
 
+        // ⛔ A draft is offered back to the person who asked, by user id — that
+        // is how the portal finds it and how the password is bound to a human.
+        // A server-to-server conversation has nobody to confirm it, so a draft
+        // written there would sit forever with no way to apply or cancel it.
+        if (!ctx.clientUserId) {
+          return {
+            ok: false,
+            error: "no_requester",
+            message: "This has to be asked for from a signed-in account, because it needs a password to confirm.",
+          };
+        }
+
         // ⛔ Scoped to the caller's own tenant. Someone in another company
         // simply does not exist from here.
         const target = await deps.prisma.user.findFirst({
@@ -130,7 +111,7 @@ export function buildPermissionTools(deps: PermissionGrantDeps): ToolSpec[] {
             riskTier: "high",
             status: "DRAFT",
             summary,
-            requestedBy: ctx.clientUserId ?? "owner",
+            requestedBy: ctx.clientUserId,
             requestedRole: ctx.role,
             paramsHash: permissionParamsHash(ctx.tenantId, target.id, perm.key),
           },

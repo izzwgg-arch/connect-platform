@@ -25,7 +25,9 @@ export * from "./webrtcIncidentAlerts";
 export * from "./webrtcGlobalOutageAlerts";
 export * from "./localDevCredentials";
 export * from "./elevenLabsKeyFormat";
+export * from "./chatPermissionGrants";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
+/* chatPermissionGrantHash uses node:crypto — import from "@connect/shared/chatPermissionGrantHash" in Node only */
 
 export const UserSchema = z.object({
   id: z.string(),

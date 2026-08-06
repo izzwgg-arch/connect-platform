@@ -218,6 +218,7 @@ import {
 } from "./platformRolePermissions";
 import { decideActionGate, userHasActionPermission } from "./permissionGates";
 import { registerCustomRoleRoutes } from "./customRoleRoutes";
+import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
   PORTAL_ROLE_BUCKETS,
@@ -39472,6 +39473,9 @@ const port = Number(process.env.PORT || 3001);
   await registerBillingRoutes(app);
   await registerPlatformRolePermissionRoutes(app);
   await registerCustomRoleRoutes(app);
+  // Grant-by-chat: the agent may only PREPARE a permission grant; this applies
+  // it, after re-checking authority and the requester's own password.
+  await registerAgentGrantRoutes(app, { rateLimit: checkBillingRateLimit, audit });
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);

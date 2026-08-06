@@ -6,6 +6,7 @@
  * and see corpus / Yiddish Labs / activity at a glance.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentGrantConfirmDialog, usePendingGrant } from "../../../components/AgentGrantConfirmDialog";
 
 function token() { return typeof window === "undefined" ? "" : (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || ""); }
 async function get<T>(p: string): Promise<T> { const r = await fetch(`/agent-api${p}`, { headers: { Authorization: `Bearer ${token()}` } }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }
@@ -68,6 +69,9 @@ export default function AssistantPage() {
   const [micEngine, setMicEngine] = useState("openai");
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // A permission change the agent PREPARED. It is applied by the API, after
+  // this dialog re-checks the password — which the agent never sees.
+  const { grant, refresh: refreshGrant, clear: clearGrant } = usePendingGrant();
 
   const load = useCallback(async () => {
     try {
@@ -146,6 +150,8 @@ export default function AssistantPage() {
   };
   const stopMic = () => { mediaRef.current?.stop(); setRecording(false); };
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+  // A confirmation prepared before a reload is still waiting — pick it up.
+  useEffect(() => { void refreshGrant(); }, [refreshGrant]);
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [chat]);
 
   const runTest = async (provider: "openai" | "anthropic") => {
@@ -185,6 +191,9 @@ export default function AssistantPage() {
     try {
       const r = await post<{ reply: string }>("/chat/message", { text, channel: "chat" });
       typeOut(r.reply); // replaces the pending ack, revealed as a typewriter
+      // Ask the API whether that turn left a permission change waiting to be
+      // confirmed — the agent's own reply is not taken as proof of one.
+      void refreshGrant();
     } catch {
       setChat((c) => { const n = [...c]; for (let j = n.length - 1; j >= 0; j--) { if (n[j].role === "assistant") { n[j] = { role: "assistant", text: "(error reaching agent)" }; break; } } return n; });
     }
@@ -195,6 +204,13 @@ export default function AssistantPage() {
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 16 }}>
+      {grant && (
+        <AgentGrantConfirmDialog
+          grant={grant}
+          onClose={clearGrant}
+          onResult={(msg) => setChat((c) => [...c, { role: "assistant", text: msg }])}
+        />
+      )}
       <h1 style={{ fontSize: 20, fontWeight: 700 }}>AI Assistant — control center</h1>
       <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>Test every agent, see everything, control it. Owner-only.</div>
       {err && <div style={{ color: "#dc2626", fontSize: 13, marginBottom: 12 }}>{err}</div>}

@@ -44,7 +44,7 @@ function isSuperAdmin(role: string): boolean {
   return String(role).toUpperCase() === "SUPER_ADMIN";
 }
 
-function isTenantAdminOrAbove(role: string): boolean {
+export function isTenantAdminOrAbove(role: string): boolean {
   const bucket = portalBucketFromJwtRole(role);
   return bucket === "SUPER_ADMIN" || bucket === "TENANT_ADMIN";
 }
@@ -54,7 +54,7 @@ function isTenantAdminOrAbove(role: string): boolean {
  * - SUPER_ADMIN: uses body/query tenantId if provided, otherwise their own.
  * - TENANT_ADMIN: always their own tenantId, never overridable.
  */
-function resolveTargetTenantId(
+export function resolveTargetTenantId(
   actorRole: string,
   actorTenantId: string,
   inputTenantId?: string | null,
@@ -69,8 +69,14 @@ function resolveTargetTenantId(
  * The set of permissions an actor is allowed to grant inside a custom role.
  * SUPER_ADMIN → all keys.
  * TENANT_ADMIN → their effective permissions minus protected platform-admin keys.
+ *
+ * ⛔ This is THE authority rule for handing a permission to someone else, and it
+ * is exported so there is exactly one of it. `agentGrantRoutes.ts` (grant-by-
+ * chat) re-checks authority through this same function rather than restating it
+ * — a second copy is a second thing to get wrong, and the copy that drifts open
+ * is the one that grants an admin key to someone who never had it.
  */
-async function getGrantablePermissions(
+export async function getGrantablePermissions(
   actorRole: string,
   actorUserId: string,
   actorTenantId: string,

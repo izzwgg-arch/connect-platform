@@ -310,12 +310,59 @@ Once Phase 2's pattern exists, repeat it where the data is already sitting there
 
 ---
 
-## 7. Permission-grant-by-chat — SPEC for the two remaining halves
+## 7. Permission-grant-by-chat — ✅ BUILT (2026-08-06). Spec kept below as the record.
 
-The agent half is built and pushed (`apps/agent/src/tools/permissionGrant.ts`,
-11 tests). It writes a DRAFT `AgentAction` and grants nothing. **Not deployed**
-— without the two halves below an owner is told "confirm with your password"
-and has nowhere to do it.
+**Both halves are now built, and the spec below is what they implement.** The
+agent still only PREPAREs; the grant is applied by the API after the portal
+re-checks the requester's own password.
+
+What shipped:
+
+- **API** — `apps/api/src/agentGrantRoutes.ts`, registered next to
+  `registerCustomRoleRoutes`. Three routes:
+  `GET /admin/agent-grants/pending` (what the dialog polls — scoped to the
+  requester, so nobody is handed someone else's request to rubber-stamp),
+  `POST /admin/agent-grants/:actionId/apply` (the 8 steps below, in order), and
+  `POST /admin/agent-grants/:actionId/dismiss` ("no thanks" — no password, since
+  cancelling can only make the account less permissive).
+- **Authority is `getGrantablePermissions()`**, now exported from
+  `customRoleRoutes.ts` — the SAME function the portal's role editor uses. It
+  was not copied. `isTenantAdminOrAbove` and `resolveTargetTenantId` are
+  exported alongside it for the same reason.
+- **The allow-list, deny-list and hash moved to `@connect/shared`** —
+  `chatPermissionGrants.ts` (browser-safe, root export) and
+  `chatPermissionGrantHash.ts` (⛔ `node:crypto`, so **subpath import only**,
+  and it needed a new `paths` entry in `tsconfig.base.json` — apps/api cannot
+  resolve a shared subpath without one). The agent re-exports them under its old
+  names, so its 12 tests are unchanged. Two copies of a deny-list is a deny-list
+  that eventually disagrees with itself.
+- **Portal** — `apps/portal/components/AgentGrantConfirmDialog.tsx`, wired into
+  BOTH chat surfaces (`FloatingAssistant` and `/assistant`). ⛔ The password
+  POSTs to `/api/...` only. It shows the summary **stored on the server**, not
+  the model's text, so what the owner reads is exactly what the API will act on.
+- **Where a grant lands**: one per-recipient `CustomRole` named
+  `Assistant grants — <email>`, plus the `UserCustomRole` assignment — one
+  visible, revocable place instead of permissions scattered across the account.
+
+⛔ Traps found while building it, worth not rediscovering:
+
+- **The `requestedBy` field is the whole link back to a human.** It was
+  `ctx.clientUserId ?? "owner"`; a server-to-server prepare would write a draft
+  literally nobody could ever confirm or cancel. The tool now refuses without a
+  signed-in requester.
+- **Creating the role with `permissions: [permission]` inline made every first
+  grant report "they already had this."** The permission now enters the role in
+  exactly one place, so the answer is the same whether the role is new or old.
+- **Two grants for the same person, confirmed at the same moment**, both try to
+  create that person's role and one loses the unique index. That single
+  collision is retried; a lost claim or a vanished target is never retried.
+
+Proof: **35 tests in `apps/api/src/agentGrantRoutes.test.ts`**, covering every
+stress case listed at the end of this section, plus 12 on the agent side. Both
+suites green; api suite overall 1653/0.
+
+⏳ **Not yet proven in a browser** — typechecked and unit-tested only. After
+deploy, walk one real grant end to end and one deliberate wrong password.
 
 ### How permissions actually work (traced 2026-08-06 — do not re-derive)
 

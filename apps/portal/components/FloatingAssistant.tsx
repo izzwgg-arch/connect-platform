@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Bot, Send, Mic, X, Plus, Paperclip, Music, FileText } from "lucide-react";
+import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
 
 type Msg = { id: string; role: "user" | "assistant"; content: string; pending?: boolean };
 
@@ -148,6 +149,10 @@ export function FloatingAssistant() {
   // only abort path used to be stop-and-upload (owner request 2026-07-27).
   const takeRef = useRef(0);
   const cancelledTakeRef = useRef(-1);
+  // A permission the assistant has PREPARED but not applied. It only ever
+  // becomes real after the password dialog below, which talks to the API
+  // directly — the assistant never sees the password.
+  const { grant, refresh: refreshGrant, clear: clearGrant } = usePendingGrant();
 
   const label = useMemo(() => pageLabel(pathname), [pathname]);
 
@@ -198,14 +203,29 @@ export function FloatingAssistant() {
         });
         setConversationId(res.conversationId);
         typeOut(ackId, res.reply);
+        // If that turn prepared a permission change, the confirmation is now
+        // waiting on the API. Ask — the assistant is not trusted to say so.
+        void refreshGrant();
       } catch {
         setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "Sorry — I couldn't reach the assistant just now. Please try again.", pending: false } : msg)));
       } finally {
         setSending(false);
       }
     },
-    [input, sending, typeOut, label, pathname, pendingFiles],
+    [input, sending, typeOut, label, pathname, pendingFiles, refreshGrant],
   );
+
+  /** Drop a line into the transcript from outside the model — e.g. the result
+   *  of a permission change, which the assistant never learns about. */
+  const sayInChat = useCallback((text: string) => {
+    setMessages((m) => [...m, { id: `sys-${Date.now()}`, role: "assistant", content: text }]);
+  }, []);
+
+  // A confirmation prepared before a reload is still waiting; pick it up when
+  // the panel is opened rather than stranding it.
+  useEffect(() => {
+    if (open) void refreshGrant();
+  }, [open, refreshGrant]);
 
   // File uploads: pick any documents (MP3s become hold-music candidates), chunk-
   // upload each in the background, then send them with the next message.
@@ -311,6 +331,14 @@ export function FloatingAssistant() {
   return (
     <>
       <style>{faCss}</style>
+
+      {grant && (
+        <AgentGrantConfirmDialog
+          grant={grant}
+          onClose={clearGrant}
+          onResult={(msg) => { setOpen(true); sayInChat(msg); }}
+        />
+      )}
 
       {open && (
         <div className="fa-panel" role="dialog" aria-label="Assistant">

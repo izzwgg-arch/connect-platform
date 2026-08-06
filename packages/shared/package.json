@@ -76,6 +76,14 @@
     "./elevenLabsKeyFormat": {
       "types": "./src/elevenLabsKeyFormat.ts",
       "default": "./src/elevenLabsKeyFormat.ts"
+    },
+    "./chatPermissionGrants": {
+      "types": "./src/chatPermissionGrants.ts",
+      "default": "./src/chatPermissionGrants.ts"
+    },
+    "./chatPermissionGrantHash": {
+      "types": "./src/chatPermissionGrantHash.ts",
+      "default": "./src/chatPermissionGrantHash.ts"
     }
   },
   "scripts": {

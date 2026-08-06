@@ -111,6 +111,17 @@ test("the approval hash binds tenant, person AND permission", () => {
   assert.equal(a, permissionParamsHash("t1", "u2", "can_manage_moh"), "must be stable");
 });
 
+test("⛔ a conversation with no signed-in person cannot prepare a grant", async () => {
+  // Nobody could ever confirm it — a draft here would strand forever.
+  const d = deps();
+  const r: any = await executeTool(buildPermissionTools(d), "prepare_permission_grant",
+    { targetEmail: "yehuda@acme.com", permission: "ivr" },
+    { tenantId: "t1", role: "internal", clientUserId: null });
+  assert.equal(r.content.ok, false);
+  assert.equal(r.content.error, "no_requester");
+  assert.equal(d.created.length, 0);
+});
+
 test("the draft records who asked, for the audit trail", async () => {
   const d = deps();
   await executeTool(buildPermissionTools(d), "prepare_permission_grant",

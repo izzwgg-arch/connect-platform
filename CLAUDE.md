@@ -31,12 +31,19 @@ Full handoff + spec: **`docs/ai-context/PLAN_SELF_IMPROVING_CONNECT_2026-08-06.m
 - **The tuner is deliberately NOT built.** Only 8 days of history and exactly
   ONE person+network group with both relay and direct arms — it would propose
   nothing. Coverage first (the mobile build above), then the decision layer.
-- **NEXT UP, fully specced in §7 of the plan doc:** the permission-grant apply
-  endpoint + portal password dialog. The agent half is built and pushed but
-  **NOT deployed** (it dead-ends without them). ⛔ Reuse
-  `getGrantablePermissions()` in `customRoleRoutes.ts` — the correct authority
-  rule already exists; do not write a second one. The agent must NEVER receive
-  the password.
+- ✅ **Permission-grant-by-chat is COMPLETE (§7 of the plan doc)** — API apply
+  endpoint (`apps/api/src/agentGrantRoutes.ts`) + portal password dialog
+  (`apps/portal/components/AgentGrantConfirmDialog.tsx`, wired into BOTH the
+  floating bubble and `/assistant`). The agent still only PREPAREs. Authority is
+  the EXPORTED `getGrantablePermissions()` from `customRoleRoutes.ts` — there is
+  exactly one authority rule; never write a second. The allow-list, deny-list
+  and approval hash now live in `@connect/shared`
+  (`chatPermissionGrants.ts` root-exported + browser-safe;
+  `chatPermissionGrantHash.ts` is `node:crypto`, **subpath only**, and a shared
+  subpath needs a `paths` entry in `tsconfig.base.json` or apps/api cannot
+  resolve it). ⛔ The password goes to `/api/*` and NEVER `/agent-api/*`. Grants
+  land in one per-recipient role `Assistant grants — <email>`. 35 API tests +
+  12 agent tests cover every stress case; **not yet walked in a browser**.
 - Deployed this session: `812674ca` → `c8f12a99` on `feat/ivr-migration-takeover`.
   Agent deploys are a MANUAL compose rebuild (no agent service in the deploy queue).
 
