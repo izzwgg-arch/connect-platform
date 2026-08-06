@@ -266,6 +266,7 @@ import {
 import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEndpoint } from "./vmRecordCallHelpers";
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
+import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
 import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler, injectAsService as didInjectAsService } from "./didSwitchSchedule";
 import { startDidRouteReconciler, type ReconcilerMapping } from "./didRouteReconciler";
@@ -21865,6 +21866,25 @@ registerElevenLabsRoutes({
   app,
   db,
   requirePromptManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts"),
+  resolvePbxRouteHelperConfig,
+  pushPromptToHelper,
+  PromptPushError,
+});
+
+// ═══ Amazon Polly greeting generation ══════════════════════════
+// The second voice source. Same prompt-manager gate as ElevenLabs, PLUS
+// `can_use_amazon_polly` — a permission in neither default bucket, so it
+// reaches people one custom role at a time rather than everyone at once.
+// Note the deliberate absence of a role fallback in hasPollyPermission: this is
+// an authoritative key check, so a tenant admin does NOT get Polly by virtue of
+// being a tenant admin. (SUPER_ADMIN still passes, because its bucket contains
+// every key.) The credentials routes are platform-owner only.
+registerPollyRoutes({
+  app,
+  db,
+  requirePromptManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts"),
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+  hasPollyPermission: (user) => userHasActionPermission(user, "can_use_amazon_polly"),
   resolvePbxRouteHelperConfig,
   pushPromptToHelper,
   PromptPushError,

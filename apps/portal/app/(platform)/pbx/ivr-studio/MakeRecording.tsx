@@ -20,8 +20,17 @@
 // The tuning controls are advanced-only and closed by default. Someone setting
 // up their first phone menu should not have to form an opinion about
 // "similarity boost" — the IVR preset is already the right answer.
+//
+// Two voice sources
+// ─────────────────
+// ElevenLabs is the default. Amazon Polly appears ONLY for people whose role
+// carries `can_use_amazon_polly` and only when its credentials are working —
+// the server answers `allowed: false` for everyone else, so the switch simply
+// isn't drawn and the screen is byte-for-byte what it always was. Which source
+// made a recording never matters after this modal closes: both arrive as 8 kHz
+// WAV through the same save path and become the same kind of catalog row.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
 
 /** Registered up front so the whole screen arrives translated at once, rather
@@ -48,6 +57,8 @@ const PHRASES = [
   "Ready - press the play button to hear it.",
   "If nothing plays, close your browser completely and open it again.",
   "The preview took too long. Try again.",
+  "Voice source", "Amazon Polly", "Language", "All languages",
+  "No voices for that language. Try another one.",
 ];
 
 interface Voice {
@@ -71,6 +82,37 @@ interface Status {
   models?: { id: string; label: string; detail: string }[];
   defaultTuning?: Tuning;
 }
+
+/** An Amazon Polly voice. Far more of these exist than ElevenLabs voices — a
+ *  hundred-odd across every language — which is why the Polly picker gets a
+ *  language filter that the ElevenLabs one doesn't need. */
+interface PollyVoice {
+  voiceId: string;
+  name: string;
+  gender: string | null;
+  languageCode: string | null;
+  languageName: string | null;
+  engines: string[];
+}
+
+interface PollyStatus {
+  /** False for everyone whose role doesn't carry can_use_amazon_polly. This is
+   *  a 200, not a 403: the Studio asks on every open, and a console full of
+   *  403s for the ordinary case makes real failures impossible to spot. */
+  allowed: boolean;
+  configured: boolean;
+  keyWorks?: boolean;
+  usable?: boolean;
+  message?: string | null;
+  region?: string | null;
+  engines?: { id: string; label: string; detail: string }[];
+  defaultSpeed?: number;
+  voices?: PollyVoice[] | null;
+}
+
+type Provider = "elevenlabs" | "polly";
+
+const POLLY_FALLBACK_SPEED = 0.95;
 
 export interface Tuning {
   stability: number;
@@ -154,6 +196,18 @@ export function MakeRecording({
   const [tuning, setTuning] = useState<Tuning>(FALLBACK_TUNING);
   const [advanced, setAdvanced] = useState(false);
 
+  // ── Amazon Polly, when this person is allowed it ──────────────────────────
+  // Kept in its own state rather than folded into the ElevenLabs fields: the
+  // two providers take different inputs, and switching between them must not
+  // lose the voice already chosen in the other.
+  const [provider, setProvider] = useState<Provider>("elevenlabs");
+  const [polly, setPolly] = useState<PollyStatus | null>(null);
+  const [pollyVoices, setPollyVoices] = useState<PollyVoice[]>([]);
+  const [pollyVoiceId, setPollyVoiceId] = useState("");
+  const [pollyEngine, setPollyEngine] = useState("neural");
+  const [pollySpeed, setPollySpeed] = useState(POLLY_FALLBACK_SPEED);
+  const [pollyLanguage, setPollyLanguage] = useState("en");
+
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -191,15 +245,32 @@ export function MakeRecording({
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 20_000);
     (async () => {
+      // Started as promises BEFORE either is awaited, so both requests are
+      // genuinely in flight at once. (Awaiting inside a Promise.all array is
+      // the trap: the array's elements are evaluated left to right, so the
+      // second request wouldn't even be created until the first replied.) Each
+      // /status carries its own provider's voice list, so this is one
+      // round-trip per provider rather than two sequential ones each.
+      //
+      // Both are best-effort, and neither may take the other down. Most people
+      // aren't allowed Polly, plenty of servers have no Polly credentials, and
+      // an API that predates this feature answers 404 — none of which may stop
+      // ElevenLabs from opening. Equally, an ElevenLabs outage must not hide a
+      // working Polly. Only a failure of BOTH is an error worth showing.
+      let loadError: any = null;
+      const elevenPromise = api("/voice/elevenlabs/status", { signal: ctrl.signal })
+        .then((r) => r.json() as Promise<Status & { voices?: Voice[] | null }>)
+        .catch((e: any) => { loadError = e; return null; });
+      const pollyPromise = api("/voice/polly/status", { signal: ctrl.signal })
+        .then((r) => r.json() as Promise<PollyStatus>)
+        .catch(() => null);
+
       try {
-        // One round-trip: /status now carries the voice list too (fetched in
-        // parallel server-side). The old flow was two strictly sequential
-        // calls — most of the "Loading voices…" wait was that second trip.
-        const s: Status & { voices?: Voice[] | null } = await (await api("/voice/elevenlabs/status", { signal: ctrl.signal })).json();
+        const [s, p] = await Promise.all([elevenPromise, pollyPromise]);
         if (cancelled) return;
-        setStatus(s);
-        if (s.defaultTuning) setTuning(s.defaultTuning);
-        if (s.configured && s.keyWorks && s.usable) {
+        if (s) setStatus(s);
+        if (s?.defaultTuning) setTuning(s.defaultTuning);
+        if (s?.configured && s.keyWorks && s.usable) {
           let voiceList: Voice[] | null = Array.isArray(s.voices) ? s.voices : null;
           if (!voiceList) {
             // The list didn't ride along (older API, or a voices hiccup the
@@ -210,6 +281,29 @@ export function MakeRecording({
           }
           setVoices(voiceList);
           if (voiceList.length) setVoiceId(voiceList[0].voiceId);
+        }
+
+        if (p?.allowed && p.configured && p.usable) {
+          setPolly(p);
+          if (typeof p.defaultSpeed === "number") setPollySpeed(p.defaultSpeed);
+          const list = Array.isArray(p.voices) ? p.voices : [];
+          setPollyVoices(list);
+          // Start on the language most of the catalogue is in for this list,
+          // rather than assuming English exists in it.
+          const preferred = list.some((v) => (v.languageCode || "").startsWith("en")) ? "en" : (list[0]?.languageCode || "en").split("-")[0];
+          setPollyLanguage(preferred);
+          const first = list.find((v) => (v.languageCode || "").startsWith(preferred) && v.engines.includes("neural")) ?? list[0];
+          if (first) {
+            setPollyVoiceId(first.voiceId);
+            if (!first.engines.includes("neural")) setPollyEngine(first.engines[0] || "standard");
+          }
+          // Polly is the only working source — start there rather than opening
+          // on an ElevenLabs error the person can do nothing about.
+          if (!(s?.configured && s.keyWorks && s.usable)) setProvider("polly");
+        } else if (loadError) {
+          // Nothing usable came back from either side. Surface the ElevenLabs
+          // failure, which is the one that carries a reason.
+          throw loadError;
         }
       } catch (e: any) {
         // A timeout must not masquerade as "this account has no voices".
@@ -236,11 +330,17 @@ export function MakeRecording({
       const timer = setTimeout(() => ctrl.abort(), PREVIEW_FETCH_TIMEOUT_MS);
       let r: Response;
       try {
-        r = await api("/voice/elevenlabs/preview", {
-          method: "POST",
-          body: JSON.stringify({ voiceId, text, model, tuning }),
-          signal: ctrl.signal,
-        });
+        r = isPolly
+          ? await api("/voice/polly/preview", {
+              method: "POST",
+              body: JSON.stringify({ voiceId: pollyVoiceId, text, engine: pollyEngine, speed: pollySpeed }),
+              signal: ctrl.signal,
+            })
+          : await api("/voice/elevenlabs/preview", {
+              method: "POST",
+              body: JSON.stringify({ voiceId, text, model, tuning }),
+              signal: ctrl.signal,
+            });
       } finally {
         clearTimeout(timer);
       }
@@ -265,10 +365,23 @@ export function MakeRecording({
   async function save() {
     setErr(null); setNote(null); setSaving(true);
     try {
-      const r = await api(`/voice/ivr/prompts/generate${tenantQs}`, {
-        method: "POST",
-        body: JSON.stringify({ displayName: name.trim() || "Greeting", text, voiceId, model, tuning, category: "greeting" }),
-      });
+      const displayName = name.trim() || "Greeting";
+      const r = isPolly
+        ? await api(`/voice/ivr/prompts/generate-polly${tenantQs}`, {
+            method: "POST",
+            body: JSON.stringify({
+              displayName,
+              text,
+              voiceId: pollyVoiceId,
+              engine: pollyEngine,
+              speed: pollySpeed,
+              category: "greeting",
+            }),
+          })
+        : await api(`/voice/ivr/prompts/generate${tenantQs}`, {
+            method: "POST",
+            body: JSON.stringify({ displayName, text, voiceId, model, tuning, category: "greeting" }),
+          });
       const j = await r.json();
       // The PBX push can lag; the greeting is real either way, so say which.
       if (j?.pbxPush?.status === "pushed") setNote(t("Saved and live - the next caller will hear it."));
@@ -282,10 +395,52 @@ export function MakeRecording({
   }
 
   const chars = text.trim().length;
-  const canGenerate = Boolean(voiceId && chars > 0 && !previewing && !saving);
   const left = status?.characterLimit && status?.charactersUsed != null
     ? Math.max(0, status.characterLimit - status.charactersUsed)
     : null;
+
+  // Which sources are actually usable right now. `pollyReady` already folds in
+  // the permission — the server sends allowed:false to everyone else, so no
+  // permission check happens on this side and none can drift out of step.
+  const elevenReady = Boolean(status?.configured && status.keyWorks && status.usable);
+  const pollyReady = Boolean(polly?.allowed && polly.configured && polly.usable && pollyVoices.length > 0);
+  const isPolly = provider === "polly" && pollyReady;
+
+  /** Languages present in the Polly catalogue, deduped to the base language
+   *  ("en" covers en-US, en-GB, en-AU …) so the picker is short. */
+  const pollyLanguages = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const v of pollyVoices) {
+      const code = (v.languageCode || "").split("-")[0];
+      if (code && !seen.has(code)) seen.set(code, (v.languageName || code).replace(/\s*\(.*\)$/, ""));
+    }
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [pollyVoices]);
+
+  /** Only voices that can actually do what's selected. Offering a voice with no
+   *  neural version while "Natural" is chosen produces a provider error at the
+   *  moment someone presses Generate — filtering is the honest version. */
+  const shownPollyVoices = useMemo(
+    () =>
+      pollyVoices.filter(
+        (v) =>
+          (pollyLanguage === "all" || (v.languageCode || "").startsWith(pollyLanguage)) &&
+          v.engines.includes(pollyEngine),
+      ),
+    [pollyVoices, pollyLanguage, pollyEngine],
+  );
+
+  // Changing language or quality can strip the selected voice out of the list.
+  // Land on the first one that survives rather than leaving an invisible
+  // selection that fails only when Generate is pressed.
+  useEffect(() => {
+    if (!isPolly) return;
+    if (shownPollyVoices.some((v) => v.voiceId === pollyVoiceId)) return;
+    setPollyVoiceId(shownPollyVoices[0]?.voiceId ?? "");
+  }, [isPolly, shownPollyVoices, pollyVoiceId]);
+
+  const selectedVoice = isPolly ? pollyVoiceId : voiceId;
+  const canGenerate = Boolean(selectedVoice && chars > 0 && !previewing && !saving);
 
   return (
     <div className="mr-backdrop" onClick={onClose}>
@@ -298,23 +453,49 @@ export function MakeRecording({
           <button className="mr-x" onClick={onClose} aria-label="Close">×</button>
         </div>
 
+        {/* A working Polly is enough on its own. The ElevenLabs failure states
+            below only apply when there is no other way to make a recording —
+            otherwise someone with Polly access would be shown an ElevenLabs
+            billing problem and stopped, with a working source right there. */}
         {loading ? (
           <div className="mr-body"><p className="mr-dim">{t("Loading voices...")}</p></div>
-        ) : !status?.configured ? (
+        ) : !elevenReady && !pollyReady && !status?.configured ? (
           <div className="mr-body">
             <div className="mr-note bad">
               {t("Voice generation isn't set up yet. An administrator needs to add an ElevenLabs key on the ElevenLabs settings page. You can still upload your own recording instead.")}
             </div>
           </div>
-        ) : !status.keyWorks || !status.usable ? (
+        ) : !elevenReady && !pollyReady ? (
           <div className="mr-body">
             {/* status.message is written by the server and already says what to
                 do about it — show it in preference to our generic fallback. */}
-            <div className="mr-note bad">{status.message || t("The ElevenLabs key isn't working. An administrator needs to check it.")}</div>
+            <div className="mr-note bad">{status?.message || t("The ElevenLabs key isn't working. An administrator needs to check it.")}</div>
           </div>
         ) : (
           <>
             <div className="mr-body">
+              {/* Only drawn when there is genuinely a choice. One source is not
+                  a decision to put in front of someone. */}
+              {elevenReady && pollyReady && (
+                <>
+                  <label className="mr-lbl">{t("Voice source")}</label>
+                  <div className="mr-chips">
+                    <button
+                      className={"mr-chip" + (provider === "elevenlabs" ? " on" : "")}
+                      onClick={() => setProvider("elevenlabs")}
+                    >
+                      ElevenLabs
+                    </button>
+                    <button
+                      className={"mr-chip" + (provider === "polly" ? " on" : "")}
+                      onClick={() => setProvider("polly")}
+                    >
+                      {t("Amazon Polly")}
+                    </button>
+                  </div>
+                </>
+              )}
+
               <label className="mr-lbl">{t("What should it be called?")}</label>
               <input className="mr-in" value={name} onChange={(e) => setName(e.target.value)} placeholder="Main greeting" />
 
@@ -329,22 +510,51 @@ export function MakeRecording({
               <textarea className="mr-ta" rows={4} value={text} onChange={(e) => setText(e.target.value)} />
               <div className="mr-meta">
                 <span>{chars} {t("characters")}</span>
-                {left != null && <span>{left.toLocaleString()} {t("left this month")}</span>}
+                {/* Only ElevenLabs publishes a monthly allowance. Amazon bills
+                    per character with no cap, so there is no number to show
+                    and inventing one would be a lie. */}
+                {!isPolly && left != null && <span>{left.toLocaleString()} {t("left this month")}</span>}
               </div>
+
+              {isPolly && pollyLanguages.length > 1 && (
+                <>
+                  <label className="mr-lbl">{t("Language")}</label>
+                  <select className="mr-in" value={pollyLanguage} onChange={(e) => setPollyLanguage(e.target.value)}>
+                    <option value="all">{t("All languages")}</option>
+                    {pollyLanguages.map(([code, label]) => (
+                      <option key={code} value={code}>{label}</option>
+                    ))}
+                  </select>
+                </>
+              )}
 
               <label className="mr-lbl">{t("Which voice?")}</label>
               <div className="mr-voices">
-                {voices.map((v) => (
-                  <button
-                    key={v.voiceId}
-                    className={"mr-voice" + (v.voiceId === voiceId ? " on" : "")}
-                    onClick={() => setVoiceId(v.voiceId)}
-                  >
-                    <b>{v.name}</b>
-                    <span>{describeVoice(v)}</span>
-                  </button>
-                ))}
-                {voices.length === 0 && <p className="mr-dim">{t("No voices on this account yet.")}</p>}
+                {isPolly
+                  ? shownPollyVoices.map((v) => (
+                      <button
+                        key={v.voiceId}
+                        className={"mr-voice" + (v.voiceId === pollyVoiceId ? " on" : "")}
+                        onClick={() => setPollyVoiceId(v.voiceId)}
+                      >
+                        <b>{v.name}</b>
+                        <span>{[v.gender, v.languageName].filter(Boolean).join(", ")}</span>
+                      </button>
+                    ))
+                  : voices.map((v) => (
+                      <button
+                        key={v.voiceId}
+                        className={"mr-voice" + (v.voiceId === voiceId ? " on" : "")}
+                        onClick={() => setVoiceId(v.voiceId)}
+                      >
+                        <b>{v.name}</b>
+                        <span>{describeVoice(v)}</span>
+                      </button>
+                    ))}
+                {isPolly && shownPollyVoices.length === 0 && (
+                  <p className="mr-dim">{t("No voices for that language. Try another one.")}</p>
+                )}
+                {!isPolly && voices.length === 0 && <p className="mr-dim">{t("No voices on this account yet.")}</p>}
               </div>
 
               <button className="mr-adv" onClick={() => setAdvanced(!advanced)}>
@@ -356,24 +566,45 @@ export function MakeRecording({
                     {t("These are already set for phone menus. Change them only if something sounds wrong.")}
                   </p>
 
-                  <Slider label={t("Speaking speed")} hint={t("Lower is slower and clearer on a bad line.")}
-                    min={0.7} max={1.2} step={0.05} value={tuning.speed}
-                    onChange={(v) => setTuning({ ...tuning, speed: v })} />
+                  {isPolly ? (
+                    <>
+                      {/* Amazon has no stability or expression knobs — its
+                          equivalent of "quality" is the engine, and speed is
+                          the only other thing worth exposing. Showing dead
+                          sliders would be worse than showing fewer. */}
+                      <Slider label={t("Speaking speed")} hint={t("Lower is slower and clearer on a bad line.")}
+                        min={0.7} max={1.2} step={0.05} value={pollySpeed}
+                        onChange={setPollySpeed} />
 
-                  <Slider label={t("Consistency")} hint={t("Higher reads it the same way every time. Too high sounds flat.")}
-                    min={0} max={1} step={0.05} value={tuning.stability}
-                    onChange={(v) => setTuning({ ...tuning, stability: v })} />
+                      <label className="mr-lbl">{t("Quality")}</label>
+                      <select className="mr-in" value={pollyEngine} onChange={(e) => setPollyEngine(e.target.value)}>
+                        {(polly?.engines ?? []).map((e) => (
+                          <option key={e.id} value={e.id}>{e.label} — {e.detail}</option>
+                        ))}
+                      </select>
+                    </>
+                  ) : (
+                    <>
+                      <Slider label={t("Speaking speed")} hint={t("Lower is slower and clearer on a bad line.")}
+                        min={0.7} max={1.2} step={0.05} value={tuning.speed}
+                        onChange={(v) => setTuning({ ...tuning, speed: v })} />
 
-                  <Slider label={t("Expression")} hint={t("Emotion in the delivery. A menu rarely needs any.")}
-                    min={0} max={1} step={0.05} value={tuning.style}
-                    onChange={(v) => setTuning({ ...tuning, style: v })} />
+                      <Slider label={t("Consistency")} hint={t("Higher reads it the same way every time. Too high sounds flat.")}
+                        min={0} max={1} step={0.05} value={tuning.stability}
+                        onChange={(v) => setTuning({ ...tuning, stability: v })} />
 
-                  <label className="mr-lbl">{t("Quality")}</label>
-                  <select className="mr-in" value={model} onChange={(e) => setModel(e.target.value)}>
-                    {(status.models ?? []).map((m) => (
-                      <option key={m.id} value={m.id}>{m.label} — {m.detail}</option>
-                    ))}
-                  </select>
+                      <Slider label={t("Expression")} hint={t("Emotion in the delivery. A menu rarely needs any.")}
+                        min={0} max={1} step={0.05} value={tuning.style}
+                        onChange={(v) => setTuning({ ...tuning, style: v })} />
+
+                      <label className="mr-lbl">{t("Quality")}</label>
+                      <select className="mr-in" value={model} onChange={(e) => setModel(e.target.value)}>
+                        {(status?.models ?? []).map((m) => (
+                          <option key={m.id} value={m.id}>{m.label} — {m.detail}</option>
+                        ))}
+                      </select>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -457,6 +688,8 @@ function MakeRecordingStyles() {
       .mr-chip{font:inherit;font-size:12px;font-weight:600;padding:6px 11px;border-radius:99px;cursor:pointer;
         border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel-2,#f6f9fc);color:var(--dim,#5d6f84)}
       .mr-chip:hover{border-color:var(--accent,#2f6bff);color:var(--accent,#2f6bff)}
+      .mr-chip.on{border-color:var(--accent,#2f6bff);color:var(--accent,#2f6bff);
+        background:var(--accent-soft,rgba(47,107,255,.08));font-weight:680}
       .mr-meta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--faint,#94a3b8);margin-top:6px}
       .mr-voices{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:8px}
       .mr-voice{text-align:left;font:inherit;padding:11px 12px;border-radius:11px;cursor:pointer;

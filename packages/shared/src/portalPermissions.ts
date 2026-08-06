@@ -146,6 +146,13 @@ export const ACTION_PERMISSION_KEYS = [
   "can_publish_ivr_routing",
   "can_override_ivr_routing",
   "can_manage_ivr_prompts",
+  // Amazon Polly as a second voice source for IVR recordings. Deliberately
+  // absent from BOTH default buckets below — including TENANT_ADMIN. Polly is
+  // billed per character against Connect's own AWS account, so it is opened to
+  // specific people through a custom role rather than handed to everyone who
+  // can manage prompts. Someone without it sees the ElevenLabs flow exactly as
+  // before; the Polly option simply isn't offered.
+  "can_use_amazon_polly",
   // Lets a person switch the customer-facing screens into Yiddish. Separate
   // from the tenant-level switch: the tenant chooses at sign-up whether
   // Yiddish is offered at all, this decides who inside it may use it.

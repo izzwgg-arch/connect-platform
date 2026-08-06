@@ -25,6 +25,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import type { Buffer } from "node:buffer";
+import { saveGeneratedPrompt } from "./generatedPromptStore";
 
 export interface ElevenLabsRouteDeps {
   app: any;
@@ -58,14 +59,6 @@ const TUNING_SCHEMA = z
  *    up minute-long provider calls. Auditioning voices is one call every few
  *    seconds; four in flight at once is already unusual.
  */
-/** Mirror of server.ts `toIvrSlug`: catalog rows only line up with the rest of
- *  the prompt catalog (list scoping, PBX prefix matching) when every writer
- *  normalises the tenant name the same way. */
-function toTenantSlug(name: string): string | null {
-  const slug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  return slug.length > 0 ? slug : null;
-}
-
 const SYNTH_RATE_LIMIT = { max: 12, timeWindow: "1 minute" as const };
 const MAX_CONCURRENT_SYNTH = 4;
 let synthInFlight = 0;
@@ -360,7 +353,6 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     if (!key) return;
 
     const { synthesiseSpeech, pcmToWav, pcmDurationSeconds, ElevenLabsError, isTtsModelId } = await import("./elevenLabs");
-    const { sanitizeBaseName, writeAndNormalisePromptFile, writePromptFile, readPromptFile } = await import("../promptStorage");
 
     // 1) Synthesise. Nothing is written anywhere until this succeeds, so a
     //    provider failure leaves no half-made greeting behind. The concurrency
@@ -400,122 +392,24 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       return reply.code(500).send({ error: "generate_failed", message: "Couldn't generate the audio. Nothing was changed." });
     }
 
-    // 2) A stable, human-readable filename. Two greetings both called "Main"
-    //    in one tenant must not fight over a single file on the PBX, so a
-    //    random suffix keeps them apart while the name stays recognisable.
-    const nameHint = sanitizeBaseName(body.data.displayName) || "greeting";
-    const fileBaseName = `${nameHint}_${crypto.randomBytes(3).toString("hex")}`.slice(0, 60);
-    const promptRef = `custom/${fileBaseName}`;
-
-    // 3) Store. At 8 kHz the bytes are already exactly what Asterisk wants, so
-    //    skip ffmpeg entirely; at 16 kHz let it do the single downsample.
-    let stored: { storageKey: string; sha256: string; sizeBytes: number; contentType: string };
-    try {
-      const args = { tenantScope: tenantId, baseName: fileBaseName, originalFilename: `${fileBaseName}.wav`, buffer: wav };
-      stored = sampleRate === 8000 ? await writePromptFile(args) : await writeAndNormalisePromptFile(args);
-    } catch (err: any) {
-      app.log.error({ err: err?.message }, "[ELEVENLABS_GENERATE] storage write failed");
-      return reply.code(500).send({ error: "storage_write_failed", message: "The audio was generated but couldn't be saved. Try again." });
-    }
-
-    // 4) Catalog row. `source: "generated"` is what tells the UI never to offer
-    //    a download; `ownershipConfidence: "manual"` reflects that a person in
-    //    this tenant deliberately created it.
-    let row: any;
-    try {
-      row = await db.tenantPbxPrompt.create({
-        data: {
-          tenantId,
-          // Same normalisation the manual-upload path uses (toIvrSlug in
-          // server.ts): the Tenant model has no slug column, so the catalog
-          // slug is always derived from the tenant's name.
-          tenantSlug: toTenantSlug(tenant.name),
-          promptRef,
-          fileBaseName,
-          relativePath: promptRef,
-          displayName: body.data.displayName.trim(),
-          category: body.data.category || "greeting",
-          source: "generated",
-          isActive: true,
-          storageKey: stored.storageKey,
-          sha256: stored.sha256,
-          sizeBytes: stored.sizeBytes,
-          contentType: stored.contentType,
-          syncedAt: new Date(),
-          ownershipConfidence: "manual",
-        },
-      });
-    } catch (err: any) {
-      // An uncaught throw here becomes Fastify's default 500, whose message is
-      // the raw ORM error — and the dialog renders that verbatim to customers.
-      app.log.error({ err: err?.message, tenantId, promptRef }, "[ELEVENLABS_GENERATE] catalog write failed");
-      return reply.code(500).send({
-        error: "catalog_write_failed",
-        message: "The audio was generated and saved, but couldn't be added to the recordings list. Try again.",
-      });
-    }
-
-    // 5) Push to the PBX so the very next caller hears it. A failed push is not
-    //    a failed generation — the cron catch-up retries, and the status we
-    //    return lets the UI say "saved, installing" rather than "error".
-    let pushStatus: "pushed" | "skipped_no_helper" | "failed" = "skipped_no_helper";
-    let pushDetail: string | null = null;
-    try {
-      // Resolve the helper for THIS tenant's PBX instance — every other push
-      // site passes the instance id; calling with none silently falls back to
-      // the global helper, which is the wrong box once per-instance helpers
-      // are configured.
-      const link = await db.tenantPbxLink
-        .findFirst({ where: { tenantId }, select: { pbxInstanceId: true } })
-        .catch(() => null);
-      const helperCfg = resolvePbxRouteHelperConfig(link?.pbxInstanceId);
-      if (helperCfg) {
-        const wavBytes = await readPromptFile(stored.storageKey);
-        await pushPromptToHelper(
-          helperCfg,
-          {
-            fileBaseName,
-            sha256: stored.sha256,
-            sizeBytes: stored.sizeBytes,
-            tenantSlug: row.tenantSlug,
-            promptRef,
-            requestedBy: `user:${user.sub}`,
-          },
-          wavBytes,
-        );
-        pushStatus = "pushed";
-      } else {
-        pushDetail = "PBX_ROUTE_HELPER_BASE_URL/SECRET not configured — audio will sync on the next cron tick.";
-      }
-    } catch (err: any) {
-      pushStatus = "failed";
-      pushDetail =
-        err instanceof PromptPushError
-          ? `helper_${err.httpStatus}: ${err.message}`
-          : `push_error: ${err?.message || String(err)}`;
-      app.log.warn({ promptRef, pushDetail }, "[ELEVENLABS_GENERATE] PBX push failed; cron will retry");
-    }
-
-    app.log.info(
-      { promptId: row.id, tenantId, promptRef, voiceId: body.data.voiceId, chars: body.data.text.length, seconds, pushStatus },
-      "[ELEVENLABS_GENERATE] greeting generated",
-    );
-
-    return reply.send({
-      ok: true,
-      prompt: {
-        id: row.id,
-        promptRef: row.promptRef,
-        displayName: row.displayName,
-        category: row.category,
-        source: row.source,
+    // 2) Store it, catalog it, push it to the PBX. Shared with the Amazon Polly
+    //    path — everything from here on is identical whoever made the audio.
+    const saved = await saveGeneratedPrompt(
+      { app, db, resolvePbxRouteHelperConfig, pushPromptToHelper, PromptPushError },
+      {
+        tenantId,
+        tenantName: tenant.name,
+        displayName: body.data.displayName,
+        category: body.data.category || "greeting",
+        wav,
+        sampleRate,
         seconds,
-        sizeBytes: row.sizeBytes,
-        /** The UI keys its download button off this. Generated audio: never. */
-        downloadable: false,
-        hasAudio: true,
+        requestedBy: `user:${user.sub}`,
+        provider: "elevenlabs",
+        logContext: { voiceId: body.data.voiceId, chars: body.data.text.length },
       },
-      pbxPush: { status: pushStatus, detail: pushDetail },
-    });
+    );
+    if (!saved.ok) return reply.code(saved.code).send({ error: saved.error, message: saved.message });
+    return reply.send(saved.body);
   });
 }
