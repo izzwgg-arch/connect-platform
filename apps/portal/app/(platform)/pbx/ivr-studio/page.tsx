@@ -117,6 +117,7 @@ const UI_PHRASES = [
   "Or add a new one:", "Upload a recording", "Uploading…", "Make one with AI",
   "A phone number", "Which phone number?", "Or send it to a new number:",
   "Add this number", "Setting it up…",
+  "No teams yet — make the first one:", "Or make a new one:", "Make a team",
   "Rings a phone outside the office — a cell, or another business.",
   "Plays a recording — directions, hours, an announcement — then continues.",
   "Remove this key", "Cancel", "Save name", "Loading…",
@@ -241,6 +242,10 @@ export default function IvrStudioPage() {
   /** Set when the recording modal/upload was opened FROM the key editor for a
    *  digit: the result becomes that key's recording, not the menu greeting. */
   const [makeRecForKey, setMakeRecForKey] = useState<string | null>(null);
+  /** Same idea for teams: "A team" with none yet should MAKE one, not send the
+   *  customer away to find the button. */
+  const [makeTeamForKey, setMakeTeamForKey] = useState<string | null>(null);
+  const [adoptTeam, setAdoptTeam] = useState<{ digit: string; number: string } | null>(null);
   /** A recording just made/uploaded for a key, waiting for that key's editor
    *  to select it. Cleared by the editor once adopted. */
   const [adoptRecording, setAdoptRecording] = useState<{ digit: string; promptRef: string } | null>(null);
@@ -1113,6 +1118,9 @@ export default function IvrStudioPage() {
                             adoptPromptRef={adoptRecording?.digit === digit ? adoptRecording.promptRef : null}
                             onAdopted={() => setAdoptRecording(null)}
                             onCreateForward={createForward}
+                            onMakeTeam={() => { setMakeTeamForKey(digit); setMakeTeamOpen(true); }}
+                            adoptTeamNumber={adoptTeam?.digit === digit ? adoptTeam.number : null}
+                            onAdoptedTeam={() => setAdoptTeam(null)}
                           />
                         )}
                       </div>
@@ -1156,6 +1164,9 @@ export default function IvrStudioPage() {
                           adoptPromptRef={adoptRecording?.digit === editingDigit ? adoptRecording.promptRef : null}
                           onAdopted={() => setAdoptRecording(null)}
                           onCreateForward={createForward}
+                          onMakeTeam={() => { setMakeTeamForKey(editingDigit); setMakeTeamOpen(true); }}
+                          adoptTeamNumber={adoptTeam?.digit === editingDigit ? adoptTeam.number : null}
+                          onAdoptedTeam={() => setAdoptTeam(null)}
                         />
                       )}
                     </>
@@ -1303,9 +1314,15 @@ export default function IvrStudioPage() {
             setPendingTeamNumbers((p) => (p.includes(team.number) ? p : [...p, team.number]));
             await loadAll();
             setMakeTeamOpen(false);
+            if (makeTeamForKey) {
+              // Made from a key editor: point that key at the new team and
+              // leave the editor open, so the person still presses Save.
+              setAdoptTeam({ digit: makeTeamForKey, number: team.number });
+              setMakeTeamForKey(null);
+            }
             flash(message);
           }}
-          onClose={() => setMakeTeamOpen(false)}
+          onClose={() => { setMakeTeamOpen(false); setMakeTeamForKey(null); }}
         />
       )}
 
@@ -1384,7 +1401,7 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward, onMakeTeam, adoptTeamNumber, onAdoptedTeam }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
@@ -1407,6 +1424,10 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   /** Teach the phone system a new outside number; resolves with the internal
    *  number to point this key at, or null if it couldn't be set up. */
   onCreateForward?: (phoneNumber: string, label: string) => Promise<string | null>;
+  /** Open the team builder for THIS key; the result arrives via adoptTeamNumber. */
+  onMakeTeam?: () => void;
+  adoptTeamNumber?: string | null;
+  onAdoptedTeam?: () => void;
 }) {
   const { t } = useUiLanguage();
   const read = current ? readDestination(current, directory) : null;
@@ -1441,6 +1462,15 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
     }
   }, [adoptPromptRef, onAdopted]);
 
+  // A team just made for this key — select it, but leave Save to the person.
+  useEffect(() => {
+    if (adoptTeamNumber) {
+      setKind("team");
+      setTarget(adoptTeamNumber);
+      onAdoptedTeam?.();
+    }
+  }, [adoptTeamNumber, onAdoptedTeam]);
+
   /**
    * EVERY choice is always shown. Two states only:
    *   offered   — pick a target
@@ -1463,8 +1493,10 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
     }
     if (k === "team") {
       if (!teamsLoaded) return { k, blocked: "Couldn't load this customer's teams — check they're linked to the phone system." };
-      if (directory.teams.length === 0) {
-        return { k, blocked: "No teams yet — make one with “New team” on the right, then pick it here." };
+      // Having no team is NOT a blocker: picking this offers to make one right
+      // here. It only becomes impossible with no phones to put in it.
+      if (directory.teams.length === 0 && directory.people.length === 0) {
+        return { k, blocked: "Add phones to this account first — a team is several of them ringing at once." };
       }
       return { k, blocked: null };
     }
@@ -1542,6 +1574,17 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
             )}
             {kind === "menu" && (
               <button className="btn sm" style={{ marginTop: 10 }} onClick={onCreateMenu}>+ Make a new menu for this key</button>
+            )}
+
+            {kind === "team" && onMakeTeam && (
+              <div className="recmakerow">
+                <span className="dimtxt">
+                  {directory.teams.length === 0 ? t("No teams yet — make the first one:") : t("Or make a new one:")}
+                </span>
+                <button className="btn sm" disabled={disabled} onClick={onMakeTeam}>
+                  {t("Make a team")}
+                </button>
+              </div>
             )}
 
             {kind === "forward" && onCreateForward && (
