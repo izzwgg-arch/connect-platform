@@ -14983,7 +14983,13 @@ app.post("/mobile/devices/register", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({
     platform: z.enum(["IOS", "ANDROID"]),
-    expoPushToken: z.string().min(8),
+    // ⛔ OPTIONAL SINCE 2026-08-06 — see the `expoPushToken` doc comment on the
+    // MobileDevice model. Requiring it here meant a phone that could not obtain
+    // an Expo token could not register at all, and therefore could never hand
+    // us the native FCM token it already had. The fast channel was hostage to
+    // the slow one. A device must still identify itself by SOMETHING, which the
+    // refine below enforces.
+    expoPushToken: z.string().min(8).optional(),
     voipPushToken: z.string().optional(),
     nativeFcmToken: z.string().max(512).optional(),
     // iOS: native APNs alert-environment device token (hex). Enables direct
@@ -15035,7 +15041,16 @@ app.post("/mobile/devices/register", async (req, reply) => {
       gateLatchedAtMs: z.number().optional(),
       gateDropCount: z.number().optional(),
     }).optional(),
-  }).parse(req.body || {});
+  })
+    // A device must be addressable by SOMETHING. Without an Expo token we key
+    // the row on (userId, deviceId), so deviceId becomes mandatory in exactly
+    // that case — otherwise a tokenless register would mint an unaddressable
+    // row on every app start.
+    .refine(
+      (v) => Boolean(v.expoPushToken) || Boolean(v.deviceId),
+      { message: "expoPushToken or deviceId is required", path: ["expoPushToken"] },
+    )
+    .parse(req.body || {});
   const extension = await db.extension.findFirst({
     where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
     select: { id: true },
@@ -15098,7 +15113,14 @@ app.post("/mobile/devices/register", async (req, reply) => {
         userId: user.sub,
         model: input.model,
         platform: input.platform,
-        expoPushToken: { not: input.expoPushToken },
+        // "a DIFFERENT row for the same model". With no Expo token to compare
+        // against, exclude by deviceId instead — passing `{ not: undefined }`
+        // here would match nothing and silently drop the flag inheritance.
+        ...(input.expoPushToken
+          ? { expoPushToken: { not: input.expoPushToken } }
+          : input.deviceId
+            ? { deviceId: { not: input.deviceId } }
+            : {}),
       },
       orderBy: { lastSeenAt: "desc" },
       select: { featureFlags: true },
@@ -15122,7 +15144,18 @@ app.post("/mobile/devices/register", async (req, reply) => {
         ? { standingRegistration: true }
         : undefined;
 
-  const saved = await db.mobileDevice.upsert({
+  // ⛔ KEY SELECTION — do NOT collapse this back to a single upsert on
+  // expoPushToken. That is what made the fast push channel hostage to the slow
+  // one: a handset whose Expo token fetch failed could not register AT ALL, so
+  // it could never hand us the native FCM token it was already holding, and
+  // stayed on the deprioritized relay forever (8 of 16 active Android devices,
+  // census 2026-08-06).
+  //
+  // With an Expo token present the behaviour is bit-for-bit what it always was.
+  // Without one we fall back to the (userId, deviceId) natural key added in
+  // migration 20260806020000.
+  const saved = input.expoPushToken
+    ? await db.mobileDevice.upsert({
     where: { expoPushToken: input.expoPushToken },
     create: {
       tenantId: user.tenantId,
@@ -15168,7 +15201,48 @@ app.post("/mobile/devices/register", async (req, reply) => {
       deactivatedAt: null,
       lastSeenAt: new Date()
     } as any
-  });
+  })
+    : await (async () => {
+        // No Expo token — key on (userId, deviceId). `deviceId` is required by
+        // the schema check above in this branch, so the compound key is complete.
+        const common = {
+          tenantId: user.tenantId,
+          userId: user.sub,
+          extensionId: extension?.id ?? null,
+          platform: input.platform,
+          voipPushToken: input.voipPushToken || null,
+          deviceId: input.deviceId || null,
+          appVersion: input.appVersion || null,
+          deviceName: input.deviceName || null,
+          manufacturer: input.manufacturer || null,
+          model: input.model || null,
+          osVersion: input.osVersion || null,
+          ...permissionsPatch,
+          ...keepAlivePatch,
+          active: true,
+          deactivatedAt: null,
+          lastSeenAt: new Date(),
+        };
+        return db.mobileDevice.upsert({
+          where: {
+            userId_deviceId: { userId: user.sub, deviceId: input.deviceId as string },
+          },
+          create: {
+            ...common,
+            expoPushToken: null,
+            // Same idempotency rule as the Expo-keyed branch: only write a
+            // token we were actually given, never null one out.
+            nativeFcmToken: input.nativeFcmToken || null,
+            apnsAlertToken: input.apnsAlertToken || null,
+            ...(createFeatureFlags !== undefined ? { featureFlags: createFeatureFlags } : {}),
+          } as any,
+          update: {
+            ...common,
+            ...(input.nativeFcmToken ? { nativeFcmToken: input.nativeFcmToken } : {}),
+            ...(input.apnsAlertToken ? { apnsAlertToken: input.apnsAlertToken } : {}),
+          } as any,
+        });
+      })();
 
   // Structured log for call-wake diagnostics. Greppable by ops as `[CALL_WAKE]`
   // alongside the push-send log emitted by sendPushToUserDevices.
@@ -20434,12 +20508,18 @@ async function ivrEnsurePromptAudioOnPbx(
   const { readPromptFile } = await import("./promptStorage");
 
   for (const row of rows) {
-    // The file the bytes were stored as is the canonical name; the ref is only
-    // a label and is the half that drifted.
-    const base = (row.fileBaseName || String(row.promptRef).split("/").pop() || "").trim();
+    // ⛔ The REF is canonical, not the stored filename.
+    //
+    // The first cut of this had it backwards: it rewrote the ref to match the
+    // file (custom/Home_main → custom/home_main). The catalog is keyed by the
+    // ref, so the pre-publish check then couldn't find the row and REFUSED the
+    // publish outright — turning a wrong greeting into no publish at all.
+    //
+    // The ref is what the catalog validated and what the dialplan will ask for.
+    // The file is ours to write, so write it under the name the ref asks for.
+    const base = (String(row.promptRef).split("/").pop() || "").trim();
     if (!base) continue;
-    const publishRef = `custom/${base}`;
-    if (publishRef !== row.promptRef) out.set(row.promptRef, publishRef);
+    const publishRef = row.promptRef;
 
     if (!helperCfg || !row.storageKey) continue;
     try {
@@ -22886,18 +22966,9 @@ app.post("/voice/ivr/publish", async (req, reply) => {
       }
     }
     for (const o of allOptions as any[]) if (o?.announcePromptRef) wantedRefs.push(String(o.announcePromptRef));
-    const fixed = await ivrEnsurePromptAudioOnPbx(tenantId, wantedRefs, tenantPbxLink?.pbxInstanceId ?? null);
-    if (fixed.size > 0) {
-      const fix = (v: any) => (v && fixed.get(String(v))) || v;
-      for (const p of profiles as any[]) {
-        p.pbxPromptRef = fix(p.pbxPromptRef);
-        p.pbxInvalidPromptRef = fix(p.pbxInvalidPromptRef);
-        p.pbxTimeoutPromptRef = fix(p.pbxTimeoutPromptRef);
-        p.pbxRetryPromptRef = fix(p.pbxRetryPromptRef);
-      }
-      for (const o of allOptions as any[]) if (o?.announcePromptRef) o.announcePromptRef = fix(o.announcePromptRef);
-      app.log.info({ tenantId, corrected: fixed.size }, "[IVR_PUBLISH] prompt refs realigned to their stored audio");
-    }
+    // Refs are NEVER rewritten here — see the note in ivrEnsurePromptAudioOnPbx.
+    // Doing so once broke the catalog check and blocked publishing entirely.
+    await ivrEnsurePromptAudioOnPbx(tenantId, wantedRefs, tenantPbxLink?.pbxInstanceId ?? null);
   }
 
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
@@ -23067,18 +23138,9 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
       }
     }
     for (const o of allOptions as any[]) if (o?.announcePromptRef) wantedRefs.push(String(o.announcePromptRef));
-    const fixed = await ivrEnsurePromptAudioOnPbx(tenantId, wantedRefs, tenantPbxLink?.pbxInstanceId ?? null);
-    if (fixed.size > 0) {
-      const fix = (v: any) => (v && fixed.get(String(v))) || v;
-      for (const p of profiles as any[]) {
-        p.pbxPromptRef = fix(p.pbxPromptRef);
-        p.pbxInvalidPromptRef = fix(p.pbxInvalidPromptRef);
-        p.pbxTimeoutPromptRef = fix(p.pbxTimeoutPromptRef);
-        p.pbxRetryPromptRef = fix(p.pbxRetryPromptRef);
-      }
-      for (const o of allOptions as any[]) if (o?.announcePromptRef) o.announcePromptRef = fix(o.announcePromptRef);
-      app.log.info({ tenantId, corrected: fixed.size }, "[IVR_PUBLISH] prompt refs realigned to their stored audio");
-    }
+    // Refs are NEVER rewritten here — see the note in ivrEnsurePromptAudioOnPbx.
+    // Doing so once broke the catalog check and blocked publishing entirely.
+    await ivrEnsurePromptAudioOnPbx(tenantId, wantedRefs, tenantPbxLink?.pbxInstanceId ?? null);
   }
 
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);

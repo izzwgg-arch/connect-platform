@@ -1220,6 +1220,36 @@ Session-critical facts (details + evidence in the handoff doc):
   paid sign-up should be re-kicked via
   `POST /admin/onboarding/submissions/:id/retry-setup` (idempotent) rather than
   waiting out the watchdog's ~16-min spacing.
+- ⛔ **Porting is LIVE and irreversible, and its parameters are only ever proven
+  by a real filing (handoff §9).** First success 2026-08-05: **port order
+  217760** (inii mini, Verizon), accepted 37 min after the api deploy that
+  fixed the parameter names. `addLNPPort` takes the WSDL's `addLNPPortInput`
+  set — `portType`/`numbers`/`isPartial`/`locationType`/`isMobile`/`pin`/`btn`/
+  `services`/`tfType`/`statementName`/`firstName`/`lastName`/`address1`/`city`/
+  `state`/`zip`/`country`/`providerName`/`providerAccount`/`notes` — and the
+  old invented `did`/`carrier`/`account_number` names were rejected `invalid`
+  on every attempt (rewritten in `ce54e40d`, `buildLnpPortParams()`). It
+  answers `{"status":"success","port":N}`: we read `portid`/`port_id`, so the
+  id stored `""` and the LOA/bill would have attached to an EMPTY order —
+  nothing threw, because `vms()` checks only `status` (fixed `e98dad78`). The
+  five integer codes in `LNP_CODES` are validated for a **local + mobile full
+  port ONLY**; toll-free, partial and landline shapes are still guesses.
+  `addLNPFile` is `{portid, file}` and nothing else.
+- ⛔ **The wizard's port step collects the service address as FOUR fields** —
+  street (`serviceAddress`), `serviceCity`, 2-letter `serviceState`, 5-digit
+  `serviceZip` — plus an **`isMobile`** checkbox, which also makes the transfer
+  PIN required. Never collapse them back into one box: `addLNPPort` takes them
+  separately and the losing carrier matches each against the CSR. Drafts saved
+  before 2026-08-06 still hold one free-text line, so `buildLnpPortParams()`
+  falls back to `parseServiceAddressLine()` and passes the customer's original
+  text through in `notes`. ⛔ That fallback is unit-tested only and has NEVER
+  been filed — 217760's fields were hand-corrected into the structured shape
+  first (recorded on the submission as
+  `answers.provisioning.portFiledManuallyBy`).
+- ⛔ **Never probe this API by submitting `addLNPPort`** — a complete request
+  files a REAL port order against a REAL customer's number at a REAL carrier.
+  Exercise parameter changes through the test suite's fake VoIP.ms, which now
+  returns the real `{status, port}` shape.
 - Test numbers are pre-owned STOCK: wipes re-route DIDs to `account:344022`,
   never cancel them. Spare DIDs show first in the wizard ("Ready now");
   the search cache holds only the purchasable list, spares always fresh.
