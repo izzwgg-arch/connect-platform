@@ -1,10 +1,58 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — the worker's dead push channel + a website that lived in a stash (2026-08-06) — READ FIRST before dropping ANY stash, removing a worktree on Windows, or believing a push/wake feature is live
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_WORKTREE_SWEEP_FCM_WIRING_2026-08-06.md`**
+(commits `f9907e5d`, `8c15d5fa`, `8b2c29f6`, `5272a8fc` on
+`feat/ivr-migration-takeover`; `ad3fb49d` on `rescue/marketing-website`.
+api + portal + worker **DEPLOYED and verified**.)
+
+- ⛔ **`git stash show --stat` shows NOTHING for a stash carrying untracked
+  files** — it is a 3-parent commit and the untracked tree is **parent 3**. An
+  entire marketing website (23 files: home, pricing, contact, 3 product pages,
+  all 5 legal pages) existed ONLY in `stash@{0}` — not on disk, not on any
+  branch, not in any commit — and read as empty. **Always
+  `git show --stat <stash>^3` before dropping.** Rescued to
+  `rescue/marketing-website`, unreviewed and deliberately unmerged.
+- ⛔ **The worker's direct-FCM sender was DEAD CODE for 6 days.** Shipped
+  2026-07-31, never sent one push: the container had no credential mount and no
+  `FCM_SERVICE_ACCOUNT_PATH`, so `isFcmDirectConfigured()` failed closed and
+  100% of call rings/wakes/cancels rode the slow Expo relay — *including*
+  devices holding a native FCM token. Fixed + deployed; the worker now logs
+  `FCM_DIRECT_ARMED` at boot. **Config, not code, was the bug** — so the guard
+  is `apps/worker/src/fcmDirectWiring.test.ts`, which reads compose and failed
+  against the pre-fix file. Never claim a push channel is live from code alone.
+- ⛔ **`docker exec` runs as root no matter the container's runtime user** —
+  reading a `-rw------- root` credential that way proves nothing. Check
+  `docker inspect -f '{{.Config.User}}'` too. And the worker needs **~90 s**
+  (`prisma generate`) before app logs appear; an absent boot line right after a
+  deploy is not yet a failure.
+- **Answering a call had `MAX_ATTEMPTS = 3` on paper and 1 in reality** — the
+  per-attempt timer was the whole remaining deadline. That is the Create A Box
+  ext 102 voicemail drop: answered in ~160 ms, no ACK, sat 16.1 s past the 15 s
+  ring timer. Per-attempt cap is now 4 s (chosen against the PBX ring window,
+  not SIP), and `answer_unacked` is its own **recoverable** verdict —
+  `session_not_found_timeout` was a lie that misled two investigations.
+  ⛔ Committed only; **ships with a mobile build, which needs Izzy's word.**
+- ⛔ **Committing while another agent is live in the same tree**: never
+  `checkout`/`stash`/switch branches. Build it with a temp index
+  (`GIT_INDEX_FILE` + `read-tree` + `commit-tree` + `git branch`) — recipe in
+  handoff §4. Stage explicit paths, never `git add -A`.
+- ⛔ **Windows: `git worktree remove` fails "Filename too long"** on
+  node_modules. Use `robocopy <empty> <target> /MIR` then delete; emptied dirs
+  stay handle-locked for minutes and delete cleanly on retry — don't kill
+  processes over it. All 6 worktrees + 8 merged branches cleared (~8 GB).
+- ⛔ **Kept on purpose: `claude/silly-zhukovsky-9bd516`** (mobile perf). It adds
+  `react-native-svg`, a NATIVE dep, and its lockfile predates the Expo SDK
+  51→54 upgrade — pinning RN 0.74/React 18 resolutions that no longer exist.
+  Merging that lockfile is the exact break `0e5207d7` fixed. Needs a re-resolve
+  **and** a native build. Six May/June stashes also kept, pending Izzy's call.
+
 ## ⛔ AGENT HANDOFF — the portal `.payload` trap + IVR Studio publish feedback (2026-08-06) — READ FIRST before writing ANY portal error message, or for "publish did nothing" / "the error is just a code"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_IVR_STUDIO_PUBLISH_FEEDBACK_2026-08-06.md`**
-(commit `62a5e3ac`, pushed on `feat/ivr-migration-takeover`, ⛔ **NOT DEPLOYED** —
-portal-only, nothing touching call routing).
+(commit `62a5e3ac`, on `feat/ivr-migration-takeover` — ✅ **DEPLOYED 2026-08-06**
+inside portal `7f7ec541`; portal-only, nothing touching call routing).
 
 - ⛔ **`ApiError` exposes the server's JSON body as `.body` — NOT `.payload`.**
   `.payload` has never existed. Every `e?.payload?.detail` in the portal is
@@ -312,9 +360,8 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONNECT_DOORWAY_2026-08-05.md`**
 - ⛔ **api-side: switches take ~35-40s now (full regen).** The 15s helper
   timeout filed phantom failures that the scheduler retry healed (noop
   convergence). Fixed to 90s in `pbxInboundRouteHelperClient.ts` (`3399f0df`)
-  — **committed, NOT yet deployed**; until an api deploy, expect one transient
-  `helper_*_failed: operation was aborted` per switch that self-heals within
-  ~2 min.
+  — ✅ **DEPLOYED 2026-08-06** inside api `7f7ec541`; the transient
+  `helper_*_failed: operation was aborted` per switch should no longer appear.
 - **Landau's mapping was stale** (said connect, PBX rings ext 101 directly —
   route was rebuilt as id 68) — corrected to `pbx` this session. PBX ssh that
   works: repo key `.connect-ssh/connect2_server2_ed25519`, port 22 (the `pbx`
@@ -350,6 +397,48 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_CREATEABOX_T7_OUTAGE_2026-08-05.m
   wake-dial (enrolled 8/5). NOT a port-443 case.
 - Query gotchas + env notes (conntrack missing on loopcom, Prisma field names,
   history-window limits) in the handoff §5.
+
+## ⛔ AGENT HANDOFF — onboarding uploads were destroyed by every api deploy (2026-08-06) — READ FIRST for wizard file uploads, port document attachments, or BEFORE ADDING ANY NEW STORAGE DIRECTORY to apps/api
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_UPLOADS_VOLUME_2026-08-06.md`**
+(commit `5b2214fe` on `feat/ivr-migration-takeover`, shipped inside the tip
+`ff1d9a7b` — **DEPLOYED and container-verified 2026-08-06**.)
+
+- ⛔ **THE RULE: a `process.cwd()` storage fallback is fine in dev and is a
+  DATA-LOSS BUG in a container.** `onboardingStorageRoot()` fell back to
+  `<cwd>/data/onboarding-files` because `ONBOARDING_STORAGE_DIR` was never set
+  and no volume covered `/app/data`, so every api deploy destroyed the
+  customer's uploaded bills/LOAs — while the `onboardingUploadedFile` **DB row
+  survived**, leaving the admin UI and the port-attach loop believing the file
+  was there. **Silent at every step**: the write succeeds, the deploy succeeds,
+  and the attach failure lands in `portDocAttachFailures`, which nobody reads.
+- **Proven casualty**: inii mini (`cmsey1ydz0000o4xoxu92gh2m`) uploaded
+  `Invoice_14945_2026-08-01.pdf` at 20:56 on 2026-08-05; the 21:49 and 22:31
+  deploys destroyed it, and **VoIP.ms port order 217760 was filed with no bill
+  attached**. Old containers are removed, so it is unrecoverable — the customer
+  must re-upload. An audit on 2026-08-06 found **exactly ONE** orphaned row
+  platform-wide (that one); query in the handoff §2. **Policy is flag, never
+  delete** — the row is the only evidence the customer ever supplied the doc,
+  so admin detail now carries `fileOnDisk` instead of dropping the row.
+- ⛔ **`docker-compose.app.yml` has TWO api service blocks with duplicated env
+  and volumes — `api` AND `api_candidate`** (blue/green, host `:3004`). A volume
+  added to only one tests perfectly and then silently loses every file at the
+  next cutover. Any new storage dir needs FOUR things: the named volume, the
+  mount + `*_STORAGE_DIR` env in **both** blocks, and a boot-time warning when
+  the env is unset (`warnIfOnboardingStorageEphemeral` in `server.ts` is the
+  pattern). `crm-lead-docs` / `crm-voicemail-drops` are shared for this reason.
+- The root had been **copy-pasted into three files** and had drifted; it now
+  lives once in `apps/api/src/onboarding/storage.ts`, which also gives the admin
+  download path the path-traversal guard it never had.
+- ⏳ **NOT PROVEN END TO END — the volume holds ZERO files.** No upload has
+  happened since the deploy, so "file survives a deploy" is proven only as
+  plumbing (env + mount + volume + new code all verified inside `app-api-1`).
+  Prove it in 5 minutes without a customer: upload any small PDF through a
+  sign-up link, deploy, confirm the file is still under
+  `/var/lib/connect/onboarding-files/` and `fileOnDisk` is true.
+- Env trap: an audit script copied to `/tmp` dies `MODULE_NOT_FOUND` on
+  `@prisma/client` — pipe it via **stdin** into
+  `docker exec -i -w /app/packages/db app-api-1 node -`.
 
 ## ⛔ AGENT HANDOFF — onboarding E2E payment proof, journey tracking, auto-ban fix (2026-08-04→05) — READ FIRST for the sign-up wizard, public pay page, sign-up report emails, "link stopped working" reports, or ElevenLabs Make One
 
@@ -657,10 +746,9 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md
   is ALWAYS derived from `Tenant.name` via the `toIvrSlug` normalisation
   (lowercase, non-alnum → `_`) — a differently-formatted slug makes rows
   invisible to the prompt list and PBX prefix matching. Handoff doc §5.
-- **Global error-handler safety net is COMMITTED (`4fb512ed`, handoff §6) but
-  NOT DEPLOYED** — the live api container is `9b521176`, which predates it, so
-  an uncaught route error can still show raw internals in customer dialogs
-  until the next api deploy. Root cause of the leak: the api container sets NO
+- **Global error-handler safety net (`4fb512ed`, handoff §6) is ✅ DEPLOYED**
+  as of 2026-08-06 inside api `7f7ec541` — uncaught route errors no longer show
+  raw internals in customer dialogs. Root cause of the leak: the api container sets NO
   `NODE_ENV` (only telephony does in docker-compose.app.yml), so the old
   handler's "production" branch never ran — June-era protection sat dead for
   months. ⛔ Never gate safety behavior on `NODE_ENV` in apps/api; the portal
