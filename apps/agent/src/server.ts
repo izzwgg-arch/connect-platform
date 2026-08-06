@@ -16,6 +16,7 @@ import { PrismaConversationStore } from "./conversation/store";
 import { registerChatRoutes } from "./conversation/routes";
 import { ReadTools } from "./tools/readTools";
 import { buildTools } from "./tools/toolRegistry";
+import { buildPermissionTools } from "./tools/permissionGrant";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
 import { ActionService } from "./actions/service";
@@ -233,7 +234,13 @@ async function main() {
     // Read tools for the conversation: the model can look THIS account's own
     // data up mid-chat. Role gating inside the registry decides what a customer
     // vs an owner may reach; the tenant is always bound from the verified ctx.
-    const chatTools = buildTools({ readTools: new ReadTools(prisma), prisma });
+    // Read tools everyone gets (role-gated inside), plus the owner-only
+    // permission-grant PREPARE tool. Preparing writes a DRAFT only — the grant
+    // is applied by the API after the portal re-checks the password.
+    const chatTools = [
+      ...buildTools({ readTools: new ReadTools(prisma), prisma }),
+      ...buildPermissionTools({ prisma }),
+    ];
     engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools);
 
     // Warm the in-memory cache from the DB, then pre-translate fixed templates
