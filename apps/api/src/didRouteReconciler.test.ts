@@ -101,6 +101,60 @@ test("healthy world: a cycle repairs nothing and alerts nothing", async () => {
   assert.deepEqual(calls.alerts, []);
 });
 
+// ── the 2026-08-06 failure: row says connect, callers get the PBX ───────────
+
+test("RENDER drift (row says connect, dialplan says PBX IVR) is caught and re-baked", async () => {
+  const rebakes: string[] = [];
+  const { deps, calls } = makeDeps({
+    inspectMapping: async () => ({
+      ok: true, mode: "connect", renderedMode: "pbx", renderedGotos: ["T2_app-ivr,IVR-1,1"],
+    }),
+    rebakeRoute: async (m) => { rebakes.push(m.id); return { ok: true, changed: 1 }; },
+  });
+  const state: ReconcilerState = { lastReassertAt: new Map() };
+  await runReconcilerCycle(deps, state);
+  assert.deepEqual(rebakes, ["map1"]);
+  assert.ok(calls.alerts.includes("reconciler-render-map1"));
+  // The ROW is fine, so the row-drift path must NOT also fire a switch.
+  assert.deepEqual(calls.reasserts, []);
+  // Rate-limited on the next cycle: a human mid-surgery gets one repair, not a fight.
+  await runReconcilerCycle(deps, state);
+  assert.equal(rebakes.length, 1);
+});
+
+test("a helper too old to report the render is never treated as healthy-by-omission", async () => {
+  const rebakes: string[] = [];
+  const { deps, calls } = makeDeps({
+    inspectMapping: async () => ({ ok: true, mode: "connect" }), // no renderedMode
+    rebakeRoute: async (m) => { rebakes.push(m.id); return { ok: true, changed: 0 }; },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  // Nothing to act on (we cannot see the render) — but equally no false repair.
+  assert.deepEqual(rebakes, []);
+  assert.deepEqual(calls.alerts, []);
+});
+
+test("render drift with no re-bake available says so instead of claiming a fix", async () => {
+  const { deps, calls } = makeDeps({
+    inspectMapping: async () => ({ ok: true, mode: "connect", renderedMode: "pbx", renderedGotos: ["T2_app-ivr,IVR-1,1"] }),
+    rebakeRoute: undefined,
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.ok(calls.alerts.includes("reconciler-render-map1"));
+});
+
+test("unhealthy doorway prefers the platform-wide repair over a single re-assert", async () => {
+  let repairs = 0;
+  const { deps, calls } = makeDeps({
+    doorwayStatus: async () => ({ ok: true, healthy: false, contextLive: true }),
+    repairDoorway: async () => { repairs++; return { ok: true, routes: [{ did: "+1", rebaked: 1, error: null }] }; },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.equal(repairs, 1);
+  assert.deepEqual(calls.reasserts, []); // repair replaces the blind re-assert
+  assert.ok(calls.alerts.includes("reconciler-doorway"));
+});
+
 test("route drifted off Connect: re-asserted through the real switch route + alerted, rate-limited on the next cycle", async () => {
   const { deps, calls } = makeDeps({ inspectMapping: async () => ({ ok: true, mode: "pbx" }) });
   const state: ReconcilerState = { lastReassertAt: new Map() };

@@ -35,9 +35,24 @@ export type PbxRouteHelperInspectResponse = {
   did: string;
   didDigits: string;
   tenantId: string;
+  /** From the PBX route ROW. Says nothing about what callers get — see below. */
   mode: "pbx" | "connect";
   route: PbxRouteHelperRoute;
   snapshot: PbxRouteHelperSnapshot | null;
+  /** ⛔ The Goto actually rendered in the generated dialplan — WHAT CALLERS
+   *  FOLLOW, and the only trustworthy answer to "where does this number go".
+   *  Absent on helpers older than 2026.08.06.3. Proven 2026-08-06: `mode` read
+   *  "connect" while every caller reached the old PBX IVR, because a panel
+   *  edit had repurposed the shared doorway destination row. */
+  rendered?: {
+    file: string | null;
+    gotos: string[];
+    pointsAtDoorway: boolean;
+    mode: "connect" | "pbx" | "unknown";
+    error: string | null;
+  };
+  /** false = the row and the render disagree; callers follow the render. */
+  renderedMatchesMode?: boolean;
 };
 
 export type PbxRouteHelperSwitchResponse = {
@@ -132,6 +147,8 @@ async function callHelper<T>(
   path:
     | "/inspect"
     | "/doorway-status"
+    | "/doorway-repair"
+    | "/route-rebake"
     | "/recording-export"
     | "/retarget"
     | "/restore"
@@ -222,9 +239,34 @@ export type PbxDoorwayStatusResponse = {
   dialplanFilePresent: boolean;
   dialplanFileCurrent: boolean;
   rows: Array<{ customContextId: number; destinationId: number }>;
+  /** Doorway destination rows the VitalPBX panel repurposed. Reported for
+   *  diagnosis only — inert once repair mints a fresh pair, so it must never
+   *  gate health (an unclearable alert is an ignored alert). */
+  hijackedRows?: Array<{ customContextId: number; destinationId: number; nowLooksLike: string | null; nowIndex: string | null }>;
+  /** Connect-owned routes whose RENDER no longer enters the doorway. */
+  renderDriftedRoutes?: Array<{ routeId: number; tenantId: string; did: string; rendered: string[] }>;
   wouldUse: string | null;
   version: string;
 };
+
+/** Re-apply the baked Goto for one DID from recorded intent. Connect-owned
+ *  routes bake the doorway CONSTANT (never a decoded destination row). Touches
+ *  only the generated dialplan — no route/snapshot/Connect state — so it is
+ *  safe on a timer and idempotent (changed:0 when already correct). */
+export function rebakePbxRoute(
+  cfg: PbxRouteHelperConfig,
+  body: { did: string; tenantId: string },
+): Promise<{ ok: true; did: string; changed?: number; connectOwned?: boolean; before?: { gotos: string[] }; after?: { gotos: string[] } }> {
+  return callHelper(cfg, "/route-rebake", body, 60_000);
+}
+
+/** Full doorway repair: valid destination pair, every Connect-owned route
+ *  repointed at it, every render re-baked into it. Idempotent. */
+export function repairPbxDoorway(
+  cfg: PbxRouteHelperConfig,
+): Promise<{ ok: true; doorwayDestinationId: string; goto: string; routes: Array<{ routeId: number; did: string; destRepointed: boolean; rebaked: number; rendered?: string[]; error: string | null }> }> {
+  return callHelper(cfg, "/doorway-repair", {}, 120_000);
+}
 
 /** Read-only doorway health — consumed by the DID route reconciler. */
 export function doorwayStatusFromHelper(

@@ -22,7 +22,12 @@
  */
 
 import { Buffer } from "node:buffer";
-import { classifyElevenLabsFailure } from "@connect/shared";
+import {
+  classifyElevenLabsFailure,
+  describeElevenLabsFailure,
+  ELEVENLABS_CUSTOMER_BUSY,
+  ELEVENLABS_CUSTOMER_UNAVAILABLE,
+} from "@connect/shared";
 
 const API_ROOT = "https://api.elevenlabs.io/v1";
 
@@ -106,7 +111,11 @@ export class ElevenLabsError extends Error {
   constructor(
     message: string,
     readonly httpStatus: number,
-    /** Safe to show a customer — never contains the key or raw provider JSON. */
+    /**
+     * For Connect staff. Never contains the key or raw provider JSON, but it
+     * DOES name the provider and our account state — so it is not for a
+     * customer's eyes. Route handlers choose by role; see `customerMessage`.
+     */
     readonly userMessage: string,
     /** ElevenLabs' own `detail.status`, when they sent one ("quota_exceeded",
      *  "invalid_api_key_prefix", …). Lets callers branch on the actual reason

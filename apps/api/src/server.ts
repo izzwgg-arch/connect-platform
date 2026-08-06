@@ -231,6 +231,8 @@ import {
   inspectPbxInboundRoute,
   doorwayStatusFromHelper,
   exportPbxRecordings,
+  rebakePbxRoute,
+  repairPbxDoorway,
   agentSetPbxRouteDestination,
   agentSetPbxRouteDestinationV2,
   agentRestorePbxRouteDestination,
@@ -23316,9 +23318,36 @@ const didReconcilerDeps = {
     if (!helperCfg) return { ok: false as const, error: "route_helper_not_configured" };
     try {
       const helper = await inspectPbxInboundRoute(helperCfg, { did: String(mapping.e164), tenantId: resolved.pbxTenantId });
-      return { ok: true as const, mode: helper.mode };
+      return {
+        ok: true as const,
+        mode: helper.mode,
+        renderedMode: helper.rendered?.mode,
+        renderedGotos: helper.rendered?.gotos,
+      };
     } catch (err: any) {
       return { ok: false as const, error: err?.message ?? "inspect_failed" };
+    }
+  },
+  rebakeRoute: async (mapping: ReconcilerMapping) => {
+    const resolved = await resolveTenantPbxClient(mapping.tenantId);
+    if ("error" in resolved) return { ok: false, error: String(resolved.error) };
+    const helperCfg = resolvePbxRouteHelperConfig(resolved.pbxInstanceId);
+    if (!helperCfg) return { ok: false, error: "route_helper_not_configured" };
+    try {
+      const r = await rebakePbxRoute(helperCfg, { did: String(mapping.e164), tenantId: resolved.pbxTenantId });
+      return { ok: true, changed: r.changed };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? "rebake_failed" };
+    }
+  },
+  repairDoorway: async () => {
+    const helperCfg = resolvePbxRouteHelperConfig(null);
+    if (!helperCfg) return { ok: false, error: "route_helper_not_configured" };
+    try {
+      const r = await repairPbxDoorway(helperCfg);
+      return { ok: true, routes: (r.routes ?? []).map((x) => ({ did: x.did, rebaked: x.rebaked, error: x.error })) };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? "doorway_repair_failed" };
     }
   },
   doorwayStatus: async () => {

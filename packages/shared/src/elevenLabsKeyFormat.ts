@@ -66,6 +66,59 @@ export function describeElevenLabsKey(key: string | null | undefined): ElevenLab
 }
 
 /**
+ * Two audiences, and they must not get the same sentence.
+ *
+ * Connect's own staff need the real cause, including our account state with
+ * the provider. A CUSTOMER must never see it. "ElevenLabs has an unpaid
+ * invoice on the account — settle the bill at elevenlabs.io" was shown to a
+ * paying customer inside the IVR Studio: it names a supplier they have no
+ * relationship with, exposes our billing state, and tells them to go and pay
+ * something that has nothing to do with them. There is no version of our
+ * account being in arrears that is a customer's business.
+ *
+ * So customer-facing text here never names the provider, never mentions
+ * money, keys or invoices, and always offers the way round it — the Studio
+ * can still upload a file or reuse an existing recording.
+ */
+export const ELEVENLABS_CUSTOMER_UNAVAILABLE =
+  "Making a new recording isn't available at the moment. Our team has been told and is on it. In the meantime you can upload a recording, or pick one you've already made.";
+
+/** Transient and worth retrying — no need to alarm anyone. */
+export const ELEVENLABS_CUSTOMER_BUSY = "The voice service is busy right now. Give it a moment and try again.";
+
+export interface ElevenLabsFailure {
+  /** For Connect staff. Names the real cause, account state included. */
+  ownerMessage: string;
+  /** Safe for a customer: no provider name, no billing, no key. */
+  customerMessage: string;
+  /**
+   * True when the cause is our account or our supplier — nothing the customer
+   * did and nothing they can fix. These are the ones worth alerting us about,
+   * because the customer is now being quietly denied a feature they pay for.
+   */
+  ourProblem: boolean;
+}
+
+/**
+ * Full reading of an ElevenLabs failure, for both audiences at once.
+ * Returns null when nothing is recognised, so the caller still decides from
+ * the status code.
+ */
+export function describeElevenLabsFailure(body: string): ElevenLabsFailure | null {
+  const ownerMessage = classifyElevenLabsFailure(body);
+  if (!ownerMessage) return null;
+  // Everything the classifier recognises is about our account, our key or our
+  // supplier — except a deleted voice, which is a choice the customer made and
+  // can remake.
+  const aboutTheirChoice = /voice_not_found/i.test(body) || /Pick another one/.test(ownerMessage);
+  return {
+    ownerMessage,
+    customerMessage: aboutTheirChoice ? "That voice isn't available any more. Pick another one." : ELEVENLABS_CUSTOMER_UNAVAILABLE,
+    ourProblem: !aboutTheirChoice,
+  };
+}
+
+/**
  * Turn an ElevenLabs error body into a sentence a non-technical owner can act
  * on, or null when we recognise nothing (and the caller should fall back to
  * the status code).
