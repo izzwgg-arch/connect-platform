@@ -1577,7 +1577,7 @@ export default function IvrStudioPage() {
                       {r.hasAudio === false && <span className="cur">no audio</span>}
                       {canManagePrompts && (
                         <>
-                          <button type="button" className="del" title={t("Rename this recording")}
+                          <button type="button" className="rn" title={t("Rename this recording")}
                             aria-label={t("Rename this recording")}
                             onClick={() => setRenaming({ id: r.id, name: r.displayName })}>✎</button>
                           <button type="button" className="del" title={t("Delete this recording")}
@@ -2419,8 +2419,11 @@ function StudioStyles() {
       .ivrs .recrow>button{border:none;background:none;font:inherit;color:inherit;cursor:pointer;padding:0}
       .ivrs .recrow>button.nm{text-align:left}
       .ivrs .recrow>button.p:hover{filter:brightness(1.08)}
-      .ivrs .recrow .del{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
+      .ivrs .recrow .del,.ivrs .recrow .rn{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
         color:var(--faint);font-size:13px;opacity:.65;transition:opacity .14s,color .14s,background-color .14s}
+      /* Rename is not destructive, so it must not turn red on hover — the
+         colour is the only thing telling these two icons apart at a glance. */
+      .ivrs .recrow .rn:hover{opacity:1;color:var(--accent);background:var(--accent-soft)}
       .ivrs .recrow .del:hover{opacity:1;color:var(--danger,#e5484d);background:rgba(229,72,77,.12)}
       .ivrs .dimtxt{color:var(--dim);font-size:12.5px}
       .ivrs .switchbanner{display:flex;align-items:center;gap:9px;margin:6px 0 0 46px;padding:8px 12px;
