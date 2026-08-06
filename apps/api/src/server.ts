@@ -173,6 +173,8 @@ import {
   isValidMohRuntimeClass,
   canonicalSmsPhone,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
+  decideAdminAlert,
+  ADMIN_ALERT_DAILY_WINDOW_MS,
 } from "@connect/shared";
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
@@ -829,7 +831,38 @@ async function sendAdminAlert(key: string, subject: string, lines: string[], min
   try {
     if (!ADMIN_ALERT_EMAIL) return;
     const now = Date.now();
+    // Fast path only. The authority is the database read below: this process
+    // restarted 56 times on 2026-08-06, and every restart emptied this map and
+    // re-armed every alert — which is how a 6h cooldown still sent one message
+    // every 25 minutes and burned the mailbox's whole daily allowance.
     if (now - (adminAlertLastSentAt.get(key) ?? 0) < minIntervalMs) return;
+
+    const fullSubject = `[Connect Alert] ${subject}`;
+    const windowStart = new Date(now - ADMIN_ALERT_DAILY_WINDOW_MS);
+    // The subject is what survives in the DB, so it carries the alert's
+    // identity across restarts. It tracks `key` closely in practice; where it
+    // drifts (a subject with a changing count), the daily cap still holds.
+    const [previous, sentLast24h] = await Promise.all([
+      db.emailJob.findFirst({
+        where: { type: "ADMIN_ALERT", subject: fullSubject, createdAt: { gte: windowStart } },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+      db.emailJob.count({ where: { type: "ADMIN_ALERT", createdAt: { gte: windowStart } } }),
+    ]);
+
+    const decision = decideAdminAlert({
+      now,
+      lastSentAtMs: previous ? previous.createdAt.getTime() : null,
+      cooldownMs: minIntervalMs,
+      sentLast24h,
+    });
+    if (!decision.send) {
+      adminAlertLastSentAt.set(key, now);
+      app.log.info({ adminAlert: true, key, subject, suppressed: decision.reason, sentLast24h }, "[ADMIN_ALERT] suppressed");
+      return;
+    }
+
     adminAlertLastSentAt.set(key, now);
     const textBody = lines.join("\n");
     const htmlBody = `<div style="font-family:monospace;white-space:pre-wrap">${lines.map(escapeAlertHtml).join("<br/>")}</div>`;

@@ -67,6 +67,8 @@ import {
   type ActiveAdminOverride,
   type AdminFallbackCandidate,
   type MohAstDbKey,
+  decideAdminAlert,
+  ADMIN_ALERT_DAILY_WINDOW_MS,
 } from "@connect/shared";
 import {
   isApnsVoipConfigured,
@@ -107,6 +109,9 @@ async function queueAdminAlertEmail(key: string, subject: string, lines: string[
   try {
     if (!ADMIN_ALERT_EMAIL) return;
     const now = Date.now();
+    // Fast path only — this map dies with the process, and a restart used to
+    // re-arm every alert. The database read below is the authority, and it is
+    // shared with the API so both processes draw on ONE mailbox budget.
     if (now - (adminAlertEmailLastSentAt.get(key) ?? 0) < ADMIN_ALERT_EMAIL_COOLDOWN_MS) return;
     adminAlertEmailLastSentAt.set(key, now);
     // Bound the cooldown map — keys are per endpoint/tenant and accumulate.
@@ -115,6 +120,28 @@ async function queueAdminAlertEmail(key: string, subject: string, lines: string[
         if (now - ts > ADMIN_ALERT_EMAIL_COOLDOWN_MS) adminAlertEmailLastSentAt.delete(k);
       }
     }
+
+    const fullSubject = `[Connect Alert] ${subject}`;
+    const windowStart = new Date(now - ADMIN_ALERT_DAILY_WINDOW_MS);
+    const [previous, sentLast24h] = await Promise.all([
+      db.emailJob.findFirst({
+        where: { type: "ADMIN_ALERT", subject: fullSubject, createdAt: { gte: windowStart } },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+      db.emailJob.count({ where: { type: "ADMIN_ALERT", createdAt: { gte: windowStart } } }),
+    ]);
+    const decision = decideAdminAlert({
+      now,
+      lastSentAtMs: previous ? previous.createdAt.getTime() : null,
+      cooldownMs: ADMIN_ALERT_EMAIL_COOLDOWN_MS,
+      sentLast24h,
+    });
+    if (!decision.send) {
+      console.log(`[ADMIN_ALERT] suppressed (${decision.reason}, ${sentLast24h} in 24h) key=${key} subject=${subject}`);
+      return;
+    }
+
     const textBody = lines.join("\n");
     const htmlBody = `<div style="font-family:monospace;white-space:pre-wrap">${lines.map(escapeAlertHtml).join("<br/>")}</div>`;
     // ADMIN_ALERT_TENANT_ID is the same synthetic tenant the API's admin

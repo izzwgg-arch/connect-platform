@@ -26,6 +26,7 @@ export * from "./webrtcGlobalOutageAlerts";
 export * from "./localDevCredentials";
 export * from "./elevenLabsKeyFormat";
 export * from "./chatPermissionGrants";
+export * from "./adminAlertBudget";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
 /* chatPermissionGrantHash uses node:crypto — import from "@connect/shared/chatPermissionGrantHash" in Node only */
 
