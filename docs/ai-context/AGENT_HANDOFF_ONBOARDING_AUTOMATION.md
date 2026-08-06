@@ -329,3 +329,96 @@ proves nothing, which is exactly how this bug survived 44 passing tests.
 files a REAL port order against a REAL number at a REAL carrier. 217760 is not
 a test record. Exercise parameter changes through the test suite's fake, and
 accept that the response shape is only ever confirmed by a customer's filing.
+
+---
+
+## 10. The same customer's 90-minute stall — a retry that redid its own work
+
+The port rejection above was only half of why inii mini waited 97 minutes
+between paying and getting a working phone. The other half is a retry-design
+bug worth understanding before writing any other resumable stage.
+
+**VoIP.ms's write path degraded on its own.** From ~21:40 to ~22:37 UTC every
+`setSubAccount` call timed out at 30 s, while `getServersInfo` answered in
+**2.0 s** the whole time. Reads being healthy is NOT evidence that writes are.
+Probe the specific method that is failing, not the API in general.
+
+**Our retry then re-entered the one call that was down.** `ensureSubaccount()`
+generates a fresh password every run, and the reuse path rotates it through
+`setSubAccount`. The credentials were persisted only at the very END of the
+number stage — so when a later step failed, a *successful* rotation was thrown
+away, and the next attempt rotated again. Four watchdog attempts, four
+rotations, four timeouts. The stage never got past its first call.
+
+⛔ **A resumable stage must persist each irreversible success the moment it
+happens, not at the end of the stage.** Anything saved only on the happy path
+guarantees the retry repeats the most expensive (or most fragile) work.
+
+**Fixed 2026-08-05 (`b20fad30`, tests `54cd7f59`, deployed inside merge
+`ac585aa7`):**
+
+- `applyOnboardingNumber()` calls `readSubaccount(row)` FIRST and reuses stored
+  credentials when present — a retry never touches `setSubAccount` again.
+  Safe because subaccount names are per-submission (§ provisioning identity):
+  the row can only ever hold this submission's own account.
+- A successful create/rotate is written to `voipmsSubaccountEncrypted`
+  immediately, before the DID work.
+- `vms()` took an optional `timeoutMs`; both subaccount writes now pass
+  **120 s** instead of 30 s. The live rotation that finally worked took **48 s**
+  — the old ceiling was aborting calls that VoIP.ms was still completing, and
+  **aborting the HTTP request does not cancel their server-side operation.**
+- Two regression tests: reuse survives with both subaccount writes returning
+  errors, and a successful create is persisted even when a later step fails.
+
+**How it actually ended:** attempt 5 of 5 (the watchdog gives up after 5) ran on
+the new code, reused everything, and completed in 130 s — number stage, PBX
+build, Connect sync, invitation email. One more failure and the sign-up would
+have gone to a "watchdog gave up" alert instead.
+
+**Operational note for a stalled paid sign-up:** the watchdog's 5 attempts are
+~16 min apart, so a bad hour costs the customer over an hour. The retry
+endpoint exists — `POST /admin/onboarding/submissions/:id/retry-setup`
+(SUPER_ADMIN) — and is safe to call repeatedly; every stage is idempotent. Use
+it rather than waiting out the timer.
+
+### The wizard half of the port fix (`ce54e40d`, live)
+
+The parameter rewrite is only useful if the wizard collects what the carrier
+needs, so the sign-up's port step changed with it.
+
+**The service address is now FOUR fields, all required.** `serviceAddress` is
+the **street line only**, plus `serviceCity`, `serviceState` (2 letters,
+upper-cased as typed) and `serviceZip` (5 digits). There is also a **"this is a
+cell phone (wireless) number"** checkbox (`isMobile`), which makes the transfer
+PIN required when ticked. ⛔ **Never collapse these back into one address box.**
+`addLNPPort` takes `address1`, `city`, `state` and `zip` as separate
+parameters, and the losing carrier matches each against the CSR — a single
+free-text line cannot be split apart reliably, which is exactly why the old
+one-line field could not be filed.
+
+**⛔ Order 217760 does NOT prove the legacy-address fallback.** inii mini's
+record was hand-corrected into the structured shape before that filing —
+`answers.provisioning.portFiledManuallyBy` on the submission says so in as many
+words ("corrected WSDL params, isMobile=1, structured address"), and its
+`phone.details` today reads `serviceAddress: "16 Depalma Dr"`, `serviceCity:
+"Highland Mills"`, `serviceState: "NY"`, `serviceZip: "10930"`, `isMobile:
+true`. So what a real carrier accepted is the **structured** path with
+`isMobile=1`. `parseServiceAddressLine()` — the fallback that splits a
+pre-2026-08-06 one-line address (ZIP and 2-letter state off the end, last comma
+part as the city) and passes the customer's **original line through in
+`notes`** so a bad parse cannot silently lose information — is covered by unit
+tests only and has never been near a carrier. Keep it, because drafts saved
+before this change still hold one line and no ZIP, but do not report it as
+proven.
+
+**`addLNPFile` takes `{portid, file}` and nothing else.** The `filename`
+parameter the old code sent is not in the WSDL; the test now asserts its
+absence.
+
+**The deploy timing is the evidence.** The api and portal carrying the rewrite
+finished deploying at **19:18 ET on 2026-08-05**, and order **217760** was
+accepted **~19:55 ET** — 37 minutes later, on the same submission that had been
+rejected `invalid` all day. Both halves are live and were verified inside the
+running api container (`LNP_CODES` present, and the port id read as
+`?? submit?.port`), so a future reader does not have to take the commit list on
+faith.

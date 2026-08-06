@@ -1206,6 +1206,20 @@ Session-critical facts (details + evidence in the handoff doc):
   `db4453f8`); subaccounts are `344022_<name>` — suffix-match, never prefix
   with the API login email; `device_type 1` = Asterisk (correct), `2` = IP
   phone (wrong); outages return Cloudflare 521/522 HTML — retry with backoff.
+- ⛔ **VoIP.ms's WRITE path degrades on its own — healthy reads prove nothing**
+  (handoff §10). 2026-08-05: every `setSubAccount` timed out for ~57 min while
+  `getServersInfo` answered in 2 s. Worse, our retry re-entered that exact
+  call: credentials were persisted only at the END of the number stage, so a
+  later failure discarded a SUCCESSFUL password rotation and the next attempt
+  rotated again — 4 watchdog attempts, 4 timeouts, 90 min of a paid customer
+  with no phone. Fixed `b20fad30`: stored creds are reused first, a successful
+  create/rotate is persisted immediately, and both subaccount writes get 120 s
+  (the rotation that worked took **48 s**; aborting the request does NOT cancel
+  VoIP.ms's operation). **General rule: a resumable stage persists each
+  irreversible success the moment it happens, never at the end.** A stalled
+  paid sign-up should be re-kicked via
+  `POST /admin/onboarding/submissions/:id/retry-setup` (idempotent) rather than
+  waiting out the watchdog's ~16-min spacing.
 - Test numbers are pre-owned STOCK: wipes re-route DIDs to `account:344022`,
   never cancel them. Spare DIDs show first in the wizard ("Ready now");
   the search cache holds only the purchasable list, spares always fresh.
