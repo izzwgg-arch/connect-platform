@@ -1,5 +1,46 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — the agent got TOOLS; audio adaptation is measured but not built (2026-08-06) — READ FIRST for apps/agent, the model router, call-quality data, or permission-granting
+
+Full handoff + spec: **`docs/ai-context/PLAN_SELF_IMPROVING_CONNECT_2026-08-06.md`**
+
+- **The agent had NO agentic loop at all** — zero `tool_use` handling anywhere.
+  Code pre-fetched data, pasted it in a prompt, and the model narrated it; it
+  could never ask a follow-up. Fixed: `completeWithTools` in `llm/router.ts`
+  (both providers, 8-round cap, degrades to a plain completion on failure —
+  never replays a half-finished tool exchange across providers).
+- ⛔ **The security model CHANGED.** The agent used to be safe because it was
+  powerless. Now it can *ask* for data, so enforcement lives in
+  `tools/toolRegistry.ts`: **no tool schema may declare a tenant**, `executeTool`
+  strips any tenant-ish key the model invents and audit-logs the drop, and role
+  gating hides internal tools from customers. **Every new tool must follow this.**
+- ⛔ **OpenAI tool calls MUST use `/v1/responses`, not chat.completions** —
+  `gpt-5.6-luna` (the live picked chat model, set via the owner model-picker,
+  which OVERRIDES `DEFAULT_ROUTES`) rejects tools+reasoning there. Caught in prod.
+- ⛔ **Thinking shares the `max_tokens` budget** on Opus 5 / Sonnet 5 / gpt-5.
+  Four ceilings were too small; chat's 800 could return EMPTY text, which the
+  engine silently turned into the canned "passed it to our team" line. Never
+  lower these to "save money" — you truncate after paying to think.
+- **Phase 1 measured (do not re-derive):** Android quality reporting is healthy
+  (~452 reports / 668 connected calls). **iOS reported ZERO** — `platform` was
+  hardcoded `"ANDROID"` in the shared RN client — and `networkType` was always
+  null. Both fixed in `apps/mobile/src/sip/jssip.ts`, **needs an APK/TestFlight
+  build to take effect**. ⛔ Do NOT import `@react-native-community/netinfo`:
+  it is in node_modules but in NO package.json and absent from pnpm-lock
+  (the undici failure mode) — networkType now comes from WebRTC ICE stats.
+- **The tuner is deliberately NOT built.** Only 8 days of history and exactly
+  ONE person+network group with both relay and direct arms — it would propose
+  nothing. Coverage first (the mobile build above), then the decision layer.
+- **NEXT UP, fully specced in §7 of the plan doc:** the permission-grant apply
+  endpoint + portal password dialog. The agent half is built and pushed but
+  **NOT deployed** (it dead-ends without them). ⛔ Reuse
+  `getGrantablePermissions()` in `customRoleRoutes.ts` — the correct authority
+  rule already exists; do not write a second one. The agent must NEVER receive
+  the password.
+- Deployed this session: `812674ca` → `c8f12a99` on `feat/ivr-migration-takeover`.
+  Agent deploys are a MANUAL compose rebuild (no agent service in the deploy queue).
+
+
 ## ⛔ AGENT HANDOFF — the worker's dead push channel + a website that lived in a stash (2026-08-06) — READ FIRST before dropping ANY stash, removing a worktree on Windows, or believing a push/wake feature is live
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_WORKTREE_SWEEP_FCM_WIRING_2026-08-06.md`**
