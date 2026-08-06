@@ -321,6 +321,41 @@ export function readDestination(stored: StoredDestination | null | undefined, di
   return { kind: "other", targetId: null, name: stored?.label ?? null, known: false };
 }
 
+// ── Hand-backs to the old phone system ───────────────────────────────────────
+//
+// Izzy's rule (2026-08-06): once a number is taken over by Connect, everything
+// it can reach must be in Connect. No flip-flopping back and forth.
+//
+// The line is about who DECIDES, not who answers. Ringing an extension, a team,
+// or dropping into voicemail is a leaf — the call ends there and nothing is
+// half-owned. But sending the caller into a VitalPBX IVR or time condition
+// hands the call flow itself back: from that point the old system chooses what
+// happens, Connect's Studio can't see it or change it, and the number is
+// half-migrated no matter what the Studio shows.
+//
+// Deliberately NOT a hand-back: `T<t>_app-custom-application`, which is how
+// Connect's own "forward to a phone number" keys reach the outside world. It
+// lives in a PBX-shaped context but Connect creates and owns it.
+
+const PBX_HANDBACK_KINDS: Array<{ re: RegExp; what: string }> = [
+  { re: /^T\d+_app-ivr,/i,            what: "a menu on the old phone system" },
+  { re: /^T\d+_app-time-condition,/i, what: "an opening-hours rule on the old phone system" },
+  { re: /^T\d+_app-announcement,/i,   what: "an announcement on the old phone system" },
+  { re: /^T\d+_app-disa,/i,           what: "a dial-through service on the old phone system" },
+  { re: /^T\d+_app-queues-priority,/i,what: "a queue rule on the old phone system" },
+];
+
+/**
+ * Does this destination hand the call back to the old phone system?
+ * Returns what it hands back to, in plain words, or null when it doesn't.
+ */
+export function pbxHandBack(stored: StoredDestination | null | undefined): string | null {
+  const ref = String(stored?.destinationRef ?? "").trim();
+  if (!ref) return null;
+  for (const { re, what } of PBX_HANDBACK_KINDS) if (re.test(ref)) return what;
+  return null;
+}
+
 /** How a recording key's "afterwards" reads in a sentence. */
 export function describeAfterRecording(stored: StoredDestination | null | undefined, dir: TenantDirectory): string {
   const afterType = String(stored?.afterDestinationType ?? "").trim();
@@ -407,6 +442,25 @@ export interface ExplainContext {
   phoneNumbers?: string[];
   /** Business hours summary, when this menu is the open-hours one. */
   hoursSummary?: string | null;
+}
+
+/**
+ * Every place a menu still hands the call back to the old phone system.
+ *
+ * Used before publishing and on the map, so a half-migrated number is visible
+ * as a fact about the call rather than something a caller discovers.
+ */
+export function findPbxHandBacks(menu: MenuForExplain): Array<{ where: string; what: string }> {
+  const out: Array<{ where: string; what: string }> = [];
+  for (const o of menu.options) {
+    const what = pbxHandBack(o);
+    if (what) out.push({ where: `Key ${digitGlyph(o.optionDigit)}`, what });
+  }
+  const timeout = pbxHandBack(menu.timeoutDestination);
+  if (timeout) out.push({ where: "When the caller presses nothing", what: timeout });
+  const invalid = pbxHandBack(menu.invalidDestination);
+  if (invalid) out.push({ where: "When the caller presses a wrong key", what: invalid });
+  return out;
 }
 
 /**

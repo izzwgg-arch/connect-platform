@@ -17266,11 +17266,16 @@ app.get("/voice/pbx/ring-groups", async (req, reply) => {
     });
   }
 
-  const { listRingGroupsFromOmbutel } = await import("./pbxOmbutelRingGroupList");
-  const result = await listRingGroupsFromOmbutel(
-    vitalTenantId,
-    pbxInstance.ombuMysqlUrlEncrypted,
-  );
+  // This opens a MySQL connection to the PBX per request and measured ~2.2s
+  // average / 2.8s p95 — the single slowest thing on an IVR Studio page load,
+  // and the floor the whole page waits on. Ring groups change when someone
+  // makes one, not second to second, so a short shared cache makes every load
+  // after the first effectively instant while staying fresh enough that a team
+  // created in the Studio shows up right away.
+  const result = await pbxReadCache(`ring-groups:${pbxInstance.id}:${vitalTenantId}`, async () => {
+    const { listRingGroupsFromOmbutel } = await import("./pbxOmbutelRingGroupList");
+    return listRingGroupsFromOmbutel(vitalTenantId!, pbxInstance.ombuMysqlUrlEncrypted);
+  });
 
   if (result.source === "skipped") {
     return reply.send({ rows: [], source: "skipped", skipReason: result.skipReason });
@@ -19969,6 +19974,31 @@ function normalizeTenantDestinationRef(type: string | null | undefined, ref: str
  *  the box so a fresh IVR behaves sensibly without any admin configuration.
  *  Stored as Asterisk built-in playable names (no `custom/` prefix). */
 const IVR_DEFAULT_PROMPT_INVALID = "pbx-invalid";
+/**
+ * A very short cache for READ-ONLY PBX lookups that the IVR Studio fires on
+ * every page load.
+ *
+ * These go over MySQL/HTTP to the PBX and are slow (ring groups measured ~2.2s
+ * average). Several of them run on one page load and none of them change from
+ * second to second. The TTL is deliberately tiny: long enough that opening the
+ * Studio, or two people looking at once, doesn't pay the cost repeatedly —
+ * short enough that something created in the Studio appears almost at once.
+ *
+ * A failed read is NOT cached, so a PBX hiccup can't be pinned in place.
+ */
+const PBX_READ_CACHE_MS = 20_000;
+const pbxReadCacheStore = new Map<string, { at: number; value: any }>();
+async function pbxReadCache<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = pbxReadCacheStore.get(key);
+  if (hit && Date.now() - hit.at < PBX_READ_CACHE_MS) return hit.value as T;
+  const value = await load();
+  pbxReadCacheStore.set(key, { at: Date.now(), value });
+  if (pbxReadCacheStore.size > 500) {
+    for (const [k, v] of pbxReadCacheStore) if (Date.now() - v.at > PBX_READ_CACHE_MS) pbxReadCacheStore.delete(k);
+  }
+  return value;
+}
+
 /** Asterisk built-ins — they ship with the PBX, so never try to push audio for them. */
 const IVR_DEFAULT_PROMPT_REFS_FOR_AUDIO = new Set(["pbx-invalid", "vm-enter-num-to-call", "vm-goodbye", "one-moment-please"]);
 const IVR_DEFAULT_PROMPT_TIMEOUT = "vm-enter-num-to-call";
@@ -22307,6 +22337,37 @@ async function loadIvrProfileForWrite(
 const IVR_OPTION_DIGIT_SCHEMA = z.enum([
   "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "hash",
 ]);
+
+// ── GET /voice/ivr/route-profiles/options ────────────────────────────────────
+// Every menu's keys for a tenant, in ONE request.
+//
+// The Studio used to fetch these one menu at a time, and because that wave only
+// starts once the first batch of requests has resolved, it added a whole second
+// round of latency to every page load — ~560ms each, up to six menus, after
+// everything else had already finished. A tenant's menus are a single table
+// read; there was never a reason to ask six times.
+//
+// Declared BEFORE the /:profileId/options route so "options" can't be captured
+// as a profileId.
+app.get("/voice/ivr/route-profiles/options", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const rawTid = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tenantId = rawTid.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(rawTid) : rawTid;
+  if (!tenantId) return reply.send({ optionsByProfile: {} });
+  assertIvrTenantAccess(user, tenantId);
+
+  const options = await (db as any).ivrOptionRoute.findMany({
+    where: { tenantId },
+    orderBy: [{ optionDigit: "asc" }],
+  });
+  const optionsByProfile: Record<string, any[]> = {};
+  for (const o of options) (optionsByProfile[o.profileId] ??= []).push(o);
+  return reply.send({ optionsByProfile });
+});
 
 // ── GET /voice/ivr/route-profiles/:profileId/options ─────────────────────────
 app.get("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {

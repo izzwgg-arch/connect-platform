@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   buildDestination, readDestination, describeDestination, describeAfterRecording,
-  explainCallFlow, summariseHours, digitGlyph, formatPhone,
+  explainCallFlow, summariseHours, digitGlyph, formatPhone, pbxHandBack, findPbxHandBacks,
   KIND_LABEL, KIND_BLURB, OFFERABLE_KINDS,
   type MenuChoiceKind, type TenantDirectory, type CallStep, type AfterRecordingChoice,
 } from "@connect/shared";
@@ -371,15 +371,24 @@ export default function IvrStudioPage() {
       setTeamsLoaded((!rgUnknown && !qUnknown) || teamRows.length > 0);
       setPeopleLoaded(ext !== null);
 
-      // Every menu's keys, so branches can be drawn without another round trip
-      // each time someone opens one.
+      // Every menu's keys in ONE request. This used to be a second wave of
+      // requests — one per menu, each ~half a second, and none of them could
+      // start until the batch above had finished. On a tenant with several
+      // menus that was most of the page's load time for a single table read.
       const allOptions: Record<string, OptionRow[]> = {};
-      await Promise.all(list.map(async (prof) => {
-        try {
-          const r = await apiGet<{ options: OptionRow[] }>(`/voice/ivr/route-profiles/${prof.id}/options${qs}`);
-          allOptions[prof.id] = r.options || [];
-        } catch { allOptions[prof.id] = []; }
-      }));
+      const bulk = await safe<{ optionsByProfile: Record<string, OptionRow[]> }>(`/voice/ivr/route-profiles/options${qs}`);
+      if (bulk?.optionsByProfile) {
+        for (const prof of list) allOptions[prof.id] = bulk.optionsByProfile[prof.id] ?? [];
+      } else {
+        // Older API (or a hiccup): fall back to the per-menu reads so the map
+        // still draws rather than showing every menu as empty.
+        await Promise.all(list.map(async (prof) => {
+          try {
+            const r = await apiGet<{ options: OptionRow[] }>(`/voice/ivr/route-profiles/${prof.id}/options${qs}`);
+            allOptions[prof.id] = r.options || [];
+          } catch { allOptions[prof.id] = []; }
+        }));
+      }
       setOptionsByProfile(allOptions);
 
       const chosen = deepLinkProfile && list.some((x) => x.id === deepLinkProfile) ? deepLinkProfile : null;
@@ -785,6 +794,26 @@ export default function IvrStudioPage() {
       );
     }
 
+    // Half-migrated numbers: a key that sends the caller back into the OLD
+    // phone system's call flow means this number isn't really on Connect —
+    // whatever the Studio shows. Say so before publishing, not after a caller
+    // finds it.
+    const handBacks = findPbxHandBacks({
+      id: active.id,
+      name: active.name,
+      options: optionsByProfile[active.id] ?? [],
+      timeoutDestination: active.timeoutDestinationType && active.timeoutDestinationRef
+        ? { destinationType: active.timeoutDestinationType, destinationRef: active.timeoutDestinationRef } : null,
+      invalidDestination: active.invalidDestinationType && active.invalidDestinationRef
+        ? { destinationType: active.invalidDestinationType, destinationRef: active.invalidDestinationRef } : null,
+    });
+    for (const h of handBacks) {
+      warnings.push(
+        `${h.where} sends the caller to ${h.what}. From there the old system decides what happens — ` +
+        "you can't see or change it here, so this number isn't fully moved over yet.",
+      );
+    }
+
     if (pendingTeamNumbers.length > 0) {
       const dests = [
         ...(optionsByProfile[active.id] ?? []),
@@ -1066,9 +1095,11 @@ export default function IvrStudioPage() {
                         <Step
                           digit={digitGlyph(digit)}
                           title={read.name ?? KIND_LABEL[read.kind]}
-                          sub={describeDestination(o, directory)}
+                          sub={pbxHandBack(o)
+                            ? `Goes to ${pbxHandBack(o)} — not moved over to Connect yet`
+                            : describeDestination(o, directory)}
                           kind={read.kind}
-                          warn={!read.known && read.kind !== "hangup" && read.kind !== "other"}
+                          warn={Boolean(pbxHandBack(o)) || (!read.known && read.kind !== "hangup" && read.kind !== "other")}
                           onClick={canManage ? () => setEditingDigit(editingDigit === digit ? null : digit) : undefined}
                           actions={branchMenu ? (
                             <button className="btn sm" onClick={(e) => { e.stopPropagation(); setOpenBranches((b) => ({ ...b, [digit]: !branchOpen })); }}>

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import {
   buildDestination, readDestination, describeDestination, explainKeyPress,
   explainCallFlow, narrateCallFlow, summariseHours, digitGlyph, digitSpoken,
-  formatPhone, OFFERABLE_KINDS, type TenantDirectory,
+  formatPhone, pbxHandBack, findPbxHandBacks, OFFERABLE_KINDS, type TenantDirectory,
 } from "./ivrPlainLanguage";
 
 // A plus center (VitalPBX tenant 2), real rows.
@@ -119,6 +119,56 @@ test("a destination from the PBX we don't offer still describes itself", () => {
   assert.equal(r.kind, "other");
   assert.equal(describeDestination({ destinationType: "announcement", destinationRef: "T2_app-announcement,announcement-3,1", label: "Opening hours notice" }, DIR), "Opening hours notice");
   assert.equal(OFFERABLE_KINDS.includes("other" as never), false);
+});
+
+// ── hand-backs to the old phone system ───────────────────────────────────────
+// Izzy's rule: a number on Connect must be fully in Connect. Real case found on
+// A plus center 2026-08-06 — key 2 went to T2_app-time-condition,TC-1,1, which
+// then chose between two VitalPBX IVRs.
+
+test("a PBX menu or hours-rule is a hand-back", () => {
+  assert.equal(pbxHandBack({ destinationType: "custom", destinationRef: "T2_app-time-condition,TC-1,1" }),
+    "an opening-hours rule on the old phone system");
+  assert.equal(pbxHandBack({ destinationType: "ivr", destinationRef: "T2_app-ivr,IVR-4,1" }),
+    "a menu on the old phone system");
+});
+
+test("leaf destinations are NOT hand-backs — the call ends there", () => {
+  // Who ANSWERS doesn't matter; who DECIDES does. These end the journey.
+  for (const ref of ["T2_cos-all,101,1", "sub-extensions-vm,VM-101,1", "T2_ext-ringgroups,800,1",
+                     "T2_ext-queues,600,1", "connect-tenant-ivr,prof_home,1", "connect-default-fallback,s,1"]) {
+    assert.equal(pbxHandBack({ destinationType: "x", destinationRef: ref }), null, ref);
+  }
+});
+
+test("Connect's own forwarding context is never a hand-back", () => {
+  // It is PBX-SHAPED but Connect creates and owns it — flagging it would tell
+  // the customer their own forward is a migration problem.
+  const fwd = buildDestination("forward", "2000", { ...DIR, forwards: [{ extension: "2000", phoneNumber: "5622096644" }] })!;
+  assert.equal(pbxHandBack(fwd), null);
+});
+
+test("a menu reports every place it still hands back, in plain words", () => {
+  const found = findPbxHandBacks({
+    id: "m", name: "Main",
+    options: [
+      { optionDigit: "1", destinationType: "extension", destinationRef: "T2_cos-all,108,1" },
+      { optionDigit: "2", destinationType: "custom", destinationRef: "T2_app-time-condition,TC-1,1" },
+    ],
+    timeoutDestination: { destinationType: "voicemail", destinationRef: "sub-extensions-vm,VM-108,1" },
+    invalidDestination: { destinationType: "ivr", destinationRef: "T2_app-ivr,IVR-4,1" },
+  });
+  assert.equal(found.length, 2);
+  assert.deepEqual(found[0], { where: "Key 2", what: "an opening-hours rule on the old phone system" });
+  assert.deepEqual(found[1], { where: "When the caller presses a wrong key", what: "a menu on the old phone system" });
+});
+
+test("a fully migrated menu reports nothing", () => {
+  assert.deepEqual(findPbxHandBacks({
+    id: "m", name: "Main",
+    options: [{ optionDigit: "1", destinationType: "extension", destinationRef: "T2_cos-all,108,1" }],
+    timeoutDestination: { destinationType: "voicemail", destinationRef: "sub-extensions-vm,VM-108,1" },
+  }), []);
 });
 
 // ── forwarding to an outside phone number ────────────────────────────────────
