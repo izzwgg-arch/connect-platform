@@ -1,5 +1,12 @@
 # Handoff — IVR migration, Studio rebuild, Yiddish interface (2026-08-03/04)
 
+> **⛔ IVR RUNTIME SUPERSEDED — read `AGENT_HANDOFF_IVR_RUNTIME_2026-08-06.md`
+> before trusting anything here about what callers hear.** On 2026-08-06 the
+> runtime was found to IGNORE a number's assigned menu entirely (it played one
+> tenant-global menu), publishing never copied recordings to the PBX, and a
+> publish reported success before Asterisk applied it. The Studio/scheduling
+> design notes below still stand; the "what happens on a call" half did not.
+
 Branch `feat/ai-agent`. Everything below is deployed to production unless
 marked otherwise.
 

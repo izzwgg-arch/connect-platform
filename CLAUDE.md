@@ -1,5 +1,115 @@
 # Connect 2 — working rules for Claude
 
+## ⛔⛔ AGENT HANDOFF — the IVR actually works now (2026-08-06) — READ FIRST for ANYTHING touching the IVR Studio, publishing, recordings, menu keys, or "I changed it and nothing changed"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_IVR_RUNTIME_2026-08-06.md`**
+
+- ⛔ **THE RULE: the database is not what callers hear. Verify with a real
+  call.** Four times in one night the DB, the publish record, and the API
+  response all said "success" while callers reached the wrong menu — for four
+  DIFFERENT reasons. Use `scripts/pbx/ivr-full-coverage.sh` /
+  `ivr-pointing-stress.sh` / `ivr-e2e.sh` (real calls + real DTMF, asserted
+  from the Asterisk log). Never report "fixed" from stored state.
+- **Six defects found and fixed**, each producing a symptom the owner had been
+  reporting for weeks: (1) the runtime NEVER read a number's assigned menu —
+  `grep -c profile_id` on the live dialplan was **0**, so every number played
+  one tenant-global menu; (2) publishing never copied recordings to the PBX;
+  (3) a publish answered `{ok:true}` before Asterisk applied a single key
+  (fire-and-forget `sendAction("DBPut")`); (4) the drift reconciler overwrote
+  the owner's work — reverting fresh publishes AND rewriting the number→menu
+  pointer every ~10 min; (5) the panel had repurposed the shared doorway
+  destination row; (6) a menu with no greeting hung up on callers.
+- ⛔ **TWO publish paths exist** — `POST /voice/ivr/publish` (Studio button) and
+  `publishIvrForTenant()` (agent door + mode sweep). Near-duplicates. A fix
+  applied to one silently skips the other; that shipped broken audio for a
+  whole test round. **Anything added to one belongs in both.**
+- ⛔ **Any repair path that writes owner-chosen state must respect
+  `PUBLISH_SETTLE_MS`** (5 min). A watchdog that "repairs" from state read
+  seconds ago will silently undo a publish — that is exactly what "I published
+  and it didn't take effect" was.
+- **Submenus are live** ("press N → another menu"): per-menu AstDB families +
+  the additive `[connect-menu]` engine. The `m<id>` exten prefix is
+  **hyphen-free on purpose** — Asterisk strips `-` in patterns.
+- Harness traps that produced false "product is broken" reports: isolate traces
+  by linkedid, match case-insensitively (`BackGround`), allow ~4s between key
+  presses, use `Dial(...,/n,D(wwww<digits>))` for DTMF, **verify every config
+  write**, and never edit/scp a script while it is running.
+
+## ⛔ AGENT HANDOFF — the IVR coverage suite REWRITES live config (2026-08-06) — READ THIS WITH THE SECTION ABOVE, before running `ivr-full-coverage.sh` or believing any "I tested the IVR and it misbehaved" report
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_IVR_COVERAGE_SUITE_2026-08-06.md`**
+
+- ⛔ **The suite the section above recommends is NOT a passive test — every round
+  rewrites the live tenant's menu and publishes it**: overwrites keys 1–5,
+  **deletes key 6**, swaps the greeting twice, and **repoints the DID to "Closed
+  menu" and back**. Anyone hand-testing that number mid-run hears the wrong
+  greeting / reaches the wrong menu / presses a just-deleted key. That is a FALSE
+  failure and is indistinguishable from a real bug. **Never run it while a human
+  is testing that number; never leave it looping unattended.**
+- ⛔ **A killed run leaves the DB and the PBX out of sync** (config written,
+  publish not reached, or the reverse). After any interruption: set the keys
+  correctly, **Publish once**, then test.
+- ⛔ **`disposition:"answered"` + `hangupCause:16` proves ONLY that the call
+  connected.** A menu playing the wrong greeting or landing on the wrong
+  destination writes an identical CDR row. Correctness comes from the suite's own
+  PASS/FAIL (Asterisk-log grep) or a real listen — never from CDR disposition.
+  This mistake was made and corrected in this session.
+- Probe calls are spottable: `direction outgoing`, `fromNumber <unknown>`,
+  `toNumber` = DID + keys pressed (`8457231213*1wwwwwwww9`), `channelsSeen` holds
+  `…@connect-probe` / `…@connect-probe-press`. ⛔ **They land in the customer's
+  real call history and inflate the Overview counters** — rule out a probe run
+  before believing impossible dashboard numbers.
+- 2026-08-06: a parallel session looped it ~30 min on Connect Communications
+  (845) 723-1213 while Izzy hand-tested; killed at his word (PID 27372).
+  **His original keys 1–6 were overwritten and never captured** — open item.
+  The suite takes no snapshot and restores nothing on exit.
+
+## ⛔ AGENT HANDOFF — VitalPBX panel locked out of its own configs (2026-08-06) — READ FIRST for "An exception has occurred / file_put_contents Permission denied" in the panel, tenant conf ownership, or the helper's privileges
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_PBX_PANEL_LOCKOUT_2026-08-06.md`**
+(commit `2f017f88`, **local only — not pushed**).
+
+- **Symptom**: red modal on any panel Save for one tenant —
+  `file_put_contents(/etc/asterisk/vitalpbx/extensions__50-<t>-dialplan.conf):
+  Permission denied` (OmbuSystemConf.php) — while the green "data has been
+  updated in the database" toast is simultaneously CORRECT. The DB write lands;
+  only the live routing file write fails, so the change needs a re-save after
+  the fix. ⛔ **Calls are never affected** (Asterisk only READS these, mode 644).
+  Hit tenants 2 (`a_plus_center`) and 35 (`connect_communications`).
+- ⛔ **ROOT CAUSE — the fix already existed and could not run.** `fc826643`
+  added `_chown_gui_conf` / `restore_gui_conf_ownership` to hand each
+  regenerated conf back to www-data, and it shipped in the deployed helper.
+  But `connect-pbx-helper.service` runs `User=asterisk`, and **handing a file
+  to another user is root-only** — every call raised `PermissionError` into a
+  deliberate "never raises" swallow. Live-proven: manual chown at 21:41,
+  re-broken at 22:09, the exact minute the helper *carrying the fix* installed.
+  **The code was never wrong; the privilege was missing.**
+- **Real fix**: drop-in
+  `/etc/systemd/system/connect-pbx-helper.service.d/10-gui-conf-ownership.conf`
+  granting `AmbientCapabilities=CAP_CHOWN CAP_FOWNER` (+ matching
+  CapabilityBoundingSet) — still NOT root. Applied live, verified via
+  `getpcaps`, and added to the installer. Unit backup
+  `/root/connect-pbx-helper.service.bak-20260806-ownership`.
+- ⛔ **Two non-fixes — do not retry**: a one-off `chown` (right emergency move,
+  but the next regen re-takes it), and **a POSIX ACL alone** (the regen's
+  `chmod 0644` sets the ACL *mask* to `r--`, masking `www-data:rw-` to
+  effective `r--` — verified with a probe file).
+- **Canary kept**: `connect-conf-owner-heal.{path,timer}` +
+  `/usr/local/sbin/connect-vitalpbx-conf-owner-heal.sh`. It should now NEVER
+  fire — new entries in `journalctl -t connect-conf-heal` mean the capability
+  grant regressed.
+- ⛔ **The installer would have DOWNGRADED the PBX**: its embedded helper had
+  drifted to `2026.08.06.2` while the `.py`/live PBX were `2026.08.06.6`, so a
+  reinstall would have wiped the same day's doorway-hijack fix (`db4a2ce4`).
+  Re-synced. The `fc826643` drift guard catches this **only if someone runs
+  it** — and on Windows it could not pass at all (`core.autocrlf` → `.sh` CRLF
+  vs `.py` LF), now pinned by a new `.gitattributes` (`/scripts/pbx/**
+  text eol=lf`, scoped — a repo-wide `*.sh` rule would churn 113 files).
+  Run the guard after ANY change to either file.
+- Env: the helper's `audit.jsonl` is `/var/lib/connect-pbx-helper/` (**66 GB**,
+  `tail -c` only) — NOT `/opt/connect-pbx-helper/`. Multiple sessions edit the
+  SAME working tree concurrently: stage explicit paths, never `git add -A`.
+
 ## ⛔ AGENT HANDOFF — Connect doorway rebuild: DID switch-to-connect was broken platform-wide (2026-08-05) — READ FIRST for IVR Studio number switching, "published but callers hear the old routing", the PBX route helper, or the connect-doorway dialplan
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONNECT_DOORWAY_2026-08-05.md`**

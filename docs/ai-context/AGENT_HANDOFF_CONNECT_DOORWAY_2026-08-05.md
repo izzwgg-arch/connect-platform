@@ -1,5 +1,14 @@
 # Handoff — Connect doorway rebuild + switch hardening (2026-08-05)
 
+> **⛔ SUPERSEDED IN PART — read `AGENT_HANDOFF_IVR_RUNTIME_2026-08-06.md` first.**
+> The doorway itself works, but on 2026-08-06 the shared doorway destination row
+> (903) was found REPURPOSED by the VitalPBX panel — every id-equality check
+> ("mode", doorway-status, the reconciler) reported CONNECTED while callers
+> reached a PBX IVR. Ground truth is now the RENDERED Goto, the doorway target
+> is a constant, and repair mints a fresh destination pair. Getting a caller
+> THROUGH the doorway to the right menu had five further defects, all covered in
+> the newer handoff.
+
 Branch `feat/ivr-migration-takeover`, tip `e9ab55ca` (api + portal BOTH deployed,
 jobs `217e2052`/`1cd85229`, container-verified). PBX work done under Izzy's
 explicit chat mandate ("I give you permission to carefully modify the PBX").
