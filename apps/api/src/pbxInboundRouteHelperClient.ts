@@ -131,6 +131,7 @@ async function callHelper<T>(
   cfg: PbxRouteHelperConfig,
   path:
     | "/inspect"
+    | "/doorway-status"
     | "/retarget"
     | "/restore"
     | "/route-set-destination"
@@ -211,6 +212,24 @@ export function inspectPbxInboundRoute(
   body: { did: string; tenantId: string },
 ): Promise<PbxRouteHelperInspectResponse> {
   return callHelper<PbxRouteHelperInspectResponse>(cfg, "/inspect", body);
+}
+
+export type PbxDoorwayStatusResponse = {
+  ok: true;
+  healthy: boolean;
+  contextLive: boolean;
+  dialplanFilePresent: boolean;
+  dialplanFileCurrent: boolean;
+  rows: Array<{ customContextId: number; destinationId: number }>;
+  wouldUse: string | null;
+  version: string;
+};
+
+/** Read-only doorway health — consumed by the DID route reconciler. */
+export function doorwayStatusFromHelper(
+  cfg: PbxRouteHelperConfig,
+): Promise<PbxDoorwayStatusResponse> {
+  return callHelper<PbxDoorwayStatusResponse>(cfg, "/doorway-status", {});
 }
 
 export function retargetPbxInboundRoute(

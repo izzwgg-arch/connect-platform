@@ -229,6 +229,7 @@ import {
   getPbxVoicemailGreeting,
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
+  doorwayStatusFromHelper,
   agentSetPbxRouteDestination,
   agentSetPbxRouteDestinationV2,
   agentRestorePbxRouteDestination,
@@ -263,7 +264,8 @@ import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEn
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
-import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler } from "./didSwitchSchedule";
+import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler, injectAsService as didInjectAsService } from "./didSwitchSchedule";
+import { startDidRouteReconciler, type ReconcilerMapping } from "./didRouteReconciler";
 import {
   publishTenantMohReverseMap,
   type TenantMohEnforcementEvidence,
@@ -19916,47 +19918,9 @@ function ivrFamily(slug: string): string {
   return `connect/t_${slug}`;
 }
 
-/** Compute the current routing mode from a schedule config + override state. */
-function computeCurrentMode(
-  config: { timezone: string; businessHoursRules: any; holidayDates: any },
-  override: { isActive: boolean; expiresAt: Date | null } | null,
-  now: Date = new Date(),
-): "business" | "afterhours" | "holiday" | "override" {
-  // 1. Manual override (check expiry)
-  if (override?.isActive && (!override.expiresAt || override.expiresAt > now)) return "override";
-
-  // 2. Holiday check — compare "YYYY-MM-DD" in tenant timezone
-  const tz = config.timezone || "UTC";
-  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })
-    .format(now); // "YYYY-MM-DD"
-  const holidays: string[] = Array.isArray(config.holidayDates) ? config.holidayDates : [];
-  if (holidays.includes(localDate)) return "holiday";
-
-  // 3. Weekly business hours
-  const rules: Array<{ day: number; open: string; close: string }> =
-    Array.isArray(config.businessHoursRules) ? config.businessHoursRules : [];
-  const localDow = Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" })
-    .formatToParts(now).find((p) => p.type === "weekday")?.value
-    ? new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "narrow" })
-        .format(now)
-    : "0"); // fallback
-  // Use numeric day-of-week (0=Sun…6=Sat)
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
-  const dowStr = parts.find((p) => p.type === "weekday")?.value ?? "";
-  const DOW_MAP: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  const dow = DOW_MAP[dowStr] ?? now.getDay();
-  const hourStr  = parts.find((p) => p.type === "hour")?.value ?? "0";
-  const minStr   = parts.find((p) => p.type === "minute")?.value ?? "0";
-  const minuteOfDay = parseInt(hourStr, 10) * 60 + parseInt(minStr, 10);
-  const parseHHMM = (s: string) => {
-    const [h, m] = s.split(":").map(Number);
-    return (h ?? 0) * 60 + (m ?? 0);
-  };
-  const rule = rules.find((r) => r.day === dow);
-  if (rule && minuteOfDay >= parseHHMM(rule.open) && minuteOfDay < parseHHMM(rule.close)) return "business";
-
-  return "afterhours";
-}
+// computeCurrentMode / ivrModeToProfileType / ivrFindActiveProfile were
+// extracted to ivrModeSelection.ts (imported below) so the logic that decides
+// what callers hear is unit-testable — see ivrModeSelection.test.ts.
 
 /**
  * Fixed set of digit slots the dialplan consumes. We always write every slot
@@ -19970,59 +19934,7 @@ const IVR_OPTION_DIGITS = [
 ] as const;
 type IvrOptionDigit = (typeof IVR_OPTION_DIGITS)[number];
 
-/** Map a computeCurrentMode() result to the profile.type that should serve it. */
-function ivrModeToProfileType(mode: string): string | null {
-  switch (mode) {
-    case "business":   return "business_hours";
-    case "afterhours": return "after_hours";
-    case "holiday":    return "holiday";
-    case "override":   return "manual_override";
-    default:           return null;
-  }
-}
-
-/** Pick the route profile that should serve the current mode. Falls back to
- *  "emergency" when override mode is requested but no manual_override profile
- *  is configured — matches the behavior of the legacy dest_override key. */
-/** The Studio's schedule config names WHICH menu serves each mode by id —
- *  that choice wins. The legacy type-based match remains as the fallback for
- *  pre-Studio tenants whose profiles are typed business_hours/after_hours/
- *  holiday. Without the id-based path, a Studio tenant (where every menu is
- *  type business_hours) published an EMPTY menu outside business hours and an
- *  arbitrary first-created menu during them — callers got the generic
- *  "one moment please" fallback instead of the configured menu. */
-function ivrFindActiveProfile<T extends { id?: string; type: string }>(
-  mode: string,
-  profiles: T[],
-  schedule?: {
-    defaultProfileId?: string | null;
-    afterHoursProfileId?: string | null;
-    holidayProfileId?: string | null;
-  } | null,
-): T | null {
-  if (schedule) {
-    const byId = (id: string | null | undefined): T | null =>
-      id ? profiles.find((p) => p.id === id) ?? null : null;
-    // A mode with no menu selected falls back toward the default menu —
-    // playing the business menu after hours beats playing nothing.
-    if (mode === "business") {
-      const p = byId(schedule.defaultProfileId);
-      if (p) return p;
-    } else if (mode === "afterhours") {
-      const p = byId(schedule.afterHoursProfileId) ?? byId(schedule.defaultProfileId);
-      if (p) return p;
-    } else if (mode === "holiday") {
-      const p = byId(schedule.holidayProfileId) ?? byId(schedule.afterHoursProfileId) ?? byId(schedule.defaultProfileId);
-      if (p) return p;
-    }
-  }
-  const wanted = ivrModeToProfileType(mode);
-  if (!wanted) return null;
-  const direct = profiles.find((p) => p.type === wanted) ?? null;
-  if (direct) return direct;
-  if (mode === "override") return profiles.find((p) => p.type === "emergency") ?? null;
-  return null;
-}
+import { computeCurrentMode, ivrModeToProfileType, ivrFindActiveProfile } from "./ivrModeSelection";
 
 /** Shape of the data buildIvrKeys needs from the active profile's options. */
 type IvrActiveOption = {
@@ -22722,6 +22634,20 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   // load options for the ONE active profile — other profiles' options are
   // in the DB but only written to AstDB when their profile becomes active.
   const activeProfile = ivrFindActiveProfile(mode, profiles as any[], schedule);
+  // GUARD: publishing with menus configured but NONE selected for the current
+  // mode would write an EMPTY menu — callers get the generic built-in filler
+  // and nothing errors anywhere. That exact silent failure shipped live on
+  // 2026-08-05. Refuse loudly instead; an admin with zero menus can still
+  // publish (a fresh tenant routing straight to extensions is legitimate).
+  if (!activeProfile && (profiles as any[]).length > 0) {
+    return reply.code(422).send({
+      error: "no_active_menu_for_mode",
+      detail:
+        `This tenant has ${(profiles as any[]).length} menu(s) but none is selected to play right now (current mode: ${mode}). ` +
+        "Open the schedule step and choose which menu serves business hours / after hours, then publish again.",
+      mode,
+    });
+  }
   const activeOptions = activeProfile
     ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } })
     : [];
@@ -22840,6 +22766,10 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   ]);
   const mode = schedule ? computeCurrentMode(schedule, override) : "business";
   const activeProfile = ivrFindActiveProfile(mode, profiles as any[], schedule);
+  // Same empty-menu guard as /voice/ivr/publish (see the comment there).
+  if (!activeProfile && (profiles as any[]).length > 0) {
+    return { ok: false, error: "no_active_menu_for_mode" };
+  }
   const activeOptions = activeProfile ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } }) : [];
   const slug = await getIvrSlugForTenant(tenantId);
   const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true } });
@@ -23319,6 +23249,63 @@ const didSwitchDeps = {
 registerDidSwitchScheduleRoutes(didSwitchDeps);
 const didSwitchSchedulerTimer = registerShutdownTimer(startDidSwitchScheduler(didSwitchDeps));
 void didSwitchSchedulerTimer;
+
+// ═══ DID/IVR drift reconciler ═════════════════════════════════
+// Continuously verifies that every Connect-published number still reaches its
+// menu (PBX route → doorway → AstDB keys) and self-repairs drift. See
+// didRouteReconciler.ts for the policies.
+const didReconcilerDeps = {
+  app,
+  db,
+  sendAdminAlert,
+  inspectMapping: async (mapping: ReconcilerMapping) => {
+    const resolved = await resolveTenantPbxClient(mapping.tenantId);
+    if ("error" in resolved) return { ok: false as const, error: String(resolved.error) };
+    const helperCfg = resolvePbxRouteHelperConfig(resolved.pbxInstanceId);
+    if (!helperCfg) return { ok: false as const, error: "route_helper_not_configured" };
+    try {
+      const helper = await inspectPbxInboundRoute(helperCfg, { did: String(mapping.e164), tenantId: resolved.pbxTenantId });
+      return { ok: true as const, mode: helper.mode };
+    } catch (err: any) {
+      return { ok: false as const, error: err?.message ?? "inspect_failed" };
+    }
+  },
+  doorwayStatus: async () => {
+    const helperCfg = resolvePbxRouteHelperConfig(null);
+    if (!helperCfg) return { ok: false as const, error: "route_helper_not_configured" };
+    try {
+      const s = await doorwayStatusFromHelper(helperCfg);
+      return { ok: true as const, healthy: !!s.healthy, contextLive: !!s.contextLive };
+    } catch (err: any) {
+      return { ok: false as const, error: err?.message ?? "doorway_status_failed" };
+    }
+  },
+  readAstDbKeys: (tenantSlug: string, family: string, keyNames: string[]) =>
+    snapshotAstDbFamily(tenantSlug, family, keyNames),
+  republishDidmap: async (mapping: ReconcilerMapping, tenantSlug: string) => {
+    const full = await (db as any).didRouteMapping.findUnique({ where: { id: mapping.id } });
+    if (!full || !full.enabled || full.routingMode !== "connect") return; // intent changed mid-cycle — never republish stale state
+    const values = await didBuildPublishValues(full, tenantSlug);
+    await publishDidmapToAstDb(tenantSlug, full.e164, values);
+  },
+  replayLastMenuPublish: async (_tenantId: string, tenantSlug: string, keys: Array<{ family: string; key: string; value: string }>) => {
+    await publishToAstDb(tenantSlug, keys);
+  },
+  lastSuccessfulPublishKeys: async (tenantId: string) => {
+    const rec = await (db as any).ivrPublishRecord.findFirst({
+      where: { tenantId, status: "success", isRollback: false },
+      orderBy: { publishedAt: "desc" },
+      select: { keysWritten: true },
+    });
+    const keys = rec?.keysWritten;
+    return Array.isArray(keys) ? (keys as Array<{ family: string; key: string; value: string }>) : null;
+  },
+  reassertRoute: (mappingId: string) =>
+    didInjectAsService(app, "POST", `/voice/did/${encodeURIComponent(mappingId)}/switch-to-connect`, "reconciler"),
+  getTenantSlug: (tenantId: string) => getIvrSlugForTenant(tenantId),
+};
+const didReconcilerTimer = registerShutdownTimer(startDidRouteReconciler(didReconcilerDeps));
+void didReconcilerTimer;
 
 registerTeamRoutes({
   app,

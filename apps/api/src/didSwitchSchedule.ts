@@ -104,8 +104,10 @@ export async function ensureMappingsForOwnedNumbers(
 }
 
 /** In-process call to a real route, as a short-lived service principal. The
- *  switch log then shows exactly who acted: "scheduler:<scheduleId>". */
-async function injectAsService(
+ *  switch log then shows exactly who acted: "scheduler:<scheduleId>".
+ *  Exported for the DID route reconciler, which re-asserts drifted routes
+ *  through the same real switch endpoints. */
+export async function injectAsService(
   app: any,
   method: "POST",
   url: string,

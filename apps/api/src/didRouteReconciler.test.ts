@@ -1,0 +1,205 @@
+/**
+ * The reconciler is the "silent decay is never silent" layer. These tests
+ * drive full cycles with stubbed deps and assert the repair policies:
+ * replay recorded intent only, rate-limit route re-asserts, alert on
+ * everything, never let one broken mapping stop the rest.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  diffAstDbKeys,
+  expectedDidmapKeys,
+  reassertAllowed,
+  runReconcilerCycle,
+  type DidRouteReconcilerDeps,
+  type ReconcilerMapping,
+  type ReconcilerState,
+  type AstDbKV,
+} from "./didRouteReconciler";
+
+// ── pure helpers ────────────────────────────────────────────────────────────
+
+test("diffAstDbKeys flags wrong and missing values, treats absent as empty string", () => {
+  const expected: AstDbKV[] = [
+    { family: "f", key: "a", value: "1" },
+    { family: "f", key: "b", value: "" },
+    { family: "f", key: "c", value: "3" },
+  ];
+  const live: AstDbKV[] = [
+    { family: "f", key: "a", value: "1" },   // ok
+    { family: "f", key: "c", value: "999" }, // wrong
+    // b missing entirely — but expected empty, so NOT drift
+  ];
+  const drifted = diffAstDbKeys(expected, live);
+  assert.deepEqual(drifted.map((d) => d.key), ["c"]);
+});
+
+test("expectedDidmapKeys: digits-keyed family, tenant + profile, tolerates null profile", () => {
+  const mapping: ReconcilerMapping = {
+    id: "m1", tenantId: "t1", e164: "+18457231213", enabled: true, routingMode: "connect", ivrProfileId: "prof1",
+  };
+  const keys = expectedDidmapKeys(mapping, "connect_communications");
+  assert.deepEqual(keys, [
+    { family: "connect/didmap/18457231213", key: "tenant", value: "connect_communications" },
+    { family: "connect/didmap/18457231213", key: "profile_id", value: "prof1" },
+  ]);
+  assert.equal(expectedDidmapKeys({ ...mapping, ivrProfileId: null }, "s")[1].value, "");
+  assert.deepEqual(expectedDidmapKeys({ ...mapping, e164: "garbage" }, "s"), []);
+});
+
+test("reassertAllowed: first time yes, inside window no, after window yes", () => {
+  const HOUR = 60 * 60 * 1000;
+  assert.equal(reassertAllowed(undefined, 1000, HOUR), true);
+  assert.equal(reassertAllowed(1000, 1000 + HOUR - 1, HOUR), false);
+  assert.equal(reassertAllowed(1000, 1000 + HOUR, HOUR), true);
+});
+
+// ── cycle harness ───────────────────────────────────────────────────────────
+
+const MAPPING: ReconcilerMapping = {
+  id: "map1", tenantId: "ten1", e164: "+18457231213", enabled: true, routingMode: "connect", ivrProfileId: "prof1",
+};
+
+function makeDeps(overrides: Partial<DidRouteReconcilerDeps> = {}) {
+  const calls = {
+    reasserts: [] as string[],
+    didmapRepublishes: [] as string[],
+    menuReplays: [] as string[],
+    alerts: [] as string[],
+  };
+  const deps: DidRouteReconcilerDeps = {
+    app: { log: { info: () => {}, warn: () => {}, error: () => {} } },
+    db: {
+      didRouteMapping: { findMany: async () => [MAPPING] },
+    },
+    sendAdminAlert: async (key) => { calls.alerts.push(key); },
+    inspectMapping: async () => ({ ok: true, mode: "connect" }),
+    doorwayStatus: async () => ({ ok: true, healthy: true, contextLive: true }),
+    // Default: live AstDB matches whatever is expected (no drift).
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      const expected = expectedDidmapKeys(MAPPING, "slug1");
+      const menu = [{ family: "connect/t_slug1", key: "active_prompt", value: "custom/x" }];
+      const all = [...expected, ...menu];
+      return keyNames.map((k) => all.find((kv) => kv.family === family && kv.key === k) ?? { family, key: k, value: "" });
+    },
+    republishDidmap: async (m) => { calls.didmapRepublishes.push(m.id); },
+    replayLastMenuPublish: async (tenantId) => { calls.menuReplays.push(tenantId); },
+    lastSuccessfulPublishKeys: async () => [{ family: "connect/t_slug1", key: "active_prompt", value: "custom/x" }],
+    reassertRoute: async (id) => { calls.reasserts.push(id); return { statusCode: 200, body: {} }; },
+    getTenantSlug: async () => "slug1",
+    ...overrides,
+  };
+  return { deps, calls };
+}
+
+test("healthy world: a cycle repairs nothing and alerts nothing", async () => {
+  const { deps, calls } = makeDeps();
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.reasserts, []);
+  assert.deepEqual(calls.didmapRepublishes, []);
+  assert.deepEqual(calls.menuReplays, []);
+  assert.deepEqual(calls.alerts, []);
+});
+
+test("route drifted off Connect: re-asserted through the real switch route + alerted, rate-limited on the next cycle", async () => {
+  const { deps, calls } = makeDeps({ inspectMapping: async () => ({ ok: true, mode: "pbx" }) });
+  const state: ReconcilerState = { lastReassertAt: new Map() };
+  await runReconcilerCycle(deps, state);
+  assert.deepEqual(calls.reasserts, ["map1"]);
+  assert.ok(calls.alerts.includes("reconciler-route-map1"));
+  // Second cycle inside the rate window: alert again (dedupe is sendAdminAlert's
+  // job), but do NOT re-assert again.
+  await runReconcilerCycle(deps, state);
+  assert.equal(calls.reasserts.length, 1);
+});
+
+test("lost didmap keys are republished from the mapping row", async () => {
+  const { deps, calls } = makeDeps({
+    readAstDbKeys: async (_slug, family, keyNames) =>
+      keyNames.map((k) => ({ family, key: k, value: "" })), // AstDB wiped
+    lastSuccessfulPublishKeys: async () => null,            // isolate: no menu publish
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.didmapRepublishes, ["map1"]);
+  assert.ok(calls.alerts.includes("reconciler-didmap-map1"));
+});
+
+test("drifted menu keys replay the LAST SUCCESSFUL publish verbatim (never recomputed)", async () => {
+  const published: AstDbKV[] = [
+    { family: "connect/t_slug1", key: "active_prompt", value: "custom/closed_menu" },
+    { family: "connect/t_slug1", key: "opt_1/dest", value: "T35_cos-all,1101,1" },
+  ];
+  let replayedWith: AstDbKV[] | null = null;
+  const { deps, calls } = makeDeps({
+    lastSuccessfulPublishKeys: async () => published,
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      if (family.startsWith("connect/didmap/")) {
+        return expectedDidmapKeys(MAPPING, "slug1"); // didmap fine
+      }
+      return keyNames.map((k) => ({ family, key: k, value: "" })); // menu wiped
+    },
+    replayLastMenuPublish: async (tenantId, _slug, keys) => {
+      calls.menuReplays.push(tenantId);
+      replayedWith = keys;
+    },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.menuReplays, ["ten1"]);
+  assert.deepEqual(replayedWith, published);
+  assert.ok(calls.alerts.includes("reconciler-menu-ten1"));
+});
+
+test("never-published tenants are left alone — the reconciler must not push drafts live", async () => {
+  const { deps, calls } = makeDeps({
+    lastSuccessfulPublishKeys: async () => null,
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
+      return keyNames.map((k) => ({ family, key: k, value: "" }));
+    },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.menuReplays, []);
+});
+
+test("unhealthy doorway: loud alert + one self-heal re-assert", async () => {
+  const { deps, calls } = makeDeps({
+    doorwayStatus: async () => ({ ok: true, healthy: false, contextLive: false }),
+  });
+  const state: ReconcilerState = { lastReassertAt: new Map() };
+  await runReconcilerCycle(deps, state);
+  assert.ok(calls.alerts.includes("reconciler-doorway"));
+  assert.deepEqual(calls.reasserts, ["map1"]);
+});
+
+test("an unreachable PBX helper alerts instead of repairing blind", async () => {
+  const { deps, calls } = makeDeps({
+    inspectMapping: async () => ({ ok: false, error: "connect ECONNREFUSED" }),
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.reasserts, []);
+  assert.ok(calls.alerts.includes("reconciler-inspect-map1"));
+});
+
+test("one broken mapping never stops the others", async () => {
+  const m2: ReconcilerMapping = { ...MAPPING, id: "map2", tenantId: "ten2", e164: "+15550001111" };
+  const { deps, calls } = makeDeps({
+    db: { didRouteMapping: { findMany: async () => [MAPPING, m2] } },
+    getTenantSlug: async (tenantId: string) => {
+      if (tenantId === "ten1") throw new Error("boom");
+      return "slug2";
+    },
+    inspectMapping: async () => ({ ok: true, mode: "pbx" }),
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  // ten1 exploded before its checks; ten2 still got its drifted route re-asserted.
+  assert.deepEqual(calls.reasserts, ["map2"]);
+});
+
+test("no connect-mode mappings: the cycle does nothing at all (no doorway noise on idle platforms)", async () => {
+  const { deps, calls } = makeDeps({
+    db: { didRouteMapping: { findMany: async () => [] } },
+    doorwayStatus: async () => ({ ok: false, error: "should not be called" }),
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.alerts, []);
+});
