@@ -320,8 +320,12 @@ export interface KeyCheck {
  * Those are two different questions and the settings page needs both. A key
  * whose account is `past_due` answers this endpoint happily with 200 — so
  * checking only "did the request succeed" produces a green "connected" badge on
- * a system that fails the moment anyone presses Generate. `status` and
- * `has_open_invoices` say so up front, for free, without spending a character.
+ * a system that fails the moment anyone presses Generate. `status` says so up
+ * front, for free, without spending a character.
+ *
+ * The opposite mistake is worse, and we made it: blocking on a signal that
+ * does NOT mean the account is stuck. Only refuse on evidence the provider
+ * will actually refuse — see the note in the body.
  */
 export async function checkElevenLabsKey(apiKey: string): Promise<KeyCheck> {
   const cached = cacheGet(subscriptionCache, apiKey);
@@ -340,7 +344,22 @@ export async function checkElevenLabsKey(apiKey: string): Promise<KeyCheck> {
 
     const status = String(j?.status ?? "").toLowerCase();
     let result: KeyCheck;
-    if (status === "past_due" || j?.has_open_invoices === true) {
+    // ⛔ `has_open_invoices` is NOT proof of arrears and must never block on
+    // its own. Proven on the live account 2026-08-06: status "active",
+    // has_open_invoices true, next payment attempt a month away — and
+    // synthesis answered 200 with real audio. We were refusing to even try,
+    // and telling the customer about an unpaid bill that did not exist. An
+    // "open invoice" includes the NEXT one, which is open on every healthy
+    // account for most of every month.
+    //
+    // `past_due` is different and is the one that genuinely blocks: proven the
+    // same night on another key, where /voices and /user/subscription both
+    // answered 200 while synthesis was refused 401 payment_issue.
+    //
+    // The rule this encodes: let the provider refuse. Pre-emptively refusing
+    // on a soft signal turns a working account into a broken feature, and the
+    // customer cannot tell the difference.
+    if (status === "past_due") {
       result = {
         ...base,
         usable: false,

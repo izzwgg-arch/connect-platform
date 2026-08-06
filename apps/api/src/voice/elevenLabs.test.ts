@@ -269,12 +269,31 @@ test("a different key never reads another key's cache", async () => {
   assert.equal(calls.length, 2);
 });
 
-test("an unpaid invoice is reported as not usable, with instructions", async () => {
-  queue(jsonRes({ ...GOOD_SUB, has_open_invoices: true }));
+test("a past_due account is reported as not usable, with instructions", async () => {
+  // Proven live: past_due really does refuse synthesis (401 payment_issue)
+  // even while /voices and /user/subscription answer 200.
+  queue(jsonRes({ ...GOOD_SUB, status: "past_due" }));
   const r = await checkElevenLabsKey("k2");
   assert.equal(r.ok, true);
   assert.equal(r.usable, false);
   assert.match(r.userMessage!, /unpaid invoice/i);
+});
+
+test("an open invoice on an ACTIVE account never blocks — this refused a working account", async () => {
+  // The regression, exactly: status active, an unsettled upcoming invoice,
+  // and ElevenLabs happily returning audio — while Connect told the customer
+  // there was an unpaid bill and refused to try.
+  queue(jsonRes({ ...GOOD_SUB, status: "active", has_open_invoices: true }));
+  const r = await checkElevenLabsKey("k2b");
+  assert.equal(r.ok, true);
+  assert.equal(r.usable, true);
+  assert.equal(r.userMessage, undefined);
+});
+
+test("an open invoice does not rescue a past_due account either", async () => {
+  queue(jsonRes({ ...GOOD_SUB, status: "past_due", has_open_invoices: false }));
+  const r = await checkElevenLabsKey("k2c");
+  assert.equal(r.usable, false);
 });
 
 test("a used-up character allowance is reported as not usable", async () => {

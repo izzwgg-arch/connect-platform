@@ -396,12 +396,18 @@ async function main() {
         // then returns 401 on synthesis, so a badge based on reachability alone
         // reads "connected" on a system that fails the moment anyone presses
         // Generate — and sends the owner off checking a key that was never the
-        // problem. `status` and `has_open_invoices` say so here, for free.
+        // problem. `status` says so here, for free.
         const subStatus = String(sub?.status ?? "").toLowerCase();
         const used = Number(sub?.character_count ?? 0);
         const limit = Number(sub?.character_limit ?? 0);
+        // ⛔ Only `past_due` blocks. `has_open_invoices` is true on a healthy
+        // account for most of every month — it counts the NEXT invoice too.
+        // Blocking on it told an owner with a paid-up account and $100 of
+        // credit that they had an unpaid bill, and refused to generate audio
+        // the provider was perfectly willing to make (proven 2026-08-06:
+        // status active + has_open_invoices true + synthesis 200).
         const blocked =
-          subStatus === "past_due" || sub?.has_open_invoices === true
+          subStatus === "past_due"
             ? "ElevenLabs has an unpaid invoice on this account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again."
             : limit > 0 && used >= limit
               ? "This account has used all its characters for the month. It resets on the next billing date, or you can upgrade the plan."
