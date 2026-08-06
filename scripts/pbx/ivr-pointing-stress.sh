@@ -44,16 +44,27 @@ point() { # mappingId profileId  — point a number at a menu, verified
   done
   FAIL=$((FAIL+1)); FAILED="$FAILED
       - could not point mapping $1 at $want (got $got)"
+  echo "    FAIL  pointing mapping $1 -> got '$got'"
   return 1
 }
 
-publish() { # tenantId anyProfileId
-  ssh -i "$LK" -o IdentitiesOnly=yes "$LOOP" "curl -s -m 200 -X POST http://127.0.0.1:3001/internal/agent/ivr/action -H 'x-agent-internal-secret: $SEC' -H 'content-type: application/json' -d '{\"tenantId\":\"$1\",\"profileId\":\"$2\",\"agentActionId\":\"point-$(date +%s%N)\",\"action\":\"list\"}'" >/dev/null 2>&1
-  local r
-  r=$(ssh -i "$LK" -o IdentitiesOnly=yes "$LOOP" "curl -s -m 200 -X POST http://127.0.0.1:3001/internal/agent/ivr/action -H 'x-agent-internal-secret: $SEC' -H 'content-type: application/json' -d '{\"tenantId\":\"$1\",\"profileId\":\"$2\",\"agentActionId\":\"point-$(date +%s%N)\",\"action\":\"set_exit\",\"exitSlot\":\"timeout\",\"destinationType\":null,\"destinationRef\":null}'")
-  echo "$r" | grep -q '"ok":true' && return 0
+publish() { # tenantId profileId — publish via a no-op greeting re-set
+  # NOTE: set_exit with null destinationType is REJECTED by the request schema
+  # (optional enum, not nullable), which made this fail silently and skip every
+  # pointing check. Re-setting the profile's CURRENT greeting is a true no-op
+  # that still runs the full production publish.
+  local tid="$1" prof="$2" cur r
+  cur=$(prisma "const {PrismaClient}=require(\"@prisma/client\");const p=new PrismaClient();p.ivrRouteProfile.findUnique({where:{id:\"$prof\"}}).then(x=>{console.log(x&&x.pbxPromptRef?x.pbxPromptRef:\"\");return p.\$disconnect()})" | tr -d '\r\n ')
+  if [ -z "$cur" ]; then
+    FAIL=$((FAIL+1)); FAILED="$FAILED
+      - publish skipped: menu $prof has no greeting to re-set"
+    echo "    FAIL  publish (menu $prof has no greeting)"; return 1
+  fi
+  r=$(ssh -i "$LK" -o IdentitiesOnly=yes "$LOOP" "curl -s -m 200 -X POST http://127.0.0.1:3001/internal/agent/ivr/action -H 'x-agent-internal-secret: $SEC' -H 'content-type: application/json' -d '{\"tenantId\":\"$tid\",\"profileId\":\"$prof\",\"agentActionId\":\"point-$(date +%s%N)\",\"action\":\"set_prompt\",\"promptSlot\":\"greeting\",\"promptRef\":\"$cur\"}'")
+  if echo "$r" | grep -q '"ok":true'; then return 0; fi
   FAIL=$((FAIL+1)); FAILED="$FAILED
-      - publish failed for tenant $1: $(echo "$r" | head -c 120)"
+      - publish failed for tenant $tid: $(echo "$r" | head -c 140)"
+  echo "    FAIL  publish -> $(echo "$r" | head -c 120)"
   return 1
 }
 
