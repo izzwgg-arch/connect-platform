@@ -2988,7 +2988,19 @@ model MobileDevice {
   userId                String
   extensionId           String?
   platform              MobilePlatform
-  expoPushToken         String               @unique
+  /// ⛔ NULLABLE ON PURPOSE (2026-08-06). This was `String @unique` (required),
+  /// which made the FAST push channel HOSTAGE TO THE SLOW ONE: the only way a
+  /// phone can hand us its native FCM token is inside
+  /// `POST /mobile/devices/register`, and that call could not be made at all
+  /// without an Expo token. `getExpoToken()` in the app has an explicit
+  /// "Expo token failed (raw FCM available)" branch — i.e. a handset holding a
+  /// perfectly good FCM token was unable to report it, and stayed on the
+  /// deprioritized Expo relay forever. Census 2026-08-06: 8 of 16 active
+  /// Android devices had no token on file.
+  /// Postgres treats NULLs as distinct, so @unique still prevents two devices
+  /// sharing one real Expo token. Rows with no Expo token are keyed by
+  /// @@unique([userId, deviceId]) below.
+  expoPushToken         String?              @unique
   voipPushToken         String?
   /// Native APNs device token (iOS, alert environment) — reported by the app on
   /// register. Enables direct APNs alert pushes for user notifications
@@ -3051,6 +3063,12 @@ model MobileDevice {
   voiceClientSessions   VoiceClientSession[]
   callWakeEvents        CallWakeEvent[]      @relation("CallWakeEventByDevice")
 
+  /// Natural key for a device that has NO Expo token (see `expoPushToken`).
+  /// `deviceId` is per-install and stable (SecureStore), so this identifies the
+  /// same handset across registers without needing a relay token. Verified safe
+  /// against production before adding: 94 rows, 0 duplicate (userId, deviceId)
+  /// pairs, 1 null deviceId — and Postgres allows repeated NULLs here.
+  @@unique([userId, deviceId])
   @@index([tenantId, userId])
   @@index([tenantId, platform])
   @@index([tenantId, userId, active])

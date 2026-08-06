@@ -179,3 +179,74 @@ export function transformDialValue(
   const value = next.join("&");
   return { ok: true, changed: value !== legs.join("&"), value };
 }
+
+// ── Follow-Me ring-time normalisation ───────────────────────────────────────
+//
+// ⛔ WHY THIS EXISTS. `[connect-mobile-wake-dial]` holds the caller for up to
+// `connect/system/mobile_reach_wait_secs` (unset in production → the hardcoded
+// default of 20 s) while a sleeping handset wakes and re-registers. But the
+// caller-side `Dial(...)` timeout is set from the extension's FOLLOW-ME ring
+// time when the follow-me path is taken — and that is **15 by VitalPBX
+// default on 115 of 122 extensions fleet-wide**, including the Create A Box
+// ext 102 call that lost a customer's call on 2026-08-05.
+//
+// So the wake budget was silently clipped: VitalPBX sent the caller to
+// voicemail at 15 s while the wake engine still believed it had 20 s. The
+// extensions' own `ringtimer` is already 30 — follow-me was overriding their
+// configured intent downwards, not expressing a deliberate choice.
+//
+// This normalisation runs as part of ENROLLMENT so it covers every device the
+// auto-enroll cycle picks up in future, not just today's fleet.
+//
+// SAFETY RULES, all enforced below:
+//   1. RAISE ONLY. Never shorten a customer's ring — that would send callers to
+//      voicemail sooner than they configured.
+//   2. Only when the current value is genuinely below the required minimum.
+//   3. Never on un-enroll (`enable === "0"`), which must be a pure revert.
+//   4. Never fatal: the dial-string rewrite is the primary function, and a
+//      ring-time failure must not roll it back or fail the enrollment.
+
+/**
+ * Minimum caller-side ring time, in seconds, for a wake-enrolled extension.
+ *
+ * Must exceed the wake hold (20 s) with enough margin for a human to actually
+ * see the screen and tap Answer. 30 matches the `ringtimer` these extensions
+ * already carry, so this restores their configured intent rather than
+ * inventing a new policy.
+ */
+export const WAKE_MIN_FOLLOWME_RING_SECS = 30;
+
+export type RingTimeDecision =
+  | { change: false; reason: "unenroll" | "already_sufficient" | "unparseable" | "disabled"; current: number | null }
+  | { change: true; from: number; to: number };
+
+/**
+ * Pure: decide whether an extension's follow-me ring time must be raised.
+ *
+ * `current` is the raw AstDB string (VitalPBX stores these as text, and the
+ * key can be absent or empty on a never-configured extension).
+ */
+export function decideFollowMeRingTime(
+  current: string | null | undefined,
+  enable: "0" | "1",
+  minSecs: number = WAKE_MIN_FOLLOWME_RING_SECS,
+): RingTimeDecision {
+  if (enable !== "1") return { change: false, reason: "unenroll", current: null };
+
+  const raw = String(current ?? "").trim();
+  // Absent/empty means "no follow-me ring time configured"; VitalPBX falls back
+  // to its own default. Leave it alone — writing a value where none existed
+  // changes behaviour for a path we have not observed.
+  if (raw === "") return { change: false, reason: "unparseable", current: null };
+
+  if (!/^\d+$/.test(raw)) return { change: false, reason: "unparseable", current: null };
+  const secs = Number(raw);
+
+  // 0 is VitalPBX's "disabled / no follow-me timeout" sentinel — raising it
+  // would IMPOSE a timeout where the customer has none. Leave it.
+  if (secs === 0) return { change: false, reason: "disabled", current: 0 };
+
+  if (secs >= minSecs) return { change: false, reason: "already_sufficient", current: secs };
+
+  return { change: true, from: secs, to: minSecs };
+}

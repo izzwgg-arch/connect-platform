@@ -392,6 +392,22 @@ services:
       # CDR persistence: telephony POSTs completed calls to the API for DB storage.
       CDR_INGEST_URL: ${CDR_INGEST_URL:-http://api:3001/internal/cdr-ingest}
       CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # ── On-ring contact-liveness probe ────────────────────────────────────
+      # A phone that slept and lost its socket leaves its contact bound for at
+      # least 10 minutes (minimum_expiration=600) while the PBX only re-checks
+      # on its own 30 s qualify cycle. Inside that window the dead contact looks
+      # perfectly healthy, so the call is dialled straight into a black hole and
+      # the caller hears voicemail. One SIP OPTIONS at ring time
+      # (qualify_timeout=3) collapses that window from ≤30 s to ~3 s at the only
+      # moment it matters — far cheaper than raising qualify_frequency
+      # fleet-wide, which drains battery on every handset continuously.
+      #
+      # ⛔ Written 2026-07 and DEFAULT OFF ever since because it makes the
+      # read-only PBX emit OPTIONS, so it needed the owner's explicit mandate.
+      # Verified on 2026-08-06 that it had never been set anywhere in
+      # production — the safeguard existed on paper only. Enabled under Izzy's
+      # explicit go-ahead the same day.
+      PBX_CONTACT_QUALIFY_ON_RING: ${PBX_CONTACT_QUALIFY_ON_RING:-1}
     ports:
       - "127.0.0.1:3003:3003"
     networks:

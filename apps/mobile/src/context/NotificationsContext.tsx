@@ -1903,6 +1903,35 @@ export function NotificationsProvider({
     console.log(`[${tag}] Token result:`, pushToken ? "OK" : `FAILED (${pushErr})`);
     if (!pushToken) {
       console.warn(`[${tag}] Still no token after retry. Reason:`, pushErr);
+      // ⛔ DO NOT `return` HERE ANYMORE (changed 2026-08-06).
+      // Bailing out meant a phone that could not get an Expo token never
+      // registered at all — and registration is the ONLY channel by which it
+      // can hand us its native FCM token, which is the fast, Doze-exempt path
+      // we actually want for call wakes. So the slow token failing permanently
+      // disabled the fast one. Register anyway with whatever we have; the
+      // server keys the row on (userId, deviceId) when there is no Expo token.
+      try {
+        const voipTokenNoExpo = Platform.OS === "ios" ? (getCachedVoipPushToken() ?? undefined) : undefined;
+        const metadataNoExpo = await mobileDeviceRegistrationMetadata();
+        if (metadataNoExpo.deviceId) {
+          const regNoExpo = await registerMobileDevice(token, {
+            platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
+            ...(voipTokenNoExpo ? { voipPushToken: voipTokenNoExpo } : {}),
+            ...metadataNoExpo,
+          }).catch((e) => {
+            console.warn(`[${tag}] tokenless registerMobileDevice failed:`, e instanceof Error ? e.message : String(e));
+            return null;
+          });
+          if (regNoExpo?.id) {
+            deviceIdRef.current = String(regNoExpo.id);
+            console.log(`[${tag}] Registered WITHOUT an Expo token — native push token delivered, id:`, regNoExpo.id);
+          }
+        } else {
+          console.warn(`[${tag}] No Expo token AND no stable deviceId — cannot register`);
+        }
+      } catch (e) {
+        console.warn(`[${tag}] tokenless registration threw:`, e instanceof Error ? e.message : String(e));
+      }
       setCallReadiness((prev) => ({
         ...prev,
         pushTokenRegistered: false,
@@ -5248,7 +5277,35 @@ export function NotificationsProvider({
           }));
         }
       } else {
-        console.warn("[PUSH_INIT] No push token — device will NOT receive push notifications. Reason:", pushErr);
+        console.warn("[PUSH_INIT] No Expo push token. Reason:", pushErr);
+        // ⛔ Register ANYWAY (2026-08-06) — see the matching block in the retry
+        // path above. The native FCM token can only reach the server inside a
+        // register call, so skipping registration here is what stranded phones
+        // on the slow Expo relay permanently. This is NOT "no push
+        // notifications": a device that reports a native token still gets
+        // direct, high-priority call wakes.
+        try {
+          const voipTokenNoExpo = Platform.OS === "ios" ? (getCachedVoipPushToken() ?? undefined) : undefined;
+          const metadataNoExpo = await mobileDeviceRegistrationMetadata();
+          if (metadataNoExpo.deviceId) {
+            const regNoExpo = await registerMobileDevice(token, {
+              platform: Platform.OS === "ios" ? "IOS" : "ANDROID",
+              ...(voipTokenNoExpo ? { voipPushToken: voipTokenNoExpo } : {}),
+              ...metadataNoExpo,
+            }).catch((e) => {
+              console.warn("[PUSH_INIT] tokenless registerMobileDevice failed:", e instanceof Error ? e.message : String(e));
+              return null;
+            });
+            if (regNoExpo?.id) {
+              deviceIdRef.current = String(regNoExpo.id);
+              console.log("[PUSH_INIT] Registered WITHOUT an Expo token — native push token delivered, id:", regNoExpo.id);
+            }
+          } else {
+            console.warn("[PUSH_INIT] No Expo token AND no stable deviceId — cannot register");
+          }
+        } catch (e) {
+          console.warn("[PUSH_INIT] tokenless registration threw:", e instanceof Error ? e.message : String(e));
+        }
         if (mounted) {
           setCallReadiness((prev) => ({
             ...prev,

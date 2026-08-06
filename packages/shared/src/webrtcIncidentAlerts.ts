@@ -110,7 +110,14 @@ export function isInboundAnswerFailure(p: Record<string, unknown>): boolean {
   return (
     cat === "INBOUND_SESSION_NOT_FOUND_TIMEOUT" ||
     cat === "INBOUND_INVITE_NOT_RECEIVED" ||
-    cat === "INBOUND_SIP_ANSWER_FAILED"
+    cat === "INBOUND_SIP_ANSWER_FAILED" ||
+    // ⛔ Added 2026-08-06 WITH the category itself. `answer_unacked` failures
+    // used to be mislabelled INBOUND_SESSION_NOT_FOUND_TIMEOUT and were caught
+    // by the line above; splitting them into their own category would have
+    // silently dropped them out of incident clustering for any payload that
+    // lacks `debugKind` — i.e. the "fix" would have removed alerting. Keep this
+    // list and InboundDiagnosisCategory in lockstep.
+    cat === "INBOUND_ANSWER_UNACKED"
   );
 }
 

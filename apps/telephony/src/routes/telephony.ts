@@ -13,6 +13,7 @@ import {
   parseWakeDialPublishRequest,
   transformDialValue,
   discoverDialKeyFamily,
+  decideFollowMeRingTime,
   DIAL_DISCOVERY_CLI,
 } from "./wakeDialPublish";
 import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
@@ -805,6 +806,52 @@ export function registerTelephonyRoutes(
   // Auth: x-cdr-secret. Body: { pbxTenantId, extension: digit strings,
   // enable: "0" | "1" }. Resp: { ok, changed, key, before, after } or a typed
   // error reason the auto-enroll worker treats as a skip, not a failure.
+  /**
+   * Raise an extension's follow-me ring time so the wake hold can actually
+   * finish. BEST EFFORT by design — the dial-string rewrite is the primary
+   * function of enrollment, and a ring-time failure must never fail or undo
+   * it: an extension routed through the wake engine with a 15 s ring is still
+   * far better than one not routed through it at all.
+   *
+   * All the raise-only / never-invent safety rules live in the pure
+   * `decideFollowMeRingTime()` so they are testable without an AMI.
+   */
+  async function normalizeFollowMeRingTime(
+    family: string,
+    enable: "0" | "1",
+  ): Promise<Record<string, unknown>> {
+    try {
+      const ringFamily = `${family}/followme`;
+      const curRing = await telephony.ami.dbGet(ringFamily, "ringtime", 3_000);
+      const decision = decideFollowMeRingTime(curRing.ok ? curRing.value : null, enable);
+      if (!decision.change) {
+        return { changed: false, reason: decision.reason, current: decision.current };
+      }
+      telephony.ami.sendAction("DBPut", {
+        Family: ringFamily,
+        Key: "ringtime",
+        Val: String(decision.to),
+      });
+      // DBPut is fire-and-forget — read back, same as the dial write does.
+      const verifyRing = await telephony.ami.dbGet(ringFamily, "ringtime", 3_000);
+      const landed = verifyRing.ok && String(verifyRing.value).trim() === String(decision.to);
+      return {
+        changed: landed,
+        from: decision.from,
+        to: decision.to,
+        verified: landed,
+        observed: verifyRing.ok ? verifyRing.value : null,
+      };
+    } catch (err) {
+      // Swallowed deliberately — see the note above.
+      return {
+        changed: false,
+        reason: "ami_error",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   router.post("/telephony/internal/wake-dial-publish", async (req: Request, res: Response) => {
     if (!isInternalRouteAuthorized(req)) {
       res.status(401).json({ error: "Unauthorized" });
@@ -849,12 +896,29 @@ export function registerTelephonyRoutes(
         return;
       }
       if (!transformed.changed) {
+        // ⛔ STILL normalise the ring time on this path. Every already-enrolled
+        // extension lands here on every auto-enroll cycle — if the ring-time
+        // step only ran on the "changed" branch, the 12 extensions enrolled
+        // before this shipped would NEVER be repaired, and the fix would only
+        // ever reach devices enrolled from now on. That is the difference
+        // between "works for everybody" and "works for future signups".
+        const ringTimeUnchangedDial = await normalizeFollowMeRingTime(family, parsed.enable);
+        if (ringTimeUnchangedDial.changed) {
+          console.log(JSON.stringify({
+            msg: "wake-dial-publish",
+            key: `T${parsed.pbxTenantId}_${parsed.extension}`,
+            enable: parsed.enable,
+            dialChanged: false,
+            ringTime: ringTimeUnchangedDial,
+          }));
+        }
         res.json({
           ok: true,
           changed: false,
           key: `T${parsed.pbxTenantId}_${parsed.extension}`,
           before: cur.value,
           after: cur.value,
+          ringTime: ringTimeUnchangedDial,
         });
         return;
       }
@@ -872,12 +936,15 @@ export function registerTelephonyRoutes(
         });
         return;
       }
+      const ringTime = await normalizeFollowMeRingTime(family, parsed.enable);
+
       console.log(JSON.stringify({
         msg: "wake-dial-publish",
         key: `T${parsed.pbxTenantId}_${parsed.extension}`,
         enable: parsed.enable,
         before: cur.value,
         after: transformed.value,
+        ringTime,
       }));
       res.json({
         ok: true,
@@ -885,6 +952,7 @@ export function registerTelephonyRoutes(
         key: `T${parsed.pbxTenantId}_${parsed.extension}`,
         before: cur.value,
         after: transformed.value,
+        ringTime,
       });
     } catch (err) {
       res.status(502).json({ error: "ami_error", detail: err instanceof Error ? err.message : String(err) });

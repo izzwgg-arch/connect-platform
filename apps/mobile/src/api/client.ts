@@ -871,7 +871,15 @@ export async function deleteChatMessage(token: string, threadId: string, message
 
 export async function registerMobileDevice(token: string, input: {
   platform: "IOS" | "ANDROID";
-  expoPushToken: string;
+  /**
+   * ⛔ OPTIONAL SINCE 2026-08-06. When the Expo push token cannot be obtained
+   * (`getExpoToken()` has an explicit "Expo token failed (raw FCM available)"
+   * branch), we MUST still register — otherwise the native FCM token below can
+   * never reach the server and this handset is stuck on the deprioritized Expo
+   * relay forever. The server keys such a row on (userId, deviceId), so
+   * `deviceId` is required whenever this is absent.
+   */
+  expoPushToken?: string;
   voipPushToken?: string;
   deviceId?: string;
   appVersion?: string;
