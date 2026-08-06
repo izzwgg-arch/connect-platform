@@ -46,17 +46,25 @@ All DEPLOYED and container-verified on `feat/ivr-migration-takeover`
   ⛔ Never wait with `pgrep -f deploy-direct` in an ssh one-liner — it matches
   its own command line and hangs forever. Poll `/ops/deploy/jobs/<id>`.
 
+**DONE 2026-08-06 (was open item 1):** inii mini is on **101**. ⛔ VitalPBX has
+NO way to renumber an extension — the panel posts the number as a hidden field
+and the REST API is read-only — so it was **copy → re-point the DID → delete**,
+in that order, because the DID's destination row stores the extension_id and
+**cascades away with the extension**. All verified live: dialplan reads
+`Goto(T105_cos-all,101,1)`, 25 voicemails moved, dead endpoints cleared with
+`module reload res_pjsip.so` (Apply Changes leaves them live in memory), Connect
+shows the phone. ⛔ The endpoint name changed (`T105_1_1` → `T105_101_1`), so
+**baila must sign out and back in**. The wizard is gated too (`0441fe2d`,
+deployed): a lone digit promotes 1 → 101 **on blur, not on change**, and under
+three digits is refused in the browser AND in the submit route. Recipe:
+[[vitalpbx-cannot-renumber-extension]], [[connect-extension-number-min-three-digits]].
+
 **OPEN, not started:**
-1. **inii mini's only extension is literally numbered `1`** ("baila", PBX tenant
-   105) — that is why Connect shows no phones and "A person" is greyed. Izzy
-   asked for: change it to **101** on the PBX, and gate the onboarding wizard so
-   a single-digit extension is auto-promoted (1 → 101) and cannot be submitted
-   below three digits.
-2. **`invalid_prompt_ref` red banner** when making a recording on inii mini —
+1. **`invalid_prompt_ref` red banner** when making a recording on inii mini —
    UNDIAGNOSED. Its five prompt refs are all valid; the server sends a `detail`
    the portal drops (the `.body` not `.payload` bug again). Three emit sites:
    `server.ts` ~21008, ~21121, ~21379.
-3. **A plus center key 2** still hands back to the PBX time condition. Both PBX
+2. **A plus center key 2** still hands back to the PBX time condition. Both PBX
    menus behind it are ALREADY migrated into Connect (greeting ids 99/11 match)
    — only the key's pointer remains, and Izzy must choose: point at "A plus
    main" (loses the hours switch) or build an hours-aware key kind. See
