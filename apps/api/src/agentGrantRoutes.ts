@@ -387,6 +387,68 @@ async function grantFailure(
   return fail(500, "apply_failed", "Something went wrong applying that change. Nothing was changed — please try again.");
 }
 
+export interface PendingGrantView {
+  id: string;
+  summary: string;
+  permission: string;
+  permissionPlain: string;
+  targetEmail: string;
+  createdAt: Date;
+}
+
+/**
+ * The grants THIS person prepared in chat and hasn't confirmed yet.
+ *
+ * ⛔ The stored `summary` is deliberately NOT returned. The approval hash binds
+ * the company, the person and the permission — it does not bind that sentence.
+ * So the sentence is rebuilt here from the same verified params the apply step
+ * will act on, and anything whose hash doesn't match, or that chat may not hand
+ * out, is not offered at all. What the owner reads is therefore what happens.
+ */
+export async function listPendingGrants(dbLike: any, actor: GrantActor): Promise<PendingGrantView[]> {
+  const rows = await dbLike.agentAction.findMany({
+    where: {
+      tenantId: actor.tenantId,
+      capabilityId: GRANT_CAPABILITY_ID,
+      status: "DRAFT",
+      approvalConsumedAt: null,
+      // Scoped to the requester — an admin is never handed someone else's
+      // half-finished request to rubber-stamp.
+      requestedBy: actor.sub,
+      createdAt: { gte: new Date(Date.now() - GRANT_DRAFT_TTL_MS) },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+    select: { id: true, params: true, paramsHash: true, createdAt: true },
+  });
+
+  const grants: PendingGrantView[] = [];
+  for (const r of rows) {
+    const p = (r.params ?? {}) as Record<string, unknown>;
+    const key = typeof p.permission === "string" ? p.permission : "";
+    const targetUserId = typeof p.targetUserId === "string" ? p.targetUserId : "";
+    if (!key || !targetUserId || !r.paramsHash) continue;
+    if (permissionParamsHash(actor.tenantId, targetUserId, key) !== r.paramsHash) continue;
+    const plain = resolveChatGrantablePermission(key)?.plain;
+    if (!plain || NEVER_GRANTABLE_BY_CHAT.has(key as PortalPermissionKey)) continue;
+    const target = await dbLike.user.findUnique({
+      where: { id: targetUserId },
+      select: { email: true, firstName: true, lastName: true, tenantId: true, status: true },
+    });
+    if (!target || target.tenantId !== actor.tenantId || target.status === "DISABLED") continue;
+    const who = [target.firstName, target.lastName].filter(Boolean).join(" ") || target.email;
+    grants.push({
+      id: r.id,
+      summary: `Give ${who} (${target.email}) permission to ${plain}.`,
+      permission: key,
+      permissionPlain: plain,
+      targetEmail: target.email,
+      createdAt: r.createdAt,
+    });
+  }
+  return grants;
+}
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 function getUser(req: any): GrantActor {
@@ -418,33 +480,7 @@ export async function registerAgentGrantRoutes(
   app.get("/admin/agent-grants/pending", async (req, reply) => {
     const actor = getUser(req);
     if (!isTenantAdminOrAbove(actor.role)) return reply.code(403).send({ error: "forbidden" });
-    const rows = await db.agentAction.findMany({
-      where: {
-        tenantId: actor.tenantId,
-        capabilityId: GRANT_CAPABILITY_ID,
-        status: "DRAFT",
-        approvalConsumedAt: null,
-        requestedBy: actor.sub,
-        createdAt: { gte: new Date(Date.now() - GRANT_DRAFT_TTL_MS) },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-      select: { id: true, summary: true, params: true, createdAt: true },
-    });
-    return {
-      grants: rows.map((r) => {
-        const p = (r.params ?? {}) as Record<string, unknown>;
-        const key = typeof p.permission === "string" ? p.permission : "";
-        return {
-          id: r.id,
-          summary: r.summary,
-          permission: key,
-          permissionPlain: resolveChatGrantablePermission(key)?.plain ?? key,
-          targetEmail: typeof p.targetEmail === "string" ? p.targetEmail : "",
-          createdAt: r.createdAt,
-        };
-      }),
-    };
+    return { grants: await listPendingGrants(db, actor) };
   });
 
   /**

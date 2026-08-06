@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   applyAgentPermissionGrant,
+  listPendingGrants,
   GRANT_DRAFT_TTL_MS,
   type GrantApplyDeps,
   type GrantActor,
@@ -564,6 +565,88 @@ test("a genuine failure is reported, not retried into a mess", async () => {
   assert.equal(r.error, "apply_failed");
   assert.equal(db._state.actions[0].status, "DRAFT", "the approval survives so it can be retried");
   assert.ok(deps.audits.some((a) => a.action === "AGENT_GRANT_APPLY_FAILED"));
+});
+
+// ─── What the dialog is offered ──────────────────────────────────────────────
+
+function withFindMany(db: any) {
+  db.agentAction.findMany = async ({ where }: any) => {
+    await Promise.resolve();
+    const cutoff = where.createdAt?.gte ? new Date(where.createdAt.gte).getTime() : 0;
+    return db._state.actions.filter(
+      (a: any) =>
+        a.tenantId === where.tenantId
+        && a.capabilityId === where.capabilityId
+        && a.status === where.status
+        && a.approvalConsumedAt == null
+        && a.requestedBy === where.requestedBy
+        && new Date(a.createdAt).getTime() >= cutoff,
+    );
+  };
+  db.user.findUnique = async ({ where }: any) => {
+    await Promise.resolve();
+    const u = db._state.users.find((x: any) => x.id === where.id);
+    return u ? { ...u, firstName: "Yehuda", lastName: "K" } : null;
+  };
+  return db;
+}
+
+test("the dialog is offered the person's own pending grant, in plain English", async () => {
+  const db = withFindMany(makeDb({ actions: [draft()] }));
+  const list = await listPendingGrants(db, ADMIN);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, "act-1");
+  assert.match(list[0].summary, /Give Yehuda K \(yehuda@acme\.com\) permission to change the phone menus/);
+  assert.doesNotMatch(list[0].summary, /can_manage/);
+});
+
+test("⛔ the sentence shown is REBUILT from the params, never the stored summary", async () => {
+  // The hash binds who/what/where — it does not bind the summary text. A row
+  // whose summary says one thing while its params say another must not let
+  // someone read one change and confirm a different one.
+  const d = draft();
+  d.summary = "Give Yehuda K permission to change the music on hold.";
+  const db = withFindMany(makeDb({ actions: [d] }));
+  const list = await listPendingGrants(db, ADMIN);
+  assert.match(list[0].summary, /change the phone menus/, "the params win, not the prose");
+  assert.doesNotMatch(list[0].summary, /music on hold/);
+});
+
+test("⛔ a row whose params no longer match its hash is never offered", async () => {
+  const d = draft();
+  d.params = { targetUserId: "u2", targetEmail: "yehuda@acme.com", permission: "can_manage_tenant_settings" };
+  const db = withFindMany(makeDb({ actions: [d] }));
+  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+});
+
+test("⛔ nobody is shown someone else's half-finished request", async () => {
+  const db = withFindMany(makeDb({ actions: [draft({ requestedBy: "someone-else" })] }));
+  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+});
+
+test("⛔ a grant for a person who has since left is not offered", async () => {
+  const db = withFindMany(makeDb({ actions: [draft()] }));
+  db._state.users = db._state.users.filter((u: any) => u.id !== "u2");
+  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+});
+
+test("a stale draft is not offered either", async () => {
+  const db = withFindMany(makeDb({ actions: [draft({ createdAt: new Date(Date.now() - GRANT_DRAFT_TTL_MS - 1000) })] }));
+  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+});
+
+test("⛔ a deny-listed permission is never even offered for confirmation", async () => {
+  for (const key of NEVER_GRANTABLE_BY_CHAT) {
+    const db = withFindMany(makeDb({ actions: [draft({ permission: key })] }));
+    assert.deepEqual(await listPendingGrants(db, ADMIN), [], `${key} must not be offered`);
+  }
+});
+
+test("a consumed grant stops being offered", async () => {
+  const db = withFindMany(makeDb({ actions: [draft()] }));
+  assert.equal((await listPendingGrants(db, ADMIN)).length, 1);
+  await apply(makeDeps(db), ADMIN);
+  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
 });
 
 // ─── Shape of the draft itself ───────────────────────────────────────────────
