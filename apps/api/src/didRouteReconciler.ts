@@ -186,6 +186,13 @@ export async function runReconcilerCycle(
       for (const mapping of mappings) {
         try {
           const slug = await deps.getTenantSlug(mapping.tenantId);
+          // Read the tenant's last publish ONCE per mapping and reuse it for
+          // both repair paths below. A publish owns the truth for a while: it
+          // is the owner acting deliberately, while every repair here is a
+          // guess made from state read seconds ago.
+          const publishedRec = await deps.lastSuccessfulPublishKeys(mapping.tenantId);
+          const publishIsFresh =
+            publishedRec !== null && Date.now() - publishedRec.publishedAt < PUBLISH_SETTLE_MS;
 
           // 2a-i. Does the RENDER still enter the doorway? This is checked
           // FIRST and separately from the row, because a row that reads
@@ -255,7 +262,17 @@ export async function runReconcilerCycle(
 
           // 2b. didmap keys intact? (Asterisk restarts keep AstDB, but a PBX
           // rebuild or stray `database del` does not.)
-          const expected = expectedDidmapKeys(mapping, slug);
+          //
+          // ⛔ Skipped right after a publish. This repair writes the number's
+          // menu assignment; racing a publish means writing the PREVIOUS menu
+          // back over the one the owner just chose, which reads as "I pointed
+          // the number at a menu and it went somewhere else". Reproduced live
+          // 2026-08-06: DB said menu 3, publish succeeded, AstDB still held
+          // menu 1 because this repair landed after it.
+          const expected = publishIsFresh ? [] : expectedDidmapKeys(mapping, slug);
+          if (publishIsFresh) {
+            app.log.info({ e164: mapping.e164 }, "[RECONCILER] skipping didmap check — a publish just landed");
+          }
           if (expected.length > 0) {
             const live = await deps.readAstDbKeys(slug, expected[0].family, expected.map((k) => k.key), mapping.e164);
             const drifted = diffAstDbKeys(expected, live);
@@ -278,7 +295,6 @@ export async function runReconcilerCycle(
           // the last successful publish verbatim (never recomputes drafts).
           if (!menuCheckedTenants.has(mapping.tenantId)) {
             menuCheckedTenants.add(mapping.tenantId);
-            const publishedRec = await deps.lastSuccessfulPublishKeys(mapping.tenantId);
             // ⛔ NEVER fight a fresh publish. This replays the LAST publish's
             // keys; if an owner publishes while a cycle is mid-flight, the
             // replay writes the OLDER values over the new ones and the change
@@ -286,10 +302,9 @@ export async function runReconcilerCycle(
             // didn't take". Caught by the e2e suite on 2026-08-06 (a greeting
             // change reverted between the publish and the call). A publish is
             // authoritative for its first minutes; drift repair can wait.
-            const publishAgeMs = publishedRec ? Date.now() - publishedRec.publishedAt : Number.MAX_SAFE_INTEGER;
-            if (publishedRec && publishAgeMs < PUBLISH_SETTLE_MS) {
+            if (publishIsFresh && publishedRec) {
               app.log.info(
-                { tenantId: mapping.tenantId, publishAgeMs },
+                { tenantId: mapping.tenantId },
                 "[RECONCILER] skipping menu check — a publish just landed and is authoritative",
               );
             } else if (publishedRec && publishedRec.keys.length > 0) {

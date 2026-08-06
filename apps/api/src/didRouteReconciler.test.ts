@@ -245,6 +245,20 @@ test("a publish landing mid-cycle aborts the replay", async () => {
   assert.deepEqual(calls.menuReplays, [], "must stand down when the publish moved under us");
 });
 
+test("a fresh publish is never overwritten by a didmap repair (the wrong-menu race)", async () => {
+  // The didmap key IS the number's menu assignment. Repairing it from state
+  // read seconds ago, right after the owner published a new assignment, writes
+  // the OLD menu back — "I pointed the number at a menu and calls went
+  // somewhere else". Reproduced live 2026-08-06.
+  const { deps, calls } = makeDeps({
+    lastSuccessfulPublishKeys: async () => ({ id: "pub-fresh", publishedAt: Date.now(), keys: [] }),
+    readAstDbKeys: async (_slug, family, keyNames) =>
+      keyNames.map((k) => ({ family, key: k, value: "" })), // looks totally drifted
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.didmapRepublishes, [], "must not rewrite a number's menu right after a publish");
+});
+
 test("didmap reads pass the DID so the endpoint's scope check accepts them", async () => {
   // Without didE164 the telephony read rejects a connect/didmap/* family, every
   // key reads back empty, and the reconciler "repairs" the same two keys on

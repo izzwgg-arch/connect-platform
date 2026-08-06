@@ -916,17 +916,24 @@ export function registerTelephonyRoutes(
     }
     // Accept either a tenant family (connect/t_<slug>*) or the specific
     // didmap family (connect/didmap/<e164>) when didE164 is supplied.
-    let didFamily: string | null = null;
+    // Accept BOTH didmap spellings. Publishes write connect/didmap/<+e164> and
+    // connect/didmap/<digits>; this read path only ever built the +e164 form,
+    // so a caller verifying the digits family (the one the dialplan reads) got
+    // family_scope_mismatch, every key came back empty, and the reconciler
+    // concluded the number's menu had "drifted" on EVERY cycle — repairing
+    // forever and racing real publishes (2026-08-06).
+    let didFamilies: Set<string> | null = null;
     if (didE164 !== undefined && didE164 !== null && didE164 !== "") {
       if (typeof didE164 !== "string" || !/^\+?\d{7,20}$/.test(didE164)) {
         res.status(400).json({ error: "invalid_did_e164" });
         return;
       }
-      didFamily = `connect/didmap/${didE164}`;
+      const digits = didE164.replace(/\D/g, "");
+      didFamilies = new Set([`connect/didmap/${didE164}`, `connect/didmap/${digits}`]);
     }
     if (
       typeof family !== "string" ||
-      !(family.startsWith(`connect/t_${tenantSlug}`) || (didFamily !== null && family === didFamily))
+      !(family.startsWith(`connect/t_${tenantSlug}`) || (didFamilies !== null && didFamilies.has(family)))
     ) {
       res.status(400).json({ error: "family_scope_mismatch" });
       return;
