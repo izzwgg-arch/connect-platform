@@ -8,6 +8,16 @@
 > is a constant, and repair mints a fresh destination pair. Getting a caller
 > THROUGH the doorway to the right menu had five further defects, all covered in
 > the newer handoff.
+>
+> **⛔ Also read `AGENT_HANDOFF_PBX_PANEL_LOCKOUT_2026-08-06.md`** before touching
+> the regen/bake path described below. Every switch here runs a full per-tenant
+> regen, and that regen used to leave `extensions__50-<t>-dialplan.conf` owned
+> `asterisk:asterisk` — which locks the VitalPBX **panel** out of that tenant
+> (`file_put_contents … Permission denied`) while calls keep working normally.
+> Fixed in two halves: the helper chowns the confs back to `www-data:www-data`
+> 0644 (`fc826643`), and the service was granted `CAP_CHOWN`/`CAP_FOWNER` so
+> those chowns can actually succeed (`2f017f88`). Any NEW code path that writes
+> a generated tenant conf must call `_chown_gui_conf()` after `os.replace`.
 
 Branch `feat/ivr-migration-takeover`, tip `e9ab55ca` (api + portal BOTH deployed,
 jobs `217e2052`/`1cd85229`, container-verified). PBX work done under Izzy's

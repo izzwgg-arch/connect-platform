@@ -175,7 +175,8 @@ api + portal, branch `feat/ivr-migration-takeover`).
 ## ⛔ AGENT HANDOFF — VitalPBX panel locked out of its own configs (2026-08-06) — READ FIRST for "An exception has occurred / file_put_contents Permission denied" in the panel, tenant conf ownership, or the helper's privileges
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_PBX_PANEL_LOCKOUT_2026-08-06.md`**
-(commit `2f017f88`, **local only — not pushed**).
+(commits `fc826643` helper-side + `2f017f88` privilege/installer-side — both now
+pushed to `origin/feat/ivr-migration-takeover`).
 
 - **Symptom**: red modal on any panel Save for one tenant —
   `file_put_contents(/etc/asterisk/vitalpbx/extensions__50-<t>-dialplan.conf):
@@ -213,7 +214,16 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_PBX_PANEL_LOCKOUT_2026-08-06.md`*
   it** — and on Windows it could not pass at all (`core.autocrlf` → `.sh` CRLF
   vs `.py` LF), now pinned by a new `.gitattributes` (`/scripts/pbx/**
   text eol=lf`, scoped — a repo-wide `*.sh` rule would churn 113 files).
-  Run the guard after ANY change to either file.
+  Run the guard after ANY change to either file — it is 33 node:test cases,
+  ~1 s: `npx tsx --test scripts/pbx/install-vitalpbx-inbound-route-helper.test.ts`
+  (green as of 2026-08-06, both files at `2026.08.06.6`).
+- **Where the ownership code lives** (`fc826643`, four call sites — all four
+  matter): `restore_gui_conf_ownership()` runs after a successful
+  `apply_tenant_changes()` regen and BEFORE the MOH re-apply, and
+  `_chown_gui_conf()` runs after `os.replace` in each of the three atomic
+  tenant-conf writers (queue musicclass patch, dialplan MOH patch, route-Goto
+  bake). All are tenant-scoped and non-fatal by design — with the capability
+  grant in place they now actually take effect.
 - Env: the helper's `audit.jsonl` is `/var/lib/connect-pbx-helper/` (**66 GB**,
   `tail -c` only) — NOT `/opt/connect-pbx-helper/`. Multiple sessions edit the
   SAME working tree concurrently: stage explicit paths, never `git add -A`.
