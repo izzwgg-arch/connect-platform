@@ -2,10 +2,13 @@
  * Portal JWT verification (HS256, same JWT_SECRET as apps/api).
  * Implemented with node:crypto — no extra deps. Payload shape from the api:
  *   { sub: userId, tenantId, email, role, iat, exp? }
- * Role mapping: SUPER_ADMIN → owner mode; everything else → customer mode.
+ * Role mapping lives in ./authRoles: SUPER_ADMIN and TENANT_ADMIN are admin
+ * ("owner") mode; a custom role named "owner" also counts but needs a DB read,
+ * so callers top this up with elevateForCustomOwnerRole().
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Role } from "./conversation/store";
+import { mapUserRole } from "./authRoles";
 
 export interface AgentIdentity {
   tenantId: string;
@@ -40,7 +43,10 @@ export function verifyPortalJwt(token: string, secret = process.env.JWT_SECRET):
   return {
     tenantId: String(payload.tenantId),
     clientUserId: String(payload.sub),
-    role: payload.role === "SUPER_ADMIN" ? "owner" : "customer",
+    // SUPER_ADMIN *and* TENANT_ADMIN are admin-grade. A custom role named
+    // "owner" also counts, but that needs a DB read the JWT cannot provide —
+    // callers top it up with elevateForCustomOwnerRole(). Fails closed here.
+    role: mapUserRole(payload.role),
     email: payload.email,
   };
 }

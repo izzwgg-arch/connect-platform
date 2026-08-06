@@ -7,6 +7,7 @@
  * than guessing a tenant (tenant isolation is absolute).
  */
 import type { Role } from "../conversation/store";
+import { mapUserRole } from "../authRoles";
 
 export interface ResolvedIdentity {
   tenantId: string;
@@ -55,6 +56,9 @@ export function normalizePhone(raw: string): string | null {
   return digits.length >= 7 ? digits : null;
 }
 
+/** @deprecated Use mapUserRole from ../authRoles — kept as a thin alias so the
+ *  admin definition lives in exactly one place. See authRoles.ts for why
+ *  TENANT_ADMIN counts and why the custom "owner" role needs a DB read. */
 function mapRole(role: string): Role {
-  return role === "SUPER_ADMIN" ? "owner" : "customer";
+  return mapUserRole(role);
 }

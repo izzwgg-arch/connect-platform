@@ -15,6 +15,7 @@ import { z } from "zod";
 import type { ConversationEngine } from "./engine";
 import type { ChatUploadStore } from "../attachments/uploadStore";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
+import { elevateForCustomOwnerRole } from "../authRoles";
 
 const Identity = z.object({
   tenantId: z.string().min(1),
@@ -49,6 +50,10 @@ export function registerChatRoutes(
   app.post("/agent/chat/message", async (req, reply) => {
     const identity = resolveIdentity(req);
     if (!identity) return reply.code(403).send({ error: "forbidden" });
+    // SUPER_ADMIN / TENANT_ADMIN arrive in the JWT, but a custom role named
+    // "owner" cannot — it needs a DB read, so top it up here. Fails closed:
+    // any lookup error leaves the JWT's role untouched.
+    const role = await elevateForCustomOwnerRole(prisma, identity);
     const body = z
       .object({
         text: z.string().min(1).max(8000),
@@ -73,7 +78,7 @@ export function registerChatRoutes(
         if (u?.uiLanguage === "yi") preferredLanguage = "yi";
       } catch { /* fall back to detection */ }
     }
-    return engine.handleMessage({ ...identity, channel: body.data.channel, preferredLanguage }, body.data.text, attachments);
+    return engine.handleMessage({ ...identity, role, channel: body.data.channel, preferredLanguage }, body.data.text, attachments);
   });
 
   // ── Chunked file upload (chat widget). nginx caps /agent-api/* bodies at
