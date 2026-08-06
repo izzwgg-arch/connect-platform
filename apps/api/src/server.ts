@@ -112,6 +112,7 @@ import {
 } from "@connect/shared/apnsVoipPush";
 import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
 import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
+import { warnIfOnboardingStorageEphemeral } from "./onboarding/storage";
 import { sweepStalledOnboardingSetups } from "./onboarding/setupWatchdog";
 import {
   FakeNumberProvider,
@@ -38895,6 +38896,7 @@ const port = Number(process.env.PORT || 3001);
   await registerCustomRoleRoutes(app);
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
+  warnIfOnboardingStorageEphemeral(app.log);
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,

@@ -102,7 +102,9 @@ function reset(opts: { live?: boolean } = {}) {
     orderDID: () => ({ status: "success" }),
     setDIDRouting: () => ({ status: "success" }),
     setSMS: () => ({ status: "success" }),
-    addLNPPort: () => ({ status: "success", portid: "P123" }),
+    // The real API's field is "port" with a bare number (proven live
+    // 2026-08-05, order 217760) — NOT portid/port_id.
+    addLNPPort: () => ({ status: "success", port: 217760 }),
     searchDIDsUSA: () => ({ status: "success", dids: [{ did: "9295551234" }] }),
   };
   fetchForbidden = !opts.live && false;
@@ -575,7 +577,7 @@ test("RETRY SAFETY: a re-run after the port was filed reuses the port id and tem
   assert.equal(calls("addLNPPort").length, 1);
   const prov = state.submissions.get(id).answers.provisioning;
   assert.equal(prov.portFiled, true);
-  assert.equal(prov.portId, "P123");
+  assert.equal(prov.portId, "217760"); // extracted from the real "port" field, not "" — the bug this guards
   assert.equal(prov.tempDid, "9145550002");
 
   // Simulate a later stage failing → the whole number stage gets retried.
@@ -629,7 +631,7 @@ test("attachments that DID reach the carrier are not re-sent on retry", async ()
   await mod.applyOnboardingNumber(id);
   const attach = calls("addLNPFile");
   assert.equal(attach.length, 1);
-  assert.equal(attach[0].params.portid, "P123");
+  assert.equal(attach[0].params.portid, "217760");
   assert.equal(attach[0].params.file, Buffer.from("fake-bill").toString("base64"));
   assert.equal(attach[0].params.filename, undefined); // WSDL: {portid, file} only
   assert.deepEqual(state.submissions.get(id).answers.provisioning.attachedFileIds, ["f1"]);

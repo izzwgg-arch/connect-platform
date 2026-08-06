@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson } from "@connect/security";
 import { ensureProvisioningIdentity, subAccountName } from "./provisioningIdentity";
+import { resolveOnboardingStoragePath } from "./storage";
 
 export { subAccountName };
 
@@ -148,10 +149,6 @@ async function resolveNewYorkPop(creds: VmsCreds): Promise<string> {
   } catch {
     return "";
   }
-}
-
-function onboardingStorageRoot(): string {
-  return (process.env.ONBOARDING_STORAGE_DIR || path.resolve(process.cwd(), "data/onboarding-files")).replace(/\\/g, "/");
 }
 
 /** Read the stored subaccount credentials for a submission (used by the PBX build). */
@@ -584,7 +581,9 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
     await logEvent(submissionId, `Port-in for ${did} already on file (id ${portId || "?"}) — not filing a second one.`);
   } else {
     const submit = await vms(creds, "addLNPPort", buildLnpPortParams(row, did));
-    portId = String(submit?.portid ?? submit?.port_id ?? "");
+    // The live API returns the id under "port" (proven on the first real
+    // filing, order 217760); the portid/port_id names never showed up.
+    portId = String(submit?.portid ?? submit?.port_id ?? submit?.port ?? "");
     await mergeProvisioningState(row, {
       portFiled: true,
       portId,
@@ -603,7 +602,14 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
     const fileKey = String(f.id ?? f.storageKey ?? f.filename ?? "");
     if (fileKey && attached.includes(fileKey)) continue;
     try {
-      const full = path.resolve(onboardingStorageRoot(), String(f.storageKey || ""));
+      const full = resolveOnboardingStoragePath(String(f.storageKey || ""));
+      if (!fs.existsSync(full)) {
+        // The DB row survived but the bytes are gone — before 2026-08-05 the
+        // upload directory lived in the container's writable layer, so every
+        // api deploy destroyed it. Nothing to attach; the customer has to
+        // re-upload via their wizard link.
+        throw new Error("the uploaded file is no longer on the server (lost in an earlier deploy) — ask the customer to re-upload it");
+      }
       const b64 = fs.readFileSync(full).toString("base64");
       // addLNPFile takes exactly {portid, file} per the WSDL — the old extra
       // "filename" param was at best ignored.

@@ -1,5 +1,6 @@
 import { db } from "@connect/db";
 import { generateVitalPbxCsv } from "./vitalpbxTemplate";
+import { onboardingFileExists } from "./storage";
 
 export function toPublicUrl(token: string | null | undefined): string | null {
   const t = (token || "").trim();
@@ -47,6 +48,14 @@ export async function readAdminSubmissionDetail(id: string) {
   if (!row) return null;
   return {
     ...row,
+    // fileOnDisk=false means the DB row outlived the actual bytes (uploads
+    // written before the onboarding-files volume existed were destroyed by
+    // api deploys). The admin UI can then chase a re-upload instead of
+    // trusting a download link that will 404.
+    uploadedFiles: (row.uploadedFiles || []).map((f: any) => ({
+      ...f,
+      fileOnDisk: onboardingFileExists(f.storageKey),
+    })),
     publicUrl: toPublicUrl(row.publicToken),
   };
 }
