@@ -102,7 +102,7 @@ Eli granted (enabled, NOT default — his primary line stays default), Yehuda's
 permission row deleted. The dialer re-fetches routes on every keypad focus —
 no build needed.
 
-## 6. TestFlight build 52 — submitted, WAITING_FOR_REVIEW
+## 6. TestFlight build 52 — APPROVED and live to testers
 
 Contents: launch-screen picker, paste explainer + detector, Android-15
 keyboard-inset commit (was live-published as APK but uncommitted). Commits on
@@ -122,6 +122,49 @@ POST betaAppReviewSubmission). EAS build id
 never uploaded). Yossi@yossiswoodworx.com added as tester + invite email sent
 (tester id `8f58ece6-375d-4459-a53d-296a84a83c3a`).
 
+**Beta review: APPROVED** (re-confirmed against ASC later the same day — 52, 48
+and 45 all VALID + APPROVED, none expired). Testers get 52 automatically.
+
+### 6a. Inviting testers — the two traps
+
+Roster as of 2026-08-05 evening (group "Loopcom Testers"): `eli.lovi@outlook.com`
+INSTALLED, `izzwgg@gmail.com` INSTALLED, `fixupusa1@gmail.com` **INSTALLED**
+(accepted this evening after a re-invite — it had sat INVITED since 08-02),
+`yossi@yossiswoodworx.com` INVITED, `leibfrankel0999@gmail.com` INVITED
+(Leib Frankel, added this evening for Fixup Group's **second** device).
+
+- **Re-send an unclaimed invite**: `POST /v1/betaTesterInvitations` with the
+  betaTester + app relationships. Worked for Fixup, who accepted within minutes —
+  a stale INVITED row usually just means the original Apple email got buried.
+- ⛔ **You cannot re-invite a tester who already accepted** — the same call
+  answers **409 `STATE_ERROR.TESTER_INVITE.ALREADY_ACCEPTED`**. One invite is
+  consumed by one Apple Account, permanently.
+- ⛔ **Therefore "put it on my second phone" has two different answers, and
+  guessing wastes an email**: SAME Apple Account → install TestFlight and sign
+  in, the app is already listed, **no invite exists to send**; DIFFERENT Apple
+  Account → add that address as its OWN betaTester (`POST /v1/betaTesters` with
+  the betaGroups relationship — Apple sends the invite itself). Ask which before
+  acting. Fixup's second device was the different-account case (Leib).
+- Adding a tester needs `firstName`/`lastName`; there is still **no PATCH for
+  betaTesters** (a wrong name means delete + re-add, firing a second invite).
+  Ad-hoc scripts used: `/tmp/asc-check52.mjs`, `/tmp/asc-reinvite-fixup.mjs`,
+  `/tmp/asc-add-leib.mjs` on loopcom (same JWT preamble as
+  `/root/.appstoreconnect/asc-tfstate.mjs`).
+
+### 6b. Emailing a customer as support@ — the working route
+
+The Gmail MCP can **draft but not send**. To actually reach a customer from
+`support@connectcomunications.com`, insert an EmailJob straight into prod
+(`docker exec -i -w /app/packages/db app-api-1 node -`): `tenantId` (required),
+`toEmail`, `subject`, `htmlBody`, `textBody`, `status:"QUEUED"`,
+`nextRunAt: new Date()`. The `type` is a free string — the api's pump
+(`apps/api/src/server.ts` ~1078) takes anything QUEUED regardless of type and
+sends within ~1 min. **Verify by polling the row to `SENT`** rather than
+assuming. Three went out this way (Fixup setup instructions, Fixup second-device
+instructions, Leib invite instructions), all confirmed SENT.
+⛔ `User` has **no `name` column** — it is `firstName`/`lastName`/`displayName`;
+a `select: { name: true }` dies in PrismaClientValidationError.
+
 ## 7. Open items
 
 1. Eli sign-out/in → verify 443 registration (contactUri = 45.14.194.179) and
@@ -134,4 +177,8 @@ never uploaded). Yossi@yossiswoodworx.com added as tester + invite email sent
 4. Observability plan (§2) — approved in principle, not built.
 5. Duplicate QSR route in the QSR tenant — clutter, awaiting Izzy's call.
 6. Kamailio SBC: finish or retire (currently bypassed, running, unused).
-7. Beta review approval for build 52 → testers get it automatically.
+7. ~~Beta review approval for build 52~~ — **DONE, APPROVED** (§6).
+8. Leib Frankel (`leibfrankel0999@gmail.com`, Fixup Group's second device) is
+   INVITED — watch for the flip to INSTALLED. Yossi is still INVITED from the
+   morning; if either stalls, re-send per §6a (they have not accepted, so the
+   409 does not apply).
