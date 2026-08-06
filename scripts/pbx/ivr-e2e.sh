@@ -48,6 +48,28 @@ echo "PLAYED: ${PLAYED:-<none>}"
 echo "MENU:   ${MENU:-<none>}"
 echo "LAST:   ${ENDED:-<none>}"
 
+# ORDERED assertions: "A&&&B" means A must appear, and B must appear AFTER it.
+# A flat regex over the whole trace can pass on the wrong half of a journey —
+# "went into the submenu and came back" was passing on the going-in alone.
+if [[ "$EXPECT" == *"&&&"* ]]; then
+  prev=0
+  ok=1
+  IFS='&&&' read -ra PARTS <<< "$EXPECT"
+  for part in "${PARTS[@]}"; do
+    [ -z "$part" ] && continue
+    # Search only the region AFTER the previous match. Searching the whole
+    # trace finds the FIRST occurrence, which for "went out and came back"
+    # is the outbound leg — so a correct journey failed its own assertion.
+    rel=$(echo "$TRACE" | tail -n +$((prev + 1)) | grep -aniE "$part" | head -1 | cut -d: -f1)
+    if [ -z "$rel" ]; then ok=0; break; fi
+    prev=$((prev + rel))
+  done
+  if [ "$ok" = "1" ]; then echo "PASS  ($EXPECT, in order)"; exit 0; fi
+  echo "FAIL  (expected in order: $EXPECT)"
+  echo "---- trace ----"; echo "$TRACE" | tail -25
+  exit 1
+fi
+
 # Case-insensitive: Asterisk logs the app as "BackGround", and a harness that
 # fails on its own regex casing is how a working system gets reported broken.
 if echo "$TRACE" | grep -qaiE "$EXPECT"; then
