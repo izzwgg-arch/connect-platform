@@ -39,6 +39,11 @@ export interface DidSwitchDeps {
   getTenantSlug: (tenantId: string) => Promise<string>;
   /** Write keys to AstDB via the telephony service. */
   publishAstDbKeys: (tenantSlug: string, keys: Array<{ family: string; key: string; value: string }>) => Promise<void>;
+  /** Republish any tenant whose business-hours mode flipped since its last
+   *  publish (open/close/holiday boundaries). Owned by server.ts — it needs
+   *  publishIvrForTenant and computeCurrentMode. Optional so tests that only
+   *  exercise switches don't have to stub it. */
+  sweepIvrModeBoundaries?: () => Promise<void>;
 }
 
 const RETRY_WINDOW_MS = 30 * 60 * 1000;
@@ -549,6 +554,13 @@ export function startDidSwitchScheduler(deps: DidSwitchDeps): NodeJS.Timeout {
           await sendAdminAlert(`announce-end-${ann.id}`, "Scheduled announcement failed to stop",
             [`Tenant: ${ann.tenantId}`, `Recording ${ann.promptRef} is still playing before the menu.`, `Error: ${detail}`], 30 * 60_000);
         }
+      }
+
+      // 5) Business-hours boundaries — flip the published menu when a
+      // tenant's schedule crosses open/close/holiday. Without this, the
+      // AstDB menu stays whatever mode the last manual Publish captured.
+      if (deps.sweepIvrModeBoundaries) {
+        await deps.sweepIvrModeBoundaries();
       }
     } catch (err: any) {
       app.log.error({ err: err?.message }, "[DID_SCHEDULE] tick crashed");

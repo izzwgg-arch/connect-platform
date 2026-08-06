@@ -19983,10 +19983,38 @@ function ivrModeToProfileType(mode: string): string | null {
 /** Pick the route profile that should serve the current mode. Falls back to
  *  "emergency" when override mode is requested but no manual_override profile
  *  is configured — matches the behavior of the legacy dest_override key. */
-function ivrFindActiveProfile<T extends { type: string }>(
+/** The Studio's schedule config names WHICH menu serves each mode by id —
+ *  that choice wins. The legacy type-based match remains as the fallback for
+ *  pre-Studio tenants whose profiles are typed business_hours/after_hours/
+ *  holiday. Without the id-based path, a Studio tenant (where every menu is
+ *  type business_hours) published an EMPTY menu outside business hours and an
+ *  arbitrary first-created menu during them — callers got the generic
+ *  "one moment please" fallback instead of the configured menu. */
+function ivrFindActiveProfile<T extends { id?: string; type: string }>(
   mode: string,
   profiles: T[],
+  schedule?: {
+    defaultProfileId?: string | null;
+    afterHoursProfileId?: string | null;
+    holidayProfileId?: string | null;
+  } | null,
 ): T | null {
+  if (schedule) {
+    const byId = (id: string | null | undefined): T | null =>
+      id ? profiles.find((p) => p.id === id) ?? null : null;
+    // A mode with no menu selected falls back toward the default menu —
+    // playing the business menu after hours beats playing nothing.
+    if (mode === "business") {
+      const p = byId(schedule.defaultProfileId);
+      if (p) return p;
+    } else if (mode === "afterhours") {
+      const p = byId(schedule.afterHoursProfileId) ?? byId(schedule.defaultProfileId);
+      if (p) return p;
+    } else if (mode === "holiday") {
+      const p = byId(schedule.holidayProfileId) ?? byId(schedule.afterHoursProfileId) ?? byId(schedule.defaultProfileId);
+      if (p) return p;
+    }
+  }
   const wanted = ivrModeToProfileType(mode);
   if (!wanted) return null;
   const direct = profiles.find((p) => p.type === wanted) ?? null;
@@ -20031,6 +20059,7 @@ function buildIvrKeys(
   slug: string,
   mode: string,
   profiles: Array<{
+    id?: string;
     type: string;
     pbxDestination: string;
     pbxPromptRef?: string | null;
@@ -20048,10 +20077,15 @@ function buildIvrKeys(
   override: { expiresAt: Date | null } | null,
   activeOptions: IvrActiveOption[] = [],
   tenantDialContext: string | null = null,
+  schedule: {
+    defaultProfileId?: string | null;
+    afterHoursProfileId?: string | null;
+    holidayProfileId?: string | null;
+  } | null = null,
 ): Array<{ family: string; key: string; value: string }> {
   const fam = ivrFamily(slug);
   const byType = new Map(profiles.map((p) => [p.type, p]));
-  const active = ivrFindActiveProfile(mode, profiles);
+  const active = ivrFindActiveProfile(mode, profiles, schedule);
 
   // VitalPBX-parity default-prompt fallback. The dialplan COULD also do this
   // at call time, but we resolve it here so the published AstDB state is
@@ -22566,7 +22600,7 @@ app.get("/voice/ivr/preview", async (req, reply) => {
 
   // Mirrors the selection logic in buildIvrKeys so preview and the actual
   // published state can never diverge.
-  const activeProfile: any = ivrFindActiveProfile(mode, profiles as any[]);
+  const activeProfile: any = ivrFindActiveProfile(mode, profiles as any[], schedule);
 
   // Pull the per-digit option routes for the active profile so the UI can
   // show "Press 1 goes to X right now" without a second round-trip.
@@ -22686,7 +22720,7 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   // gets per-digit destinations alongside the legacy single-dest keys. We only
   // load options for the ONE active profile — other profiles' options are
   // in the DB but only written to AstDB when their profile becomes active.
-  const activeProfile = ivrFindActiveProfile(mode, profiles as any[]);
+  const activeProfile = ivrFindActiveProfile(mode, profiles as any[], schedule);
   const activeOptions = activeProfile
     ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } })
     : [];
@@ -22698,7 +22732,7 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   const tenantDialContext = tenantPbxLink?.pbxTenantId
     ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all`
     : null;
-  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext);
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule);
 
   // STRICT PRE-PUBLISH CHECK — every non-default prompt ref we're about to
   // write to AstDB must exist in this tenant's catalog. The save path
@@ -22804,12 +22838,12 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
     (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true } }),
   ]);
   const mode = schedule ? computeCurrentMode(schedule, override) : "business";
-  const activeProfile = ivrFindActiveProfile(mode, profiles as any[]);
+  const activeProfile = ivrFindActiveProfile(mode, profiles as any[], schedule);
   const activeOptions = activeProfile ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } }) : [];
   const slug = await getIvrSlugForTenant(tenantId);
   const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true } });
   const tenantDialContext = tenantPbxLink?.pbxTenantId ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all` : null;
-  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext);
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule);
 
   const IVR_DEFAULT_PROMPT_REFS = new Set([IVR_DEFAULT_PROMPT_INVALID, IVR_DEFAULT_PROMPT_TIMEOUT, "vm-goodbye", "pbx-invalid", "vm-enter-num-to-call"]);
   const promptCandidates: Array<{ key: string; ref: string; profileType?: string | null }> = [];
@@ -22839,6 +22873,50 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   } catch (err: any) {
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
     return { ok: false, error: err?.message ?? "publish_failed" };
+  }
+}
+
+// ── IVR mode-boundary sweep ──────────────────────────────────────────────────
+// The published AstDB menu is a snapshot taken at publish time — nothing else
+// re-evaluates the business-hours schedule. Without this sweep a tenant's menu
+// NEVER flips at open/close: whatever mode was live at the last manual Publish
+// kept serving callers around the clock. Runs from the 60s DID-switch tick and
+// republishes only when the computed mode differs from the last successful
+// publish's mode. Tenants that never published are skipped — the sweep keeps
+// live state in sync, it must not push drafts live.
+async function sweepIvrModeBoundaries(): Promise<void> {
+  const schedules = await (db as any).ivrScheduleConfig.findMany({ where: { isActive: true } });
+  for (const sched of schedules) {
+    try {
+      const last = await (db as any).ivrPublishRecord.findFirst({
+        where: { tenantId: sched.tenantId, status: "success" },
+        orderBy: { publishedAt: "desc" },
+        select: { mode: true },
+      });
+      if (!last) continue;
+      const override = await (db as any).ivrOverrideState.findUnique({ where: { tenantId: sched.tenantId } });
+      const mode = computeCurrentMode(sched, override);
+      if (mode === last.mode) continue;
+      const r = await publishIvrForTenant(sched.tenantId, `mode-scheduler:${last.mode}->${mode}`);
+      if (r.ok) {
+        app.log.info({ tenantId: sched.tenantId, from: last.mode, to: mode }, "[IVR_MODE] republished at schedule boundary");
+      } else {
+        app.log.error({ tenantId: sched.tenantId, from: last.mode, to: mode, error: (r as any).error }, "[IVR_MODE] boundary republish failed");
+        await sendAdminAlert(
+          `ivr-mode-${sched.tenantId}`,
+          `IVR schedule flip failed for a tenant`,
+          [
+            `Tenant: ${sched.tenantId}`,
+            `The menu should have flipped from ${last.mode} to ${mode}, but the republish failed.`,
+            `Error: ${String((r as any).error)}`,
+            "Callers keep hearing the previous menu; the sweep retries every minute.",
+          ],
+          30 * 60_000,
+        );
+      }
+    } catch (err: any) {
+      app.log.error({ tenantId: sched.tenantId, err: err?.message }, "[IVR_MODE] sweep error");
+    }
   }
 }
 
@@ -23235,6 +23313,7 @@ const didSwitchDeps = {
   getTenantSlug: (tenantId: string) => getIvrSlugForTenant(tenantId),
   publishAstDbKeys: (tenantSlug: string, keys: Array<{ family: string; key: string; value: string }>) =>
     publishToAstDb(tenantSlug, keys),
+  sweepIvrModeBoundaries,
 };
 registerDidSwitchScheduleRoutes(didSwitchDeps);
 const didSwitchSchedulerTimer = registerShutdownTimer(startDidSwitchScheduler(didSwitchDeps));
