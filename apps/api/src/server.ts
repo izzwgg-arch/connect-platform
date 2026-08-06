@@ -20449,7 +20449,11 @@ async function publishToAstDb(
       ...(secret ? { "x-cdr-secret": secret } : {}),
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(8_000),
+    // 60s: telephony now AWAITS every AstDB write before answering (a publish
+    // that reports success before Asterisk applied it is how "I published and
+    // it didn't take effect" happens). A full tenant publish is 400+ keys, so
+    // the old 8s aborted mid-write and failed the publish outright.
+    signal: AbortSignal.timeout(60_000),
   });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
