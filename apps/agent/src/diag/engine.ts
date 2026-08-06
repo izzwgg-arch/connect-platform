@@ -8,6 +8,15 @@ import type { ReadTools, ExtensionStatusResult, CdrSummary } from "../tools/read
 import type { AuditLog } from "../audit/audit";
 import type { Notifier } from "../notify/notifier";
 import type { ModelRouter } from "../llm/router";
+import { buildTools } from "../tools/toolRegistry";
+
+/**
+ * Ceiling for the diagnostic narrative. Generous on purpose: this runs on Opus 5
+ * (thinking on by default) AND across several tool rounds, so thinking + tool
+ * results + the final write-up all share the budget. The old value was 500,
+ * which on a thinking model buys a truncated sentence.
+ */
+const DIAG_MAX_TOKENS = Number(process.env.AGENT_DIAG_MAX_TOKENS || 12000);
 
 export interface Hypothesis {
   cause: string;
@@ -29,6 +38,8 @@ export interface DiagReport {
   hypotheses: Hypothesis[];
   recommendation: string;
   narrative?: string; // LLM-written when available
+  /** How much the model actually looked, vs just narrating the seed findings. */
+  investigation?: { toolCalls: number; hitIterationCap: boolean };
 }
 
 export function rankHypotheses(devices: ExtensionStatusResult[], cdr: CdrSummary, complaint: string | null): Hypothesis[] {
@@ -109,14 +120,33 @@ export class DiagnosticsEngine {
 
     const report: DiagReport = { tenantId, extension, severity, findings: { devices, cdr, complaint }, hypotheses, recommendation };
 
-    // Optional LLM narrative (Claude) — never blocks.
+    // LLM narrative — never blocks. The seed findings above are a STARTING
+    // POINT, not the whole picture: the model gets the read tools and can go
+    // look at what the heuristics didn't think to fetch (a wider call window,
+    // measured audio quality, a neighbouring extension). Tools are bound to
+    // this tenant by ToolContext — the model cannot name a different one.
     if (this.llm && this.llm.available().length > 0) {
       try {
-        const res = await this.llm.complete("diagnostics", [
-          { role: "system", content: "You are a telecom diagnostics analyst. Write a concise plain-language summary (5-8 sentences) of this phone-system diagnostic for a support team. No speculation beyond the data." },
-          { role: "user", content: JSON.stringify({ complaint, devices, cdr, hypotheses }) },
-        ], { maxTokens: 500 });
+        const res = await this.llm.completeWithTools(
+          "diagnostics",
+          [
+            {
+              role: "system",
+              content:
+                "You are a telecom diagnostics analyst for Connect. You have read-only tools for THIS customer's phone system. " +
+                "The findings below are a first pass from a heuristic — treat them as a starting point and use the tools to check " +
+                "anything they leave open, then commit to a conclusion. Prefer evidence you fetched over the heuristic's guess when " +
+                "they disagree, and say so. Finish with a concise plain-language summary (5-8 sentences) for a support team: what is " +
+                "wrong, what the evidence is, and what to do. No speculation beyond the data you actually saw.",
+            },
+            { role: "user", content: JSON.stringify({ complaint, extension, devices, cdr, hypotheses }) },
+          ],
+          buildTools({ readTools: this.tools, prisma: this.prisma }),
+          { tenantId, role: "internal" },
+          { maxTokens: DIAG_MAX_TOKENS },
+        );
         report.narrative = res.text.trim();
+        report.investigation = { toolCalls: res.toolCalls, hitIterationCap: res.hitIterationCap };
       } catch {
         /* heuristics stand alone */
       }

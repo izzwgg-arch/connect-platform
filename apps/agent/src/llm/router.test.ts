@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterChatModels, parseChatModelPick, ModelRouter, DEFAULT_ROUTES, ANTHROPIC_MODEL, OPENAI_MODEL } from "./router";
+import {
+  filterChatModels, parseChatModelPick, ModelRouter, DEFAULT_ROUTES,
+  ANTHROPIC_MODEL, ANTHROPIC_MODEL_HEAVY, OPENAI_MODEL,
+  DEFAULT_MAX_TOKENS, PING_MAX_TOKENS,
+} from "./router";
 
 test("filterChatModels: keeps chat-capable OpenAI models, drops non-chat + dated snapshots", () => {
   const ids = [
@@ -52,7 +56,24 @@ test("anthropic pick keeps OpenAI as failover; null resets to code defaults", ()
   r.setChatModel({ provider: "anthropic", model: "claude-opus-4-8" });
   assert.deepEqual((r as any).routes.support_chat, { primary: "anthropic", model: "claude-opus-4-8", fallbackModel: OPENAI_MODEL });
   r.setChatModel(null);
-  assert.deepEqual(r.activeChatModel(), { provider: "anthropic", model: ANTHROPIC_MODEL });
+  assert.deepEqual(r.activeChatModel(), { provider: DEFAULT_ROUTES.support_chat.primary, model: DEFAULT_ROUTES.support_chat.model });
+});
+
+test("customer chat defaults to OpenAI; internal reasoning stays on Opus", () => {
+  // Izzy's split (2026-08-06): customer-facing = OpenAI, backend brain = Opus.
+  assert.equal(DEFAULT_ROUTES.support_chat.primary, "openai");
+  assert.equal(DEFAULT_ROUTES.support_chat.fallbackModel, ANTHROPIC_MODEL);
+  for (const task of ["diagnostics", "security_analysis", "report_writing", "policy_editing"]) {
+    assert.equal(DEFAULT_ROUTES[task].primary, "anthropic");
+    assert.equal(DEFAULT_ROUTES[task].model, ANTHROPIC_MODEL_HEAVY);
+  }
+});
+
+test("token ceilings leave room for thinking-by-default models", () => {
+  // ⛔ Opus 5 / Sonnet 5 think by default and thinking shares the max_tokens
+  // budget. A small ceiling truncates the answer AFTER paying to think.
+  assert.ok(DEFAULT_MAX_TOKENS >= 8000, `DEFAULT_MAX_TOKENS too low: ${DEFAULT_MAX_TOKENS}`);
+  assert.ok(PING_MAX_TOKENS >= 1000, `PING_MAX_TOKENS too low: ${PING_MAX_TOKENS}`);
 });
 
 test("setChatModel never mutates the shared DEFAULT_ROUTES object", () => {

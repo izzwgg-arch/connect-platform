@@ -9,6 +9,8 @@
  */
 import type { ConversationStore, ConversationRow, Role } from "./store";
 import type { ModelRouter, ChatMessage } from "../llm/router";
+import { CHAT_MAX_TOKENS } from "../llm/router";
+import type { ToolSpec, ToolRole } from "../tools/toolRegistry";
 import type { AuditLog } from "../audit/audit";
 import { killSwitchEngaged } from "../config";
 import { isMemoryAdd, renderLessonsBlock, type TrainerLessonService } from "../training/lessons";
@@ -156,7 +158,28 @@ export class ConversationEngine {
     private bridgeEnabled = false,
     private contextProvider: ContextProvider | null = null,
     private training: TrainerLessonService | null = null,
+    /**
+     * Read tools the model may reach for mid-conversation. Optional and last so
+     * every existing construction site keeps working untouched — no tools means
+     * exactly the old text-in/text-out behaviour.
+     */
+    private tools: ToolSpec[] | null = null,
   ) {}
+
+  /**
+   * Map the conversation role to a tool role.
+   *
+   * ⛔ Safe because `Role` is derived server-side from the DATABASE user record
+   * (channels/identity.ts: SUPER_ADMIN ⇒ "owner", everyone else ⇒ "customer") —
+   * it is never taken from the request body or from chat text. If that ever
+   * changes, this mapping becomes a privilege-escalation path.
+   *
+   * Either way the tenant is bound separately from the verified context, so an
+   * "owner" still only ever sees their own tenant's data.
+   */
+  private toolRoleFor(role: Role): ToolRole {
+    return role === "owner" ? "internal" : "customer";
+  }
 
   /** Is the YL translate-bridge active for this turn? Yiddish + YL configured + enabled. */
   private bridging(language: "en" | "yi"): boolean {
@@ -413,8 +436,33 @@ export class ConversationEngine {
 
     if (this.llm && this.llm.available().length > 0) {
       try {
-        const res = await this.llm.complete("support_chat", msgs, { maxTokens: 800, conversationId: conv.id });
+        // With tools wired, the model can look this account's own data up
+        // mid-conversation instead of guessing. ctx is the SERVER-VERIFIED
+        // context — chat text claiming another tenant changes nothing, because
+        // no tool schema accepts a tenant and the registry strips any the model
+        // invents. Without tools this is byte-for-byte the previous behaviour.
+        const res = this.tools?.length
+          ? await this.llm.completeWithTools(
+              "support_chat",
+              msgs,
+              this.tools,
+              { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role), clientUserId: ctx.clientUserId },
+              { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id },
+            )
+          : await this.llm.complete("support_chat", msgs, { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id });
         const model = `${res.provider}:${res.model}`;
+        // An empty reply is NOT a normal outcome — on thinking-by-default models
+        // it means the token budget was spent reasoning. Both branches below fall
+        // back to canned text, which hides it. Record it so it is countable.
+        if (!res.text.trim()) {
+          await this.audit.record({
+            actor: "system",
+            event: "chat.empty_completion",
+            tenantId: ctx.tenantId,
+            conversationId: conv.id,
+            payload: { model, outputTokens: res.outputTokens, maxTokens: CHAT_MAX_TOKENS },
+          });
+        }
         if (bridging) {
           const englishReply = res.text.trim() || teamFallbackEn;
           return this.finishBridged(conv, ctx, englishReply, model, bridgeDegraded);

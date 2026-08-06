@@ -8,6 +8,8 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import type { AgentConfig } from "../config";
 import type { AuditLog } from "../audit/audit";
+import type { ToolSpec, ToolContext } from "../tools/toolRegistry";
+import { toolsForRole, executeTool } from "../tools/toolRegistry";
 
 export type TaskClass = "support_chat" | "task_extraction" | "diagnostics" | "security_analysis" | "report_writing" | "policy_editing";
 export type ProviderName = "openai" | "anthropic";
@@ -23,14 +25,47 @@ export interface RouteTable {
  * quality matters most. All overridable via env with zero code change.
  */
 export const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5"; // Sonnet 5 — volume
-export const ANTHROPIC_MODEL_HEAVY = process.env.ANTHROPIC_MODEL_HEAVY || "claude-opus-4-8"; // Opus — heavy reasoning
+export const ANTHROPIC_MODEL_HEAVY = process.env.ANTHROPIC_MODEL_HEAVY || "claude-opus-5"; // Opus 5 — heavy reasoning
 export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
 
+/**
+ * ⛔ THINKING IS ON BY DEFAULT on Opus 5 and Sonnet 5 — and thinking tokens come
+ * out of the SAME max_tokens budget as the visible answer. That is why
+ * DEFAULT_MAX_TOKENS below is large. Lowering it back toward the old 1024 does
+ * not save money on a hard question; it truncates the answer mid-sentence after
+ * the model has already paid to think. If cost needs cutting, change the MODEL
+ * (or set output_config.effort once the SDK supports it) — never the ceiling.
+ *
+ * Installed @anthropic-ai/sdk is 0.60.0, which predates `output_config.effort`,
+ * so effort stays at the API default (`high`). Upgrading the SDK is the
+ * prerequisite for tuning it — see PLAN_SELF_IMPROVING_CONNECT_2026-08-06.md.
+ */
+export const DEFAULT_MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS || 16000);
+/** Self-test ping: small, but must still clear an adaptive-thinking preamble. */
+export const PING_MAX_TOKENS = 4000;
+/**
+ * Customer-facing chat ceiling. Was a bare `800` at the call site in
+ * conversation/engine.ts — under 800 a thinking-by-default model (Sonnet 5, and
+ * gpt-5, whose reasoning tokens also count against max_completion_tokens) can
+ * spend the entire budget reasoning and return EMPTY text. The engine then
+ * silently substitutes the "passed it to our team" canned line, so the failure
+ * is invisible to us and reads as a dumb agent to the customer.
+ */
+export const CHAT_MAX_TOKENS = Number(process.env.AGENT_CHAT_MAX_TOKENS || 4000);
+/**
+ * How many look-then-think rounds one question gets. Each round is a model call
+ * plus its tool results, so this bounds both cost and latency. Hitting the cap
+ * is reported (`hitIterationCap`) rather than hidden — a question that keeps
+ * hitting it is a missing tool, not a reason to raise the number.
+ */
+export const MAX_TOOL_ITERATIONS = Number(process.env.AGENT_MAX_TOOL_ITERATIONS || 8);
+
 export const DEFAULT_ROUTES: RouteTable = {
-  // High volume → Sonnet 5 (as the Anthropic side / fallback). Cheap + strong.
-  support_chat: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
-  task_extraction: { primary: "anthropic", model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL },
-  // Low volume + hard reasoning → Opus.
+  // Customer-facing conversation → OpenAI (Izzy's call, 2026-08-06). Anthropic
+  // Sonnet 5 stays the failover so a provider outage never mutes the chat.
+  support_chat: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
+  task_extraction: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
+  // Internal reasoning — diagnose and fix — → Opus 5, full smartness.
   diagnostics: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
   security_analysis: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
   report_writing: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
@@ -114,7 +149,7 @@ export class ModelRouter {
   setChatModel(pick: { provider: ProviderName; model: string } | null): void {
     const next = pick
       ? { primary: pick.provider, model: pick.model, fallbackModel: pick.provider === "openai" ? ANTHROPIC_MODEL : OPENAI_MODEL }
-      : { primary: "anthropic" as ProviderName, model: ANTHROPIC_MODEL, fallbackModel: OPENAI_MODEL };
+      : { ...DEFAULT_ROUTES.support_chat };
     this.routes = { ...this.routes, support_chat: { ...next }, task_extraction: { ...next } };
   }
 
@@ -157,6 +192,8 @@ export class ModelRouter {
     if (provider === "anthropic" && !this.anthropic) throw new Error("Anthropic key not configured");
     const model = explicitModel?.trim() || (provider === "openai" ? OPENAI_MODEL : ANTHROPIC_MODEL);
     // Larger max_tokens so reasoning-style models still emit visible output.
+    // ⛔ Not 200: thinking-by-default models can spend the whole budget reasoning
+    // and return an EMPTY text block, which reads as "provider down" in the UI.
     const res = await this.callProvider(
       provider,
       model,
@@ -164,7 +201,7 @@ export class ModelRouter {
         { role: "system", content: "Reply with exactly: SELFTEST-OK" },
         { role: "user", content: "ping" },
       ],
-      200,
+      PING_MAX_TOKENS,
     );
     return { provider, model, text: res.text };
   }
@@ -180,7 +217,7 @@ export class ModelRouter {
     for (let i = 0; i < order.length; i++) {
       const { provider, model } = order[i];
       try {
-        const res = await this.callProvider(provider, model, messages, opts.maxTokens ?? 1024);
+        const res = await this.callProvider(provider, model, messages, opts.maxTokens ?? DEFAULT_MAX_TOKENS);
         const result: CompletionResult = { ...res, provider, model, failedOver: i > 0 };
         await this.audit.record({
           actor: "model",
@@ -195,6 +232,200 @@ export class ModelRouter {
       }
     }
     throw new Error(`All providers failed for ${task}: ${String(lastErr)}`);
+  }
+
+  /**
+   * Agentic completion — the model may CALL TOOLS and see the results, then
+   * decide what to look at next, until it has an answer. This is the difference
+   * between a model that writes and an agent that investigates.
+   *
+   * ⛔ Deliberately NO cross-provider failover mid-conversation. Anthropic and
+   * OpenAI encode tool calls differently; replaying a half-finished tool
+   * exchange onto the other provider is a correctness trap, not a safety net.
+   * If the primary fails we degrade to a plain no-tools `complete()`, which
+   * still answers (worse) rather than resuming a conversation it can't read.
+   *
+   * Every tool call is audit-logged with the SERVER-VERIFIED tenant, so a
+   * cross-tenant attempt is visible after the fact as well as blocked before.
+   */
+  async completeWithTools(
+    task: TaskClass,
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    ctx: ToolContext,
+    opts: { maxTokens?: number; conversationId?: string; maxIterations?: number } = {},
+  ): Promise<CompletionResult & { toolCalls: number; hitIterationCap: boolean }> {
+    const route = this.routes[task];
+    if (!route) throw new Error(`No route for task class ${task}`);
+    const visible = toolsForRole(tools, ctx.role);
+    const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const maxIterations = opts.maxIterations ?? MAX_TOOL_ITERATIONS;
+
+    // No tools visible to this role ⇒ nothing agentic to do; take the cheap path.
+    if (visible.length === 0) {
+      const res = await this.complete(task, messages, opts);
+      return { ...res, toolCalls: 0, hitIterationCap: false };
+    }
+
+    const runTool = async (name: string, args: Record<string, unknown>) => {
+      const r = await executeTool(tools, name, args, ctx);
+      await this.audit.record({
+        actor: "model",
+        event: r.ok ? "tool.call" : "tool.refused",
+        tenantId: ctx.tenantId,
+        conversationId: opts.conversationId,
+        payload: { tool: name, role: ctx.role, ok: r.ok, droppedArgs: r.droppedArgs },
+      });
+      return r;
+    };
+
+    try {
+      const out =
+        route.primary === "anthropic"
+          ? await this.anthropicToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool)
+          : await this.openaiToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool);
+      await this.audit.record({
+        actor: "model",
+        event: "llm.completion",
+        tenantId: ctx.tenantId,
+        conversationId: opts.conversationId,
+        payload: {
+          task, provider: route.primary, model: route.model, agentic: true,
+          toolCalls: out.toolCalls, hitIterationCap: out.hitIterationCap,
+          inputTokens: out.inputTokens, outputTokens: out.outputTokens,
+        },
+      });
+      return { ...out, provider: route.primary, model: route.model, failedOver: false };
+    } catch (err) {
+      await this.audit.record({
+        actor: "model",
+        event: "llm.tool_loop_failed",
+        tenantId: ctx.tenantId,
+        conversationId: opts.conversationId,
+        payload: { task, provider: route.primary, model: route.model, error: String(err) },
+      });
+      // Degrade to a plain completion rather than resume across providers.
+      const res = await this.complete(task, messages, opts);
+      return { ...res, toolCalls: 0, hitIterationCap: false };
+    }
+  }
+
+  private toolLoopResult(text: string, inputTokens: number, outputTokens: number, toolCalls: number, hitIterationCap: boolean) {
+    return { text, inputTokens, outputTokens, toolCalls, hitIterationCap };
+  }
+
+  private async anthropicToolLoop(
+    model: string,
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    maxTokens: number,
+    maxIterations: number,
+    runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
+  ) {
+    if (!this.anthropic) throw new Error("Anthropic key not configured");
+    const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
+    // Working conversation carries tool_use / tool_result blocks, so it is wider
+    // than ChatMessage. Typed loosely on purpose — the SDK owns the real shape.
+    const convo: any[] = messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let toolCalls = 0;
+
+    for (let i = 0; i < maxIterations; i++) {
+      const res: any = await this.anthropic.messages.create({
+        model,
+        max_tokens: maxTokens,
+        system: system || undefined,
+        messages: convo,
+        tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters as any })),
+      } as any);
+      inputTokens += res.usage?.input_tokens ?? 0;
+      outputTokens += res.usage?.output_tokens ?? 0;
+
+      const toolUses = (res.content ?? []).filter((b: any) => b.type === "tool_use");
+      if (res.stop_reason !== "tool_use" || toolUses.length === 0) {
+        const text = (res.content ?? [])
+          .filter((b: any) => b.type === "text")
+          .map((b: any) => b.text)
+          .join("");
+        return this.toolLoopResult(text, inputTokens, outputTokens, toolCalls, false);
+      }
+
+      convo.push({ role: "assistant", content: res.content });
+      const results: any[] = [];
+      for (const tu of toolUses) {
+        toolCalls++;
+        const r = await runTool(tu.name, (tu.input ?? {}) as Record<string, unknown>);
+        results.push({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: JSON.stringify(r.content ?? null),
+          ...(r.ok ? {} : { is_error: true }),
+        });
+      }
+      // All results for one assistant turn go back in ONE user message —
+      // splitting them trains the model out of parallel tool calls.
+      convo.push({ role: "user", content: results });
+    }
+    return this.toolLoopResult(
+      "I gathered a lot of information but ran out of investigation steps before reaching a conclusion.",
+      inputTokens, outputTokens, toolCalls, true,
+    );
+  }
+
+  private async openaiToolLoop(
+    model: string,
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    maxTokens: number,
+    maxIterations: number,
+    runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
+  ) {
+    if (!this.openai) throw new Error("OpenAI key not configured");
+    const convo: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let toolCalls = 0;
+
+    for (let i = 0; i < maxIterations; i++) {
+      const res: any = await this.openai.chat.completions.create({
+        model,
+        max_completion_tokens: maxTokens,
+        messages: convo,
+        tools: tools.map((t) => ({
+          type: "function" as const,
+          function: { name: t.name, description: t.description, parameters: t.parameters as any },
+        })),
+      } as any);
+      inputTokens += res.usage?.prompt_tokens ?? 0;
+      outputTokens += res.usage?.completion_tokens ?? 0;
+
+      const msg = res.choices?.[0]?.message;
+      const calls = msg?.tool_calls ?? [];
+      if (calls.length === 0) {
+        return this.toolLoopResult(msg?.content ?? "", inputTokens, outputTokens, toolCalls, false);
+      }
+
+      convo.push(msg);
+      for (const call of calls) {
+        toolCalls++;
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(call.function?.arguments || "{}");
+        } catch {
+          // Malformed arguments are the model's error to recover from, not ours.
+        }
+        const r = await runTool(call.function?.name ?? "", args);
+        convo.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(r.content ?? null) });
+      }
+    }
+    return this.toolLoopResult(
+      "I gathered a lot of information but ran out of investigation steps before reaching a conclusion.",
+      inputTokens, outputTokens, toolCalls, true,
+    );
   }
 
   private async callProvider(

@@ -8,13 +8,14 @@ import Fastify from "fastify";
 import { loadConfig, killSwitchEngaged } from "./config";
 import { AuditLog, FileAuditSink, type AuditSink } from "./audit/audit";
 import { Notifier } from "./notify/notifier";
-import { ModelRouter } from "./llm/router";
+import { ModelRouter, PING_MAX_TOKENS } from "./llm/router";
 import { loadManifest, executableCapabilities } from "./manifest/manifest";
 import { getPrisma } from "./db";
 import { ConversationEngine } from "./conversation/engine";
 import { PrismaConversationStore } from "./conversation/store";
 import { registerChatRoutes } from "./conversation/routes";
 import { ReadTools } from "./tools/readTools";
+import { buildTools } from "./tools/toolRegistry";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
 import { ActionService } from "./actions/service";
@@ -229,7 +230,11 @@ async function main() {
     // live via "add that to your memory"; lessons apply immediately, everything
     // is audited, and the owner revokes from the AI Trainer page.
     const trainerLessons = new TrainerLessonService(prisma, audit, router);
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons);
+    // Read tools for the conversation: the model can look THIS account's own
+    // data up mid-chat. Role gating inside the registry decides what a customer
+    // vs an owner may reach; the tenant is always bound from the verified ctx.
+    const chatTools = buildTools({ readTools: new ReadTools(prisma), prisma });
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools);
 
     // Warm the in-memory cache from the DB, then pre-translate fixed templates
     // (once) so common replies are instant. Runs in the background — never
@@ -717,7 +722,7 @@ async function main() {
         const r = await router.complete(provider as any, [
           { role: "system", content: "Reply with exactly: SELFTEST-OK" },
           { role: "user", content: "ping" },
-        ], { maxTokens: 16 });
+        ], { maxTokens: PING_MAX_TOKENS });
         return { ok: true, provider: r.provider, model: r.model, text: r.text.trim(), failedOver: r.failedOver };
       } catch (err) {
         return { ok: false, error: String(err) };
@@ -1101,7 +1106,7 @@ async function main() {
       const res = await router.complete(task, [
         { role: "system", content: "Reply with exactly: SELFTEST-OK" },
         { role: "user", content: "ping" },
-      ], { maxTokens: 16 });
+      ], { maxTokens: PING_MAX_TOKENS });
       llm = { provider: res.provider, model: res.model, text: res.text.trim(), failedOver: res.failedOver };
     } catch (err) {
       llm = { error: String(err) };
