@@ -153,6 +153,63 @@ export class AmiClient extends EventEmitter {
     });
   }
 
+  // Write a single AstDB value and WAIT for Asterisk to confirm it.
+  //
+  // ⛔ Why this exists (2026-08-06): the IVR publish route wrote every key with
+  // fire-and-forget `sendAction("DBPut", …)` and then answered `{ok:true}`
+  // immediately. Connect therefore reported "published" before Asterisk had
+  // applied anything — a call placed right after a publish could still hear the
+  // OLD menu, and a dropped write was invisible to everyone forever. That is
+  // the mechanism behind months of "I publish and it doesn't take effect".
+  // A publish is a promise to the owner; it has to be kept before we answer.
+  dbPut(
+    family: string,
+    key: string,
+    value: string,
+    timeoutMs = 5_000,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || !this.authenticated) {
+        reject(new Error("AMI not connected"));
+        return;
+      }
+      const id = `cc-${++this.actionSeq}`;
+      let settled = false;
+
+      const onResponse = (frame: AmiFrame) => {
+        if (frame["ActionID"] !== id) return;
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (frame["Response"] === "Success") resolve({ ok: true });
+        else resolve({ ok: false, error: frame["Message"] ?? `Response: ${frame["Response"] ?? "unknown"}` });
+      };
+      const onDisconnect = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("AMI disconnected before DBPut completed"));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`AMI DBPut timed out: ${family}/${key}`));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("response", onResponse);
+        this.off("disconnected", onDisconnect);
+      };
+      this.on("response", onResponse);
+      this.on("disconnected", onDisconnect);
+
+      this.socket.write(
+        `Action: DBPut\r\nActionID: ${id}\r\nFamily: ${family}\r\nKey: ${key}\r\nVal: ${value}\r\n\r\n`,
+      );
+    });
+  }
+
   // Read a single AstDB value by Family + Key. Resolves with { ok: true, value }
   // on success, { ok: false } if the key is absent, and rejects on timeout or
   // disconnect.

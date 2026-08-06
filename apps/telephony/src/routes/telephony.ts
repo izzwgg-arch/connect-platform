@@ -596,7 +596,7 @@ export function registerTelephonyRoutes(
   //                                         dialplan resolver does not know
   //                                         the canonical Connect slug at the
   //                                         time it reads the key.
-  router.post("/telephony/internal/ivr-publish", (req: Request, res: Response) => {
+  router.post("/telephony/internal/ivr-publish", async (req: Request, res: Response) => {
     if (!isInternalRouteAuthorized(req)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
@@ -628,6 +628,7 @@ export function registerTelephonyRoutes(
       return;
     }
     let written = 0;
+    const accepted: Array<{ family: string; key: string; value: string }> = [];
     for (const entry of keys) {
       if (
         typeof entry !== "object" || entry === null ||
@@ -662,8 +663,47 @@ export function registerTelephonyRoutes(
         res.status(400).json({ error: "family_scope_mismatch", family });
         return;
       }
-      telephony.ami.sendAction("DBPut", { Family: family, Key: key, Val: value });
-      written++;
+      accepted.push({ family, key, value });
+    }
+
+    // ⛔ AWAIT every write. This used to be fire-and-forget sendAction() +
+    // an immediate {ok:true}: Connect answered "published" before Asterisk had
+    // applied a single key, so a call right after a publish could still hear
+    // the previous menu, and a dropped write was never noticed by anyone. The
+    // owner's word for that is "I published and it didn't take effect".
+    // Bounded concurrency keeps a 400+ key publish quick without flooding the
+    // AMI socket.
+    const failures: Array<{ family: string; key: string; error: string }> = [];
+    const CONCURRENCY = 16;
+    for (let i = 0; i < accepted.length; i += CONCURRENCY) {
+      const batch = accepted.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (e) => {
+          try {
+            const r = await telephony.ami.dbPut(e.family, e.key, e.value);
+            return r.ok ? null : { ...e, error: r.error };
+          } catch (err: any) {
+            return { ...e, error: String(err?.message ?? err) };
+          }
+        }),
+      );
+      for (const r of results) {
+        if (r) failures.push({ family: r.family, key: r.key, error: r.error });
+        else written++;
+      }
+    }
+
+    if (failures.length > 0) {
+      // Partial writes are a FAILED publish. Reporting success here is how a
+      // half-applied menu goes live and nobody finds out.
+      res.status(502).json({
+        ok: false,
+        error: "astdb_write_failed",
+        written,
+        failed: failures.length,
+        sample: failures.slice(0, 5),
+      });
+      return;
     }
     res.json({ ok: true, written });
   });
