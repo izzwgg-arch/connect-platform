@@ -17,6 +17,10 @@ DID="${1:?did}"
 EXPECT="${2:?expected regex}"
 KEYS="${3:-}"
 WAIT="${4:-14}"
+# NOT_EXPECT: the call must NOT touch this. "Landed on the right menu" is only
+# half the guarantee — a number pointed at one IVR must also never reach any
+# OTHER menu, another tenant, or the default fallback.
+NOT_EXPECT="${5:-}"
 LOG=/var/log/asterisk/full
 
 START=$(wc -l < "$LOG")
@@ -47,6 +51,12 @@ ENDED=$(echo "$TRACE"  | grep -aoE 'Goto\([^)]*\)' | tail -1)
 echo "PLAYED: ${PLAYED:-<none>}"
 echo "MENU:   ${MENU:-<none>}"
 echo "LAST:   ${ENDED:-<none>}"
+
+if [ -n "$NOT_EXPECT" ] && echo "$TRACE" | grep -qaiE "$NOT_EXPECT"; then
+  echo "FAIL  (call reached something it must never reach: $NOT_EXPECT)"
+  echo "---- trace ----"; echo "$TRACE" | grep -aiE "$NOT_EXPECT" | head -5
+  exit 1
+fi
 
 # ORDERED assertions: "A&&&B" means A must appear, and B must appear AFTER it.
 # A flat regex over the whole trace can pass on the wrong half of a journey —
