@@ -315,3 +315,87 @@ test("X5: VERSION reflects the 2026-07-26 build or later", () => {
     "VERSION must be at or after the X5 cut (2026.07.26.1), got " + m![1],
   );
 });
+
+// ── 2026-08-06: regen must hand tenant confs back to the GUI ──────────────
+// apply_tenant_changes (the official per-tenant regen) rewrites
+// extensions__50-<t>-dialplan.conf / queues__50-<t>-main.conf as
+// asterisk:asterisk, but the VitalPBX GUI writes them as www-data — so every
+// panel Save/Apply after a helper-triggered regen crashed with
+// file_put_contents(...) Permission denied in OmbuSystemConf.php (verified
+// live on tenants 2 and 35, 2026-08-05). The helper must chown the
+// regenerated files back to www-data:www-data 0644, non-fatally.
+
+const HELPER_PATH = join(__dirname, "vitalpbx-inbound-route-helper.py");
+const HELPER = readFileSync(HELPER_PATH, "utf8");
+
+test("ownership: GUI conf ownership constants and restore function exist", () => {
+  for (const src of [SCRIPT, HELPER]) {
+    assert.match(src, /GUI_CONF_OWNER_USER = "www-data"/);
+    assert.match(src, /GUI_CONF_OWNER_GROUP = "www-data"/);
+    assert.match(src, /GUI_CONF_MODE = 0o644/);
+    assert.match(src, /def _chown_gui_conf\(path\):/);
+    assert.match(src, /def restore_gui_conf_ownership\(tenant_id\):/);
+  }
+});
+
+test("ownership: restore_gui_conf_ownership covers both tenant conf files", () => {
+  assert.match(
+    HELPER,
+    /def restore_gui_conf_ownership\(tenant_id\):[\s\S]{0,1500}extensions__50-%d-dialplan\.conf[\s\S]{0,300}queues__50-%d-main\.conf/,
+    "restore_gui_conf_ownership must target the tenant dialplan conf and the tenant queues conf",
+  );
+});
+
+test("ownership: apply_tenant_changes restores GUI ownership after regen, before the MOH re-apply", () => {
+  assert.match(
+    HELPER,
+    /def apply_tenant_changes\([\s\S]{0,5000}"guiOwnership"\] = restore_gui_conf_ownership\(tenant_id\)[\s\S]{0,1500}"mohReapply"\] = reapply_moh_patches_after_regen\(tenant_id\)/,
+    "apply_tenant_changes must chown the regenerated confs back to www-data BEFORE re-applying MOH patches (so the patch writers inherit the fixed ownership)",
+  );
+});
+
+test("ownership: every atomic tenant-conf writer normalizes ownership after os.replace", () => {
+  // patch_tenant_queue_musicclass + patch_tenant_dialplan_moh + bake_route_goto
+  assert.equal(
+    countOccurrences(HELPER, 'evidence["ownership"] = _chown_gui_conf(conf)'),
+    3,
+    "all three tenant-conf writers (queue musicclass, dialplan MOH, route Goto bake) must call _chown_gui_conf after replacing the file",
+  );
+});
+
+test("ownership: _chown_gui_conf never raises (errors go into evidence)", () => {
+  assert.match(
+    HELPER,
+    /def _chown_gui_conf\(path\):[\s\S]{0,900}except \(KeyError, OSError\) as exc:[\s\S]{0,120}out\["error"\] = str\(exc\)/,
+    "_chown_gui_conf must swallow lookup/chown failures into the evidence dict — a chown failure must never abort a switch",
+  );
+});
+
+test("ownership: VERSION reflects the 2026-08-06 ownership fix or later", () => {
+  const m = SCRIPT.match(/^VERSION\s*=\s*"([^"]+)"/m);
+  assert.ok(m, "VERSION constant must exist");
+  assert.ok(
+    m![1].localeCompare("2026.08.06.2") >= 0,
+    "VERSION must be at or after the ownership-fix cut (2026.08.06.2), got " + m![1],
+  );
+});
+
+// ── drift guard: the installer's embedded helper must BE the helper ───────
+// The embedded copy silently drifted from 2026.07.26.1 → 2026.08.06.x once
+// (fresh installs would have shipped a helper missing apply_tenant_changes
+// entirely). Enforce byte-identity so it can't happen again.
+
+test("embedded helper heredoc is byte-identical to vitalpbx-inbound-route-helper.py", () => {
+  const marker = "cat >/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py <<'PYHELPER'\n";
+  const start = SCRIPT.indexOf(marker);
+  assert.ok(start !== -1, "installer must write the helper via the PYHELPER heredoc");
+  const bodyStart = start + marker.length;
+  const end = SCRIPT.indexOf("\nPYHELPER\n", bodyStart);
+  assert.ok(end !== -1, "PYHELPER heredoc terminator must exist");
+  const embedded = SCRIPT.slice(bodyStart, end + 1);
+  assert.equal(
+    embedded,
+    HELPER,
+    "the embedded helper copy has drifted from scripts/pbx/vitalpbx-inbound-route-helper.py — re-sync the heredoc",
+  );
+});

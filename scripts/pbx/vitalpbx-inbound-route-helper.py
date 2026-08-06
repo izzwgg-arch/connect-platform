@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.06.1"
+VERSION = "2026.08.06.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -779,6 +779,48 @@ QUEUE_CONF_DIR = "/etc/asterisk/vitalpbx"
 # (/opt is read-only to the service ??? learned the hard way, 2026-07-23).
 QUEUE_BACKUP_DIR = "/var/lib/connect-pbx-helper/backups"
 
+# The VitalPBX web GUI (PHP-FPM) writes every generated tenant conf as
+# www-data:www-data 0644. A helper-triggered regen (apply_tenant_changes)
+# rewrites them as asterisk:asterisk instead, after which every panel
+# Save/Apply for that tenant crashes with file_put_contents(...) Permission
+# denied in OmbuSystemConf.php (verified live on tenants 2 + 35, 2026-08-05).
+# Every helper write to these files must therefore leave them GUI-writable.
+GUI_CONF_OWNER_USER = "www-data"
+GUI_CONF_OWNER_GROUP = "www-data"
+GUI_CONF_MODE = 0o644
+
+def _chown_gui_conf(path):
+    """Best-effort: leave one generated tenant conf owned www-data:www-data
+    0644 so the GUI can rewrite it. Never raises."""
+    out = {"file": str(path), "changed": False, "error": None}
+    try:
+        uid = pwd.getpwnam(GUI_CONF_OWNER_USER).pw_uid
+        gid = grp.getgrnam(GUI_CONF_OWNER_GROUP).gr_gid
+        st = os.stat(path)
+        if st.st_uid != uid or st.st_gid != gid:
+            os.chown(path, uid, gid)
+            out["changed"] = True
+        if (st.st_mode & 0o777) != GUI_CONF_MODE:
+            os.chmod(path, GUI_CONF_MODE)
+            out["changed"] = True
+    except (KeyError, OSError) as exc:
+        out["error"] = str(exc)
+    return out
+
+def restore_gui_conf_ownership(tenant_id):
+    """Chown the tenant's regenerated conf files back to the GUI convention
+    after a regen. Tenant-scoped and non-fatal: chown trouble is reported in
+    the evidence, never raised, so it can't abort a doorway/IVR switch."""
+    t = int(tenant_id)
+    files = []
+    for name in ("extensions__50-%d-dialplan.conf" % t, "queues__50-%d-main.conf" % t):
+        path = Path(QUEUE_CONF_DIR) / name
+        if not path.is_file():
+            files.append({"file": str(path), "changed": False, "error": "missing"})
+            continue
+        files.append(_chown_gui_conf(path))
+    return {"files": files}
+
 def target_class_for_group(music_group_id):
     """VitalPBX renders music group N as Asterisk class 'mohN'; seed group 1 is 'default'."""
     gid = int(music_group_id)
@@ -877,6 +919,7 @@ def patch_tenant_queue_musicclass(tenant_id, music_group_id, target_class=None):
         except PermissionError:
             pass
         os.replace(tmp, conf)
+        evidence["ownership"] = _chown_gui_conf(conf)
         evidence["patched"] = res["changed"]
         return evidence
     except Exception as exc:
@@ -1001,6 +1044,7 @@ def patch_tenant_dialplan_moh(tenant_id, music_group_id, target_class=None):
         except PermissionError:
             pass
         os.replace(tmp, conf)
+        evidence["ownership"] = _chown_gui_conf(conf)
         evidence["patched"] = res["changed"]
         return evidence
     except Exception as exc:
@@ -2396,6 +2440,7 @@ def bake_route_goto(tenant_id, did_digits, target_type, target_id):
         except PermissionError:
             pass
         os.replace(tmp, conf)
+        evidence["ownership"] = _chown_gui_conf(conf)
         evidence["changed"] = res["changed"]
         evidence["reload"] = run_apply_command('asterisk -rx "dialplan reload"')
         if evidence["reload"]["exitCode"] != 0:
@@ -2480,6 +2525,11 @@ def apply_tenant_changes(tenant_id, extra_reloads=(), pending_modules=()):
     extras = [run_apply_command(c) for c in extra_reloads]
     if extras:
         result["extraReloads"] = extras
+    # The regen just rewrote the tenant conf files as asterisk:asterisk; hand
+    # them back to the GUI (www-data:www-data 0644) or every subsequent panel
+    # Save/Apply for this tenant dies on Permission denied. Runs BEFORE the
+    # MOH re-apply below so those patch writers inherit the fixed ownership.
+    result["guiOwnership"] = restore_gui_conf_ownership(tenant_id)
     # A regen rewrites the tenant dialplan + queue conf from the ombu DB. If the
     # tenant is currently on a Connect-uploaded MOH class (connect_*), that class
     # exists only in the patched text + AstDB — re-apply it or callers fall back
