@@ -190,6 +190,12 @@ export default function IvrStudioPage() {
    *  exactly like success, so it has to be checked explicitly. */
   const [peopleLoaded, setPeopleLoaded] = useState(true);
   const [teamsLoaded, setTeamsLoaded] = useState(true);
+  /** Teams arrive AFTER first paint — see the deferred load in loadAll().
+   *  ⛔ This is a third state and must not be folded into `teamsLoaded`:
+   *  "still arriving" and "we tried and failed" produce different sentences,
+   *  and showing the failure sentence while a request is still in flight tells
+   *  the customer their phone system is broken when it isn't. */
+  const [teamsLoading, setTeamsLoading] = useState(false);
   /** Outside numbers this tenant can already reach (Custom Applications on the
    *  PBX). `null` means we couldn't find out — which must not be shown as
    *  "there are none", or a saved key reads as broken during a PBX hiccup. */
@@ -308,13 +314,19 @@ export default function IvrStudioPage() {
     setLoading(true); setError(null);
     const safe = async <T,>(path: string): Promise<T | null> => { try { return await apiGet<T>(path); } catch { return null; } };
     try {
-      const [p, pr, sc, ext, q, rg, dm, nums, fwd] = await Promise.all([
+      // ⛔ Ring groups and queues are NOT in this batch on purpose.
+      // /voice/pbx/ring-groups is a live Ombutel MySQL read and measured 1.8s
+      // average / 2.2s max — the slowest thing on this page by a wide margin and,
+      // inside a Promise.all, the floor the entire screen waited on. Nothing
+      // above the fold needs it: it feeds the Teams card and the "A team" choice
+      // in the key editor, both of which handle arriving late. Queues rides along
+      // because the two are merged into one `teams` list — splitting them would
+      // flash a wrong team count before the second one landed.
+      const [p, pr, sc, ext, dm, nums, fwd] = await Promise.all([
         apiGet<{ profiles: RouteProfile[] }>(`/voice/ivr/route-profiles${qs}`),
         apiGet<{ prompts: PromptRow[] }>(`/voice/ivr/prompts${qs}`),
         safe<{ schedule: ScheduleRow | null }>(`/voice/ivr/schedule${qs}`),
         safe<{ rows: any[] }>(`/voice/pbx/resources/extensions${qs}`),
-        safe<{ rows: any[] }>(`/voice/pbx/resources/queues${qs}`),
-        safe<{ rows: any[] }>(`/voice/pbx/ring-groups${qs}`),
         safe<{ mappings: any[] }>(`/voice/did/mappings${qs}`),
         safe<{ numbers: TenantNumber[] }>(`/voice/ivr/numbers${qs}`),
         safe<{ forwards: any[]; read: boolean }>(`/voice/forwards${qs}`),
@@ -352,32 +364,49 @@ export default function IvrStudioPage() {
       }
       setPbxTenantId(pbxT);
 
-      // The two sources name things differently, verified live 2026-08-03:
-      //   ring groups → { name: "Sales", number: "1010" }        name IS the label
-      //   queues      → { name: "T2_Q600", description: "main q",
-      //                   extension: "600" }                     name is an internal id
-      // Reading `name` first for both would offer a customer "T2_Q600" as a
-      // place to send callers, which is precisely the jargon this screen exists
-      // to get rid of. So queues prefer `description`.
-      const teamRows = [
-        ...(rg?.rows || []).map((x) => ({ number: String(x.number ?? x.group_number ?? x.extension ?? ""), name: (x.name ?? x.description ?? null) as string | null, kind: "ring_group" as const })),
-        ...(q?.rows || []).map((x) => ({ number: String(x.number ?? x.queue_number ?? x.extension ?? ""), name: (x.description ?? x.name ?? null) as string | null, kind: "queue" as const })),
-      ].filter((x) => x.number);
-      setTeams(teamRows);
-      // "A team" is a ring group OR a queue, so we only know this customer has
-      // none when BOTH lists were actually read. Ring groups answer 200 with a
-      // `skipReason` instead of an error when they can't be read; queues 404
-      // (which `safe` turns into null).
-      //
-      // Requiring both is not pedantry — Landau Home has zero ring groups and
-      // exactly one queue, and /voice/pbx/resources/queues answers 404
-      // PBX_LINK_NOT_FOUND for them even though ring groups resolve their
-      // VitalPBX tenant fine. Accepting one good source hid a team they really
-      // have. If we already found teams, the choice is offered regardless.
-      const rgUnknown = rg === null || Boolean((rg as any)?.skipReason);
-      const qUnknown = q === null;
-      setTeamsLoaded((!rgUnknown && !qUnknown) || teamRows.length > 0);
       setPeopleLoaded(ext !== null);
+
+      // Teams, off the critical path. Fired without await so the screen paints
+      // and becomes usable while the slow PBX read is still going; it fills the
+      // Teams card and the "A team" choice in place when it lands.
+      setTeamsLoading(true);
+      void (async () => {
+        try {
+          const [rg, q] = await Promise.all([
+            safe<{ rows: any[] }>(`/voice/pbx/ring-groups${qs}`),
+            safe<{ rows: any[] }>(`/voice/pbx/resources/queues${qs}`),
+          ]);
+          // The two sources name things differently, verified live 2026-08-03:
+          //   ring groups → { name: "Sales", number: "1010" }        name IS the label
+          //   queues      → { name: "T2_Q600", description: "main q",
+          //                   extension: "600" }                     name is an internal id
+          // Reading `name` first for both would offer a customer "T2_Q600" as a
+          // place to send callers, which is precisely the jargon this screen exists
+          // to get rid of. So queues prefer `description`.
+          const teamRows = [
+            ...(rg?.rows || []).map((x) => ({ number: String(x.number ?? x.group_number ?? x.extension ?? ""), name: (x.name ?? x.description ?? null) as string | null, kind: "ring_group" as const })),
+            ...(q?.rows || []).map((x) => ({ number: String(x.number ?? x.queue_number ?? x.extension ?? ""), name: (x.description ?? x.name ?? null) as string | null, kind: "queue" as const })),
+          ].filter((x) => x.number);
+          setTeams(teamRows);
+          // "A team" is a ring group OR a queue, so we only know this customer has
+          // none when BOTH lists were actually read. Ring groups answer 200 with a
+          // `skipReason` instead of an error when they can't be read; queues 404
+          // (which `safe` turns into null).
+          //
+          // Requiring both is not pedantry — Landau Home has zero ring groups and
+          // exactly one queue, and /voice/pbx/resources/queues answers 404
+          // PBX_LINK_NOT_FOUND for them even though ring groups resolve their
+          // VitalPBX tenant fine. Accepting one good source hid a team they really
+          // have. If we already found teams, the choice is offered regardless.
+          const rgUnknown = rg === null || Boolean((rg as any)?.skipReason);
+          const qUnknown = q === null;
+          setTeamsLoaded((!rgUnknown && !qUnknown) || teamRows.length > 0);
+        } catch {
+          setTeamsLoaded(false);
+        } finally {
+          setTeamsLoading(false);
+        }
+      })();
 
       // Every menu's keys in ONE request. This used to be a second wave of
       // requests — one per menu, each ~half a second, and none of them could
@@ -1161,6 +1190,7 @@ export default function IvrStudioPage() {
                             directory={directory}
                             peopleLoaded={peopleLoaded}
                             teamsLoaded={teamsLoaded}
+                            teamsLoading={teamsLoading}
                             pendingTeamNumbers={pendingTeamNumbers}
                             disabled={saving}
                             onSave={(kind, target, after) => saveKey(digit, kind, target, after)}
@@ -1207,6 +1237,7 @@ export default function IvrStudioPage() {
                           directory={directory}
                           peopleLoaded={peopleLoaded}
                           teamsLoaded={teamsLoaded}
+                          teamsLoading={teamsLoading}
                           pendingTeamNumbers={pendingTeamNumbers}
                           disabled={saving}
                           onSave={(kind, target, after) => saveKey(editingDigit, kind, target, after)}
@@ -1291,12 +1322,16 @@ export default function IvrStudioPage() {
 
             <div className="card">
               <div className="card-h">
-                <div><h2>{t("Teams")}</h2><div className="sub">{directory.teams.length} set up</div></div>
+                <div><h2>{t("Teams")}</h2><div className="sub">{teamsLoading ? t("Loading…") : `${directory.teams.length} set up`}</div></div>
                 <button className="btn sm" disabled={!canManage} onClick={() => setMakeTeamOpen(true)}>{t("New team")}</button>
               </div>
               <div className="card-b">
                 <div className="reclist flat">
-                  {directory.teams.length === 0 && (
+                  {/* "Still arriving" must not read as "you have none" — teams
+                      load after first paint, so an empty list mid-flight is not
+                      an answer yet. */}
+                  {teamsLoading && <div className="dimtxt">{t("Loading…")}</div>}
+                  {!teamsLoading && directory.teams.length === 0 && (
                     <div className="dimtxt">
                       {t("No teams yet - a team is several phones ringing instead of one.")}
                     </div>
@@ -1473,12 +1508,13 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward, onMakeTeam, adoptTeamNumber, onAdoptedTeam }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, teamsLoading, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward, onMakeTeam, adoptTeamNumber, onAdoptedTeam }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
   peopleLoaded: boolean;
   teamsLoaded: boolean;
+  teamsLoading: boolean;
   /** Teams that exist but don't take calls until PBX changes are applied. */
   pendingTeamNumbers?: string[];
   disabled?: boolean;
@@ -1564,6 +1600,10 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
       return { k, blocked: null };
     }
     if (k === "team") {
+      // Teams load after first paint, so the editor can open before they land.
+      // Saying "couldn't load" then would be false — and would send someone off
+      // to check a PBX link that is perfectly fine.
+      if (teamsLoading) return { k, blocked: "Still loading this customer's teams — one moment." };
       if (!teamsLoaded) return { k, blocked: "Couldn't load this customer's teams — check they're linked to the phone system." };
       // Having no team is NOT a blocker: picking this offers to make one right
       // here. It only becomes impossible with no phones to put in it.
@@ -1943,7 +1983,7 @@ function StudioStyles() {
       .ivrs .crumbs b{color:var(--text)}
       .ivrs .spacer{flex:1}
       .ivrs .btn{font:inherit;font-size:13.5px;font-weight:640;border-radius:10px;padding:9px 15px;border:1px solid var(--line);
-        background:var(--panel);color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.14s;white-space:nowrap}
+        background:var(--panel);color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:border-color .14s,color .14s,background-color .14s,opacity .14s,filter .14s;white-space:nowrap}
       .ivrs .btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
       .ivrs .btn:disabled{opacity:.5;cursor:not-allowed}
       .ivrs .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -1995,7 +2035,7 @@ function StudioStyles() {
       .ivrs .knob.add{border-style:dashed;background:transparent;color:var(--dim)}
       .ivrs .line{width:2px;flex:1;min-height:14px;background:var(--line)}
       .ivrs .stepcard{width:100%;text-align:left;font:inherit;color:var(--text);margin:8px 0 8px 14px;padding:13px 15px;border:1px solid var(--line);
-        border-radius:13px;background:var(--panel-2);display:flex;gap:13px;align-items:center;flex-wrap:wrap;transition:.14s}
+        border-radius:13px;background:var(--panel-2);display:flex;gap:13px;align-items:center;flex-wrap:wrap;transition:border-color .14s,color .14s,background-color .14s,opacity .14s,filter .14s}
       .ivrs .stepcard.tappable{cursor:pointer}
       .ivrs .stepcard.tappable:hover{border-color:var(--accent-line)}
       .ivrs .stepcard.add{border-style:dashed;background:transparent}
@@ -2034,7 +2074,7 @@ function StudioStyles() {
       .ivrs .editor-b{padding:15px}
       .ivrs .choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:9px}
       .ivrs .choice{display:flex;flex-direction:column;gap:6px;text-align:left;padding:13px;border-radius:12px;border:1px solid var(--line);
-        background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);transition:.14s}
+        background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);transition:border-color .14s,color .14s,background-color .14s,opacity .14s,filter .14s}
       .ivrs .choice:hover{border-color:var(--accent-line)}
       .ivrs .choice.on{border-color:var(--accent);background:var(--accent-soft)}
       .ivrs .choice.blocked{border-style:dashed;opacity:.75}
@@ -2048,7 +2088,7 @@ function StudioStyles() {
       .ivrs .plabel{font-size:11.5px;font-weight:710;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin-bottom:9px}
       .ivrs .targets{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:8px;max-height:250px;overflow:auto}
       .ivrs .target{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;
-        background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);text-align:left;transition:.14s}
+        background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);text-align:left;transition:border-color .14s,color .14s,background-color .14s,opacity .14s,filter .14s}
       .ivrs .target:hover{border-color:var(--accent-line)}
       .ivrs .target.on{border-color:var(--accent);background:var(--accent-soft)}
       .ivrs .av{width:31px;height:31px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:12px;font-weight:730;color:#fff}
@@ -2057,7 +2097,7 @@ function StudioStyles() {
       .ivrs .target .nm span{display:block;font-size:11.5px;color:var(--faint)}
       .ivrs .digitgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
       .ivrs .digitbtn{aspect-ratio:1;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);
-        font:inherit;font-size:18px;font-weight:740;cursor:pointer;transition:.14s}
+        font:inherit;font-size:18px;font-weight:740;cursor:pointer;transition:border-color .14s,color .14s,background-color .14s,opacity .14s,filter .14s}
       .ivrs .digitbtn:hover{border-color:var(--accent);color:var(--accent)}
       .ivrs .readback{margin-top:14px;padding:13px 15px;border-radius:11px;border:1px dashed var(--accent-line);background:var(--accent-soft);font-size:14.5px;line-height:1.55}
       .ivrs .readback.idle{border-color:var(--line);background:var(--bg-soft);color:var(--dim)}
@@ -2070,7 +2110,7 @@ function StudioStyles() {
       .ivrs .reclist{display:flex;flex-direction:column;gap:8px;margin:10px 0 4px 70px;max-height:260px;overflow:auto}
       .ivrs .reclist.flat{margin:0;max-height:320px}
       .ivrs .recrow{display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;
-        background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);text-align:left;width:100%;transition:.14s}
+        background:var(--panel-2);cursor:pointer;font-family:inherit;color:var(--text);text-align:left;width:100%;transition:border-color .14s,color .14s,background-color .14s,opacity .14s,filter .14s}
       .ivrs .recrow:hover{border-color:var(--accent-line)}
       .ivrs .recrow.on{border-color:var(--accent)}
       .ivrs .recrow .p{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-size:11px}
