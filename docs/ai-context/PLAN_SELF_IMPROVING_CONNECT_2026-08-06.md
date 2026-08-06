@@ -307,3 +307,73 @@ Once Phase 2's pattern exists, repeat it where the data is already sitting there
 - Not automatic in the "nobody watches it" sense. It is automatic in the
   "it proposes and improves continuously, and Izzy says yes" sense — which is
   what was actually asked for.
+
+---
+
+## 7. Permission-grant-by-chat — SPEC for the two remaining halves
+
+The agent half is built and pushed (`apps/agent/src/tools/permissionGrant.ts`,
+11 tests). It writes a DRAFT `AgentAction` and grants nothing. **Not deployed**
+— without the two halves below an owner is told "confirm with your password"
+and has nowhere to do it.
+
+### How permissions actually work (traced 2026-08-06 — do not re-derive)
+
+- A permission is a `PortalPermissionKey` string living in
+  `CustomRole.permissions` (a JSON array), scoped `@@unique([tenantId, name])`.
+- A user receives them via a `UserCustomRole` assignment.
+- Resolver: `hasEffectivePortalPermission` (via `userHasActionPermission`
+  in `apps/api/src/permissionGates.ts`).
+- ⛔ **The authority rule already exists** — `getGrantablePermissions(actorRole,
+  actorUserId, actorTenantId)` in `apps/api/src/customRoleRoutes.ts`:
+  SUPER_ADMIN gets everything; TENANT_ADMIN gets *their own effective
+  permissions minus `PROTECTED_PLATFORM_ADMIN_PERMISSIONS`*. **Reuse it. Do not
+  write a second authority rule.**
+- Role gate: `isTenantAdminOrAbove(actor.role)`. Actor: `getUser(req)`.
+- Password check: `bcrypt.compare(password, user.passwordHash)` — the pattern
+  already at `apps/api/src/server.ts:5541` (the login path). Reuse it.
+
+### Half 1 — the API apply endpoint
+
+Write it as its own module (`agentGrantRoutes.ts`) registered like
+`registerCustomRoleRoutes`, NOT inline in the 20k-line server.ts.
+
+`POST /admin/agent-grants/:actionId/apply` with `{ password }`, in this order —
+each step is a hard stop:
+
+1. `getUser(req)`; `isTenantAdminOrAbove(actor.role)` else 403.
+2. Load the `AgentAction`. Require `capabilityId === "action.grant_permission"`,
+   `status === "DRAFT"`, `approvalConsumedAt === null`, and
+   `action.tenantId === actor.tenantId` (SUPER_ADMIN may cross only via the
+   existing `resolveTargetTenantId` helper).
+3. Recompute `permissionParamsHash(tenantId, targetUserId, permission)` from
+   the STORED params and require it to equal `action.paramsHash`. This is what
+   stops an approval for one grant applying a different one.
+4. **Independently re-check authority**: the permission must be in
+   `getGrantablePermissions(...)` for THIS actor. The agent's say-so is never
+   sufficient — a prompt-injected agent must not be able to grant anything.
+5. Re-check the deny-list (`NEVER_GRANTABLE_BY_CHAT`) server-side too.
+6. Verify the password against **the actor's own** `passwordHash`. Rate-limit
+   by actor id (reuse `checkBillingRateLimit`) and audit failures — this is a
+   password oracle otherwise.
+7. Apply: upsert a per-tenant `CustomRole` named `Assistant grants — <email>`,
+   add the permission to its `permissions` array (idempotent), and ensure the
+   `UserCustomRole` assignment exists. Keeps every chat-granted permission in
+   one visible, revocable place instead of scattering them.
+8. Mark `status = "EXECUTED"`, `approvedBy = actor.sub`, `executedAt = now()`,
+   `approvalConsumedAt = now()` — single use, in the same transaction as (7).
+
+### Half 2 — the portal dialog
+
+Sees a prepared action (id + summary returned by the agent), shows the summary
+verbatim and a password field, POSTs to the endpoint, reports the result back
+into the chat. ⛔ The password goes to the API only — never to `/agent-api/*`.
+
+### Stress cases that must be proven before this is called done
+
+Replay a consumed approval · a second apply racing the first (both must not
+grant twice) · tampered `params` vs stored `paramsHash` · an actor granting a
+permission they don't hold · a TENANT_ADMIN reaching for a protected
+platform-admin key · a cross-tenant `actionId` · wrong password (and repeated
+wrong passwords → rate-limited) · a DRAFT whose target user was deleted or
+moved tenant between prepare and apply.
