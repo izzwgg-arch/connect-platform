@@ -1,5 +1,67 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — IVR Studio: forwards, direct dial, audible prompts (2026-08-06) — READ FIRST for the Studio, prompt refs, or any PBX dialplan patch
+
+All DEPLOYED and container-verified on `feat/ivr-migration-takeover`
+(tip `ae2ba8e3`). Full detail in the memory files named below.
+
+- **A menu key can ring an outside phone number.** Built from Izzy's recorded
+  panel session: a Custom Destination holds the number, a Custom Application on
+  a reserved **2000–2099** number answers and hands the call to it; the key
+  stores `destinationType:"custom"` → `T<t>_app-custom-application,<ext>,1`
+  (a plain Goto — NOT `cos-all`, which is typed "extension" and drags the call
+  through the wake dialer). ⛔ **`cid_name`/`cid_number` stay EMPTY forever** so
+  the outbound route's caller ID is used — customers must never set their own.
+  ⛔ **This is the ONE place Connect calls Apply Changes itself** (Izzy's
+  instruction; it was in his recording). Without it the rows exist, the
+  extension is in no dialplan, and callers get a BUSY SIGNAL — which is exactly
+  what happened live. Every other panel write still leaves the click to Izzy.
+- **Direct dial + spoken prompts fixed ON THE PBX** (`extensions__60_custom.conf`,
+  backups `.bak.dd3.*` / `.bak.langdir.*`). `[connect-menu]` had NO `_XXX`
+  patterns, so pressing 1 fired option 1 instantly and 101 was impossible; and
+  every prompt was probed at `sounds/<ref>` when Asterisk's built-ins live at
+  `sounds/**en**/<ref>` — so "that option is invalid" and the timeout message
+  were silently skipped for years. Default invalid prompt is now
+  `option-is-invalid`. ⛔ **Never invent syntax inside those guards** — an
+  attempt using `CUT()` made Asterisk reject the file and SILENTLY keep the old
+  dialplan (no error logged for that file). Mirror the existing proven line
+  shape. The `same =>` indent there is **seven** spaces; assert every
+  string replacement.
+- ⛔ **The prompt REF is canonical, never the stored filename.** A "fix" that
+  rewrote refs to match files (`custom/Home_main` → `custom/home_main`) made the
+  catalog check fail and **blocked publishing entirely**. Publish now pushes the
+  audio to the PBX under the name the ref asks for. See
+  [[ivr-menu-prompts-and-directdial-broken]].
+- **Studio UX rules** (Izzy, sharply): a key choice is **never hidden for being
+  empty** — picking one you don't have must CREATE it (team → MakeTeam,
+  recording → upload/AI, number → add). Only "A person" stays greyed.
+- **Half-migrated numbers are flagged**: `pbxHandBack`/`findPbxHandBacks` in
+  `@connect/shared` mark keys that hand control back to a PBX IVR/time
+  condition, on the map and before Publish. Rule = who DECIDES, not who answers.
+- **Deploy traps that cost hours tonight:** ⛔ enqueue the **branch TIP**, not
+  your own commit — several sessions push minutes apart and pinning your hash
+  silently ROLLS BACK newer work; a running job can't be cancelled. ⛔ The
+  queue does NOT protect against the heavy-build lock — jobs fail in the build
+  stage with `HEAVY JOB ALREADY RUNNING` and look like broken code (happened 5×).
+  ⛔ Never wait with `pgrep -f deploy-direct` in an ssh one-liner — it matches
+  its own command line and hangs forever. Poll `/ops/deploy/jobs/<id>`.
+
+**OPEN, not started:**
+1. **inii mini's only extension is literally numbered `1`** ("baila", PBX tenant
+   105) — that is why Connect shows no phones and "A person" is greyed. Izzy
+   asked for: change it to **101** on the PBX, and gate the onboarding wizard so
+   a single-digit extension is auto-promoted (1 → 101) and cannot be submitted
+   below three digits.
+2. **`invalid_prompt_ref` red banner** when making a recording on inii mini —
+   UNDIAGNOSED. Its five prompt refs are all valid; the server sends a `detail`
+   the portal drops (the `.body` not `.payload` bug again). Three emit sites:
+   `server.ts` ~21008, ~21121, ~21379.
+3. **A plus center key 2** still hands back to the PBX time condition. Both PBX
+   menus behind it are ALREADY migrated into Connect (greeting ids 99/11 match)
+   — only the key's pointer remains, and Izzy must choose: point at "A plus
+   main" (loses the hours switch) or build an hours-aware key kind. See
+   [[aplus-key2-handback-last-step]].
+
 ## ⛔ AGENT HANDOFF — the agent got TOOLS; audio adaptation is measured but not built (2026-08-06) — READ FIRST for apps/agent, the model router, call-quality data, or permission-granting
 
 Full handoff + spec: **`docs/ai-context/PLAN_SELF_IMPROVING_CONNECT_2026-08-06.md`**
