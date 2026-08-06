@@ -643,10 +643,26 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: "invalid_token" });
     if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
 
-    // validate extensions numeric + unique
+    // validate extensions numeric + long enough + unique.
+    //
+    // ⛔ Three digits is a HARD floor, not a style preference. VitalPBX accepts
+    // a one-digit extension and builds it happily, but every Connect directory
+    // read filters on `^\d{2,6}$` (isRealDirectoryExtensionNumber in server.ts),
+    // so the extension is created, billed, and INVISIBLE — no phones listed
+    // anywhere, and "a person" greyed out in the IVR Studio with nothing on
+    // screen to explain it. One customer signed up with their only extension
+    // numbered "1" and lived exactly that. The wizard promotes a single digit
+    // (1 → 101) before it gets here; this is the gate an older or scripted
+    // client can't walk past. Rejecting rather than rewriting is deliberate:
+    // silently renumbering someone's phone is not ours to do.
     const seen = new Set<string>();
     for (const e of body.extensions || []) {
       if (!/^[0-9]+$/.test(e.extNumber)) return reply.code(400).send({ error: `Extension number "${e.extNumber}" can only contain digits.` });
+      if (!/^[0-9]{3,6}$/.test(e.extNumber)) {
+        return reply.code(400).send({
+          error: `Extension number "${e.extNumber}" is too short — extension numbers need at least three digits, like 101.`,
+        });
+      }
       if (seen.has(e.extNumber)) return reply.code(400).send({ error: `Extension number ${e.extNumber} is used more than once — extension numbers must be unique.` });
       seen.add(e.extNumber);
     }

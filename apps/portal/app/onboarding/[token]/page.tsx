@@ -102,7 +102,19 @@ function IconMoon() { return (<svg width="14" height="14" viewBox="0 0 24 24" fi
 // ── Validation helpers ───────────────────────────────────────────────────────
 
 function isEmail(v: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()); }
-function isNumericExt(v: string) { return /^\d+$/.test(v.trim()); }
+/** Phone systems number people 101, 102, 103 — three digits up. A shorter one
+ *  is accepted by VitalPBX and then vanishes from Connect: every directory
+ *  read filters on `^\d{2,6}$`, so the extension exists, is billed, and is
+ *  invisible. That is exactly what happened to one customer, whose only
+ *  extension was literally numbered "1" — no phones showed anywhere and
+ *  "a person" was greyed out in the IVR Studio. */
+function isNumericExt(v: string) { return /^\d{3,6}$/.test(v.trim()); }
+/** A single digit is what someone types when they think of it as "phone 1".
+ *  Turn it into the real thing rather than rejecting them — 1 becomes 101. */
+function promoteExtNumber(v: string): string {
+  const d = v.trim();
+  return /^\d$/.test(d) ? `10${d}` : d;
+}
 
 function validateStep(step: number, f: FormData): string | null {
   if (step === 0) {
@@ -136,7 +148,9 @@ function validateStep(step: number, f: FormData): string | null {
   if (step === 3) {
     for (const ext of f.extensions) {
       if (ext.displayName.trim().length < 1) return "Each extension needs a name.";
-      if (!isNumericExt(ext.extNumber)) return `Extension number "${ext.extNumber || "(empty)"}" must be numeric.`;
+      if (!isNumericExt(ext.extNumber)) {
+        return `Extension number "${ext.extNumber || "(empty)"}" won't work — use at least three digits, like 101.`;
+      }
       if (ext.cellMode && ext.cellNumber.replace(/\D/g, "").replace(/^1/, "").length !== 10) {
         return `Enter a full cell phone number for ${ext.displayName.trim() || "extension " + (ext.extNumber || "?")}.`;
       }
@@ -998,7 +1012,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                         />
                       </td>
                       <td data-label="Name"><input className="ob-input" placeholder="Jane Smith" value={ext.displayName} onChange={(e) => updateExt(i, { displayName: e.target.value })} /></td>
-                      <td data-label="Ext #"><input className="ob-input" placeholder="101" value={ext.extNumber} onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })} style={{ textAlign: "center" }} /></td>
+                      {/* Promote on blur, not on change: rewriting mid-typing
+                          would turn "1" into "101" before they type the 0. */}
+                      <td data-label="Ext #"><input className="ob-input" placeholder="101" value={ext.extNumber}
+                        onChange={(e) => updateExt(i, { extNumber: e.target.value.replace(/\D/g, "") })}
+                        onBlur={() => { const p = promoteExtNumber(ext.extNumber); if (p !== ext.extNumber) updateExt(i, { extNumber: p }); }}
+                        style={{ textAlign: "center" }} /></td>
                       <td data-label="Email"><input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email} onChange={(e) => updateExt(i, { email: e.target.value })} /></td>
                       <td className="ob-ext-remove-td">{form.extensions.length > 1 && (<button className="ob-ext-remove" onClick={() => removeExt(i)} title="Remove">×</button>)}</td>
                     </tr>
