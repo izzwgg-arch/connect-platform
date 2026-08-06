@@ -581,7 +581,9 @@ async function submitPortIn(creds: VmsCreds, row: any, live: boolean): Promise<v
     await logEvent(submissionId, `Port-in for ${did} already on file (id ${portId || "?"}) — not filing a second one.`);
   } else {
     const submit = await vms(creds, "addLNPPort", buildLnpPortParams(row, did));
-    portId = String(submit?.portid ?? submit?.port_id ?? "");
+    // The live API returns the id under "port" (proven on the first real
+    // filing, order 217760); the portid/port_id names never showed up.
+    portId = String(submit?.portid ?? submit?.port_id ?? submit?.port ?? "");
     await mergeProvisioningState(row, {
       portFiled: true,
       portId,
