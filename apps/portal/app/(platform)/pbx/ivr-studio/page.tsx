@@ -11,10 +11,12 @@
 //     another menu opens that menu underneath it as an indented branch. Nobody
 //     has to hold the shape of the thing in their head.
 //
-//  2. FOUR CHOICES, NOT NINE. Assigning a key offers "a person / a team /
-//     voicemail / another menu / hang up" instead of nine dialplan concepts —
-//     and a choice the customer has no data for is not offered at all (14 of
-//     17 tenants have no queue, so "a team" hides itself for them).
+//  2. PLAIN CHOICES, NOT NINE DIALPLAN CONCEPTS. Assigning a key offers "a
+//     person / a team / a phone number / voicemail / a recording / another
+//     menu / hang up". Every one is ALWAYS shown: a choice the customer can't
+//     use yet is greyed with the reason, never hidden. Hiding them made a
+//     brand-new tenant's screen look broken — three choices simply absent,
+//     with nothing to say why.
 //
 //  3. EVERY CHOICE READS ITSELF BACK in the words a person would use, so a
 //     mistake is obvious before Publish.
@@ -1440,33 +1442,36 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   }, [adoptPromptRef, onAdopted]);
 
   /**
-   * Three states per choice, and they must stay distinct:
-   *   offered   — this customer has some, pick one
-   *   hidden    — this customer genuinely has none (checked and empty)
-   *   blocked   — we couldn't find out, so say so
+   * EVERY choice is always shown. Two states only:
+   *   offered   — pick a target
+   *   blocked   — shown, greyed, with the reason why it can't be used yet
    *
-   * Collapsing "blocked" into "hidden" is how a customer with six ring groups
-   * ends up seeing no "A team" option and concluding the feature doesn't
-   * exist. /voice/pbx/ring-groups returns 200 with an empty list and a
-   * skipReason when it can't read the PBX, so this is not hypothetical.
+   * It used to have a third state, hidden, for "this customer genuinely has
+   * none". That was wrong and it looked like a bug: a brand-new tenant with no
+   * extensions and no teams yet saw THREE of the seven choices simply vanish —
+   * "A person", "Voicemail" and "A team" — with nothing to explain where they
+   * went. A menu builder that hides the most ordinary choice on a phone system
+   * reads as broken, not as helpful. Say why instead of disappearing.
    */
   const shown = OFFERABLE_KINDS.map((k) => {
     if (k === "person" || k === "voicemail") {
       if (!peopleLoaded) return { k, blocked: "Couldn't load this customer's extensions — refresh and try again." };
-      return directory.people.length > 0 ? { k, blocked: null } : null;
+      if (directory.people.length === 0) {
+        return { k, blocked: "No phones on this account yet. Add extensions to the phone system, then come back." };
+      }
+      return { k, blocked: null };
     }
     if (k === "team") {
       if (!teamsLoaded) return { k, blocked: "Couldn't load this customer's teams — check they're linked to the phone system." };
-      return directory.teams.length > 0 ? { k, blocked: null } : null;
-    }
-    if (k === "recording" || k === "forward") {
-      // Always offered — unlike a team, these can be made right here (upload or
-      // generate a recording; type a phone number), so having none is a
-      // starting point, not a dead end.
+      if (directory.teams.length === 0) {
+        return { k, blocked: "No teams yet — make one with “New team” on the right, then pick it here." };
+      }
       return { k, blocked: null };
     }
-    return { k, blocked: null }; // another menu + hang up always possible
-  }).filter(Boolean) as Array<{ k: MenuChoiceKind; blocked: string | null }>;
+    // Recordings and phone numbers can be made right here, so having none is a
+    // starting point rather than a dead end.
+    return { k, blocked: null };
+  }) as Array<{ k: MenuChoiceKind; blocked: string | null }>;
 
   const blockedReason = shown.find((s) => s.k === kind)?.blocked ?? null;
 
@@ -1638,7 +1643,7 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
                 ? <>When a caller presses <span className="k">{digitGlyph(digit)}</span> we play <b>{preview?.label}</b>, {preview ? describeAfterRecording(preview, directory) : ""}.</>
                 : <>When a caller presses <span className="k">{digitGlyph(digit)}</span> they&apos;ll reach <b>{preview?.label}</b>.</>
             : blockedReason
-              ? <>Can&apos;t set key {digitGlyph(digit)} to this until the list above loads.</>
+              ? <>{blockedReason}</>
               : kind === "recording" && target && afterKind === "voicemail" && !afterExt
                 ? <>Choose whose voicemail the caller lands in after the recording.</>
                 : <>Choose where key {digitGlyph(digit)} should send the caller.</>}
