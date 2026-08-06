@@ -112,6 +112,7 @@ const UI_PHRASES = [
   "A person", "A team", "Voicemail", "A recording", "Another menu", "Hang up",
   "Which person?", "Whose voicemail?", "Which team?", "Which menu?", "Which recording?",
   "After it plays, what happens?", "Back to this menu", "A voicemail",
+  "Or add a new one:", "Upload a recording", "Uploading…", "Make one with AI",
   "Plays a recording — directions, hours, an announcement — then continues.",
   "Remove this key", "Cancel", "Save name", "Loading…",
   "Your phone number", "Your recording", "No recording set — callers hear a stand-in message",
@@ -186,6 +187,12 @@ export default function IvrStudioPage() {
   const [publishWarnings, setPublishWarnings] = useState<string[] | null>(null);
   /** Generate a greeting instead of recording one — see MakeRecording.tsx. */
   const [makeRecOpen, setMakeRecOpen] = useState(false);
+  /** Set when the recording modal/upload was opened FROM the key editor for a
+   *  digit: the result becomes that key's recording, not the menu greeting. */
+  const [makeRecForKey, setMakeRecForKey] = useState<string | null>(null);
+  /** A recording just made/uploaded for a key, waiting for that key's editor
+   *  to select it. Cleared by the editor once adopted. */
+  const [adoptRecording, setAdoptRecording] = useState<{ digit: string; promptRef: string } | null>(null);
   /** Create a ring group or a waiting line - see MakeTeam.tsx. */
   const [makeTeamOpen, setMakeTeamOpen] = useState(false);
   /** Which number rings this menu + when it switches — see NumberStep.tsx. */
@@ -395,6 +402,49 @@ export default function IvrStudioPage() {
       setDirty(true); setEditingDigit(null);
       flash(`Key ${digitGlyph(digit)} now goes to ${dest.label}`);
     } catch (e: any) { setError(e?.message || "Couldn't save that key"); } finally { setSaving(false); }
+  }
+
+  /**
+   * Upload a file straight from the key editor: catalog row first, then the
+   * audio bytes (the server converts any common format to phone-quality WAV
+   * and installs it on the phone system). Returns the new promptRef, or null
+   * after surfacing the error — the editor stays open either way.
+   */
+  async function uploadRecordingForKey(digit: string, file: File): Promise<string | null> {
+    try {
+      const base = file.name.replace(/\.[^.]+$/, "");
+      const safe = base.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "recording";
+      const suffix = Math.random().toString(16).slice(2, 8);
+      const created = await apiPost<{ prompt: PromptRow }>(`/voice/ivr/prompts${qs}`, {
+        tenantId,
+        promptRef: `custom/${safe}_${suffix}`,
+        displayName: base.trim() || "Recording",
+        category: "general",
+      });
+      const row = created.prompt;
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const token = (typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || "";
+      const r = await fetch(`${getPortalApiBaseUrl()}/voice/ivr/prompts/${encodeURIComponent(row.id)}/audio`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({} as any));
+        throw new Error(body?.message || body?.error || `Upload failed (${r.status})`);
+      }
+      setPrompts((ps) => [
+        ...ps.filter((p) => p.id !== row.id),
+        { id: row.id, promptRef: row.promptRef, displayName: row.displayName, category: row.category, hasAudio: true },
+      ]);
+      setAdoptRecording({ digit, promptRef: row.promptRef });
+      flash(`“${row.displayName}” uploaded.`);
+      return row.promptRef;
+    } catch (e: any) {
+      setError(e?.message || "Couldn't upload that recording.");
+      return null;
+    }
   }
 
   async function clearKey(digit: string) {
@@ -907,10 +957,14 @@ export default function IvrStudioPage() {
                             teamsLoaded={teamsLoaded}
                             pendingTeamNumbers={pendingTeamNumbers}
                             disabled={saving}
-                            onSave={(kind, target) => saveKey(digit, kind, target)}
+                            onSave={(kind, target, after) => saveKey(digit, kind, target, after)}
                             onClear={() => clearKey(digit)}
                             onClose={() => setEditingDigit(null)}
                             onCreateMenu={() => setNamingFor({ mode: "create", forDigit: digit })}
+                            onMakeRecording={() => { setMakeRecForKey(digit); setMakeRecOpen(true); }}
+                            onUploadRecording={(file) => uploadRecordingForKey(digit, file)}
+                            adoptPromptRef={adoptRecording?.digit === digit ? adoptRecording.promptRef : null}
+                            onAdopted={() => setAdoptRecording(null)}
                           />
                         )}
                       </div>
@@ -945,10 +999,14 @@ export default function IvrStudioPage() {
                           teamsLoaded={teamsLoaded}
                           pendingTeamNumbers={pendingTeamNumbers}
                           disabled={saving}
-                          onSave={(kind, target) => saveKey(editingDigit, kind, target)}
+                          onSave={(kind, target, after) => saveKey(editingDigit, kind, target, after)}
                           onClear={() => setEditingDigit(null)}
                           onClose={() => setEditingDigit(null)}
                           onCreateMenu={() => setNamingFor({ mode: "create", forDigit: editingDigit })}
+                          onMakeRecording={() => { setMakeRecForKey(editingDigit); setMakeRecOpen(true); }}
+                          onUploadRecording={(file) => uploadRecordingForKey(editingDigit, file)}
+                          adoptPromptRef={adoptRecording?.digit === editingDigit ? adoptRecording.promptRef : null}
+                          onAdopted={() => setAdoptRecording(null)}
                         />
                       )}
                     </>
@@ -1108,19 +1166,29 @@ export default function IvrStudioPage() {
           apiBase={getPortalApiBaseUrl()}
           authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
           onCreated={async (prompt) => {
-            // Point the menu at what was just made — nobody generates a
-            // greeting and then wants to go and select it separately.
-            await patchProfile({ pbxPromptRef: prompt.promptRef });
             // Splice the one new row in rather than reloading everything —
             // Play and the picker need it now, and nothing else changed.
             setPrompts((ps) => [
               ...ps.filter((p) => p.id !== prompt.id),
               { id: prompt.id, promptRef: prompt.promptRef, displayName: prompt.displayName, category: prompt.category, hasAudio: true },
             ]);
+            if (makeRecForKey) {
+              // Opened from a key editor: the recording belongs to that key,
+              // not to the menu greeting. The editor adopts it and stays open
+              // so "afterwards" can still be chosen before saving.
+              setAdoptRecording({ digit: makeRecForKey, promptRef: prompt.promptRef });
+              setMakeRecForKey(null);
+              setMakeRecOpen(false);
+              flash(`“${prompt.displayName}” is ready — save the key when you're done.`);
+              return;
+            }
+            // Point the menu at what was just made — nobody generates a
+            // greeting and then wants to go and select it separately.
+            await patchProfile({ pbxPromptRef: prompt.promptRef });
             setMakeRecOpen(false);
             flash(`“${prompt.displayName}” is now your greeting.`);
           }}
-          onClose={() => setMakeRecOpen(false)}
+          onClose={() => { setMakeRecOpen(false); setMakeRecForKey(null); }}
         />
       )}
 
@@ -1167,7 +1235,7 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
@@ -1180,6 +1248,13 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   onClear: () => void;
   onClose: () => void;
   onCreateMenu: () => void;
+  /** Open the ElevenLabs modal for THIS key; the result comes back via adoptPromptRef. */
+  onMakeRecording?: () => void;
+  /** Upload a file for THIS key; resolves with the new promptRef or null on failure. */
+  onUploadRecording?: (file: File) => Promise<string | null>;
+  /** A recording just made/uploaded for this key — select it. */
+  adoptPromptRef?: string | null;
+  onAdopted?: () => void;
 }) {
   const { t } = useUiLanguage();
   const read = current ? readDestination(current, directory) : null;
@@ -1198,6 +1273,18 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
   })();
   const [afterKind, setAfterKind] = useState<"replay" | "voicemail" | "hangup">(savedAfter.kind);
   const [afterExt, setAfterExt] = useState<string>(savedAfter.ext);
+  const [uploading, setUploading] = useState(false);
+
+  // A recording made or uploaded for this key while the editor was open:
+  // select it, but leave "afterwards" and Save to the person — the recording
+  // existing is not the same as the key being wired.
+  useEffect(() => {
+    if (adoptPromptRef) {
+      setKind("recording");
+      setTarget(adoptPromptRef);
+      onAdopted?.();
+    }
+  }, [adoptPromptRef, onAdopted]);
 
   /**
    * Three states per choice, and they must stay distinct:
@@ -1220,9 +1307,10 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
       return directory.teams.length > 0 ? { k, blocked: null } : null;
     }
     if (k === "recording") {
-      // No recordings yet = genuinely nothing to play; the choice hides
-      // itself the same way "a team" does for a customer with no teams.
-      return (directory.recordings ?? []).length > 0 ? { k, blocked: null } : null;
+      // Always offered — unlike a team, a recording can be made right here
+      // (upload a file or generate one), so an empty library is a starting
+      // point, not a dead end.
+      return { k, blocked: null };
     }
     return { k, blocked: null }; // another menu + hang up always possible
   }).filter(Boolean) as Array<{ k: MenuChoiceKind; blocked: string | null }>;
@@ -1290,6 +1378,33 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, pendi
             )}
             {kind === "menu" && (
               <button className="btn sm" style={{ marginTop: 10 }} onClick={onCreateMenu}>+ Make a new menu for this key</button>
+            )}
+
+            {kind === "recording" && (
+              <div className="recmakerow">
+                <span className="dimtxt">{t("Or add a new one:")}</span>
+                {onUploadRecording && (
+                  <label className={"btn sm" + (uploading || disabled ? " disabled" : "")}>
+                    {uploading ? t("Uploading…") : t("Upload a recording")}
+                    <input
+                      type="file"
+                      accept="audio/*,.wav,.mp3,.m4a,.ogg"
+                      style={{ display: "none" }}
+                      disabled={uploading || disabled}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        setUploading(true);
+                        try { await onUploadRecording(file); } finally { setUploading(false); }
+                      }}
+                    />
+                  </label>
+                )}
+                {onMakeRecording && (
+                  <button className="btn sm" disabled={disabled} onClick={onMakeRecording}>{t("Make one with AI")}</button>
+                )}
+              </div>
             )}
 
             {kind === "recording" && (
@@ -1581,6 +1696,9 @@ function StudioStyles() {
       .ivrs .tag.menu{color:var(--menu);border-color:color-mix(in srgb,var(--menu) 42%,transparent);background:color-mix(in srgb,var(--menu) 13%,transparent)}
       .ivrs .tag.hangup{color:var(--stop);border-color:color-mix(in srgb,var(--stop) 40%,transparent);background:color-mix(in srgb,var(--stop) 12%,transparent)}
       .ivrs .tag.recording{color:var(--vm);border-color:color-mix(in srgb,var(--vm) 40%,transparent);background:color-mix(in srgb,var(--vm) 12%,transparent)}
+      .ivrs .recmakerow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:10px}
+      .ivrs .recmakerow .btn{cursor:pointer}
+      .ivrs .recmakerow .btn.disabled{opacity:.5;pointer-events:none}
       .ivrs .afterbox{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
       .ivrs .afterrow{display:flex;gap:8px;flex-wrap:wrap}
       .ivrs .afterbtn{font:inherit;font-size:13px;font-weight:620;padding:8px 14px;border-radius:999px;cursor:pointer;
