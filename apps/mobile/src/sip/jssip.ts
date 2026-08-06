@@ -3586,8 +3586,12 @@ export class JsSipClient implements SipClient {
           const stats = await pc.getStats();
           const localCandidates = new Map<string, string>();
           const codecIds = new Map<string, string>();
+          const candidateNetworks = new Map<string, string>();
           stats.forEach((r: any) => {
-            if (r.type === "local-candidate") localCandidates.set(r.id, r.candidateType || "");
+            if (r.type === "local-candidate") {
+              localCandidates.set(r.id, r.candidateType || "");
+              if (typeof r.networkType === "string" && r.networkType) candidateNetworks.set(r.id, r.networkType);
+            }
             if (r.type === "codec" && typeof r.mimeType === "string") {
               codecIds.set(r.id, r.mimeType.replace(/^audio\//, ""));
             }
@@ -3608,6 +3612,8 @@ export class JsSipClient implements SipClient {
               if (typeof r.currentRoundTripTime === "number") snapshot.rttMs = Math.round(r.currentRoundTripTime * 1000);
               const ct = localCandidates.get(r.localCandidateId);
               if (ct) { snapshot.candidateType = ct; snapshot.isUsingRelay = ct === "relay"; }
+              const nt = candidateNetworks.get(r.localCandidateId);
+              if (nt) snapshot.networkType = nt;
             }
           });
           // Cache the last snapshot that actually carried RTP stats. The final
@@ -3644,15 +3650,27 @@ export class JsSipClient implements SipClient {
     // Collect device/network metadata for RCA
     let deviceModel: string | null = null;
     let networkType: string | null = null;
+    // Default to ANDROID so a require() failure keeps the previous behaviour
+    // rather than mislabelling every report as iOS.
+    let platformLabel: "ANDROID" | "IOS" = "ANDROID";
     try {
       const { Platform } = require("react-native");
+      platformLabel = Platform.OS === "ios" ? "IOS" : "ANDROID";
       deviceModel = Platform.OS === "android" ? `Android ${Platform.Version}` : `iOS ${Platform.Version}`;
     } catch { /* ignore */ }
-    // Network type via @react-native-community/netinfo omitted —
-    // package is not in the bundle; omitting prevents require(undefined) crash.
+    // Network type comes from the WebRTC ICE stats below, NOT from
+    // @react-native-community/netinfo: that package is present in
+    // node_modules but declared in NO package.json and absent from the
+    // lockfile, so importing it works locally and breaks any clean build
+    // (same failure mode as the undici incident). The nominated local
+    // candidate already carries networkType — no dependency needed.
 
     const report: Record<string, unknown> = {
-      platform: "ANDROID",
+      // ⛔ Was hardcoded "ANDROID". This file is shared React Native code, so
+      // every iOS call was filed as Android — which is why CallQualityHourly
+      // showed zero iOS rows while iOS calls were plainly happening
+      // (measured 2026-08-06: 97 iOS app calls, 0 iOS quality rows).
+      platform: platformLabel,
       durationMs,
       // Server zod is .optional() (NOT .nullable()) for direction — a null
       // would 400 the whole report. Omit when unknown.
@@ -3671,9 +3689,18 @@ export class JsSipClient implements SipClient {
         const localCandidates = new Map<string, string>();
         let audioCodec: string | null = null;
         const codecIds = new Map<string, string>();
+        // libwebrtc tags each local candidate with the interface it came from
+        // ("wifi" | "cellular" | "ethernet" | "vpn" | "unknown"). This is the
+        // dependency-free source for networkType — the whole point of the
+        // per-customer profile is splitting wifi from cellular, and before
+        // this every bucket was filed as "unknown".
+        const candidateNetworks = new Map<string, string>();
         stats.forEach((r: any) => {
           if (r.type === "local-candidate" && typeof r.candidateType === "string") {
             localCandidates.set(r.id, r.candidateType);
+            if (typeof r.networkType === "string" && r.networkType) {
+              candidateNetworks.set(r.id, r.networkType);
+            }
           }
           if (r.type === "codec" && typeof r.mimeType === "string") {
             codecIds.set(r.id, r.mimeType.replace(/^audio\//, ""));
@@ -3708,6 +3735,10 @@ export class JsSipClient implements SipClient {
               report.candidateType = ct;
               report.isUsingRelay = ct === "relay";
             }
+            // Take the network from the candidate that actually carried the
+            // call, not from whatever interface happened to exist.
+            const nt = candidateNetworks.get(r.localCandidateId);
+            if (nt) report.networkType = nt;
           }
         });
         if (audioCodec) report.audioCodec = audioCodec;
@@ -3723,7 +3754,7 @@ export class JsSipClient implements SipClient {
       const cached = this.lastLivePingStats;
       for (const key of [
         "rttMs", "jitterMs", "packetsLost", "packetsReceived",
-        "audioCodec", "candidateType", "isUsingRelay", "audioRoute",
+        "audioCodec", "candidateType", "isUsingRelay", "audioRoute", "networkType",
       ] as const) {
         if (cached[key] !== undefined && report[key] === undefined) report[key] = cached[key];
       }
