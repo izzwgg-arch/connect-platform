@@ -19935,6 +19935,7 @@ const IVR_OPTION_DIGITS = [
 type IvrOptionDigit = (typeof IVR_OPTION_DIGITS)[number];
 
 import { computeCurrentMode, ivrModeToProfileType, ivrFindActiveProfile } from "./ivrModeSelection";
+import { rewriteMenuNavRef } from "./ivrMenuNav";
 
 /** Shape of the data buildIvrKeys needs from the active profile's options. */
 type IvrActiveOption = {
@@ -19995,6 +19996,7 @@ function buildIvrKeys(
     afterHoursProfileId?: string | null;
     holidayProfileId?: string | null;
   } | null = null,
+  menuOptionsByProfile: Record<string, IvrActiveOption[]> = {},
 ): Array<{ family: string; key: string; value: string }> {
   const fam = ivrFamily(slug);
   const byType = new Map(profiles.map((p) => [p.type, p]));
@@ -20041,9 +20043,9 @@ function buildIvrKeys(
     // read these keys will simply ignore them.
     { family: fam, key: "direct_dial",       value: (active?.directDialEnabled ?? false) ? "1" : "0" },
     { family: fam, key: "dest_invalid_type", value: (active?.invalidDestinationType ?? "").trim() },
-    { family: fam, key: "dest_invalid",      value: normalizeTenantDestinationRef(active?.invalidDestinationType, active?.invalidDestinationRef, tenantDialContext) },
+    { family: fam, key: "dest_invalid",      value: rewriteMenuNavRef(active?.invalidDestinationType, normalizeTenantDestinationRef(active?.invalidDestinationType, active?.invalidDestinationRef, tenantDialContext), { inMenuFamily: false }) },
     { family: fam, key: "dest_timeout_type", value: (active?.timeoutDestinationType ?? "").trim() },
-    { family: fam, key: "dest_timeout",      value: normalizeTenantDestinationRef(active?.timeoutDestinationType, active?.timeoutDestinationRef, tenantDialContext) },
+    { family: fam, key: "dest_timeout",      value: rewriteMenuNavRef(active?.timeoutDestinationType, normalizeTenantDestinationRef(active?.timeoutDestinationType, active?.timeoutDestinationRef, tenantDialContext), { inMenuFamily: false }) },
   ];
 
   // Per-digit option routing. Disabled options are treated as if missing so
@@ -20057,7 +20059,7 @@ function buildIvrKeys(
     keys.push({
       family: fam,
       key: `opt_${digit}/dest`,
-      value: normalizeTenantDestinationRef(opt?.destinationType, opt?.destinationRef, tenantDialContext),
+      value: rewriteMenuNavRef(opt?.destinationType, normalizeTenantDestinationRef(opt?.destinationType, opt?.destinationRef, tenantDialContext), { inMenuFamily: false }),
     });
     keys.push({ family: fam, key: `opt_${digit}/type`, value: opt?.destinationType ?? "" });
     // Recording keys: what [connect-play-prompt] plays for this digit, and
@@ -20067,8 +20069,44 @@ function buildIvrKeys(
     keys.push({
       family: fam,
       key: `opt_${digit}/after`,
-      value: normalizeTenantDestinationRef(opt?.afterDestinationType, opt?.afterDestinationRef, tenantDialContext),
+      value: rewriteMenuNavRef(opt?.afterDestinationType, normalizeTenantDestinationRef(opt?.afterDestinationType, opt?.afterDestinationRef, tenantDialContext), { inMenuFamily: false }),
     });
+  }
+
+  // ── Per-menu families: connect/t_<slug>/menu/<profileId>/* ────────────────
+  // The [connect-menu] submenu engine (scripts/pbx/patch-connect-menu.sh)
+  // reads these at call time. EVERY menu is published, not just the active
+  // one — "press N → another menu" must reach any menu regardless of which
+  // one currently answers the number. Same deterministic full-slate rule as
+  // the tenant-global keys: every slot written, stale values overwritten.
+  for (const p of profiles) {
+    if (!p.id) continue;
+    const menuFam = `${fam}/menu/${p.id}`;
+    keys.push(
+      { family: menuFam, key: "prompt",          value: p.pbxPromptRef ?? "" },
+      { family: menuFam, key: "prompt_invalid",  value: (p.pbxInvalidPromptRef && p.pbxInvalidPromptRef.trim()) || IVR_DEFAULT_PROMPT_INVALID },
+      { family: menuFam, key: "prompt_timeout",  value: (p.pbxTimeoutPromptRef && p.pbxTimeoutPromptRef.trim()) || IVR_DEFAULT_PROMPT_TIMEOUT },
+      { family: menuFam, key: "prompt_retry",    value: (p.pbxRetryPromptRef && p.pbxRetryPromptRef.trim()) || "" },
+      { family: menuFam, key: "timeout_seconds", value: String(p.timeoutSeconds ?? 7) },
+      { family: menuFam, key: "max_retries",     value: String(p.maxRetries ?? 3) },
+      { family: menuFam, key: "dest_invalid_type", value: (p.invalidDestinationType ?? "").trim() },
+      { family: menuFam, key: "dest_invalid",      value: rewriteMenuNavRef(p.invalidDestinationType, normalizeTenantDestinationRef(p.invalidDestinationType, p.invalidDestinationRef, tenantDialContext), { inMenuFamily: true }) },
+      { family: menuFam, key: "dest_timeout_type", value: (p.timeoutDestinationType ?? "").trim() },
+      { family: menuFam, key: "dest_timeout",      value: rewriteMenuNavRef(p.timeoutDestinationType, normalizeTenantDestinationRef(p.timeoutDestinationType, p.timeoutDestinationRef, tenantDialContext), { inMenuFamily: true }) },
+    );
+    const menuOptByDigit = new Map<string, IvrActiveOption>();
+    for (const opt of menuOptionsByProfile[p.id] ?? []) {
+      if (opt.enabled) menuOptByDigit.set(opt.optionDigit, opt);
+    }
+    for (const digit of IVR_OPTION_DIGITS) {
+      const opt = menuOptByDigit.get(digit);
+      keys.push(
+        { family: menuFam, key: `opt_${digit}/dest`, value: rewriteMenuNavRef(opt?.destinationType, normalizeTenantDestinationRef(opt?.destinationType, opt?.destinationRef, tenantDialContext), { inMenuFamily: true }) },
+        { family: menuFam, key: `opt_${digit}/type`, value: opt?.destinationType ?? "" },
+        { family: menuFam, key: `opt_${digit}/announce`, value: opt?.announcePromptRef ?? "" },
+        { family: menuFam, key: `opt_${digit}/after`, value: rewriteMenuNavRef(opt?.afterDestinationType, normalizeTenantDestinationRef(opt?.afterDestinationType, opt?.afterDestinationRef, tenantDialContext), { inMenuFamily: true }) },
+      );
+    }
   }
 
   return keys;
@@ -22648,9 +22686,14 @@ app.post("/voice/ivr/publish", async (req, reply) => {
       mode,
     });
   }
-  const activeOptions = activeProfile
-    ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } })
+  // ALL profiles' options load in one query: per-menu families publish every
+  // menu (submenu navigation), not just the active one.
+  const allOptions: any[] = (profiles as any[]).length
+    ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: { in: (profiles as any[]).map((p: any) => p.id) } } })
     : [];
+  const menuOptionsByProfile: Record<string, any[]> = {};
+  for (const opt of allOptions) (menuOptionsByProfile[opt.profileId] ??= []).push(opt);
+  const activeOptions = activeProfile ? (menuOptionsByProfile[activeProfile.id] ?? []) : [];
   const slug = await getIvrSlugForTenant(tenantId);
   const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({
     where: { tenantId },
@@ -22659,7 +22702,7 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   const tenantDialContext = tenantPbxLink?.pbxTenantId
     ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all`
     : null;
-  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule);
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
 
   // STRICT PRE-PUBLISH CHECK — every non-default prompt ref we're about to
   // write to AstDB must exist in this tenant's catalog. The save path
@@ -22695,7 +22738,9 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   }
   // Recording keys dead-air the same way a missing greeting does — the digit
   // plays nothing and bounces the caller back — so they get the same gate.
-  for (const opt of activeOptions as any[]) {
+  // ALL menus' recordings are checked (submenus publish too, not just the
+  // active menu).
+  for (const opt of allOptions as any[]) {
     if (opt.enabled && opt.announcePromptRef && !IVR_DEFAULT_PROMPT_REFS.has(opt.announcePromptRef)) {
       promptCandidates.push({ key: `opt_${opt.optionDigit}/announce`, ref: String(opt.announcePromptRef) });
     }
@@ -22770,11 +22815,16 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   if (!activeProfile && (profiles as any[]).length > 0) {
     return { ok: false, error: "no_active_menu_for_mode" };
   }
-  const activeOptions = activeProfile ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: activeProfile.id } }) : [];
+  const allOptions: any[] = (profiles as any[]).length
+    ? await (db as any).ivrOptionRoute.findMany({ where: { profileId: { in: (profiles as any[]).map((p: any) => p.id) } } })
+    : [];
+  const menuOptionsByProfile: Record<string, any[]> = {};
+  for (const opt of allOptions) (menuOptionsByProfile[opt.profileId] ??= []).push(opt);
+  const activeOptions = activeProfile ? (menuOptionsByProfile[activeProfile.id] ?? []) : [];
   const slug = await getIvrSlugForTenant(tenantId);
   const tenantPbxLink = await (db as any).tenantPbxLink.findUnique({ where: { tenantId }, select: { pbxTenantId: true } });
   const tenantDialContext = tenantPbxLink?.pbxTenantId ? `T${String(tenantPbxLink.pbxTenantId).trim()}_cos-all` : null;
-  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule);
+  const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
 
   const IVR_DEFAULT_PROMPT_REFS = new Set([IVR_DEFAULT_PROMPT_INVALID, IVR_DEFAULT_PROMPT_TIMEOUT, "vm-goodbye", "pbx-invalid", "vm-enter-num-to-call"]);
   const promptCandidates: Array<{ key: string; ref: string; profileType?: string | null }> = [];
@@ -22783,7 +22833,7 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
       if (ref && !IVR_DEFAULT_PROMPT_REFS.has(ref)) promptCandidates.push({ key, ref: String(ref), profileType: p.type });
     }
   }
-  for (const opt of activeOptions as any[]) {
+  for (const opt of allOptions as any[]) {
     if (opt.enabled && opt.announcePromptRef && !IVR_DEFAULT_PROMPT_REFS.has(opt.announcePromptRef)) {
       promptCandidates.push({ key: `opt_${opt.optionDigit}/announce`, ref: String(opt.announcePromptRef) });
     }
