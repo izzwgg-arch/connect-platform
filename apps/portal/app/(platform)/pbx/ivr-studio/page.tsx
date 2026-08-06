@@ -124,6 +124,9 @@ const UI_PHRASES = [
   "Your phone number", "Your recording", "No recording set — callers hear a stand-in message",
   "No number points at this menu yet", "We replay the menu, then the call ends",
   "They press a key you haven't set up", "We tell them it wasn't valid and replay the menu",
+  "They can dial someone's extension", "They can't dial an extension", "Turn off", "Turn on",
+  "A caller who knows an extension can type it instead of picking from the menu.",
+  "If a caller types an extension we tell them that option is invalid.",
   "Which key should the caller press?", "No recordings yet.", "Nothing to choose yet.",
   "This menu has no keys set up yet.", "None yet", "Add",
   "Callers never hear this name. It's only so you can find it later.",
@@ -1209,11 +1212,29 @@ export default function IvrStudioPage() {
                       ? `We send them to ${describeDestination({ destinationType: active.timeoutDestinationType || "", destinationRef: active.timeoutDestinationRef }, directory)}`
                       : "We replay the menu, then the call ends"} />
 
-                  <Step glyph="⚠️" muted last
+                  <Step glyph="⚠️" muted
                     title={t("They press a key you haven't set up")}
                     sub={active.invalidDestinationRef
                       ? `After a few tries we send them to ${describeDestination({ destinationType: active.invalidDestinationType || "", destinationRef: active.invalidDestinationRef }, directory)}`
                       : "We tell them it wasn't valid and replay the menu"} />
+
+                  {/* Dialling an extension straight from the menu. Its own step
+                      because it changes what a caller can do, and because with
+                      it OFF a caller who tries is told the option is invalid
+                      rather than left guessing. */}
+                  <Step glyph="#️⃣" muted last
+                    title={active.directDialEnabled
+                      ? t("They can dial someone's extension")
+                      : t("They can't dial an extension")}
+                    sub={active.directDialEnabled
+                      ? t("A caller who knows an extension can type it instead of picking from the menu.")
+                      : t("If a caller types an extension we tell them that option is invalid.")}
+                    actions={
+                      <button className="btn sm" disabled={!canManage || saving}
+                        onClick={() => patchProfile({ directDialEnabled: !active.directDialEnabled })}>
+                        {active.directDialEnabled ? t("Turn off") : t("Turn on")}
+                      </button>
+                    } />
                 </div>
               </div>
             </div>

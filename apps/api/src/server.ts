@@ -20047,7 +20047,7 @@ function normalizeTenantDestinationRef(type: string | null | undefined, ref: str
  *  hasn't uploaded a custom recording. Matches what VitalPBX ships out of
  *  the box so a fresh IVR behaves sensibly without any admin configuration.
  *  Stored as Asterisk built-in playable names (no `custom/` prefix). */
-const IVR_DEFAULT_PROMPT_INVALID = "pbx-invalid";
+const IVR_DEFAULT_PROMPT_INVALID = "option-is-invalid";
 /**
  * A very short cache for READ-ONLY PBX lookups that the IVR Studio fires on
  * every page load.
@@ -20200,6 +20200,10 @@ function buildIvrKeys(
       { family: menuFam, key: "prompt_retry",    value: (p.pbxRetryPromptRef && p.pbxRetryPromptRef.trim()) || "" },
       { family: menuFam, key: "timeout_seconds", value: String(p.timeoutSeconds ?? 7) },
       { family: menuFam, key: "max_retries",     value: String(p.maxRetries ?? 3) },
+      // Whether a caller may dial an extension straight from THIS menu.
+      // [connect-menu] reads it per menu: off means an extension is treated as
+      // an invalid choice, so the caller is TOLD rather than left in silence.
+      { family: menuFam, key: "direct_dial",     value: (p.directDialEnabled ?? false) ? "1" : "0" },
       { family: menuFam, key: "dest_invalid_type", value: (p.invalidDestinationType ?? "").trim() },
       { family: menuFam, key: "dest_invalid",      value: rewriteMenuNavRef(p.invalidDestinationType, normalizeTenantDestinationRef(p.invalidDestinationType, p.invalidDestinationRef, tenantDialContext), { inMenuFamily: true }) },
       { family: menuFam, key: "dest_timeout_type", value: (p.timeoutDestinationType ?? "").trim() },
