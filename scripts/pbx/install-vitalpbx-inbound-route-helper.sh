@@ -192,7 +192,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.06.2"
+VERSION = "2026.08.06.6"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -512,31 +512,109 @@ def ensure_connect_doorway_dialplan(strict=False):
         sys.stderr.write("ensure_connect_doorway_dialplan_failed: " + str(exc) + "\n")
         return evidence
 
-def _find_doorway_rows(conn):
-    """All custom-context rows named connect-doorway joined to their (FK-live)
-    destination rows, oldest first."""
+def _find_doorway_rows(conn, include_invalid=False):
+    """Custom-context rows named connect-doorway joined to their (FK-live)
+    destination rows, oldest first, each carrying a `valid` verdict.
+
+    ⛔ 2026-08-06, THE HIJACK: a destination row's EXISTENCE means nothing.
+    VitalPBX's panel rewrote our doorway destination (903) IN PLACE — it became
+    category=ivr index=1 ("Home Main" on tenant 2) when someone saved that
+    tenant's inbound route in the GUI. The custom-context row still pointed at
+    903, so every id-equality check (route.destination_id == snapshot's
+    connect id, doorway_status "row exists") kept reporting CONNECTED while
+    both live numbers pointing at 903 rendered to a PBX IVR. `valid` is the
+    semantic check that catches it: the destination must still sit in the
+    custom_contexts category AND its index must still be the cc_id."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT cc.cc_id, cc.destination_id, d.id AS dest_id
+            SELECT cc.cc_id, cc.destination_id, d.id AS dest_id, d.`index` AS dest_index,
+                   m.name AS dest_category_module
             FROM ombu_custom_contexts cc
             JOIN ombu_destinations d ON d.id = cc.destination_id
+            LEFT JOIN ombu_destinations_category c ON c.id = d.category_id
+            LEFT JOIN ombu_modules m ON m.module_id = c.module_id
             WHERE cc.context = %s
             ORDER BY cc.cc_id ASC
             """,
             (CONNECT_DOORWAY_CONTEXT,),
         )
-        return cur.fetchall()
+        rows = [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in rows:
+        r["valid"] = (
+            str(r.get("dest_category_module") or "") == "custom_contexts"
+            and str(r.get("dest_index") or "") == str(r.get("cc_id"))
+        )
+        if r["valid"] or include_invalid:
+            out.append(r)
+    return out
+
+
+def _doorway_goto(conn):
+    """The Goto triple that enters the doorway.
+
+    ⛔ Deliberately NOT derived from a destination row. The row is mutable by
+    the panel (see _find_doorway_rows); the CONTEXT is ours and constant. Read
+    extension/priority from the cc row when it looks sane, else fall back to
+    the values this helper always writes."""
+    exten, prio = "s", "1"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT extension, priority FROM ombu_custom_contexts WHERE context = %s ORDER BY cc_id ASC LIMIT 1",
+                (CONNECT_DOORWAY_CONTEXT,),
+            )
+            row = cur.fetchone()
+        if row:
+            e = str(row.get("extension") or "").strip()
+            p = str(row.get("priority") or "").strip()
+            if re.match(r"^[A-Za-z0-9_\-]{1,64}$", e):
+                exten = e
+            if re.match(r"^[A-Za-z0-9_\-]{1,16}$", p):
+                prio = p
+    except Exception:
+        pass
+    return "%s,%s,%s" % (CONNECT_DOORWAY_CONTEXT, exten, prio)
+
+
+def _route_is_connect_mode(route_id, current_dest):
+    """Did CONNECT put this route where it is? Read from our own snapshot db,
+    never from the PBX's destination semantics."""
+    try:
+        with snap_conn() as sconn:
+            row = sconn.execute(
+                "SELECT current_connect_destination_id FROM inbound_route_snapshots WHERE route_id = ?",
+                (int(route_id),),
+            ).fetchone()
+        return bool(row) and str(row[0] or "") == str(current_dest)
+    except Exception:
+        return False
 
 def ensure_connect_doorway_rows(conn, evidence):
     """Return the ombu_destinations id routes should point at, creating the
     Custom Context + destination pair when missing. Runs inside the caller's
     transaction so a failed flip never leaves half a doorway behind."""
-    rows = _find_doorway_rows(conn)
-    if rows:
+    all_rows = _find_doorway_rows(conn, include_invalid=True)
+    valid = [r for r in all_rows if r["valid"]]
+    if valid:
         evidence["doorwayCreated"] = False
-        evidence["doorwayDestinationId"] = int(rows[0]["dest_id"])
-        return str(rows[0]["dest_id"])
+        evidence["doorwayDestinationId"] = int(valid[0]["dest_id"])
+        return str(valid[0]["dest_id"])
+    # ⛔ HIJACK REPAIR (2026-08-06): when no VALID pair survives we build a
+    # brand-new one rather than repointing the old custom-context row —
+    # deliberately, on two grounds. The helper's DB user has INSERT but not
+    # UPDATE on ombu_custom_contexts (least privilege, and asking for more
+    # grants is a human round-trip mid-outage), and a fresh pair is the same
+    # code path a first-time install takes, so there is one creation path to
+    # reason about instead of two. The hijacked row is left in place as inert
+    # clutter: `valid` already makes it invisible to every routing decision.
+    if all_rows:
+        evidence["doorwayHijackedRowsIgnored"] = [
+            {"ccId": int(r["cc_id"]), "destinationId": int(r["dest_id"]),
+             "nowLooksLike": r.get("dest_category_module"), "nowIndex": r.get("dest_index")}
+            for r in all_rows
+        ]
     with conn.cursor() as cur:
         cur.execute(
             "SELECT c.id FROM ombu_destinations_category c JOIN ombu_modules m ON m.module_id = c.module_id WHERE m.name = 'custom_contexts'"
@@ -584,11 +662,16 @@ def resolve_connect_destination(conn, requested, evidence):
     discovered by name (created if missing). A stale pinned id is recorded and
     skipped, never fatal: that staleness is exactly what broke every switch
     between April and August 2026."""
+    # A requested/pinned id must be a REAL doorway destination, not merely an
+    # existing row: destination 903 existed the whole time it meant "tenant 2's
+    # Home Main IVR" (the 2026-08-06 hijack). Existence checks are what let a
+    # repurposed row keep passing for the doorway.
+    valid_ids = {str(r["dest_id"]) for r in _find_doorway_rows(conn)}
     for source, raw in (("request", requested), ("config", CFG.connect_destination_id)):
         value = str(raw or "").strip()
         if not value:
             continue
-        if NUM_RE.match(value) and destination_exists(conn, value):
+        if NUM_RE.match(value) and value in valid_ids:
             evidence["connectDestinationSource"] = source
             return value
         evidence.setdefault("staleDestinationIdsIgnored", []).append({"source": source, "id": value})
@@ -608,9 +691,35 @@ def doorway_status(body):
         except OSError:
             pass
     with db_conn() as conn:
-        rows = _find_doorway_rows(conn)
+        all_rows = _find_doorway_rows(conn, include_invalid=True)
+        rows = [r for r in all_rows if r["valid"]]
+        hijacked = [r for r in all_rows if not r["valid"]]
         env_id = str(CFG.connect_destination_id or "").strip()
-        env_id_exists = bool(env_id) and destination_exists(conn, env_id)
+        env_id_valid = bool(env_id) and env_id in {str(r["dest_id"]) for r in rows}
+        # Routes Connect owns whose RENDER no longer enters the doorway — the
+        # only question that matters to a caller. Cheap enough for a monitor:
+        # one snapshot read + one file read per Connect-managed route.
+        drifted = []
+        try:
+            with snap_conn() as sconn:
+                snaps = sconn.execute(
+                    "SELECT route_id, tenant_id, did_digits, did_e164, current_connect_destination_id FROM inbound_route_snapshots"
+                ).fetchall()
+            for route_id, tenant_id, did_digits, did_e164, connect_dest in snaps:
+                try:
+                    route = find_route(conn, tenant_id, did_digits)
+                except Exception:
+                    continue
+                if str(route.get("destination_id")) != str(connect_dest or ""):
+                    continue  # handed back to the PBX on purpose
+                rendered = read_rendered_route_gotos(tenant_id, did_digits)
+                if not any(str(g).startswith(CONNECT_DOORWAY_CONTEXT + ",") for g in rendered.get("gotos") or []):
+                    drifted.append({
+                        "routeId": int(route_id), "tenantId": str(tenant_id), "did": str(did_e164),
+                        "rendered": rendered.get("gotos") or [],
+                    })
+        except Exception as exc:
+            drifted = [{"error": "render_scan_failed: %s" % exc}]
     return {
         "ok": True,
         "version": VERSION,
@@ -620,11 +729,93 @@ def doorway_status(body):
         "dialplanFileCurrent": file_current,
         "contextLive": _doorway_context_live(),
         "rows": [{"customContextId": int(r["cc_id"]), "destinationId": int(r["dest_id"])} for r in rows],
+        # A destination row the panel repurposed out from under us. Its mere
+        # existence used to read as "doorway fine" — never again.
+        "hijackedRows": [
+            {"customContextId": int(r["cc_id"]), "destinationId": int(r["dest_id"]),
+             "nowLooksLike": r.get("dest_category_module"), "nowIndex": r.get("dest_index")}
+            for r in hijacked
+        ],
+        "renderDriftedRoutes": drifted,
         "envPinnedId": env_id or None,
-        "envPinnedIdExists": env_id_exists,
-        "wouldUse": (env_id if env_id_exists else (str(rows[0]["dest_id"]) if rows else None)),
-        "healthy": _doorway_context_live() and (env_id_exists or bool(rows)),
+        "envPinnedIdExists": env_id_valid,
+        "wouldUse": (env_id if env_id_valid else (str(rows[0]["dest_id"]) if rows else None)),
+        # healthy means CALLER-VISIBLE health: the context answers, a VALID
+        # doorway destination exists, and every Connect-owned route still
+        # RENDERS into the doorway.
+        #
+        # ⛔ hijackedRows deliberately does NOT count against health. Once
+        # repair mints a fresh pair, the repurposed old row is inert clutter
+        # that no routing decision can see — but it never goes away (the helper
+        # has no UPDATE/DELETE on that table). Gating health on it would email
+        # an unfixable alert forever, and an alert nobody can clear is an alert
+        # everybody learns to ignore. It stays reported for diagnosis; only
+        # renderDriftedRoutes (what callers actually get) gates health.
+        "healthy": (
+            _doorway_context_live()
+            and bool(rows)
+            and not drifted
+        ),
     }
+
+
+def doorway_repair(body):
+    """Repair the doorway end-to-end: valid destination row, cc row pointing at
+    it, every Connect-owned route pointing at it, and every render entering it.
+
+    Idempotent and safe on a timer. Only touches routes whose own snapshot says
+    CONNECT put them where they are — a number a human handed back to the PBX
+    is left alone. Never invents Connect-mode for a route."""
+    evidence = {"dialplan": ensure_connect_doorway_dialplan(strict=False)}
+    with db_conn() as conn:
+        try:
+            conn.begin()
+            good_dest = ensure_connect_doorway_rows(conn, evidence)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        goto = _doorway_goto(conn)
+    repaired = []
+    with snap_conn() as sconn:
+        snaps = sconn.execute(
+            "SELECT route_id, tenant_id, did_digits, did_e164, current_connect_destination_id FROM inbound_route_snapshots"
+        ).fetchall()
+    for route_id, tenant_id, did_digits, did_e164, connect_dest in snaps:
+        item = {"routeId": int(route_id), "did": str(did_e164), "tenantId": str(tenant_id),
+                "destRepointed": False, "rebaked": 0, "error": None}
+        try:
+            with db_conn() as conn:
+                route = find_route(conn, tenant_id, did_digits)
+                current = str(route.get("destination_id"))
+                if current != str(connect_dest or ""):
+                    continue  # deliberately on the PBX — not ours to touch
+                if current != str(good_dest):
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE ombu_inbound_routes SET destination_id = %s WHERE inbound_route_id = %s AND tenant_id = %s AND destination_id = %s",
+                            (good_dest, int(route_id), tenant_id, current),
+                        )
+                        if cur.rowcount != 1:
+                            raise RuntimeError("route_repoint_guard_failed")
+                    conn.commit()
+                    with snap_conn() as sconn:
+                        sconn.execute(
+                            "UPDATE inbound_route_snapshots SET current_connect_destination_id = ? WHERE route_id = ?",
+                            (str(good_dest), int(route_id)),
+                        )
+                        sconn.commit()
+                    item["destRepointed"] = True
+            bake = _bake_goto(tenant_id, did_digits, goto)
+            if bake.get("error"):
+                raise RuntimeError("route_bake_failed:%s" % bake["error"])
+            item["rebaked"] = int(bake.get("changed") or 0)
+            item["rendered"] = (read_rendered_route_gotos(tenant_id, did_digits).get("gotos") or [])
+        except Exception as exc:
+            item["error"] = str(exc)
+        repaired.append(item)
+    return {"ok": True, "version": VERSION, "doorwayDestinationId": good_dest, "goto": goto,
+            "doorway": evidence, "routes": repaired}
 
 def queue_moh_table_name(conn):
     """Queue hold music comes from queues.conf / this table, not inbound CHANNEL(musicclass)."""
@@ -1274,7 +1465,21 @@ def inspect_route(body):
             cols = [d[0] for d in sconn.execute("SELECT * FROM inbound_route_snapshots LIMIT 0").description]
             snapshot = dict(zip(cols, row))
     mode = "connect" if str(route.get("destination_id")) == str((snapshot or {}).get("current_connect_destination_id")) else "pbx"
-    return {"ok": True, "version": VERSION, "did": did_e164, "didDigits": did_digits, "tenantId": tenant_id, "route": route, "snapshot": snapshot, "mode": mode}
+    # `mode` reflects the DB row. `rendered` reflects what CALLERS FOLLOW —
+    # the two can disagree after any regen (see read_rendered_route_gotos).
+    # renderedMatchesMode is the one field a monitor should trust.
+    rendered = read_rendered_route_gotos(tenant_id, did_digits)
+    doorway_ctx = CONNECT_DOORWAY_CONTEXT + ","
+    points_at_doorway = any(str(g).startswith(doorway_ctx) for g in rendered.get("gotos") or [])
+    rendered["pointsAtDoorway"] = points_at_doorway
+    rendered_mode = "connect" if points_at_doorway else ("pbx" if rendered.get("gotos") else "unknown")
+    rendered["mode"] = rendered_mode
+    return {
+        "ok": True, "version": VERSION, "did": did_e164, "didDigits": did_digits,
+        "tenantId": tenant_id, "route": route, "snapshot": snapshot, "mode": mode,
+        "rendered": rendered,
+        "renderedMatchesMode": rendered_mode == mode,
+    }
 
 def retarget_route(body):
     did_digits, did_e164 = normalize_did(body.get("did"))
@@ -1333,13 +1538,15 @@ def retarget_route(body):
     # only reloads, it never regenerates the tenant conf, so the DB retarget
     # stayed invisible to callers. Real per-tenant regen + direct Goto bake.
     apply_result = apply_tenant_changes(tenant_id, pending_modules=(OWNER_MODULE_INBOUND_ROUTE,))
-    bake = None
+    # 2026-08-06: bake the doorway as a CONSTANT. Decoding connect_dest here is
+    # what re-baked a hijacked row's meaning (a PBX IVR) over a live Connect
+    # number. VitalPBX's own regen never renders the doorway either — this bake
+    # IS the routing, so it must not depend on a row the panel can rewrite.
     with db_conn() as conn:
-        decoded = _decode_destination(conn, connect_dest)
-    if decoded and decoded.get("type") in BAKEABLE_TARGET_TYPES and decoded.get("targetId"):
-        bake = bake_route_goto(tenant_id, did_digits, decoded["type"], decoded["targetId"])
-        if bake.get("error"):
-            raise RuntimeError("route_bake_failed:%s" % bake["error"])
+        goto = _doorway_goto(conn)
+    bake = _bake_goto(tenant_id, did_digits, goto)
+    if bake.get("error"):
+        raise RuntimeError("route_bake_failed:%s" % bake["error"])
     with db_conn() as conn:
         after = find_route(conn, tenant_id, did_digits)
     return {"ok": True, "did": did_e164, "tenantId": tenant_id, "routeId": route_id, "before": route, "after": after, "connectDestinationId": connect_dest, "doorway": doorway, "apply": apply_result, "bake": bake}
@@ -1408,7 +1615,10 @@ def _route_is_connect_managed(route_id, current_dest):
         return True
     try:
         with db_conn() as conn:
-            for row in _find_doorway_rows(conn):
+            # include_invalid: a HIJACKED doorway destination must still count as
+            # Connect-managed here, or M3 would happily retarget a route Connect
+            # owns just because the panel repurposed the row underneath it.
+            for row in _find_doorway_rows(conn, include_invalid=True):
                 if str(row["dest_id"]) == str(current_dest):
                     return True
     except Exception:
@@ -2563,15 +2773,118 @@ def _patch_route_goto_text(text, did_digits, goto_target):
     new_text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
     return {"changed": changed, "newText": new_text, "old": old, "error": None if changed or not old else None}
 
+def read_rendered_route_gotos(tenant_id, did_digits):
+    """READ-ONLY: the Goto target(s) actually rendered for this DID in the
+    generated tenant dialplan — i.e. WHAT CALLERS FOLLOW.
+
+    ⛔ This, not ombu_inbound_routes.destination_id, is the ground truth for
+    "where does this number go". Proven live 2026-08-06: A plus center's route
+    row said destination 903 (the Connect doorway) while the regenerated file
+    said Goto(T2_app-ivr,IVR-1,1) and every caller reached the old PBX menu.
+    VitalPBX's own regenerator does NOT render a Connect doorway destination —
+    our bake is the only thing that does — so ANY regen (panel Save/Apply,
+    another tool, a tenant edit) silently reverts a live number to the PBX.
+    Anything that verifies routing MUST read this."""
+    out = {"file": None, "gotos": [], "error": None}
+    try:
+        conf = Path(QUEUE_CONF_DIR) / ("extensions__50-%d-dialplan.conf" % int(tenant_id))
+        out["file"] = str(conf)
+        if not conf.is_file():
+            out["error"] = "dialplan_conf_missing"
+            return out
+        header_re = re.compile(r"^exten => _?%s(?:/[^,]*)?,1,NoOp\(INBOUND_ROUTE:" % re.escape(str(did_digits)))
+        goto_re = re.compile(r"^\s*same => n,Goto\(([^)]*)\)\s*$")
+        lines = conf.read_text(errors="replace").splitlines()
+        i = 0
+        while i < len(lines):
+            if header_re.match(lines[i]):
+                j = i + 1
+                while j < len(lines) and lines[j].strip().startswith("same =>"):
+                    m = goto_re.match(lines[j])
+                    if m:
+                        out["gotos"].append(m.group(1))
+                    j += 1
+                i = j
+            else:
+                i += 1
+    except OSError as exc:
+        out["error"] = "read_failed: %s" % exc
+    return out
+
+
+def rebake_route(body):
+    """Re-apply the baked Goto for a DID from its CURRENT DB destination.
+
+    The repair half of the render-drift problem documented on
+    read_rendered_route_gotos: the DB is right, the rendered file is wrong,
+    and nothing about the DB needs changing. Touches ONLY the generated
+    dialplan (same guarded patcher as every other bake: backup, line-scope
+    check, atomic replace, dialplan reload) and NEVER the route row, the
+    snapshot, or Connect-side state — so it cannot desync anything and is
+    safe to run on a timer. Idempotent: already-converged renders report
+    changed=0 and rewrite nothing."""
+    did_digits, did_e164 = normalize_did(body.get("did"))
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    with db_conn() as conn:
+        route = find_route(conn, tenant_id, did_digits)
+        dest = str(route.get("destination_id") or "")
+        decoded = _decode_destination(conn, dest)
+        # Is this route one CONNECT owns? Our snapshot answers that — the PBX's
+        # destination semantics cannot be trusted (2026-08-06 hijack).
+        connect_owned = _route_is_connect_mode(route.get("inbound_route_id"), dest)
+        doorway_goto = _doorway_goto(conn) if connect_owned else None
+    before = read_rendered_route_gotos(tenant_id, did_digits)
+    if connect_owned:
+        bake = _bake_goto(tenant_id, did_digits, doorway_goto)
+        if bake.get("error"):
+            raise RuntimeError("route_bake_failed:%s" % bake["error"])
+        return {
+            "ok": True, "did": did_e164, "tenantId": tenant_id, "destinationId": dest,
+            "connectOwned": True, "goto": doorway_goto, "baked": True,
+            "changed": int(bake.get("changed") or 0), "bake": bake,
+            "before": before, "after": read_rendered_route_gotos(tenant_id, did_digits),
+        }
+    if not decoded or decoded.get("type") not in BAKEABLE_TARGET_TYPES or not decoded.get("targetId"):
+        return {
+            "ok": True, "did": did_e164, "tenantId": tenant_id, "destinationId": dest,
+            "decoded": decoded, "baked": False, "reason": "destination_not_bakeable",
+            "before": before, "after": before,
+        }
+    bake = bake_route_goto(tenant_id, did_digits, decoded["type"], decoded["targetId"])
+    if bake.get("error"):
+        raise RuntimeError("route_bake_failed:%s" % bake["error"])
+    after = read_rendered_route_gotos(tenant_id, did_digits)
+    return {
+        "ok": True, "did": did_e164, "tenantId": tenant_id, "destinationId": dest,
+        "decoded": decoded, "baked": True, "changed": int(bake.get("changed") or 0),
+        "bake": bake, "before": before, "after": after,
+    }
+
+
 def bake_route_goto(tenant_id, did_digits, target_type, target_id):
-    evidence = {"attempted": False, "changed": 0, "goto": None, "file": None, "backup": None, "old": [], "reload": None, "error": None}
+    """Bake the Goto for a NATIVE destination (type+id decoded from the DB)."""
+    try:
+        with db_conn() as conn:
+            goto = _goto_target_for(conn, int(tenant_id), target_type, target_id)
+    except Exception as exc:
+        return {"attempted": False, "changed": 0, "goto": None, "file": None, "backup": None,
+                "old": [], "reload": None, "error": "bake_failed: %s" % exc}
+    return _bake_goto(tenant_id, did_digits, goto)
+
+
+def _bake_goto(tenant_id, did_digits, goto):
+    """Write an EXPLICIT Goto target into the generated tenant dialplan.
+
+    Split out from bake_route_goto on 2026-08-06 so the doorway can be baked
+    as a CONSTANT. Deriving it by decoding ombu_destinations is exactly how the
+    hijack (see _find_doorway_rows) turned a Connect-owned number back into a
+    PBX IVR — and how the first re-bake attempt cheerfully re-baked the wrong
+    target. Connect-owned routes bake `connect-doorway,s,1`, full stop."""
+    evidence = {"attempted": False, "changed": 0, "goto": goto, "file": None, "backup": None, "old": [], "reload": None, "error": None}
     try:
         t = int(tenant_id)
         conf = Path(QUEUE_CONF_DIR) / ("extensions__50-%d-dialplan.conf" % t)
         evidence["file"] = str(conf)
-        with db_conn() as conn:
-            goto = _goto_target_for(conn, t, target_type, target_id)
-        evidence["goto"] = goto
         if not conf.is_file():
             evidence["error"] = "dialplan_conf_missing"
             return evidence
@@ -3757,6 +4070,8 @@ class Handler(BaseHTTPRequestHandler):
             "/ensure-transport-wss-cert": ensure_transport_wss_cert,
             "/upload-prompt": upload_prompt,
             "/recording-export": recording_export,
+            "/route-rebake": rebake_route,
+            "/doorway-repair": doorway_repair,
             "/media-sync": media_sync_trigger,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
@@ -4273,6 +4588,16 @@ Restart=on-failure
 RestartSec=3
 User=asterisk
 Group=asterisk
+# 2026-08-06: restore_gui_conf_ownership()/_chown_gui_conf() hand each
+# regenerated tenant conf back to www-data so the VitalPBX panel can still
+# save it. Handing a file to ANOTHER user is root-only, so as a plain
+# User=asterisk process every one of those calls raised PermissionError and
+# was swallowed by design ("never raises") — the fix shipped in fc826643 was
+# live and silently doing nothing, and the panel stayed locked out with
+# "file_put_contents ... Permission denied". These are the two narrow
+# capabilities that code needs and nothing more; do NOT run this as root.
+AmbientCapabilities=CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

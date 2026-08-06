@@ -1,0 +1,15 @@
+# Everything under scripts/pbx runs on the Linux PBX, and the installer carries
+# an embedded byte-for-byte copy of vitalpbx-inbound-route-helper.py guarded by
+# a byte-identity test (install-vitalpbx-inbound-route-helper.test.ts).
+#
+# On Windows, core.autocrlf=true checks the .sh out as CRLF while the .py stays
+# LF, so that guard can never pass locally — it fails by construction, gets
+# ignored, and the embedded helper silently drifts. It drifted twice: to
+# 2026.07.26.1 (missing apply_tenant_changes entirely) and again to 2026.08.06.2
+# while the live PBX ran 2026.08.06.6, where running the installer would have
+# DOWNGRADED the PBX and wiped the doorway-hijack fix.
+#
+# Deliberately scoped to scripts/pbx rather than a repo-wide *.sh rule: 113 shell
+# scripts elsewhere are CRLF in working trees and a blanket flip would churn
+# unrelated in-flight work.
+/scripts/pbx/** text eol=lf
