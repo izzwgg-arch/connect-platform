@@ -203,6 +203,43 @@ test("drifted menu keys replay the LAST SUCCESSFUL publish verbatim (never recom
   assert.ok(calls.alerts.includes("reconciler-menu-ten1"));
 });
 
+test("an unreadable AstDB (every key empty) is NOT treated as drift — no repair, no alert", async () => {
+  // The telephony read endpoint 400s above 32 keys; that used to surface as
+  // "every key is missing" and had the reconciler republishing healthy tenants
+  // on every cycle and emailing about each one.
+  const published: AstDbKV[] = Array.from({ length: 40 }, (_, i) => ({
+    family: "connect/t_slug1", key: `k${i}`, value: `v${i}`,
+  }));
+  const { deps, calls } = makeDeps({
+    lastSuccessfulPublishKeys: async () => published,
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
+      return keyNames.map((k) => ({ family, key: k, value: "" }));
+    },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.deepEqual(calls.menuReplays, []);
+  assert.equal(calls.alerts.includes("reconciler-menu-ten1"), false);
+});
+
+test("menu-key reads are chunked to 32 so large families are readable at all", async () => {
+  const published: AstDbKV[] = Array.from({ length: 70 }, (_, i) => ({
+    family: "connect/t_slug1", key: `k${i}`, value: `v${i}`,
+  }));
+  const batchSizes: number[] = [];
+  const { deps } = makeDeps({
+    lastSuccessfulPublishKeys: async () => published,
+    readAstDbKeys: async (_slug, family, keyNames) => {
+      if (family.startsWith("connect/didmap/")) return expectedDidmapKeys(MAPPING, "slug1");
+      batchSizes.push(keyNames.length);
+      return keyNames.map((k) => ({ family, key: k, value: published.find((p) => p.key === k)!.value }));
+    },
+  });
+  await runReconcilerCycle(deps, { lastReassertAt: new Map() });
+  assert.ok(batchSizes.length >= 3, `expected chunked reads, got ${JSON.stringify(batchSizes)}`);
+  assert.ok(batchSizes.every((n) => n <= 32), `a batch exceeded the endpoint cap: ${JSON.stringify(batchSizes)}`);
+});
+
 test("never-published tenants are left alone — the reconciler must not push drafts live", async () => {
   const { deps, calls } = makeDeps({
     lastSuccessfulPublishKeys: async () => null,

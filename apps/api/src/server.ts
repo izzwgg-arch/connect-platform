@@ -22883,6 +22883,30 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   const record = await (db as any).ivrPublishRecord.create({
     data: { tenantId, publishedBy, mode, keysWritten: keys, previousKeys, status: "pending", isRollback: false },
   });
+  // ⛔ Same audio + per-number-menu guarantees as POST /voice/ivr/publish.
+  // These two publish paths are near-duplicates; when only the route had the
+  // audio push (2026-08-06), every publish driven by the agent door or the
+  // scheduler shipped routing that referenced files the PBX did not have —
+  // and a stress run through this path "passed" while callers got filler.
+  // Anything added to one path belongs in both.
+  const audioSync = await materializePromptsOnPbx(
+    tenantId,
+    collectPromptRefs(profiles as any[], allOptions as any[]),
+    publishedBy,
+  );
+  if (audioSync.missingAudio.length || audioSync.failed.length) {
+    app.log.warn({ tenantId, slug, audioSync }, "ivr(agent): publish could not place every recording on the PBX");
+  }
+  try {
+    const liveMappings = await (db as any).didRouteMapping.findMany({
+      where: { tenantId, enabled: true, routingMode: "connect" },
+    });
+    for (const m of liveMappings) {
+      await publishDidmapToAstDb(slug, m.e164, await didBuildPublishValues(m, slug));
+    }
+  } catch (err: any) {
+    app.log.warn({ tenantId, err: err?.message }, "ivr(agent): didmap refresh during publish failed");
+  }
   try {
     await publishToAstDb(slug, keys);
     try { await publishWakeSystemConfig(slug); await publishWakeTenantConfig(slug, tenantId); } catch (wakeErr: any) { app.log.warn({ tenantId, err: wakeErr?.message }, "agent ivr: wake-config publish failed (non-fatal)"); }
