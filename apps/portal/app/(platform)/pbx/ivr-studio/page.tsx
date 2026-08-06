@@ -46,6 +46,10 @@ import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } fro
 interface RouteProfile {
   id: string; tenantId: string; name: string; type: string;
   pbxPromptRef: string | null; pbxInvalidPromptRef: string | null; pbxTimeoutPromptRef: string | null;
+  /** Not edited on this screen, but a recording used here still counts as "in
+   *  use" — leaving it out of the check would let someone delete a recording
+   *  the retry message still points at, which blocks the next publish. */
+  pbxRetryPromptRef?: string | null;
   timeoutSeconds: number; maxRetries: number; directDialEnabled: boolean;
   invalidDestinationType: string | null; invalidDestinationRef: string | null;
   timeoutDestinationType: string | null; timeoutDestinationRef: string | null;
@@ -139,6 +143,12 @@ const UI_PHRASES = [
   "Callers will hear it once a phone number points at this menu.",
   "Not published — nothing changed for callers",
   "These recordings aren't on the phone system yet:",
+  "Stop", "Delete", "Deleting…", "Close", "Delete this menu",
+  "Are you sure you want to delete this?",
+  "Callers can't reach it any more, and it can't be brought back.",
+  "You can't delete this yet", "It's still being used here:",
+  "Change these to something else first, then you can delete it.",
+  "Play this recording", "Stop playing", "Delete this recording",
 ];
 
 /** Publish blockers the API can return WITHOUT a human-readable `detail`.
@@ -172,6 +182,9 @@ export default function IvrStudioPage() {
   const search = useSearchParams();
   const canManage = can("can_manage_ivr_routing");
   const canPublish = can("can_publish_ivr_routing") || canManage;
+  /** Recordings are their own permission on the API side — someone who may
+   *  point keys around isn't automatically allowed to delete the audio. */
+  const canManagePrompts = can("can_manage_ivr_prompts");
 
   const [profiles, setProfiles] = useState<RouteProfile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -214,6 +227,17 @@ export default function IvrStudioPage() {
   const [namingFor, setNamingFor] = useState<null | { mode: "create"; forDigit: string | null } | { mode: "rename" }>(null);
   const [showScript, setShowScript] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** Which recording is playing right now, so its button can offer Stop.
+   *  There was no way to stop a recording once it started — the only escape
+   *  was to leave the page. */
+  const [playingRef, setPlayingRef] = useState<string | null>(null);
+  /** The "are you sure?" for deleting a recording or a whole menu. `blockers`
+   *  non-empty means it can't be deleted yet and the dialog explains why
+   *  instead of offering the button. */
+  const [confirmDelete, setConfirmDelete] = useState<null | {
+    kind: "recording" | "menu"; id: string; name: string; blockers: string[];
+  }>(null);
+  const [deleting, setDeleting] = useState(false);
 
   /** The assistant sends the customer here after building a menu for them. */
   const fromAssistant = search?.get("from") === "assistant";
@@ -300,14 +324,38 @@ export default function IvrStudioPage() {
     return `${base}/voice/ivr/prompts/${encodeURIComponent(promptId)}/stream?token=${encodeURIComponent(token)}`;
   }, []);
 
+  const stopPlaying = useCallback(() => {
+    const a = audioRef.current;
+    if (a) { a.pause(); try { a.currentTime = 0; } catch { /* not seekable yet */ } }
+    setPlayingRef(null);
+  }, []);
+
+  /** Play, or stop if this same recording is already playing.
+   *  ⛔ The element's own `pause` event is deliberately NOT wired to clear
+   *  `playingRef`: it fires asynchronously, so the pause we do below before
+   *  switching tracks would land AFTER we set the new one and blank the button
+   *  while audio is playing. Every stop path goes through stopPlaying(). */
   const play = useCallback((promptRef: string | null | undefined) => {
     if (!promptRef) { flash("No recording set yet"); return; }
     const row = prompts.find((p) => p.promptRef === promptRef);
     if (!row) { flash("That recording isn't in your library"); return; }
-    if (!audioRef.current) audioRef.current = new Audio();
+    if (playingRef === promptRef) { stopPlaying(); return; }
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.onended = () => setPlayingRef(null);
+      audioRef.current.onerror = () => setPlayingRef(null);
+    }
+    audioRef.current.pause();
     audioRef.current.src = streamUrl(row.id);
-    audioRef.current.play().catch(() => flash("Couldn't play it — the audio hasn't been uploaded"));
-  }, [prompts, streamUrl]);
+    setPlayingRef(promptRef);
+    audioRef.current.play().catch(() => {
+      setPlayingRef(null);
+      flash("Couldn't play it — the audio hasn't been uploaded");
+    });
+  }, [prompts, streamUrl, playingRef, stopPlaying]);
+
+  /** Leaving the page mid-playback used to leave the audio running. */
+  useEffect(() => () => { audioRef.current?.pause(); }, []);
 
   const loadAll = useCallback(async () => {
     if (!tenantId) return;
@@ -649,6 +697,98 @@ export default function IvrStudioPage() {
     await patchProfile({ name });
   }
 
+  // ── Deleting ───────────────────────────────────────────────────────────────
+  // Both deletes refuse while something still points at the thing, and say
+  // exactly what. That is not politeness — it is the only way to keep the
+  // system publishable.
+  //
+  //  · A recording is soft-deleted (isActive=false). Any menu still naming it
+  //    then fails the pre-publish catalog check with `prompt_refs_not_in_catalog`
+  //    and NOTHING can be published for that customer until it's put back. So a
+  //    recording in use is not deletable until the spots using it are changed.
+  //  · A menu is soft-deleted too. A key or a phone number still pointing at a
+  //    deleted menu dead-ends the caller, which is worse than a wrong menu
+  //    because there is nothing on screen to explain it.
+
+  /** Every place on this screen that still names this recording, in the words
+   *  the customer would use for that spot. */
+  function recordingUses(promptRef: string): string[] {
+    const uses: string[] = [];
+    for (const p of profiles) {
+      if (p.pbxPromptRef === promptRef) uses.push(`the greeting on “${p.name}”`);
+      if (p.pbxInvalidPromptRef === promptRef) uses.push(`the “that wasn't a valid key” message on “${p.name}”`);
+      if (p.pbxTimeoutPromptRef === promptRef) uses.push(`the “nothing was pressed” message on “${p.name}”`);
+      if (p.pbxRetryPromptRef === promptRef) uses.push(`the retry message on “${p.name}”`);
+      for (const o of optionsByProfile[p.id] ?? []) {
+        if (o.announcePromptRef === promptRef) {
+          uses.push(`what plays when a caller presses ${digitGlyph(o.optionDigit)} on “${p.name}”`);
+        }
+      }
+    }
+    return uses;
+  }
+
+  /** Every place that still sends callers into this menu. */
+  function menuUses(profileId: string): string[] {
+    const uses: string[] = [];
+    for (const n of tenantNumbers) {
+      if (n.ivrProfileId === profileId) uses.push(`${fmtUs(n.e164)} rings it`);
+      else if (n.pendingSwitch?.ivrProfileId === profileId) uses.push(`${fmtUs(n.e164)} is booked to switch to it`);
+    }
+    for (const p of profiles) {
+      if (p.id === profileId) continue;
+      for (const o of optionsByProfile[p.id] ?? []) {
+        const read = readDestination(o, directory);
+        if (read.kind === "menu" && read.targetId === profileId) {
+          uses.push(`key ${digitGlyph(o.optionDigit)} on “${p.name}” opens it`);
+        }
+      }
+    }
+    if (schedule?.defaultProfileId === profileId) uses.push("it's the menu that answers while you're open");
+    if (schedule?.afterHoursProfileId === profileId) uses.push("it's the menu that answers while you're closed");
+    if (schedule?.holidayProfileId === profileId) uses.push("it's the menu that answers on holidays");
+    return uses;
+  }
+
+  function askDeleteRecording(row: PromptRow) {
+    setConfirmDelete({ kind: "recording", id: row.id, name: row.displayName, blockers: recordingUses(row.promptRef) });
+  }
+
+  function askDeleteMenu(profile: RouteProfile) {
+    setConfirmDelete({ kind: "menu", id: profile.id, name: profile.name, blockers: menuUses(profile.id) });
+  }
+
+  async function doDelete() {
+    const target = confirmDelete;
+    if (!target || target.blockers.length > 0) return;
+    setDeleting(true);
+    try {
+      if (target.kind === "recording") {
+        const row = prompts.find((p) => p.id === target.id);
+        if (row && playingRef === row.promptRef) stopPlaying();
+        await apiDelete(`/voice/ivr/prompts/${target.id}${qs}`);
+        setPrompts((ps) => ps.filter((p) => p.id !== target.id));
+        flash(`“${target.name}” deleted`);
+      } else {
+        await apiDelete(`/voice/ivr/route-profiles/${target.id}${qs}`);
+        const left = profiles.filter((p) => p.id !== target.id);
+        setProfiles(left);
+        setOptionsByProfile((m) => { const next = { ...m }; delete next[target.id]; return next; });
+        // The deleted menu was almost certainly the open one — land somewhere
+        // real rather than on an empty screen with a stale id selected.
+        if (activeId === target.id) { setActiveId(left[0]?.id ?? null); setEditingDigit(null); }
+        setDirty(true);
+        flash(`“${target.name}” deleted`);
+      }
+      setConfirmDelete(null);
+    } catch (e: any) {
+      // Server body first — `.message` alone downgrades a full explanation to a
+      // bare slug. See the portal ApiError note in CLAUDE.md.
+      setError(e?.body?.detail || e?.message || "Couldn't delete that");
+      setConfirmDelete(null);
+    } finally { setDeleting(false); }
+  }
+
   async function saveSchedule(next: ScheduleRow) {
     if (!tenantId) return;
     setSaving(true);
@@ -988,6 +1128,12 @@ export default function IvrStudioPage() {
             </select>
             {active && <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "rename" })}>{t("Rename")}</button>}
             <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "create", forDigit: null })}>+ New menu</button>
+            {active && (
+              <button className="btn ghost sm danger" disabled={!canManage}
+                title={t("Delete this menu")} onClick={() => askDeleteMenu(active)}>
+                {t("Delete")}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1109,7 +1255,9 @@ export default function IvrStudioPage() {
                     sub={greetingRow ? "Your recording" : "No recording set — callers hear a stand-in message"}
                     actions={
                       <>
-                        <button className="btn sm" onClick={() => play(active.pbxPromptRef)}>{t("Play")}</button>
+                        <button className="btn sm" onClick={() => play(active.pbxPromptRef)}>
+                          {playingRef && playingRef === active.pbxPromptRef ? t("Stop") : t("Play")}
+                        </button>
                         <button className="btn sm" disabled={!canManage} onClick={() => setRecPickerOpen(!recPickerOpen)}>{t("Change")}</button>
                         <button className="btn sm" disabled={!canManage} onClick={() => setMakeRecOpen(true)}>{t("Make one")}</button>
                       </>
@@ -1126,12 +1274,21 @@ export default function IvrStudioPage() {
                         </div>
                       )}
                       {prompts.map((r) => (
-                        <button key={r.id} className={"recrow" + (active.pbxPromptRef === r.promptRef ? " on" : "")}
-                          onClick={() => { patchProfile({ pbxPromptRef: r.promptRef }); setRecPickerOpen(false); }}>
-                          <span className="p" onClick={(e) => { e.stopPropagation(); play(r.promptRef); }}>▶</span>
-                          <span className="nm">{r.displayName}</span>
+                        <div key={r.id} className={"recrow" + (active.pbxPromptRef === r.promptRef ? " on" : "")}>
+                          <button type="button" className="p"
+                            title={playingRef === r.promptRef ? t("Stop playing") : t("Play this recording")}
+                            aria-label={playingRef === r.promptRef ? t("Stop playing") : t("Play this recording")}
+                            onClick={() => play(r.promptRef)}>{playingRef === r.promptRef ? "⏸" : "▶"}</button>
+                          <button type="button" className="nm"
+                            onClick={() => { patchProfile({ pbxPromptRef: r.promptRef }); setRecPickerOpen(false); }}>
+                            {r.displayName}
+                          </button>
                           {active.pbxPromptRef === r.promptRef && <span className="cur">current</span>}
-                        </button>
+                          {canManagePrompts && (
+                            <button type="button" className="del" title={t("Delete this recording")}
+                              aria-label={t("Delete this recording")} onClick={() => askDeleteRecording(r)}>🗑</button>
+                          )}
+                        </div>
                       ))}
                     </div>
                   )}
@@ -1359,10 +1516,18 @@ export default function IvrStudioPage() {
                 <div className="reclist flat">
                   {prompts.length === 0 && <div className="dimtxt">{t("No recordings yet.")}</div>}
                   {prompts.map((r) => (
-                    <button key={r.id} className="recrow" onClick={() => play(r.promptRef)}>
-                      <span className="p">▶</span><span className="nm">{r.displayName}</span>
+                    <div key={r.id} className="recrow">
+                      <button type="button" className="p"
+                        title={playingRef === r.promptRef ? t("Stop playing") : t("Play this recording")}
+                        aria-label={playingRef === r.promptRef ? t("Stop playing") : t("Play this recording")}
+                        onClick={() => play(r.promptRef)}>{playingRef === r.promptRef ? "⏸" : "▶"}</button>
+                      <button type="button" className="nm" onClick={() => play(r.promptRef)}>{r.displayName}</button>
                       {r.hasAudio === false && <span className="cur">no audio</span>}
-                    </button>
+                      {canManagePrompts && (
+                        <button type="button" className="del" title={t("Delete this recording")}
+                          aria-label={t("Delete this recording")} onClick={() => askDeleteRecording(r)}>🗑</button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1382,6 +1547,43 @@ export default function IvrStudioPage() {
               <button className="btn ghost" onClick={() => setPublishWarnings(null)}>{t("Cancel")}</button>
               <button className="btn primary" onClick={() => { setPublishWarnings(null); void publish(); }}>Publish anyway</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div className="backdrop" onClick={() => { if (!deleting) setConfirmDelete(null); }}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            {confirmDelete.blockers.length > 0 ? (
+              <>
+                <h3>{t("You can't delete this yet")}</h3>
+                <p className="dimtxt" style={{ margin: "8px 0 0" }}>
+                  <b>{confirmDelete.name}</b> — {t("It's still being used here:")}
+                </p>
+                <ul className="misslist">
+                  {confirmDelete.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                </ul>
+                <p className="dimtxt" style={{ margin: "10px 0 0" }}>
+                  {t("Change these to something else first, then you can delete it.")}
+                </p>
+                <div className="foot">
+                  <button className="btn primary" onClick={() => setConfirmDelete(null)}>{t("Close")}</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3>{t("Are you sure you want to delete this?")}</h3>
+                <p className="dimtxt" style={{ margin: "8px 0 0" }}>
+                  <b>{confirmDelete.name}</b> — {t("Callers can't reach it any more, and it can't be brought back.")}
+                </p>
+                <div className="foot">
+                  <button className="btn ghost" disabled={deleting} onClick={() => setConfirmDelete(null)}>{t("Cancel")}</button>
+                  <button className="btn danger" disabled={deleting} onClick={() => void doDelete()}>
+                    {deleting ? t("Deleting…") : t("Delete")}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2116,6 +2318,16 @@ function StudioStyles() {
       .ivrs .recrow .p{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-size:11px}
       .ivrs .recrow .nm{flex:1;font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .ivrs .recrow .cur{font-size:11.5px;color:var(--faint)}
+      /* A row is a div now, not one big button, because it carries its own
+         play and delete buttons — nesting a button in a button is invalid and
+         Firefox drops the inner one. These reset the inner buttons back to
+         looking like the spans they replaced. */
+      .ivrs .recrow>button{border:none;background:none;font:inherit;color:inherit;cursor:pointer;padding:0}
+      .ivrs .recrow>button.nm{text-align:left}
+      .ivrs .recrow>button.p:hover{filter:brightness(1.08)}
+      .ivrs .recrow .del{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
+        color:var(--faint);font-size:13px;opacity:.65;transition:opacity .14s,color .14s,background-color .14s}
+      .ivrs .recrow .del:hover{opacity:1;color:var(--danger,#e5484d);background:rgba(229,72,77,.12)}
       .ivrs .dimtxt{color:var(--dim);font-size:12.5px}
       .ivrs .switchbanner{display:flex;align-items:center;gap:9px;margin:6px 0 0 46px;padding:8px 12px;
         border-radius:10px;font-size:12.5px;color:#8a6a12;background:rgba(239,159,39,.12);
