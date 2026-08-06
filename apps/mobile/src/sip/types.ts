@@ -158,6 +158,16 @@ export type SipClient = {
   ) => Promise<boolean>;
   /** Synchronous probe: is a matching inbound INVITE already live on the UA? */
   hasMatchingIncomingInvite: (match?: SipMatch) => boolean;
+  /**
+   * Why the last `answerIncoming()` returned false:
+   * - `answer_unacked` — we sent the 200 OK and the far end never ACKed it
+   *   (dead transport). RECOVERABLE: the PBX never saw a pickup, so it is
+   *   still ringing and the call can be re-offered over a fresh leg.
+   * - `session_not_found_timeout` — no matching INVITE ever surfaced.
+   * - `max_attempts` — answered repeatedly, each one rejected.
+   * Null when the last answer succeeded or none has run.
+   */
+  getLastInboundAnswerFailure?: () => string | null;
   rejectIncoming: (match?: SipMatch) => Promise<boolean>;
   hangup: () => Promise<void>;
   /**

@@ -26,6 +26,7 @@ import {
 import {
   MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
   MOBILE_SIP_ANSWER_POLL_MS,
+  MOBILE_SIP_ANSWER_ATTEMPT_TIMEOUT_MS,
   createSipAnswerDeadline,
   type SipAnswerDeadlineHandle,
 } from "./mobileAnswerTiming";
@@ -533,6 +534,13 @@ export class JsSipClient implements SipClient {
   private answerInvokedAt: WeakMap<any, number> = new WeakMap();
   /** Sessions that were identified as ghost-confirmed (PBX cancelled dialog) — they must not emit state transitions. */
   private ghostSessions: WeakSet<any> = new WeakSet();
+  /**
+   * Verdict from the most recent `answerIncoming()` run: one of
+   * `answer_unacked` | `session_not_found_timeout` | `max_attempts`, or null on
+   * success / not-yet-run. Read by the answer pipeline to decide whether the
+   * failure is worth rescuing via the backend requeue.
+   */
+  private lastInboundAnswerFailure: string | null = null;
   /**
    * Sessions the user explicitly terminated via `hangup()`. Tracked so the
    * subsequent `ended`/`failed` event never trips ghost-detection (a short,
@@ -2704,6 +2712,31 @@ export class JsSipClient implements SipClient {
     }
   }
 
+  /**
+   * True when we have already produced an answer for this session and are
+   * waiting on the far end to ACK our 200 OK.
+   *
+   * JsSIP RTCSession `_status` 6 = STATUS_WAITING_FOR_ACK. Reaching it means
+   * the SDP answer was built and handed to the transport — so if this state
+   * persists, the failure is the transport swallowing our 200 OK (or the ACK),
+   * NOT a missing/unmatched INVITE. Retrying `session.answer()` on this session
+   * is impossible (JsSIP throws) and pointless (the socket is the problem), so
+   * callers use this to abandon the leg early and re-offer the call over a
+   * fresh one while the PBX is still ringing.
+   */
+  private isAwaitingAckAfterAnswer(session: any): boolean {
+    try {
+      if (!session) return false;
+      // Prefer JsSIP's own view; fall back to the raw status code.
+      if (typeof session.isEstablished === "function" && session.isEstablished()) {
+        return false;
+      }
+      return session._status === 6;
+    } catch {
+      return false;
+    }
+  }
+
   private isAnswerableIncoming(session: any): boolean {
     const status = session?._status;
     // JsSIP incoming sessions are answerable while waiting for answer (4) and
@@ -3059,6 +3092,11 @@ export class JsSipClient implements SipClient {
    * any register round-trip (standing registration: Asterisk dialed us
    * directly and the INVITE landed during the ring).
    */
+  /** See `lastInboundAnswerFailure`. Null when the last answer succeeded. */
+  getLastInboundAnswerFailure(): string | null {
+    return this.lastInboundAnswerFailure;
+  }
+
   hasMatchingIncomingInvite(match?: SipMatch): boolean {
     try {
       return !!this.findIncoming(match);
@@ -3147,8 +3185,16 @@ export class JsSipClient implements SipClient {
     // SIP is registered but the INVITE hasn't arrived) must NOT consume an
     // attempt slot — we just wait inside the overall time budget.
     const POLL_MS = MOBILE_SIP_ANSWER_POLL_MS;
+    // Cleared per attempt-run so a previous call's verdict can never leak into
+    // this one's rescue decision.
+    this.lastInboundAnswerFailure = null;
     let inviteFoundMarked = false;
     let pollIterations = 0;
+    // Set by the per-attempt timer when an attempt reached WAITING_FOR_ACK — we
+    // answered and the far end never acknowledged. Retrying is impossible on
+    // that session and futile on that transport, so we abandon immediately and
+    // report `answer_unacked` so the caller can run the requeue rescue.
+    let unackedAnswerSession: any = null;
     const inviteIdForLatency = match?.inviteId ?? null;
     while (Date.now() < getUntil()) {
       if (epoch !== this.activeAnswerEpoch) {
@@ -3185,12 +3231,45 @@ export class JsSipClient implements SipClient {
       setTimeout(() => ICM.routeToEarpiece(), 150);
 
       const outcome = await new Promise<"confirmed" | "ghost" | "failed">((resolve) => {
-        const ANSWER_TIMEOUT_MS = Math.max(500, getUntil() - Date.now());
+        // ⛔ BOUND EACH ATTEMPT. This used to be the ENTIRE remaining deadline
+        // (`Math.max(500, getUntil() - Date.now())`), which made MAX_ATTEMPTS=3
+        // a fiction: attempt #1 swallowed the whole clock and attempts #2/#3
+        // could never run.
+        //
+        // Live proof (Create A Box ext 102, 2026-08-05 12:57:26 ET, pbxCallId
+        // 1785949038.169956): the app found the INVITE on its FIRST poll
+        // (pollIterations=1), sent its 200 OK ~160 ms after the answer tap
+        // (answerAttempts=1, sipAnswer.sent=true), and the session reached
+        // JsSIP status 6 = STATUS_WAITING_FOR_ACK with hasAnswer=true. The ACK
+        // never came — the socket was dead while `wssConnected`/`uaRegistered`/
+        // `sipStackHealthy` all still reported true (Asterisk only marked the
+        // contact UNREACHABLE 27 s later). We then sat here for 16.1 s while
+        // the PBX's 15 s ring timer expired and dumped the caller to voicemail.
+        //
+        // Failing fast is what buys the rescue: a bounded attempt surfaces
+        // `answer_unacked` inside ~4 s, leaving time to re-offer the call over
+        // a fresh leg WHILE THE PBX IS STILL RINGING.
+        const ANSWER_TIMEOUT_MS = Math.max(
+          500,
+          Math.min(MOBILE_SIP_ANSWER_ATTEMPT_TIMEOUT_MS, getUntil() - Date.now()),
+        );
         let settled = false;
         const answerTimer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          console.warn('[CALL_EVENT] answer_timeout after ' + ANSWER_TIMEOUT_MS + 'ms');
+          // Distinguish "we never got to answer" from "we answered and the far
+          // end never acknowledged". Only the latter means our 200 OK went into
+          // a black hole; it is the signal the caller uses to trigger a requeue
+          // instead of reporting a bogus "session not found".
+          if (this.isAwaitingAckAfterAnswer(session)) {
+            unackedAnswerSession = session;
+            console.warn(
+              '[CALL_EVENT] answer_unacked after ' + ANSWER_TIMEOUT_MS +
+                'ms — 200 OK sent, no ACK (dead transport); abandoning this leg',
+            );
+          } else {
+            console.warn('[CALL_EVENT] answer_timeout after ' + ANSWER_TIMEOUT_MS + 'ms');
+          }
           resolve("failed");
         }, ANSWER_TIMEOUT_MS);
 
@@ -3302,6 +3381,12 @@ export class JsSipClient implements SipClient {
       if (outcome === "ghost") {
         continue;
       }
+      // We answered and got no ACK. `findIncoming` will keep returning this
+      // same session (it is still "answerable"), and the already-attempted
+      // guard above would then spin the remaining budget away doing nothing —
+      // which is exactly how a 4 s failure used to be reported as a 16 s one.
+      // Bail out NOW so the caller still has ring time left to rescue the call.
+      if (unackedAnswerSession) break;
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
 
@@ -3310,7 +3395,23 @@ export class JsSipClient implements SipClient {
     }
 
     console.warn('[CALL_EVENT] answer_pipeline_exhausted attempts=' + attempt);
-    const failureReason = attempt >= MAX_ATTEMPTS ? "max_attempts" : "session_not_found_timeout";
+    // ⛔ Report what ACTUALLY happened. `session_not_found_timeout` used to be
+    // stamped on every sub-MAX_ATTEMPTS failure — including ones where the
+    // session was found on the first poll and answered — which sent two
+    // separate investigations down the wrong path (2026-08-05). The three
+    // outcomes are genuinely different faults:
+    //   answer_unacked            → we answered; transport swallowed it
+    //   session_not_found_timeout → no matching INVITE ever surfaced
+    //   max_attempts              → answered repeatedly, each one rejected
+    const failureReason = unackedAnswerSession
+      ? "answer_unacked"
+      : attempt >= MAX_ATTEMPTS
+        ? "max_attempts"
+        : "session_not_found_timeout";
+    // Published for the answer pipeline: `answer_unacked` is recoverable (the
+    // PBX is still ringing and will re-offer over a fresh leg), the others are
+    // not. Without this the caller only sees `false` and gives up on all three.
+    this.lastInboundAnswerFailure = failureReason;
     this.emitWebrtcCallDebug(
       this.inboundBlackbox.buildInboundFailurePayload({
         inviteId: match?.inviteId ?? null,

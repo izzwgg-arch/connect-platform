@@ -212,6 +212,13 @@ function computeStats(session: FlightSession): TimingStats {
     if (reason === 'session_not_found_timeout') {
       stats.warningFlags.push('SIP_INVITE_TIMEOUT');
     }
+    // We answered and the far end never ACKed our 200 OK — a dead/one-way
+    // transport, NOT a missing INVITE. Flagged separately because these two
+    // were conflated under SIP_INVITE_TIMEOUT and that mislabel cost two
+    // wrong root causes on the 2026-08-05 Create A Box call.
+    if (reason === 'answer_unacked') {
+      stats.warningFlags.push('SIP_ANSWER_UNACKED');
+    }
     if (reason === 'ended_before_confirmed') {
       stats.warningFlags.push('SIP_ENDED_BEFORE_CONFIRMED');
     }

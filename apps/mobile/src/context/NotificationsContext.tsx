@@ -3024,6 +3024,83 @@ export function NotificationsProvider({
                 path: 'warm_answer_first',
               },
             });
+          } else if (
+            (() => {
+              try { return sip.getLastInboundAnswerFailure() === 'answer_unacked'; }
+              catch { return false; }
+            })()
+          ) {
+            // ── UNACKED-ANSWER RESCUE (live failure 2026-08-05, Create A Box
+            //    ext 102, pbxCallId 1785949038.169956) ────────────────────────
+            // We answered on the warm socket and the PBX never ACKed our 200 OK
+            // — the transport was dead while every health flag still read
+            // healthy (`wssConnected`/`uaRegistered`/`sipStackHealthy` all true;
+            // Asterisk only marked the contact UNREACHABLE 27 s later). The PBX
+            // therefore never saw a pickup at all and is STILL RINGING, so the
+            // call is recoverable: ask the backend to re-offer it as a fresh
+            // PJSIP leg, exactly as the cold path does.
+            //
+            // This is only reachable now that an attempt is bounded
+            // (MOBILE_SIP_ANSWER_ATTEMPT_TIMEOUT_MS). Previously the single
+            // attempt consumed the whole 16 s budget, the PBX's 15 s ring timer
+            // expired first, and the caller was already in voicemail — there
+            // was nothing left to rescue.
+            //
+            // Re-offering is safe even in the race where our original 200 OK
+            // did land: the server's requeue guard skips the AMI Redirect once
+            // `extensionAnsweredAt` is set, so the worst case is a no-op.
+            console.warn('[ANSWER_PIPELINE] WARM_ANSWER_UNACKED — requeueing over a fresh leg', JSON.stringify({
+              inviteId: invite.id,
+              pbxCallId: invite.pbxCallId,
+              sinceAnswerMs: Date.now() - answerTappedAt,
+            }));
+            flightRecord('SIP', 'ANSWER_UNACKED_REQUEUE', {
+              inviteId: invite.id,
+              pbxCallId: invite.pbxCallId ?? null,
+              severity: 'warn',
+              payload: { sinceAnswerMs: Date.now() - answerTappedAt },
+            });
+            // Drop the half-answered leg first — it is wedged in
+            // WAITING_FOR_ACK and would otherwise shadow the replacement
+            // INVITE in findIncoming().
+            sip.rejectIncomingInvite({
+              inviteId: invite.id,
+              fromNumber: invite.fromNumber,
+              toExtension: invite.toExtension,
+              pbxCallId: invite.pbxCallId,
+              sipCallTarget: invite.sipCallTarget,
+            }).catch(() => undefined);
+
+            const requeue = await respondInvite(
+              authToken,
+              invite.id,
+              "ACCEPT",
+              deviceIdRef.current || undefined,
+            ).catch(() => null);
+
+            if (requeue?.code === "INVITE_CLAIMED_OK") {
+              backendClaimed = true;
+              answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
+              const requeuedInvite = await sip
+                .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
+                .catch(() => false);
+              if (requeuedInvite) {
+                answered = await sip
+                  .answerIncomingInvite(
+                    inviteMatch,
+                    MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+                    recordSipAnswerTrace,
+                    answerDeadline.handle,
+                  )
+                  .catch(() => false);
+                flightRecord('SIP', 'ANSWER_UNACKED_REQUEUE_RESULT', {
+                  inviteId: invite.id,
+                  pbxCallId: invite.pbxCallId ?? null,
+                  severity: answered ? 'info' : 'error',
+                  payload: { answered, sinceAnswerMs: Date.now() - answerTappedAt },
+                });
+              }
+            }
           }
         } else {
           // Cold / requeue path: ACCEPT was already awaited above; answer now.

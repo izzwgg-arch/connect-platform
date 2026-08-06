@@ -108,6 +108,13 @@ type SipState = {
   hasMatchingIncomingInvite: (
     match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
   ) => boolean;
+  /**
+   * Why the last `answerIncomingInvite` returned false:
+   * `answer_unacked` (we answered, transport swallowed it — RECOVERABLE via a
+   * backend requeue), `session_not_found_timeout`, or `max_attempts`.
+   * Null when the last answer succeeded.
+   */
+  getLastInboundAnswerFailure: () => string | null;
   rejectIncomingInvite: (match?: {
     inviteId?: string | null;
     fromNumber?: string | null;
@@ -2462,6 +2469,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         }
         return clientRef.current.answerIncoming(match, timeoutMs, onTrace, deadlineHandle);
       },
+
+      getLastInboundAnswerFailure: () =>
+        clientRef.current.getLastInboundAnswerFailure?.() ?? null,
 
       beginInboundBlackbox: (inviteId, meta) => {
         clientRef.current.beginInboundBlackbox?.(inviteId, meta);

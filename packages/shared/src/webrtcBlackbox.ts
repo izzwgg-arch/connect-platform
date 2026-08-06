@@ -74,6 +74,14 @@ export type OutboundDiagnosisCategory =
 export type InboundDiagnosisCategory =
   | "INBOUND_SESSION_NOT_FOUND_TIMEOUT"
   | "INBOUND_INVITE_NOT_RECEIVED"
+  /**
+   * We DID answer — the 200 OK was built and handed to the transport — and the
+   * far end never ACKed it. The fault is the socket, not the INVITE. Kept
+   * distinct from INBOUND_SESSION_NOT_FOUND_TIMEOUT because conflating the two
+   * is what produced two wrong root causes for the Create A Box ext 102 call on
+   * 2026-08-05.
+   */
+  | "INBOUND_ANSWER_UNACKED"
   | "INBOUND_SIP_ANSWER_FAILED"
   | "INBOUND_BACKEND_CLAIM_FAILED"
   | "INBOUND_MAX_ATTEMPTS"
@@ -311,6 +319,9 @@ export function classifyInboundDiagnosis(input: {
   inviteNotReceived?: boolean;
 }): InboundDiagnosisCategory {
   const reason = String(input.failureReason || "").toLowerCase();
+  // Must be tested BEFORE the generic `reason.includes("answer")` fallback
+  // below, which would otherwise swallow it into INBOUND_SIP_ANSWER_FAILED.
+  if (reason === "answer_unacked") return "INBOUND_ANSWER_UNACKED";
   if (reason === "session_not_found_timeout") return "INBOUND_SESSION_NOT_FOUND_TIMEOUT";
   if (reason === "max_attempts") return "INBOUND_MAX_ATTEMPTS";
   if (input.inviteNotReceived || reason === "sip_invite_not_received") {

@@ -41,6 +41,30 @@ export const MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS = 16_000;
 /** Hard cap for a single answer attempt (initial + extensions). */
 export const MOBILE_SIP_ANSWER_MAX_WAIT_MS = 30_000;
 
+/**
+ * Cap on ONE `session.answer()` attempt — how long we wait for JsSIP to emit
+ * `confirmed` (i.e. for the far end to ACK our 200 OK) before treating that leg
+ * as dead.
+ *
+ * Why this exists (live failure 2026-08-05, Create A Box ext 102)
+ * --------------------------------------------------------------
+ * `answerIncoming()` declares `MAX_ATTEMPTS = 3`, but its per-attempt timer used
+ * to be the WHOLE remaining deadline. Attempt #1 therefore consumed every
+ * millisecond and attempts #2/#3 were unreachable — the retry budget was
+ * fiction. On that call the app found the INVITE on its first poll and sent its
+ * 200 OK within ~160 ms of the tap; the socket was dead (silently — every
+ * health flag still read healthy), no ACK ever came, and the app sat here for
+ * 16.1 s. Meanwhile the PBX's 15 s ring timer expired and the caller was sent
+ * to voicemail.
+ *
+ * 4 s is chosen against the PBX ring window, not against SIP: a tenant ring
+ * timer is commonly 15 s, so failing at ~4 s leaves ~10 s to re-offer the call
+ * over a fresh leg while the caller is still ringing. SIP's own 200 OK
+ * retransmission ladder (T1 = 500 ms, doubling) has already made ~3 attempts by
+ * then, so a live-but-slow transport is not cut off prematurely.
+ */
+export const MOBILE_SIP_ANSWER_ATTEMPT_TIMEOUT_MS = 4_000;
+
 /** JsSIP findIncoming poll interval — keep in sync with jssip.ts. */
 export const MOBILE_SIP_ANSWER_POLL_MS = 15;
 
