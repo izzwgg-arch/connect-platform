@@ -149,6 +149,9 @@ const UI_PHRASES = [
   "You can't delete this yet", "It's still being used here:",
   "Change these to something else first, then you can delete it.",
   "Play this recording", "Stop playing", "Delete this recording",
+  "Make a recording", "Rename this recording", "Rename recording", "Save name",
+  "What should it be called?", "That name is already taken by another recording.",
+  "Callers never hear this name — it's only so you can find the recording later.",
 ];
 
 /** Publish blockers the API can return WITHOUT a human-readable `detail`.
@@ -238,6 +241,8 @@ export default function IvrStudioPage() {
     kind: "recording" | "menu"; id: string; name: string; blockers: string[];
   }>(null);
   const [deleting, setDeleting] = useState(false);
+  /** Which recording is being renamed, and the name being typed. */
+  const [renaming, setRenaming] = useState<null | { id: string; name: string }>(null);
 
   /** The assistant sends the customer here after building a menu for them. */
   const fromAssistant = search?.get("from") === "assistant";
@@ -275,6 +280,11 @@ export default function IvrStudioPage() {
   /** Set when the recording modal/upload was opened FROM the key editor for a
    *  digit: the result becomes that key's recording, not the menu greeting. */
   const [makeRecForKey, setMakeRecForKey] = useState<string | null>(null);
+  /** Opened from the Recordings library rather than from a greeting or a key.
+   *  The result is added to the library and assigned to NOTHING — silently
+   *  repointing the live greeting because someone made an announcement is the
+   *  kind of change a caller notices before the customer does. */
+  const [makeRecForLibrary, setMakeRecForLibrary] = useState(false);
   /** Same idea for teams: "A team" with none yet should MAKE one, not send the
    *  customer away to find the button. */
   const [makeTeamForKey, setMakeTeamForKey] = useState<string | null>(null);
@@ -571,6 +581,21 @@ export default function IvrStudioPage() {
    * and installs it on the phone system). Returns the new promptRef, or null
    * after surfacing the error — the editor stays open either way.
    */
+  /** The library is only usable if every name is distinct — an upload of the
+   *  same file twice would otherwise produce two rows nobody can tell apart.
+   *  Adds a number rather than refusing: an upload is already in flight by the
+   *  time we know, and the name is editable afterwards. */
+  function uniqueRecordingName(base: string): string {
+    const taken = new Set(prompts.map((p) => p.displayName.trim().toLowerCase()));
+    const wanted = base.trim() || "Recording";
+    if (!taken.has(wanted.toLowerCase())) return wanted;
+    for (let n = 2; n < 100; n++) {
+      const candidate = `${wanted} ${n}`;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return wanted;
+  }
+
   async function uploadRecordingForKey(digit: string, file: File): Promise<string | null> {
     try {
       const base = file.name.replace(/\.[^.]+$/, "");
@@ -579,7 +604,7 @@ export default function IvrStudioPage() {
       const created = await apiPost<{ prompt: PromptRow }>(`/voice/ivr/prompts${qs}`, {
         tenantId,
         promptRef: `custom/${safe}_${suffix}`,
-        displayName: base.trim() || "Recording",
+        displayName: uniqueRecordingName(base),
         category: "general",
       });
       const row = created.prompt;
@@ -748,6 +773,23 @@ export default function IvrStudioPage() {
     if (schedule?.afterHoursProfileId === profileId) uses.push("it's the menu that answers while you're closed");
     if (schedule?.holidayProfileId === profileId) uses.push("it's the menu that answers on holidays");
     return uses;
+  }
+
+  /** Renaming touches nothing a caller hears: the promptRef and the audio on
+   *  the phone system are untouched, so no republish is needed and `dirty`
+   *  stays where it was. Only the label in this library changes. */
+  async function renameRecording(id: string, nextName: string) {
+    const name = nextName.trim();
+    if (!name) return;
+    setSaving(true);
+    try {
+      await apiPatch(`/voice/ivr/prompts/${id}${qs}`, { displayName: name });
+      setPrompts((ps) => ps.map((p) => (p.id === id ? { ...p, displayName: name } : p)));
+      setRenaming(null);
+      flash(`Renamed to “${name}”`);
+    } catch (e: any) {
+      setError(e?.body?.detail || e?.message || "Couldn't rename that recording");
+    } finally { setSaving(false); }
   }
 
   function askDeleteRecording(row: PromptRow) {
@@ -1511,7 +1553,17 @@ export default function IvrStudioPage() {
             </div>
 
             <div className="card">
-              <div className="card-h"><div><h2>{t("Recordings")}</h2><div className="sub">{prompts.length} available</div></div></div>
+              <div className="card-h">
+                <div><h2>{t("Recordings")}</h2><div className="sub">{prompts.length} available</div></div>
+                {/* Making a recording used to be reachable ONLY from the
+                    greeting step or a key editor, so anything made was
+                    immediately assigned somewhere. This one just adds to the
+                    library and leaves the menu alone. */}
+                <button className="btn sm" disabled={!canManagePrompts}
+                  onClick={() => { setMakeRecForKey(null); setMakeRecForLibrary(true); setMakeRecOpen(true); }}>
+                  {t("Make a recording")}
+                </button>
+              </div>
               <div className="card-b">
                 <div className="reclist flat">
                   {prompts.length === 0 && <div className="dimtxt">{t("No recordings yet.")}</div>}
@@ -1524,8 +1576,13 @@ export default function IvrStudioPage() {
                       <button type="button" className="nm" onClick={() => play(r.promptRef)}>{r.displayName}</button>
                       {r.hasAudio === false && <span className="cur">no audio</span>}
                       {canManagePrompts && (
-                        <button type="button" className="del" title={t("Delete this recording")}
-                          aria-label={t("Delete this recording")} onClick={() => askDeleteRecording(r)}>🗑</button>
+                        <>
+                          <button type="button" className="del" title={t("Rename this recording")}
+                            aria-label={t("Rename this recording")}
+                            onClick={() => setRenaming({ id: r.id, name: r.displayName })}>✎</button>
+                          <button type="button" className="del" title={t("Delete this recording")}
+                            aria-label={t("Delete this recording")} onClick={() => askDeleteRecording(r)}>🗑</button>
+                        </>
                       )}
                     </div>
                   ))}
@@ -1550,6 +1607,34 @@ export default function IvrStudioPage() {
           </div>
         </div>
       )}
+
+      {renaming && (() => {
+        const typed = renaming.name.trim().toLowerCase();
+        const taken = prompts.some((p) => p.id !== renaming.id && p.displayName.trim().toLowerCase() === typed);
+        const canSave = Boolean(typed) && !taken && !saving;
+        return (
+          <div className="backdrop" onClick={() => { if (!saving) setRenaming(null); }}>
+            <div className="dialog" onClick={(e) => e.stopPropagation()}>
+              <h3>{t("Rename recording")}</h3>
+              <label className="rnlbl">{t("What should it be called?")}</label>
+              <input className="inp" autoFocus value={renaming.name}
+                onChange={(e) => setRenaming({ ...renaming, name: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Enter" && canSave) void renameRecording(renaming.id, renaming.name); }} />
+              <p className="dimtxt" style={{ margin: "8px 0 0" }}>
+                {taken
+                  ? t("That name is already taken by another recording.")
+                  : t("Callers never hear this name — it's only so you can find the recording later.")}
+              </p>
+              <div className="foot">
+                <button className="btn ghost" disabled={saving} onClick={() => setRenaming(null)}>{t("Cancel")}</button>
+                <button className="btn primary" disabled={!canSave} onClick={() => void renameRecording(renaming.id, renaming.name)}>
+                  {t("Save name")}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {confirmDelete && (
         <div className="backdrop" onClick={() => { if (!deleting) setConfirmDelete(null); }}>
@@ -1647,6 +1732,14 @@ export default function IvrStudioPage() {
               ...ps.filter((p) => p.id !== prompt.id),
               { id: prompt.id, promptRef: prompt.promptRef, displayName: prompt.displayName, category: prompt.category, hasAudio: true },
             ]);
+            if (makeRecForLibrary) {
+              // Made from the Recordings card: it joins the library and
+              // nothing on the menu moves.
+              setMakeRecForLibrary(false);
+              setMakeRecOpen(false);
+              flash(`“${prompt.displayName}” added to your recordings.`);
+              return;
+            }
             if (makeRecForKey) {
               // Opened from a key editor: the recording belongs to that key,
               // not to the menu greeting. The editor adopts it and stays open
@@ -1663,7 +1756,8 @@ export default function IvrStudioPage() {
             setMakeRecOpen(false);
             flash(`“${prompt.displayName}” is now your greeting.`);
           }}
-          onClose={() => { setMakeRecOpen(false); setMakeRecForKey(null); }}
+          onClose={() => { setMakeRecOpen(false); setMakeRecForKey(null); setMakeRecForLibrary(false); }}
+          existingNames={prompts.map((p) => p.displayName)}
         />
       )}
 
@@ -2364,6 +2458,7 @@ function StudioStyles() {
       .ivrs .dialog{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);width:min(440px,100%);padding:20px}
       .ivrs .dialog h3{margin:0 0 6px;font-size:17px;font-weight:670}
       .ivrs .dialog .inp{margin-top:13px;font-size:15px;padding:11px 13px}
+      .ivrs .rnlbl{display:block;font-size:11.5px;font-weight:640;color:var(--dim);margin:14px 0 0}
       .ivrs .check{display:flex;align-items:center;gap:9px;margin-top:13px;font-size:13.5px;cursor:pointer;color:var(--dim)}
       .ivrs .check input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
       .ivrs .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);

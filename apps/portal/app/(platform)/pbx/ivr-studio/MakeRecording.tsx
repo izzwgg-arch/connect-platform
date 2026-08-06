@@ -60,6 +60,9 @@ const PHRASES = [
   "Voice source", "Amazon Polly", "Language", "All languages", "of",
   "No voices offer that language and quality together. Try another.",
   "This voice quality always reads at its own natural pace — speed can't be changed.",
+  "Give this recording a name so you can find it later.",
+  "You already have a recording called that. Pick a different name.",
+  "So you can tell it apart from your other recordings later.",
 ];
 
 interface Voice {
@@ -181,11 +184,16 @@ export function MakeRecording({
   authToken,
   onCreated,
   onClose,
+  existingNames = [],
 }: {
   /** "?tenantId=…" or "" — the Studio's existing tenant scoping, passed through. */
   tenantQs: string;
   apiBase: string;
   authToken: string;
+  /** What this customer's recordings are already called. Used to refuse a
+   *  duplicate and to suggest a name that isn't taken — four recordings called
+   *  "Main greeting" is a library nobody can use. */
+  existingNames?: string[];
   /** Called with the new catalog row once it's installed — the whole row, so
    *  the Studio can splice it into its list instead of refetching everything. */
   onCreated: (prompt: { id: string; promptRef: string; displayName: string; category: string }) => void;
@@ -195,7 +203,11 @@ export function MakeRecording({
   const [voices, setVoices] = useState<Voice[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [name, setName] = useState("Main greeting");
+  // ⛔ Starts EMPTY on purpose. It used to default to "Main greeting", and the
+  // template chips overwrote it with their own label, so whoever clicked the
+  // first chip and pressed save got "Main greeting" — one tenant ended up with
+  // four recordings by that name and no way to tell them apart.
+  const [name, setName] = useState("");
   const [text, setText] = useState(TEMPLATES[0].text);
   const [voiceId, setVoiceId] = useState("");
   const [model, setModel] = useState("eleven_flash_v2_5");
@@ -374,9 +386,14 @@ export function MakeRecording({
   }
 
   async function save() {
+    // ⛔ No "|| Greeting" fallback here any more. A silent default is how the
+    // library filled up with identical names, and an unnamed recording is
+    // un-findable the moment there are two of them.
+    const displayName = name.trim();
+    if (!displayName) { setErr(t("Give this recording a name so you can find it later.")); return; }
+    if (nameTaken) { setErr(t("You already have a recording called that. Pick a different name.")); return; }
     setErr(null); setNote(null); setSaving(true);
     try {
-      const displayName = name.trim() || "Greeting";
       const r = isPolly
         ? await api(`/voice/ivr/prompts/generate-polly${tenantQs}`, {
             method: "POST",
@@ -404,6 +421,25 @@ export function MakeRecording({
       setSaving(false);
     }
   }
+
+  /** Case- and space-insensitive, because "Main Greeting" and "main greeting"
+   *  are the same thing to the person reading the list. */
+  const takenKeys = useMemo(
+    () => new Set(existingNames.map((n) => n.trim().toLowerCase()).filter(Boolean)),
+    [existingNames],
+  );
+  const nameTaken = takenKeys.has(name.trim().toLowerCase());
+
+  /** A template's label, made unique — "Main greeting 2" when the first one is
+   *  already in the library. Only ever fills an empty box. */
+  const suggestName = useCallback((base: string): string => {
+    if (!takenKeys.has(base.trim().toLowerCase())) return base;
+    for (let n = 2; n < 100; n++) {
+      const candidate = `${base} ${n}`;
+      if (!takenKeys.has(candidate.toLowerCase())) return candidate;
+    }
+    return base;
+  }, [takenKeys]);
 
   const chars = text.trim().length;
   const left = status?.characterLimit && status?.charactersUsed != null
@@ -513,11 +549,21 @@ export function MakeRecording({
 
               <label className="mr-lbl">{t("What should it be called?")}</label>
               <input className="mr-in" value={name} onChange={(e) => setName(e.target.value)} placeholder="Main greeting" />
+              <div className={"mr-hint" + (nameTaken ? " bad" : "")}>
+                {nameTaken
+                  ? t("You already have a recording called that. Pick a different name.")
+                  : t("So you can tell it apart from your other recordings later.")}
+              </div>
 
               <label className="mr-lbl">{t("What should callers hear?")}</label>
               <div className="mr-chips">
                 {TEMPLATES.map((tpl) => (
-                  <button key={tpl.label} className="mr-chip" onClick={() => { setText(tpl.text); setName(tpl.label); }}>
+                  // The chip fills the name only when the box is still empty,
+                  // and never with a name that's already taken. It used to
+                  // overwrite whatever was typed with its own label, which is
+                  // how a library ends up with four "Main greeting"s.
+                  <button key={tpl.label} className="mr-chip"
+                    onClick={() => { setText(tpl.text); if (!name.trim()) setName(suggestName(tpl.label)); }}>
                     {t(tpl.label)}
                   </button>
                 ))}
@@ -678,7 +724,10 @@ export function MakeRecording({
               <button className="mr-btn" onClick={preview} disabled={!canGenerate}>
                 {previewing ? t("Generating...") : `\u25b6 ${t("Hear it")}`}
               </button>
-              <button className="mr-btn primary" onClick={save} disabled={!canGenerate}>
+              {/* Naming gates SAVE only — previewing an unnamed draft is fine,
+                  and making someone name a voice they haven't heard yet is the
+                  wrong order. */}
+              <button className="mr-btn primary" onClick={save} disabled={!canGenerate || !name.trim() || nameTaken}>
                 {t(saving ? "Saving..." : "Use this recording")}
               </button>
             </div>
@@ -731,6 +780,9 @@ function MakeRecordingStyles() {
         border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel-2,#f6f9fc);color:inherit}
       .mr-ta{resize:vertical;line-height:1.6}
       .mr-in:focus,.mr-ta:focus{outline:none;border-color:var(--accent,#2f6bff)}
+      .mr-hint{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--faint,#94a3b8)}
+      .mr-hint.bad{color:#c2410c}
+      :root[data-theme="dark"] .mr-hint.bad{color:#fca77a}
       .mr-chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:9px}
       .mr-chip{font:inherit;font-size:12px;font-weight:600;padding:6px 11px;border-radius:99px;cursor:pointer;
         border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel-2,#f6f9fc);color:var(--dim,#5d6f84)}
