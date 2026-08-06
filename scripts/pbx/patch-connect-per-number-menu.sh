@@ -60,6 +60,7 @@ cp -a "$FILE" "$FILE.bak.per-number-menu.$STAMP"
 echo "Backup: $FILE.bak.per-number-menu.$STAMP"
 
 python3 - "$FILE" <<'PY'
+import re
 import sys
 
 path = sys.argv[1]
@@ -72,7 +73,11 @@ block = [
     " ; shows the owner, so it must be what callers hear. Falls through to the",
     " ; legacy tenant-global menu when the number has no assignment or the menu",
     " ; has not been published yet.",
-    " same =>      n,Set(DID_MENU=${DB(connect/didmap/${IVR_DID}/profile_id)})",
+    " ; ⛔ The (permenu) LABEL is load-bearing. The pre-announce block above",
+    " ; jumps straight to (prompt) when there is no announcement, which leapt",
+    " ; clean over this block — the patch verified as 'live' while doing",
+    " ; nothing at all. Those jumps are retargeted to (permenu) below.",
+    " same =>      n(permenu),Set(DID_MENU=${DB(connect/didmap/${IVR_DID}/profile_id)})",
     ' same =>      n,GotoIf($["${DID_MENU}" = ""]?prompt)',
     " same =>      n,Set(DID_MENU_PROMPT=${DB(connect/t_${TENANT_SLUG}/menu/${DID_MENU}/prompt)})",
     ' same =>      n,GotoIf($["${DID_MENU_PROMPT}" = ""]?prompt)',
@@ -92,9 +97,26 @@ if not inserted:
     sys.stderr.write("FATAL: anchor vanished mid-write\n")
     sys.exit(1)
 
+# Retarget the pre-announce block's skip-jumps from (prompt) to (permenu), so a
+# call with no announcement still reaches the per-number check. ONLY inside
+# that block — the retry/timeout loops must keep landing on (prompt).
+start = next(i for i, l in enumerate(out) if "Set(PRE_ANNOUNCE=${DB(" in l)
+end = next(i for i, l in enumerate(out) if "n(play_pre),Playback" in l)
+retargeted = 0
+for i in range(start, end):
+    if "?prompt)" in out[i]:
+        out[i] = out[i].replace("?prompt)", "?permenu)")
+        retargeted += 1
+    elif re.search(r"Goto\(prompt\)\s*$", out[i]):
+        out[i] = re.sub(r"Goto\(prompt\)\s*$", "Goto(permenu)", out[i])
+        retargeted += 1
+if retargeted == 0:
+    sys.stderr.write("FATAL: no pre-announce jumps retargeted — block would be unreachable\n")
+    sys.exit(1)
+
 with open(path, "w", encoding="utf-8", newline="\n") as fh:
     fh.write("\n".join(out) + "\n")
-print("inserted %d lines before the (prompt) label" % len(block))
+print("inserted %d lines, retargeted %d pre-announce jump(s)" % (len(block), retargeted))
 PY
 
 echo "Reloading dialplan…"

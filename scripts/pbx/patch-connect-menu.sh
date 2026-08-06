@@ -66,7 +66,12 @@ exten => _m.,1,NoOp(Connect submenu — tenant=${TENANT_SLUG} menu=${EXTEN})
  same =>       n,Set(M_T=${IF($[${LEN(${M_T})}>0]?${M_T}:7)})
  same =>       n,Set(M_RMAX=${IF($[${LEN(${M_RMAX})}>0]?${M_RMAX}:3)})
  same =>       n,Set(M_RETRIES=0)
- same =>       n,GotoIf($["${M_GREETING}" = ""]?dead)
+ ; An empty greeting does NOT mean a dead menu — only an UNPUBLISHED one does.
+ ; max_retries is written for every published menu, so it is the "this menu
+ ; exists" marker. Without this split, a customer who creates a menu and hasn't
+ ; recorded its greeting yet drops callers to goodbye (proven live 2026-08-06).
+ same =>       n,Set(M_PUBLISHED=${DB(${MENU_FAMILY}/max_retries)})
+ same =>       n,GotoIf($["${M_GREETING}" = ""]?nogreet)
  same =>       n(prompt),GotoIf($[${M_RETRIES} > 0 & ${LEN(${M_RETRY_PROMPT})} > 0]?try_retry)
  same =>       n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${M_GREETING}.ulaw)}" = "1"]?play_greet)
  same =>       n,GotoIf($["${STAT(e,/var/lib/asterisk/sounds/${M_GREETING}.wav)}" = "1"]?play_greet)
@@ -96,6 +101,10 @@ exten => _m.,1,NoOp(Connect submenu — tenant=${TENANT_SLUG} menu=${EXTEN})
  same =>       n,NoOp(Connect submenu exhausted on timeout — type=${EXIT_TYPE} dest=${EXIT_DEST})
  same =>       n,Goto(connect-exit-router,s,1)
  same =>       n(fallback),Goto(connect-default-fallback,s,1)
+ same =>       n(nogreet),GotoIf($["${M_PUBLISHED}" = ""]?dead)
+ same =>       n,NoOp(Connect submenu ${CUR_MENU} has no greeting recorded yet - serving its keys)
+ same =>       n,Playback(one-moment-please)
+ same =>       n,Goto(waitdigit)
  same =>       n(dead),NoOp(Connect submenu ${EXTEN} unpublished or no slug — tenant fallback)
  same =>       n,Goto(connect-default-fallback,s,1)
 
