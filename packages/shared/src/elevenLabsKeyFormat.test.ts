@@ -13,6 +13,7 @@ import {
   ELEVENLABS_KEY_PREFIX,
   ELEVENLABS_LEGACY_KEY_MESSAGE,
   classifyElevenLabsFailure,
+  describeElevenLabsFailure,
   describeElevenLabsKey,
   isElevenLabsKeyFailure,
 } from "./elevenLabsKeyFormat";
@@ -73,6 +74,54 @@ test("nothing recognised means nothing said, so the status code still decides", 
 test("a malformed body never throws", () => {
   assert.doesNotThrow(() => classifyElevenLabsFailure("{not json"));
   assert.equal(classifyElevenLabsFailure("{not json"), null);
+});
+
+// ── what a CUSTOMER is allowed to see ────────────────────────────────────────
+//
+// A paying customer was shown "ElevenLabs has an unpaid invoice on the account
+// — settle the bill at elevenlabs.io" inside the IVR Studio. These lock that
+// door: our supplier, our bill and our key are never a customer's business.
+
+const OUR_ACCOUNT_FAILURES = [
+  ["unpaid invoice", JSON.stringify({ detail: { status: "payment_issue" } })],
+  ["out of characters", JSON.stringify({ detail: { status: "quota_exceeded" } })],
+  ["flagged account", JSON.stringify({ detail: { status: "detected_unusual_activity" } })],
+  ["rejected key", JSON.stringify({ detail: { status: "invalid_api_key" } })],
+  ["retired key format", LEGACY_PREFIX_BODY],
+] as const;
+
+for (const [label, body] of OUR_ACCOUNT_FAILURES) {
+  test(`customer text for "${label}" never names the supplier, the bill or the key`, () => {
+    const f = describeElevenLabsFailure(body)!;
+    assert.doesNotMatch(f.customerMessage, /elevenlabs/i);
+    assert.doesNotMatch(f.customerMessage, /invoice|bill|payment|paid|credit/i);
+    assert.doesNotMatch(f.customerMessage, /\bkey\b|sk_/i);
+  });
+
+  test(`"${label}" is flagged as our problem, so staff get alerted`, () => {
+    assert.equal(describeElevenLabsFailure(body)!.ourProblem, true);
+  });
+}
+
+test("the customer is told what they CAN do instead, not just that it failed", () => {
+  const f = describeElevenLabsFailure(JSON.stringify({ detail: { status: "payment_issue" } }))!;
+  assert.match(f.customerMessage, /upload/i);
+});
+
+test("staff still get the real reason — the two messages are different", () => {
+  const f = describeElevenLabsFailure(JSON.stringify({ detail: { status: "payment_issue" } }))!;
+  assert.match(f.ownerMessage, /unpaid invoice/i);
+  assert.notEqual(f.ownerMessage, f.customerMessage);
+});
+
+test("a deleted voice IS the customer's business — they picked it, they can repick", () => {
+  const f = describeElevenLabsFailure(JSON.stringify({ detail: { status: "voice_not_found" } }))!;
+  assert.match(f.customerMessage, /pick another/i);
+  assert.equal(f.ourProblem, false);
+});
+
+test("an unrecognised body describes nothing, rather than inventing a reason", () => {
+  assert.equal(describeElevenLabsFailure("<html>502</html>"), null);
 });
 
 // ── blaming the key vs blaming the connection ────────────────────────────────

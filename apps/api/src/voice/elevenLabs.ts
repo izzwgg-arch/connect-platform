@@ -108,6 +108,9 @@ export function isTtsModelId(v: unknown): v is TtsModelId {
 }
 
 export class ElevenLabsError extends Error {
+  /** Safe for a customer — see the constructor note. */
+  readonly customerMessage: string;
+
   constructor(
     message: string,
     readonly httpStatus: number,
@@ -121,9 +124,19 @@ export class ElevenLabsError extends Error {
      *  "invalid_api_key_prefix", …). Lets callers branch on the actual reason
      *  rather than on a status code that means several different things. */
     readonly providerCode: string = "",
+    /**
+     * Safe for a customer. Defaults to `userMessage`, which is correct for the
+     * errors we raise ourselves — "type the greeting first", "pick a voice" —
+     * because those are about what the customer just did. Provider failures
+     * pass an explicit neutral message instead.
+     */
+    customerMessage?: string,
+    /** Our account or our supplier — not the customer, and not their fault. */
+    readonly ourProblem: boolean = false,
   ) {
     super(message);
     this.name = "ElevenLabsError";
+    this.customerMessage = customerMessage ?? userMessage;
   }
 }
 
@@ -160,6 +173,24 @@ function explain(status: number, body: string): string {
 }
 
 /**
+ * The same failure, told to a customer.
+ *
+ * Never names the supplier and never mentions our account. The one exception
+ * is text the customer typed — 422 on unreadable text is genuinely theirs to
+ * fix, and hiding that would leave them stuck with no way forward.
+ */
+function explainForCustomer(status: number, body: string): { message: string; ourProblem: boolean } {
+  const known = describeElevenLabsFailure(body);
+  if (known) return { message: known.customerMessage, ourProblem: known.ourProblem };
+  if (status === 429) return { message: ELEVENLABS_CUSTOMER_BUSY, ourProblem: false };
+  if (status === 422 && !/quota|credit/i.test(body)) {
+    return { message: "Some of that text couldn't be read. Try shortening it or removing unusual characters.", ourProblem: false };
+  }
+  if (status >= 500) return { message: "The voice service is having trouble right now. Try again shortly.", ourProblem: true };
+  return { message: ELEVENLABS_CUSTOMER_UNAVAILABLE, ourProblem: true };
+}
+
+/**
  * Read ElevenLabs' structured `detail` object, when there is one.
  *
  * The rules themselves live in @connect/shared so the agent's settings page
@@ -193,15 +224,23 @@ async function call(
       // Read at most a snippet: provider errors can be enormous, and the body
       // is only ever used to classify, never shown verbatim.
       const text = (await res.text().catch(() => "")).slice(0, 400);
-      throw new ElevenLabsError(`elevenlabs_${res.status}`, res.status, explain(res.status, text), providerCodeOf(text));
+      const forCustomer = explainForCustomer(res.status, text);
+      throw new ElevenLabsError(
+        `elevenlabs_${res.status}`,
+        res.status,
+        explain(res.status, text),
+        providerCodeOf(text),
+        forCustomer.message,
+        forCustomer.ourProblem,
+      );
     }
     return res;
   } catch (err: any) {
     if (err instanceof ElevenLabsError) throw err;
     if (err?.name === "AbortError") {
-      throw new ElevenLabsError("elevenlabs_timeout", 504, "ElevenLabs took too long to answer. Try again.");
+      throw new ElevenLabsError("elevenlabs_timeout", 504, "ElevenLabs took too long to answer. Try again.", "", "The voice service took too long to answer. Try again.", true);
     }
-    throw new ElevenLabsError(`elevenlabs_unreachable: ${err?.message}`, 502, "Couldn't reach ElevenLabs.");
+    throw new ElevenLabsError(`elevenlabs_unreachable: ${err?.message}`, 502, "Couldn't reach ElevenLabs.", "", "Couldn't reach the voice service. Try again shortly.", true);
   } finally {
     clearTimeout(timer);
   }
@@ -266,8 +305,13 @@ export interface KeyCheck {
   characterCount?: number;
   characterLimit?: number;
   tier?: string;
-  /** Present whenever `usable` is false — always says what to do about it. */
+  /** Present whenever `usable` is false — always says what to do about it.
+   *  Written for Connect staff: it names the provider and our account state. */
   userMessage?: string;
+  /** The same situation told to a customer — no provider, no billing, no key. */
+  customerMessage?: string;
+  /** Our account or supplier, not anything the customer did. */
+  ourProblem?: boolean;
 }
 
 /**
@@ -302,6 +346,12 @@ export async function checkElevenLabsKey(apiKey: string): Promise<KeyCheck> {
         usable: false,
         userMessage:
           "ElevenLabs has an unpaid invoice on the account, so it won't make new recordings. The key is fine — settle the bill at elevenlabs.io and this starts working again.",
+        // Proven live 2026-08-06: with the account past_due, ElevenLabs refuses
+        // synthesis outright (401 payment_issue) even though this endpoint and
+        // /voices both answer 200. So this really is unusable — but why is our
+        // business, not the customer's.
+        customerMessage: ELEVENLABS_CUSTOMER_UNAVAILABLE,
+        ourProblem: true,
       };
     } else if (limit > 0 && used >= limit) {
       result = {
@@ -309,6 +359,8 @@ export async function checkElevenLabsKey(apiKey: string): Promise<KeyCheck> {
         usable: false,
         userMessage:
           "The ElevenLabs account has used all its characters for this month. It resets on the next billing date, or you can upgrade the plan.",
+        customerMessage: ELEVENLABS_CUSTOMER_UNAVAILABLE,
+        ourProblem: true,
       };
     } else {
       result = { ...base, usable: true };
@@ -318,7 +370,13 @@ export async function checkElevenLabsKey(apiKey: string): Promise<KeyCheck> {
     cacheSet(subscriptionCache, apiKey, result);
     return result;
   } catch (err: any) {
-    return { ok: false, usable: false, userMessage: err?.userMessage || "Couldn't check the key." };
+    return {
+      ok: false,
+      usable: false,
+      userMessage: err?.userMessage || "Couldn't check the key.",
+      customerMessage: err?.customerMessage || ELEVENLABS_CUSTOMER_UNAVAILABLE,
+      ourProblem: err?.ourProblem ?? true,
+    };
   }
 }
 
@@ -391,7 +449,7 @@ export async function synthesiseSpeech(
       });
       const pcm = Buffer.from(await res.arrayBuffer());
       if (pcm.length === 0) {
-        throw new ElevenLabsError("empty_audio", 502, "ElevenLabs returned no audio. Try again.");
+        throw new ElevenLabsError("empty_audio", 502, "ElevenLabs returned no audio. Try again.", "", "No audio came back. Try again.", true);
       }
       return { pcm, sampleRate: rate, model };
     } catch (err: any) {

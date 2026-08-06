@@ -124,18 +124,82 @@ async function withSynthSlot<T>(reply: any, fn: () => Promise<T>): Promise<T | u
   }
 }
 
+/**
+ * Who is allowed to be told the real reason.
+ *
+ * Only Connect's own staff. A tenant admin using the IVR Studio is a CUSTOMER:
+ * they were shown "ElevenLabs has an unpaid invoice on the account — settle the
+ * bill at elevenlabs.io", which names a supplier they have no relationship
+ * with and hands them our billing problem. Whatever state our account is in,
+ * the customer gets the neutral version and we get told instead.
+ */
+function isConnectStaff(user: any): boolean {
+  return String(user?.role || "").toUpperCase() === "SUPER_ADMIN";
+}
+
+/**
+ * One admin alert per hour, per distinct reason.
+ *
+ * The point of hiding the cause from customers is that WE find out instead —
+ * a silent neutral message that reaches nobody is worse than the leak it
+ * replaced. Deduped because a broken provider affects every customer at once
+ * and every one of them will press the button a few times.
+ */
+const ALERT_INTERVAL_MS = 60 * 60_000;
+const lastAlertAt = new Map<string, number>();
+
+async function alertStaffOnce(app: any, reason: string, detail: string[]): Promise<void> {
+  const now = Date.now();
+  const previous = lastAlertAt.get(reason) ?? 0;
+  if (now - previous < ALERT_INTERVAL_MS) return;
+  lastAlertAt.set(reason, now);
+  app.log.error({ reason }, "[ELEVENLABS] customers are being denied voice generation");
+  try {
+    const { queueBillingAdminAlertEmail } = await import("../billing/billingEmailLifecycle");
+    await queueBillingAdminAlertEmail("Voice generation is failing for customers", [
+      "Customers cannot generate IVR recordings right now.",
+      "",
+      ...detail,
+      "",
+      "They are being shown a neutral message — they are NOT told the reason.",
+      "Check the ElevenLabs settings page in Connect for the full detail.",
+    ]);
+  } catch {
+    // An alert that fails must never turn into a second customer-facing error.
+  }
+}
+
 export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
   const { app, db, requirePromptManager, resolvePbxRouteHelperConfig, pushPromptToHelper, PromptPushError } = deps;
 
+  /** The message this caller is allowed to see, plus an alert when it's ours. */
+  async function messageFor(user: any, err: any): Promise<string> {
+    const staff = isConnectStaff(user);
+    const ownerMessage = err?.userMessage || "Couldn't generate the audio. Nothing was changed.";
+    if (err?.ourProblem) {
+      await alertStaffOnce(app, err?.providerCode || String(err?.httpStatus ?? "unknown"), [
+        `Reason: ${ownerMessage}`,
+        `Provider status: ${err?.httpStatus ?? "?"} ${err?.providerCode || ""}`.trim(),
+      ]);
+    }
+    return staff ? ownerMessage : err?.customerMessage || ownerMessage;
+  }
+
   /** Common guard: no key configured is a 503 with an actionable message, not
    *  a mystery 500. The message names the page where the key is set. */
-  async function keyOr503(reply: any): Promise<string | null> {
+  async function keyOr503(reply: any, user?: any): Promise<string | null> {
     const { resolveElevenLabsKey } = await import("./elevenLabsKey");
     const key = await resolveElevenLabsKey(db);
     if (!key) {
+      const { ELEVENLABS_CUSTOMER_UNAVAILABLE } = await import("@connect/shared");
+      // A customer has no settings page to go to and no key to set. Telling
+      // them one is missing only makes the product look broken to the person
+      // least able to do anything about it.
       reply.code(503).send({
         error: "elevenlabs_not_configured",
-        message: "No ElevenLabs key is set yet. Add one on the ElevenLabs settings page.",
+        message: isConnectStaff(user)
+          ? "No ElevenLabs key is set yet. Add one on the ElevenLabs settings page."
+          : ELEVENLABS_CUSTOMER_UNAVAILABLE,
       });
       return null;
     }
@@ -163,13 +227,22 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       // Best-effort: a voice-list hiccup must not break the status answer.
       listElevenLabsVoices(key).catch(() => null),
     ]);
+    // A customer must not learn WHY from this endpoint either — the Studio
+    // modal renders `message` verbatim, which is how "settle the bill at
+    // elevenlabs.io" reached a customer's screen in the first place.
+    if (check.ourProblem && !check.usable) {
+      await alertStaffOnce(app, `status_${check.ok ? "unusable" : "unreachable"}`, [
+        `Reason: ${check.userMessage ?? "unknown"}`,
+        `Key reachable: ${check.ok ? "yes" : "no"}`,
+      ]);
+    }
     return reply.send({
       configured: true,
       keyWorks: check.ok,
       /** The account can actually synthesise right now — a valid key on an
        *  unpaid account is `keyWorks: true, usable: false`. */
       usable: check.usable ?? false,
-      message: check.userMessage ?? null,
+      message: (isConnectStaff(user) ? check.userMessage : check.customerMessage ?? check.userMessage) ?? null,
       charactersUsed: check.characterCount ?? null,
       characterLimit: check.characterLimit ?? null,
       tier: check.tier ?? null,
@@ -184,7 +257,7 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
   app.get("/voice/elevenlabs/voices", async (req: any, reply: any) => {
     const user = await requirePromptManager(req, reply);
     if (!user) return;
-    const key = await keyOr503(reply);
+    const key = await keyOr503(reply, user);
     if (!key) return;
 
     const { listElevenLabsVoices, ElevenLabsError } = await import("./elevenLabs");
@@ -192,7 +265,9 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       return reply.send({ voices: await listElevenLabsVoices(key) });
     } catch (err: any) {
       if (err instanceof ElevenLabsError) {
-        return reply.code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+        return reply
+          .code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502)
+          .send({ error: "elevenlabs_failed", message: await messageFor(user, err) });
       }
       return reply.code(502).send({ error: "elevenlabs_failed", message: "Couldn't load the voice list." });
     }
@@ -212,7 +287,7 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
 
-    const key = await keyOr503(reply);
+    const key = await keyOr503(reply, user);
     if (!key) return;
 
     const { synthesiseSpeech, pcmToWav, ElevenLabsError, isTtsModelId } = await import("./elevenLabs");
@@ -239,7 +314,9 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
         return reply.send(wav);
       } catch (err: any) {
         if (err instanceof ElevenLabsError) {
-          return reply.code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+          return reply
+            .code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502)
+            .send({ error: "elevenlabs_failed", message: await messageFor(user, err) });
         }
         app.log.error({ err: err?.message }, "[ELEVENLABS_PREVIEW] failed");
         return reply.code(500).send({ error: "preview_failed", message: "Couldn't generate the preview." });
@@ -279,7 +356,7 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
     const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true } });
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
 
-    const key = await keyOr503(reply);
+    const key = await keyOr503(reply, user);
     if (!key) return;
 
     const { synthesiseSpeech, pcmToWav, pcmDurationSeconds, ElevenLabsError, isTtsModelId } = await import("./elevenLabs");
@@ -315,7 +392,9 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       sampleRate = out.sampleRate;
     } catch (err: any) {
       if (err instanceof ElevenLabsError) {
-        return reply.code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502).send({ error: "elevenlabs_failed", message: err.userMessage });
+        return reply
+          .code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502)
+          .send({ error: "elevenlabs_failed", message: await messageFor(user, err) });
       }
       app.log.error({ err: err?.message }, "[ELEVENLABS_GENERATE] synthesis failed");
       return reply.code(500).send({ error: "generate_failed", message: "Couldn't generate the audio. Nothing was changed." });
