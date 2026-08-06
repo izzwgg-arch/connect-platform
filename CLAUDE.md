@@ -1101,6 +1101,15 @@ Session-critical facts (details + evidence in the handoff doc):
   emails never used anywhere on the platform (global uniqueness).
 - Ezra's test IP `173.212.214.198` is allowlisted in
   `/etc/nginx/connectcomms/allowlist.conf` (nginx auto-ban hit it mid-test).
+- **Toll-free & vanity numbers (2026-08-04, `73f990a0` — handoff §8)**: the
+  wizard's number step sells `local | tollfree | vanity` (stored as
+  `answers.phone.numberKind`); toll-free/vanity = $15/mo
+  (`tollFreeNumberMonthlyCents`), first-number-free applies to LOCAL only,
+  purchase branches to `orderTollFree`/`orderVanity`. ⛔ The month-2 $15 is
+  stamped as a FLAT `customFee` — never "fix" it to `per_toll_free_did`
+  (that basis counts phoneNumber rows onboarding never writes → bills $0).
+  Taken-meanwhile replacements stay the same kind; port temp numbers skip
+  toll-free spares.
 - In THIS Cursor environment ssh/scp run directly from PowerShell (keys in
   `C:\Users\izzyw\.ssh\`); server scripts run via scp → `docker cp` →
   `tsx` inside `app-api-1`; DB one-liners pipe JS into

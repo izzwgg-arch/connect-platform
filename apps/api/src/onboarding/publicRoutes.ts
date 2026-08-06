@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
 import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { prepareOnboardingCheckout, quoteForSubmission } from "./onboardingPayment";
-import { quoteInputForSubmission } from "./quoteInput";
+import { quoteInputForSubmission, isTollFreeNumberKind } from "./quoteInput";
 import { describeQuote, quoteOnboarding } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
@@ -68,6 +68,26 @@ function canLazyCreate(): boolean {
 function generatePublicToken(bytes: number = 24): string {
   // 32+ URL-safe chars
   return randomBytes(bytes).toString("base64url");
+}
+
+/** Phone-keypad letters → digits ("PIZZA" → "74992"); digits pass through. */
+function vanityToDigits(word: string): string {
+  const keypad: Record<string, string> = {
+    a: "2", b: "2", c: "2", d: "3", e: "3", f: "3", g: "4", h: "4", i: "4",
+    j: "5", k: "5", l: "5", m: "6", n: "6", o: "6", p: "7", q: "7", r: "7", s: "7",
+    t: "8", u: "8", v: "8", w: "9", x: "9", y: "9", z: "9",
+  };
+  return String(word || "")
+    .toLowerCase()
+    .split("")
+    .map((c) => (/[0-9]/.test(c) ? c : keypad[c] || ""))
+    .join("")
+    .slice(0, 7);
+}
+
+/** Toll-free NPAs — the prefixes VoIP.ms sells as toll-free (and vanity). */
+function isTollFreeTenDigits(d: string): boolean {
+  return /^(800|833|844|855|866|877|888)/.test(d);
 }
 
 // Write policy + reusable-template detection live in ./validation so they can
@@ -152,16 +172,32 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
 
   // Search available numbers to buy (VoIP.ms), gated by a valid onboarding token.
   // Read-only lookup only — never orders/charges. Never exposes prices to the customer.
+  //
+  // Query params:
+  //   q      digits to search for
+  //   mode   starts | contains | ends (local search position; default guesses)
+  //   type   local (default) | tollfree
+  //   vanity a word for toll-free vanity search ("PIZZA" → **74992); implies tollfree
   app.get("/onboarding/:token/numbers", async (req, reply) => {
     const { token } = (req.params as any) as { token: string };
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
 
     const q = String((req.query as any)?.q || "").trim();
+    const modeParam = String((req.query as any)?.mode || "").toLowerCase();
+    const mode = (["starts", "contains", "ends"].includes(modeParam) ? modeParam : undefined) as
+      | "starts" | "contains" | "ends" | undefined;
+    const vanityWord = String((req.query as any)?.vanity || "").trim().slice(0, 40);
+    const vanityDigits = vanityToDigits(vanityWord);
+    const wantVanity = !!vanityDigits;
+    const wantTollFree = wantVanity || String((req.query as any)?.type || "local").toLowerCase() === "tollfree";
     const creds = await loadGlobalVoipMsCreds();
     if (!creds) return { numbers: [], note: "number_provider_unconfigured" };
 
-    const cacheKey = q.replace(/\D/g, "") || q.toLowerCase();
+    const digits = q.replace(/\D/g, "");
+    const cacheKey = wantVanity
+      ? `vanity:${vanityDigits}`
+      : `${wantTollFree ? "tollfree" : "local"}:${mode || "auto"}:${digits || q.toLowerCase()}`;
     const cached = numberSearchCache.get(cacheKey);
     const cachedPurchasable =
       cached && Date.now() - cached.at < NUMBER_SEARCH_CACHE_MS ? cached.purchasable : null;
@@ -169,26 +205,42 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     try {
       const testMode = (process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true";
       const provider = new VoipMsNumberProvider(creds, testMode);
-      const digits = q.replace(/\D/g, "");
       const fmt = (d: string) => (d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : d);
+      // The kind rides on every result so the wizard can price it ($15/month
+      // toll-free) and provisioning can buy it with the right VoIP.ms method.
+      const kind = wantVanity ? "vanity" : wantTollFree ? "tollfree" : "local";
 
       // Numbers we ALREADY OWN (spare in the master account, not assigned to
       // any subaccount) come first — use up stock before buying new ones.
+      // Each tab only shows its own stock: toll-free spares never appear under
+      // Local (they'd price wrong), and vice versa.
       // The availability search runs in parallel so this adds no wait time.
-      const matchesQuery = (d: string) =>
-        !digits || (digits.length <= 3 ? d.startsWith(digits) : d.includes(digits));
+      const vanityRe = wantVanity
+        ? new RegExp(`${vanityDigits.slice(-7)}$`)
+        : null;
+      const matchesQuery = (d: string) => {
+        if (isTollFreeTenDigits(d) !== wantTollFree) return false;
+        if (vanityRe) return vanityRe.test(d);
+        if (!digits) return true;
+        if (mode === "starts") return wantTollFree ? d.slice(3).startsWith(digits) : d.startsWith(digits);
+        if (mode === "ends") return d.endsWith(digits);
+        if (mode === "contains") return d.includes(digits);
+        return digits.length <= 3 ? d.startsWith(digits) : d.includes(digits);
+      };
       const [spares, results] = await Promise.all([
         listSpareDids(creds as any).catch(() => []),
         cachedPurchasable
           ? Promise.resolve(null)
-          : provider
-              .searchNumbers({
-                type: "local",
-                areaCode: digits || undefined,
-                contains: digits || undefined,
-                limit: 12,
-              })
-              .catch(() => []),
+          : (wantVanity
+              ? provider.searchVanity({ pattern: vanityDigits, limit: 12 })
+              : provider.searchNumbers({
+                  type: wantTollFree ? "tollfree" : "local",
+                  areaCode: digits || undefined,
+                  contains: digits || undefined,
+                  mode,
+                  limit: 12,
+                })
+            ).catch(() => []),
       ]);
       const spareNumbers = spares
         .filter((s) => matchesQuery(s.did))
@@ -199,6 +251,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
           sms: s.sms,
           voice: true,
           inStock: true, // already purchased — provisioning routes it, no new purchase
+          kind: wantTollFree ? ("tollfree" as const) : ("local" as const),
         }));
       const spareSet = new Set(spareNumbers.map((s) => s.e164));
 
@@ -213,6 +266,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
             sms: r.capabilities?.sms !== false,
             voice: r.capabilities?.voice !== false,
             inStock: false,
+            kind,
           };
         });
       if (!cachedPurchasable && purchasableAll.length) {
@@ -461,11 +515,17 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const q: any = req.query || {};
     const extParam = Number(q.extensions);
     const smsParam = String(q.sms ?? "");
+    // The wizard passes its live pick too — apply-number is fire-and-forget
+    // and autosave is debounced, so the stored numberKind can lag the screen.
+    const kindParam = String(q.numberKind ?? "").toLowerCase();
     const input = {
       extensions:
         Number.isFinite(extParam) && extParam >= 0 ? Math.min(500, Math.floor(extParam)) : derived.extensions,
       phoneNumbers: derived.phoneNumbers,
       smsEnabled: smsParam === "1" ? true : smsParam === "0" ? false : derived.smsEnabled,
+      tollFreeNumber: ["local", "tollfree", "vanity"].includes(kindParam)
+        ? isTollFreeNumberKind(kindParam)
+        : derived.tollFreeNumber,
     };
     const quote = quoteOnboarding(input);
     return { ok: true, lines: quote.lines, monthlyTotalCents: quote.monthlyTotalCents, summary: describeQuote(quote) };
@@ -541,6 +601,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       ...(answers.phone || {}),
       choice: body.choice,
       selectedNumber: body.selectedNumber || answers.phone?.selectedNumber || "",
+      // The kind travels with the selection: it prices the $15 toll-free line
+      // and picks the purchase method. A port has no kind.
+      numberKind: body.choice === "port" ? undefined : body.numberKind || answers.phone?.numberKind || "local",
       details: body.porting ?? answers.phone?.details ?? {},
     };
     await (db as any).onboardingSubmission.update({
@@ -626,6 +689,10 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         ...(answers.phone || {}),
         choice: body.phoneNumberChoice || answers.phone?.choice || "",
         selectedNumber: body.selectedNumber || answers.phone?.selectedNumber || "",
+        numberKind:
+          (body.phoneNumberChoice || answers.phone?.choice) === "port"
+            ? undefined
+            : body.numberKind || answers.phone?.numberKind || "local",
         details: body.porting ?? answers.phone?.details ?? {},
       };
       // Which extension is the account owner (becomes the tenant admin when

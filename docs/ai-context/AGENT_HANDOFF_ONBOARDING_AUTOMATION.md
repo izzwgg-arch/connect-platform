@@ -208,3 +208,61 @@ see §3). Both rounds fully wiped, all 4 systems verified clean.
   endpoint if rounds continue.
 - Number-search `location` field for spare DIDs came back empty in the last
   probe (cosmetic — `getDIDsInfo` ratecenter/state missing on some rows).
+
+---
+
+## 8. Toll-free & vanity numbers (added 2026-08-04, commit `73f990a0`)
+
+The wizard's "Get a new number" step sells three kinds of number. The kind is
+stored as **`answers.phone.numberKind`** (`local | tollfree | vanity`) at
+select/apply/submit and drives pricing, purchase, and reporting. Built on the
+worktree branch `claude/heuristic-easley-d05ffe` atop feat/ai-agent tip
+`7f3c7970`.
+
+- **Wizard** (`apps/portal/app/onboarding/[token]/page.tsx`): Local /
+  Toll-free tabs; the Local tab has an explicit Starts with / Contains /
+  Ends with selector (threaded as `mode` — the integration used to guess from
+  digit length); the Toll-free tab has a digit search plus a "Spell a word"
+  vanity input (keypad letters → digits, conversion shown to the customer).
+  Toll-free/vanity results carry a "$15/mo" chip. Each tab shows only its own
+  spare stock — a toll-free spare under Local would price wrong.
+- **Search API** (`GET /onboarding/:token/numbers`): new query params `mode`,
+  `type=local|tollfree`, `vanity=<word>` (implies toll-free). Every result now
+  carries `kind`. Cache key includes tab/mode/pattern.
+- **Integration** (`packages/integrations/src/index.ts`):
+  `NumberSearchInput.mode`; new `VoipMsNumberProvider.searchVanity()` —
+  VoIP.ms `searchVanity` with `type: "8**"` and a 7-char `*`-padded pattern
+  (`"PIZZA"` → `74992` → `**74992`).
+- **Pricing** (`packages/shared/src/onboardingPricing.ts`):
+  `tollFreeNumberMonthlyCents: 1500`; quote line key `tollfree_number`
+  ("Toll-free number — $15.00/mo", invoice line type PHONE_NUMBER). The
+  first-number-included rule applies to LOCAL numbers only; the toll-free
+  number is never also charged the $10 extra-number price. E911 still applies.
+  **1 ext + toll-free = exactly $50**, asserted literally in
+  `onboardingPricing.test.ts`.
+- **Month-2 recurring** (`onboardingBillingDefaults.ts`): the stamp adds the
+  $15 in the `customFee` fee slot as **`flat_monthly` — deliberately NOT
+  `per_toll_free_did`**: that basis counts Connect `phoneNumber` rows, which
+  onboarding never writes, so it would quietly bill $0 and break the quote.
+  `ensureOnboardingBillingDefaults` takes `{ tollFreeNumber }` — threaded from
+  checkout AND the orchestrator adoption path via
+  `quoteInputForSubmission().tollFreeNumber` (which also guards: a stale
+  numberKind after switching to "port" never surcharges).
+- **Purchase** (`voipMsProvisioning.ts`): branches on the stored kind —
+  `orderTollFree` / `orderVanity` instead of `orderDID` (same param shape,
+  NY pop). Spares route via `setDIDRouting` as before. A toll-free pick taken
+  by another customer meanwhile is replaced with another TOLL-FREE number
+  (spare first, then `searchTollFreeUSA` + orderTollFree), never a local one.
+  `findSpareDid` (port temp numbers / local replacements) now SKIPS toll-free
+  spares — handing one out would bill $15 to a local-price customer.
+- **Review + owner report** (`adminSignupReport.ts`): both name the kind —
+  "Toll-free number ($15 a month): (833) …".
+- Tests: `onboardingPricing.test.ts` ($50 floor, no double $10),
+  `quoteInput.test.ts` (kind derivation + port guard),
+  `voipMsProvisioning.test.ts` (dry-run + live mocks for both order methods,
+  same-kind replacement, temp-number toll-free skip),
+  `onboardingBillingDefaults.test.ts` (month-2 preview = $50 through the real
+  invoice engine).
+- Open: vanity replacement can't re-pick the word automatically (a taken
+  vanity number is replaced with a plain toll-free number, logged in the
+  timeline); toll-free purchase not yet live-tested against real VoIP.ms.

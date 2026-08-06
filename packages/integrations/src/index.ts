@@ -8,6 +8,12 @@ export interface NumberSearchInput {
   type: "local" | "tollfree";
   areaCode?: string;
   contains?: string;
+  /**
+   * Where the digits must sit in the number (VoIP.ms searchDIDsUSA /
+   * searchTollFreeUSA `type`). When omitted, providers fall back to guessing
+   * from the digit length (3 digits = starts, else contains).
+   */
+  mode?: "starts" | "contains" | "ends";
   limit?: number;
 }
 
@@ -199,23 +205,59 @@ export class VoipMsNumberProvider implements NumberProvider {
     }
 
     // Real VoIP.ms lookup of available numbers to purchase.
-    //   local    -> searchDIDsUSA(type, query)   type: starts | contains | ends
-    //   tollfree -> searchTollFreeUSA(query)
+    //   local    -> searchDIDsUSA(type, query)      type: starts | contains | ends
+    //   tollfree -> searchTollFreeUSA(type, query)
     const digits = String(input.areaCode || input.contains || "").replace(/\D/g, "");
+    const url = this.searchUrl();
+    if (input.type === "tollfree") {
+      url.searchParams.set("method", "searchTollFreeUSA");
+      url.searchParams.set("type", input.mode || (digits ? "contains" : "starts"));
+      url.searchParams.set("query", digits);
+    } else {
+      url.searchParams.set("method", "searchDIDsUSA");
+      url.searchParams.set("type", input.mode || (digits.length === 3 ? "starts" : "contains"));
+      url.searchParams.set("query", digits);
+    }
+    return this.runSearch(url, lim);
+  }
+
+  /**
+   * VoIP.ms searchVanity — toll-free only (VoIP.ms offers vanity numbers only
+   * on 8xx). `pattern` is the last 7 digits with `*` wildcards, left-padded
+   * (e.g. the word "PIZZA" → digits 74992 → pattern "**74992"); the 8xx prefix
+   * is the `type` parameter ("8**" = any toll-free prefix).
+   */
+  async searchVanity(input: { pattern: string; limit?: number }): Promise<NumberSearchResult[]> {
+    const lim = Math.min(Math.max(input.limit || 20, 1), 50);
+    const pattern = String(input.pattern || "").replace(/[^0-9*]/g, "").slice(-7).padStart(7, "*");
+    if (!/[0-9]/.test(pattern)) return [];
+    if ((process.env.SIMULATE_NUMBER_PROVIDER || "false").toLowerCase() === "true" || this.testMode) {
+      // Deterministic simulated matches: fill the wildcards so the number
+      // really ends with the requested digits.
+      return ["833", "844", "855"].slice(0, Math.min(3, lim)).map((prefix, i) => ({
+        phoneNumber: `+1${prefix}${pattern.replace(/\*/g, String(5 + i))}`,
+        region: "Toll-free",
+        capabilities: { sms: false, mms: false, voice: true },
+        monthlyCostCents: undefined,
+        providerMeta: { simulated: true, vanity: true },
+      }));
+    }
+    const url = this.searchUrl();
+    url.searchParams.set("method", "searchVanity");
+    url.searchParams.set("type", "8**");
+    url.searchParams.set("query", pattern);
+    return this.runSearch(url, lim);
+  }
+
+  private searchUrl(): URL {
     const base = this.credentials.apiBaseUrl || VOIPMS_DEFAULT_BASE;
     const url = new URL(base);
     url.searchParams.set("api_username", this.credentials.username);
     url.searchParams.set("api_password", this.credentials.password);
-    if (input.type === "tollfree") {
-      url.searchParams.set("method", "searchTollFreeUSA");
-      url.searchParams.set("type", digits ? "contains" : "starts");
-      url.searchParams.set("query", digits);
-    } else {
-      url.searchParams.set("method", "searchDIDsUSA");
-      url.searchParams.set("type", digits.length === 3 ? "starts" : "contains");
-      url.searchParams.set("query", digits);
-    }
+    return url;
+  }
 
+  private async runSearch(url: URL, lim: number): Promise<NumberSearchResult[]> {
     let json: any = {};
     try {
       const res = await fetch(url.toString(), { method: "GET" });

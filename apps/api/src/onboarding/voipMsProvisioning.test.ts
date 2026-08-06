@@ -106,6 +106,9 @@ function reset(opts: { live?: boolean } = {}) {
     // 2026-08-05, order 217760) — NOT portid/port_id.
     addLNPPort: () => ({ status: "success", port: 217760 }),
     searchDIDsUSA: () => ({ status: "success", dids: [{ did: "9295551234" }] }),
+    orderTollFree: () => ({ status: "success" }),
+    orderVanity: () => ({ status: "success" }),
+    searchTollFreeUSA: () => ({ status: "success", dids: [{ did: "8442220000" }] }),
   };
   fetchForbidden = !opts.live && false;
   if (opts.live) process.env.VOIPMS_AUTO_PROVISION = "on";
@@ -319,6 +322,131 @@ test("resume: number already routed to OUR OWN subaccount is re-routed without e
   assert.equal(res.ok, true);
   assert.equal(calls("orderDID").length, 0);
   assert.equal(calls("setDIDRouting").length, 1);
+});
+
+// ── Toll-free & vanity purchases ─────────────────────────────────────────────
+
+test("dry-run toll-free pick: ready state, kind named in the timeline, ZERO VoIP.ms calls", async () => {
+  reset();
+  fetchForbidden = true;
+  const id = seedSubmission({
+    answers: { phone: { choice: "new", selectedNumber: "(833) 555-0100", numberKind: "tollfree" } },
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(res.live, false);
+  const row = state.submissions.get(id);
+  assert.equal(row.numberStatus, "ready_dryrun");
+  assert.equal(row.provisionedDid, "8335550100");
+  assert.ok(state.events.some((e) => /\[dry-run\].*toll-free number 8335550100/i.test(e.message)));
+});
+
+test("live toll-free pick: bought with orderTollFree (never orderDID), routed to the subaccount", async () => {
+  reset({ live: true });
+  const id = seedSubmission({
+    answers: { phone: { choice: "new", selectedNumber: "(833) 555-0100", numberKind: "tollfree" } },
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+
+  const order = calls("orderTollFree");
+  assert.equal(order.length, 1);
+  assert.equal(order[0].params.did, "8335550100");
+  assert.equal(order[0].params.routing, "account:344022_BobsPlumsub1");
+  assert.equal(order[0].params.pop, "23"); // New York 1
+  assert.equal(calls("orderDID").length, 0);
+  assert.equal(calls("orderVanity").length, 0);
+
+  const row = state.submissions.get(id);
+  assert.equal(row.numberStatus, "ready");
+  assert.equal(row.provisionedDid, "8335550100");
+  assert.equal(row.didIsTemporary, false);
+});
+
+test("live vanity pick: bought with orderVanity (never orderDID/orderTollFree)", async () => {
+  reset({ live: true });
+  const id = seedSubmission({
+    answers: { phone: { choice: "new", selectedNumber: "(844) 557-4992", numberKind: "vanity" } },
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  const order = calls("orderVanity");
+  assert.equal(order.length, 1);
+  assert.equal(order[0].params.did, "8445574992");
+  assert.equal(order[0].params.routing, "account:344022_BobsPlumsub1");
+  assert.equal(calls("orderDID").length, 0);
+  assert.equal(calls("orderTollFree").length, 0);
+  assert.equal(state.submissions.get(id).provisionedDid, "8445574992");
+});
+
+test("toll-free with SMS add-on: setSMS enable=1 on the toll-free DID", async () => {
+  reset({ live: true });
+  const id = seedSubmission({
+    smsEnabled: true,
+    answers: { phone: { choice: "new", selectedNumber: "8335550100", numberKind: "tollfree" } },
+  });
+  await mod.applyOnboardingNumber(id);
+  const sms = calls("setSMS");
+  assert.equal(sms.length, 1);
+  assert.equal(sms[0].params.did, "8335550100");
+});
+
+test("toll-free SPARE already in our account: routed, not re-purchased", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = (p) =>
+    p.did === "8335550100"
+      ? { status: "success", dids: [{ did: "8335550100", routing: "account:344022" }] }
+      : { status: "success", dids: [] };
+  const id = seedSubmission({
+    answers: { phone: { choice: "new", selectedNumber: "8335550100", numberKind: "tollfree" } },
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("orderTollFree").length, 0);
+  assert.equal(calls("orderVanity").length, 0);
+  const route = calls("setDIDRouting");
+  assert.equal(route.length, 1);
+  assert.equal(route[0].params.did, "8335550100");
+});
+
+test("toll-free taken by ANOTHER customer meanwhile: replacement is TOLL-FREE, never a local number", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [{ did: "8335550100", routing: "account:344022_SomeoneElse1" }],
+  });
+  const id = seedSubmission({
+    answers: { phone: { choice: "new", selectedNumber: "8335550100", numberKind: "tollfree" } },
+  });
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("setDIDRouting").length, 0); // the taken number is never touched
+  assert.equal(calls("searchDIDsUSA").length, 0); // no local fallback for a toll-free customer
+  const order = calls("orderTollFree");
+  assert.equal(order.length, 1);
+  assert.equal(order[0].params.did, "8442220000"); // from searchTollFreeUSA
+  assert.equal(state.submissions.get(id).provisionedDid, "8442220000");
+  assert.ok(state.events.some((e) => /toll-free number 8335550100 was taken/i.test(e.message)));
+});
+
+test("a port customer's TEMPORARY number is never a toll-free spare (it would bill $15)", async () => {
+  reset({ live: true });
+  vmsHandlers.getDIDsInfo = () => ({
+    status: "success",
+    dids: [
+      { did: "8335550999", routing: "account:344022" }, // toll-free spare — must be skipped
+      { did: "9145550002", routing: "account:344022" }, // local spare — the right pick
+    ],
+  });
+  const id = seedSubmission({
+    phoneNumberChoice: "port",
+    answers: { phone: { choice: "port", details: { numbers: "2125550000", carrier: "Verizon", accountNumber: "V9" } } },
+  });
+  await mod.applyOnboardingNumber(id);
+  const route = calls("setDIDRouting");
+  assert.equal(route.length, 1);
+  assert.equal(route[0].params.did, "9145550002");
+  assert.equal(state.submissions.get(id).provisionedDid, "9145550002");
 });
 
 test("live new number with SMS add-on: setSMS enable=1 on the DID", async () => {

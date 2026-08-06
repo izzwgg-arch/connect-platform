@@ -73,12 +73,15 @@ export function quoteForSubmission(sub: {
  * second tenant for the same customer.
  */
 async function ensureTenantForSubmission(sub: { id: string; companyName?: string | null; createdTenantId?: string | null; smsEnabled?: boolean | null; answers?: any }): Promise<string> {
+  // A toll-free/vanity pick must recur at $15/month — same stamp pattern as
+  // E911 and the $2 fee.
+  const tollFreeNumber = quoteInputForSubmission(sub).tollFreeNumber;
   if (sub.createdTenantId) {
     const existing = await (db as any).tenant.findUnique({ where: { id: sub.createdTenantId }, select: { id: true } });
     if (existing) {
       // Self-heal: tenants created before fee-stamping shipped get the stamp on
       // their next checkout visit (the guards inside make this a no-op after).
-      await ensureOnboardingBillingDefaults(db as any, existing.id, { smsEnabled: !!sub.smsEnabled });
+      await ensureOnboardingBillingDefaults(db as any, existing.id, { smsEnabled: !!sub.smsEnabled, tollFreeNumber });
       return existing.id;
     }
   }
@@ -94,7 +97,7 @@ async function ensureTenantForSubmission(sub: { id: string; companyName?: string
   // Without this stamp the month-2 automatic bill would be bare $30/extension —
   // no E911, no $2 fee line — breaking the "$35 a month, including tax" promise
   // the checkout and report email make.
-  await ensureOnboardingBillingDefaults(db as any, tenant.id, { smsEnabled: !!sub.smsEnabled });
+  await ensureOnboardingBillingDefaults(db as any, tenant.id, { smsEnabled: !!sub.smsEnabled, tollFreeNumber });
   await (db as any).onboardingSubmission.update({
     where: { id: sub.id },
     data: { createdTenantId: tenant.id },
@@ -151,6 +154,7 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
     e911: "E911_FEE",
     sms: "SMS_PACKAGE",
     additional_numbers: "PHONE_NUMBER",
+    tollfree_number: "PHONE_NUMBER",
     telecom_fees: "REGULATORY_FEE",
   };
   const lineItemRows = () =>

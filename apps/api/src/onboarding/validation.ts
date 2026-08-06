@@ -45,6 +45,9 @@ export const publicSubmitSchema = z.object({
   language: z.string().max(8).optional(),
   phoneNumberChoice: z.string().optional(),
   selectedNumber: z.string().optional(),
+  // What KIND of new number was picked — prices the $15/month toll-free line
+  // and routes the purchase to orderTollFree / orderVanity instead of orderDID.
+  numberKind: z.enum(["local", "tollfree", "vanity"]).optional(),
   porting: z.unknown().optional(),
   smsEnabled: z.boolean().optional(),
   extensions: z.array(extensionInputSchema).min(0).max(500).default([]),
@@ -54,6 +57,7 @@ export const publicSubmitSchema = z.object({
 export const publicApplyNumberSchema = z.object({
   choice: z.enum(["new", "port"]),
   selectedNumber: z.string().optional(),
+  numberKind: z.enum(["local", "tollfree", "vanity"]).optional(),
   porting: z.unknown().optional(),
   smsEnabled: z.boolean().optional(),
   companyName: z.string().min(1).max(200).optional(),
