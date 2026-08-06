@@ -22772,6 +22772,34 @@ app.post("/voice/ivr/publish", async (req, reply) => {
     data: { tenantId, publishedBy: (user as any).id ?? "unknown", mode, keysWritten: keys, previousKeys, status: "pending", isRollback: false },
   });
 
+  // Put the AUDIO on the PBX before the routing that references it goes live,
+  // so a publish can never leave a menu pointing at a file that isn't there.
+  const audioSync = await materializePromptsOnPbx(
+    tenantId,
+    collectPromptRefs(profiles as any[], allOptions as any[]),
+    `publish:${(user as any).id ?? "unknown"}`,
+  );
+  if (audioSync.missingAudio.length || audioSync.failed.length) {
+    app.log.warn({ tenantId, slug, audioSync }, "ivr: publish could not place every recording on the PBX");
+  }
+
+  // Keep each number's menu assignment live in AstDB. The runtime resolves the
+  // menu per number from connect/didmap/<did>/profile_id, so a publish must
+  // refresh it or a menu re-assignment stays invisible to callers.
+  let numbersSynced = 0;
+  try {
+    const liveMappings = await (db as any).didRouteMapping.findMany({
+      where: { tenantId, enabled: true, routingMode: "connect" },
+    });
+    for (const m of liveMappings) {
+      const values = await didBuildPublishValues(m, slug);
+      await publishDidmapToAstDb(slug, m.e164, values);
+      numbersSynced += 1;
+    }
+  } catch (err: any) {
+    app.log.warn({ tenantId, err: err?.message }, "ivr: didmap refresh during publish failed");
+  }
+
   try {
     await publishToAstDb(slug, keys);
     // Bundle the wake-config publish into the IVR publish so the wake wrapper
@@ -22790,8 +22818,14 @@ app.post("/voice/ivr/publish", async (req, reply) => {
       app.log.warn({ tenantId, slug, err: wakeErr?.message }, "ivr: wake-config publish failed (non-fatal)");
     }
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
-    app.log.info({ tenantId, slug, mode, keysWritten: keys.length, previousCaptured: previousKeys.length, wakeSystemPublished, wakeTenantPublished }, "ivr: publish success");
-    return reply.send({ ok: true, mode, slug, keysWritten: keys.length, recordId: record.id, wakeSystemPublished, wakeTenantPublished });
+    app.log.info({ tenantId, slug, mode, keysWritten: keys.length, previousCaptured: previousKeys.length, wakeSystemPublished, wakeTenantPublished, audioSync, numbersSynced }, "ivr: publish success");
+    return reply.send({
+      ok: true, mode, slug, keysWritten: keys.length, recordId: record.id,
+      wakeSystemPublished, wakeTenantPublished,
+      // Surfaced so the Studio can tell the owner plainly when a menu is live
+      // but one of its recordings has no audio behind it.
+      audioSync, numbersSynced,
+    });
   } catch (err: any) {
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
     app.log.warn({ tenantId, err: err?.message }, "ivr: publish failed");
@@ -22858,6 +22892,86 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
     await (db as any).ivrPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: err?.message ?? "unknown" } });
     return { ok: false, error: err?.message ?? "publish_failed" };
   }
+}
+
+/**
+ * Make sure every recording a publish is about to reference actually EXISTS on
+ * the PBX, and push the bytes when it doesn't.
+ *
+ * ⛔ 2026-08-06, the second half of "I change the recording and nothing
+ * changes": the owner picked a recording in the Studio, the catalog row was
+ * right, the publish was right, the menu family carried the right ref — and
+ * callers heard "one moment please", because the WAV had never been written to
+ * /var/lib/asterisk/sounds/custom on the PBX. Only the manual upload path ever
+ * pushed audio; anything catalogued from a PBX sync or an import existed as
+ * metadata with no playable file behind it, and the dialplan's STAT() check
+ * silently fell back.
+ *
+ * The push is idempotent (the helper compares sha256 and skips a matching
+ * file), so this runs on every publish and converges. Rows with no audio in
+ * Connect are reported, never guessed at — a wrong file is worse than a
+ * reported gap.
+ */
+async function materializePromptsOnPbx(
+  tenantId: string,
+  promptRefs: string[],
+  actor: string,
+): Promise<{ pushed: string[]; unchanged: string[]; missingAudio: string[]; failed: Array<{ ref: string; error: string }> }> {
+  const out = { pushed: [] as string[], unchanged: [] as string[], missingAudio: [] as string[], failed: [] as Array<{ ref: string; error: string }> };
+  const refs = Array.from(new Set(promptRefs.filter((r) => r && r.startsWith("custom/"))));
+  if (refs.length === 0) return out;
+  const helperCfg = resolvePbxRouteHelperConfig();
+  if (!helperCfg) {
+    out.failed.push({ ref: "*", error: "route_helper_not_configured" });
+    return out;
+  }
+  const { readPromptFile } = await import("./promptStorage");
+  const rows = await (db as any).tenantPbxPrompt.findMany({ where: { promptRef: { in: refs } } });
+  const byRef = new Map<string, any>(rows.map((r: any) => [r.promptRef, r]));
+  for (const ref of refs) {
+    const row = byRef.get(ref);
+    if (!row?.storageKey) {
+      out.missingAudio.push(ref);
+      continue;
+    }
+    try {
+      const wavBytes = await readPromptFile(row.storageKey);
+      const sha = createHash("sha256").update(wavBytes).digest("hex");
+      const res = await pushPromptToHelper(
+        helperCfg,
+        {
+          fileBaseName: row.fileBaseName || ref.replace(/^custom\//, ""),
+          sha256: sha,
+          sizeBytes: wavBytes.length,
+          tenantSlug: row.tenantSlug ?? null,
+          promptRef: ref,
+          requestedBy: actor,
+        },
+        wavBytes,
+      );
+      if ((res as any)?.unchanged) out.unchanged.push(ref);
+      else out.pushed.push(ref);
+    } catch (err: any) {
+      out.failed.push({ ref, error: err instanceof PromptPushError ? `helper_${err.httpStatus}: ${err.message}` : String(err?.message ?? err) });
+    }
+  }
+  return out;
+}
+
+/** Every recording ref a set of menus references — greetings, invalid,
+ *  timeout, retry, and per-key announcements. */
+function collectPromptRefs(profiles: any[], options: any[]): string[] {
+  const refs: string[] = [];
+  for (const p of profiles) {
+    for (const f of ["pbxPromptRef", "pbxInvalidPromptRef", "pbxTimeoutPromptRef", "pbxRetryPromptRef"]) {
+      const v = p?.[f];
+      if (v) refs.push(String(v));
+    }
+  }
+  for (const o of options) {
+    if (o?.announcePromptRef) refs.push(String(o.announcePromptRef));
+  }
+  return refs;
 }
 
 // ── IVR mode-boundary sweep ──────────────────────────────────────────────────
