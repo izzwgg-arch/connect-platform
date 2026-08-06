@@ -132,6 +132,7 @@ async function callHelper<T>(
   path:
     | "/inspect"
     | "/doorway-status"
+    | "/recording-export"
     | "/retarget"
     | "/restore"
     | "/route-set-destination"
@@ -230,6 +231,31 @@ export function doorwayStatusFromHelper(
   cfg: PbxRouteHelperConfig,
 ): Promise<PbxDoorwayStatusResponse> {
   return callHelper<PbxDoorwayStatusResponse>(cfg, "/doorway-status", {});
+}
+
+export type PbxRecordingExportResponse = {
+  ok: true;
+  tenantId: string;
+  soundsDir: string;
+  copiedCount: number;
+  results: Array<{
+    recordingId: number | null;
+    targetBase: string;
+    copied: boolean;
+    error: string | null;
+    file?: string;
+    bytes?: number;
+  }>;
+};
+
+/** Copy native VitalPBX recordings into the Connect sounds dir — the audio
+ *  half of an IVR menu migration. 30s: copies are local disk I/O but a
+ *  go-live may move a dozen files. */
+export function exportPbxRecordings(
+  cfg: PbxRouteHelperConfig,
+  body: { tenantId: string; recordings: Array<{ recordingId: number; targetBase: string }> },
+): Promise<PbxRecordingExportResponse> {
+  return callHelper<PbxRecordingExportResponse>(cfg, "/recording-export", body, 30_000);
 }
 
 export function retargetPbxInboundRoute(

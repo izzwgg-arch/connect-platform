@@ -9,6 +9,7 @@ import os
 import pwd
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -24,7 +25,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.05.3"
+VERSION = "2026.08.06.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2637,11 +2638,104 @@ def tenant_catalog(body):
 # The path is reported, never opened — the caller decides what to do with it.
 
 def _rec_static_path(tenant_path, recording_id):
-    """On-disk path of a VitalPBX recording. Returns None when unknowable."""
+    """On-disk path of a VitalPBX recording. Returns None when unknowable.
+    2026-08-06: this build stores <md5>.wav (extension INCLUDED) — the older
+    extensionless form still exists in the wild. Report whichever is actually
+    on disk, falling back to the bare path when neither is (A plus go-live
+    debugging chased the wrong path because of the missing .wav)."""
     if not tenant_path or recording_id in (None, "", 0, "0"):
         return None
     digest = hashlib.md5(str(int(recording_id)).encode("utf-8")).hexdigest()
-    return "%s/%s/recordings/%s" % (str(CFG.static_dir).rstrip("/"), tenant_path, digest)
+    base = "%s/%s/recordings/%s" % (str(CFG.static_dir).rstrip("/"), tenant_path, digest)
+    for cand in (base + ".wav", base):
+        try:
+            if os.path.isfile(cand):
+                return cand
+        except OSError:
+            pass
+    return base
+
+
+def recording_export(body):
+    """Copy native VitalPBX recordings into the Connect prompt sounds dir
+    under stable caller-supplied names — the missing half of an IVR menu
+    migration (menus copied fine; their audio never left VitalPBX's private
+    static tree, so every migrated menu greeted callers with the generic
+    fallback). Per-item results, never all-or-nothing: one bad recording must
+    not block the rest of a go-live. Only tenant-owned recordings, only
+    shape-checked target names, only real RIFF/WAVE sources copied verbatim —
+    anything else is reported, not guessed at. Idempotent: re-copy overwrites."""
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    items = body.get("recordings") or []
+    if not isinstance(items, list) or not items:
+        raise ValueError("recordings_required")
+    if len(items) > 100:
+        raise ValueError("too_many_recordings")
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT path FROM ombu_tenants WHERE tenant_id = %s", (tenant_id,))
+            row = cur.fetchone()
+        tenant_path = str((row or {}).get("path") or "").strip()
+        if not tenant_path:
+            raise LookupError("tenant_path_not_found")
+        with conn.cursor() as cur:
+            cur.execute("SELECT recording_id FROM ombu_recordings WHERE tenant_id = %s", (tenant_id,))
+            owned = {int(r["recording_id"]) for r in cur.fetchall()}
+    base_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,118}$")
+    src_dir = Path(str(CFG.static_dir).rstrip("/")) / tenant_path / "recordings"
+    results = []
+    for item in items:
+        rid = _nullable_int((item or {}).get("recordingId"))
+        target = str((item or {}).get("targetBase") or "").strip()
+        out = {"recordingId": rid, "targetBase": target, "copied": False, "error": None}
+        results.append(out)
+        if rid is None or not base_re.match(target):
+            out["error"] = "invalid_item"
+            continue
+        if rid not in owned:
+            out["error"] = "recording_not_owned_by_tenant"
+            continue
+        digest = hashlib.md5(str(rid).encode("utf-8")).hexdigest()
+        src = None
+        for cand in (src_dir / (digest + ".wav"), src_dir / digest):
+            if cand.is_file():
+                src = cand
+                break
+        if src is None:
+            out["error"] = "source_file_missing"
+            continue
+        try:
+            with src.open("rb") as fh:
+                head = fh.read(4)
+        except OSError as exc:
+            out["error"] = "source_unreadable: %s" % exc
+            continue
+        if head != b"RIFF":
+            out["error"] = "source_not_wav"
+            continue
+        dst = Path(CFG.sounds_dir) / (target + ".wav")
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+            os.chmod(dst, 0o644)
+            try:
+                uid = pwd.getpwnam(CFG.sounds_owner_user).pw_uid
+                gid = grp.getgrnam(CFG.sounds_owner_group).gr_gid
+                os.chown(dst, uid, gid)
+            except (KeyError, PermissionError):
+                pass
+            out["copied"] = True
+            out["file"] = str(dst)
+            out["bytes"] = int(dst.stat().st_size)
+        except OSError as exc:
+            out["error"] = "copy_failed: %s" % exc
+    return {
+        "ok": True,
+        "tenantId": tenant_id,
+        "soundsDir": str(CFG.sounds_dir),
+        "copiedCount": sum(1 for r in results if r["copied"]),
+        "results": results,
+    }
 
 def _nullable_int(value):
     if value in (None, "", 0, "0"):
@@ -3445,6 +3539,7 @@ class Handler(BaseHTTPRequestHandler):
             "/sync-tenant-moh": sync_tenant_moh,
             "/ensure-transport-wss-cert": ensure_transport_wss_cert,
             "/upload-prompt": upload_prompt,
+            "/recording-export": recording_export,
             "/media-sync": media_sync_trigger,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,

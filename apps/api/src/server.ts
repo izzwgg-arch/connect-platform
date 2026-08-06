@@ -230,6 +230,7 @@ import {
   getPbxVoicemailGreetingRecordCallStatus,
   inspectPbxInboundRoute,
   doorwayStatusFromHelper,
+  exportPbxRecordings,
   agentSetPbxRouteDestination,
   agentSetPbxRouteDestinationV2,
   agentRestorePbxRouteDestination,
@@ -24193,8 +24194,67 @@ app.post("/voice/ivr/migration/import", async (req, reply) => {
     }
   });
 
+  // ── Copy the menus' AUDIO too ──────────────────────────────────────────────
+  // The structure copy above is worthless to a caller if the recordings stay
+  // in VitalPBX's private static tree — the dialplan STAT-checks each file
+  // and falls back to the generic built-in prompts, which is exactly what
+  // A plus center's go-live played on 2026-08-06. Copy every required
+  // recording into the Connect sounds dir now, catalog the ones that landed,
+  // and surface every failure as a warning the UI shows — never silently.
+  const recordingCopy: { attempted: boolean; copied: number; failures: string[] } = { attempted: false, copied: 0, failures: [] };
+  if (plan.requiredRecordings.length > 0) {
+    const exportItems = plan.requiredRecordings
+      .filter((r) => r.promptRef.startsWith("custom/"))
+      .map((r) => ({ recordingId: r.recordingId, targetBase: r.promptRef.slice("custom/".length) }));
+    const helperCfgForCopy = await ivrMigrationHelper(connectTenantId);
+    if (!helperCfgForCopy) {
+      recordingCopy.failures.push("PBX helper not configured — recordings were not copied.");
+    } else if (exportItems.length > 0) {
+      recordingCopy.attempted = true;
+      try {
+        const exp = await exportPbxRecordings(helperCfgForCopy, {
+          tenantId: String(body.data.pbxTenantId),
+          recordings: exportItems,
+        });
+        recordingCopy.copied = exp.copiedCount;
+        const tenantRow = await (db as any).tenant.findUnique({ where: { id: connectTenantId }, select: { name: true } });
+        const slugForCatalog = toIvrSlug(String(tenantRow?.name ?? ""));
+        for (const r of exp.results) {
+          const ref = `custom/${r.targetBase}`;
+          if (!r.copied) {
+            const rec = plan.requiredRecordings.find((x) => x.promptRef === ref);
+            recordingCopy.failures.push(`"${rec?.name ?? r.targetBase}" could not be copied (${r.error ?? "unknown"}) — that menu will play a generic prompt until it is.`);
+            continue;
+          }
+          // Catalog immediately so the publish gate passes without waiting
+          // for the prompt-sync cron to notice the new file.
+          const existing = await (db as any).tenantPbxPrompt.findFirst({ where: { promptRef: ref } });
+          if (existing) {
+            await (db as any).tenantPbxPrompt.update({ where: { id: existing.id }, data: { isActive: true, lastSeenAt: new Date() } });
+          } else {
+            await (db as any).tenantPbxPrompt.create({
+              data: {
+                tenantId: connectTenantId,
+                tenantSlug: slugForCatalog,
+                promptRef: ref,
+                fileBaseName: r.targetBase,
+                relativePath: ref,
+                displayName: plan.requiredRecordings.find((x) => x.promptRef === ref)?.name ?? r.targetBase,
+                category: "greeting",
+                source: "import",
+              },
+            });
+          }
+        }
+      } catch (err: any) {
+        recordingCopy.failures.push(`Recording copy failed (${err?.message ?? "unknown"}) — menus will play generic prompts until the recordings are copied.`);
+      }
+    }
+  }
+  const warningsWithAudio = [...plan.warnings, ...recordingCopy.failures];
+
   app.log.info(
-    { connectTenantId, pbxTenantId: body.data.pbxTenantId, pbxIvrId: body.data.pbxIvrId, profiles: written.length, problems: plan.problems.length },
+    { connectTenantId, pbxTenantId: body.data.pbxTenantId, pbxIvrId: body.data.pbxIvrId, profiles: written.length, problems: plan.problems.length, recordingsCopied: recordingCopy.copied, recordingFailures: recordingCopy.failures.length },
     "ivr-migration: copied from PBX",
   );
 
@@ -24205,8 +24265,9 @@ app.post("/voice/ivr/migration/import", async (req, reply) => {
     schedule: plan.schedule,
     dids: plan.dids,
     requiredRecordings: plan.requiredRecordings,
+    recordingCopy,
     problems: plan.problems,
-    warnings: plan.warnings,
+    warnings: warningsWithAudio,
     // Said explicitly so nobody reads a successful copy as a cutover.
     note: "Copied into Connect. Callers still hear the PBX until you take over the phone number.",
   });
