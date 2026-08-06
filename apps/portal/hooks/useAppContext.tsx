@@ -302,6 +302,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [portalPermissionOverride, role, backendJwtRole],
   );
 
+  /**
+   * Whether this user may see the tenant list at all.
+   *
+   * ⛔ Read as a BOOLEAN on purpose. `canPermission` is a useCallback rebuilt
+   * whenever `role`, `backendJwtRole` or the permission override settle — which
+   * they each do separately during boot. The tenant-options effect below used to
+   * depend on that identity, so it re-ran on every one of those settles and
+   * fired `/admin/tenants` + `/admin/pbx/tenants` THREE times per page load
+   * (measured on the IVR Studio 2026-08-06: 1019ms, 1043ms and 2003ms in, at
+   * ~760ms of server time each). Depending on the answer instead of the function
+   * makes it run when the answer actually changes.
+   */
+  const canSwitchTenants = canPermission("can_switch_tenants");
+
   const reloadTenantOptions = useCallback(async () => {
     if (!canPermission("can_switch_tenants")) {
       setTenants([]);
@@ -398,14 +412,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    if (!canPermission("can_switch_tenants")) {
+    if (!canSwitchTenants) {
       // Non-super-admins only see their own tenant
       setTenants([]);
       return;
     }
-    reloadTenantOptions()
-      .then(() => {
+    // Calls loadTenantOptions directly (a stable module import) rather than
+    // reloadTenantOptions, whose identity churns with canPermission and would
+    // reintroduce the repeat-fetch this effect was fixed for.
+    loadTenantOptions()
+      .then((rows) => {
         if (!active) return;
+        setTenants(rows);
       })
       .catch(() => {
         if (!active) return;
@@ -414,7 +432,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [reloadTenantOptions, role]);
+  }, [canSwitchTenants]);
 
   useEffect(() => {
     if (tenants.length === 0) return;

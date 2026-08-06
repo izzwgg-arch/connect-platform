@@ -128,7 +128,29 @@ function resolveDisplayName(t: VitalTenantRaw): string {
   return "Unnamed tenant";
 }
 
+/**
+ * In-flight sharing: if a load is already running, join it instead of starting
+ * a second pair of requests.
+ *
+ * The repeat-fetch this guards against was really an effect-dependency bug in
+ * useAppContext (fixed there — that is the root cause, not this). This stays as
+ * a cheap backstop for the genuinely concurrent callers: the boot effect and a
+ * PBX refresh finishing at the same moment both land here.
+ *
+ * Deliberately NOT a timed cache — the tenant list must reflect a just-created
+ * tenant immediately. This only collapses calls that overlap in time.
+ */
+let tenantOptionsInFlight: Promise<Tenant[]> | null = null;
+
 export async function loadTenantOptions(): Promise<Tenant[]> {
+  if (tenantOptionsInFlight) return tenantOptionsInFlight;
+  tenantOptionsInFlight = loadTenantOptionsUncached().finally(() => {
+    tenantOptionsInFlight = null;
+  });
+  return tenantOptionsInFlight;
+}
+
+async function loadTenantOptionsUncached(): Promise<Tenant[]> {
   try {
     // Keep Connect tenants first, then append PBX-only tenants that have not
     // been linked to a Connect tenant yet. /admin/pbx/tenants is DB-backed by

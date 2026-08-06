@@ -20060,18 +20060,40 @@ const IVR_DEFAULT_PROMPT_INVALID = "option-is-invalid";
  * short enough that something created in the Studio appears almost at once.
  *
  * A failed read is NOT cached, so a PBX hiccup can't be pinned in place.
+ *
+ * Concurrent misses SHARE one load ("single flight"). Without this, the cache
+ * only helps the SECOND page load: several admins opening the Studio at once —
+ * or one page firing the same lookup twice — each missed together and each
+ * opened its own MySQL connection to the PBX, which is both slow for them and
+ * the most expensive thing we do to the PBX. Freshness is unchanged: an
+ * in-flight load is the newest data there is, so joining it is never staler
+ * than starting a second one.
  */
 const PBX_READ_CACHE_MS = 20_000;
 const pbxReadCacheStore = new Map<string, { at: number; value: any }>();
+const pbxReadInFlight = new Map<string, Promise<any>>();
 async function pbxReadCache<T>(key: string, load: () => Promise<T>): Promise<T> {
   const hit = pbxReadCacheStore.get(key);
   if (hit && Date.now() - hit.at < PBX_READ_CACHE_MS) return hit.value as T;
-  const value = await load();
-  pbxReadCacheStore.set(key, { at: Date.now(), value });
-  if (pbxReadCacheStore.size > 500) {
-    for (const [k, v] of pbxReadCacheStore) if (Date.now() - v.at > PBX_READ_CACHE_MS) pbxReadCacheStore.delete(k);
-  }
-  return value;
+
+  const running = pbxReadInFlight.get(key);
+  if (running) return running as Promise<T>;
+
+  const pending = (async () => {
+    const value = await load();
+    pbxReadCacheStore.set(key, { at: Date.now(), value });
+    if (pbxReadCacheStore.size > 500) {
+      for (const [k, v] of pbxReadCacheStore) if (Date.now() - v.at > PBX_READ_CACHE_MS) pbxReadCacheStore.delete(k);
+    }
+    return value;
+  })().finally(() => {
+    // Always clear, including on failure — a rejected load must not be pinned
+    // as the shared promise for every later caller.
+    pbxReadInFlight.delete(key);
+  });
+
+  pbxReadInFlight.set(key, pending);
+  return pending;
 }
 
 /** Asterisk built-ins — they ship with the PBX, so never try to push audio for them. */
