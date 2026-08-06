@@ -94,6 +94,14 @@ no emails typed in is correct behavior, not a bug.
   instead of JSON (observed ~10 min on 2026-07-27). Any script hitting the
   API must detect leading `<` and retry with generous backoff; wipe scripts
   pace calls with sleeps.
+- ⛔ **`addLNPPort` returns the order number as `port`** — a bare integer:
+  `{"status":"success","port":217760}`. Not `portid`, not `port_id`. We shipped
+  both of those guessed names and read `""` off the first real filing (fixed
+  2026-08-05, commit `e98dad78`). **The lesson is the same one the parameter
+  names taught: VoIP.ms field names are only ever proven by a live call.** A
+  response field cannot be inferred from the request's field names, from the
+  WSDL's input types, or from what a sister method returns — and a wrong guess
+  is silent, because `vms()` only checks `status`. See §9.
 
 ## 4. VitalPBX panel — verified facts and traps
 
@@ -198,8 +206,10 @@ see §3). Both rounds fully wiped, all 4 systems verified clean.
 
 ## 7. Open items / next steps
 
-- **Port-in flow is implemented but never live-tested** (temporary DID +
-  `addLNPPort`). Needs a real port exercise.
+- ~~**Port-in flow is implemented but never live-tested**~~ — **DONE
+  2026-08-05: the first real filing SUCCEEDED**, port order **217760** (inii
+  mini, 6469846023 from Verizon). See §9 below for what that one live exercise
+  taught, including a response-field bug it exposed.
 - **Ezra Store 1's failure mode is fixed but unproven live** — next stress
   round should include a mid-provisioning interruption / duplicate-name rerun
   to confirm the self-heal in production.
@@ -266,3 +276,56 @@ worktree branch `claude/heuristic-easley-d05ffe` atop feat/ai-agent tip
 - Open: vanity replacement can't re-pick the word automatically (a taken
   vanity number is replaced with a plain toll-free number, logged in the
   timeline); toll-free purchase not yet live-tested against real VoIP.ms.
+
+---
+
+## 9. Port-in went live (2026-08-05) — order 217760, and the field bug it found
+
+The port-in path was written blind in July and sat unproven until a real
+customer needed it. One live filing settled several things at once.
+
+**The filing succeeded.** Submission `cmsey1ydz0000o4xoxu92gh2m` ("inii mini"),
+number 6469846023, carrier Verizon → **port order 217760**, accepted
+2026-08-05 ~19:55 ET. This came after `ce54e40d` rewrote `buildLnpPortParams()`
+to the WSDL's real parameter names; every earlier automated port had been
+rejected `invalid` because the code sent invented names (`did`, `carrier`,
+`account_number`).
+
+**⛔ The five integer codes are validated only for ONE combination.**
+`portType=1, isPartial=0, locationType=1, isMobile=1, tfType=0` was accepted
+for a **local + mobile full port**. Toll-free, partial, and landline
+combinations are still guesses — treat the next filing of a different shape as
+unproven, not as "the port code works".
+
+**⛔ The response field was wrong, and nothing complained.** `submitPortIn()`
+read `submit?.portid ?? submit?.port_id`; VoIP.ms actually answers
+`{"status":"success","port":217760}`. Consequences, all silent:
+
+- `answers.provisioning.portId` stored `""`.
+- The customer timeline logged `id ?` instead of the order number.
+- The `addLNPFile` loop would have attached the LOA and the phone bill to an
+  **empty** `portid` — the documents VoIP.ms needs to work the port.
+
+Nothing threw, because `vms()` validates only `status`. The filing reported
+success and the order really did exist; only our record of it was blank.
+Fixed 2026-08-05 in **`e98dad78`** (`?? submit?.port` added, on
+`feat/ivr-migration-takeover`). `voipMsProvisioning.test.ts`'s fake VoIP.ms now
+returns the **real** `{status, port}` shape, so the assertion on the stored id
+fails if the extraction regresses — a fake that returns a made-up field shape
+proves nothing, which is exactly how this bug survived 44 passing tests.
+
+**inii mini's own loose ends** (this is a real customer's live port):
+
+- **No bill was attached** — the upload was destroyed by an api deploy before
+  the volume fix (`5b2214fe`, see the uploads handoff). The customer has to
+  re-upload; the document cannot be recovered.
+- **The PIN may bounce.** We sent `6023`, the number's last 4. Verizon Wireless
+  ports need a generated **6-digit Number Transfer PIN**; if the port rejects,
+  that is the first thing to ask the customer for.
+- `portId` was corrected by hand to `217760` in `answers.provisioning` — the
+  code fix does not backfill.
+
+⛔ **Never probe this API by submitting `addLNPPort` calls.** A complete request
+files a REAL port order against a REAL number at a REAL carrier. 217760 is not
+a test record. Exercise parameter changes through the test suite's fake, and
+accept that the response shape is only ever confirmed by a customer's filing.
