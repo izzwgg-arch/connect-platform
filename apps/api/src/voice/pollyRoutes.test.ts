@@ -336,20 +336,56 @@ test("phone-native 8 kHz PCM is asked for, so nothing is resampled on the way to
   const body = JSON.parse(seen.find((s) => s.url.includes("/v1/speech"))!.body);
   assert.equal(body.OutputFormat, "pcm");
   assert.equal(body.SampleRate, "8000");
-  assert.equal(body.Engine, "neural", "the natural-sounding engine is the default, not the robotic one");
+  // The default engine has its own test below; this one is about the format.
 });
 
 test("a speed change becomes SSML, and the text inside it is escaped", async () => {
   await app.inject({
     method: "POST",
     url: "/voice/polly/preview",
-    payload: { voiceId: "Joanna", text: "Sales & support", speed: 0.9 },
+    payload: { voiceId: "Joanna", text: "Sales & support", engine: "neural", speed: 0.9 },
     remoteAddress: addr,
   });
   const body = JSON.parse(seen.find((s) => s.url.includes("/v1/speech"))!.body);
   assert.equal(body.TextType, "ssml");
   assert.match(body.Text, /<prosody rate="90%">/);
   assert.match(body.Text, /Sales &amp; support/, "an ampersand must not break the markup or be read aloud");
+});
+
+/**
+ * Proven against the live account 2026-08-06 (Matthew/en-US, us-east-1): the
+ * generative engine returned byte-identical audio at speed 1.00, 0.95 and 0.90
+ * — it accepts <prosody rate> with a 200 and ignores it. So we don't send it.
+ * If someone "tidies up" the engine check, this catches it.
+ */
+test("the generative engine never gets SSML — Amazon accepts it there and silently ignores it", async () => {
+  await app.inject({
+    method: "POST",
+    url: "/voice/polly/preview",
+    payload: { voiceId: "Matthew", text: "Thanks for calling.", engine: "generative", speed: 0.9 },
+    remoteAddress: addr,
+  });
+  const body = JSON.parse(seen.find((s) => s.url.includes("/v1/speech"))!.body);
+  assert.equal(body.Engine, "generative");
+  assert.equal(body.TextType, "text", "no pointless markup around text Amazon will discard");
+  assert.equal(body.Text, "Thanks for calling.");
+});
+
+test("generative is the default quality — a greeting is worth the fraction of a penny", async () => {
+  await preview();
+  const body = JSON.parse(seen.find((s) => s.url.includes("/v1/speech"))!.body);
+  assert.equal(body.Engine, "generative");
+});
+
+test("status tells the client which qualities honour a speed change", async () => {
+  const r = await app.inject({ method: "GET", url: "/voice/polly/status" });
+  const engines = (r.json() as any).engines as { id: string; supportsSpeed: boolean }[];
+  const generative = engines.find((e) => e.id === "generative");
+  const neural = engines.find((e) => e.id === "neural");
+  assert.equal(generative?.supportsSpeed, false, "so the UI can hide a slider that would do nothing");
+  assert.equal(neural?.supportsSpeed, true);
+  assert.equal((r.json() as any).defaultEngine, "generative");
+  assert.equal(engines[0].id, "generative", "best-first, so 'the first one it can do' picks the best");
 });
 
 test("at normal speed it stays plain text — no SSML to go wrong", async () => {

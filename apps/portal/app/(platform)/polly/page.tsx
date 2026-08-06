@@ -51,6 +51,8 @@ interface Engine {
   id: string;
   label: string;
   detail: string;
+  /** False where Amazon accepts a speaking-speed change and then ignores it. */
+  supportsSpeed?: boolean;
 }
 
 interface Credentials {
@@ -86,9 +88,12 @@ export default function PollyPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // Nothing is hidden by default. This page's job is to show you the whole
+  // inventory you're paying for; a helpful-looking default filter here just
+  // makes voices look missing. Narrowing is the customer's move, not ours.
   const [search, setSearch] = useState("");
-  const [language, setLanguage] = useState("en");
-  const [engine, setEngine] = useState("neural");
+  const [language, setLanguage] = useState("all");
+  const [engine, setEngine] = useState("all");
   const [playing, setPlaying] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -160,7 +165,13 @@ export default function PollyPage() {
   async function playSample(v: Voice) {
     setErr(null); setPlaying(v.voiceId);
     try {
-      const usableEngine = v.engines.includes(engine) ? engine : v.engines[0] || "standard";
+      // With "Any quality" selected there is no chosen engine to honour, so
+      // audition each voice at the best it offers — the order in POLLY_ENGINES
+      // is best-first, so the first match is that.
+      const preferred = (state?.engines ?? []).map((e) => e.id);
+      const usableEngine = v.engines.includes(engine)
+        ? engine
+        : preferred.find((id) => v.engines.includes(id)) || v.engines[0] || "standard";
       // A bespoke fetch rather than the shared helpers: apiFetchBlob is GET-only
       // and this is a POST that answers with audio. The API ORIGIN still comes
       // from the shared resolver — hard-coding `/api` would work in production
@@ -209,10 +220,14 @@ export default function PollyPage() {
     const q = search.trim().toLowerCase();
     return voices.filter((v) => {
       if (language !== "all" && !(v.languageCode || "").toLowerCase().startsWith(language)) return false;
+      // The quality dropdown FILTERS, rather than only tinting a badge. Picking
+      // "Most lifelike" and still being shown all 109 voices makes answering
+      // "which ones can do this?" a manual scan of every badge on the page.
+      if (engine !== "all" && !v.engines.includes(engine)) return false;
       if (!q) return true;
       return `${v.name} ${v.voiceId} ${v.languageName ?? ""}`.toLowerCase().includes(q);
     });
-  }, [voices, search, language]);
+  }, [voices, search, language, engine]);
 
   const canSave = accessKeyId.trim().length > 0 && secretAccessKey.trim().length > 0 && !saving;
 
@@ -347,6 +362,7 @@ export default function PollyPage() {
                   ))}
                 </select>
                 <select className="pl-input pl-narrow" value={engine} onChange={(e) => setEngine(e.target.value)}>
+                  <option value="all">Any quality</option>
                   {(state.engines ?? []).map((e) => (
                     <option key={e.id} value={e.id}>{e.label}</option>
                   ))}

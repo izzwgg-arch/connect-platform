@@ -55,23 +55,58 @@ export interface PollyVoice {
 }
 
 /**
- * Polly's engines, in the terms someone setting up a phone menu cares about.
+ * Polly's engines, in the terms someone setting up a phone menu cares about,
+ * best first.
  *
- * Neural is the default rather than standard: the price difference is
- * irrelevant at greeting lengths, and standard voices are noticeably more
- * robotic — which is the whole reason a business puts off recording a greeting.
+ * Generative is the default. Amazon charges more for it per character, but a
+ * greeting is a few hundred characters — the difference between generative and
+ * standard on a 300-character greeting is under a penny, paid once, however
+ * many thousands of callers hear it. Sounding human is worth incomparably more
+ * than that to a business being judged by its phone menu. The cost argument
+ * that makes generative a luxury for audiobooks does not survive contact with
+ * IVR-sized text.
+ *
+ * The trade is coverage, not money: 43 of Amazon's 109 voices offer generative
+ * (measured live, us-east-1, 2026-08-06), so defaulting to it shows fewer
+ * voices. That is why the quality control sits NEXT TO the voice list in the
+ * UI rather than inside an advanced panel — the thing doing the filtering has
+ * to be visible beside the thing being filtered.
  */
 export const POLLY_ENGINES = [
-  { id: "neural", label: "Natural", detail: "The best all-round choice. Clear and human on a phone line." },
+  { id: "generative", label: "Most lifelike", detail: "The most human. Best for a greeting callers judge you by." },
+  { id: "neural", label: "Natural", detail: "Clear and human, and offered on more voices." },
+  { id: "long-form", label: "Long-form", detail: "For longer messages. Only a few voices offer it." },
   { id: "standard", label: "Basic", detail: "Cheapest and most robotic. Available on every voice." },
-  { id: "long-form", label: "Long-form", detail: "For longer messages. Only some voices offer it." },
-  { id: "generative", label: "Most expressive", detail: "The most lifelike, on the few voices that support it." },
 ] as const;
 
 export type PollyEngineId = (typeof POLLY_ENGINES)[number]["id"];
 
+export const POLLY_DEFAULT_ENGINE: PollyEngineId = "generative";
+
 export function isPollyEngineId(v: unknown): v is PollyEngineId {
   return POLLY_ENGINES.some((e) => e.id === v);
+}
+
+/**
+ * Engines that silently ignore a speaking-speed change.
+ *
+ * PROVEN, not read in a doc (2026-08-06, Matthew/en-US, us-east-1): the same
+ * text through the generative engine returned byte-identical audio at speed
+ * 1.00, 0.95 and 0.90 — 14,976 bytes every time — while neural's output length
+ * moved with the setting. Amazon accepts the `<prosody rate>` wrapper with a
+ * 200 and then does nothing with it.
+ *
+ * That is the worst kind of failure: no error to notice, no effect to hear.
+ * Two things follow, and both matter. The SSML wrapper is skipped entirely for
+ * these engines (pointless markup around text is only ever a new way to break),
+ * and the UI hides the speed control rather than leaving a slider that does
+ * nothing. If Amazon later adds prosody support to generative, delete the id
+ * from this list and both behaviours correct themselves.
+ */
+const ENGINES_IGNORING_SPEED: readonly string[] = ["generative"];
+
+export function engineSupportsSpeed(engine: string): boolean {
+  return !ENGINES_IGNORING_SPEED.includes(engine);
 }
 
 /** Speaking speed, expressed the way the recording modal already expresses it.
@@ -455,12 +490,15 @@ export async function synthesisePollySpeech(
   }
   if (!input.voiceId) throw new PollyError("no_voice", 400, "Pick a voice first.");
 
-  const engine: PollyEngineId = isPollyEngineId(input.engine) ? input.engine : "neural";
+  const engine: PollyEngineId = isPollyEngineId(input.engine) ? input.engine : POLLY_DEFAULT_ENGINE;
 
   // Polly has no speed parameter — rate is SSML only. At exactly 1.0 send plain
-  // text instead, so an unremarkable greeting never fails on an SSML quirk.
+  // text instead, so an unremarkable greeting never fails on an SSML quirk. And
+  // on an engine that ignores prosody entirely (see ENGINES_IGNORING_SPEED),
+  // send plain text whatever the speed: wrapping markup Amazon will discard
+  // buys nothing and is one more thing that can go wrong.
   const speed = Math.min(1.2, Math.max(0.7, Number(input.speed) || POLLY_DEFAULT_SPEED));
-  const usesSsml = Math.abs(speed - 1) > 0.001;
+  const usesSsml = Math.abs(speed - 1) > 0.001 && engineSupportsSpeed(engine);
   const payloadText = usesSsml
     ? `<speak><prosody rate="${Math.round(speed * 100)}%">${escapeXml(text)}</prosody></speak>`
     : text;

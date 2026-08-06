@@ -192,7 +192,8 @@ export function registerPollyRoutes(deps: PollyRouteDeps): void {
     const creds = await resolvePollyCredentials(db);
     if (!creds) return reply.send({ allowed: true, configured: false });
 
-    const { checkPollyCredentials, listPollyVoices, POLLY_ENGINES, POLLY_DEFAULT_SPEED } = await import("./polly");
+    const { checkPollyCredentials, listPollyVoices, POLLY_ENGINES, POLLY_DEFAULT_SPEED, POLLY_DEFAULT_ENGINE, engineSupportsSpeed } =
+      await import("./polly");
     const [check, voices] = await Promise.all([
       checkPollyCredentials(creds),
       // Best-effort: a voice-list hiccup must not break the status answer.
@@ -215,7 +216,11 @@ export function registerPollyRoutes(deps: PollyRouteDeps): void {
       usable: check.usable ?? false,
       message: (isConnectStaff(user) ? check.userMessage : check.customerMessage ?? check.userMessage) ?? null,
       region: creds.region,
-      engines: POLLY_ENGINES,
+      // `supportsSpeed` rides along per engine so the client can hide a control
+      // that would do nothing, rather than each screen hard-coding which
+      // engines Amazon quietly ignores prosody on.
+      engines: POLLY_ENGINES.map((e) => ({ ...e, supportsSpeed: engineSupportsSpeed(e.id) })),
+      defaultEngine: POLLY_DEFAULT_ENGINE,
       defaultSpeed: POLLY_DEFAULT_SPEED,
       /** null = list unavailable right now; the client falls back to /voices. */
       voices,
@@ -405,7 +410,7 @@ export function registerPollyRoutes(deps: PollyRouteDeps): void {
     }
 
     const creds = await resolvePollyCredentials(db);
-    const { checkPollyCredentials, listPollyVoices, POLLY_ENGINES } = await import("./polly");
+    const { checkPollyCredentials, listPollyVoices, POLLY_ENGINES, POLLY_DEFAULT_ENGINE, engineSupportsSpeed } = await import("./polly");
     const [check, voices] = await Promise.all([
       checkPollyCredentials(creds!),
       listPollyVoices(creds!).catch(() => []),
@@ -414,7 +419,8 @@ export function registerPollyRoutes(deps: PollyRouteDeps): void {
     return reply.send({
       ...described,
       regions: SUGGESTED_POLLY_REGIONS,
-      engines: POLLY_ENGINES,
+      engines: POLLY_ENGINES.map((e) => ({ ...e, supportsSpeed: engineSupportsSpeed(e.id) })),
+      defaultEngine: POLLY_DEFAULT_ENGINE,
       keyWorks: check.ok,
       usable: check.usable ?? false,
       // This page is owner-only, so the full detail is the right thing to show.

@@ -57,8 +57,9 @@ const PHRASES = [
   "Ready - press the play button to hear it.",
   "If nothing plays, close your browser completely and open it again.",
   "The preview took too long. Try again.",
-  "Voice source", "Amazon Polly", "Language", "All languages",
-  "No voices for that language. Try another one.",
+  "Voice source", "Amazon Polly", "Language", "All languages", "of",
+  "No voices offer that language and quality together. Try another.",
+  "This voice quality always reads at its own natural pace — speed can't be changed.",
 ];
 
 interface Voice {
@@ -105,7 +106,10 @@ interface PollyStatus {
   usable?: boolean;
   message?: string | null;
   region?: string | null;
-  engines?: { id: string; label: string; detail: string }[];
+  /** `supportsSpeed` is false for engines Amazon silently ignores prosody on —
+   *  the speed control is hidden for those rather than left doing nothing. */
+  engines?: { id: string; label: string; detail: string; supportsSpeed?: boolean }[];
+  defaultEngine?: string;
   defaultSpeed?: number;
   voices?: PollyVoice[] | null;
 }
@@ -113,6 +117,8 @@ interface PollyStatus {
 type Provider = "elevenlabs" | "polly";
 
 const POLLY_FALLBACK_SPEED = 0.95;
+/** Overridden by the server's `defaultEngine`; only used if it doesn't say. */
+const POLLY_FALLBACK_ENGINE = "generative";
 
 export interface Tuning {
   stability: number;
@@ -204,7 +210,7 @@ export function MakeRecording({
   const [polly, setPolly] = useState<PollyStatus | null>(null);
   const [pollyVoices, setPollyVoices] = useState<PollyVoice[]>([]);
   const [pollyVoiceId, setPollyVoiceId] = useState("");
-  const [pollyEngine, setPollyEngine] = useState("neural");
+  const [pollyEngine, setPollyEngine] = useState(POLLY_FALLBACK_ENGINE);
   const [pollySpeed, setPollySpeed] = useState(POLLY_FALLBACK_SPEED);
   const [pollyLanguage, setPollyLanguage] = useState("en");
 
@@ -286,16 +292,21 @@ export function MakeRecording({
         if (p?.allowed && p.configured && p.usable) {
           setPolly(p);
           if (typeof p.defaultSpeed === "number") setPollySpeed(p.defaultSpeed);
+          const engine = p.defaultEngine || POLLY_FALLBACK_ENGINE;
+          setPollyEngine(engine);
           const list = Array.isArray(p.voices) ? p.voices : [];
           setPollyVoices(list);
           // Start on the language most of the catalogue is in for this list,
           // rather than assuming English exists in it.
           const preferred = list.some((v) => (v.languageCode || "").startsWith("en")) ? "en" : (list[0]?.languageCode || "en").split("-")[0];
           setPollyLanguage(preferred);
-          const first = list.find((v) => (v.languageCode || "").startsWith(preferred) && v.engines.includes("neural")) ?? list[0];
+          const first = list.find((v) => (v.languageCode || "").startsWith(preferred) && v.engines.includes(engine)) ?? list[0];
           if (first) {
             setPollyVoiceId(first.voiceId);
-            if (!first.engines.includes("neural")) setPollyEngine(first.engines[0] || "standard");
+            // Not every voice offers the default quality. Follow the voice we
+            // actually landed on rather than leaving a selected quality it
+            // cannot do — that combination fails only at Generate time.
+            if (!first.engines.includes(engine)) setPollyEngine(first.engines[0] || "standard");
           }
           // Polly is the only working source — start there rather than opening
           // on an ElevenLabs error the person can do nothing about.
@@ -439,6 +450,10 @@ export function MakeRecording({
     setPollyVoiceId(shownPollyVoices[0]?.voiceId ?? "");
   }, [isPolly, shownPollyVoices, pollyVoiceId]);
 
+  /** False on engines Amazon accepts a speed for and then ignores. Server-told,
+   *  so this screen never hard-codes which ones those are. */
+  const pollyEngineSupportsSpeed = (polly?.engines ?? []).find((e) => e.id === pollyEngine)?.supportsSpeed !== false;
+
   const selectedVoice = isPolly ? pollyVoiceId : voiceId;
   const canGenerate = Boolean(selectedVoice && chars > 0 && !previewing && !saving);
 
@@ -516,19 +531,48 @@ export function MakeRecording({
                 {!isPolly && left != null && <span>{left.toLocaleString()} {t("left this month")}</span>}
               </div>
 
-              {isPolly && pollyLanguages.length > 1 && (
-                <>
-                  <label className="mr-lbl">{t("Language")}</label>
-                  <select className="mr-in" value={pollyLanguage} onChange={(e) => setPollyLanguage(e.target.value)}>
-                    <option value="all">{t("All languages")}</option>
-                    {pollyLanguages.map(([code, label]) => (
-                      <option key={code} value={code}>{label}</option>
-                    ))}
-                  </select>
-                </>
+              {/* Language and quality sit HERE, directly above the voice list,
+                  not in Advanced settings. Both of them filter that list, and
+                  a filter whose control is hidden just makes the list look
+                  wrong — which is exactly what happened when Quality lived in
+                  the collapsed panel and silently hid two thirds of the
+                  voices. */}
+              {isPolly && (
+                <div className="mr-polly-filters">
+                  {pollyLanguages.length > 1 && (
+                    <div>
+                      <label className="mr-lbl">{t("Language")}</label>
+                      <select className="mr-in" value={pollyLanguage} onChange={(e) => setPollyLanguage(e.target.value)}>
+                        <option value="all">{t("All languages")}</option>
+                        {pollyLanguages.map(([code, label]) => (
+                          <option key={code} value={code}>{label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div>
+                    <label className="mr-lbl">{t("Quality")}</label>
+                    <select className="mr-in" value={pollyEngine} onChange={(e) => setPollyEngine(e.target.value)}>
+                      {(polly?.engines ?? []).map((e) => (
+                        <option key={e.id} value={e.id}>{e.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               )}
 
-              <label className="mr-lbl">{t("Which voice?")}</label>
+              <label className="mr-lbl">
+                {t("Which voice?")}
+                {/* Say how many of the total are being shown. Without this, a
+                    filtered list is indistinguishable from a short one. */}
+                {isPolly && pollyVoices.length > 0 && (
+                  <span className="mr-count">
+                    {shownPollyVoices.length === pollyVoices.length
+                      ? shownPollyVoices.length
+                      : `${shownPollyVoices.length} ${t("of")} ${pollyVoices.length}`}
+                  </span>
+                )}
+              </label>
               <div className="mr-voices">
                 {isPolly
                   ? shownPollyVoices.map((v) => (
@@ -552,7 +596,7 @@ export function MakeRecording({
                       </button>
                     ))}
                 {isPolly && shownPollyVoices.length === 0 && (
-                  <p className="mr-dim">{t("No voices for that language. Try another one.")}</p>
+                  <p className="mr-dim">{t("No voices offer that language and quality together. Try another.")}</p>
                 )}
                 {!isPolly && voices.length === 0 && <p className="mr-dim">{t("No voices on this account yet.")}</p>}
               </div>
@@ -569,19 +613,22 @@ export function MakeRecording({
                   {isPolly ? (
                     <>
                       {/* Amazon has no stability or expression knobs — its
-                          equivalent of "quality" is the engine, and speed is
-                          the only other thing worth exposing. Showing dead
-                          sliders would be worse than showing fewer. */}
-                      <Slider label={t("Speaking speed")} hint={t("Lower is slower and clearer on a bad line.")}
-                        min={0.7} max={1.2} step={0.05} value={pollySpeed}
-                        onChange={setPollySpeed} />
-
-                      <label className="mr-lbl">{t("Quality")}</label>
-                      <select className="mr-in" value={pollyEngine} onChange={(e) => setPollyEngine(e.target.value)}>
-                        {(polly?.engines ?? []).map((e) => (
-                          <option key={e.id} value={e.id}>{e.label} — {e.detail}</option>
-                        ))}
-                      </select>
+                          equivalent of those is the quality choice, which now
+                          lives above next to the voice list. Speed is all
+                          that's left, and only on engines that honour it:
+                          the most lifelike one accepts the setting and then
+                          ignores it, so showing the slider there would be a
+                          control that does nothing. */}
+                      {pollyEngineSupportsSpeed ? (
+                        <Slider label={t("Speaking speed")} hint={t("Lower is slower and clearer on a bad line.")}
+                          min={0.7} max={1.2} step={0.05} value={pollySpeed}
+                          onChange={setPollySpeed} />
+                      ) : (
+                        <p className="mr-dim">{t("This voice quality always reads at its own natural pace — speed can't be changed.")}</p>
+                      )}
+                      <p className="mr-dim" style={{ marginBottom: 0 }}>
+                        {(polly?.engines ?? []).find((e) => e.id === pollyEngine)?.detail ?? ""}
+                      </p>
                     </>
                   ) : (
                     <>
@@ -690,6 +737,10 @@ function MakeRecordingStyles() {
       .mr-chip:hover{border-color:var(--accent,#2f6bff);color:var(--accent,#2f6bff)}
       .mr-chip.on{border-color:var(--accent,#2f6bff);color:var(--accent,#2f6bff);
         background:var(--accent-soft,rgba(47,107,255,.08));font-weight:680}
+      .mr-polly-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+      .mr-polly-filters .mr-lbl{margin-top:16px}
+      .mr-count{font-size:11px;font-weight:650;color:var(--accent,#2f6bff);
+        background:var(--accent-soft,rgba(47,107,255,.08));border-radius:999px;padding:2px 8px;margin-left:7px}
       .mr-meta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--faint,#94a3b8);margin-top:6px}
       .mr-voices{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:8px}
       .mr-voice{text-align:left;font:inherit;padding:11px 12px;border-radius:11px;cursor:pointer;
