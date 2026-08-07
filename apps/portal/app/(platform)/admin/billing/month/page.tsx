@@ -2,9 +2,11 @@
 
 /* Mockup 1 — This month. The morning screen: is billing on track, and if not, who. */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Pill, asList, dateTime, invoiceTone, money, shortDate, useApi } from "../_new/ui";
+import { useRouter } from "next/navigation";
+import { apiPost } from "../../../../../services/apiClient";
+import { Pill, asList, dateTime, errText, invoiceTone, money, shortDate, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Overview = {
@@ -56,6 +58,8 @@ function nextChargeDate(day: number): Date {
 }
 
 export default function BillingMonthPage() {
+  const router = useRouter();
+  const [composer, setComposer] = useState<"invoice" | "charge" | null>(null);
   const overview = useApi<Overview>("/admin/billing/overview");
   const runs = useApi<Run[]>("/admin/billing/runs/recent", (raw) => asList<Run>(raw, "runs"));
   const tenants = useApi<TenantRow[]>("/admin/billing/platform/tenants", (raw) => asList<TenantRow>(raw, "tenants"));
@@ -102,8 +106,27 @@ export default function BillingMonthPage() {
         <div className="cbill-toolbar">
           <Link className="cbill-btn" href="/admin/billing/customers">Customers</Link>
           <Link className="cbill-btn" href="/admin/billing/needs-you">Needs you</Link>
+          <button className="cbill-btn primary" onClick={() => setComposer(composer ? null : "invoice")}>
+            New invoice
+          </button>
+          <button className="cbill-btn" onClick={() => setComposer(composer ? null : "charge")}>
+            One-time charge
+          </button>
         </div>
       </div>
+
+      {composer && (
+        <Composer
+          kind={composer}
+          tenants={(tenants.data || []).map((t) => ({ id: t.id, name: t.name }))}
+          onClose={() => setComposer(null)}
+          onCreated={(invoiceId) => {
+            setComposer(null);
+            if (invoiceId) router.push(`/admin/billing/invoice/${invoiceId}`);
+            else void overview.reload();
+          }}
+        />
+      )}
 
       {overview.error && <div className="cbill-banner bad">{overview.error}</div>}
 
@@ -241,5 +264,130 @@ export default function BillingMonthPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** Build a custom invoice, or put a one-time charge on someone's account.
+    A custom invoice is never charged automatically — you collect it yourself. */
+function Composer({
+  kind,
+  tenants,
+  onClose,
+  onCreated,
+}: {
+  kind: "invoice" | "charge";
+  tenants: Array<{ id: string; name: string }>;
+  onClose: () => void;
+  onCreated: (invoiceId?: string) => void;
+}) {
+  const [tenantId, setTenantId] = useState("");
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState("");
+  const [dueDate, setDueDate] = useState(
+    new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10),
+  );
+  const [memo, setMemo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    const cents = Math.round(Number(String(amount).replace(/[^0-9.]/g, "")) * 100);
+    if (!tenantId) { setErr("Pick a customer."); return; }
+    if (!description.trim()) { setErr("Say what this is for."); return; }
+    if (!Number.isFinite(cents) || cents < 1) { setErr("Enter an amount."); return; }
+    setBusy(true); setErr("");
+    try {
+      if (kind === "charge") {
+        await apiPost(`/admin/billing/platform/tenants/${tenantId}/one-time-charges`, {
+          description: description.trim(),
+          amountCents: cents,
+          chargeMode: "none",
+          ...(memo.trim() ? { invoiceMemo: memo.trim() } : {}),
+        });
+        onCreated();
+      } else {
+        const now = new Date();
+        const res: any = await apiPost(`/admin/billing/invoices/manual`, {
+          tenantId,
+          periodStart: now.toISOString(),
+          periodEnd: new Date(now.getTime() + 30 * 86400000).toISOString(),
+          dueDate: new Date(`${dueDate}T12:00:00Z`).toISOString(),
+          lineItems: [
+            {
+              type: "CUSTOM",
+              description: description.trim(),
+              quantity: 1,
+              unitPriceCents: cents,
+              taxable: false,
+            },
+          ],
+          ...(memo.trim() ? { notes: memo.trim() } : {}),
+          status: "OPEN",
+        });
+        onCreated(res?.id || res?.invoice?.id);
+      }
+    } catch (e: any) {
+      setErr(errText(e, "Could not create that."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="cbill-card">
+      <div className="cbill-card-hd">
+        <h3>{kind === "invoice" ? "New custom invoice" : "One-time charge"}</h3>
+        <div className="cbill-toolbar">
+          <span className="hint">
+            {kind === "invoice"
+              ? "Never charged automatically — you collect it yourself"
+              : "Added to their account as a charge"}
+          </span>
+          <button className="cbill-btn" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+      <div className="cbill-card-bd">
+        {err && <div className="cbill-banner bad" style={{ margin: "10px 0" }}>{err}</div>}
+        <div className="cbill-row">
+          <div className="cbill-label"><span className="t">Customer</span></div>
+          <select className="cbill-select" style={{ minWidth: 220 }} value={tenantId}
+            onChange={(e) => setTenantId(e.target.value)} aria-label="Customer">
+            <option value="">Choose a customer…</option>
+            {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+        <div className="cbill-row">
+          <div className="cbill-label">
+            <span className="t">What is it for</span>
+            <span className="h">This is the wording the customer sees</span>
+          </div>
+          <input className="cbill-input text" value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Replacement handset" aria-label="Description" />
+        </div>
+        <div className="cbill-row">
+          <div className="cbill-label"><span className="t">Amount</span></div>
+          <input className="cbill-input" value={amount} onChange={(e) => setAmount(e.target.value)}
+            placeholder="0.00" aria-label="Amount" />
+        </div>
+        {kind === "invoice" && (
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">Due by</span></div>
+            <input className="cbill-input" style={{ width: 150 }} type="date" value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)} aria-label="Due date" />
+          </div>
+        )}
+        <div className="cbill-row">
+          <div className="cbill-label"><span className="t">Memo</span><span className="h">Optional</span></div>
+          <input className="cbill-input text" value={memo} onChange={(e) => setMemo(e.target.value)} aria-label="Memo" />
+        </div>
+        <div className="cbill-row">
+          <div className="cbill-label" />
+          <button className="cbill-btn primary" disabled={busy} onClick={() => void submit()}>
+            {busy ? "Creating…" : kind === "invoice" ? "Create invoice" : "Add the charge"}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

@@ -4,7 +4,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Pill, asList, dateTime, money, txTone, useApi } from "../_new/ui";
+import { apiPost } from "../../../../../services/apiClient";
+import { Pill, asList, dateTime, errText, money, txTone, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Tx = {
@@ -30,10 +31,34 @@ export default function BillingMoneyPage() {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<Tx | null>(null);
 
-  const { data, error, loading } = useApi<Tx[]>(
+  const { data, error, loading, reload } = useApi<Tx[]>(
     "/admin/billing/transactions?limit=100",
     (raw) => asList<Tx>(raw, "transactions"),
   );
+
+  const [refunding, setRefunding] = useState("");
+  const [actionErr, setActionErr] = useState("");
+  const [actionOk, setActionOk] = useState("");
+
+  /** Refunds move real money, so this always confirms with the amount named. */
+  const refund = async (t: Tx) => {
+    const label = `${money(t.amountCents)} to ${t.tenant?.name || "this customer"}`;
+    if (!window.confirm(`Refund ${label}? This sends the money back and cannot be undone here.`)) return;
+    const reason = window.prompt("Reason for the refund (kept on the record):", "") || "";
+    setRefunding(t.id);
+    setActionErr("");
+    setActionOk("");
+    try {
+      await apiPost(`/admin/billing/transactions/${t.id}/refund`, { reason, confirmLive: true });
+      setActionOk(`Refunded ${label}.`);
+      setSelected(null);
+      void reload();
+    } catch (e: any) {
+      setActionErr(errText(e, "The refund did not go through. Nothing was refunded."));
+    } finally {
+      setRefunding("");
+    }
+  };
 
   const rows = useMemo(() => {
     const list = data || [];
@@ -88,6 +113,8 @@ export default function BillingMoneyPage() {
       </div>
 
       {error && <div className="cbill-banner bad">{error}</div>}
+      {actionErr && <div className="cbill-banner bad">{actionErr}</div>}
+      {actionOk && <div className="cbill-banner ok">{actionOk}</div>}
 
       <div className="cbill-kpis">
         <div className="cbill-kpi good">
@@ -198,6 +225,22 @@ export default function BillingMoneyPage() {
                 {selected.responseMessage || "—"}
               </span>
             </div>
+            {selected.status === "APPROVED" && (
+              <div className="cbill-row">
+                <div className="cbill-label">
+                  <span className="t">Refund this payment</span>
+                  <span className="h">Sends the money back to the customer's card</span>
+                </div>
+                <button
+                  className="cbill-btn"
+                  style={{ color: "var(--cb-crit)", borderColor: "rgba(200,50,74,0.35)" }}
+                  disabled={refunding === selected.id}
+                  onClick={() => void refund(selected)}
+                >
+                  {refunding === selected.id ? "Refunding…" : `Refund ${money(selected.amountCents)}`}
+                </button>
+              </div>
+            )}
           </div>
         </section>
       )}

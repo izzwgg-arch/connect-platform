@@ -1,13 +1,7 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { Suspense } from "react";
-import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { AdminBillingOpsView } from "../_components/adminBillingOpsPanels";
-
-export default function AdminBillingInvoicesPage() {
-  return (
-    <Suspense fallback={<LoadingSkeleton rows={6} />}>
-      <AdminBillingOpsView view="invoices" />
-    </Suspense>
-  );
+/* Replaced by the rebuilt billing screens. The old page lives in git history at
+   the commit before this one if any of it is ever needed again. */
+export default function RedirectedBillingPage() {
+  redirect("/admin/billing/invoice");
 }

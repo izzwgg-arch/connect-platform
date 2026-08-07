@@ -7,7 +7,7 @@
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { apiPost, apiPut } from "../../../../../../services/apiClient";
+import { apiDelete, apiPost, apiPut } from "../../../../../../services/apiClient";
 import { Pill, asList, dateTime, errText, invoiceTone, longDate, money, useApi } from "../../_new/ui";
 import "../../customer/customerBilling.css";
 
@@ -186,7 +186,33 @@ export default function InvoicePage() {
       <section className="cbill-card">
         <div className="cbill-card-hd">
           <h3>What they are being charged for</h3>
-          <span className="hint">{lines.length} line{lines.length === 1 ? "" : "s"}</span>
+          <div className="cbill-toolbar">
+            <span className="hint">{lines.length} line{lines.length === 1 ? "" : "s"}</span>
+            {!paid && !voided && (
+              <button
+                className="cbill-btn"
+                disabled={!!busy}
+                onClick={() => {
+                  const description = window.prompt("What is this line for?", "");
+                  if (!description || !description.trim()) return;
+                  const raw = window.prompt("How much? (e.g. 25.00)", "0.00");
+                  const cents = Math.round(Number(String(raw || "").replace(/[^0-9.-]/g, "")) * 100);
+                  if (!Number.isFinite(cents)) return;
+                  void act("Add a line", () =>
+                    apiPost(`/admin/billing/invoices/${i.id}/line-items`, {
+                      type: "CUSTOM",
+                      description: description.trim(),
+                      quantity: 1,
+                      unitPriceCents: cents,
+                      taxable: false,
+                    }),
+                  );
+                }}
+              >
+                Add a line
+              </button>
+            )}
+          </div>
         </div>
         <div className="cbill-table-wrap">
           <table className="cbill-table">
@@ -197,11 +223,12 @@ export default function InvoicePage() {
                 <th className="r">Each</th>
                 <th className="r">Taxable</th>
                 <th className="r">Amount</th>
+                <th className="r"></th>
               </tr>
             </thead>
             <tbody>
               {lines.length === 0 && (
-                <tr><td colSpan={5} style={{ color: "var(--cb-muted)" }}>No line items.</td></tr>
+                <tr><td colSpan={6} style={{ color: "var(--cb-muted)" }}>No line items.</td></tr>
               )}
               {lines.map((l) => (
                 <tr key={l.id}>
@@ -210,26 +237,46 @@ export default function InvoicePage() {
                   <td className="r n">{money(l.unitPriceCents)}</td>
                   <td className="r">{l.taxable === false ? <Pill tone="off">No</Pill> : <Pill tone="ok">Yes</Pill>}</td>
                   <td className="r n">{money(l.amountCents)}</td>
+                  <td className="r">
+                    {!paid && !voided && (
+                      <button
+                        className="cbill-btn"
+                        disabled={!!busy}
+                        onClick={() => {
+                          if (!window.confirm(`Remove "${l.description}" from this invoice?`)) return;
+                          void act("Remove the line", () =>
+                            apiDelete(`/admin/billing/invoices/${i.id}/line-items/${l.id}`),
+                          );
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               <tr>
-                <td colSpan={4} className="r" style={{ fontWeight: 620 }}>Subtotal</td>
+                <td colSpan={5} className="r" style={{ fontWeight: 620 }}>Subtotal</td>
                 <td className="r n">{money(i.subtotalCents)}</td>
               </tr>
               {i.taxCents > 0 && (
                 <tr>
-                  <td colSpan={4} className="r" style={{ fontWeight: 620 }}>Sales tax</td>
+                  <td colSpan={5} className="r" style={{ fontWeight: 620 }}>Sales tax</td>
                   <td className="r n">{money(i.taxCents)}</td>
                 </tr>
               )}
               <tr>
-                <td colSpan={4} className="r" style={{ fontWeight: 700 }}>Total</td>
+                <td colSpan={5} className="r" style={{ fontWeight: 700 }}>Total</td>
                 <td className="r n" style={{ fontWeight: 700 }}>{money(i.totalCents)}</td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
+
+      {!paid && !voided && (
+        <OutsidePayment invoice={i} onDone={() => { void inv.reload(); void events.reload(); }} />
+      )}
 
       <InvoiceMeta invoice={i} onSaved={() => { void inv.reload(); void events.reload(); }} />
 
@@ -255,6 +302,105 @@ export default function InvoicePage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** They paid you outside Connect — Zelle, a cheque, cash. Record it here and the
+    invoice settles, so the card is never charged on the payment date. */
+function OutsidePayment({ invoice, onDone }: { invoice: Invoice; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState(((invoice.balanceDueCents || 0) / 100).toFixed(2));
+  const [method, setMethod] = useState("ZELLE");
+  const [when, setWhen] = useState(new Date().toISOString().slice(0, 10));
+  const [reference, setReference] = useState("");
+  const [payer, setPayer] = useState("");
+  const [notes, setNotes] = useState("");
+  const [receipt, setReceipt] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    const cents = Math.round(Number(String(amount).replace(/[^0-9.]/g, "")) * 100);
+    if (!Number.isFinite(cents) || cents < 1) { setErr("Enter how much they paid."); return; }
+    setSaving(true); setErr("");
+    try {
+      await apiPost(`/admin/billing/invoices/${invoice.id}/external-payment`, {
+        amountCents: cents,
+        paymentDate: new Date(`${when}T12:00:00Z`).toISOString(),
+        method,
+        ...(reference.trim() ? { externalReference: reference.trim() } : {}),
+        ...(payer.trim() ? { payerName: payer.trim() } : {}),
+        ...(notes.trim() ? { externalNotes: notes.trim() } : {}),
+        sendReceiptEmail: receipt,
+      });
+      setOpen(false);
+      onDone();
+    } catch (e: any) {
+      setErr(errText(e, "Could not record that payment."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="cbill-card">
+      <div className="cbill-card-hd">
+        <h3>They paid outside Connect</h3>
+        <div className="cbill-toolbar">
+          <span className="hint">Zelle, cheque, cash — recording it stops the card being charged</span>
+          <button className="cbill-btn" onClick={() => setOpen(!open)}>
+            {open ? "Cancel" : "Record a payment"}
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="cbill-card-bd">
+          {err && <div className="cbill-banner bad" style={{ margin: "10px 0" }}>{err}</div>}
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">How much</span><span className="h">Balance due is {money(invoice.balanceDueCents)}</span></div>
+            <input className="cbill-input" value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Amount paid" />
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">How they paid</span></div>
+            <select className="cbill-select" value={method} onChange={(e) => setMethod(e.target.value)} aria-label="Payment method">
+              <option value="ZELLE">Zelle</option>
+              <option value="CHECK">Cheque</option>
+              <option value="CASH">Cash</option>
+              <option value="QUICKPAY">QuickPay</option>
+              <option value="CARD_EXTERNAL">Card, taken elsewhere</option>
+              <option value="ACH_EXTERNAL">Bank transfer</option>
+              <option value="OTHER">Something else</option>
+            </select>
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">When</span></div>
+            <input className="cbill-input" style={{ width: 150 }} type="date" value={when} onChange={(e) => setWhen(e.target.value)} aria-label="Payment date" />
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">Reference</span><span className="h">Cheque number, confirmation code — optional</span></div>
+            <input className="cbill-input text" value={reference} onChange={(e) => setReference(e.target.value)} aria-label="Reference" />
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">Who paid</span><span className="h">Optional</span></div>
+            <input className="cbill-input text" value={payer} onChange={(e) => setPayer(e.target.value)} aria-label="Payer name" />
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">Note</span><span className="h">Kept on the record, not shown to the customer</span></div>
+            <input className="cbill-input text" value={notes} onChange={(e) => setNotes(e.target.value)} aria-label="Notes" />
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label"><span className="t">Email them a receipt</span></div>
+            <button type="button" className="cbill-toggle" data-on={receipt} aria-label="Send a receipt" onClick={() => setReceipt(!receipt)} />
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label" />
+            <button className="cbill-btn primary" disabled={saving} onClick={() => void submit()}>
+              {saving ? "Recording…" : "Record this payment"}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -228,6 +228,13 @@ export default function CustomerBillingPage() {
             }
           : null,
       });
+      // Retry rules live behind their own endpoint, not the settings PUT.
+      await apiPut(`/admin/billing/platform/tenants/${tenantId}/collections-config`, {
+        dunningEnabled: !collectionsPaused,
+        maxAttempts: Math.max(1, Math.min(10, retryCount)),
+        retryDelayHours: Math.max(1, Math.min(336, retryHours)),
+      }).catch(() => undefined);
+
       setSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       setOriginal(form);
       apiGet<Preview>(`/admin/billing/platform/tenants/${tenantId}/invoice-preview`)
@@ -238,7 +245,7 @@ export default function CustomerBillingPage() {
     } finally {
       setSaving(false);
     }
-  }, [form, saving, tenantId, tollFreeCents, virtualExtCents, flatRateOn, flatRateCents, skipNext, skipReason]);
+  }, [form, saving, tenantId, tollFreeCents, virtualExtCents, flatRateOn, flatRateCents, skipNext, skipReason, collectionsPaused, retryCount, retryHours]);
 
   if (loading) return <div className="cbill"><p className="cbill-sub">Loading this customer's billing…</p></div>;
   if (loadError) return <div className="cbill"><div className="cbill-banner bad">{loadError}</div></div>;
@@ -722,9 +729,6 @@ export default function CustomerBillingPage() {
                   />
                 </div>
               </div>
-              <p className="cbill-sub" style={{ padding: "0 0 12px" }}>
-                Retry rules and pausing are saved on the collections screen for now.
-              </p>
             </div>
           </section>
         </div>
