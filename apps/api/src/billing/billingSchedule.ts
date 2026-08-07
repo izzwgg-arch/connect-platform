@@ -109,13 +109,58 @@ export function buildBillingSchedule(input: {
   metadata?: unknown;
   timeZone?: string | null;
 }): BillingSchedule {
+  return buildScheduleForAnchor(input, "current");
+}
+
+/**
+ * The schedule for the NEXT charge that has not happened yet.
+ *
+ * ⛔ `buildBillingSchedule` always anchors the payment date inside the CURRENT
+ * month, so once that day has passed the whole [reminder, charge) window sits in
+ * the past and `reminderDue` can never be true again that month. For
+ * `billingDayOfMonth = 1` — the schema default — the window is in the past on
+ * every single day of the year, so the T-3 invoice-creation phase never ran and
+ * those tenants never got an invoice at all (proven across a full simulated
+ * year; see billingSchedule.test.ts).
+ *
+ * Invoice creation must therefore look FORWARD: anchor on the next occurrence of
+ * the billing day at or after today, so the reminder window opens three days
+ * before the charge that is actually coming. Charge/`due` semantics are
+ * deliberately left to `buildBillingSchedule` so this fix cannot change when or
+ * whether a card is charged.
+ */
+export function buildUpcomingBillingSchedule(input: {
+  now?: Date;
+  billingDayOfMonth: number;
+  metadata?: unknown;
+  timeZone?: string | null;
+}): BillingSchedule {
+  return buildScheduleForAnchor(input, "upcoming");
+}
+
+function buildScheduleForAnchor(
+  input: {
+    now?: Date;
+    billingDayOfMonth: number;
+    metadata?: unknown;
+    timeZone?: string | null;
+  },
+  anchor: "current" | "upcoming",
+): BillingSchedule {
   const now = input.now ?? new Date();
   const timeZone = input.timeZone && isValidTimeZone(input.timeZone)
     ? input.timeZone
     : resolveBillingTimeZone(input.metadata);
   const today = localDateParts(now, timeZone);
-  const paymentDay = clampBillingDay(today.year, today.month, input.billingDayOfMonth);
-  const paymentLocal = { year: today.year, month: today.month, day: paymentDay };
+  let anchorYear = today.year;
+  let anchorMonth = today.month;
+  if (anchor === "upcoming" && today.day > clampBillingDay(today.year, today.month, input.billingDayOfMonth)) {
+    const shifted = addMonths(today.year, today.month, 1);
+    anchorYear = shifted.year;
+    anchorMonth = shifted.month;
+  }
+  const paymentDay = clampBillingDay(anchorYear, anchorMonth, input.billingDayOfMonth);
+  const paymentLocal = { year: anchorYear, month: anchorMonth, day: paymentDay };
   const nextMonth = addMonths(paymentLocal.year, paymentLocal.month, 1);
   const nextPaymentLocal = {
     year: nextMonth.year,

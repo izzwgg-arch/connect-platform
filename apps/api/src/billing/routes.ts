@@ -762,10 +762,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         autoBillingEnabled: z.boolean().optional(),
         billingDayOfMonth: z.number().int().min(1).max(28).optional(),
         paymentTermsDays: z.number().int().min(0).max(90).optional(),
+        // ⛔ `undefined` MUST stay `undefined`. The handler drops undefined keys
+        // (partial update); anything else is written. The old transform ended
+        // `: v ?? null`, so an ABSENT billingEmail became null and was saved —
+        // meaning every save of any unrelated setting silently erased the
+        // customer's billing email. An explicit null/"" still clears it.
         billingEmail: z.string().nullable().optional().refine(
           (v) => v == null || isValidMultiBillingEmail(v),
           { message: "billingEmail must be a valid email address or comma-separated list of valid addresses" },
-        ).transform((v) => (v ? normalizeMultiBillingEmail(v) || null : v ?? null)),
+        ).transform((v) => (v === undefined ? undefined : (v ? normalizeMultiBillingEmail(v) || null : null))),
         creditsCents: z.number().int().optional(),
         discountPercent: z.number().min(0).max(1).optional(),
         billingAddress: z.any().optional(),

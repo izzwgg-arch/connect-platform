@@ -40,7 +40,7 @@ import { runWakeCanaryEnrollCycle } from "./wakeCanaryEnrollCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { startPbxWebrtcDriftReconcileLoop } from "./pbxWebrtcDriftReconcileCycle";
 import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
-import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
+import { buildBillingSchedule, buildUpcomingBillingSchedule, type BillingSchedule } from "./billingSchedule";
 import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
@@ -3661,14 +3661,23 @@ async function runMonthlyBillingAutomation(): Promise<void> {
         billingDayOfMonth: setting.billingDayOfMonth,
         metadata: setting.metadata,
       }),
+      // ⛔ Invoice creation MUST use the upcoming charge, not the current
+      // month's already-past one. `schedule.reminderDue` is false all year for
+      // billingDayOfMonth=1 (the default), which is why those tenants never got
+      // an invoice. See buildUpcomingBillingSchedule.
+      upcoming: buildUpcomingBillingSchedule({
+        now,
+        billingDayOfMonth: setting.billingDayOfMonth,
+        metadata: setting.metadata,
+      }),
     }));
     const runPeriodStart = new Date(Math.min(...dueSchedules.map(({ schedule }: any) => schedule.periodStart.getTime())));
     const runPeriodEnd = new Date(Math.max(...dueSchedules.map(({ schedule }: any) => schedule.periodEnd.getTime())));
     const run = await (db as any).billingRun.create({ data: { periodStart: runPeriodStart, periodEnd: runPeriodEnd, status: "RUNNING", dryRun: false } });
     const results: any[] = [];
-    for (const { setting, schedule } of dueSchedules) {
+    for (const { setting, schedule, upcoming } of dueSchedules) {
       try {
-        await runAutopayReminderPhase(setting, schedule, run.id, results);
+        await runAutopayReminderPhase(setting, upcoming, run.id, results);
 
         if (!schedule.due) {
           await (db as any).billingEventLog.create({

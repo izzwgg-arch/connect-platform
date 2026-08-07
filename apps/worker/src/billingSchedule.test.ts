@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildBillingSchedule, resolveBillingTimeZone } from "./billingSchedule";
+import { buildBillingSchedule, buildUpcomingBillingSchedule, resolveBillingTimeZone } from "./billingSchedule";
 
 test("worker restart before payment date local midnight is not due", () => {
   const schedule = buildBillingSchedule({
@@ -110,3 +110,72 @@ test("payment due date is charge due but not reminderDue", () => {
   assert.equal(onDueDate.reminderDue, false);
 });
 
+
+// ── Regression: the invoice-creation window must open for EVERY billing day ───
+// Every test above uses billingDayOfMonth 21, which works. The schema default is
+// 1, which did not: buildBillingSchedule anchors the payment date inside the
+// current month, so for day 1 the [reminder, charge) window is in the past on
+// every day of the year and the T-3 invoice phase never ran. 16 of 30 live
+// tenants sat on that default and never auto-generated an invoice.
+
+function daysWindowOpen(billingDayOfMonth: number): number {
+  let open = 0;
+  for (let d = 0; d < 365; d++) {
+    // 09:00 America/New_York on each day of 2026
+    const now = new Date(Date.UTC(2026, 0, 1, 14, 0, 0) + d * 86400000);
+    if (buildUpcomingBillingSchedule({ now, billingDayOfMonth }).reminderDue) open++;
+  }
+  return open;
+}
+
+test("invoice-creation window opens ~3 days every month for every billing day", () => {
+  for (const day of [1, 2, 3, 5, 15, 21, 28]) {
+    const open = daysWindowOpen(day);
+    assert.ok(
+      open >= 33 && open <= 39,
+      `billingDayOfMonth=${day}: window opened on ${open}/365 days, expected ~36 (3 per month)`,
+    );
+  }
+});
+
+test("billing day 1: window opens before the 1st, anchored on the UPCOMING charge", () => {
+  // Jul 29 2026, 09:00 ET — three days before the Aug 1 charge.
+  const now = new Date("2026-07-29T13:00:00.000Z");
+  const upcoming = buildUpcomingBillingSchedule({ now, billingDayOfMonth: 1 });
+
+  assert.equal(upcoming.paymentDate, "2026-08-01", "should point at the next charge, not Jul 1");
+  assert.equal(upcoming.reminderDate, "2026-07-29");
+  assert.equal(upcoming.reminderDue, true, "the T-3 invoice window must be open");
+  assert.equal(upcoming.due, false, "the charge itself is not due yet");
+
+  // The invoice created in this window must cover the period the charge pays for.
+  assert.equal(upcoming.periodStart.toISOString(), "2026-08-01T04:00:00.000Z");
+  assert.equal(upcoming.nextPaymentDate, "2026-09-01");
+
+  // The old builder is what was broken — kept so the regression stays visible.
+  const current = buildBillingSchedule({ now, billingDayOfMonth: 1 });
+  assert.equal(current.paymentDate, "2026-07-01");
+  assert.equal(current.reminderDue, false);
+});
+
+test("on the billing day itself the window is closed and the charge is due", () => {
+  const now = new Date("2026-08-01T13:00:00.000Z"); // Aug 1, 09:00 ET
+  const upcoming = buildUpcomingBillingSchedule({ now, billingDayOfMonth: 1 });
+  assert.equal(upcoming.paymentDate, "2026-08-01");
+  assert.equal(upcoming.reminderDue, false);
+  assert.equal(buildBillingSchedule({ now, billingDayOfMonth: 1 }).due, true);
+});
+
+test("upcoming schedule rolls to next month once the billing day has passed", () => {
+  const now = new Date("2026-08-02T13:00:00.000Z"); // day after
+  const upcoming = buildUpcomingBillingSchedule({ now, billingDayOfMonth: 1 });
+  assert.equal(upcoming.paymentDate, "2026-09-01");
+  assert.equal(upcoming.reminderDate, "2026-08-29");
+});
+
+test("short months clamp: billing day 31 lands on the last day of February", () => {
+  const now = new Date("2026-02-25T14:00:00.000Z");
+  const upcoming = buildUpcomingBillingSchedule({ now, billingDayOfMonth: 31 });
+  assert.equal(upcoming.paymentDate, "2026-02-28");
+  assert.equal(upcoming.reminderDue, true);
+});
