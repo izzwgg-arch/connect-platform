@@ -63,6 +63,7 @@ const PHRASES = [
   "Give this recording a name so you can find it later.",
   "You already have a recording called that. Pick a different name.",
   "So you can tell it apart from your other recordings later.",
+  "Name it before you can save it.",
 ];
 
 interface Voice {
@@ -236,6 +237,7 @@ export function MakeRecording({
   // One VISIBLE audio element, reused. Two previews playing over each other is
   // a confusing way to compare voices — and a visible player means playback
   // never depends on autoplay being allowed or the media pipeline being alive.
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
   const inlineAudioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
@@ -389,9 +391,26 @@ export function MakeRecording({
     // ⛔ No "|| Greeting" fallback here any more. A silent default is how the
     // library filled up with identical names, and an unnamed recording is
     // un-findable the moment there are two of them.
+    //
+    // But refusing has to SAY SO, at the control that was pressed and at the
+    // box that needs filling — the name sits at the top of a modal that scrolls
+    // a long way past the voice list, so someone at the bottom cannot see it.
+    // The take itself is never at risk: the name is not part of what generates
+    // the audio, so filling it in and pressing again returns the identical
+    // preview from the server-side cache.
     const displayName = name.trim();
-    if (!displayName) { setErr(t("Give this recording a name so you can find it later.")); return; }
-    if (nameTaken) { setErr(t("You already have a recording called that. Pick a different name.")); return; }
+    if (!displayName) {
+      setErr(t("Give this recording a name so you can find it later."));
+      nameInputRef.current?.focus();
+      nameInputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    if (nameTaken) {
+      setErr(t("You already have a recording called that. Pick a different name."));
+      nameInputRef.current?.focus();
+      nameInputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
     setErr(null); setNote(null); setSaving(true);
     try {
       const r = isPolly
@@ -548,11 +567,18 @@ export function MakeRecording({
               )}
 
               <label className="mr-lbl">{t("What should it be called?")}</label>
-              <input className="mr-in" value={name} onChange={(e) => setName(e.target.value)} placeholder="Main greeting" />
-              <div className={"mr-hint" + (nameTaken ? " bad" : "")}>
+              <input ref={nameInputRef} className={"mr-in" + (nameTaken || (previewReady && !name.trim()) ? " bad" : "")}
+                value={name} onChange={(e) => setName(e.target.value)} placeholder="Main greeting" />
+              {/* Once there's a preview there is a take worth keeping, so the
+                  missing name stops being a hint and becomes the one thing
+                  standing between them and saving it. Say so THEN, not after
+                  they press the button and wonder why nothing happened. */}
+              <div className={"mr-hint" + (nameTaken || (previewReady && !name.trim()) ? " bad" : "")}>
                 {nameTaken
                   ? t("You already have a recording called that. Pick a different name.")
-                  : t("So you can tell it apart from your other recordings later.")}
+                  : previewReady && !name.trim()
+                    ? t("Name it before you can save it.")
+                    : t("So you can tell it apart from your other recordings later.")}
               </div>
 
               <label className="mr-lbl">{t("What should callers hear?")}</label>
@@ -724,10 +750,12 @@ export function MakeRecording({
               <button className="mr-btn" onClick={preview} disabled={!canGenerate}>
                 {previewing ? t("Generating...") : `\u25b6 ${t("Hear it")}`}
               </button>
-              {/* Naming gates SAVE only — previewing an unnamed draft is fine,
-                  and making someone name a voice they haven't heard yet is the
-                  wrong order. */}
-              <button className="mr-btn primary" onClick={save} disabled={!canGenerate || !name.trim() || nameTaken}>
+              {/* ⛔ NEVER disabled for a missing name. It was, and someone who
+                  had spent an hour getting a take right found a dead button and
+                  no reason given — the name box is at the top of a long scrolled
+                  modal, far out of sight of the button that refuses. Clicking
+                  now says what's wrong and puts the cursor in the box. */}
+              <button className="mr-btn primary" onClick={save} disabled={!canGenerate}>
                 {t(saving ? "Saving..." : "Use this recording")}
               </button>
             </div>
@@ -781,8 +809,10 @@ function MakeRecordingStyles() {
       .mr-ta{resize:vertical;line-height:1.6}
       .mr-in:focus,.mr-ta:focus{outline:none;border-color:var(--accent,#2f6bff)}
       .mr-hint{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--faint,#94a3b8)}
-      .mr-hint.bad{color:#c2410c}
+      .mr-hint.bad{color:#c2410c;font-weight:600}
       :root[data-theme="dark"] .mr-hint.bad{color:#fca77a}
+      .mr-in.bad{border-color:#c2410c}
+      :root[data-theme="dark"] .mr-in.bad{border-color:#fca77a}
       .mr-chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:9px}
       .mr-chip{font:inherit;font-size:12px;font-weight:600;padding:6px 11px;border-radius:99px;cursor:pointer;
         border:1px solid var(--line,rgba(19,32,48,.13));background:var(--panel-2,#f6f9fc);color:var(--dim,#5d6f84)}
