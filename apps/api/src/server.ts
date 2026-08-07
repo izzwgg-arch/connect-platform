@@ -22707,8 +22707,19 @@ app.put("/voice/ivr/schedule", async (req, reply) => {
   // the same tenant. Prevents a Tenant A admin from attaching Tenant B's
   // route profiles to their own schedule (which would be silently accepted
   // by the upsert and later cause confusing publish output).
-  const referencedIds = [d.defaultProfileId, d.afterHoursProfileId, d.holidayProfileId]
-    .filter((x): x is string => typeof x === "string" && x.length > 0);
+  //
+  // ⛔ DEDUPE FIRST. One menu may legitimately serve several modes — the same
+  // menu for open hours and closed hours is what most small businesses want,
+  // and it is the fastest way to get a new customer live. Without the Set, two
+  // slots holding the same id made a list of 2 that findMany answered with 1
+  // row, and the count check below rejected it as "profile_not_found". Saving
+  // the schedule then failed every time, which left no menu selected for the
+  // current mode, which made publish refuse — a closed loop with no way out
+  // and a bare slug on screen for a reason. Lived on 2026-08-06.
+  const referencedIds = Array.from(new Set(
+    [d.defaultProfileId, d.afterHoursProfileId, d.holidayProfileId]
+      .filter((x): x is string => typeof x === "string" && x.length > 0),
+  ));
   if (referencedIds.length > 0) {
     const profiles = await (db as any).ivrRouteProfile.findMany({
       where: { id: { in: referencedIds } },

@@ -166,6 +166,17 @@ const PUBLISH_ERROR_TEXT: Record<string, string> = {
   forbidden: "You don't have permission to publish phone menus.",
 };
 
+/** Saving the opening hours can be refused too, and those codes have no
+ *  `detail` worth reading. A bare "profile_not_found" on screen is what a
+ *  customer saw on 2026-08-06 while stuck in a loop they couldn't get out of. */
+const SCHEDULE_ERROR_TEXT: Record<string, string> = {
+  profile_not_found: "One of the menus chosen here no longer exists. Pick the menus again and save.",
+  profile_wrong_tenant: "One of the menus chosen here belongs to a different customer. Pick the menus again and save.",
+  tenant_not_linked: "This customer isn't linked to the phone system yet, so opening hours can't be saved.",
+  forbidden: "You don't have permission to change the opening hours.",
+  invalid_payload: "Something was missing from the hours. Reload the page and try again.",
+};
+
 /** Turns an API blocker key ("active_prompt_invalid", "opt_3/announce") into
  *  a spot on screen the admin can actually go fix. */
 function describeMissingSpot(key: string, profileType?: string | null): string {
@@ -848,7 +859,13 @@ export default function IvrStudioPage() {
     try {
       await apiPut(`/voice/ivr/schedule`, { ...next, tenantId });
       setSchedule(next); setDirty(true); flash("Opening hours saved");
-    } catch (e: any) { setError(e?.message || "Couldn't save the hours"); } finally { setSaving(false); }
+    } catch (e: any) {
+      // `.body` is where the server's JSON lives — `.message` alone reduces a
+      // full explanation to a bare slug, which is how "profile_not_found"
+      // reached a customer's screen. See the ApiError note in CLAUDE.md.
+      const code = String(e?.body?.error || "");
+      setError(SCHEDULE_ERROR_TEXT[code] || e?.body?.detail || e?.message || "Couldn't save the hours");
+    } finally { setSaving(false); }
   }
 
   /**
