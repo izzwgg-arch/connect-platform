@@ -22,7 +22,7 @@
 
 import { z } from "zod";
 import type { Buffer } from "node:buffer";
-import { saveGeneratedPrompt } from "./generatedPromptStore";
+import { saveGeneratedPrompt, resolveGeneratedPromptTenantId } from "./generatedPromptStore";
 
 export interface PollyRouteDeps {
   app: any;
@@ -328,7 +328,15 @@ export function registerPollyRoutes(deps: PollyRouteDeps): void {
       // A tenant admin can only ever generate into their own tenant, whatever
       // the body says. A super admin must land on one — a greeting with no
       // owner is invisible to the customer it was made for.
-      const tenantId = isSuperAdmin ? body.data.tenantId || user.tenantId || null : user.tenantId || null;
+      //
+      // ⛔ The Studio sends the tenant in the QUERY STRING, not the body — the
+      // identical bug that mis-filed 12 ElevenLabs recordings on 2026-08-06.
+      const tenantId = await resolveGeneratedPromptTenantId(db, {
+        isSuperAdmin,
+        bodyTenantId: body.data.tenantId,
+        queryTenantId: (req.query as any)?.tenantId,
+        userTenantId: user.tenantId,
+      });
       if (!tenantId) {
         return reply.code(400).send({ error: "tenant_required", message: "Choose which customer this greeting belongs to." });
       }

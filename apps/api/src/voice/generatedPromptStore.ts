@@ -42,6 +42,20 @@ export interface GeneratedPromptInput {
   provider: string;
   /** Anything else worth putting in the one log line for this generation. */
   logContext?: Record<string, unknown>;
+  /** How this was made, kept so it can be edited later instead of retyped.
+   *  The voice fields matter as much as the text: reopening an edit without
+   *  them would re-read the greeting in whatever voice happened to be selected,
+   *  and callers notice a business changing voice mid-sentence. */
+  sourceText?: string | null;
+  voiceId?: string | null;
+  voiceModel?: string | null;
+  voiceSettings?: Record<string, unknown> | null;
+  /** Set to REPLACE an existing generated recording rather than add a new one.
+   *  The row keeps its id, its promptRef and its filename, so every menu key
+   *  pointing at it keeps working and the new audio overwrites the old one on
+   *  the PBX under the same name. That is what makes this an edit rather than
+   *  "make another one and go re-point everything by hand". */
+  replacePromptId?: string | null;
 }
 
 export type GeneratedPromptResult =
@@ -54,6 +68,54 @@ export type GeneratedPromptResult =
 export function toTenantSlug(name: string): string | null {
   const slug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return slug.length > 0 ? slug : null;
+}
+
+/**
+ * Which customer a generated recording belongs to.
+ *
+ * ⛔ THE QUERY STRING IS WHERE IT ACTUALLY ARRIVES. The IVR Studio scopes every
+ * call by appending `?tenantId=…` — it has never put the tenant in the body.
+ * Both generate routes read the BODY only, so for a super-admin the tenant was
+ * always undefined and silently fell back to their own tenant. On 2026-08-06
+ * that filed 12 recordings made for a customer under the admin's own account:
+ * the Studio, correctly scoped to the customer, showed nothing, and the
+ * customer's owner reported them as deleted on reload. Nothing had been
+ * deleted, and nothing errored — the greeting was simply made for the wrong
+ * company. Read BOTH, and prefer the explicit one.
+ *
+ * A tenant admin is still pinned to their own tenant whatever they send.
+ */
+export async function resolveGeneratedPromptTenantId(
+  db: any,
+  opts: { isSuperAdmin: boolean; bodyTenantId?: string | null; queryTenantId?: string | null; userTenantId?: string | null },
+): Promise<string | null> {
+  if (!opts.isSuperAdmin) return opts.userTenantId || null;
+  const asked = String(opts.bodyTenantId || opts.queryTenantId || "").trim();
+  if (!asked) return opts.userTenantId || null;
+
+  // The portal's tenant switcher identifies super-admin picks as `vpbx:<slug>`
+  // (same form the prompt LIST accepts). Passing that straight to a findUnique
+  // on Tenant.id answers "tenant not found", so resolve it the same way.
+  if (asked.startsWith("vpbx:")) {
+    const slug = asked.slice(5).toLowerCase();
+    const dir = await db.pbxTenantDirectory
+      .findFirst({ where: { tenantSlug: { equals: slug, mode: "insensitive" } }, select: { vitalTenantId: true, tenantCode: true } })
+      .catch(() => null);
+    if (dir) {
+      const link = await db.tenantPbxLink
+        .findFirst({
+          where: { OR: [{ pbxTenantId: dir.vitalTenantId }, { pbxTenantCode: dir.tenantCode || "__never__" }] },
+          select: { tenantId: true },
+        })
+        .catch(() => null);
+      if (link?.tenantId) return link.tenantId;
+    }
+    const byName = await db.tenant
+      .findFirst({ where: { name: { equals: slug.replace(/_/g, " "), mode: "insensitive" } }, select: { id: true } })
+      .catch(() => null);
+    return byName?.id ?? null;
+  }
+  return asked;
 }
 
 export async function saveGeneratedPrompt(
