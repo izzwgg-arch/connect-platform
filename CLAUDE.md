@@ -1,5 +1,42 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — turning SMS on for a customer (2026-08-07) — READ FIRST for "activate texting", SMS number assignment, or any "their texts aren't arriving" report
+
+Full runbook (incl. paste-ready wording for the Connect Agent's knowledge):
+**`docs/ai-context/AGENT_HANDOFF_SMS_ACTIVATION_2026-08-07.md`**. Proven end to
+end on **inii mini** 2026-08-07 — real text out ("Message delivered to handset")
+and a real reply into the customer's inbox. No deploy, no PBX write, no Apply
+Changes.
+
+- **The whole job is four steps:** (1) find the DID's `TenantSmsNumber` row —
+  every VoIP.ms DID syncs in with `tenantId: null` (69 rows, 59 unassigned);
+  (2) assign it (`PATCH /admin/apps/voip-ms/numbers/:id` or Admin → VoIP.ms
+  numbers) with `tenantId` + `assignedExtensionId` (or `assignedUserId`, or
+  neither for a shared company inbox) + `isTenantDefault`; (3)
+  `TenantBillingSettings.smsBillingEnabled = true` — `smsPriceCents` is already
+  1000 on every onboarding tenant, so the next invoice moves $35 → $45, nothing
+  charges mid-cycle; (4) confirm `sms_enabled: "1"` on the DID at VoIP.ms
+  (`setSMS {did, enable:"1"}` if not; expect `sms_wait_message` rate-limiting).
+- ⛔ **The per-DID `webhook` / `sms_url_callback` fields are a red herring, and
+  `setSMS` lies about them.** It answers `{"status":"success"}` and NEVER moves
+  either `_enabled` flag (four param shapes tried). **Gesheft is the busiest
+  inbound SMS number on the platform with `webhook_enabled: "0"` and a stale
+  3CX URL.** Judge from a number that demonstrably works, never a field name.
+- ⛔ **Three more non-requirements:** `smsSendMode` stays **TEST** (LIVE is the
+  old campaign path — it reads the `phoneNumber` table, which onboarding tenants
+  have ZERO rows in); `defaultSmsFromNumberId` stays null (`isTenantDefault` on
+  the number row is the real setting); `smsPrimaryProvider` reads TWILIO on every
+  working tenant and must not be "fixed" — chat texting rides VoIP.ms regardless.
+- **Inbound arrives by POLL, not the webhook.** `voipMsInboundSyncJob.ts` polls
+  `getSMS`+`getMMS` for every assigned/active/smsCapable number — assignment IS
+  the wiring; watch `[voipms-inbound] +1…: fetched=N` in the worker log. ⛔ Never
+  conclude "nothing arrived" from nginx (`/api/webhooks/voipms/sms` is rarely
+  hit), and ⛔ never measure delivery lag from the DB — inbound `createdAt` is
+  stamped from the **carrier's** timestamp, so it can only ever agree with itself.
+- ⛔ **inii mini's 845-260-5692 is TEMPORARY** — their real number 646-984-6023
+  is mid-port (order **217760**, open). Texting does NOT follow the port; repeat
+  the four steps when it lands. See [[voipms-sms-per-did-webhook-is-a-red-herring]].
+
 ## ⛔ AGENT HANDOFF — IVR Studio: forwards, direct dial, audible prompts (2026-08-06) — READ FIRST for the Studio, prompt refs, or any PBX dialplan patch
 
 All DEPLOYED and container-verified on `feat/ivr-migration-takeover`
