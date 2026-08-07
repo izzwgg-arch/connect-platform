@@ -2893,10 +2893,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       issueDate: z.string().datetime().optional(),
       dueDate: z.string().datetime().optional(),
       notes: z.string().max(2000).nullable().optional(),
+      // ⛔ Same trap as the tenant-settings route: this update is applied with
+      // `if ("billingEmail" in body)`, and a transform ending `: v ?? null` puts
+      // the key in the parsed object even when the client never sent it — so
+      // editing only the notes erased the invoice's billing email override.
+      // Keep `undefined` as `undefined`; an explicit null/"" still clears it.
       billingEmail: z.string().nullable().optional().refine(
         (v) => v == null || isValidMultiBillingEmail(v),
         { message: "billingEmail must be a valid email address or comma-separated list of valid addresses" },
-      ).transform((v) => (v ? normalizeMultiBillingEmail(v) || null : v ?? null)),
+      ).transform((v) => (v === undefined ? undefined : (v ? normalizeMultiBillingEmail(v) || null : null))),
       status: z.enum(["DRAFT", "OPEN", "OVERDUE"]).optional(),
       allowPaidEdit: z.boolean().optional(),
     }).parse(req.body || {});
@@ -2907,7 +2912,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (body.issueDate) update.issueDate = new Date(body.issueDate);
     if (body.dueDate) update.dueDate = new Date(body.dueDate);
     if ("notes" in body) update.notes = body.notes;
-    if ("billingEmail" in body) update.billingEmail = body.billingEmail;
+    // `in` is not enough: zod puts transformed optional keys on the object even
+    // when absent, so this must test the value, not the key.
+    if (body.billingEmail !== undefined) update.billingEmail = body.billingEmail;
     if (body.status) update.status = body.status;
 
     try {

@@ -68,3 +68,45 @@ test("explicit empty string clears the address on purpose", () => {
 test("an invalid address is rejected rather than silently blanked", () => {
   assert.throws(() => settingsSchema.parse({ billingEmail: "not-an-email" }));
 });
+
+// ── The same trap on PUT /admin/billing/invoices/:id ─────────────────────────
+// That route applies its patch with `if (body.billingEmail !== undefined)`.
+// Before the fix the transform ended `: v ?? null`, so zod put billingEmail:null
+// on the parsed object even when the client never sent it, and editing only the
+// notes erased the invoice's billing email override.
+
+const invoicePatchSchema = z.object({
+  notes: z.string().max(2000).nullable().optional(),
+  billingEmail: billingEmailField,
+  status: z.enum(["DRAFT", "OPEN", "OVERDUE"]).optional(),
+});
+
+/** The route's apply block, verbatim. */
+function invoiceUpdate(body: Record<string, unknown>): Record<string, unknown> {
+  const parsed = invoicePatchSchema.parse(body);
+  const update: Record<string, unknown> = {};
+  if ("notes" in parsed) update.notes = parsed.notes;
+  if (parsed.billingEmail !== undefined) update.billingEmail = parsed.billingEmail;
+  if (parsed.status) update.status = parsed.status;
+  return update;
+}
+
+test("editing only an invoice's notes does not erase its billing email", () => {
+  const update = invoiceUpdate({ notes: "spoke to the customer" });
+  assert.equal("billingEmail" in update, false);
+  assert.deepEqual(update, { notes: "spoke to the customer" });
+});
+
+test("changing only an invoice's status does not erase its billing email", () => {
+  assert.equal("billingEmail" in invoiceUpdate({ status: "OPEN" }), false);
+});
+
+test("an invoice billing email that is sent is still saved", () => {
+  assert.equal(invoiceUpdate({ billingEmail: "ap@acme.com" }).billingEmail, "ap@acme.com");
+});
+
+test("an invoice billing email can still be cleared on purpose", () => {
+  const update = invoiceUpdate({ billingEmail: null });
+  assert.equal("billingEmail" in update, true);
+  assert.equal(update.billingEmail, null);
+});
