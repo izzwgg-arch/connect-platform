@@ -1,11 +1,25 @@
 import type { BillingSchedule } from "./billingSchedule";
 
-/** Find the non-VOID tenant invoice for the current autopay billing period. */
+/**
+ * Find the non-VOID tenant invoice for the current autopay billing period.
+ *
+ * ⛔ Operator-created invoices (`source: "MANUAL"`) are excluded on purpose.
+ * Autopay picks the most recently created invoice overlapping the period, so a
+ * custom invoice — even a one-day one for a handset — used to be able to
+ * (a) be auto-charged in place of the monthly bill, and (b) suppress creation of
+ * the monthly invoice entirely, because the lookup found it and concluded the
+ * period was already invoiced. A custom invoice must be purely additive: you
+ * collect it yourself with a payment link or "Charge now".
+ *
+ * This cannot double-charge: a PAID manual invoice covering the period still
+ * stops the autopay charge via findPaidBillingPeriodCoverage.
+ */
 export function autopayPeriodInvoiceWhere(tenantId: string, schedule: BillingSchedule) {
   return {
     tenantId,
     billingProfileId: null,
     status: { not: "VOID" as const },
+    source: { not: "MANUAL" as const },
     OR: [
       { periodStart: schedule.periodStart, periodEnd: schedule.periodEnd },
       {

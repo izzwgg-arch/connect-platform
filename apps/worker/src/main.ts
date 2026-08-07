@@ -3643,6 +3643,88 @@ async function runAutopayReminderPhase(
   });
 }
 
+/**
+ * The customer's payment date passed without the card being charged.
+ *
+ * Charging late would break the promise the invoice made ("we'll charge you on
+ * the 15th"), so this never charges. It records the miss once per tenant per
+ * cycle and raises one admin alert; the invoice stays OPEN and collectable by
+ * hand or by the payment link. Silent on the overwhelmingly common case where
+ * the charge already ran normally — we only speak up when money was actually
+ * left on the table.
+ */
+async function reportMissedChargeWindow(
+  setting: any,
+  schedule: BillingSchedule,
+  runId: string,
+  results: any[],
+): Promise<void> {
+  const invoice = await findAutopayPeriodInvoice(setting.tenantId, schedule);
+  const balanceDue = Math.max(0, invoice?.balanceDueCents ?? invoice?.totalCents ?? 0);
+
+  // Nothing owed for that cycle — the charge ran, or it was paid another way.
+  if (!invoice || invoice.status === "PAID" || balanceDue <= 0) {
+    results.push({ tenantId: setting.tenantId, invoiceId: invoice?.id ?? null, transactionId: null, skipped: "past_charge_date_settled" });
+    return;
+  }
+
+  // A failed charge is the dunning sweep's job, not ours — don't double-report.
+  const dunning = readDunningSlice(invoice.metadata);
+  if (invoice.status === "FAILED" || dunning.attempts > 0) {
+    results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "past_charge_date_awaiting_dunning" });
+    return;
+  }
+
+  // One event per tenant per payment date — the log itself is the dedupe.
+  const already = await (db as any).billingEventLog
+    .findFirst({
+      where: {
+        tenantId: setting.tenantId,
+        invoiceId: invoice.id,
+        type: "autopay_charge_window_missed",
+      },
+      select: { id: true },
+    })
+    .catch(() => null);
+
+  if (!already) {
+    await (db as any).billingEventLog
+      .create({
+        data: {
+          tenantId: setting.tenantId,
+          invoiceId: invoice.id,
+          runId,
+          type: "autopay_charge_window_missed",
+          message:
+            `Payment date ${schedule.paymentDate} passed without the card being charged. ` +
+            `Connect will NOT charge late — collect this invoice by hand or send a payment link.`,
+          metadata: {
+            reason: "charge_window_missed",
+            paymentDate: schedule.paymentDate,
+            timeZone: schedule.timeZone,
+            balanceDueCents: balanceDue,
+            invoiceNumber: invoice.invoiceNumber,
+          },
+        },
+      })
+      .catch(() => null);
+
+    await queueAdminAlertEmail(
+      `billing-charge-window-missed:${setting.tenantId}:${schedule.paymentDate}`,
+      `Autopay missed its charge date (tenant ${setting.tenantId})`,
+      [
+        `Tenant: ${setting.tenantId}`,
+        `Invoice ${invoice.invoiceNumber} for the cycle ending ${schedule.paymentDate} was never charged.`,
+        `Balance due: $${(balanceDue / 100).toFixed(2)}`,
+        `Connect does not charge after the payment date on purpose — collect it manually.`,
+        `Run: ${runId}`,
+      ],
+    );
+  }
+
+  results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "charge_window_missed" });
+}
+
 async function runMonthlyBillingAutomation(): Promise<void> {
   if (_billingAutomationRunning) return;
   _billingAutomationRunning = true;
@@ -3680,6 +3762,14 @@ async function runMonthlyBillingAutomation(): Promise<void> {
         await runAutopayReminderPhase(setting, upcoming, run.id, results);
 
         if (!schedule.due) {
+          // ⛔ A card is only ever charged ON the customer's payment date. If that
+          // day passed without the charge running (worker outage), we do NOT fire
+          // it late on an arbitrary day — the customer was told a date. Surface it
+          // for a human instead, once, with the invoice still open and collectable.
+          if (schedule.chargeWindowMissed) {
+            await reportMissedChargeWindow(setting, schedule, run.id, results);
+            continue;
+          }
           await (db as any).billingEventLog.create({
             data: {
               tenantId: setting.tenantId,

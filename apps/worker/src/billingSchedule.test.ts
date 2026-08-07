@@ -61,19 +61,24 @@ test("timezone boundary around America/New_York midnight controls eligibility", 
   assert.equal(atMidnight.due, true);
 });
 
-test("startup catch-up charges overdue current-cycle schedules only", () => {
+test("a card is charged ONLY on the payment date — never the day after", () => {
   const beforePaymentDate = buildBillingSchedule({
     now: new Date("2026-05-20T16:00:00.000Z"),
     billingDayOfMonth: 21,
   });
-  const overdue = buildBillingSchedule({
+  const dayAfter = buildBillingSchedule({
     now: new Date("2026-05-22T16:00:00.000Z"),
     billingDayOfMonth: 21,
   });
 
   assert.equal(beforePaymentDate.due, false);
-  assert.equal(overdue.due, true);
-  assert.equal(overdue.paymentDate, "2026-05-21");
+  assert.equal(beforePaymentDate.chargeWindowMissed, false);
+
+  // Previously `due` stayed true for the rest of the month, so a restart on any
+  // later day would charge. It must not.
+  assert.equal(dayAfter.due, false, "must not charge the day after the payment date");
+  assert.equal(dayAfter.chargeWindowMissed, true, "the miss must be visible instead");
+  assert.equal(dayAfter.paymentDate, "2026-05-21");
 });
 
 test("tenant-specific billing timezone metadata is honored when valid", () => {
@@ -178,4 +183,50 @@ test("short months clamp: billing day 31 lands on the last day of February", () 
   const upcoming = buildUpcomingBillingSchedule({ now, billingDayOfMonth: 31 });
   assert.equal(upcoming.paymentDate, "2026-02-28");
   assert.equal(upcoming.reminderDue, true);
+});
+
+
+// ── A charge is an event on a date, not a condition true all month ───────────
+
+test("due is true on the payment date and on no other day of the month", () => {
+  for (const day of [1, 5, 15, 21, 28]) {
+    let dueDays: string[] = [];
+    for (let d = 0; d < 365; d++) {
+      const now = new Date(Date.UTC(2026, 0, 1, 14, 0, 0) + d * 86400000);
+      if (buildBillingSchedule({ now, billingDayOfMonth: day }).due) {
+        dueDays.push(now.toISOString().slice(0, 10));
+      }
+    }
+    assert.ok(
+      dueDays.length >= 11 && dueDays.length <= 13,
+      `billingDayOfMonth=${day}: charge was due on ${dueDays.length} days of the year, expected ~12 (one per month)`,
+    );
+    for (const iso of dueDays) {
+      assert.equal(
+        Number(iso.slice(-2)),
+        day,
+        `billingDayOfMonth=${day}: charge was due on ${iso}, which is not the payment date`,
+      );
+    }
+  }
+});
+
+test("due and chargeWindowMissed are never both true", () => {
+  for (const day of [1, 14, 28]) {
+    for (let d = 0; d < 365; d++) {
+      const now = new Date(Date.UTC(2026, 0, 1, 9, 0, 0) + d * 86400000);
+      const s = buildBillingSchedule({ now, billingDayOfMonth: day });
+      assert.ok(!(s.due && s.chargeWindowMissed), `both true on ${now.toISOString()} (day=${day})`);
+    }
+  }
+});
+
+test("hourly re-runs on the payment date stay due; the next day does not", () => {
+  for (let h = 0; h < 24; h++) {
+    const now = new Date(Date.UTC(2026, 4, 21, 4 + h, 0, 0)); // May 21 local, hour by hour
+    const s = buildBillingSchedule({ now, billingDayOfMonth: 21 });
+    if (h < 20) assert.equal(s.due, true, `hour ${h} on the payment date should still be due`);
+  }
+  const nextDay = buildBillingSchedule({ now: new Date(Date.UTC(2026, 4, 22, 12, 0, 0)), billingDayOfMonth: 21 });
+  assert.equal(nextDay.due, false);
 });

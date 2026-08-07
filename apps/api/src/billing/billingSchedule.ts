@@ -12,7 +12,23 @@ export type BillingSchedule = {
   periodEnd: Date;
   /** True on/after scheduledReminderAt and before scheduledChargeAt (T-3 reminder + invoice prep). */
   reminderDue: boolean;
+  /**
+   * True ONLY on the calendar day the payment is set for, in the tenant's zone.
+   *
+   * ⛔ This used to stay true for the rest of the month (`today.day >= paymentDay`),
+   * which made a charge a *condition* re-evaluated every hour and on every worker
+   * restart rather than an event on a date — the reason autopay felt like it
+   * "charges every minute" and why a stack of guard clauses was the only thing
+   * preventing a double charge. A card must only ever be charged on the date the
+   * customer was told.
+   */
   due: boolean;
+  /**
+   * The payment date for this cycle has passed and the charge never ran (worker
+   * outage, etc.). Deliberately NOT chargeable — a missed charge is surfaced for a
+   * human instead of firing on an arbitrary later day. See runMonthlyBillingAutomation.
+   */
+  chargeWindowMissed: boolean;
 };
 
 type LocalDateParts = {
@@ -182,6 +198,13 @@ function buildScheduleForAnchor(
     periodStart: scheduledChargeAt,
     periodEnd: new Date(nextScheduledChargeAt.getTime() - 1),
     reminderDue: now.getTime() >= scheduledReminderAt.getTime() && now.getTime() < scheduledChargeAt.getTime(),
-    due: now.getTime() >= scheduledChargeAt.getTime() && today.day >= paymentDay,
+    due:
+      now.getTime() >= scheduledChargeAt.getTime() &&
+      today.day === paymentDay &&
+      today.month === paymentLocal.month &&
+      today.year === paymentLocal.year,
+    chargeWindowMissed:
+      now.getTime() >= scheduledChargeAt.getTime() &&
+      !(today.day === paymentDay && today.month === paymentLocal.month && today.year === paymentLocal.year),
   };
 }
