@@ -13,18 +13,30 @@ import type { BillingSchedule } from "./billingSchedule";
  *
  * This cannot double-charge: a PAID manual invoice covering the period still
  * stops the autopay charge via findPaidBillingPeriodCoverage.
+ *
+ * ⛔ The exclusion MUST be written as `OR [source IS NULL, source <> 'MANUAL']`.
+ * `source: { not: "MANUAL" }` alone is a NULL trap: in SQL `NULL <> 'MANUAL'` is
+ * NULL, not true, so every auto-created invoice would be filtered out — and the
+ * auto path never sets the column, so `source` is NULL on all of them. Written
+ * the wrong way this matches ZERO invoices and blocks every autopay charge.
+ * Verified against live data: Gesheft has 5 invoices, 4 with source NULL.
  */
 export function autopayPeriodInvoiceWhere(tenantId: string, schedule: BillingSchedule) {
   return {
     tenantId,
     billingProfileId: null,
     status: { not: "VOID" as const },
-    source: { not: "MANUAL" as const },
-    OR: [
-      { periodStart: schedule.periodStart, periodEnd: schedule.periodEnd },
+    AND: [
+      // NULL-safe "not an operator-created invoice"
+      { OR: [{ source: null }, { source: { not: "MANUAL" as const } }] },
       {
-        periodStart: { lte: schedule.scheduledChargeAt },
-        periodEnd: { gte: schedule.scheduledChargeAt },
+        OR: [
+          { periodStart: schedule.periodStart, periodEnd: schedule.periodEnd },
+          {
+            periodStart: { lte: schedule.scheduledChargeAt },
+            periodEnd: { gte: schedule.scheduledChargeAt },
+          },
+        ],
       },
     ],
   };
