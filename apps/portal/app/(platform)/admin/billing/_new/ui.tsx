@@ -145,3 +145,25 @@ export function asList<T = any>(raw: any, ...keys: string[]): T[] {
   }
   return [];
 }
+
+/** The rebuilt billing nav — the tab bar from the design, replacing the old
+    nine-tab workspace toolbar these pages used to be wrapped in. */
+export function BillingNav({ current }: { current: string }) {
+  const items: Array<{ key: string; label: string; href: string }> = [
+    { key: "month", label: "This month", href: "/admin/billing/month" },
+    { key: "customers", label: "Customers", href: "/admin/billing/customers" },
+    { key: "invoices", label: "Invoices", href: "/admin/billing/invoice" },
+    { key: "payments", label: "Payments", href: "/admin/billing/money" },
+    { key: "needs-you", label: "Needs you", href: "/admin/billing/needs-you" },
+    { key: "catalog", label: "Catalog", href: "/admin/billing/catalog" },
+  ];
+  return (
+    <nav className="cbill-nav" aria-label="Billing">
+      {items.map((it) => (
+        <a key={it.key} href={it.href} data-on={it.key === current ? "true" : "false"}>
+          {it.label}
+        </a>
+      ))}
+    </nav>
+  );
+}

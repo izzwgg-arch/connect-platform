@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Pill, asList, money, ordinal, useApi } from "../_new/ui";
+import { BillingNav, Pill, asList, money, ordinal, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type TenantRow = {
@@ -66,6 +66,7 @@ export default function BillingCustomersPage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="customers" />
       <div className="cbill-head">
         <div>
           <h2>Customers</h2>

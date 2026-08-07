@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { apiGet, apiPut } from "../../../../../../services/apiClient";
+import { BillingNav } from "../../_new/ui";
 import "../customerBilling.css";
 
 /* One customer's billing, on one screen.
@@ -256,6 +257,7 @@ export default function CustomerBillingPage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="customers" />
       <div className="cbill-head">
         <div>
           <h2>{tenantName || "Customer"} — billing</h2>

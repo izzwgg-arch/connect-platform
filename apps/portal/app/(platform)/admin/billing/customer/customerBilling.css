@@ -396,3 +396,25 @@ table.cbill-table a:hover { text-decoration: underline; }
 
 .cbill-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 15px; }
 .cbill-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* the rebuilt nav — replaces the old workspace toolbar on these pages */
+.cbill-nav {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--cb-line);
+  margin-bottom: 4px;
+}
+.cbill-nav a {
+  font-size: 13px;
+  font-weight: 540;
+  color: var(--cb-muted);
+  padding: 6px 12px;
+  border-radius: 7px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.cbill-nav a:hover { color: var(--cb-ink); background: var(--cb-line-soft); }
+.cbill-nav a[data-on="true"] { color: var(--cb-accent); background: var(--cb-accent-soft); font-weight: 650; }
+.cbill-nav a:focus-visible { outline: 2px solid var(--cb-accent); outline-offset: 2px; }

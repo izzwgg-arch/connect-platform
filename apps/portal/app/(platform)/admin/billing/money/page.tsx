@@ -5,7 +5,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { apiPost } from "../../../../../services/apiClient";
-import { Pill, asList, dateTime, errText, money, txTone, useApi } from "../_new/ui";
+import { BillingNav, Pill, asList, dateTime, errText, money, txTone, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Tx = {
@@ -88,6 +88,7 @@ export default function BillingMoneyPage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="payments" />
       <div className="cbill-head">
         <div>
           <h2>Payments</h2>

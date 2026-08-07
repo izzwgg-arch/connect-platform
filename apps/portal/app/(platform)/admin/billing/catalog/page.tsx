@@ -4,7 +4,7 @@
    profiles, reports and exports. */
 
 import Link from "next/link";
-import { Pill, asList, money, useApi } from "../_new/ui";
+import { BillingNav, Pill, asList, money, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Plan = {
@@ -38,6 +38,7 @@ export default function BillingCatalogPage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="catalog" />
       <div className="cbill-head">
         <div>
           <h2>Catalog</h2>

@@ -8,7 +8,7 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiDelete, apiPost, apiPut } from "../../../../../../services/apiClient";
-import { Pill, asList, dateTime, errText, invoiceTone, longDate, money, useApi } from "../../_new/ui";
+import { BillingNav, Pill, asList, dateTime, errText, invoiceTone, longDate, money, useApi } from "../../_new/ui";
 import "../../customer/customerBilling.css";
 
 type LineItem = {
@@ -99,6 +99,7 @@ export default function InvoicePage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="invoices" />
       <div className="cbill-head">
         <div>
           <h2>{i.invoiceNumber}</h2>

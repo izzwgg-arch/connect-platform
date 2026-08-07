@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiPost } from "../../../../../services/apiClient";
-import { Pill, asList, dateTime, errText, invoiceTone, money, shortDate, useApi } from "../_new/ui";
+import { BillingNav, Pill, asList, dateTime, errText, invoiceTone, money, shortDate, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Overview = {
@@ -94,6 +94,7 @@ export default function BillingMonthPage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="month" />
       <div className="cbill-head">
         <div>
           <h2>This month</h2>

@@ -6,7 +6,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Pill, asList, dateTime, longDate, money, ordinal, useApi } from "../../../_new/ui";
+import { BillingNav, Pill, asList, dateTime, longDate, money, ordinal, useApi } from "../../../_new/ui";
 import "../../customerBilling.css";
 
 type Invoice = {
@@ -142,6 +142,7 @@ export default function CustomerTimelinePage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="customers" />
       <div className="cbill-head">
         <div>
           <h2>Billing timeline</h2>

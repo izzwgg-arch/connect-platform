@@ -5,7 +5,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { Pill, asList, invoiceTone, money, shortDate, useApi } from "../_new/ui";
+import { BillingNav, Pill, asList, invoiceTone, money, shortDate, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Overview = {
@@ -61,6 +61,7 @@ export default function BillingNeedsYouPage() {
 
   return (
     <div className="cbill">
+      <BillingNav current="needs-you" />
       <div className="cbill-head">
         <div>
           <h2>Needs you</h2>
