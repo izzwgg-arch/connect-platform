@@ -30,6 +30,13 @@ import {
   serverListeningCompleted,
   shutdownRegisteredTimerCount,
 } from "./processLifecycle";
+import {
+  APK_LATEST_FILENAME,
+  androidApkDownloadPageUrl,
+  apkDownloadDir,
+  apkPublicBaseUrl,
+  getAndroidApkUrlForInviteEmail,
+} from "./androidApkInviteUrl";
 import { installApiRequestProfiler } from "./apiRequestProfiler";
 import { HostMetricsCollector } from "./ops/hostMetrics";
 import { buildServerHealthSnapshot } from "./ops/serverHealth";
@@ -4620,31 +4627,18 @@ app.get("/api/ready", handleReadyProbe);
 //
 // nginx does not need any changes — these paths flow through the existing
 // `/api/...` reverse-proxy mount.
-const APK_DOWNLOAD_DIR = (process.env.APK_DOWNLOAD_DIR || "/var/lib/connect/downloads").replace(/\/+$/, "");
-const APK_PUBLIC_BASE_URL = (
-  process.env.ANDROID_APK_DOWNLOAD_URL_BASE
-  || (() => {
-    const origin = String(
-      process.env.API_PUBLIC_URL
-      || process.env.PUBLIC_API_URL
-      || process.env.PUBLIC_API_BASE_URL
-      || process.env.PORTAL_PUBLIC_URL
-      || process.env.APP_PUBLIC_URL
-      || "https://app.connectcomunications.com"
-    ).replace(/\/+$/, "");
-    return origin.endsWith("/api") ? `${origin}/downloads` : `${origin}/api/downloads`;
-  })()
-).replace(/\/+$/, "");
-const APK_LATEST_FILENAME = "connectcomms-latest.apk";
+// Paths + the invite-email download-page URL are shared with the onboarding
+// sign-up invite path — see ./androidApkInviteUrl.
 const APK_FILENAME_PATTERN = /^connectcomms-(latest|v\d+\.\d+\.\d+(?:[+\-][A-Za-z0-9.\-]+)?)\.apk$/;
 const APK_MIME_TYPE = "application/vnd.android.package-archive";
 
 function resolveApkPath(filename: string): string | null {
   if (!APK_FILENAME_PATTERN.test(filename)) return null;
-  const resolved = path.resolve(APK_DOWNLOAD_DIR, filename);
+  const downloadDir = apkDownloadDir();
+  const resolved = path.resolve(downloadDir, filename);
   // Defence-in-depth: the regex already blocks `..` / slashes, but verify the
   // resolved path stays inside the configured directory.
-  if (!resolved.startsWith(`${APK_DOWNLOAD_DIR}${path.sep}`) && resolved !== `${APK_DOWNLOAD_DIR}${path.sep}${filename}`) {
+  if (!resolved.startsWith(`${downloadDir}${path.sep}`) && resolved !== `${downloadDir}${path.sep}${filename}`) {
     return null;
   }
   return resolved;
@@ -4664,7 +4658,7 @@ async function readApkManifest(): Promise<{
   /** Short ship / CI id from publish manifest when present. */
   buildId: string | null;
 }> {
-  const latestPath = path.join(APK_DOWNLOAD_DIR, APK_LATEST_FILENAME);
+  const latestPath = path.join(apkDownloadDir(), APK_LATEST_FILENAME);
   let stat: import("fs").Stats | null = null;
   try {
     stat = await fsp.stat(latestPath);
@@ -4678,7 +4672,7 @@ async function readApkManifest(): Promise<{
   let versionCode: number | null = null;
   let buildId: string | null = null;
   try {
-    const manifestRaw = await fsp.readFile(path.join(APK_DOWNLOAD_DIR, "connectcomms-latest.json"), "utf8");
+    const manifestRaw = await fsp.readFile(path.join(apkDownloadDir(), "connectcomms-latest.json"), "utf8");
     // Strip a leading UTF-8 BOM (some editors/PowerShell encodings add one).
     const manifest = manifestRaw.charCodeAt(0) === 0xfeff ? manifestRaw.slice(1) : manifestRaw;
     const parsed = JSON.parse(manifest) as {
@@ -4738,30 +4732,7 @@ async function readApkManifest(): Promise<{
 }
 
 function apkDownloadHref(filename = APK_LATEST_FILENAME): string {
-  return `${APK_PUBLIC_BASE_URL}/${filename}?direct=1`;
-}
-
-function androidApkDownloadPageUrl(): string {
-  return `${APK_PUBLIC_BASE_URL.replace(/\/downloads$/, "")}/mobile/android/download`;
-}
-
-/**
- * URL shown in user invite / welcome emails for the Android app.
- * - ANDROID_APK_DOWNLOAD_PAGE_URL: optional override (Play Store, landing page, etc.).
- * - Otherwise: same HTML download page as /mobile/android/download, but only if
- *   connectcomms-latest.apk exists under APK_DOWNLOAD_DIR (avoids broken links).
- */
-async function getAndroidApkUrlForInviteEmail(): Promise<string | null> {
-  const pageOverride = String(process.env.ANDROID_APK_DOWNLOAD_PAGE_URL || "").trim();
-  if (pageOverride.length > 0) return pageOverride;
-  try {
-    const latestPath = path.join(APK_DOWNLOAD_DIR, APK_LATEST_FILENAME);
-    const st = await fsp.stat(latestPath);
-    if (!st.isFile() || st.size < 1024) return null;
-    return androidApkDownloadPageUrl();
-  } catch {
-    return null;
-  }
+  return `${apkPublicBaseUrl()}/${filename}?direct=1`;
 }
 
 function escapeHtmlForApkPage(raw: string): string {

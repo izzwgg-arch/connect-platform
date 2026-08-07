@@ -6,6 +6,7 @@ import { VitalPbxClient } from "@connect/integrations";
 import { syncPbxTenantDirectoryFromRows } from "../pbxTenantDirectorySync";
 import { syncExtensionsFromPbx } from "../pbxExtensionSync";
 import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
+import { getAndroidApkUrlForInviteEmail } from "../androidApkInviteUrl";
 import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
 import { buildPbxTenant, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
 import { ensureProvisioningIdentity } from "./provisioningIdentity";
@@ -126,7 +127,9 @@ async function queueInviteEmail(input: {
     extensionNumber: input.extensionNumber,
     setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(token)}`),
     expiresHours: INVITE_TOKEN_HOURS,
-    androidApkUrl: null,
+    // Same Android download-page link the admin invite path sends. This was
+    // hardcoded null, so every self-service sign-up got an invite with no APK.
+    androidApkUrl: await getAndroidApkUrlForInviteEmail(),
   });
   // Same semantics as the admin invite/resend-invite path: the account is
   // INVITED until they set their password through the link.
