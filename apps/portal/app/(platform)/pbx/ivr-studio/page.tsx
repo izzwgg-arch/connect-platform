@@ -1113,8 +1113,16 @@ export default function IvrStudioPage() {
     setPublishBlocked(null);
     setPublished(null);
     try {
+      // ⛔ NOT the 10s default. Publishing writes the whole menu to the phone
+      // system and pushes any new audio with it; switching a number on top of
+      // that runs a full per-tenant config regeneration measured at 35–40s
+      // (the server's own helper timeout is 90s). At 10s the browser gave up
+      // on work that was going to succeed — and giving up on the request does
+      // NOT stop the server, so the publish landed anyway while the screen
+      // said it had timed out. That is how the same menu got published twice
+      // 16 seconds apart. The client must outlast the server.
       const res = await apiPost<{ keysWritten?: number }>(
-        `/voice/ivr/publish${qs}`, { tenantId, profileId: active.id });
+        `/voice/ivr/publish${qs}`, { tenantId, profileId: active.id }, undefined, { timeoutMs: 120_000 });
       const keysWritten = Number(res?.keysWritten ?? 0);
       // The held "switch right now" plan executes here — Publish is the one
       // moment routing is allowed to change, so this is where the inbound
@@ -1122,7 +1130,7 @@ export default function IvrStudioPage() {
       if (numberPlan && numberPlan.when === "now") {
         const e164 = numberPlan.e164;
         try {
-          await apiPost(`/voice/did/${encodeURIComponent(numberPlan.mappingId)}/switch-to-connect${qs}`, {});
+          await apiPost(`/voice/did/${encodeURIComponent(numberPlan.mappingId)}/switch-to-connect${qs}`, {}, undefined, { timeoutMs: 120_000 });
           setNumberPlan(null);
           setDirty(false);
           setPublished({ at: new Date(), keysWritten, switched: e164, pointed: true });
@@ -1151,7 +1159,15 @@ export default function IvrStudioPage() {
       const detail = String(body?.detail ?? "").trim()
         || PUBLISH_ERROR_TEXT[String(body?.error ?? "").trim()]
         || "";
-      if (detail || missing.length > 0) setPublishBlocked({ detail: detail || "Couldn't publish.", missing });
+      // A client-side timeout is NOT a failed publish. Aborting the request
+      // doesn't stop the phone system, so the change may well have landed —
+      // saying "timed out" invites a second Publish that isn't needed.
+      if (e?.status === 408) {
+        setError(
+          "The phone system is taking longer than usual. Your change may already have gone through — " +
+          "wait a moment and reload this page to check before publishing again.",
+        );
+      } else if (detail || missing.length > 0) setPublishBlocked({ detail: detail || "Couldn't publish.", missing });
       else setError(e?.message || "Couldn't publish");
     } finally { setSaving(false); }
   }
