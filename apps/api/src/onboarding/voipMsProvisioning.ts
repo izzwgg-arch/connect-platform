@@ -473,6 +473,33 @@ async function routeDid(creds: VmsCreds, submissionId: string, did: string, subU
   await logEvent(submissionId, `DID ${did} routed to ${subUsername}.`);
 }
 
+/**
+ * Turn SMS on for a DID at VoIP.ms. Exported so the assistant's "activate
+ * texting" flow uses the SAME proven retry (freshly-touched DIDs answer
+ * `sms_wait_message`) instead of a second, thinner copy.
+ *
+ * ⛔ `sms_enabled=1` plus a TenantSmsNumber row is the whole switch — the
+ * per-DID webhook flags in getDIDsInfo look decisive and are not; `setSMS`
+ * reports success without ever moving them.
+ */
+export async function enableSmsOnDid(creds: VmsCreds, did: string): Promise<{ ok: boolean; detail: string }> {
+  const retryMs = Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000);
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await vms(creds, "setSMS", { did, enable: "1" });
+      return { ok: true, detail: `SMS enabled on ${did}.` };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      if (/sms_wait_message/i.test(msg) && attempt < 4) {
+        await new Promise((r) => setTimeout(r, retryMs * attempt * 3));
+        continue;
+      }
+      return { ok: false, detail: msg.slice(0, 160) };
+    }
+  }
+  return { ok: false, detail: "retries_exhausted" };
+}
+
 /** Turn SMS on for a DID (best-effort — logged, never fatal). */
 async function enableSms(creds: VmsCreds, submissionId: string, did: string, live: boolean): Promise<void> {
   if (!live) {

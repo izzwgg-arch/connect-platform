@@ -214,7 +214,7 @@ test("a confirmed grant lands where the permission resolver actually reads it", 
   assert.equal(row.status, "EXECUTED");
   assert.equal(row.approvedBy, "admin-1");
   assert.ok(row.executedAt && row.approvalConsumedAt, "must be stamped executed AND consumed");
-  assert.ok(deps.audits.some((a) => a.action === "AGENT_GRANT_APPLIED"));
+  assert.ok(deps.audits.some((a) => a.action === "AGENT_CONFIRM_APPLIED"));
 });
 
 test("the reply is plain English and says where to undo it", async () => {
@@ -243,7 +243,7 @@ test("re-granting something they already have is honest about it", async () => {
   await apply(deps, ADMIN, "act-1");
   const r: any = await apply(deps, ADMIN, "act-2");
   assert.equal(r.ok, true);
-  assert.equal(r.alreadyHeld, true);
+  assert.equal(r.details.alreadyHeld, true);
   assert.match(r.message, /already/);
   assert.deepEqual(grantedPermissions(db, "u2"), ["can_manage_ivr_routing"], "not duplicated");
 });
@@ -316,7 +316,7 @@ test("⛔ STRESS: params edited after approval are refused, and nothing is grant
   assert.equal(r.error, "params_tampered");
   assert.equal(grantedPermissions(db, "u2").length, 0);
   assert.equal(db._state.actions[0].status, "DRAFT", "a refused apply must not spend the approval");
-  assert.ok(deps.audits.some((a) => a.action === "AGENT_GRANT_PARAMS_TAMPERED"), "tampering must be recorded");
+  assert.ok(deps.audits.some((a) => a.action === "AGENT_CONFIRM_PARAMS_TAMPERED"), "tampering must be recorded");
 });
 
 test("⛔ STRESS: swapping the RECIPIENT is caught by the same hash", async () => {
@@ -360,7 +360,7 @@ test("⛔ STRESS: an actor cannot hand out a permission they do not hold", async
   assert.equal(r.error, "not_yours_to_grant");
   assert.equal(grantedPermissions(db, "u2").length, 0);
   assert.equal(db._state.actions[0].status, "DRAFT");
-  assert.ok(deps.audits.some((a) => a.action === "AGENT_GRANT_REFUSED_NOT_YOURS"));
+  assert.ok(deps.audits.some((a) => a.action === "AGENT_CONFIRM_REFUSED"));
 });
 
 test("⛔ STRESS: a TENANT_ADMIN reaching for a protected platform-admin key is refused", async () => {
@@ -408,7 +408,7 @@ test("⛔ STRESS: an action id from another company simply does not exist", asyn
   const r: any = await apply(deps, ADMIN);
   assert.equal(r.ok, false);
   assert.equal(r.status, 404);
-  assert.equal(r.error, "grant_not_found");
+  assert.equal(r.error, "confirmation_not_found");
   assert.equal(grantedPermissions(db, "u7").length, 0);
   assert.equal(deps.rateCalls.length, 0, "and it must not even reach the password check");
 });
@@ -438,7 +438,7 @@ test("⛔ STRESS: a wrong password changes nothing and is recorded", async () =>
   assert.equal(r.error, "invalid_password");
   assert.equal(grantedPermissions(db, "u2").length, 0);
   assert.equal(db._state.actions[0].status, "DRAFT", "the approval survives a typo");
-  assert.ok(deps.audits.some((a) => a.action === "AGENT_GRANT_PASSWORD_FAILED"));
+  assert.ok(deps.audits.some((a) => a.action === "AGENT_CONFIRM_PASSWORD_FAILED"));
 });
 
 test("⛔ STRESS: repeated wrong passwords are rate-limited, not a guessing game", async () => {
@@ -464,7 +464,7 @@ test("the limiter is keyed to the person, so one admin cannot lock another out",
   const db = makeDb({ actions: [draft()] });
   const deps = makeDeps(db);
   await apply(deps, ADMIN, "act-1", "wrong");
-  assert.deepEqual(deps.rateCalls, ["agent-grant-apply:admin-1"]);
+  assert.deepEqual(deps.rateCalls, ["agent-confirm-apply:admin-1"]);
 });
 
 test("⛔ the password is checked against the ACTOR's own hash, never the target's", async () => {
@@ -564,7 +564,7 @@ test("a genuine failure is reported, not retried into a mess", async () => {
   assert.equal(r.status, 500);
   assert.equal(r.error, "apply_failed");
   assert.equal(db._state.actions[0].status, "DRAFT", "the approval survives so it can be retried");
-  assert.ok(deps.audits.some((a) => a.action === "AGENT_GRANT_APPLY_FAILED"));
+  assert.ok(deps.audits.some((a) => a.action === "AGENT_CONFIRM_APPLY_FAILED"));
 });
 
 // ─── What the dialog is offered ──────────────────────────────────────────────
@@ -576,7 +576,10 @@ function withFindMany(db: any) {
     return db._state.actions.filter(
       (a: any) =>
         a.tenantId === where.tenantId
-        && a.capabilityId === where.capabilityId
+        // The registry filters by capability with `{ in: [...] }`.
+        && (Array.isArray(where.capabilityId?.in)
+          ? where.capabilityId.in.includes(a.capabilityId)
+          : a.capabilityId === where.capabilityId)
         && a.status === where.status
         && a.approvalConsumedAt == null
         && a.requestedBy === where.requestedBy
@@ -593,7 +596,7 @@ function withFindMany(db: any) {
 
 test("the dialog is offered the person's own pending grant, in plain English", async () => {
   const db = withFindMany(makeDb({ actions: [draft()] }));
-  const list = await listPendingGrants(db, ADMIN);
+  const list = await listPendingGrants(makeDeps(db), ADMIN);
   assert.equal(list.length, 1);
   assert.equal(list[0].id, "act-1");
   assert.match(list[0].summary, /Give Yehuda K \(yehuda@acme\.com\) permission to change the phone menus/);
@@ -607,7 +610,7 @@ test("⛔ the sentence shown is REBUILT from the params, never the stored summar
   const d = draft();
   d.summary = "Give Yehuda K permission to change the music on hold.";
   const db = withFindMany(makeDb({ actions: [d] }));
-  const list = await listPendingGrants(db, ADMIN);
+  const list = await listPendingGrants(makeDeps(db), ADMIN);
   assert.match(list[0].summary, /change the phone menus/, "the params win, not the prose");
   assert.doesNotMatch(list[0].summary, /music on hold/);
 });
@@ -616,37 +619,37 @@ test("⛔ a row whose params no longer match its hash is never offered", async (
   const d = draft();
   d.params = { targetUserId: "u2", targetEmail: "yehuda@acme.com", permission: "can_manage_tenant_settings" };
   const db = withFindMany(makeDb({ actions: [d] }));
-  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+  assert.deepEqual(await listPendingGrants(makeDeps(db), ADMIN), []);
 });
 
 test("⛔ nobody is shown someone else's half-finished request", async () => {
   const db = withFindMany(makeDb({ actions: [draft({ requestedBy: "someone-else" })] }));
-  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+  assert.deepEqual(await listPendingGrants(makeDeps(db), ADMIN), []);
 });
 
 test("⛔ a grant for a person who has since left is not offered", async () => {
   const db = withFindMany(makeDb({ actions: [draft()] }));
   db._state.users = db._state.users.filter((u: any) => u.id !== "u2");
-  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+  assert.deepEqual(await listPendingGrants(makeDeps(db), ADMIN), []);
 });
 
 test("a stale draft is not offered either", async () => {
   const db = withFindMany(makeDb({ actions: [draft({ createdAt: new Date(Date.now() - GRANT_DRAFT_TTL_MS - 1000) })] }));
-  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+  assert.deepEqual(await listPendingGrants(makeDeps(db), ADMIN), []);
 });
 
 test("⛔ a deny-listed permission is never even offered for confirmation", async () => {
   for (const key of NEVER_GRANTABLE_BY_CHAT) {
     const db = withFindMany(makeDb({ actions: [draft({ permission: key })] }));
-    assert.deepEqual(await listPendingGrants(db, ADMIN), [], `${key} must not be offered`);
+    assert.deepEqual(await listPendingGrants(makeDeps(db), ADMIN), [], `${key} must not be offered`);
   }
 });
 
 test("a consumed grant stops being offered", async () => {
   const db = withFindMany(makeDb({ actions: [draft()] }));
-  assert.equal((await listPendingGrants(db, ADMIN)).length, 1);
+  assert.equal((await listPendingGrants(makeDeps(db), ADMIN)).length, 1);
   await apply(makeDeps(db), ADMIN);
-  assert.deepEqual(await listPendingGrants(db, ADMIN), []);
+  assert.deepEqual(await listPendingGrants(makeDeps(db), ADMIN), []);
 });
 
 // ─── Shape of the draft itself ───────────────────────────────────────────────
@@ -655,7 +658,7 @@ test("⛔ an action id that is not a permission grant is not found", async () =>
   const db = makeDb({ actions: [draft({ capabilityId: "action.A1.temp_forward" })] });
   const r: any = await apply(makeDeps(db), ADMIN);
   assert.equal(r.status, 404);
-  assert.equal(r.error, "grant_not_found");
+  assert.equal(r.error, "confirmation_not_found");
 });
 
 test("an already-decided draft cannot be revived", async () => {
@@ -680,7 +683,7 @@ test("a missing action id is not found, and reveals nothing else", async () => {
   const db = makeDb({ actions: [draft()] });
   const r: any = await apply(makeDeps(db), ADMIN, "act-does-not-exist");
   assert.equal(r.status, 404);
-  assert.equal(r.error, "grant_not_found");
+  assert.equal(r.error, "confirmation_not_found");
 });
 
 test("⛔ no refusal message ever names a permission key or another company", async () => {

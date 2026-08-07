@@ -228,6 +228,8 @@ import {
 import { decideActionGate, userHasActionPermission } from "./permissionGates";
 import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
+import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
+import { registerAccountSetupInfoRoute } from "./agentProvisioning/accountSetupInfoRoute";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
   PORTAL_ROLE_BUCKETS,
@@ -39510,9 +39512,51 @@ const port = Number(process.env.PORT || 3001);
   await registerBillingRoutes(app);
   await registerPlatformRolePermissionRoutes(app);
   await registerCustomRoleRoutes(app);
-  // Grant-by-chat: the agent may only PREPARE a permission grant; this applies
-  // it, after re-checking authority and the requester's own password.
-  await registerAgentGrantRoutes(app, { rateLimit: checkBillingRateLimit, audit });
+  // Read-only door the assistant quotes prices from, so the figure it says in
+  // chat is the one the invoice engine will actually bill.
+  registerAccountSetupInfoRoute(app);
+  // Confirm-by-password: the agent may only PREPARE (a permission grant, a new
+  // extension, …); these routes apply it after re-checking authority and the
+  // requester's own password.
+  //
+  // ⛔ Provisioning capabilities REPLAY the real portal routes rather than
+  // reimplementing them, signed as the admin who actually confirmed — so the
+  // PBX work, the welcome email and the audit rows are identical to a human
+  // clicking the same buttons, and the token carries no more authority than
+  // that person already has.
+  await registerAgentGrantRoutes(app, {
+    rateLimit: checkBillingRateLimit,
+    audit,
+    injectAsService: async (method, url, actorUserId, payload) => {
+      const actor = await db.user.findUnique({
+        where: { id: actorUserId },
+        select: { id: true, tenantId: true, email: true, role: true },
+      });
+      if (!actor) throw new Error("confirming_user_not_found");
+      const token = app.jwt.sign(
+        { sub: actor.id, tenantId: actor.tenantId, email: actor.email, role: actor.role },
+        { expiresIn: "2m" },
+      );
+      const res = await app.inject({
+        method,
+        url,
+        headers: { authorization: `Bearer ${token}` },
+        payload: (payload ?? {}) as any,
+      });
+      let body: any = null;
+      try { body = res.json(); } catch { body = { raw: String(res.body).slice(0, 300) }; }
+      return { statusCode: res.statusCode, body };
+    },
+    // Carrier-side SMS switch. Reuses the onboarding retry, because a
+    // freshly-touched DID answers `sms_wait_message` rather than an error.
+    enableSmsOnDid: async (did: string) => {
+      const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
+      if (!row?.credentialsEncrypted) return { ok: false, detail: "voipms_not_configured" };
+      const creds = decryptJson<{ username: string; password: string }>(row.credentialsEncrypted);
+      if (!creds?.username || !creds?.password) return { ok: false, detail: "voipms_not_configured" };
+      return enableSmsOnDid(creds, did);
+    },
+  });
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);
