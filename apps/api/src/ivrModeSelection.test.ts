@@ -69,6 +69,54 @@ test("override mode: manual_override first, emergency as fallback", () => {
   assert.equal(ivrFindActiveProfile("override", [{ id: "e", type: "emergency" }], null)?.id, "e");
 });
 
+// ── The brand-new-customer deadlock (2026-08-06) ───────────────────────────
+// A fresh tenant could not go live at all: Studio menus are all typed
+// business_hours, a new tenant has no opening hours so the mode is always
+// "afterhours", and nothing is chosen in the schedule yet — so the id lookup
+// missed, the type lookup missed, and publish refused with "no menu is
+// selected to play right now". Editing the menu could never clear it.
+const freshTenant = [{ id: "their-only-menu", type: "business_hours", name: "New menu" }];
+const emptySchedule = { defaultProfileId: null, afterHoursProfileId: null, holidayProfileId: null };
+
+test("DEADLOCK: a brand-new tenant's only menu answers, even with nothing scheduled", () => {
+  assert.equal(ivrFindActiveProfile("afterhours", freshTenant, emptySchedule)?.id, "their-only-menu");
+  assert.equal(ivrFindActiveProfile("business", freshTenant, emptySchedule)?.id, "their-only-menu");
+  assert.equal(ivrFindActiveProfile("holiday", freshTenant, emptySchedule)?.id, "their-only-menu");
+});
+
+test("DEADLOCK: it holds with no schedule row at all, which is what a new tenant has", () => {
+  assert.equal(ivrFindActiveProfile("afterhours", freshTenant, null)?.id, "their-only-menu");
+});
+
+test("the fallback NEVER overrides a menu the customer actually chose", () => {
+  // The 2026-08-05 failure was an explicit per-mode choice being ignored. The
+  // fallback runs only after both lookups come back empty, so a real choice
+  // always wins — assert it directly rather than trusting the ordering.
+  assert.equal(ivrFindActiveProfile("afterhours", studioProfiles, studioSchedule)?.id, "closed-menu");
+  assert.equal(ivrFindActiveProfile("business", studioProfiles, studioSchedule)?.id, "main-menu");
+  const legacy = [{ id: "a", type: "business_hours" }, { id: "b", type: "after_hours" }];
+  assert.equal(ivrFindActiveProfile("afterhours", legacy, emptySchedule)?.id, "b", "typed after-hours menu still wins");
+});
+
+test("with several unscheduled menus the business-hours one answers, not an arbitrary first", () => {
+  const mixed = [
+    { id: "announcement", type: "holiday" },
+    { id: "the-main-one", type: "business_hours" },
+  ];
+  assert.equal(ivrFindActiveProfile("afterhours", mixed, emptySchedule)?.id, "the-main-one");
+});
+
+test("no menus at all is still null — a tenant routing straight to extensions is legitimate", () => {
+  assert.equal(ivrFindActiveProfile("afterhours", [], emptySchedule), null);
+  assert.equal(ivrFindActiveProfile("business", [], null), null);
+});
+
+test("override does NOT fall back to the main menu — it is a deliberate switch", () => {
+  // Quietly serving normal routing would make an activated emergency override
+  // look applied while changing nothing for callers.
+  assert.equal(ivrFindActiveProfile("override", freshTenant, emptySchedule), null);
+});
+
 test("mode → legacy type mapping stays stable", () => {
   assert.equal(ivrModeToProfileType("business"), "business_hours");
   assert.equal(ivrModeToProfileType("afterhours"), "after_hours");

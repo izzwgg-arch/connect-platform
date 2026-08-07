@@ -99,5 +99,29 @@ export function ivrFindActiveProfile<T extends { id?: string; type: string }>(
   const direct = profiles.find((p) => p.type === wanted) ?? null;
   if (direct) return direct;
   if (mode === "override") return profiles.find((p) => p.type === "emergency") ?? null;
+
+  // ⛔ LAST RESORT: the tenant's main menu, rather than nothing.
+  //
+  // Without this, a brand-new customer could not go live at all. Every menu the
+  // Studio creates is typed `business_hours`; a fresh tenant has no opening
+  // hours set, so the mode is ALWAYS "afterhours"; the schedule has no menu
+  // chosen for it yet, so the id lookup misses and the type lookup misses. The
+  // publish then refuses with "no menu is selected to play right now" — a
+  // deadlock that no amount of editing the MENU can clear, because the thing
+  // that needs fixing is a schedule screen further down the page. Setting up
+  // your first phone menu and being told you cannot use it is not a guard, it
+  // is a wall.
+  //
+  // This can never override a deliberate choice: it only runs after BOTH the
+  // schedule's per-mode ids and the type match have come back empty. So the
+  // 2026-08-05 failure it must not undo — an explicit per-mode menu being
+  // ignored — is structurally out of reach here.
+  //
+  // Playing the customer's own menu at the wrong time of day beats playing the
+  // generic built-in filler, which is what "no menu" actually sounds like to a
+  // caller.
+  if (mode === "business" || mode === "afterhours" || mode === "holiday") {
+    return profiles.find((p) => p.type === "business_hours") ?? profiles[0] ?? null;
+  }
   return null;
 }

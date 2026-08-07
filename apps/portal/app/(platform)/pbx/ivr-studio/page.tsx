@@ -707,8 +707,19 @@ export default function IvrStudioPage() {
         flash(`“${name}” created`);
       }
 
+      // Claim whichever slot this menu is for, if nothing holds it yet. The
+      // very first menu a customer makes has to be the one that answers the
+      // phone — leaving both slots empty is how a new tenant used to reach
+      // Publish and be told no menu was selected to play, with no way to fix
+      // it from the menu they were looking at.
+      const base = schedule ?? EMPTY_SCHEDULE;
+      const next = { ...base };
       if (type === "after_hours") {
-        const next = { ...(schedule ?? EMPTY_SCHEDULE), afterHoursProfileId: created.id };
+        if (!base.afterHoursProfileId) next.afterHoursProfileId = created.id;
+      } else if (!base.defaultProfileId) {
+        next.defaultProfileId = created.id;
+      }
+      if (next.defaultProfileId !== base.defaultProfileId || next.afterHoursProfileId !== base.afterHoursProfileId) {
         setSchedule(next);
         await apiPut(`/voice/ivr/schedule`, { ...next, tenantId });
       }
