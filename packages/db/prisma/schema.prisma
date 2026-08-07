@@ -3524,6 +3524,20 @@ model TenantPbxPrompt {
   contentType String? // e.g. "audio/wav", "audio/mpeg"
   syncedAt    DateTime? // last time audio bytes were uploaded
 
+  // ── How a generated recording was made ────────────────────────────────────
+  // Only ever set for `source: "generated"` rows. Kept so a greeting can be
+  // EDITED rather than retyped from scratch: the Studio reopens the voice
+  // studio with these values restored, the customer changes a sentence, and
+  // the same voice reads the new version. Without the voice fields an edit
+  // would silently come back in a different voice, which callers notice.
+  // Null on uploaded and PBX-synced rows — there is no text behind those, and
+  // that absence is exactly what the UI tests to decide whether to offer Edit.
+  sourceText    String? // the words that were typed
+  voiceProvider String? // "elevenlabs" | "polly"
+  voiceId       String?
+  voiceModel    String? // ElevenLabs model id, or the Polly engine
+  voiceSettings Json? // provider-specific tuning (stability/style, speed, language)
+
   // ── Ownership confidence ──────────────────────────────────────────────────
   // How did we decide this row belongs to `tenantId`?
   //   "exact"   — tenantId resolved from VitalPBX `ombu_recordings.tenant_id`
