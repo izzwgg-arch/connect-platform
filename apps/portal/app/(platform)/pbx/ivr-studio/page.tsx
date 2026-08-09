@@ -1500,17 +1500,43 @@ export default function IvrStudioPage() {
                     </>
                   )}
 
+                  {/* How long to wait, and how many tries, are both editable.
+                      They were display-only before, which is why the wait read
+                      as a fixed 7 seconds that "cannot be changed" — the API has
+                      always accepted both (timeoutSeconds 1-60, maxRetries 1-10)
+                      and publish already pushes them to the PBX. Only the
+                      control was missing. */}
                   <Step glyph="⏱" muted
                     title={`They press nothing for ${active.timeoutSeconds || 7} seconds`}
                     sub={active.timeoutDestinationRef
                       ? `We send them to ${describeDestination({ destinationType: active.timeoutDestinationType || "", destinationRef: active.timeoutDestinationRef }, directory)}`
-                      : "We replay the menu, then the call ends"} />
+                      : "We replay the menu, then the call ends"}
+                    actions={
+                      <select className="sel" disabled={!canManage || saving}
+                        aria-label={t("How long to wait")}
+                        value={String(active.timeoutSeconds || 7)}
+                        onChange={(e) => patchProfile({ timeoutSeconds: Number(e.target.value) })}>
+                        {[3, 5, 7, 10, 15, 20, 30].map((s) => (
+                          <option key={s} value={s}>{s} seconds</option>
+                        ))}
+                      </select>
+                    } />
 
                   <Step glyph="⚠️" muted
                     title={t("They press a key you haven't set up")}
                     sub={active.invalidDestinationRef
-                      ? `After a few tries we send them to ${describeDestination({ destinationType: active.invalidDestinationType || "", destinationRef: active.invalidDestinationRef }, directory)}`
-                      : "We tell them it wasn't valid and replay the menu"} />
+                      ? `After ${active.maxRetries || 3} ${(active.maxRetries || 3) === 1 ? "try" : "tries"} we send them to ${describeDestination({ destinationType: active.invalidDestinationType || "", destinationRef: active.invalidDestinationRef }, directory)}`
+                      : `We tell them it wasn't valid and replay the menu, up to ${active.maxRetries || 3} ${(active.maxRetries || 3) === 1 ? "time" : "times"}`}
+                    actions={
+                      <select className="sel" disabled={!canManage || saving}
+                        aria-label={t("How many tries")}
+                        value={String(active.maxRetries || 3)}
+                        onChange={(e) => patchProfile({ maxRetries: Number(e.target.value) })}>
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <option key={n} value={n}>{n} {n === 1 ? "try" : "tries"}</option>
+                        ))}
+                      </select>
+                    } />
 
                   {/* Dialling an extension straight from the menu. Its own step
                       because it changes what a caller can do, and because with
