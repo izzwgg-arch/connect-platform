@@ -897,6 +897,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     newest: { senderUserId: string | null; createdAt: Date; direction: string } | undefined | null,
     participants: { userId: string | null; lastReadAt: Date | null }[],
     markedUnreadAt?: Date | null,
+    viewerUserId?: string | null,
   ): boolean => {
     // Newest inbound message OR a manual "mark unread" both raise the New threshold.
     const newestTs = newest && newest.direction !== "OUTBOUND" ? newest.createdAt.getTime() : 0;
@@ -904,6 +905,15 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const threshold = Math.max(newestTs, markTs);
     if (threshold === 0) return false;
     const sender = newest?.senderUserId ?? null;
+    // ⛔ You are never New to yourself. An internal message is stored with
+    // direction "INTERNAL" — NOT "OUTBOUND" — so it counts toward the threshold
+    // above, and the sender is deliberately excluded from the read check below.
+    // Together that left a thread whose newest message you sent permanently New
+    // *to you*: "Mark read" and "Mark all read" wrote lastReadAt, the recompute
+    // ignored it, and the item came straight back on the next poll — on web and
+    // mobile alike, because the state is computed here. A manual mark-unread
+    // still wins (markTs > newestTs), since that is someone asking for it back.
+    if (viewerUserId && sender && viewerUserId === sender && markTs <= newestTs) return false;
     return !participants.some(
       (p) => p.userId && p.userId !== sender && p.lastReadAt && p.lastReadAt.getTime() >= threshold,
     );
@@ -932,7 +942,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         })).map((p) => p.thread);
     let count = 0;
     for (const t of threads) {
-      if (isThreadSharedNew((t as any).messages[0], (t as any).participants, (t as any).markedUnreadAt)) count++;
+      if (isThreadSharedNew((t as any).messages[0], (t as any).participants, (t as any).markedUnreadAt, user.sub)) count++;
     }
     return { count };
   });
@@ -1027,7 +1037,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
     const threads = await Promise.all(threadsRaw.map(async (t: any) => {
       const last = t.messages[0];
-      const isNew = isThreadSharedNew(t.messages[0], t.participants, t.markedUnreadAt);
+      const isNew = isThreadSharedNew(t.messages[0], t.participants, t.markedUnreadAt, user.sub);
       const unread = canViewTenant ? 0 : (unreadMap.get(t.id) || 0);
       let participantName = t.title || "Chat";
       let participantExtension = "";

@@ -116,7 +116,11 @@ export function ViewportDropdown({
         maxWidth: `calc(100vw - ${collisionPadding * 2}px)`,
         maxHeight: `calc(100vh - ${collisionPadding * 2}px)`,
         overflowY: "auto",
-        zIndex: 1000,
+        // Above the floating assistant (panel 1199, button 1200) and the desktop
+        // update notice (1200). At 1000 the assistant drew straight over the
+        // account and notification menus and clipped them mid-list. Stays below
+        // screen-pops and modal dialogs (9999/10000), which must still win.
+        zIndex: 1250,
       }}
       tabIndex={-1}
     >

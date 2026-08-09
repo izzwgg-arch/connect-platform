@@ -77,7 +77,11 @@ export function DateRangeFilter({ value, onChange }: Props) {
           role="tab"
           aria-selected={value.key === "custom"}
           className={`dash-filter-pill ${value.key === "custom" ? "active" : ""}`}
-          onClick={() => setCustomOpen((o) => !o || value.key !== "custom")}
+          // Plain toggle. This used to read `!o || value.key !== "custom"`, which
+          // could never close: on the second click `!o` is false and it fell through
+          // to `value.key !== "custom"` — still true whenever the range had not been
+          // applied yet — so the panel re-opened itself and the chevron stayed up.
+          onClick={() => setCustomOpen((o) => !o)}
         >
           <Calendar size={14} aria-hidden />
           Custom

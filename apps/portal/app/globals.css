@@ -33235,6 +33235,20 @@ table tr:hover {
     linear-gradient(45deg, transparent 50%, #64748b 50%),
     linear-gradient(135deg, #64748b 50%, transparent 50%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.92)) !important;
+  /* The generic light-theme `select { background: ... }` shorthand resets
+     background-position/size to their initial values. Restoring only the image
+     (above) leaves the two 5px arrow wedges painted at FULL box size, which
+     renders the control as a slate block with a giant white triangle. Repeat
+     the geometry here so the shorthand can never strip it again. */
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%,
+    0 0 !important;
+  background-repeat: no-repeat !important;
+  background-size:
+    5px 5px,
+    5px 5px,
+    100% 100% !important;
 }
 
 :root[data-theme="light"] .ch-shell.crm-calls-workspace .calls-date-input::-webkit-calendar-picker-indicator {
@@ -35081,6 +35095,17 @@ table tr:hover {
 .cc-shell.crm-queue-workspace .cc-composer {
   padding: 10px 12px;
   background: color-mix(in srgb, var(--crm-surface, var(--panel)) 96%, transparent);
+}
+
+/* The floating assistant button is pinned bottom-right (58px wide, 22px inset)
+   on every page that has a composer — it hides only on /assistant and
+   /support-chat, neither of which has one — so it sat directly on top of the
+   composer's trailing controls. Measured on /chat: the button spans to 80px
+   from the viewport edge while the compose bubble ended at 37px, putting the
+   voice-note and send buttons underneath it. Reserve that corner. */
+.cc-composer,
+.cc-shell.crm-queue-workspace .cc-composer {
+  padding-right: 72px;
 }
 
 .cc-shell.crm-queue-workspace .cc-compose-row {
