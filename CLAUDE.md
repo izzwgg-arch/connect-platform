@@ -1,5 +1,126 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — "everything is loading very, very slow" (2026-08-06) — READ FIRST for ANY portal-speed report, before adding a permission check to a route, or before blaming the server / the customer's internet
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_PORTAL_PERFORMANCE_2026-08-06.md`**
+(`abb1314a` + `4ad257f7` + `5486746a` on `feat/ivr-migration-takeover`, api +
+portal DEPLOYED and container-verified, plus a live nginx change).
+**Dashboard 22.1s → ~2–4s; api server time 499ms → 225ms; IVR Studio 5.15s → 3.41s.**
+
+- ⛔ **THE BOX WAS NEVER THE BOTTLENECK — and Izzy's pushback is what found the
+  real bug.** Through the whole incident the server was **79% idle**, 72 GB free,
+  uplink at **0.5 Mbit/s**, on-box responses **5–20 ms**. Hardware would have
+  changed nothing. **Four causes stacked**, and fixing the first alone looked
+  like a total win while the api was still wasting half a second per request.
+  Never stop at the first cause, and never conclude "capacity" from load average
+  (it sat at 7–12 all day while CPU was 79% idle — that was deploy churn).
+- ⛔ **HTTP/2 had never been enabled.** nginx was built `--with-http_v2_module`
+  but no `http2` directive existed anywhere, so **51 of 51 requests were
+  http/1.1** and Chrome capped at 6 connections while the dashboard fires **26
+  API calls** — average queue wait **1,120 ms**, 14 requests waiting over a
+  second *before being sent*. Now `listen 443 ssl http2;` in
+  `/etc/nginx/sites-enabled/connectcomms` (a real file, NOT a symlink; the only
+  443 block). Backup `/root/nginx-connectcomms-backup-20260806-http2.conf`.
+  ⛔ nginx is **1.24**, which takes `http2` as a **`listen` parameter** — the
+  standalone `http2 on;` only exists from 1.25.1. ⛔ **WebSockets are fine**
+  (no Extended CONNECT → Chrome opens a separate HTTP/1.1 connection for
+  `/ws/telephony`), but verify the 101s after any TLS change.
+- ⛔ **Every request re-read the WHOLE permission system.**
+  `hasEffectivePortalPermission()` ran the full resolver per call — **5 queries**,
+  one of them issued **twice** — and routes ask several times each. Postgres was
+  doing **184,000 rows/sec to serve 276 transactions/sec (~667 rows per
+  request)**. ⛔ **NOT missing indexes** (all sensibly indexed; Postgres correctly
+  seq-scans tables that small) — it was query *volume*. Fixed by
+  `apps/api/src/permissionCache.ts`: **4 queries cold, 0 warm**; permission
+  seq-scans **55.1/s → 4.5/s**. ⛔ It is an **authorization** cache: the **TTL,
+  not the invalidation**, bounds staleness (blue/green means one process can't
+  clear the other's map), a failed resolve is never cached, and **every new
+  permission WRITE path must call `invalidateAllPortalPermissions()`**.
+  `PORTAL_PERMISSION_CACHE_TTL_MS=0` disables it.
+- ⛔ **A card charge that "timed out" was a deploy, not the gateway.** Izzy's
+  `POST …/invoices/:id/pay` at 18:25:27 returned **499** (client gave up) while
+  an api deploy started at 18:16 was still cutting over. Zero Cardknox errors.
+  **44 deploys that day** (vs 12 the day before) also produced 502 bursts and
+  drove 499s from ~5/hour to **124/hour**. ⛔ **An in-flight paid action can die
+  in a blue/green cutover.**
+- ⛔ **Never blame the customer's internet without a reference host.** Izzy's
+  ping to `1.1.1.1` was a steady **10–15 ms** while the same ping to loopcom ran
+  **96–830 ms** — the server is in **Lauterbourg, France**, so every request pays
+  ~100–200 ms of travel forever. That is the remaining floor, and only moving the
+  server fixes it.
+- **IVR Studio:** the tenant list was fetched **3×** per load — ⛔ an
+  **effect-dependency bug**, not a fetch bug (the effect watched a `useCallback`
+  rebuilt as `role`/`backendJwtRole`/permissions each settled separately during
+  boot); now watches the **boolean**. And `/voice/pbx/ring-groups` (a live
+  Ombutel MySQL read, **1.8 s**) sat in the opening `Promise.all` so the whole
+  screen waited on it — now deferred past first paint, **page usable ~2.8 s
+  sooner**. ⛔ Late-arriving teams needed a **third** state (`teamsLoading`):
+  reusing `teamsLoaded` prints "check they're linked to the phone system" while
+  the request is still in flight, which is a lie.
+- ⚠️ **NOT REPRODUCED: the reported Studio scroll lag.** A real defect was fixed
+  (six rules used `transition:.14s` = **`transition: all`**, so the browser
+  watched every animatable property on every row while scrolling swept hover
+  across them), but the tenant selected in Izzy's browser (**Create A Box**) has
+  **no menus**, so the page had nothing to scroll. **Re-test on a tenant with
+  menus.** Next suspects: the global `.btn` transitions `transform, box-shadow`;
+  `.ivrs .sticky` sits inside shadowed cards.
+- ⛔ **Deploy traps:** `runningCount: 0` does NOT mean you can deploy — direct
+  deploys never register in the queue and the **heavy-job lock is separate**
+  (`pgrep -f run-heavy`). And **`nohup … &` over ssh dies with the tool's ssh
+  session** — use `setsid nohup … < /dev/null & disown` and poll the log later;
+  one deploy was silently lost this way.
+
+## ⛔ AGENT HANDOFF — a reassigned desk phone never hears about it (2026-08-06) — READ FIRST for "I changed the extension and the phone didn't change", VitalPBX provisioning, or any phone-to-extension assignment
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_REPROVISION_2026-08-06.md`**
+(Gesheft T53W stuck on 114 after being assigned to 101 — diagnosed and fixed
+live. **No PBX config written**; the one action was a `pjsip send notify` run by
+Izzy from a Run button.)
+
+- ⛔ **A REBOOT IS NOT A RE-PROVISION.** The panel change was correct and saved
+  the whole time; the handset simply never downloaded it — last fetch **July 30,
+  02:20 AM**, nothing when the change was made, nothing when it was rebooted.
+  The panel's reboot button sends `check-sync;reboot=true`, and whether the phone
+  then fetches settings depends on `static.auto_provision.power_on` **stored on
+  the handset**. The reboot *visibly working* is what made this read as a PBX
+  routing bug.
+- **The fix, proven live in ~2 seconds** —
+  `asterisk -rx "pjsip send notify yealink-check-cfg endpoint T8_114"`
+  (`check-sync;reboot=false` = "fetch now", a different code path that ignores
+  `power_on`). The phone swapped to 101 **without rebooting**. Per-brand options
+  (`poly-`/`snom-`/`cisco-check-cfg`, `reboot-*`) already exist in
+  `/etc/asterisk/vitalpbx/pjsip_notify__10-default.conf`.
+- ⛔ **THE DIAGNOSTIC: `grep phoneprov /var/log/nginx/access.log`** (+ `zcat` the
+  `.gz` for 14 days). It records every download with **model and MAC** in the
+  user agent, so it is the only honest witness to whether a change reached a
+  phone. A hit from the customer's public IP with a `Yealink SIP-T53W … <mac>`
+  agent IS the phone. ⛔ A hit from **`127.0.0.1` with agent `VitalPBX` (54
+  bytes) is only the panel rendering its own page** and proves nothing —
+  it sits there looking reassuring while the phone is weeks out of date.
+  Silence from the customer's IP = the change never left the server. Always
+  compare against other tenants in the same window before blaming provisioning.
+- ⛔ **NOTIFY targets the EXTENSION, not one handset** — it fans out to every
+  contact on the AOR (114 had two phones; both re-provisioned, harmlessly).
+  Check `pjsip show aor <ep>` and warn the owner first.
+- ⛔ **You cannot read provisioning behaviour off the template** — VitalPBX
+  pushes every `auto_provision.*` key **blank** except the server URL, and blank
+  means "keep what you have". Likewise the `description` field is a LABEL: this
+  phone's record still reads `114` (template still named `Gesheft 114`) while
+  correctly serving 101. Read `provisioning.accounts.phone_device_id` joined to
+  `ombutel.ombu_devices.user`, never the description.
+- ⛔ **`PbxEndpointRegistrationEvent` has NO `createdAt`** — order by
+  `occurredAt` or `findMany` throws. It is how you prove a reboot happened
+  independently of whether config changed (they are unrelated).
+- **Sister failure — check BOTH:** [[createabox-102-blf-mac-mismatch]] is the
+  same symptom from the opposite cause (phone fetched fine, panel had the WRONG
+  MAC, so the rewritten file was one nothing downloads). The nginx log tells
+  them apart in one grep — it shows the MAC the phone ASKS for.
+- **OPEN, needs Izzy:** Gesheft is **two sites** (`75.99.30.60` holds 102-111 +
+  897 + the ORIGINAL 101; `66.250.98.9` holds 114/115/116 + the moved phone), so
+  **101 now rings in both places**. If the intent was to *move* 101 rather than
+  add a second, the old phone needs unassigning. Also 114 still has a T26P on it
+  whose record is labelled "118".
+
 ## ⛔ AGENT HANDOFF — "he answered and got voicemail" (2026-08-06) — READ FIRST for ANY "answered and it didn't connect" report, mobile push channels, the wake hold, or before trusting a failure LABEL
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANSWER_UNACKED_PUSH_CHANNEL_2026-08-06.md`**
