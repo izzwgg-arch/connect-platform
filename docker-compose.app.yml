@@ -93,6 +93,13 @@ services:
       # survives (2026-08-05: a customer's Verizon bill needed for a number
       # port was lost exactly this way).
       ONBOARDING_STORAGE_DIR: ${ONBOARDING_STORAGE_DIR:-/var/lib/connect/onboarding-files}
+      # Profile photos (users) and contact photos. Same trap as the onboarding
+      # uploads above: unset, these fell back to <cwd>/data, which no volume
+      # covers, so every api deploy destroyed them while the DB kept
+      # avatarStorageKey + avatarUrl — and the UI rendered a broken image.
+      # Found 2026-08-09 with /app/data absent and 2 orphaned user rows.
+      USER_AVATAR_STORAGE_DIR: ${USER_AVATAR_STORAGE_DIR:-/var/lib/connect/user-avatars}
+      CONTACT_AVATAR_STORAGE_DIR: ${CONTACT_AVATAR_STORAGE_DIR:-/var/lib/connect/contact-avatars}
       # Public URL the PBX-host helper can actually reach. MUST be set in
       # production or signed URLs will point at http://localhost:3001.
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
@@ -163,6 +170,10 @@ services:
       # Onboarding wizard uploads (porting bills / LOAs) — must survive
       # deploys; the DB rows that point at these files certainly do.
       - onboarding-files:/var/lib/connect/onboarding-files
+      # Profile and contact photos — must survive deploys and blue/green
+      # cutovers; the DB rows pointing at them do.
+      - user-avatars:/var/lib/connect/user-avatars
+      - contact-avatars:/var/lib/connect/contact-avatars
       # Persistent CRM lead document storage. Tenant document files survive
       # container rebuilds and blue/green API rollouts.
       - crm-lead-docs:/var/lib/connect/crm-lead-docs
@@ -247,6 +258,13 @@ services:
       # Same onboarding upload volume as the stable api service — port
       # documents must survive blue/green cutovers too.
       ONBOARDING_STORAGE_DIR: ${ONBOARDING_STORAGE_DIR:-/var/lib/connect/onboarding-files}
+      # Profile photos (users) and contact photos. Same trap as the onboarding
+      # uploads above: unset, these fell back to <cwd>/data, which no volume
+      # covers, so every api deploy destroyed them while the DB kept
+      # avatarStorageKey + avatarUrl — and the UI rendered a broken image.
+      # Found 2026-08-09 with /app/data absent and 2 orphaned user rows.
+      USER_AVATAR_STORAGE_DIR: ${USER_AVATAR_STORAGE_DIR:-/var/lib/connect/user-avatars}
+      CONTACT_AVATAR_STORAGE_DIR: ${CONTACT_AVATAR_STORAGE_DIR:-/var/lib/connect/contact-avatars}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
       PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
@@ -286,6 +304,10 @@ services:
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
       - onboarding-files:/var/lib/connect/onboarding-files
+      # Profile and contact photos — must survive deploys and blue/green
+      # cutovers; the DB rows pointing at them do.
+      - user-avatars:/var/lib/connect/user-avatars
+      - contact-avatars:/var/lib/connect/contact-avatars
       - crm-lead-docs:/var/lib/connect/crm-lead-docs
       - crm-voicemail-drops:/var/lib/connect/crm-voicemail-drops
       # Read-only host inventory for Storage Health scanner (Phase 1.6). No writes.
@@ -512,4 +534,10 @@ volumes:
   # Persistent storage for CRM voicemail drop WAV files. Shared between api
   # and api_candidate so previews work through blue/green cutovers.
   crm-voicemail-drops:
+    driver: local
+  # Profile photos and contact photos. Shared between api and api_candidate so
+  # an avatar uploaded on one side still resolves after a blue/green cutover.
+  user-avatars:
+    driver: local
+  contact-avatars:
     driver: local

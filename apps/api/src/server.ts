@@ -5933,6 +5933,24 @@ function userAvatarRoot(): string {
   return process.env.USER_AVATAR_STORAGE_DIR || path.join(process.cwd(), "data", "user-avatars");
 }
 
+// ⛔ Both avatar roots fall back to <cwd>/data, which NO volume covers, so an
+// unset env means every api deploy destroys the files while the DB keeps
+// avatarStorageKey + avatarUrl — the UI then renders a broken image forever.
+// Found live 2026-08-09: /app/data did not exist and 2 user rows were orphaned.
+// Same failure the onboarding uploads had; see warnIfOnboardingStorageEphemeral.
+function warnIfAvatarStorageEphemeral(log: { warn: (o: unknown, m?: string) => void }): void {
+  for (const [envVar, root] of [
+    ["USER_AVATAR_STORAGE_DIR", userAvatarRoot()],
+    ["CONTACT_AVATAR_STORAGE_DIR", contactAvatarRoot()],
+  ] as const) {
+    if (process.env[envVar]) continue;
+    log.warn(
+      { envVar, resolvedRoot: root },
+      `${envVar} is not set — photos are being written inside the container and WILL be destroyed by the next deploy. Mount a volume and set ${envVar}.`,
+    );
+  }
+}
+
 app.get("/me/avatar", async (req, reply) => {
   const authUser = await requirePermission(req, reply, () => true);
   if (!authUser) return;
@@ -39675,6 +39693,7 @@ const port = Number(process.env.PORT || 3001);
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);
+  warnIfAvatarStorageEphemeral(app.log);
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,

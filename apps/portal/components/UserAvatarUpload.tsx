@@ -26,6 +26,15 @@ export function UserAvatarUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A stored avatarUrl whose file is gone renders as a broken-image glyph,
+  // which reads as "the app is broken" rather than "no photo yet". Fall back to
+  // the initials instead. This is a real state: avatars used to be written to
+  // <cwd>/data, which no volume covered, so every api deploy destroyed the file
+  // while the DB kept avatarStorageKey and avatarUrl pointing at it.
+  // Keyed to the URL that failed, not a bare boolean, so uploading a replacement
+  // renders it: the upload route returns /api/me/avatar?v=<sha>, a new URL per file.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showImage = !!avatarUrl && failedUrl !== avatarUrl;
 
   const initials = name
     .split(/\s+/)
@@ -90,8 +99,14 @@ export function UserAvatarUpload({
       onKeyDown={editable ? handleKeyDown : undefined}
       aria-label={editable ? "Change profile photo" : undefined}
     >
-      {avatarUrl ? (
-        <img src={avatarUrl} alt={name} className="uau-img" draggable={false} />
+      {showImage ? (
+        <img
+          src={avatarUrl as string}
+          alt={name}
+          className="uau-img"
+          draggable={false}
+          onError={() => setFailedUrl(avatarUrl ?? null)}
+        />
       ) : (
         <span className="uau-initials" aria-hidden>{initials}</span>
       )}
