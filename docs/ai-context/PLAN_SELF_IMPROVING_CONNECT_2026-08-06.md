@@ -416,7 +416,15 @@ Sees a prepared action (id + summary returned by the agent), shows the summary
 verbatim and a password field, POSTs to the endpoint, reports the result back
 into the chat. ⛔ The password goes to the API only — never to `/agent-api/*`.
 
-### Stress cases that must be proven before this is called done
+### Deployment status (checked 2026-08-09)
+
+✅ All three halves are LIVE and container-verified: `agentGrantRoutes.ts` in
+`app-api-1`, `permissionGrant.ts` in `app-agent-1`, and `AgentGrantConfirm`
+inside the portal's built `.next`. ⏳ **Nobody has walked it in a browser yet** —
+no human has typed a password into the dialog and watched a permission land.
+The tests below prove the logic; they do not prove the round trip.
+
+### Stress cases (covered by 35 API + 12 agent tests)
 
 Replay a consumed approval · a second apply racing the first (both must not
 grant twice) · tampered `params` vs stored `paramsHash` · an actor granting a

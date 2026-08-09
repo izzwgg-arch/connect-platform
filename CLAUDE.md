@@ -199,7 +199,12 @@ Full handoff + spec: **`docs/ai-context/PLAN_SELF_IMPROVING_CONNECT_2026-08-06.m
   subpath needs a `paths` entry in `tsconfig.base.json` or apps/api cannot
   resolve it). ⛔ The password goes to `/api/*` and NEVER `/agent-api/*`. Grants
   land in one per-recipient role `Assistant grants — <email>`. 35 API tests +
-  12 agent tests cover every stress case; **not yet walked in a browser**.
+  12 agent tests cover every stress case. ✅ **DEPLOYED — container-verified
+  2026-08-09**: `agentGrantRoutes.ts` in `app-api-1`, `permissionGrant.ts` in
+  `app-agent-1`, and `AgentGrantConfirm` inside the live portal `.next` build.
+  ⏳ Still **never walked in a browser** — nobody has typed a password into the
+  dialog and watched a real permission land. Do that before trusting it; the
+  tests prove the logic, not the round trip.
 - Deployed this session: `812674ca` → `c8f12a99` on `feat/ivr-migration-takeover`.
   Agent deploys are a MANUAL compose rebuild (no agent service in the deploy queue).
 
