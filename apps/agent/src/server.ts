@@ -161,6 +161,10 @@ async function main() {
       makeRouteApiClient(),
       makeIvrApiClient(),
       makeQueueApiClient(),
+      // READ-ONLY here: answers "is DND on?" via action:"get" so a status
+      // question is never answered by writing. Writes still go through
+      // ActionService → the M11 executor.
+      makeExtFeatureApiClient(),
     );
     const rateLimiter = new RateLimiter();
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectIntent } from "./intent";
+import { detectIntent, extractExtension } from "./intent";
 
 test("diagnostic intent: English 'not ringing'", () => {
   const i = detectIntent("my phone is not ringing when customers call ext 204");
@@ -114,4 +114,78 @@ test("action intent: routing verb + bare DID lands in pbx_config (loose M3 fallb
 test("plain conversation is not misclassified", () => {
   assert.equal(detectIntent("hi, what are your office hours?").kind, "chat");
   assert.equal(detectIntent("thank you so much").kind, "chat");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trainer-log regressions (Ezra, 2026-07-26 → 08-07). Every string below is a
+// VERBATIM message from the live logs that fired a real PBX write when it
+// should not have. See docs/ai-context/AGENT_HANDOFF_TRAINER_AUDIT_2026-08-09.md
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("DND status questions are read-only, never a write", () => {
+  const asks = [
+    "DND status?",
+    "check dnd status",
+    "Check DND Status",
+    "DND status",
+    "why can't you check DND status?",
+    "recent dnd changes",
+    "status of DND right now",
+    "DND status, do not disable or enable, just check status",
+    "is dnd on?",
+    "what is my dnd status",
+  ];
+  for (const a of asks) {
+    const i = detectIntent(a);
+    assert.equal(i.kind, "action", `${a} → ${i.kind}`);
+    assert.equal((i as any).actionType, "dnd", a);
+    assert.equal((i as any).statusQuery, true, `"${a}" must be a status query, not a write`);
+  }
+});
+
+test("real DND commands still execute", () => {
+  const cmds: Array<[string, "yes" | "no"]> = [
+    ["please put extension 1101 on do not disturb", "yes"],
+    ["take extension 1101 out of do not disturb", "no"],
+    ["enable DND for 1101", "yes"],
+    ["disable dnd", "no"],
+    ["dnd", "yes"],
+    ["Activate DND", "yes"],
+    ["Turn off DND on extension 1101", "no"],
+  ];
+  for (const [text, want] of cmds) {
+    const i = detectIntent(text);
+    assert.equal((i as any).actionType, "dnd", text);
+    assert.notEqual((i as any).statusQuery, true, `"${text}" must stay a command`);
+    assert.equal((i as any).enableHint, want, text);
+  }
+});
+
+test("a relayed or quoted sentence is never executed", () => {
+  const relays = [
+    'please relay this SPECIFIC sentence: Teach me DND status',
+    'Send this exactly to them: "Teach me DND Status check"',
+    'Please tell admin to give you: "DND Status check"',
+    "pass along: Teach assistant to summarize voicemails",
+    'Remember "Status" has priority over DND',
+    "pass it along to the team",
+    "Tell admin this specific sentence: Teach me to change IVR",
+  ];
+  for (const r of relays) {
+    const i = detectIntent(r);
+    assert.equal(i.kind, "chat", `"${r}" must not become an executable action (got ${(i as any).actionType})`);
+  }
+});
+
+test("a duration is never read as an extension number", () => {
+  // 2026-07-31: "keep dnd on for 30 mins" filed objectId "30" and died on the
+  // scope fence — the agent tried to touch an extension the tenant doesn't own.
+  assert.equal(extractExtension("keep dnd on for 30 mins"), undefined);
+  assert.equal(extractExtension("set dnd for 30 minutes"), undefined);
+  assert.equal(extractExtension("turn off DND in 15 minutes"), undefined);
+  assert.equal(extractExtension("hold music until 5 pm"), undefined);
+  // …but a real extension still resolves, prefixed or bare.
+  assert.equal(extractExtension("set dnd on extension 1101 for 30 mins"), "1101");
+  assert.equal(extractExtension("put 1101 on do not disturb"), "1101");
+  assert.equal(extractExtension("ext 102"), "102");
 });

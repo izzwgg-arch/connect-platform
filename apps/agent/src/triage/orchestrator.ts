@@ -113,6 +113,9 @@ export class TriageOrchestrator {
     private routeApi: PbxDoorClient | null = null,
     private ivrApi: PbxDoorClient | null = null,
     private queueApi: PbxDoorClient | null = null,
+    /** M11 extension-feature door — used READ-ONLY here (`action:"get"`) to
+     *  answer "is DND on?" without writing. Null ⇒ we say we couldn't check. */
+    private extFeatureApi: PbxDoorClient | null = null,
   ) {}
 
   async handle(intent: Intent | ({ kind: "audio_upload" } & Record<string, unknown>), ctx: TriageCtx, language: "en" | "yi"): Promise<TriageOutcome> {
@@ -167,6 +170,13 @@ export class TriageOrchestrator {
 
     // intent.kind === "action"
     if (intent.actionType === "moh") return this.handleMoh(intent, ctx, language);
+
+    // "DND status?" is a QUESTION. Answering it by switching DND on is the
+    // single most-repeated defect in the trainer logs (2026-07-26 → 08-07).
+    // Read-only, and it never files an action.
+    if (intent.actionType === "dnd" && intent.statusQuery) {
+      return this.answerDndStatus(intent, ctx, language);
+    }
 
     // M3/M4/M10 — inbound routing, IVR menus, queue config (owner directive
     // 2026-07-28). Legacy ivr_switch phrasings ("holiday menu") get first crack
@@ -253,6 +263,68 @@ export class TriageOrchestrator {
               : `איך האָב עס איבערגעגעבן פֿאַר אַפּרואוו. איך וועל אײַך לאָזן וויסן ווען עס איז גרייט.`
           : undefined,
     };
+  }
+
+  /**
+   * Read-only answer to "is Do Not Disturb on?".
+   *
+   * Uses the SAME door the M11 executor uses for its before-snapshot
+   * (`action: "get"`), so what we report is the live AstDB diversion state, not
+   * an inference from the last action row. When the door isn't wired or the
+   * read fails we say we couldn't check — we never fall back to guessing, and
+   * we never "check" by writing.
+   */
+  private async answerDndStatus(
+    intent: Extract<Intent, { kind: "action" }>,
+    ctx: TriageCtx,
+    language: "en" | "yi",
+  ): Promise<TriageOutcome> {
+    const ext = intent.extensionHint ?? (await this.resolveExtension(ctx));
+    const pbxTenantId = await this.resolvePbxTenantId(ctx.tenantId);
+    const where = ext ? `extension ${ext}` : "your extension";
+
+    if (!this.extFeatureApi || !pbxTenantId || !ext) {
+      return {
+        handled: true,
+        reply: `I couldn't read the live Do Not Disturb setting for ${where} just now. I haven't changed anything — tell me if you'd like it turned on or off.`,
+        yiddish:
+          language === "yi"
+            ? `איך האָב נישט געקענט איבערלייענען דעם "נישט שטערן" סטאַטוס. איך האָב גאָרנישט געביטן.`
+            : undefined,
+      };
+    }
+
+    try {
+      const resp = await this.extFeatureApi.call({
+        tenantId: String(pbxTenantId),
+        action: "get",
+        extension: String(ext),
+        feature: "DND",
+        agentActionId: "status-read",
+      });
+      const on = String(resp?.state?.enable ?? "no") === "yes";
+      return {
+        handled: true,
+        reply: on
+          ? `Do Not Disturb is currently ON for ${where} — calls go straight to voicemail. Say "turn off DND" and I'll clear it.`
+          : `Do Not Disturb is currently OFF for ${where} — calls ring normally.`,
+        yiddish:
+          language === "yi"
+            ? on
+              ? `"נישט שטערן" איז יעצט אָנגעצונדן אויף ${where}.`
+              : `"נישט שטערן" איז יעצט אויסגעשאלטן אויף ${where}.`
+            : undefined,
+      };
+    } catch {
+      return {
+        handled: true,
+        reply: `I couldn't reach the phone system to read Do Not Disturb for ${where} just now. I haven't changed anything — try again in a moment.`,
+        yiddish:
+          language === "yi"
+            ? `איך האָב נישט געקענט דערגרייכן דעם סיסטעם. איך האָב גאָרנישט געביטן.`
+            : undefined,
+      };
+    }
   }
 
   /** Map a Connect tenant id → its VitalPBX tenant number (what M-ops key on). */

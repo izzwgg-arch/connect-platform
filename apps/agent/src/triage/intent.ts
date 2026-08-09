@@ -43,7 +43,105 @@ const ACTION_PATTERNS: Array<{ type: ActionType; terms: string[] }> = [
   { type: "vm_reset", terms: ["reset voicemail", "voicemail pin", "vm pin", "voicemail password"] },
 ];
 
-const EXT_RE = /\b(?:ext(?:ension)?\.?\s*)?(\d{2,5})\b/i;
+// Legacy bare-number matcher — superseded by extractExtension() above, which
+// refuses to read a duration as an extension. Kept only for reference.
+
+/**
+ * Extension extraction that refuses to read a DURATION as an extension.
+ * "keep dnd on for 30 mins" filed objectId "30" on 2026-07-31 and died on the
+ * scope fence — the bare-number regex above had matched the minutes. An
+ * explicit "ext 101" always wins; a bare number is only accepted when it is
+ * neither followed by a time unit ("30 mins", "5 pm", "9:30") nor introduced by
+ * a duration preposition ("for 30", "in 15", "after 60").
+ */
+const EXT_EXPLICIT_RE = /\bext(?:ension)?\.?\s*(\d{2,5})\b/i;
+const TIME_UNIT_AFTER_RE = /^\s*(?:mins?\b|minutes?\b|hrs?\b|hours?\b|secs?\b|seconds?\b|days?\b|weeks?\b|months?\b|[ap]\.?m\.?\b|:)/i;
+const DURATION_BEFORE_RE = /\b(?:for|in|after|next|another|every|until|till)\s+$/i;
+
+export function extractExtension(text: string): string | undefined {
+  const explicit = text.match(EXT_EXPLICIT_RE);
+  if (explicit) return explicit[1];
+  for (const m of text.matchAll(/\b(\d{2,5})\b/g)) {
+    const at = m.index ?? 0;
+    const after = text.slice(at + m[0].length, at + m[0].length + 16);
+    if (TIME_UNIT_AFTER_RE.test(after)) continue;
+    const before = text.slice(Math.max(0, at - 12), at);
+    if (DURATION_BEFORE_RE.test(before)) continue;
+    return m[1];
+  }
+  return undefined;
+}
+
+/**
+ * RELAY / MEMORY guard (trainer logs 2026-07-30 → 08-07).
+ *
+ * "please relay this SPECIFIC sentence: Teach me DND status", "Send this
+ * exactly to them: …", "pass along: …" and "Remember "Status" has priority over
+ * DND" all contain the word "dnd" — so every one of them EXECUTED a live DND
+ * enable instead of being passed on or learned. A message that asks us to
+ * carry, quote or memorise text is ABOUT that text — never a command to act on
+ * it. These fall through to chat, where the LLM relays it or the trainer lesson
+ * branch records it.
+ */
+const RELAY_META_RE = new RegExp(
+  [
+    String.raw`\bpass (?:this|that|it|the following)?\s*along\b`,
+    String.raw`\bpass along\b`,
+    String.raw`\bpass (?:this|that|it) (?:on |over )?to\b`,
+    String.raw`\brelay (?:this|that|it|the following)\b`,
+    String.raw`\bforward (?:this|that|it) (?:message |sentence |request )?to\b`,
+    String.raw`\bsend (?:this|that|it) (?:exactly|verbatim|as[- ]is|message|sentence)\b`,
+    String.raw`\bsend (?:this|that|it) (?:exactly )?to (?:the )?(?:admin|team|them|him|her)\b`,
+    String.raw`\b(?:tell|ask|inform|notify) (?:the )?(?:admin|administrator|team|them)\b`,
+    String.raw`\b(?:specific|exact) (?:sentence|message|words|wording)\b`,
+    // memory / rule teaching — the trainer branch owns these, never an action
+    String.raw`\b(?:remember|memori[sz]e|keep in mind|don'?t forget|note that|take note)\b`,
+    String.raw`\badd (?:this|that|it) to (?:your |the )?memory\b`,
+    String.raw`\bmake (?:this|that|it) a rule\b`,
+    String.raw`\bteach (?:me|you|the assistant|yourself)\b`,
+  ].join("|"),
+  "i",
+);
+
+export function isRelayOrMemory(text: string): boolean {
+  return RELAY_META_RE.test(text);
+}
+
+/**
+ * DND STATUS question — answered read-only, NEVER executed.
+ *
+ * DND had no status detection at all (MOH has had one since July), so every
+ * message containing "dnd" fell through to enableHint:"yes" and fired a live
+ * write. Ezra asked "DND status?" 14 times across 9 days and got DND switched
+ * ON 14 times; "DND status, do not disable or enable, just check status" on
+ * 2026-08-07 enabled it too. Two layers:
+ *   FORCE — the user explicitly says not to change it ("just check", "do not
+ *           enable or disable"). Wins even though the words enable/disable
+ *           appear in the sentence.
+ *   ASK   — a status marker with no imperative verb ("dnd status", "is dnd on",
+ *           "check dnd", "recent dnd changes").
+ */
+const DND_STATUS_FORCE_RE =
+  /\bdo(?:n'?t| not)\s+(?:enable|disable|turn|change|set|activate|deactivate)\b|\b(?:just|only|simply)\s+(?:check|tell|show|report|read)\b|\bcheck (?:the )?status only\b/i;
+const DND_STATUS_ASK_RE = new RegExp(
+  [
+    String.raw`\bstatus\b`,
+    String.raw`\b(?:is|are)\s+(?:my\s+|the\s+)?(?:dnd|do not disturb)\b`,
+    String.raw`\bis\b[^?]{0,30}\b(?:on|off|enabled|disabled|active)\b`,
+    String.raw`\b(?:check|what'?s|what is|show|tell me)\b`,
+    String.raw`\brecent\b[^?]{0,30}\bchanges?\b`,
+    String.raw`\bcurrent(?:ly)?\b`,
+  ].join("|"),
+  "i",
+);
+/** An unmistakable command to CHANGE dnd — suppresses the ASK layer. */
+const DND_IMPERATIVE_RE =
+  /\b(?:enable|disable|turn|set|put|activate|deactivate|remove|cancel|keep|start|stop|silence)\b/i;
+
+export function isDndStatusQuery(text: string): boolean {
+  if (DND_STATUS_FORCE_RE.test(text)) return true;
+  return DND_STATUS_ASK_RE.test(text) && !DND_IMPERATIVE_RE.test(text);
+}
 
 // DND direction: a DND request is "enable" unless the message clearly asks to
 // clear it ("turn off dnd", "take me out of do not disturb", "cancel dnd"…).
@@ -77,10 +175,16 @@ export const MOH_STATUS_Q_RE = new RegExp(
 export function detectIntent(text: string): Intent {
   const t = text.toLowerCase();
 
+  // A relay ("pass this along"), a quote ("send this exactly to them") or a
+  // memory instruction ("remember …") is ABOUT its text, never a command to
+  // execute it. Checked before every action pattern — this is what turned
+  // "relay this sentence: Teach me DND status" into a live DND write.
+  if (isRelayOrMemory(text)) return { kind: "chat", raw: text };
+
   // Action first (more specific), then diagnostic.
   for (const p of ACTION_PATTERNS) {
     if (p.terms.some((term) => t.includes(term))) {
-      const ext = text.match(EXT_RE)?.[1];
+      const ext = extractExtension(text);
       const targetMatch = t.match(/to (?:ext(?:ension)?\.?\s*)?(\d{2,5})/);
       const untilMatch = t.match(/(?:until|till|til|through|bis)\s+([^.,\n]+)/i);
       return {
@@ -99,7 +203,12 @@ export function detectIntent(text: string): Intent {
                 ? "no"
                 : "yes"
               : undefined,
-        statusQuery: p.type === "moh" ? MOH_STATUS_Q_RE.test(t) : undefined,
+        statusQuery:
+          p.type === "moh"
+            ? MOH_STATUS_Q_RE.test(t)
+            : p.type === "dnd"
+              ? isDndStatusQuery(text)
+              : undefined,
         raw: text,
       };
     }
@@ -115,7 +224,7 @@ export function detectIntent(text: string): Intent {
     /\d{3,}/.test(t) &&
     !/\b(?:text|sms|message|fax|email)\b/i.test(t);
   if (loosePbxRoute) {
-    return { kind: "action", actionType: "pbx_config", extensionHint: text.match(EXT_RE)?.[1], raw: text };
+    return { kind: "action", actionType: "pbx_config", extensionHint: extractExtension(text), raw: text };
   }
 
   // Loose MOH: a change-verb near "music" without the word "hold" ("change my
@@ -127,7 +236,7 @@ export function detectIntent(text: string): Intent {
     return {
       kind: "action",
       actionType: "moh",
-      extensionHint: text.match(EXT_RE)?.[1],
+      extensionHint: extractExtension(text),
       enableHint: MOH_DEACTIVATE_RE.test(t) ? "no" : "yes",
       statusQuery: looseMohStatus,
       raw: text,
@@ -135,7 +244,7 @@ export function detectIntent(text: string): Intent {
   }
 
   if (DIAG_TERMS.some((term) => t.includes(term))) {
-    return { kind: "diagnostic", extensionHint: text.match(EXT_RE)?.[1], complaint: text };
+    return { kind: "diagnostic", extensionHint: extractExtension(text), complaint: text };
   }
 
   // raw is carried so the triage layer can resume a pending clarification

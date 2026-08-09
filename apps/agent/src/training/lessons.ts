@@ -60,6 +60,16 @@ const MEMORY_TRIGGERS: RegExp[] = [
   /\bsave (?:that|this|it) (?:to|in) (?:your|the) memory\b/i,
   /\bmake (?:that|this|it) a rule\b/i,
   /\bfrom now on\b.*\balways\b/i,
+  // 2026-08-07 audit: after 23 trainer conversations and 9 days of testing the
+  // AgentTrainerLesson table was still EMPTY. Ezra's real corrections never
+  // matched the list above — they lead with the verb and then quote the rule
+  // ("Remember "Status" has priority over DND", "Keep in mind …", "Note that
+  // …", "Don't forget …"). The old set demanded a that/this/it pronoun that
+  // nobody types. Still narrow: a teaching verb must LEAD the sentence, so
+  // ordinary talk ("I remember you said…") never becomes a standing rule.
+  /^\s*(?:please\s+)?(?:remember|memori[sz]e|keep in mind|note|don'?t forget|take note)\b[\s:,-]/i,
+  /^\s*(?:please\s+)?(?:always|never)\b/i,
+  /\bfrom now on\b/i,
 ];
 
 export function isMemoryAdd(text: string): boolean {
