@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiGet, apiPut } from "../../../../../../services/apiClient";
 import { BillingNav } from "../../_new/ui";
@@ -128,6 +129,7 @@ export default function CustomerBillingPage() {
     if (!tenantId) return;
     setLoading(true);
     setLoadError("");
+    setOriginalExtras(""); // re-snapshot once the metadata fields have landed
     try {
       const s = await apiGet<TenantBillingSettings>(`/admin/billing/tenants/${tenantId}/settings`);
       setOriginal(s);
@@ -183,10 +185,43 @@ export default function CustomerBillingPage() {
     setSavedAt("");
   }, []);
 
+  /** Everything the page can edit, including the settings that live inside the
+      untyped metadata blob. They are part of "dirty" — before, only `form` was
+      compared, so a metadata edit was invisible to it. */
+  const extras = useMemo(
+    () => ({
+      tollFreeCents, virtualExtCents, flatRateOn, flatRateCents, timeZone,
+      e911Cents, regulatoryCents, skipNext, skipReason,
+      retryCount, retryHours, collectionsPaused,
+    }),
+    [tollFreeCents, virtualExtCents, flatRateOn, flatRateCents, timeZone, e911Cents,
+     regulatoryCents, skipNext, skipReason, retryCount, retryHours, collectionsPaused],
+  );
+  const [originalExtras, setOriginalExtras] = useState<string>("");
+
+  // Snapshot the metadata-backed fields once, right after a load settles, so
+  // "dirty" has a baseline to compare against.
+  useEffect(() => {
+    if (!loading && form && originalExtras === "") setOriginalExtras(JSON.stringify(extras));
+  }, [loading, form, extras, originalExtras]);
+
+  /** ⛔ This used to end `|| savedAt === ""`, and savedAt starts empty — so a
+      page you had just opened and never touched announced "Unsaved changes"
+      with the Save button lit. "No changes" was unreachable, which teaches
+      people to ignore the bar entirely. */
   const dirty = useMemo(() => {
     if (!form || !original) return false;
-    return JSON.stringify(form) !== JSON.stringify(original) || savedAt === "";
-  }, [form, original, savedAt]);
+    if (JSON.stringify(form) !== JSON.stringify(original)) return true;
+    return originalExtras !== "" && JSON.stringify(extras) !== originalExtras;
+  }, [form, original, extras, originalExtras]);
+
+  const previewLines = useMemo(() => {
+    const all = preview?.lineItems || [];
+    return {
+      charged: all.filter((li) => Number(li.amountCents || 0) !== 0),
+      includedCount: all.filter((li) => Number(li.amountCents || 0) === 0).length,
+    };
+  }, [preview]);
 
   const activeCard = useMemo(
     () => cards.find((c) => c.id === form?.defaultPaymentMethodId) || cards.find((c) => c.active) || null,
@@ -217,6 +252,33 @@ export default function CustomerBillingPage() {
         billingPricingMode: "custom",
         tollFreeDidPriceCents: inputToCents(tollFreeCents),
         virtualExtensionPriceCents: inputToCents(virtualExtCents),
+        // ⛔ These three were rendered as live controls, marked the page dirty
+        // when edited, and were then dropped on the floor — the save reported
+        // success and the old values came back on reload. The two fees are what
+        // make a customer's month-2 invoice match their sign-up quote.
+        billingTimeZone: timeZone,
+        // The API validates the whole fee item, not just the amount — a partial
+        // object is rejected and takes the entire save down with it. E911 stays
+        // on per_phone_number: per_did counts only BILLABLE numbers, which is
+        // zero for a one-number tenant on first-number-free.
+        billingTelecomFees: {
+          e911: {
+            enabled: inputToCents(e911Cents) > 0,
+            customerVisible: true,
+            label: "E911 service fee",
+            mode: "amountCents" as const,
+            amountCents: inputToCents(e911Cents),
+            basis: "per_phone_number" as const,
+          },
+          regulatory: {
+            enabled: inputToCents(regulatoryCents) > 0,
+            customerVisible: true,
+            label: "Regulatory recovery fee",
+            mode: "amountCents" as const,
+            amountCents: inputToCents(regulatoryCents),
+            basis: "flat_monthly" as const,
+          },
+        },
         billingFlatRate: flatRateOn
           ? { enabled: true, amountCents: inputToCents(flatRateCents), appliesTo: "extensions" as const }
           : null,
@@ -238,6 +300,7 @@ export default function CustomerBillingPage() {
 
       setSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       setOriginal(form);
+      setOriginalExtras(JSON.stringify(extras));
       apiGet<Preview>(`/admin/billing/platform/tenants/${tenantId}/invoice-preview`)
         .then((r) => setPreview(r))
         .catch(() => undefined);
@@ -246,7 +309,8 @@ export default function CustomerBillingPage() {
     } finally {
       setSaving(false);
     }
-  }, [form, saving, tenantId, tollFreeCents, virtualExtCents, flatRateOn, flatRateCents, skipNext, skipReason, collectionsPaused, retryCount, retryHours]);
+  }, [form, saving, tenantId, tollFreeCents, virtualExtCents, flatRateOn, flatRateCents, timeZone,
+      e911Cents, regulatoryCents, skipNext, skipReason, collectionsPaused, retryCount, retryHours, extras]);
 
   if (loading) return <div className="cbill"><p className="cbill-sub">Loading this customer's billing…</p></div>;
   if (loadError) return <div className="cbill"><div className="cbill-banner bad">{loadError}</div></div>;
@@ -260,6 +324,7 @@ export default function CustomerBillingPage() {
       <BillingNav current="customers" />
       <div className="cbill-head">
         <div>
+          <Link className="cbill-back" href="/admin/billing/customers">← All customers</Link>
           <h2>{tenantName || "Customer"} — billing</h2>
           <div className="cbill-sub">
             {noCard ? (
@@ -276,6 +341,16 @@ export default function CustomerBillingPage() {
             <span>·</span>
             <span>{timeZone.replace("America/", "").replace("_", " ")} time</span>
           </div>
+        </div>
+        {/* This page had no actions at all — no way back, no way to their
+            invoices, and no way to add a card, even though "Needs you" shows an
+            "Add a card" button that links straight here. */}
+        <div className="cbill-toolbar">
+          <Link className="cbill-btn" href={`/admin/billing/customer/${tenantId}/timeline`}>Timeline</Link>
+          <Link className="cbill-btn" href="/admin/billing/invoice">Invoices</Link>
+          <Link className="cbill-btn primary" href={`/admin/billing/methods?tenantId=${tenantId}`}>
+            {noCard ? "Add a card" : "Manage cards"}
+          </Link>
         </div>
       </div>
 
@@ -366,7 +441,7 @@ export default function CustomerBillingPage() {
               <div className="cbill-row">
                 <div className="cbill-label">
                   <span className="t">Toll-free numbers</span>
-                  <span className="h">Had no screen at all before — it lived only in hidden settings</span>
+                  <span className="h">Price for each toll-free number, every month</span>
                 </div>
                 <div className="cbill-controls">
                   <input className="cbill-input" value={tollFreeCents} onChange={(e) => { setTollFreeCents(e.target.value); setSavedAt(""); }} aria-label="Toll-free number price" />
@@ -376,7 +451,7 @@ export default function CustomerBillingPage() {
               <div className="cbill-row">
                 <div className="cbill-label">
                   <span className="t">Virtual extensions</span>
-                  <span className="h">Also previously hidden</span>
+                  <span className="h">Extensions with no phone of their own</span>
                 </div>
                 <div className="cbill-controls">
                   <input className="cbill-input" value={virtualExtCents} onChange={(e) => { setVirtualExtCents(e.target.value); setSavedAt(""); }} aria-label="Virtual extension price" />
@@ -646,12 +721,24 @@ export default function CustomerBillingPage() {
               {!preview && <p className="cbill-sub">Preview unavailable.</p>}
               {preview && (
                 <>
-                  {(preview.lineItems || []).map((li, i) => (
+                  {/* Four phone numbers at $0.00 above a $30.00 total made the
+                      preview look broken. The included ones collapse to a
+                      single line; anything actually charged stays itemised. */}
+                  {previewLines.charged.map((li, i) => (
                     <div className="cbill-prev-line" key={i}>
                       <span>{li.description}</span>
                       <span>{money(li.amountCents)}</span>
                     </div>
                   ))}
+                  {previewLines.includedCount > 0 && (
+                    <div className="cbill-prev-line">
+                      <span>
+                        {previewLines.includedCount} included{" "}
+                        {previewLines.includedCount === 1 ? "item" : "items"}
+                      </span>
+                      <span>{money(0)}</span>
+                    </div>
+                  )}
                   {typeof preview.taxCents === "number" && preview.taxCents > 0 && (
                     <div className="cbill-prev-line">
                       <span>Sales tax</span>

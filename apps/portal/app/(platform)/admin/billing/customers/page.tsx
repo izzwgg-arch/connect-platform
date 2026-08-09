@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { BillingNav, Pill, asList, money, ordinal, useApi } from "../_new/ui";
+import { BillingNav, Pill, SearchBox, asList, money, ordinal, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type TenantRow = {
@@ -26,6 +26,16 @@ type TenantRow = {
 
 type Filter = "all" | "no-card" | "attention";
 
+/** ⛔ A tenant with no billing settings at all reported day 0, and `ordinal(0)`
+    falls back to 1 — so the worst accounts rendered as a calm, unstyled "1st"
+    while genuine day-1 accounts got a red pill. On live data that was 19
+    accounts drawn as healthy against 15 flagged. Never infer the billing day;
+    absent is its own state. Module scope so every reader shares one rule. */
+function billingDayOf(t: TenantRow): number | null {
+  const raw = t.billingSettings ? Number(t.billingSettings.billingDayOfMonth) : NaN;
+  return Number.isFinite(raw) && raw >= 1 ? raw : null;
+}
+
 export default function BillingCustomersPage() {
   const { data, error, loading } = useApi<TenantRow[]>(
     "/admin/billing/platform/tenants",
@@ -43,10 +53,12 @@ export default function BillingCustomersPage() {
       const s = t.billingSettings;
       if (filter === "no-card") return cards.length === 0;
       if (filter === "attention") {
+        const day = billingDayOf(t);
         return (
           cards.length === 0 ||
           !String(s?.billingEmail || "").trim() ||
-          Number(s?.billingDayOfMonth) === 1 ||
+          day === null ||
+          day === 1 ||
           Number(t.balanceDueCents || 0) > 0
         );
       }
@@ -60,7 +72,8 @@ export default function BillingCustomersPage() {
       total: list.length,
       withEmail: list.filter((t) => String(t.billingSettings?.billingEmail || "").trim()).length,
       noCard: list.filter((t) => (t.paymentMethods || []).length === 0).length,
-      day1: list.filter((t) => Number(t.billingSettings?.billingDayOfMonth) === 1).length,
+      day1: list.filter((t) => billingDayOf(t) === 1).length,
+      notSetUp: list.filter((t) => billingDayOf(t) === null).length,
     };
   }, [data]);
 
@@ -76,22 +89,18 @@ export default function BillingCustomersPage() {
             <span>{stats.withEmail} with a billing email</span>
             <span>·</span>
             <span>{stats.noCard} missing a card</span>
-            {stats.day1 > 0 && (
+            {stats.day1 + stats.notSetUp > 0 && (
               <>
                 <span>·</span>
-                <span style={{ color: "var(--cb-crit)" }}>{stats.day1} still on billing day 1</span>
+                <span style={{ color: "var(--cb-crit)" }}>
+                  {stats.day1 + stats.notSetUp} with no real billing day
+                </span>
               </>
             )}
           </div>
         </div>
         <div className="cbill-toolbar">
-          <input
-            className="cbill-input text"
-            placeholder="Search customers…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            aria-label="Search customers"
-          />
+          <SearchBox value={q} onChange={setQ} placeholder="Search customers…" label="Search customers" />
           <div className="cbill-seg">
             <button type="button" data-on={filter === "all"} onClick={() => setFilter("all")}>All</button>
             <button type="button" data-on={filter === "no-card"} onClick={() => setFilter("no-card")}>Missing a card</button>
@@ -100,12 +109,15 @@ export default function BillingCustomersPage() {
         </div>
       </div>
 
-      {stats.day1 > 0 && (
+      {stats.day1 + stats.notSetUp > 0 && (
         <div className="cbill-banner warn">
           <span>
-            <strong>{stats.day1} customers are on billing day 1.</strong> Until that is changed to a
-            real day, their monthly invoice cycle does not line up with anything they bought. Open a
-            customer to change it.
+            <strong>
+              {stats.day1 + stats.notSetUp} customers have no billing day anyone chose
+            </strong>{" "}
+            — {stats.day1} sitting on the 1st, the default, and {stats.notSetUp} with no billing
+            setup at all. Until that is a real day, their monthly cycle does not line up with
+            anything they bought. Open a customer to change it.
           </span>
         </div>
       )}
@@ -141,15 +153,25 @@ export default function BillingCustomersPage() {
                   const card = cards.find((c) => c.isDefault) || cards[0];
                   const email = String(s?.billingEmail || "").trim();
                   const owed = Number(t.balanceDueCents || 0);
-                  const day = Number(s?.billingDayOfMonth || 0);
+                  const day = billingDayOf(t);
                   const notCharging = s?.autoBillingEnabled === false;
                   return (
                     <tr key={t.id}>
                       <td>
                         <Link href={`/admin/billing/customer/${t.id}`}>{t.name || "(no name)"}</Link>
+                        {/* Several companies share a name — there are two "Agent"
+                            and two "KJFD" — so the row needs something else to
+                            tell them apart. */}
+                        <div className="cbill-rowsub">{t.id.slice(-6)}</div>
                       </td>
                       <td>
-                        {day === 1 ? <Pill tone="bad">1st</Pill> : <span className="n">{ordinal(day)}</span>}
+                        {day === null ? (
+                          <Pill tone="bad">Not set up</Pill>
+                        ) : day === 1 ? (
+                          <Pill tone="warn">1st — default</Pill>
+                        ) : (
+                          <span className="n">{ordinal(day)}</span>
+                        )}
                       </td>
                       <td>
                         {card ? (

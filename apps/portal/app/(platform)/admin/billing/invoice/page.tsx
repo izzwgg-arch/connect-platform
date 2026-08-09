@@ -5,7 +5,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { BillingNav, Pill, asList, invoiceTone, longDate, money, useApi } from "../_new/ui";
+import { BillingNav, Pill, SearchBox, asList, invoiceTone, longDate, money, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Invoice = {
@@ -68,8 +68,7 @@ export default function InvoicesListPage() {
           <div className="cbill-sub"><span>{(data || []).length} most recent</span></div>
         </div>
         <div className="cbill-toolbar">
-          <input className="cbill-input text" placeholder="Search invoice or customer…" value={q}
-            onChange={(e) => setQ(e.target.value)} aria-label="Search invoices" />
+          <SearchBox value={q} onChange={setQ} placeholder="Search invoice or customer…" label="Search invoices" />
           <div className="cbill-seg">
             <button type="button" data-on={filter === "all"} onClick={() => setFilter("all")}>All</button>
             <button type="button" data-on={filter === "unpaid"} onClick={() => setFilter("unpaid")}>Unpaid</button>
@@ -81,7 +80,10 @@ export default function InvoicesListPage() {
 
       {error && <div className="cbill-banner bad">{error}</div>}
 
-      <div className="cbill-kpis">
+      {/* Three figures that are news. "Showing 57 of 57" was a quarter of this
+          strip spent on a number that never tells you anything — it belongs on
+          the table, and only when a filter is actually hiding something. */}
+      <div className="cbill-kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
         <div className={totals.owed > 0 ? "cbill-kpi alert" : "cbill-kpi"}>
           <span className="k">Still owed</span><span className="v">{money(totals.owed)}</span>
           <span className="s">{totals.unpaid} unpaid invoices</span>
@@ -94,13 +96,17 @@ export default function InvoicesListPage() {
           <span className="k">Custom invoices</span><span className="v">{totals.custom}</span>
           <span className="s">never charged automatically</span>
         </div>
-        <div className="cbill-kpi">
-          <span className="k">Showing</span><span className="v">{rows.length}</span>
-          <span className="s">of {(data || []).length}</span>
-        </div>
       </div>
 
       <section className="cbill-card">
+        {rows.length !== (data || []).length && (
+          <div className="cbill-card-hd">
+            <h3>
+              Showing {rows.length} of {(data || []).length}
+            </h3>
+            <span className="hint">a filter or search is hiding the rest</span>
+          </div>
+        )}
         <div className="cbill-table-wrap">
           <table className="cbill-table">
             <thead>

@@ -4,6 +4,7 @@
    Next never routes to it. */
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { apiGet } from "../../../../../services/apiClient";
 
 export function money(cents: number | null | undefined): string {
@@ -147,8 +148,13 @@ export function asList<T = any>(raw: any, ...keys: string[]): T[] {
 }
 
 /** The rebuilt billing nav — the tab bar from the design, replacing the old
-    nine-tab workspace toolbar these pages used to be wrapped in. */
-export function BillingNav({ current }: { current: string }) {
+    nine-tab workspace toolbar these pages used to be wrapped in.
+
+    ⛔ These MUST be next/link. They were plain <a href>, so every tab click
+    tore down and reloaded the whole portal — white flash, sidebar redrawn,
+    every request re-made. That single detail is most of why the section felt
+    stitched on rather than part of the app. */
+export function BillingNav({ current, needsYouCount }: { current: string; needsYouCount?: number }) {
   const items: Array<{ key: string; label: string; href: string }> = [
     { key: "month", label: "This month", href: "/admin/billing/month" },
     { key: "customers", label: "Customers", href: "/admin/billing/customers" },
@@ -159,11 +165,84 @@ export function BillingNav({ current }: { current: string }) {
   ];
   return (
     <nav className="cbill-nav" aria-label="Billing">
-      {items.map((it) => (
-        <a key={it.key} href={it.href} data-on={it.key === current ? "true" : "false"}>
-          {it.label}
-        </a>
-      ))}
+      {items.map((it) => {
+        const on = it.key === current;
+        return (
+          <Link key={it.key} href={it.href} data-on={on ? "true" : "false"} aria-current={on ? "page" : undefined}>
+            {it.label}
+            {it.key === "needs-you" && Number(needsYouCount) > 0 ? (
+              <span className="cbill-nav-count">{needsYouCount}</span>
+            ) : null}
+          </Link>
+        );
+      })}
     </nav>
+  );
+}
+
+/** A real search field. Every page used to reuse `.cbill-input text` — the
+    money input, right-aligned and monospaced, patched back to normal. */
+export function SearchBox({
+  value,
+  onChange,
+  placeholder,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  label: string;
+}) {
+  return (
+    <div className="cbill-search">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="9" cy="9" r="6" />
+        <path d="M13.5 13.5 18 18" strokeLinecap="round" />
+      </svg>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={label}
+        type="search"
+      />
+      {value ? (
+        <button type="button" onClick={() => onChange("")} aria-label="Clear search">
+          ×
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** A card that can arrive folded. "Needs you" ran 57 rows over six and a half
+    screens, with the least urgent group (33 missing billing emails) the
+    longest and burying everything above it. */
+export function FoldingCard({
+  title,
+  count,
+  tone = "warn",
+  hint,
+  open,
+  children,
+}: {
+  title: string;
+  count: number;
+  tone?: PillTone;
+  hint?: ReactNode;
+  open: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="cbill-card" open={open}>
+      <summary>
+        <h3>
+          {title}
+          <Pill tone={tone}>{count}</Pill>
+        </h3>
+        {hint ? <span className="hint">{hint}</span> : null}
+      </summary>
+      {children}
+    </details>
   );
 }

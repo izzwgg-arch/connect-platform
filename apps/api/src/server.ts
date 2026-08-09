@@ -158,6 +158,13 @@ import {
 import { computeVoicemailPatchUpdate } from "./voicemailAccessPolicy";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
+import {
+  MAX_AUTO_REMOVALS,
+  eraseRemovedTenant,
+  findOrphanTenants,
+  markTenantRemoved,
+  runOrphanSweepAfterSync,
+} from "./pbxOrphanTenantSweep";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant, setTenantClaimRejectionHandler } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx, type ExtensionSyncResult } from "./pbxExtensionSync";
@@ -16682,6 +16689,12 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
     },
     "pbx_tenant_directory_manual_sync",
   );
+  // A tenant deleted on the PBX used to leave its whole Connect company behind —
+  // users, numbers, call history, billing — with the link still marked LINKED.
+  const sweep = await runOrphanSweepAfterSync(db, instance.id, syncResult, app.log).catch((e: any) => {
+    app.log.warn({ err: e?.message }, "pbx_orphan_sweep_failed");
+    return null;
+  });
   return {
     ok: true,
     instanceId: instance.id,
@@ -16690,7 +16703,109 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
     directoryUpdated: syncResult.updated,
     directoryDeleted: syncResult.deleted,
     inboundDidSync,
+    orphanSweep: sweep,
   };
+});
+
+/**
+ * Tenants whose PBX tenant no longer exists, and what removing each would
+ * destroy. Read-only — this is the page you look at before pressing anything.
+ */
+app.get("/admin/pbx/removed-tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { createdAt: "asc" } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+
+  const [pending, alreadyMarked] = await Promise.all([
+    findOrphanTenants(db as any, instance.id),
+    (db as any).tenant.findMany({
+      where: { pbxRemovedAt: { not: null } },
+      select: { id: true, name: true, pbxRemovedAt: true, archivedAt: true },
+      orderBy: { pbxRemovedAt: "desc" },
+    }),
+  ]);
+
+  return {
+    pbxInstanceId: instance.id,
+    maxAutoRemovals: MAX_AUTO_REMOVALS,
+    /** Orphans that have not been marked removed yet. */
+    pending,
+    /** Already out of Connect; the ones with no archivedAt can be erased. */
+    removed: alreadyMarked,
+  };
+});
+
+/**
+ * Confirm the removal of tenants whose PBX tenant is gone.
+ *
+ * ⛔ This does not destroy anything. It marks each tenant removed, which takes
+ * it out of every list and stops all billing. The permanent erase is the
+ * separate call below, so a wrong sweep is always recoverable.
+ */
+app.post("/admin/pbx/removed-tenants/confirm", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const body = z.object({ tenantIds: z.array(z.string().min(1)).min(1).max(200) }).parse(req.body || {});
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { createdAt: "asc" } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+
+  // Re-derive from the PBX directory rather than trusting the ids we were sent —
+  // the caller's page may be minutes stale, and this stops billing.
+  const orphans = await findOrphanTenants(db as any, instance.id);
+  const byId = new Map(orphans.map((o) => [o.tenantId, o]));
+  const results: any[] = [];
+  const skipped: string[] = [];
+  for (const tenantId of body.tenantIds) {
+    const orphan = byId.get(tenantId);
+    if (!orphan) {
+      skipped.push(tenantId);
+      continue;
+    }
+    results.push(await markTenantRemoved(db as any, orphan));
+    await audit({
+      tenantId,
+      actorUserId: (admin as any).sub,
+      action: "TENANT_PBX_REMOVED",
+      entityType: "Tenant",
+      entityId: tenantId,
+    }).catch(() => undefined);
+  }
+  app.log.warn(
+    { event: "pbx_orphan_confirm", marked: results.length, skipped: skipped.length, by: (admin as any).sub },
+    "pbx_orphan_confirm",
+  );
+  return { ok: true, marked: results, skippedNotOrphaned: skipped };
+});
+
+/**
+ * Permanently erase one tenant that was already marked removed.
+ *
+ * ⛔ Irreversible, and refuses any tenant that ever completed a payment. One
+ * tenant per call, on purpose — this is not a bulk operation.
+ */
+app.post("/admin/pbx/removed-tenants/:tenantId/erase", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const { tenantId } = req.params as { tenantId: string };
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+  const result = await eraseRemovedTenant(db as any, tenantId);
+  if (!result.ok) {
+    return reply.status(409).send({
+      error: result.error,
+      message:
+        result.error === "tenant_has_completed_payments"
+          ? "This customer has completed payments, so their records are kept. Nothing was deleted."
+          : result.error === "tenant_not_marked_removed"
+            ? "Confirm the removal first. Nothing was deleted."
+            : "That customer no longer exists.",
+    });
+  }
+  app.log.warn(
+    { event: "pbx_orphan_erased", tenantId, name: tenant?.name, by: (admin as any).sub },
+    "pbx_orphan_erased",
+  );
+  return { ok: true, tenantId, name: tenant?.name || null };
 });
 
 /**

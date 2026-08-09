@@ -18,6 +18,11 @@ export interface PbxTenantDirectorySyncResult {
   updated: number;
   /** Local directory rows removed because VitalPBX no longer returns them. */
   deleted: number;
+  /** Tenants VitalPBX actually returned this time. */
+  seenCount: number;
+  /** Tenants Connect knew about before this sync — the two together are how
+      the orphan sweep decides whether the PBX answer can be trusted. */
+  knownCount: number;
 }
 
 export async function syncPbxTenantDirectoryFromRows(
@@ -28,6 +33,7 @@ export async function syncPbxTenantDirectoryFromRows(
   let upserted = 0;
   let created = 0;
   let updated = 0;
+  const knownCount = await db.pbxTenantDirectory.count({ where: { pbxInstanceId } });
   const seenVitalTenantIds = new Set<string>();
   for (const t of tenants) {
     const vitalTenantId = String((t as { tenant_id?: unknown }).tenant_id ?? (t as { id?: unknown }).id ?? "").trim();
@@ -88,7 +94,7 @@ export async function syncPbxTenantDirectoryFromRows(
     deleted = result.count;
   }
 
-  return { upserted, created, updated, deleted };
+  return { upserted, created, updated, deleted, seenCount: seenVitalTenantIds.size, knownCount };
 }
 
 export async function syncPbxTenantDirectory(

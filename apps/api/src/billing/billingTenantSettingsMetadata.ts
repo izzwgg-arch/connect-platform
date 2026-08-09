@@ -101,6 +101,9 @@ export type TenantBillingMetaPatchInput = {
   billingTelecomFees?: BillingTelecomFeesConfig | null;
   /** Omit = leave schedule override untouched; null = remove */
   billingScheduleOverride?: BillingScheduleOverride | null;
+  /** Omit = leave the billing timezone untouched; null = remove. Read by
+      billingSchedule.ts to decide the customer's own charge date. */
+  billingTimeZone?: string | null;
 };
 /** Same merge semantics as `PUT /admin/billing/tenants/:tenantId/settings` for audit tests. */
 export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantBillingMetaPatchInput): Record<string, unknown> {
@@ -134,6 +137,11 @@ export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantB
   }
   if (input.billingScheduleOverride !== undefined) {
     merged = mergeBillingScheduleOverrideIntoMetadata(merged, input.billingScheduleOverride);
+  }
+  if (input.billingTimeZone !== undefined) {
+    const tz = typeof input.billingTimeZone === "string" ? input.billingTimeZone.trim() : "";
+    if (!tz) delete merged.billingTimeZone;
+    else merged.billingTimeZone = tz;
   }
   return merged;
 }

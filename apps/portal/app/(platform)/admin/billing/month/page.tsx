@@ -44,6 +44,28 @@ type TenantRow = {
   paymentMethods?: Array<{ id: string; brand?: string | null; last4?: string | null }>;
 };
 
+/** Turn a billing run's stored totals into a sentence.
+
+    ⛔ This used to render `JSON.stringify(r.totals).slice(0, 120)` — five rows
+    of raw truncated data, mid-word, at the foot of the main billing screen.
+    The sweep runs hourly and almost always has nothing to do, so it was five
+    identical lines of gibberish. */
+function runOutcome(r: Run): string {
+  if (r.errorMessage) return r.errorMessage;
+  const t: any = r.totals || {};
+  const results: any[] = Array.isArray(t.results) ? t.results : [];
+  const n = (v: unknown) => Number(v) || 0;
+  const created = n(t.invoicesCreated) || results.filter((x) => x?.invoiceId).length;
+  const charged = n(t.charged) || results.filter((x) => x?.transactionId).length;
+  const failed = n(t.failed) || results.filter((x) => x?.failed).length;
+  const bits = [
+    created ? `${created} invoice${created === 1 ? "" : "s"} created` : "",
+    charged ? `${charged} card${charged === 1 ? "" : "s"} charged` : "",
+    failed ? `${failed} failed` : "",
+  ].filter(Boolean);
+  return bits.length ? bits.join(" · ") : "Nothing was due";
+}
+
 /** Next occurrence of a billing day, so "coming up" is real rather than guessed. */
 function nextChargeDate(day: number): Date {
   const now = new Date();
@@ -66,6 +88,16 @@ export default function BillingMonthPage() {
 
   const o = overview.data;
   const failures = o?.recentFailures || [];
+
+  /** ⛔ `/admin/billing/overview` does not carry the company name on a failure,
+      so every one of these rows read "Customer — payment failed" — six
+      identical lines telling you everything except who to chase. The name is
+      already on the page; the tenant list below has it. */
+  const nameOf = useMemo(() => {
+    const byId = new Map((tenants.data || []).map((t) => [t.id, t.name]));
+    return (f: { tenantId: string; tenant?: { name?: string } | null }) =>
+      f.tenant?.name || byId.get(f.tenantId) || "Unknown customer";
+  }, [tenants.data]);
 
   const coming = useMemo(() => {
     const list = (tenants.data || []).filter((t) => t.billingSettings?.autoBillingEnabled);
@@ -94,7 +126,7 @@ export default function BillingMonthPage() {
 
   return (
     <div className="cbill">
-      <BillingNav current="month" />
+      <BillingNav current="month" needsYouCount={needsYou} />
       <div className="cbill-head">
         <div>
           <h2>This month</h2>
@@ -104,9 +136,9 @@ export default function BillingMonthPage() {
             <span>each on their own day</span>
           </div>
         </div>
+        {/* The old "Customers" and "Needs you" buttons sat directly under tabs
+            of the same name — the toolbar is for things the tabs cannot do. */}
         <div className="cbill-toolbar">
-          <Link className="cbill-btn" href="/admin/billing/customers">Customers</Link>
-          <Link className="cbill-btn" href="/admin/billing/needs-you">Needs you</Link>
           <button className="cbill-btn primary" onClick={() => setComposer(composer ? null : "invoice")}>
             New invoice
           </button>
@@ -166,12 +198,11 @@ export default function BillingMonthPage() {
             <div className="cbill-att" key={f.id}>
               <div className="cbill-att-i bad">!</div>
               <div className="cbill-att-tx">
-                <span className="h">
-                  {f.tenant?.name || "Customer"} — payment failed
-                </span>
+                <span className="h">{nameOf(f)}</span>
                 <span className="d">
-                  {f.invoiceNumber} · {money(f.balanceDueCents)} ·{" "}
-                  {f.failedAt ? `failed ${shortDate(f.failedAt)}` : `due ${shortDate(f.dueDate)}`}
+                  Payment failed · {money(f.balanceDueCents)} ·{" "}
+                  {f.failedAt ? `failed ${shortDate(f.failedAt)}` : `due ${shortDate(f.dueDate)}`} ·{" "}
+                  {f.invoiceNumber}
                 </span>
               </div>
               <Pill tone="bad">{invoiceTone(f.status).label}</Pill>
@@ -255,9 +286,7 @@ export default function BillingMonthPage() {
                     )}
                     {r.dryRun ? " (dry run)" : ""}
                   </td>
-                  <td style={{ color: "var(--cb-muted)", fontSize: 12.5 }}>
-                    {r.errorMessage || (r.totals ? JSON.stringify(r.totals).slice(0, 120) : "—")}
-                  </td>
+                  <td style={{ color: "var(--cb-muted)", fontSize: 12.5 }}>{runOutcome(r)}</td>
                 </tr>
               ))}
             </tbody>

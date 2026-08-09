@@ -666,8 +666,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/admin/billing/platform/tenants", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
+    // ⛔ This had no `where` at all — every tenant row ever created, forever.
+    // Against a live PBX of 28 tenants it returned 50, so the billing screens
+    // were the only place in Connect still counting companies that had been
+    // deleted on the phone system, and every count on every billing screen was
+    // inflated by roughly two thirds. The sidebar has always filtered; this
+    // now agrees with it.
     const [tenants, balances] = await Promise.all([
       (db as any).tenant.findMany({
+        where: { pbxRemovedAt: null },
         include: {
           billingSettings: true,
           paymentMethods: { where: { active: true }, select: { id: true, brand: true, last4: true, isDefault: true } },
@@ -807,6 +814,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           .nullable()
           .optional(),
         billingTelecomFees: billingTelecomFeesPutSchema().nullable().optional(),
+        // The customer billing screen has always shown a timezone picker. It was
+        // never in this schema, so zod stripped it on every save and the choice
+        // silently reverted. billingSchedule.ts has been reading it all along.
+        billingTimeZone: z.string().min(1).max(64).nullable().optional(),
         billingScheduleOverride: z
           .object({
             nextPaymentDate: z.string().nullable().optional(),
@@ -843,6 +854,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       virtualExtensionPriceCents,
       billingTelecomFees,
       billingScheduleOverride,
+      // Must be destructured out: `...pricing` is spread straight into the
+      // Prisma upsert, and billingTimeZone lives in metadata, not a column.
+      billingTimeZone,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
@@ -895,7 +909,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       tollFreeDidPriceCents !== undefined ||
       virtualExtensionPriceCents !== undefined ||
       billingTelecomFees !== undefined ||
-      billingScheduleOverride !== undefined
+      billingScheduleOverride !== undefined ||
+      billingTimeZone !== undefined
     ) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       if (billingPricingMode !== undefined || promoteCustomPricingMode) {
@@ -911,6 +926,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         ...(virtualExtensionPriceCents !== undefined ? { virtualExtensionPriceCents } : {}),
         ...(telecomFeesPatch?.ok ? { billingTelecomFees: telecomFeesPatch.value } : {}),
         ...(scheduleOverridePatch?.ok ? { billingScheduleOverride: scheduleOverridePatch.value } : {}),
+        ...(billingTimeZone !== undefined ? { billingTimeZone } : {}),
       });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };
@@ -3752,10 +3768,17 @@ function billingTelecomFeeItemPutSchema() {
     mode: z.enum(["ratePercent", "amountCents"]),
     ratePercent: z.number().min(0).max(1).nullable().optional(),
     amountCents: z.number().int().min(0).nullable().optional(),
+    // ⛔ Must stay in step with TelecomFeeBasis in billingTelecomFees.ts.
+    // "per_phone_number" was missing here while being a perfectly valid basis
+    // everywhere else — and it is the one onboarding stamps for E911, because
+    // "per_did" counts only billable numbers (zero for a one-number tenant on
+    // first-number-free). So the API could not accept, through this route, the
+    // configuration it writes itself.
     basis: z.enum([
       "invoice_subtotal",
       "per_extension",
       "per_did",
+      "per_phone_number",
       "per_toll_free_did",
       "per_line",
       "flat_monthly",

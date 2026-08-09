@@ -2,10 +2,10 @@
 
 /* Mockup 6 — Payments. Every charge, refund and card in one place. */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { apiPost } from "../../../../../services/apiClient";
-import { BillingNav, Pill, asList, dateTime, errText, money, txTone, useApi } from "../_new/ui";
+import { BillingNav, Pill, SearchBox, asList, dateTime, errText, money, txTone, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Tx = {
@@ -40,16 +40,23 @@ export default function BillingMoneyPage() {
   const [actionErr, setActionErr] = useState("");
   const [actionOk, setActionOk] = useState("");
 
-  /** Refunds move real money, so this always confirms with the amount named. */
-  const refund = async (t: Tx) => {
+  /** Refunds move real money, so this always confirms with the amount named.
+
+      ⛔ This used to run through window.confirm + window.prompt — an unstyled
+      grey box that cannot show the company in bold, cannot warn properly, and
+      that some browsers suppress outright. The confirm now happens in the page,
+      and "Refund" finally looks different from "Cancel". */
+  const [confirming, setConfirming] = useState<Tx | null>(null);
+  const [reason, setReason] = useState("");
+
+  const refund = async (t: Tx, reasonText: string) => {
     const label = `${money(t.amountCents)} to ${t.tenant?.name || "this customer"}`;
-    if (!window.confirm(`Refund ${label}? This sends the money back and cannot be undone here.`)) return;
-    const reason = window.prompt("Reason for the refund (kept on the record):", "") || "";
+    setConfirming(null);
     setRefunding(t.id);
     setActionErr("");
     setActionOk("");
     try {
-      await apiPost(`/admin/billing/transactions/${t.id}/refund`, { reason, confirmLive: true });
+      await apiPost(`/admin/billing/transactions/${t.id}/refund`, { reason: reasonText, confirmLive: true });
       setActionOk(`Refunded ${label}.`);
       setSelected(null);
       void reload();
@@ -97,13 +104,7 @@ export default function BillingMoneyPage() {
           </div>
         </div>
         <div className="cbill-toolbar">
-          <input
-            className="cbill-input text"
-            placeholder="Search customer or invoice…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            aria-label="Search payments"
-          />
+          <SearchBox value={q} onChange={setQ} placeholder="Search customer or invoice…" label="Search payments" />
           <div className="cbill-seg">
             <button type="button" data-on={filter === "all"} onClick={() => setFilter("all")}>All</button>
             <button type="button" data-on={filter === "APPROVED"} onClick={() => setFilter("APPROVED")}>Approved</button>
@@ -117,7 +118,7 @@ export default function BillingMoneyPage() {
       {actionErr && <div className="cbill-banner bad">{actionErr}</div>}
       {actionOk && <div className="cbill-banner ok">{actionOk}</div>}
 
-      <div className="cbill-kpis">
+      <div className="cbill-kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
         <div className="cbill-kpi good">
           <span className="k">Collected</span>
           <span className="v">{money(totals.collected)}</span>
@@ -133,17 +134,15 @@ export default function BillingMoneyPage() {
           <span className="v">{totals.refunded}</span>
           <span className="s">in this view</span>
         </div>
-        <div className="cbill-kpi">
-          <span className="k">Showing</span>
-          <span className="v">{rows.length}</span>
-          <span className="s">of {(data || []).length}</span>
-        </div>
       </div>
 
       <section className="cbill-card">
         <div className="cbill-card-hd">
-          <h3>Transactions</h3>
-          <span className="hint">click a row for the processor's own response</span>
+          <h3>
+            Transactions
+            {rows.length !== (data || []).length ? ` — showing ${rows.length} of ${(data || []).length}` : ""}
+          </h3>
+          <span className="hint">open a row for the processor's own response</span>
         </div>
         <div className="cbill-table-wrap">
           <table className="cbill-table">
@@ -161,7 +160,22 @@ export default function BillingMoneyPage() {
               {rows.map((t) => {
                 const tone = txTone(t.status);
                 return (
-                  <tr key={t.id} className="clickable" onClick={() => setSelected(t)}>
+                  /* Rows carry the only route to the processor's response, so
+                     they must be reachable without a mouse. */
+                  <tr
+                    key={t.id}
+                    className="clickable"
+                    onClick={() => setSelected(t)}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Open payment details for ${t.tenant?.name || "customer"}`}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelected(t);
+                      }
+                    }}
+                  >
                     <td className="n">{dateTime(t.createdAt)}</td>
                     <td>
                       {t.tenant?.id ? (
@@ -233,10 +247,9 @@ export default function BillingMoneyPage() {
                   <span className="h">Sends the money back to the customer's card</span>
                 </div>
                 <button
-                  className="cbill-btn"
-                  style={{ color: "var(--cb-crit)", borderColor: "rgba(200,50,74,0.35)" }}
+                  className="cbill-btn danger"
                   disabled={refunding === selected.id}
-                  onClick={() => void refund(selected)}
+                  onClick={() => { setReason(""); setConfirming(selected); }}
                 >
                   {refunding === selected.id ? "Refunding…" : `Refund ${money(selected.amountCents)}`}
                 </button>
@@ -245,6 +258,84 @@ export default function BillingMoneyPage() {
           </div>
         </section>
       )}
+
+      {confirming && (
+        <RefundDialog
+          tx={confirming}
+          reason={reason}
+          onReason={setReason}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void refund(confirming, reason)}
+        />
+      )}
     </div>
+  );
+}
+
+/** Refunds move real money. This replaces window.confirm + window.prompt, which
+    could not name the customer in bold, could not carry a warning, and is
+    suppressed outright by some browsers after a few uses. */
+function RefundDialog({
+  tx,
+  reason,
+  onReason,
+  onCancel,
+  onConfirm,
+}: {
+  tx: Tx;
+  reason: string;
+  onReason: (v: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement | null>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+  }, []);
+  return (
+    <dialog
+      className="cbill-modal"
+      ref={ref}
+      onCancel={(e) => { e.preventDefault(); onCancel(); }}
+      aria-label="Confirm refund"
+    >
+      <div className="cbill-card">
+        <div className="cbill-card-hd">
+          <h3>Refund this payment</h3>
+        </div>
+        <div className="cbill-card-bd">
+          <div className="cbill-prev-total" style={{ borderTop: 0, marginTop: 0, paddingTop: 4 }}>
+            <span>{tx.tenant?.name || "This customer"}</span>
+            <span>{money(tx.amountCents)}</span>
+          </div>
+          <div className="cbill-banner warn" style={{ margin: "10px 0" }}>
+            <span>
+              The money goes back to the customer&apos;s card. This cannot be undone from here.
+            </span>
+          </div>
+          <div className="cbill-row">
+            <div className="cbill-label">
+              <span className="t">Reason</span>
+              <span className="h">Kept on the record</span>
+            </div>
+            <input
+              className="cbill-input text"
+              value={reason}
+              onChange={(e) => onReason(e.target.value)}
+              placeholder="Charged twice by mistake"
+              aria-label="Reason for the refund"
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="cbill-actions" style={{ justifyContent: "flex-end" }}>
+          <button type="button" className="cbill-btn" onClick={onCancel}>Cancel</button>
+          <button type="button" className="cbill-btn danger" onClick={onConfirm}>
+            Refund {money(tx.amountCents)}
+          </button>
+        </div>
+      </div>
+    </dialog>
   );
 }

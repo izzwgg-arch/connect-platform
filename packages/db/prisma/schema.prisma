@@ -771,6 +771,13 @@ model Tenant {
   sbcUdpExposureConfirmed         Boolean                           @default(false)
   sbcUdpExposureConfirmedAt       DateTime?
   sbcUdpExposureConfirmedByUserId String?
+  /// Set when this tenant's PBX tenant was deleted on VitalPBX. The tenant is
+  /// out of every list and cannot be billed from this moment; the permanent
+  /// erase happens separately so a bad PBX response can never destroy data.
+  pbxRemovedAt                    DateTime?
+  /// Set instead of deleting when a removed tenant has completed payments —
+  /// the books are kept, everything else is closed.
+  archivedAt                      DateTime?
   createdAt                       DateTime                          @default(now())
   users                           User[]
   tenDlcSubs                      TenDlcSubmission[]
@@ -4278,7 +4285,10 @@ model ConnectChatThread {
   markedUnreadById     String?
   participants         ConnectChatParticipant[]
   messages             ConnectChatMessage[]
-  tenant               Tenant                   @relation(fields: [tenantId], references: [id])
+  // ⛔ The ONLY tenant relation in this schema without onDelete, so it defaulted
+  // to Restrict — one chat thread was enough to make deleting a tenant fail with
+  // a foreign-key error. Every other tenant relation (240 of them) cascades.
+  tenant               Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, lastMessageAt])
   @@index([tenantId, type])

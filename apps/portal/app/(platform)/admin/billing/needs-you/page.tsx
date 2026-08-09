@@ -5,7 +5,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { BillingNav, Pill, asList, invoiceTone, money, shortDate, useApi } from "../_new/ui";
+import { BillingNav, FoldingCard, Pill, asList, money, shortDate, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
 type Overview = {
@@ -39,6 +39,14 @@ export default function BillingNeedsYouPage() {
 
   const failures = overview.data?.recentFailures || [];
 
+  /** The overview payload carries no company name on a failure, so these rows
+      all read "Customer — payment failed". The tenant list has the name. */
+  const nameOf = useMemo(() => {
+    const byId = new Map((tenants.data || []).map((t) => [t.id, t.name]));
+    return (f: { tenantId: string; tenant?: { name?: string } | null }) =>
+      f.tenant?.name || byId.get(f.tenantId) || "Unknown customer";
+  }, [tenants.data]);
+
   const problems = useMemo(() => {
     const list = tenants.data || [];
     const noCard = list.filter(
@@ -61,7 +69,7 @@ export default function BillingNeedsYouPage() {
 
   return (
     <div className="cbill">
-      <BillingNav current="needs-you" />
+      <BillingNav current="needs-you" needsYouCount={total} />
       <div className="cbill-head">
         <div>
           <h2>Needs you</h2>
@@ -71,9 +79,6 @@ export default function BillingNeedsYouPage() {
             <span>Connect already tried everything it is allowed to try</span>
           </div>
         </div>
-        <div className="cbill-toolbar">
-          <Link className="cbill-btn" href="/admin/billing/month">This month</Link>
-        </div>
       </div>
 
       {overview.error && <div className="cbill-banner bad">{overview.error}</div>}
@@ -82,19 +87,22 @@ export default function BillingNeedsYouPage() {
       )}
 
       {failures.length > 0 && (
-        <section className="cbill-card">
-          <div className="cbill-card-hd">
-            <h3>Payments that failed</h3>
-            <span className="hint">retries are already exhausted or in progress</span>
-          </div>
+        <FoldingCard
+          title="Payments that failed"
+          count={failures.length}
+          tone="bad"
+          hint="retries are already exhausted or in progress"
+          open
+        >
           {failures.map((f) => (
             <div className="cbill-att" key={f.id}>
               <div className="cbill-att-i bad">!</div>
               <div className="cbill-att-tx">
-                <span className="h">{f.tenant?.name || "Customer"} — {invoiceTone(f.status).label.toLowerCase()}</span>
+                <span className="h">{nameOf(f)}</span>
                 <span className="d">
-                  {f.invoiceNumber} · {money(f.balanceDueCents)} ·{" "}
-                  {f.failedAt ? `last tried ${shortDate(f.failedAt)}` : `due ${shortDate(f.dueDate)}`}
+                  Payment failed · {money(f.balanceDueCents)} ·{" "}
+                  {f.failedAt ? `last tried ${shortDate(f.failedAt)}` : `due ${shortDate(f.dueDate)}`} ·{" "}
+                  {f.invoiceNumber}
                 </span>
               </div>
               <Pill tone="bad">{money(f.balanceDueCents)}</Pill>
@@ -102,15 +110,17 @@ export default function BillingNeedsYouPage() {
               <Link className="cbill-btn" href={`/admin/billing/customer/${f.tenantId}`}>Customer</Link>
             </div>
           ))}
-        </section>
+        </FoldingCard>
       )}
 
       {problems.noCard.length > 0 && (
-        <section className="cbill-card">
-          <div className="cbill-card-hd">
-            <h3>No card on file</h3>
-            <span className="hint">these customers cannot be charged at all</span>
-          </div>
+        <FoldingCard
+          title="No card on file"
+          count={problems.noCard.length}
+          tone="bad"
+          hint="these customers cannot be charged at all"
+          open={problems.noCard.length <= 8}
+        >
           {problems.noCard.map((t) => (
             <div className="cbill-att" key={t.id}>
               <div className="cbill-att-i bad">!</div>
@@ -122,15 +132,17 @@ export default function BillingNeedsYouPage() {
               <Link className="cbill-btn" href={`/admin/billing/customer/${t.id}`}>Add a card</Link>
             </div>
           ))}
-        </section>
+        </FoldingCard>
       )}
 
       {problems.notCollecting.length > 0 && (
-        <section className="cbill-card">
-          <div className="cbill-card-hd">
-            <h3>Not being collected from</h3>
-            <span className="hint">they have a card, but automatic charging is off</span>
-          </div>
+        <FoldingCard
+          title="Not being collected from"
+          count={problems.notCollecting.length}
+          tone="warn"
+          hint="they have a card, but automatic charging is off"
+          open={problems.notCollecting.length <= 8}
+        >
           {problems.notCollecting.map((t) => (
             <div className="cbill-att" key={t.id}>
               <div className="cbill-att-i warn">?</div>
@@ -146,15 +158,17 @@ export default function BillingNeedsYouPage() {
               <Link className="cbill-btn" href={`/admin/billing/customer/${t.id}`}>Review</Link>
             </div>
           ))}
-        </section>
+        </FoldingCard>
       )}
 
       {problems.day1.length > 0 && (
-        <section className="cbill-card">
-          <div className="cbill-card-hd">
-            <h3>Billing day still set to the 1st</h3>
-            <span className="hint">the default nobody chose — their cycle matches nothing they bought</span>
-          </div>
+        <FoldingCard
+          title="Billing day still set to the 1st"
+          count={problems.day1.length}
+          tone="warn"
+          hint="the default nobody chose — their cycle matches nothing they bought"
+          open={problems.day1.length <= 8}
+        >
           {problems.day1.map((t) => (
             <div className="cbill-att" key={t.id}>
               <div className="cbill-att-i warn">1</div>
@@ -166,15 +180,17 @@ export default function BillingNeedsYouPage() {
               <Link className="cbill-btn" href={`/admin/billing/customer/${t.id}`}>Set the day</Link>
             </div>
           ))}
-        </section>
+        </FoldingCard>
       )}
 
       {problems.noEmail.length > 0 && (
-        <section className="cbill-card">
-          <div className="cbill-card-hd">
-            <h3>No billing email</h3>
-            <span className="hint">these customers receive no invoices, reminders or receipts</span>
-          </div>
+        <FoldingCard
+          title="No billing email"
+          count={problems.noEmail.length}
+          tone="warn"
+          hint="these customers receive no invoices, reminders or receipts"
+          open={problems.noEmail.length <= 8}
+        >
           {problems.noEmail.map((t) => (
             <div className="cbill-att" key={t.id}>
               <div className="cbill-att-i warn">@</div>
@@ -186,7 +202,7 @@ export default function BillingNeedsYouPage() {
               <Link className="cbill-btn" href={`/admin/billing/customer/${t.id}`}>Add an address</Link>
             </div>
           ))}
-        </section>
+        </FoldingCard>
       )}
     </div>
   );

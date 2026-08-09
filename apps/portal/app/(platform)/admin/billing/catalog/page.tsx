@@ -116,32 +116,49 @@ export default function BillingCatalogPage() {
         </div>
       </section>
 
+      {/* Eleven identical grey buttons used to sit here doing three different
+          kinds of thing — "Aging report" opened something, "Export aging CSV"
+          downloaded a file, and five of them jumped into the old screens with
+          no warning. Same actions, sorted by what they actually do. */}
       <section className="cbill-card">
         <div className="cbill-card-hd">
           <h3>Reports &amp; exports</h3>
-          <span className="hint">downloads open in a new tab</span>
         </div>
         <div className="cbill-actions">
+          <span className="cbill-actions-label">View</span>
           <a className="cbill-btn" href="/api/admin/billing/reports/aging" target="_blank" rel="noreferrer">Aging report</a>
           <a className="cbill-btn" href="/api/admin/billing/reports/failed-payments" target="_blank" rel="noreferrer">Failed payments</a>
-          <a className="cbill-btn" href="/api/admin/billing/reports/aging/export" target="_blank" rel="noreferrer">Export aging CSV</a>
-          <a className="cbill-btn" href="/api/admin/billing/reports/failed-payments/export" target="_blank" rel="noreferrer">Export failed payments CSV</a>
-          <a className="cbill-btn" href="/api/admin/billing/reports/export/invoices" target="_blank" rel="noreferrer">Export invoices CSV</a>
-          <a className="cbill-btn" href="/api/admin/billing/reports/export/transactions" target="_blank" rel="noreferrer">Export transactions CSV</a>
+        </div>
+        <div className="cbill-actions" style={{ paddingTop: 0 }}>
+          <span className="cbill-actions-label">Download</span>
+          <a className="cbill-btn ghost" href="/api/admin/billing/reports/aging/export" target="_blank" rel="noreferrer">⤓ Aging CSV</a>
+          <a className="cbill-btn ghost" href="/api/admin/billing/reports/failed-payments/export" target="_blank" rel="noreferrer">⤓ Failed payments CSV</a>
+          <a className="cbill-btn ghost" href="/api/admin/billing/reports/export/invoices" target="_blank" rel="noreferrer">⤓ Invoices CSV</a>
+          <a className="cbill-btn ghost" href="/api/admin/billing/reports/export/transactions" target="_blank" rel="noreferrer">⤓ Transactions CSV</a>
         </div>
       </section>
 
       <section className="cbill-card">
         <div className="cbill-card-hd">
           <h3>Gateway &amp; imports</h3>
-          <span className="hint">these still live on the original screens</span>
+          <span className="hint">these open the older screens, which look different</span>
         </div>
         <div className="cbill-actions">
-          <Link className="cbill-btn" href="/admin/billing/settings">Payment gateway settings</Link>
-          <Link className="cbill-btn" href="/admin/billing/sola-imports">Imported recurring schedules</Link>
-          <Link className="cbill-btn" href="/admin/billing/methods">Saved cards</Link>
-          <Link className="cbill-btn" href="/admin/billing/activity">Billing activity log</Link>
-          <Link className="cbill-btn" href="/admin/billing/collections">Collections queue</Link>
+          <Link className="cbill-btn" href="/admin/billing/settings">
+            Payment gateway settings <Pill tone="off">Old screen</Pill>
+          </Link>
+          <Link className="cbill-btn" href="/admin/billing/sola-imports">
+            Imported recurring schedules <Pill tone="off">Old screen</Pill>
+          </Link>
+          <Link className="cbill-btn" href="/admin/billing/methods">
+            Saved cards <Pill tone="off">Old screen</Pill>
+          </Link>
+          <Link className="cbill-btn" href="/admin/billing/activity">
+            Billing activity log <Pill tone="off">Old screen</Pill>
+          </Link>
+          <Link className="cbill-btn" href="/admin/billing/collections">
+            Collections queue <Pill tone="off">Old screen</Pill>
+          </Link>
         </div>
       </section>
     </div>
