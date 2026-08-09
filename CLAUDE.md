@@ -1,5 +1,59 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — "he answered and got voicemail" (2026-08-06) — READ FIRST for ANY "answered and it didn't connect" report, mobile push channels, the wake hold, or before trusting a failure LABEL
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANSWER_UNACKED_PUSH_CHANNEL_2026-08-06.md`**
+(commit `c55ae840` on `feat/ivr-migration-takeover`; api + telephony DEPLOYED and
+container-verified. ⛔ The MOBILE half is committed and on **NO phone**.)
+
+- ⛔ **`session_not_found_timeout` IS A LIE — read the blackbox, never the label.**
+  `jssip.ts` stamps it on **any** failure with fewer than 3 attempts, *including
+  one where the session was found on poll #1 and answered*. **Two consecutive
+  wrong root causes were published to Izzy off that label** before the raw
+  `WEBRTC_CALL_DEBUG` payload was read. The payload said the opposite all along:
+  `pollIterations:1, answerAttempts:1, sipAnswer.sent:true`, candidate
+  `status:6` = **`STATUS_WAITING_FOR_ACK`**. The app answered in ~160 ms; the
+  **200 OK was swallowed by a dead-but-healthy-looking socket** (`uaConnected`,
+  `uaRegistered`, `sipStackHealthy` all true; Asterisk noticed 27 s later). This
+  IS the Simon stranded-socket family — a claim in that session that it was NOT
+  was wrong. ⛔ **Nothing watches for an un-ACKed 200 OK**; every safeguard
+  checks before/around the ring, none watches the pickup.
+- ⛔ **`MAX_ATTEMPTS = 3` was fiction**: the per-attempt timer was the WHOLE
+  remaining deadline, so attempt #1 ate all 16 s while the PBX ring expired at
+  15 s. Now capped at 4 s + honest `answer_unacked` verdict + a rescue that
+  re-offers the call over a fresh leg. ⛔ Do NOT shrink the cap to make "3" fit
+  (only 2 fit the initial window — asserted deliberately; a smaller cap cuts
+  SIP's 200 OK retransmit ladder short), and ⛔ do NOT add a socket rebuild
+  between attempts — `registerInner()` suppresses force-restart inside
+  `inInviteAnswerWindow()` on purpose.
+- ⛔ **Three safeguards existed and had NEVER RUN — config, not code.**
+  `PBX_CONTACT_QUALIFY_ON_RING` was set **nowhere in production** since July.
+  The worker's direct-FCM sender had **no credential mount and an empty
+  `FCM_SERVICE_ACCOUNT_PATH`** → 6 days of 100% Expo fallback *including* devices
+  holding a native token. The SIP→UI cancel bridge arms only **after** a SIP
+  INVITE surfaces in JS, so it is structurally disabled in exactly this failure.
+  **Never claim a push channel is live from code** — grep
+  `FCM_DIRECT_DELIVERED` with `"source":"worker"` in the running container.
+- ⛔ **The fast token was hostage to the slow one.** A native FCM token can only
+  reach us inside `/mobile/devices/register`, which **required** `expoPushToken`
+  — so a phone whose Expo fetch failed could never report the good FCM token it
+  already held (8 of 16 Android devices). `expoPushToken` is now nullable with
+  tokenless rows keyed on `@@unique([userId, deviceId])`.
+- ⛔ **The 20 s wake hold could never finish.** The caller-side `Dial` timeout
+  comes from **`followme/ringtime` (15 on 115 of 122 extensions)**, NOT
+  `ringtimer` (30). Fixed inside wake enrollment via in-lane `ami.dbPut`,
+  raise-only, `0` left alone. ⛔ It MUST run on the `!transformed.changed` path
+  — all 10 live repairs logged `dialChanged:false`; otherwise **none** of the 12
+  enrolled extensions would ever be fixed. ⛔ Lowering `mobile_reach_wait_secs`
+  is NOT the fix (voicemail arrives sooner, not later).
+- ⛔ **`database show` output pads the key column**, so awk field indexes shift
+  with key length — split on the last `:` or you get a false "no value" census.
+- ⛔ **Shared tree:** another session swept this session's `server.ts` edit into
+  its own IVR commit, leaving HEAD using `userId_deviceId` with no schema for it.
+  Two fixes reported as "done this session" (`8c15d5fa`, `f9907e5d`) already
+  existed and were merely **undeployed**. Check `git log -S` before claiming
+  authorship, and re-check `git diff --cached --name-only` after every `git add`.
+
 ## ⛔ AGENT HANDOFF — billing: 4 live bugs fixed, screens rebuilt (2026-08-07) — READ FIRST for ANY billing work, `{ not: … }` Prisma filters, or a new screen under /admin/billing
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_BILLING_REBUILD_2026-08-07.md`**
@@ -85,6 +139,52 @@ Changes.
 - ⛔ **inii mini's 845-260-5692 is TEMPORARY** — their real number 646-984-6023
   is mid-port (order **217760**, open). Texting does NOT follow the port; repeat
   the four steps when it lands. See [[voipms-sms-per-did-webhook-is-a-red-herring]].
+
+## ⛔ AGENT HANDOFF — "I changed it in VitalPBX and the phone didn't change" (2026-08-06) — READ FIRST for BLF/key edits, desk-phone provisioning, or before believing a phone's registration proves anything
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CREATEABOX_102_BLF_MAC_2026-08-06.md`**
+(Create A Box ext 102 — FIXED and verified live under Izzy's one-time PBX write mandate,
+scoped to that one extension; backups `/root/blf-102-backup-20260806/`.)
+
+- ⛔ **VitalPBX provisioning is PRE-GENERATED FILES, rendered at SAVE time.** It never
+  looks a phone up when the phone asks. Saving writes
+  `/var/lib/vitalpbx/provisioning/provisioning_templates/<tenant-hash>/<mac>.cfg`, and
+  nginx hands out whatever filename is requested. So a **wrong MAC on the record rewrites
+  a file nothing downloads**, while the phone keeps downloading its own file — with a
+  clean **200**, never a 404. Ext 102's phone served a **July 19** copy for seven weeks:
+  right account, right password, **zero BLF keys**. Proven by mtimes: he saved 101 at
+  12:26:15 and 101's phone got it 29 s later (**that one worked**), saved 102 at 12:41:20,
+  then resynced 102 four times and got the stale file every time.
+- ⛔ **"It registers, so its MAC must be in the system" is FALSE — the MAC plays no part in
+  registration.** `[T7_102]` is `identify_by=username,auth_username`; there are **zero**
+  MACs in the tenant SIP config, and across `ombutel`+`asterisk` the only `mac` column is
+  `ombu_static_leases` (DHCP). `ombu_devices` has **no MAC column at all**. The phone keeps
+  its credentials locally. ⛔ The WireGuard tunnel is irrelevant to both — it is only the
+  road the traffic travels.
+- **THE DIAGNOSTIC, one grep:** `grep phoneprov /var/log/nginx/access.log` (+ zgrep the
+  .gz). Every download logs the phone's **own MAC in its User-Agent**; compare it to the
+  record, then `stat` that `<mac>.cfg`. Fetched but **mtime predates your edit** = wrong
+  MAC (this case). **No fetch at all** = the phone never asked — fire the check-sync, see
+  [[desk-phone-reassign-needs-check-sync]]. A hit from **127.0.0.1 / UA "VitalPBX"** is
+  just the panel rendering a page and proves nothing.
+- **Fix + proof shape:** correct the MAC on the record (durable — future saves land right),
+  overwrite the phone-facing `.cfg` with the correct render for an immediate fix, then
+  `pjsip send notify yealink-check-cfg endpoint T<t>_<ext>` (⛔ NOT the reboot button).
+  ⛔ **Diff the two configs before overwriting** — ours differed only in the key blocks with
+  a byte-identical account block; a differing password would knock the phone offline. ⛔ Use
+  `cat src > dest`, never `cp` — that dir carries POSIX ACLs (`+` in `ls -la`). Verified by
+  the served size changing **138162 → 138270** 1 s after the NOTIFY, plus **5 BLF
+  subscriptions** (101/103/105/106/107) appearing in `pjsip show subscriptions inbound`.
+- ⛔ **Do not suppress stderr on probes** — an early `mysqldump … 2>/dev/null | grep` would
+  have made a failed dump read as "the MAC isn't in the database". Re-run visibly before
+  trusting a negative. Config key lines are **indented**, so `grep "^linekey"` finds
+  nothing and looks like "no BLFs anywhere".
+- A trailing space in `linekey.2.value` (`103 `) was called a likely dead key and that was
+  **wrong** — Yealink trims it, 103 subscribed normally. Left as Izzy wrote it.
+- ✅ The staged registration-expiry fix from the T7 outage handoff (2026-08-05 §4) is
+  **confirmed applied** — all seven T7 aors read `default_expiration/maximum_expiration
+  120`. ⏳ Ext **104 and 106 are not registered** (101/102/103/105/107 Avail) — flagged to
+  Izzy, not investigated.
 
 ## ⛔ AGENT HANDOFF — IVR Studio: forwards, direct dial, audible prompts (2026-08-06) — READ FIRST for the Studio, prompt refs, or any PBX dialplan patch
 
