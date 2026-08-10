@@ -50,6 +50,18 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // M11: agent extension-feature (DND/CF) door. In-handler shared-secret auth.
   const isInternalAgentExtFeaturePath =
     path === "/internal/agent/extfeature/action" || path.endsWith("/internal/agent/extfeature/action");
+  // Read-only account/pricing door behind the provisioning tools ("how many
+  // extensions do I have", "add extension 1102", "turn texting on"). Same
+  // in-handler shared-secret auth, fail-closed.
+  // ⛔ This was MISSING, so the door 401'd at the JWT hook before its own secret
+  // check ever ran — the agent shipped the caller and the api shipped the route,
+  // and nothing connected them. Symptom in production: "I couldn't retrieve the
+  // account setup details right now", every time, which is what blocked the
+  // trainer's extension request. Tell the two apart by the STATUS: this route
+  // answers 403 forbidden on a bad secret, so a 401 unauthorized means you never
+  // reached it. Any new /internal/agent/* door must be added here too.
+  const isInternalAgentAccountSetupPath =
+    path === "/internal/agent/account-setup-info" || path.endsWith("/internal/agent/account-setup-info");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -98,6 +110,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalAgentIvrPath
     || isInternalAgentQueuePath
     || isInternalAgentExtFeaturePath
+    || isInternalAgentAccountSetupPath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath

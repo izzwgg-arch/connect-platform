@@ -36,6 +36,29 @@ test("shouldSkipJwtVerification: internal agent MOH doors skip JWT (in-handler s
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/other"), false);
 });
 
+// ⛔ Every /internal/agent/* door authenticates with the shared secret INSIDE its
+// own handler, so each one must also skip the JWT hook — otherwise it 401s before
+// that check runs and the feature is silently dead. account-setup-info shipped
+// that way: the agent had the caller, the api had the route, and the bypass list
+// did not have the path, so the assistant answered "I couldn't retrieve the
+// account setup details" every single time. Add new doors to BOTH places.
+test("shouldSkipJwtVerification: every internal agent door skips JWT", () => {
+  for (const p of [
+    "/internal/agent/moh/override",
+    "/internal/agent/moh/upload-asset",
+    "/internal/agent/route/action",
+    "/internal/agent/ivr/action",
+    "/internal/agent/queue/action",
+    "/internal/agent/extfeature/action",
+    "/internal/agent/account-setup-info",
+  ]) {
+    assert.equal(shouldSkipJwtVerification(p), true, `${p} must skip the JWT hook`);
+    assert.equal(shouldSkipJwtVerification(`/api${p}`), true, `/api${p} must skip the JWT hook`);
+  }
+  // A path that merely looks like one must NOT open.
+  assert.equal(shouldSkipJwtVerification("/internal/agent/account-setup-info-x"), false);
+});
+
 test("shouldSkipJwtVerification: MOH sync + signed download paths skip JWT", () => {
   assert.equal(shouldSkipJwtVerification("/voice/moh/sync-manifest"), true);
   assert.equal(shouldSkipJwtVerification("/voice/moh/download/test%2Fconnect_x%2Fasset.wav"), true);
