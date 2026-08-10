@@ -158,6 +158,38 @@ since. Do that; it is the acceptance test.
   `1250` z-index, `padding-right:72px`, `background-size:5px 5px,…`, and the
   IVR "How long to wait" label. Then re-verified three of them in a real browser.
 
+## 9b. Second pass — page 1 of the sheet (`871f9dfd`)
+
+⛔ **Three unrelated things were all called "DND"**, which is why row 2 was
+unexplainable in both directions:
+
+1. the portal toggle → `localStorage("cc-extension-dnd")` and nothing else;
+2. the API's `presence` → the **literal string `"AVAILABLE"`**, hardcoded in
+   `formatExtensionControlPanel` — real DND is reported nowhere;
+3. the assistant → writes **real** extension DND to the PBX via `pbx.M11`.
+
+The toggle now reads "Mute this browser" and a browser mute no longer reports
+itself as presence `"DND"`. ⛔ Wiring the portal to real extension DND is a
+PRODUCT DECISION, not a rename — it would let a browser switch block real calls
+— and needs an api→`pbx.M11` read that does not exist. Left for Izzy.
+
+Row 40 "message memory only 35": the model got `history.slice(-20)` while the
+store had already fetched **100** and discarded the rest for free. Now 40. Still
+capped deliberately — thinking shares the `max_tokens` budget.
+
+**Checked and already fixed — do not re-investigate:** row 50 (Prisma crash),
+row 52 (there IS a "Delete this menu" button), row 17 (assistant can enable SMS,
+`4badbf06`, live), and "no backspace in the Android dial pad" — `KeypadTab` has
+had one with long-press-to-clear since **2026-05-14**; he was on an old APK.
+
+**Not a bug:** row 26 "only one is assigned" was *correct* — he had one
+extension because his 1102/1103 request was never actioned. Process gap.
+
+⛔ **Rows 6/47 (one-word "yes/no/go") must NOT be made to execute.** Writes go
+through the password-gated single-use approval in `agentConfirmations.ts`. That
+is the protection that refused all 15 jailbreak attempts. Only ever consider it
+for read-only requests, and only on Izzy's say-so.
+
 ## 10. Open
 
 1. **Tell Ezra the lesson feature works**, with the phrasings that fire it. He
