@@ -17601,12 +17601,20 @@ table tr:hover {
   to   { transform: translateX(0);    opacity: 1; }
 }
 
-/* Page shell */
+/* Page shell.
+   `.console-content:has(> .td-page)` clips this page (overflow: hidden) so the
+   hero, toolbar and status bar can stay put — same contract as .ch-shell /
+   .vm-shell / .billing-ws-shell. That means the scrolling MUST happen inside,
+   on .td-content. With `min-height: 100%` + `overflow: visible` there was no
+   scroller anywhere, so any member list taller than the window was simply cut
+   off and unreachable — invisible when the window was maximised and the list
+   happened to fit, dead the moment the window got shorter. */
 .td-page {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
-  overflow: visible;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -17750,6 +17758,16 @@ table tr:hover {
 /* ?? Content area ??????????????????????????????????????????????????????????? */
 .td-content {
   flex: 1;
+  /* min-height: 0 is what actually lets a flex child shrink below its content
+     and become a scroller — without it `flex: 1` still grows to fit every row. */
+  min-height: 0;
+  overflow-y: auto;
+  /* The sideways scroll for a wide list lives here rather than on
+     .td-list-wrap, so that .td-content is the ONLY scrollport inside the page.
+     A scrollport on .td-list-wrap would capture the list view's sticky
+     `.td-thead` — which never scrolls vertically — and the column headers would
+     slide out of sight on the way down. */
+  overflow-x: auto;
   padding: 16px;
 }
 
@@ -17912,7 +17930,10 @@ table tr:hover {
 .td-action-item:hover { background: var(--panel-2); }
 
 /* ?? List / table view ?????????????????????????????????????????????????????? */
-.td-list-wrap { overflow-x: auto; }
+/* Deliberately NOT a scrollport — see .td-content. Sideways scrolling for a
+   wide table happens on .td-content so `.td-thead`'s sticky header keeps
+   working. */
+.td-list-wrap { overflow: visible; }
 .td-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .td-thead { position: sticky; top: 0; z-index: 10; background: var(--panel); }
 .td-th {
