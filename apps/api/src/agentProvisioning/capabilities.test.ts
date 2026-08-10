@@ -112,7 +112,7 @@ function makeDb(seed: Partial<Record<string, any[]>> = {}) {
       findMany: async ({ where }: any) =>
         state.inboundDids.filter((d: any) => d.connectTenantId === where.connectTenantId && d.active === where.active),
     },
-    billingTenantSettings: {
+    tenantBillingSettings: {
       findUnique: async ({ where }: any) => find(state.billingSettings, { tenantId: where.tenantId }),
       update: async ({ where, data }: any) => {
         const row = find(state.billingSettings, { tenantId: where.tenantId });

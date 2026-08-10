@@ -92,7 +92,7 @@ export const enableSmsCapability: ConfirmCapability<EnableSmsParams> = {
   hashInput: enableSmsHashInput,
 
   async authorize(deps, ctx) {
-    const settings = await deps.db.billingTenantSettings.findUnique({
+    const settings = await deps.db.tenantBillingSettings.findUnique({
       where: { tenantId: ctx.tenantId },
       select: { smsBillingEnabled: true },
     });
@@ -191,7 +191,7 @@ export const enableSmsCapability: ConfirmCapability<EnableSmsParams> = {
     // — `isTenantDefault` on the number row is the real setting) and
     // `smsPrimaryProvider` (reads TWILIO on every working tenant; the texting
     // path goes through VoIP.ms regardless).
-    await deps.db.billingTenantSettings.update({
+    await deps.db.tenantBillingSettings.update({
       where: { tenantId: ctx.tenantId },
       data: { smsBillingEnabled: true },
     });

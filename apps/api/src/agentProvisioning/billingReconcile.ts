@@ -175,14 +175,14 @@ export async function reconcileBillingAfterAddition(input: {
   // silently switch them back to auto — someone chose manual deliberately, and
   // that choice may be holding a negotiated quantity.
   if (input.before.manualBuckets.includes(key)) {
-    const settings = await (db as any).billingTenantSettings.findUnique({ where: { tenantId: input.tenantId } });
+    const settings = await db.tenantBillingSettings.findUnique({ where: { tenantId: input.tenantId } });
     const overrides: BillingQuantityOverridesConfig = {
       ...(parseBillingQuantityOverrides(settings?.metadata) ?? {}),
     };
     const current = overrides[key];
     const bumped = Math.max(0, Number(current?.quantity ?? 0)) + 1;
     overrides[key] = { mode: "manual", quantity: bumped };
-    await (db as any).billingTenantSettings.update({
+    await db.tenantBillingSettings.update({
       where: { tenantId: input.tenantId },
       data: { metadata: mergeBillingQuantityOverridesIntoMetadata(settings?.metadata, overrides) as any },
     });

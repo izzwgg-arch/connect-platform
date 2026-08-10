@@ -57,7 +57,7 @@ export async function loadAccountSetupInfo(tenantId: string): Promise<AccountSet
       take: 200,
     }),
     (db as any).tenantSmsNumber.findFirst({ where: { tenantId, active: true }, select: { id: true } }),
-    (db as any).billingTenantSettings.findUnique({
+    db.tenantBillingSettings.findUnique({
       where: { tenantId },
       select: { smsBillingEnabled: true },
     }),
