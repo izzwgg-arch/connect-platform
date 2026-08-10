@@ -74,6 +74,7 @@ export interface ConnectionEvent {
     | "hard-reinit"
     | "stale-socket"
     | "registrationFailed"
+    | "init-failed"
     | "netchange"
     | "online"
     | "offline"
@@ -939,6 +940,20 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const unregisteredSinceRef = useRef<number | null>(null);
   /** Epoch ms of the last hard-reinit, to cap how often we rebuild the UA. */
   const lastHardReinitRef = useRef<number>(0);
+  /** Cached softphone config + SIP secret, so rebuilding the UA costs ZERO API calls.
+   *  Before this cache, every hard-reinit re-fetched both /voice/me/extension (60/hr
+   *  limit) and /voice/me/reset-sip-password (30/hr limit). The watchdog rebuilds as
+   *  often as every ~50 s (~72/hr), so a client on a flapping network reliably
+   *  out-ran its own server budget and got itself 429'd — proven live on
+   *  2026-08-10: 101 credential fetches from one desktop app, ending in a 429 at
+   *  12:15:47Z, after which the dialer sat on "Connecting" until it was restarted.
+   *  The secret does not rotate server-side (issueOneTimeProvisioningForUser returns
+   *  the stored encrypted password), so re-fetching it per rebuild bought nothing.
+   *  Invalidated on a 401/403 registration failure — the one case where the cached
+   *  secret is genuinely the problem. */
+  const sipCredsRef = useRef<{ ext: VoiceExtension; sipPassword: string; at: number } | null>(null);
+  /** Pending init retry, so no failure path is a dead end and cleanup can cancel it. */
+  const initRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Set by the active UA so network/visibility listeners can force a fast recovery. */
   const forceReconnectRef = useRef<(() => void) | null>(null);
   /** Timestamp when the local hangup was initiated (for the stale-report). */
@@ -1459,6 +1474,26 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     // race) but doubles up to a minute — the fixed 2.5s loop turned any tab
     // with a dead token into a 401 firehose that tripped the nginx auto-ban.
     let authRetryDelayMs = 2_500;
+    // Backoff for EVERY other setup failure. Before this, each `return` below was a
+    // dead end: the engine set an error string and stopped, with no UA, no watchdog
+    // and no timer alive — so the dialer kept showing whatever it last said
+    // ("Connecting", amber) forever and only restarting the app recovered it. The
+    // watchdog cannot help, because the watchdog lives inside the UA that was never
+    // built. Capped at 60 s: one request a minute is far under the nginx auto-ban
+    // threshold and self-heals the moment the cause clears.
+    let initRetryDelayMs = 5_000;
+    const scheduleInitRetry = (why: string) => {
+      if (cancelled) return;
+      const delay = initRetryDelayMs;
+      initRetryDelayMs = Math.min(60_000, Math.round(initRetryDelayMs * 1.8));
+      logConn("init-failed", undefined, `${why} — retrying in ${Math.round(delay / 1000)}s`);
+      if (initRetryTimerRef.current) clearTimeout(initRetryTimerRef.current);
+      initRetryTimerRef.current = setTimeout(() => {
+        initRetryTimerRef.current = null;
+        if (cancelled) return;
+        try { init(); } catch { /* ignore — the next failure reschedules */ }
+      }, delay);
+    };
 
     async function init() {
       // Signed out (public wizard, pay page, login screen): the phone engine
@@ -1523,11 +1558,17 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
                 : raw.includes("PBX_NOT_LINKED")
                   ? "PBX_NOT_LINKED — The PBX is not configured for your account. Contact your administrator."
                   : raw;
+        setRegState("failed");
         setError(msg);
         patchDiag({
           webrtcEnabled: false,
+          lastRegError: msg,
           ...(extNum ? { extensionNumber: extNum } : {}),
         });
+        // A 429 here is self-inflicted (we asked too often) — wait out the window
+        // rather than adding to it.
+        if (e instanceof ApiError && e.status === 429) initRetryDelayMs = 60_000;
+        scheduleInitRetry("extension-fetch");
         return;
       }
       if (cancelled) return;
@@ -1548,20 +1589,26 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         sipDomainConfigured: !!sipDomain,
       });
 
-      if (!ext.webrtcEnabled) {
-        setError("WEBRTC_DISABLED — An administrator must enable WebRTC for this tenant. Go to PBX → Extensions → WebRTC Settings.");
-        return;
-      }
-      if (!sipWssUrl) {
-        setError("SIP WSS URL is not configured. Set sipWsUrl in Voice → Settings → WebRTC.");
-        return;
-      }
-      if (!sipDomain) {
-        setError("SIP Domain is not configured. Set sipDomain in Voice → Settings → WebRTC.");
-        return;
-      }
-      if (!ext.sipUsername) {
-        setError("No SIP username assigned. Contact your administrator.");
+      // Admin-configuration gaps. These are not transient, but they DO get fixed by
+      // an administrator while the app is open — so show the truth ("Not registered",
+      // not a permanent amber "Connecting") and keep re-checking slowly so the phone
+      // comes to life on its own once the setting lands.
+      const configProblem =
+        !ext.webrtcEnabled
+          ? "WEBRTC_DISABLED — An administrator must enable WebRTC for this tenant. Go to PBX → Extensions → WebRTC Settings."
+          : !sipWssUrl
+            ? "SIP WSS URL is not configured. Set sipWsUrl in Voice → Settings → WebRTC."
+            : !sipDomain
+              ? "SIP Domain is not configured. Set sipDomain in Voice → Settings → WebRTC."
+              : !ext.sipUsername
+                ? "No SIP username assigned. Contact your administrator."
+                : null;
+      if (configProblem) {
+        setRegState("failed");
+        setError(configProblem);
+        patchDiag({ lastRegError: configProblem });
+        initRetryDelayMs = 60_000; // nothing this client does will fix it — check gently
+        scheduleInitRetry("config");
         return;
       }
 
@@ -1570,35 +1617,58 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       }
 
       let sipPassword: string;
-      try {
-        const reset = await apiPost<{ sipPassword: string; provisioning?: { sipPassword: string } }>(
-          "/voice/me/reset-sip-password",
-        );
-        sipPassword = reset.sipPassword ?? reset.provisioning?.sipPassword ?? "";
-      } catch (e: unknown) {
-        if (cancelled) return;
-        const fromBody =
-          e instanceof ApiError && e.body && typeof e.body === "object"
-            ? (e.body as { extensionNumber?: string; message?: string })
-            : null;
-        const extNum = fromBody?.extensionNumber?.trim() || null;
-        const raw = e instanceof Error ? e.message : "SIP_CREDENTIAL_FETCH_FAILED";
-        const msg = raw.includes("EXTENSION_NOT_PROVISIONED")
-          ? `EXTENSION_NOT_PROVISIONED — ${fromBody?.message || `Extension ${extNum || "?"} is not linked to the PBX yet.`}`
-          : raw.includes("SIP_CREDENTIAL_NOT_SET")
-            ? "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension."
-            : raw.includes("RATE_LIMITED")
-              ? "RATE_LIMITED — Too many credential requests. Reload the page to retry."
-              : `Failed to fetch SIP credentials: ${raw}. Try refreshing the page.`;
-        setError(msg);
-        patchDiag({ lastRegError: msg, ...(extNum ? { extensionNumber: extNum } : {}) });
-        return;
+      const cachedCreds = sipCredsRef.current;
+      if (cachedCreds && cachedCreds.ext.sipUsername === ext.sipUsername && cachedCreds.sipPassword) {
+        // Rebuild the UA on the secret we already hold. See sipCredsRef.
+        sipPassword = cachedCreds.sipPassword;
+      } else {
+        try {
+          const reset = await apiPost<{ sipPassword: string; provisioning?: { sipPassword: string } }>(
+            "/voice/me/reset-sip-password",
+          );
+          sipPassword = reset.sipPassword ?? reset.provisioning?.sipPassword ?? "";
+        } catch (e: unknown) {
+          if (cancelled) return;
+          const fromBody =
+            e instanceof ApiError && e.body && typeof e.body === "object"
+              ? (e.body as { extensionNumber?: string; message?: string })
+              : null;
+          const extNum = fromBody?.extensionNumber?.trim() || null;
+          const raw = e instanceof Error ? e.message : "SIP_CREDENTIAL_FETCH_FAILED";
+          const msg = raw.includes("EXTENSION_NOT_PROVISIONED")
+            ? `EXTENSION_NOT_PROVISIONED — ${fromBody?.message || `Extension ${extNum || "?"} is not linked to the PBX yet.`}`
+            : raw.includes("SIP_CREDENTIAL_NOT_SET")
+              ? "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension."
+              : raw.includes("RATE_LIMITED")
+                ? "Reconnecting — the phone asked for its credentials too often. Retrying automatically."
+                : `Failed to fetch SIP credentials: ${raw}. Retrying automatically.`;
+          setRegState("failed");
+          setError(msg);
+          patchDiag({ lastRegError: msg, ...(extNum ? { extensionNumber: extNum } : {}) });
+          // 429 = we out-ran our own per-hour budget. Waiting is the ONLY cure, and
+          // it used to be left to the human ("Reload the page to retry"), which is how
+          // the dialer ended up parked on "Connecting" for hours.
+          if ((e instanceof ApiError && e.status === 429) || raw.includes("RATE_LIMITED")) {
+            initRetryDelayMs = 60_000;
+          }
+          scheduleInitRetry("credential-fetch");
+          return;
+        }
       }
 
-      if (cancelled || !sipPassword) {
-        setError("SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension.");
+      if (cancelled) return;
+      if (!sipPassword) {
+        const msg = "SIP_CREDENTIAL_NOT_SET — An administrator must set the SIP password for this extension.";
+        setRegState("failed");
+        setError(msg);
+        patchDiag({ lastRegError: msg });
+        sipCredsRef.current = null;
+        initRetryDelayMs = 60_000;
+        scheduleInitRetry("empty-credential");
         return;
       }
+      sipCredsRef.current = { ext, sipPassword, at: Date.now() };
+      initRetryDelayMs = 5_000; // setup got this far — reset the backoff ladder
 
       try {
         const JsSIP = await loadJsSIP();
@@ -1861,6 +1931,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             setRegState("failed");
             setError(msg);
             patchDiag({ lastRegError: msg });
+            // The ONE case where the cached secret is the actual problem: the PBX
+            // rejected it. Drop the cache so the next rebuild fetches a fresh one.
+            if (code === 401 || code === 403) sipCredsRef.current = null;
             // Keep retrying in desktop so users do not get stuck on Offline after reload.
             if (regFailCount >= 3) {
               setError(`SIP registration failed: ${e.cause}. Reconnecting...`);
@@ -1985,10 +2058,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setRegState("failed");
         setError(msg);
         patchDiag({ lastRegError: msg });
-        setTimeout(() => {
-          if (cancelled || uaRef.current) return;
-          try { init(); } catch { /* ignore */ }
-        }, 3_000);
+        scheduleInitRetry("ua-init");
       }
     }
 
@@ -2038,6 +2108,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (keepAliveTimerRef.current) { clearInterval(keepAliveTimerRef.current); keepAliveTimerRef.current = null; }
       if (watchdogTimerRef.current) { clearInterval(watchdogTimerRef.current); watchdogTimerRef.current = null; }
       if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+      if (initRetryTimerRef.current) { clearTimeout(initRetryTimerRef.current); initRetryTimerRef.current = null; }
       forceReconnectRef.current = null;
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       if (uaRef.current) {
