@@ -1,5 +1,118 @@
 # Connect 2 — working rules for Claude
 
+## ⛔⛔ AGENT HANDOFF — the dialer locked ITSELF out and sat on "Connecting" (2026-08-10) — READ FIRST for ANY "softphone stuck on Connecting / orange" report, before adding a retry path that calls an API, and before blaming a customer's internet
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SOFTPHONE_SELF_LOCKOUT_2026-08-10.md`**
+(commit `d8fc102e` on `feat/ivr-migration-takeover` — **portal DEPLOYED and
+container-verified**; portal-only, nothing touching call routing or the PBX.)
+
+- ⛔ **THE RULE: a client's own repair loop must cost fewer requests than its own
+  server budget allows.** Ours cost more. Every UA rebuild re-fetched
+  `/voice/me/extension` (**60/hr**) *and* `/voice/me/reset-sip-password`
+  (**30/hr**) — and the watchdog rebuilds every **~50 s (~72/hr)**, so any client
+  on a flapping network **reliably rate-limited itself out of its own credential
+  endpoint**. It never needed to re-fetch: the secret does not rotate
+  (`issueOneTimeProvisioningForUser` returns the STORED encrypted password and
+  only stamps `sipPasswordIssuedAt`). ⛔ Both limits are keyed **per user, not per
+  device** — two desktop installs on one login share one budget.
+- ⛔ **Every failure path in `init()` was a DEAD END, and the UI lied about it.**
+  Each early return did `setError()` and stopped, leaving **no UA, no watchdog,
+  no timer** — all the recovery machinery lives *inside* the UA that was never
+  built. The 429 message read *"Reload the page to retry"*: the code knew it was
+  wedged and **made the human the recovery mechanism**. And `regState` was never
+  updated on the way out, so the dialer kept rendering the amber **"Connecting"**
+  of a connection already torn down. That is the whole mystery of "restarting
+  fixes it". Fixed via `sipCredsRef` (rebuilds now cost **zero** API calls) +
+  `scheduleInitRetry()` on every path + honest `setRegState("failed")`.
+- ⛔ **THE DIAGNOSTIC, one grep — and the SILENCE is the proof:**
+  `grep "reset-sip-password" /var/log/nginx/access.log | grep "connect/desktop"`.
+  The User-Agent names the client (`@connect/desktop/0.1.5 … Electron`) so you can
+  separate desktop from browser from mobile. On 2026-08-10 it showed **101
+  fetches** from one desktop (healthy = **one per sign-in**), one every ~50 s,
+  a **429 at 06:15:47 ET**, then **46 minutes of ZERO requests** — while a second
+  install on the same network kept ticking every ~8 min. **A client fighting a bad
+  network gets NOISIER; a client that stops asking has quit.** Izzy's screenshot
+  was stamped 06:35 — 20 minutes into the wedge. He said it wasn't his internet
+  and he was right. ⛔ Nginx logs are **CEST = his clock + 6h**.
+- ⛔ **The desktop app loads the HOSTED portal**, so a portal deploy reaches every
+  install with **no new build** — but an **already-open window keeps the old
+  bundle until it is restarted**. "It's deployed" without "now restart it" leaves
+  the customer looking at the identical bug.
+- ⛔ **Deploy traps re-confirmed:** `pgrep -f run-heavy` in an ssh one-liner
+  **matches its own command line** and invented a heavy job that did not exist
+  (`ps -o pid,etime,cmd -p <pid>` → "PID gone") — same self-match as
+  `pgrep -f deploy-direct`. And the server clone was **two commits behind
+  origin**, so the incremental bundle failed `Repository lacks these prerequisite
+  commits` — `git fetch origin <branch>` there FIRST, then apply the bundle.
+- ⏳ **NOT PROVEN: nobody has watched the dialer recover from a real network drop
+  on the new code.** Proven as plumbing only (typecheck clean, new strings live in
+  `app-portal-1`'s `.next`, old dead-end string gone). **The acceptance test is a
+  number:** re-run the grep above — fetches should fall from **101/day to ~one per
+  sign-in**, with **zero 429s**. ⛔ Do NOT "fix" a recurrence by raising the
+  server-side limits; the limit is the safety net that caught this.
+
+## ⛔⛔ ALERT EMAILS ARE CURRENTLY OFF (2026-08-06) — READ FIRST for ANY email/voicemail-notification report, before adding an ADMIN_ALERT, or before believing a mail fix worked
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_MAIL_QUOTA_BOUNCE_LOOP_2026-08-06.md`**
+(commit `0197dd56` on `feat/ivr-migration-takeover` — **api DEPLOYED and
+container-verified; ⛔ the WORKER half is committed and NOT deployed.**)
+
+- ⛔ **THE RULE: a quiet log is not a fixed bug — prove there was TRAFFIC in the
+  window you measured.** The bounce loop was declared fixed after **four minutes
+  of zero bounces**. It was not fixed; it ran **135 more**. Those minutes were
+  quiet because *no mail had been sent in them* — zero voicemails were recorded
+  fleet-wide. Check `find /var/spool/asterisk/voicemail -name "msg*.txt"
+  -newermt "<start>" | wc -l` before concluding anything about mail. Same trap in
+  another costume: `postmap -q "" <map>` proves the RULE, never the BEHAVIOUR.
+- ⛔ **ONE mailbox sends everything Connect sends** — invoices, invites, password
+  resets **and the PBX's voicemail-to-email**, all as
+  `support@connectcomunications.com` — and Google caps it at **500/day**. On
+  2026-08-06 our own **ADMIN_ALERT emails took 402 of 499**, and every customer
+  email for the rest of the day was refused. **15 messages reached nobody**: 10
+  Gesheft voicemails, RSBK, Trust Bookkeeping, inii mini, two $130 Create A Box
+  invoices, one payment link. ⛔ The limit is a **rolling 24h window, not a
+  midnight reset**, and ⛔ **a 550 refusal is permanent — nothing is retried when
+  capacity returns.** Recordings are always safe (`delete=yes` appears nowhere);
+  only the notification is lost.
+- ⛔ **`ALERTING IS OFF`**: `/root/alert-email-killswitch.sh` on loopcom marks
+  every `ADMIN_ALERT` job dead before the sender sees it (customer email is never
+  touched). **It self-expires ~23:41 ET 2026-08-06**, at which point the OLD
+  behaviour silently returns unless the worker is deployed. `pkill -f
+  alert-email-killswitch` to lift it early.
+- ⛔ **The alert cooldown was in a `Map`.** The API restarted **56 times** that
+  day and every restart re-armed every alert — that is how a six-hour cooldown
+  sent one message every 25 minutes. Now `packages/shared/src/adminAlertBudget.ts`:
+  the cooldown is read from the **database** (identity = the subject, since that
+  is what survives in `EmailJob`), plus a **hard ceiling of 40 alert emails per
+  rolling 24h across every key** — because a subject carrying a changing count
+  defeats any per-key cooldown. ⛔ **UNEXPLAINED: four api alerts were still
+  created while the count was ~453. Do not re-enable alerts until that is
+  understood**, and remember several files create `ADMIN_ALERT` rows *without*
+  going through `sendAdminAlert` (`billingEmailLifecycle`, `receiptReconciliation`,
+  `adminSignupReport`, `journeyTracking`, `setupWatchdog`).
+- ⛔ **The bounce loop: `sender_canonical_maps` was `/.*/ → support@`, which
+  rewrites the BLANK sender that makes a bounce un-bounceable.** 2,409 bounces
+  from 66 real emails, each nesting the last (one queued message hit **452 KB**),
+  and the storm tripped Gmail's `454 Too many login attempts` — so the loop was
+  causing the refusals it fed on. ⛔ **Changing the rule to `/^.+$/` IS A NO-OP —
+  Postfix never queries the map with an empty key.** The fix that works breaks the
+  loop at *delivery*: `support@connectcomunications.com discard:` in
+  `transport_maps`. Safe only because **nothing legitimate is addressed to
+  support@ from that box** — all 24 delivered that day were bounces, and the one
+  config hit is `serveremail=` (the FROM address). Backups
+  `/root/{sender_canonical_maps,main.cf}.bak-20260806-bounceloop`.
+- ⛔ **Deploy traps:** `deploy-direct.sh` **hard-resets to `origin/<branch>`**, so
+  a local-only commit is silently rolled back and reported `success` /
+  `no_changes` — use `--commit <full-sha>` (ship it with an *incremental* `git
+  bundle`: 6.7 KB vs 653 MB for full history). And `deploy-direct.sh` **does not
+  accept `worker`** — that goes through `POST /ops/deploy/enqueue`, whose field is
+  **`service`** (not `target`) and which **requires `branch`**, so a commit-only
+  worker deploy has no path.
+- **Still open:** the worker deploy; the unexplained cap bypass; the McNamara Lion
+  payment link (`CC-202608-00006`) still unsent; and the real fix — **alerts and
+  customer mail still share one mailbox and one 500/day allowance.** A second
+  sending mailbox was offered and never supplied.
+
 ## ⛔ AGENT HANDOFF — the AI trainer taught the agent NOTHING for 9 days (2026-08-09) — READ FIRST for apps/agent triage/intent, trainer lessons, "the agent did X when I only asked ABOUT X", or before believing any agent feature is live
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_TRAINER_AUDIT_2026-08-09.md`**
