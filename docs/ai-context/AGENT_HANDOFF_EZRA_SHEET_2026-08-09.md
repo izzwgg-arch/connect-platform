@@ -168,10 +168,26 @@ unexplainable in both directions:
    `formatExtensionControlPanel` — real DND is reported nowhere;
 3. the assistant → writes **real** extension DND to the PBX via `pbx.M11`.
 
-The toggle now reads "Mute this browser" and a browser mute no longer reports
-itself as presence `"DND"`. ⛔ Wiring the portal to real extension DND is a
-PRODUCT DECISION, not a rename — it would let a browser switch block real calls
-— and needs an api→`pbx.M11` read that does not exist. Left for Izzy.
+⛔ **CORRECTION — an earlier draft of this doc said the api→`pbx.M11` read "does
+not exist". That was WRONG, and Izzy caught it.** DND has been wired through the
+**same helper as MOH** all along: `getPbxDiversion` / `setPbxDiversion` in
+`apps/api/src/pbxInboundRouteHelperClient.ts` hit the helper's `/get-diversion`
+and `/set-diversion`, the api already called them from
+`POST /internal/agent/extfeature/action`, and `AGENT_HANDOFF_SHAMMES_PBX_MS.md`
+records **"M11 DND | LIVE, proven | all tenants"**. Live helper
+`2026.08.06.6` serves both endpoints. The lesson: grep the **helper client**,
+not just route paths — searching for a route with "dnd" in the URL finds
+nothing, because the door is `/internal/agent/extfeature/action`.
+
+What was actually missing was only a **user-facing wrapper**, now added:
+`GET`/`POST /voice/extensions/me/dnd`, scoped to the caller's own extension,
+reusing those exact proven calls. It answers **200 `supported:false`** (never
+403/503) when the tenant has no PBX link, because the profile menu asks on every
+open. The POST **reads back** and reports `confirmed`, so the control can never
+claim a state the phone system did not confirm. The menu now shows a real
+"Do Not Disturb" alongside the clearly-named "Mute this browser", and presence
+follows the real one. ⛔ The old localStorage flag is **never** promoted into
+real DND — that would silently start blocking calls for anyone who had set it.
 
 Row 40 "message memory only 35": the model got `history.slice(-20)` while the
 store had already fetched **100** and discarded the rest for free. Now 40. Still

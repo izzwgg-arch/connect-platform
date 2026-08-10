@@ -106,6 +106,14 @@ function vmRecordStateLabel(state: string): string {
 export function ProfileMenu() {
   const [open, setOpen] = useState(false);
   const [dnd, setDnd] = useState(false);
+  // Real phone-system DND for this user's own extension, read from and written
+  // to the SAME proven M11 helper path the assistant uses. Never seeded from
+  // the old localStorage mute — that flag meant "this tab", and promoting it
+  // would silently start blocking real calls for anyone who had ever set it.
+  const [extDnd, setExtDnd] = useState(false);
+  const [extDndSupported, setExtDndSupported] = useState(false);
+  const [extDndSaving, setExtDndSaving] = useState(false);
+  const [extDndError, setExtDndError] = useState<string | null>(null);
   const [ringerOn, setRingerOn] = useState(true);
   const [smsToEmail, setSmsToEmail] = useState(false);
   const [smsToEmailSaving, setSmsToEmailSaving] = useState(false);
@@ -126,13 +134,13 @@ export function ProfileMenu() {
   const closeMenu = useCallback(() => setOpen(false), []);
   const displayName = getPreferredUserDisplayName(user);
   const extensionNumber = panelData?.extension?.number || user.extension || "Not assigned";
-  // The browser mute must NOT report itself as "DND" — that is the phone
-  // system's state, which this control has never touched. Showing "Do Not
-  // Disturb" here told people their extension was silenced when only this tab
-  // was. (Note: panelData.presence is currently a hardcoded "AVAILABLE" on the
-  // server, so real extension DND is still not surfaced anywhere in the portal.
-  // Wiring that up means reading the agent's pbx.M11 door from the api.)
-  const presence = panelData?.presence || user.presence || "AVAILABLE";
+  // Presence now follows the REAL extension DND read back from the phone
+  // system. It must never follow the browser mute: that flag means "this tab",
+  // and showing "Do Not Disturb" for it told people their extension was
+  // silenced when it was still ringing everywhere else.
+  // (panelData.presence is still a hardcoded "AVAILABLE" server-side, so it
+  // only ever contributes the default here.)
+  const presence = extDndSupported && extDnd ? "DND" : panelData?.presence || user.presence || "AVAILABLE";
   const greeting = panelData?.greeting ?? DEFAULT_GREETING;
   const previewUrl = useMemo(() => withBrowserToken(greeting.previewUrl), [greeting.previewUrl]);
 
@@ -152,6 +160,18 @@ export function ProfileMenu() {
       })
       .catch(() => {
         if (active) setPanelData({ extension: null, presence: "OFFLINE", greeting: DEFAULT_GREETING });
+      });
+    apiGet<{ supported?: boolean; dnd?: boolean }>("/voice/extensions/me/dnd")
+      .then((d) => {
+        if (!active) return;
+        setExtDndSupported(Boolean(d?.supported));
+        setExtDnd(Boolean(d?.dnd));
+        setExtDndError(null);
+      })
+      .catch(() => {
+        // Hide the control rather than show a confident "off" — reporting DND
+        // as off when we could not read it is how calls get silently blocked.
+        if (active) setExtDndSupported(false);
       });
     return () => {
       active = false;
@@ -178,6 +198,27 @@ export function ProfileMenu() {
   function updateDnd(next: boolean) {
     setDnd(next);
     if (typeof window !== "undefined") localStorage.setItem("cc-extension-dnd", next ? "1" : "0");
+  }
+
+  // Real extension DND. Optimistic, but corrected from the server's read-back —
+  // the control must never claim a state the phone system did not confirm.
+  async function updateExtDnd(next: boolean) {
+    const previous = extDnd;
+    setExtDnd(next);
+    setExtDndSaving(true);
+    setExtDndError(null);
+    try {
+      const r = await apiPost<{ dnd?: boolean; confirmed?: boolean }>("/voice/extensions/me/dnd", { dnd: next });
+      setExtDnd(Boolean(r?.dnd));
+      if (r && r.confirmed === false) {
+        setExtDndError("Saved, but we couldn't read it back — check your phone before relying on it.");
+      }
+    } catch (e: any) {
+      setExtDnd(previous);
+      setExtDndError(e?.body?.message || e?.message || "Couldn't reach the phone system.");
+    } finally {
+      setExtDndSaving(false);
+    }
   }
 
   function updateRinger(next: boolean) {
@@ -389,6 +430,26 @@ export function ProfileMenu() {
               says what it actually does. Wiring this control to real extension DND
               is a deliberate product decision, not a rename — it would start
               blocking real calls from a browser switch. */}
+          {/* The REAL one: this writes your extension's DND on the phone system,
+              through the same M11 helper path the assistant uses. Shown only
+              when the tenant is actually linked to a PBX — a toggle that cannot
+              reach the phone system is worse than no toggle. */}
+          {extDndSupported ? (
+            <>
+              <ControlToggle
+                label="Do Not Disturb"
+                detail={extDnd ? "Your extension is not accepting calls" : "Stop calls to your extension, everywhere"}
+                checked={extDnd}
+                disabled={extDndSaving}
+                onChange={updateExtDnd}
+              />
+              {extDndError ? (
+                <div className="ecp-inline-error" role="alert" style={{ fontSize: 12, color: "var(--danger)", padding: "2px 0 6px" }}>
+                  {extDndError}
+                </div>
+              ) : null}
+            </>
+          ) : null}
           <ControlToggle label="Mute this browser" detail="Stops calls ringing HERE only — not your phone system DND" checked={dnd} onChange={updateDnd} />
           <ControlToggle label="Ringer" detail="WebRTC incoming ring" checked={ringerOn} onChange={updateRinger} />
           <ControlToggle label="Theme" detail={theme === "dark" ? "Dark mode" : "Light mode"} checked={theme === "dark"} onChange={(next) => setTheme(next ? "dark" : "light")} />

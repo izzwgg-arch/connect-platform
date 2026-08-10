@@ -18812,6 +18812,79 @@ app.get("/voice/extensions/me/control-panel", async (req, reply) => {
   return reply.send(formatExtensionControlPanel(extension, metadata, smsToEmailEnabled));
 });
 
+// ── Do Not Disturb for the signed-in user's OWN extension ────────────────────
+// ⛔ This adds NO new integration. It reuses the SAME proven M11 path the
+// assistant already uses — the MOH helper's /get-diversion and /set-diversion
+// (see AGENT_HANDOFF_SHAMMES_PBX_MS.md: "M11 DND | LIVE, proven | all
+// tenants"). The capability was built and proven; only a user-facing wrapper
+// was missing, which is why the portal shipped a localStorage-only mute that
+// disagreed with the assistant in both directions.
+//
+// ⛔ Answers 200 with supported:false — never 403/503 — when the tenant has no
+// PBX link or the helper is unconfigured. The profile menu asks on every open,
+// and an error storm there would bury real failures (same rule as /voice/polly/status).
+//
+// NOT the same thing as POST /mobile/dnd-status, which is Connect's own
+// app-level signal for the wake dialplan and never touches VitalPBX DND.
+async function resolveOwnExtensionDndTarget(user: JwtUser): Promise<
+  | { ok: true; cfg: ReturnType<typeof resolvePbxRouteHelperConfig>; vitalTenantId: string; extension: string }
+  | { ok: false; reason: string }
+> {
+  const extension = await resolveVoicemailGreetingExtension(user);
+  if (!extension?.extNumber) return { ok: false, reason: "no_extension" };
+  if (!user.tenantId) return { ok: false, reason: "no_tenant" };
+  const link = await db.tenantPbxLink.findFirst({
+    where: { tenantId: user.tenantId, status: "LINKED" },
+    select: { pbxInstanceId: true, pbxTenantId: true },
+  });
+  if (!link?.pbxInstanceId || !link.pbxTenantId) return { ok: false, reason: "tenant_not_linked" };
+  const cfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+  if (!cfg) return { ok: false, reason: "route_helper_not_configured" };
+  return { ok: true, cfg, vitalTenantId: String(link.pbxTenantId), extension: String(extension.extNumber) };
+}
+
+app.get("/voice/extensions/me/dnd", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const t = await resolveOwnExtensionDndTarget(user as JwtUser);
+  if (!t.ok) return reply.send({ supported: false, reason: t.reason, dnd: false });
+  try {
+    const r = await getPbxDiversion(t.cfg!, { tenantId: t.vitalTenantId, extension: t.extension, feature: "DND" });
+    return reply.send({ supported: true, dnd: String(r.enable) === "yes", extension: t.extension });
+  } catch (err: any) {
+    // Reading failed — say so rather than reporting a confident "off", which is
+    // the answer that silently blocks somebody's calls without them knowing.
+    app.log.warn({ extension: t.extension, err: err?.message }, "own-extension DND read failed");
+    return reply.send({ supported: false, reason: "read_failed", dnd: false });
+  }
+});
+
+app.post("/voice/extensions/me/dnd", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const body = z.object({ dnd: z.boolean() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const t = await resolveOwnExtensionDndTarget(user as JwtUser);
+  if (!t.ok) return reply.code(409).send({ error: t.reason });
+  try {
+    await setPbxDiversion(t.cfg!, {
+      tenantId: t.vitalTenantId,
+      extension: t.extension,
+      feature: "DND",
+      enable: body.data.dnd ? "yes" : "no",
+    });
+    app.log.info({ extension: t.extension, dnd: body.data.dnd, actor: `user:${(user as JwtUser).sub}` }, "own-extension DND set (live AstDB)");
+    // Read back rather than echoing the request — the whole class of bug this
+    // replaces was a control that reported a state nothing had confirmed.
+    const after = await getPbxDiversion(t.cfg!, { tenantId: t.vitalTenantId, extension: t.extension, feature: "DND" })
+      .catch(() => null);
+    return reply.send({ ok: true, dnd: after ? String(after.enable) === "yes" : body.data.dnd, confirmed: !!after });
+  } catch (err: any) {
+    app.log.warn({ extension: t.extension, err: err?.message }, "own-extension DND set failed");
+    return reply.code(502).send({ error: "dnd_set_failed", message: err?.message ?? "Could not reach the phone system." });
+  }
+});
+
 app.put("/voice/extensions/me/sms-to-email", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
