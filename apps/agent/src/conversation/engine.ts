@@ -418,14 +418,23 @@ export class ConversationEngine {
       }
     }
 
-    // Build short history for context (last 20 messages). When bridging, feed the
-    // English mirror so the model stays entirely in English.
+    // Build short history for context. When bridging, feed the English mirror so
+    // the model stays entirely in English.
+    //
+    // This was 20 — ten exchanges — while the store already fetched 100, so the
+    // rest was loaded and thrown away for free. The trainer's sheet reports the
+    // assistant losing the thread part-way through a long session ("message
+    // memory only 35"), and a ten-exchange window is enough to cause that on its
+    // own. Raised to 40. Deliberately still a cap: the whole history would grow
+    // unbounded, and on Opus/Sonnet/gpt-5 thinking shares the max_tokens budget,
+    // so an oversized prompt buys truncation after you have paid to think.
+    const HISTORY_WINDOW = 40;
     const history = await this.store.listMessages(conv.id, 100);
     const msgs: ChatMessage[] = [
       { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
       ...(identityBlock ? [{ role: "system" as const, content: identityBlock }] : []),
       ...(lessonsBlock ? [{ role: "system" as const, content: lessonsBlock }] : []),
-      ...history.slice(-20).map((m) => ({
+      ...history.slice(-HISTORY_WINDOW).map((m) => ({
         role: (m.role === "assistant" ? "assistant" : "user") as "assistant" | "user",
         content: bridging ? (m.contentEn ?? m.content) : m.content,
       })),

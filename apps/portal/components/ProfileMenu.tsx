@@ -126,7 +126,13 @@ export function ProfileMenu() {
   const closeMenu = useCallback(() => setOpen(false), []);
   const displayName = getPreferredUserDisplayName(user);
   const extensionNumber = panelData?.extension?.number || user.extension || "Not assigned";
-  const presence = dnd ? "DND" : panelData?.presence || user.presence || "AVAILABLE";
+  // The browser mute must NOT report itself as "DND" — that is the phone
+  // system's state, which this control has never touched. Showing "Do Not
+  // Disturb" here told people their extension was silenced when only this tab
+  // was. (Note: panelData.presence is currently a hardcoded "AVAILABLE" on the
+  // server, so real extension DND is still not surfaced anywhere in the portal.
+  // Wiring that up means reading the agent's pbx.M11 door from the api.)
+  const presence = panelData?.presence || user.presence || "AVAILABLE";
   const greeting = panelData?.greeting ?? DEFAULT_GREETING;
   const previewUrl = useMemo(() => withBrowserToken(greeting.previewUrl), [greeting.previewUrl]);
 
@@ -373,7 +379,17 @@ export function ProfileMenu() {
 
         <section className="ecp-section" aria-label="Quick controls">
           <div className="ecp-section-title">Quick Controls</div>
-          <ControlToggle label="DND" detail="Silence calls for this browser" checked={dnd} onChange={updateDnd} />
+          {/* ⛔ This is NOT the phone system's Do Not Disturb. It is a browser-only
+              mute: it lives in localStorage, it is never sent anywhere, and it does
+              not stop your desk phone or mobile from ringing. Real extension DND is
+              written to the PBX by the assistant, and the two have never been
+              connected — which is exactly why a trainer saw the assistant say "DND
+              is off" while this switch stayed lit, and the reverse the next day.
+              Calling both of them "DND" is what made that unexplainable, so this one
+              says what it actually does. Wiring this control to real extension DND
+              is a deliberate product decision, not a rename — it would start
+              blocking real calls from a browser switch. */}
+          <ControlToggle label="Mute this browser" detail="Stops calls ringing HERE only — not your phone system DND" checked={dnd} onChange={updateDnd} />
           <ControlToggle label="Ringer" detail="WebRTC incoming ring" checked={ringerOn} onChange={updateRinger} />
           <ControlToggle label="Theme" detail={theme === "dark" ? "Dark mode" : "Light mode"} checked={theme === "dark"} onChange={(next) => setTheme(next ? "dark" : "light")} />
           <ControlToggle label="SMS to Email" detail="Send my texts to my inbox" checked={smsToEmail} disabled={smsToEmailSaving} onChange={updateSmsToEmail} />
