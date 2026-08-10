@@ -206,6 +206,49 @@ through the password-gated single-use approval in `agentConfirmations.ts`. That
 is the protection that refused all 15 jailbreak attempts. Only ever consider it
 for read-only requests, and only on Izzy's say-so.
 
+## 9c. ⛔ "I couldn't retrieve the account setup details" — TWO bugs stacked
+
+Found live while Ezra tested the rebuilt agent (2026-08-10 14:33-14:41). He
+asked "how many extensions do I have", "add extension 1102 for sales" and
+"clarify active extensions" and got the same failure each time — **the request
+he had been waiting on since 08-04**.
+
+**Bug 1 — the door was JWT-blocked.** `/internal/agent/account-setup-info` was
+missing from `jwtPublicRouteBypass.ts`, so the global auth hook rejected it
+before its own shared-secret check ran. The agent shipped the caller and the api
+shipped the route (both in `4badbf06`); nothing connected them.
+⛔ **The status code tells them apart: that route answers 403 on a bad secret, so
+a 401 means you never reached the route.** Secrets matched (sha256 prefix equal
+in both containers), DNS resolved, route registered at `server.ts:39723`.
+Swept all 7 `/internal/agent/*` doors — this was the only one missing.
+(`/internal/agent/moh/other` is a NEGATIVE test case, not a route.)
+
+**Bug 2, revealed once the door opened — a Prisma model that does not exist.**
+The schema is `TenantBillingSettings`, so the accessor is
+`tenantBillingSettings`. Every call site had the words transposed. Proven
+against the live client:
+
+```
+tenantBillingSettings: object
+billingTenantSettings: undefined
+```
+
+Five accessors, all crashing on use: `accountSetupInfoRoute.ts:60`,
+`billingReconcile.ts:178,185`, `enableSmsCapability.ts:95,194`.
+
+⛔ **Why it shipped green:** every site was `(db as any).…` or an injected
+`deps.db`, so TypeScript could not see it — **and `capabilities.test.ts` mocked
+the WRONG NAME too**, so 16 tests passed against a fake db that agreed with the
+bug. Same trap as [[sms-shared-inbox-test-mock-drift]]: a mock proves the code
+matches the mock, never that the model exists. The casts are now gone from the
+two real-client sites so the next transposition is a build error.
+⛔ Do NOT "fix" `apps/api/src/billing/*` — those are imports of a MODULE named
+`billingTenantSettingsMetadata`, not accessors.
+
+Proven end to end: `http=200` with real prices, extensions and people.
+⏳ **Noticed, not chased:** the payload returns `suggestedExtensionNumber: "101"`,
+which is the protected extension (`AGENT_PBX_PROTECTED_EXTS` default `101`).
+
 ## 10. Open
 
 1. **Tell Ezra the lesson feature works**, with the phrasings that fire it. He
