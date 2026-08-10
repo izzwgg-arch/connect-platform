@@ -147,10 +147,6 @@ export default function InvoicePage() {
             onClick={() => act("Email a payment link", () => apiPost(`/admin/billing/invoices/${i.id}/email-payment-link`, {}))}>
             Email payment link
           </button>
-          <button className="cbill-btn" disabled={!!busy || paid || voided}
-            onClick={() => act("Text a payment link", () => apiPost(`/admin/billing/invoices/${i.id}/sms-payment-link`, {}))}>
-            Text payment link
-          </button>
           <button className="cbill-btn" disabled={!!busy || !paid}
             onClick={() => act("Resend the receipt", () => apiPost(`/admin/billing/invoices/${i.id}/resend-receipt`, {}))}>
             Resend receipt
@@ -275,6 +271,10 @@ export default function InvoicePage() {
         </div>
       </section>
 
+      {!voided && (
+        <PaymentLink invoice={i} onSent={() => { void inv.reload(); void events.reload(); }} />
+      )}
+
       {!paid && !voided && (
         <OutsidePayment invoice={i} onDone={() => { void inv.reload(); void events.reload(); }} />
       )}
@@ -303,6 +303,128 @@ export default function InvoicePage() {
         </div>
       </section>
     </div>
+  );
+}
+
+type PaymentLinkInfo = {
+  url: string;
+  expiresAt: string;
+  sms: {
+    capable: boolean;
+    fromNumber: string | null;
+    fromNumberLabel: string | null;
+    reason: string | null;
+    suggestedPhone: string | null;
+  };
+};
+
+/** One link to copy and paste anywhere, and a text message that carries it.
+    The text always goes out from Connect's own number, for every customer —
+    the customer's own number is never used, and there is no picker for it. */
+function PaymentLink({ invoice, onSent }: { invoice: Invoice; onSent: () => void }) {
+  const link = useApi<PaymentLinkInfo>(`/admin/billing/invoices/${invoice.id}/payment-link`);
+  const [copied, setCopied] = useState("");
+  const [phone, setPhone] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sentTo, setSentTo] = useState("");
+  const [err, setErr] = useState("");
+
+  const info = link.data;
+  const url = info?.url || "";
+  // Offer the last number we texted for this customer, until they type over it.
+  const phoneValue = phoneTouched ? phone : (phone || info?.sms.suggestedPhone || "");
+
+  const copy = async () => {
+    setErr("");
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied("Copied — paste it wherever you like.");
+      window.setTimeout(() => setCopied(""), 4000);
+    } catch {
+      setErr("Your browser blocked copying. Select the link above and copy it by hand.");
+    }
+  };
+
+  const send = async () => {
+    const digits = phoneValue.replace(/\D/g, "");
+    if (digits.length < 10) { setErr("Enter the 10-digit mobile number to text this to."); return; }
+    setSending(true); setErr(""); setSentTo(""); setCopied("");
+    try {
+      const res = await apiPost<{ toPhone: string; fromPhoneLabel?: string }>(
+        `/admin/billing/invoices/${invoice.id}/sms-payment-link`,
+        { phone: phoneValue.trim() },
+      );
+      setSentTo(res.toPhone);
+      onSent();
+    } catch (e: any) {
+      setErr(errText(e, "The text did not go out."));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <section className="cbill-card">
+      <div className="cbill-card-hd">
+        <h3>Payment link</h3>
+        <span className="hint">Anyone who opens it can pay — no login needed</span>
+      </div>
+      <div className="cbill-card-bd">
+        {link.error && <div className="cbill-banner bad" style={{ margin: "10px 0" }}>{link.error}</div>}
+        {err && <div className="cbill-banner bad" style={{ margin: "10px 0" }}>{err}</div>}
+        {copied && <div className="cbill-banner ok" style={{ margin: "10px 0" }}>{copied}</div>}
+        {sentTo && <div className="cbill-banner ok" style={{ margin: "10px 0" }}>Texted to {sentTo}.</div>}
+
+        <div className="cbill-row">
+          <div className="cbill-label">
+            <span className="t">The link</span>
+            <span className="h">Works until {longDate(info?.expiresAt)}</span>
+          </div>
+          <input
+            className="cbill-input text"
+            readOnly
+            value={link.loading ? "Loading…" : url}
+            onFocus={(e) => e.currentTarget.select()}
+            aria-label="Payment link"
+          />
+        </div>
+        <div className="cbill-row">
+          <div className="cbill-label" />
+          <button className="cbill-btn primary" disabled={!url} onClick={() => void copy()}>
+            Copy link
+          </button>
+        </div>
+
+        <div className="cbill-row">
+          <div className="cbill-label">
+            <span className="t">Text it to them</span>
+            <span className="h">
+              {info?.sms.capable
+                ? `Sent from Connect ${info.sms.fromNumberLabel} — the same number for every customer`
+                : (info?.sms.reason || "Checking whether texting is available…")}
+            </span>
+          </div>
+          <input
+            className="cbill-input text"
+            value={phoneValue}
+            placeholder="(845) 555-0123"
+            onChange={(e) => { setPhoneTouched(true); setPhone(e.target.value); }}
+            aria-label="Mobile number to text the payment link to"
+          />
+        </div>
+        <div className="cbill-row">
+          <div className="cbill-label" />
+          <button
+            className="cbill-btn"
+            disabled={sending || !url || info?.sms.capable === false}
+            onClick={() => void send()}
+          >
+            {sending ? "Sending…" : "Send the text"}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
+import { SolaCardknoxAdapter, type SolaCardknoxConfig } from "@connect/integrations";
 import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createBillingInvoiceRowWithUniqueNumber, createManualInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
 import { updateInvoiceMeta, replaceInvoiceLineItems, addInvoiceLineItem, deleteInvoiceLineItem } from "./invoiceEditEngine";
 import { postExternalPayment, externalMethodLabel, type ExternalPaymentMethodType } from "./externalPayment";
@@ -53,6 +53,8 @@ import {
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
 import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail, queueReceiptEmailOnce } from "./billingEmailLifecycle";
+import { BILLING_PAY_TOKEN_TTL_MS } from "./billingPayToken";
+import { formatUsPhoneForHumans, normalizeUsPhone, resolveBillingSmsSender } from "./billingSmsSender";
 import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
@@ -237,57 +239,25 @@ function centsToDollarsStr(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-// ── SMS provider resolution for billing ───────────────────────────────────────
+// ── SMS sending for billing ───────────────────────────────────────────────────
+//
+// ⛔ There is deliberately NO per-tenant resolver here any more. Billing texts
+// always go out from Connect's own number via the platform VoIP.ms account —
+// see `billingSmsSender.ts` for why the per-tenant version could never work.
 
-type TenantSmsProviderResult = {
-  provider: import("@connect/integrations").SmsProvider;
-  fromNumber: string;
-  providerName: string;
-};
-
-async function resolveTenantSmsProvider(tenantId: string): Promise<TenantSmsProviderResult | null> {
-  const tenant = await (db as any).tenant.findUnique({
-    where: { id: tenantId },
-    select: {
-      smsPrimaryProvider: true,
-      defaultSmsFromNumber: { select: { phoneNumber: true } },
-    },
+/**
+ * The last number we successfully texted a pay link to for this customer, so
+ * the screen can offer it again instead of making the operator remember it.
+ */
+async function lastBillingSmsRecipientForTenant(tenantId: string): Promise<string | null> {
+  const rows = await (db as any).billingEventLog.findMany({
+    where: { tenantId, type: "billing.sms_payment_link_sent" },
+    select: { metadata: true },
+    orderBy: { createdAt: "desc" },
+    take: 1,
   });
-  if (!tenant) return null;
-
-  const providerName: string = tenant.smsPrimaryProvider || "TWILIO";
-  const credential = await (db as any).providerCredential.findUnique({
-    where: { tenantId_provider: { tenantId, provider: providerName } },
-  });
-  if (!credential || !credential.isEnabled) return null;
-
-  let smsProvider: import("@connect/integrations").SmsProvider;
-  try {
-    if (providerName === "TWILIO") {
-      const creds = decryptJson<TwilioCredentials>(credential.credentialsEncrypted);
-      if (!creds.accountSid || !creds.authToken) return null;
-      smsProvider = new TwilioSmsProvider(creds, false);
-    } else {
-      const creds = decryptJson<VoipMsCredentials>(credential.credentialsEncrypted);
-      if (!creds.username || !creds.password || !creds.fromNumber) return null;
-      smsProvider = new VoipMsSmsProvider(creds, false);
-    }
-  } catch {
-    return null;
-  }
-
-  let fromNumber: string | null = tenant.defaultSmsFromNumber?.phoneNumber ?? null;
-  if (!fromNumber) {
-    const anyNum = await (db as any).phoneNumber.findFirst({
-      where: { tenantId, status: "ACTIVE" },
-      select: { phoneNumber: true },
-      orderBy: { createdAt: "asc" },
-    });
-    fromNumber = anyNum?.phoneNumber ?? null;
-  }
-  if (!fromNumber) return null;
-
-  return { provider: smsProvider, fromNumber, providerName };
+  const phone = rows?.[0]?.metadata?.toPhone;
+  return typeof phone === "string" && phone.trim() ? phone : null;
 }
 
 function ensureCredentialCrypto(reply: any): boolean {
@@ -2668,31 +2638,67 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // ── Admin SMS payment link ────────────────────────────────────────────────────
+  // ── Admin payment link: copy, or text it ─────────────────────────────────────
 
+  /**
+   * The one link an operator can copy and paste anywhere — the same signed
+   * public pay URL the emailed and texted links use. No login needed to open it.
+   */
+  app.get("/admin/billing/invoices/:id/payment-link", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const invoice = await (db as any).billingInvoice.findUnique({
+      where: { id },
+      select: { id: true, tenantId: true, status: true },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    if (invoice.status === "VOID") {
+      return reply.code(400).send({ error: "invoice_voided", message: "This invoice was cancelled, so it has no payment link." });
+    }
+
+    const [sender, suggestedPhone] = await Promise.all([
+      resolveBillingSmsSender(),
+      lastBillingSmsRecipientForTenant(invoice.tenantId),
+    ]);
+
+    return {
+      url: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId),
+      expiresAt: new Date(Date.now() + BILLING_PAY_TOKEN_TTL_MS).toISOString(),
+      // Everything the "text it" panel needs, so the screen makes one call.
+      sms: {
+        capable: sender.ok,
+        fromNumber: sender.ok ? sender.fromNumber : null,
+        fromNumberLabel: sender.ok ? formatUsPhoneForHumans(sender.fromNumber) : null,
+        reason: sender.ok ? null : sender.message,
+        suggestedPhone,
+      },
+    };
+  });
+
+  /**
+   * Kept for the older invoices screen. `tenantId` no longer changes the answer:
+   * billing texts always come from Connect's own number.
+   */
   app.get("/admin/billing/platform/tenants/:tenantId/sms-capability", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
     const { tenantId } = req.params as { tenantId: string };
-    const result = await resolveTenantSmsProvider(tenantId);
-    if (!result) {
-      return { capable: false, fromNumber: null, fromNumbers: [], provider: null, reason: "No enabled SMS provider credentials found for this tenant." };
+    const sender = await resolveBillingSmsSender();
+    if (!sender.ok) {
+      return { capable: false, fromNumber: null, fromNumbers: [], provider: null, reason: sender.message };
     }
-    // Return all active phone numbers for this tenant (to populate from-number picker)
-    const allNums = await (db as any).phoneNumber.findMany({
-      where: { tenantId, status: "ACTIVE" },
-      select: { phoneNumber: true, friendlyName: true, provider: true },
-      orderBy: { purchasedAt: "asc" },
-    });
-    const fromNumbers: { number: string; label: string }[] = allNums.map((n: any) => ({
-      number: n.phoneNumber,
-      label: n.friendlyName ? `${n.friendlyName} (${n.phoneNumber})` : n.phoneNumber,
-    }));
-    // Ensure the auto-resolved from number is always in the list
-    if (result.fromNumber && !fromNumbers.some((n) => n.number === result.fromNumber)) {
-      fromNumbers.unshift({ number: result.fromNumber, label: result.fromNumber });
-    }
-    return { capable: true, fromNumber: result.fromNumber, fromNumbers, provider: result.providerName, reason: null };
+    const label = formatUsPhoneForHumans(sender.fromNumber);
+    return {
+      capable: true,
+      fromNumber: sender.fromNumber,
+      // One choice on purpose — an operator must not be able to text a customer
+      // a bill from some other customer's number.
+      fromNumbers: [{ number: sender.fromNumber, label: `Connect ${label}` }],
+      provider: "VOIPMS",
+      reason: null,
+      suggestedPhone: await lastBillingSmsRecipientForTenant(tenantId),
+    };
   });
 
   app.post("/admin/billing/invoices/:id/sms-payment-link", async (req, reply) => {
@@ -2712,31 +2718,21 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     if (invoice.status === "VOID") return reply.code(400).send({ error: "invoice_voided" });
 
-    const smsCtx = await resolveTenantSmsProvider(invoice.tenantId);
-    if (!smsCtx) {
-      return reply.code(400).send({ error: "sms_provider_unavailable", message: "No enabled SMS provider credentials found for this tenant." });
+    const sender = await resolveBillingSmsSender();
+    if (!sender.ok) {
+      return reply.code(400).send({ error: sender.error, message: sender.message });
     }
+    // ⛔ `fromPhone` is still accepted so the older screen keeps working, but it
+    // is deliberately IGNORED. Every billing text comes from Connect's number.
+    const resolvedFromNumber = sender.fromNumber;
 
     const rawPhone = (input.phone || "").trim();
-    if (!rawPhone || rawPhone.length < 7) {
-      return reply.code(400).send({ error: "destination_phone_required", message: "Provide a destination phone number." });
+    if (!rawPhone) {
+      return reply.code(400).send({ error: "destination_phone_required", message: "Enter the mobile number to text this payment link to." });
     }
-    const normalizedPhone = rawPhone.startsWith("+") ? rawPhone : `+1${rawPhone.replace(/\D/g, "")}`;
-    if (normalizedPhone.replace(/\D/g, "").length < 10) {
-      return reply.code(400).send({ error: "invalid_phone", message: "Phone number appears too short — check the number and try again." });
-    }
-
-    // Optional from-number override — must be an active number owned by this tenant
-    let resolvedFromNumber = smsCtx.fromNumber;
-    if (input.fromPhone && input.fromPhone.trim()) {
-      const owned = await (db as any).phoneNumber.findFirst({
-        where: { phoneNumber: input.fromPhone.trim(), tenantId: invoice.tenantId, status: "ACTIVE" },
-        select: { phoneNumber: true },
-      });
-      if (!owned) {
-        return reply.code(400).send({ error: "invalid_from_number", message: "The selected from-number is not an active number for this tenant." });
-      }
-      resolvedFromNumber = owned.phoneNumber;
+    const normalizedPhone = normalizeUsPhone(rawPhone);
+    if (!normalizedPhone) {
+      return reply.code(400).send({ error: "invalid_phone", message: "That does not look like a phone number — enter 10 digits, for example 845 555 0123." });
     }
 
     // Duplicate send protection: no same phone for this invoice in the last 2 minutes
@@ -2758,10 +2754,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
     let providerMessageId: string | undefined;
     try {
-      const result = await smsCtx.provider.sendMessage({
+      const result = await sender.send({
         tenantId: invoice.tenantId,
         to: normalizedPhone,
-        from: resolvedFromNumber,
         body: msgBody,
       });
       providerMessageId = result.providerMessageId;
@@ -2788,7 +2783,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       data: { lastEmailStatus: "SMS_SENT", lastEmailedAt: new Date() },
     });
 
-    return { ok: true, toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId };
+    return {
+      ok: true,
+      toPhone: normalizedPhone,
+      fromPhone: resolvedFromNumber,
+      fromPhoneLabel: formatUsPhoneForHumans(resolvedFromNumber),
+      providerMessageId,
+    };
   });
 
   // ── Admin explicit charge with saved card ────────────────────────────────────
