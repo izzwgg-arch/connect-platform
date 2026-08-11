@@ -19922,7 +19922,16 @@ async function recoverRecordingFromPbxCdr(args: {
     const headers: Record<string, string> = { "app-key": args.appKey, Accept: "audio/*, */*" };
     if (args.rangeHeader) headers.Range = args.rangeHeader;
     try {
-      const resp = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
+      // Headers-only timeout — the returned resp's body is streamed to the
+      // client after this function returns, and must not carry a fuse.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20_000);
+      let resp: Response;
+      try {
+        resp = await fetch(url, { headers, signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
       if (resp.ok) {
         app.log.info({ linkedId: args.linkedId, correctedPath: path }, "recording: recovered via pbx cdr recfile");
         return { correctedPath: path, resp };
@@ -19948,7 +19957,7 @@ function pipePbxRecordingResponse(
   reply: any,
   asAttachment: boolean,
   rec: { pbxFilePath: string | null; linkedId: string },
-): void {
+): unknown {
   const contentType = pbxResp.headers.get("content-type") || "audio/wav";
   const contentLength = pbxResp.headers.get("content-length");
   const contentRange  = pbxResp.headers.get("content-range");
@@ -19964,8 +19973,14 @@ function pipePbxRecordingResponse(
     reply.header("Content-Disposition", `attachment; filename="${safeName || `recording-${rec.linkedId}.${ext}`}"`);
   }
   reply.status(pbxResp.status === 206 ? 206 : 200);
+  // ⛔ The send MUST be RETURNED all the way out of the async route handler.
+  // `reply.send(stream)` without returning it races the handler's own
+  // `undefined` resolution, and for a STREAM payload the race loses: Fastify
+  // replies `content-length: 0` with an empty body (reproduced on Fastify
+  // 5.7.4; a Buffer payload happens to survive the same race, which is why the
+  // old buffered version never showed this).
   // No body (e.g. an upstream 204/empty 206) degrades to an empty send.
-  reply.send(pbxResp.body ? Readable.fromWeb(pbxResp.body as any) : Buffer.alloc(0));
+  return reply.send(pbxResp.body ? Readable.fromWeb(pbxResp.body as any) : Buffer.alloc(0));
 }
 
 /**
@@ -19979,7 +19994,7 @@ async function streamCallRecording(
   user: { role?: string | null; tenantId?: string | null; extension?: string | null; id?: string },
   reply: any,
   asAttachment: boolean,
-): Promise<void> {
+): Promise<unknown> {
   if (rec.status !== "ready" || !rec.pbxFilePath) {
     reply.code(404).send({ error: "recording_not_available" });
     return;
@@ -20097,10 +20112,20 @@ async function streamCallRecording(
   const rangeHeader = (reply.request?.headers?.range || "") as string;
   if (rangeHeader) headers.Range = rangeHeader;
 
-  const pbxResp = await fetch(audioUrl, {
-    headers,
-    signal: AbortSignal.timeout(20_000),
-  });
+  // ⛔ The timeout bounds TIME-TO-HEADERS only. The body now STREAMS to the
+  // client at the client's own pace (backpressure), so a long recording on a
+  // slow line legitimately takes minutes — an AbortSignal.timeout() on the
+  // whole fetch would cut the audio off mid-listen at the 20s mark. Once
+  // headers have arrived the timer is cleared and the body flows untimed; a
+  // dead client tears the pipe down itself.
+  const headerCtrl = new AbortController();
+  const headerTimer = setTimeout(() => headerCtrl.abort(), 20_000);
+  let pbxResp: Response;
+  try {
+    pbxResp = await fetch(audioUrl, { headers, signal: headerCtrl.signal });
+  } finally {
+    clearTimeout(headerTimer);
+  }
 
   if (!pbxResp.ok) {
     // The stored path 404'd — the PBX recorded the call under a different leg
@@ -20128,8 +20153,7 @@ async function streamCallRecording(
           .update({ where: { linkedId: rec.linkedId }, data: { recordingPath: recovered.correctedPath } })
           .catch(() => undefined);
         app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment, recovered: true }, "recording: access logged");
-        pipePbxRecordingResponse(recovered.resp, reply, asAttachment, rec);
-        return;
+        return pipePbxRecordingResponse(recovered.resp, reply, asAttachment, rec);
       }
     }
 
@@ -20155,7 +20179,7 @@ async function streamCallRecording(
   }
 
   app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment }, "recording: access logged");
-  pipePbxRecordingResponse(pbxResp, reply, asAttachment, rec);
+  return pipePbxRecordingResponse(pbxResp, reply, asAttachment, rec);
 }
 
 // Helper: resolve a ConnectCdr row into a recording descriptor, enforcing permissions.
