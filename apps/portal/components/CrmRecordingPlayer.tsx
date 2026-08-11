@@ -18,7 +18,7 @@
  */
 
 import { useState } from "react";
-import { Play, Square, AlertCircle } from "lucide-react";
+import { Play, Square, AlertCircle, MicOff } from "lucide-react";
 
 interface CrmRecordingPlayerProps {
   linkedId: string;
@@ -35,9 +35,32 @@ function getStorageToken(): string {
   );
 }
 
+/**
+ * An <audio> element's onError says only "it broke" — never why. That produced
+ * a dead player next to a 10px "Unavailable" for calls that simply have no
+ * recording, which reads as a broken product. So on failure we ask the server
+ * for one byte and use its answer to say the true thing.
+ */
+type PlayFailure = "not_recorded" | "temporary";
+
+async function classifyStreamFailure(streamUrl: string): Promise<PlayFailure> {
+  try {
+    const resp = await fetch(streamUrl, { headers: { Range: "bytes=0-0" } });
+    if (resp.ok || resp.status === 206) return "temporary"; // audio fetched fine — the element choked, not the server
+    if (resp.status === 404) {
+      const body = await resp.json().catch(() => null as any);
+      return body?.error === "audio_fetch_failed" ? "temporary" : "not_recorded";
+    }
+    return "temporary";
+  } catch {
+    return "temporary";
+  }
+}
+
 export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPlayerProps) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState(false);
+  const [failure, setFailure] = useState<PlayFailure | null>(null);
 
   const streamUrl = (() => {
     const token = getStorageToken();
@@ -48,7 +71,7 @@ export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPl
   if (!open) {
     return (
       <button
-        onClick={() => { setError(false); setOpen(true); }}
+        onClick={() => { setError(false); setFailure(null); setOpen(true); }}
         title="Play recording"
         style={{
           display: "inline-flex",
@@ -71,13 +94,35 @@ export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPl
     );
   }
 
+  // A player that can never produce sound is worse than no player — once we know
+  // the call was not recorded, replace it with the plain fact.
+  if (failure === "not_recorded") {
+    return (
+      <span
+        title="This call was not recorded, so there is no audio to play."
+        style={{
+          display: "inline-flex", alignItems: "center", gap: "0.25rem",
+          fontSize: compact ? "0.625rem" : "0.6875rem", fontWeight: 600,
+          padding: compact ? "0.0625rem 0.25rem" : "0.125rem 0.375rem",
+          borderRadius: 4, background: "#f3f4f6", color: "#6b7280", lineHeight: 1,
+        }}
+      >
+        <MicOff size={compact ? 8 : 10} />
+        Not recorded
+      </span>
+    );
+  }
+
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: "0.375rem", flexWrap: "wrap" }}>
       <audio
         controls
         autoPlay={false}
         src={streamUrl}
-        onError={() => setError(true)}
+        onError={() => {
+          setError(true);
+          void classifyStreamFailure(streamUrl).then(setFailure);
+        }}
         style={{
           height: compact ? "28px" : "32px",
           maxWidth: compact ? "180px" : "240px",
@@ -86,18 +131,18 @@ export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPl
       />
       {error && (
         <span
-          title="Recording unavailable"
+          title="The recording could not be fetched just now. This is usually temporary."
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.2rem",
             fontSize: "0.625rem", color: "#ef4444",
           }}
         >
           <AlertCircle size={10} />
-          Unavailable
+          Couldn’t load — try again
         </span>
       )}
       <button
-        onClick={() => { setOpen(false); setError(false); }}
+        onClick={() => { setOpen(false); setError(false); setFailure(null); }}
         title="Collapse player"
         style={{
           background: "none",

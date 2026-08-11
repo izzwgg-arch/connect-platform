@@ -273,6 +273,7 @@ import {
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
+import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -19675,6 +19676,35 @@ app.get("/voice/voicemail/:id/download", async (req, reply) => {
 //
 // The Connect stream/download endpoints are the ONLY place we talk to the PBX
 // for audio — exactly one request per user click.  No polling, no scanning.
+//
+// ⛔ recordingPath proves INTENT, NOT EXISTENCE. VitalPBX sets __REC_FILENAME /
+// MIXMONITOR_FILENAME on calls it then does not record, so the path is simply
+// the name the file WOULD have carried. Measured on Trust Bookkeeping
+// 2026-08-11: 69 calls advertised a recording that day, 38 files existed —
+// 45% of the play buttons were dead, and a customer who clicked four of them in
+// a row (2026-08-04) reasonably concluded recordings were broken. When
+// MixMonitor genuinely runs the file is always written (38 invocations → 38
+// files that day), so the ONLY proof is fetching it. Once the PBX confirms a
+// file is absent we stamp ConnectCdr.recordingMissingAt and stop offering it.
+
+/** A call the PBX has confirmed it never recorded. Distinct from a transient fetch failure. */
+const RECORDING_NOT_RECORDED = "recording_not_recorded";
+const RECORDING_NOT_RECORDED_DETAIL =
+  "This call was not recorded, so there is no audio to play or download. Recording is switched on per route on the phone system — ask us if you expected this call to be recorded.";
+
+/**
+ * Mark a call as having no recording, after the PBX has CONFIRMED absence
+ * (a 404 on the file AND an empty VitalPBX-CDR recovery lookup). This is what
+ * removes the dead play/download button for everyone from then on.
+ *
+ * Deliberately never called for 5xx/timeouts: a PBX that is merely unreachable
+ * must not erase a customer's recordings from the UI.
+ */
+async function markRecordingMissing(linkedId: string): Promise<void> {
+  await (db as any).connectCdr
+    .update({ where: { linkedId }, data: { recordingMissingAt: new Date() } })
+    .catch(() => undefined);
+}
 
 /**
  * Convert an absolute PBX recording path (or a legacy "YYYY/MM/DD/xxx.wav"
@@ -20053,9 +20083,22 @@ async function streamCallRecording(
       }
     }
 
+    // A 404 that survived recovery is proof the call was never recorded: the file
+    // is not at the stored path and VitalPBX's own CDR has no recfile for it.
+    // Stamp it so this dead play button disappears instead of being clicked
+    // again (one customer clicked the same one four times in eight minutes).
+    // Anything other than 404 is transient — never stamp, never hide.
+    if (shouldMarkRecordingMissing({ pbxStatus: pbxResp.status, recovered: false })) {
+      await markRecordingMissing(rec.linkedId);
+      app.log.info({ linkedId: rec.linkedId, audioUrl }, "recording: confirmed never recorded — marked missing");
+      reply.code(404).send({ error: RECORDING_NOT_RECORDED, detail: RECORDING_NOT_RECORDED_DETAIL });
+      return;
+    }
+
     app.log.warn({ linkedId: rec.linkedId, audioUrl, status: pbxResp.status }, "recording: fetch failed");
-    reply.code(pbxResp.status === 404 ? 404 : 503).send({
-      error: pbxResp.status === 404 ? "recording_file_missing" : "audio_fetch_failed",
+    reply.code(503).send({
+      error: "audio_fetch_failed",
+      detail: "The phone system did not return the audio just now. This is usually temporary — please try again in a moment.",
       pbxStatus: pbxResp.status,
     });
     return;
@@ -20092,6 +20135,7 @@ async function resolveRecordingForUser(
       linkedId: true,
       tenantId: true,
       recordingPath: true,
+      recordingMissingAt: true,
       fromNumber: true,
       toNumber: true,
       direction: true,
@@ -20103,6 +20147,12 @@ async function resolveRecordingForUser(
   });
   if (!cdr) { reply.code(404).send({ error: "not_found" }); return null; }
   if (!cdr.recordingPath) { reply.code(404).send({ error: "recording_not_available" }); return null; }
+  // Already proven absent on an earlier click — answer immediately instead of
+  // making the customer wait on a PBX round-trip that is known to 404.
+  if (cdr.recordingMissingAt) {
+    reply.code(404).send({ error: RECORDING_NOT_RECORDED, detail: RECORDING_NOT_RECORDED_DETAIL });
+    return null;
+  }
 
   const digits = (s: string | null | undefined) => String(s ?? "").replace(/\D/g, "");
   const rawExt = cdr.direction === "outgoing" ? digits(cdr.fromNumber) : digits(cdr.toNumber);
@@ -20155,6 +20205,105 @@ app.get("/voice/recording/:linkedId/download", async (req, reply) => {
     app.log.warn({ linkedId, err: err?.message }, "recording: download failed");
     return reply.code(503).send({ error: "audio_unavailable" });
   }
+});
+
+// ── POST /voice/recordings/verify ─────────────────────────────────────────────
+// Sweep calls that ADVERTISE a recording and confirm against the PBX whether the
+// audio actually exists, stamping the ones that do not.
+//
+// Without this, the only way a dead play button gets cleaned up is a customer
+// clicking it — which is precisely the experience we are fixing. Trust
+// Bookkeeping alone carried 183 of them across August.
+//
+// Uses the SAME resolve → fetch → recover chain as a real click, so the sweep can
+// never mark something missing that a click would have played. Reads one byte per
+// recording (Range: bytes=0-0), never the whole file.
+app.post("/voice/recordings/verify", async (req, reply) => {
+  const user = await requirePermission(req, reply, canAccessAdminSbc); // SUPER_ADMIN only
+  if (!user) return;
+
+  const body = (req.body ?? {}) as { tenantId?: string; since?: string; limit?: number; dryRun?: boolean };
+  const limit = Math.min(Math.max(Number(body.limit) || 500, 1), 5000);
+  const dryRun = body.dryRun !== false; // default DRY RUN — stamping is opt-in
+  const since = body.since ? new Date(body.since) : null;
+
+  const where: any = { recordingPath: { not: null }, recordingMissingAt: null };
+  if (body.tenantId) where.tenantId = body.tenantId;
+  if (since && !Number.isNaN(since.getTime())) where.startedAt = { gte: since };
+
+  const rows = await (db as any).connectCdr.findMany({
+    where,
+    select: {
+      linkedId: true, tenantId: true, recordingPath: true, startedAt: true,
+      durationSec: true, pbxVitalTenantId: true, pbxTenantCode: true,
+    },
+    orderBy: { startedAt: "desc" },
+    take: limit,
+  });
+
+  let present = 0, missing = 0, recovered = 0, skipped = 0;
+  const missingIds: string[] = [];
+
+  for (const r of rows) {
+    const pbxInstance = await resolvePbxInstanceForCdr(r.tenantId, r.linkedId).catch(() => null);
+    // No PBX link is "cannot tell", never "missing" — a tenant whose PBX we can't
+    // reach must not have its recordings hidden.
+    if (!pbxInstance) { skipped++; continue; }
+
+    let auth: { token: string; secret?: string | null };
+    try { auth = decryptJson<{ token: string; secret?: string | null }>(pbxInstance.apiAuthEncrypted); }
+    catch { skipped++; continue; }
+
+    const headers = { "app-key": auth.token, Accept: "audio/*, */*", Range: "bytes=0-0" };
+    let status = 0;
+    try {
+      const resp = await fetch(buildRecordingUrl(pbxInstance.baseUrl, r.recordingPath), { headers, signal: AbortSignal.timeout(20_000) });
+      status = resp.status;
+      await resp.arrayBuffer().catch(() => undefined); // drain the single byte
+    } catch { skipped++; continue; }
+
+    if (!shouldMarkRecordingMissing({ pbxStatus: status, recovered: false })) {
+      // 2xx = the file is there. Anything else (5xx, auth) is inconclusive, and
+      // inconclusive must never hide a recording.
+      if (status >= 200 && status < 400) present++; else skipped++;
+      continue;
+    }
+
+    // Stored path 404s — the queue/IVR leg-drift case. Ask the PBX's own CDR
+    // before concluding anything, exactly as a user click would.
+    const rec = await recoverRecordingFromPbxCdr({
+      linkedId: r.linkedId,
+      storedPath: r.recordingPath,
+      startedAt: r.startedAt ?? null,
+      durationSec: r.durationSec ?? null,
+      pbxVitalTenantId: r.pbxVitalTenantId ?? null,
+      pbxTenantCode: r.pbxTenantCode ?? null,
+      pbxInstance,
+      appKey: auth.token,
+      rangeHeader: "bytes=0-0",
+    }).catch(() => null);
+
+    if (rec) {
+      recovered++;
+      if (!dryRun) {
+        await (db as any).connectCdr
+          .update({ where: { linkedId: r.linkedId }, data: { recordingPath: rec.correctedPath } })
+          .catch(() => undefined);
+      }
+      continue;
+    }
+
+    missing++;
+    if (missingIds.length < 50) missingIds.push(r.linkedId);
+    if (!dryRun) await markRecordingMissing(r.linkedId);
+  }
+
+  app.log.info({ tenantId: body.tenantId ?? null, checked: rows.length, present, missing, recovered, skipped, dryRun }, "recording: verify sweep");
+  return reply.send({
+    dryRun, checked: rows.length, present, missing, recovered, skipped,
+    sampleMissing: missingIds,
+    note: dryRun ? "Dry run — nothing was changed. Send dryRun:false to apply." : "Applied.",
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -28979,8 +29128,18 @@ app.get("/calls/history", async (req, reply) => {
   }
 
   // hasRecording filter — was parsed but previously never applied to the query.
-  if (query.hasRecording === "yes") where.recordingPath = { not: null };
-  else if (query.hasRecording === "no") where.recordingPath = null;
+  // "Has a recording" means a path AND no confirmed absence — a call whose file
+  // the PBX has told us does not exist is a call with no recording, and must not
+  // be offered for playback or counted as one.
+  if (query.hasRecording === "yes") where.AND = [
+    ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+    { recordingPath: { not: null } },
+    { recordingMissingAt: null },
+  ];
+  else if (query.hasRecording === "no") where.AND = [
+    ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+    { OR: [{ recordingPath: null }, { recordingMissingAt: { not: null } }] },
+  ];
 
   const normalizedSearch = String(query.search || "").trim();
   if (normalizedSearch) {
@@ -29016,6 +29175,7 @@ app.get("/calls/history", async (req, reply) => {
         queueId: true,
         hangupCause: true,
         recordingPath: true,
+        recordingMissingAt: true,
   } as const;
   const selectWithoutFromPrefix = {
         id: true,
@@ -29040,6 +29200,7 @@ app.get("/calls/history", async (req, reply) => {
         queueId: true,
         hangupCause: true,
         recordingPath: true,
+        recordingMissingAt: true,
   } as const;
   const isMissingFromPrefixColumn = (err: unknown) => {
     const message = err instanceof Error ? err.message : String(err || "");
@@ -29545,8 +29706,12 @@ app.get("/calls/history", async (req, reply) => {
       journeySummary: outcome.journeySummary,
       finalOutcomeReason: outcome.finalOutcomeReason,
       journeySteps: outcome.journeySteps,
-      recordingAvailable: !!r.recordingPath,
+      // A stored path is not a recording — see recordingAvailability.ts. Offering
+      // one the PBX has already denied is how a customer ends up clicking the
+      // same dead button four times.
+      recordingAvailable: isRecordingOfferable(r as any),
       recordingPath: r.recordingPath ?? null,
+      recordingNotRecorded: !!(r as any).recordingMissingAt,
     };
   });
 

@@ -55,6 +55,7 @@ export async function registerCrmLiveCallContextRoutes(app: FastifyInstance) {
             durationSec: true,
             talkSec: true,
             recordingPath: true,
+            recordingMissingAt: true,
           },
         })
       : null;
@@ -205,6 +206,7 @@ export async function registerCrmLiveCallContextRoutes(app: FastifyInstance) {
               durationSec: true,
               talkSec: true,
               recordingPath: true,
+              recordingMissingAt: true,
             },
           })
         : Promise.resolve([]),
@@ -475,7 +477,7 @@ function formatCdr(cdr: any) {
     endedAt: cdr.endedAt ?? null,
     durationSec: cdr.durationSec ?? 0,
     talkSec: cdr.talkSec ?? 0,
-    recordingAvailable: !!cdr.recordingPath,
+    recordingAvailable: !!cdr.recordingPath && !cdr.recordingMissingAt,
     summary: null,
     transcriptionSummary: null,
   };
@@ -523,7 +525,7 @@ function formatCurrentCall({
     startedAt: cdr?.startedAt ?? null,
     answeredAt: cdr?.answeredAt ?? null,
     durationSec: cdr?.durationSec ?? null,
-    recordingAvailable: !!cdr?.recordingPath,
+    recordingAvailable: !!cdr?.recordingPath && !cdr?.recordingMissingAt,
   };
 }
 

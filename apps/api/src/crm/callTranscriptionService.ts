@@ -234,6 +234,7 @@ async function loadEligibleCall(input: CallTranscriptionInput): Promise<
         linkedId: true,
         tenantId: true,
         recordingPath: true,
+        recordingMissingAt: true,
         durationSec: true,
         talkSec: true,
         pbxVitalTenantId: true,
@@ -246,7 +247,9 @@ async function loadEligibleCall(input: CallTranscriptionInput): Promise<
     return { ok: false, status: "UNAVAILABLE", reason: "transcription_disabled" };
   }
   if (!contact) return { ok: false, status: "UNAVAILABLE", reason: "contact_not_available" };
-  if (!cdr?.recordingPath || !cdr.tenantId) return { ok: false, status: "UNAVAILABLE", reason: "recording_not_available" };
+  // recordingMissingAt = the PBX has already confirmed there is no file. Without
+  // this the transcriber would queue work for audio that can never be fetched.
+  if (!cdr?.recordingPath || !cdr.tenantId || cdr.recordingMissingAt) return { ok: false, status: "UNAVAILABLE", reason: "recording_not_available" };
   return { ok: true, cdr: { ...cdr, tenantId: cdr.tenantId, recordingPath: cdr.recordingPath } };
 }
 

@@ -30,11 +30,38 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
 }
 
 /**
+ * Why a download failed, so the caller can say something true.
+ *
+ * "not_recorded" is a permanent answer — the PBX has confirmed the call has no
+ * audio file — and must NOT be reported as "please try again", which is what
+ * sent one customer clicking the same dead button four times in eight minutes.
+ */
+export type RecordingFailure = "not_recorded" | "forbidden" | "temporary";
+
+export const RECORDING_FAILURE_TEXT: Record<RecordingFailure, string> = {
+  not_recorded:
+    "This call was not recorded, so there is no audio to download. If you expected it to be recorded, let us know — recording is switched on per route on the phone system.",
+  forbidden: "You do not have permission to download this recording.",
+  temporary:
+    "The recording could not be fetched just now. This is usually temporary — please try again in a moment.",
+};
+
+/**
  * Download a call recording. Returns true on success. On failure returns false
  * (caller can surface a message). Falls back to a direct navigation if the
  * Blob/object-URL path is unavailable.
+ *
+ * Prefer downloadRecordingWithReason() for anything user-facing — this wrapper
+ * exists so older call sites keep compiling.
  */
 export async function downloadRecording(linkedId: string): Promise<boolean> {
+  return (await downloadRecordingWithReason(linkedId)).ok;
+}
+
+/** Download a recording, reporting WHY it failed so the UI can be honest. */
+export async function downloadRecordingWithReason(
+  linkedId: string,
+): Promise<{ ok: true } | { ok: false; reason: RecordingFailure }> {
   const token = getStorageToken();
   const base = `/api/voice/recording/${encodeURIComponent(linkedId)}/download`;
   const url = token ? `${base}?token=${encodeURIComponent(token)}` : base;
@@ -42,7 +69,17 @@ export async function downloadRecording(linkedId: string): Promise<boolean> {
 
   try {
     const resp = await fetch(url, { headers: { Accept: "audio/*, */*" } });
-    if (!resp.ok) return false;
+    if (!resp.ok) {
+      if (resp.status === 403) return { ok: false, reason: "forbidden" };
+      if (resp.status === 404) {
+        // 404 covers both "never recorded" and "no such call"; the server names
+        // which. Anything else 404-shaped is still permanent, so don't invite a
+        // retry that cannot succeed.
+        const body = await resp.json().catch(() => null as any);
+        return { ok: false, reason: body?.error === "audio_fetch_failed" ? "temporary" : "not_recorded" };
+      }
+      return { ok: false, reason: "temporary" };
+    }
     const blob = await resp.blob();
     const filename = filenameFromDisposition(resp.headers.get("content-disposition"), fallbackName);
 
@@ -56,7 +93,7 @@ export async function downloadRecording(linkedId: string): Promise<boolean> {
     a.remove();
     // Revoke after a tick so the download has started.
     window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 4000);
-    return true;
+    return { ok: true };
   } catch {
     // Last-resort fallback: let the browser navigate to the attachment URL.
     try {
@@ -66,9 +103,9 @@ export async function downloadRecording(linkedId: string): Promise<boolean> {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      return true;
+      return { ok: true };
     } catch {
-      return false;
+      return { ok: false, reason: "temporary" };
     }
   }
 }

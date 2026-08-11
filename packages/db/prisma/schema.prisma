@@ -2882,6 +2882,18 @@ model ConnectCdr {
   rawLegCount            Int       @default(1) // how many CDR notifications were received for this linkedId (channel-leg count)
   isForwarded            Boolean   @default(false) // true for :out rows — inbound call automatically forwarded to an external number (find-me/follow-me)
   recordingPath          String? // deterministic path "YYYY/MM/DD/<linkedId>.wav" computed at ingest; null when call is not recorded
+  /// Set once the PBX has CONFIRMED the recording file does not exist.
+  ///
+  /// recordingPath is captured from the AMI VarSet of __REC_FILENAME /
+  /// MIXMONITOR_FILENAME — a variable VitalPBX sets on calls it then does NOT
+  /// record (it is the name the file WOULD have had). So a non-null
+  /// recordingPath proves intent, never existence: on 2026-08-11, Trust
+  /// Bookkeeping showed 69 play buttons for the day against 38 real files.
+  /// Stamped only after the stream/download path 404s AND the VitalPBX-CDR
+  /// recovery lookup also comes back empty, so a transient PBX error can never
+  /// set it. Rows carrying it are excluded from recordingAvailable, which is
+  /// what removes the dead play/download buttons.
+  recordingMissingAt     DateTime?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 

@@ -10,7 +10,7 @@ import { PageHeader } from "../../../components/PageHeader";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { apiGet } from "../../../services/apiClient";
-import { downloadRecording } from "../../../services/recordingDownload";
+import { downloadRecordingWithReason, RECORDING_FAILURE_TEXT } from "../../../services/recordingDownload";
 
 // Recordings are sourced from the same ConnectCdr-backed call history the Calls
 // page uses (hasRecording=yes), and play through the shared
@@ -130,8 +130,8 @@ export default function RecordingsPage() {
                     type="button"
                     className="btn ghost"
                     onClick={async () => {
-                      const ok = await downloadRecording(row.linkedId);
-                      if (!ok) window.alert("Download failed — the recording could not be retrieved. Please try again.");
+                      const res = await downloadRecordingWithReason(row.linkedId);
+                      if (!res.ok) window.alert(RECORDING_FAILURE_TEXT[res.reason]);
                     }}
                   >
                     Download
