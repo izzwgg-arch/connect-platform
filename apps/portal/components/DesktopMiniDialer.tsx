@@ -11,6 +11,7 @@ import {
   Clock3,
   Delete,
   Headphones,
+  Loader2,
   MessageSquare,
   Mic,
   MicOff,
@@ -244,6 +245,64 @@ function voicemailStreamUrl(id: string): string {
   return `${getPortalApiBaseUrl()}/voice/voicemail/${encodeURIComponent(id)}/stream${tokenQuery}`;
 }
 
+// ── Instant-play voicemail preload cache ─────────────────────────────────────
+//
+// Pressing Play used to START the work: fetch → server pulls the file from the
+// PBX → possible ffmpeg transcode → full buffer → only then the first byte.
+// Seconds of silence after an unchanged Play icon ("many die there" — Izzy,
+// 2026-08-11, about this exact mini-dialer). Requirement: play must be
+// INSTANT — the audio is already on the machine before the button is pressed.
+//
+// So as soon as the voicemail list arrives we fetch each message's audio into a
+// blob and play from that object URL — zero network on the Play press. Module
+// scope on purpose: the player and even the panel unmount freely (same rule as
+// the SIP singleton), and a cache that dies with the component reintroduces the
+// wait it exists to remove.
+//
+// The warm-up uses ?preload=1, which the server never read-stamps — fetching
+// ahead is not listening; read-marking stays with the existing PATCH on the
+// actual Play press. Bounded (count + bytes) with oldest-first eviction, and a
+// failed warm-up simply leaves that message on the streaming path — the cache
+// is an accelerator, never a gate.
+const vmAudioCache = new Map<string, { objectUrl: string; bytes: number }>();
+const vmAudioInFlight = new Set<string>();
+let vmAudioCacheBytes = 0;
+const VM_CACHE_MAX_ENTRIES = 30;
+const VM_CACHE_MAX_BYTES = 64 * 1024 * 1024; // ~64 MB ≈ hours of 48k MP3 / PCM voicemail
+
+function vmCacheEvictOldest(): void {
+  const oldest = vmAudioCache.keys().next();
+  if (oldest.done) return;
+  const entry = vmAudioCache.get(oldest.value);
+  vmAudioCache.delete(oldest.value);
+  if (entry) {
+    vmAudioCacheBytes -= entry.bytes;
+    try { URL.revokeObjectURL(entry.objectUrl); } catch { /* ignore */ }
+  }
+}
+
+function preloadVoicemailAudio(ids: string[]): void {
+  for (const id of ids) {
+    if (vmAudioCache.has(id) || vmAudioInFlight.has(id)) continue;
+    vmAudioInFlight.add(id);
+    const base = voicemailStreamUrl(id);
+    fetch(`${base}${base.includes("?") ? "&" : "?"}preload=1`, { headers: { Accept: "audio/*, */*" } })
+      .then(async (resp) => {
+        if (!resp.ok) return;
+        const blob = await resp.blob();
+        if (blob.size === 0) return;
+        while (vmAudioCache.size >= VM_CACHE_MAX_ENTRIES || vmAudioCacheBytes + blob.size > VM_CACHE_MAX_BYTES) {
+          if (vmAudioCache.size === 0) break;
+          vmCacheEvictOldest();
+        }
+        vmAudioCache.set(id, { objectUrl: URL.createObjectURL(blob), bytes: blob.size });
+        vmAudioCacheBytes += blob.size;
+      })
+      .catch(() => { /* streaming path still works */ })
+      .finally(() => vmAudioInFlight.delete(id));
+  }
+}
+
 // Locally-authoritative voicemail read/unread overrides, persisted so a voicemail
 // that was played (or explicitly toggled) NEVER reverts to NEW because a later
 // server refetch returned a stale copy — it only flips back on an explicit
@@ -314,35 +373,53 @@ function vmWaveBars(src: string): number[] {
   return bars;
 }
 
-function VoicemailPlayer({ src, durationSec, onPlay }: { src: string; durationSec: number; onPlay?: () => void }) {
+function VoicemailPlayer({ vmId, src, durationSec, onPlay }: { vmId?: string; src: string; durationSec: number; onPlay?: () => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(durationSec || 0);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    const audio = new Audio(src);
-    audio.preload = "none";
+    // Instant play: use the preloaded blob when the cache has it (the normal
+    // case — the warm-up starts when the list loads). The network URL is only
+    // the fallback, and THAT path shows the spinner.
+    const cached = vmId ? vmAudioCache.get(vmId)?.objectUrl : undefined;
+    const audio = new Audio(cached ?? src);
+    // Fallback path still warms itself in the background so a press mid-warm-up
+    // has a head start; "none" was how every play started from zero.
+    audio.preload = "auto";
     audioRef.current = audio;
 
     const updateTime = () => setCurrent(audio.currentTime || 0);
     const updateDuration = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
+    // State follows the element's REAL events. The old promise-based flip could
+    // sit pending for the whole download with the button still reading "play",
+    // or read "playing" while the pipe was silent.
+    const markPlaying = () => { setLoading(false); setPlaying(true); };
+    const markWaiting = () => setLoading(true);
+    const markPause = () => setPlaying(false);
     const markEnded = () => {
       setPlaying(false);
+      setLoading(false);
       setCurrent(0);
       audio.currentTime = 0;
     };
     const markError = () => {
       setPlaying(false);
+      setLoading(false);
       setError(true);
     };
 
     audio.addEventListener("timeupdate", updateTime);
     audio.addEventListener("loadedmetadata", updateDuration);
     audio.addEventListener("durationchange", updateDuration);
+    audio.addEventListener("playing", markPlaying);
+    audio.addEventListener("waiting", markWaiting);
+    audio.addEventListener("pause", markPause);
     audio.addEventListener("ended", markEnded);
     audio.addEventListener("error", markError);
 
@@ -351,11 +428,14 @@ function VoicemailPlayer({ src, durationSec, onPlay }: { src: string; durationSe
       audio.removeEventListener("timeupdate", updateTime);
       audio.removeEventListener("loadedmetadata", updateDuration);
       audio.removeEventListener("durationchange", updateDuration);
+      audio.removeEventListener("playing", markPlaying);
+      audio.removeEventListener("waiting", markWaiting);
+      audio.removeEventListener("pause", markPause);
       audio.removeEventListener("ended", markEnded);
       audio.removeEventListener("error", markError);
       audioRef.current = null;
     };
-  }, [src]);
+  }, [vmId, src]);
 
   const toggle = () => {
     const audio = audioRef.current;
@@ -366,14 +446,16 @@ function VoicemailPlayer({ src, durationSec, onPlay }: { src: string; durationSe
       setPlaying(false);
       return;
     }
-    setError(false);
+    // Show loading the moment the press can't be satisfied instantly; the
+    // `playing` event clears it. From the blob cache this never even flickers.
+    if (audio.readyState < 3 /* HAVE_FUTURE_DATA */) setLoading(true);
     audio.play()
       .then(() => {
-        setPlaying(true);
         onPlay?.();
       })
       .catch(() => {
         setPlaying(false);
+        setLoading(false);
         setError(true);
       });
   };
@@ -391,8 +473,8 @@ function VoicemailPlayer({ src, durationSec, onPlay }: { src: string; durationSe
 
   return (
     <div className="vm-player" data-error={error ? "true" : "false"}>
-      <button type="button" className="vm-play" data-active={playing ? "true" : "false"} onClick={toggle} aria-label={playing ? "Pause voicemail" : "Play voicemail"}>
-        {error ? <AlertCircle size={16} /> : playing ? <Pause size={17} /> : <Play size={17} />}
+      <button type="button" className="vm-play" data-active={playing ? "true" : "false"} onClick={toggle} aria-label={loading ? "Loading voicemail" : playing ? "Pause voicemail" : "Play voicemail"}>
+        {error ? <AlertCircle size={16} /> : loading ? <Loader2 size={17} className="vm-spin" /> : playing ? <Pause size={17} /> : <Play size={17} />}
       </button>
       <div
         className="vm-wave"
@@ -414,6 +496,8 @@ function VoicemailPlayer({ src, durationSec, onPlay }: { src: string; durationSe
         .vm-wave { display: flex; align-items: center; gap: 2px; flex: 1; height: 30px; cursor: pointer; }
         .vm-wave span { flex: 1; border-radius: 2px; background: rgba(148,163,184,0.34); }
         .vm-wave span.on { background: #3b82f6; }
+        .vm-player :global(.vm-spin) { animation: vm-spin 0.8s linear infinite; }
+        @keyframes vm-spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );
@@ -633,7 +717,13 @@ export function DesktopMiniDialer() {
       .then((result) => setThreads(result.threads.slice(0, 20)))
       .catch(() => setThreads([]));
     apiGet<{ voicemails?: MiniVoicemail[] }>("/voice/voicemail?folder=inbox&page=1&pageSize=20")
-      .then((result) => setVoicemails(applyVmReadOverrides(Array.isArray(result.voicemails) ? result.voicemails : [])))
+      .then((result) => {
+        const list = applyVmReadOverrides(Array.isArray(result.voicemails) ? result.voicemails : []);
+        setVoicemails(list);
+        // Warm the instant-play cache the moment we know what's in the inbox —
+        // by the time a human reaches the Play button the audio is local.
+        preloadVoicemailAudio(list.map((v) => v.id));
+      })
       .catch(() => setVoicemails([]));
     apiGet<{ threads?: Array<{ id: string; isNew?: boolean; participantName?: string; lastMessage?: string; type?: string; externalSmsE164?: string | null }> }>("/chat/threads")
       .then((result) => setNewChats((result.threads || [])
@@ -1215,7 +1305,7 @@ export function DesktopMiniDialer() {
                         <span className="vm-dur">{formatDuration(vm.durationSec)}</span>
                       </div>
                     </div>
-                    <VoicemailPlayer src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} onPlay={() => markVmListened(vm.id, true)} />
+                    <VoicemailPlayer vmId={vm.id} src={vm.streamUrl || voicemailStreamUrl(vm.id)} durationSec={vm.durationSec} onPlay={() => markVmListened(vm.id, true)} />
                     {vm.transcription ? <p className="vm-transcript">{vm.transcription}</p> : null}
                     {(vm.note || vm.callbackReminderAt) && vmNoteEditId !== vm.id && vmRemEditId !== vm.id ? (
                       <div className="vm-meta">

@@ -7,6 +7,7 @@ import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
 import dgram from "dgram";
+import { Readable } from "node:stream";
 import nodemailer from "nodemailer";
 import { promises as fsp } from "fs";
 import os from "node:os";
@@ -19286,6 +19287,34 @@ async function transcodeVoicemailToMp3(input: Buffer, extension: string): Promis
   }
 }
 
+/**
+ * Read the audio-format code from a RIFF/WAVE header. 1 = plain PCM, which
+ * every browser plays natively; 49 (0x31) = GSM-in-WAV ("wav49"), which none do.
+ * Null = not a parseable WAV (treat as unknown → let the transcode decide).
+ *
+ * WHY: the voicemail stream transcoded EVERY .wav to MP3 — temp files + an
+ * ffmpeg spawn + a full re-encode, all before the first byte left the server.
+ * Asterisk voicemail .wav is normally 8 kHz 16-bit PCM, so for the common case
+ * that entire step bought nothing but seconds of "pressed play, hearing
+ * nothing" (the mini-dialer complaint, 2026-08-11). The container extension
+ * cannot make this call — wav49 also ships as ".WAV" — only the header can.
+ */
+function wavAudioFormatCode(buf: Buffer): number | null {
+  if (buf.length < 20) return null;
+  if (buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WAVE") return null;
+  let off = 12;
+  while (off + 8 <= buf.length) {
+    const id = buf.toString("ascii", off, off + 4);
+    const size = buf.readUInt32LE(off + 4);
+    if (id === "fmt ") {
+      if (off + 10 > buf.length) return null;
+      return buf.readUInt16LE(off + 8);
+    }
+    off += 8 + size + (size % 2); // chunks are word-aligned
+  }
+  return null;
+}
+
 /** VitalPBX /static or absolute https — not raw Asterisk spool paths (they must not be joined to baseUrl). */
 function isConnectVitalVoicemailRecfileRef(recfile: string | null | undefined): boolean {
   const t = String(recfile ?? "").trim();
@@ -19360,7 +19389,12 @@ async function finishVoicemailStreamFromBuffer(
   //  • skipTranscode (?raw=1 query param): mobile pre-loader requesting original audio
   //  • source is already MP3/M4A/AAC/OGG: transcoding a compressed format again is wasteful
   const alreadyCompressed = ext === "mp3" || ext === "m4a" || ext === "aac" || ext === "ogg" || ext === "opus";
-  if (!asAttachment && !skipTranscode && !alreadyCompressed) {
+  //  • plain PCM WAV: browsers play it natively — transcoding it only delays the
+  //    first byte by an ffmpeg spawn + full re-encode. Decided by the RIFF
+  //    header, never the extension (wav49 = GSM also ships as ".wav"/".WAV" and
+  //    MUST still be transcoded — format code 49, not 1).
+  const isPlayablePcmWav = (ext === "wav" || ext === "wav49") && wavAudioFormatCode(sourceBuf) === 1;
+  if (!asAttachment && !skipTranscode && !alreadyCompressed && !isPlayablePcmWav) {
     try {
       buf = await transcodeVoicemailToMp3(sourceBuf, ext);
       responseContentType = "audio/mpeg";
@@ -19633,12 +19667,17 @@ app.get("/voice/voicemail/:id/stream", async (req, reply) => {
   // Android MediaPlayer (used by expo-av) handles WAV/PCM natively; skipping
   // transcode removes 500ms–2s of latency per preload request.
   const rawMode = (req.query as Record<string, string | undefined>)["raw"] === "1";
+  // ?preload=1 — desktop mini-dialer warming its instant-play cache. Same audio
+  // a real play would get (browser-playable, so transcode still applies where
+  // needed) but NEVER read-stamps: fetching ahead is not listening, and without
+  // this the cache warm-up would silently mark every new voicemail read.
+  const preloadMode = (req.query as Record<string, string | undefined>)["preload"] === "1";
   const isOwnMailbox = await isVoicemailOwnMailbox(vm, user);
   app.log.info(
-    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder, rawMode, isOwnMailbox },
+    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder, rawMode, preloadMode, isOwnMailbox },
     "voicemail: stream request",
   );
-  try { return await streamVoicemailAudio(req, vm, reply, false, rawMode, !rawMode && isOwnMailbox); }
+  try { return await streamVoicemailAudio(req, vm, reply, false, rawMode, !rawMode && !preloadMode && isOwnMailbox); }
   catch (err: any) {
     app.log.warn({ id, err: err?.message, stack: err?.stack }, "voicemail: stream failed");
     return reply.code(503).send({ error: "audio_unavailable" });
@@ -19893,13 +19932,22 @@ async function recoverRecordingFromPbxCdr(args: {
   return null;
 }
 
-/** Pipe a (200/206) PBX audio response through to the client reply. */
+/**
+ * Pipe a (200/206) PBX audio response through to the client reply, STREAMING.
+ *
+ * This used to `await pbxResp.arrayBuffer()` — the whole WAV had to travel
+ * PBX → Connect before the browser received its FIRST byte, so a long call
+ * (~20 MB) sat "loading" for the entire transfer while the player already
+ * showed the pause icon. That is the "it says playing but nothing is playing"
+ * report (Trust Bookkeeping, 2026-08-11). WAV/MP3 play progressively, so piping
+ * the body through as it arrives makes time-to-first-byte ≈ one PBX round-trip
+ * and the browser starts playing as soon as it has a header's worth of audio.
+ */
 function pipePbxRecordingResponse(
   pbxResp: Response,
   reply: any,
   asAttachment: boolean,
   rec: { pbxFilePath: string | null; linkedId: string },
-  buf: Buffer,
 ): void {
   const contentType = pbxResp.headers.get("content-type") || "audio/wav";
   const contentLength = pbxResp.headers.get("content-length");
@@ -19915,7 +19963,9 @@ function pipePbxRecordingResponse(
     const safeName = (rec.pbxFilePath || rec.linkedId).split("/").pop()!.replace(/[^\w.-]/g, "_");
     reply.header("Content-Disposition", `attachment; filename="${safeName || `recording-${rec.linkedId}.${ext}`}"`);
   }
-  reply.status(pbxResp.status === 206 ? 206 : 200).send(buf);
+  reply.status(pbxResp.status === 206 ? 206 : 200);
+  // No body (e.g. an upstream 204/empty 206) degrades to an empty send.
+  reply.send(pbxResp.body ? Readable.fromWeb(pbxResp.body as any) : Buffer.alloc(0));
 }
 
 /**
@@ -20078,7 +20128,7 @@ async function streamCallRecording(
           .update({ where: { linkedId: rec.linkedId }, data: { recordingPath: recovered.correctedPath } })
           .catch(() => undefined);
         app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment, recovered: true }, "recording: access logged");
-        pipePbxRecordingResponse(recovered.resp, reply, asAttachment, rec, Buffer.from(await recovered.resp.arrayBuffer()));
+        pipePbxRecordingResponse(recovered.resp, reply, asAttachment, rec);
         return;
       }
     }
@@ -20105,7 +20155,7 @@ async function streamCallRecording(
   }
 
   app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment }, "recording: access logged");
-  pipePbxRecordingResponse(pbxResp, reply, asAttachment, rec, Buffer.from(await pbxResp.arrayBuffer()));
+  pipePbxRecordingResponse(pbxResp, reply, asAttachment, rec);
 }
 
 // Helper: resolve a ConnectCdr row into a recording descriptor, enforcing permissions.
@@ -20284,6 +20334,8 @@ app.post("/voice/recordings/verify", async (req, reply) => {
     }).catch(() => null);
 
     if (rec) {
+      // The sweep only needs the verdict, not the audio — release the socket.
+      try { await (rec.resp.body as any)?.cancel?.(); } catch { /* noop */ }
       recovered++;
       if (!dryRun) {
         await (db as any).connectCdr
