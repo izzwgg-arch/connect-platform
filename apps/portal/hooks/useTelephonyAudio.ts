@@ -263,11 +263,21 @@ function playCallEndChimePattern(ctx: AudioContext, volume = 0.13): void {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
+// Absolute backstop on the incoming ringtone. The ring is normally stopped by a
+// SIP event (accepted/ended/failed/CANCEL) or a user click — but if the SIP
+// socket dies mid-ring, none of those can ever arrive, and a UA rebuild orphans
+// the tone with no session left to stop it (Fixup Group, 2026-08-10: a ring
+// survived a PC reboot because the ringing client's WS failed 6 ms after the
+// incoming-call screen appeared). 120 s is longer than any real ring-to-voicemail
+// window, so this only ever silences a ring whose call is already over.
+const RINGTONE_ABSOLUTE_CAP_MS = 120_000;
+
 export function useTelephonyAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const ringbackRef = useRef<ToneHandle | null>(null);
   const ringtoneRef = useRef<ToneHandle | null>(null);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ringtoneCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function ensureCtx(): AudioContext | null {
     if (!ctxRef.current || ctxRef.current.state === "closed") {
@@ -281,6 +291,10 @@ export function useTelephonyAudio() {
 
   /** Stop everything immediately. */
   const stopAll = useCallback(() => {
+    if (ringtoneCapTimerRef.current) {
+      clearTimeout(ringtoneCapTimerRef.current);
+      ringtoneCapTimerRef.current = null;
+    }
     ringbackRef.current?.stop();
     ringbackRef.current = null;
     ringtoneRef.current?.stop();
@@ -350,6 +364,13 @@ export function useTelephonyAudio() {
       return;
     }
     stopAll();
+    // Arm the absolute cap BEFORE branching so every ring path (media element,
+    // codec fallback, plain synth) is covered. stopAll() clears it, so a ring
+    // that ends normally never sees this fire.
+    ringtoneCapTimerRef.current = setTimeout(() => {
+      console.warn(`[TelephonyAudio] ringtone_absolute_cap fired after ${RINGTONE_ABSOLUTE_CAP_MS}ms — force-stopping a ring nothing else stopped`);
+      stopAll();
+    }, RINGTONE_ABSOLUTE_CAP_MS);
     // Ringer routing (desktop only): its own output device + volume, so a
     // headset user still hears the ring on their speakers. Browser: unchanged.
     const isDesktop =

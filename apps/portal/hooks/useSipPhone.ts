@@ -708,7 +708,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [remotePartyNumber, setRemotePartyNumber] = useState<string | null>(null);
   const [remotePartyName, setRemotePartyName] = useState<string | null>(null);
   const [remotePartyPrefix, setRemotePartyPrefix] = useState<string | null>(null);
-  const { calls: enrichLiveCalls } = useTelephonySocket();
+  const { calls: enrichLiveCalls, status: liveFeedStatus } = useTelephonySocket();
   const [muted, setMutedState] = useState(false);
   const [onHold, setOnHold] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
@@ -2111,6 +2111,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (initRetryTimerRef.current) { clearTimeout(initRetryTimerRef.current); initRetryTimerRef.current = null; }
       forceReconnectRef.current = null;
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
+      // A UA rebuilt mid-ring orphans the ringtone: the dead UA's sessions never
+      // fire ended/failed (the transport is gone), so nothing downstream will
+      // ever call stopAllAudio(). Stop it here — a legitimate ring on the NEW
+      // UA restarts it via its own newRTCSession.
+      stopAllAudio();
       if (uaRef.current) {
         try { uaRef.current.stop(); } catch { /* ignore */ }
         uaRef.current = null;
@@ -3276,6 +3281,101 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     setRemotePartyName(name);
     setRemotePartyPrefix(prefix);
   }, [enrichLiveCalls, callDirection, callState, remoteParty, remotePartyNumber]);
+
+  // ── Phantom-ring protection ─────────────────────────────────────────────────
+  // The ring is normally stopped by a SIP event on the same socket that started
+  // it. When that socket dies mid-ring (Fixup Group, 2026-08-10: WS_DISCONNECTED
+  // 6 ms after the incoming-call screen appeared, ring survived a PC reboot),
+  // no CANCEL can ever arrive and the ring runs forever. Two independent guards:
+  //
+  //  1) A liveness sweep while ringing: session gone/ended, UA gone (rebuild
+  //     mid-ring), or the ring outliving RINGING_MAX_MS → force-stop. JsSIP's
+  //     own no_answer_timeout (60 s) ends any HEALTHY unanswered ring first, so
+  //     the cap only ever fires on a ring whose timers are already wedged.
+  //  2) The live-call feed (/ws/telephony — a second, independent socket): if
+  //     the PBX call we were ringing for is hungup/removed, the call is over
+  //     regardless of what our SIP socket failed to deliver.
+  //
+  // ⛔ Deliberately NOT evidence: liveCall.state === "up" / answeredAt. An IVR
+  // or queue answers the CALLER leg immediately (to play prompts/MOH) while
+  // agents are still legitimately ringing — treating "answered" as
+  // answered-elsewhere would kill every queue ring. Only ended/gone counts.
+  //
+  // Scope: the PRIMARY ringing call. A call-waiting side ring is bounded by the
+  // audio layer's RINGTONE_ABSOLUTE_CAP_MS backstop.
+  const RINGING_MAX_MS = 90_000;
+  const ringLiveMatchRef = useRef<string | null>(null);
+
+  function killPhantomRing(why: string) {
+    console.warn(`[SipPhone] phantom_ring_stop reason=${why}`);
+    stopAllAudio();
+    const s = sessionRef.current;
+    // Best-effort decline toward the PBX; on a dead socket this throws and the
+    // local state reset below is the part that matters.
+    try { if (s && !s.isEnded?.()) s.terminate?.(); } catch { /* dead transport */ }
+    if (s) {
+      for (const [id, sess] of sessionsByIdRef.current.entries()) {
+        if (sess === s) { removeSessionMeta(id); break; }
+      }
+    }
+    sessionRef.current = null;
+    setCallDirection(null);
+    setCallState("idle");
+    setRemoteParty(null);
+    setOnHold(false);
+    stopLocalStream();
+    teardownRemoteAudioPlayback();
+    patchDiag({ lastCallError: `Ring force-stopped (${why}) — the call was already over` });
+    clearCallDiag();
+  }
+
+  // Guard 1: liveness sweep, active only while the primary call is ringing.
+  useEffect(() => {
+    if (callState !== "ringing" || callDirection !== "inbound") return undefined;
+    const ringingSince = Date.now();
+    const timer = setInterval(() => {
+      const s = sessionRef.current;
+      if (!s) { killPhantomRing("no_session"); return; }
+      if (s.isEnded?.()) { killPhantomRing("session_ended"); return; }
+      if (!uaRef.current) { killPhantomRing("ua_gone"); return; }
+      if (Date.now() - ringingSince > RINGING_MAX_MS) { killPhantomRing("max_ring_exceeded"); return; }
+    }, 5_000);
+    return () => clearInterval(timer);
+    // killPhantomRing is a plain hook-scope function (same pattern as bindSession).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callState, callDirection]);
+
+  // Guard 2: the live-call feed says the call is over. Only acts on positive
+  // evidence (matched call ended, or a previously matched call vanished from a
+  // CONNECTED feed) — an unmatched ring is left alone, and a disconnected feed
+  // proves nothing (its map goes stale, not empty).
+  useEffect(() => {
+    if (callDirection !== "inbound" || callState !== "ringing") {
+      ringLiveMatchRef.current = null;
+      return;
+    }
+    if (liveFeedStatus !== "connected") return;
+    const num = (remotePartyNumber || "").replace(/\D/g, "");
+    if (!num) return;
+    let matched: LiveCall | null = null;
+    for (const c of enrichLiveCalls.values()) {
+      if (c.direction !== "inbound") continue;
+      const cf = (c.from || "").replace(/\D/g, "");
+      if (cf && (cf === num || cf.endsWith(num) || num.endsWith(cf))) { matched = c; break; }
+    }
+    if (matched) {
+      ringLiveMatchRef.current = matched.id;
+      if (matched.state === "hungup" || matched.endedAt != null) {
+        killPhantomRing("live_call_ended");
+      }
+    } else if (ringLiveMatchRef.current) {
+      // We saw this call in the feed earlier in THIS ring and now it is gone
+      // from a healthy feed — the PBX call ended (hangup or answered elsewhere
+      // and completed). Nothing should still be ringing for it.
+      killPhantomRing("live_call_gone");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enrichLiveCalls, liveFeedStatus, callDirection, callState, remotePartyNumber]);
 
   // Reset speaker mode on call end and route audio back to the base device, so the
   // NEXT call starts on the headset (not stuck on the loudspeaker from last time).
