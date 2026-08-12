@@ -2,8 +2,10 @@
 
 **Commit:** `62a5e3ac` on `feat/ivr-migration-takeover` (pushed to origin).
 **Scope:** one file — `apps/portal/app/(platform)/pbx/ivr-studio/page.tsx`.
-**Status:** ⛔ **pushed but NOT DEPLOYED.** Portal-only; no PBX or API side.
-Nothing here changes call routing — it changes what the admin is told.
+**Status:** ✅ **DEPLOYED 2026-08-06** (merged to `feat/ivr-migration-takeover`
+and shipped inside portal `7f7ec541`; confirmed still present in the live portal
+image `0cf18b14` on 2026-08-12). Portal-only; no PBX or API side. Nothing here
+changes call routing — it changes what the admin is told.
 
 ---
 

@@ -239,7 +239,8 @@ container-verified; ⛔ the WORKER half is committed and NOT deployed.**)
 ## ⛔ AGENT HANDOFF — the AI trainer taught the agent NOTHING for 9 days (2026-08-09) — READ FIRST for apps/agent triage/intent, trainer lessons, "the agent did X when I only asked ABOUT X", or before believing any agent feature is live
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_TRAINER_AUDIT_2026-08-09.md`**
-(fix committed `a3fcca41`; ⛔ **NOT DEPLOYED** — the agent is a manual rebuild).
+(fix `a3fcca41` — ✅ **DEPLOYED**: `app-agent-1` rebuilt 2026-08-12 04:58 and
+container-verified. The agent remains a manual rebuild, never in the deploy queue.)
 
 - ⛔ **After 23 conversations and 824 messages (2026-07-26 → 08-07),
   `AgentTrainerLesson` holds ZERO rows** and the `trainer.*` audit trail is
@@ -255,12 +256,18 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_TRAINER_AUDIT_2026-08-09.md`**
   kept saying "I asked about status not enable". Treat every new read-shaped
   intent as read-only by default; a customer asking "is my DND on?" must never
   have their calls silently blocked.
-- ⛔ **THE FIX IS COMMITTED AND NOT LIVE.** `app-agent-1` was built **08-07**;
-  `grep -c isDndStatusQuery` in the running container returns **0**. The agent
-  is NOT in `deploy-direct.sh` (api|portal only) and the classifier blocks
-  container builds — **Izzy must run**
+- ✅ **THE DND FIX IS NOW LIVE — verified in the running container 2026-08-12.**
+  `app-agent-1` was rebuilt **08-12 04:58** and carries it:
+  `isDndStatusQuery()` is defined at `apps/agent/src/triage/intent.ts:141` and
+  wired into the classifier at :210, and `training/lessons.ts` is present. A
+  status question no longer performs a DND write. (This entry read "COMMITTED
+  AND NOT LIVE" until 08-12 — it was true from 08-09 to 08-11.)
+  ⛔ The agent is still NOT in `deploy-direct.sh` (api|portal only), so it
+  remains a manual
   `docker compose -f docker-compose.app.yml -f docker-compose.agent.yml up -d --build agent`.
-  Verify by grepping the NEW container, never by reading the commit.
+  ⛔ **Verify by grepping the RUNNING agent container, never by reading the
+  commit and never from api/portal** — `a3fcca41` is an ancestor of both the
+  live api and portal images while living in a container neither one builds.
 - **Company hold music still cannot be put back.** Every "Secro" switch and
   every revert-to-regular-schedule fails `native_tenant_moh_sync_failed`
   (07-30, 07-31, 08-03 ×3, 08-05 ×2, 08-06 ×2). Setting a *specific* profile
