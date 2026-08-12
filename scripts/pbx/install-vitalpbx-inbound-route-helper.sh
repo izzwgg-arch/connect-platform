@@ -181,6 +181,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import ssl
@@ -192,7 +193,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.06.6"
+VERSION = "2026.08.12.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -278,6 +279,17 @@ class Config:
         self.vitalpbx_api_key = os.environ.get("CONNECT_PBX_VITALPBX_API_KEY", "").strip()
         self.apply_changes_timeout = int(os.environ.get("CONNECT_PBX_APPLY_CHANGES_TIMEOUT_SEC", "180"))
         self.static_dir = Path(os.environ.get("CONNECT_PBX_STATIC_DIR", "/var/lib/vitalpbx/static"))
+        # Overload guard (2026-08-12): ThreadingHTTPServer spawns one thread per
+        # connection with NO cap. Under loopcom's voicemail-spool polling (~126
+        # req/min against mailboxes with 9k+ messages) threads piled up past 700,
+        # the GIL convoy pushed every response over the api's 15s abort, aborted
+        # clients left CLOSE-WAIT sockets held by still-grinding threads, and the
+        # process wedged at the 1024-fd soft limit (every open() -> Errno 24).
+        # max_inflight bounds concurrent request threads; excess connections get
+        # an immediate 503 instead of a thread. socket_timeout bounds how long a
+        # dead/silent peer can hold a thread on a blocking read/write.
+        self.max_inflight = int(os.environ.get("CONNECT_PBX_HELPER_MAX_INFLIGHT", "32"))
+        self.socket_timeout = int(os.environ.get("CONNECT_PBX_HELPER_SOCKET_TIMEOUT_SEC", "30"))
     def validate(self):
         if len(self.secret) < 32:
             raise SystemExit("CONNECT_PBX_HELPER_SECRET must be at least 32 chars")
@@ -365,8 +377,14 @@ def snap_conn():
 
 def audit(action, ok, payload, result=None, error=None):
     entry = {"ts": utc_now(), "version": VERSION, "action": action, "ok": ok, "payload": payload, "result": result, "error": error}
-    with CFG.audit_file.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, sort_keys=True) + "\n")
+    # Best-effort: audit runs BETWEEN the action and the response, so an OSError
+    # here (fd exhaustion, full disk) would report a COMPLETED action as failed
+    # to the client — which then retries a write that already happened.
+    try:
+        with CFG.audit_file.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+    except OSError as exc:
+        sys.stderr.write("audit_write_failed: %s\n" % exc)
 
 def find_route(conn, tenant_id, did_digits):
     with conn.cursor() as cur:
@@ -2076,6 +2094,109 @@ def _vm_spool_int(val, default):
         return default
 
 
+# ── spool scan cache (2026-08-12) ─────────────────────────────────────────────
+# Gesheft ext 101's INBOX holds 18k+ files; a single /voicemail/spool/list
+# parsed EVERY msg*.txt on EVERY poll (~68/min from loopcom), which is what
+# drove the thread pile-up. Asterisk touches the folder directory's mtime on
+# any message add/move/delete, so a (mtime_ns, size, ino) signature over the
+# three folder dirs is a reliable change detector: scan once per actual
+# mailbox change, serve every other poll from memory. The per-mailbox lock
+# makes concurrent cache misses scan once, not once per waiting request.
+_VM_SPOOL_CACHE = {}
+_VM_SPOOL_CACHE_MAX_ENTRIES = 512
+_VM_SPOOL_CACHE_LOCK = threading.Lock()
+_VM_SPOOL_MBOX_LOCKS = {}
+
+
+def _vm_spool_dir_sig(mbox_dir):
+    sig = []
+    for sub in VM_SPOOL_LIST_FOLDERS:
+        try:
+            st = (mbox_dir / sub).stat()
+            sig.append((sub, st.st_mtime_ns, st.st_size, st.st_ino))
+        except OSError:
+            sig.append((sub, None, None, None))
+    return tuple(sig)
+
+
+def _vm_spool_mbox_lock(key):
+    with _VM_SPOOL_CACHE_LOCK:
+        lock = _VM_SPOOL_MBOX_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _VM_SPOOL_MBOX_LOCKS[key] = lock
+        return lock
+
+
+def _vm_spool_scan_mailbox(mbox_dir):
+    """Parse every msg*.txt under INBOX/Old/Urgent. Returns records (with the
+    integer origtime under "_oti") sorted newest-first. Unfiltered: since/limit
+    are applied per-request on top of the cached result."""
+    records = []
+    for sub in VM_SPOOL_LIST_FOLDERS:
+        d = mbox_dir / sub
+        if not d.is_dir():
+            continue
+        try:
+            entries = list(d.glob("msg*.txt"))
+        except OSError:
+            continue
+        for txt_path in entries:
+            stem = txt_path.stem
+            if not re.match(r"^msg[0-9]+$", stem):
+                continue
+            kv = _parse_vm_txt(txt_path)
+            ot = str(kv.get("origtime") or "").strip()
+            if not ot or ot == "0":
+                continue
+            try:
+                oti = int(ot)
+            except ValueError:
+                continue
+            cid = str(kv.get("callerid") or kv.get("caller_id") or "")
+            dur = str(kv.get("duration") or "0")
+            wav = txt_path.with_suffix(".wav")
+            recfile = str(wav) if wav.is_file() else ""
+            records.append(
+                {
+                    "folder": sub,
+                    "origtime": ot,
+                    "callerid": cid,
+                    "duration": dur,
+                    "filename": txt_path.name,
+                    "msg_num": stem,
+                    "recfile": recfile,
+                    "_oti": oti,
+                }
+            )
+    records.sort(key=lambda r: r["_oti"], reverse=True)
+    return records
+
+
+def _vm_spool_records_cached(mbox_dir):
+    key = str(mbox_dir)
+    sig = _vm_spool_dir_sig(mbox_dir)
+    with _VM_SPOOL_CACHE_LOCK:
+        ent = _VM_SPOOL_CACHE.get(key)
+        if ent is not None and ent["sig"] == sig:
+            return ent["records"]
+    lock = _vm_spool_mbox_lock(key)
+    with lock:
+        # Re-check under the mailbox lock: a concurrent miss may have refreshed.
+        sig = _vm_spool_dir_sig(mbox_dir)
+        with _VM_SPOOL_CACHE_LOCK:
+            ent = _VM_SPOOL_CACHE.get(key)
+            if ent is not None and ent["sig"] == sig:
+                return ent["records"]
+        records = _vm_spool_scan_mailbox(mbox_dir)
+        with _VM_SPOOL_CACHE_LOCK:
+            _VM_SPOOL_CACHE.pop(key, None)
+            while len(_VM_SPOOL_CACHE) >= _VM_SPOOL_CACHE_MAX_ENTRIES:
+                _VM_SPOOL_CACHE.pop(next(iter(_VM_SPOOL_CACHE)))
+            _VM_SPOOL_CACHE[key] = {"sig": sig, "records": records}
+        return records
+
+
 def vm_spool_list_messages(body):
     """
     Read-only: list msg*.txt under INBOX/Old/Urgent for one mailbox (no file moves).
@@ -2138,53 +2259,14 @@ def vm_spool_list_messages(body):
             "folderMsgCounts": {},
         }
 
-    records = []
-    folder_msg_counts = {}
-    for sub in VM_SPOOL_LIST_FOLDERS:
-        d = mbox_dir / sub
-        if not d.is_dir():
-            folder_msg_counts[sub] = 0
-            continue
-        n_here = 0
-        try:
-            entries = list(d.glob("msg*.txt"))
-        except OSError:
-            folder_msg_counts[sub] = 0
-            continue
-        for txt_path in entries:
-            stem = txt_path.stem
-            if not re.match(r"^msg[0-9]+$", stem):
-                continue
-            kv = _parse_vm_txt(txt_path)
-            ot = str(kv.get("origtime") or "").strip()
-            if not ot or ot == "0":
-                continue
-            try:
-                oti = int(ot)
-            except ValueError:
-                continue
-            if since_ot and oti < since_ot:
-                continue
-            cid = str(kv.get("callerid") or kv.get("caller_id") or "")
-            dur = str(kv.get("duration") or "0")
-            wav = txt_path.with_suffix(".wav")
-            recfile = str(wav) if wav.is_file() else ""
-            records.append(
-                {
-                    "folder": sub,
-                    "origtime": ot,
-                    "callerid": cid,
-                    "duration": dur,
-                    "filename": txt_path.name,
-                    "msg_num": stem,
-                    "recfile": recfile,
-                    "_oti": oti,
-                }
-            )
-            n_here += 1
-        folder_msg_counts[sub] = n_here
-
-    records.sort(key=lambda r: r["_oti"], reverse=True)
+    all_records = _vm_spool_records_cached(mbox_dir)
+    if since_ot:
+        records = [r for r in all_records if r["_oti"] >= since_ot]
+    else:
+        records = all_records
+    folder_msg_counts = {sub: 0 for sub in VM_SPOOL_LIST_FOLDERS}
+    for r in records:
+        folder_msg_counts[r["folder"]] = folder_msg_counts.get(r["folder"], 0) + 1
     total_matching = len(records)
     max_ot = max((r["_oti"] for r in records), default=None)
 
@@ -3902,6 +3984,12 @@ def queue_action(body):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "ConnectPbxRouteHelper/" + VERSION
+    # Socket inactivity timeout (socketserver applies it via settimeout in
+    # setup()). Without it a peer that connects and goes silent — or aborts
+    # mid-transfer without the FIN/RST ever landing — parks this thread on a
+    # blocking read/write forever. handle_one_request() catches TimeoutError
+    # and closes the connection, releasing the thread and its fd.
+    timeout = CFG.socket_timeout
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (utc_now(), fmt % args))
     def send_json(self, status, payload):
@@ -4308,6 +4396,53 @@ def ensure_connect_vm_dialplan():
     except OSError as exc:
         sys.stderr.write("ensure_connect_vm_dialplan_failed: " + str(exc) + "\n")
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a hard cap on concurrent request threads.
+
+    The stock ThreadingHTTPServer spawns one thread per accepted connection
+    with no limit; under sustained polling faster than the handlers drain,
+    the process snowballs (more threads → GIL convoy → slower handlers →
+    even more threads) until it exhausts its fd limit and wedges. Beyond
+    max_inflight we answer 503 straight from the accept loop — no thread,
+    no lingering fd — so overload degrades to fast, visible errors instead
+    of a dead helper."""
+
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._inflight = threading.BoundedSemaphore(max(1, CFG.max_inflight))
+
+    def process_request(self, request, client_address):
+        if self._inflight.acquire(blocking=False):
+            try:
+                super().process_request(request, client_address)
+                return
+            except BaseException:
+                self._inflight.release()
+                raise
+        try:
+            request.settimeout(2)
+            body = b'{"error":"helper_saturated"}'
+            head = (
+                "HTTP/1.0 503 Service Unavailable\r\n"
+                "content-type: application/json\r\n"
+                "content-length: %d\r\n"
+                "connection: close\r\n\r\n" % len(body)
+            ).encode("ascii")
+            request.sendall(head + body)
+        except OSError:
+            pass
+        finally:
+            self.shutdown_request(request)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._inflight.release()
+
+
 def main():
     CFG.validate()
     with snap_conn():
@@ -4320,8 +4455,8 @@ def main():
     if "--check" in sys.argv:
         print(json.dumps({"ok": True, "version": VERSION, "bind": CFG.bind, "port": CFG.port}))
         return
-    httpd = ThreadingHTTPServer((CFG.bind, CFG.port), Handler)
-    print("connect-pbx-route-helper listening on %s:%s" % (CFG.bind, CFG.port), flush=True)
+    httpd = BoundedThreadingHTTPServer((CFG.bind, CFG.port), Handler)
+    print("connect-pbx-route-helper listening on %s:%s (max_inflight=%d)" % (CFG.bind, CFG.port, CFG.max_inflight), flush=True)
     httpd.serve_forever()
 
 if __name__ == "__main__":
@@ -4598,6 +4733,12 @@ Group=asterisk
 # capabilities that code needs and nothing more; do NOT run this as root.
 AmbientCapabilities=CAP_CHOWN CAP_FOWNER
 CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
+# 2026-08-12: the default 1024-fd soft limit is what turned an overload into a
+# hard wedge (every open() -> Errno 24, including the helper's own sqlite +
+# audit files). The in-process cap (CONNECT_PBX_HELPER_MAX_INFLIGHT) is the
+# real guard; this is headroom so fd pressure never lands exactly on the code
+# that needs an fd to report the problem.
+LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

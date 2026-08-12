@@ -168,7 +168,12 @@ async function callHelper<T>(
     | "/voicemail/greeting/reset"
     | "/voicemail/greeting/record-call",
   body: Record<string, unknown>,
-  timeoutMs = 15_000,
+  // 45s, not 15s: when the helper is busy (or catching up after a restart) a
+  // healthy /inspect can exceed 15s, and that abort is what failed every
+  // switch-to-connect on 2026-08-12 while the helper was overloaded. The
+  // helper now answers 503 fast when saturated, so a longer deadline no
+  // longer risks minutes-long hangs. Retarget/restore stay at 90s below.
+  timeoutMs = 45_000,
 ): Promise<T> {
   const resp = await fetch(`${cfg.baseUrl}${path}`, {
     method: "POST",
@@ -199,7 +204,7 @@ async function callHelper<T>(
 async function getHelper<T>(
   cfg: PbxRouteHelperConfig,
   path: string,
-  timeoutMs = 15_000,
+  timeoutMs = 45_000,
 ): Promise<T> {
   const resp = await fetch(`${cfg.baseUrl}${path}`, {
     method: "GET",
