@@ -107,6 +107,13 @@ export interface ChatContext {
    * English-set account.
    */
   preferredLanguage?: "en" | "yi";
+  /** Which portal page the customer has open ("Voicemail", "/voicemail").
+   *  Shown to the model as context so "what am I looking at" has an answer —
+   *  the widget banner has always promised "ask me anything on this page".
+   *  This is the page NAME only, never page content: the assistant still
+   *  cannot see the screen, and should say so if asked about specifics. */
+  viewingPage?: string;
+  viewingPath?: string;
 }
 
 /** Finished chat-widget upload, resolved tenant-scoped by the route layer. */
@@ -430,9 +437,18 @@ export class ConversationEngine {
     // so an oversized prompt buys truncation after you have paid to think.
     const HISTORY_WINDOW = 40;
     const history = await this.store.listMessages(conv.id, 100);
+    // The widget banner says "Viewing with you: <page> — ask me anything on
+    // this page", and the portal has always sent the page name. Until this
+    // block, the engine dropped it, so the assistant answered "I can't see
+    // what you're doing" to the exact question the banner invites. Name only —
+    // the model must not pretend to see the screen's contents.
+    const viewingBlock = ctx.viewingPage
+      ? `The customer currently has the "${String(ctx.viewingPage).slice(0, 80)}" page of the Connect app open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You know which page they are on — answer page-related questions in that light — but you cannot see the page's contents, live data, or their screen; say so if asked about specifics.`
+      : null;
     const msgs: ChatMessage[] = [
       { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
       ...(identityBlock ? [{ role: "system" as const, content: identityBlock }] : []),
+      ...(viewingBlock ? [{ role: "system" as const, content: viewingBlock }] : []),
       ...(lessonsBlock ? [{ role: "system" as const, content: lessonsBlock }] : []),
       ...history.slice(-HISTORY_WINDOW).map((m) => ({
         role: (m.role === "assistant" ? "assistant" : "user") as "assistant" | "user",

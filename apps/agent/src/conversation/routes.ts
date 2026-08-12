@@ -65,6 +65,18 @@ export function registerChatRoutes(
         channel: z.string().optional(),
         /** Finished upload ids from /agent/chat/upload/finish (this session). */
         attachments: z.array(z.string().min(1).max(64)).max(10).optional(),
+        /** Which portal page the customer has open. The widget has ALWAYS sent
+         *  this ("Viewing with you: Voicemail — ask me anything on this page")
+         *  — the schema silently dropped it, so the assistant answered "I
+         *  can't see what you are doing" while the page name sat in the
+         *  request body. Data, not instructions: values are length-capped and
+         *  passed to the engine as context only. */
+        context: z
+          .object({
+            page: z.string().max(80).optional(),
+            path: z.string().max(200).optional(),
+          })
+          .optional(),
       })
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
@@ -83,7 +95,11 @@ export function registerChatRoutes(
         if (u?.uiLanguage === "yi") preferredLanguage = "yi";
       } catch { /* fall back to detection */ }
     }
-    const result = await engine.handleMessage({ ...identity, role, channel: body.data.channel, preferredLanguage }, body.data.text, attachments);
+    const result = await engine.handleMessage(
+      { ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path },
+      body.data.text,
+      attachments,
+    );
     // After the reply is decided: if the assistant just promised to pass this
     // to the human team, make that promise TRUE. Fire-and-forget — the
     // customer's chat never waits on (or breaks over) the escalation pipeline.
