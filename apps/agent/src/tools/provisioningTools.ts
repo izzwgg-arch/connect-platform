@@ -49,6 +49,8 @@ export type AccountSetupInfo = {
   suggestedExtensionNumber: string | null;
   people: Array<{ id: string; name: string; email: string }>;
   hasTextableNumber: boolean;
+  /** The company's own phone numbers, main line first ("845-723-1213"). */
+  companyNumbers?: string[];
 };
 
 /** "$30.00" — anything the model reads out to a customer. */
@@ -64,8 +66,8 @@ export function buildProvisioningTools(deps: ProvisioningToolDeps): ToolSpec[] {
     {
       name: "account_setup_info",
       description:
-        "What this account currently has and what adding to it costs: the monthly total, the price of another extension, of text messaging, and of another phone number; which extension numbers are already taken and a suggested free one; whether texting is already on; and the people on the account with their ids. " +
-        "Use this BEFORE quoting any price or preparing any change, so the figure you say out loud is the one the customer will actually be billed.",
+        "What this account currently has and what adding to it costs: the company's own phone numbers (main line first), the monthly total, the price of another extension, of text messaging, and of another phone number; which extension numbers are already taken and a suggested free one; whether texting is already on; and the people on the account with their ids. " +
+        "Use this to answer \"what is my company's phone number\" (companyNumbers, first entry is the main line), and BEFORE quoting any price or preparing any change, so the figure you say out loud is the one the customer will actually be billed.",
       minRole: "internal",
       parameters: { type: "object", properties: {}, additionalProperties: false },
       run: (_args, ctx: ToolContext) => deps.loadAccountSetupInfo(ctx.tenantId),

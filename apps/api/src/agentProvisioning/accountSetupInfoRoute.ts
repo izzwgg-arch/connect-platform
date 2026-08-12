@@ -28,6 +28,8 @@ export type AccountSetupInfo = {
   suggestedExtensionNumber: string | null;
   people: Array<{ id: string; name: string; email: string }>;
   hasTextableNumber: boolean;
+  /** The company's own phone numbers, main line first ("845-723-1213"). */
+  companyNumbers: string[];
 };
 
 /**
@@ -48,7 +50,7 @@ export function suggestFreeExtensionNumber(taken: string[]): string | null {
 }
 
 export async function loadAccountSetupInfo(tenantId: string): Promise<AccountSetupInfo> {
-  const [snapshot, extensions, users, smsNumber, settings] = await Promise.all([
+  const [snapshot, extensions, users, smsNumber, settings, inboundDids] = await Promise.all([
     snapshotBilling(tenantId),
     db.extension.findMany({ where: { tenantId }, select: { extNumber: true } }),
     db.user.findMany({
@@ -61,6 +63,18 @@ export async function loadAccountSetupInfo(tenantId: string): Promise<AccountSet
       where: { tenantId },
       select: { smsBillingEnabled: true },
     }),
+    // The company's own phone numbers. ⛔ These live in PbxTenantInboundDid,
+    // synced from the PBX — NOT the Connect phoneNumber table, which onboarding
+    // tenants have zero rows in. Without this the assistant answered "I don't
+    // have your company's phone number" to every customer who asked — a
+    // question the trainer marked red twice, because the number was sitting in
+    // the database the whole time.
+    (db as any).pbxTenantInboundDid.findMany({
+      where: { connectTenantId: tenantId, active: true },
+      select: { e164: true },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+    }).catch(() => []),
   ]);
 
   const extensionsInUse = extensions.map((e: any) => String(e.extNumber || "").trim()).filter(Boolean).sort();
@@ -82,6 +96,14 @@ export async function loadAccountSetupInfo(tenantId: string): Promise<AccountSet
       email: u.email,
     })),
     hasTextableNumber: !!smsNumber,
+    // "845-723-1213" — the way a person reads a number out loud. The first one
+    // listed is the oldest DID on the account, which is the main line for
+    // every onboarded tenant (the first number is the one signup bought).
+    companyNumbers: (inboundDids as Array<{ e164: string }>).map((d) => {
+      const digits = String(d.e164 || "").replace(/\D/g, "");
+      const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+      return ten.length === 10 ? `${ten.slice(0, 3)}-${ten.slice(3, 6)}-${ten.slice(6)}` : String(d.e164 || "");
+    }).filter(Boolean),
   };
 }
 
