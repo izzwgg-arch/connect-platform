@@ -1,5 +1,64 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — the phone rang while the PBX had nowhere to send the call (2026-08-10) — READ FIRST for ANY "it rang but never connected", before treating a ring as proof the phone was reached, before flipping a tenant onto the 443 SIP route, or before looking a tenant up by name
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_DEMO_INCOMING_CALLS_443_2026-08-10.md`**
+(Loopcom Demo ext 101. **Config only — no deploy, no code change, no PBX write.**)
+
+- ⛔ **THE RULE: a ring notification must not be sent when the call has nowhere
+  to land — and nothing checks.** The ring push and the actual call are two
+  independent systems. On all four calls the push path was perfect (`expoStatus:
+  ok`, incoming screen **76 ms** after the push) while `PJSIP_DIAL_CONTACTS` was
+  **empty** and `connect-wake-core` spun once a second for **13 s** (call 1) and
+  **18 s** (call 4) without ever dialling the phone. Same family as
+  [[desktop-ring-has-no-off-switch]].
+- ⛔ **A client's own "registered" is an OPINION; the PBX contact list is the
+  FACT.** The app reported `registered / wssConnected / sipStackHealthy` with a
+  535 s-old registration while `pjsip show endpoint T102_101_1` read
+  **`Unavailable, 0 of inf`** — and still did 13 minutes later. Believe the PBX.
+- ⛔ **"Voicemail AND still ringing" was FOUR calls overlapping, not one call
+  misbehaving.** The caller redialled 4× in 90 s. Line calls up by `linkedid`
+  before believing one call did two contradictory things. The voicemail was a
+  **DECLINE** (19:04:55 → `sub-leave-vm` → `VoiceMail(101@…,u)` one second
+  later); **no message was recorded** — the INBOX newest is Aug 2. The
+  still-ringing was call 4, where a DECLINE was tapped with **no SIP session
+  behind it**, so it reached nothing and the PBX rang on 14 s more.
+- **Cause of the churn:** every contact was `192.157.84.x` = **Cologuard, Old
+  Bridge NJ** (the filter family in [[webrtc-filtered-internet-port-8089]]).
+  `qualify_frequency 30` pings each contact; the filter never returns it, so the
+  contact is dropped and re-minted on a new port — **23 registration events in 22
+  minutes**.
+- ⛔ **Moving a tenant to 443 is THREE fields, not two:** `webrtcRouteViaSbc:
+  true` + `sipWsUrl: null` + **`sipDomain: "m.connectcomunications.com"`**. Both
+  tenants moved had an IP literal in `sipDomain` too;
+  `normalizeSipWsUrlHost()` self-corrects an IP-literal *sipWsUrl* and **nothing
+  corrects `sipDomain`**. Diff the whole row against Gesheft/Displaydex. Read
+  live per request — no deploy, no restart. ⛔ Probe the route with
+  **`curl --http1.1`** — nginx has HTTP/2 on and a default curl returns **426
+  Upgrade Required**, which reads like a broken route (correct answer: `101
+  Switching Protocols` + `Sec-WebSocket-Protocol: sip`).
+- **On 443 now:** Gesheft, Displaydex, **Loopcom Demo**, **inii mini**. ⛔ inii
+  mini did **not** have this fault (11 reg events in 24 h, Optimum static
+  business IP, `Avail` at 34.9 ms) — it was moved on Izzy's instruction, not on
+  evidence. ⏳ **Nobody has completed a call on 443 on either tenant**, and both
+  need their phones to **sign out and back in** (the app never refreshes a cached
+  `sipWsUrl` — which is also why the flip is inert on a live session and broke
+  nothing).
+- ⛔ **21 of 50 tenant rows carry `pbxRemovedAt`** — a raw name lookup returns
+  companies no Connect screen shows (cost a round of "which inii mini is real?").
+  Filter `pbxRemovedAt: null`. They are inert: `billing/routes.ts:647` excludes
+  them, so their ACTIVE billable extensions cannot invoice. Erase is a separate
+  confirmed call and never touches a tenant that ever paid. See
+  [[removed-tenants-still-answer-name-lookups]].
+- ⏳ **Unexplained: "we got Unknown."** Every record carries the number — invite
+  row, VoIP `callerNumber`, flight recorder, SIP invite. No CNAM from the carrier
+  is normal. Ask WHICH SCREEN said Unknown before hunting.
+- **Still open (the 443 move does not fix these):** the api fans out ring pushes
+  without consulting whether the PBX holds a contact — though `connect-wake-core`
+  already computes exactly that verdict as `WARM`; a decline with no session
+  behind it is silently dropped; and the wake loop spins its full grace period
+  against a permanently empty contact list instead of failing to voicemail early.
+
 ## ⛔ AGENT HANDOFF — the voicemail preloader drowned the PBX helper; fix DEPLOYED + traffic-proven (2026-08-12) — READ FIRST for helper `audio_not_found` floods, "PBX CPU high with no calls", voicemail play/preload work, or before touching `streamVoicemailAudio`
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_PRELOAD_FLOOD_2026-08-12.md`**
@@ -29,12 +88,40 @@ not stale for this).
   SILENT in api logs (local-store hits and audioGoneAt 404s log nothing) —
   judge from the helper journal on the PBX, and remember `docker logs` wipes
   at every deploy, so a 0-match grep minutes after a restart proves nothing.
-- ⛔ **Still open:** the PBX runs helper `2026.08.06.6` — unbounded
-  ThreadingHTTPServer, no scan cache; the hardening (`1b0771bb`, branch
-  `claude/hopeful-pasteur-e03ce2`) is committed but NOT deployed (PBX write =
-  Izzy). Desktop apps only pick up the portal preloader fix on reload. ⏳ Not
-  yet proven: a real voicemail measured arriving in seconds (the
-  instant-delivery half of the commit).
+- ✅ **The helper hardening IS live on the PBX** (installed 19:33 ET same day
+  under Izzy's explicit permission): helper `2026.08.12.1` — bounded server
+  (32 in-flight, fast 503), 30s socket timeout, per-mailbox scan cache — plus
+  fd-limit drop-in `20-fd-limit.conf` (`LimitNOFILE=65536`; the soft limit was
+  **1,024**, which is what both fd-exhaustion wedges hit). Backup
+  `/root/helper-backup-fdfix-20260812-193319.py`; probe went 30s → **2.7 ms**.
+  ⛔ **The merge trap that came with it:** `1b0771bb` branched **13
+  helper-commits behind** the tip, so merging CONFLICTS on both helper files
+  even though its content was built on the live file. Resolve by taking the
+  fix's files — but ONLY after grepping them for every our-branch marker
+  (`restore_gui_conf_ownership`, `connect-doorway`, `doorway-status`) and
+  running the 33-case drift guard; and before installing ANY externally-built
+  helper, `sha256sum` the live PBX file against the fix's claimed base — a
+  mismatch means silent downgrade. Merge `c756c742`; the api half (inspect
+  15s→45s, spool list 12s→30s — the aborts that fed the thread pile-up)
+  deployed as `c7da4043`, container-verified.
+- **Every open portal window now learns about a deploy** (`0cf18b14`, deployed
+  + bundle-verified): `GET /version` (unauthenticated, reads `.next/BUILD_ID`)
+  + `PortalReloadNotice` mounted in `app/providers.tsx` — full window,
+  mini-dialer AND browser tabs poll every 5 min + on focus, and show
+  "Connect was updated — Reload" when the build id changes. **Never
+  auto-reloads** (a reload tears down the SIP softphone mid-call); dismissal
+  is per-build so it re-arms next deploy. ⛔ Don't confuse with
+  `DesktopUpdateToast` in the same file — that covers ELECTRON SHELL updates
+  only and is mounted only in SidebarNav; the mini-dialer had NO update
+  surface before this. Windows opened before `0cf18b14` still need ONE manual
+  reload — after that, no deploy is silent again.
+- ⏳ **Not yet proven:** a real voicemail measured arriving in seconds (the
+  instant-delivery half). Acceptance: `voicemail-notify: sync complete` with
+  `upserted_count ≥ 1` (not `helper_error:…timeout`), then
+  `voicemail: arrival audio copied to local store`, then Play is instant.
+  Also open: Gesheft 101/102 mailbox cleanup (9,200 + 2,600 msgs), and the
+  VitalPBX REST voicemail read returning 0 fleet-wide (why everything rides
+  the helper spool path at all).
 
 ## ⛔⛔ AGENT HANDOFF — the dialer locked ITSELF out and sat on "Connecting" (2026-08-10) — READ FIRST for ANY "softphone stuck on Connecting / orange" report, before adding a retry path that calls an API, and before blaming a customer's internet
 
@@ -1292,11 +1379,31 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELI_IOS_443_PASTE_2026-08-05.md`*
   retired: menu-paste never needs permission; the Settings row only appears
   after a programmatic clipboard read). Waiting on Eli's long-press
   observation; candidate fix = RN 0.81.5→0.81.6 in build 53 (re-lock pnpm).
-- **Build 52 submitted** (launch-screen picker, paste explainer + Deny-wedge
-  detector, keyboard-inset commit), attached to "Loopcom Testers",
-  WAITING_FOR_REVIEW. Pipeline recipe + `asc-release-52.mjs` pattern in the
-  handoff §6. Bump `buildNumber` in **app.config.ts**; `npx --yes eas-cli`
-  (plain `eas` not installed on loopcom).
+- **Build 52 is the current TestFlight build** (launch-screen picker, paste
+  explainer + Deny-wedge detector, keyboard-inset commit) — id
+  `6d37750c-78e1-4fe2-87c3-f77a62336f16`, uploaded 2026-08-04, `VALID`, beta
+  review **APPROVED**, attached to "Loopcom Testers"
+  (`fe508ee6-4a3f-49dd-bf53-858839fa2f06`). Pipeline recipe +
+  `asc-release-52.mjs` pattern in the handoff §6. Bump `buildNumber` in
+  **app.config.ts**; `npx --yes eas-cli` (plain `eas` not installed on loopcom).
+- **"Send him the latest build" = add him to the group, nothing more.** The
+  newest build is already attached, so a `POST /v1/betaTesters` with a
+  `betaGroups` relationship is the ENTIRE job — Apple fires the invite email
+  itself. There is no separate build-push step. Testers as of **2026-08-10**:
+  eli.lovi@outlook.com, izzwgg@gmail.com, fixupusa1@gmail.com,
+  leibfrankel0999@gmail.com INSTALLED; yossi@yossiswoodworx.com,
+  shulemfreund1@gmail.com INVITED.
+- ⛔ **`GET /v1/betaGroups/{id}/builds` returns an EMPTY list even when builds
+  ARE attached** — it made build 52 read as unattached and nearly bought a
+  pointless re-attach. Ask the other direction:
+  `GET /v1/builds?filter[betaGroups]={id}&sort=-version`. And
+  `GET /v1/builds/{id}/betaGroups` is a hard **403 `GET_RELATED` not allowed**
+  (CREATE/DELETE only), which reads like an auth failure and is not one.
+- **SSH to loopcom works straight from the Bash tool here** (Git Bash):
+  `ssh -i .connect-ssh/connect2_ed25519 -o IdentitiesOnly=yes root@45.14.194.179`
+  from the repo root — the Linux-sandbox hop in §"Server access" is not required
+  in this environment. Ship a script with
+  `ssh … 'cat > /root/.appstoreconnect/x.mjs' < local.mjs`, then `node` it.
 - **QSR prefix route**: dialer only shows routes with a per-user permission
   row. It was assigned to Yehuda by mistake — now Eli-only (not default). A
   duplicate QSR route sits in the QSR tenant itself as clutter.

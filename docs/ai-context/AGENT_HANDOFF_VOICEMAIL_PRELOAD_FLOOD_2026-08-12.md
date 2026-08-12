@@ -98,23 +98,87 @@ identity scans that stamp verdicts / find current slots).
 
 ## 4. What is still open
 
-1. ⛔ **The PBX still runs helper `2026.08.06.6`** — unbounded
-   `ThreadingHTTPServer` (thread per connection, no cap) and **no scan cache**.
-   The bounded-server + scan-cache hardening is committed as `1b0771bb` on
-   branch `claude/hopeful-pasteur-e03ce2` but **NOT deployed** — installing it
-   is a PBX write, which is Izzy's call. Until then, any un-updated client that
-   floods again hits a helper with no self-protection (it was the fd-exhaustion
-   crash of 11:35). The helper restart at 14:31 only unwedged it.
+1. ~~The PBX still runs helper `2026.08.06.6`~~ — **DONE 19:33 ET the same
+   evening**: helper `2026.08.12.1` installed on the PBX under Izzy's explicit
+   permission. Full record in §5.
 2. **Desktop apps pick up the portal preloader fix only when their window
-   reloads.** The deploy-reload notice (`0cf18b14`, deployed same evening)
-   pushes open windows to reload; an office that ignores it keeps the old
+   reloads.** The deploy-reload notice (`0cf18b14`, deployed same evening —
+   §6) pushes open windows to reload; an office that ignores it keeps the old
    client behavior — which the server-side `audioGoneAt` 404s now absorb
-   cheaply, but the requests still arrive.
+   cheaply, but the requests still arrive. Windows opened BEFORE `0cf18b14`
+   never see any notice and still need one manual reload/restart.
 3. ⏳ **Not yet proven:** a real voicemail measured arriving on a softphone in
    seconds (the instant-delivery half of `7bc11786`), and the first-play-instant
-   claim. Prove with a live deposit, not by reading the code.
+   claim. Prove with a live deposit, not by reading the code. Acceptance:
+   `docker logs app-api-1 | grep "voicemail-notify: sync complete"` shows
+   `upserted_count ≥ 1` (not the old `helper_error:…timeout`), followed by
+   `voicemail: arrival audio copied to local store`.
+4. **Gesheft 101/102 mailboxes need an actual cleanup** (9,200 + 2,600
+   messages) — every operation on them is heavy regardless of caching.
 
-## 5. Diagnostics recipe (next "helper flooded" / "PBX busy, no calls" report)
+## 5. Helper `2026.08.12.1` installed on the PBX (19:33 ET, Izzy's permission)
+
+The `1b0771bb` hardening is LIVE: `BoundedThreadingHTTPServer` (max 32
+in-flight, fast 503 when saturated, env `CONNECT_PBX_HELPER_MAX_INFLIGHT`),
+30 s handler socket timeout, per-mailbox spool-scan cache keyed on folder-dir
+`(mtime_ns,size,ino)` with single-flight, best-effort audit writes.
+
+- **Install route** (the established one): extract `.py` from the commit → scp
+  to PBX `/tmp` → remote `python3 -m py_compile` → `cp -p` backup →
+  `cat src > dest` (preserves the target inode's root:root 755) → restart.
+  Backup: **`/root/helper-backup-fdfix-20260812-193319.py`**; rollback is
+  `cat` it back + `systemctl restart connect-pbx-helper`.
+- **fd ceiling**: drop-in
+  `/etc/systemd/system/connect-pbx-helper.service.d/20-fd-limit.conf` with
+  `LimitNOFILE=65536` (the soft limit was **1,024** against a 524k hard limit —
+  Python honors the soft one; that's what the two fd-exhaustion wedges hit).
+  The CAP_CHOWN/CAP_FOWNER drop-in survived the restart (`getpcaps` verified).
+- **Post-install health**: 5 fds / 1 thread idle; an unauthorized probe answers
+  **401 in 2.7 ms** (the wedged helper took 30 s for the same probe); 63
+  requests served in the first sampled minute, all 200.
+- ⛔ **THE MERGE TRAP**: `1b0771bb` branched from `5419bdd2` — **13
+  helper-commits behind** the branch tip — so `git merge` CONFLICTS on both
+  helper files even though the fix's CONTENT was built on the live file.
+  Resolution: take the fix's files wholesale, but ONLY after verifying they
+  contain every our-branch marker (`restore_gui_conf_ownership`,
+  `_chown_gui_conf`, `connect-doorway`, `doorway-status`, `vm_spool_read_audio`)
+  plus the new `BoundedThreadingHTTPServer`, and the drift guard passes on the
+  resolved copies (`npx tsx --test
+  scripts/pbx/install-vitalpbx-inbound-route-helper.test.ts` — 33/33).
+  ⛔ Before installing ANY externally-built helper file, hash-compare the live
+  PBX file against the base the fix claims (`sha256sum` both sides) — a
+  mismatch means the "fix" is a silent downgrade of live-only features.
+  Merge commit: `c756c742`.
+- **The api half rode the same merge** and deployed as `c7da4043`: helper
+  client inspect timeout **15 s → 45 s**, spool list **12 s → 30 s** — the
+  15 s aborts + retries were what fed the thread pile-up.
+
+## 6. Deploy-reload notice (`0cf18b14`) — every open window learns about a deploy
+
+The desktop shell loads the HOSTED portal, so a portal deploy used to reach
+nobody until each machine was manually restarted. Now:
+
+- **`GET /version`** (`apps/portal/app/version/route.ts`, unauthenticated,
+  `force-dynamic`, no-store): returns the running build id from
+  `.next/BUILD_ID` (checks both `cwd/.next` and `cwd/apps/portal/.next` — the
+  standalone server runs from `/app`); answers `"dev"` outside production and
+  the client ignores that value.
+- **`PortalReloadNotice`** (in `components/DesktopUpdateNotice.tsx`, mounted in
+  `app/providers.tsx` so full window + mini-dialer + browser tabs all get it):
+  captures the build id at load, re-polls every 5 min and on window focus;
+  on change shows "Connect was updated — Reload" (same visual pattern as the
+  shell-update toast). **Never auto-reloads** — a reload tears down the SIP
+  softphone mid-call; the card says to finish the call first. Dismissal is
+  remembered per build id, so it re-arms on the next deploy.
+- ⛔ **Do not confuse it with `DesktopUpdateToast`** (same file): that one
+  covers ELECTRON SHELL updates via `window.connectDesktop.updates`, is
+  mounted only in `SidebarNav`, and knows nothing about portal deploys. The
+  mini-dialer window had NO update surface at all before `0cf18b14`.
+- Verified live: `curl https://app.connectcomunications.com/version` returns a
+  real build id, and the "Connect was updated" string is in the deployed
+  shared chunk.
+
+## 7. Diagnostics recipe (next "helper flooded" / "PBX busy, no calls" report)
 
 ```bash
 # On the PBX (read-only): rate + verdicts, and who
