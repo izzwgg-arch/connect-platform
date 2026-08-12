@@ -51,6 +51,7 @@ test("shouldSkipJwtVerification: every internal agent door skips JWT", () => {
     "/internal/agent/queue/action",
     "/internal/agent/extfeature/action",
     "/internal/agent/account-setup-info",
+    "/internal/agent/contacts-info",
   ]) {
     assert.equal(shouldSkipJwtVerification(p), true, `${p} must skip the JWT hook`);
     assert.equal(shouldSkipJwtVerification(`/api${p}`), true, `/api${p} must skip the JWT hook`);

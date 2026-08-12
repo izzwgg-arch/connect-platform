@@ -238,6 +238,7 @@ import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
 import { registerAccountSetupInfoRoute } from "./agentProvisioning/accountSetupInfoRoute";
+import { registerAgentContactsInfoRoute } from "./agentProvisioning/contactsInfoRoute";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
   PORTAL_ROLE_BUCKETS,
@@ -40137,6 +40138,7 @@ const port = Number(process.env.PORT || 3001);
   // Read-only door the assistant quotes prices from, so the figure it says in
   // chat is the one the invoice engine will actually bill.
   registerAccountSetupInfoRoute(app);
+  registerAgentContactsInfoRoute(app);
   // Confirm-by-password: the agent may only PREPARE (a permission grant, a new
   // extension, …); these routes apply it after re-checking authority and the
   // requester's own password.

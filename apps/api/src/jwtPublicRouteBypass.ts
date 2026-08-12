@@ -62,6 +62,10 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // reached it. Any new /internal/agent/* door must be added here too.
   const isInternalAgentAccountSetupPath =
     path === "/internal/agent/account-setup-info" || path.endsWith("/internal/agent/account-setup-info");
+  // Read-only contacts door ("who is in my contacts"). Same in-handler
+  // shared-secret auth, fail-closed.
+  const isInternalAgentContactsPath =
+    path === "/internal/agent/contacts-info" || path.endsWith("/internal/agent/contacts-info");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -111,6 +115,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalAgentQueuePath
     || isInternalAgentExtFeaturePath
     || isInternalAgentAccountSetupPath
+    || isInternalAgentContactsPath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath

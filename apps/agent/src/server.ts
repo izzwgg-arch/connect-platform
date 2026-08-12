@@ -19,6 +19,8 @@ import { buildTools } from "./tools/toolRegistry";
 import { buildPermissionTools } from "./tools/permissionGrant";
 import { buildProvisioningTools } from "./tools/provisioningTools";
 import { makeAccountSetupInfoClient } from "./pbx/accountSetupInfoClient";
+import { buildContactsTools } from "./tools/contactsTools";
+import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
 import { ActionService } from "./actions/service";
@@ -250,6 +252,9 @@ async function main() {
       // is applied by the api after the customer re-enters their own password,
       // and every price quoted comes from the invoice engine, never from here.
       ...buildProvisioningTools({ prisma, loadAccountSetupInfo: makeAccountSetupInfoClient() }),
+      // "Who is in my contacts?" — read-only, tenant-locked. The write side
+      // deliberately does not exist (see contactsTools.ts).
+      ...buildContactsTools({ loadContactsInfo: makeContactsInfoClient() }),
     ];
     engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools);
 
