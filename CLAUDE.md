@@ -1,5 +1,41 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — the voicemail preloader drowned the PBX helper; fix DEPLOYED + traffic-proven (2026-08-12) — READ FIRST for helper `audio_not_found` floods, "PBX CPU high with no calls", voicemail play/preload work, or before touching `streamVoicemailAudio`
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_PRELOAD_FLOOD_2026-08-12.md`**
+(fix commit `7bc11786` on `feat/ivr-migration-takeover`, api + portal **DEPLOYED
+16:29 ET 2026-08-12**; touches no worker files, so the older worker container is
+not stale for this).
+
+- ⛔ **Exactly ONE code path POSTs the helper's `/voicemail/spool/audio`:**
+  `streamVoicemailAudio` in `apps/api/src/server.ts` (the `:id/stream` /
+  `:id/download` routes). The worker reads lists, never audio — a helper audio
+  flood is ALWAYS the api relaying clients. This one was the desktop preloader
+  (`?preload=1`) re-sweeping ~200 permanently-dead voicemails every 30 s;
+  nothing cached the "gone" verdict, so each sweep re-paid VitalPBX REST +
+  a spool list scan (Gesheft 101 = 9,200+ msgs) + the audio POST. The helper
+  crashed at 11:35 (`Errno 24`, fd exhaustion), restarted 14:31.
+- **The fix that shipped:** `Voicemail.audioGoneAt` (negative cache — checked
+  first, answers 404 with zero PBX cost) + `Voicemail.localAudioPath` local
+  audio store (one PBX fetch per message EVER; volume in BOTH api compose
+  blocks) + notify scan bounded to `sinceOrigtime = newest − 6h` + the
+  mini-dialer marks 404/410 ids gone in a module Set. ⛔ `audioGoneAt` is
+  stamped ONLY by a pagination-COMPLETE identity scan that proves the origtime
+  is absent — never by a timeout, and **never by a positional `msgNum` 404**
+  (slots renumber; that's the "every voicemail plays the first one" trap).
+- **Traffic-proven, not quiet-log-proven** (independent session, 17:00 ET):
+  with the sweep still running ~100 req/min, helper audio POSTs went
+  **3,074/hr + 394 not_found before the deploy → 0 + 0 after**. ⛔ Success is
+  SILENT in api logs (local-store hits and audioGoneAt 404s log nothing) —
+  judge from the helper journal on the PBX, and remember `docker logs` wipes
+  at every deploy, so a 0-match grep minutes after a restart proves nothing.
+- ⛔ **Still open:** the PBX runs helper `2026.08.06.6` — unbounded
+  ThreadingHTTPServer, no scan cache; the hardening (`1b0771bb`, branch
+  `claude/hopeful-pasteur-e03ce2`) is committed but NOT deployed (PBX write =
+  Izzy). Desktop apps only pick up the portal preloader fix on reload. ⏳ Not
+  yet proven: a real voicemail measured arriving in seconds (the
+  instant-delivery half of the commit).
+
 ## ⛔⛔ AGENT HANDOFF — the dialer locked ITSELF out and sat on "Connecting" (2026-08-10) — READ FIRST for ANY "softphone stuck on Connecting / orange" report, before adding a retry path that calls an API, and before blaming a customer's internet
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SOFTPHONE_SELF_LOCKOUT_2026-08-10.md`**
