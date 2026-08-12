@@ -14,6 +14,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ConversationEngine } from "./engine";
 import type { ChatUploadStore } from "../attachments/uploadStore";
+import type { EscalationService } from "../escalation/escalations";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
 import { elevateForCustomOwnerRole } from "../authRoles";
 
@@ -46,6 +47,10 @@ export function registerChatRoutes(
    *  answered in Yiddish even when they type in English. Optional: without it
    *  the engine falls back to detecting the language of each message. */
   prisma: any = null,
+  /** Detects "passed to the human team" replies and turns them into a
+   *  researched SMS + email to the owner. Optional: without it, behaviour is
+   *  exactly the old (report-nothing) behaviour. */
+  escalations: EscalationService | null = null,
 ) {
   app.post("/agent/chat/message", async (req, reply) => {
     const identity = resolveIdentity(req);
@@ -78,7 +83,17 @@ export function registerChatRoutes(
         if (u?.uiLanguage === "yi") preferredLanguage = "yi";
       } catch { /* fall back to detection */ }
     }
-    return engine.handleMessage({ ...identity, role, channel: body.data.channel, preferredLanguage }, body.data.text, attachments);
+    const result = await engine.handleMessage({ ...identity, role, channel: body.data.channel, preferredLanguage }, body.data.text, attachments);
+    // After the reply is decided: if the assistant just promised to pass this
+    // to the human team, make that promise TRUE. Fire-and-forget — the
+    // customer's chat never waits on (or breaks over) the escalation pipeline.
+    escalations?.considerTurn({
+      tenantId: identity.tenantId,
+      clientUserId: identity.clientUserId ?? null,
+      role: role === "owner" ? "owner" : "customer",
+      conversationId: result.conversationId,
+    });
+    return result;
   });
 
   // ── Chunked file upload (chat widget). nginx caps /agent-api/* bodies at

@@ -83,7 +83,17 @@ export type BillingSmsSenderUnavailable = {
  * right shape.
  */
 export async function resolveBillingSmsSender(): Promise<BillingSmsSender | BillingSmsSenderUnavailable> {
-  const fromNumber = resolveBillingSmsFromNumber();
+  return resolvePlatformSmsSender(resolveBillingSmsFromNumber());
+}
+
+/**
+ * Same platform sender, arbitrary Connect-owned from-number. Used by the agent
+ * escalation dispatcher, which sends from Connect's escalation number rather
+ * than the billing number (one of the escalation RECIPIENTS is the billing
+ * number itself — (845) 723-1213 — so they cannot share a from).
+ */
+export async function resolvePlatformSmsSender(fromNumberRaw: string): Promise<BillingSmsSender | BillingSmsSenderUnavailable> {
+  const fromNumber = normalizeUsPhone(fromNumberRaw) || CONNECT_BILLING_SMS_FROM_FALLBACK;
 
   const cfg = await (db as any).globalVoipMsConfig.findUnique({ where: { id: "default" } });
   if (!cfg?.credentialsEncrypted) {

@@ -451,6 +451,9 @@ enum EmailJobStatus {
   RUNNING
   SENT
   FAILED
+  /// Deliberately not sent — e.g. ADMIN_ALERT mails muted by the owner
+  /// (2026-08-12: only Assistant escalation reports may reach the alert inbox).
+  SKIPPED
 }
 
 enum PhoneNumberStatus {
@@ -6400,6 +6403,49 @@ model AgentKbArticle {
 /// tenant's conversations. Every lesson carries who/when; the owner can revoke
 /// any lesson from the AI Trainer page. Audit events: trainer.lesson_added /
 /// trainer.lesson_revoked.
+enum AgentEscalationStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+/// One customer request the assistant could not handle itself, researched and
+/// packaged for the owner's decision. The AGENT detects + researches + writes
+/// the row; the API's dispatcher sends the SMS (to the owner's numbers, from
+/// Connect's escalation number) and the email report, because the agent
+/// container is a manual rebuild and must never be the only thing standing
+/// between a customer and the owner hearing about it.
+model AgentEscalation {
+  id             String                @id @default(cuid())
+  conversationId String?
+  tenantId       String
+  tenantName     String
+  clientUserId   String?
+  userName       String
+  userEmail      String?
+  /// What the customer asked, in one or two sentences.
+  requestSummary String
+  /// Compact report for the SMS (tenant + user + issue + proposed fix).
+  smsBody        String
+  /// Full report for the email: issue, findings, exact proposed fix, approval line.
+  report         String
+  /// The exact fix the agent proposes, alone — for screens and follow-ups.
+  proposedFix    String
+  /// True when the research LLM was unavailable and the report is only the raw request.
+  researchDegraded Boolean             @default(false)
+  status         AgentEscalationStatus @default(QUEUED)
+  attempts       Int                   @default(0)
+  lastError      String?
+  smsSentAt      DateTime?
+  emailQueuedAt  DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@index([status, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
 model AgentTrainerLesson {
   id                   String    @id @default(cuid())
   tenantId             String

@@ -63,6 +63,27 @@ export class Notifier {
   }
 
   async send(mail: Mail): Promise<{ sent: boolean; reason?: string }> {
+    // Owner directive (2026-08-12): the alert inbox receives ONLY the
+    // Assistant's escalation reports — and those are sent by the API's
+    // dispatcher, never from here. So this notifier drops that recipient from
+    // every mail (digests, incidents, action mails alike); if nobody is left,
+    // the mail is recorded to audit and not sent. Muting at the SEND door, not
+    // per call site, because call sites multiply — that lesson cost a full
+    // day's Gmail quota (402 of 499 sends) on 2026-08-06.
+    const muted = (process.env.AGENT_MUTED_ALERT_RECIPIENTS || "tod10950@gmail.com")
+      .split(",")
+      .map((v) => v.trim().toLowerCase())
+      .filter(Boolean);
+    const originalTo = mail.to;
+    mail = { ...mail, to: mail.to.filter((t) => !muted.includes(String(t).trim().toLowerCase())) };
+    if (mail.to.length === 0) {
+      await this.audit.record({
+        actor: "system",
+        event: `notify.muted`,
+        payload: { kind: mail.kind, to: originalTo, subject: mail.subject },
+      });
+      return { sent: false, reason: "recipient_muted" };
+    }
     await this.audit.record({
       actor: "system",
       event: `notify.${mail.kind}`,

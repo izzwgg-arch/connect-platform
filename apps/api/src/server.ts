@@ -275,6 +275,7 @@ import {
 } from "./pbxInboundRouteHelperClient";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
+import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -1142,6 +1143,25 @@ async function processEmailJobsBatch() {
     });
 
     for (const job of jobs) {
+      // Owner directive (2026-08-12): the alert inbox receives ONLY the
+      // Assistant's escalation reports (type AGENT_ESCALATION). ADMIN_ALERT
+      // mails — every automated warning the platform generates — are muted at
+      // this single send door, whatever created them (several files create
+      // these rows without going through sendAdminAlert, so gating creation
+      // sites would always leak). The rows still exist as the audit trail; on
+      // 2026-08-06 these alerts burned 402 of the mailbox's 499 daily sends
+      // and silenced customer email for the rest of the day.
+      if (job.type === "ADMIN_ALERT") {
+        await db.emailJob.update({
+          where: { id: job.id },
+          data: {
+            status: "SKIPPED" as any,
+            lastErrorCode: "ALERTS_MUTED",
+            lastErrorMessage: "Muted by owner directive 2026-08-12 — only Assistant escalation reports go to the alert inbox.",
+          },
+        });
+        continue;
+      }
       try {
         await db.emailJob.update({ where: { id: job.id }, data: { status: "RUNNING", attempts: job.attempts + 1 } });
         await sendEmailJobNow(job);
@@ -37658,6 +37678,15 @@ const emailJobTimer = registerShutdownTimer(
   }, 15_000),
 );
 emailJobTimer.unref();
+
+// Agent escalations → owner SMS + email report. The agent writes the rows;
+// this sweep delivers them (see agentEscalationDispatch.ts for the policy).
+const agentEscalationTimer = registerShutdownTimer(
+  setInterval(() => {
+    dispatchAgentEscalationsBatch(app.log as any).catch((e) => app.log.error({ err: e }, "agent escalation dispatch failed"));
+  }, 30_000),
+);
+agentEscalationTimer.unref();
 
 // Receipt reconciliation sweep — safety net so every approved payment gets a
 // receipt email even when the primary queue-on-charge path missed it
