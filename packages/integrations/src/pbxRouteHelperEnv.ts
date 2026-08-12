@@ -98,7 +98,10 @@ export type VoicemailSpoolListMergedResponse = VoicemailSpoolListResponse & {
 export async function listVoicemailSpoolFromHelper(
   cfg: PbxRouteHelperConfig,
   body: VoicemailSpoolListBody,
-  timeoutMs = 12_000,
+  // 30s, not 12s: a cold-cache scan of a huge mailbox (gesheft ext 101 has
+  // 9k+ messages) can exceed 12s on a busy helper; aborting just makes the
+  // caller retry the same expensive scan while the first one still runs.
+  timeoutMs = 30_000,
 ): Promise<VoicemailSpoolListResponse> {
   const resp = await fetch(`${cfg.baseUrl}/voicemail/spool/list`, {
     method: "POST",
@@ -136,7 +139,7 @@ export async function fetchAllVoicemailSpoolMessages(
   options?: { pageSize?: number; timeoutMs?: number; maxPages?: number },
 ): Promise<VoicemailSpoolListMergedResponse> {
   const pageSize = Math.min(Math.max(options?.pageSize ?? 2000, 1), 20000);
-  const timeoutMs = options?.timeoutMs ?? 12_000;
+  const timeoutMs = options?.timeoutMs ?? 30_000;
   const maxPagesEnv = Number(process.env.VOICEMAIL_HELPER_SPOOL_MAX_PAGES || "");
   const maxPages = Math.max(
     1,
