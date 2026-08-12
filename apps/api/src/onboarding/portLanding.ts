@@ -43,7 +43,8 @@ import {
   type VmsCreds,
 } from "./voipMsProvisioning";
 import {
-  agentSetPbxRouteDestination,
+  agentSetPbxRouteDestinationV2,
+  getPbxTenantCatalog,
   inspectPbxInboundRoute,
   resolvePbxRouteHelperConfig,
 } from "../pbxInboundRouteHelperClient";
@@ -87,33 +88,43 @@ async function defaultCopyPbxDestination(
 
   const temp = await inspectPbxInboundRoute(cfg, { did: tempDid, tenantId: pbxTenantId });
   // Drift guard: Connect's DB said "pbx" but the PBX route actually enters the
-  // doorway. Copying a doorway destination ROW id would recreate the
-  // hijackable pattern the doorway rebuild eliminated — that world belongs to
-  // the switch path, never to a raw destination copy.
+  // doorway. Copying a doorway target would recreate the hijackable pattern
+  // the doorway rebuild eliminated — that world belongs to the switch path.
   if (temp.mode === "connect" || temp.rendered?.pointsAtDoorway) {
     return { copied: false, detail: "temporary route is Connect-owned on the PBX — nothing to copy" };
   }
-  const destId = temp.route?.destination_id;
-  if (destId == null || destId === "") return { copied: false, detail: "temporary route has no destination to copy" };
 
-  const ported = await inspectPbxInboundRoute(cfg, { did: portedDid, tenantId: pbxTenantId });
-  if (String(ported.route?.destination_id ?? "") === String(destId)) {
-    return { copied: true, detail: "already pointing at the same destination" };
+  // ⛔ Copy the DECODED target (extension / ring group / PBX IVR / custom
+  // app), never the raw destination ROW id: two routes sharing one
+  // ombu_destinations row means deleting the temp route later cascades the
+  // row away and silently breaks the ported route (the renumbering-saga
+  // cascade trap). The v2 setter gives the ported route its OWN row.
+  const catalog = await getPbxTenantCatalog(cfg, { tenantId: pbxTenantId });
+  const findRoute = (did: string) =>
+    (catalog.routes || []).find((r) => String(r.did || "").replace(/\D/g, "") === did) || null;
+  const tempRoute = findRoute(tempDid);
+  const portedRoute = findRoute(portedDid);
+  if (!tempRoute?.target?.type || tempRoute.target.targetId == null) {
+    return { copied: false, detail: "temporary route has no decodable destination to copy" };
   }
-  try {
-    await agentSetPbxRouteDestination(cfg, {
-      did: portedDid,
-      tenantId: pbxTenantId,
-      destinationId: destId,
-      actor: "port-watchdog",
-    });
-  } catch (e: any) {
-    // The set runs a full per-tenant regen (~40s) and can outlive the HTTP
-    // timeout while still landing — the next sweep's inspect sees the copied
-    // destination and records the stage then. Never treat the abort as fatal.
-    return { copied: false, detail: `helper still applying (${String(e?.message || e).slice(0, 120)}) — will verify next sweep` };
+  if (
+    portedRoute?.target &&
+    portedRoute.target.type === tempRoute.target.type &&
+    String(portedRoute.target.targetId) === String(tempRoute.target.targetId)
+  ) {
+    return { copied: true, detail: `already pointing at the same ${tempRoute.target.type}` };
   }
-  return { copied: true, detail: `destination ${destId} copied from the temporary number` };
+  await agentSetPbxRouteDestinationV2(cfg, {
+    did: portedDid,
+    tenantId: pbxTenantId,
+    targetType: tempRoute.target.type,
+    targetId: tempRoute.target.targetId,
+    actor: "port-watchdog",
+  });
+  return {
+    copied: true,
+    detail: `${tempRoute.target.type} ${tempRoute.target.label || tempRoute.target.targetId} copied from the temporary number`,
+  };
 }
 
 export function defaultPortLandingDeps(): PortLandingDeps {
