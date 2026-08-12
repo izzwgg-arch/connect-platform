@@ -266,6 +266,12 @@ function voicemailStreamUrl(id: string): string {
 // is an accelerator, never a gate.
 const vmAudioCache = new Map<string, { objectUrl: string; bytes: number }>();
 const vmAudioInFlight = new Set<string>();
+// Voicemails the server said are GONE (404/410) — the audio never comes back,
+// so re-asking on every 30s list refresh is pure waste. Without this set, one
+// office's machines retried ~200 dead voicemails ~166× each in two hours and
+// flooded the PBX helper into fd exhaustion (2026-08-12). Module scope: lives
+// as long as the window; each app start re-probes each id at most once.
+const vmAudioGone = new Set<string>();
 let vmAudioCacheBytes = 0;
 const VM_CACHE_MAX_ENTRIES = 30;
 const VM_CACHE_MAX_BYTES = 64 * 1024 * 1024; // ~64 MB ≈ hours of 48k MP3 / PCM voicemail
@@ -283,11 +289,17 @@ function vmCacheEvictOldest(): void {
 
 function preloadVoicemailAudio(ids: string[]): void {
   for (const id of ids) {
-    if (vmAudioCache.has(id) || vmAudioInFlight.has(id)) continue;
+    if (vmAudioCache.has(id) || vmAudioInFlight.has(id) || vmAudioGone.has(id)) continue;
     vmAudioInFlight.add(id);
     const base = voicemailStreamUrl(id);
     fetch(`${base}${base.includes("?") ? "&" : "?"}preload=1`, { headers: { Accept: "audio/*, */*" } })
       .then(async (resp) => {
+        // Gone is FINAL — deleted voicemail audio never reappears. Transient
+        // failures (5xx, network) stay retryable on later sweeps.
+        if (resp.status === 404 || resp.status === 410) {
+          vmAudioGone.add(id);
+          return;
+        }
         if (!resp.ok) return;
         const blob = await resp.blob();
         if (blob.size === 0) return;

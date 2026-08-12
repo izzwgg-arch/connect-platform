@@ -121,6 +121,12 @@ import {
 import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
 import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
 import { warnIfOnboardingStorageEphemeral } from "./onboarding/storage";
+import {
+  readVoicemailAudio,
+  saveVoicemailAudio,
+  voicemailAudioExtFromFilename,
+  warnIfVoicemailAudioStoreEphemeral,
+} from "./voicemail/audioStore";
 import { sweepStalledOnboardingSetups } from "./onboarding/setupWatchdog";
 import {
   FakeNumberProvider,
@@ -19385,8 +19391,23 @@ async function finishVoicemailStreamFromBuffer(
   fileExtForMime: string,
   skipTranscode = false,
   allowReadStamp = true,
+  // Every buffer that reaches here from a PBX fetch is persisted to the local
+  // audio store so this message never costs the PBX another request. Only the
+  // serve-from-store path passes false (re-writing what was just read).
+  persistLocalCopy = true,
 ): Promise<void> {
   const ext = (fileExtForMime.match(/^[a-z0-9]+$/i) ? fileExtForMime : "wav").toLowerCase();
+  if (persistLocalCopy) {
+    // Original bytes, pre-transcode — later serves re-derive the browser format.
+    // Fire-and-forget: a full disk degrades to PBX streaming, never breaks playback.
+    void saveVoicemailAudio(vm.id, ext, sourceBuf)
+      .then((filename) =>
+        filename
+          ? db.voicemail.update({ where: { id: vm.id }, data: { localAudioPath: filename, audioGoneAt: null } })
+          : undefined,
+      )
+      .catch((err: any) => app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: local audio store write failed"));
+  }
   const mimeByExt: Record<string, string> = {
     wav:   "audio/wav",
     wav49: "audio/wav",
@@ -19443,12 +19464,43 @@ async function finishVoicemailStreamFromBuffer(
 
 async function streamVoicemailAudio(
   req: any,
-  vm: { id: string; tenantId: string | null; extension: string; pbxExtensionId: string | null; pbxMessageId: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; receivedAt: Date; readAt: Date | null },
+  vm: { id: string; tenantId: string | null; extension: string; pbxExtensionId: string | null; pbxMessageId: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; receivedAt: Date; readAt: Date | null; localAudioPath: string | null; audioGoneAt: Date | null },
   reply: any,
   asAttachment: boolean,
   skipTranscode = false,
   allowReadStamp = true,
 ): Promise<void> {
+  // ── LOCAL STORE: this message's audio already lives on Connect's disk ──────
+  // Zero PBX traffic — the whole point of the store. Serve and stop.
+  if (vm.localAudioPath) {
+    const localBuf = readVoicemailAudio(vm.localAudioPath);
+    if (localBuf) {
+      await finishVoicemailStreamFromBuffer(
+        req, vm, reply, asAttachment, vm.extension, localBuf,
+        voicemailAudioExtFromFilename(vm.localAudioPath), skipTranscode, allowReadStamp,
+        false, // serving FROM the store — don't re-write it
+      );
+      return;
+    }
+    // Pointer without bytes (volume wiped / file lost): clear it and fall
+    // through to a normal PBX fetch, which re-populates the store.
+    app.log.warn({ vmId: vm.id, localAudioPath: vm.localAudioPath }, "voicemail: local audio missing on disk — re-fetching from PBX");
+    await db.voicemail.update({ where: { id: vm.id }, data: { localAudioPath: null } }).catch(() => undefined);
+  }
+
+  // ── AUDIO-GONE VERDICT: a completed spool scan already proved this message ──
+  // is no longer in the mailbox. Deleted spool audio never comes back, so
+  // answer from the verdict without costing the PBX anything. This is what
+  // turns a misbehaving preload loop from a PBX flood into a no-op (2026-08-12:
+  // one office retried ~200 dead voicemails every 30s and drowned the helper).
+  if (vm.audioGoneAt) {
+    reply.code(404).send({
+      error: "voicemail_audio_gone",
+      detail: "This voicemail's audio is no longer on the phone system, so it can't be played or downloaded.",
+    });
+    return;
+  }
+
   if (!vm.tenantId) { reply.code(503).send({ error: "audio_unavailable" }); return; }
   const link = await db.tenantPbxLink.findFirst({
     where:   { tenantId: vm.tenantId, pbxInstance: { isEnabled: true } } as any,
@@ -19587,6 +19639,12 @@ async function streamVoicemailAudio(
         { vmId: vm.id, ext: vm.extension, identityOrigtime, scanned: merged.messages?.length ?? 0 },
         "voicemail: origtime not present in mailbox — audio gone",
       );
+      // Cache the verdict so this message never costs the PBX another scan.
+      // ONLY here: the scan itself succeeded and covered every page — a helper
+      // timeout or partial pagination must never brand audio as gone.
+      if (merged.paginationComplete !== false) {
+        await db.voicemail.update({ where: { id: vm.id }, data: { audioGoneAt: new Date() } }).catch(() => undefined);
+      }
       reply.code(404).send({
         error: "voicemail_audio_gone",
         detail: "This voicemail's audio is no longer on the phone system, so it can't be played or downloaded.",
@@ -29003,6 +29061,58 @@ app.post("/voice/moh/pbx-classes/auto-sync", async (req, reply) => {
   return reply.send({ ok: true, result });
 });
 
+// ── Arrival-time audio copy ───────────────────────────────────────────────────
+// Fetch a fresh voicemail's audio ONCE, the moment it is ingested, into the
+// local store — every play/preload after that costs the PBX nothing.
+// Sequential (never a burst against the helper), caller-capped, deduped by an
+// in-flight set. The msgNum comes from the scan that just ran, same freshness
+// contract as the origtime-identity stream path.
+const vmArrivalAudioCopyInFlight = new Set<string>();
+async function copyFreshVoicemailAudioToStore(
+  helperCfg: NonNullable<ReturnType<typeof resolvePbxRouteHelperConfig>>,
+  args: {
+    pbxTenantId: string;
+    extension: string;
+    voicemailContext: string;
+    items: Array<{ vmId: string; folder: string; msgNum: string }>;
+  },
+): Promise<void> {
+  for (const item of args.items) {
+    if (vmArrivalAudioCopyInFlight.has(item.vmId)) continue;
+    vmArrivalAudioCopyInFlight.add(item.vmId);
+    try {
+      const folder =
+        item.folder === "INBOX" || item.folder === "Old" || item.folder === "Urgent" ? item.folder : "INBOX";
+      const { contentType, buffer } = await fetchVoicemailSpoolAudioFromHelper(helperCfg, {
+        tenantId: args.pbxTenantId,
+        extension: args.extension,
+        folder,
+        msgNum: item.msgNum,
+        voicemailContext: args.voicemailContext,
+      });
+      const ct = (contentType || "").toLowerCase();
+      const audioExt = ct.includes("mpeg") ? "mp3"
+        : ct.includes("ogg") ? "ogg"
+        : ct.includes("mp4") ? "m4a"
+        : ct.includes("gsm") ? "gsm"
+        : "wav";
+      const filename = await saveVoicemailAudio(item.vmId, audioExt, Buffer.from(buffer));
+      if (filename) {
+        await db.voicemail.update({ where: { id: item.vmId }, data: { localAudioPath: filename } });
+        app.log.info(
+          { vmId: item.vmId, ext: args.extension, filename, byteLength: buffer.byteLength },
+          "voicemail: arrival audio copied to local store",
+        );
+      }
+    } catch (err: any) {
+      // Non-fatal by design: the first Play simply takes the fetch-and-store path.
+      app.log.warn({ vmId: item.vmId, ext: args.extension, err: err?.message }, "voicemail: arrival audio copy failed");
+    } finally {
+      vmArrivalAudioCopyInFlight.delete(item.vmId);
+    }
+  }
+}
+
 // ── POST /internal/voicemail-notify — trigger immediate sync for one mailbox ──
 // Called by the telephony service on AMI MessageWaiting events.
 app.post("/internal/voicemail-notify", async (req, reply) => {
@@ -29053,12 +29163,29 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           fallback_reason = "missing_pbx_tenant_id";
         } else {
           try {
+            // Bound the scan to messages newer than what we already know.
+            // A MessageWaiting event means "something NEW arrived" — listing
+            // the whole mailbox to find it made this call scale with mailbox
+            // size (Gesheft 101 holds 9,200+ messages; the unbounded scan blew
+            // the 20s timeout on every event, which is why voicemails waited
+            // for the ~5-min worker sweep instead of appearing instantly).
+            // The 6h margin absorbs clock skew and out-of-order deposits;
+            // folder moves on older messages stay the worker reconciler's job.
+            // A mailbox we know nothing about still gets the full scan.
+            const newestKnown = await db.voicemail.aggregate({
+              where: { tenantId: link.tenantId, extension: ext.extNumber },
+              _max: { receivedAt: true },
+            });
+            const newestKnownEpoch = newestKnown._max.receivedAt
+              ? Math.floor(newestKnown._max.receivedAt.getTime() / 1000)
+              : null;
             const spool = await fetchAllVoicemailSpoolMessages(
               helperCfg,
               {
                 tenantId: tid,
                 extension: mailbox,
                 voicemailContext: context,
+                ...(newestKnownEpoch ? { sinceOrigtime: Math.max(0, newestKnownEpoch - 6 * 3600) } : {}),
               },
               {
                 pageSize: Math.max(100, Number(process.env.VOICEMAIL_HELPER_SPOOL_PAGE_SIZE || 2000) || 2000),
@@ -29119,6 +29246,9 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
     }
 
     let upserted = 0;
+    // Fresh arrivals whose audio gets copied to the local store right now —
+    // one PBX fetch at deposit time buys instant playback forever after.
+    const freshForAudioCopy: Array<{ vmId: string; folder: string; msgNum: string }> = [];
     for (const rec of records) {
       // VitalPBX: { date, clid, recfile, filename, msg_id }. Legacy: { origtime, callerid, msg_num }.
       const origtime = String(rec.date ?? rec.origtime ?? rec.orig_time ?? "");
@@ -29209,7 +29339,30 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           },
         }).catch((err: any) => app.log.warn({ err: err?.message, voicemailId: voicemail.id, mailbox }, "voicemail-push: failed"));
       }
+      if (!existingVoicemail && /^msg[0-9]+$/.test(pbxMsgNum)) {
+        const receivedMs = parseInt(origtime, 10) * 1000;
+        // Only genuinely fresh messages — a first-ever sync of a mailbox with a
+        // years-deep backlog must not turn into a bulk audio download.
+        if (Date.now() - receivedMs < 48 * 3600 * 1000) {
+          freshForAudioCopy.push({ vmId: voicemail.id, folder: rawFolder, msgNum: pbxMsgNum });
+        }
+      }
       upserted++;
+    }
+
+    if (freshForAudioCopy.length > 0) {
+      const helperCfgForCopy = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+      const tidForCopy = String(link.pbxTenantId || "").trim();
+      if (helperCfgForCopy && tidForCopy) {
+        // Background on purpose: the notify reply must stay fast, and a copy
+        // failure only means the first Play takes the normal fetch path.
+        void copyFreshVoicemailAudioToStore(helperCfgForCopy, {
+          pbxTenantId: tidForCopy,
+          extension: ext.extNumber,
+          voicemailContext: context,
+          items: freshForAudioCopy.slice(0, 5),
+        });
+      }
     }
 
     try {
@@ -40184,6 +40337,7 @@ const port = Number(process.env.PORT || 3001);
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);
+  warnIfVoicemailAudioStoreEphemeral(app.log);
   warnIfAvatarStorageEphemeral(app.log);
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,

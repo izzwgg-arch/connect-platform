@@ -2953,6 +2953,18 @@ model Voicemail {
   emailedAt  DateTime?
   emailError String?
 
+  // ── Local audio copy + audio-gone verdict ──────────────────────────────
+  // localAudioPath: filename inside VOICEMAIL_AUDIO_STORAGE_DIR ("<vmId>.<ext>").
+  // Voicemail audio is immutable once recorded, so after the first successful
+  // PBX fetch the bytes are served from Connect's own disk forever — the PBX
+  // is never asked twice for the same message.
+  localAudioPath String?
+  // audioGoneAt: a SUCCESSFUL, pagination-complete spool scan proved this
+  // message's origtime is no longer in the mailbox. Permanent by nature
+  // (deleted spool audio never comes back); clears only by manual DB update.
+  // Helper timeouts/errors must NEVER stamp this — only a completed scan may.
+  audioGoneAt DateTime?
+
   @@index([tenantId])
   @@index([extension])
   @@index([receivedAt])

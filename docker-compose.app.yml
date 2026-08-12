@@ -93,6 +93,11 @@ services:
       # survives (2026-08-05: a customer's Verizon bill needed for a number
       # port was lost exactly this way).
       ONBOARDING_STORAGE_DIR: ${ONBOARDING_STORAGE_DIR:-/var/lib/connect/onboarding-files}
+      # Local voicemail audio store — each message is fetched from the PBX once
+      # and served from here forever. Losing the volume is only a re-fetch cost
+      # (the PBX keeps the original), but an ephemeral dir would silently
+      # reinstate the per-play PBX load the store exists to remove.
+      VOICEMAIL_AUDIO_STORAGE_DIR: ${VOICEMAIL_AUDIO_STORAGE_DIR:-/var/lib/connect/voicemail-audio}
       # Profile photos (users) and contact photos. Same trap as the onboarding
       # uploads above: unset, these fell back to <cwd>/data, which no volume
       # covers, so every api deploy destroyed them while the DB kept
@@ -170,6 +175,8 @@ services:
       # Onboarding wizard uploads (porting bills / LOAs) — must survive
       # deploys; the DB rows that point at these files certainly do.
       - onboarding-files:/var/lib/connect/onboarding-files
+      # Voicemail audio fetched once from the PBX, served locally forever.
+      - voicemail-audio:/var/lib/connect/voicemail-audio
       # Profile and contact photos — must survive deploys and blue/green
       # cutovers; the DB rows pointing at them do.
       - user-avatars:/var/lib/connect/user-avatars
@@ -258,6 +265,9 @@ services:
       # Same onboarding upload volume as the stable api service — port
       # documents must survive blue/green cutovers too.
       ONBOARDING_STORAGE_DIR: ${ONBOARDING_STORAGE_DIR:-/var/lib/connect/onboarding-files}
+      # Same voicemail audio store as the stable api service — the cache must
+      # survive blue/green cutovers or every cutover re-fetches from the PBX.
+      VOICEMAIL_AUDIO_STORAGE_DIR: ${VOICEMAIL_AUDIO_STORAGE_DIR:-/var/lib/connect/voicemail-audio}
       # Profile photos (users) and contact photos. Same trap as the onboarding
       # uploads above: unset, these fell back to <cwd>/data, which no volume
       # covers, so every api deploy destroyed them while the DB kept
@@ -304,6 +314,7 @@ services:
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
       - onboarding-files:/var/lib/connect/onboarding-files
+      - voicemail-audio:/var/lib/connect/voicemail-audio
       # Profile and contact photos — must survive deploys and blue/green
       # cutovers; the DB rows pointing at them do.
       - user-avatars:/var/lib/connect/user-avatars
@@ -525,6 +536,11 @@ volumes:
   # api_candidate so files survive deploys and blue/green cutovers. Before
   # this volume existed every api deploy silently destroyed these documents.
   onboarding-files:
+    driver: local
+  # Voicemail audio fetched once from the PBX and served locally forever.
+  # Shared between api and api_candidate so the cache survives blue/green
+  # cutovers. Losing it is a re-fetch cost, never data loss.
+  voicemail-audio:
     driver: local
   # Persistent storage for CRM imported lead documents (Drive files pulled into
   # tenant-scoped local storage). Survives container rebuilds and blue/green rollouts.
