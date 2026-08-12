@@ -50,7 +50,7 @@ function liveEnabled(): boolean {
   return String(process.env.VOIPMS_AUTO_PROVISION || "").toLowerCase() === "on";
 }
 
-async function loadMasterCreds(): Promise<VmsCreds | null> {
+export async function loadMasterCreds(): Promise<VmsCreds | null> {
   const row = await (db as any).globalVoipMsConfig.findUnique({ where: { id: "default" } });
   if (!row?.credentialsEncrypted) return null;
   try {
@@ -72,7 +72,7 @@ async function loadMasterCreds(): Promise<VmsCreds | null> {
  * exponential backoff. A real API answer with a non-success status is NOT
  * retried; that's VoIP.ms saying no, not an outage.
  */
-async function vms(creds: VmsCreds, method: string, params: Record<string, string> = {}, timeoutMs = 30_000): Promise<any> {
+export async function vms(creds: VmsCreds, method: string, params: Record<string, string> = {}, timeoutMs = 30_000): Promise<any> {
   const base = (creds.apiBaseUrl || VMS_BASE_DEFAULT).replace(/\/$/, "");
   const url = new URL(base);
   url.searchParams.set("api_username", creds.username);

@@ -477,9 +477,21 @@ Changes.
   conclude "nothing arrived" from nginx (`/api/webhooks/voipms/sms` is rarely
   hit), and ⛔ never measure delivery lag from the DB — inbound `createdAt` is
   stamped from the **carrier's** timestamp, so it can only ever agree with itself.
-- ⛔ **inii mini's 845-260-5692 is TEMPORARY** — their real number 646-984-6023
-  is mid-port (order **217760**, open). Texting does NOT follow the port; repeat
-  the four steps when it lands. See [[voipms-sms-per-did-webhook-is-a-red-herring]].
+- ✅ **inii mini's port LANDED 2026-08-12 and is FULLY LIVE** (order 217760).
+  The real number 646-984-6023 arrived routed to the MASTER account with SMS
+  off — fixed same day: routed to `344022_iniimi92gh2m`, `sms_enabled=1`,
+  TenantSmsNumber assigned + made tenant default (worker poll numbers=12).
+  Calls: inbound route 240 created via panel automation (same code path as
+  onboarding), switched to Connect via the real `/voice/did/:id/switch-to-connect`
+  + full publish (183 keys) — probe call traced into `connect-menu` playing
+  `custom/main_greeting_fc10c9`. ⛔ **The switch only worked after restarting
+  `connect-pbx-helper` on the PBX** — it had leaked to 1024/1024 FDs + 761
+  threads since Aug 6 (`Errno 24` on every open, incl. its own sqlite; inspect
+  answered in ~25-30s vs the client's 15s timeout → `pbx_helper_read_failed:
+  aborted due to timeout` on every switch platform-wide). Leak suspect: the
+  voicemail-spool polling endpoints. Temp number 845-260-5692 stays active
+  (no longer SMS default) pending Izzy's retirement call.
+  See [[voipms-sms-per-did-webhook-is-a-red-herring]].
 
 ## ⛔ AGENT HANDOFF — "I changed it in VitalPBX and the phone didn't change" (2026-08-06) — READ FIRST for BLF/key edits, desk-phone provisioning, or before believing a phone's registration proves anything
 

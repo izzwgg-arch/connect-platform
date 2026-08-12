@@ -718,3 +718,44 @@ test("slugify matches the robot's behavior", () => {
   assert.equal(slugify("  Acme  Corp  "), "acme_corp");
   assert.equal(slugify("A---B"), "a_b");
 });
+
+// ── Porting sign-ups: both numbers prepared at build time ─────────────────────
+
+test("porting build: real number is outbound CID, both numbers in tenant, two inbound routes", async () => {
+  const fake = new FakePanel();
+  const result = await run(fake, job({ portedDid: "6469846023" }));
+
+  // Callers see the customer's REAL number from day one, not the temp DID.
+  const route = fake.puts.find((p) => p.cls === "trunk_group")!;
+  assert.equal(get(route.fields, "cid_number"), "6469846023");
+
+  // Both numbers live in the tenant's number list.
+  const tenant = fake.puts.find((p) => p.cls === "tenants")!;
+  assert.equal(get(tenant.fields, "inbound_numbers[0][did]"), "8455577726");
+  assert.equal(get(tenant.fields, "inbound_numbers[1][did]"), "6469846023");
+
+  // Two inbound routes with distinct descriptions (the panel rejects
+  // duplicates), both pointed at the first extension.
+  assert.equal(fake.inboundRoutes.length, 2);
+  assert.equal(get(fake.inboundRoutes[0], "did"), "8455577726");
+  assert.equal(get(fake.inboundRoutes[0], "description"), "Main");
+  assert.equal(get(fake.inboundRoutes[1], "did"), "6469846023");
+  assert.equal(get(fake.inboundRoutes[1], "description"), "Main ported");
+  assert.equal(get(fake.inboundRoutes[1], "destination"), result.firstExtId);
+});
+
+test("porting build: +1-prefixed ported number is normalized to bare 10 digits", async () => {
+  const fake = new FakePanel();
+  await run(fake, job({ portedDid: "+16469846023" }));
+  const route = fake.puts.find((p) => p.cls === "trunk_group")!;
+  assert.equal(get(route.fields, "cid_number"), "6469846023");
+  assert.equal(get(fake.inboundRoutes[1], "did"), "6469846023");
+});
+
+test("garbled portedDid falls back to the single-number build instead of failing", async () => {
+  const fake = new FakePanel();
+  await run(fake, job({ portedDid: "123" }));
+  const route = fake.puts.find((p) => p.cls === "trunk_group")!;
+  assert.equal(get(route.fields, "cid_number"), "8455577726");
+  assert.equal(fake.inboundRoutes.length, 1);
+});

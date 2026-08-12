@@ -188,14 +188,34 @@ decrypt with `CREDENTIALS_MASTER_KEY` (AES-256-GCM envelope, see
 | Billing | `smsBillingEnabled: true`, $10/mo, first appears on the Sep 5 invoice |
 | VoIP.ms | `sms_enabled: "1"`, routing `account:344022_iniimi92gh2m` |
 
-⛔ **845-260-5692 is a TEMPORARY number.** Their real number, **646-984-6023**,
-is mid-transfer from Verizon — **port order 217760**, filed 2026-08-05, still
-open. When it lands, repeat steps 1–4 on the real number and decide what happens
-to the temp one; texting does **not** follow the port by itself. Two known risks
-on that order: no phone bill was ever attached (the upload was destroyed by an
-api deploy before the volume fix), and the transfer PIN we sent was the number's
-last four rather than a Verizon 6-digit Number Transfer PIN. See
-`AGENT_HANDOFF_ONBOARDING_AUTOMATION.md` §9.
+✅ **UPDATE 2026-08-12: the port LANDED and SMS was moved to the real number.**
+Port order 217760 reads `post_status: completed`; the two filing risks (missing
+bill, weak PIN) never bit. Steps 1–4 were repeated on **646-984-6023** that day:
+the DID arrived routed to the MASTER account (`account:344022`) with
+`sms_enabled: "0"` — both fixed (`setDIDRouting` → `account:344022_iniimi92gh2m`,
+`setSMS enable=1`, re-read verified). New `TenantSmsNumber` row assigned
+user+ext 101, **tenant default moved to the real number**; the temp row stays
+active but is no longer default. Worker poll picked it up
+(`[voipms-inbound] +16469846023` in the cycle). **CALLS went live the same day**
+(second session, Izzy's mandate): inbound route **240** created in tenant 105
+via the onboarding panel-automation path (`createInboundRoute` shape, dest ext
+101), DidRouteMapping `cmsqf9ksm6l2gpb13yfa0ybqa` → IVR "New menu"
+(`cmsgxycu3019ns1139yvetiih`), switched via the real
+`/voice/did/:id/switch-to-connect` (service JWT, same as the scheduler) + full
+`/voice/ivr/publish` (183 keys, numbersSynced 2). Probe call traced end to end:
+`connect-doorway` → `connect-tenant-ivr` → `connect-menu` playing
+`custom/main_greeting_fc10c9`. ⛔ The switch 502'd
+(`pbx_helper_read_failed: aborted due to timeout`) until
+**`connect-pbx-helper` was restarted on the PBX — it had leaked to 1024/1024
+FDs and 761 threads since Aug 6** (every open failed `Errno 24`, responses took
+~25-30s vs the 15s inspect timeout; suspect: voicemail-spool polling). Still
+open: temp number retirement (Izzy's call), and no live text sent from the new
+number yet (wiring fully verified; a text+reply is the last proof).
+
+Original filing notes (for history): filed 2026-08-05; no phone bill was ever
+attached (the upload was destroyed by an api deploy before the volume fix), and
+the transfer PIN we sent was the number's last four rather than a Verizon
+6-digit Number Transfer PIN. See `AGENT_HANDOFF_ONBOARDING_AUTOMATION.md` §9.
 
 **Left deliberately as-is:** the number is scoped to baila personally
 (`assignedUserId` set), which is the one shape difference from the other

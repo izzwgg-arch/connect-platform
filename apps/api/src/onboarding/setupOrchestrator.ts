@@ -480,11 +480,22 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
 
     // ── 2. Build the PBX tenant ─────────────────────────────────────────────
     await setPbxStatus(submissionId, "building");
+    // A porting sign-up prepares the customer's REAL number alongside the
+    // temporary one: both go into the tenant, both get inbound routes, and
+    // the real number is the outbound caller ID from day one. Port day is
+    // then only a VoIP.ms repoint (see portLanding.ts).
+    const freshAnswers: any = fresh.answers || {};
+    const numberChoice = String(fresh.phoneNumberChoice || freshAnswers?.phone?.choice || "new");
+    const portedDigits = String(freshAnswers?.phone?.details?.numbers ?? "")
+      .replace(/\D/g, "")
+      .replace(/^1(?=\d{10}$)/, "");
+    const portedDid = numberChoice === "port" && portedDigits.length === 10 ? portedDigits : null;
     const job: PbxBuildJob = {
       company,
       slug: identity.tenantSlug,
       label: identity.pbxLabel,
       did,
+      portedDid,
       voipms: { user: sub.username, pass: sub.password, server: sub.server },
       people,
     };

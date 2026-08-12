@@ -68,6 +68,15 @@ export type PbxBuildJob = {
   label?: string;
   voipms: { user: string; pass: string; server: string };
   did: string;
+  /**
+   * Set when the sign-up is porting a number in: the customer's REAL number,
+   * which lands on the account only when the carrier releases it. The build
+   * prepares the tenant for it from day one — it goes into the tenant's
+   * number list, gets its own inbound route ("Main ported"), and is used as
+   * the outbound caller ID (callers should see the number the customer is
+   * known by, not the temporary one). Port day then needs zero panel work.
+   */
+  portedDid?: string | null;
   people: PbxPerson[];
 };
 
@@ -83,6 +92,12 @@ export type PbxBuildResult = {
 
 export const slugify = (c: string): string =>
   c.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+/** A porting number as bare 10 digits, or null when absent/garbled. */
+function tenDigitsOrNull(v: string | null | undefined): string | null {
+  const d = String(v ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  return d.length === 10 ? d : null;
+}
 
 type Pairs = Array<[string, string | number | null | undefined]>;
 
@@ -216,7 +231,7 @@ async function createTenant(
   s: PanelSession,
   label: string,
   slug: string,
-  did: string,
+  dids: string[],
   arsId: string,
   resolve?: TenantPathResolver,
 ): Promise<string> {
@@ -236,7 +251,10 @@ async function createTenant(
       ["outbound_profiles[]", arsId], ["restricted_cid", "disabled"], ["calls_limit", ""], ["inbound_calls_limit", ""],
       ["cid_name", ""], ["cid_number", ""],
       [`inbound_numbers[${PH}][did]`, ""], [`inbound_numbers[${PH}][description]`, ""],
-      ["inbound_numbers[0][did]", did], ["inbound_numbers[0][description]", ""],
+      ...dids.map((d, i): [string, string][] => [
+        [`inbound_numbers[${i}][did]`, d],
+        [`inbound_numbers[${i}][description]`, ""],
+      ]).flat(),
       ["settings[timezone]", "system"],
     ]),
   );
@@ -414,7 +432,7 @@ async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind
   }
 }
 
-async function createInboundRoute(s: PanelSession, did: string, destExtId: string): Promise<void> {
+async function createInboundRoute(s: PanelSession, did: string, destExtId: string, description = "Main"): Promise<void> {
   // Resume guard: if the DID already shows on the inbound-routes page, a
   // previous run created the route — don't create a duplicate.
   try {
@@ -429,7 +447,7 @@ async function createInboundRoute(s: PanelSession, did: string, destExtId: strin
       "inbound-route",
       await s.post([
         ["class", "inbound_route"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
-        ["routing_method", "default"], ["description", "Main"], ["did", did], ["cid_number", ""],
+        ["routing_method", "default"], ["description", description], ["did", did], ["cid_number", ""],
         ["cid_management_id", ""], ["cid_lookup_id", ""], ["language", "en"], ["music_group_id", ""], ["alertinfo", ""],
         ["pmmaxretries", "3"], ["pmminlength", "10"], ["detectiontime", "5"],
         ["fax_mod_dest", ""], ["fax_destination", ""], ["fax_destination_custom", ""],
@@ -470,14 +488,21 @@ export async function buildPbxTenant(
     throw new PanelStepError("input", "job needs at least one person");
   }
 
+  // A porting sign-up carries the customer's REAL number alongside the
+  // temporary one. Callers must see the real number from day one, and both
+  // numbers are prepared in the tenant so port day needs zero panel work.
+  const portedDid = tenDigitsOrNull(job.portedDid);
+  const outboundCid = portedDid || job.did;
+  const tenantDids = portedDid ? [job.did, portedDid] : [job.did];
+
   s.setTenant(mainTenant);
   const trunkId = await createTrunk(s, label, job.voipms);
   log(`trunk ok (id ${trunkId})`);
-  const routeId = await createOutboundRoute(s, label, co, job.did, trunkId);
-  log(`outbound route ok (id ${routeId})`);
+  const routeId = await createOutboundRoute(s, label, co, outboundCid, trunkId);
+  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""})`);
   const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
-  const tenantPath = await createTenant(s, label, slug, job.did, arsId, resolveTenantPath);
+  const tenantPath = await createTenant(s, label, slug, tenantDids, arsId, resolveTenantPath);
   log(`tenant ok (path ${tenantPath})`);
 
   s.setTenant(tenantPath);
@@ -500,5 +525,11 @@ export async function buildPbxTenant(
   }
   await createInboundRoute(s, job.did, firstExtId as string);
   log(`inbound route ok`);
+  if (portedDid) {
+    // The ported number's route exists BEFORE the port lands, so completion
+    // is only a VoIP.ms repoint — no panel work, nothing to forget.
+    await createInboundRoute(s, portedDid, firstExtId as string, "Main ported");
+    log(`inbound route for ported number ${portedDid} ok`);
+  }
   return { company: co, slug, tenantPath, trunkId, routeId, arsId, firstExtId: firstExtId as string };
 }

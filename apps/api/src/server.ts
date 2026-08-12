@@ -128,6 +128,7 @@ import {
   warnIfVoicemailAudioStoreEphemeral,
 } from "./voicemail/audioStore";
 import { sweepStalledOnboardingSetups } from "./onboarding/setupWatchdog";
+import { sweepOpenPorts } from "./onboarding/portWatchdog";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -37915,6 +37916,23 @@ const onboardingWatchdogTimer = registerShutdownTimer(
   }, 60_000),
 );
 onboardingWatchdogTimer.unref();
+
+// Port watchdog — watches every filed number port until it lands, then runs
+// the landing automatically (route to subaccount, texting, menu switch,
+// retire the temporary number). VoIP.ms has no webhook for ports, so this
+// polls two cheap signals every 15 minutes; ports are rare and take days.
+const portWatchdogTimer = registerShutdownTimer(
+  setInterval(() => {
+    sweepOpenPorts()
+      .then((summary) => {
+        if (summary.landedOrProgressed > 0 || summary.failed > 0) {
+          app.log.warn({ portWatchdog: summary }, "port watchdog took action");
+        }
+      })
+      .catch((e) => app.log.error({ err: e }, "port watchdog failed"));
+  }, Number(process.env.PORT_WATCHDOG_INTERVAL_MS || 15 * 60_000)),
+);
+portWatchdogTimer.unref();
 
 async function processIvrScheduleBatch(): Promise<void> {
   const now = new Date();
