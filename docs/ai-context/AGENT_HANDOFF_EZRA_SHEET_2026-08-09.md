@@ -249,6 +249,56 @@ Proven end to end: `http=200` with real prices, extensions and people.
 ⏳ **Noticed, not chased:** the payload returns `suggestedExtensionNumber: "101"`,
 which is the protected extension (`AGENT_PBX_PROTECTED_EXTS` default `101`).
 
+## 9d. Round 2 — the sheet came back colour-coded (2026-08-12)
+
+Ezra re-tested everything and colour-coded pages 1-2 (page 3 has no colours —
+it was re-tested before those fixes deployed). **Greens confirmed every prior
+fix: DND status, lessons ("Adding to memory GOOD"), Secro AND back-to-default
+(the grant), message memory ("A lot!"), call history, team directory — and all
+ten Round 3 IVR scenarios passed.**
+
+Fixed from the reds, each proven:
+
+- **Closed hours "does not have priority" (5 rows) + holiday.** The dialplan's
+  per-number path routes on `didmap/profile_id` UNCONDITIONALLY — mode never
+  gets a say — so an assigned number played its business menu around the
+  clock and Ezra re-pointed it by hand at every open/close. ⛔ The mode sweep
+  was innocent: zero flips in 24h is CORRECT for his only-Monday schedule.
+  Fixed api-side: `resolveDidmapProfileId()` (ivrModeSelection.ts, 7 new
+  tests) resolves every didmap write through the mode, via
+  `didBuildPublishValues` — the one derivation behind both publish paths, the
+  DID switch routes AND the drift reconciler (which would otherwise revert the
+  pointer within ~10 min). ⏳ His schedule's `afterHoursProfileId` is
+  currently NULL — the resolver correctly keeps the assignment until a
+  closed-hours menu is picked in the Studio. Acceptance: pick one, wait for
+  the next boundary/publish, call.
+- **Main company number** — `companyNumbers` on account-setup-info, from
+  `PbxTenantInboundDid` (⛔ NOT the phoneNumber table — zero rows for
+  onboarded tenants). Proven live: `"companyNumbers":["845-723-1213"]`.
+- **"Viewing with you"** — the widget has ALWAYS sent `context:{page,path}`;
+  the agent's schema silently dropped it. Now a system block names the open
+  page — and says the assistant still cannot see its contents.
+- **Contacts (view)** — new read-only door `/internal/agent/contacts-info` +
+  `list_contacts` tool (minRole customer, tenant-locked, capped 25, search).
+  ⛔ Registered in the JWT bypass + the all-doors guard IN THE SAME COMMIT.
+
+Deliberately NOT fixed, and why:
+
+- **One-word yes/no/go (2 rows)** — needs a pending-action design; a chat
+  "yes" that executes writes would weaken the approval model that refused all
+  15 jailbreaks. Izzy's call.
+- **"Cancel all requests"** — the escalation feature is being built by
+  ANOTHER session in this same tree right now (untracked
+  `apps/agent/src/escalation/` + a migration dated 2026-08-12). Hands off.
+- **Add directory/personal contacts (write half)** — read-shaped features
+  must not quietly grow write paths; the portal has the writes.
+- **Turn off Ringer** — the ringer is browser-localStorage; no server setting
+  exists for the agent to write. Product design, not a patch.
+- **Mark read/unread from chat** — buildable as a user-scoped door; not
+  started.
+- **Teams configure/delete + queues** — ring groups/queues have no VitalPBX
+  API (panel automation only, per the numbering memory); a real build.
+
 ## 10. Open
 
 1. **Tell Ezra the lesson feature works**, with the phrasings that fire it. He
