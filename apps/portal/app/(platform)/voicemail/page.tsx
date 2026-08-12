@@ -313,7 +313,18 @@ function SmartAudioPlayer({
 
   function togglePlay() {
     const audio = getOrCreateAudio();
-    if (!audio.src) audio.src = src;
+    // ⛔ Keep the element bound to THIS voicemail, not the first one it ever
+    // played. This component gets reused for a different `vm` (the detail panel
+    // renders it unkeyed), and the old `if (!audio.src)` set the src exactly
+    // once — so pressing play on the next voicemail replayed the previous one
+    // forever. Compare and rebind instead. (`audio.src` reflects the resolved
+    // absolute URL, so compare against what WE last assigned, not the property.)
+    if ((audio as any)._ccAssignedSrc !== src) {
+      audio.src = src;
+      (audio as any)._ccAssignedSrc = src;
+      setCurrentSec(0);
+      setDurationSec(vm.durationSec);
+    }
     if (playing) {
       audio.pause();
       return;
@@ -637,7 +648,10 @@ function DetailPanel({
       </div>
 
       <section className="vm-detail-card premium-player">
-        <SmartAudioPlayer vm={vm} activeId={activeId} onActivate={onActivate} onPlayed={onPlayed} autoPlayRequest={autoPlayRequest} />
+        {/* key: force a fresh player (and audio element) per voicemail — the
+            detail panel itself is reused across selections, and a reused player
+            is how "the next voicemail replays the first one" happened. */}
+        <SmartAudioPlayer key={vm.id} vm={vm} activeId={activeId} onActivate={onActivate} onPlayed={onPlayed} autoPlayRequest={autoPlayRequest} />
       </section>
 
       <section className="vm-detail-card">

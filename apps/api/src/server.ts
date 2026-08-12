@@ -19505,6 +19505,124 @@ async function streamVoicemailAudio(
     }
   };
 
+  // ── PRIMARY PATH: resolve the message's CURRENT spool position by ORIGTIME ──
+  //
+  // ⛔ Every stored locator we have is POSITIONAL — pbxMsgNum, the spool path in
+  // pbxRecfile, and even VitalPBX's /static/<token>/.../msgNNNN.wav all name a
+  // SLOT in the mailbox, and Asterisk renumbers slots whenever a message is
+  // deleted or moved (INBOX→Old on phone playback). Trusting any of them serves
+  // whatever message sits at that slot NOW: production had 35 different
+  // voicemails on one mailbox all bound to msg0000 — the "every voicemail plays
+  // the first one" report (both portal and mini-dialer, 2026-08-11).
+  //
+  // A message's true identity is its origtime (pbxMessageId is
+  // "{pbxTenantId}|{ext}|{origtime}|{caller10}"). The on-PBX helper's spool list
+  // returns origtime + the CURRENT msg_num per message, so we look the message
+  // up by identity and fetch by the slot it occupies at this moment. Only when
+  // the helper cannot answer at all do we fall back to the legacy positional
+  // chain — and when the helper answers "that origtime is no longer in the
+  // mailbox", we refuse honestly instead of playing somebody else's voicemail.
+  const digits10 = (v: string) => String(v ?? "").replace(/\D/g, "").slice(-10);
+  const identityParts = String(vm.pbxMessageId || "").split("|");
+  const identityOrigtime = (() => {
+    const t = Number(identityParts[2]);
+    return Number.isFinite(t) && t > 0 ? t : Math.floor(new Date(vm.receivedAt).getTime() / 1000);
+  })();
+  const identityCaller = digits10(identityParts[3] || "");
+
+  const tryStreamByOrigtimeIdentity = async (): Promise<"handled" | "fallthrough"> => {
+    const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+    const tid = String(link.pbxTenantId || "").trim();
+    if (!helperCfg || !tid || !(identityOrigtime > 0)) return "fallthrough";
+    const storedContext = vm.pbxRecfile
+      ? (/\/voicemail\/([^/]+)\//.exec(vm.pbxRecfile) ?? [])[1] ?? null
+      : null;
+    let merged: Awaited<ReturnType<typeof fetchAllVoicemailSpoolMessages>>;
+    try {
+      merged = await fetchAllVoicemailSpoolMessages(
+        helperCfg,
+        {
+          tenantId: tid,
+          extension: vm.extension,
+          ...(storedContext ? { voicemailContext: storedContext } : {}),
+          // Lower bound only — keeps the scan small for recent messages while
+          // still finding the exact origtime for old ones.
+          sinceOrigtime: Math.max(0, identityOrigtime - 1),
+        },
+        { timeoutMs: 12_000 },
+      );
+    } catch (err: any) {
+      app.log.warn({ vmId: vm.id, err: err?.message }, "voicemail: origtime identity list failed — legacy chain");
+      return "fallthrough";
+    }
+    const sameTime = (merged.messages || []).filter((m) => Number(m.origtime) === identityOrigtime);
+    // Two messages in the same second: the caller's digits break the tie.
+    const match =
+      sameTime.length <= 1
+        ? sameTime[0]
+        : (identityCaller ? sameTime.find((m) => digits10(m.callerid) === identityCaller) : undefined) ?? sameTime[0];
+    if (!match) {
+      app.log.info(
+        { vmId: vm.id, ext: vm.extension, identityOrigtime, scanned: merged.messages?.length ?? 0 },
+        "voicemail: origtime not present in mailbox — audio gone",
+      );
+      reply.code(404).send({
+        error: "voicemail_audio_gone",
+        detail: "This voicemail's audio is no longer on the phone system, so it can't be played or downloaded.",
+      });
+      return "handled";
+    }
+    const matchFolder =
+      match.folder === "INBOX" || match.folder === "Old" || match.folder === "Urgent"
+        ? match.folder
+        : pbxHelperSpoolFolderFromVoicemail(vm);
+    const matchMsgNum = String(match.msg_num || "").trim();
+    if (!matchFolder || !/^msg[0-9]+$/.test(matchMsgNum)) return "fallthrough";
+    try {
+      const { contentType, buffer } = await fetchVoicemailSpoolAudioFromHelper(helperCfg, {
+        tenantId: tid,
+        extension: vm.extension,
+        folder: matchFolder,
+        msgNum: matchMsgNum,
+        voicemailContext: (merged.resolvedContext ?? storedContext) ?? undefined,
+      });
+      const sourceBuf = Buffer.from(buffer);
+      let audioExt = "wav";
+      const ct = (contentType || "").toLowerCase();
+      if (ct.includes("mpeg")) audioExt = "mp3";
+      else if (ct.includes("ogg")) audioExt = "ogg";
+      else if (ct.includes("mp4")) audioExt = "m4a";
+      else if (ct.includes("gsm")) audioExt = "gsm";
+      // Advisory only — playback never trusts these again, but keeping them
+      // fresh helps debugging and the degraded legacy chain.
+      await db.voicemail
+        .update({
+          where: { id: vm.id },
+          data: {
+            pbxMsgNum: matchMsgNum,
+            pbxFolder: matchFolder,
+            ...(match.recfile ? { pbxRecfile: match.recfile } : {}),
+          },
+        })
+        .catch(() => undefined);
+      app.log.info(
+        { vmId: vm.id, ext: vm.extension, identityOrigtime, folder: matchFolder, msgNum: matchMsgNum, byteLength: sourceBuf.byteLength },
+        "voicemail: streamed by origtime identity",
+      );
+      await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, audioExt, skipTranscode, allowReadStamp);
+      return "handled";
+    } catch (err: any) {
+      app.log.warn(
+        { vmId: vm.id, ext: vm.extension, folder: matchFolder, msgNum: matchMsgNum, err: err?.message },
+        "voicemail: origtime-resolved audio fetch failed — legacy chain",
+      );
+      return "fallthrough";
+    }
+  };
+
+  if ((await tryStreamByOrigtimeIdentity()) === "handled") return;
+
+  // ── LEGACY CHAIN (helper unavailable only) ──────────────────────────────────
   // Preferred path: VitalPBX returns a ready-to-fetch /static/<token>/... URL in
   // voicemail_records. It embeds its own auth token so we can stream it directly
   // without app-key/Tenant headers. `/api/v2/voicemail/:mailbox/:folder/:msg`
@@ -19544,15 +19662,15 @@ async function streamVoicemailAudio(
       const records = await pbx.getExtensionVoicemailRecords(vm.pbxExtensionId, link.pbxTenantId ?? undefined);
       const receivedEpoch = Math.floor(new Date(vm.receivedAt).getTime() / 1000);
       const refreshed = records.find((rec: any) => {
-        const candidateRecfile = String(rec.recfile ?? "");
-        const candidateFilename = String(rec.filename ?? "");
         const candidateMsgId = String(rec.msg_id ?? "");
-        const fileDerivedMsgNum = (candidateFilename || candidateRecfile).split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
-        const candidateMsgNum = String(rec.msg_num ?? rec.msgnum ?? rec.id ?? fileDerivedMsgNum);
         const candidateDate = Number(rec.date ?? rec.origtime ?? rec.orig_time ?? 0);
+        // NEVER match by msg_num: it is a POSITION in the folder, renumbered
+        // whenever a message is deleted or moved. Matching on it bound dozens of
+        // voicemails to whichever message happened to sit at the remembered slot
+        // (35 rows on one mailbox all pointing at msg0000) - the "every voicemail
+        // plays the first one" bug. origtime is the message's true identity.
         return (
           (candidateMsgId && candidateMsgId === vm.pbxMessageId) ||
-          (candidateMsgNum && candidateMsgNum === vm.pbxMsgNum) ||
           (candidateDate > 0 && Math.abs(candidateDate - receivedEpoch) <= 2)
         );
       });
@@ -19583,17 +19701,15 @@ async function streamVoicemailAudio(
       const records = await pbx.getExtensionVoicemailRecords(vm.pbxExtensionId, link.pbxTenantId ?? undefined);
       const receivedEpoch = Math.floor(new Date(vm.receivedAt).getTime() / 1000);
       const refreshed = records.find((rec: any) => {
-        const candidateRecfile = String(rec.recfile ?? "");
-        const candidateFilename = String(rec.filename ?? "");
         const candidateMsgId = String(rec.msg_id ?? "");
-        const fileDerivedMsgNum = (candidateFilename || candidateRecfile).split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
-        const candidateMsgNum = String(
-          rec.msg_num ?? rec.msgnum ?? rec.id ?? fileDerivedMsgNum,
-        );
         const candidateDate = Number(rec.date ?? rec.origtime ?? rec.orig_time ?? 0);
+        // NEVER match by msg_num: it is a POSITION in the folder, renumbered
+        // whenever a message is deleted or moved. Matching on it bound dozens of
+        // voicemails to whichever message happened to sit at the remembered slot
+        // (35 rows on one mailbox all pointing at msg0000) - the "every voicemail
+        // plays the first one" bug. origtime is the message's true identity.
         return (
           (candidateMsgId && candidateMsgId === vm.pbxMessageId) ||
-          (candidateMsgNum && candidateMsgNum === vm.pbxMsgNum) ||
           (candidateDate > 0 && Math.abs(candidateDate - receivedEpoch) <= 2)
         );
       });
