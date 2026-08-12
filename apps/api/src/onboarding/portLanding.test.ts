@@ -448,3 +448,96 @@ test("sweep: repeated landing failures alert exactly once, at the threshold", as
   const stuck = s.emails.filter((e) => /Port landing stuck/.test(e.subject));
   assert.equal(stuck.length, 1);
 });
+
+// ── Pointing the ported number + the re-publish ───────────────────────────────
+
+test("PBX world: the ported route copies the temp route's destination, then routing is re-published", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  s.mappings.find((m) => m.e164 === "+8452605692")!.routingMode = "pbx"; // temp NOT on Connect
+  const calls: VmsCall[] = [];
+  const copyCalls: any[] = [];
+  const publishCalls: string[] = [];
+  const d = {
+    ...deps(s, ROUTED_OK, calls),
+    copyPbxDestination: async (_db: any, tenantId: string, tempDid: string, portedDid: string) => {
+      copyCalls.push({ tenantId, tempDid, portedDid });
+      return { copied: true, detail: "destination 907 copied" };
+    },
+    publishTenant: async (tenantId: string) => {
+      publishCalls.push(tenantId);
+    },
+  };
+
+  const r = await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(r.done, true);
+  assert.deepEqual(copyCalls, [{ tenantId: "tenant1", tempDid: "8452605692", portedDid: "6469846023" }]);
+  assert.deepEqual(publishCalls, ["tenant1"]);
+
+  // Idempotent: a second run copies and publishes nothing again.
+  await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(copyCalls.length, 1);
+  assert.equal(publishCalls.length, 1);
+});
+
+test("PBX world: a copy that cannot land yet blocks retirement and retries next sweep", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  s.mappings.find((m) => m.e164 === "+8452605692")!.routingMode = "pbx";
+  const calls: VmsCall[] = [];
+  let copyOk = false;
+  const d = {
+    ...deps(s, ROUTED_OK, calls),
+    copyPbxDestination: async () => (copyOk ? { copied: true, detail: "ok" } : { copied: false, detail: "helper still applying" }),
+    publishTenant: async () => {},
+  };
+
+  const r1 = await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(r1.done, false);
+  assert.equal(r1.stage, "destination_copy_pending");
+  // temp number untouched while the pointing is unfinished
+  assert.ok(!calls.find((c) => c.method === "setDIDRouting" && c.params.did === "8452605692"));
+
+  copyOk = true;
+  const r2 = await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(r2.done, true);
+});
+
+test("Connect world: publish runs only AFTER the switch lands, and a failed publish is retried", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s); // temp on Connect
+  const calls: VmsCall[] = [];
+  const publishCalls: string[] = [];
+  let publishFails = true;
+  const d = {
+    ...deps(s, ROUTED_OK, calls),
+    copyPbxDestination: async () => {
+      throw new Error("must not be called in the Connect world");
+    },
+    publishTenant: async (tenantId: string) => {
+      publishCalls.push(tenantId);
+      if (publishFails) throw new Error("publish refused (422)");
+    },
+  };
+
+  // Switch still pending — publish must not have been attempted.
+  await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(publishCalls.length, 0);
+
+  // Scheduler lands the switch; the first publish attempt fails → retried.
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  await assert.rejects(() => landing.runPortLanding(row, CREDS, true, d));
+  assert.equal(publishCalls.length, 1);
+  assert.ok(!row.answers.provisioning.portLanding.publishedAt);
+  assert.ok(!row.answers.provisioning.portLanding.tempRetiredAt); // retirement never ran
+
+  publishFails = false;
+  const r = await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(r.done, true);
+  assert.equal(publishCalls.length, 2);
+  assert.ok(row.answers.provisioning.portLanding.publishedAt);
+});

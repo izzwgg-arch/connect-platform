@@ -112,9 +112,10 @@ export async function injectAsService(
   method: "POST",
   url: string,
   actor: string,
+  payload: Record<string, unknown> = {},
 ): Promise<{ statusCode: number; body: any }> {
   const token = app.jwt.sign({ sub: actor, role: "SUPER_ADMIN", email: "scheduler@connect.internal" }, { expiresIn: "2m" });
-  const res = await app.inject({ method, url, headers: { authorization: `Bearer ${token}` }, payload: {} });
+  const res = await app.inject({ method, url, headers: { authorization: `Bearer ${token}` }, payload });
   let body: any = null;
   try { body = res.json(); } catch { body = { raw: String(res.body).slice(0, 300) }; }
   return { statusCode: res.statusCode, body };

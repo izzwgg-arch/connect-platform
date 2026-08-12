@@ -42,15 +42,87 @@ import {
   vms as realVms,
   type VmsCreds,
 } from "./voipMsProvisioning";
+import {
+  agentSetPbxRouteDestination,
+  inspectPbxInboundRoute,
+  resolvePbxRouteHelperConfig,
+} from "../pbxInboundRouteHelperClient";
 
 export type PortLandingDeps = {
   db: any;
   vms: (creds: VmsCreds, method: string, params?: Record<string, string>) => Promise<any>;
   enableSmsOnDid: (creds: VmsCreds, did: string) => Promise<{ ok: boolean; detail: string }>;
+  /**
+   * Make the ported number's PBX inbound route point at whatever the
+   * temporary number's route points at — an extension, a ring group, a PBX
+   * IVR, an outside number's custom app. Only used when the temp number is
+   * NOT on Connect (the switch path owns that world). `copied: false` with a
+   * detail = try again next sweep.
+   */
+  copyPbxDestination?: (db: any, tenantId: string, tempDid: string, portedDid: string) => Promise<{ copied: boolean; detail: string }>;
+  /**
+   * Re-publish the tenant's routing so the new number's inbound route kicks
+   * in — the same POST /voice/ivr/publish the Studio button drives. Wired by
+   * server.ts (needs the live app to inject as a service principal); absent
+   * in unit tests.
+   */
+  publishTenant?: (tenantId: string) => Promise<void>;
 };
 
+/** Default copy: helper inspect on both routes, then the native set-destination. */
+async function defaultCopyPbxDestination(
+  db: any,
+  tenantId: string,
+  tempDid: string,
+  portedDid: string,
+): Promise<{ copied: boolean; detail: string }> {
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId },
+    select: { pbxTenantId: true, pbxInstanceId: true },
+  });
+  if (!link?.pbxTenantId) return { copied: false, detail: "tenant not linked to a PBX" };
+  const cfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+  if (!cfg) return { copied: false, detail: "PBX route helper not configured" };
+  const pbxTenantId = String(link.pbxTenantId);
+
+  const temp = await inspectPbxInboundRoute(cfg, { did: tempDid, tenantId: pbxTenantId });
+  // Drift guard: Connect's DB said "pbx" but the PBX route actually enters the
+  // doorway. Copying a doorway destination ROW id would recreate the
+  // hijackable pattern the doorway rebuild eliminated — that world belongs to
+  // the switch path, never to a raw destination copy.
+  if (temp.mode === "connect" || temp.rendered?.pointsAtDoorway) {
+    return { copied: false, detail: "temporary route is Connect-owned on the PBX — nothing to copy" };
+  }
+  const destId = temp.route?.destination_id;
+  if (destId == null || destId === "") return { copied: false, detail: "temporary route has no destination to copy" };
+
+  const ported = await inspectPbxInboundRoute(cfg, { did: portedDid, tenantId: pbxTenantId });
+  if (String(ported.route?.destination_id ?? "") === String(destId)) {
+    return { copied: true, detail: "already pointing at the same destination" };
+  }
+  try {
+    await agentSetPbxRouteDestination(cfg, {
+      did: portedDid,
+      tenantId: pbxTenantId,
+      destinationId: destId,
+      actor: "port-watchdog",
+    });
+  } catch (e: any) {
+    // The set runs a full per-tenant regen (~40s) and can outlive the HTTP
+    // timeout while still landing — the next sweep's inspect sees the copied
+    // destination and records the stage then. Never treat the abort as fatal.
+    return { copied: false, detail: `helper still applying (${String(e?.message || e).slice(0, 120)}) — will verify next sweep` };
+  }
+  return { copied: true, detail: `destination ${destId} copied from the temporary number` };
+}
+
 export function defaultPortLandingDeps(): PortLandingDeps {
-  return { db: realDb, vms: realVms, enableSmsOnDid: realEnableSmsOnDid };
+  return {
+    db: realDb,
+    vms: realVms,
+    enableSmsOnDid: realEnableSmsOnDid,
+    copyPbxDestination: defaultCopyPbxDestination,
+  };
 }
 
 export type PortLandingResult = {
@@ -273,6 +345,38 @@ export async function runPortLanding(
     }
     // pending/activated-but-not-reflected — check again next sweep.
     return { done: false, stage: "waiting_for_switch" };
+  }
+
+  // ── 4b. PBX world: point the ported route at what the temp route points at ─
+  // The build gave the ported number a route to the FIRST extension; the
+  // tenant may actually point their number at a ring group, a PBX IVR, or an
+  // outside number's custom app. Copy the temp route's destination so the
+  // real number goes to the same place. (The Connect world was handled above
+  // by the switch — its route enters the doorway, nothing to copy.)
+  if (!tempOnConnect && tempDid && !landing.destCopiedAt) {
+    if (deps.copyPbxDestination) {
+      const r = await deps.copyPbxDestination(db, tenantId, tempDid, portedDid);
+      if (!r.copied) {
+        await mergeLanding(db, row, { lastError: `destination copy: ${r.detail}` });
+        return { done: false, stage: "destination_copy_pending", detail: r.detail };
+      }
+      await logEvent(db, row.id, `Ported number now points where the temporary number pointed (${r.detail}).`);
+    } else {
+      await logEvent(db, row.id, `Ported number left on its built route (no destination copier wired).`);
+    }
+    await mergeLanding(db, row, { destCopiedAt: new Date().toISOString(), lastError: null });
+  }
+
+  // ── 4c. Re-publish the tenant's routing so the inbound route kicks in ─────
+  // Same publish the Studio button runs. By this point the number's pointing
+  // is final (switch landed, or destination copied), so one publish covers
+  // whatever it points at — a menu, an extension, or an outside number.
+  if (!landing.publishedAt) {
+    if (deps.publishTenant) {
+      await deps.publishTenant(tenantId);
+      await logEvent(db, row.id, `Routing re-published — the ported number's inbound route is live.`);
+    }
+    await mergeLanding(db, row, { publishedAt: new Date().toISOString(), lastError: null });
   }
 
   // ── Gate: never retire the temp number before the port order is COMPLETED ─

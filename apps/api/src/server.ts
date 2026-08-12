@@ -128,7 +128,7 @@ import {
   warnIfVoicemailAudioStoreEphemeral,
 } from "./voicemail/audioStore";
 import { sweepStalledOnboardingSetups } from "./onboarding/setupWatchdog";
-import { sweepOpenPorts } from "./onboarding/portWatchdog";
+import { defaultPortWatchdogDeps, sweepOpenPorts } from "./onboarding/portWatchdog";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -37923,7 +37923,17 @@ onboardingWatchdogTimer.unref();
 // polls two cheap signals every 15 minutes; ports are rare and take days.
 const portWatchdogTimer = registerShutdownTimer(
   setInterval(() => {
-    sweepOpenPorts()
+    sweepOpenPorts({
+      ...defaultPortWatchdogDeps(),
+      // Re-publish rides the REAL publish route as a service principal, so a
+      // watchdog publish and a Studio publish are literally one code path.
+      publishTenant: async (tenantId: string) => {
+        const r = await didInjectAsService(app, "POST", "/voice/ivr/publish", "port-watchdog", { tenantId });
+        if (r.statusCode !== 200) {
+          throw new Error(`publish refused (${r.statusCode}): ${JSON.stringify(r.body).slice(0, 200)}`);
+        }
+      },
+    })
       .then((summary) => {
         if (summary.landedOrProgressed > 0 || summary.failed > 0) {
           app.log.warn({ portWatchdog: summary }, "port watchdog took action");
