@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeCurrentMode, ivrFindActiveProfile, ivrModeToProfileType } from "./ivrModeSelection";
+import { computeCurrentMode, ivrFindActiveProfile, ivrModeToProfileType, resolveDidmapProfileId } from "./ivrModeSelection";
 
 // The exact live shape from the incident: many menus, all business_hours.
 const studioProfiles = [
@@ -165,4 +165,52 @@ test("an active override wins; an expired one is ignored", () => {
     computeCurrentMode(nySchedule, { isActive: true, expiresAt: new Date("2026-08-05T13:00:00Z") }, at),
     "business",
   );
+});
+
+// ── resolveDidmapProfileId — a number's pointer follows the schedule ─────────
+// The trainer's five red rows in one line: "Closed hours working, but does not
+// have priority. Need to publish everytime store is closed." The per-number
+// dialplan path routes on didmap/profile_id unconditionally, so what we WRITE
+// there must already reflect the mode.
+const MENUS = [
+  { id: "main", type: "business_hours" },
+  { id: "closed", type: "business_hours" },
+  { id: "xmas", type: "business_hours" },
+  { id: "panic", type: "manual_override" },
+];
+const SCHED = { defaultProfileId: "main", afterHoursProfileId: "closed", holidayProfileId: "xmas" };
+
+test("didmap: business hours keep the number's own assignment", () => {
+  assert.equal(resolveDidmapProfileId("main", "business", MENUS, SCHED), "main");
+  // A number deliberately pointed at the closed menu keeps it during the day too.
+  assert.equal(resolveDidmapProfileId("closed", "business", MENUS, SCHED), "closed");
+});
+
+test("didmap: when the store closes, the schedule's closed menu takes priority", () => {
+  assert.equal(resolveDidmapProfileId("main", "afterhours", MENUS, SCHED), "closed");
+});
+
+test("didmap: a holiday beats the closed menu, and falls back through it", () => {
+  assert.equal(resolveDidmapProfileId("main", "holiday", MENUS, SCHED), "xmas");
+  assert.equal(resolveDidmapProfileId("main", "holiday", MENUS, { ...SCHED, holidayProfileId: null }), "closed");
+});
+
+test("didmap: no schedule menu for the mode keeps the assignment — never the tenant's first menu", () => {
+  assert.equal(resolveDidmapProfileId("main", "afterhours", MENUS, { defaultProfileId: "main" }), "main");
+  assert.equal(resolveDidmapProfileId("main", "afterhours", MENUS, null), "main");
+});
+
+test("didmap: a stale schedule id pointing at a deleted menu falls back to the assignment", () => {
+  assert.equal(resolveDidmapProfileId("main", "afterhours", MENUS, { ...SCHED, afterHoursProfileId: "deleted-menu" }), "main");
+});
+
+test("didmap: an emergency override wins on assigned numbers too", () => {
+  assert.equal(resolveDidmapProfileId("main", "override", MENUS, SCHED), "panic");
+  const noPanic = MENUS.filter((m) => m.type !== "manual_override");
+  assert.equal(resolveDidmapProfileId("main", "override", noPanic, SCHED), "main");
+});
+
+test("didmap: an unassigned number stays unassigned — the legacy path keeps handling it", () => {
+  assert.equal(resolveDidmapProfileId("", "afterhours", MENUS, SCHED), "");
+  assert.equal(resolveDidmapProfileId(null, "afterhours", MENUS, SCHED), "");
 });

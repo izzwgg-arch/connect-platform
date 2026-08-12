@@ -75,6 +75,62 @@ export function ivrModeToProfileType(mode: string): string | null {
  *  the business menu after hours beats playing nothing. Override mode falls
  *  back to an "emergency"-typed profile, matching the legacy dest_override
  *  behavior. */
+/** Resolve which menu a NUMBER's didmap pointer should name right now.
+ *
+ *  ⛔ The per-number path in the dialplan is UNCONDITIONAL:
+ *
+ *    Set(DID_MENU=${DB(connect/didmap/<did>/profile_id)})
+ *    Goto(connect-menu,m${DID_MENU},1)
+ *
+ *  The mode is never consulted there — mode-selected keys only govern the
+ *  legacy no-assignment path. So a number assigned to the Main Menu played the
+ *  Main Menu around the clock, and closing time changed nothing. That is the
+ *  trainer's "Closed hours working, but does not have priority. Need to publish
+ *  everytime store is closed" — five red rows from one cause: he was re-pointing
+ *  the number by hand at every open/close because nothing else would.
+ *
+ *  Fixed on the API side, not the PBX: every didmap writer resolves the pointer
+ *  THROUGH the mode. The number's assigned menu is its business-hours menu; off
+ *  hours, the schedule's menu for the current mode wins.
+ *
+ *  Deliberate choices:
+ *  - business mode → always the assignment. An owner who deliberately points a
+ *    second number at the after-hours menu keeps that at all times of day.
+ *  - a mode with no schedule menu → the assignment, NOT ivrFindActiveProfile's
+ *    tenant-wide fallback chain. For an explicitly assigned number, "no closed
+ *    menu chosen" must keep playing ITS menu, never drift to the tenant's
+ *    first-created one.
+ *  - override → a manual_override/emergency-typed menu if one exists. An
+ *    emergency switch that assigned numbers ignore is the same bug again.
+ *  - a substituted id must exist in `profiles`; a stale schedule id falls back
+ *    to the assignment rather than pointing callers at a deleted menu.
+ */
+export function resolveDidmapProfileId<T extends { id?: string; type: string }>(
+  assignedProfileId: string | null | undefined,
+  mode: string,
+  profiles: T[],
+  schedule?: IvrScheduleSelection | null,
+): string {
+  const assigned = String(assignedProfileId ?? "").trim();
+  if (!assigned) return "";
+  if (mode === "business") return assigned;
+
+  const exists = (id: string | null | undefined): string | null =>
+    id && profiles.some((p) => p.id === id) ? id : null;
+
+  if (mode === "afterhours") {
+    return exists(schedule?.afterHoursProfileId) ?? assigned;
+  }
+  if (mode === "holiday") {
+    return exists(schedule?.holidayProfileId) ?? exists(schedule?.afterHoursProfileId) ?? assigned;
+  }
+  if (mode === "override") {
+    const p = profiles.find((x) => x.type === "manual_override") ?? profiles.find((x) => x.type === "emergency");
+    return exists(p?.id) ?? assigned;
+  }
+  return assigned;
+}
+
 export function ivrFindActiveProfile<T extends { id?: string; type: string }>(
   mode: string,
   profiles: T[],

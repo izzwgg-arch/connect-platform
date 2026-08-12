@@ -20592,7 +20592,7 @@ const IVR_OPTION_DIGITS = [
 ] as const;
 type IvrOptionDigit = (typeof IVR_OPTION_DIGITS)[number];
 
-import { computeCurrentMode, ivrModeToProfileType, ivrFindActiveProfile } from "./ivrModeSelection";
+import { computeCurrentMode, ivrModeToProfileType, ivrFindActiveProfile, resolveDidmapProfileId } from "./ivrModeSelection";
 import { rewriteMenuNavRef } from "./ivrMenuNav";
 
 /** Shape of the data buildIvrKeys needs from the active profile's options. */
@@ -25406,9 +25406,39 @@ async function didBuildPublishValues(
     const prof = await (db as any).mohProfile.findUnique({ where: { id: mapping.mohProfileId } });
     mohClass = didResolveMohClass(prof);
   }
+  // ⛔ The pointer must be resolved THROUGH the business-hours mode. The
+  // dialplan's per-number path routes on this value unconditionally — the mode
+  // never gets a say there — so writing the raw assignment here is what made
+  // closed hours "not have priority": an assigned number played its business
+  // menu around the clock, whatever the schedule said. All didmap writers
+  // (both publish paths, the DID switch routes, and the drift reconciler)
+  // flow through this function, so the substitution holds everywhere; the
+  // mode sweep republishes at open/close/holiday boundaries, which flips the
+  // pointer within a minute of the schedule crossing. A resolution failure
+  // falls back to the raw assignment — the pre-fix behaviour — never to an
+  // unpublished number.
+  let profileId = mapping.ivrProfileId ?? "";
+  if (profileId) {
+    try {
+      const sched = await (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: mapping.tenantId } });
+      if (sched?.isActive) {
+        const override = await (db as any).ivrOverrideState.findUnique({ where: { tenantId: mapping.tenantId } });
+        const mode = computeCurrentMode(sched, override);
+        if (mode !== "business") {
+          const profiles = await (db as any).ivrRouteProfile.findMany({
+            where: { tenantId: mapping.tenantId },
+            select: { id: true, type: true },
+          });
+          profileId = resolveDidmapProfileId(profileId, mode, profiles, sched);
+        }
+      }
+    } catch (err: any) {
+      app.log.warn({ tenantId: mapping.tenantId, e164: mapping.e164, err: err?.message }, "didmap: mode resolution failed — using the raw assignment");
+    }
+  }
   return {
     tenant: tenantSlug,
-    profile_id: mapping.ivrProfileId ?? "",
+    profile_id: profileId,
     moh_class: mohClass,
     hold_announce: mapping.holdAnnouncePromptRef ?? "",
     hold_repeat: String(mapping.holdRepeatSec ?? 30),
