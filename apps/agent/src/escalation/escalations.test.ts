@@ -20,6 +20,11 @@ test("real escalation replies from production transcripts are detected", () => {
     // Trimpro 2026-08-07 / Gesheft 2026-08-10
     "I’ve passed this request to the human team for review and handling.",
     "I’ve sent the request to our human team to help you reopen the mini view of the Connect app.",
+    // ⛔ REGRESSION: missed LIVE on the first post-deploy test (2026-08-12) —
+    // the model promised an escalation without naming a team after the verb.
+    "I’m sorry—fax-line troubleshooting and repairs require our human team. I’ve passed along: **your fax machine stopped receiving faxes on the fax line yesterday**.",
+    "I'll pass this along and our team will follow up with you.",
+    "This has been escalated to a human who can help.",
   ];
   for (const reply of realReplies) {
     assert.equal(isEscalationReply(reply), true, `should detect: ${reply.slice(0, 60)}`);

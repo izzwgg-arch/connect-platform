@@ -41,6 +41,16 @@ const ESCALATION_RE = new RegExp(
     String.raw`\b(?:pass(?:ed|ing)?|sent|forward(?:ed|ing)?|escalat(?:ed|ing)|submitt?(?:ed|ing)?|flagged)\b[^.!?\n]{0,60}?\bto\s+(?:our|the)\s+(?:human\s+)?(?:support\s+)?team\b`,
     String.raw`\brecorded\s+(?:and\s+passed\s+to|for)\s+the\s+team\b`,
     String.raw`\bflagged\s+(?:it|this|that)?\s*for\s+(?:our|the)\s+team\b`,
+    // "I've passed along: **…**" — caught LIVE on the first post-deploy test
+    // (2026-08-12): the model promised an escalation without naming a team
+    // after the verb. The transcript-derived patterns above missed it; the
+    // model free-forms, so the idiom itself must match, target or not.
+    String.raw`\bpass(?:ed|ing)?\s+(?:\w+\s+){0,2}?along\b`,
+    // "passed this to a human" / "escalated to a human"
+    String.raw`\b(?:passed|sent|forwarded|escalated)\b[^.!?\n]{0,40}?\bto\s+a\s+human\b`,
+    // "our team will follow up / look into / reach out / get back" — a promise
+    // that the team now owns it, phrased from the team's side.
+    String.raw`\b(?:our|the)\s+(?:human\s+)?(?:support\s+)?team\s+will\s+(?:follow\s+up|look\s+into|reach\s+out|get\s+back|review|handle|take\s+(?:it|this|care))\b`,
   ].join("|"),
   "i",
 );
