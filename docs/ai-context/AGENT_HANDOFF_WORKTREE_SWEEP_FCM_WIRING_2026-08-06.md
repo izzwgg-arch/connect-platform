@@ -225,3 +225,22 @@ typecheck clean.
 present in `901dcb80` before any of this work) and `packages/db` test files
 report implicit-any. The Docker build resolves these fine. Do not chase them
 as a regression from this session.
+
+---
+
+## 8. Addendum (2026-08-12) — the docs themselves had the same disease
+
+The theme of this handoff was "work that looks safe but exists nowhere":
+uncommitted fixes, a website living only in a stash. It turned out the
+documentation was a third case. `.gitignore` had `docs/` wholesale (for the
+1.2 GB `docs/pbx-brain/` PBX snapshot that bloated EAS uploads), so **41 of 91
+files under `docs/ai-context/` were never in git at all** — including five
+handoffs CLAUDE.md names as "READ FIRST", and including THIS FILE's neighbors.
+Every tracked doc had been individually force-added.
+
+Fixed in `2bf61c03`: only `docs/pbx-brain/` is ignored now (EAS stays
+protected by `.easignore`, which still excludes all of `docs/`), all 199 real
+docs are tracked, `docs/pbx/*.sh`+`*.conf` are pinned LF in `.gitattributes`
+for the PBX-scp path, and a two-pass safety sweep (secrets, line endings) of
+the committed tree came back clean — details in the CLAUDE.md section
+"`docs/` is IN GIT now".

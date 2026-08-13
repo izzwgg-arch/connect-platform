@@ -1,5 +1,29 @@
 # Connect 2 — working rules for Claude
 
+## `docs/` is IN GIT now (2026-08-12) — the force-add ritual is dead; only `docs/pbx-brain/` stays ignored
+
+Commit `2bf61c03`. For months `.gitignore` had `docs/` wholesale, so **41 of 91
+files under `docs/ai-context/` — several of them "READ FIRST" targets named in
+this very file — existed only on one machine**, one `git clean -xfd` from
+deletion. Every doc that WAS in git got there by individual `git add -f`, which
+is exactly how the gap grew unnoticed.
+
+- **Why it was ignored:** `docs/pbx-brain/` holds a **1.2 GB PBX snapshot**
+  (475 MB tarball + extracted VitalPBX dump) that bloated EAS build uploads.
+  That dir is still ignored; EAS is independently protected by `.easignore`,
+  which excludes ALL of `docs/` — so do not "fix" the .gitignore rule back.
+- **A new doc now lands with a plain `git add`.** If `git add docs/...` ever
+  complains about an ignore rule again, something regressed — check
+  `.gitignore` for a resurrected `docs/` line before force-adding.
+- **Both safety passes ran against the committed tree and came back clean**
+  (structured tokens, private keys, cred-bearing URLs, assigned secret values,
+  the AMI-password shape, long-hex triage → only placeholders, git SHAs and
+  checksums; `.connect-ssh/` still ignored, zero surprise untracked files).
+  ⛔ `docs/pbx/*.sh` + `*.conf` are pinned LF in `.gitattributes` — they get
+  scp'd to the Linux PBX and a Windows CRLF checkout breaks them (same trap as
+  `/scripts/pbx/**`). The unpinned `.mjs`/`.sql` there are shebang-free and
+  CRLF-safe on purpose; pin any NEW shell/conf file you add under docs/pbx.
+
 ## ⛔⛔ AGENT HANDOFF — escalations go somewhere now; recordings stopped lying; voicemails play their own audio (2026-08-12) — READ FIRST for agent escalations/alert email, ANY recording or voicemail playback work, before adding a reply.send(stream) to apps/api, or before believing a stored audio locator
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ESCALATIONS_RECORDINGS_VOICEMAIL_2026-08-12.md`**
