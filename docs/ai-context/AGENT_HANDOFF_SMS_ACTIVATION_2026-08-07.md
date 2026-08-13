@@ -208,9 +208,13 @@ via the onboarding panel-automation path (`createInboundRoute` shape, dest ext
 (`pbx_helper_read_failed: aborted due to timeout`) until
 **`connect-pbx-helper` was restarted on the PBX — it had leaked to 1024/1024
 FDs and 761 threads since Aug 6** (every open failed `Errno 24`, responses took
-~25-30s vs the 15s inspect timeout; suspect: voicemail-spool polling). Still
-open: temp number retirement (Izzy's call), and no live text sent from the new
-number yet (wiring fully verified; a text+reply is the last proof).
+~25-30s vs the 15s inspect timeout; suspect: voicemail-spool polling). ✅ **Temp number
+845-260-5692 RETIRED 2026-08-12** — automatically, by the new port watchdog's
+first sweep (routed back to the master spare pool, SMS row un-claimed, mapping
+deleted; see `AGENT_HANDOFF_PORT_AUTOMATION_2026-08-12.md`). Its old "Main"
+PBX inbound route on tenant 105 is the one leftover (+$3/mo E911 until deleted
+in the panel). Still open: no live text sent from the new number yet (wiring
+fully verified; a text+reply is the last proof).
 
 Original filing notes (for history): filed 2026-08-05; no phone bill was ever
 attached (the upload was destroyed by an api deploy before the volume fix), and

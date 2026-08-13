@@ -1,5 +1,112 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — number ports land themselves now (2026-08-12) — READ FIRST for ANY port-in work, "the port completed and nothing happened", the port watchdog, or before touching portLanding/portWatchdog
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_PORT_AUTOMATION_2026-08-12.md`**
+(commits `c5dc0f7a` → `76a0bfbf` → `5330620d` on `feat/ivr-migration-takeover`,
+api **DEPLOYED + container-verified**; live-proven the same day on inii mini's
+own port — the first sweep landed it end-to-end, temp number retired, no human).
+
+- **The whole port lifecycle is automatic now.** Build: a porting sign-up
+  prepares BOTH numbers (tenant number list, dual inbound routes
+  "Main"/"Main ported", the REAL number as outbound caller ID). A 15-min api
+  watchdog polls `getLNPStatus` + `getDIDsInfo` (⛔ VoIP.ms has NO port
+  webhook; ✅ **`getLNPList` enumerates all orders** — how Matamim's real
+  order was found). On arrival: route to subaccount (verified by re-read),
+  move texting (claim + copy assignment + tenant default), mirror the
+  mapping + book the menu switch via DidSwitchSchedule — or, temp-not-on-
+  Connect, **copy the temp route's DECODED PBX destination** (⛔ never the
+  raw `ombu_destinations` row id — shared rows cascade away when the temp
+  route is deleted; `5330620d`) — then **re-publish through the real
+  `/voice/ivr/publish`** as a service principal. ⛔ Retirement gates on the
+  ORDER reading completed, never FOC arrival: temp DID → master spare pool,
+  SMS row un-claimed, mapping DELETED (unique e164 must free for reuse).
+- ⛔ **Completion AND rejection emails ride ADMIN_ALERT → currently
+  `ALERTS_MUTED`.** They queue and are skipped; the sign-up timeline is the
+  record. A rejected port needs a human and nobody is emailed while the mute
+  stands.
+- ⏳ **Matamim is the staged first start-to-finish test** (submission
+  `cmsey1yel0002o4xoogh8gmrh`, PBX tenant 104): port **217946 →
+  929-359-8299, FOC 2026-08-17**. ⛔ The wizard had recorded the WRONG number
+  (8456282646) — corrected on the submission. Hand-backfilled because the
+  port was filed manually: tenant lists both numbers, route 241
+  "Main ported" → ext 101 (own destination row), outbound CID now the ported
+  number, watchdog tracking (`lastPortStatus: foc_received`). Around Aug 17
+  the timeline should walk arrived → texting → pointing → published →
+  (on completed) temp 724-419-8226 retired — with zero human input.
+- **Per-retirement leftover:** the temp number's old PBX inbound route stays
+  (panel deletes have no captured contract) and counts **$3/mo E911** until
+  deleted in the panel. First one: inii mini's "Main" 8452605692 on tenant 105.
+- ⛔ Traps paid for: tenant EDIT form has NO `name` input and legacy tenants
+  carry the PLAIN company description — identify a parsed tenant form by
+  `tenant_id` + `inbound_numbers[0][did]`; a killed panel run (exit 137) can
+  have LANDED its post — read the PBX DB before re-running (scripts are
+  resume-guarded); blue/green api deploys run TWO Prisma pools and can
+  transiently exhaust Postgres (max 100) — wait, don't "fix".
+
+## ⛔⛔ ALERT EMAILS ARE MUTED AT THE SEND DOOR; ONLY ASSISTANT ESCALATIONS REACH THE OWNER (verified live 2026-08-12) — READ FIRST before adding ANY alert, before "why didn't I get warned about X", and before assuming an alert reached a human
+
+**Verified by reading the running container and the DB, 2026-08-12 — read-only,
+nothing changed.** Izzy's directive (2026-08-12), already implemented by another
+session: **every automated alert to the alert inbox stops; Assistant escalations
+continue.**
+
+- **The mute is ONE gate at the single send door** —
+  `processEmailJobsBatch` in `apps/api/src/server.ts:1162`: any
+  `EmailJob` with `type === "ADMIN_ALERT"` is set `status SKIPPED`,
+  `lastErrorCode "ALERTS_MUTED"`, and never sent. ⛔ **This design is the point:
+  gating the CREATION sites would always leak**, because at least seven files
+  (`billingEmailLifecycle`, `receiptReconciliation`, `adminSignupReport`,
+  `journeyTracking`, `setupWatchdog`, `portLanding`, `portWatchdog`) create
+  `ADMIN_ALERT` rows **without** going through `sendAdminAlert`. Do not "improve"
+  this by moving the check upstream.
+- ⛔ **It is CODE in the running image, not a shell script with a timer.** Last
+  week's `/root/alert-email-killswitch.sh` self-expired and alerts silently
+  returned for five days. This survives restarts and deploys. Verify with
+  `docker exec app-api-1 grep -c ALERTS_MUTED /app/apps/api/src/server.ts` → `1`.
+- **Nothing bypasses it: the api is the ONLY sender of `EmailJob` rows.** The
+  worker merely *creates* them (its `status: "SENT"` writes are all
+  `SmsMessage`/CRM tables, not `EmailJob`).
+- ✅ **PROVEN OFF, not assumed:** last `ADMIN_ALERT` with a real `sentAt` was
+  **2026-08-12T01:08Z**; **36 rows SKIPPED `ALERTS_MUTED`** from 02:18Z to
+  23:44Z. Rows are still created on purpose — **they are the audit trail**, and
+  reading them is now the only way to see what the platform tried to warn about.
+- **58 `ADMIN_ALERT` rows sit `FAILED` at `attempts=5`** (Aug 5–6, the mail-quota
+  casualties). The processor only takes `attempts < 5`, so ⛔ **they can never
+  fire** — do not "retry" them.
+- ✅ **Escalations work, both halves, proven live:** `apps/api/src/agentEscalationDispatch.ts`
+  turns each `AgentEscalation` row into an SMS **and** an `EmailJob` of type
+  **`AGENT_ESCALATION`** — the only mail category the gate lets through. Two real
+  dispatches on 2026-08-12 (02:21, 03:05) both carry `smsSentAt` **and**
+  `emailQueuedAt` with `lastError: null`; both emails show `SENT`.
+  SMS → **(562) 209-6644 + (845) 723-1213**, from **(845) 557-7768**, capped at
+  **40/rolling 24h** so a runaway agent cannot text all night. ⛔ **Escalation SMS
+  writes NO `SmsMessage` row** — querying that table returns "none" and looks
+  like a failure; read `AgentEscalation.smsSentAt` instead.
+- ⛔ **Two suppression mechanisms now look alike — tell them apart by
+  `lastErrorCode`, never by status.** `ALERTS_MUTED` = this gate (owner
+  directive). No code / a `decideAdminAlert` log line = the **40-per-rolling-24h
+  ceiling** in `packages/shared/src/adminAlertBudget.ts`, which still exists
+  underneath and still works.
+- **Agent-side alert channels are muted DELIBERATELY, and belt-and-braces:** the
+  daily digest and the `[Watchman CRITICAL]` toll-fraud warnings run through
+  `apps/agent/src/notify/notifier.ts:73`, which filters recipients listed in
+  **`AGENT_MUTED_ALERT_RECIPIENTS` (default `tod10950@gmail.com`)** and returns
+  `{sent:false, reason:"recipient_muted"}`. On top of that `app-agent-1` has
+  **zero SMTP env vars**, so today they are `recorded to audit only` anyway.
+  ⛔ The real fragility is not SMTP — it is that **the filter matches on the
+  literal address**: change `ADMIN_ALERT_EMAIL` (or the owner's address) without
+  updating `AGENT_MUTED_ALERT_RECIPIENTS` and the agent's alerts start flowing
+  again silently.
+- **Customer mail is untouched and must stay that way:** `BILLING_INVOICE_READY`,
+  `BILLING_RECEIPT`, `BILLING_PAYMENT_LINK`, `USER_INVITE` all still send, as do
+  the PBX's voicemail notifications (a different system entirely — see the
+  voicemail-email handoff).
+- ⚠️ **The accepted cost:** toll-fraud attempts, unregistered devices and doorway
+  failures now warn nobody. That is Izzy's call, made twice. If you need one of
+  these back, add it as an **escalation**, not as an `ADMIN_ALERT` — that is the
+  channel that reaches him.
+
 ## `docs/` is IN GIT now (2026-08-12) — the force-add ritual is dead; only `docs/pbx-brain/` stays ignored
 
 Commit `2bf61c03`. For months `.gitignore` had `docs/` wholesale, so **41 of 91
@@ -136,6 +243,24 @@ Portal CSS only, one screen; nothing touching call routing, the PBX or billing.)
   `.console-content:has(…)` rules (wallboard, checklist, scripts, voicemail-drops,
   forms) set **background only** and never touch `overflow`, so those pages keep
   normal scrolling and are not affected.
+- ✅ **Billing hardened same day (`33d08426` — committed + pushed, ⛔ NOT yet
+  deployed; behavior-identical, rides the next portal deploy).** Its `flex: 1`
+  used to arrive only through the
+  `.billing-ws-shell--context-wide .billing-ws-main--wide` pair, so a page
+  rendering `.billing-ws-main` bare would silently lose the scroll chain — the
+  `.td-page` failure shape one refactor away. The layout now lives on
+  `.billing-ws-main` itself and both modifier classes are DELETED from CSS and
+  `AdminBillingShell` (nothing else referenced them; `--all-tenants` stays,
+  conditional and pre-existing). Proven by measuring shell markup and bare
+  markup side by side: identical 1,569 px scroll, toolbar pinned, 0 px stranded.
+- ⛔ **The rebuilt/non-rebuilt billing scroll split is DELIBERATE — never "fix"
+  one side to match the other.** Pages on the `REBUILT` list in
+  `apps/portal/app/(platform)/admin/billing/layout.tsx` render no
+  `.billing-ws-shell` at all (bare `<Suspense>` renders no DOM node), so the
+  `:has()` never matches and they scroll as ordinary pages; shell-wrapped pages
+  scroll inside `.billing-ws-main-scroll` with the toolbar pinned. The full
+  explanation now sits ON the `REBUILT` list itself — read it before adding any
+  screen under `/admin/billing`.
 
 ## ⛔⛔ AGENT HANDOFF — voicemail-to-email is sent BY THE PBX, not by Connect (2026-08-09) — READ FIRST for ANY "customer didn't get their voicemail email", before looking inside Connect for it, and before believing alert emails are off
 
@@ -472,13 +597,19 @@ container-verified**; portal-only, nothing touching call routing or the PBX.)
 
 ## ⛔⛔ THE ONE MAILBOX SENDS EVERYTHING, CAPPED AT 500/DAY (2026-08-06) — READ FIRST for ANY email/voicemail-notification report, before adding an ADMIN_ALERT, or before believing a mail fix worked
 
-> ⛔ **STALE HEADLINE CORRECTED 2026-08-12 — this section used to say "ALERT
-> EMAILS ARE CURRENTLY OFF". THEY ARE ON.** The kill switch self-expired as its
-> own note predicted and nothing replaced it. Sent/day: `08-06 399` → **`08-08
-> 40, 08-09 40, 08-10 40, 08-11 40`** → `08-12 sent=6 skipped=34`. The
-> **40-per-rolling-24h ceiling IS holding**, and Izzy confirmed on 2026-08-12
-> that he still receives these. See the voicemail-email handoff at the top of
-> this file, §11.
+> ⛔ **ALERT EMAILS ARE OFF AGAIN — and this time it is CODE, not an expiring
+> script.** History: the 2026-08-06 kill switch self-expired, so alerts ran for
+> five days (`08-06 399` → `08-08…08-11` pinned at **40/day** by the
+> rolling-24h ceiling). On **2026-08-11 ~22:18 EDT** a proper mute landed
+> (Izzy's directive) and has held since — see the section below on the
+> **ALERTS_MUTED send-door gate**, which is now the authority on this topic.
+>
+> ⛔ **Correction, so nobody repeats it:** an earlier pass of this file read the
+> `08-12 skipped=34` rows as the **40/day budget ceiling** doing its job. That
+> was wrong — those skips are the **new mute gate** (`lastErrorCode
+> ALERTS_MUTED`). The ceiling and the gate produce similar-looking suppression;
+> **tell them apart by `lastErrorCode` on the `EmailJob` row**, never by the
+> status alone.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_MAIL_QUOTA_BOUNCE_LOOP_2026-08-06.md`**
 (commit `0197dd56` on `feat/ivr-migration-takeover` — **api DEPLOYED and
@@ -919,13 +1050,16 @@ Changes.
   onboarding), switched to Connect via the real `/voice/did/:id/switch-to-connect`
   + full publish (183 keys) — probe call traced into `connect-menu` playing
   `custom/main_greeting_fc10c9`. ⛔ **The switch only worked after restarting
-  `connect-pbx-helper` on the PBX** — it had leaked to 1024/1024 FDs + 761
-  threads since Aug 6 (`Errno 24` on every open, incl. its own sqlite; inspect
-  answered in ~25-30s vs the client's 15s timeout → `pbx_helper_read_failed:
-  aborted due to timeout` on every switch platform-wide). Leak suspect: the
-  voicemail-spool polling endpoints. Temp number 845-260-5692 stays active
-  (no longer SMS default) pending Izzy's retirement call.
-  See [[voipms-sms-per-did-webhook-is-a-red-herring]].
+  `connect-pbx-helper` on the PBX** — it had wedged at 1024/1024 FDs + 761
+  threads (`pbx_helper_read_failed: aborted due to timeout` on every switch
+  platform-wide). Root-caused + FIXED same day: helper `2026.08.12.1`
+  (bounded server, spool-scan cache, LimitNOFILE 65536) — see
+  [[pbx-helper-fd-leak-wedges-switches]]. ✅ **Temp number 845-260-5692 was
+  RETIRED automatically** by the port watchdog's first sweep (back on the
+  master spare pool, SMS row un-claimed, mapping deleted); its old "Main"
+  PBX inbound route on tenant 105 is the one leftover (+$3/mo E911 until
+  deleted in the panel). See the port-automation handoff at the top of this
+  file and [[voipms-sms-per-did-webhook-is-a-red-herring]].
 
 ## ⛔ AGENT HANDOFF — "I changed it in VitalPBX and the phone didn't change" (2026-08-06) — READ FIRST for BLF/key edits, desk-phone provisioning, or before believing a phone's registration proves anything
 
