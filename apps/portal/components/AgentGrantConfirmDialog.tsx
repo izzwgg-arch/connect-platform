@@ -20,9 +20,18 @@ import { apiGet, apiPost, ApiError } from "../services/apiClient";
 export type PendingGrant = {
   id: string;
   summary: string;
-  permission: string;
-  permissionPlain: string;
-  targetEmail: string;
+  /**
+   * ⛔ "$30.00 a month, added to your next bill." — null when nothing is
+   * charged (a permission grant costs nothing). This MUST be rendered: some of
+   * these confirmations start a recurring charge, and a password box with no
+   * price on it is not informed consent, however clearly the assistant said the
+   * figure earlier in the conversation.
+   */
+  priceLine?: string | null;
+  capabilityId?: string;
+  permission?: string;
+  permissionPlain?: string;
+  targetEmail?: string;
   createdAt: string;
 };
 
@@ -186,8 +195,26 @@ export function AgentGrantConfirmDialog({
         <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Confirm this change</h2>
         {/* Verbatim from the server — not model output. */}
         <p style={{ fontSize: 14, lineHeight: 1.5, margin: "12px 0 4px" }}>{grant.summary}</p>
+        {grant.priceLine && (
+          <p
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              lineHeight: 1.5,
+              margin: "10px 0 4px",
+              padding: "8px 12px",
+              borderRadius: 9,
+              background: "rgba(37,99,235,.12)",
+              border: "1px solid rgba(37,99,235,.35)",
+            }}
+          >
+            {grant.priceLine}
+          </p>
+        )}
         <p style={{ fontSize: 12.5, opacity: 0.7, margin: "0 0 14px" }}>
-          Enter your own account password to confirm. You can undo this any time under Roles.
+          {grant.priceLine
+            ? "Enter your own account password to confirm this and the charge."
+            : "Enter your own account password to confirm. You can undo this any time under Roles."}
         </p>
 
         <input
