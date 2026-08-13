@@ -726,6 +726,7 @@ function CallRecordingPlayer({
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const classifyingRef = useRef(false);
   const [playState, setPlayState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
   const [failure, setFailure] = useState<RecordingPlaybackFailure | null>(null);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
@@ -756,7 +757,13 @@ function CallRecordingPlayer({
   function handleAudioFailure() {
     clearWatchdog();
     setPlayState("idle");
-    void classifyRecordingPlaybackFailure(streamSrc).then(setFailure);
+    // onError and a rejected play() promise both fire for one failure — one
+    // classification request is enough.
+    if (classifyingRef.current) return;
+    classifyingRef.current = true;
+    void classifyRecordingPlaybackFailure(streamSrc)
+      .then(setFailure)
+      .finally(() => { classifyingRef.current = false; });
   }
 
   function togglePlayback() {
