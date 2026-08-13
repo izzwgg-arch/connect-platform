@@ -9,6 +9,7 @@ import { ChatConversation } from "../../../components/chat/ChatConversation";
 import { ChatInbox } from "../../../components/chat/ChatInbox";
 import { NewChatDialog } from "../../../components/chat/NewChatDialog";
 import { mergeChatMessages, resolveActiveThread, type ChatScrollIntent, type ChatScrollReason } from "../../../components/chat/chatState";
+import { stabilizeMessageAttachmentUrls } from "../../../components/chat/chatPresentation";
 import type { ChatDirectoryUser, ChatMessage, ChatThread, PendingAttachment } from "../../../components/chat/types";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment, ApiError } from "../../../services/apiClient";
 import { CRMPageHeader, CRMWorkspaceMain, CRMWorkspaceRightRail, cn, crm } from "../../../components/crm";
@@ -190,7 +191,9 @@ export default function ChatPage() {
     try {
       const res = await apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${threadId}/messages`);
       if (requestId !== messageRequestSeq.current) return;
-      const nextMessages = res.messages ?? [];
+      // Pin signed attachment URLs so a poll cannot swap an <audio>/<img> src
+      // mid-playback (that is what cut voice notes off after one poll).
+      const nextMessages = stabilizeMessageAttachmentUrls(res.messages ?? []);
       setMessages((prev) => isThreadSwitch ? nextMessages : mergeChatMessages(prev, nextMessages));
       loadedThreadId.current = threadId;
       // Viewing a thread marks it read for the team (server skips tenant-wide

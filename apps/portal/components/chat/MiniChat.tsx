@@ -6,6 +6,7 @@ import { useAppContext } from "../../hooks/useAppContext";
 import { ChatConversation } from "./ChatConversation";
 import { NewChatDialog } from "./NewChatDialog";
 import { mergeChatMessages, resolveActiveThread, type ChatScrollIntent, type ChatScrollReason } from "./chatState";
+import { stabilizeMessageAttachmentUrls } from "./chatPresentation";
 import { fmtChatTime, initials } from "./formatting";
 import type { ChatDirectoryUser, ChatMessage, ChatThread, PendingAttachment } from "./types";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment, ApiError } from "../../services/apiClient";
@@ -145,7 +146,9 @@ export function MiniChat() {
     try {
       const res = await apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${threadId}/messages`);
       if (requestId !== messageRequestSeq.current) return;
-      const next = res.messages ?? [];
+      // Pin signed attachment URLs so a poll cannot swap an <audio>/<img> src
+      // mid-playback (that is what cut voice notes off after one poll).
+      const next = stabilizeMessageAttachmentUrls(res.messages ?? []);
       setMessages((prev) => (isThreadSwitch ? next : mergeChatMessages(prev, next)));
       loadedThreadId.current = threadId;
       // Viewing a thread marks it read (server advances lastReadAt; silent

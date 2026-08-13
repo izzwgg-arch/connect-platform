@@ -91,3 +91,88 @@ export function dropVoiceTransportDuplicates<T extends AttachmentLike>(attachmen
     (a) => !(isTransportMediaCandidate(a) && originalAudioBaseNames.has(attachmentBaseName(a.fileName))),
   );
 }
+
+/**
+ * The API mints a FRESH HMAC-signed downloadUrl (new `exp`/`sig`) for every
+ * attachment on every `/chat/threads/:id/messages` fetch, and both chat
+ * surfaces poll every 7s. Handing that changing string to a media element
+ * makes the browser treat it as a different file: `<audio>` aborts and
+ * reloads, so a voice note dies a few seconds into playback, and `<img>`
+ * re-downloads and visibly flashes.
+ *
+ * So we pin the first URL seen per attachment id and keep reusing it until it
+ * is close to expiry, keeping the `src` string byte-identical across refetches.
+ * The mobile app carries the same fix (`stabilizeAttachmentUrl` in
+ * `apps/mobile/src/screens/tabs/ChatTab.tsx`) — keep the two in step.
+ *
+ * ⛔ Apply this at EVERY message-fetch site. A surface that skips it looks
+ * fine until someone plays a voice note longer than one poll interval.
+ */
+const stableAttachmentUrlCache = new Map<string, string>();
+
+/** Re-pin this many seconds before expiry, so a pinned URL never goes stale mid-use. */
+const STABLE_URL_RENEW_WITHIN_SECONDS = 120;
+
+/** Bound the cache — a desktop chat window can stay open for days. */
+const STABLE_URL_CACHE_MAX = 500;
+
+/** Our signed links carry `exp=` (storage-key route) or `e=` (attachment-id route). */
+function signedUrlExpSeconds(url: string): number {
+  const m = url.match(/[?&](?:exp|e)=(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+function isOurSignedUrl(url: string): boolean {
+  return /[?&](?:exp|e)=\d+/.test(url);
+}
+
+export function stabilizeAttachmentUrl(
+  attachmentId: string,
+  url: string | null | undefined,
+  nowMs: number = Date.now(),
+): string | null {
+  if (!url) return url ?? null;
+  // Only pin our own signed URLs; external (MMS carrier) URLs are already stable.
+  if (!isOurSignedUrl(url)) return url;
+  const cached = stableAttachmentUrlCache.get(attachmentId);
+  if (cached) {
+    const nowSec = Math.floor(nowMs / 1000);
+    if (signedUrlExpSeconds(cached) - nowSec > STABLE_URL_RENEW_WITHIN_SECONDS) return cached;
+  }
+  if (stableAttachmentUrlCache.size >= STABLE_URL_CACHE_MAX && !stableAttachmentUrlCache.has(attachmentId)) {
+    const oldest = stableAttachmentUrlCache.keys().next();
+    if (!oldest.done) stableAttachmentUrlCache.delete(oldest.value);
+  }
+  stableAttachmentUrlCache.set(attachmentId, url);
+  return url;
+}
+
+/**
+ * Returns the same array/objects when nothing changed, so React sees stable
+ * identities and does not re-render (or re-mount media) needlessly.
+ */
+export function stabilizeMessageAttachmentUrls(
+  messages: ChatMessage[],
+  nowMs: number = Date.now(),
+): ChatMessage[] {
+  let anyChanged = false;
+  const out = messages.map((m) => {
+    if (!m.attachments || m.attachments.length === 0) return m;
+    let changed = false;
+    const attachments = m.attachments.map((a) => {
+      const stable = stabilizeAttachmentUrl(a.id, a.downloadUrl, nowMs);
+      if (stable === a.downloadUrl) return a;
+      changed = true;
+      return { ...a, downloadUrl: stable };
+    });
+    if (!changed) return m;
+    anyChanged = true;
+    return { ...m, attachments };
+  });
+  return anyChanged ? out : messages;
+}
+
+/** Test seam — the pin cache is module state shared by both chat surfaces. */
+export function __resetStableAttachmentUrlCacheForTests(): void {
+  stableAttachmentUrlCache.clear();
+}

@@ -69,6 +69,19 @@ function VoiceNotePlayer({ attachment }: { attachment: ChatAttachment }) {
     [position, totalDurationMs],
   );
 
+  // Second line of defence behind stabilizeMessageAttachmentUrls(): changing an
+  // <audio> src mid-playback makes the browser abort and reload, which cut
+  // voice notes off seconds in. Callers pin the URL, and we additionally refuse
+  // to adopt a new one while sound is actually playing.
+  const [src, setSrc] = useState<string | null>(attachment.downloadUrl ?? null);
+  useEffect(() => {
+    const next = attachment.downloadUrl ?? null;
+    if (!next || next === src) return;
+    const el = audioRef.current;
+    const isMidPlayback = Boolean(el && !el.paused && !el.ended);
+    if (!isMidPlayback) setSrc(next);
+  }, [attachment.downloadUrl, src]);
+
   useEffect(() => {
     return () => {
       audioRef.current?.pause();
@@ -76,7 +89,7 @@ function VoiceNotePlayer({ attachment }: { attachment: ChatAttachment }) {
     };
   }, []);
 
-  if (!attachment.downloadUrl) {
+  if (!src) {
     return (
       <div className={`cc-attach cc-voicenote ${attachmentToneClass(attachment)}`}>
         <Mic size={16} />
@@ -113,7 +126,7 @@ function VoiceNotePlayer({ attachment }: { attachment: ChatAttachment }) {
       <Mic size={14} className="cc-voicenote-mic" aria-hidden />
       <audio
         ref={audioRef}
-        src={attachment.downloadUrl}
+        src={src}
         preload="metadata"
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
