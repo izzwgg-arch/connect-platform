@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { applyConfirmedAction, buildCapabilityRegistry, type ConfirmDeps, type ConfirmActor } from "../agentConfirmations";
 import { addExtensionCapability } from "./addExtensionCapability";
 import { enableSmsCapability, findTextableNumber } from "./enableSmsCapability";
-import { addPhoneNumberCapability, prettyDid } from "./addPhoneNumberCapability";
+import { addPhoneNumberCapability, prettyDid, isNumberBillingTrustworthy } from "./addPhoneNumberCapability";
 import {
   ADD_EXTENSION_CAPABILITY_ID,
   ENABLE_SMS_CAPABILITY_ID,
@@ -466,4 +466,41 @@ test("the price line says 'included' when it is their first number", async () =>
   });
   assert.match(described!.summary, /\(845\) 555-1234/);
   assert.match(described!.priceLine!, /included/i);
+});
+
+test("⛔ an account whose real numbers aren't billed cannot be priced", async () => {
+  // 11 of 29 live tenants have DIDs only in PbxTenantInboundDid, so the plan's
+  // per-number line thinks they have NONE. Quoting the next number as "your
+  // first, included" to a company with two is a wrong price on a recurring
+  // charge; refusing costs them a self-serve number instead.
+  const db: any = {
+    phoneNumber: { count: async () => 0 },
+    pbxTenantInboundDid: { count: async () => 2 },
+  };
+  assert.equal(await isNumberBillingTrustworthy(db, TENANT), false);
+});
+
+test("an account whose numbers ARE billed can be priced", async () => {
+  const db: any = {
+    phoneNumber: { count: async () => 2 },
+    pbxTenantInboundDid: { count: async () => 2 },
+  };
+  assert.equal(await isNumberBillingTrustworthy(db, TENANT), true);
+  // A brand-new account with nothing yet is fine too — nothing to disagree with.
+  const fresh: any = { phoneNumber: { count: async () => 0 }, pbxTenantInboundDid: { count: async () => 0 } };
+  assert.equal(await isNumberBillingTrustworthy(fresh, TENANT), true);
+});
+
+test("⛔ the refusal never names our plumbing to a customer", async () => {
+  const db = makeDb();
+  db.onboardingSubmission = { findFirst: async () => null };
+  db.phoneNumber = { findFirst: async () => null, count: async () => 0, create: async () => ({}) };
+  const refusal = await addPhoneNumberCapability.authorize(deps(db), {
+    actor: ADMIN,
+    tenantId: TENANT,
+    params: { did: "8455551234" },
+    action: {},
+  });
+  assert.ok(refusal);
+  assert.doesNotMatch(refusal!.message, /phoneNumber|PbxTenant|subaccount|VoIP|table/i);
 });

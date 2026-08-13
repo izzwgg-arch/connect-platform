@@ -123,6 +123,27 @@ export async function searchAvailableNumbers(
   return [...spares, ...fresh];
 }
 
+/**
+ * Can we stand behind a price for another number on this account?
+ *
+ * ⛔ The plan's per-number line counts `phoneNumber` rows, but most accounts the
+ * sign-up flow built have their DIDs only in `PbxTenantInboundDid` — 11 of 29
+ * live tenants on 2026-08-07. On those the engine thinks the company has NO
+ * numbers, so it prices the next one as "your first, included" for a business
+ * that already has two, and then bills something different again.
+ *
+ * When the two disagree we refuse rather than guess. ⛔ And we deliberately do
+ * NOT repair it by backfilling rows: that would start charging people for
+ * numbers they have had for months, which is a decision for a human.
+ */
+export async function isNumberBillingTrustworthy(db: any, tenantId: string): Promise<boolean> {
+  const [billedNumbers, realDids] = await Promise.all([
+    db.phoneNumber.count({ where: { tenantId, status: "ACTIVE" } }),
+    db.pbxTenantInboundDid.count({ where: { connectTenantId: tenantId, active: true } }),
+  ]);
+  return realDids <= billedNumbers;
+}
+
 export const addPhoneNumberCapability: ConfirmCapability<AddPhoneNumberParams> = {
   id: ADD_PHONE_NUMBER_CAPABILITY_ID,
   // Buys from a carrier and writes to the PBX — cannot be rolled back.
@@ -161,6 +182,28 @@ export const addPhoneNumberCapability: ConfirmCapability<AddPhoneNumberParams> =
         error: "cannot_self_serve",
         message:
           "I can't add a number to this account automatically — someone on our team needs to set this one up. " +
+          "I've made a note; nothing has been ordered or charged.",
+      };
+    }
+
+    // ⛔ Don't quote a price we can't stand behind. The plan's per-number line
+    // counts `phoneNumber` rows, but most accounts built by the sign-up flow
+    // have their DIDs only in `PbxTenantInboundDid` — 11 of 29 live tenants as
+    // of 2026-08-07. On those, the engine thinks the account has NO numbers, so
+    // it would quote the next one as "your first number, included" to a company
+    // that already has two, and then bill something different again.
+    //
+    // Refusing is the honest move: it costs a customer a self-serve number,
+    // where the alternative is a wrong price on a recurring charge. It also
+    // deliberately does NOT "fix" the count by backfilling rows — that would
+    // start billing people for numbers they have had for months, which is a
+    // decision for a human, not for a chat.
+    if (!(await isNumberBillingTrustworthy(deps.db, ctx.tenantId))) {
+      return {
+        status: 409,
+        error: "cannot_price",
+        message:
+          "I can't add a number to this account myself — the billing for this one needs a person to look at it first. " +
           "I've made a note; nothing has been ordered or charged.",
       };
     }

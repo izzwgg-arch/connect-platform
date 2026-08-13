@@ -80,12 +80,23 @@ export async function loadAccountSetupInfo(tenantId: string): Promise<AccountSet
   ]);
 
   const extensionsInUse = extensions.map((e: any) => String(e.extNumber || "").trim()).filter(Boolean).sort();
+  // ⛔ "Your first number is included" must be judged against the numbers the
+  // company ACTUALLY has, not the `phoneNumber` rows. Most accounts the sign-up
+  // flow built have none of those rows — their DIDs live in PbxTenantInboundDid
+  // — so the pricing engine reports first-number-free to companies that already
+  // have two, and the assistant would quote $0.00 for a number that is not free.
+  // Reporting reality here keeps the assistant from saying it; adding a number
+  // on such an account is refused outright in addPhoneNumberCapability.
+  const realNumberCount = (inboundDids as Array<unknown>).length;
+  const nextNumberIsFree = snapshot.unitPrices.firstPhoneNumberFree && realNumberCount === 0;
   return {
     monthlyTotal: formatCents(snapshot.monthlyTotalCents),
     extensionPrice: formatCents(priceOfAddition(snapshot, "extension").unitCents),
     smsPrice: formatCents(priceOfAddition(snapshot, "sms").unitCents),
-    additionalNumberPrice: formatCents(priceOfAddition(snapshot, "local_number").unitCents),
-    firstNumberFree: snapshot.unitPrices.firstPhoneNumberFree,
+    additionalNumberPrice: formatCents(
+      nextNumberIsFree ? 0 : snapshot.unitPrices.additionalPhoneNumberCents,
+    ),
+    firstNumberFree: nextNumberIsFree,
     smsAlreadyOn: !!settings?.smsBillingEnabled,
     extensionsInUse,
     suggestedExtensionNumber: suggestFreeExtensionNumber(extensionsInUse),
