@@ -751,6 +751,10 @@ model Tenant {
   defaultSmsFromNumberId          String?
   defaultVoiceFromNumberId        String?
   numberPurchaseEnabled           Boolean                           @default(true)
+  /// Per-tenant switch: when ON, this tenant's tenant-wide call viewers also see
+  /// call history + recordings for extensions in OTHER tenants that are linked
+  /// into this tenant via UserSipAccount rows (scoped to those extensions only).
+  linkedSipCallVisibilityEnabled  Boolean                           @default(false)
   smsSubscriptionRequired         Boolean                           @default(true)
   smsBillingEnforced              Boolean                           @default(true)
   webrtcEnabled                   Boolean                           @default(false)

@@ -164,6 +164,12 @@ import {
   type VoicemailOwnedScope,
 } from "./voicemailResourceScope";
 import { computeVoicemailPatchUpdate } from "./voicemailAccessPolicy";
+import {
+  groupLinkedSipAccountRows,
+  cdrRowMatchesExtensionNumbers,
+  cdrRowInLinkedSipScopes,
+  type LinkedSipCallScope,
+} from "./linkedSipVisibility";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import {
@@ -8403,6 +8409,28 @@ app.post("/admin/tenants/:id/number-purchase-enabled", async (req, reply) => {
   return { tenantId: updated.id, numberPurchaseEnabled: updated.numberPurchaseEnabled };
 });
 
+// Per-tenant switch for linked-SIP cross-tenant call visibility: when ON, this
+// tenant's tenant-wide call viewers also see call history + recordings for
+// foreign extensions attached to its users via UserSipAccount (those
+// extensions only — nothing else from the foreign tenant).
+app.post("/admin/tenants/:id/linked-sip-call-visibility", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+
+  const { id } = req.params as { id: string };
+  const input = z.object({ enabled: z.boolean() }).parse(req.body);
+  const updated = await db.tenant.update({ where: { id }, data: { linkedSipCallVisibilityEnabled: input.enabled } as any });
+  await audit({
+    tenantId: updated.id,
+    actorUserId: admin.sub,
+    action: "TENANT_LINKED_SIP_VISIBILITY_UPDATED",
+    entityType: "Tenant",
+    entityId: updated.id,
+    metadata: { enabled: input.enabled },
+  });
+  return { tenantId: updated.id, linkedSipCallVisibilityEnabled: (updated as any).linkedSipCallVisibilityEnabled };
+});
+
 app.post("/settings/providers/twilio/test-send", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
@@ -8606,6 +8634,7 @@ app.get("/admin/tenants", async (req, reply) => {
       dailySmsCap: t.dailySmsCap,
       perSecondRate: t.perSecondRate,
       firstCampaignRequiresApproval: t.firstCampaignRequiresApproval,
+      linkedSipCallVisibilityEnabled: (t as any).linkedSipCallVisibilityEnabled === true,
       stats: { users: userCount, campaigns: campaignCount },
     };
   }));
@@ -18110,6 +18139,52 @@ function cdrRowMatchesExtensions(row: {
   return exts.some((ext) => new RegExp(`(^|[^0-9])${ext}([^0-9]|$)`).test(haystack));
 }
 
+/**
+ * Linked-SIP cross-tenant visibility scopes for a home tenant.
+ *
+ * Empty unless Tenant.linkedSipCallVisibilityEnabled is ON. When on, each
+ * cross-tenant UserSipAccount row attached to one of this tenant's users
+ * contributes its foreign extension: the result groups those extensions by
+ * foreign tenant, with each foreign tenant expanded into every tenantId form
+ * its CDR rows may be stored under (cuid and "vpbx:{slug}").
+ *
+ * Fails closed: any error means no extra visibility, never a 500.
+ */
+async function resolveLinkedSipCallScopes(homeTenantId: string | null | undefined): Promise<LinkedSipCallScope[]> {
+  const tenantId = String(homeTenantId || "").trim();
+  if (!tenantId || tenantId.startsWith("vpbx:")) return [];
+  try {
+    const tenant = await db.tenant.findUnique({
+      where: { id: tenantId },
+      select: { linkedSipCallVisibilityEnabled: true } as any,
+    });
+    if (!(tenant as any)?.linkedSipCallVisibilityEnabled) return [];
+    const links = await db.userSipAccount.findMany({
+      where: { user: { tenantId }, NOT: { tenantId } },
+      select: {
+        tenantId: true,
+        extension: { select: { extNumber: true, status: true } },
+      },
+    });
+    const grouped = groupLinkedSipAccountRows(
+      tenantId,
+      links.map((l) => ({
+        tenantId: l.tenantId,
+        extNumber: l.extension?.extNumber ?? null,
+        extStatus: (l.extension as any)?.status ?? null,
+      })),
+    );
+    const scopes: LinkedSipCallScope[] = [];
+    for (const [foreignTenantId, extensions] of grouped) {
+      const tenantKeys = (await resolveTenantIdFilterSet(foreignTenantId)) ?? [foreignTenantId];
+      scopes.push({ tenantKeys, extensions });
+    }
+    return scopes;
+  } catch {
+    return [];
+  }
+}
+
 function canonicalCdrCallKey(linkedId: string | null | undefined, fallbackId: string): string {
   const raw = String(linkedId || fallbackId || "").trim();
   return raw.replace(/:out\d*$/i, "") || fallbackId;
@@ -20186,7 +20261,7 @@ function pipePbxRecordingResponse(
  * <audio> element can seek without re-fetching the whole file).
  */
 async function streamCallRecording(
-  rec: { id: string; linkedId: string; tenantId: string | null; extension: string | null; pbxFilePath: string | null; pbxFileDate: string | null; status: string; startedAt?: Date | null; durationSec?: number | null; pbxVitalTenantId?: string | null; pbxTenantCode?: string | null },
+  rec: { id: string; linkedId: string; tenantId: string | null; extension: string | null; pbxFilePath: string | null; pbxFileDate: string | null; status: string; startedAt?: Date | null; durationSec?: number | null; pbxVitalTenantId?: string | null; pbxTenantCode?: string | null; fromNumber?: string | null; toNumber?: string | null; channelsSeen?: unknown; dcontextsSeen?: unknown; dcontext?: string | null },
   user: { role?: string | null; tenantId?: string | null; extension?: string | null; id?: string },
   reply: any,
   asAttachment: boolean,
@@ -20197,6 +20272,9 @@ async function streamCallRecording(
   }
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  // Set when the recording is visible ONLY through the tenant's linked-SIP
+  // cross-tenant scope (Tenant.linkedSipCallVisibilityEnabled + UserSipAccount).
+  let viaLinkedSipScope = false;
   if (!isSuperAdmin) {
     // CDR rows store tenantId as EITHER the Connect cuid OR "vpbx:{slug}"
     // (e.g. "vpbx:ribit_capital"). The user's JWT carries the Connect cuid, so a
@@ -20210,7 +20288,14 @@ async function streamCallRecording(
         ? ((await resolveTenantIdFilterSet(user.tenantId).catch(() => null)) ?? [user.tenantId])
         : [];
       if (!allowedTenantIds.includes(rec.tenantId)) {
-        reply.code(403).send({ error: "forbidden" }); return;
+        // Not the user's own tenant — last chance: the linked-SIP scope. The
+        // row must belong to a linked foreign tenant AND involve one of the
+        // linked extensions; foreign-tenant membership alone never qualifies.
+        const linkedScopes = await resolveLinkedSipCallScopes(user.tenantId);
+        viaLinkedSipScope = cdrRowInLinkedSipScopes(rec, linkedScopes);
+        if (!viaLinkedSipScope) {
+          reply.code(403).send({ error: "forbidden" }); return;
+        }
       }
     }
     let allowTenantWide = false;
@@ -20221,6 +20306,14 @@ async function streamCallRecording(
         tenantId: user.tenantId,
       } as any, "can_view_tenant_call_recordings" as any);
     } catch { /* noop */ }
+    // A linked foreign recording is an extension of the TENANT-WIDE view: it
+    // is never owned by the requesting user, so it requires the tenant-wide
+    // recordings permission outright (the owner carve-out below must not
+    // apply — "owned extension numbers" are home-tenant numbers and a
+    // coincidental match would leak).
+    if (viaLinkedSipScope && !allowTenantWide) {
+      reply.code(403).send({ error: "forbidden" }); return;
+    }
     if (!allowTenantWide) {
       let owned: string[] = [];
       try {
@@ -20245,7 +20338,9 @@ async function streamCallRecording(
   if (!asAttachment && !isSuperAdmin) {
     let isOwner = false;
     try {
-      const ownedForListen = await getUserExtensionNumbers(user as any);
+      // Owned numbers are HOME-tenant extensions — a linked foreign recording
+      // whose extension number coincides is not "yours".
+      const ownedForListen = viaLinkedSipScope ? [] : await getUserExtensionNumbers(user as any);
       isOwner = !!(rec.extension && ownedForListen.includes(rec.extension));
     } catch { isOwner = false; }
     let hasViewKey = false;
@@ -20279,7 +20374,8 @@ async function streamCallRecording(
   if (asAttachment && !isSuperAdmin) {
     let isOwner = false;
     try {
-      const ownedForDownload = await getUserExtensionNumbers(user as any);
+      // Same rule as listen: no owner carve-out for linked foreign recordings.
+      const ownedForDownload = viaLinkedSipScope ? [] : await getUserExtensionNumbers(user as any);
       isOwner = !!(rec.extension && ownedForDownload.includes(rec.extension));
     } catch { isOwner = false; }
     let hasDownloadKey = false;
@@ -20397,6 +20493,11 @@ async function resolveRecordingForUser(
   durationSec: number | null;
   pbxVitalTenantId: string | null;
   pbxTenantCode: string | null;
+  fromNumber: string | null;
+  toNumber: string | null;
+  channelsSeen: unknown;
+  dcontextsSeen: unknown;
+  dcontext: string | null;
 } | null> {
   const cdr = await (db as any).connectCdr.findUnique({
     where: { linkedId },
@@ -20413,6 +20514,9 @@ async function resolveRecordingForUser(
       durationSec: true,
       pbxVitalTenantId: true,
       pbxTenantCode: true,
+      channelsSeen: true,
+      dcontextsSeen: true,
+      dcontext: true,
     },
   });
   if (!cdr) { reply.code(404).send({ error: "not_found" }); return null; }
@@ -20442,6 +20546,11 @@ async function resolveRecordingForUser(
     durationSec: cdr.durationSec ?? null,
     pbxVitalTenantId: cdr.pbxVitalTenantId ?? null,
     pbxTenantCode: cdr.pbxTenantCode ?? null,
+    fromNumber: cdr.fromNumber ?? null,
+    toNumber: cdr.toNumber ?? null,
+    channelsSeen: cdr.channelsSeen ?? null,
+    dcontextsSeen: cdr.dcontextsSeen ?? null,
+    dcontext: cdr.dcontext ?? null,
   };
 }
 
@@ -29426,6 +29535,12 @@ app.get("/calls/history", async (req, reply) => {
   const requestedTenantId = query.tenantId && query.tenantId !== "global" ? query.tenantId : null;
   const extensionScoped = await isExtensionScopedCallViewerForUser(user);
   const userExtensions = extensionScoped ? await getUserExtensionNumbers(user) : [];
+  // Per-tenant switch: tenant-wide viewers may ALSO see linked foreign
+  // extensions (UserSipAccount cross-tenant lines). Empty unless the tenant's
+  // linkedSipCallVisibilityEnabled flag is on.
+  const linkedSipScopes = !isSuperAdmin && !extensionScoped && user.tenantId
+    ? await resolveLinkedSipCallScopes(user.tenantId)
+    : [];
 
   // Build the set of tenantId values to filter by.
   // null = global / no restriction.
@@ -29545,7 +29660,15 @@ app.get("/calls/history", async (req, reply) => {
       { toNumber: { contains: normalizedSearch, mode: "insensitive" } },
     ] });
   }
-  if (andClauses.length > 0) where.AND = andClauses;
+  // Merge, never overwrite — hasRecording above may already have put clauses
+  // in where.AND, and assigning here used to silently drop them whenever a
+  // search term was present (the recordings page sends both).
+  if (andClauses.length > 0) {
+    where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+      ...andClauses,
+    ];
+  }
 
   const skip = (query.page - 1) * query.pageSize;
   const select = {
@@ -29630,6 +29753,43 @@ app.get("/calls/history", async (req, reply) => {
     incoming = allVisibleRows.filter((r) => r.direction === "incoming").length;
     outgoing = allVisibleRows.filter((r) => r.direction === "outgoing").length;
     internal = allVisibleRows.filter((r) => r.direction === "internal").length;
+  } else if (linkedSipScopes.length > 0) {
+    // Tenant-wide viewer whose tenant has linked-SIP visibility ON: merge the
+    // whole own-tenant window with the linked foreign extensions' calls.
+    // Foreign rows are filtered in memory (same matcher as extension-scoped
+    // viewers) because queue/ring-group calls carry the extension only in
+    // channelsSeen — a SQL from/to filter would miss them. Same 5000-row cap
+    // per source as the extension-scoped path.
+    const ownRowsPromise = findConnectCdrRows({
+      where,
+      orderBy: { startedAt: "desc" },
+      take: 5000,
+    });
+    const foreignListsPromise = Promise.all(linkedSipScopes.map(async (scope) => {
+      const foreignWhere = { ...where, tenantId: { in: scope.tenantKeys } };
+      const foreignRows = await findConnectCdrRows({
+        where: foreignWhere,
+        orderBy: { startedAt: "desc" },
+        take: 5000,
+      });
+      return foreignRows.filter((r) => cdrRowMatchesExtensionNumbers(r, scope.extensions));
+    }));
+    const [ownRows, foreignLists] = await Promise.all([ownRowsPromise, foreignListsPromise]);
+    const seenIds = new Set(ownRows.map((r) => r.id));
+    const merged = [...ownRows];
+    for (const list of foreignLists) {
+      for (const r of list) {
+        if (seenIds.has(r.id)) continue;
+        seenIds.add(r.id);
+        merged.push(r);
+      }
+    }
+    merged.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+    total = merged.length;
+    rows = merged.slice(skip, skip + query.pageSize);
+    incoming = merged.filter((r) => r.direction === "incoming").length;
+    outgoing = merged.filter((r) => r.direction === "outgoing").length;
+    internal = merged.filter((r) => r.direction === "internal").length;
   } else {
     [total, rows, incoming, outgoing, internal] = await Promise.all([
       db.connectCdr.count({ where }),
