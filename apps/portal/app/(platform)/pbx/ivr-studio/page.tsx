@@ -2237,6 +2237,30 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
 
   const changed = JSON.stringify(draft) !== savedJson.current;
   const ruleFor = (day: number) => draft.businessHoursRules.find((r) => r.day === day) ?? null;
+
+  // What the DRAFT schedule says about this very moment, with the reason.
+  // "Even though store is OPEN, all I hear is After hours greetings" was a
+  // schedule with hours on Monday only — the other six days were "Closed all
+  // day", so the system was right and the owner had no way to see why. This
+  // line makes the schedule's verdict, and its reason, visible on the card.
+  const rightNow = (() => {
+    try {
+      const tz = draft.timezone || "America/New_York";
+      const now = new Date();
+      const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+      if (draft.holidayDates.includes(localDate)) return { open: false, why: `${localDate} is marked as a holiday` };
+      const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+      const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const dayName = parts.find((p) => p.type === "weekday")?.value ?? "";
+      const dow = DOW[dayName] ?? now.getDay();
+      const mm = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10) * 60 + parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+      const toMin = (s: string) => { const [h, m] = s.split(":").map(Number); return (h ?? 0) * 60 + (m ?? 0); };
+      const r = draft.businessHoursRules.find((x) => x.day === dow);
+      if (!r) return { open: false, why: `no opening hours are set for ${dayName === "Sun" ? "Sunday" : dayName === "Mon" ? "Monday" : dayName === "Tue" ? "Tuesday" : dayName === "Wed" ? "Wednesday" : dayName === "Thu" ? "Thursday" : dayName === "Fri" ? "Friday" : "Saturday"}` };
+      if (mm >= toMin(r.open) && mm < toMin(r.close)) return { open: true, why: `${r.open}–${r.close} today` };
+      return { open: false, why: `outside today's ${r.open}–${r.close}` };
+    } catch { return null; }
+  })();
   const setDay = (day: number, open: string | null, close?: string) => {
     setDraft((d) => {
       const rest = d.businessHoursRules.filter((r) => r.day !== day);
@@ -2261,6 +2285,18 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
           </select>
         </div>
 
+        {rightNow && (
+          <div className="rowmini" style={{ marginBottom: 10, alignItems: "center", gap: 8 }}>
+            <span className="pill" style={{ background: rightNow.open ? "var(--ok)" : "var(--vm)", color: "#fff" }}>
+              {rightNow.open ? t("Open right now") : t("Closed right now")}
+            </span>
+            <span className="dimtxt">
+              {rightNow.open
+                ? `Callers hear the open-hours menu (${rightNow.why}).`
+                : `Callers hear the closed-hours menu — ${rightNow.why}.`}
+            </span>
+          </div>
+        )}
         <div className="days">
           {DAY_NAMES.map((nm, day) => {
             const r = ruleFor(day);
@@ -2318,6 +2354,24 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
             <button className="btn sm" disabled={disabled || !newHoliday || draft.holidayDates.includes(newHoliday)}
               onClick={() => { setDraft((s) => ({ ...s, holidayDates: [...s.holidayDates, newHoliday].sort() })); setNewHoliday(""); }}>{t("Add")}</button>
           </div>
+          {/* Which menu plays ON those days. This selector did not exist — the
+              date picker did, holidayProfileId was saved and honoured all the
+              way down to the dialplan pointer, but no screen ever offered it.
+              So a customer could build a Holiday Menu with a holiday greeting,
+              add the dates, and the system silently played the CLOSED menu on
+              the holiday instead: "Holiday's not working, even though set up
+              and greetings are ready." The fallback (holiday → closed menu)
+              stays for tenants that never pick one. */}
+          {draft.holidayDates.length > 0 && (
+            <div className="rowmini" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
+              <span className="dimtxt">{t("On those days play")}</span>
+              <select className="sel" disabled={disabled} value={draft.holidayProfileId ?? ""}
+                onChange={(e) => setDraft((d) => ({ ...d, holidayProfileId: e.target.value || null }))}>
+                <option value="">Same as when you&apos;re closed</option>
+                {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="foot">

@@ -141,7 +141,7 @@ export function FloatingAssistant() {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   // Each mic take gets a serial number; cancelling marks the CURRENT take as
@@ -431,11 +431,28 @@ export function FloatingAssistant() {
                 <Mic size={17} />
               </button>
             )}
-            <input
+            {/* A textarea, not an <input>: the keydown always allowed
+                Shift+Enter through, but a single-line input physically cannot
+                hold a newline, so the trainer's "no Shift+Enter to add one
+                line" was right — the handler was ready and the element wasn't.
+                Enter still sends; Shift+Enter now actually makes a line. */}
+            <textarea
               ref={inputRef}
+              rows={1}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
+              onChange={(e) => {
+                setInput(e.target.value);
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                  if (inputRef.current) inputRef.current.style.height = "auto";
+                }
+              }}
               placeholder={recording ? "Recording… mic = use it, ✕ = cancel" : transcribing ? "Transcribing… ✕ to cancel" : "Type or talk…"}
               aria-label="Message"
             />
@@ -529,8 +546,9 @@ const faCss = `
 .fa-icon:disabled { opacity: .5; cursor: default; }
 .fa-cancel { color: #ef4444; border: 1px solid rgba(239,68,68,.45); }
 .fa-cancel:hover { background: rgba(239,68,68,.15); }
-.fa-input input { flex: 1; background: var(--panel-2, #16233a); border: 1px solid var(--border, #2a3c5f); color: var(--text, #e8ecf3); border-radius: 999px; padding: 9px 14px; font-size: 13px; outline: none; }
-.fa-input input:focus { border-color: var(--accent, #2f6df6); }
+.fa-input input, .fa-input textarea { flex: 1; background: var(--panel-2, #16233a); border: 1px solid var(--border, #2a3c5f); color: var(--text, #e8ecf3); border-radius: 999px; padding: 9px 14px; font-size: 13px; outline: none; }
+.fa-input input:focus, .fa-input textarea:focus { border-color: var(--accent, #2f6df6); }
+.fa-input textarea { resize: none; font-family: inherit; line-height: 1.4; max-height: 96px; border-radius: 18px; }
 .fa-send { background: var(--accent, #2f6df6); border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .fa-send:disabled { opacity: .5; cursor: default; }
 .fa-foot { text-align: center; font-size: 10.5px; color: var(--text-dim, #5c6b84); padding: 5px 0 8px; background: var(--bg, #0e1826); }
