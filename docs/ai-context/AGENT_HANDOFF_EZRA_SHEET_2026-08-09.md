@@ -299,6 +299,45 @@ Deliberately NOT fixed, and why:
 - **Teams configure/delete + queues** — ring groups/queues have no VitalPBX
   API (panel automation only, per the numbering memory); a real build.
 
+## 9e. Round 3 (2026-08-12 evening) — the sheet re-tested again
+
+⛔ **Check the clock before believing a red.** Two of today's reds — contacts
+and "viewing with you" — were tests run MINUTES before the deploy carrying the
+fix landed (agent rebuilt 02:58Z; his tests ran before that). Both re-proven
+through the real chat as a signed-in user: `list_contacts` answered with real
+names, and "what page am I looking at" answered "You're currently on the
+Voicemail page… I can't see its contents." Rows 10 (company number) and 11
+(one-word prompts) went GREEN under his own re-test.
+
+**The closed-hours fix WORKS in production** — the didmap pointer flipped to
+his new "After hours" menu on its own, zero manual publishes. Today's
+inversion, "Even though store is OPEN, all I hear is After hours greetings",
+is the schedule itself: **hours exist ONLY for Monday** (`day:1`), so every
+other day is closed-all-day by configuration and the system obeyed it. The
+multi-day save path is fine (A plus has 5 rules, inii mini 6).
+
+Fixed in `80ec63ba` (portal):
+- **HoursCard live verdict** — "Closed right now — no opening hours are set
+  for Tuesday", computed from the DRAFT so edits update it before saving.
+  This is the line that would have answered him instantly.
+- **The holiday menu selector finally exists.** The DATE picker was there and
+  `holidayProfileId` was honoured all the way down to the didmap pointer — but
+  NO screen ever offered it, so holidays silently played the closed menu:
+  "Holiday's not working, even though set up and greetings are ready."
+  "On those days play: <menu>" appears once any holiday date exists.
+- **Shift+Enter in the assistant chat box** — the keydown always allowed it,
+  but the element was a single-line `<input>`, which cannot hold a newline.
+  Now a textarea; Enter sends.
+
+Still open from round 3, deliberately:
+- **Right-click disabled in the PC app** (Electron shell context menu).
+- **Mark messages read/unread from chat** (user-scoped write door; unbuilt).
+- **"Cancel all requests"** — the escalation feature landed overnight
+  (`22333b19`); cancellation belongs in that machinery, not bolted beside it.
+- **Seeing page CONTENTS / live call list / summarizing the screen** — a real
+  product feature (shipping page data to the agent), not a patch.
+- **Teams/queues** — unchanged; no VitalPBX API.
+
 ## 10. Open
 
 1. **Tell Ezra the lesson feature works**, with the phrasings that fire it. He
