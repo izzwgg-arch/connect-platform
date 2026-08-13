@@ -172,13 +172,47 @@ reopened** — it loads the hosted portal, but an already-open window keeps the
 old bundle. "It's deployed" without "now restart it" leaves the customer looking
 at the identical bug.
 
-## 10. Follow-up worth doing
+## 10. The other three screens — CHECKED, all healthy (2026-08-12)
 
-The other three screens on the `:has()` list — `.ch-shell` (Calls), `.vm-shell`
-(Voicemail), `.billing-ws-shell` (Billing) — should each be opened at a **short,
-non-maximised window** and checked for the same thing. `.ch-shell` is known good
-(it is the reference implementation). The other two were not checked in this
-session.
+The Team Directory was the only screen with the defect. Verified by measurement
+at a 640 px window, not by reading the CSS:
+
+| screen | scroller | scrolls | reaches bottom row |
+|---|---|---|---|
+| Voicemail `.vm-shell` | `.vm-feed` | 1,490 px | yes |
+| Voicemail detail panel | `.vm-detail` / `.vm-detail-placeholder` | 742 px | yes |
+| Billing `.billing-ws-shell` | `.billing-ws-main-scroll` | 1,430 px | yes |
+| Calls `.ch-shell` | — | reference implementation | — |
+
+Every parent in both chains clips with **0 px stranded**, i.e. nothing is hidden
+behind a clipped container the way `.td-page` was.
+
+Their chains, for reference:
+
+- **Voicemail** — `.vm-shell` (h100/mh0/hidden/flex-col) → `.vm-hero` +
+  `.vm-toolbar` (`flex-shrink: 0`) → `.vm-workspace` (`flex:1; min-height:0;
+  overflow:hidden`, a 2-column grid) → `.vm-feed` **and** the right-hand
+  `.vm-detail` panel, both `min-height: 0; overflow-y: auto`.
+- **Billing** — `.billing-ws-shell` (h100/mh0/hidden/flex-col) →
+  `.billing-ws-main--wide` → `.billing-ws-toolbar` (`flex-shrink: 0`) +
+  `.billing-ws-main-scroll` (`flex:1; min-height:0; overflow-y:auto`), which does
+  wrap `{children}` on the success path as well as the loading/error branches.
+
+⛔ **The contract list is exactly these four screens.** The other
+`.console-content:has(…)` rules — wallboard, checklist, scripts, voicemail-drops,
+forms — set **background only** and never touch `overflow`, so those pages keep
+normal page scrolling and are not under this contract.
+
+Two Billing-specific notes for anyone extending it:
+
+- `.billing-ws-main` gets its `flex: 1` from
+  `.billing-ws-shell--context-wide .billing-ws-main--wide`, **not** from its own
+  rule. A page rendering `.billing-ws-main` without `--wide` loses it.
+- `AdminBillingShell` only wraps routes **absent** from its `REBUILT` list.
+  Rebuilt pages return a bare `<Suspense>`, so no `.billing-ws-shell` element
+  exists, the `:has()` never matches, and `.console-content` scrolls them
+  normally. (`<Suspense>` renders no DOM node, which is why the shell is still a
+  direct child and the `:has(>)` matches for the non-rebuilt pages.)
 
 Any screen **added** to that list in future must ship all three parts of the
 contract in §2, or it arrives with this exact bug.

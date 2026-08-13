@@ -832,9 +832,24 @@ When you find a new fragile area, add it here.
 - **Only clip a root whose overlays are `position: fixed`.** The Team Directory's
   detail panel, backdrop and toasts all are, so `overflow: hidden` never reaches
   them. Verify this per screen before adding clipping.
-- **Open — not checked.** `.vm-shell` (Voicemail) and `.billing-ws-shell`
-  (Billing) have never been opened at a short window to confirm they honour the
-  contract. `.ch-shell` (Calls) is the known-good reference implementation.
+- **Checked 2026-08-12 — the other three screens on the list are HEALTHY, so the
+  Team Directory was the only one.** Verified by measurement at a 640 px window,
+  not by reading: Voicemail `.vm-feed` scrolls 1,490 px and its detail panel
+  (`.vm-detail` / `.vm-detail-placeholder`) another 742 px, both reaching the
+  bottom row; Billing `.billing-ws-main-scroll` scrolls 1,430 px and reaches
+  bottom; every parent clips with 0 px stranded. `.ch-shell` (Calls) is the
+  reference implementation.
+- **The list is exactly four screens.** The other `.console-content:has(…)` rules
+  (wallboard, checklist, scripts, voicemail-drops, forms) set **background only**
+  and never touch `overflow`, so they are not under this contract and keep normal
+  page scrolling.
+- **Two things to know if you extend Billing.** `.billing-ws-main` gets its
+  `flex: 1` from `.billing-ws-shell--context-wide .billing-ws-main--wide`, not
+  from its own rule — a page rendering `.billing-ws-main` without `--wide` would
+  lose it. And `AdminBillingShell` only wraps routes **absent** from its
+  `REBUILT` list; rebuilt pages return bare `<Suspense>`, so no
+  `.billing-ws-shell` exists, the `:has()` never matches and `.console-content`
+  scrolls them normally.
 
 ## Voicemail / recordings
 

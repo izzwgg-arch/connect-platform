@@ -104,9 +104,14 @@ Portal CSS only, one screen; nothing touching call routing, the PBX or billing.)
 - ⏳ **NOT PROVEN: nobody has opened the real screen since the deploy.** Proven
   by measurement against the actual shipped stylesheet (5,412 rules parsed) plus
   the live CSS fetched over HTTPS — not by a human scrolling it.
-- **Follow-up not done:** `.vm-shell` (Voicemail) and `.billing-ws-shell`
-  (Billing) were never checked at a short window for the same defect.
-  `.ch-shell` is the known-good reference.
+- ✅ **The other three screens were checked (2026-08-12) and are HEALTHY** — the
+  Team Directory was the only one. Measured at a 640 px window, not read:
+  Voicemail's feed scrolls 1,490 px and its detail panel another 742 px; Billing's
+  `.billing-ws-main-scroll` scrolls 1,430 px; all parents clip with 0 px stranded.
+  ⛔ **The contract list is exactly four screens** — the other
+  `.console-content:has(…)` rules (wallboard, checklist, scripts, voicemail-drops,
+  forms) set **background only** and never touch `overflow`, so those pages keep
+  normal scrolling and are not affected.
 
 ## ⛔⛔ AGENT HANDOFF — voicemail-to-email is sent BY THE PBX, not by Connect (2026-08-09) — READ FIRST for ANY "customer didn't get their voicemail email", before looking inside Connect for it, and before believing alert emails are off
 
