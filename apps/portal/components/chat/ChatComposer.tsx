@@ -412,7 +412,22 @@ export function ChatComposer({
     // Voice notes upload through the same tenant-scoped attachment pipeline.
     if (recording || recorderRef.current) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // ⛔ Ask for voice processing explicitly. A bare `audio: true` leaves
+    // automatic gain, noise suppression and echo cancellation to whatever the
+    // browser/Electron shell happens to default to, which is how a laptop-mic
+    // recording ends up quiet and roomy — "far away" — before the server ever
+    // sees it. autoGainControl is the one that makes a voice sound close.
+    // 48 kHz mono matches what the server re-encodes to; both are hints and a
+    // browser that ignores them still records fine.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+        sampleRate: 48000,
+      },
+    });
     // Prefer audio/mp4 so the server-side worker converter is fed the same
     // container as the mobile recorder. webm is the cross-browser fallback.
     const mimeType = MediaRecorder.isTypeSupported("audio/mp4")

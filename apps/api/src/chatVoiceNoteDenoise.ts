@@ -7,9 +7,28 @@
  * stored original by the worker) all get the denoised audio.
  *
  * Implementation: shells out to ffmpeg (already present in the API container).
- * The chain is intentionally gentle so natural voice is preserved:
- *   - highpass=f=80   → removes low-frequency rumble / handling noise
- *   - afftdn=nr=10    → light FFT denoiser for steady background hiss
+ *
+ * ⛔ The noise floor is the parameter that decides whether this helps or ruins
+ * the recording. `afftdn`'s `nf` is "everything below this level is noise",
+ * valid -80..-20, DEFAULT -50. This chain used to pass **nf=-25** — nearly the
+ * most destructive value available. Ordinary speech averages about -20 dB, so
+ * the denoiser ate the body and tails of the voice and produced the hollow,
+ * watery "talking from inside a dungeon" sound Izzy reported on 2026-08-13.
+ * Measured on that real voice note: -18.4 LUFS with an 11.0 LU range, quiet
+ * passages sitting at -27 LUFS. Keep `nf` at the default unless you have
+ * measured a specific recording and can justify moving it.
+ *
+ * The chain, in order (order matters — clean, then shape, then level):
+ *   - highpass=f=90    → low-frequency rumble / handling noise
+ *   - afftdn nf=-50    → gentle hiss removal at the SAFE default floor
+ *   - equalizer 300Hz  → -2dB, takes out boxy "mud"
+ *   - equalizer 2.6kHz → +3dB presence, this is what makes speech intelligible
+ *   - acompressor      → lifts quiet syllables so they stop sounding distant
+ *   - loudnorm LRA=7   → consistent level, tighter range than the old LRA=11
+ *
+ * ⛔ Force `-ar 48000`. Without it the output inherits the source rate; a real
+ * upload arrived at 96 kHz, which is pointless for mono speech and an odd
+ * decode path for browsers.
  *
  * Failure mode: never throws. Returns null when ffmpeg is unavailable or the
  * conversion fails, and the caller keeps the original upload untouched.
@@ -40,6 +59,19 @@ export function isVoiceNoteUpload(filename: string, mimeType: string): boolean {
   return mime.startsWith("audio/") && isVoiceNoteFilename(filename);
 }
 
+/**
+ * Exported so the chain itself is assertable — the destructive setting that
+ * caused the "dungeon" recording was a single number buried in an arg array.
+ */
+export const VOICE_NOTE_FILTER_CHAIN = [
+  "highpass=f=90",
+  "afftdn=nr=12:nf=-50",
+  "equalizer=f=300:t=q:w=1.0:g=-2",
+  "equalizer=f=2600:t=q:w=1.2:g=3",
+  "acompressor=threshold=-20dB:ratio=3:attack=10:release=180:makeup=2",
+  "loudnorm=I=-16:TP=-1.5:LRA=7",
+].join(",");
+
 export async function denoiseVoiceNote(input: Buffer): Promise<Buffer | null> {
   const id = crypto.randomBytes(6).toString("hex");
   const inPath = path.join(os.tmpdir(), `cc-vn-in-${id}`);
@@ -55,18 +87,16 @@ export async function denoiseVoiceNote(input: Buffer): Promise<Buffer | null> {
         "-i",
         inPath,
         "-af",
-        // highpass=80  -> remove low-frequency rumble / handling noise
-        // afftdn       -> light FFT denoiser for steady background hiss
-        // loudnorm     -> normalize speech to a consistent, louder level
-        //                 (-16 LUFS target) with true-peak limiting so it never
-        //                 clips. This is what makes voice notes play louder.
-        "highpass=f=80,afftdn=nr=10:nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
+        VOICE_NOTE_FILTER_CHAIN,
         "-c:a",
         "aac",
         "-b:a",
         "96k",
         "-ac",
         "1",
+        // Never inherit the source rate — see the note above about a real 96 kHz upload.
+        "-ar",
+        "48000",
         "-movflags",
         "+faststart",
         outPath,
