@@ -1,5 +1,162 @@
 # Connect 2 — working rules for Claude
 
+## ⛔⛔ AGENT HANDOFF — voicemail-to-email is sent BY THE PBX, not by Connect (2026-08-09) — READ FIRST for ANY "customer didn't get their voicemail email", before looking inside Connect for it, and before believing alert emails are off
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_PBX_2026-08-09.md`**
+(**Read-only investigation — no deploy, no code change, no PBX write.** Evidence
+current to 2026-08-09; §7 and §11 re-verified 2026-08-12.)
+
+- ⛔ **THE RULE: the voicemail emails customers receive come from Asterisk on the
+  PBX. Connect has nothing to do with them.** This session opened inside Connect,
+  found Connect's own voicemail-email job had never processed a single row, and
+  was about to report that as the cause. It is a *different, unshipped feature*.
+  Izzy had to redirect: *"you're supposed to look inside the PBX."* **Two systems
+  can email the same voicemail — establish which one the customer actually
+  receives before diagnosing anything.**
+- **The live chain:** `app_voicemail` → the mailbox's email address in
+  `/etc/asterisk/vitalpbx/voicemail__50-<pbxTenantNum>-main.conf`
+  (`<ext> => <pin>,<Name>,<EMAIL>,,attach=yes|…` — the **3rd comma field**) →
+  `mailcmd=/usr/share/vitalpbx/scripts/voicemail2email` → postfix →
+  `sender_canonical_maps /^.+$/` rewrites the sender to
+  `support@connectcomunications.com` → authenticated `smtp.gmail.com:587`.
+  ⛔ **An EMPTY 3rd field means no email is ever generated** — no error, no log
+  line, nothing to find later. ⛔ `voicemail2email` is **ionCube-encrypted PHP**
+  and cannot be read; judge it only by `/var/log/mail.log`.
+- ⛔ **THE REAL "missing emails": 58 mailboxes platform-wide have no address**, so
+  **108 of 2,674 voicemails in 30 days (4%) never notified anyone.** Worst: **A
+  Plus ext 108 "Home" 45**, **Gesheft ext 112 11**, Create A Box ext 101 8 (one
+  255s). Gesheft's blind mailboxes: **103,104,105,106,108,112,116,117,118,897**.
+  ⛔ **Gesheft ext 102 emails to `Orders@pileupny.com`** — another company's
+  domain; delivers fine, **needs Izzy's confirmation it's intentional.**
+- **The mechanism itself is healthy — do not re-litigate transport.** On
+  2026-08-09: **33 voicemails → 29 in email-configured mailboxes → 29 sent, 30/30
+  postfix deliveries `status=sent`, zero failures**, all queues empty, and
+  `/var/mail/root` holds **381 cron mails and not one bounce** in over a year.
+  Gesheft ext 101 was **12-for-12**. Every recipient domain is Google Workspace
+  with `include:_spf.google.com` and we relay through authenticated Gmail, so
+  `250 OK … gsmtp` means Google took it — after that it is inbox-or-spam on the
+  customer side. **Size is a non-issue:** ~**4.3 KB of email per second of audio**
+  (it compresses; it does not attach the raw 16 KB/s wav) against a **10 MB**
+  limit.
+- ⛔ **NO MAIL HISTORY SURVIVES PAST THE CURRENT DAY — this is why the question
+  had no hard answer.** `mail.log.1` is **1 byte**; the journal is
+  **runtime-only** (no `/var/log/journal`) and starts `00:00:01`;
+  `/var/log/asterisk/full` starts `00:00:01` with **no `full.1`**; `mail.*` is
+  routed nowhere but `mail.log`; **no remote syslog.** Every midnight the previous
+  day's evidence is destroyed. **Fixing retention is the highest-value follow-up
+  in the handoff** — without it the next identical complaint gets the same
+  non-answer.
+- ⛔ **Connect's own sender has NEVER run:** `AGENT_VOICEMAIL_EMAIL` is set
+  **nowhere** (container, `.env.platform`, compose), while
+  `AGENT_VOICEMAIL_TRANSCRIBE=1` **is** — which is why transcripts land and
+  Connect emails never do. Proven, not inferred: `emailedAt` is stamped even for
+  skips, and it is **null on all 289 voicemails 08-09→08-13**. ⛔ Before anyone
+  enables it: a failed send returns **without stamping**, so the row silently
+  ages out of the **30-minute** window forever with no `emailError` — and the
+  agent's notifier has **no SMTP configured at all**, so today it would send
+  nothing while burning each window.
+- ⛔ **Gesheft ext 101 is 853 messages from a hard wall:** `maxmsg=9999` and its
+  INBOX holds **9,146** (102 holds 2,612). At ~35/day that is **3–4 weeks** until
+  Asterisk plays "mailbox full" and **the message is not recorded at all** — no
+  voicemail, no email, no Connect row, nothing in the log. It will present as "we
+  stopped getting voicemail emails".
+- **Verified, do not re-derive:** the PBX runs **EDT**;
+  `Voicemail.receivedAt` **is exactly** the spool `origtime` epoch (**40/40** over
+  Aug 8–9, absolute UTC); **Connect's ingest is reliable** — 40 spool ↔ 40 rows,
+  1:1 on ext/duration/caller/origtime, so nothing "failed to save".
+- ⛔ **"ALERT EMAILS ARE CURRENTLY OFF" (the 2026-08-06 section below) is STALE —
+  alerting is back ON.** The kill switch self-expired as predicted and nothing
+  replaced it; the script sits inert at `/root/alert-email-killswitch.sh`. Izzy
+  confirmed 2026-08-12 he is still receiving them. Sent/day: `08-06 399` → **`08-08
+  40, 08-09 40, 08-10 40, 08-11 40`** → `08-12 sent=6 skipped=34`. **The
+  40-per-rolling-24h ceiling IS holding** — but 40/day still comes out of the same
+  500/day mailbox as customer invoices and every voicemail notification.
+- ⛔ **Never check for a process with `pgrep -f` over ssh** — it matched its own
+  command line and reported the kill switch alive. Use
+  `ps -eo pid,etime,cmd | grep "[a]lert-email-killswitch"`. Documented three times
+  already and it still cost a wrong reading.
+- **The 845-274-6215 case:** the voicemail is **NOT lost** —
+  `gesheft-voicemail/101/INBOX/msg9132.wav`, 1,563,884 bytes, **97s**, left **Sat
+  2026-08-08 23:06:40 EDT** into ext 101, and in Connect
+  (`cmsl83ilealfdqn1313zni9az`). **It left no voicemail "today"** — on 08-09 at
+  11:06:42 it called again and **ext 102 answered, talking 6m43s**. Whether its
+  email sent is **unprovable** (behind the midnight wall). The check only Izzy can
+  run, in `Orders@gesheftkosher.com` incl. Spam/Trash:
+  `from:support@connectcomunications.com after:2026/08/08 before:2026/08/10`.
+
+## ⛔⛔ AGENT HANDOFF — billing ignored the app's own theme, and 22 tenants deleted on the PBX were still alive in Connect (2026-08-12) — READ FIRST before styling ANY portal section, before believing a billing count, before adding a field to the tenant-settings PUT, or for "I deleted it on the PBX and it's still here"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_BILLING_THEME_PBX_ORPHANS_2026-08-12.md`**
+(commit `438a5e2e` on `feat/ivr-migration-takeover` — **api + portal DEPLOYED and
+container-verified, including a database migration.** First tenant sweep run live
+under Izzy's explicit go-ahead: **21 companies closed out, none erased.**)
+
+- ⛔ **THE RULE: no section gets its own palette.** `.cbill` had one, switched on
+  `@media (prefers-color-scheme: dark)` — the **operating system's** setting.
+  Connect's theme is a user preference written to `<html data-theme>` by
+  `useAppContext.tsx:390`, so the two agreed only by luck. Proven live: with the
+  app on dark, billing stayed a **white slab** and the page heading went
+  dark-on-dark and vanished. Everything structural now aliases `--panel`,
+  `--panel-2`, `--text`, `--text-dim`, `--border`, `--accent`, `--success`,
+  `--warning`, `--danger`. ⛔ Connect's convention is **bare `:root` is DARK,
+  light is opt-in**, so dark overrides are written
+  `:root:not([data-theme="light"])` — not `[data-theme="dark"]` — or the first
+  paint is wrong before hydration. Status *text* stays hand-tuned per theme:
+  the app's raw `--success`/`--warning` are display colours that fail contrast
+  as 11px pill text. See [[billing-must-use-connect-theme-tokens]].
+- ⛔ **Never infer a date from a falsy value.** A tenant with no billingSettings
+  reported day `0`, and `ordinal(0)` does `Number(n) || 1` → "1st" — so **19
+  accounts with no billing setup at all rendered as a calm, unstyled "1st"**
+  while 15 genuine day-1 accounts got a red pill. The banner said 15; the truth
+  was 34. Absent is its own state now.
+- ⛔ **Three controls on the customer billing page were decorative** — timezone,
+  911 fee, regulatory fee: shown, editable, dirty-marking, and dropped on save.
+  **Two server-side gaps**, both silent: `billingTimeZone` was **not in the PUT's
+  zod schema** (zod strips unknown keys), and **`per_phone_number` was missing
+  from the fee `basis` enum** while being the exact basis onboarding stamps for
+  E911 (`per_did` counts only *billable* numbers → zero on first-number-free).
+  ⛔ A new metadata field must be **destructured out** of the route input —
+  `...pricing` is spread straight into the Prisma upsert. ⛔ The fee validator
+  needs the **whole item**; a partial object 400s the entire save.
+- ⛔ **`/admin/billing/platform/tenants` had NO `where` clause** — every tenant
+  row ever created. 50 against a live PBX of 28, while the sidebar has always
+  filtered. That gap *was* the inflated counts on every billing screen.
+- ⛔ **Deleting a tenant on VitalPBX only ever removed the directory row.** The
+  Connect tenant survived with its users, numbers, history and billing, and its
+  `TenantPbxLink` stayed **`LINKED`** pointing at a PBX tenant that no longer
+  existed. 22 ghosts, 22 signable user accounts. Now swept — but **timidly**,
+  because the trigger is a list fetched from the PBX and a short list makes live
+  customers look deleted: only links pointing at an absent PBX tenant (a
+  **never-linked** tenant was never on the PBX, so it is left alone); an empty
+  or half-size answer is refused; **more than `MAX_AUTO_REMOVALS` (3) does
+  nothing and waits for a person**; marking removed destroys nothing; the erase
+  is a separate confirmed call that **re-reads the money at deletion time**.
+  ⛔ **The PBX check does the real work — the money rule is the second lock.**
+  Relax Tires, RSBK and Fixup Group have zero billing history and are real live
+  customers; they are safe only because they are still on the PBX.
+  See [[pbx-tenant-deletion-must-cascade-to-connect]].
+- ⛔ **`ConnectChatThread` was the ONLY tenant relation without `onDelete`**, so
+  it defaulted to `Restrict` — one chat thread would have made every tenant
+  delete fail on a foreign key. The other 240 cascade. Fixed in migration
+  `20260808120000_tenant_pbx_removal`, verified live (`confdeltype = 'c'`).
+- **Live result:** billing 50 → **29** companies, missing-a-card 32 → **11**,
+  no-real-billing-day 34 → **13**, "Needs you" 57 → **30**. Screen is
+  `/admin/pbx/removed-tenants`. ⛔ **Ezra stress test 1 (T101) and Loopcom Demo
+  (T102) are still ON the PBX** so the rule correctly kept them; delete them
+  there and the sweep follows. "Connect" (T1) is VitalPBX's own system tenant.
+- **Env:** ⛔ deploy enqueue field is **`service`**, not `target` (`target`
+  answers `invalid_service`, which reads like a broken route). ⛔ `PbxInstance`
+  filters on **`isEnabled`**. ⛔ PBX tenants live in **`ombu_tenants`** keyed on
+  **`tenant_id`** — not `tenants`/`id`. **SSH and `git push` both work directly
+  from the Bash tool here**; no sandbox hop and no bundle route needed.
+  `apps/api` carries **72 pre-existing** typecheck errors (this adds none);
+  portal clean; billing suite **408 pass / 0 fail**.
+- ⏳ **Not proven:** nothing has been **permanently erased** (the 21 sit closed
+  out, awaiting per-tenant deletes); the customer page's save has **not** been
+  exercised against a real customer — change the timezone or a fee and reload
+  before trusting it; and the sweep has **never run unattended** (every run so
+  far was over the cap and hand-confirmed).
+
 ## ⛔ AGENT HANDOFF — the phone rang while the PBX had nowhere to send the call (2026-08-10) — READ FIRST for ANY "it rang but never connected", before treating a ring as proof the phone was reached, before flipping a tenant onto the 443 SIP route, or before looking a tenant up by name
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_DEMO_INCOMING_CALLS_443_2026-08-10.md`**
@@ -119,9 +276,11 @@ not stale for this).
   instant-delivery half). Acceptance: `voicemail-notify: sync complete` with
   `upserted_count ≥ 1` (not `helper_error:…timeout`), then
   `voicemail: arrival audio copied to local store`, then Play is instant.
-  Also open: Gesheft 101/102 mailbox cleanup (9,200 + 2,600 msgs), and the
-  VitalPBX REST voicemail read returning 0 fleet-wide (why everything rides
-  the helper spool path at all).
+  Also open: Gesheft 101/102 mailbox cleanup (9,200 + 2,600 msgs) — ⛔ **now on a
+  clock: `maxmsg=9999` and 101 holds 9,146, so at ~35/day it hits "mailbox full"
+  in 3–4 weeks and callers stop being recorded at all** (voicemail-email handoff
+  §9) — and the VitalPBX REST voicemail read returning 0 fleet-wide (why
+  everything rides the helper spool path at all).
 
 ## ⛔⛔ AGENT HANDOFF — the dialer locked ITSELF out and sat on "Connecting" (2026-08-10) — READ FIRST for ANY "softphone stuck on Connecting / orange" report, before adding a retry path that calls an API, and before blaming a customer's internet
 
@@ -174,7 +333,15 @@ container-verified**; portal-only, nothing touching call routing or the PBX.)
   sign-in**, with **zero 429s**. ⛔ Do NOT "fix" a recurrence by raising the
   server-side limits; the limit is the safety net that caught this.
 
-## ⛔⛔ ALERT EMAILS ARE CURRENTLY OFF (2026-08-06) — READ FIRST for ANY email/voicemail-notification report, before adding an ADMIN_ALERT, or before believing a mail fix worked
+## ⛔⛔ THE ONE MAILBOX SENDS EVERYTHING, CAPPED AT 500/DAY (2026-08-06) — READ FIRST for ANY email/voicemail-notification report, before adding an ADMIN_ALERT, or before believing a mail fix worked
+
+> ⛔ **STALE HEADLINE CORRECTED 2026-08-12 — this section used to say "ALERT
+> EMAILS ARE CURRENTLY OFF". THEY ARE ON.** The kill switch self-expired as its
+> own note predicted and nothing replaced it. Sent/day: `08-06 399` → **`08-08
+> 40, 08-09 40, 08-10 40, 08-11 40`** → `08-12 sent=6 skipped=34`. The
+> **40-per-rolling-24h ceiling IS holding**, and Izzy confirmed on 2026-08-12
+> that he still receives these. See the voicemail-email handoff at the top of
+> this file, §11.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_MAIL_QUOTA_BOUNCE_LOOP_2026-08-06.md`**
 (commit `0197dd56` on `feat/ivr-migration-takeover` — **api DEPLOYED and
