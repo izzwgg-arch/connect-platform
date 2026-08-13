@@ -66,6 +66,10 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // shared-secret auth, fail-closed.
   const isInternalAgentContactsPath =
     path === "/internal/agent/contacts-info" || path.endsWith("/internal/agent/contacts-info");
+  // Read-only "which numbers could this account add" door. Looks at carrier
+  // stock; never buys — the purchase happens only behind the password confirm.
+  const isInternalAgentNumberSearchPath =
+    path === "/internal/agent/search-phone-numbers" || path.endsWith("/internal/agent/search-phone-numbers");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -116,6 +120,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalAgentExtFeaturePath
     || isInternalAgentAccountSetupPath
     || isInternalAgentContactsPath
+    || isInternalAgentNumberSearchPath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath
