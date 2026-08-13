@@ -312,6 +312,17 @@ Once Phase 2's pattern exists, repeat it where the data is already sitting there
 
 ## 7. Permission-grant-by-chat — ✅ BUILT (2026-08-06). Spec kept below as the record.
 
+> **⛔ SUPERSEDED IN SHAPE (2026-08-07).** The machinery below was generalised:
+> the gates now live in `apps/api/src/agentConfirmations.ts` and permission-grant
+> is the FIRST OF FOUR capabilities on it (the others add an extension, turn
+> texting on, and add a phone number). Its 43 stress tests pass unchanged through
+> that refactor, which is what makes it safe to believe. **Anything below about
+> the password check, the single-use claim, the params hash or tenant scoping is
+> still accurate — it just lives in the shared core rather than in
+> `agentGrantRoutes.ts`.** For the billable capabilities, and the billing rule
+> that inverts the obvious design, read
+> **`AGENT_HANDOFF_AGENT_PROVISIONING_2026-08-07.md`** first.
+
 **Both halves are now built, and the spec below is what they implement.** The
 agent still only PREPAREs; the grant is applied by the API after the portal
 re-checks the requester's own password.
