@@ -336,14 +336,6 @@ export type SnapshotStatus = {
   storageRoot: string;
 };
 
-export type BlockerRow = {
-  id: string;
-  label: string;
-  pathOrRef: string;
-  reason: string;
-  sizeBytes: number | null;
-};
-
 export type ForensicDossier = {
   path: string;
   sizeBytes: number | null;

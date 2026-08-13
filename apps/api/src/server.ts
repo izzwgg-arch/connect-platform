@@ -199,7 +199,6 @@ import {
   isMohAssetPbxReady,
   isNativeMohRuntimeClass,
   isValidMohRuntimeClass,
-  canonicalSmsPhone,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
   decideAdminAlert,
   ADMIN_ALERT_DAILY_WINDOW_MS,
