@@ -126,6 +126,26 @@ export function buildTools(deps: BuildToolsDeps): ToolSpec[] {
         deps.readTools.cdrHistory(ctx.tenantId, asExtension(args.extension), asWindowHours(args.windowHours)),
     },
     {
+      name: "voicemails",
+      description:
+        "This account's voicemail inbox, newest first: who called, when, how long, whether it was heard, and the transcript where one exists. Use for 'do I have voicemails', 'summarize my voicemails', or 'who left me a message'. Summarize from the transcripts; where a message has no transcript say so rather than guessing what it contains. Read-only — it never marks anything heard.",
+      minRole: "customer",
+      parameters: {
+        type: "object",
+        properties: {
+          extension: { type: "string", description: "Optional mailbox extension number to filter to." },
+          limit: { type: "number", description: "How many recent messages to return. Default 15, max 25." },
+        },
+        additionalProperties: false,
+      },
+      run: (args, ctx) =>
+        deps.readTools.voicemailSummary(
+          ctx.tenantId,
+          asExtension(args.extension),
+          typeof args.limit === "number" ? args.limit : 15,
+        ),
+    },
+    {
       name: "call_quality",
       description:
         "Measured audio quality for this account, bucketed by hour: round-trip time, jitter, packet loss in both directions, and how many calls were poor. Broken out by user, direction, codec, network type, and whether the call used a relay. Use to answer 'the audio was bad' with evidence, or to compare relay vs direct for a specific person.",

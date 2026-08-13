@@ -119,6 +119,33 @@ function attachConsoleCapture(win: BrowserWindow, tag: string): void {
   }
 }
 
+/** Right-click Cut/Copy/Paste. Electron shows NO context menu unless the shell
+ *  builds one, so the PC app shipped with right-click doing nothing at all —
+ *  "Cannot right click in the PC app (Copy, Paste)" on the trainer's sheet,
+ *  twice. Roles only (no custom handlers): the OS performs the edit, so this
+ *  cannot read or log clipboard contents. */
+function attachEditContextMenu(win: BrowserWindow): void {
+  try {
+    win.webContents.on("context-menu", (_e, params) => {
+      const items: Electron.MenuItemConstructorOptions[] = [];
+      if (params.isEditable) {
+        items.push(
+          { role: "cut", enabled: params.editFlags.canCut },
+          { role: "copy", enabled: params.editFlags.canCopy },
+          { role: "paste", enabled: params.editFlags.canPaste },
+          { type: "separator" },
+          { role: "selectAll" },
+        );
+      } else if (params.selectionText.trim()) {
+        items.push({ role: "copy" }, { type: "separator" }, { role: "selectAll" });
+      }
+      if (items.length > 0) Menu.buildFromTemplate(items).popup({ window: win });
+    });
+  } catch {
+    /* a broken context menu must never break the window */
+  }
+}
+
 function settingsPath(): string {
   return path.join(app.getPath("userData"), "settings.json");
 }
@@ -212,6 +239,7 @@ function createFullWindow(show = true): BrowserWindow {
   });
 
   attachConsoleCapture(fullWindow, "full");
+  attachEditContextMenu(fullWindow);
 
   fullWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -288,6 +316,7 @@ function createMiniWindow(show = true): BrowserWindow {
     if (!miniWindow || miniWindow.isDestroyed()) return;
     miniWindow.webContents.send("desktop:mini-theme", miniTheme);
   });
+  attachEditContextMenu(miniWindow);
   // Cache-bust the mini route: Electron's HTTP cache otherwise serves a stale
   // mini-dialer HTML across relaunches, so freshly deployed portal fixes wouldn't
   // appear without a manual hard-reload. A unique param forces a fresh fetch.

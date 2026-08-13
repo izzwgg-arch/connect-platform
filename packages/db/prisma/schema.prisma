@@ -6419,6 +6419,10 @@ enum AgentEscalationStatus {
   QUEUED
   SENT
   FAILED
+  /// Withdrawn by the requester (agent tool cancel_my_requests) before it was
+  /// sent. The dispatcher only sweeps QUEUED/FAILED, so a cancelled row is
+  /// naturally never dispatched.
+  CANCELLED
 }
 
 /// One customer request the assistant could not handle itself, researched and

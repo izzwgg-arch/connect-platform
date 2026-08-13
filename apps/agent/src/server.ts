@@ -21,6 +21,7 @@ import { buildProvisioningTools } from "./tools/provisioningTools";
 import { makeAccountSetupInfoClient, makePhoneNumberSearchClient } from "./pbx/accountSetupInfoClient";
 import { buildContactsTools } from "./tools/contactsTools";
 import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
+import { buildSelfServiceTools } from "./tools/selfServiceTools";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
 import { ActionService } from "./actions/service";
@@ -259,6 +260,9 @@ async function main() {
       // "Who is in my contacts?" — read-only, tenant-locked. The write side
       // deliberately does not exist (see contactsTools.ts).
       ...buildContactsTools({ loadContactsInfo: makeContactsInfoClient() }),
+      // "Mark my chats read" / "cancel my requests" — the only self-scoped
+      // writes in the tool surface; see the file's header for the fence.
+      ...buildSelfServiceTools({ prisma }),
     ];
     engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools);
 

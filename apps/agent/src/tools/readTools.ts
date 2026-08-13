@@ -31,6 +31,19 @@ export interface CdrSummary {
   recent: Array<{ direction: string; disposition: string; from: string | null; to: string | null; startedAt: Date; talkSec: number }>;
 }
 
+export interface VoicemailSummary {
+  totalUnheard: number;
+  totalInInbox: number;
+  voicemails: Array<{
+    from: string;
+    receivedAt: Date;
+    seconds: number;
+    listened: boolean;
+    /** Transcript text when auto-transcription produced one; null otherwise. */
+    transcript: string | null;
+  }>;
+}
+
 export class ReadTools {
   constructor(private prisma: any) {}
 
@@ -71,6 +84,36 @@ export class ReadTools {
       }
     }
     return out;
+  }
+
+  /** The tenant's voicemail box, newest first, with transcripts where the
+   *  transcriber has already produced one. Same DB mirror the Voicemail page
+   *  reads — "cannot check voicemails / cannot summarize voicemails" was never
+   *  a data problem, only a missing read path. Deleted messages excluded;
+   *  transcripts are capped so one long message cannot flood the prompt. */
+  async voicemailSummary(tenantId: string, extNumber?: string, limit = 15): Promise<VoicemailSummary> {
+    const where: any = { tenantId, folder: "inbox", deletedAt: null, ...(extNumber ? { extension: extNumber } : {}) };
+    const [totalUnheard, totalInInbox, rows] = await Promise.all([
+      this.prisma.voicemail.count({ where: { ...where, listened: false } }),
+      this.prisma.voicemail.count({ where }),
+      this.prisma.voicemail.findMany({
+        where,
+        orderBy: { receivedAt: "desc" },
+        take: Math.min(Math.max(limit, 1), 25),
+        select: { callerName: true, callerNumber: true, receivedAt: true, durationSec: true, listened: true, transcript: true },
+      }),
+    ]);
+    return {
+      totalUnheard,
+      totalInInbox,
+      voicemails: rows.map((v: any) => ({
+        from: v.callerName || v.callerNumber || "Unknown caller",
+        receivedAt: v.receivedAt,
+        seconds: v.durationSec ?? 0,
+        listened: !!v.listened,
+        transcript: v.transcript ? String(v.transcript).slice(0, 400) : null,
+      })),
+    };
   }
 
   /** Call history summary for a tenant (optionally one extension) from ConnectCdr. */
