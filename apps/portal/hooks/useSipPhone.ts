@@ -3377,6 +3377,51 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enrichLiveCalls, liveFeedStatus, callDirection, callState, remotePartyNumber]);
 
+  // Guard 3: the CallInvite row is the true per-call cancel signal — the api
+  // marks it CANCELED / claimed the moment another device answers, which is
+  // exactly the signal mobile gets as a push and web gets nowhere. Poll it
+  // over plain HTTP (a fresh connection every time — immune to the dead-WS
+  // failure) only while ringing. Same matched-then-gone semantics as guard 2:
+  // we only act after we have SEEN our invite PENDING once, so a ring whose
+  // call never created an invite is left alone.
+  const ringInviteMatchRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (callDirection !== "inbound" || callState !== "ringing") {
+      ringInviteMatchRef.current = null;
+      return undefined;
+    }
+    if (!hasBrowserAuthToken()) return undefined;
+    const num = ((remotePartyNumber ?? remoteParty) || "").replace(/\D/g, "");
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const rows = await apiGet<Array<{ id: string; fromNumber: string | null }>>(
+          "/mobile/call-invites/pending",
+        );
+        if (stopped) return;
+        const match = (rows || []).find((r) => {
+          const rf = (r.fromNumber || "").replace(/\D/g, "");
+          if (!num || !rf) return false;
+          return rf === num || rf.endsWith(num) || num.endsWith(rf);
+        });
+        if (match) {
+          ringInviteMatchRef.current = match.id;
+        } else if (ringInviteMatchRef.current) {
+          // Our invite was PENDING moments ago and is not any more, while we
+          // are still ringing — it was canceled, claimed by another device,
+          // or expired. Stop ringing.
+          killPhantomRing("invite_no_longer_pending");
+        }
+      } catch {
+        /* transient poll failure proves nothing — keep ringing */
+      }
+    };
+    const timer = setInterval(() => { void poll(); }, 4_000);
+    void poll();
+    return () => { stopped = true; clearInterval(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callDirection, callState, remotePartyNumber, remoteParty]);
+
   // Reset speaker mode on call end and route audio back to the base device, so the
   // NEXT call starts on the headset (not stuck on the loudspeaker from last time).
   useEffect(() => {
