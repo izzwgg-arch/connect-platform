@@ -23,7 +23,7 @@ export const MAX_CHUNKS = 64;
 export const SESSION_TTL_MS = 30 * 60_000;
 export const ATTACHMENT_TTL_MS = 24 * 3600_000;
 
-export type AttachmentKind = "audio" | "document";
+export type AttachmentKind = "audio" | "image" | "document";
 
 export interface ChatAttachment {
   id: string;
@@ -53,9 +53,16 @@ interface UploadSession {
 
 const AUDIO_MIME_RE = /^audio\//i;
 const AUDIO_EXT_RE = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|wma|aiff?)$/i;
+// Only the formats both LLM providers accept as image input. Anything else
+// image-ish (tiff, bmp, svg…) stays a plain document — better an honest "I
+// can't open that" than a provider 400 mid-conversation.
+const IMAGE_MIME_RE = /^image\/(png|jpe?g|gif|webp)$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 
 export function classifyAttachment(filename: string, mimeType: string): AttachmentKind {
-  return AUDIO_MIME_RE.test(mimeType) || AUDIO_EXT_RE.test(filename) ? "audio" : "document";
+  if (AUDIO_MIME_RE.test(mimeType) || AUDIO_EXT_RE.test(filename)) return "audio";
+  if (IMAGE_MIME_RE.test(mimeType) || IMAGE_EXT_RE.test(filename)) return "image";
+  return "document";
 }
 
 export function safeFilename(raw: string): string {

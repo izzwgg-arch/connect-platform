@@ -97,9 +97,59 @@ export function parseChatModelPick(v: string | null | undefined): { provider: Pr
   return m ? { provider: m[1] as ProviderName, model: m[2].trim() } : null;
 }
 
+/** One piece of a multimodal user message. Images ride as base64 — the file
+ *  never leaves our infrastructure except inside the provider request itself. */
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; dataBase64: string };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  /** ⛔ Parts are allowed on USER messages only. System prompts are joined with
+   *  `.join("\n")` in several places and assistant turns are provider output —
+   *  an image anywhere but a user turn would be silently stringified. The
+   *  mappers below enforce this by flattening non-user parts to their text. */
+  content: string | ChatContentPart[];
+}
+
+/** The text of a message, whatever its shape — for system joins and logs. */
+export function chatMessageText(content: string | ChatContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content.filter((p): p is Extract<ChatContentPart, { type: "text" }> => p.type === "text").map((p) => p.text).join("\n");
+}
+
+/** Anthropic messages.create content: string passes through; parts map to
+ *  text / base64-image blocks. Exported for tests. */
+export function toAnthropicContent(m: ChatMessage): unknown {
+  if (typeof m.content === "string") return m.content;
+  if (m.role !== "user") return chatMessageText(m.content);
+  return m.content.map((p) =>
+    p.type === "text"
+      ? { type: "text", text: p.text }
+      : { type: "image", source: { type: "base64", media_type: p.mediaType, data: p.dataBase64 } },
+  );
+}
+
+/** OpenAI /v1/responses input content (input_text / input_image). Exported for tests. */
+export function toOpenAiResponsesContent(m: ChatMessage): unknown {
+  if (typeof m.content === "string") return m.content;
+  if (m.role !== "user") return chatMessageText(m.content);
+  return m.content.map((p) =>
+    p.type === "text"
+      ? { type: "input_text", text: p.text }
+      : { type: "input_image", image_url: `data:${p.mediaType};base64,${p.dataBase64}` },
+  );
+}
+
+/** OpenAI chat.completions content (text / image_url). Exported for tests. */
+export function toOpenAiChatContent(m: ChatMessage): unknown {
+  if (typeof m.content === "string") return m.content;
+  if (m.role !== "user") return chatMessageText(m.content);
+  return m.content.map((p) =>
+    p.type === "text"
+      ? { type: "text", text: p.text }
+      : { type: "image_url", image_url: { url: `data:${p.mediaType};base64,${p.dataBase64}` } },
+  );
 }
 
 export interface CompletionResult {
@@ -323,12 +373,12 @@ export class ModelRouter {
     runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
   ) {
     if (!this.anthropic) throw new Error("Anthropic key not configured");
-    const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
+    const system = messages.filter((m) => m.role === "system").map((m) => chatMessageText(m.content)).join("\n");
     // Working conversation carries tool_use / tool_result blocks, so it is wider
     // than ChatMessage. Typed loosely on purpose — the SDK owns the real shape.
     const convo: any[] = messages
       .filter((m) => m.role !== "system")
-      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+      .map((m) => ({ role: m.role as "user" | "assistant", content: toAnthropicContent(m) as any }));
 
     let inputTokens = 0;
     let outputTokens = 0;
@@ -398,7 +448,7 @@ export class ModelRouter {
     //   messages -> input, tools are FLAT ({type,name,description,parameters}),
     //   replies arrive as items in `output`, and a tool result goes back as a
     //   `function_call_output` item keyed by call_id.
-    const input: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
+    const input: any[] = messages.map((m) => ({ role: m.role, content: toOpenAiResponsesContent(m) }));
     let inputTokens = 0;
     let outputTokens = 0;
     let toolCalls = 0;
@@ -463,7 +513,7 @@ export class ModelRouter {
       const res = await this.openai.chat.completions.create({
         model,
         max_completion_tokens: maxTokens,
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        messages: messages.map((m) => ({ role: m.role, content: toOpenAiChatContent(m) as any })),
       });
       return {
         text: res.choices[0]?.message?.content ?? "",
@@ -472,13 +522,13 @@ export class ModelRouter {
       };
     }
     if (!this.anthropic) throw new Error("Anthropic key not configured");
-    const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
+    const system = messages.filter((m) => m.role === "system").map((m) => chatMessageText(m.content)).join("\n");
     const rest = messages.filter((m) => m.role !== "system");
     const res = await this.anthropic.messages.create({
       model,
       max_tokens: maxTokens,
       system: system || undefined,
-      messages: rest.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      messages: rest.map((m) => ({ role: m.role as "user" | "assistant", content: toAnthropicContent(m) as any })),
     });
     const text = res.content
       .filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")

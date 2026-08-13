@@ -99,6 +99,47 @@ function form(fields: Array<[string, string]>): FormData {
 }
 
 /**
+ * Delete a team through the panel — the same two-step dance a human's click
+ * performs, replayed exactly. ⛔ The single-step delete "succeeds" WITHOUT
+ * deleting (the onboarding wipes learned this twice): the first POST only
+ * returns a confirmation modal, and the deletion happens when the modal's own
+ * hidden inputs are posted back. So step 1 must find `confirmation-modal` in
+ * the response, step 2 replays its hidden fields verbatim, and the caller must
+ * verify by re-listing — a success notification alone is not proof.
+ */
+export async function deleteTeam(
+  session: PanelSession,
+  kind: "ring_group" | "queue",
+  panelRowId: string,
+): Promise<void> {
+  const cls = kind === "queue" ? "queues" : "ring_group";
+  const r = await session.postForm(form([
+    ["class", cls],
+    ["method", "delete"],
+    ["mode", "delete"],
+    ["data", panelRowId],
+  ]));
+  const html = String((r.json as any)?.html || "");
+  if (/module-error-list/i.test(html)) {
+    const items = (html.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) || []).map((x) => x.replace(/<[^>]+>/g, " ").trim()).filter(Boolean);
+    throw new Error(`panel_refused_delete: ${items.join(" | ") || "unknown reason"}`);
+  }
+  if (!/confirmation-modal/i.test(html)) {
+    throw new Error(`unexpected_delete_response: ${r.text.slice(0, 200)}`);
+  }
+  const pairs: Array<[string, string]> = [];
+  for (const m of html.matchAll(/<input\b[^>]*type=["']hidden["'][^>]*>/gi)) {
+    const n = (m[0].match(/name=["']([^"']+)["']/i) || [])[1];
+    const v = (m[0].match(/value=["']([^"']*)["']/i) || [])[1] || "";
+    if (n) pairs.push([n, v]);
+  }
+  const r2 = await session.postForm(form(pairs));
+  if ((r2.json as any)?.notification?.type !== "success") {
+    throw new Error(`delete_confirm_failed: ${r2.text.slice(0, 200)}`);
+  }
+}
+
+/**
  * An unchecked checkbox is OMITTED by a real browser. Sending `foo=no` CHECKS
  * it — that is how a trunk got disabled during onboarding. So checkbox fields
  * appear here only when they should be on.

@@ -8,8 +8,9 @@
  * - Language auto-detect: Hebrew-script text → Yiddish ("yi"), else English.
  */
 import type { ConversationStore, ConversationRow, Role } from "./store";
-import type { ModelRouter, ChatMessage } from "../llm/router";
+import type { ModelRouter, ChatMessage, ChatContentPart } from "../llm/router";
 import { CHAT_MAX_TOKENS } from "../llm/router";
+import fs from "node:fs";
 import type { ToolSpec, ToolRole } from "../tools/toolRegistry";
 import type { AuditLog } from "../audit/audit";
 import { killSwitchEngaged } from "../config";
@@ -122,7 +123,7 @@ export interface ChatAttachmentRef {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  kind: "audio" | "document";
+  kind: "audio" | "image" | "document";
   path: string;
 }
 
@@ -455,6 +456,30 @@ export class ConversationEngine {
         content: bridging ? (m.contentEn ?? m.content) : m.content,
       })),
     ];
+
+    // Screenshot understanding: image attachments on THIS turn ride into the
+    // final user message as base64 content parts, so "what does this error
+    // mean?" over a screenshot gets a real answer instead of "passed it to the
+    // human team". Current turn only — history keeps the [Attached: …] note but
+    // never re-uploads old images, so a long conversation cannot re-bill every
+    // prior screenshot on every turn. Caps: 3 images, 5 MB each (the provider
+    // limit); an unreadable file degrades to the text-only message it always was.
+    const imageFiles = attachments.filter((a) => a.kind === "image" && a.sizeBytes <= 5 * 1024 * 1024).slice(0, 3);
+    if (imageFiles.length > 0 && msgs.length > 0) {
+      const last = msgs[msgs.length - 1];
+      if (last.role === "user" && typeof last.content === "string") {
+        const parts: ChatContentPart[] = [{ type: "text", text: last.content }];
+        for (const img of imageFiles) {
+          try {
+            const data = await fs.promises.readFile(img.path);
+            parts.push({ type: "image", mediaType: img.mimeType, dataBase64: data.toString("base64") });
+          } catch (err: any) {
+            console.warn(`[chat] image attachment ${img.id} unreadable (${err?.message}) — sending text only`);
+          }
+        }
+        if (parts.length > 1) last.content = parts;
+      }
+    }
 
     // Fallback English used when the LLM is unavailable or errors.
     const teamFallbackEn = "I've received your message and passed it to our team — someone will follow up with you shortly.";

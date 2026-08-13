@@ -249,7 +249,7 @@ export default function IvrStudioPage() {
    *  non-empty means it can't be deleted yet and the dialog explains why
    *  instead of offering the button. */
   const [confirmDelete, setConfirmDelete] = useState<null | {
-    kind: "recording" | "menu"; id: string; name: string; blockers: string[];
+    kind: "recording" | "menu" | "team"; id: string; name: string; blockers: string[];
   }>(null);
   const [deleting, setDeleting] = useState(false);
   /** Which recording is being renamed, and the name being typed. */
@@ -822,6 +822,30 @@ export default function IvrStudioPage() {
     setConfirmDelete({ kind: "menu", id: profile.id, name: profile.name, blockers: menuUses(profile.id) });
   }
 
+  /** Which menu keys still route into this team. Client-side mirror of the
+   *  server's own refusal, so the dialog can say WHERE before the request. */
+  function teamUses(number: string): string[] {
+    const markers = [`ext-group,${number},`, `ext-queues,${number},`];
+    const uses: string[] = [];
+    for (const p of profiles) {
+      for (const o of optionsByProfile[p.id] ?? []) {
+        if (markers.some((m) => (o.destinationRef || "").includes(m))) {
+          uses.push(`key ${o.optionDigit} of “${p.name}” sends callers to it`);
+        }
+      }
+    }
+    return uses;
+  }
+
+  function askDeleteTeam(tm: { number: string; name?: string | null; kind: "ring_group" | "queue" }) {
+    setConfirmDelete({
+      kind: "team",
+      id: `${tm.kind}/${tm.number}`,
+      name: tm.name || `Team ${tm.number}`,
+      blockers: teamUses(tm.number),
+    });
+  }
+
   async function doDelete() {
     const target = confirmDelete;
     if (!target || target.blockers.length > 0) return;
@@ -832,6 +856,13 @@ export default function IvrStudioPage() {
         if (row && playingRef === row.promptRef) stopPlaying();
         await apiDelete(`/voice/ivr/prompts/${target.id}${qs}`);
         setPrompts((ps) => ps.filter((p) => p.id !== target.id));
+        flash(`“${target.name}” deleted`);
+      } else if (target.kind === "team") {
+        // id is "<kind>/<number>" — the server re-resolves the panel row id
+        // from the number itself and refuses if any menu key still points at it.
+        await apiDelete(`/voice/teams/${target.id}${qs}`);
+        const num = target.id.split("/")[1];
+        setTeams((ts) => ts.filter((t) => t.number !== num));
         flash(`“${target.name}” deleted`);
       } else {
         await apiDelete(`/voice/ivr/route-profiles/${target.id}${qs}`);
@@ -1611,6 +1642,9 @@ export default function IvrStudioPage() {
                       <span className="nm">{tm.name || `Team ${tm.number}`}</span>
                       {pendingTeamNumbers.includes(tm.number) && <span className="tag voicemail">{t("not live yet")}</span>}
                       <span className="cur">{tm.number}</span>
+                      <button className="btn ghost sm" disabled={!canManage}
+                        title={t("Delete this team")}
+                        onClick={() => askDeleteTeam(tm)}>✕</button>
                     </div>
                   ))}
                   {directory.teams.some((tm) => pendingTeamNumbers.includes(tm.number)) && (

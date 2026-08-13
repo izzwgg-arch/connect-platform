@@ -21,7 +21,7 @@
 
 import { z } from "zod";
 import { PanelSession, loadPanelConfig } from "../onboarding/panelClient";
-import { createRingGroup, createQueue, LAST_DESTINATION_CATEGORIES } from "./teamBuilder";
+import { createRingGroup, createQueue, deleteTeam, LAST_DESTINATION_CATEGORIES } from "./teamBuilder";
 import type { UsedNumbers } from "@connect/shared";
 
 export interface TeamRouteDeps {
@@ -240,6 +240,105 @@ export function registerTeamRoutes(deps: TeamRouteDeps): void {
       /** Deliberately surfaced: it exists but callers won't reach it yet. */
       live: false,
       message: `“${result.name}” is set up on ${result.number}. It goes live the next time changes are applied to the phone system.`,
+    });
+  });
+
+  // ── DELETE /voice/teams ───────────────────────────────────────────────────
+  // "Cannot delete teams" — teams could be created from the Studio since
+  // 2026-08-04 but never removed, so every experiment left a permanent ring
+  // group behind. Same panel-robot discipline as create, with three fences:
+  //   1. the panel row id is resolved server-side FROM THE NUMBER via the live
+  //      Ombutel read — never taken from the client;
+  //   2. a team any menu key still points at is refused BY NAME (a key routing
+  //      callers into a deleted team is a dead end a caller discovers first);
+  //   3. the delete is the panel's own two-step confirm, then verified GONE by
+  //      re-reading the table — a success notification alone is not proof.
+  app.delete("/voice/teams/:kind/:number", async (req: any, reply: any) => {
+    const user = await requireIvrManager(req, reply);
+    if (!user) return;
+
+    // Path params + query tenant scope (the Studio's `qs`), because the portal's
+    // apiDelete sends no body — a body-only DELETE would be uncallable from it.
+    const parsed = z.object({
+      kind: z.enum(["ring_group", "queue"]),
+      number: z.string().regex(/^\d{3,6}$/),
+    }).safeParse(req.params);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_params", detail: parsed.error.flatten() });
+    const b = { ...parsed.data, tenantId: (req.query as any)?.tenantId ? String((req.query as any).tenantId) : undefined };
+
+    const raw = b.tenantId ?? user.tenantId ?? null;
+    if (!raw) return reply.code(400).send({ error: "tenant_required" });
+    const tenantId = raw.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(raw) : raw;
+    if (!tenantId) return reply.code(400).send({ error: "tenant_not_linked" });
+    assertIvrTenantAccess(user, tenantId);
+
+    const link = await db.tenantPbxLink.findUnique({
+      where: { tenantId },
+      select: { pbxTenantId: true, pbxInstanceId: true },
+    });
+    if (!link?.pbxTenantId) return reply.code(409).send({ error: "tenant_not_linked_to_pbx" });
+
+    // Fence 2 first — cheapest, and the refusal a person can act on.
+    const marker = b.kind === "queue" ? `ext-queues,${b.number},` : `ext-group,${b.number},`;
+    const pointingKeys = await db.ivrOptionRoute.findMany({
+      where: { destinationRef: { contains: marker }, profile: { tenantId } },
+      select: { digit: true, profile: { select: { name: true } } },
+      take: 10,
+    });
+    if (pointingKeys.length > 0) {
+      const wheres = pointingKeys.map((k: any) => `key ${k.digit} of “${k.profile?.name ?? "a menu"}”`).join(", ");
+      return reply.code(409).send({
+        error: "team_in_use",
+        message: `That team still answers ${wheres}. Point those keys somewhere else first, then delete it.`,
+      });
+    }
+
+    const pbxInstance = link.pbxInstanceId
+      ? await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } })
+      : await db.pbxInstance.findFirst({ where: { isEnabled: true } });
+    if (!pbxInstance) return reply.code(503).send({ error: "no_enabled_pbx_instance" });
+
+    // Fence 1 — resolve the panel row id from the live table.
+    const { listTeamsFromOmbutel } = await import("../pbxOmbutelRingGroupList");
+    const listed = await listTeamsFromOmbutel(b.kind, String(link.pbxTenantId), pbxInstance.ombuMysqlUrlEncrypted);
+    if (listed.source === "skipped") {
+      return reply.code(503).send({ error: "pbx_unreachable", detail: listed.skipReason });
+    }
+    const row = listed.rows.find((r) => r.number === b.number);
+    if (!row) return reply.code(404).send({ error: "team_not_found", message: `No ${b.kind === "queue" ? "queue" : "ring group"} ${b.number} exists on your phone system.` });
+    if (!row.id) return reply.code(503).send({ error: "team_id_unresolved", message: "The phone system didn't report an id for that team — nothing was deleted." });
+
+    const panelCfg = loadPanelConfig();
+    const account = panelCfg?.accounts[0];
+    if (!panelCfg || !account) return reply.code(503).send({ error: "panel_not_configured" });
+
+    const dir = await readTeamDirectory(String(link.pbxTenantId), link.pbxInstanceId ?? null);
+    try {
+      const session = await new PanelSession(panelCfg.baseUrl, account).login();
+      if (dir?.tenantPath) session.setTenant(dir.tenantPath);
+      await deleteTeam(session, b.kind, String(row.id));
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      app.log.error({ tenantId, kind: b.kind, number: b.number, err: msg }, "[TEAM_DELETE] failed");
+      return reply.code(502).send({
+        error: "team_delete_failed",
+        message: "Couldn't remove that from the phone system. Nothing was changed.",
+        detail: msg,
+      });
+    }
+
+    // Fence 3 — believe the table, not the notification.
+    const after = await listTeamsFromOmbutel(b.kind, String(link.pbxTenantId), pbxInstance.ombuMysqlUrlEncrypted);
+    const stillThere = after.source !== "skipped" && after.rows.some((r) => r.number === b.number);
+    if (stillThere) {
+      app.log.error({ tenantId, kind: b.kind, number: b.number }, "[TEAM_DELETE] panel said success but the row is still there");
+      return reply.code(502).send({ error: "team_delete_unverified", message: "The phone system reported success but the team is still there. Nothing else was changed — try again or tell us." });
+    }
+
+    app.log.info({ tenantId, kind: b.kind, number: b.number, panelRowId: row.id }, "[TEAM_DELETE] deleted and verified gone");
+    return reply.send({
+      ok: true,
+      message: `${b.kind === "queue" ? "Queue" : "Team"} ${b.number}${row.name ? ` (“${row.name}”)` : ""} is deleted. Callers stop reaching it the next time changes are applied to the phone system.`,
     });
   });
 }

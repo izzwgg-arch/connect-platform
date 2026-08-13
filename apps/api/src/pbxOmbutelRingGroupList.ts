@@ -68,10 +68,43 @@ const CANDIDATES: Array<{ table: string; tenantCols: string[]; numberCols: strin
   },
 ];
 
+// Queues live in their own table with the same shape family. Kept as a second
+// candidate list so the schema-adaptive machinery below serves both team kinds.
+const QUEUE_CANDIDATES: typeof CANDIDATES = [
+  {
+    table: "ombu_queues",
+    tenantCols: ["tenant_id", "tenantid"],
+    numberCols: ["queue_number", "extension", "number"],
+    nameCols:   ["description", "name", "queue_name"],
+    strategyCols: ["strategy", "ring_strategy"],
+    idCols: ["queue_id", "id"],
+  },
+  {
+    table: "queues",
+    tenantCols: ["tenant_id", "tenantid"],
+    numberCols: ["extension", "number"],
+    nameCols:   ["description", "name"],
+    strategyCols: ["strategy"],
+    idCols: ["id"],
+  },
+];
+
 export async function listRingGroupsFromOmbutel(
   vitalTenantId: string | null,
   ombuMysqlUrlEncrypted: string | null | undefined,
 ): Promise<RingGroupListResult> {
+  return listTeamsFromOmbutel("ring_group", vitalTenantId, ombuMysqlUrlEncrypted);
+}
+
+/** Ring groups OR queues, same adaptive read. The delete route resolves a
+ *  team's panel row id from its NUMBER through this — the id is never taken
+ *  from the client. */
+export async function listTeamsFromOmbutel(
+  kind: "ring_group" | "queue",
+  vitalTenantId: string | null,
+  ombuMysqlUrlEncrypted: string | null | undefined,
+): Promise<RingGroupListResult> {
+  const candidates = kind === "queue" ? QUEUE_CANDIDATES : CANDIDATES;
   if (!ombuMysqlUrlEncrypted?.trim()) {
     return { source: "skipped", skipReason: "ombuMysqlUrlEncrypted not configured on PbxInstance", rows: [], error: null };
   }
@@ -110,7 +143,7 @@ export async function listRingGroupsFromOmbutel(
 
     // Find which candidate table actually exists in this schema. Single
     // INFORMATION_SCHEMA round-trip — cheap.
-    const candidateNames = CANDIDATES.map((c) => c.table);
+    const candidateNames = candidates.map((c) => c.table);
     const placeholders = candidateNames.map(() => "?").join(",");
     const [tRows] = (await conn.query(
       `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (${placeholders})`,
@@ -118,9 +151,9 @@ export async function listRingGroupsFromOmbutel(
     )) as [DbRow[], unknown];
     const presentTables = new Set((tRows as DbRow[]).map((r) => String((r as any).TABLE_NAME)));
 
-    const chosen = CANDIDATES.find((c) => presentTables.has(c.table));
+    const chosen = candidates.find((c) => presentTables.has(c.table));
     if (!chosen) {
-      return { source: "skipped", skipReason: `no known ring-group table in schema "${schema}"`, rows: [], error: null };
+      return { source: "skipped", skipReason: `no known ${kind === "queue" ? "queue" : "ring-group"} table in schema "${schema}"`, rows: [], error: null };
     }
 
     // Inspect the chosen table's columns so we can build a query that won't
