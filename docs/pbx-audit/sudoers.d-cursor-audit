@@ -1,0 +1,17 @@
+# Sudoers fragment for read-only PBX audit (cursor-audit).
+# Install as: /etc/sudoers.d/cursor-audit (chmod 440, root:root).
+# Ensures sudo works from forced-command SSH (no TTY).
+
+Defaults:cursor-audit !requiretty
+
+# Asterisk CLI read-only commands (full path; exact arguments)
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx core show version
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx core show channels
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx core show channels concise
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx bridge show all
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx pjsip show channels
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx queue show
+cursor-audit ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx pjsip show endpoints
+
+# Log tail (read-only)
+cursor-audit ALL=(root) NOPASSWD: /usr/bin/tail -n 100 /var/log/asterisk/full

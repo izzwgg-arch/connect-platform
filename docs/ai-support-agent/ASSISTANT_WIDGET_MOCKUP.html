@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup — Floating Assistant Widget (Connect portal)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #0d1420; color: #e8ecf3; min-height: 100vh; }
+
+  /* ── Fake portal page behind the widget (for context) ── */
+  .portal { display: flex; min-height: 100vh; filter: saturate(.9); }
+  .sidebar { width: 210px; background: #101a2b; border-right: 1px solid #1d2a40; padding: 18px 12px; }
+  .logo { font-weight: 800; font-size: 17px; color: #fff; margin-bottom: 22px; letter-spacing: .3px; }
+  .logo span { color: #4f8ef7; }
+  .nav a { display: block; padding: 8px 10px; border-radius: 8px; color: #9fb0c9; font-size: 13px; text-decoration: none; margin-bottom: 2px; }
+  .nav a.active { background: #16233a; color: #fff; }
+  .main { flex: 1; padding: 26px 30px; }
+  .main h1 { font-size: 20px; margin-bottom: 4px; }
+  .main .sub { color: #8b9ab2; font-size: 13px; margin-bottom: 18px; }
+  .cardrow { display: flex; gap: 14px; }
+  .card { background: #121d30; border: 1px solid #1d2a40; border-radius: 12px; padding: 16px; flex: 1; }
+  .card b { font-size: 22px; display:block; }
+  .card small { color: #8b9ab2; }
+  table.fake { width: 100%; margin-top: 18px; border-collapse: collapse; font-size: 13px; }
+  table.fake th, table.fake td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #1d2a40; color: #b9c6da; }
+  table.fake th { color: #7d8ca3; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; }
+
+  /* ── The floating assistant bubble ── */
+  .fab { position: fixed; right: 22px; bottom: 22px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+  .fab-btn {
+    width: 58px; height: 58px; border-radius: 50%; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #2f6df6, #5b3df5);
+    box-shadow: 0 8px 26px rgba(47,109,246,.45), 0 2px 8px rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .fab-btn svg { width: 27px; height: 27px; fill: #fff; }
+  .fab-hint {
+    background: #16233a; color: #cfe0ff; border: 1px solid #29406b; font-size: 12px;
+    padding: 7px 12px; border-radius: 10px 10px 2px 10px; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  }
+  .fab-dot { position: absolute; top: 2px; right: 2px; width: 12px; height: 12px; background: #22c55e; border: 2px solid #0d1420; border-radius: 50%; }
+
+  /* ── The open chat panel ── */
+  .panel {
+    position: fixed; right: 22px; bottom: 94px; z-index: 59;
+    width: 372px; max-width: calc(100vw - 44px); height: 560px; max-height: calc(100vh - 130px);
+    background: #0f1928; border: 1px solid #23344f; border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .p-head { background: linear-gradient(135deg, #16233a, #1b2440); padding: 13px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #23344f; }
+  .avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg,#2f6df6,#5b3df5); display:flex; align-items:center; justify-content:center; }
+  .avatar svg { width: 18px; height: 18px; fill: #fff; }
+  .p-head .t { flex: 1; }
+  .p-head .t b { font-size: 14px; display: block; }
+  .p-head .t small { color: #7fd4a2; font-size: 11px; }
+  .p-head .actions { display: flex; gap: 6px; }
+  .p-head .actions button { background: none; border: none; color: #8b9ab2; cursor: pointer; font-size: 15px; padding: 4px; }
+
+  /* context chip — shows the agent SEES the page */
+  .ctx { padding: 8px 14px; border-bottom: 1px solid #1d2a40; display: flex; align-items: center; gap: 8px; background: #0c1626; }
+  .ctx .eye { font-size: 12px; }
+  .ctx span { font-size: 11.5px; color: #7d95c0; }
+  .ctx b { color: #b9d0f5; font-weight: 600; }
+
+  .msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .m { max-width: 82%; padding: 9px 12px; border-radius: 13px; font-size: 13.5px; line-height: 1.45; }
+  .m.bot { background: #182742; border: 1px solid #23344f; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .m.user { background: #2f6df6; color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .m.yi { direction: rtl; text-align: right; font-size: 15px; }
+  .m .img { margin-top: 6px; border-radius: 8px; overflow: hidden; border: 1px solid #2c3f60; }
+  .m .img .ph { background: repeating-linear-gradient(45deg, #1a2740, #1a2740 12px, #16223a 12px, #16223a 24px); height: 90px; display:flex; align-items:center; justify-content:center; color:#6f84a8; font-size:11px; }
+  .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 8px; }
+  .quick button { background: #14213a; border: 1px solid #2a3c5f; color: #a9c2ec; font-size: 11.5px; padding: 6px 10px; border-radius: 999px; cursor: pointer; }
+
+  .inp { border-top: 1px solid #23344f; padding: 10px 12px; display: flex; align-items: center; gap: 8px; background: #0e1826; }
+  .inp .icon { background: none; border: none; cursor: pointer; font-size: 17px; color: #8b9ab2; padding: 4px; }
+  .inp input { flex: 1; background: #16233a; border: 1px solid #2a3c5f; color: #e8ecf3; border-radius: 999px; padding: 9px 14px; font-size: 13px; outline: none; }
+  .inp .send { background: #2f6df6; border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; display:flex; align-items:center; justify-content:center; }
+  .inp .send svg { width: 16px; height: 16px; fill: #fff; }
+  .foot { text-align: center; font-size: 10.5px; color: #5c6b84; padding: 5px 0 8px; background:#0e1826; }
+
+  /* annotations */
+  .anno { position: fixed; z-index: 70; background: #f5c542; color: #201a05; font-size: 11.5px; font-weight: 700; padding: 5px 9px; border-radius: 7px; box-shadow: 0 3px 10px rgba(0,0,0,.5); }
+  .anno small { display: block; font-weight: 500; }
+  .a1 { right: 400px; bottom: 610px; max-width: 210px; }
+  .a2 { right: 404px; bottom: 508px; max-width: 215px; }
+  .a3 { right: 404px; bottom: 330px; max-width: 210px; }
+  .a4 { right: 404px; bottom: 128px; max-width: 215px; }
+  .a5 { right: 90px;  bottom: 30px;  max-width: 200px; }
+  @media (max-width: 900px) { .anno { display:none; } }
+</style>
+</head>
+<body>
+
+  <!-- fake portal page -->
+  <div class="portal">
+    <div class="sidebar">
+      <div class="logo">c<span>o</span>nnect</div>
+      <div class="nav">
+        <a>Overview</a><a>Team Directory</a><a>Call History</a><a class="active">Voicemail</a>
+        <a>Chat</a><a>Contacts</a><a>Extensions</a><a>IVR Routing</a><a>Call Reports</a>
+      </div>
+    </div>
+    <div class="main">
+      <h1>Voicemail</h1>
+      <div class="sub">Inbox · 3 new messages</div>
+      <div class="cardrow">
+        <div class="card"><b>3</b><small>New voicemails</small></div>
+        <div class="card"><b>12</b><small>This week</small></div>
+        <div class="card"><b>0:48</b><small>Avg length</small></div>
+      </div>
+      <table class="fake">
+        <tr><th>From</th><th>Extension</th><th>When</th><th>Length</th><th>Transcript</th></tr>
+        <tr><td>(718) 555-0142</td><td>101</td><td>Today 9:14 AM</td><td>0:37</td><td>גוט מארגן, איך רוף וועגן…</td></tr>
+        <tr><td>(347) 555-0177</td><td>105</td><td>Today 8:52 AM</td><td>1:02</td><td>Hi, just following up on…</td></tr>
+        <tr><td>(212) 555-0129</td><td>101</td><td>Yesterday</td><td>0:24</td><td>ביטע רופט מיר צוריק…</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── THE ASSISTANT WIDGET ── -->
+
+  <!-- open panel -->
+  <div class="panel">
+    <div class="p-head">
+      <div class="avatar"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7v1.3c1.2.4 2 1.5 2 2.7v2a3 3 0 0 1-3 3h-.4A7 7 0 0 1 12 22a7 7 0 0 1-5.6-4H6a3 3 0 0 1-3-3v-2c0-1.2.8-2.3 2-2.7V9a7 7 0 0 1 7-7Zm-3 8.5a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Zm6 0a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z"/></svg></div>
+      <div class="t"><b>Connect Assistant</b><small>● Online — here to help</small></div>
+      <div class="actions"><button title="Voice conversation">🎧</button><button title="New chat">✎</button><button title="Minimize">—</button></div>
+    </div>
+
+    <!-- page context chip -->
+    <div class="ctx"><span class="eye">👁</span><span>Viewing with you: <b>Voicemail — Inbox</b> · I can help with anything on this page</span></div>
+
+    <div class="msgs">
+      <div class="m bot">Hi Izzy! I see you're looking at your <b>voicemail inbox</b>. Want me to summarize the new messages, or help with something else?</div>
+      <div class="m user">What did the first caller want?</div>
+      <div class="m bot">The caller from <b>(718) 555-0142</b> asked about changing their store's closing-time announcement. They'd like it to say 6:00 PM instead of 7:00 PM. Want me to draft that change for approval?</div>
+      <div class="m user yi">יא, און זאג מיר אויב עס זענען דא נאך מעסעדזשעס פון דעם קאסטומער</div>
+      <div class="m bot yi">איין מאמענט — איך קוק דורך די מעסעדזשעס פאר אייך.</div>
+      <div class="m user">Also — this phone is showing an error, what does it mean? <div class="img"><div class="ph">📷 photo of phone screen (uploaded)</div></div></div>
+      <div class="m bot">That's a <b>"No Service — account not registered"</b> error on your handset. Usually it means the phone lost its connection to the system. I can run a quick check on extension 101 right now — should I?</div>
+    </div>
+
+    <div class="quick">
+      <button>Summarize new voicemails</button>
+      <button>Check my extension</button>
+      <button>רעד צו מיר אידיש</button>
+    </div>
+
+    <div class="inp">
+      <button class="icon" title="Attach an image">📷</button>
+      <button class="icon" title="Hold to talk">🎤</button>
+      <input placeholder="Type, talk, or send a picture…">
+      <button class="send" title="Send"><svg viewBox="0 0 24 24"><path d="M3 11.6 20.4 3.4c.9-.4 1.8.5 1.4 1.4l-8.2 17.4c-.4.9-1.7.8-2-.1l-1.9-6-6-1.9c-.9-.3-1-1.6-.1-2z"/></svg></button>
+    </div>
+    <div class="foot">Connect Assistant · a human is always behind it</div>
+  </div>
+
+  <!-- collapsed bubble (always visible on every page) -->
+  <div class="fab">
+    <div class="fab-hint">Need help? I'm right here 👋</div>
+    <button class="fab-btn" style="position:relative">
+      <svg viewBox="0 0 24 24"><path d="M12 3C6.5 3 2 6.9 2 11.7c0 2.8 1.6 5.3 4 6.9V22l3.6-2c.8.1 1.6.2 2.4.2 5.5 0 10-3.9 10-8.6S17.5 3 12 3z"/></svg>
+      <span class="fab-dot"></span>
+    </button>
+  </div>
+
+  <!-- annotations -->
+  <div class="anno a1">Always-visible bubble<small>Floats bottom-right on every portal page. Green dot = online. Click to open/close.</small></div>
+  <div class="anno a2">Sees the current page<small>The assistant knows which page you're on and what's on it — answers are about what you're doing right now.</small></div>
+  <div class="anno a3">Full conversations<small>Yiddish + English, remembers the thread, can run checks and draft changes for approval.</small></div>
+  <div class="anno a4">Photos + voice<small>📷 send a picture (phone screen, error, wiring) and it understands it. 🎤 talk instead of typing. 🎧 live voice conversation.</small></div>
+  <div class="anno a5">Collapsed state<small>What every page shows when the panel is closed.</small></div>
+
+</body>
+</html>

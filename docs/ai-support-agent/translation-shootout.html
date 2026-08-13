@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yiddish Translation Shoot-out — Claude vs Yiddish Labs vs OpenAI</title>
+<style>
+  :root { --line:#e3e3e3; --head:#0f2540; --a:#0b6b5e; --b:#8a4b00; --c:#5b3a86; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 20px; color:#111; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color:#555; font-size: 13px; margin-bottom: 14px; }
+  .note { background:#f5f8ff; border:1px solid #d8e4ff; padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:16px; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  th, td { border: 1px solid var(--line); padding: 9px 11px; vertical-align: top; }
+  th { background: var(--head); color:#fff; font-size: 12.5px; text-align:left; }
+  td.num { width: 24px; text-align:center; color:#888; font-weight:600; }
+  td.en { width: 19%; font-size: 12.5px; line-height:1.4; }
+  td.yi { font-size: 16px; line-height: 1.65; direction: rtl; text-align: right; font-family: "Frank Ruhl Libre", "Times New Roman", serif; }
+  td.a { background:#f4fbf9; } td.b { background:#fdf7f0; } td.c { background:#f7f4fc; }
+  td.win { width: 66px; }
+  .tag { display:inline-block; font-size:11px; font-weight:700; padding:2px 6px; border-radius:5px; color:#fff; }
+  .tag.a { background: var(--a); } .tag.b { background: var(--b); } .tag.c { background: var(--c); }
+  .win input { width: 52px; }
+  tfoot td { font-size:12.5px; background:#fafafa; }
+  @media print { body { margin: 6px; } table{ font-size: 11px; } td.yi{ font-size:14px; } }
+</style>
+</head>
+<body>
+  <h1>Yiddish Translation Shoot-out — three-way</h1>
+  <div class="sub">English support replies &rarr; heimishe Yiddish. <b>A = Claude</b> · <b>B = Yiddish Labs</b> · <b>C = OpenAI (gpt-4o)</b>. Generated 2026-07-21.</div>
+  <div class="note">
+    <b>How to score:</b> for each row, compare the three Yiddish versions for <b>accuracy, natural heimishe wording/spelling, and tone</b>, and write the winner (<b>A / B / C</b>, or <b>tie</b>) in the box.
+    For a fair test, hand it to a native speaker without telling them which column is which (A Claude · B Yiddish Labs · C OpenAI).
+    <br><b>Quick tell:</b> C (OpenAI) uses academic YIVO spelling with diacritics (אײַער, מאַנשאַפֿט) — usually the <i>least</i> heimish. A and B are the real contest.
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th>English (source)</th>
+        <th><span class="tag a">A</span> Claude</th>
+        <th><span class="tag b">B</span> Yiddish Labs</th>
+        <th><span class="tag c">C</span> OpenAI</th>
+        <th>Winner</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="num">1</td>
+        <td class="en">Good morning. How can I help you with your phone system today?</td>
+        <td class="yi a">גוט מארגן. מיט וואס קען איך אייך העלפן היינט מיט אייער טעלעפאן סיסטעם?</td>
+        <td class="yi b">גוט מארגן. מיט וואס קען איך אייך היינט זיין צו הילף מיט אייער פאון סיסטעם?</td>
+        <td class="yi c">גוט מארגן. ווי קען איך אייך העלפן מיט אייער טעלעפאן סיסטעם היינט?</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="en">Your extension is not registered, so I have passed the full details to our support team.</td>
+        <td class="yi a">אייער עקסטענשן איז נישט רעגיסטרירט, דעריבער האב איך אריבערגעשיקט די פולע פרטים צו אונזער סאפארט טים.</td>
+        <td class="yi b">היות אייער עקסטענשן איז נישט רעגיסטרירט, האב איך שוין אריבערגעשיקט אלע דעטאלן צו אונזער סופפארט טיעם.</td>
+        <td class="yi c">דיין עקסטענשן איז נישט רעגיסטרירט, אזוי האב איך איבערגעגעבן אלע דעטאלן צו אונזער סופּפּאָרט מאַנשאַפֿט.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">3</td>
+        <td class="en">I've reset your voicemail PIN. Please try again with the new code I just emailed you.</td>
+        <td class="yi a">איך האב צוריקגעשטעלט אייער וואויסמעיל פין. ביטע פרובירט נאכאמאל מיט'ן נייעם קאוד וואס איך האב אייך נאר וואס געשיקט אויף אימעיל.</td>
+        <td class="yi b">כ'האב שוין ריסעט דיין וואויסמעיל פין (PIN). ביטע פרובירט נאכאמאל מיט'ן נייעם קאוד וואס איך האב יעצט געשיקט צו דיין אימעיל.</td>
+        <td class="yi c">איך האָב צוריקגעשטעלט אײַער וואויסמעיל פּין. ביטע פּרוּווט ווידער מיט דעם נײַעם קאָד וואָס איך האָב אײַך גע'ימעיל'ט.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">4</td>
+        <td class="en">Your calls are being forwarded to your cell phone until tomorrow morning.</td>
+        <td class="yi a">אייערע רופן ווערן ווייטערגעשיקט צו אייער סעלפאון ביז מארגן אינדערפרי.</td>
+        <td class="yi b">דיינע קאלס ווערן יעצט געפארווערדערט צו דיין סעלפאון, און דאס וועט אזוי אנהאלטן ביז מארגן אינדערפרי.</td>
+        <td class="yi c">דיינע רופעס ווערן פאָרווערט צו דיין סעלפאן ביז מארגן אינדערפרי.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">5</td>
+        <td class="en">The main line is ringing to the wrong department. I've flagged it for our team to fix today.</td>
+        <td class="yi a">די הויפט ליניע קלינגט צום פאלשן דעפארטמענט. איך האב עס אנגעצייכנט פאר אונזער טים צו פאררעכטן היינט.</td>
+        <td class="yi b">די מעין טעלעפאן ליין קלינגט אריין אינעם נישט ריכטיגן דעפארטמענט. איך האב שוין מעורר געווען אונזער טיעם דאס צו פאראכטן תיכף ומיד נאך היינט.</td>
+        <td class="yi c">די הויפּט ליניע רופט זיך אין דער אומריכטיקער דעפּאַרטמענט. איך האָב עס שוין געגעבן איבער צו אונדזער מאַנשאַפֿט צו פאַררעכטן היינט.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">6</td>
+        <td class="en">Thank you for your patience. Everything is working now — please let me know if you have any other trouble.</td>
+        <td class="yi a">א דאנק פאר אייער געדולד. אלעס ארבעט שוין יעצט — ביטע לאזט מיר וויסן אויב איר האט נאך עפעס א פראבלעם.</td>
+        <td class="yi b">א דאנק פאר אייער געדולד. אלעס ארבעט שוין ברוך השם פיין, ביטע לאזט מיר וויסן אויב איר באגעגנט נאך סיי וועלכע פראבלעמען.</td>
+        <td class="yi c">א גרויסן יישר כח פאר אייער געדולד. אלעס ארבעט יעצט גוט - ביטע לאזט מיר וויסן אויב איר האט נאך עפעס פראבלעמען.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">7</td>
+        <td class="en">To transfer a call, press the transfer button, dial the extension, and hang up.</td>
+        <td class="yi a">צו טראנספערן א רוף, דרוקט דעם טראנספער קנעפל, וויילט די עקסטענשן, און לייגט אראפ.</td>
+        <td class="yi b">כדי אריבערצולייגן א קאל, דרוקט דעם 'טראנספער' קנעפל, דייעלט דעם עקסטענשאן, און דערנאך לייגט אראפ דעם טעלעפאן.</td>
+        <td class="yi c">צו טראנספערען אַ רוף, דריקט דעם טראנספער קנעפּל, טייפּט דעם עקסטענשן, און לייגט אראפ דעם טעלעפאן.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">8</td>
+        <td class="en">We noticed unusual activity on your account overnight and temporarily blocked international calling to keep you safe.</td>
+        <td class="yi a">מיר האבן באמערקט אומגעווענליכע אקטיוויטעט אויף אייער קאנטע איבערנאכט, און מיר האבן צייטווייליג בלאקירט אינטערנאציאנאלע רופן כדי אייך צו האלטן זיכער.</td>
+        <td class="yi b">מיר האבן באמערקט אומגעווענליכע אקטיוויטעטן אויף אייער אקאונט דורכאויס די נאכט, דערפאר האבן מיר צייטווייליג בלאקירט די מעגליכקייט צו מאכן אינטערנאציאנאלע קאלס כדי אייך צו באשיצן.</td>
+        <td class="yi c">מיר האבן באמערקט אומגעוויינטלעכע אקטיוויטעט אויף אייער אקאונט איבערנאכט און מיר האבן צייַטווייליג אפגעשפארט אינטערנאציאנאלע רופונגען צו האלטן אייך זיכער.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">9</td>
+        <td class="en">Your new extension 105 is set up with voicemail-to-email. Test it whenever you're ready.</td>
+        <td class="yi a">אייער נייע עקסטענשן 105 איז איינגעשטעלט מיט וואויסמעיל-צו-אימעיל. פרובירט עס ווען איר זענט גרייט.</td>
+        <td class="yi b">דיין נייע עקסטענשאן 105 איז שוין אנגעשטעלט געווארן מיט וואויסמעיל-טו-אימעיל. ביטע טעסט עס אויס ווען אימער עס קומט דיר אויס גוט.</td>
+        <td class="yi c">דיין נייע עקסטענשן 105 איז איינגעשטעלט מיט וואויסמעיל צו אימעיל. פרוביר עס אויס ווען דו ביסט גרייט.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+      <tr>
+        <td class="num">10</td>
+        <td class="en">I'm sorry for the trouble. A technician will call you back within the hour.</td>
+        <td class="yi a">עס טוט מיר לייד פאר די אומאנגענעמליכקייט. א טעכניקער וועט אייך צוריקרופן אינערהאלב א שעה.</td>
+        <td class="yi b">מיר אנטשולדיגן זיך פאר די אומבאקוועמליכקייט. א טעכניקער וועט זיך פארבינדן מיט אייך אינערהאלב די קומענדיגע שעה.</td>
+        <td class="yi c">איך בין מוחל פארן אומבאקוועמליכקייט. א טעכניקער וועט אייך צוריק רופן אין דער שעה.</td>
+        <td class="win"><input type="text"></td>
+      </tr>
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="2"><b>Tally</b> (count the winners)</td>
+        <td>A (Claude): ____</td>
+        <td>B (Yiddish Labs): ____</td>
+        <td>C (OpenAI): ____</td>
+        <td>Ties: __</td>
+      </tr>
+    </tfoot>
+  </table>
+  <p class="sub" style="margin-top:14px">
+    What to look for: (1) natural heimishe word choice vs. literal or literary/YIVO phrasing; (2) heimishe spelling convention (no academic diacritics);
+    (3) tone of a real frum support person; (4) tech terms (extension / voicemail / transfer); (5) faithfulness to the English (watch B and C adding or dropping words — e.g. #9 "in the hour" in C is a mistranslation).
+    If A holds its own, translation can run in-house on Claude and Yiddish Labs can be dropped from translation entirely.
+  </p>
+</body>
+</html>

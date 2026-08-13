@@ -63,7 +63,12 @@ _server_reports/
 # Not source, and large binaries here were bloating EAS Build uploads to
 # 700+ MB (EAS falls back to .gitignore rules when no .easignore exists).
 _latency_logs/
-docs/
+# docs/ used to be ignored WHOLESALE because docs/pbx-brain/ holds a 1.2 GB
+# PBX snapshot that bloated EAS uploads — which silently left 41 of 91 handoff
+# docs (several of them CLAUDE.md "READ FIRST" targets) out of git entirely.
+# EAS is protected by .easignore (which still excludes all of docs/); git now
+# ignores only the snapshot. (2026-08-12)
+docs/pbx-brain/
 apps/portal/public/downloads/
 _latency_logs/
 /*.txt

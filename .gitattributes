@@ -13,3 +13,11 @@
 # scripts elsewhere are CRLF in working trees and a blanket flip would churn
 # unrelated in-flight work.
 /scripts/pbx/** text eol=lf
+
+# docs/pbx carries reference copies of scripts and Asterisk .conf that get
+# scp'd to the Linux PBX (media-sync, prompt-sync, voicemail-drop context).
+# Same CRLF trap as above, same scoped fix — .sh and .conf only, so the .md
+# files keep normal Windows behavior. Added 2026-08-12 when docs/ stopped
+# being gitignored wholesale.
+/docs/pbx/*.sh text eol=lf
+/docs/pbx/*.conf text eol=lf

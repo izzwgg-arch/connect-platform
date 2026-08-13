@@ -1,0 +1,33 @@
+==============================
+ PBX AUDIT SNAPSHOT (sample)
+==============================
+Time: Tue 17 Mar 14:11:59 EDT 2026
+
+----- ACTIVE CHANNELS -----
+Asterisk command failed
+
+----- ACTIVE CHANNEL COUNT -----
+Could not get active channel count
+
+----- ACTIVE BRIDGES -----
+Could not get bridges
+
+----- SYSTEM LOAD -----
+ 14:11:59 up 7 days,  3:25,  1 user,  load average: 0.23, 0.24, 0.25
+
+----- MEMORY -----
+               total        used        free      shared  buff/cache   available
+Mem:            47Gi        16Gi        30Gi       219Mi       635Mi        30Gi
+Swap:             0B          0B          0B
+
+----- LAST ASTERISK LOGS -----
+(Sample: bridge join/leave and call activity in VERBOSE lines;
+ use to infer activity when channel count is not available from CLI.)
+
+==============================
+ END OF SNAPSHOT
+==============================
+
+Note: The cursor-audit account runs this script only; it cannot run
+arbitrary Asterisk CLI. For exact PBX active count, use VitalPBX UI
+or a privileged account. This file is a template for what the snapshot returns.
