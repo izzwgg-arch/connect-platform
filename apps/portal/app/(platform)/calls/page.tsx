@@ -14,9 +14,16 @@ import {
   Phone, PhoneOff, PhoneMissed, PhoneIncoming,
   ChevronDown, ChevronRight, Voicemail,
   Radio, CheckCircle2, XCircle, AlertCircle, Info,
-  X, Mic, Download, Pause, Play, Volume2,
+  X, Mic, MicOff, Download, Loader2, Pause, Play, Volume2,
   Search, MoreHorizontal, Copy, SlidersHorizontal, PhoneCall,
 } from "lucide-react";
+import {
+  classifyRecordingPlaybackFailure,
+  recordingStreamUrl,
+  RECORDING_PLAYBACK_TEXT,
+  type RecordingPlaybackFailure,
+} from "../../../services/recordingPlayback";
+import { downloadRecordingWithReason, RECORDING_FAILURE_TEXT } from "../../../services/recordingDownload";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -509,9 +516,6 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
   }
 
   const initials = heroInitials();
-  const recordingToken = typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : "";
-  const recordingStreamSrc = `/api/voice/recording/${encodeURIComponent(row.linkedId)}/stream?token=${recordingToken}`;
-  const recordingDownloadSrc = `/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${recordingToken}`;
 
   return (
       <aside className="call-detail-panel ch-detail-panel custom-scrollbar" aria-label="Call details">
@@ -662,19 +666,11 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
               <Mic size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />
               Recording
             </h4>
-            <div className="cdp-recording-player">
-              <CallRecordingPlayer src={recordingStreamSrc} />
-              {canDownloadRecording ? (
-                <a
-                  className="cdp-recording-download"
-                  href={recordingDownloadSrc}
-                  download
-                >
-                  <Download size={13} />
-                  Download
-                </a>
-              ) : null}
-            </div>
+            <CallRecordingPlayer
+              linkedId={row.linkedId}
+              fallbackDurationSec={row.talkSec > 0 ? row.talkSec : row.durationSec}
+              canDownload={canDownloadRecording}
+            />
           </div>
         ) : null}
 
@@ -712,61 +708,193 @@ function formatPlayerTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-function CallRecordingPlayer({ src }: { src: string }) {
+// How long a pressed Play may sit with no audio flowing before we stop
+// pretending and offer a retry. The server bounds its PBX time-to-headers at
+// 20s and a stale-path recovery can add a second round-trip, so anything past
+// ~45s is genuinely stuck — not still loading.
+const RECORDING_LOAD_WATCHDOG_MS = 45_000;
+
+function CallRecordingPlayer({
+  linkedId,
+  fallbackDurationSec,
+  canDownload,
+}: {
+  linkedId: string;
+  /** Known call length from the CDR — shown while the audio's own metadata hasn't arrived yet. */
+  fallbackDurationSec: number;
+  canDownload: boolean;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [playing, setPlaying] = useState(false);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [playState, setPlayState] = useState<"idle" | "loading" | "playing" | "paused">("idle");
+  const [failure, setFailure] = useState<RecordingPlaybackFailure | null>(null);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
+
+  const streamSrc = recordingStreamUrl(linkedId);
+
+  useEffect(() => () => clearWatchdog(), []);
+
+  function clearWatchdog() {
+    if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
+  }
+
+  // Retries are USER-initiated only — an automatic retry loop against a dead
+  // recording is exactly the request flood that once wedged the PBX helper.
+  function armWatchdog() {
+    clearWatchdog();
+    watchdogRef.current = setTimeout(() => {
+      const audio = audioRef.current;
+      if (audio && !audio.paused) audio.pause();
+      setPlayState("idle");
+      setFailure("temporary");
+    }, RECORDING_LOAD_WATCHDOG_MS);
+  }
+
+  function handleAudioFailure() {
+    clearWatchdog();
+    setPlayState("idle");
+    void classifyRecordingPlaybackFailure(streamSrc).then(setFailure);
+  }
 
   function togglePlayback() {
     const audio = audioRef.current;
     if (!audio) return;
-    if (audio.paused) {
-      audio.play().catch(() => setPlaying(false));
-    } else {
-      audio.pause();
+    if (!audio.paused) { audio.pause(); return; }
+    setFailure(null);
+    // HAVE_FUTURE_DATA — anything below it means the click starts a network
+    // fetch, and the user must see that as loading, not as a dead button.
+    if (audio.readyState < 3) { setPlayState("loading"); armWatchdog(); }
+    audio.play().catch((err: unknown) => {
+      // pause() interrupting a pending play() is the user changing their mind,
+      // not a playback failure.
+      if ((err as { name?: string } | null)?.name === "AbortError") return;
+      handleAudioFailure();
+    });
+  }
+
+  function retry() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setFailure(null);
+    audio.load(); // drop whatever half-state the element is wedged in and refetch
+    togglePlayback();
+  }
+
+  async function handleDownload() {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadMessage(null);
+    try {
+      const res = await downloadRecordingWithReason(linkedId);
+      if (!res.ok) {
+        // The PBX confirming "never recorded" answers the player too, not just
+        // the download — swap the whole card for the plain fact.
+        if (res.reason === "not_recorded") setFailure("not_recorded");
+        else setDownloadMessage(RECORDING_FAILURE_TEXT[res.reason]);
+      }
+    } finally {
+      setDownloading(false);
     }
   }
+
+  // A player that can never produce sound is worse than no player.
+  if (failure === "not_recorded" || failure === "forbidden") {
+    return (
+      <div className="cdp-recording-player">
+        <div className="cdp-recording-note">
+          <MicOff size={14} aria-hidden />
+          <span>{RECORDING_PLAYBACK_TEXT[failure]}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Streams without usable metadata report duration 0 or Infinity — the CDR's
+  // own talk time is the honest stand-in until real metadata arrives.
+  const effectiveDuration = Number.isFinite(duration) && duration > 0 ? duration : Math.max(0, fallbackDurationSec || 0);
+  const progress = effectiveDuration > 0 ? Math.min(100, (current / effectiveDuration) * 100) : 0;
+  const loading = playState === "loading";
+  const playing = playState === "playing";
 
   function seek(value: string) {
     const next = Number(value);
     const audio = audioRef.current;
     setCurrent(next);
-    if (audio && Number.isFinite(next)) audio.currentTime = next;
+    // Before any load has happened there is nothing to seek in.
+    if (audio && Number.isFinite(next) && audio.readyState >= 1) audio.currentTime = next;
   }
 
-  const progress = duration > 0 ? (current / duration) * 100 : 0;
-
   return (
-    <div className="cdp-custom-audio">
-      <audio
-        ref={audioRef}
-        preload="none"
-        src={src}
-        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
-        onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime || 0)}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-      />
-      <button type="button" className="cdp-custom-audio-play" onClick={togglePlayback} aria-label={playing ? "Pause recording" : "Play recording"}>
-        {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
-      </button>
-      <span className="cdp-custom-audio-time">
-        {formatPlayerTime(current)} / {formatPlayerTime(duration)}
-      </span>
-      <label className="cdp-custom-audio-track" aria-label="Recording progress">
-        <span style={{ width: `${progress}%` }} />
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.1}
-          value={duration ? current : 0}
-          onChange={(event) => seek(event.currentTarget.value)}
+    <div className="cdp-recording-player">
+      <div className="cdp-custom-audio">
+        <audio
+          ref={audioRef}
+          preload="none"
+          src={streamSrc}
+          onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+          onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
+          onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime || 0)}
+          onPlaying={() => { clearWatchdog(); setPlayState("playing"); }}
+          onWaiting={() => {
+            const audio = audioRef.current;
+            if (audio && !audio.paused) { setPlayState("loading"); armWatchdog(); }
+          }}
+          onPause={() => { clearWatchdog(); setPlayState("paused"); }}
+          onEnded={() => { clearWatchdog(); setPlayState("paused"); }}
+          onError={handleAudioFailure}
         />
-      </label>
-      <Volume2 className="cdp-custom-audio-volume" size={16} aria-hidden />
+        <button
+          type="button"
+          className="cdp-custom-audio-play"
+          onClick={togglePlayback}
+          aria-label={loading ? "Loading recording" : playing || loading ? "Pause recording" : "Play recording"}
+        >
+          {loading ? (
+            <Loader2 size={16} className="cdp-audio-spin" />
+          ) : playing ? (
+            <Pause size={16} fill="currentColor" />
+          ) : (
+            <Play size={16} fill="currentColor" />
+          )}
+        </button>
+        <span className="cdp-custom-audio-time" aria-live="polite">
+          {loading ? "Loading…" : `${formatPlayerTime(current)} / ${formatPlayerTime(effectiveDuration)}`}
+        </span>
+        <label className="cdp-custom-audio-track" aria-label="Recording progress">
+          <span style={{ width: `${progress}%` }} />
+          <input
+            type="range"
+            min={0}
+            max={effectiveDuration || 0}
+            step={0.1}
+            value={effectiveDuration ? current : 0}
+            onChange={(event) => seek(event.currentTarget.value)}
+          />
+        </label>
+        <Volume2 className="cdp-custom-audio-volume" size={16} aria-hidden />
+      </div>
+      {failure === "temporary" ? (
+        <div className="cdp-recording-error" role="alert">
+          <AlertCircle size={13} aria-hidden />
+          <span>{RECORDING_PLAYBACK_TEXT.temporary}</span>
+          <button type="button" onClick={retry}>Try again</button>
+        </div>
+      ) : null}
+      {canDownload ? (
+        <button type="button" className="cdp-recording-download" onClick={handleDownload} disabled={downloading}>
+          {downloading ? <Loader2 size={13} className="cdp-audio-spin" /> : <Download size={13} />}
+          {downloading ? "Preparing…" : "Download"}
+        </button>
+      ) : null}
+      {downloadMessage ? (
+        <div className="cdp-recording-error" role="alert">
+          <AlertCircle size={13} aria-hidden />
+          <span>{downloadMessage}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -16237,6 +16237,31 @@ table tr:hover {
 .cdp-recording-pending {
   font-size: 12px; color: var(--console-muted); font-style: italic; margin: 4px 0 0;
 }
+/* Honest playback states: "not recorded" replaces the player, "couldn't load"
+   sits under it with a retry, and the play button spins while audio loads. */
+.cdp-recording-note {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--text-dim);
+  padding: 6px 4px;
+}
+.cdp-recording-error {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--danger, #ef4444);
+  padding: 2px 4px 0;
+}
+.cdp-recording-error button {
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 45%, transparent);
+  background: transparent; color: inherit; font: inherit; font-weight: 700;
+  border-radius: 8px; padding: 2px 10px; cursor: pointer;
+}
+.cdp-recording-error button:hover {
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+}
+/* The download control is a <button> now (honest failure reporting), not an <a>. */
+.cdp-recording-download { cursor: pointer; font-family: inherit; }
+.cdp-recording-download:disabled { opacity: 0.6; cursor: default; transform: none; }
+.cdp-audio-spin { animation: cdpAudioSpin 0.8s linear infinite; }
+@keyframes cdpAudioSpin { to { transform: rotate(360deg); } }
 
 /* ???????????????????????????????????????????????????????????????????????????????
    CALL HISTORY v3 ? premium SaaS telephony feed

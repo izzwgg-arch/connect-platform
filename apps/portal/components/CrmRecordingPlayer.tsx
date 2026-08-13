@@ -19,6 +19,11 @@
 
 import { useState } from "react";
 import { Play, Square, AlertCircle, MicOff } from "lucide-react";
+import {
+  classifyRecordingPlaybackFailure,
+  recordingStreamUrl,
+  type RecordingPlaybackFailure,
+} from "../services/recordingPlayback";
 
 interface CrmRecordingPlayerProps {
   linkedId: string;
@@ -26,52 +31,17 @@ interface CrmRecordingPlayerProps {
   compact?: boolean;
 }
 
-function getStorageToken(): string {
-  if (typeof window === "undefined") return "";
-  return (
-    window.localStorage.getItem("token") ||
-    window.localStorage.getItem("cc-token") ||
-    ""
-  );
-}
-
-/**
- * An <audio> element's onError says only "it broke" — never why. That produced
- * a dead player next to a 10px "Unavailable" for calls that simply have no
- * recording, which reads as a broken product. So on failure we ask the server
- * for one byte and use its answer to say the true thing.
- */
-type PlayFailure = "not_recorded" | "temporary";
-
-async function classifyStreamFailure(streamUrl: string): Promise<PlayFailure> {
-  try {
-    const resp = await fetch(streamUrl, { headers: { Range: "bytes=0-0" } });
-    if (resp.ok || resp.status === 206) return "temporary"; // audio fetched fine — the element choked, not the server
-    if (resp.status === 404) {
-      const body = await resp.json().catch(() => null as any);
-      return body?.error === "audio_fetch_failed" ? "temporary" : "not_recorded";
-    }
-    return "temporary";
-  } catch {
-    return "temporary";
-  }
-}
-
 export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPlayerProps) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState(false);
-  const [failure, setFailure] = useState<PlayFailure | null>(null);
+  const [failure, setFailure] = useState<RecordingPlaybackFailure | null>(null);
   // True from the moment the player opens until the first `playing` event, and
   // again on `waiting` (mid-play rebuffer). Without this the native controls
   // flip to "pause" while the network is still fetching — the "it says playing
   // but nothing is playing" report.
   const [buffering, setBuffering] = useState(false);
 
-  const streamUrl = (() => {
-    const token = getStorageToken();
-    const base = `/api/voice/recording/${encodeURIComponent(linkedId)}/stream`;
-    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
-  })();
+  const streamUrl = recordingStreamUrl(linkedId);
 
   if (!open) {
     return (
@@ -100,11 +70,14 @@ export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPl
   }
 
   // A player that can never produce sound is worse than no player — once we know
-  // the call was not recorded, replace it with the plain fact.
-  if (failure === "not_recorded") {
+  // the call was not recorded (or this user may not hear it), replace it with
+  // the plain fact.
+  if (failure === "not_recorded" || failure === "forbidden") {
     return (
       <span
-        title="This call was not recorded, so there is no audio to play."
+        title={failure === "forbidden"
+          ? "You don’t have permission to listen to this recording."
+          : "This call was not recorded, so there is no audio to play."}
         style={{
           display: "inline-flex", alignItems: "center", gap: "0.25rem",
           fontSize: compact ? "0.625rem" : "0.6875rem", fontWeight: 600,
@@ -113,7 +86,7 @@ export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPl
         }}
       >
         <MicOff size={compact ? 8 : 10} />
-        Not recorded
+        {failure === "forbidden" ? "No access" : "Not recorded"}
       </span>
     );
   }
@@ -134,7 +107,7 @@ export function CrmRecordingPlayer({ linkedId, compact = false }: CrmRecordingPl
         onError={() => {
           setError(true);
           setBuffering(false);
-          void classifyStreamFailure(streamUrl).then(setFailure);
+          void classifyRecordingPlaybackFailure(streamUrl).then(setFailure);
         }}
         style={{
           height: compact ? "28px" : "32px",
