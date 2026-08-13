@@ -1,5 +1,47 @@
 # Connect 2 — working rules for Claude
 
+## ⛔ AGENT HANDOFF — the Team Directory could not scroll unless the window was maximised (2026-08-12) — READ FIRST before adding a screen to the `.console-content:has(> …)` full-height list, or for ANY "this page cuts off / won't scroll" report
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_TEAM_DIRECTORY_SCROLL_2026-08-12.md`**
+(commit `504ec6ed` on `feat/ivr-migration-takeover`, shipped in portal tip
+`5330620d` — **DEPLOYED, container-verified AND verified over public HTTPS**.
+Portal CSS only, one screen; nothing touching call routing, the PBX or billing.)
+
+- ⛔ **A screen listed in `.console-content:has(> …)` has had its outer
+  scrolling turned OFF and MUST supply its own inner scroller.** Three parts,
+  as `.ch-shell` does it: root `height:100%; min-height:0; overflow:hidden` +
+  flex column; header/footer bands `flex-shrink:0`; **middle band
+  `flex:1; min-height:0; overflow-y:auto`**. The Team Directory had only the
+  footer part, so **no element on the page was a scroller** and everything
+  below the window edge was unreachable. ⛔ **`min-height: 0` is the piece that
+  does the work and the piece everyone omits** — without it a `flex:1` child
+  still grows to fit its content and never scrolls.
+- ⛔ **A maximised window PROVES NOTHING here.** Nothing about the bug is
+  size-dependent — only the symptom is. Maximised, the list happened to fit and
+  the screen looked perfect; shrink the window and 1,425 px of people were cut
+  off with **zero** scrollable containers anywhere on the page. **Test every
+  screen on that list at a short window.**
+- ⛔ **One scrollport per page.** `overflow-x: auto` computes `overflow-y` to
+  `auto` too, so a nested wrapper becomes its own scrollport and captures any
+  `position: sticky` header inside it. Making the page scroll would have slid
+  the list view's column headings away (measured: header at **y = −523**);
+  moving the sideways scroll up onto `.td-content` pinned them correctly
+  (**y = 77** vs content top 61). Fixing the scroll is what *exposed* this —
+  check for it whenever you add a scroller.
+- **Safe to clip only because the overlays are `position: fixed`** — the detail
+  panel, its backdrop and the toasts all are, so `overflow: hidden` on the root
+  never reaches them. Verify that before adding clipping to any other screen.
+- ⛔ **The desktop app keeps the OLD bundle until the window is fully closed and
+  reopened** — a portal deploy reaches every install with no new build, but
+  "it's deployed" without "now restart it" leaves the customer looking at the
+  identical bug.
+- ⏳ **NOT PROVEN: nobody has opened the real screen since the deploy.** Proven
+  by measurement against the actual shipped stylesheet (5,412 rules parsed) plus
+  the live CSS fetched over HTTPS — not by a human scrolling it.
+- **Follow-up not done:** `.vm-shell` (Voicemail) and `.billing-ws-shell`
+  (Billing) were never checked at a short window for the same defect.
+  `.ch-shell` is the known-good reference.
+
 ## ⛔⛔ AGENT HANDOFF — voicemail-to-email is sent BY THE PBX, not by Connect (2026-08-09) — READ FIRST for ANY "customer didn't get their voicemail email", before looking inside Connect for it, and before believing alert emails are off
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_PBX_2026-08-09.md`**

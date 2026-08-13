@@ -805,6 +805,37 @@ When you find a new fragile area, add it here.
 - **Two truth sources.** KPI cards = VitalPBX `/api/v2/cdr`, live table = `connectCdr`
   rows. Keep both in mind.
 
+## Portal layout — full-height screens must own their scrolling
+
+- **Fixed 2026-08-12 — the Team Directory could not scroll unless the window was
+  maximised.** `apps/portal/app/globals.css` (~15246) strips scrolling from the
+  page wrapper for an opt-in list of screens
+  (`.console-content:has(> .ch-shell | .vm-shell | .td-page | .billing-ws-shell)`),
+  which makes each of those screens responsible for its own inner scroller.
+  `.td-page` had `min-height: 100%; overflow: visible` and `.td-content` had no
+  `overflow` at all, so **no element on the page was a scroller** — 1,425 px of
+  members were cut off and unreachable. Fix (`504ec6ed`, deployed in portal tip
+  `5330620d`): `.td-page { height:100%; min-height:0; overflow:hidden }` +
+  `.td-content { flex:1; min-height:0; overflow-y:auto; overflow-x:auto }` +
+  `.td-list-wrap { overflow:visible }`. Full detail:
+  **`docs/ai-context/AGENT_HANDOFF_TEAM_DIRECTORY_SCROLL_2026-08-12.md`**.
+- **The trap: `min-height: 0`.** Without it a `flex: 1` child grows to fit all
+  its content and never becomes a scroller, so the parent silently clips instead.
+  This is the piece that is always omitted.
+- **A maximised window proves nothing.** Nothing about this class of bug is
+  size-dependent — only the symptom is. If the list happens to fit, the screen
+  looks perfect. **Test at a short, non-maximised window.**
+- **One scrollport per page.** `overflow-x: auto` computes `overflow-y` to `auto`
+  too, so a nested wrapper becomes its own scrollport and captures any
+  `position: sticky` header inside it (this is why `.td-list-wrap` gave up its
+  `overflow-x`). Watch for it any time you add a scroller above a sticky header.
+- **Only clip a root whose overlays are `position: fixed`.** The Team Directory's
+  detail panel, backdrop and toasts all are, so `overflow: hidden` never reaches
+  them. Verify this per screen before adding clipping.
+- **Open — not checked.** `.vm-shell` (Voicemail) and `.billing-ws-shell`
+  (Billing) have never been opened at a short window to confirm they honour the
+  contract. `.ch-shell` (Calls) is the known-good reference implementation.
+
 ## Voicemail / recordings
 
 - **Voicemail privacy / tenant + mailbox isolation (non-negotiable).** Voicemail
