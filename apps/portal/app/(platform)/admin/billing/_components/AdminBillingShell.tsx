@@ -243,7 +243,6 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
     "billing-ws-scope",
     "billing-p5-scope",
     "billing-p8-scope",
-    "billing-ws-shell--context-wide",
     isGlobalScope && !effectiveTenantId ? "billing-ws-shell--all-tenants" : "",
   ]
     .filter(Boolean)
@@ -260,7 +259,7 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
         tabIndex={-1}
         aria-hidden
       />
-      <div className="billing-ws-main billing-ws-main--wide">
+      <div className="billing-ws-main">
         {showToolbar ? (
           <div className="billing-ws-toolbar" aria-label="Billing workspace">
             <div className="billing-ws-toolbar-meta">

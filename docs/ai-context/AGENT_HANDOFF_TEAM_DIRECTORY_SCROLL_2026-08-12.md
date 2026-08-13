@@ -203,16 +203,23 @@ Their chains, for reference:
 forms — set **background only** and never touch `overflow`, so those pages keep
 normal page scrolling and are not under this contract.
 
-Two Billing-specific notes for anyone extending it:
+Two Billing-specific traps were found here, and both were closed the same day:
 
-- `.billing-ws-main` gets its `flex: 1` from
-  `.billing-ws-shell--context-wide .billing-ws-main--wide`, **not** from its own
-  rule. A page rendering `.billing-ws-main` without `--wide` loses it.
-- `AdminBillingShell` only wraps routes **absent** from its `REBUILT` list.
-  Rebuilt pages return a bare `<Suspense>`, so no `.billing-ws-shell` element
-  exists, the `:has()` never matches, and `.console-content` scrolls them
-  normally. (`<Suspense>` renders no DOM node, which is why the shell is still a
-  direct child and the `:has(>)` matches for the non-rebuilt pages.)
+- **Fixed** — `.billing-ws-main` used to get its `flex: 1` only through
+  `.billing-ws-shell--context-wide .billing-ws-main--wide`, so a page rendering
+  it bare would silently lose the scroll chain (the exact `.td-page` failure
+  shape, one refactor away). The layout now lives on `.billing-ws-main` itself
+  in `billingPhase7.css` and both modifier classes were deleted from CSS and
+  `AdminBillingShell` alike. Proven by measurement: shell markup and bare markup
+  now scroll identically (1,569 px, toolbar pinned, 0 px stranded).
+  `--all-tenants` stays — it pre-dates this and is conditional.
+- **Documented in-code** — `AdminBillingShell` only wraps routes **absent** from
+  its `REBUILT` list. Rebuilt pages return a bare `<Suspense>` (which renders no
+  DOM node), so no `.billing-ws-shell` element exists, the `:has()` never
+  matches, and `.console-content` scrolls them normally. That split is
+  deliberate; the full explanation now sits on the `REBUILT` list itself in
+  `apps/portal/app/(platform)/admin/billing/layout.tsx` so nobody "fixes" one
+  side to match the other.
 
 Any screen **added** to that list in future must ship all three parts of the
 contract in §2, or it arrives with this exact bug.

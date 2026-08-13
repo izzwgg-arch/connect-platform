@@ -843,13 +843,21 @@ When you find a new fragile area, add it here.
   (wallboard, checklist, scripts, voicemail-drops, forms) set **background only**
   and never touch `overflow`, so they are not under this contract and keep normal
   page scrolling.
-- **Two things to know if you extend Billing.** `.billing-ws-main` gets its
-  `flex: 1` from `.billing-ws-shell--context-wide .billing-ws-main--wide`, not
-  from its own rule — a page rendering `.billing-ws-main` without `--wide` would
-  lose it. And `AdminBillingShell` only wraps routes **absent** from its
-  `REBUILT` list; rebuilt pages return bare `<Suspense>`, so no
-  `.billing-ws-shell` exists, the `:has()` never matches and `.console-content`
-  scrolls them normally.
+- **Fixed 2026-08-12 — Billing's `flex: 1` no longer hides behind modifier
+  classes.** It used to arrive only through
+  `.billing-ws-shell--context-wide .billing-ws-main--wide`, so a page rendering
+  `.billing-ws-main` bare would silently lose the scroll chain. The layout now
+  lives on `.billing-ws-main` itself and the two modifier classes are gone from
+  both the CSS and `AdminBillingShell` (measured: bare markup now scrolls
+  identically to the shell's markup). `--all-tenants` remains, deliberately —
+  it pre-dates this and is conditional.
+- **Still true, now documented in-code:** `AdminBillingShell` only wraps routes
+  **absent** from its `REBUILT` list; rebuilt pages return bare `<Suspense>`, so
+  no `.billing-ws-shell` exists, the `:has()` never matches and
+  `.console-content` scrolls them normally. **Deliberate — don't "fix" one side
+  to match the other.** The full explanation now sits on the `REBUILT` list in
+  `apps/portal/app/(platform)/admin/billing/layout.tsx`, where anyone adding a
+  screen will read it.
 
 ## Voicemail / recordings
 

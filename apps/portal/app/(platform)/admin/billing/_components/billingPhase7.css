@@ -27,21 +27,20 @@
   overflow: hidden;
 }
 
-/* Full-width workspace (tenant rail removed — global workspace switcher is source of truth) */
-
-.billing-ws-shell--context-wide .billing-ws-main--wide {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--billing-border);
-}
-
+/* Full-width workspace (tenant rail removed — global workspace switcher is
+   source of truth). The full-height layout lives HERE, on the base class —
+   deliberately not on a `--context-wide .billing-ws-main--wide` combination.
+   It used to: `flex: 1` only arrived through that pair, so a page rendering
+   `.billing-ws-main` without both modifiers silently lost the scroll chain and
+   clipped its content — the exact Team Directory bug
+   (docs/ai-context/AGENT_HANDOFF_TEAM_DIRECTORY_SCROLL_2026-08-12.md). */
 .billing-ws-main {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  border-top: 1px solid var(--billing-border);
 }
 
 .billing-ws-toolbar {
