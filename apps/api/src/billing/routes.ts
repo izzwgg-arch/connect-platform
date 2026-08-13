@@ -52,8 +52,8 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail, queueReceiptEmailOnce } from "./billingEmailLifecycle";
-import { BILLING_PAY_TOKEN_TTL_MS } from "./billingPayToken";
+import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, publicPortalBaseUrl, queueApologyEmailOnce, queuePaymentLinkEmail, queueReceiptEmailOnce } from "./billingEmailLifecycle";
+import { BILLING_PAY_TOKEN_TTL_MS, createBillingMultiPayToken } from "./billingPayToken";
 import { formatUsPhoneForHumans, normalizeUsPhone, resolveBillingSmsSender } from "./billingSmsSender";
 import {
   buildBillingEmailJobCreateData,
@@ -244,6 +244,27 @@ function centsToDollarsStr(cents: number): string {
 // ⛔ There is deliberately NO per-tenant resolver here any more. Billing texts
 // always go out from Connect's own number via the platform VoIP.ms account —
 // see `billingSmsSender.ts` for why the per-tenant version could never work.
+
+/**
+ * Every invoice of this customer that still has money owing — what a combined
+ * "pay everything" link covers. Due-date order, oldest first.
+ */
+async function openInvoicesForTenant(tenantId: string) {
+  return (db as any).billingInvoice.findMany({
+    where: {
+      tenantId,
+      status: { in: ["OPEN", "FAILED", "OVERDUE"] },
+      balanceDueCents: { gt: 0 },
+    },
+    select: { id: true, invoiceNumber: true, status: true, balanceDueCents: true, dueDate: true },
+    orderBy: { dueDate: "asc" },
+  });
+}
+
+function combinedPayUrl(tenantId: string, invoiceIds: string[]): string {
+  const token = createBillingMultiPayToken(tenantId, invoiceIds);
+  return `${publicPortalBaseUrl()}/pay/invoices/${encodeURIComponent(token)}`;
+}
 
 /**
  * The last number we successfully texted a pay link to for this customer, so
@@ -2657,14 +2678,27 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invoice_voided", message: "This invoice was cancelled, so it has no payment link." });
     }
 
-    const [sender, suggestedPhone] = await Promise.all([
+    const [sender, suggestedPhone, openInvoices] = await Promise.all([
       resolveBillingSmsSender(),
       lastBillingSmsRecipientForTenant(invoice.tenantId),
+      openInvoicesForTenant(invoice.tenantId),
     ]);
+
+    // When this customer owes on more than one invoice, offer ONE link that
+    // covers all of them — one card entry settles everything open.
+    const combined = openInvoices.length > 1
+      ? {
+        count: openInvoices.length,
+        totalCents: openInvoices.reduce((sum: number, r: any) => sum + r.balanceDueCents, 0),
+        invoiceNumbers: openInvoices.map((r: any) => r.invoiceNumber),
+        url: combinedPayUrl(invoice.tenantId, openInvoices.map((r: any) => r.id)),
+      }
+      : null;
 
     return {
       url: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId),
       expiresAt: new Date(Date.now() + BILLING_PAY_TOKEN_TTL_MS).toISOString(),
+      combined,
       // Everything the "text it" panel needs, so the screen makes one call.
       sms: {
         capable: sender.ok,
@@ -2709,6 +2743,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       phone: z.string().min(7).max(20).optional(),
       fromPhone: z.string().max(20).optional(),
       note: z.string().max(300).optional(),
+      /** true = text ONE link covering every open invoice of this customer. */
+      combined: z.boolean().optional(),
     }).parse(req.body || {});
 
     const invoice = await (db as any).billingInvoice.findUnique({
@@ -2745,12 +2781,30 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return reply.code(429).send({ error: "duplicate_sms_send", message: "A payment link was already sent to this number in the last 2 minutes. Please wait before resending." });
     }
 
-    const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
-    const invLabel = invoice.invoiceNumber || invoice.id.slice(0, 8);
-    const invoiceIsPaid = invoice.status === "PAID";
-    const smsAmountCents = invoiceIsPaid ? invoice.totalCents : (invoice.balanceDueCents ?? invoice.totalCents);
-    const balanceStr = centsToDollarsStr(smsAmountCents);
-    const msgBody = `${invoice.tenant?.name || "Connect"}: ${invoiceIsPaid ? "View paid invoice" : "Pay invoice"} ${invLabel} (${balanceStr}): ${payUrl}`;
+    // Combined = one link covering every open invoice of this customer.
+    let payUrl: string;
+    let msgBody: string;
+    let combinedInvoiceIds: string[] | null = null;
+    if (input.combined) {
+      const open = await openInvoicesForTenant(invoice.tenantId);
+      if (open.length < 2) {
+        return reply.code(400).send({
+          error: "combined_not_applicable",
+          message: "This customer has only one open invoice — send the regular link instead.",
+        });
+      }
+      combinedInvoiceIds = open.map((r: any) => r.id);
+      const totalCents = open.reduce((sum: number, r: any) => sum + r.balanceDueCents, 0);
+      payUrl = combinedPayUrl(invoice.tenantId, combinedInvoiceIds!);
+      msgBody = `${invoice.tenant?.name || "Connect"}: Pay ${open.length} open invoices (${centsToDollarsStr(totalCents)} total): ${payUrl}`;
+    } else {
+      payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
+      const invLabel = invoice.invoiceNumber || invoice.id.slice(0, 8);
+      const invoiceIsPaid = invoice.status === "PAID";
+      const smsAmountCents = invoiceIsPaid ? invoice.totalCents : (invoice.balanceDueCents ?? invoice.totalCents);
+      const balanceStr = centsToDollarsStr(smsAmountCents);
+      msgBody = `${invoice.tenant?.name || "Connect"}: ${invoiceIsPaid ? "View paid invoice" : "Pay invoice"} ${invLabel} (${balanceStr}): ${payUrl}`;
+    }
 
     let providerMessageId: string | undefined;
     try {
@@ -2771,15 +2825,20 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return reply.code(502).send({ error: "sms_send_failed", message: err?.message || "SMS provider returned an error. Check the phone number and try again." });
     }
 
-    await logBillingEvent({
-      tenantId: invoice.tenantId,
-      invoiceId: id,
-      type: "billing.sms_payment_link_sent",
-      message: `Payment link sent via SMS to ${normalizedPhone}${input.note ? ` — ${input.note}` : ""}`,
-      metadata: { toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId, adminUserId: u.sub },
-    });
-    await (db as any).billingInvoice.update({
-      where: { id },
+    // A combined text is recorded on EVERY invoice it covers, so each invoice's
+    // timeline shows the link going out and its open being noticed.
+    const coveredIds = combinedInvoiceIds ?? [id];
+    for (const coveredId of coveredIds) {
+      await logBillingEvent({
+        tenantId: invoice.tenantId,
+        invoiceId: coveredId,
+        type: "billing.sms_payment_link_sent",
+        message: `Payment link${combinedInvoiceIds ? ` (combined, ${coveredIds.length} invoices)` : ""} sent via SMS to ${normalizedPhone}${input.note ? ` — ${input.note}` : ""}`,
+        metadata: { toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId, adminUserId: u.sub, ...(combinedInvoiceIds ? { combined: true } : {}) },
+      });
+    }
+    await (db as any).billingInvoice.updateMany({
+      where: { id: { in: coveredIds } },
       data: { lastEmailStatus: "SMS_SENT", lastEmailedAt: new Date() },
     });
 

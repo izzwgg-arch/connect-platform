@@ -34,6 +34,53 @@ export function createBillingInvoicePayToken(
   return `${payloadB64}.${signPayload(payloadB64)}`;
 }
 
+type MultiPayTokenPayload = { t: string; ii: string[]; e: number };
+
+/**
+ * One signed token covering SEVERAL invoices of one tenant — "pay everything
+ * open in one go". Same secret and signing as the single-invoice token; the
+ * payload shape (`ii` vs `i`) is what tells them apart, so neither verifier
+ * ever accepts the other's token.
+ */
+export function createBillingMultiPayToken(
+  tenantId: string,
+  invoiceIds: string[],
+  ttlMs: number = BILLING_PAY_TOKEN_TTL_MS,
+): string {
+  const ids = [...new Set(invoiceIds.filter((v) => typeof v === "string" && v.trim()))];
+  if (!ids.length) throw new Error("A combined pay link needs at least one invoice.");
+  const payload: MultiPayTokenPayload = { t: tenantId, ii: ids, e: Date.now() + ttlMs };
+  const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return `${payloadB64}.${signPayload(payloadB64)}`;
+}
+
+/** Verify a combined-invoices token; null if invalid, expired, or single-shape. */
+export function verifyBillingMultiPayToken(
+  token: string,
+): { tenantId: string; invoiceIds: string[]; expiresAt: number } | null {
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const payloadB64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = signPayload(payloadB64);
+  try {
+    const a = Buffer.from(sig, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  } catch {
+    return null;
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as MultiPayTokenPayload;
+    if (!decoded?.t || typeof decoded.e !== "number") return null;
+    if (!Array.isArray(decoded.ii) || !decoded.ii.length || !decoded.ii.every((v) => typeof v === "string" && v)) return null;
+    if (decoded.e < Date.now()) return null;
+    return { tenantId: decoded.t, invoiceIds: decoded.ii, expiresAt: decoded.e };
+  } catch {
+    return null;
+  }
+}
+
 /** Verify token; returns null if invalid or expired. */
 export function verifyBillingInvoicePayToken(
   token: string,

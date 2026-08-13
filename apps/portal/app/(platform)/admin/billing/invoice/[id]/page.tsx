@@ -309,6 +309,12 @@ export default function InvoicePage() {
 type PaymentLinkInfo = {
   url: string;
   expiresAt: string;
+  combined: {
+    count: number;
+    totalCents: number;
+    invoiceNumbers: string[];
+    url: string;
+  } | null;
   sms: {
     capable: boolean;
     fromNumber: string | null;
@@ -329,16 +335,20 @@ function PaymentLink({ invoice, onSent }: { invoice: Invoice; onSent: () => void
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState("");
   const [err, setErr] = useState("");
+  // When the customer owes on several invoices, the operator picks which link
+  // this card is working with — this one invoice, or everything open.
+  const [useCombined, setUseCombined] = useState(false);
 
   const info = link.data;
-  const url = info?.url || "";
+  const combined = info?.combined || null;
+  const activeUrl = (useCombined && combined ? combined.url : info?.url) || "";
   // Offer the last number we texted for this customer, until they type over it.
   const phoneValue = phoneTouched ? phone : (phone || info?.sms.suggestedPhone || "");
 
   const copy = async () => {
     setErr("");
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(activeUrl);
       setCopied("Copied — paste it wherever you like.");
       window.setTimeout(() => setCopied(""), 4000);
     } catch {
@@ -353,7 +363,7 @@ function PaymentLink({ invoice, onSent }: { invoice: Invoice; onSent: () => void
     try {
       const res = await apiPost<{ toPhone: string; fromPhoneLabel?: string }>(
         `/admin/billing/invoices/${invoice.id}/sms-payment-link`,
-        { phone: phoneValue.trim() },
+        { phone: phoneValue.trim(), ...(useCombined && combined ? { combined: true } : {}) },
       );
       setSentTo(res.toPhone);
       onSent();
@@ -376,6 +386,37 @@ function PaymentLink({ invoice, onSent }: { invoice: Invoice; onSent: () => void
         {copied && <div className="cbill-banner ok" style={{ margin: "10px 0" }}>{copied}</div>}
         {sentTo && <div className="cbill-banner ok" style={{ margin: "10px 0" }}>Texted to {sentTo}.</div>}
 
+        {combined && (
+          <div className="cbill-row">
+            <div className="cbill-label">
+              <span className="t">What the link covers</span>
+              <span className="h">
+                They owe on {combined.count} invoices — {combined.invoiceNumbers.join(", ")}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="cbill-btn"
+                data-on={!useCombined}
+                style={!useCombined ? { fontWeight: 650 } : undefined}
+                onClick={() => { setUseCombined(false); setCopied(""); }}
+              >
+                Just this invoice ({money(invoice.balanceDueCents)})
+              </button>
+              <button
+                type="button"
+                className="cbill-btn"
+                data-on={useCombined}
+                style={useCombined ? { fontWeight: 650 } : undefined}
+                onClick={() => { setUseCombined(true); setCopied(""); }}
+              >
+                All {combined.count} open invoices ({money(combined.totalCents)})
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="cbill-row">
           <div className="cbill-label">
             <span className="t">The link</span>
@@ -384,14 +425,14 @@ function PaymentLink({ invoice, onSent }: { invoice: Invoice; onSent: () => void
           <input
             className="cbill-input text"
             readOnly
-            value={link.loading ? "Loading…" : url}
+            value={link.loading ? "Loading…" : activeUrl}
             onFocus={(e) => e.currentTarget.select()}
             aria-label="Payment link"
           />
         </div>
         <div className="cbill-row">
           <div className="cbill-label" />
-          <button className="cbill-btn primary" disabled={!url} onClick={() => void copy()}>
+          <button className="cbill-btn primary" disabled={!activeUrl} onClick={() => void copy()}>
             Copy link
           </button>
         </div>
@@ -417,10 +458,14 @@ function PaymentLink({ invoice, onSent }: { invoice: Invoice; onSent: () => void
           <div className="cbill-label" />
           <button
             className="cbill-btn"
-            disabled={sending || !url || info?.sms.capable === false}
+            disabled={sending || !activeUrl || info?.sms.capable === false}
             onClick={() => void send()}
           >
-            {sending ? "Sending…" : "Send the text"}
+            {sending
+              ? "Sending…"
+              : useCombined && combined
+                ? `Text the all-${combined.count}-invoices link`
+                : "Send the text"}
           </button>
         </div>
       </div>

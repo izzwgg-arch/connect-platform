@@ -1,49 +1,56 @@
-/**
- * Public pay token: signed, expiring, tenant+invoice bound.
- */
-
-import test from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
+
+process.env.BILLING_PAY_TOKEN_SECRET ||= "test-secret-for-pay-tokens";
+
 import {
   createBillingInvoicePayToken,
+  createBillingMultiPayToken,
   verifyBillingInvoicePayToken,
-  BILLING_PAY_TOKEN_TTL_MS,
+  verifyBillingMultiPayToken,
 } from "./billingPayToken";
 
-const ORIGINAL = process.env.BILLING_PAY_TOKEN_SECRET;
-
-test.before(() => {
-  process.env.BILLING_PAY_TOKEN_SECRET = "a".repeat(64);
-});
-
-test.after(() => {
-  if (ORIGINAL === undefined) delete process.env.BILLING_PAY_TOKEN_SECRET;
-  else process.env.BILLING_PAY_TOKEN_SECRET = ORIGINAL;
-});
-
-test("valid token round-trips invoice and tenant", () => {
-  const token = createBillingInvoicePayToken("inv_1", "tenant_a");
-  const parsed = verifyBillingInvoicePayToken(token);
+test("multi token round-trips tenant + every invoice id", () => {
+  const token = createBillingMultiPayToken("tenant-1", ["inv-a", "inv-b", "inv-c"]);
+  const parsed = verifyBillingMultiPayToken(token);
   assert.ok(parsed);
-  assert.equal(parsed!.invoiceId, "inv_1");
-  assert.equal(parsed!.tenantId, "tenant_a");
+  assert.equal(parsed!.tenantId, "tenant-1");
+  assert.deepEqual(parsed!.invoiceIds, ["inv-a", "inv-b", "inv-c"]);
+  assert.ok(parsed!.expiresAt > Date.now());
 });
 
-test("tampered token is rejected", () => {
-  const token = createBillingInvoicePayToken("inv_1", "tenant_a");
-  const bad = token.slice(0, -2) + "xx";
-  assert.equal(verifyBillingInvoicePayToken(bad), null);
+test("duplicate and blank ids are dropped at mint time", () => {
+  const token = createBillingMultiPayToken("t", ["inv-a", "inv-a", "", "inv-b"]);
+  const parsed = verifyBillingMultiPayToken(token);
+  assert.deepEqual(parsed!.invoiceIds, ["inv-a", "inv-b"]);
 });
 
-test("wrong tenant in payload cannot be verified with different secret", () => {
-  const token = createBillingInvoicePayToken("inv_1", "tenant_a");
-  process.env.BILLING_PAY_TOKEN_SECRET = "b".repeat(64);
-  assert.equal(verifyBillingInvoicePayToken(token), null);
-  process.env.BILLING_PAY_TOKEN_SECRET = "a".repeat(64);
+test("a combined link over zero invoices cannot be minted", () => {
+  assert.throws(() => createBillingMultiPayToken("t", []));
+  assert.throws(() => createBillingMultiPayToken("t", ["", "  "].map((s) => s.trim()).filter(Boolean)));
 });
 
-test("expired token is rejected", () => {
-  const token = createBillingInvoicePayToken("inv_1", "tenant_a", -1000);
-  assert.equal(verifyBillingInvoicePayToken(token), null);
-  void BILLING_PAY_TOKEN_TTL_MS;
+test("an expired multi token verifies to null", () => {
+  const token = createBillingMultiPayToken("t", ["inv-a"], -1000);
+  assert.equal(verifyBillingMultiPayToken(token), null);
+});
+
+test("a tampered multi token verifies to null", () => {
+  const token = createBillingMultiPayToken("t", ["inv-a"]);
+  const [payload, sig] = token.split(".");
+  const forged = Buffer.from(JSON.stringify({ t: "t", ii: ["inv-a", "inv-EVIL"], e: Date.now() + 60_000 }), "utf8").toString("base64url");
+  assert.equal(verifyBillingMultiPayToken(`${forged}.${sig}`), null);
+  assert.equal(verifyBillingMultiPayToken(`${payload}.AAAA${sig.slice(4)}`), null);
+});
+
+test("the two token shapes never accept each other", () => {
+  // A single-invoice token must not open the combined page, and a combined
+  // token must not open the single page — each verifier demands its own shape.
+  const single = createBillingInvoicePayToken("inv-a", "tenant-1");
+  const multi = createBillingMultiPayToken("tenant-1", ["inv-a", "inv-b"]);
+  assert.equal(verifyBillingMultiPayToken(single), null);
+  assert.equal(verifyBillingInvoicePayToken(multi), null);
+  // And both still accept themselves.
+  assert.ok(verifyBillingInvoicePayToken(single));
+  assert.ok(verifyBillingMultiPayToken(multi));
 });
