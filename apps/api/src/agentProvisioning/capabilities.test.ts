@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { applyConfirmedAction, buildCapabilityRegistry, type ConfirmDeps, type ConfirmActor } from "../agentConfirmations";
 import { addExtensionCapability } from "./addExtensionCapability";
 import { enableSmsCapability, findTextableNumber } from "./enableSmsCapability";
+import { addPhoneNumberCapability, prettyDid } from "./addPhoneNumberCapability";
 import {
   ADD_EXTENSION_CAPABILITY_ID,
   ENABLE_SMS_CAPABILITY_ID,
@@ -394,4 +395,75 @@ test("findTextableNumber prefers a number the company already owns", async () =>
   const found = await findTextableNumber(db, TENANT);
   assert.equal(found?.id, "claimed");
   assert.equal(found?.needsClaim, false);
+});
+
+// ─── Adding a phone number ───────────────────────────────────────────────────
+
+test("⛔ toll-free never sneaks through the local-number path", async () => {
+  // Toll-free is $15 and a different purchase method. A draft carrying one
+  // must not be treated as a $10 local number.
+  for (const tf of ["8005551234", "8335551234", "8885551234"]) {
+    assert.equal(addPhoneNumberCapability.parseParams({ did: tf }), null, `${tf} must be refused`);
+  }
+  assert.deepEqual(addPhoneNumberCapability.parseParams({ did: "8455551234" }), { did: "8455551234" });
+});
+
+test("a number is normalised to ten digits however it is written", () => {
+  for (const written of ["+1 (845) 555-1234", "1-845-555-1234", "845.555.1234"]) {
+    assert.deepEqual(addPhoneNumberCapability.parseParams({ did: written }), { did: "8455551234" });
+  }
+  assert.equal(addPhoneNumberCapability.parseParams({ did: "555-1234" }), null, "too short is not a number");
+});
+
+test("the number is read back the way a person says it", () => {
+  assert.equal(prettyDid("8457231213"), "(845) 723-1213");
+});
+
+test("⛔ an account we cannot serve properly is refused, never half-provisioned", async () => {
+  // No VoIP.ms subaccount = no way to route the DID. Buying it anyway would
+  // leave the customer paying for a number that never rings.
+  const db = makeDb();
+  db.onboardingSubmission = { findFirst: async () => null };
+  db.phoneNumber = { findFirst: async () => null, create: async () => ({}) };
+  const refusal = await addPhoneNumberCapability.authorize(deps(db), {
+    actor: ADMIN,
+    tenantId: TENANT,
+    params: { did: "8455551234" },
+    action: {},
+  });
+  assert.ok(refusal, "must refuse");
+  assert.equal(refusal!.error, "cannot_self_serve");
+  assert.doesNotMatch(refusal!.message, /subaccount|VoIP|PBX/i, "and must not leak our plumbing to a customer");
+});
+
+test("⛔ a number already on the platform is refused", async () => {
+  const db = makeDb();
+  db.onboardingSubmission = { findFirst: async () => ({ voipmsSubaccountEncrypted: "x" }) };
+  db.phoneNumber = { findFirst: async () => ({ id: "pn-1", tenantId: OTHER }), create: async () => ({}) };
+  const refusal = await addPhoneNumberCapability.authorize(deps(db), {
+    actor: ADMIN,
+    tenantId: TENANT,
+    params: { did: "8455551234" },
+    action: {},
+  });
+  assert.equal(refusal?.error, "number_taken");
+});
+
+test("the price line says 'included' when it is their first number", async () => {
+  const db = makeDb();
+  const d: any = deps(db, {
+    billing: {
+      snapshot: async () => ({ monthlyTotalCents: 3500 }),
+      priceOf: () => ({ unitCents: 0, charged: false, note: "your first number is included" }),
+      reconcile: async () => ({ monthlyTotalCents: 3500, deltaCents: 0, repairedManualOverride: false, warning: null }),
+      format: (c: number) => `$${(c / 100).toFixed(2)}`,
+    },
+  } as any);
+  const described = await addPhoneNumberCapability.describe(d, {
+    actor: ADMIN,
+    tenantId: TENANT,
+    params: { did: "8455551234" },
+  });
+  assert.match(described!.summary, /\(845\) 555-1234/);
+  assert.match(described!.priceLine!, /included/i);
 });

@@ -32,6 +32,7 @@ import {
 import { permissionGrantCapability } from "./agentProvisioning/permissionGrantCapability";
 import { addExtensionCapability } from "./agentProvisioning/addExtensionCapability";
 import { enableSmsCapability } from "./agentProvisioning/enableSmsCapability";
+import { addPhoneNumberCapability } from "./agentProvisioning/addPhoneNumberCapability";
 import { defaultBillingDeps } from "./agentProvisioning/billingReconcile";
 import {
   getGrantablePermissions,
@@ -46,6 +47,7 @@ export const confirmCapabilityRegistry = buildCapabilityRegistry([
   permissionGrantCapability,
   addExtensionCapability,
   enableSmsCapability,
+  addPhoneNumberCapability,
 ]);
 
 /** The approval hash the agent wrote, recomputed here. */

@@ -307,7 +307,7 @@ async function importExtension(s: PanelSession, person: PbxPerson): Promise<void
 }
 
 /** Same lookup the panel makes for inbound-route destinations. */
-async function extensionId(s: PanelSession, ext: string): Promise<string> {
+export async function extensionId(s: PanelSession, ext: string): Promise<string> {
   const { text } = await s.post([
     ["class", "inbound_route"], ["method", "getDestinationChildOptions"], ["mode", "view"],
     ["data[selected]", "1"], ["data[parent]", "inbound_route-mod_dest"], ["data[child]", "inbound_route-destination"],
@@ -432,7 +432,7 @@ async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind
   }
 }
 
-async function createInboundRoute(s: PanelSession, did: string, destExtId: string, description = "Main"): Promise<void> {
+export async function createInboundRoute(s: PanelSession, did: string, destExtId: string, description = "Main"): Promise<void> {
   // Resume guard: if the DID already shows on the inbound-routes page, a
   // previous run created the route — don't create a duplicate.
   try {

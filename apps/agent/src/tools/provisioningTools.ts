@@ -19,8 +19,10 @@ import type { ToolSpec, ToolContext } from "./toolRegistry";
 import {
   ADD_EXTENSION_CAPABILITY_ID,
   ENABLE_SMS_CAPABILITY_ID,
+  ADD_PHONE_NUMBER_CAPABILITY_ID,
   addExtensionHashInput,
   enableSmsHashInput,
+  addPhoneNumberHashInput,
   isBillableExtensionNumber,
   SMS_INBOX_SCOPES,
   type SmsInboxScope,
@@ -36,6 +38,11 @@ export interface ProvisioningToolDeps {
   prisma: any;
   /** Reads this tenant's REAL prices and monthly total from the invoice engine. */
   loadAccountSetupInfo(tenantId: string): Promise<AccountSetupInfo>;
+  /** Numbers this account could take, stock we already own listed first. */
+  searchPhoneNumbers?(
+    tenantId: string,
+    areaCode?: string,
+  ): Promise<Array<{ did: string; pretty: string; location: string }>>;
 }
 
 export type AccountSetupInfo = {
@@ -274,6 +281,103 @@ export function buildProvisioningTools(deps: ProvisioningToolDeps): ToolSpec[] {
           requiresPasswordConfirmation: true,
           message:
             `${summary} That's ${info.smsPrice} a month. This is not switched on yet — confirm it with your account password.`,
+        };
+      },
+    },
+    {
+      name: "search_phone_numbers",
+      description:
+        "Phone numbers this account could add, best first. Optionally pass a 3-digit area code to look in one area. " +
+        "Use this after the customer has agreed to the monthly price, so they can pick the number they want. Read a few of them out and let them choose.",
+      minRole: "internal",
+      parameters: {
+        type: "object",
+        properties: {
+          areaCode: { type: "string", description: "Optional 3-digit area code, e.g. '845'." },
+        },
+        additionalProperties: false,
+      },
+      run: async (args, ctx: ToolContext) => {
+        if (!deps.searchPhoneNumbers) {
+          return { ok: false, error: "unavailable", message: "I can't look up available numbers right now." };
+        }
+        const areaCode = String(args.areaCode ?? "").replace(/\D/g, "").slice(0, 3) || undefined;
+        const numbers = await deps.searchPhoneNumbers(ctx.tenantId, areaCode);
+        if (!numbers.length) {
+          return {
+            ok: false,
+            error: "none_available",
+            message: areaCode
+              ? `I couldn't find any numbers in the ${areaCode} area. Ask them if another area code would work.`
+              : "I couldn't find any available numbers just now.",
+          };
+        }
+        return { ok: true, numbers };
+      },
+    },
+
+    {
+      name: "prepare_add_phone_number",
+      description:
+        "Prepare (do NOT buy) one more phone number for this account, chosen from search_phone_numbers. " +
+        "Only call this once you have told the customer the monthly price, they have agreed, and they have picked a specific number. " +
+        "Returns a confirmation id; the number is only bought and connected after the customer re-enters their own account password.",
+      minRole: "internal",
+      parameters: {
+        type: "object",
+        properties: {
+          did: { type: "string", description: "The 10-digit number they chose, exactly as search_phone_numbers returned it." },
+        },
+        required: ["did"],
+        additionalProperties: false,
+      },
+      run: async (args, ctx: ToolContext) => {
+        if (!ctx.clientUserId) {
+          return {
+            ok: false,
+            error: "no_requester",
+            message: "This has to be asked for from a signed-in account, because it needs a password to confirm.",
+          };
+        }
+        const did = String(args.did ?? "").replace(/\D/g, "").slice(-10);
+        if (did.length !== 10) {
+          return { ok: false, error: "bad_number", message: "Ask them to pick one of the numbers I listed." };
+        }
+        if (/^(800|833|844|855|866|877|888)/.test(did)) {
+          return {
+            ok: false,
+            error: "tollfree_not_by_chat",
+            message: "Toll-free numbers are priced differently and have to be set up by our team. Offer them a local number instead.",
+          };
+        }
+
+        const info = await deps.loadAccountSetupInfo(ctx.tenantId);
+        const pretty = `(${did.slice(0, 3)}) ${did.slice(3, 6)}-${did.slice(6)}`;
+        const summary = `Add the phone number ${pretty} to this account.`;
+        const action = await deps.prisma.agentAction.create({
+          data: {
+            tenantId: ctx.tenantId,
+            capabilityId: ADD_PHONE_NUMBER_CAPABILITY_ID,
+            params: { did },
+            riskTier: "high",
+            status: "DRAFT",
+            summary,
+            requestedBy: ctx.clientUserId,
+            requestedRole: ctx.role,
+            paramsHash: sha256(addPhoneNumberHashInput(ctx.tenantId, { did })),
+          },
+          select: { id: true },
+        });
+
+        return {
+          ok: true,
+          actionId: action.id,
+          summary,
+          price: info.additionalNumberPrice,
+          requiresPasswordConfirmation: true,
+          message:
+            `${summary} That's ${info.additionalNumberPrice} a month. This is not done yet — confirm it with your account password ` +
+            `and the number will be connected to your phones.`,
         };
       },
     },

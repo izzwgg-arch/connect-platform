@@ -75,7 +75,7 @@ const retryBaseMs = () => Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000);
 const busyAccounts = new Set<string>();
 const accountWaiters: Array<() => void> = [];
 
-async function acquireAccount(cfg: PanelConfig): Promise<RobotAccount> {
+export async function acquireAccount(cfg: PanelConfig): Promise<RobotAccount> {
   for (;;) {
     const free = cfg.accounts.find((a) => !busyAccounts.has(a.id));
     if (free) {
@@ -86,7 +86,7 @@ async function acquireAccount(cfg: PanelConfig): Promise<RobotAccount> {
   }
 }
 
-function releaseAccount(account: RobotAccount): void {
+export function releaseAccount(account: RobotAccount): void {
   busyAccounts.delete(account.id);
   const w = accountWaiters.shift();
   if (w) w();

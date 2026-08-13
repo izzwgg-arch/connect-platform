@@ -31,3 +31,27 @@ export function makeAccountSetupInfoClient(
     return json.info as AccountSetupInfo;
   };
 }
+
+/** Read-only number search. It looks; it never buys. */
+export function makePhoneNumberSearchClient(
+  opts: { baseUrl?: string; secret?: string; timeoutMs?: number } = {},
+): (tenantId: string, areaCode?: string) => Promise<Array<{ did: string; pretty: string; location: string }>> {
+  const baseUrl = (opts.baseUrl ?? process.env.AGENT_API_BASE_URL ?? "http://api:3001").replace(/\/$/, "");
+  // Searching upstream stock is slower than a DB read — VoIP.ms is a live call.
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  return async (tenantId: string, areaCode?: string) => {
+    const secret = (opts.secret ?? process.env.AGENT_INTERNAL_SECRET ?? "").trim();
+    if (!secret) throw new Error("search_phone_numbers_secret_unset (AGENT_INTERNAL_SECRET) — fail-closed");
+    const resp = await postInternalApi({
+      url: `${baseUrl}/internal/agent/search-phone-numbers`,
+      secret,
+      body: { tenantId, ...(areaCode ? { areaCode } : {}) },
+      timeoutMs,
+    });
+    const json: any = await resp.json().catch(() => ({}));
+    if (!resp.ok || json?.ok !== true) {
+      throw new Error(`search_phone_numbers_error status=${resp.status} ${JSON.stringify(json).slice(0, 200)}`);
+    }
+    return Array.isArray(json.numbers) ? json.numbers : [];
+  };
+}

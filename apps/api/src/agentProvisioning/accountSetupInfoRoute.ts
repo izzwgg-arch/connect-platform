@@ -16,6 +16,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { snapshotBilling, priceOfAddition, formatCents } from "./billingReconcile";
+import { searchAvailableNumbers } from "./addPhoneNumberCapability";
+import { loadMasterCreds } from "../onboarding/voipMsProvisioning";
 
 export type AccountSetupInfo = {
   monthlyTotal: string;
@@ -108,6 +110,31 @@ export async function loadAccountSetupInfo(tenantId: string): Promise<AccountSet
 }
 
 export function registerAccountSetupInfoRoute(app: FastifyInstance) {
+  /**
+   * Numbers this account could add, stock we already own first. Read-only —
+   * it looks, it never buys. The purchase happens only after the customer's
+   * password, in `addPhoneNumberCapability`.
+   */
+  app.post("/internal/agent/search-phone-numbers", async (req, reply) => {
+    const secret = (process.env.AGENT_INTERNAL_SECRET || "").trim();
+    if (!secret || req.headers["x-agent-internal-secret"] !== secret) {
+      return reply.code(403).send({ ok: false, error: "forbidden" });
+    }
+    const body = z
+      .object({ tenantId: z.string().min(1), areaCode: z.string().max(3).optional() })
+      .safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: "bad_request" });
+    try {
+      const creds = await loadMasterCreds();
+      if (!creds) return { ok: true, numbers: [] };
+      const numbers = await searchAvailableNumbers(creds, body.data.areaCode);
+      return { ok: true, numbers: numbers.map(({ did, pretty, location }) => ({ did, pretty, location })) };
+    } catch (err) {
+      req.log?.error({ err }, "search_phone_numbers_failed");
+      return reply.code(500).send({ ok: false, error: "lookup_failed" });
+    }
+  });
+
   app.post("/internal/agent/account-setup-info", async (req, reply) => {
     const secret = (process.env.AGENT_INTERNAL_SECRET || "").trim();
     // Fail closed: an unset secret must not become an open door.
