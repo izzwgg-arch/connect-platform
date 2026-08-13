@@ -120,9 +120,14 @@ test("RENDER drift (row says connect, dialplan says PBX IVR) is caught and re-ba
   assert.ok(calls.alerts.includes("reconciler-render-map1"));
   // The ROW is fine, so the row-drift path must NOT also fire a switch.
   assert.deepEqual(calls.reasserts, []);
-  // Rate-limited on the next cycle: a human mid-surgery gets one repair, not a fight.
+  // ⛔ NOT rate-limited (changed 2026-08-13): drift found again on the next
+  // cycle is re-baked again. A drifted render is callers getting dead air NOW,
+  // and the re-bake only rewrites the generated dialplan from recorded intent
+  // — a human moving the number changes the ROW, which is the re-assert branch
+  // and keeps its rate limit. The old 6h allowance turned inii mini's second
+  // Apply-Changes regen of the night into six minutes of dead calls.
   await runReconcilerCycle(deps, state);
-  assert.equal(rebakes.length, 1);
+  assert.equal(rebakes.length, 2);
 });
 
 test("a helper too old to report the render is never treated as healthy-by-omission", async () => {

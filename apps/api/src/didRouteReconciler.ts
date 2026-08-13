@@ -203,20 +203,26 @@ export async function runReconcilerCycle(
           const inspect = await deps.inspectMapping(mapping);
           if (inspect.ok && inspect.mode === "connect" && inspect.renderedMode && inspect.renderedMode !== "connect") {
             app.log.error({ e164: mapping.e164, rendered: inspect.renderedGotos }, "[RECONCILER] render drifted off the doorway");
-            let repair = "re-bake rate-limited (already attempted recently)";
-            const key = `rebake:${mapping.id}`;
-            if (reassertAllowed(lastReassertAt.get(key), Date.now(), REASSERT_MIN_INTERVAL_MS)) {
-              lastReassertAt.set(key, Date.now());
-              if (deps.rebakeRoute) {
-                try {
-                  const r = await deps.rebakeRoute(mapping);
-                  repair = r.ok ? `re-baked the live routing (${r.changed ?? 0} line(s) rewritten)` : `re-bake failed: ${r.error}`;
-                } catch (err: any) {
-                  repair = `re-bake threw: ${err?.message}`;
-                }
-              } else {
-                repair = "no re-bake available on this helper — upgrade the PBX helper";
+            // ⛔ NOT rate-limited, deliberately (changed 2026-08-13). A drifted
+            // render means callers to this number are getting DEAD AIR at this
+            // moment, and the re-bake writes only the generated dialplan from
+            // recorded intent — it cannot fight a human's decision, because a
+            // human moving the number changes the ROW, which is the (still
+            // rate-limited) re-assert branch below. The old 6h limit turned
+            // inii mini's second regen of the night into six minutes of dead
+            // calls: the first regen used up the allowance, the second hit
+            // "rate-limited" and callers stayed broken until the slower
+            // doorway-repair path happened to run.
+            let repair: string;
+            if (deps.rebakeRoute) {
+              try {
+                const r = await deps.rebakeRoute(mapping);
+                repair = r.ok ? `re-baked the live routing (${r.changed ?? 0} line(s) rewritten)` : `re-bake failed: ${r.error}`;
+              } catch (err: any) {
+                repair = `re-bake threw: ${err?.message}`;
               }
+            } else {
+              repair = "no re-bake available on this helper — upgrade the PBX helper";
             }
             await sendAdminAlert(
               `reconciler-render-${mapping.id}`,

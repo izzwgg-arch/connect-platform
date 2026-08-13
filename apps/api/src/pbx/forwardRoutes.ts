@@ -23,6 +23,7 @@
 import { z } from "zod";
 import { PanelSession, loadPanelConfig } from "../onboarding/panelClient";
 import { createForward, normaliseForwardNumber, phoneFromDescription } from "./forwardBuilder";
+import { rebakeConnectRoutesAfterRegen } from "./applyRegenRebake";
 import { formatPhone, type UsedNumbers } from "@connect/shared";
 
 export interface ForwardRouteDeps {
@@ -196,6 +197,21 @@ export function registerForwardRoutes(deps: ForwardRouteDeps): void {
       { tenantId, extension: result.extension, phoneNumber: result.phoneNumber },
       "[FORWARD_CREATE] created (pending Apply Changes)",
     );
+
+    // The Apply Changes that just ran regenerated this tenant's dialplan,
+    // which restores VitalPBX's own render of every inbound route — a render
+    // that cannot reach the Connect doorway. Without this, every
+    // Connect-routed number of this tenant sends callers to DEAD AIR until
+    // the reconciler's next sweep (proven live 2026-08-13: seven dead calls
+    // at inii mini in the six-minute gap). Re-bake NOW, before answering.
+    // Run it even when the apply reported failure — a failed apply can still
+    // have regenerated part-way, and the re-bake is idempotent and cheap.
+    await rebakeConnectRoutesAfterRegen(tenantId, {
+      db,
+      log: app.log,
+      pbxTenantId: String(link.pbxTenantId),
+      pbxInstanceId: link.pbxInstanceId ?? null,
+    });
 
     return reply.send({
       ok: true,
