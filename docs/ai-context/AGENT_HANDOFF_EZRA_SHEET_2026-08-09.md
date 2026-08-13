@@ -338,6 +338,42 @@ Still open from round 3, deliberately:
   product feature (shipping page data to the agent), not a patch.
 - **Teams/queues** — unchanged; no VitalPBX API.
 
+## 9f. Final sweep (2026-08-13) — everything buildable, built
+
+`86d219f8` + desktop `0.1.6`, all deployed:
+
+- **`voicemails` read tool** — inbox with transcripts (capped 400 chars each),
+  told to summarize FROM transcripts and admit when one is missing. Read-only.
+- **`mark_my_chats_read`** — the caller's own lastReadAt, same write as the
+  portal button. Cannot mark unread (that flag is tenant-shared).
+- **`cancel_my_requests`** — withdraws the caller's own QUEUED **and FAILED**
+  escalations (FAILED retries, so it is still pending from their side; SENT
+  stays). Enum value `CANCELLED`, additive migration, applied and verified:
+  `QUEUED,SENT,FAILED,CANCELLED`. The dispatcher sweeps QUEUED/FAILED only.
+  ⛔ These two are the ONLY self-scoped writes in the tool surface; the file
+  header in `selfServiceTools.ts` is the fence for the next "small write".
+- **Desktop `0.1.6`** — right-click Cut/Copy/Paste/Select All on the full
+  window AND the mini dialer, OS roles only (the shell cannot read the
+  clipboard). Built, signed, published, `latest.exe` alias updated, and the
+  live update feed serves 0.1.6 — installs ≥0.1.4 self-update within 3h.
+  The 0.1.2/0.1.3 strandees still need the one-time manual reinstall.
+- **SMS for "Ezra stress test 1"** — spare +1-212-888-0885 assigned as tenant
+  default. ⛔ Deliberately WITHOUT touching billing: the send resolver gates on
+  the TenantSmsNumber row alone, so "Cannot Send text" is now testable with
+  zero billing impact. If it becomes permanent, follow the SMS runbook's
+  billing step.
+
+⏳ **Not chat-exercised yet** (container-verified only — Chrome closed before
+the smoke test): one message each proves them — "summarize my voicemails",
+"mark my chats read", "cancel my requests".
+
+⛔ **Deferred with reasons, not silently:** screenshot understanding needs a
+new attachment kind + multimodal content through BOTH LLM providers (the
+upload pipeline types attachments `"audio" | "document"` and router messages
+are text-only strings) — a real feature, not a patch. Teams/queues still have
+no VitalPBX API. Page-contents awareness (live call list etc.) is a product
+design. One-word EXECUTION stays off for writes on purpose.
+
 ## 10. Open
 
 1. **Tell Ezra the lesson feature works**, with the phrasings that fire it. He
