@@ -17689,10 +17689,23 @@ app.get("/voice/queues", async (req, reply) => {
   });
 
   if (result.source === "skipped") {
-    return reply.send({ queues: [], source: "skipped", skipReason: result.skipReason });
+    return reply.send({ queues: [], extensions: [], source: "skipped", skipReason: result.skipReason });
   }
+
+  // The extension list rides along so the "new queue" member picker needs no
+  // second round-trip. Cached on the same key family; failure yields [] rather
+  // than breaking the board.
+  const extensions = await pbxReadCache(
+    `queue-exts:${ctx.pbxInstance.id}:${ctx.vitalTenantId}`,
+    async () => {
+      const { listTenantExtensions } = await import("./pbxQueueDirectory");
+      return listTenantExtensions(ctx.vitalTenantId, ctx.pbxInstance.ombuMysqlUrlEncrypted);
+    },
+  );
+
   return reply.send({
     queues: result.rows,
+    extensions,
     source: result.source,
     vitalTenantId: ctx.vitalTenantId,
   });
@@ -24820,6 +24833,25 @@ registerTeamRoutes({
   app,
   db,
   requireIvrManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing"),
+  // Creating a QUEUE is allowed for an IVR manager OR anyone holding the
+  // queue-creation key, so the Queues screen can offer the button on its own
+  // per-user permission. ⛔ Hand-rolled rather than reusing
+  // requireRoleOrPortalPermission because that helper takes ONE key and
+  // replies 403 itself, so it cannot be chained for an either/or.
+  requireQueueCreator: async (req: any, reply: any) => {
+    const user = getUser(req);
+    const allowed = decideActionGate({
+      roleAllowed: canManageIvr(user),
+      hasKey:
+        (await userHasActionPermission(user, "can_create_queues")) ||
+        (await userHasActionPermission(user, "can_manage_ivr_routing")),
+    });
+    if (!allowed) {
+      reply.status(403).send({ error: "forbidden" });
+      return undefined;
+    }
+    return user;
+  },
   assertIvrTenantAccess,
   resolveConnectTenantIdFromScope,
   readTeamDirectory,

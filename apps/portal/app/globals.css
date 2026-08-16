@@ -38199,6 +38199,75 @@ table tr:hover {
 .qw-s-off    { border-left-color: var(--border); opacity: .5; }
 .qw-s-off    .qw-a-state { color: var(--text-dim); }
 
+/* ── New-queue dialog + form controls ─────────────────────────────────────
+   Same token discipline as the rest of the board: no literal colours, and
+   status ink stays separate from status fill. */
+.qb-modal-backdrop {
+  position: fixed; inset: 0; z-index: 2600;
+  background: rgba(4, 10, 16, .62);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 4vh 16px; overflow-y: auto;
+}
+.qb-modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  width: 100%; max-width: 720px; display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .38);
+}
+.qb-modal-h {
+  display: flex; align-items: center; gap: 12px;
+  padding: 18px 20px; border-bottom: 1px solid var(--border);
+}
+.qb-modal-h h2 { margin: 0; font-size: 18px; font-weight: 640; color: var(--text); letter-spacing: -.01em; }
+.qb-ctl-x {
+  margin-left: auto; display: inline-grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text-dim);
+}
+.qb-ctl-x:hover { color: var(--text); border-color: var(--accent); }
+.qb-ctl-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.qb-modal-body { padding: 20px; display: flex; flex-direction: column; gap: 18px; }
+.qb-modal-f {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 16px 20px; border-top: 1px solid var(--border);
+}
+
+.qb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.qb-fieldrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.qb-label { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.qb-hint { margin: 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+.qb-hint-strong { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 11px 14px; }
+
+.qb-input {
+  width: 100%; padding: 9px 12px; border-radius: 8px; font-size: 14px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  font-family: inherit;
+}
+.qb-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.qb-input-num { max-width: 120px; font-variant-numeric: tabular-nums; }
+.qb-numwrap { display: flex; align-items: center; gap: 8px; }
+.qb-unit { font-size: 12.5px; color: var(--text-dim); }
+
+.qb-picker {
+  list-style: none; margin: 0; padding: 8px; max-height: 210px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.qb-check { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 13.5px; }
+.qb-check:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.qb-check input { accent-color: var(--accent); width: 15px; height: 15px; }
+.qb-check-row { padding: 4px 0; }
+
+.qb-disclosure {
+  align-self: flex-start; padding: 7px 0; border: 0; background: none; cursor: pointer;
+  color: var(--qb-ink-info); font-size: 13.5px; font-weight: 560;
+}
+.qb-disclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.qb-advanced {
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2);
+}
+.qb-notice-ok { border-left: 3px solid var(--success); }
+
 @media (prefers-reduced-motion: reduce) {
   .qb-livechip.is-live .qb-dot, .qw-pulse { animation: none; }
 }

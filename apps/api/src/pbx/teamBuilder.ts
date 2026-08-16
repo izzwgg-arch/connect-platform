@@ -26,6 +26,21 @@ export type RingStrategy = "ringall" | "one_by_one";
 export interface TeamMember {
   /** VitalPBX ombu_extensions.extension_id — NOT the dialled number. */
   extensionId: string;
+  /**
+   * Queue only. Lower rings first; members share a tier when equal. The panel
+   * sends "" when unset, so undefined must stay "" rather than become 0 —
+   * 0 is a real, meaningful penalty.
+   */
+  penalty?: number;
+}
+
+/**
+ * The panel sends an EMPTY STRING for a numeric field left blank, not "0".
+ * The difference matters: `servicelevel=0` and `servicelevel=` mean different
+ * things to VitalPBX, and 0 is a legitimate value for several of these.
+ */
+function numField(v: number | undefined | null): string {
+  return v == null ? "" : String(v);
 }
 
 export interface RingGroupSpec {
@@ -43,10 +58,40 @@ export interface RingGroupSpec {
   number?: string;
 }
 
+/**
+ * How a queue picks which agent to ring.
+ *
+ * ⛔ The panel contract doc records that only `ringall` was ever captured from
+ * a real panel save. These are Asterisk's own `app_queue` strategies, and the
+ * value passes STRAIGHT THROUGH into the generated `queues.conf` — verified on
+ * the live box, where `strategy=ringall` and `strategy=linear` both appear in
+ * `/etc/asterisk/vitalpbx/queues__*.conf`. A value the panel refuses fails
+ * loudly through `assertSaved` rather than silently storing rubbish, which is
+ * why offering the full set is safe.
+ */
+export type QueueStrategy =
+  | "ringall"
+  | "linear"
+  | "leastrecent"
+  | "fewestcalls"
+  | "random"
+  | "rrmemory"
+  | "rrordered"
+  | "wrandom";
+
+export const QUEUE_STRATEGIES: readonly QueueStrategy[] = [
+  "ringall", "linear", "leastrecent", "fewestcalls", "random", "rrmemory", "rrordered", "wrandom",
+] as const;
+
+/** Strategies proven live on this PBX today, as opposed to merely accepted. */
+export const QUEUE_STRATEGIES_PROVEN: readonly QueueStrategy[] = ["ringall", "linear"] as const;
+
 export interface QueueSpec {
   name: string;
   prefix?: string;
   members: TeamMember[];
+  /** How the queue hunts. Defaults to ringall, the previous hardcoded value. */
+  strategy?: QueueStrategy;
   /** Seconds each agent's phone rings before moving on. */
   ringTime?: number;
   /** Seconds to wait between rounds. */
@@ -64,6 +109,46 @@ export interface QueueSpec {
   maxWaitSeconds?: number;
   lastDestination?: { categoryId: string; targetId: string };
   number?: string;
+
+  // ── Advanced ─────────────────────────────────────────────────────────────
+  /**
+   * Seconds an agent is left alone after a call before the queue may ring them
+   * again. Was hardcoded 0.
+   */
+  wrapUpSeconds?: number;
+  /**
+   * The "answered within N seconds" target this queue is judged against.
+   * ⛔ VitalPBX leaves this NULL by default — every queue on this box has no
+   * target — which is why the reports have to state whose target they used.
+   * Setting it here is what lets a queue carry its OWN service level.
+   */
+  serviceLevelSeconds?: number;
+  /** Let callers in when no agent is logged on. Was hardcoded "yes". */
+  joinWhenEmpty?: boolean;
+  /** Throw waiting callers out if every agent disappears. Was hardcoded "no". */
+  leaveWhenEmpty?: boolean;
+  /** Feed callers to agents as they free up rather than strictly in turn. */
+  autofill?: boolean;
+  /** Auto-pause an agent who doesn't answer. Was hardcoded "no". */
+  autoPause?: boolean;
+  /** Seconds to wait before connecting the two legs. */
+  memberDelaySeconds?: number;
+  /** Relative weight when one agent sits on several queues. */
+  weight?: number;
+  /** Only ring members whose penalty is within this many of the lowest. */
+  penaltyMembersLimit?: number;
+  /** How often to repeat the caller's position, seconds. */
+  announceFrequency?: number;
+  /** Never announce position more often than this, seconds. */
+  minAnnounceFrequency?: number;
+  /** Stop announcing position past this place in the queue. */
+  announcePositionLimit?: number;
+  /** Round the announced hold time to this many seconds. */
+  announceRoundSeconds?: number;
+  /** SIP Alert-Info, so handsets can ring differently for this queue. */
+  alertInfo?: string;
+  /** Where a caller goes when the queue gives up. Distinct from lastDestination. */
+  hangupDestination?: { categoryId: string; targetId: string };
 }
 
 export interface TeamCreateResult {
@@ -218,37 +303,42 @@ export async function createQueue(
     ["csfr_token", csrf],
     ["extension", number],
     ["description", spec.name],
-    ["strategy", "ringall"],
+    ["strategy", spec.strategy ?? "ringall"],
     ["prefix", spec.prefix ?? spec.name],
     ["join_announcement_id", spec.joinAnnouncementId ?? ""],
     ["announcement_id", ""],
-    ["servicelevel", ""],
-    ["joinempty", "yes"],
-    ["leavewhenempty", "no"],
-    ["alertinfo", ""],
+    ["servicelevel", numField(spec.serviceLevelSeconds)],
+    // ⛔ An unchecked box is ABSENT from the panel's form, never "no" — but
+    // these two are selects, not checkboxes, so they DO carry a literal value.
+    ["joinempty", spec.joinWhenEmpty === false ? "no" : "yes"],
+    ["leavewhenempty", spec.leaveWhenEmpty === true ? "yes" : "no"],
+    ["alertinfo", spec.alertInfo ?? ""],
     ["queue_timeout", String(spec.maxWaitSeconds ?? 0)],
     ["timeout", String(spec.ringTime ?? 15)],
     ["retry", String(spec.retry ?? 5)],
-    ["wrapuptime", "0"],
+    ["wrapuptime", String(spec.wrapUpSeconds ?? 0)],
+    // ⛔ Callback stays empty on purpose. `queue_callback_id` points at a row
+    // in ombu_queues_callback, configured on a panel screen that was never
+    // recorded — so we cannot offer it without guessing the contract.
     ["queue_callback_id", ""],
     ["music_group_id", spec.musicGroupId ?? ""],
     ["periodic_announcement_id", spec.periodicAnnouncementId ?? ""],
-    ["periodic_announce_frequency", spec.periodicAnnounceFrequency ? String(spec.periodicAnnounceFrequency) : ""],
+    ["periodic_announce_frequency", numField(spec.periodicAnnounceFrequency)],
     ["relative_periodic_announce", spec.relativePeriodicAnnounce === false ? "no" : "yes"],
     ["announce_position", spec.announcePosition ? "yes" : "no"],
-    ["announce_position_limit", ""],
-    ["announce_frequency", ""],
-    ["min_announce_frequency", ""],
-    ["announce_round_seconds", "0"],
-    ["autopause", "no"],
-    ["penaltymemberslimit", ""],
-    ["memberdelay", ""],
-    ["weight", ""],
+    ["announce_position_limit", numField(spec.announcePositionLimit)],
+    ["announce_frequency", numField(spec.announceFrequency)],
+    ["min_announce_frequency", numField(spec.minAnnounceFrequency)],
+    ["announce_round_seconds", String(spec.announceRoundSeconds ?? 0)],
+    ["autopause", spec.autoPause === true ? "yes" : "no"],
+    ["penaltymemberslimit", numField(spec.penaltyMembersLimit)],
+    ["memberdelay", numField(spec.memberDelaySeconds)],
+    ["weight", numField(spec.weight)],
     ["maxlen", String(spec.maxCallers ?? 0)],
     ["cron_profile_id", ""],
     ["ivr_id", ""],
     ["queue_vip_list_id", ""],
-    ["autofill", "yes"],
+    ["autofill", spec.autofill === false ? "no" : "yes"],
     ...checkbox("answerchannel", true),
   ];
 
@@ -263,13 +353,20 @@ export async function createQueue(
   spec.members.forEach((m, i) => {
     fields.push([`queue_members[${i}][member_id]`, ""]);
     fields.push([`queue_members_${i}_extension_id`, String(m.extensionId)]);
-    fields.push([`queue_members[${i}][penalty]`, ""]);
+    fields.push([`queue_members[${i}][penalty]`, numField(m.penalty)]);
     fields.push([`queue_members[${i}][type]`, "static"]);
   });
 
   if (spec.lastDestination) {
     fields.push(["mod_dest", spec.lastDestination.categoryId]);
     fields.push(["destination", spec.lastDestination.targetId]);
+  }
+
+  // Where a caller goes when the queue gives up on them — a different exit
+  // from `lastDestination`, and the panel keeps them in separate fields.
+  if (spec.hangupDestination) {
+    fields.push(["mod_hangup_dest", spec.hangupDestination.categoryId]);
+    fields.push(["hangup_dest", spec.hangupDestination.targetId]);
   }
 
   const res = await session.postForm(form(fields));

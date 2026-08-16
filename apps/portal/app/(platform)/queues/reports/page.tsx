@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, BarChart3 } from "lucide-react";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiPost } from "../../../../services/apiClient";
+import { useUiLanguage } from "../../../../hooks/useUiLanguage";
 import { formatDuration, formatDurationLong } from "../queueBoard";
 
 /**
@@ -76,6 +77,38 @@ type ReportsResponse =
     }
   | { available: false; reason: string; detail: string; queues: [] };
 
+
+/** ⛔ Byte-exact — an em-dash or apostrophe off by one never reaches Yiddish. */
+const PHRASES = [
+  "Queue reports", "How each queue and each agent has been performing.",
+  "7 days", "30 days", "90 days", "Live view", "Loading reports…",
+  "Queue history isn't connected yet",
+  "Live queue status works without this — only the historical reports need it. Nothing is broken and no calls are missing; Connect simply hasn't been given permission to read the phone system's queue log.",
+  "Back to live queue status",
+  "Healthy", "Needs attention", "Losing callers", "Answered",
+  "answered of", "offered", "timed out", "hung up", "pressed a key to leave",
+  "Average wait", "Average talk", "Total talk time", "Answered within",
+  "Average wait before hanging up", "Longest wait",
+  "Connect's default target — this queue has none set", "target set on the queue",
+  "a single outlier can dominate this — see the spread below",
+  "How long answered callers waited", "How long callers waited before hanging up",
+  "None in this period.",
+  "On a queue, but answered nothing",
+  "These extensions are configured members of a queue but took no calls from it in this period. They are members on paper only.",
+  "Agents", "No agent answered a queue call in this period.",
+  "Agent", "Queue", "Calls taken", "Avg talk", "Longest call", "Total on calls",
+  "Avg wait before pickup", "Share of queue",
+  "A share far above the others means one person is carrying the queue — worth knowing before they take a day off.",
+  "Calls by hour of the day",
+  "When the calls actually arrive. Staffing that is flat across the day will show up here as waits that build at the peak.",
+  "Show these figures as a table", "Hour", "Offered", "Hung up", "Answered %",
+  "By day", "By day of the week", "Date", "Day",
+  "unanswered rings were logged. This is normal and is",
+  "not", "a count of missed calls: when a queue rings everyone at once, every agent who doesn't get there first logs one on every call.",
+  "Could not load queue reports.",
+  "times shown on the phone system's own clock", "to",
+] as string[];
+
 const RANGES = [
   { label: "7 days", days: 7 },
   { label: "30 days", days: 30 },
@@ -83,6 +116,7 @@ const RANGES = [
 ];
 
 function QueueReportsPageInner() {
+  const { t } = useUiLanguage(PHRASES);
   const [days, setDays] = useState(30);
   const [data, setData] = useState<ReportsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,9 +127,9 @@ function QueueReportsPageInner() {
     setError(null);
     apiPost<ReportsResponse>("/voice/queues/reports", { days })
       .then(setData)
-      .catch((e: any) => setError(e?.body?.detail || e?.message || "Could not load queue reports."))
+      .catch((e: any) => setError(e?.body?.detail || e?.message || t("Could not load queue reports.")))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, t]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -106,12 +140,12 @@ function QueueReportsPageInner() {
       <header className="qb-head">
         <div className="qb-head-main">
           <h1 className="qb-title">
-            <BarChart3 size={22} aria-hidden /> Queue reports
+            <BarChart3 size={22} aria-hidden /> {t("Queue reports")}
           </h1>
           <p className="qb-sub">
             {available
-              ? `${available.rangeStart} to ${available.rangeEnd} · times shown on the phone system's own clock`
-              : "How each queue and each agent has been performing."}
+              ? `${available.rangeStart} ${t("to")} ${available.rangeEnd} · ${t("times shown on the phone system's own clock")}`
+              : t("How each queue and each agent has been performing.")}
           </p>
         </div>
         <div className="qb-head-actions">
@@ -124,17 +158,17 @@ function QueueReportsPageInner() {
                 aria-pressed={days === r.days}
                 onClick={() => setDays(r.days)}
               >
-                {r.label}
+                {t(r.label)}
               </button>
             ))}
           </div>
           <Link href="/queues" className="qb-btn">
-            <ArrowLeft size={15} aria-hidden /> Live view
+            <ArrowLeft size={15} aria-hidden /> {t("Live view")}
           </Link>
         </div>
       </header>
 
-      {loading && <p className="qb-empty">Loading reports…</p>}
+      {loading && <p className="qb-empty">{t("Loading reports…")}</p>}
       {error && <p className="qb-notice qb-notice-warn">{error}</p>}
 
       {!loading && data && data.available === false && <Unavailable reason={data.reason} detail={data.detail} />}
@@ -148,12 +182,11 @@ function QueueReportsPageInner() {
           {available.idleMembers.length > 0 && (
             <section className="qb-panel qb-panel-alert">
               <h2 className="qb-panel-h">
-                <AlertTriangle size={16} aria-hidden /> On a queue, but answered nothing
+                <AlertTriangle size={16} aria-hidden /> {t("On a queue, but answered nothing")}
                 <span className="qb-count">{available.idleMembers.length}</span>
               </h2>
               <p className="qb-foot qb-foot-top">
-                These extensions are configured members of a queue but took no calls from it in this
-                period. They are members on paper only.
+                {t("These extensions are configured members of a queue but took no calls from it in this period. They are members on paper only.")}
               </p>
               <ul className="qb-idle">
                 {available.idleMembers.map((m) => (
@@ -171,8 +204,8 @@ function QueueReportsPageInner() {
 
           <HourChart rows={available.byHour} />
 
-          <TrendTable title="By day" rows={available.byDate} />
-          <TrendTable title="By day of the week" rows={available.byWeekday} />
+          <TrendTable title={"By day"} rows={available.byDate} />
+          <TrendTable title={"By day of the week"} rows={available.byWeekday} />
         </>
       )}
     </div>
@@ -180,19 +213,18 @@ function QueueReportsPageInner() {
 }
 
 function Unavailable({ reason, detail }: { reason: string; detail: string }) {
+  const { t } = useUiLanguage();
   const isGrant = reason === "queue_log_access_denied";
   return (
     <section className="qb-panel qb-panel-alert">
       <h2 className="qb-panel-h">
-        <AlertTriangle size={16} aria-hidden /> Queue history isn&rsquo;t connected yet
+        <AlertTriangle size={16} aria-hidden /> {t("Queue history isn't connected yet")}
       </h2>
       <p className="qb-foot qb-foot-top">{detail}</p>
       {isGrant && (
         <>
           <p className="qb-foot">
-            Live queue status works without this — only the historical reports need it. Nothing is
-            broken and no calls are missing; Connect simply hasn&rsquo;t been given permission to read
-            the phone system&rsquo;s queue log.
+            {t("Live queue status works without this — only the historical reports need it. Nothing is broken and no calls are missing; Connect simply hasn't been given permission to read the phone system's queue log.")}
           </p>
           <pre className="qb-code">
 {`GRANT SELECT ON \`asterisk\`.\`queues_log\`
@@ -202,19 +234,20 @@ FLUSH PRIVILEGES;`}
         </>
       )}
       <p className="qb-foot">
-        <Link href="/queues" className="qb-link">Back to live queue status</Link>
+        <Link href="/queues" className="qb-link">{t("Back to live queue status")}</Link>
       </p>
     </section>
   );
 }
 
 function QueueReportCard({ q }: { q: QueueReport }) {
+  const { t } = useUiLanguage();
   const o = q.outcomes;
   const tone = (o.answeredPct ?? 0) >= 85 ? "ok" : (o.answeredPct ?? 0) >= 60 ? "warn" : "crit";
   const health =
-    tone === "ok" ? { symbol: "✓", label: "Healthy" }
-    : tone === "warn" ? { symbol: "⚠", label: "Needs attention" }
-    : { symbol: "⚠", label: "Losing callers" };
+    tone === "ok" ? { symbol: "✓", label: t("Healthy") }
+    : tone === "warn" ? { symbol: "⚠", label: t("Needs attention") }
+    : { symbol: "⚠", label: t("Losing callers") };
 
   return (
     <section className="qb-panel">
@@ -229,7 +262,7 @@ function QueueReportCard({ q }: { q: QueueReport }) {
       <div className="qb-report-top">
         <div className="qb-meterblock">
           <div className="qb-meterlabel">
-            <span>Answered</span>
+            <span>{t("Answered")}</span>
             <span className="qb-meterpct">{o.answeredPct != null ? `${o.answeredPct}%` : "—"}</span>
           </div>
           <div className="qb-meter">
@@ -244,29 +277,29 @@ function QueueReportCard({ q }: { q: QueueReport }) {
         </div>
 
         <dl className="qb-facts">
-          <Fact k="Average wait" v={q.avgWaitSec != null ? formatDurationLong(q.avgWaitSec) : "—"} />
-          <Fact k="Average talk" v={q.avgTalkSec != null ? formatDurationLong(q.avgTalkSec) : "—"} />
-          <Fact k="Total talk time" v={formatDurationLong(q.totalTalkSec)} />
+          <Fact k={t("Average wait")} v={q.avgWaitSec != null ? formatDurationLong(q.avgWaitSec) : "—"} />
+          <Fact k={t("Average talk")} v={q.avgTalkSec != null ? formatDurationLong(q.avgTalkSec) : "—"} />
+          <Fact k={t("Total talk time")} v={formatDurationLong(q.totalTalkSec)} />
           <Fact
-            k={`Answered within ${q.serviceLevelTargetSec}s`}
+            k={`${t("Answered within")} ${q.serviceLevelTargetSec}s`}
             v={q.serviceLevelPct != null ? `${q.serviceLevelPct}%` : "—"}
-            note={q.serviceLevelTargetSource === "default" ? "Connect's default target — this queue has none set" : "target set on the queue"}
+            note={q.serviceLevelTargetSource === "default" ? t("Connect's default target — this queue has none set") : t("target set on the queue")}
           />
           <Fact
-            k="Average wait before hanging up"
+            k={t("Average wait before hanging up")}
             v={q.avgAbandonWaitSec != null ? formatDurationLong(q.avgAbandonWaitSec) : "—"}
           />
           <Fact
-            k="Longest wait"
+            k={t("Longest wait")}
             v={q.maxWaitSec != null ? formatDurationLong(q.maxWaitSec) : "—"}
-            note="a single outlier can dominate this — see the spread below"
+            note={t("a single outlier can dominate this — see the spread below")}
           />
         </dl>
       </div>
 
       <div className="qb-buckets">
-        <BucketBar title="How long answered callers waited" buckets={q.answeredWaitBuckets} tone="ok" />
-        <BucketBar title="How long callers waited before hanging up" buckets={q.abandonWaitBuckets} tone="crit" />
+        <BucketBar title={t("How long answered callers waited")} buckets={q.answeredWaitBuckets} tone="ok" />
+        <BucketBar title={t("How long callers waited before hanging up")} buckets={q.abandonWaitBuckets} tone="crit" />
       </div>
 
       {o.ringNoAnswer > 0 && (
@@ -281,6 +314,7 @@ function QueueReportCard({ q }: { q: QueueReport }) {
 }
 
 function Fact({ k, v, note }: { k: string; v: string; note?: string }) {
+  const { t } = useUiLanguage();
   return (
     <div className="qb-fact">
       <dt>{k}</dt>
@@ -293,12 +327,13 @@ function Fact({ k, v, note }: { k: string; v: string; note?: string }) {
 }
 
 function BucketBar({ title, buckets, tone }: { title: string; buckets: WaitBucket[]; tone: string }) {
+  const { t } = useUiLanguage();
   const total = buckets.reduce((s, b) => s + b.count, 0);
   return (
     <div className="qb-bucketblock">
       <h3 className="qb-bucket-t">{title}</h3>
       {total === 0 ? (
-        <p className="qb-empty qb-empty-inline">None in this period.</p>
+        <p className="qb-empty qb-empty-inline">{t("None in this period.")}</p>
       ) : (
         <ul className="qb-bucketlist">
           {buckets.map((b) => {
@@ -323,6 +358,7 @@ function BucketBar({ title, buckets, tone }: { title: string; buckets: WaitBucke
 }
 
 function AgentTable({ agents, queues }: { agents: AgentReport[]; queues: QueueReport[] }) {
+  const { t } = useUiLanguage();
   const queueName = useMemo(() => {
     const m = new Map(queues.map((q) => [q.logName, q.name]));
     return (logName: string) => m.get(logName) ?? logName;
@@ -331,8 +367,8 @@ function AgentTable({ agents, queues }: { agents: AgentReport[]; queues: QueueRe
   if (agents.length === 0) {
     return (
       <section className="qb-panel">
-        <h2 className="qb-panel-h">Agents</h2>
-        <p className="qb-empty qb-empty-inline">No agent answered a queue call in this period.</p>
+        <h2 className="qb-panel-h">{t("Agents")}</h2>
+        <p className="qb-empty qb-empty-inline">{t("No agent answered a queue call in this period.")}</p>
       </section>
     );
   }
@@ -340,20 +376,20 @@ function AgentTable({ agents, queues }: { agents: AgentReport[]; queues: QueueRe
   return (
     <section className="qb-panel">
       <h2 className="qb-panel-h">
-        Agents<span className="qb-count">{agents.length}</span>
+        {t("Agents")}<span className="qb-count">{agents.length}</span>
       </h2>
       <div className="qb-tablewrap">
         <table className="qb-table">
           <thead>
             <tr>
-              <th scope="col">Agent</th>
-              <th scope="col">Queue</th>
-              <th scope="col" className="qb-r">Calls taken</th>
-              <th scope="col" className="qb-r">Avg talk</th>
-              <th scope="col" className="qb-r">Longest call</th>
-              <th scope="col" className="qb-r">Total on calls</th>
-              <th scope="col" className="qb-r">Avg wait before pickup</th>
-              <th scope="col">Share of queue</th>
+              <th scope="col">{t("Agent")}</th>
+              <th scope="col">{t("Queue")}</th>
+              <th scope="col" className="qb-r">{t("Calls taken")}</th>
+              <th scope="col" className="qb-r">{t("Avg talk")}</th>
+              <th scope="col" className="qb-r">{t("Longest call")}</th>
+              <th scope="col" className="qb-r">{t("Total on calls")}</th>
+              <th scope="col" className="qb-r">{t("Avg wait before pickup")}</th>
+              <th scope="col">{t("Share of queue")}</th>
             </tr>
           </thead>
           <tbody>
@@ -383,22 +419,21 @@ function AgentTable({ agents, queues }: { agents: AgentReport[]; queues: QueueRe
         </table>
       </div>
       <p className="qb-foot">
-        A share far above the others means one person is carrying the queue — worth knowing before
-        they take a day off.
+        {t("A share far above the others means one person is carrying the queue — worth knowing before they take a day off.")}
       </p>
     </section>
   );
 }
 
 function HourChart({ rows }: { rows: TimeBucketRow[] }) {
+  const { t } = useUiLanguage();
   const max = Math.max(1, ...rows.map((r) => r.offered));
   if (rows.length === 0) return null;
   return (
     <section className="qb-panel">
-      <h2 className="qb-panel-h">Calls by hour of the day</h2>
+      <h2 className="qb-panel-h">{t("Calls by hour of the day")}</h2>
       <p className="qb-foot qb-foot-top">
-        When the calls actually arrive. Staffing that is flat across the day will show up here as
-        waits that build at the peak.
+        {t("When the calls actually arrive. Staffing that is flat across the day will show up here as waits that build at the peak.")}
       </p>
       <div className="qb-chart">
         {rows.map((r) => {
@@ -413,15 +448,15 @@ function HourChart({ rows }: { rows: TimeBucketRow[] }) {
         })}
       </div>
       <details className="qb-details">
-        <summary>Show these figures as a table</summary>
+        <summary>{t("Show these figures as a table")}</summary>
         <div className="qb-tablewrap">
           <table className="qb-table">
             <thead>
               <tr>
-                <th scope="col">Hour</th>
-                <th scope="col" className="qb-r">Offered</th>
-                <th scope="col" className="qb-r">Answered</th>
-                <th scope="col" className="qb-r">Hung up</th>
+                <th scope="col">{t("Hour")}</th>
+                <th scope="col" className="qb-r">{t("Offered")}</th>
+                <th scope="col" className="qb-r">{t("Answered")}</th>
+                <th scope="col" className="qb-r">{t("Hung up")}</th>
               </tr>
             </thead>
             <tbody>
@@ -442,19 +477,20 @@ function HourChart({ rows }: { rows: TimeBucketRow[] }) {
 }
 
 function TrendTable({ title, rows }: { title: string; rows: TimeBucketRow[] }) {
+  const { t } = useUiLanguage();
   if (rows.length === 0) return null;
   return (
     <section className="qb-panel">
-      <h2 className="qb-panel-h">{title}</h2>
+      <h2 className="qb-panel-h">{t(title)}</h2>
       <div className="qb-tablewrap">
         <table className="qb-table">
           <thead>
             <tr>
-              <th scope="col">{title === "By day" ? "Date" : "Day"}</th>
-              <th scope="col" className="qb-r">Offered</th>
-              <th scope="col" className="qb-r">Answered</th>
-              <th scope="col" className="qb-r">Hung up</th>
-              <th scope="col" className="qb-r">Answered %</th>
+              <th scope="col">{title === "By day" ? t("Date") : t("Day")}</th>
+              <th scope="col" className="qb-r">{t("Offered")}</th>
+              <th scope="col" className="qb-r">{t("Answered")}</th>
+              <th scope="col" className="qb-r">{t("Hung up")}</th>
+              <th scope="col" className="qb-r">{t("Answered %")}</th>
             </tr>
           </thead>
           <tbody>

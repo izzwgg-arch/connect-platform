@@ -21,7 +21,9 @@
 
 import { z } from "zod";
 import { PanelSession, loadPanelConfig } from "../onboarding/panelClient";
-import { createRingGroup, createQueue, deleteTeam, LAST_DESTINATION_CATEGORIES } from "./teamBuilder";
+import {
+  createRingGroup, createQueue, deleteTeam, LAST_DESTINATION_CATEGORIES, QUEUE_STRATEGIES,
+} from "./teamBuilder";
 import type { UsedNumbers } from "@connect/shared";
 
 export interface TeamRouteDeps {
@@ -29,6 +31,15 @@ export interface TeamRouteDeps {
   db: any;
   /** Resolves the caller and enforces IVR management, or replies. */
   requireIvrManager: (req: any, reply: any) => Promise<any | undefined>;
+  /**
+   * Gate for creating a QUEUE specifically. Optional; falls back to
+   * `requireIvrManager` so existing callers keep working.
+   *
+   * ⛔ It exists so the Queues screen can offer a "New queue" button gated on
+   * its own per-user key without creating a visible door that doesn't open:
+   * whatever the button checks, the route must accept.
+   */
+  requireQueueCreator?: (req: any, reply: any) => Promise<any | undefined>;
   assertIvrTenantAccess: (user: any, tenantId: string) => void;
   resolveConnectTenantIdFromScope: (scope: string) => Promise<string | null>;
   /** Live directory + used numbers, or null when the PBX can't be read. */
@@ -57,14 +68,21 @@ const BODY = z.object({
   kind: z.enum(["ring_group", "queue"]),
   name: z.string().min(1).max(60),
   prefix: z.string().max(20).optional(),
-  /** Ring groups only. Queues always ring everyone available. */
+  /** Ring groups only — how the group hunts. Queues use `queueStrategy`. */
   strategy: z.enum(["ringall", "one_by_one"]).optional(),
   /** Extension numbers, IN THE ORDER they should ring. */
   members: MEMBER_LIST,
+  /**
+   * Optional per-member ring priority, aligned to `members` by index. Lower
+   * rings first. Omit entirely to leave every member on the same tier.
+   */
+  memberPenalties: z.array(z.number().int().min(0).max(99).nullable()).optional(),
   ringTime: z.number().int().min(0).max(300).optional(),
   lastDestination: LAST_DEST,
 
   // ── queue-only ──────────────────────────────────────────────────────────
+  /** Queues get Asterisk's full strategy set — see QUEUE_STRATEGIES. */
+  queueStrategy: z.enum(QUEUE_STRATEGIES as unknown as [string, ...string[]]).optional(),
   retry: z.number().int().min(0).max(120).optional(),
   musicGroupId: z.string().optional(),
   joinAnnouncementId: z.string().optional(),
@@ -76,14 +94,38 @@ const BODY = z.object({
   announcePosition: z.boolean().optional(),
   maxCallers: z.number().int().min(0).max(999).optional(),
   maxWaitSeconds: z.number().int().min(0).max(7200).optional(),
+
+  // ── queue advanced ──────────────────────────────────────────────────────
+  wrapUpSeconds: z.number().int().min(0).max(3600).optional(),
+  /** The queue's own "answered within N seconds" target. */
+  serviceLevelSeconds: z.number().int().min(1).max(3600).optional(),
+  joinWhenEmpty: z.boolean().optional(),
+  leaveWhenEmpty: z.boolean().optional(),
+  autofill: z.boolean().optional(),
+  autoPause: z.boolean().optional(),
+  memberDelaySeconds: z.number().int().min(0).max(60).optional(),
+  weight: z.number().int().min(0).max(99).optional(),
+  penaltyMembersLimit: z.number().int().min(0).max(99).optional(),
+  announceFrequency: z.number().int().min(0).max(3600).optional(),
+  minAnnounceFrequency: z.number().int().min(0).max(3600).optional(),
+  announcePositionLimit: z.number().int().min(0).max(999).optional(),
+  announceRoundSeconds: z.number().int().min(0).max(60).optional(),
+  alertInfo: z.string().max(60).optional(),
+  hangupDestination: LAST_DEST,
 });
 
 export function registerTeamRoutes(deps: TeamRouteDeps): void {
   const { app, db, requireIvrManager, assertIvrTenantAccess, resolveConnectTenantIdFromScope, readTeamDirectory } = deps;
+  const requireQueueCreator = deps.requireQueueCreator ?? requireIvrManager;
 
   // ── POST /voice/teams ─────────────────────────────────────────────────────
   app.post("/voice/teams", async (req: any, reply: any) => {
-    const user = await requireIvrManager(req, reply);
+    // Pick the gate from the requested kind BEFORE validating the body — a
+    // queue may be created by someone holding the queue key alone, while a
+    // ring group still needs IVR management. The body is validated below
+    // either way, so reading `kind` here decides only which gate runs.
+    const wantsQueue = String((req.body as any)?.kind || "") === "queue";
+    const user = wantsQueue ? await requireQueueCreator(req, reply) : await requireIvrManager(req, reply);
     if (!user) return;
 
     const parsed = BODY.safeParse(req.body);
@@ -115,13 +157,22 @@ export function registerTeamRoutes(deps: TeamRouteDeps): void {
     // Members: numbers in, row ids out. An unknown number is fatal — a team
     // that silently rings nobody is worse than a refusal.
     const byNumber = new Map(dir.extensions.map((e) => [String(e.number), e]));
-    const members: { extensionId: string }[] = [];
+    const members: { extensionId: string; penalty?: number }[] = [];
     const missing: string[] = [];
-    for (const num of b.members) {
+    b.members.forEach((num, i) => {
       const hit = byNumber.get(String(num).trim());
-      if (!hit) missing.push(String(num));
-      else members.push({ extensionId: String(hit.id) });
-    }
+      if (!hit) {
+        missing.push(String(num));
+        return;
+      }
+      // Penalties are aligned to `members` BY INDEX, so they must be attached
+      // here — before the dedup below shifts every position.
+      const penalty = b.memberPenalties?.[i];
+      members.push({
+        extensionId: String(hit.id),
+        ...(penalty == null ? {} : { penalty }),
+      });
+    });
     if (missing.length) {
       return reply.code(400).send({
         error: "unknown_extensions",
@@ -135,25 +186,42 @@ export function registerTeamRoutes(deps: TeamRouteDeps): void {
 
     // Last destination: the customer picks a person or an IVR; we translate to
     // the panel's category id + target the same way the Studio does.
-    let lastDestination: { categoryId: string; targetId: string } | undefined;
-    if (b.lastDestination) {
-      const { kind, target } = b.lastDestination;
-      if (kind === "ivr") {
-        lastDestination = { categoryId: LAST_DESTINATION_CATEGORIES.ivr, targetId: String(target) };
-      } else {
-        const hit = byNumber.get(String(target).trim());
-        if (!hit) {
-          return reply.code(400).send({
-            error: "unknown_destination",
-            message: `Extension ${target} isn't on your phone system.`,
-          });
-        }
-        lastDestination = {
-          categoryId: kind === "voicemail" ? LAST_DESTINATION_CATEGORIES.voicemail : LAST_DESTINATION_CATEGORIES.extension,
-          targetId: String(hit.id),
-        };
+    type ResolvedDest = { categoryId: string; targetId: string };
+    const resolveDest = (
+      d: { kind: "extension" | "voicemail" | "ivr"; target: string } | undefined,
+    ): ResolvedDest | { error: string } | undefined => {
+      if (!d) return undefined;
+      if (d.kind === "ivr") {
+        return { categoryId: LAST_DESTINATION_CATEGORIES.ivr, targetId: String(d.target) };
       }
+      const hit = byNumber.get(String(d.target).trim());
+      if (!hit) return { error: String(d.target) };
+      return {
+        categoryId:
+          d.kind === "voicemail" ? LAST_DESTINATION_CATEGORIES.voicemail : LAST_DESTINATION_CATEGORIES.extension,
+        targetId: String(hit.id),
+      };
+    };
+    const isDestError = (v: unknown): v is { error: string } =>
+      typeof v === "object" && v !== null && "error" in (v as any);
+
+    const lastRaw = resolveDest(b.lastDestination);
+    if (isDestError(lastRaw)) {
+      return reply.code(400).send({
+        error: "unknown_destination",
+        message: `Extension ${lastRaw.error} isn't on your phone system.`,
+      });
     }
+    const lastDestination = lastRaw as ResolvedDest | undefined;
+
+    const hangupRaw = resolveDest(b.hangupDestination);
+    if (isDestError(hangupRaw)) {
+      return reply.code(400).send({
+        error: "unknown_hangup_destination",
+        message: `Extension ${hangupRaw.error} isn't on your phone system.`,
+      });
+    }
+    const hangupDestination = hangupRaw as ResolvedDest | undefined;
 
     const panelCfg = loadPanelConfig();
     if (!panelCfg) {
@@ -192,6 +260,7 @@ export function registerTeamRoutes(deps: TeamRouteDeps): void {
                 name: b.name,
                 prefix: b.prefix,
                 members: deduped,
+                strategy: b.queueStrategy as any,
                 ringTime: b.ringTime,
                 retry: b.retry,
                 musicGroupId: b.musicGroupId,
@@ -202,6 +271,22 @@ export function registerTeamRoutes(deps: TeamRouteDeps): void {
                 announcePosition: b.announcePosition,
                 maxCallers: b.maxCallers,
                 maxWaitSeconds: b.maxWaitSeconds,
+                // Advanced
+                wrapUpSeconds: b.wrapUpSeconds,
+                serviceLevelSeconds: b.serviceLevelSeconds,
+                joinWhenEmpty: b.joinWhenEmpty,
+                leaveWhenEmpty: b.leaveWhenEmpty,
+                autofill: b.autofill,
+                autoPause: b.autoPause,
+                memberDelaySeconds: b.memberDelaySeconds,
+                weight: b.weight,
+                penaltyMembersLimit: b.penaltyMembersLimit,
+                announceFrequency: b.announceFrequency,
+                minAnnounceFrequency: b.minAnnounceFrequency,
+                announcePositionLimit: b.announcePositionLimit,
+                announceRoundSeconds: b.announceRoundSeconds,
+                alertInfo: b.alertInfo,
+                hangupDestination,
                 lastDestination,
               },
               dir.used,

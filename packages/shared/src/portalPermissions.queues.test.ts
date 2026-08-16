@@ -19,10 +19,12 @@ import {
  * it looks like a bug rather than a permission.
  */
 
-const QUEUE_ACTION_KEYS = ["can_view_queues", "can_view_queue_wallboard", "can_view_queue_reports"] as const;
+const QUEUE_ACTION_KEYS = [
+  "can_view_queues", "can_view_queue_wallboard", "can_view_queue_reports", "can_create_queues",
+] as const;
 const QUEUE_NAV_KEY = "can_view_pbx_queues";
 
-test("the three queue action keys exist and are real permission keys", () => {
+test("the four queue action keys exist and are real permission keys", () => {
   for (const k of QUEUE_ACTION_KEYS) {
     assert.ok((ACTION_PERMISSION_KEYS as readonly string[]).includes(k), `${k} missing from ACTION_PERMISSION_KEYS`);
     assert.ok(isPortalPermissionKey(k), `${k} is not a valid PortalPermissionKey`);
@@ -79,4 +81,14 @@ test("the reports key is separable from the live board", () => {
   const withoutReports = new Set(tenantAdmin);
   withoutReports.delete("can_view_queue_reports");
   assert.ok(withoutReports.has("can_view_queues"), "revoking reports must leave the live board intact");
+});
+
+test("creating a queue is its own key, separate from watching one", () => {
+  // Creating writes to the PBX. Someone who watches the board all day should
+  // not automatically be able to add queues to the phone system.
+  const tenantAdmin = new Set(DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN as readonly string[]);
+  const withoutCreate = new Set(tenantAdmin);
+  withoutCreate.delete("can_create_queues");
+  assert.ok(withoutCreate.has("can_view_queues"), "revoking create must leave the live board");
+  assert.ok(!(DEFAULT_ROLE_PERMISSIONS.END_USER as readonly string[]).includes("can_create_queues"));
 });

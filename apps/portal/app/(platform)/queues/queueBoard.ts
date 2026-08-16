@@ -158,12 +158,16 @@ export function formatDurationLong(totalSec: number | null | undefined): string 
 
 type QueuesResponse = {
   queues?: QueueConfig[];
+  /** Every extension on the tenant — feeds the "new queue" member picker. */
+  extensions?: Array<{ extension: string; name: string | null }>;
   source?: string;
   skipReason?: string;
 };
 
 export type QueueBoardState = {
   queues: BoardQueue[];
+  /** Tenant extensions, for the create-queue picker. */
+  extensions: Array<{ extension: string; name: string | null }>;
   loading: boolean;
   /** Set when config could not be loaded — the UI must say why, not show zero. */
   configError: string | null;
@@ -175,6 +179,7 @@ export type QueueBoardState = {
 export function useQueueBoard(): QueueBoardState {
   const { queueList, activeCalls, isLive } = useTelephony();
   const [config, setConfig] = useState<QueueConfig[] | null>(null);
+  const [extensions, setExtensions] = useState<Array<{ extension: string; name: string | null }>>([]);
   const [configError, setConfigError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
@@ -200,6 +205,7 @@ export function useQueueBoard(): QueueBoardState {
           setConfigError(res.skipReason || "Queue configuration is unavailable.");
         } else {
           setConfig(res.queues ?? []);
+          setExtensions(res.extensions ?? []);
           setConfigError(null);
         }
       })
@@ -288,7 +294,7 @@ export function useQueueBoard(): QueueBoardState {
     });
   }, [config, queueList, activeCalls]);
 
-  return { queues, loading, configError, live: isLive, reload };
+  return { queues, extensions, loading, configError, live: isLive, reload };
 }
 
 /**

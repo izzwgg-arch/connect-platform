@@ -155,6 +155,50 @@ const num = (v: unknown): number | null => {
 };
 const yes = (v: unknown): boolean => String(v ?? "").trim().toLowerCase() === "yes";
 
+/**
+ * Every extension on the tenant, for the "who's in this queue?" picker.
+ *
+ * Returned alongside the queues by `GET /voice/queues` rather than from its own
+ * endpoint: it is the same tenant scope and the same connection, and a second
+ * round-trip to the PBX for a list this small is not worth a second door.
+ */
+export async function listTenantExtensions(
+  vitalTenantId: string,
+  ombuMysqlUrlEncrypted: string | null | undefined,
+): Promise<Array<{ extension: string; name: string | null }>> {
+  const tenant = String(vitalTenantId || "").trim();
+  if (!tenant) return [];
+  const c = await connectOmbutelMysql(ombuMysqlUrlEncrypted);
+  if (!c.ok) return [];
+  const { conn, schema } = c;
+  try {
+    const cols = await columnsOf(conn, schema, "ombu_extensions");
+    if (!cols.has("extension")) return [];
+    const tenantCol = cols.has("tenant_id") ? "tenant_id" : cols.has("tenantid") ? "tenantid" : null;
+    if (!tenantCol) return [];
+    // ⛔ `name`, not `description` — ombu_extensions has no description column.
+    const nameCol = cols.has("name") ? "`name`" : "NULL";
+    const [rows] = (await conn.query(
+      `SELECT \`extension\` AS \`_ext\`, ${nameCol} AS \`_name\`
+         FROM \`ombu_extensions\`
+        WHERE \`${tenantCol}\` = ?
+        ORDER BY \`extension\` ASC
+        LIMIT 500`,
+      [tenant],
+    )) as [DbRow[], unknown];
+    return (rows as DbRow[])
+      .map((r) => ({
+        extension: String(r["_ext"] ?? "").trim(),
+        name: r["_name"] != null ? String(r["_name"]).trim() || null : null,
+      }))
+      .filter((e) => e.extension);
+  } catch {
+    return []; // the picker degrades to "no extensions", never a 500
+  } finally {
+    await conn.end().catch(() => {});
+  }
+}
+
 export async function listQueuesFromOmbutel(
   vitalTenantId: string,
   ombuMysqlUrlEncrypted: string | null | undefined,

@@ -170,9 +170,16 @@ export const ACTION_PERMISSION_KEYS = [
   //                              data about named people, so it is separable
   //                              from watching the queue and is deliberately
   //                              NOT granted to an ordinary user by default.
+  //   can_create_queues        — make a NEW queue. This is a PBX write, so it
+  //                              is separate from merely watching one: plenty
+  //                              of supervisors should see the board and never
+  //                              create anything. ⛔ The /voice/teams route
+  //                              accepts this key OR the IVR-management key,
+  //                              so the button and the endpoint always agree.
   "can_view_queues",
   "can_view_queue_wallboard",
   "can_view_queue_reports",
+  "can_create_queues",
   // Lets a person switch the customer-facing screens into Yiddish. Separate
   // from the tenant-level switch: the tenant chooses at sign-up whether
   // Yiddish is offered at all, this decides who inside it may use it.
@@ -383,10 +390,11 @@ const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_manage_contacts",
   "can_view_reports",
   // Queues: on for a tenant admin, off for an ordinary user, and every one of
-  // the three individually revocable from a custom role.
+  // the four individually revocable from a custom role.
   "can_view_queues",
   "can_view_queue_wallboard",
   "can_view_queue_reports",
+  "can_create_queues",
   "can_view_admin",
   "can_manage_integrations",
   "can_manage_voip_ms",
