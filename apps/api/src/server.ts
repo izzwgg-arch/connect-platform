@@ -289,6 +289,7 @@ import {
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
+import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -40526,6 +40527,12 @@ const port = Number(process.env.PORT || 3001);
   warnIfOnboardingStorageEphemeral(app.log);
   warnIfVoicemailAudioStoreEphemeral(app.log);
   warnIfAvatarStorageEphemeral(app.log);
+  // Publish the assistant's standing knowledge (docs/agent-knowledge/*.md) into
+  // the database the agent reads. Deliberately here rather than in the agent:
+  // the agent is a manual rebuild, so knowledge would otherwise need a
+  // hand-built container to change. Never fatal — a bad knowledge file must not
+  // stop the api from booting.
+  syncAgentKnowledgeDocs(app.log as any).catch((e) => app.log.error({ err: e }, "agent knowledge sync failed"));
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,

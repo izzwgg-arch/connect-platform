@@ -155,6 +155,18 @@ export interface RateLimitLike {
  */
 export type ContextProvider = (ctx: ChatContext) => Promise<{ ok: true; block: string | null } | { ok: false; reason?: string }>;
 
+/**
+ * Supplies the standing knowledge block for a turn: the platform document plus
+ * THIS company's document (apps/agent/src/knowledge/standingKnowledge.ts).
+ * Injected rather than imported so the engine keeps no database dependency and
+ * every existing construction site — and every test — works untouched.
+ *
+ * ⛔ `tenantId` here is the server-verified one from the session. A provider
+ * that resolved the company from chat text would hand one customer another
+ * customer's knowledge.
+ */
+export type KnowledgeProvider = (input: { tenantId: string; audience: "customer" | "internal" }) => Promise<string | null>;
+
 export class ConversationEngine {
   constructor(
     private store: ConversationStore,
@@ -172,6 +184,11 @@ export class ConversationEngine {
      * exactly the old text-in/text-out behaviour.
      */
     private tools: ToolSpec[] | null = null,
+    /**
+     * Standing knowledge (system document + this company's document). Optional
+     * and last, like `tools`: absent means exactly the previous behaviour.
+     */
+    private knowledge: KnowledgeProvider | null = null,
   ) {}
 
   /**
@@ -415,6 +432,26 @@ export class ConversationEngine {
       }
     }
 
+    // Standing knowledge: the platform document + THIS company's document,
+    // read before answering. This is what stops "I'll pass that to the team"
+    // being the answer to a question we have already written down. Failure-safe
+    // by design — no knowledge must never mean no reply.
+    let knowledgeBlock: string | null = null;
+    if (this.knowledge) {
+      try {
+        knowledgeBlock = await this.knowledge({ tenantId: ctx.tenantId, audience: "customer" });
+      } catch (err) {
+        knowledgeBlock = null;
+        await this.audit.record({
+          actor: "system",
+          event: "chat.knowledge_unavailable",
+          tenantId: ctx.tenantId,
+          conversationId: conv.id,
+          payload: { error: String(err).slice(0, 200) },
+        });
+      }
+    }
+
     // Trainer lessons (active, tenant-scoped) refine behavior in every turn.
     // Failure-safe: lesson lookup can never break a conversation.
     let lessonsBlock: string | null = null;
@@ -449,6 +486,9 @@ export class ConversationEngine {
     const msgs: ChatMessage[] = [
       { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
       ...(identityBlock ? [{ role: "system" as const, content: identityBlock }] : []),
+      // Knowledge sits BEFORE the trainer lessons on purpose: lessons are
+      // corrections and must be able to override a document.
+      ...(knowledgeBlock ? [{ role: "system" as const, content: knowledgeBlock }] : []),
       ...(viewingBlock ? [{ role: "system" as const, content: viewingBlock }] : []),
       ...(lessonsBlock ? [{ role: "system" as const, content: lessonsBlock }] : []),
       ...history.slice(-HISTORY_WINDOW).map((m) => ({

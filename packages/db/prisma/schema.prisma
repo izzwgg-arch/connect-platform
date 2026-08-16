@@ -6494,6 +6494,48 @@ model AgentMemory {
   @@unique([tenantId, key])
 }
 
+/// Standing knowledge the assistant reads BEFORE it answers — one document for
+/// the platform ("system") and one per company ("tenant"). Split on purpose:
+/// a conversation loads the system doc plus THAT company's doc and nothing
+/// else, so knowledge grows with the customer base without growing the prompt.
+///
+/// ⛔ The markdown files in `docs/agent-knowledge/` are the SOURCE OF TRUTH —
+/// this table is the published copy the agent reads. The api re-syncs the
+/// files into these rows at boot (`agentKnowledgeSync.ts`), so editing a file
+/// and deploying the api publishes it; the agent container never needs a
+/// rebuild to learn something new. Rows written from a file carry
+/// source="repo" and are removed when their file is deleted.
+///
+/// ⛔ `body` is what a CUSTOMER can be told. Staff-only material lives between
+/// `<!-- internal -->` markers inside the file and is stripped into
+/// `internalBody`, which only the escalation researcher ever sees.
+model AgentKnowledgeDoc {
+  id       String  @id @default(cuid())
+  /// "system" (platform-wide, tenantId null) or "tenant".
+  scope    String
+  /// Which company this doc belongs to. Null for the system doc. No FK by
+  /// design — every other Agent* table does the same, and a knowledge row must
+  /// never be the reason a tenant delete fails.
+  tenantId String?
+  /// Stable file identity: "system" or the tenant file's basename.
+  slug     String  @unique
+  title    String
+  /// Customer-safe knowledge, markdown.
+  body     String
+  /// Staff-only knowledge, markdown. Never reaches a customer-facing reply.
+  internalBody String?
+  /// sha256 of the source file — lets a sync skip unchanged documents.
+  checksum String
+  /// "repo" (published from docs/agent-knowledge) or "manual".
+  source   String  @default("repo")
+  /// Relative path of the file this came from, for error messages.
+  sourcePath String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scope, tenantId])
+}
+
 model AgentTranscript {
   id          String   @id @default(cuid())
   tenantId    String?

@@ -28,6 +28,7 @@
 import type { AuditLog } from "../audit/audit";
 import type { ModelRouter, ChatMessage } from "../llm/router";
 import type { ToolSpec } from "../tools/toolRegistry";
+import { loadStandingKnowledgeBlock } from "../knowledge/standingKnowledge";
 
 /**
  * The assistant's escalation phrasings. These are OUR OWN strings — the system
@@ -198,8 +199,26 @@ export class EscalationService {
     };
     if (!this.llm || this.llm.available().length === 0) return fallback;
 
+    // The researcher gets the STAFF view of the standing knowledge — the
+    // platform document plus this company's document including its internal
+    // notes. This is what makes "PROPOSED FIX" specific enough for the owner to
+    // approve with one word instead of having to go and look the account up.
+    // Failure-safe: no knowledge simply means the old, thinner report.
+    let knowledgeBlock: string | null = null;
+    try {
+      knowledgeBlock = await loadStandingKnowledgeBlock({
+        prisma: this.prisma,
+        tenantId: ctx.tenantId,
+        tenantName,
+        audience: "internal",
+      });
+    } catch {
+      knowledgeBlock = null;
+    }
+
     const msgs: ChatMessage[] = [
       { role: "system", content: RESEARCH_SYSTEM_PROMPT },
+      ...(knowledgeBlock ? [{ role: "system" as const, content: knowledgeBlock }] : []),
       {
         role: "user",
         content: `Company (tenant): ${tenantName}\nCustomer: ${userName}\n\nConversation transcript (most recent last):\n${transcript}\n\nPrepare the escalation report.`,

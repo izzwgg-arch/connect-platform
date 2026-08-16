@@ -50,6 +50,7 @@ import { EmailChannel } from "./channels/email";
 import { MessagingChannelHandler, NullMessagingTransport } from "./channels/messaging";
 import { VoiceStudio } from "./voice/studio";
 import { KnowledgeBase } from "./knowledge/kb";
+import { loadStandingKnowledgeBlock } from "./knowledge/standingKnowledge";
 import { TrainerLessonService } from "./training/lessons";
 import { verifyPortalJwt } from "./auth";
 import { buildProvisioningPlan } from "./pbx/provisioningPlan";
@@ -264,7 +265,14 @@ async function main() {
       // writes in the tool surface; see the file's header for the fence.
       ...buildSelfServiceTools({ prisma }),
     ];
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools);
+    // Standing knowledge: the platform document + the ONE document belonging to
+    // the company this person is from, published from docs/agent-knowledge by
+    // the api. Customer audience here — staff-only sections never reach a
+    // customer-facing reply; the escalation researcher asks for them separately.
+    const knowledgeProvider = ({ tenantId, audience }: { tenantId: string; audience: "customer" | "internal" }) =>
+      loadStandingKnowledgeBlock({ prisma, tenantId, audience });
+
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools, knowledgeProvider);
 
     // Warm the in-memory cache from the DB, then pre-translate fixed templates
     // (once) so common replies are instant. Runs in the background — never
