@@ -50,6 +50,7 @@ import {
 } from "./ops/serverHealthCache";
 import { registerStorageMaintenanceRoutes } from "./ops/storageMaintenance/routes";
 import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
+import { sipPublicProbeUrl, sipPublicWsUrl, sipPublicPath } from "./sipPublicEndpoint";
 import {
   clientIpFromForwardedFor,
   evaluateLoginAttempt,
@@ -764,7 +765,7 @@ function resolveWebrtcConfig(tenant: any, link: any, turnCfg: any = null) {
   const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
   const explicitSipWsUrl = tenant?.sipWsUrl?.trim() || null;
   const fallbackSipWsUrl = tenant?.webrtcRouteViaSbc
-    ? "wss://app.connectcomunications.com/sip"
+    ? sipPublicWsUrl()
     : pbxWsEndpoint;  // uses module-level pbxWsEndpoint (from PBX_WS_ENDPOINT env var)
   // Rewrite any IP-literal WS host to the PBX's canonical FQDN. A `wss://<ip>`
   // URL can never pass mobile/browser TLS hostname verification (the PBX cert is
@@ -4416,7 +4417,7 @@ async function applyNginxSbcTarget(config: any): Promise<{ target: { mode: "LOCA
 
 async function probeNginxSipProxy(): Promise<boolean> {
   try {
-    const res = await fetch("https://app.connectcomunications.com/sip", {
+    const res = await fetch(sipPublicProbeUrl(), {
       method: "GET",
       headers: {
         Connection: "Upgrade",
@@ -4631,7 +4632,7 @@ app.get("/voice/sbc/status", async (req, reply) => {
 
   return {
     ok: true,
-    route: { publicPath: "/sip", publicSipWsUrl: "wss://app.connectcomunications.com/sip" },
+    route: { publicPath: sipPublicPath(), publicSipWsUrl: sipPublicWsUrl() },
     mode: target.mode,
     activeUpstream: maskedActiveUpstream,
     services: {
