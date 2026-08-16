@@ -330,7 +330,6 @@ export async function createQueue(
     ["announce_frequency", numField(spec.announceFrequency)],
     ["min_announce_frequency", numField(spec.minAnnounceFrequency)],
     ["announce_round_seconds", String(spec.announceRoundSeconds ?? 0)],
-    ["autopause", spec.autoPause === true ? "yes" : "no"],
     ["penaltymemberslimit", numField(spec.penaltyMembersLimit)],
     ["memberdelay", numField(spec.memberDelaySeconds)],
     ["weight", numField(spec.weight)],
@@ -338,7 +337,13 @@ export async function createQueue(
     ["cron_profile_id", ""],
     ["ivr_id", ""],
     ["queue_vip_list_id", ""],
-    ["autofill", spec.autofill === false ? "no" : "yes"],
+    // ⛔ CHECKBOXES, not selects — proven by a real create: sending
+    // `autofill=no` stored **yes**, because the panel reads "field present" as
+    // "box ticked" regardless of the value. An unchecked box must be ABSENT.
+    // `joinempty`/`leavewhenempty` above ARE selects and do carry "yes"/"no",
+    // which is why they round-tripped correctly in the same request.
+    ...checkbox("autofill", spec.autofill !== false),
+    ...checkbox("autopause", spec.autoPause === true),
     ...checkbox("answerchannel", true),
   ];
 

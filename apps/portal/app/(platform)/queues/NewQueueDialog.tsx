@@ -46,7 +46,9 @@ export const NEW_QUEUE_PHRASES = [
   "Repeat their place in line every", "Never repeat more often than",
   "Stop announcing past place", "Round the wait time to",
   "Distinctive ring", "Alert-Info sent to the handsets, if yours support it.",
-  "Where callers go if nobody answers", "Nowhere — just hang up",
+  "Where callers go if nobody answers", "Choose someone…",
+  "The phone system won't accept a queue without one.",
+  "Choose where callers go if nobody answers.",
   "This queue will be number", "It won't take calls until Apply Changes is pressed on the phone system.",
   "Queue created", "was created and is waiting for Apply Changes on the phone system.",
   "Give the queue a name.", "Pick at least one person.",
@@ -116,13 +118,20 @@ export function NewQueueDialog({
   const toggleMember = (ext: string) =>
     setMembers((prev) => (prev.includes(ext) ? prev.filter((x) => x !== ext) : [...prev, ext]));
 
-  const canSubmit = name.trim().length > 0 && members.length > 0 && !saving;
+  // A queue is refused without a last destination, so pre-fill it with the
+  // first person ticked rather than making that a step someone can miss.
+  useEffect(() => {
+    if (!lastDest && members.length > 0) setLastDest(members[0]!);
+  }, [members, lastDest]);
+
+  const canSubmit = name.trim().length > 0 && members.length > 0 && lastDest.length > 0 && !saving;
 
   const submit = async () => {
     // ⛔ Refuse loudly at the control that was pressed. A disabled button with
     // no reason on screen is how an hour of work ends in a dead end.
     if (!name.trim()) { setErr(t("Give the queue a name.")); return; }
     if (members.length === 0) { setErr(t("Pick at least one person.")); return; }
+    if (!lastDest) { setErr(t("Choose where callers go if nobody answers.")); return; }
 
     setSaving(true);
     setErr(null);
@@ -227,9 +236,12 @@ export function NewQueueDialog({
             <NumField label={t("Longest anyone waits")} unit={t("seconds")} hint={t("0 means no limit — they wait until someone answers")} value={maxWait} onChange={setMaxWait} min={0} max={7200} />
           </div>
 
-          <Field label={t("Where callers go if nobody answers")}>
+          <Field
+            label={t("Where callers go if nobody answers")}
+            hint={t("The phone system won't accept a queue without one.")}
+          >
             <select className="qb-input" value={lastDest} onChange={(e) => setLastDest(e.target.value)}>
-              <option value="">{t("Nowhere — just hang up")}</option>
+              <option value="">{t("Choose someone…")}</option>
               {people.map((p) => (
                 <option key={p.extension} value={p.extension}>
                   {p.extension}{p.name ? ` — ${p.name}` : ""}

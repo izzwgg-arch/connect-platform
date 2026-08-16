@@ -223,6 +223,20 @@ export function registerTeamRoutes(deps: TeamRouteDeps): void {
     }
     const hangupDestination = hangupRaw as ResolvedDest | undefined;
 
+    // ⛔ A QUEUE MUST HAVE A LAST DESTINATION. Proven by a real create against
+    // the panel, which refused the save with "Destination Module is required. |
+    // Destination is required." The fields were previously only sent when the
+    // caller supplied one, so any queue created without a destination failed
+    // — loudly, thanks to assertSaved, but at the very end of the form.
+    // Refusing here says so before anything is attempted.
+    if (b.kind === "queue" && !lastDestination) {
+      return reply.code(400).send({
+        error: "destination_required",
+        message:
+          "Choose where callers should go if nobody in the queue answers. The phone system won't accept a queue without one.",
+      });
+    }
+
     const panelCfg = loadPanelConfig();
     if (!panelCfg) {
       return reply.code(503).send({
