@@ -14601,30 +14601,24 @@ body {
 
 /* ?? Topbar: dark premium header ???????????????????????????????????????????? */
 
+/* Topbar brand mark — LoopCom wordmark, ONE transparent PNG for BOTH themes.
+   ⛔ Do NOT reintroduce a per-theme show/hide here. What used to live in this
+   spot hid the logo entirely in light mode and printed a "Connect" text span
+   instead, because the old SVG was white-on-transparent — which is why the app
+   looked like it had no logo in light mode at all.
+   ⛔ No filter either: the chrome artwork is used exactly as delivered. */
 .brand-logo-svg {
-  height: 42px;
+  /* 26px, not the old 42px: this wordmark is 5.6:1, so 42px tall would be 236px
+     wide and overflow the brand slot. Height gives way, not the slot. */
+  height: 26px;
   width: auto;
-  max-width: min(168px, 40vw);
+  max-width: min(180px, 42vw);
   display: block;
   flex-shrink: 0;
   margin: 0;
   padding: 0;
   object-fit: contain;
   object-position: left center;
-  filter: saturate(0.88);
-}
-
-/* Dark mode: show SVG logo, hide text */
-:root[data-theme="dark"] .brand-logo-svg {
-  display: block;
-}
-:root[data-theme="dark"] .brand-name {
-  display: none;
-}
-
-/* Light mode: hide SVG logo (white text invisible on light bg), show text */
-:root[data-theme="light"] .brand-logo-svg {
-  display: none;
 }
 
 .brand-name {
@@ -19431,9 +19425,8 @@ table tr:hover {
   );
 }
 
-:root[data-theme="light"] .brand-logo-svg {
-  filter: none;
-}
+/* (removed) .brand-logo-svg no longer carries a saturate filter in either theme,
+   so a light-mode override that cancelled it has nothing left to cancel. */
 
 :root[data-theme="light"] .topbar-center .global-search .input,
 :root[data-theme="light"] .input,

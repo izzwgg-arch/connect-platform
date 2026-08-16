@@ -2,7 +2,7 @@
 
 import { Menu } from "lucide-react";
 import { LanguageToggle } from "../hooks/useUiLanguage";
-import { ConnectLogo } from "./ConnectLogo";
+import { LoopComLogo } from "./LoopComLogo";
 import { FloatingDialer } from "./FloatingDialer";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationPanel } from "./NotificationPanel";
@@ -25,8 +25,10 @@ export function Topbar({ onToggleNav }: TopbarProps) {
         >
           <Menu size={18} />
         </button>
-        <ConnectLogo className="brand-logo-svg" />
-        <span className="brand-name">Connect</span>
+        {/* No text beside it: the wordmark says LoopCom itself, and the old
+            "Connect" span existed only as a light-mode fallback for a logo that
+            could not render on a light background. */}
+        <LoopComLogo className="brand-logo-svg" />
       </div>
 
       <div className="topbar-center">
