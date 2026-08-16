@@ -23,6 +23,7 @@
 
 import { db } from "@connect/db";
 import { resolvePlatformSmsSender, normalizeUsPhone } from "./billing/billingSmsSender";
+import { offerFixCode, fixOfferLine } from "./agentFixByText";
 
 const ESCALATION_SMS_FROM = () => normalizeUsPhone(process.env.AGENT_ESCALATION_SMS_FROM) || "+18455577768";
 const ESCALATION_SMS_TO = (): string[] =>
@@ -63,10 +64,24 @@ export async function dispatchAgentEscalationsBatch(log?: { info: (o: any, m: st
           if (!sender.ok) {
             errors.push(`sms_unavailable: ${sender.error}`);
           } else {
+            // "Fix it!": when the assistant has already prepared an executable
+            // draft, the text carries a one-time code the owner can reply with.
+            // ⛔ Minted HERE, at send time, not when the row was written — the
+            // code is only ever in the clear inside this message, and an
+            // escalation that waited in the queue must not carry a stale one.
+            // Failure to mint is never fatal: the escalation still goes out,
+            // just without the shortcut.
+            let body = row.smsBody;
+            try {
+              const code = await offerFixCode(row);
+              if (code) body = `${body}\n${fixOfferLine(code)}`;
+            } catch (err: any) {
+              errors.push(`fix_code: ${String(err?.message || err).slice(0, 120)}`);
+            }
             let delivered = 0;
             for (const to of ESCALATION_SMS_TO()) {
               try {
-                await sender.send({ tenantId: row.tenantId, to, body: row.smsBody });
+                await sender.send({ tenantId: row.tenantId, to, body });
                 delivered++;
               } catch (err: any) {
                 errors.push(`sms_to_${to}: ${String(err?.message || err).slice(0, 160)}`);

@@ -6458,6 +6458,29 @@ model AgentEscalation {
   lastError      String?
   smsSentAt      DateTime?
   emailQueuedAt  DateTime?
+
+  /// ── "Fix it!" by text ───────────────────────────────────────────────────
+  /// The DRAFT AgentAction this escalation offers to carry out, if the request
+  /// maps to one of the safe capabilities. Null means the escalation is
+  /// information only and the SMS carries no code — most of them.
+  fixActionId      String?
+  /// sha256 of the one-time code. ⛔ The code itself is NEVER stored: the SMS
+  /// is the only place it exists in the clear, which is what makes replying
+  /// with it proof that the owner read the message.
+  fixCodeHash      String?  @unique
+  fixCodeExpiresAt DateTime?
+  /// Set the moment a reply claims the code, before the work runs — the claim
+  /// is what makes it single-use, so a second text can never act twice.
+  fixCodeUsedAt    DateTime?
+  /// Which phone approved it, for the audit trail.
+  fixApprovedFrom  String?
+  /// null | "offered" | "applied" | "refused" | "failed"
+  fixStatus        String?
+  /// Plain-English outcome, mirrored into the reply SMS.
+  fixResult        String?
+  /// Counts refused attempts against this escalation, so a guessed code costs
+  /// something even before the platform-wide rate limit bites.
+  fixAttempts      Int                   @default(0)
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
 

@@ -290,6 +290,7 @@ import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
+import { sweepFixRepliesBatch } from "./agentFixByText";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -38032,6 +38033,16 @@ const agentEscalationTimer = registerShutdownTimer(
   }, 30_000),
 );
 agentEscalationTimer.unref();
+
+// "Fix it!" — the owner's reply to an escalation text. Inbound SMS arrives by
+// the worker's VoIP.ms poll (a couple of minutes), so a 60s sweep is as fast as
+// the channel allows; it reads only the escalation number's threads.
+const agentFixReplyTimer = registerShutdownTimer(
+  setInterval(() => {
+    sweepFixRepliesBatch(app.log as any).catch((e) => app.log.error({ err: e }, "agent fix-by-text sweep failed"));
+  }, 60_000),
+);
+agentFixReplyTimer.unref();
 
 // Receipt reconciliation sweep — safety net so every approved payment gets a
 // receipt email even when the primary queue-on-charge path missed it

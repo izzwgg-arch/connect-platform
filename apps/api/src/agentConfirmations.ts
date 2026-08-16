@@ -183,6 +183,18 @@ export async function loadVerifiedDraft(
     resolveTenantId(actorRole: string, actorTenantId: string, actionTenantId: string): string;
     hash(input: string): string;
     now: Date;
+    /**
+     * How old a draft may be. Defaults to the 30-minute on-screen window.
+     *
+     * ⛔ Raised ONLY by the "Fix it!" by-text path, and only because that
+     * approval has a different shape: the owner is answering a written report on
+     * his phone, possibly the next morning, and the one-time code — not the
+     * clock — is what proves the approval is deliberate and single-use. The two
+     * values must stay equal (see `FIX_CODE_TTL_MS`): a code that outlives the
+     * draft it points at would fail with "expired" at the moment the owner
+     * finally answered, which reads as the feature being broken.
+     */
+    maxAgeMs?: number;
   },
 ): Promise<
   | { ok: true; capability: ConfirmCapability; params: any; tenantId: string }
@@ -211,7 +223,7 @@ export async function loadVerifiedDraft(
   if (action.status !== "DRAFT") {
     return { ok: false, refusal: { status: 409, error: "already_decided", message: "That request has already been dealt with." } };
   }
-  if (action.createdAt && input.now.getTime() - new Date(action.createdAt).getTime() > CONFIRM_DRAFT_TTL_MS) {
+  if (action.createdAt && input.now.getTime() - new Date(action.createdAt).getTime() > (input.maxAgeMs ?? CONFIRM_DRAFT_TTL_MS)) {
     return {
       ok: false,
       refusal: {
@@ -260,10 +272,27 @@ export async function applyConfirmedAction(
   input: {
     actor: ConfirmActor;
     actionId: string;
-    password: string;
+    /** The account password. Used when no `credential` is supplied. */
+    password?: string;
+    /**
+     * How the approver proved it is them. Omit for the password path, which is
+     * every existing caller.
+     *
+     * ⛔ `one_time_code` does NOT skip a gate — it REPLACES the password with a
+     * secret of equal single-use standing, and only after the caller has already
+     * proven, outside this function, that the code matched a live unclaimed
+     * offer and that the sender was allowed to approve. Everything else — role,
+     * tenant scope, params hash, the capability's own authorisation, the atomic
+     * claim, the audit — runs exactly as it does for a password.
+     */
+    credential?:
+      | { kind: "password"; password: string }
+      | { kind: "one_time_code"; channel: "sms"; verifiedFrom: string };
     isTenantAdminOrAbove(role: string): boolean;
     resolveTenantId(actorRole: string, actorTenantId: string, actionTenantId: string): string;
     hash(input: string): string;
+    /** See `loadVerifiedDraft`. Only the by-text path passes this. */
+    maxAgeMs?: number;
   },
 ): Promise<ConfirmResult> {
   const now = deps.now?.() ?? new Date();
@@ -282,6 +311,7 @@ export async function applyConfirmedAction(
     resolveTenantId: input.resolveTenantId,
     hash: input.hash,
     now,
+    maxAgeMs: input.maxAgeMs,
   });
   if (!loaded.ok) return { ok: false, ...loaded.refusal };
   const { capability, params, tenantId } = loaded;
@@ -301,8 +331,10 @@ export async function applyConfirmedAction(
     return { ok: false, ...refusal };
   }
 
-  // 6 ─ Password. Rate-limited BEFORE the compare and counted on every attempt,
-  // so this cannot be walked through guess by guess.
+  // 6 ─ The approver's own credential. Rate-limited BEFORE the compare and
+  // counted on every attempt, so neither channel can be walked through guess by
+  // guess.
+  const credential = input.credential ?? { kind: "password" as const, password: input.password ?? "" };
   if (!deps.rateLimit(`agent-confirm-apply:${actor.sub}`, PASSWORD_ATTEMPT_MAX, PASSWORD_ATTEMPT_WINDOW_MS)) {
     await safeAudit(deps, {
       tenantId,
@@ -319,19 +351,37 @@ export async function applyConfirmedAction(
     where: { id: actor.sub },
     select: { id: true, passwordHash: true, status: true },
   });
-  if (!actorUser?.passwordHash || actorUser.status === "DISABLED") {
+  // A disabled account confirms nothing, whichever channel it came through.
+  if (actorUser?.status === "DISABLED") {
     return fail(403, "forbidden", "Your account can't confirm this change.");
   }
-  if (!(await deps.comparePassword(input.password, actorUser.passwordHash))) {
+  if (credential.kind === "password") {
+    if (!actorUser?.passwordHash) {
+      return fail(403, "forbidden", "Your account can't confirm this change.");
+    }
+    if (!(await deps.comparePassword(credential.password, actorUser.passwordHash))) {
+      await safeAudit(deps, {
+        tenantId,
+        action: "AGENT_CONFIRM_PASSWORD_FAILED",
+        entityType: "AgentAction",
+        entityId: action.id,
+        actorUserId: actor.sub,
+        metadata: { capabilityId: capability.id },
+      });
+      return fail(401, "invalid_password", "That password didn't match. Nothing was changed.");
+    }
+  } else {
+    // The code was matched and claimed by the caller before we got here. What
+    // this branch owes the audit trail is WHICH phone spent it — an approval
+    // that changed a customer's account must never be anonymous.
     await safeAudit(deps, {
       tenantId,
-      action: "AGENT_CONFIRM_PASSWORD_FAILED",
+      action: "AGENT_CONFIRM_BY_TEXT",
       entityType: "AgentAction",
       entityId: action.id,
       actorUserId: actor.sub,
-      metadata: { capabilityId: capability.id },
+      metadata: { capabilityId: capability.id, channel: credential.channel, from: credential.verifiedFrom },
     });
-    return fail(401, "invalid_password", "That password didn't match. Nothing was changed.");
   }
 
   // 7/8 ─ Claim, then do the work.

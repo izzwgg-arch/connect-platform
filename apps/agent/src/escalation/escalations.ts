@@ -150,6 +150,18 @@ export class EscalationService {
 
     const research = await this.research(ctx, tenantName, userName, transcript);
 
+    // "Fix it!" by text: if the assistant already PREPARED a real action during
+    // this conversation — an extension to add, texting to switch on, a number
+    // to buy — link it, and the owner's escalation text can carry a one-time
+    // code that carries it out.
+    //
+    // ⛔ Only a draft the assistant wrote IN THIS CONVERSATION counts, and only
+    // through the ordinary prepare tools, which already hashed their params and
+    // ran their own pre-checks. Nothing here composes an action out of the
+    // report's prose: a text message may only ever say yes to something already
+    // written down, and that is the whole safety story.
+    const fixActionId = await this.findPreparedFix(ctx);
+
     const smsBody = buildEscalationSms({
       tenantName,
       userName,
@@ -172,6 +184,7 @@ export class EscalationService {
         report: research.report,
         proposedFix: research.proposedFix,
         researchDegraded: research.degraded,
+        fixActionId,
       },
     });
     await this.audit.record({
@@ -181,6 +194,43 @@ export class EscalationService {
       conversationId: ctx.conversationId,
       payload: { escalationId: row.id, tenantName, userName, researchDegraded: research.degraded },
     });
+  }
+
+  /**
+   * The draft action this escalation can offer to carry out, if there is one.
+   *
+   * ⛔ Deliberately narrow, because the answer becomes something a text message
+   * can execute:
+   *   · same conversation — a draft from another chat is another request;
+   *   · same tenant — belt and braces on top of that;
+   *   · still DRAFT — never one already approved, denied or spent;
+   *   · recent (30 min, the confirmation TTL) — an old draft is a stale intent;
+   *   · exactly ONE candidate — with two, "the fix" is ambiguous and the owner
+   *     must choose on screen rather than have us guess for him.
+   * Anything else returns null and the escalation goes out with no code, which
+   * is the behaviour it had before this feature existed.
+   */
+  private async findPreparedFix(ctx: EscalationTurnCtx): Promise<string | null> {
+    if (!ctx.conversationId) return null;
+    try {
+      const since = new Date(Date.now() - 30 * 60 * 1000);
+      const drafts = await this.prisma.agentAction.findMany({
+        where: {
+          conversationId: ctx.conversationId,
+          tenantId: ctx.tenantId,
+          status: "DRAFT",
+          createdAt: { gte: since },
+          paramsHash: { not: null },
+        },
+        select: { id: true },
+        orderBy: { createdAt: "desc" },
+        take: 2,
+      });
+      return drafts.length === 1 ? drafts[0].id : null;
+    } catch {
+      // A lookup failure must never cost the escalation itself.
+      return null;
+    }
   }
 
   private async research(

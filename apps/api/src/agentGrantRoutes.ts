@@ -29,6 +29,7 @@ import {
   type ConfirmResult,
   type PendingConfirmationView,
 } from "./agentConfirmations";
+import { FIX_CODE_TTL_MS } from "./agentFixPolicy";
 import { permissionGrantCapability } from "./agentProvisioning/permissionGrantCapability";
 import { addExtensionCapability } from "./agentProvisioning/addExtensionCapability";
 import { enableSmsCapability } from "./agentProvisioning/enableSmsCapability";
@@ -72,6 +73,58 @@ export function applyAgentPermissionGrant(
     resolveTenantId: resolveTargetTenantId,
     hash,
   });
+}
+
+/**
+ * Apply one action approved by TEXT rather than by password ("Fix it!").
+ *
+ * ⛔ The caller (`agentFixByText.ts`) must already have proven the sender and
+ * atomically claimed the one-time code. This wrapper exists so that fact is
+ * stated in exactly one place and so the SMS path cannot drift away from the
+ * password path: both go through `applyConfirmedAction` and therefore through
+ * the same role gate, tenant scoping, params-hash check, capability
+ * authorisation, atomic claim and audit.
+ *
+ * The deps bag is assembled lazily by `agentFixDeps`, which server.ts sets at
+ * boot — the same one the routes use, so a capability behaves identically
+ * whether it was approved on screen or by phone.
+ */
+export function applyAgentFixAction(input: {
+  actor: ConfirmActor;
+  actionId: string;
+  verifiedFrom: string;
+}): Promise<ConfirmResult> {
+  const deps = agentFixDeps;
+  if (!deps) {
+    return Promise.resolve({
+      ok: false,
+      status: 503,
+      error: "fix_by_text_unavailable",
+      message: "Approval by text is not wired up on this server.",
+    } as ConfirmResult);
+  }
+  return applyConfirmedAction(deps, confirmCapabilityRegistry, {
+    actor: input.actor,
+    actionId: input.actionId,
+    credential: { kind: "one_time_code", channel: "sms", verifiedFrom: input.verifiedFrom },
+    // The draft must stay approvable for as long as the code does, or an
+    // overnight escalation answers "expired" the moment the owner replies.
+    maxAgeMs: FIX_CODE_TTL_MS,
+    isTenantAdminOrAbove,
+    resolveTenantId: resolveTargetTenantId,
+    hash,
+  });
+}
+
+/**
+ * The deps the SMS path executes with. Set once at boot from the same bag the
+ * routes use. Null until then, and the fix path refuses rather than guessing —
+ * a half-wired dependency is how a capability silently behaves differently
+ * depending on who approved it.
+ */
+let agentFixDeps: ConfirmDeps | null = null;
+export function setAgentFixDeps(deps: ConfirmDeps): void {
+  agentFixDeps = deps;
 }
 
 export function listPendingGrants(dbLike: any, actor: ConfirmActor): Promise<PendingConfirmationView[]>;
@@ -124,6 +177,9 @@ export async function registerAgentGrantRoutes(
     // The ONE place the real invoice engine is wired into the capabilities.
     billing: defaultBillingDeps,
   };
+  // The "Fix it!" sweep executes with the SAME bag, so a capability cannot
+  // behave one way on screen and another way over text.
+  setAgentFixDeps(confirmDeps);
 
   const pending = async (req: any, reply: any) => {
     const actor = getUser(req);
