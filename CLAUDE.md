@@ -37,9 +37,29 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 ## ⛔⛔ AGENT HANDOFF — the login brute-force limiter had NEVER run; the portal ships no security headers; Cloudflare is NOT in front of us (2026-08-16) — READ FIRST before any auth/login work, before filing a TLS or firewall finding, before using `req.ip`, or before believing Cloudflare protects Connect
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md`**
-(read-only audit + ONE code fix, `192837b5` on `feat/ivr-migration-takeover`.
-**Committed and pushed. ⛔ NOT DEPLOYED — awaiting Izzy's word.** No infrastructure
-touched, no PBX interaction, no Cloudflare change.)
+(audit + fixes, `192837b5` on `feat/ivr-migration-takeover`. **api DEPLOYED and
+container-verified 2026-08-16; nginx security headers LIVE; Cloudflare DMARC + edge
+TLS applied.** No PBX interaction.)
+Cutover plan for the edge: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md`**
+(⛔ PLAN ONLY, nothing executed).
+
+- ✅ **THE LOGIN THROTTLE IS LIVE AND PROVEN IN PRODUCTION** — not inferred from tests:
+  12 posts to `/api/auth/login` for one throwaway account returned **401 ×10 then 429
+  ×2**, a *different* account from the same IP still returned **401** (so account
+  scoping works and no IP was blanket-blocked), and the log line reads
+  `reason: account_failure_volume, sourceIp: 50.48.58.53` — **a real client address,
+  which is the proof the `X-Forwarded-For` resolution works**; with `req.ip` it would
+  have read the nginx hop for everyone. Re-run that probe after any api deploy.
+- ✅ **THE PORTAL SECURITY HEADERS ARE LIVE.** Fixed by
+  `/etc/nginx/connectcomms/security-headers.conf`, `include`d into the two locations
+  that define their own `add_header` (`location /` and `location = /privacy`) — because
+  ⛔ **nginx `add_header` is NOT inherited into a block that has its own.** Verified over
+  public HTTPS: `/login` now returns all five headers **and keeps** its
+  `Cache-Control: no-store` (which is what stops stale portal bundles), `/api/health`
+  unchanged. ⛔ Verified in a REAL BROWSER too — `/login` renders client-side, so curl
+  proves nothing: console showed **no CSP violations** and the form rendered. Backup
+  `/root/nginx-connectcomms-backup-20260816-183503-secheaders.conf`; rollback is restore
+  + `systemctl reload nginx`.
 
 - ⛔⛔ **THE LOGIN LIMITER WAS DEAD CODE AND HAD NEVER RUN IN PRODUCTION.** It was
   gated on `process.env.NODE_ENV === "production"` and **the api container sets no
