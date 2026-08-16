@@ -1,6 +1,6 @@
 {
-  "name": "@connect/desktop",
-  "version": "0.1.6",
+  "name": "@connect/desktop-support",
+  "version": "0.0.1",
   "private": true,
   "main": "dist/main.js",
   "scripts": {
@@ -8,11 +8,12 @@
     "dev": "pnpm build && electron .",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/remoteSupport/inputInjector.test.ts src/remoteSupport/lanScan.test.ts",
     "dist": "pnpm build && electron-builder --win"
   },
   "build": {
-    "appId": "com.connectcommunications.desktop",
-    "productName": "Connect",
+    "appId": "com.connectcommunications.supporttools",
+    "productName": "Loopcom Support",
     "directories": {
       "output": "release"
     },
@@ -28,22 +29,18 @@
     },
     "nsis": {
       "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico"
+      "uninstallerIcon": "assets/icon.ico",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
     },
-    "publish": {
-      "provider": "generic",
-      "url": "https://app.connectcomunications.com/desktop/",
-      "channel": "latest"
-    },
-    "artifactName": "Connect-Setup-${version}.${ext}"
+    "artifactName": "LoopcomSupport-Setup-${version}.${ext}"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "electron": "^41.5.0",
     "electron-builder": "^26.8.1",
+    "tsx": "^4.20.5",
     "typescript": "^6.0.3"
-  },
-  "dependencies": {
-    "electron-updater": "^6.3.9"
   }
 }

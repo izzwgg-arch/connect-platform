@@ -19,6 +19,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { userHasActionPermission } from "./permissionGates";
 import { formatMac, normalizeIpv4, normalizeMac, vendorForMac } from "./lanPhoneVendors";
+import { comparePhones, listPbxProvisionedPhones } from "./pbxPhoneProvisioning";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -244,6 +245,81 @@ export async function registerLanPhoneRoutes(app: FastifyInstance, deps: LanPhon
       everScanned: runCount > 0,
       scanCount: runCount,
       lastRun: lastRun ? runView(lastRun) : null,
+    });
+  });
+
+  /**
+   * ⛔ THE PAYOFF: what the phone system BELIEVES each phone's hardware ID is,
+   * against what is actually on the network.
+   *
+   * When those disagree, VitalPBX rewrites a settings file that no handset ever
+   * downloads — the panel looks right, the log shows a clean 200 for a
+   * different filename, and the phone serves a config from weeks ago. There is
+   * no error anywhere in that chain, which is why Create A Box ext 102 went
+   * seven weeks unnoticed. This route is the check that was missing.
+   *
+   * ⛔ Never answers with an empty list when something is unavailable. A blank
+   * comparison reads as "everything is fine", which is the opposite of the
+   * truth when the real answer is "I could not look".
+   */
+  app.get("/lan-phones/comparison", async (req: any, reply: any) => {
+    const user = getUser(req);
+    if (!(await userHasActionPermission(user, "can_view_lan_phones"))) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
+
+    const isSuper = String(user.role) === "SUPER_ADMIN";
+    const requestedTenant = String(req.query?.tenantId || "").trim();
+    const tenantId = isSuper && requestedTenant ? requestedTenant : user.tenantId;
+
+    const [link, phones, runCount] = await Promise.all([
+      db.tenantPbxLink.findUnique({ where: { tenantId } }),
+      db.lanDiscoveredPhone.findMany({ where: { tenantId }, take: 500 }),
+      db.lanDiscoveryRun.count({ where: { tenantId } }),
+    ]);
+
+    if (!link?.pbxInstanceId) {
+      return reply.send({
+        available: false,
+        reason: "no_pbx_link",
+        message: "This company is not linked to the phone system, so there is nothing to compare against.",
+      });
+    }
+
+    const instance = await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } });
+    const pbxTenant = Number(link.pbxTenantCode || link.pbxTenantId || 0) || undefined;
+
+    const provisioned = await listPbxProvisionedPhones(
+      (instance as any)?.ombuMysqlUrlEncrypted,
+      pbxTenant ? { pbxTenant } : {},
+    );
+
+    if (!provisioned.available) {
+      // Prints the exact fix on screen rather than a slug, the same way the
+      // queue reports do when their grant is missing.
+      return reply.send({
+        available: false,
+        reason: provisioned.reason,
+        message:
+          provisioned.reason === "provisioning_access_denied"
+            ? "Connect cannot read the phone system's provisioning records yet. One database permission is needed."
+            : "The phone system could not be reached, so there is nothing to compare against.",
+        detail: provisioned.detail,
+        grantSql: provisioned.grantSql,
+      });
+    }
+
+    const comparison = comparePhones({
+      pbxPhones: provisioned.phones,
+      networkPhones: phones.map((p) => ({ mac: p.macAddress, ip: p.ipAddress, vendor: p.vendor })),
+      networkScanned: runCount > 0,
+    });
+
+    return reply.send({
+      available: true,
+      tenantId,
+      networkScanned: runCount > 0,
+      ...comparison,
     });
   });
 

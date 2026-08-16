@@ -57,6 +57,23 @@ export default function RemoteSupportConsent() {
 
   const bridge = desktopBridge();
 
+  /**
+   * ⛔ THE PRODUCTION GATE. This component is mounted globally, so without this
+   * check EVERY signed-in user — every customer, in every browser and in the
+   * Connect desktop app — would poll for support requests every few seconds
+   * the moment the portal deploys.
+   *
+   * Remote support only exists in the separate "Loopcom Support" app, which is
+   * the only build that exposes `connectDesktop.remoteSupport`. The Connect
+   * desktop app deliberately does not, so it and every browser fall through
+   * here and do nothing at all: no polling, no network traffic, no UI.
+   *
+   * ⛔ Adding a `remoteSupport` key to the Connect app's preload would silently
+   * switch this on for the entire customer base. Do not, until that is the
+   * decision being made.
+   */
+  const supported = Boolean(bridge?.remoteSupport?.listScreens);
+
   /** Everything torn down together — local first, server second. */
   const teardown = useCallback(async (sessionId?: string) => {
     try { peerRef.current?.stop(); } catch { /* already gone */ }
@@ -84,6 +101,7 @@ export default function RemoteSupportConsent() {
   // Is anyone asking? This is the only polling the customer's machine does
   // while nothing is happening.
   useEffect(() => {
+    if (!supported) return;
     let cancelled = false;
     const tick = async () => {
       if (cancelled || live) return;
@@ -98,7 +116,7 @@ export default function RemoteSupportConsent() {
     void tick();
     const timer = setInterval(tick, PENDING_POLL_MS);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [live]);
+  }, [live, supported]);
 
   // Offer the screen list as soon as there is something to answer.
   useEffect(() => {
@@ -220,6 +238,11 @@ export default function RemoteSupportConsent() {
       setBusy(false);
     }
   }, [request, chosenScreen, allowControl, bridge, teardown]);
+
+  // ⛔ Not the support app — render nothing, ever. Belt and braces alongside the
+  // polling gate above, so a future edit that reorders the effects still cannot
+  // put a dialog in front of a customer.
+  if (!supported) return null;
 
   // Nothing to show.
   if (!request && !live && !error) return null;
