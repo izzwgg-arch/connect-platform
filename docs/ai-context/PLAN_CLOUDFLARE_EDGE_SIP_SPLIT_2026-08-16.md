@@ -12,6 +12,12 @@ browser pass on it found the **public pay pages were DEAD there** (hardcoded abs
 API URL → CORS block). Fixed and deployed the same day, `93a85d25`; ⛔ **read the
 "second hostname makes every hardcoded absolute API URL a bug class" section in §4b
 before adding any URL to a portal page.**
+⛔ **Also 2026-08-16: `sip.loopcom.net` (the LoopCom-branded SIP hostname) was
+ATTEMPTED AND IS BLOCKED — see Phase A2.** It does **not** exist: no DNS record, no
+cert, no nginx block, and `SIP_PUBLIC_WS_URL` still reads
+`wss://sip.connectcomunications.com/sip`. **Nothing was changed anywhere.** The single
+blocker is Squarespace's Google re-auth, which only an agent cannot pass — Izzy must add
+one `A` record. Phase A2 carries the exact record and the whole ready-to-run runbook.
 Every step is reversible and each carries its own rollback.
 
 ✅ **Plan upgraded to Cloudflare Pro** on `connectcomunications.com` (2026-08-16,
@@ -37,6 +43,176 @@ Enterprise**, so Pro does NOT remove the need for the SIP split below.
   port 80 returns **301**.
 - ⛔ **Nothing has moved for any customer.** Both hostnames serve SIP; all four
   tenants still use `app.` until Phase B changes the code.
+
+---
+
+## Phase A2 — `sip.loopcom.net` (the LoopCom-branded SIP hostname) — ⛔ BLOCKED AT STEP 1, NOTHING CHANGED
+
+Attempted 2026-08-16. Owner's decision: the SIP hostname should carry LoopCom branding,
+so `sip.loopcom.net` becomes the **handed-out** value in place of
+`sip.connectcomunications.com`. **Additive only — `sip.connectcomunications.com` and
+every other hostname stay live indefinitely, because clients cache their SIP URL
+forever.**
+
+⛔⛔ **STATUS: NOT DONE. `sip.loopcom.net` DOES NOT EXIST.** The DNS record was never
+created, so there is no cert, no nginx block, and `SIP_PUBLIC_WS_URL` was **not**
+touched — it still reads `wss://sip.connectcomunications.com/sip`. **Zero changes were
+made to DNS, nginx, `.env.platform`, any container, any tenant row, or the PBX.**
+
+### The blocker — Squarespace's Google re-auth, hit and confirmed
+
+The Squarespace session was live (the domains list and loopcom.net's DNS page both
+rendered fully, read-only). But **the moment `ADD RECORD` under *Custom records* is
+clicked, Squarespace throws the modal:**
+
+> **Verify to continue as support@connectcomunications.com** — *Login with Google to
+> continue.* [CONTINUE]
+
+⛔ **An agent must not authenticate as the owner, so this is a hard stop, not a retry.**
+The modal was dismissed with its ✕ and the page left untouched. **Izzy has to add this
+one record himself.** Note it gates the *write*, not the *read* — so a future session
+can still inspect and verify loopcom.net's DNS without him, and should, before asking.
+
+**The one record he needs to add** (loopcom.net → DNS → *Custom records* → ADD RECORD):
+
+| Type | Name | Data | TTL |
+|---|---|---|---|
+| `A` | `sip` | `45.14.194.179` | leave default (4 hrs) |
+
+⛔ **Touch nothing else on that page.** Verified present and to be left exactly as-is:
+the **four apex `A` records** (198.185.159.144/145, 198.49.23.144/145 — the live
+Squarespace marketing site), the **`www` CNAME**, the **`HTTPS` service record**, the
+**five Google MX records** (priorities 1/5/5/10/10), the Google verification TXT, and
+the existing custom records **`A app → 45.14.194.179`** and **`TXT _dmarc`**.
+Squarespace is not Cloudflare — there is **no proxy toggle** on this form, so the
+grey-cloud trap from Phase A does not apply here; the record is DNS-only by nature.
+
+### Baseline captured before the attempt — this is the "nothing regressed" evidence
+
+Measured 2026-08-16, **from the server** (see the filter trap below for why that
+matters), all with the real WebSocket upgrade headers and `--http1.1`:
+
+| check | result |
+|---|---|
+| `sip.connectcomunications.com/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
+| `app.connectcomunications.com/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
+| `app.loopcom.net/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
+| `sip.loopcom.net` | **NXDOMAIN** (the blocker) |
+| `docker exec app-api-1 … $SIP_PUBLIC_WS_URL` | `[wss://sip.connectcomunications.com/sip]` |
+| `/api/health` | **200** |
+| bad-credential `POST /api/auth/login` | **401 `invalid_credentials`** |
+| default TLS server (unmatched SNI) | `CN = app.connectcomunications.com` |
+| deploy queue | `runningCount: 0` |
+
+⛔⛔ **THE TRAP THAT ALMOST GOT FILED AS A REGRESSION: from Izzy's own workstation,
+`app.connectcomunications.com/sip` and `app.loopcom.net/sip` return `403 Forbidden`,
+while `sip.connectcomunications.com/sip` returns `101` from that same machine.** That
+**403 is his content filter**, not nginx — the identical probe from the server returns
+**101 on all three**. This is the [[webrtc-filtered-internet-port-8089]] family in a new
+costume: the filter categorises the `app.` hostnames differently from `sip.`. **Never
+conclude a SIP-hostname regression from a workstation curl on a filtered line — re-run
+it from the box before believing it.** (Existing certs at the time: three, one each for
+`app.connectcomunications.com`, `app.loopcom.net`, `sip.connectcomunications.com`.)
+
+⛔ **`app.` and `sip.` are NOT the same SIP path, and this is worth knowing before the
+cutover.** `sites-available/connectcomms` proxies `/sip` to **`https://127.0.0.1:7443`**
+— the **`sbc-kamailio` container** (up 4 weeks), the unfinished experiment
+[[connect2-ops-alerts]] records as never having carried a call. `connectcomms-sip` and
+`connectcomms-loopcom` both proxy `/sip` **straight to
+`https://m.connectcomunications.com:8089/ws`**. All three return 101, so the upgrade
+proves the *route*, not the *call*. The new block must mirror the **direct-to-PBX** form.
+
+### The runbook — every remaining step, ready to run once the A record exists
+
+⛔ **Step 0, non-negotiable: prove DNS first.** `nslookup sip.loopcom.net 8.8.8.8` must
+answer `45.14.194.179`. Running certbot before propagation burns a Let's Encrypt
+failure and reads like a broken vhost.
+
+```bash
+# 1) CERT. ⛔ `certbot --nginx` (installer form) CANNOT be first — it needs a vhost
+#    already carrying the server_name, and when it owns the file it MERGES 80 and 443
+#    into ONE block, which would serve /sip over plaintext HTTP (this exact thing
+#    happened on the sip.connectcomunications.com file in Phase A). Throwaway :80
+#    block first, then `certonly`, so certbot never rewrites the hand-written vhost.
+cp -a /etc/nginx/sites-available/connectcomms-sip \
+      /root/nginx-connectcomms-sip-backup-$(date +%Y%m%d-%H%M%S).conf
+tar czf /root/nginx-full-backup-$(date +%Y%m%d-%H%M%S).tar.gz /etc/nginx
+
+cat > /etc/nginx/sites-available/connectcomms-sip-loopcom <<'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sip.loopcom.net;
+    root /var/www/html;
+    location /.well-known/acme-challenge/ { allow all; }
+}
+EOF
+ln -s /etc/nginx/sites-available/connectcomms-sip-loopcom /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+
+certbot certonly --nginx -d sip.loopcom.net --cert-name sip.loopcom.net \
+        --non-interactive --deploy-hook 'systemctl reload nginx'
+
+# 2) REAL VHOST — overwrite the throwaway with the full two-block form.
+#    ⛔ FILENAME IS LOAD-BEARING: sites-enabled/* loads in SORTED order and the first
+#    `listen 443` block becomes nginx's default server for unmatched hostnames. Current
+#    order is connectcomms, connectcomms-loopcom, connectcomms-platform,
+#    connectcomms-sip — `connectcomms-sip-loopcom` sorts LAST, so the default stays the
+#    app.connectcomunications.com block. A name like `app-sip` would silently steal it.
+```
+
+The vhost body is `connectcomms-sip` **verbatim** with the hostname and cert paths
+swapped: port 80 → `return 301 https://$host$request_uri;`, port 443 with
+`proxy_pass https://m.connectcomunications.com:8089/ws; proxy_ssl_server_name on;`,
+`proxy_http_version 1.1`, the `Upgrade`/`Connection "upgrade"`/`Host`/`X-Forwarded-*`
+headers, **`proxy_read_timeout 3600; proxy_send_timeout 3600;`**, and
+`location / { return 404; }`. ⛔ Keep `/sip` **HTTPS-only** — it carries SIP credentials.
+⛔ Do **not** add `security-headers.conf` here; this block serves no HTML.
+
+```bash
+nginx -t && systemctl reload nginx     # ⛔ reload, NEVER restart
+
+# 3) VERIFY BEFORE FLIPPING ANY CLIENT VALUE — from the SERVER, not a filtered line.
+for H in sip.loopcom.net sip.connectcomunications.com app.connectcomunications.com app.loopcom.net; do
+  curl -s --http1.1 -o /dev/null -D - -H "Connection: Upgrade" -H "Upgrade: websocket" \
+       -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+       -H "Sec-WebSocket-Protocol: sip" "https://$H/sip" | grep -iE "^HTTP/|websocket-protocol"
+done
+curl -sI http://sip.loopcom.net/sip | head -1          # expect 301
+echo | openssl s_client -connect 127.0.0.1:443 -servername nomatch.example.com 2>/dev/null \
+  | openssl x509 -noout -subject                        # MUST still be app.connectcomunications.com
+```
+⛔ Expect **101 + `Sec-WebSocket-Protocol: sip` on ALL FOUR**. A plain `curl` returns
+**426 Upgrade Required** (nginx has HTTP/2 on) — that is the wrong test, not a fault.
+
+```bash
+# 4) FLIP THE HANDED-OUT URL. One variable, nothing else.
+cp -a /opt/connectcomms/env/.env.platform \
+      /opt/connectcomms/env/.env.platform.bak.$(date -u +%Y%m%dT%H%M%SZ)
+sed -i 's|^SIP_PUBLIC_WS_URL=.*|SIP_PUBLIC_WS_URL=wss://sip.loopcom.net/sip|' \
+      /opt/connectcomms/env/.env.platform
+diff /opt/connectcomms/env/.env.platform.bak.* /opt/connectcomms/env/.env.platform  # ⛔ ONE line
+
+curl -s http://127.0.0.1:3910/ops/deploy/status        # ⛔ require runningCount: 0
+cd /opt/connectcomms/app && bash scripts/deploy-direct.sh api --branch feat/ivr-migration-takeover
+docker exec app-api-1 sh -c 'echo [$SIP_PUBLIC_WS_URL]'
+```
+⛔ **Never `docker compose up` by hand** — api is blue/green (AGENTS.md rule 12).
+**Rollback is under a minute:** put the old value back, redeploy api.
+
+### What this does and does not change
+
+- ✅ New sign-ins are handed `wss://sip.loopcom.net/sip`.
+- ⛔ **NOBODY MOVES UNTIL THEY SIGN OUT AND BACK IN.** The apps never refresh a cached
+  `sipWsUrl` — that is precisely why the flip is safe and why it is also inert. Live
+  sessions keep registering against `sip.connectcomunications.com` indefinitely.
+- ⛔ **Therefore `sip.connectcomunications.com` can NEVER be retired on a schedule.**
+  Retiring it while a single client still holds it cached is the one and only way this
+  work causes an outage. It stays live indefinitely, at zero cost.
+- ⛔ **Still one global value.** `apps/api/src/sipPublicEndpoint.ts` is deliberately
+  untouched: a portal user on `app.connectcomunications.com` would now be handed a
+  **loopcom.net** SIP host. It works, but per-domain SIP remains an **OPEN DESIGN
+  DECISION the owner has not made** — do not "fix" it unasked.
 
 ---
 

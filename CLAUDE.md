@@ -702,6 +702,59 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   files. Fully recovered, nothing lost — but compare by inspecting which files the
   errors land in, never by stashing.
 
+## ⛔ AGENT HANDOFF — `sip.loopcom.net` does NOT exist; the SIP hostname handed to clients is still the connectcomunications one (2026-08-16) — READ FIRST before any SIP-hostname work, before believing LoopCom branding reached SIP, or before retiring ANY SIP hostname
+
+Full runbook: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md` → Phase A2**
+(**Attempted and BLOCKED. Nothing changed: no DNS record, no cert, no nginx block, no
+env edit, no deploy, no tenant row, no PBX interaction.**)
+
+- ⛔⛔ **`sip.loopcom.net` DOES NOT RESOLVE (NXDOMAIN) and the platform still hands out
+  `wss://sip.connectcomunications.com/sip`** — proven, not assumed:
+  `docker exec app-api-1 sh -c 'echo [$SIP_PUBLIC_WS_URL]'` reads
+  `[wss://sip.connectcomunications.com/sip]`. **The LoopCom rebrand has NOT reached SIP.**
+- ⛔ **THE BLOCKER IS ONE DNS RECORD ONLY IZZY CAN ADD.** The Squarespace session is
+  live and loopcom.net's DNS page **reads** fine, but clicking `ADD RECORD` throws
+  **"Verify to continue as support@connectcomunications.com — Login with Google"**, and
+  an agent must not authenticate as the owner. He needs to add exactly one custom
+  record: **`A` / name `sip` / data `45.14.194.179`** — and touch nothing else on that
+  page (four apex A records = the live Squarespace site, `www` CNAME, `HTTPS` record,
+  **five Google MX records**, and the existing `_dmarc` TXT). The gate blocks the
+  **write**, not the **read**, so inspection and verification still work unattended.
+- ⛔⛔ **A `403` ON `app.*/sip` FROM IZZY'S WORKSTATION IS HIS CONTENT FILTER, NOT A
+  REGRESSION — this was one step from being filed as an outage.** From his line,
+  `app.connectcomunications.com/sip` and `app.loopcom.net/sip` return **403** while
+  `sip.connectcomunications.com/sip` returns **101** on the same machine; the identical
+  probe **from the server returns 101 on all three**. The filter categorises the `app.`
+  hostnames differently. **Re-run any SIP-hostname probe from the box before believing
+  a failure.** ⛔ And use `curl --http1.1` with the upgrade headers — a plain curl
+  returns **426**, which is the wrong test, not a fault.
+- ⛔ **`app.` and `sip.` are NOT the same SIP path.** `sites-available/connectcomms`
+  proxies `/sip` to **`127.0.0.1:7443`** — the `sbc-kamailio` container, the unfinished
+  experiment that has never carried a call — while `connectcomms-sip` and
+  `connectcomms-loopcom` go **straight to `m.connectcomunications.com:8089/ws`**. All
+  three answer 101, so the upgrade proves the **route, not the call**. Any new SIP vhost
+  must mirror the **direct-to-PBX** form.
+- ⛔ **The filename of a new vhost is load-bearing.** `sites-enabled/*` loads in sorted
+  order and the first `listen 443` block is nginx's default server for unmatched
+  hostnames. Today that is `connectcomms` (verified live: unmatched SNI returns
+  `CN = app.connectcomunications.com`). Use **`connectcomms-sip-loopcom`**, which sorts
+  last; a name like `app-sip` would silently steal the default server.
+- ⛔ **When it does land, this is ADDITIVE and `sip.connectcomunications.com` can NEVER
+  be retired on a schedule.** Clients cache `sipWsUrl` forever and the apps never
+  refresh it — which is exactly why the flip is safe *and* why it moves nobody until
+  they sign out and back in. Retiring an old SIP hostname while one client still holds
+  it cached is the only way this work causes an outage.
+- ⛔ `apps/api/src/sipPublicEndpoint.ts` is **one global value by design** — after the
+  flip a portal user on `app.connectcomunications.com` would be handed a **loopcom.net**
+  SIP host. Per-domain SIP is an **open decision the owner has not made**; do not "fix"
+  it unasked.
+- ✅ **Baseline proven before the attempt and unchanged after it** (deploy queue idle,
+  `runningCount: 0`): all three existing hostnames **101** from the server,
+  `/api/health` **200**, bad-credential login **401 `invalid_credentials`**, default TLS
+  server still `app.connectcomunications.com`. ⛔ That 401 first read as a **500** —
+  that was **shell-quoting mangling the JSON through nested ssh**, not the API. Send the
+  body with `--data @file` before believing a login 500.
+
 ## ⛔⛔ AGENT HANDOFF — the customer's price is ALL-INCLUSIVE now; taxes live INSIDE the total (2026-08-16) — READ FIRST before any billing-calculation work, before adding a tax or fee line, before quoting a price, or for "why did this customer's total change?"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ALL_INCLUSIVE_PRICING_2026-08-16.md`**
