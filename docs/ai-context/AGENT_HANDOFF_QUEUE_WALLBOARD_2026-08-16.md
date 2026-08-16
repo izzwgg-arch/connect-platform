@@ -332,6 +332,95 @@ in the page file. Fixed in `c21a6eca`.
 - Listen / Whisper / Barge are **not built** — deliberately. They need
   `ChanSpy` verified on the PBX and a permission gate; neither was done.
 
+## 4c-2. Second pass, 2026-08-16 — grant applied, TV mode, light mode
+
+Izzy granted an explicit PBX mandate for this work ("I have permission to go
+into PBX and do what you need"). Commit `072c78cb`, portal **DEPLOYED and
+container-verified**.
+
+### ✅ The GRANT is APPLIED — reports are live with real data
+
+```sql
+GRANT SELECT ON `asterisk`.`queues_log` TO 'connect_read'@'45.14.194.179';
+```
+Applied via a file (`/root/connect-queue-grant.sql` on the PBX) — ⛔ inline
+backticks do not survive the nested-shell quoting and produced
+`Failed to open file`, which reads like a MySQL error and is not one.
+Grants now read: `ombutel.*` **plus** `asterisk.queues_log`, nothing else.
+Reversible with `REVOKE SELECT ON \`asterisk\`.\`queues_log\` FROM …`.
+
+**Proven live in `app-api-1`** (30-day window, PBX clock):
+
+| queue | offered | answered | timed out | avg wait | SL @20s |
+|---|---|---|---|---|---|
+| Phone Orders | 2,020 | 1,866 (92.4%) | 1 | 33 s | 78.5% |
+| Customer Service | 464 | 213 (45.9%) | 212 | 13 s | 69.5% |
+| After Hours CS | 335 | 37 (11.0%) | 274 | 14 s | 64.9% |
+
+Agent 102 = 899 calls / **48.2%** of Phone Orders. `idleMembers` correctly
+returned 108, 117, 118 (Phone Orders), 108 (Customer Service), 106 (After
+Hours). Figures differ by ~1% from the manual audit because the window slides
+and the report uses `created` (PBX clock) rather than `time` (UTC).
+
+### ⛔ Light mode was genuinely broken — measured, not guessed
+
+`--success` / `--warning` / `--danger` / `--accent` are **display** colours.
+As TEXT they measure:
+
+| | on light `#ffffff` | on dark `#141f2b` |
+|---|---|---|
+| success `#22c55e` | **2.28** ✗ | 7.31 ✓ |
+| warning `#f59e0b` | **2.15** ✗ | 7.76 ✓ |
+| danger `#ef4444` | **3.76** ✗ | 4.43 ✓ |
+| accent `#3b82f6` | **3.68** ✗ | 4.53 ✓ |
+
+So the screens were fine in dark and unreadable in light. Fixed by splitting
+**ink from fill**: text uses `--qb-ink-ok/warn/crit/info`, darkened for light
+only (5.38–5.93:1); fills, borders and edge stripes keep the display colour,
+where 3:1 for a large block is the right bar. 30 declarations rewired; a check
+confirms **0** text uses left on a raw display colour and **36** fills correctly
+untouched. ⛔ The button ink `#04121d` on accent was checked and kept — it
+measures 5.15:1 on light accent and 7.31:1 on dark, better than white on both.
+
+### TV mode
+
+`/queues/wall`, reached from `/queues` → **TV mode**.
+- Real fullscreen (Fullscreen API).
+- **Screen wake lock, re-acquired on every `visibilitychange`** — the browser
+  drops it whenever the tab hides, so acquiring once would die overnight and
+  the panel would sleep.
+- Controls fade after 4 s of no input but **never leave the DOM**, so they stay
+  keyboard-reachable and `:focus-within` re-reveals them.
+- Per-display theme lock (follow app / always dark / always light) in
+  `localStorage`. ⛔ Applied as token overrides scoped to `.qw-root`, **NOT** by
+  writing `data-theme` on `<html>` — the app context owns that attribute and
+  would fight for it, and leaving TV mode could strand the whole portal in the
+  wrong theme.
+
+### ⏳ Listen / Whisper / Barge — VERIFIED FEASIBLE, NOT BUILT
+
+Checked properly this time rather than promised off a mockup:
+
+- ✅ `app_chanspy.so` is **loaded and Running** on the PBX.
+- ✅ VitalPBX already ships the dialplan in
+  `/etc/asterisk/vitalpbx/extensions__20-baseplan.conf`:
+  `[sub-extension-spy]` takes `ARG1` and maps it to ChanSpy options —
+  **`qS` = listen, `qwS` = whisper, `qBS` = barge** — with
+  `[sub-spy-ext-barge]` and siblings as entry points.
+- ✅ Connect already has an AMI originate path
+  (`TelephonyService.ts:607`, `sendAction("Originate")`).
+- ⛔ **The stock subroutine is interactive** — it `Read()`s the target
+  extension from the caller and may `Authenticate()` against the extension
+  password. It is built for a human dialling a feature code, so it cannot be
+  driven programmatically as-is; a small non-interactive context that takes the
+  target as an argument would have to be added to the PBX.
+
+**Deliberately not built in this pass.** It lets one person silently listen to
+another's live call, so it needs its own permission key (not a reused one), an
+audit row per session, and a decision about whether the agent is notified —
+none of which should be bolted on at the end of a long session. The mechanism
+is now proven and written down; it is a scoped next piece, not an unknown.
+
 ## 4d. Re-verification probe
 
 Run inside the api container after the grant lands. Proves the whole chain

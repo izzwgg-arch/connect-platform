@@ -416,17 +416,43 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   endpoint** (second source of truth for the same fact). Permission keys are
   **reused**: `can_view_live_calls` / `can_view_reports`, nav key
   `can_view_pbx_queues` on the `can_view_calls` expansion.
-- ⛔⛔ **REPORTS RETURN NOTHING UNTIL ONE GRANT RUNS.** `connect_read` has
-  SELECT on **`ombutel` only**; `queues_log` is in the **`asterisk`** schema.
-  Izzy approved it 2026-08-16 but it is a PBX privilege change, so it stays a
-  human action: `GRANT SELECT ON \`asterisk\`.\`queues_log\` TO
-  'connect_read'@'45.14.194.179'; FLUSH PRIVILEGES;`. Until then the route
-  answers **200 `available:false` / `queue_log_access_denied`** and the screen
-  prints that exact SQL — ⛔ **deliberately never an empty report**, which would
-  render as "this customer had no calls" about a queue doing 2,000 a month.
-  ✅ Both halves proven live inside `app-api-1`: directory returned all three
-  Gesheft queues with correct members; stats returned exactly
-  `queue_log_access_denied`.
+- ✅ **THE GRANT IS APPLIED (2026-08-16) — reports are LIVE with real data.**
+  `connect_read` now holds `ombutel.*` **plus `asterisk.queues_log`**, nothing
+  else. Proven in `app-api-1`: Phone Orders **2,020 offered / 1,866 answered
+  (92.4%) / SL 78.5% @20s**, Customer Service 45.9%, After Hours 11.0%, agent
+  102 at **48.2%** of Phone Orders, idle members 108/117/118 correctly flagged.
+  ⛔ Apply such a grant from a **file** (`mysql < file.sql`) — inline backticks
+  do not survive nested-shell quoting and fail with `Failed to open file`,
+  which reads like a MySQL error and is not one.
+  ⛔ The failure path still matters and is still tested: without the grant the
+  route answers **200 `available:false` / `queue_log_access_denied`** and the
+  screen prints the exact SQL — **deliberately never an empty report**, which
+  would render as "this customer had no calls" about a queue doing 2,000/month.
+- ⛔ **Light mode was broken and the fix is ink-vs-fill — do not collapse it
+  back.** `--success`/`--warning`/`--danger`/`--accent` are DISPLAY colours: as
+  TEXT they measure **2.28 / 2.15 / 3.76 / 3.68** on the light panel (success
+  and warning effectively unreadable) versus 7.31 / 7.76 / 4.43 / 4.53 on dark.
+  Text now uses `--qb-ink-*`, darkened for light only (5.38–5.93:1); fills,
+  borders and edge stripes keep the display colour. 0 text uses left on a raw
+  display colour, 36 fills correctly untouched. Button ink `#04121d` on accent
+  was measured and KEPT (5.15 light / 7.31 dark — better than white on both).
+- ✅ **TV mode is real** (`/queues/wall`, reached from `/queues`): Fullscreen
+  API, **screen wake lock re-acquired on every `visibilitychange`** (the browser
+  drops it whenever the tab hides, so acquiring once dies overnight), controls
+  that fade after 4 s but never leave the DOM (still keyboard-reachable), and a
+  per-display theme lock in `localStorage`. ⛔ That lock is **token overrides
+  scoped to `.qw-root`, never `data-theme` on `<html>`** — the app context owns
+  that attribute and leaving TV mode could strand the whole portal in the wrong
+  theme.
+- ⏳ **Listen/Whisper/Barge: VERIFIED FEASIBLE, deliberately NOT built.**
+  `app_chanspy.so` is loaded; VitalPBX already ships `[sub-extension-spy]` in
+  `extensions__20-baseplan.conf` mapping **`qS` listen / `qwS` whisper / `qBS`
+  barge**; Connect already has AMI `Originate` (`TelephonyService.ts:607`).
+  ⛔ But the stock subroutine is **interactive** — it `Read()`s the target
+  extension and may `Authenticate()` — so it cannot be driven programmatically
+  without adding a non-interactive context. Left unbuilt on purpose: silently
+  listening to a live call needs its OWN permission key, a per-session audit row
+  and a decision on notifying the agent.
 - ⛔ **A Next.js App Router `page.tsx` may ONLY export a default component.** A
   named export fails the production build ("does not match the required types
   of a Next.js Page") and **`tsc --noEmit` does NOT catch it** — it passed every
