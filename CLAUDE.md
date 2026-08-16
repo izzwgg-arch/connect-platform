@@ -777,9 +777,11 @@ HTTPS**, job `8e6a3525`, commit `140dec3e`. Everything else still unwired.)
 
 ## ⛔ AGENT HANDOFF — the Call History player was a SECOND player, and it never got the fix (2026-08-13) — READ FIRST for any "recording won't play / jumps back" report, before touching a portal recording player, or before adding a new one
 
-Commits `033d0e6c` + `f95f7969` on `feat/ivr-migration-takeover` — portal
-**DEPLOYED and container-verified** (new player chunk + spinner CSS grep'd
-inside `app-portal-1`'s `.next`).
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CALL_HISTORY_RECORDING_PLAYER_2026-08-13.md`**
+(commits `033d0e6c` + `f95f7969` on `feat/ivr-migration-takeover` — portal
+**DEPLOYED and container-verified**: new player chunk + spinner CSS grep'd
+inside `app-portal-1`'s `.next`, and re-verified still present after the later
+`e3744815` portal deploy.)
 
 - ⛔ **THE RULE: the portal had TWO recording players, and the 2026-08-11
   spinner/honest-error fix landed on only one of them.** `CrmRecordingPlayer`
@@ -813,10 +815,18 @@ inside `app-portal-1`'s `.next`).
   `app-api-1` kills the in-process sweep handler AND wipes `docker logs`** —
   a missing completion line proves nothing; judge progress by
   `count(recordingMissingAt not null)`. Pass 1 stamped **752 dead buttons
-  (186 → 938)** before the 14:52Z deploy killed it; a retry loop
-  (`/root/recording-verify-loop.sh`, log `/root/recording-verify-loop.log`,
-  6 attempts) is finishing the newest-5000 pass. Stamps are idempotent and
-  cumulative; history deeper than that cleans up honestly per click.
+  (186 → 938)** before the 14:52Z deploy killed it; the retry loop
+  (`/root/recording-verify-loop.sh`, log `/root/recording-verify-loop.log`)
+  then **COMPLETED on attempt 2, 2026-08-13 21:28 CEST**:
+  **5,000 checked → 4,354 real, 643 stamped dead, 3 RECOVERED** (queue/IVR
+  leg-drift paths self-healed, so those three now play), 0 skipped.
+  **Fleet total 186 → 1,666 dead play buttons removed in one day —
+  ~13% of everything the newest 5,000 rows advertised.** Stamps are
+  idempotent and cumulative; history deeper than that cleans up honestly per
+  click. ⛔ **Do not "reset" a stamp to re-test** — the sweep is the same
+  resolve→fetch→recover chain a click uses, and `recovered: 3` is the proof it
+  cannot hide a playable recording. Reversal, if ever needed, is
+  `update "ConnectCdr" set "recordingMissingAt" = null`.
 - ⏳ **NOT PROVEN:** nobody has pressed play on the new player in a real
   browser. Open windows/desktop installs keep the old bundle until reloaded
   (the reload banner appears within ~5 min).
