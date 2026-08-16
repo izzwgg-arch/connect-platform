@@ -35,6 +35,33 @@ while the host later reported epoch `1786903514` = Aug 16 18:05 UTC. Same box,
 of NTP, RMS offset 0.145 ms, source `free.saclay.org`, and `NTPSynchronized=yes`.
 So the clock is right **now**.
 
+**⛔ It was NOT chrony that fixed it, and this can happen again.** Checked
+afterwards, and every guest-side explanation is ruled out:
+
+- **No reboot** — `uptime -s` is 2026-04-26, up 16 weeks straight.
+- **The journal is PERSISTENT** (`/var/log/journal` exists, history reaches back
+  to 2026-02-26) and contains **no time-change record at all**.
+- **chrony never stepped it** — no `chrony` unit messages that day, no restart,
+  and `/var/log/chrony/` is empty.
+- **chrony structurally could not have** — `/etc/chrony/chrony.conf` sets
+  **`makestep 1 3`**, i.e. it may step the clock only during its **first 3
+  updates after starting**; after that it only *slews*, and slewing cannot close
+  a 3-day gap in any practical time.
+
+The stored evidence is not a misreading: the deploy-queue rows for this session's
+jobs still read `created_at` **1786632839354** and **1786640619474** (Aug 13
+13:33 and 15:43 UTC) — two hours apart, matching the real gap between those two
+deploys — while every job created afterwards by other sessions reads
+**1786891477+** (Aug 16). The clock tracked elapsed time correctly the whole
+time; it was simply offset by ~3 days and then jumped forward.
+
+A guest clock that steps with **no reboot, no chrony action and no journal entry**
+points at a **hypervisor-side correction** (VPS live-migration / resume, kvm-clock)
+— invisible from inside the VM. ⛔ **So the guest cannot prevent or log a repeat,
+and `makestep 1 3` means chrony will not rescue it either.** If timestamps look
+wrong again, check `date` against a known-good source first and do not waste time
+in the journal — it will be silent.
+
 ⛔ **NOT INVESTIGATED, and it is Izzy's call:** how long the skew lasted, and what
 carries wrong timestamps because of it. Anything time-derived in that window is
 suspect — invoice/billing dating, `DidSwitchSchedule` firing, port watchdog
