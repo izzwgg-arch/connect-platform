@@ -17557,6 +17557,180 @@ app.get("/voice/pbx/ring-groups", async (req, reply) => {
   return reply.send({ rows: result.rows, source: result.source, table: result.table, vitalTenantId });
 });
 
+// ── Queues: status, wallboard and reports ───────────────────────────────────
+//
+// Two routes, two data sources, two very different failure modes:
+//
+//   GET  /voice/queues          → config + membership, from the `ombutel`
+//                                 schema Connect is ALREADY granted.
+//   POST /voice/queues/reports  → history, from `asterisk.queues_log`, which
+//                                 Connect is NOT granted by default.
+//
+// ⛔ The live half (who is waiting, which agent is on a call right now) does
+// NOT come from here — it rides the existing `/ws/telephony` socket as
+// `LiveQueueState`, fed by AMI. Adding a REST "live" endpoint would create a
+// second source of truth for the same fact, and the two would drift.
+//
+// Tenant resolution mirrors /voice/pbx/ring-groups exactly, including the
+// super-admin `vpbx:<slug>` override, so a super admin viewing a customer sees
+// that customer's queues rather than their own empty set.
+async function resolveQueueTenantContext(
+  req: any,
+  user: JwtUser,
+): Promise<
+  | { ok: true; vitalTenantId: string; pbxInstance: { id: string; ombuMysqlUrlEncrypted: string | null } }
+  | { ok: false; status: number; body: Record<string, unknown> }
+> {
+  const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  const qsTenantId = String((req.query as any)?.tenantId || (req.body as any)?.tenantId || "").trim();
+  const headerTenantId = String((req.headers as any)["x-tenant-context"] || "").trim();
+
+  let vpbxSlug: string | null = null;
+  let connectTenantId: string | null = null;
+  const raw = qsTenantId || headerTenantId || user.tenantId || "";
+  if (raw.startsWith("vpbx:")) {
+    if (!isSuperAdmin) return { ok: false, status: 403, body: { error: "super_admin_required_for_vpbx_override" } };
+    vpbxSlug = raw.slice(5).trim();
+  } else if (raw && raw !== "local") {
+    connectTenantId = raw;
+  }
+  if (!vpbxSlug && !connectTenantId) {
+    return { ok: false, status: 200, body: { queues: [], source: "skipped", skipReason: "no tenant context" } };
+  }
+
+  const pbxInstance = await db.pbxInstance.findFirst({ where: { isEnabled: true } });
+  if (!pbxInstance) {
+    return { ok: false, status: 200, body: { queues: [], source: "skipped", skipReason: "no_enabled_pbx_instance" } };
+  }
+
+  let vitalTenantId: string | null = null;
+  if (connectTenantId) {
+    const link = await db.tenantPbxLink.findUnique({
+      where: { tenantId: connectTenantId },
+      select: { pbxTenantId: true },
+    });
+    vitalTenantId = link?.pbxTenantId?.trim() || null;
+  } else if (vpbxSlug) {
+    const dir = await db.pbxTenantDirectory.findFirst({
+      where: { tenantSlug: vpbxSlug },
+      select: { vitalTenantId: true },
+    });
+    vitalTenantId = dir?.vitalTenantId?.trim() || null;
+    if (!vitalTenantId && /^\d+$/.test(vpbxSlug)) vitalTenantId = vpbxSlug;
+  }
+
+  if (!vitalTenantId) {
+    return {
+      ok: false,
+      status: 200,
+      body: {
+        queues: [],
+        source: "skipped",
+        skipReason: vpbxSlug ? `no_directory_entry_for_slug:${vpbxSlug}` : "tenant_not_linked_to_pbx",
+      },
+    };
+  }
+  return { ok: true, vitalTenantId, pbxInstance: pbxInstance as any };
+}
+
+// Queue config + membership. Cheap enough to cache briefly: membership changes
+// when somebody edits a queue in the panel, not second to second, and the
+// wallboard re-reads this on every mount.
+app.get("/voice/queues", async (req, reply) => {
+  const user = await requireRoleOrPortalPermission(
+    req,
+    reply,
+    (u) => isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]),
+    "can_view_live_calls",
+  );
+  if (!user) return;
+
+  const ctx = await resolveQueueTenantContext(req, user);
+  if (!ctx.ok) return reply.code(ctx.status).send(ctx.body);
+
+  const result = await pbxReadCache(`queues:${ctx.pbxInstance.id}:${ctx.vitalTenantId}`, async () => {
+    const { listQueuesFromOmbutel } = await import("./pbxQueueDirectory");
+    return listQueuesFromOmbutel(ctx.vitalTenantId, ctx.pbxInstance.ombuMysqlUrlEncrypted);
+  });
+
+  if (result.source === "skipped") {
+    return reply.send({ queues: [], source: "skipped", skipReason: result.skipReason });
+  }
+  return reply.send({
+    queues: result.rows,
+    source: result.source,
+    vitalTenantId: ctx.vitalTenantId,
+  });
+});
+
+// Detailed queue reporting.
+//
+// ⛔ When the `queues_log` grant is missing this answers 200 with
+// `available:false` and a specific reason — NOT an error and NOT an empty
+// report. An empty report would render as "this customer had no calls", which
+// is a confident lie; the UI needs to be able to say "reports aren't connected
+// yet, here is exactly what's missing".
+app.post("/voice/queues/reports", async (req, reply) => {
+  const user = await requireRoleOrPortalPermission(
+    req,
+    reply,
+    (u) => isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]),
+    "can_view_reports",
+  );
+  if (!user) return;
+
+  const input = z
+    .object({
+      tenantId: z.string().optional(),
+      days: z.number().int().min(1).max(366).optional(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      serviceLevelTargetSec: z.number().int().min(1).max(3600).optional(),
+      /** Limit to specific queue extensions; omitted = every queue. */
+      queueExtensions: z.array(z.string()).optional(),
+    })
+    .parse(req.body || {});
+
+  const ctx = await resolveQueueTenantContext(req, user);
+  if (!ctx.ok) return reply.code(ctx.status).send({ ...ctx.body, available: false });
+
+  const dir = await pbxReadCache(`queues:${ctx.pbxInstance.id}:${ctx.vitalTenantId}`, async () => {
+    const { listQueuesFromOmbutel } = await import("./pbxQueueDirectory");
+    return listQueuesFromOmbutel(ctx.vitalTenantId, ctx.pbxInstance.ombuMysqlUrlEncrypted);
+  });
+  if (dir.source === "skipped") {
+    return reply.send({ available: false, reason: "pbx_unavailable", detail: dir.skipReason, queues: [] });
+  }
+
+  const wanted = input.queueExtensions?.length
+    ? dir.rows.filter((q) => input.queueExtensions!.includes(q.extension))
+    : dir.rows;
+  if (wanted.length === 0) {
+    return reply.send({ available: false, reason: "no_queues", detail: "this account has no queues", queues: [] });
+  }
+
+  const { loadQueueStats } = await import("./pbxQueueStats");
+  const stats = await loadQueueStats({
+    ombuMysqlUrlEncrypted: ctx.pbxInstance.ombuMysqlUrlEncrypted,
+    queues: wanted,
+    range:
+      input.startDate && input.endDate
+        ? { kind: "dates", startDate: input.startDate, endDate: input.endDate }
+        : { kind: "lastDays", days: input.days ?? 30 },
+    serviceLevelTargetSec: input.serviceLevelTargetSec,
+  });
+
+  if (!stats.ok) {
+    return reply.send({
+      available: false,
+      reason: stats.skip.code,
+      detail: stats.skip.detail,
+      queues: [],
+    });
+  }
+  return reply.send({ available: true, ...stats, vitalTenantId: ctx.vitalTenantId });
+});
+
 app.post("/voice/pbx/resources/:resource", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;

@@ -97,6 +97,7 @@ export const navItems: NavItem[] = [
   { id: "pbx.moh_scheduling", href: "/pbx/moh-scheduling", label: "MOH Scheduling", icon: "MH", lucide: Music, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", href: "/pbx/call-recordings", label: "Call Recordings", icon: "CR", lucide: Disc, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_recordings" },
   { id: "pbx.call_reports", href: "/pbx/call-reports", label: "Call Reports", icon: "CP", lucide: BarChart3, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_reports" },
+  { id: "pbx.queues", href: "/queues", label: "Queues", icon: "QU", lucide: ListOrdered, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_queues" },
 
   { id: "crm.dashboard", href: "/crm/dashboard", label: "CRM Dashboard", icon: "CD", lucide: LayoutDashboard, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_dashboard" },
   { id: "crm.queue", href: "/crm/queue", label: "My Queue", icon: "CQ", lucide: ListOrdered, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_queue" },

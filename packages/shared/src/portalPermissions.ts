@@ -43,6 +43,11 @@ export const SIDEBAR_ITEMS = [
   { id: "pbx.moh_scheduling", section: "pbx", label: "MOH Scheduling", href: "/pbx/moh-scheduling", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", section: "pbx", label: "Call Recordings", href: "/pbx/call-recordings", permission: "can_view_pbx_call_recordings" },
   { id: "pbx.call_reports", section: "pbx", label: "Call Reports", href: "/pbx/call-reports", permission: "can_view_pbx_call_reports" },
+  // Queue status, the live wallboard and queue reporting. One nav entry for
+  // all three because they are one feature seen at three distances; the wall
+  // display is reached from the page rather than the sidebar, since it is
+  // meant for a TV and not for the person browsing the app.
+  { id: "pbx.queues", section: "pbx", label: "Queues", href: "/queues", permission: "can_view_pbx_queues" },
 
   { id: "crm.dashboard", section: "crm", label: "CRM Dashboard", href: "/crm/dashboard", permission: "can_view_crm_dashboard" },
   { id: "crm.contacts", section: "crm", label: "Contacts", href: "/crm/contacts", permission: "can_view_crm_contacts" },
@@ -231,6 +236,10 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_pbx_softphone",
     "can_view_pbx_sbc_connectivity",
     "can_view_settings_system_health",
+    // Queues ride the "can view calls" legacy key rather than "can view
+    // reports": the wallboard is a live phone-operations screen, and the
+    // person who watches calls is the person who watches the queue.
+    "can_view_pbx_queues",
   ],
   can_view_voicemail: [...WORKSPACE_SECTION, "can_view_workspace_voicemail"],
   can_view_chat: [...WORKSPACE_SECTION, "can_view_workspace_chat"],
