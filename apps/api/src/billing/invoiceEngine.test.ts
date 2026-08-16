@@ -248,12 +248,21 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.ok(discountLine, "DISCOUNT line must exist when discountPercent=0.1");
   assert.equal(discountLine.amountCents, -300, "DISCOUNT = −10% of 1×$30 = −$3.00 (−300 cents)");
 
-  // Tax base (taxable subtotal) = 3000 + (−300) = 2700 cents (discount reduces taxable base).
-  // fakeTaxProfile: salesTax 8% on 2700 = 216, E911 $0.50/ext × 1 = 50, regulatory 1% on 2700 = 27 → total 293.
+  // All-inclusive pricing: the customer owes list (3000 − 300 discount) + the $5
+  // account fee = 3200, and the real taxes come OUT of that. The percentage fees
+  // are owed on the SERVICE revenue, so the base is backed out to 2890:
+  // salesTax 8% of 2890 = 231, E911 $0.50/ext × 1 = 50, regulatory 1% of 2890 = 29 → 310,
+  // and 2890 + 310 = 3200 exactly.
   const salesTaxLineDisc = previewDisc.lineItems.find((l) => l.type === "SALES_TAX");
   assert.ok(salesTaxLineDisc, "SALES_TAX line must exist when tax enabled");
-  assert.equal(salesTaxLineDisc.amountCents, 216, "Sales tax = 8% of discounted base 2700 cents = 216 cents");
-  assert.equal(previewDisc.taxCents, 293, "taxCents = sales(216) + E911(50) + regulatory(27) on discounted base");
+  assert.equal(salesTaxLineDisc.amountCents, 231, "Sales tax = 8% of the backed-out service base 2890 cents");
+  assert.equal(previewDisc.taxCents, 310, "taxCents = sales(231) + E911(50) + regulatory(29) on the tax-inclusive base");
+  assert.equal(previewDisc.totalCents, 3200, "customer total = discounted list 2700 + $5 account fee — taxes live inside it");
+  assert.equal(
+    previewDisc.accountPricing.netServiceRevenueCents + previewDisc.taxCents,
+    previewDisc.totalCents,
+    "net service revenue + actual taxes and fees must equal the customer total",
+  );
 
   // discountPercent=0 → no DISCOUNT line
   state.settings.discountPercent = 0;
@@ -294,7 +303,10 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   const scPreviewNoChange = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   const scExtLineNoChange = scPreviewNoChange.lineItems.find((l) => l.type === "EXTENSION");
   assert.ok(scExtLineNoChange, "EXTENSION line must exist (no scheduled change)");
-  assert.equal(scExtLineNoChange.unitPriceCents, 3000, "no scheduled change: should use extensionPriceCents=3000");
+  // ⛔ The line's own unitPriceCents is the POST-split net (the account fee is folded
+  // in and the real taxes carved out). Plan/price resolution is asserted against
+  // metadata.listUnitPriceCents — the commercial price the line was struck at.
+  assert.equal(scExtLineNoChange.metadata?.listUnitPriceCents, 3000, "no scheduled change: should use extensionPriceCents=3000");
   assert.equal(scPreviewNoChange.scheduledPlanChange, undefined, "scheduledPlanChange must be absent when nothing scheduled");
 
   // periodStart before effectiveAt → current plan prices, no scheduledPlanChange
@@ -310,7 +322,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   });
   const extBeforeEff = previewBeforeEff.lineItems.find((l) => l.type === "EXTENSION");
   assert.ok(extBeforeEff, "EXTENSION line must exist (before effective)");
-  assert.equal(extBeforeEff.unitPriceCents, 3000, "before effective date: must use current plan price 3000");
+  assert.equal(extBeforeEff.metadata?.listUnitPriceCents, 3000, "before effective date: must use current plan price 3000");
   assert.equal(previewBeforeEff.scheduledPlanChange, undefined, "scheduledPlanChange must be absent before effective date");
 
   // periodStart on effectiveAt → next plan prices, scheduledPlanChange present
@@ -321,7 +333,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   });
   const extOnEff = previewOnEff.lineItems.find((l) => l.type === "EXTENSION");
   assert.ok(extOnEff, "EXTENSION line must exist (on effective date)");
-  assert.equal(extOnEff.unitPriceCents, 9900, "on effective date: must use next plan extensionPriceCents=9900");
+  assert.equal(extOnEff.metadata?.listUnitPriceCents, 9900, "on effective date: must use next plan extensionPriceCents=9900");
   assert.ok(previewOnEff.scheduledPlanChange, "scheduledPlanChange must be present on effective date");
   assert.equal(previewOnEff.scheduledPlanChange!.planId, nextPlanFixture.id, "scheduledPlanChange.planId matches next plan");
   assert.equal(previewOnEff.scheduledPlanChange!.planName, "Growth Plan", "scheduledPlanChange.planName matches next plan");
@@ -334,7 +346,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   });
   const extAfterEff = previewAfterEff.lineItems.find((l) => l.type === "EXTENSION");
   assert.ok(extAfterEff, "EXTENSION line must exist (after effective)");
-  assert.equal(extAfterEff.unitPriceCents, 9900, "after effective date: still uses next plan price 9900");
+  assert.equal(extAfterEff.metadata?.listUnitPriceCents, 9900, "after effective date: still uses next plan price 9900");
   assert.ok(previewAfterEff.scheduledPlanChange, "scheduledPlanChange must still be present after effective date");
 
   // ── Explicit pricing mode (metadata.billingPricingMode) — same invoiceEngine import ──
@@ -358,7 +370,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   state.settings.billingPlan = higherPlanForLegacy;
   const pmLegacy = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   assert.equal(pmLegacy.pricingResolution?.mode, "legacy");
-  assert.equal(pmLegacy.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 3000);
+  assert.equal(pmLegacy.lineItems.find((l) => l.type === "EXTENSION")?.metadata?.listUnitPriceCents, 3000);
 
   state.settings.metadata = { billingPricingMode: "catalog" };
   state.settings.extensionPriceCents = 3000;
@@ -372,7 +384,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   };
   const pmCat = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   assert.equal(pmCat.pricingResolution?.mode, "catalog");
-  assert.equal(pmCat.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 7777);
+  assert.equal(pmCat.lineItems.find((l) => l.type === "EXTENSION")?.metadata?.listUnitPriceCents, 7777);
 
   state.settings.metadata = { billingPricingMode: "custom" };
   state.settings.extensionPriceCents = 4242;
@@ -389,7 +401,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   };
   const pmCustom = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   assert.equal(pmCustom.pricingResolution?.mode, "custom");
-  assert.equal(pmCustom.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 4242);
+  assert.equal(pmCustom.lineItems.find((l) => l.type === "EXTENSION")?.metadata?.listUnitPriceCents, 4242);
 
   state.settings.smsBillingEnabled = true;
   state.settings.smsPriceCents = 0;
@@ -432,7 +444,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     periodStart: new Date(Date.UTC(2028, 0, 1, 0, 0, 0, 0)),
     periodEnd: new Date(Date.UTC(2028, 1, 0, 23, 59, 59, 999)),
   });
-  assert.equal(pmCatScheduled.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 6600);
+  assert.equal(pmCatScheduled.lineItems.find((l) => l.type === "EXTENSION")?.metadata?.listUnitPriceCents, 6600);
   assert.ok(pmCatScheduled.scheduledPlanChange);
 
   db.extension.findMany = async () =>
@@ -451,10 +463,14 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   const flatExt = flatPreview.lineItems.find((l) => l.type === "EXTENSION");
   assert.ok(flatExt);
   assert.equal(flatExt!.quantity, 1);
-  assert.equal(flatExt!.unitPriceCents, 50000);
-  assert.equal(flatExt!.amountCents, 50000);
+  assert.equal(flatExt!.metadata?.listUnitPriceCents, 50000);
+  assert.equal(flatExt!.metadata?.listAmountCents, 50000);
   assert.equal(flatExt!.metadata?.flatRate, true);
   assert.equal(flatExt!.metadata?.extensionCount, 10);
+  // Flat rate is all-inclusive too: $500 list + $5 account fee is what the
+  // customer owes, and the real taxes come out of it.
+  assert.equal(flatPreview.totalCents, 50500);
+  assert.equal(flatExt!.amountCents, 50500 - flatPreview.taxCents);
   const e911Flat = flatPreview.lineItems.find((l) => l.type === "E911_FEE");
   assert.ok(e911Flat);
   assert.equal(e911Flat!.quantity, 10);
@@ -464,15 +480,22 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     state.lastCreateData as unknown as { lineItems?: { create: Array<Record<string, unknown>> } }
   )?.lineItems?.create?.find((l) => l.type === "EXTENSION");
   assert.equal(flatPersisted?.quantity, 1);
-  assert.equal(flatPersisted?.amountCents, 50000);
+  assert.equal(flatPersisted?.amountCents, flatExt!.amountCents);
+  const flatPersistedMeta = (state.lastCreateData as unknown as { metadata?: Record<string, unknown> })?.metadata;
+  assert.ok(
+    (flatPersistedMeta as { accountPricing?: { applied?: boolean } })?.accountPricing?.applied,
+    "the split must be persisted on invoice metadata.accountPricing",
+  );
 
   db.extension.findMany = async () => [{ id: "e1", extNumber: "101", displayName: "Sales" }];
   state.settings.metadata = {};
   const perExtPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   const perExt = perExtPreview.lineItems.find((l) => l.type === "EXTENSION");
   assert.equal(perExt?.quantity, 1);
-  assert.equal(perExt?.unitPriceCents, 3000);
-  assert.equal(perExt?.amountCents, 3000);
+  assert.equal(perExt?.metadata?.listUnitPriceCents, 3000);
+  assert.equal(perExt?.metadata?.listAmountCents, 3000);
+  assert.equal(perExtPreview.totalCents, 3500, "1 extension = $30 + $5 account fee = $35, all in");
+  assert.equal(perExt?.amountCents, 3500 - perExtPreview.taxCents, "the extension line carries the net service revenue");
 
   phoneNumberRows = [
     { id: "p1", phoneNumber: "+12125551212" },
@@ -511,7 +534,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   const physAfterVirtPrice = virtPricePreview.lineItems.find(
     (l) => l.type === "EXTENSION" && !(l.metadata as Record<string, unknown>)?.lineItemKind,
   );
-  assert.equal(physAfterVirtPrice?.unitPriceCents, 3000);
+  assert.equal(physAfterVirtPrice?.metadata?.listUnitPriceCents, 3000);
 
   const localPhoneLine = qtyPreview.lineItems.find(
     (l) => l.type === "PHONE_NUMBER" && (l.metadata as Record<string, unknown>)?.lineItemKind === "local_phone_numbers",
@@ -620,15 +643,27 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
       },
     },
   };
+  // 1 extension at $30 list + the $5 account fee = $35 all in. Every fee here is
+  // unmarked, so all five are real charges living INSIDE that $35 — including
+  // the $5 custom fee, which is what six live tenants actually keep in that
+  // bucket. The percentage fees (10% + 1% + 2%) are owed on the SERVICE revenue,
+  // so they are computed on the backed-out base 2477, not on the $35 paid.
   const feePreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
   assert.equal(feePreview.taxCalculationAudit.providerId, "billing_telecom_fees_v1");
-  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant sales tax")?.amountCents, 300);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant sales tax")?.amountCents, 248);
   assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant E911")?.amountCents, 200);
-  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant regulatory recovery")?.amountCents, 30);
-  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant USF recovery")?.amountCents, 60);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant regulatory recovery")?.amountCents, 25);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant USF recovery")?.amountCents, 50);
   assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant custom fee")?.amountCents, 500);
-  assert.equal(feePreview.taxCents, 1090);
-  assert.equal(feePreview.totalCents, 4090);
+  assert.equal(feePreview.taxCents, 1023);
+  assert.equal(feePreview.totalCents, 3500);
+  assert.equal(feePreview.accountPricing.totalTaxesAndFeesCents, 1023);
+  assert.equal(feePreview.accountPricing.netServiceRevenueCents, 2477);
+  assert.equal(feePreview.accountPricing.taxableBaseCents, 2477, "percentage fees must be computed on the service base, not the all-in total");
+  assert.equal(
+    feePreview.accountPricing.netServiceRevenueCents + feePreview.accountPricing.totalTaxesAndFeesCents,
+    feePreview.accountPricing.customerTotalCents,
+  );
 
   // ── Itemized multi-month and prorated service periods ─────────────────────
   db.extension.findMany = async () => [
@@ -649,7 +684,12 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     periodEnd: new Date("2028-02-01T04:59:59.999Z"),
     billingMonthCount: 1,
   });
-  assert.equal(singleMonth.lineItems.find((l) => l.type === "EXTENSION")?.amountCents, 6000);
+  // 2 extensions × $30 + one $5 account fee = $65, and with no tax config the
+  // whole $65 stays service revenue (the $5 remainder is never labelled a tax).
+  assert.equal(singleMonth.lineItems.find((l) => l.type === "EXTENSION")?.amountCents, 6500);
+  assert.equal(singleMonth.totalCents, 6500);
+  assert.equal(singleMonth.taxCents, 0);
+  assert.equal(singleMonth.accountPricing.netServiceRevenueCents, 6500);
   assert.equal(singleMonth.totalCents, singleMonth.lineItems.reduce((sum, l) => sum + l.amountCents, 0));
 
   const multiMonth = await buildBillingInvoicePreview({
@@ -660,8 +700,11 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   });
   const multiExt = multiMonth.lineItems.find((l) => l.type === "EXTENSION");
   assert.equal(multiExt?.quantity, 6, "2 extensions × 3 months must be transparent in line quantity");
-  assert.equal(multiExt?.unitPriceCents, 3000);
-  assert.equal(multiExt?.amountCents, 18000);
+  assert.equal(multiExt?.metadata?.listUnitPriceCents, 3000);
+  assert.equal(multiExt?.metadata?.listAmountCents, 18000);
+  // The account fee is charged once per month, so a 3-month invoice carries 3 of them.
+  assert.equal(multiExt?.metadata?.accountFeeCents, 1500);
+  assert.equal(multiExt?.amountCents, 19500);
   assert.equal(multiExt?.metadata?.billingMonthCount, 3);
   assert.equal(multiExt?.metadata?.servicePeriodStart, "2028-01-01T05:00:00.000Z");
   assert.equal(multiMonth.totalCents, multiMonth.lineItems.reduce((sum, l) => sum + l.amountCents, 0));
@@ -675,7 +718,9 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   });
   const proratedExt = prorated.lineItems.find((l) => l.type === "EXTENSION");
   assert.equal(proratedExt?.quantity, 2);
-  assert.equal(proratedExt?.amountCents, 3000, "2 extensions × $30 × 0.5 month");
+  assert.equal(proratedExt?.metadata?.listAmountCents, 3000, "2 extensions × $30 × 0.5 month");
+  assert.equal(proratedExt?.metadata?.accountFeeCents, 250, "the account fee prorates with the period");
+  assert.equal(proratedExt?.amountCents, 3250);
   assert.equal(proratedExt?.metadata?.prorated, true);
   assert.equal(prorated.totalCents, prorated.lineItems.reduce((sum, l) => sum + l.amountCents, 0));
 

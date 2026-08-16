@@ -51,6 +51,20 @@ export type TelecomFeeItemConfig = {
   ratePercent?: number | null;
   amountCents?: number | null;
   basis: TelecomFeeBasis;
+  /**
+   * This "fee" is really a COMMERCIAL charge of ours, not a tax or a government
+   * fee — onboarding's $15/month toll-free number is the live example, and it
+   * only rides a fee row because the `per_toll_free_did` basis counts
+   * phoneNumber rows onboarding never writes.
+   *
+   * ⛔ It matters because the customer's price is all-inclusive: a real tax
+   * lives INSIDE the total, while a service charge ADDS to it. Defaults to
+   * false, which is the safe reading — every fee row configured before this
+   * flag existed is an actual fee (E911, telecom & regulatory recovery, sales
+   * tax), and treating one of those as revenue would both overcharge the
+   * customer and book a government charge as income.
+   */
+  serviceCharge?: boolean;
 };
 
 export type BillingTelecomFeesConfig = Partial<Record<TelecomFeeKey, TelecomFeeItemConfig>>;
@@ -116,6 +130,8 @@ export function parseBillingTelecomFees(metadata: unknown): BillingTelecomFeesCo
       ratePercent: row.ratePercent != null ? clampPercent(Number(row.ratePercent)) : null,
       amountCents: row.amountCents != null ? clampCents(Number(row.amountCents)) : null,
       basis: validBasis.includes(basis) ? basis : "invoice_subtotal",
+      // Opt-in only: anything not explicitly marked is a real tax / fee.
+      serviceCharge: row.serviceCharge === true,
     };
   }
   return Object.keys(out).length ? out : null;
@@ -361,6 +377,9 @@ export function buildBillingTelecomFeeLines(input: {
         telecomFeeKey: key,
         telecomFeeBasis: fee.basis,
         telecomFeeMode: fee.mode,
+        // Read by billingAccountPricing.isGovernmentTaxOrFeeLine to decide
+        // whether this amount lives inside the customer's total or adds to it.
+        telecomFeeIsServiceCharge: fee.serviceCharge === true,
         customerVisible: fee.customerVisible !== false,
       },
     });

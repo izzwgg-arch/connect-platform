@@ -13,6 +13,13 @@ import { resolveVirtualExtensionPriceCents } from "./billingVirtualExtensionPric
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 import { addBillingDays, billingMonthBounds, billingYearMonth } from "./billingTime";
 import { buildBillingTelecomFeeLines, parseBillingTelecomFees } from "./billingTelecomFees";
+import {
+  buildAccountPricingSummary,
+  isGovernmentTaxOrFeeLine,
+  resolveAccountTaxesAndFeesCents,
+  solveTaxInclusiveTaxableBase,
+  type BillingAccountPricingSummary,
+} from "./billingAccountPricing";
 import { buildBillingSchedule } from "./billingSchedule";
 import { billingPeriodAlreadyPaidError, findPaidBillingPeriodCoverage } from "./billingPeriodGuards";
 
@@ -49,6 +56,12 @@ export type BillingInvoicePreview = {
   totalCents: number;
   /** Persisted on invoice `metadata.taxCalculationAudit` at creation. */
   taxCalculationAudit: TaxCalculationAuditSnapshot;
+  /**
+   * The all-inclusive split: customer total, the real taxes/fees inside it, and
+   * the net service revenue left over. Persisted on
+   * `metadata.accountPricing` at creation. See billingAccountPricing.ts.
+   */
+  accountPricing: BillingAccountPricingSummary;
   /**
    * Present when a plan change is scheduled and this preview's periodStart
    * is on or after the effective date — meaning the preview already reflects
@@ -419,8 +432,10 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     }
   }
 
-  const subtotalCents = lineItems.reduce((sum, item) => sum + item.amountCents, 0);
-  const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
+  // "List" = the commercial lines at their catalogue prices, before the account
+  // fee is folded in and before the real taxes/fees are carved back out. The
+  // final subtotal is recomputed further down, after that adjustment.
+  const listTaxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
   // The `per_phone_number` fee basis (E911 on onboarding tenants) is owed on
   // EVERY active number, including the first-free one — and onboarding numbers
   // live only in PbxTenantInboundDid, never in the Connect phoneNumber table,
@@ -431,7 +446,13 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     pbxDids.length,
   );
   const telecomFees = parseBillingTelecomFees(settings.metadata);
-  const taxResult = telecomFees
+  /**
+   * The real taxes / E911 / regulatory fees owed on a given amount of taxable
+   * SERVICE revenue. Pulled out as a function of the base so the tax-inclusive
+   * solver can ask it more than once — the fee engines themselves are unchanged.
+   */
+  const computeFeesAtTaxableBase = (taxableSubtotalCents: number) =>
+    telecomFees
     ? (() => {
         const feeLines = !!settings.taxEnabled
           ? buildBillingTelecomFeeLines({
@@ -487,6 +508,77 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
         taxableSubtotalCents,
         extensionCount: scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount),
       });
+
+  // ── All-inclusive pricing ─────────────────────────────────────────────────
+  // customer_total = (extensions × price) + one account fee, and the real
+  // taxes/fees come OUT of that total instead of being added on top. See
+  // billingAccountPricing.ts for why, and for the invariant this keeps.
+  const accountFeeCentsPerMonth = resolveAccountTaxesAndFeesCents(settings.metadata);
+  const accountFeeCents = roundCents(accountFeeCentsPerMonth * Math.max(0, Number(periodFactor.monthCount || 1)));
+  const billedExtensionCount = scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount);
+  // The per-extension line is what carries the account fee and absorbs the
+  // fees. With no billable extension there is nothing to price per extension
+  // against, so such an invoice keeps the old additive behaviour rather than
+  // inventing a $5 charge for no service.
+  const applyAccountPricing = !!extensionLine && billingQuantities.billing.extensions > 0;
+
+  let taxResult: ReturnType<typeof computeFeesAtTaxableBase>;
+  let taxableBaseCents = listTaxableSubtotalCents;
+  let totalFeesCents = 0;
+  let serviceRevenueAdjustmentCents = 0;
+  let feesExceedCommercialRevenue = false;
+
+  // Only GOVERNMENT charges live inside the customer's total. An operator
+  // `customFee` line (onboarding's $15 toll-free) is service revenue and adds
+  // to what the customer owes — see isGovernmentTaxOrFeeLine.
+  const sumGovernmentFees = (lines: ReadonlyArray<{ amountCents: number; metadata?: Record<string, unknown> }>) =>
+    lines.filter((line) => isGovernmentTaxOrFeeLine(line)).reduce((sum, line) => sum + line.amountCents, 0);
+
+  if (applyAccountPricing) {
+    const solved = solveTaxInclusiveTaxableBase({
+      taxableGrossCents: listTaxableSubtotalCents + accountFeeCents,
+      computeFees: (base) => {
+        const result = computeFeesAtTaxableBase(base);
+        return { result, totalFeesCents: sumGovernmentFees(result.lines) };
+      },
+    });
+    taxResult = solved.fees;
+    taxableBaseCents = solved.taxableBaseCents;
+    totalFeesCents = solved.totalFeesCents;
+
+    // Fold the account fee in and carve the real fees out — one adjustment on
+    // the extension line, so the customer's total lands on the formula exactly.
+    const targetAmountCents = extensionLine!.amountCents + accountFeeCents - totalFeesCents;
+    const nextAmountCents = Math.max(0, targetAmountCents);
+    feesExceedCommercialRevenue = targetAmountCents < 0;
+    serviceRevenueAdjustmentCents = nextAmountCents - extensionLine!.amountCents;
+    const listAmountCents = extensionLine!.amountCents;
+    const listUnitPriceCents = extensionLine!.unitPriceCents;
+    const quantity = Math.max(1, Number(extensionLine!.quantity || 1));
+    extensionLine!.amountCents = nextAmountCents;
+    // amountCents stays authoritative; the unit price is the displayed
+    // per-extension net and may be a cent off it when the split is not divisible.
+    extensionLine!.unitPriceCents = roundCents(nextAmountCents / quantity);
+    extensionLine!.metadata = {
+      ...lineMetadata(extensionLine!),
+      taxInclusivePricing: true,
+      // The commercial price this line was struck at, before the account fee was
+      // folded in and the real fees carved out. Plan/price resolution is read
+      // from HERE — the line's own unitPriceCents is the post-split net.
+      listUnitPriceCents,
+      listAmountCents,
+      accountFeeCents,
+      absorbedTaxesAndFeesCents: totalFeesCents,
+      netRevenuePerExtensionCents: extensionLine!.unitPriceCents,
+    };
+  } else {
+    taxResult = computeFeesAtTaxableBase(listTaxableSubtotalCents);
+    totalFeesCents = sumGovernmentFees(taxResult.lines);
+  }
+
+  const subtotalCents = lineItems.reduce((sum, item) => sum + item.amountCents, 0);
+  const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
+
   for (const line of taxResult.lines) {
     lineItems.push({
       type: line.type,
@@ -508,6 +600,24 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   }
   const taxCents = taxResult.lines.reduce((sum, item) => sum + item.amountCents, 0);
   const totalCents = Math.max(0, subtotalCents + taxCents);
+
+  // net_service_revenue + total_actual_taxes_and_fees = customer_total, always:
+  // the total here IS the invoice total, and the net is derived from it by
+  // subtraction inside buildAccountPricingSummary.
+  const accountPricing = buildAccountPricingSummary({
+    applied: applyAccountPricing,
+    reason: applyAccountPricing
+      ? "all_inclusive_extension_pricing"
+      : "no_billable_extensions_taxes_added_on_top",
+    extensionCount: billedExtensionCount,
+    accountFeeCentsPerMonth,
+    accountFeeCents: applyAccountPricing ? accountFeeCents : 0,
+    customerTotalCents: totalCents,
+    totalTaxesAndFeesCents: totalFeesCents,
+    serviceRevenueAdjustmentCents,
+    taxableBaseCents,
+    feesExceedCommercialRevenue,
+  });
 
   const scheduledPlanChange: BillingInvoicePreview["scheduledPlanChange"] =
     hasScheduledChange && settings.nextBillingPlan
@@ -546,6 +656,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     taxCents,
     totalCents,
     taxCalculationAudit: taxResult.audit,
+    accountPricing,
     ...(scheduledPlanChange ? { scheduledPlanChange } : {}),
     pricingResolution,
     pricingPreviewExplanation,
@@ -622,6 +733,7 @@ export async function createBillingInvoice(input: {
         metadata: {
           taxCalculationAudit: preview.taxCalculationAudit,
           billingPeriodFactor: preview.billingPeriodFactor,
+          accountPricing: preview.accountPricing,
         },
         lineItems: {
           create: preview.lineItems.map((item) => ({

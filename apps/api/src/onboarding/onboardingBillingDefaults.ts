@@ -51,6 +51,10 @@ export function onboardingTelecomFeesConfig(opts: { tollFreeNumber?: boolean } =
             mode: "amountCents" as const,
             amountCents: ONBOARDING_PRICES.tollFreeNumberMonthlyCents,
             basis: "flat_monthly" as const,
+            // ⛔ This one is OUR charge, not a tax. Customer prices are
+            // all-inclusive, so a real fee lives inside the total while this
+            // adds to it — see billing/billingAccountPricing.ts.
+            serviceCharge: true,
           },
         }
       : {}),

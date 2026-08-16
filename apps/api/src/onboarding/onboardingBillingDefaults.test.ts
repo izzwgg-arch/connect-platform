@@ -213,4 +213,9 @@ test("stamped config matches the quote's constants exactly", () => {
   // onboarding never writes — that basis would bill $0 and break the promise.
   assert.equal(tf.customFee?.basis, "flat_monthly");
   assert.equal(tf.customFee?.label, "Toll-free number");
+  // ⛔ It is OUR charge, not a tax — customer totals are all-inclusive, so this
+  // must ADD to the total instead of being absorbed out of service revenue.
+  assert.equal(tf.customFee?.serviceCharge, true);
+  assert.notEqual(cfg.e911?.serviceCharge, true, "a real fee must never be marked as revenue");
+  assert.notEqual(cfg.regulatory?.serviceCharge, true);
 });
