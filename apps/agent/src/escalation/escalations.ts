@@ -126,19 +126,51 @@ export class EscalationService {
     });
     if (recent) return;
 
-    // Who is this? Names ride in the SMS (Izzy's requirement, 2026-08-12).
+    // Who is this? ⛔ The tenant name AND the person's name are REQUIRED content
+    // in the escalation, not decoration (Izzy's requirement, restated
+    // 2026-08-16 after a real text arrived saying "Unknown user"): the owner has
+    // to know who to call back without opening anything.
+    //
+    // The id is looked for in TWO places on purpose. This turn's context is the
+    // usual source, but a conversation that began without one — or a turn that
+    // lost it — must not cost us the name, because the CONVERSATION row records
+    // who started it. Falling back there is what turns the one unnamed
+    // escalation we shipped into a named one.
+    const conversationUserId =
+      ctx.clientUserId ??
+      (await this.prisma.agentConversation
+        .findUnique({ where: { id: ctx.conversationId }, select: { clientUserId: true } })
+        .catch(() => null))?.clientUserId ??
+      null;
+
     const [tenant, user] = await Promise.all([
       this.prisma.tenant.findUnique({ where: { id: ctx.tenantId }, select: { name: true } }).catch(() => null),
-      ctx.clientUserId
-        ? this.prisma.user.findUnique({ where: { id: ctx.clientUserId }, select: { firstName: true, lastName: true, email: true } }).catch(() => null)
+      conversationUserId
+        ? this.prisma.user
+            .findUnique({
+              where: { id: conversationUserId },
+              select: { firstName: true, lastName: true, displayName: true, email: true },
+            })
+            .catch(() => null)
         : Promise.resolve(null),
     ]);
     const tenantName = String(tenant?.name || ctx.tenantId);
-    const userName =
-      [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() ||
-      String(user?.email || "").split("@")[0] ||
-      "Unknown user";
+    const userName = resolveEscalationUserName(user);
     const userEmail = user?.email ? String(user.email) : null;
+
+    // ⛔ An unnamed escalation is a defect, not a normal outcome — record it so
+    // it is countable instead of merely looking odd in a text message once.
+    if (!user) {
+      await this.audit
+        .record({
+          actor: "system",
+          event: "escalation.user_unidentified",
+          tenantId: ctx.tenantId,
+          conversationId: ctx.conversationId,
+          payload: { turnClientUserId: ctx.clientUserId ?? null, conversationClientUserId: conversationUserId },
+        })
+        .catch(() => undefined);
+    }
 
     // Chronological transcript (English mirror when bridged) for the researcher.
     const transcript = [...messages]
@@ -312,6 +344,32 @@ export function parseReportSections(text: string): { issue: string; findings: st
  * user name attached, a full picture of what's going on, and the fix already
  * worked out — approval is the only thing left. Kept under ~4 SMS segments.
  */
+/**
+ * The person's name for the escalation, from whatever the user record offers.
+ *
+ * ⛔ Never returns "Unknown user". That string reached the owner's phone once
+ * and told him nothing — not who to call, not even whether a real person was
+ * on the other end. When there is genuinely no signed-in user (the widget can
+ * be opened without one), say THAT, because "nobody was signed in" is a fact he
+ * can act on, and it reads as a state of the world rather than a bug in us.
+ *
+ * Pure and exported so the wording is testable without a database.
+ */
+export function resolveEscalationUserName(
+  user: { firstName?: string | null; lastName?: string | null; displayName?: string | null; email?: string | null } | null | undefined,
+): string {
+  if (!user) return "not signed in (chat widget)";
+  const full = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  if (full) return full;
+  const display = String(user.displayName ?? "").trim();
+  if (display) return display;
+  const local = String(user.email ?? "").split("@")[0].trim();
+  if (local) return local;
+  // A user row with no name and no email at all — vanishingly rare, but saying
+  // "a user with no name on record" is still more useful than "Unknown user".
+  return "a user with no name on record";
+}
+
 export function buildEscalationSms(input: {
   tenantName: string;
   userName: string;
@@ -332,7 +390,12 @@ export function buildEscalationSms(input: {
     input.degraded
       ? `Fix: research was unavailable — full transcript emailed.`
       : `Fix ready: ${clamp(input.proposedFix, 260)}`,
-    `Full report emailed. Reply OK here (or tell the assistant) to approve.`,
+    // ⛔ Do NOT promise "reply OK to approve". Approval is either the one-time
+    // FIX code the dispatcher appends when a fix is actually executable, or the
+    // portal. An "OK" here approves nothing and is deliberately ignored by the
+    // reply parser — telling the owner otherwise teaches him a gesture that
+    // silently does nothing.
+    `Full report emailed.`,
   ];
   return lines.join("\n");
 }

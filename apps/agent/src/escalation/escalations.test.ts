@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isEscalationReply, buildEscalationSms, parseReportSections } from "./escalations";
+import { isEscalationReply, buildEscalationSms, parseReportSections, resolveEscalationUserName } from "./escalations";
 
 // ── detection — matched against OUR OWN phrasings, from real transcripts ─────
 
@@ -61,7 +61,9 @@ test("the SMS carries tenant name, user name, issue and the ready fix", () => {
   assert.match(sms, /Miss Spilman/);
   assert.match(sms, /prefix is not working/i);
   assert.match(sms, /Fix ready:/);
-  assert.match(sms, /Reply OK/);
+  // ⛔ Was `assert.match(sms, /Reply OK/)`. Replying OK approves nothing — the
+  // one-time FIX code does — so promising it in the text was actively wrong.
+  assert.match(sms, /Full report emailed./);
   // Keep the text well under 5 SMS segments (~765 chars of GSM-7).
   assert.ok(sms.length <= 700, `sms too long: ${sms.length}`);
 });
@@ -93,4 +95,59 @@ test("report sections parse from the researcher's format", () => {
   assert.match(s.findings, /one outbound route/);
   assert.match(s.proposedFix, /Add a caller-ID override/);
   assert.match(s.approval, /authorizes/);
+});
+
+// ── Naming the person (2026-08-16) ──────────────────────────────────────────
+// A real escalation text reached the owner saying "Unknown user". The tenant
+// name and the person's name are required content: he has to know who to call
+// back without opening anything.
+
+test("⛔ the escalation NEVER says 'Unknown user'", () => {
+  for (const u of [null, undefined, {}, { firstName: null, lastName: null, email: null }]) {
+    const name = resolveEscalationUserName(u as any);
+    assert.doesNotMatch(name, /unknown user/i, `must not say Unknown user for ${JSON.stringify(u)}`);
+    assert.ok(name.trim().length > 0, "and must always say something");
+  }
+});
+
+test("a real person is named from first and last name", () => {
+  assert.equal(resolveEscalationUserName({ firstName: "Sara", lastName: "Klein", email: "s@x.com" }), "Sara Klein");
+});
+
+test("a partial record still yields a usable name", () => {
+  assert.equal(resolveEscalationUserName({ firstName: "Sara", lastName: null }), "Sara");
+  assert.equal(resolveEscalationUserName({ displayName: "Front Desk" }), "Front Desk");
+  assert.equal(resolveEscalationUserName({ email: "yossi@gesheft.com" }), "yossi");
+});
+
+test("nobody signed in is reported as a state of the world, not a mystery", () => {
+  const name = resolveEscalationUserName(null);
+  assert.match(name, /not signed in/i);
+});
+
+test("⛔ the SMS no longer promises that replying OK approves anything", () => {
+  const sms = buildEscalationSms({
+    tenantName: "Acme Ltd",
+    userName: "Sara Klein",
+    userEmail: "sara@acme.test",
+    issue: "Their voicemail emails stopped.",
+    proposedFix: "Add an address to mailbox 101.",
+    degraded: false,
+  });
+  assert.doesNotMatch(sms, /reply ok/i, "an OK approves nothing — the FIX code does");
+  assert.match(sms, /Company: Acme Ltd/);
+  assert.match(sms, /User: Sara Klein \(sara@acme.test\)/);
+});
+
+test("the company and the person are always both present in the text", () => {
+  const sms = buildEscalationSms({
+    tenantName: "Gesheft",
+    userName: resolveEscalationUserName(null),
+    userEmail: null,
+    issue: "x",
+    proposedFix: "y",
+    degraded: false,
+  });
+  assert.match(sms, /Company: Gesheft/);
+  assert.match(sms, /User: not signed in/i);
 });
