@@ -194,3 +194,57 @@ test("an explicit AGENT_KNOWLEDGE_DIR still wins over the walk-up", async () => 
   assert.equal(s.published, 1);
   await rm(dir, { recursive: true, force: true });
 });
+
+test("⛔ a file holding ONLY generated facts publishes nothing — no filler in the prompt", async () => {
+  await makeDir({
+    "system.md": "# Connect\nx\n",
+    "tenants/acme.md": [
+      "---", "tenantId: t_acme", "---", "",
+      "# Acme Ltd", "",
+      "What the assistant should know before answering anyone from this company.",
+      "Everything outside the staff-only block may be said to the customer.", "",
+      "<!-- generated:facts -->", "## Their extensions", "- **101** — Desk", "<!-- /generated:facts -->", "",
+      "## What we have learned about them", "",
+      "_Nothing recorded yet. Add what a new person on the support desk would need_",
+    ].join("\n"),
+  });
+  const s = await syncAgentKnowledgeDocs();
+  assert.equal(s.factsOnly, 1);
+  assert.equal(state.docs.find((d: any) => d.slug === "acme"), undefined, "no row for a file with nothing human in it");
+  assert.deepEqual(s.skipped, [], "and it is NOT reported as a problem");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("⛔ generated facts are stripped from a file that DOES carry human knowledge", async () => {
+  await makeDir({
+    "system.md": "# Connect\nx\n",
+    "tenants/acme.md": [
+      "---", "tenantId: t_acme", "---", "# Acme Ltd", "",
+      "<!-- generated:facts -->", "## Their extensions", "- **101** — Desk phone in the warehouse", "<!-- /generated:facts -->", "",
+      "## What we have learned about them", "",
+      "They only answer the phone in the mornings, and they always ask about invoices first.",
+    ].join("\n"),
+  });
+  await syncAgentKnowledgeDocs();
+  const doc = state.docs.find((d: any) => d.slug === "acme");
+  assert.ok(doc);
+  assert.match(doc.body, /only answer the phone in the mornings/);
+  assert.doesNotMatch(doc.body, /Desk phone in the warehouse/, "live facts come from the facts document, not from here");
+});
+
+test("⛔ changing how a file is transformed must republish it, not read as unchanged", async () => {
+  // The checksum is taken on the text AS PUBLISHED. Checksumming the raw file
+  // once meant a transformation change left every stored row stale while the
+  // sync happily reported "unchanged".
+  await makeDir({
+    "system.md": "# Connect\nx\n",
+    "tenants/acme.md": "---\ntenantId: t_acme\n---\n# Acme\nThey always ask about invoices before anything else, every single time.\n",
+  });
+  await syncAgentKnowledgeDocs();
+  const stored = state.docs.find((d: any) => d.slug === "acme");
+  assert.doesNotMatch(stored.checksum, /^$/);
+  // Same file, same publish → unchanged.
+  const again = await syncAgentKnowledgeDocs();
+  assert.equal(again.unchanged, 2);
+  await rm(dir, { recursive: true, force: true });
+});

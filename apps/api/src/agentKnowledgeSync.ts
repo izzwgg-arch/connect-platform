@@ -87,6 +87,35 @@ export function stripGeneratedFacts(text: string): string {
   return text.replace(/<!--\s*generated:facts\s*-->[\s\S]*?<!--\s*\/generated:facts\s*-->/gi, "").replace(/\n{3,}/g, "\n\n");
 }
 
+/**
+ * Does this document actually SAY anything a person wrote?
+ *
+ * A freshly generated tenant file is a heading, a line of boilerplate telling
+ * the editor what the file is for, and an italic "nothing recorded yet"
+ * placeholder. Publishing that puts three lines of filler into every prompt for
+ * 23 companies and teaches the model nothing. Judged structurally — comments,
+ * headings, boilerplate and italic-only lines removed — rather than by matching
+ * the placeholder's exact words, which would rot the moment someone reworded it.
+ *
+ * ⛔ Structure ONLY, never a length threshold. A minimum character count was
+ * tried and rejected: "They only speak Yiddish." is 24 characters and is
+ * exactly the kind of thing this whole feature exists to carry. One real
+ * sentence is enough.
+ */
+export function hasHumanKnowledge(body: string): boolean {
+  const prose = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .filter((l) => !/^#{1,6}\s/.test(l))              // headings
+    .filter((l) => !/^_.*_$/.test(l))                  // italic placeholder lines
+    .filter((l) => !/^What the assistant should know/i.test(l))
+    .filter((l) => !/^Everything outside the staff-only block/i.test(l))
+    .join(" ");
+  return prose.length > 0;
+}
+
 interface CandidateFile {
   slug: string;
   relPath: string;
@@ -187,9 +216,8 @@ export async function syncAgentKnowledgeDocs(log?: {
     // row (which would hold stale facts) is removed by the sweep below.
     const emptyAfterStrip =
       parsed.scope === "tenant" &&
-      !parsed.body.trim() &&
-      !parsed.internalBody.trim() &&
-      parsed.errors.every((e) => /customer-safe part of the document is empty/.test(e));
+      !hasHumanKnowledge(parsed.body) &&
+      !parsed.internalBody.trim();
     if (emptyAfterStrip) {
       summary.factsOnly++;
       continue;
@@ -214,7 +242,13 @@ export async function syncAgentKnowledgeDocs(log?: {
     }
 
     seen.add(file.slug);
-    const checksum = sha256(file.text);
+    // ⛔ Checksum the text AS PUBLISHED, not the raw file. Checksumming the raw
+    // file meant that changing how a file is transformed (stripping the facts
+    // block) left every already-published row untouched — the sync reported
+    // "unchanged: 30" and the stale bodies stayed live. Any future change to
+    // the transformation must likewise be visible to this hash.
+    const checksum = sha256(`${parsed.body}
+${parsed.internalBody}`);
     const prior = bySlug.get(file.slug);
     if (prior && prior.checksum === checksum) {
       summary.unchanged++;
