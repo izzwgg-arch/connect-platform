@@ -1281,6 +1281,70 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   need `ChanSpy` confirmed on the PBX and a Connect permission gate; neither was
   checked. Don't promise them off the picture.
 
+## ⛔⛔ AGENT HANDOFF — the brand is **Loopcom** (lowercase c) and it is LIVE on login, the topbar, the invite email, all 9 billing emails and the pay pages (2026-08-16) — READ FIRST before any branding or email-template work, before adding a card-entry surface, or before previewing an email
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_REBRAND_EMAILS_2026-08-16.md`**
+(commits `140dec3e` → `cf8d16ff`. **api + portal DEPLOYED and container-verified.**)
+
+- ⛔ **Customer-facing text says `Loopcom`** — not LoopCom, not Connect
+  Communications. Izzy, 2026-08-16: *"the C from com and LoopCom should be
+  lowercase"* and *"we're changing everything to LoopCom, no more Connect
+  Communications."* Tests assert "Connect Communications" appears nowhere in the
+  invite email or the billing emails. Internal identifiers (`loopComShell`,
+  `LoopComLogo`) keep camel case on purpose — they are not customer text.
+- ⛔ **`/login` renders CLIENT-SIDE, so `curl …/login | grep` PROVES NOTHING** —
+  you get a 4.8 KB cached shell (`x-nextjs-cache: HIT`) with no markup. Grepping
+  it for the NEW classes says ABSENT on a good deploy, and grepping for the OLD
+  copy says "gone" regardless: **a false positive in both directions.** Verify
+  from the live stylesheet and the `/_next/static/chunks/app/login/page-*.js`
+  bundle. This cost a wrong "it's missing" report.
+- ⛔ **The topbar had NO logo in light mode** — the stylesheet hid it and printed
+  the word "Connect" as a text fallback, because the old SVG was
+  white-on-transparent. **Never reintroduce a per-theme show/hide, and never put
+  a `filter` on `.brand-logo-svg`.** One transparent PNG serves both themes; the
+  kit's deep-ink light variant was explicitly rejected.
+  Logo height is **20px**, sized against the topbar's own 13px type — at 26px the
+  letters ran ~2× the search placeholder beside them.
+- ⛔ **The email logo URL is resolved INSIDE `userEmailTemplates.ts`
+  (`brandLogoUrl()`), never passed in by callers** — two paths queue the invite
+  email and passing it in is exactly how the Android APK link went missing from
+  every self-service sign-up. A test asserts both paths still route through the
+  template.
+- ⛔ **`billing@loopcom.net`: the DOMAIN is verified, the MAILBOX is not.**
+  `loopcom.net` has full Google MX and serves a site — that does **not** prove
+  the `billing@` user exists, and Google bounces mail to a non-existent user.
+  Confirm before the next invoice goes out.
+- ⛔ **Apple Pay was claimed on the pay pages and implemented NOWHERE** (zero
+  matches for `ApplePay`/`payment-request` in portal or api). Removed. Note the
+  Sola SDK *does* ship Apple Pay support — it has simply never been configured,
+  so it is enable-able, not impossible.
+- ⛔ **Outlook cannot be previewed** — it renders with Word's engine and no
+  browser reproduces it. Desktop and phone were verified by rendering the real
+  generated HTML at 1280/375px; **Outlook is structural-only until someone sends
+  one.** Every gradient sits on a solid `bgcolor`, every layout has an
+  `[if mso]` fixed-600px wrapper, and the media query is an enhancement only.
+  ⛔ The invite shell and the billing shell are **separate on purpose** — the
+  billing one is better hardened (VML `roundrect` button); don't merge them.
+- ⛔ **NOT changed, deliberately — each needs a decision:** `billing/pdf.ts` still
+  says **"Connect Communications, LLC"** (the legal entity on invoice PDFs — if
+  the LLC was never renamed, the registered name belongs there);
+  `billing/invoices/[id]` still loads `/connect-logo.png`; the favicon, app icons
+  and the three sibling emails (password created/reset/changed) are untouched;
+  ~50 `Connect Communications` occurrences remain in apps/api alone.
+- ⏳ **NOT PROVEN: nobody has opened ANY of these emails in a real inbox**, and
+  nobody has opened the rebuilt `/login` or the pay pages in a browser. All of it
+  is proven from generated output, tests and container greps.
+- ⏳ **Designed and agreed but NOT built** (details in §6 of the handoff):
+  voicemail email (blocked — the PBX must stop sending its own first, a PBX
+  change); text-by-email via `sms@loopcom.net` (blocked on the mailbox; ✅ the
+  hard part exists — `crmEmailSync.ts` already pulls Gmail and parses
+  `In-Reply-To`/`References`); one payment page (⛔ both checkout routes require
+  an invoice, so "add a card" needs a save-card mode — `/admin/card-test` exists
+  purely to work around this); default-card + decline fallback (⛔ removing a
+  card clears `isDefault` and **nothing promotes a replacement** — one tenant
+  currently has a card and no default, so autopay cannot charge it; and **fall
+  back only on an explicit decline**, never a timeout, or you bill twice).
+
 ## ⛔ AGENT HANDOFF — the LoopCom logo is in the repo and LIVE on the sign-in page (2026-08-16) — READ FIRST before any LoopCom branding work, before putting a logo on any screen, or before believing a logo handed to you is the current one
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_BRAND_ASSETS_2026-08-16.md`**
