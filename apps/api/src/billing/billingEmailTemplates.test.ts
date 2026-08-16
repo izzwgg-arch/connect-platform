@@ -201,7 +201,7 @@ test("paymentReceiptEmail notes both PDF attachments and embeds invoice + transa
     transactionId: "tx_abc",
     portalInvoiceUrl: "https://example.com/i",
   });
-  assert.match(t.html, /Attached: your invoice and your payment receipt/i);
+  assert.match(t.html, /Your invoice and your receipt are attached to this email as PDFs/i);
   assert.match(t.html, /connect-billing-invoice:inv_abc/);
   assert.match(t.html, /connect-billing-transaction:tx_abc/);
   assert.doesNotMatch(t.html, /\/api\/billing\/platform\/invoices\//);
@@ -230,7 +230,10 @@ test("paymentReceiptEmail shows autopay note when paidViaAutopay", () => {
     paidViaAutopay: true,
   });
   assert.match(t.html, /saved payment method/);
-  assert.match(t.subject, /Autopay receipt/);
+  // One heading and subject either way — the autopay note below carries the nuance.
+  assert.match(t.subject, /Payment successful/);
+  assert.match(t.html, /Payment successful/);
+  assert.doesNotMatch(t.html, /Autopay successful/);
 });
 
 test("paymentReceiptEmail does not include raw card details", () => {

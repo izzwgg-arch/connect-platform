@@ -96,7 +96,7 @@ function emailShell(title: string, body: string, _brand: InvoiceEmailBranding): 
               <tr>
                 <td class="email-pad" style="padding:24px 28px 18px;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;background:#ffffff;">
                   <img src="${escapeHtml(logoSrc)}" alt="Loopcom" width="156" height="28" style="display:block;width:156px;max-width:156px;height:28px;border:0;outline:none;text-decoration:none;margin:0 0 18px;" />
-                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Loopcom billing</p>
+                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Billing</p>
                   <h1 style="margin:0;font-size:26px;line-height:32px;font-weight:750;color:#0f172a;">${escapeHtml(title)}</h1>
                 </td>
               </tr>
@@ -356,9 +356,7 @@ export function paymentReceiptEmail(input: {
   brand?: InvoiceEmailBranding | null;
 }): { subject: string; html: string; text: string } {
   const brand = mergeBrand(input.brand ?? null);
-  const subject = input.paidViaAutopay
-    ? `Autopay receipt — ${input.invoiceNumber}`
-    : `Payment received — ${input.invoiceNumber}`;
+  const subject = `Payment successful — ${input.invoiceNumber}`;
 
   const autopayNote = input.paidViaAutopay
     ? `<p style="margin:0 0 16px;font-size:14px;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;">Your saved payment method was charged automatically on your billing date.</p>`
@@ -377,7 +375,9 @@ export function paymentReceiptEmail(input: {
     ? `<p style="margin:0 0 12px;">${ctaButton(input.portalInvoiceUrl, "View invoice")}</p>`
     : "";
 
-  const h1 = input.paidViaAutopay ? "Autopay successful" : "Payment received";
+  // One heading either way. The customer cares that it went through; the note
+  // below still says when it was charged automatically.
+  const h1 = "Payment successful";
 
   const body = `
     <div style="margin-bottom:16px;">
@@ -387,7 +387,7 @@ export function paymentReceiptEmail(input: {
     ${autopayNote}
     ${infoBox(rows.join(""))}
     ${viewBtn}
-    <p style="margin:12px 0 0;font-size:14px;line-height:22px;color:#64748b;">Attached: your invoice and your payment receipt.</p>
+    <p style="margin:12px 0 0;font-size:14px;line-height:22px;color:#64748b;">Your invoice and your receipt are attached to this email as PDFs.</p>
     ${billingInvoiceEmailMarker(input.billingInvoiceId)}
     ${billingPaymentTransactionMarker(input.transactionId)}
   `;
@@ -395,7 +395,7 @@ export function paymentReceiptEmail(input: {
   return {
     subject,
     html: emailShell(h1, body, brand),
-    text: `${subject}\nAmount: ${money(input.totalCents)}\nInvoice: ${input.invoiceNumber}\nPaid: ${fmtDate(input.paidAt)}\nAttached: invoice PDF and receipt PDF${input.portalInvoiceUrl ? `\nPortal: ${input.portalInvoiceUrl}` : ""}`,
+    text: `${subject}\nAmount: ${money(input.totalCents)}\nInvoice: ${input.invoiceNumber}\nPaid: ${fmtDate(input.paidAt)}\nYour invoice and your receipt are attached to this email as PDFs.${input.portalInvoiceUrl ? `\nPortal: ${input.portalInvoiceUrl}` : ""}`,
   };
 }
 
