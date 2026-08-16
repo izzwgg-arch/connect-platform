@@ -291,6 +291,7 @@ import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAva
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
 import { sweepFixRepliesBatch } from "./agentFixByText";
+import { syncAllTenantFactsDocs } from "./agentTenantFacts";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -40718,6 +40719,18 @@ const port = Number(process.env.PORT || 3001);
   // hand-built container to change. Never fatal — a bad knowledge file must not
   // stop the api from booting.
   syncAgentKnowledgeDocs(app.log as any).catch((e) => app.log.error({ err: e }, "agent knowledge sync failed"));
+  // Every live company's account facts, refreshed by themselves. ⛔ A SWEEP, not
+  // a hook on tenant creation: five different code paths create a tenant, and
+  // hooking each is how this codebase has repeatedly shipped a feature that
+  // works on one path and silently skips another. A sweep also fixes staleness,
+  // which a creation hook cannot — numbers, extensions and menus keep changing.
+  const refreshTenantFacts = () =>
+    syncAllTenantFactsDocs(app.log as any).catch((e) => app.log.error({ err: e }, "agent tenant facts sweep failed"));
+  registerShutdownTimer(setTimeout(refreshTenantFacts, 120_000));
+  const agentFactsTimer = registerShutdownTimer(
+    setInterval(refreshTenantFacts, Number(process.env.AGENT_FACTS_REFRESH_MS || 6 * 3600_000)),
+  );
+  agentFactsTimer.unref();
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,

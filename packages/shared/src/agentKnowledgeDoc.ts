@@ -145,6 +145,13 @@ export function capKnowledgeText(text: string, maxChars: number): { text: string
 
 export interface KnowledgeBlockInput {
   system?: { title: string; body: string; internalBody?: string | null } | null;
+  /**
+   * This company's LIVE account facts — numbers, extensions, texting, phone
+   * menu — generated and refreshed automatically. Separate from `tenant` on
+   * purpose: facts go stale and are regenerated, what we have learned is
+   * written by people and must never be overwritten by a generator.
+   */
+  tenantFacts?: { title: string; body: string; internalBody?: string | null } | null;
   tenant?: { title: string; body: string; internalBody?: string | null } | null;
   audience: KnowledgeAudience;
   /** Character budget per document. Two documents, so the prompt cost is 2×. */
@@ -176,9 +183,17 @@ export function renderKnowledgeBlock(input: KnowledgeBlockInput): string | null 
   };
 
   take(input.system, "Connect platform");
-  take(input.tenant, input.tenantName ? `This customer — ${input.tenantName}` : "This customer");
+  take(input.tenantFacts, input.tenantName ? `This customer's account — ${input.tenantName}` : "This customer's account");
+  take(input.tenant, input.tenantName ? `What we know about ${input.tenantName}` : "What we know about this customer");
 
   if (parts.length === 0) return null;
+  // Facts are generated from the live system; a human note is a correction on
+  // top of them. Saying so stops the model treating a stale-sounding sentence
+  // in the notes as authoritative about, say, how many extensions exist.
+  const precedence =
+    input.tenantFacts && input.tenant
+      ? " The account section is read live from the phone system; the notes are what our team has learned."
+      : "";
 
   const rules =
     input.audience === "internal"
@@ -191,5 +206,5 @@ export function renderKnowledgeBlock(input: KnowledgeBlockInput): string | null 
           "If it does not cover the question, say what you do know and hand it to the team — never invent a detail to fill the gap.",
         ].join(" ");
 
-  return `${rules}\n\n${parts.join("\n\n")}`;
+  return `${rules}${precedence}\n\n${parts.join("\n\n")}`;
 }

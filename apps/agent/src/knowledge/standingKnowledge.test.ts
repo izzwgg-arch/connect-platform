@@ -2,14 +2,21 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { loadStandingKnowledgeBlock, clearKnowledgeCache } from "./standingKnowledge";
 
-function fakePrisma(rows: Array<{ scope: string; tenantId: string | null; title: string; body: string; internalBody?: string | null }>) {
+function fakePrisma(
+  rows: Array<{ scope: string; tenantId: string | null; title: string; body: string; internalBody?: string | null; source?: string }>,
+) {
   const calls: any[] = [];
   return {
     calls,
     agentKnowledgeDoc: {
       findFirst: async ({ where }: any) => {
         calls.push(where);
-        const hit = rows.find((r) => r.scope === where.scope && (where.tenantId === undefined ? r.tenantId === null : r.tenantId === where.tenantId));
+        const hit = rows.find(
+          (r) =>
+            r.scope === where.scope &&
+            (where.tenantId === undefined ? r.tenantId === null : r.tenantId === where.tenantId) &&
+            (where.source === undefined || (r.source ?? "repo") === where.source),
+        );
         return hit ? { ...hit, internalBody: hit.internalBody ?? null, updatedAt: new Date() } : null;
       },
     },
@@ -34,8 +41,31 @@ test("loads the system document and only THIS company's document", async () => {
 test("⛔ the tenant document is fetched by tenantId, never by name", async () => {
   const prisma = fakePrisma([{ scope: "tenant", tenantId: "t_acme", title: "Acme", body: "x" }]);
   await loadStandingKnowledgeBlock({ prisma, tenantId: "t_acme", audience: "customer" });
-  const tenantQuery = prisma.calls.find((c) => c.scope === "tenant");
-  assert.deepEqual(tenantQuery, { scope: "tenant", tenantId: "t_acme" });
+  for (const q of prisma.calls.filter((c) => c.scope === "tenant")) {
+    assert.equal(q.tenantId, "t_acme");
+    assert.equal(Object.keys(q).sort().join(","), "scope,source,tenantId");
+  }
+});
+
+test("⛔ live facts and human notes are fetched SEPARATELY, by source", async () => {
+  // One findFirst for both would return whichever was updated last, so the
+  // assistant would randomly lose either the account facts or the notes.
+  const prisma = fakePrisma([
+    { scope: "tenant", tenantId: "t_acme", title: "Acme — account facts", body: "They have extension 101.", source: "auto" },
+    { scope: "tenant", tenantId: "t_acme", title: "Acme", body: "They always call about invoices.", source: "repo" },
+  ]);
+  const block = await loadStandingKnowledgeBlock({ prisma, tenantId: "t_acme", tenantName: "Acme", audience: "customer" });
+  assert.match(block!, /extension 101/, "the live facts must be there");
+  assert.match(block!, /always call about invoices/, "and so must the human notes");
+  assert.match(block!, /read live from the phone system/, "and the model must be told which is which");
+});
+
+test("a company with facts but no human notes still gets its facts", async () => {
+  const prisma = fakePrisma([
+    { scope: "tenant", tenantId: "t_new", title: "New Co — account facts", body: "One number, no menu.", source: "auto" },
+  ]);
+  const block = await loadStandingKnowledgeBlock({ prisma, tenantId: "t_new", audience: "customer" });
+  assert.match(block!, /One number, no menu/);
 });
 
 test("staff-only notes are withheld from customers and given to the researcher", async () => {

@@ -85,12 +85,20 @@ export interface StandingKnowledgeInput {
 export async function loadStandingKnowledgeBlock(input: StandingKnowledgeInput): Promise<string | null> {
   if (!input.prisma) return null;
   const system = await load(input.prisma, "system", { scope: "system" });
-  const tenant = input.tenantId
-    ? await load(input.prisma, `tenant:${input.tenantId}`, { scope: "tenant", tenantId: input.tenantId })
+  // ⛔ TWO tenant documents exist and they must be fetched separately by SOURCE.
+  // "auto" is the account's live facts, regenerated on a timer; "repo" is what
+  // people have written about them. A single findFirst would return whichever
+  // was updated last — so the assistant would randomly lose one of them.
+  const tenantFacts = input.tenantId
+    ? await load(input.prisma, `facts:${input.tenantId}`, { scope: "tenant", tenantId: input.tenantId, source: "auto" })
     : null;
-  if (!system && !tenant) return null;
+  const tenant = input.tenantId
+    ? await load(input.prisma, `tenant:${input.tenantId}`, { scope: "tenant", tenantId: input.tenantId, source: "repo" })
+    : null;
+  if (!system && !tenant && !tenantFacts) return null;
   return renderKnowledgeBlock({
     system,
+    tenantFacts,
     tenant,
     audience: input.audience,
     maxCharsPerDoc: maxChars(),

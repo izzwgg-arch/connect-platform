@@ -36,6 +36,8 @@ export interface KnowledgeSyncSummary {
   unchanged: number;
   removed: number;
   skipped: Array<{ file: string; reason: string }>;
+  /** Files that hold only generated facts — normal, not a problem. */
+  factsOnly: number;
   /** True when the directory could not be read at all (dev machines, older images). */
   missingDir: boolean;
 }
@@ -71,6 +73,18 @@ export async function resolveAgentKnowledgeDir(): Promise<string | null> {
 
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex");
+}
+
+/**
+ * Remove the `<!-- generated:facts -->` region a knowledge file may carry.
+ *
+ * Those blocks were how the first version of this feature got live data into
+ * the documents; facts are now generated continuously instead. A file with no
+ * such block is returned untouched, so a purely hand-written document is
+ * unaffected.
+ */
+export function stripGeneratedFacts(text: string): string {
+  return text.replace(/<!--\s*generated:facts\s*-->[\s\S]*?<!--\s*\/generated:facts\s*-->/gi, "").replace(/\n{3,}/g, "\n\n");
 }
 
 interface CandidateFile {
@@ -139,7 +153,7 @@ export async function syncAgentKnowledgeDocs(log?: {
   warn: (o: any, m: string) => void;
 }): Promise<KnowledgeSyncSummary> {
   const dir = (await resolveAgentKnowledgeDir()) ?? "";
-  const summary: KnowledgeSyncSummary = { dir, scanned: 0, published: 0, unchanged: 0, removed: 0, skipped: [], missingDir: false };
+  const summary: KnowledgeSyncSummary = { dir, scanned: 0, published: 0, unchanged: 0, removed: 0, skipped: [], factsOnly: 0, missingDir: false };
 
   const files = dir ? await readCandidates(dir) : null;
   if (files === null) {
@@ -157,7 +171,29 @@ export async function syncAgentKnowledgeDocs(log?: {
   let sawSystem = false;
 
   for (const file of files) {
-    const parsed = parseKnowledgeDoc({ text: file.text, slug: file.slug, sourcePath: file.relPath });
+    // ⛔ The generated facts block is STRIPPED before publishing. Live facts now
+    // come from `agentTenantFacts.ts`, refreshed on a timer; leaving the block
+    // in would put the same fact in the prompt twice and let the stale copy
+    // contradict the fresh one. The block stays in the file for humans to read.
+    const parsed = parseKnowledgeDoc({
+      text: stripGeneratedFacts(file.text),
+      slug: file.slug,
+      sourcePath: file.relPath,
+    });
+    // A tenant file that carried ONLY generated facts has nothing left once they
+    // are stripped, and that is the normal state of a company nobody has written
+    // about yet. It is not an error and must not be reported as one — noise here
+    // would bury a real problem. Left out of `seen`, so any previously published
+    // row (which would hold stale facts) is removed by the sweep below.
+    const emptyAfterStrip =
+      parsed.scope === "tenant" &&
+      !parsed.body.trim() &&
+      !parsed.internalBody.trim() &&
+      parsed.errors.every((e) => /customer-safe part of the document is empty/.test(e));
+    if (emptyAfterStrip) {
+      summary.factsOnly++;
+      continue;
+    }
     if (parsed.errors.length > 0) {
       summary.skipped.push({ file: file.relPath, reason: parsed.errors.join("; ") });
       continue;
