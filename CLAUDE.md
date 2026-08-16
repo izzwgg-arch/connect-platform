@@ -100,7 +100,72 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_WHATSAPP_AUDIT_2026-08-16.md`**
   templates — ⛔ free-form sending outside that window gets the number
   quality-rated down and eventually blocked by Meta).
 
-## ⛔ AGENT HANDOFF — the assistant has NO access to any MD file, and its knowledge base is dead code (2026-08-16) — READ FIRST before saying the assistant "knows" something we wrote down, or before answering "does the agent have the docs?"
+## ⛔⛔ AGENT HANDOFF — the assistant now READS a system document + THIS company's document before answering (2026-08-16) — READ FIRST before writing anything into docs/agent-knowledge, before adding knowledge to the agent, or for "why does the assistant not know X?"
+
+Commit `4c6f26a0` (+ `140dec3e` path fix) on `feat/ivr-migration-takeover`.
+Owner's design, chosen 2026-08-16: **one MD file per tenant plus one system MD
+file; the agent auto-reads the system file + that tenant's file only.**
+Memory: [[agent-knowledge-docs-per-tenant]]. Supersedes the audit section below,
+which is now history.
+
+- **Where knowledge lives:** `docs/agent-knowledge/system.md` +
+  `docs/agent-knowledge/tenants/<slug>.md` — **29 company documents, generated
+  from live data**, in git. ⛔ These are NOT the `docs/ai-context/` handoffs;
+  those are for Claude sessions, are full of other tenants' failures, and must
+  never be fed to a customer-facing model.
+- ⛔ **The API publishes; the AGENT only reads.** `agentKnowledgeSync.ts` runs
+  at api boot, parses the files out of its own image (`COPY . .` puts
+  `/app/docs` inside it) and upserts `AgentKnowledgeDoc` rows; the agent reads
+  those rows. **This is the whole design**: the agent is a manual rebuild, so
+  knowledge baked into its image would need a hand-built container per wording
+  change. **Edit a file → deploy the api → the assistant knows it.**
+- ⛔ **`process.cwd()` is `/app/apps/api`, NOT the repo root.** The first deploy
+  published NOTHING and logged `missingDir` because the default path was
+  `cwd/docs/agent-knowledge`. It deleted nothing — deletion is gated on having
+  actually read a directory — and the resolver now walks up. `AGENT_KNOWLEDGE_DIR`
+  overrides.
+- ⛔ **TWO AUDIENCES, ONE FILE.** Everything outside `<!-- internal -->` markers
+  is customer-safe; what is inside reaches ONLY the escalation researcher. The
+  parser **fails closed** on an unbalanced marker (staff text goes to the
+  internal half and the file is refused), and `scripts/agent-knowledge/check-docs.ts`
+  greps the customer half for password/ssh/AMI/key/`/root/` before you commit.
+  **Run it after any knowledge edit — 30 documents, ~1 s.**
+- ⛔ **A tenant document must resolve to a REAL tenant or it is REFUSED, never
+  guessed** — a document published against the wrong tenantId tells one customer
+  another customer's facts. Put `tenantId:` in the front matter; a bare name is
+  accepted only when exactly one live tenant matches.
+- ⛔ **Two live tenants are both named "Connect Communications"**, so name-derived
+  filenames COLLIDE and the second silently overwrote the first. `buildSlugMap`
+  now suffixes the tenant-id tail for **both** of any duplicated name. Check this
+  before adding any name-keyed file.
+- **Re-running the generator is safe and meant to be routine:**
+  `collect-tenant-facts.mjs` (read-only, runs in `app-api-1`) →
+  `render-tenant-docs.mjs` rewrites ONLY the `<!-- generated:facts -->` block, so
+  hand-written knowledge survives. A hand-written file with no fence is left
+  entirely alone.
+- **Prompt cost is bounded**: two documents, each capped (12k chars default,
+  `AGENT_KNOWLEDGE_MAX_CHARS`) and cut on a section boundary; 60 s cache, so
+  knowledge costs ~one query a minute, not one per message. Failure-safe
+  everywhere — no knowledge must never mean no reply.
+- **Model routing was ALREADY what the owner asked for** — verify before
+  "building" it: fixing/researching runs `diagnostics` → **Opus 5**; customer
+  chat runs `support_chat` → **OpenAI gpt-5**; Yiddish rides the **Yiddish Labs**
+  bridge both ways, chosen from `User.uiLanguage` and falling back to
+  Hebrew-character detection.
+- ⏳ **NOT PROVEN: no customer has asked a question that the documents answer.**
+  Proven as plumbing (52 agent tests, 12 api, 14 shared; migration applied;
+  documents published — count them with `SELECT scope, count(*) FROM
+  "AgentKnowledgeDoc"`). ⛔ **The agent container must be rebuilt** to read the
+  new table — it is in no deploy queue.
+- ⏳ **Only 6 of 29 documents carry real knowledge** (Gesheft, Create A Box,
+  Trust Bookkeepings, Displaydex, inii mini, Landau Home). The other 23 are live
+  facts with an empty "What we have learned about them". Fill them as you learn.
+- ⏳ **Part 2 — "Fix it!" by SMS reply — is NOT built.** Design agreed: the
+  escalation SMS carries a one-time code, the owner replies `FIX <code>`, and the
+  agent executes ONLY the existing safe capability catalog. Nothing of it exists
+  yet; today the escalation still ends at a human.
+
+## ⛔ AGENT HANDOFF — the assistant had NO access to any MD file, and its knowledge base was dead code (2026-08-16, FIXED same day by the section above) — READ FIRST before saying the assistant "knows" something we wrote down, or before answering "does the agent have the docs?"
 
 **Read-only audit — no code change, no deploy.** Memory:
 [[agent-has-no-document-knowledge]].
