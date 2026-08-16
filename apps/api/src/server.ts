@@ -255,6 +255,8 @@ import {
 import { decideActionGate, userHasActionPermission } from "./permissionGates";
 import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
+import { registerRemoteSupportRoutes } from "./remoteSupportRoutes";
+import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
 import { registerAccountSetupInfoRoute } from "./agentProvisioning/accountSetupInfoRoute";
 import { registerAgentContactsInfoRoute } from "./agentProvisioning/contactsInfoRoute";
@@ -40777,6 +40779,16 @@ const port = Number(process.env.PORT || 3001);
       return enableSmsOnDid(creds, did);
     },
   });
+  // Remote support: watching and driving a customer's Windows machine, and the
+  // desk-phone inventory the Windows app reads off their own network.
+  //
+  // ⛔ These are ordinary authenticated portal routes and must NOT be added to
+  // the JWT bypass list — that list is only for `/internal/agent/*` doors with
+  // their own shared-secret check. Every decision here needs a real signed-in
+  // user, because the whole audit trail is "which named person watched which
+  // named person's screen".
+  await registerRemoteSupportRoutes(app, { audit });
+  await registerLanPhoneRoutes(app, { audit });
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);

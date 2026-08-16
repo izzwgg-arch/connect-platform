@@ -38271,3 +38271,100 @@ table tr:hover {
 @media (prefers-reduced-motion: reduce) {
   .qb-livechip.is-live .qb-dot, .qw-pulse { animation: none; }
 }
+
+/* ── Remote support ─────────────────────────────────────────────────────────
+   Styled from the app's own tokens (--panel/--text/--border/--accent) so it
+   follows the IN-APP theme switch, not the operating system's. ⛔ Never add a
+   `@media (prefers-color-scheme)` block here — that is the mistake the billing
+   section shipped, where the section had its own palette and went white while
+   the app was dark. Bare `:root` is DARK in this codebase; light is opt-in. */
+
+.rs-backdrop {
+  position: fixed; inset: 0; z-index: 9000;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(3, 8, 15, .72); backdrop-filter: blur(2px);
+}
+.rs-card {
+  width: min(560px, 100%); max-height: 90vh; overflow-y: auto;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px; padding: 22px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .45);
+}
+.rs-title { margin: 0 0 10px; font-size: 18px; line-height: 1.35; }
+/* The reason the support person typed. Deliberately prominent — this is the
+   thing the customer is actually deciding about. */
+.rs-reason {
+  margin: 0 0 16px; padding: 12px 14px; font-size: 15px; line-height: 1.45;
+  background: var(--panel-2); border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.rs-label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 8px; }
+.rs-screens { margin-bottom: 16px; }
+.rs-screen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.rs-screen {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer;
+  background: var(--panel-2); border: 2px solid var(--border); border-radius: 10px;
+  color: var(--text); font-size: 11px; text-align: left;
+}
+.rs-screen img, .rs-screen-blank { width: 100%; aspect-ratio: 16/10; object-fit: cover; border-radius: 6px; background: var(--bg); }
+.rs-screen.is-chosen { border-color: var(--accent); }
+.rs-screen span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rs-control, .rs-checkbox { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 16px; font-size: 13px; line-height: 1.45; }
+.rs-control input, .rs-checkbox input { margin-top: 3px; flex: none; }
+.rs-note { font-size: 12px; color: var(--text-dim); line-height: 1.5; margin: 0 0 14px; }
+.rs-error { color: var(--danger); font-size: 13px; margin: 0 0 12px; }
+.rs-status { color: var(--text-dim); font-size: 13px; margin: 0 0 12px; }
+.rs-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.rs-footnote { margin: 14px 0 0; font-size: 11px; color: var(--text-dim); }
+
+/* The in-app reminder. The unmissable one is the always-on-top banner the
+   Electron main process draws, which this deliberately does not duplicate. */
+.rs-live {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px; z-index: 9000;
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--danger); border-radius: 10px; font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .4);
+}
+.rs-live--error { border-color: var(--warning); }
+.rs-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: rs-pulse 1.6s ease-in-out infinite; }
+@keyframes rs-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
+
+.rs-console { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 18px; }
+.rs-console-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.rs-console-head h1 { margin: 0; font-size: 20px; }
+.rs-ask { padding: 18px; display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+.rs-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.rs-field small { color: var(--text-dim); font-size: 11px; }
+
+.rs-stage { display: flex; flex-direction: column; gap: 8px; }
+.rs-stage-status { color: var(--text-dim); font-size: 13px; }
+.rs-video {
+  width: 100%; max-height: 72vh; background: #000; border-radius: 10px;
+  border: 1px solid var(--border); object-fit: contain; outline: none;
+}
+/* The cursor is the only affordance telling the support person whether their
+   clicks will land, so it is not decoration. */
+.rs-video.is-controllable { cursor: crosshair; border-color: var(--accent); }
+.rs-video:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.rs-stage-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--text-dim); }
+.rs-badge { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
+.rs-badge--control { border-color: var(--accent); color: var(--text); }
+.rs-hint { font-style: italic; }
+
+.rs-history { padding: 18px; }
+.rs-history h2, .rs-ask h2 { margin: 0 0 12px; font-size: 15px; }
+.rs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rs-table th, .rs-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.rs-table th { color: var(--text-dim); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+
+.lp-page { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 16px; }
+.lp-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.lp-head h1 { margin: 0; font-size: 20px; }
+.lp-summary { padding: 14px 18px; font-size: 13px; line-height: 1.5; }
+.lp-page .card { padding: 18px; }
+.lp-page .card h2 { margin: 0 0 12px; font-size: 15px; }
+
+/* Wide tables must scroll inside themselves — the page body never scrolls
+   sideways. */
+.rs-history, .lp-page .card { overflow-x: auto; }

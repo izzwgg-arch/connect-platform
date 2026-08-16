@@ -946,6 +946,9 @@ model Tenant {
   whatsAppUsageEvents             WhatsAppUsageEvent[]
   whatsAppContactPreferences      WhatsAppContactPreference[]
   whatsAppPolicyAuditEvents       WhatsAppPolicyAuditEvent[]
+  remoteSupportSessions           RemoteSupportSession[]
+  lanDiscoveryRuns                LanDiscoveryRun[]
+  lanDiscoveredPhones             LanDiscoveredPhone[]
 }
 
 model User {
@@ -7146,4 +7149,205 @@ model DeliveryException {
 
   @@index([tenantId, orderId])
   @@index([tenantId, reasonCode])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Remote support — watching and driving a customer's Windows machine.
+//
+// ⛔ THE RULE THIS SCHEMA ENFORCES: consent is per session, and control is
+// consented SEPARATELY from viewing. There is no standing permission on the
+// customer's side and no way to silently upgrade a view-only session into a
+// control session — `controlGranted` is written only by the customer's own
+// consent call, never by the admin's request.
+//
+// The row is also the audit trail. It survives the session ending on purpose:
+// "who watched whose screen, when, why, for how long, and did they touch
+// anything" must be answerable months later.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum RemoteSupportStatus {
+  /// Admin has asked. The customer has not answered yet. Dies at expiresAt.
+  REQUESTED
+  /// Customer said yes. The peer connection is being established.
+  CONSENTED
+  /// Media is flowing.
+  ACTIVE
+  /// Finished normally — by either side, or by the heartbeat watchdog.
+  ENDED
+  /// Customer said no. Terminal: a refusal is never retried into the same row.
+  DECLINED
+  /// Nobody answered before expiresAt.
+  EXPIRED
+}
+
+enum RemoteSupportSignalRole {
+  ADMIN
+  CLIENT
+}
+
+model RemoteSupportSession {
+  id       String @id @default(cuid())
+  tenantId String
+
+  /// The person whose screen this is.
+  ///
+  /// ⛔ targetUserId and requestedByUserId are deliberately plain columns with
+  /// NO foreign key to User, following the AgentEscalation precedent. These
+  /// rows are the audit trail, and an audit row that disappears when you delete
+  /// the account it accuses is not an audit trail. Resolve the names for
+  /// display; never rely on a join existing.
+  targetUserId String
+  /// The staff member who asked. Never null — an unattributed remote session
+  /// is exactly the thing this table exists to make impossible.
+  requestedByUserId String
+
+  status RemoteSupportStatus @default(REQUESTED)
+
+  /// ⛔ Two separate booleans, and they are not interchangeable.
+  /// `controlRequested` is what the ADMIN asked for; `controlGranted` is what
+  /// the CUSTOMER agreed to. The API only ever writes controlGranted from the
+  /// consent route, so an admin cannot grant themselves control, and a
+  /// view-only session cannot become a control session without asking again.
+  controlRequested Boolean @default(false)
+  controlGranted   Boolean @default(false)
+
+  /// Why the admin needed in. Shown to the customer in the consent dialog
+  /// verbatim — a support request the customer cannot understand is not
+  /// informed consent.
+  requestReason String
+
+  /// What the desktop app reported about the machine (hostname / OS / app
+  /// version), so the audit row says which computer, not just which person.
+  deviceLabel String?
+
+  /// A request nobody answers must die rather than sit armed forever.
+  expiresAt DateTime
+
+  consentAt  DateTime?
+  declinedAt DateTime?
+  startedAt  DateTime?
+  endedAt    DateTime?
+  /// "admin" | "customer" | "watchdog" | "permission_revoked" | "app_closed"
+  endedReason String?
+  endedBy     String?
+
+  /// Heartbeats. Either side going quiet ends the session — a session that
+  /// outlives the window it was displayed in is a screen being watched with
+  /// nobody's banner up.
+  lastSeenAdminAt  DateTime?
+  lastSeenClientAt DateTime?
+
+  /// How many input events were actually injected. Zero on a view-only
+  /// session, and the honest answer to "did they touch anything".
+  inputEventCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signals RemoteSupportSignal[]
+
+  @@index([tenantId, status])
+  @@index([targetUserId, status])
+  @@index([requestedByUserId])
+  @@index([status, expiresAt])
+}
+
+/// WebRTC signalling relay. Deliberately a table and not a socket: setting up
+/// a peer connection is a handful of messages over a few seconds, so short
+/// polling costs nothing and avoids standing up new realtime infrastructure.
+/// Once connected, the screen and every input event ride the peer connection
+/// directly and never touch this table.
+model RemoteSupportSignal {
+  id        String                  @id @default(cuid())
+  sessionId String
+  fromRole  RemoteSupportSignalRole
+  /// "offer" | "answer" | "ice"
+  kind      String
+  payload   Json
+  createdAt DateTime                @default(now())
+  /// Stamped when the other side has read it, so each message is delivered
+  /// once and the table drains itself.
+  consumedAt DateTime?
+
+  session RemoteSupportSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, fromRole, consumedAt])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Desk phones discovered on a customer's own network by the Windows app.
+//
+// This exists because the MAC address on the PBX record is the single point of
+// failure in phone provisioning, and nothing verifies it. A phone whose record
+// carries the wrong MAC downloads nothing while the panel looks perfect — the
+// Create A Box ext 102 incident, seven weeks of a stale config. These rows are
+// the phone's OWN account of itself, so the two can be compared.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One scan. Kept separately from the phones so "the scan ran and found
+/// nothing" is distinguishable from "no scan has ever run" — an empty
+/// inventory rendered as a confident "this office has no phones" is the
+/// failure mode worth designing out.
+model LanDiscoveryRun {
+  id       String @id @default(cuid())
+  tenantId String
+
+  /// Who ran it and from which machine.
+  reportedByUserId String
+  deviceLabel      String?
+  /// The subnet that was scanned, e.g. "192.168.1.0/24".
+  subnet String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  /// null while running, then "ok" | "partial" | "failed".
+  outcome String?
+  /// Why a scan failed or returned less than it should have, in plain words.
+  note String?
+
+  hostsSeen    Int @default(0)
+  phonesFound  Int @default(0)
+
+  tenant Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phones LanDiscoveredPhone[]
+
+  @@index([tenantId, startedAt])
+}
+
+model LanDiscoveredPhone {
+  id       String @id @default(cuid())
+  tenantId String
+
+  /// Normalised lowercase hex, no separators (e.g. "805e0c4d7e6b"), because
+  /// every source formats MACs differently and a mismatch here defeats the
+  /// entire point of collecting them.
+  macAddress String
+  ipAddress  String?
+  /// Resolved from the MAC's OUI prefix — "Yealink", "Polycom", "Grandstream".
+  vendor     String?
+  /// Model and firmware, when the phone's own web interface will say.
+  model      String?
+  firmware   String?
+  hostname   String?
+  /// The provisioning server the phone believes it should use. This is the
+  /// field that explains a phone which never fetches its config.
+  provisioningUrl String?
+
+  /// The most recent scan that saw it, and the first/last times ever seen.
+  lastRunId   String?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lastRun LanDiscoveryRun? @relation(fields: [lastRunId], references: [id], onDelete: SetNull)
+
+  /// One row per physical phone per customer. Re-scanning updates in place.
+  @@unique([tenantId, macAddress])
+  @@index([tenantId, lastSeenAt])
+  @@index([tenantId, vendor])
 }

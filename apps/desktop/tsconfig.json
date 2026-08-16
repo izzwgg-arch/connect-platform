@@ -11,5 +11,8 @@
     "sourceMap": true,
     "noEmit": false
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // Tests are run straight from source with tsx; compiling them would ship test
+  // files inside the installer, since electron-builder packages all of dist/**.
+  "exclude": ["src/**/*.test.ts"]
 }

@@ -214,6 +214,27 @@ export const ACTION_PERMISSION_KEYS = [
   "can_view_tenant_voicemails",
   "can_view_tenant_chats",
   "can_view_tenant_call_recordings",
+  // ── Remote support ────────────────────────────────────────────────────────
+  // Watching a customer's screen and driving their mouse are the two most
+  // invasive things this platform can do, so they are deliberately absent from
+  // BOTH default buckets below — including TENANT_ADMIN — exactly like
+  // can_use_amazon_polly. They are opened to named people through a custom
+  // role. SUPER_ADMIN still receives them automatically via the force-add
+  // bucket, so no snapshot migration is needed.
+  //
+  // ⛔ Two keys, not one, and the split is load-bearing: watching is how you
+  // diagnose, controlling is how you change someone's machine. Plenty of staff
+  // should be able to look at a screen and never touch it, and revoking
+  // control must leave viewing intact. The API enforces this per session —
+  // a session opened without can_control_remote_support can never be upgraded
+  // to control without a fresh consent from the customer.
+  "can_remote_support",
+  "can_control_remote_support",
+  // The desk-phone inventory the Windows app discovers on a customer's own
+  // network (MAC, IP, model). Separate from remote support because reading an
+  // inventory is not the same as watching somebody work, and the people who
+  // provision phones are not necessarily the people who do support calls.
+  "can_view_lan_phones",
   // Delivery/order tracking (supermarket delivery feature)
   "can_view_tracking",
   "can_manage_tracking",

@@ -42,3 +42,48 @@ export type PhoneEngineCommand = {
   command: string;
   args: unknown[];
 };
+
+/**
+ * A screen the customer can share. `id` is what gets handed to getDisplayMedia.
+ * The whole list is offered rather than auto-picking, because "which screen"
+ * is the customer's decision on a multi-monitor setup.
+ */
+export type DesktopScreenSource = {
+  id: string;
+  name: string;
+  /** data: URI of a still, so the customer can see what they are about to share. */
+  thumbnailDataUrl: string;
+  isScreen: boolean;
+};
+
+/**
+ * What the machine says about itself, stamped onto the session so the audit row
+ * names a computer and not just a person.
+ */
+export type DesktopMachineInfo = {
+  hostname: string;
+  platform: string;
+  release: string;
+  appVersion: string;
+  username: string;
+};
+
+export type RemoteSupportBannerState = {
+  visible: boolean;
+  supportName?: string;
+  controlGranted?: boolean;
+};
+
+export type LanScanHost = {
+  ip: string;
+  mac: string;
+  respondedOnHttp?: boolean;
+};
+
+export type LanScanOutcome = {
+  subnet: string | null;
+  hostsSeen: number;
+  hosts: LanScanHost[];
+  outcome: "ok" | "partial" | "failed";
+  note?: string;
+};

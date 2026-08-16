@@ -8,6 +8,7 @@
     "dev": "pnpm build && electron .",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/remoteSupport/inputInjector.test.ts src/remoteSupport/lanScan.test.ts",
     "dist": "pnpm build && electron-builder --win"
   },
   "build": {
@@ -41,6 +42,7 @@
     "@types/node": "^25.6.0",
     "electron": "^41.5.0",
     "electron-builder": "^26.8.1",
+    "tsx": "^4.20.5",
     "typescript": "^6.0.3"
   },
   "dependencies": {

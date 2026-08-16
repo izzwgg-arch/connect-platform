@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, session, shell, Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
+import { registerRemoteSupportIpc, stopRemoteSupport, getPreferredSourceId } from "./remoteSupport/mainWiring";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -399,6 +400,24 @@ function sendPhoneEventToRenderers(envelope: PhoneEngineEnvelope): void {
 }
 
 function registerIpc(): void {
+  // Remote support (screen capture, input injection, the always-on-top banner)
+  // and desk-phone discovery on the customer's own network.
+  //
+  // ⛔ Registering these handlers does NOT start anything. Every one of them is
+  // inert until the portal calls it, and the portal only calls them after the
+  // customer has answered the consent prompt.
+  registerRemoteSupportIpc({
+    onStopRequested: () => {
+      // The customer pressed Stop on the banner. Kill input injection here and
+      // now rather than waiting for the portal to come back — the local half
+      // must stop even if the network is the reason they are stopping.
+      stopRemoteSupport();
+      for (const win of [fullWindow, miniWindow]) {
+        if (win && !win.isDestroyed()) win.webContents.send("remote-support:stop-requested");
+      }
+    },
+  });
+
   // In-app update UX: the portal sidebar shows "New Update — Install"; these
   // two handlers let it read the updater state and trigger the one-click
   // install (quitAndInstall) once the download is complete.
@@ -584,6 +603,41 @@ if (!gotSingleInstanceLock) {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === "media" || permission === "notifications");
   });
+  // ⛔ WITHOUT THIS, SCREEN SHARING SILENTLY DOES NOT WORK. Electron does not
+  // implement `navigator.mediaDevices.getDisplayMedia()` on its own — the call
+  // hangs or rejects in the renderer with nothing useful in the console unless
+  // the main process installs a handler that picks the source. This is the
+  // single easiest piece of remote support to leave out and then spend an
+  // afternoon debugging in the portal, where the bug is not.
+  //
+  // The renderer chooses the screen (the customer picks it in the consent
+  // dialog) and passes it as the request's preferred source; we honour that and
+  // fall back to the primary screen. Audio is deliberately never captured —
+  // support needs to see the screen, not listen to the room.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      desktopCapturer
+        .getSources({ types: ["screen", "window"] })
+        .then((sources) => {
+          const wanted = (request as any)?.preferredDisplaySurface;
+          const chosen =
+            sources.find((s) => s.id === getPreferredSourceId()) ||
+            sources.find((s) => s.id === wanted) ||
+            sources.find((s) => s.id.startsWith("screen:")) ||
+            sources[0];
+          if (!chosen) {
+            // Refusing loudly beats handing back an empty stream that renders
+            // as a black rectangle nobody can explain.
+            callback({ video: undefined, audio: undefined });
+            return;
+          }
+          callback({ video: chosen, audio: undefined });
+        })
+        .catch(() => callback({ video: undefined, audio: undefined }));
+    },
+    // Lets the customer's own chosen window be used rather than forcing a screen.
+    { useSystemPicker: false },
+  );
   // Flush the HTTP cache on startup so freshly deployed portal code is picked up.
   // This clears ONLY the network cache — cookies and localStorage are untouched, so
   // the user stays signed in. (Electron was otherwise serving a stale mini-dialer
@@ -635,4 +689,8 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  // ⛔ Tear down the input helper and the banner on the way out. Leaving a
+  // PowerShell helper alive after the app has gone is a process on a customer's
+  // machine that can move their mouse and that nothing is watching.
+  stopRemoteSupport();
 });
