@@ -204,9 +204,22 @@ that reply-approval "was deliberately NOT built".
 - **One SUPER_ADMIN exists** (izzywgg@gmail.com), so the approver resolves with
   no config. With more than one and no `AGENT_FIX_APPROVER_EMAIL`, it REFUSES
   rather than pick — the audit trail would otherwise name the wrong person.
-- ⏳ **NOT PROVEN: no code has ever been texted back.** 13 gate tests + 10
-  parser tests, migration applied, api deployed — but no human has replied to a
-  real escalation. Acceptance test in §4 of the handoff.
+- ✅ **PROVEN ARMED in the live process, not inferred:**
+  `docker logs app-api-1 | grep AGENT_FIX_BY_TEXT_ARMED` lists the four
+  executable capabilities (`grant_permission`, `add_extension`, `enable_sms`,
+  `add_phone_number`). ⛔ **Check this after any api deploy** — if the deps
+  wiring were missed, every texted approval would answer *"not wired up on this
+  server"*, a reply the owner still RECEIVES, so the feature would look alive
+  while fixing nothing.
+- ✅ **Gates proven against production** (probe pointed a real escalation at a
+  non-existent action, so no change was possible): a stranger with the right
+  code got `unknown_code`, **no reply, and did NOT burn the code**; a wrong code
+  got `unknown_code`; the owner's correct code reached execution and was
+  refused; the replay answered `already_used`; `fixApprovedFrom` recorded the
+  phone. Probe row deleted.
+- ⏳ **NOT PROVEN: no code has ever been texted back by a human**, and no real
+  fix has been carried out this way. 13 gate tests + 10 parser tests, migration
+  applied, api + agent deployed. Acceptance test in §4 of the handoff.
 
 ## ⛔ AGENT HANDOFF — the assistant had NO access to any MD file, and its knowledge base was dead code (2026-08-16, FIXED same day by the section above) — READ FIRST before saying the assistant "knows" something we wrote down, or before answering "does the agent have the docs?"
 
