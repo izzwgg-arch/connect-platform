@@ -4,6 +4,15 @@
 change, no deploy, no config regeneration, no reload, no Connect-side change.
 Read-only everywhere else.
 
+Committed as **`32115851`** on `feat/ivr-migration-takeover` (doc only — the PBX
+repair is data, it is in no commit) and **pushed**.
+
+> ⛔ **READ §10 BEFORE TRUSTING ANY DATE IN THIS DOCUMENT.** Every timestamp here
+> is copied from the PBX / this workstation, and both were reading **2026-08-13**
+> while the work was done, on a day the rest of the platform stamped
+> **2026-08-16**. The filename says 08-13 because that is what the evidence says;
+> whether that is the true date is **unresolved**.
+
 Symptom Izzy hit: pressing **Delete** on Secro Selutions ext 103 "Fix Up Group"
 in the VitalPBX panel produced a red modal —
 
@@ -195,3 +204,54 @@ flag turns out not to be enough.
   (port 22, from the repo root). The `pbx` alias pins 2222 and times out.
 - ⛔ A repo-wide `grep -rn` from Git Bash on Windows exceeds the 120 s tool
   timeout — use the Grep tool.
+
+---
+
+## 10. ⛔ The dates in this document are not trustworthy — UNRESOLVED
+
+Related to the clock section at the top of `CLAUDE.md`, which records that the
+**loopcom clock was ~3 days behind and was corrected mid-session** on 2026-08-16
+and explicitly leaves "how long it lasted and what carries wrong timestamps" as
+Izzy's call, **not investigated**. This is a second sighting of the same shape,
+and it is not explained.
+
+**What is certain:**
+
+- The 8 fatals are stamped `2026/08/13 11:30:15 … 12:03:21` and now live in
+  `/var/log/nginx/error.log.3.gz` — the Aug-13 file in an **unbroken daily
+  rotation sequence running Aug 2 → Aug 16**.
+- Real "now" at the end of this session was **2026-08-16 18:13 UTC**, agreed to
+  within 5 seconds by **all three machines** — this workstation, loopcom and the
+  PBX — with `System clock synchronized: yes` and NTP active on both servers.
+
+**What does not fit, and was not resolved:**
+
+- The commit for this document was stamped **2026-08-13 12:56 -0400** by this
+  workstation, while commits pushed by parallel sessions during the same working
+  period are stamped **2026-08-16 13:51 … 14:12 -0400**. Three days apart, same
+  afternoon.
+- ⛔ **`git log --oneline -3` did not show this commit at all**, even though
+  `git merge-base --is-ancestor` said it IS in HEAD, `git ls-tree HEAD` listed
+  the file, and `git branch -r --contains` put it on origin. **A commit with a
+  skewed date sinks below the newer ones and reads exactly like a lost commit or
+  a branch rollback.** Verify with `--is-ancestor` / `ls-tree`, never by
+  eyeballing the log — same family as the inverted-`--is-ancestor` false scare in
+  `AGENT_HANDOFF_ESCALATIONS_RECORDINGS_VOICEMAIL_2026-08-12.md`.
+- The backup file written during this session carries mtime **`Aug 13 12:12`**.
+- Between the first log read and the last, **three rotation files appeared**
+  (`.1` Aug 15, `.2` Aug 14, `.3` Aug 13) where the earlier listing had ended at
+  Aug 13 — consistent with logrotate catching up after a clock correction. But
+  `.1` holds **90 real log lines dated 2026/08/15**, which a synthetic catch-up
+  rotation could not have produced. **These two observations contradict each
+  other and the contradiction stands.**
+
+**How to treat this:** the incident is real, the diagnosis and the repair are
+unaffected (they rest on database state and generated config, not on any clock),
+but **do not build a timeline on these timestamps**. If the true date matters —
+for a customer conversation, a billing question, or correlating with CDRs — pin
+it against something outside these two machines first.
+
+⛔ **The lesson, restated because it just cost a full detour:** `date` on the
+box, the mtime on a file, and the date on your own commit are **not facts you can
+assume**. When a stored timestamp disagrees with what you just did, check the
+clock before trusting the record.
