@@ -37,5 +37,21 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+A small account — two people using it day to day, Gitty on 301 and Hendy on 302.
+
+Their extensions are numbered in the 300s rather than the usual 100s. So a
+question from them about "extension 101" is almost certainly about something
+else, or an old note, rather than a line of theirs.
+
+Texting is not set up for this company.
+
+<!-- internal -->
+- Phone system tenant 3. Four further extensions exist but are inactive.
+- ⛔ Connect bills them for 6 extensions while the phone system holds 3 — 305,
+  306 and 307 exist only in Connect. Flagged to Izzy, not resolved. Deleting an
+  extension on the phone system does not stop Connect billing for it.
+- One of their extensions could not be deleted from the phone-system panel for a
+  while: its device row claimed to be a mobile client with no mobile account
+  behind it, which crashed the delete with a fatal error naming no extension.
+  Repaired in the database, not through the panel.
+<!-- /internal -->

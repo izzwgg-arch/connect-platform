@@ -63,5 +63,30 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+By some distance our heaviest user — five phone numbers, more than twenty
+extensions and a few thousand calls a quarter. Their setup is not a normal
+office: alongside people they have extensions for individual rooms, a front door
+and an inside door intercom, and a couple of mobiles.
+
+Two things come up with them. Several mailboxes have no email address set
+against them, so voicemails left there are recorded properly but never emailed
+to anybody — the "Home" extension is the worst affected. If they say they have
+stopped getting voicemail emails, check whether that mailbox has an address at
+all before looking anywhere else.
+
+The other is their phone menu. One of the options still hands the caller back to
+the older phone-system menu instead of being answered by Connect. It works, but
+it has not been fully moved across yet.
+
+Texting is not set up for this company.
+
+<!-- internal -->
+- Phone system tenant 2. Ext 108 "Home" had around 45 voicemails sitting against
+  an empty email field. The address is the third comma field in the mailbox's
+  voicemail config; empty means no email is ever generated, with nothing logged.
+- Key 2 on their menu still points at the old time condition. Both menus behind
+  it are already migrated into Connect — only the pointer remains, and which way
+  to send it is Izzy's decision.
+- This tenant was one of the two hit by the panel config-ownership lockout.
+- Two Android phones across two logins.
+<!-- /internal -->

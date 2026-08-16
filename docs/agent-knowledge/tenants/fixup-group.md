@@ -35,5 +35,22 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+They run the whole company on one login and one extension. Several phones are
+signed in to that same account at once — two iPhones and an Android — so a call
+rings all of them together and whoever is free picks it up. That is how they
+want it, not a mistake.
+
+Because everyone shares one account, "my phone didn't ring" usually means that
+one handset rather than the account. Worth asking whether the other phones rang
+before looking any further.
+
+They do use texting, on their main number.
+
+<!-- internal -->
+- Phone system tenant 31, extension 103 only. The admin login carries all three
+  registered devices.
+- ⛔ Three different things carry a similar name: RSBK is tenant 34 and its
+  extension 101 is "Appointments", and a device labelled "Fix Up Group" also
+  exists on Secro Selutions' tenant. Only tenant 31 is this company.
+- No billing settings row exists for this account.
+<!-- /internal -->

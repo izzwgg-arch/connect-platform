@@ -39,5 +39,28 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+A busy account — around nine hundred calls a quarter across four extensions,
+with 101 "Appointments" taking most of it.
+
+Two things have caused them trouble. Calls to Appointments were not reaching the
+phone app at all, so they rang out with nobody able to pick up. And do-not-disturb
+has been left switched on for that extension for a long stretch, which stops it
+ringing entirely — worth checking first if they say a line is silent.
+
+They have also hit a problem where a voicemail looks like it is playing but no
+sound comes out, and reinstalling the app was the only thing that helped. If
+that happens again, force-stopping the app from the phone's settings and
+reopening it does the same job without a reinstall.
+
+Texting is not set up for this company.
+
+<!-- internal -->
+- Phone system tenant 34. ⛔ Ext 101's dial key rings only the dead base
+  endpoint, so calls never reach the app. The fix is to add the app endpoint
+  alongside it — a phone-system write, still open.
+- DND on 101 has been on since early July. Check it before promising the line
+  will ring.
+- The silent-voicemail symptom was a leaked phone-system call left active by a
+  ghost ring. Backstops shipped, but older app builds still need the force-stop.
+- Three Android phones on one login.
+<!-- /internal -->

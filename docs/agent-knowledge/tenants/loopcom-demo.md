@@ -36,5 +36,18 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+This is not a real customer. It is the demonstration account used to show
+Connect to other people and for app review, with two made-up staff, Alex Morgan
+and Maya Feldman.
+
+Anything odd here is a test artefact rather than a customer problem, and its
+numbers should never be quoted as evidence of how the platform is behaving for
+real companies.
+
+<!-- internal -->
+- Phone system tenant 102. On the 443 SIP route.
+- It did produce one real finding: the phone showed an incoming call while the
+  phone system had nowhere to send it. The ring notification and the call itself
+  are independent paths and nothing checks one against the other.
+- One iPhone signed in, used for App Store review.
+<!-- /internal -->

@@ -36,5 +36,23 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+They keep by far the largest contact list of any company on Connect — a few
+thousand people. That matters, because for a while the phone app only loaded the
+first thousand. Anyone further down was invisible and could not be found by
+searching, and trying to re-add them was refused as a duplicate. That is fixed.
+If they say a contact vanished, check before assuming someone deleted it.
+
+There was also a period when calls were missing from their call history. That
+was a fault on our side, not anything they did. Recent history was repaired;
+anything older than that repair could not be recovered.
+
+They use texting on their main number.
+
+<!-- internal -->
+- Phone system tenant 25. About 4,010 contacts — the largest on the platform,
+  and the account that first surfaced the contacts paging cap.
+- Their "ext 101 sees no calls today" report is what uncovered the live-call
+  eviction bug that was erasing call records platform-wide. A few days either
+  side of the fix were backfilled; earlier losses were not.
+- Two Android phones on one login.
+<!-- /internal -->

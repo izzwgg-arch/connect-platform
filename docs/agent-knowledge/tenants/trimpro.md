@@ -44,5 +44,23 @@ Everything outside the staff-only block may be said to the customer.
 
 ## What we have learned about them
 
-_Nothing recorded yet. Add what a new person on the support desk would need_
-_to know: how they work, what has gone wrong before, what they always ask._
+A large account — seven working extensions and well over a thousand calls a
+quarter, so they notice any phone problem quickly.
+
+One thing about them is unusual and worth knowing before answering a question
+about their call history: extension 102 is also carried on a phone belonging to
+someone outside this company, by arrangement between the two businesses. So
+calls on that one extension can appear somewhere other than Trimpro's own
+screens. Nothing about that is a fault.
+
+Texting is not set up for this company.
+
+<!-- internal -->
+- Phone system tenant 11. Ext 102 "Mrs. Schwarts" is attached to a Trust
+  Bookkeepings user, and Trust has the cross-company call-visibility switch on —
+  so Trust's owner sees those calls and their recordings. Ext 102 only, nothing
+  else of Trimpro's. Roughly 52 of ~692 calls over a fortnight involve it.
+- ⛔ Their outbound routes live under phone-system tenant_id 1, not 11 — do not
+  filter by their own tenant when hunting one.
+- Two Android phones on one login.
+<!-- /internal -->
