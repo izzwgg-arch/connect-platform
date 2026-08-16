@@ -7,7 +7,11 @@ BUT NOT ONE TENANT HAS MOVED. PHASE C NOT STARTED.**
 `sipWsUrl`**, so every phone signed in today is still registering against `app.` and
 will keep doing so until its user signs out and back in. **Phase B is NOT complete and
 `app.` MUST NOT be proxied yet.** Migrating the four tenants is the owner's to schedule.
-Also new this day: **`app.loopcom.net` now serves Connect** (§4b).
+Also new this day: **`app.loopcom.net` now serves Connect** (§4b) — and the first real
+browser pass on it found the **public pay pages were DEAD there** (hardcoded absolute
+API URL → CORS block). Fixed and deployed the same day, `93a85d25`; ⛔ **read the
+"second hostname makes every hardcoded absolute API URL a bug class" section in §4b
+before adding any URL to a portal page.**
 Every step is reversible and each carries its own rollback.
 
 ✅ **Plan upgraded to Cloudflare Pro** on `connectcomunications.com` (2026-08-16,
@@ -333,6 +337,91 @@ It reappears after a short idle, so it will interrupt a long session more than o
   systemctl reload nginx` — the new domain goes back to answering on the wrong cert and
   **nothing else changes**.
 
+### ⛔⛔ A SECOND HOSTNAME MAKES EVERY HARDCODED ABSOLUTE API URL A BUG CLASS — the pay pages were already broken on it (FIXED + DEPLOYED 2026-08-16, `93a85d25`)
+
+The line above ("budget a real test pass, do not assume it just works") was right, and
+this is what that pass found on the very first page opened. **Portal only — no nginx,
+no DNS, no Cloudflare, no env, no PBX.**
+
+- ⛔⛔ **THE RULE, and it is now a CLASS, not an incident: the moment Connect is served
+  on more than one hostname, any hardcoded absolute API URL in the portal is a live
+  outage on every hostname that is not the hardcoded one.** `NEXT_PUBLIC_API_URL` is
+  **empty** in `app-portal-1`, so four public pages fell through to a literal
+  `|| "https://app.connectcomunications.com/api"`. On `app.loopcom.net` the browser
+  then made a **cross-origin** request, the api sends no `Access-Control-Allow-Origin`,
+  and the fetch was **blocked outright**:
+  ```
+  Access to fetch at 'https://app.connectcomunications.com/api/billing/platform/pay-links/PROBE000'
+  from origin 'https://app.loopcom.net' has been blocked by CORS policy
+  Uncaught (in promise) TypeError: Failed to fetch
+  ```
+  ⛔ **This is a DEAD PAY PAGE, not a cosmetic problem** — the customer sees a
+  permanent loading state and cannot pay.
+- ⛔ **It is invisible from the old host.** The identical URL on
+  `app.connectcomunications.com` returns a clean 404. Any check run only against the
+  original hostname passes and proves nothing. **Test new-host bugs on the new host.**
+- ⛔⛔ **THE TRAP: ONE BLANKET "make it relative" FIX BREAKS MOBILE PAIRING.** These are
+  **two different questions with different answers** and they must never be collapsed
+  into one helper:
+  1. **The three pay pages** (`app/p/[code]`, `app/pay/invoice/[token]`,
+     `app/pay/invoices/[token]`) `fetch` from the page the customer is already on →
+     the answer is a **same-origin RELATIVE base (`/api`)**, correct on every hostname
+     nginx serves, present and future, with no CORS at all.
+  2. **`components/QRPairingModal.tsx` is NOT that case.** It bakes the base into a **QR
+     code scanned by a PHONE**. ⛔ A relative `/api` is meaningless off-device — mobile
+     does `fetch(\`${apiBaseUrl}/...\`)` (`apps/mobile/src/api/client.ts:1210`) and React
+     Native's `fetch` rejects a relative URL. It must stay **ABSOLUTE**, but derived
+     from **`window.location.origin` at runtime**, never a hardcoded domain, so a phone
+     paired from either host talks to the host it was paired from.
+- **Both now live in `apps/portal/lib/publicApiBase.ts`**: `resolveSameOriginApiBase()`
+  and `resolveAbsoluteApiBase()`, plus `currentBrowserOrigin()`.
+  **`NEXT_PUBLIC_API_URL` still wins when set** (that is how local dev points at
+  `:3001`) — only the fallback changed. A *relative* env override is made absolute for
+  the QR rather than passed through, and with no origin at all (server render) the QR
+  base falls back to the legacy absolute rather than ever emitting a relative path.
+  This mirrors what **`services/apiClient.ts` already did for authenticated calls** —
+  the public pages use bare `fetch` and never got it. ⛔ Prefer `apiClient` on any new
+  page; if you must use bare `fetch`, use these helpers.
+- ⛔ **The guard reads the CALL SITES' SOURCE, not just the helpers** — the defect was
+  **four callers**, and a unit test of a resolver passes straight through that (same
+  shape as `sipPublicEndpoint.test.ts` and `internalDoorBypass.test.ts`).
+  `apps/portal/lib/publicApiBase.test.ts`, **14 tests**, registered in the portal `test`
+  script. **Proven to be a real guard: all four pre-fix files fail it.** It also asserts
+  the QR modal does **not** use the same-origin resolver.
+- ✅ **PROVEN IN A REAL BROWSER ON BOTH HOSTS, after deploy.** All three pay routes,
+  probe code `PROBE000`, signed out, no real payment data:
+
+  | route | app.loopcom.net | app.connectcomunications.com |
+  |---|---|---|
+  | `/p/PROBE000` | 404 | 404 |
+  | `/pay/invoice/PROBE000` | 410 | 410 |
+  | `/pay/invoices/PROBE000` | 401 | 401 |
+
+  **Identical status on every route on both hosts.** Every request went to
+  `https://app.loopcom.net/api/...` — **zero requests to the other domain** — and the
+  page renders its honest "this link is invalid" copy instead of hanging. Console
+  filtered for `CORS|Failed to fetch|Content Security|Refused|Access-Control` on both
+  hosts: **no matches.**
+- ✅ **Container-verified, not log-verified:** `grep -c app.connectcomunications.com` on
+  all three shipped pay-page chunks inside `app-portal-1` is **0**; the legacy literal
+  now survives only inside the resolver module as the SSR-only fallback, and the QR
+  chunk calls `LJ(env, AU())` — the absolute resolver with the live origin.
+- ⏳ **NOT PROVEN: no phone has been paired from `app.loopcom.net`.** The QR half is
+  proven by unit test and by reading the shipped bundle, **not by scanning a code with a
+  real handset**. That is the acceptance test: open the QR modal on `app.loopcom.net`,
+  scan it, and confirm the phone provisions. ⏳ **No real payment has been taken on
+  either host since the change** — the pay pages are proven to *load and reach the api*,
+  not to have completed a charge.
+- ⏳ **STILL HARDCODED, deliberately out of scope** (each is the same bug class, none is
+  a pay path): `components/AppDownloadCard.tsx:8` (the Android APK link — a customer on
+  loopcom.net is sent to the other domain to download; it works, but it leaks the old
+  brand), `navigation/navConfig.ts:88` (the desktop installer link, same), and
+  `app/(platform)/billing/invoices/[id]/page.tsx:46` (already prefers
+  `window.location.origin` and only falls back when there is no window — the mildest
+  case). ⛔ **Treat the whole class as a sweep, not four one-offs**, and re-run
+  `grep -rn "app\.connectcomunications\.com" apps/portal --include=*.ts --include=*.tsx`
+  (exclude `.next`) before believing it is finished.
+
 ⛔ **STILL TRUE AND STILL UNRESOLVED: clients on `app.loopcom.net` are handed a SIP URL
 on a DIFFERENT hostname.** `apps/api/src/sipPublicEndpoint.ts` holds **one global
 value**, so a softphone signed in on loopcom.net registers against
@@ -344,7 +433,10 @@ has not made** — deliberately not "fixed" here.
 and no softphone has registered from it. Sessions, cookies and CSP are host-scoped, so
 that pass is real work, not a formality.
 
-⛔ **Serving the portal on a SECOND hostname is not just DNS + nginx.** Sessions,
+⛔ **Serving the portal on a SECOND hostname is not just DNS + nginx** — and this is no
+longer a warning, it is a **proven, customer-facing outage**: the public pay pages were
+dead on `app.loopcom.net` from the moment it started serving Connect. See the
+hardcoded-API-URL section above. Sessions,
 cookies and the CSP `connect-src` are host-scoped, and clients are still handed
 `wss://app.connectcomunications.com/sip` for SIP (see `sipPublicEndpoint.ts` — it is a
 single global value, **not per-domain**, so a second domain does NOT get its own SIP
