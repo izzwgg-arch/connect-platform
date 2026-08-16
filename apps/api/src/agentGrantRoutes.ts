@@ -179,7 +179,19 @@ export async function registerAgentGrantRoutes(
   };
   // The "Fix it!" sweep executes with the SAME bag, so a capability cannot
   // behave one way on screen and another way over text.
+  //
+  // ⛔ Logged at boot ON PURPOSE. If this wiring were ever missed, every texted
+  // approval would answer "not wired up on this server" — a reply the owner
+  // still RECEIVES, so the feature would look alive while fixing nothing. That
+  // is this codebase's most repeated failure shape (the worker's dead FCM
+  // sender, the empty knowledge base, the trainer that taught nothing), and one
+  // grep-able line is what makes it provable instead of inferred:
+  //     docker exec app-api-1 ... | grep AGENT_FIX_BY_TEXT_ARMED
   setAgentFixDeps(confirmDeps);
+  app.log.info(
+    { capabilities: confirmCapabilityRegistry.ids(), marker: "AGENT_FIX_BY_TEXT_ARMED" },
+    "AGENT_FIX_BY_TEXT_ARMED — approval by text can execute these capabilities",
+  );
 
   const pending = async (req: any, reply: any) => {
     const actor = getUser(req);
