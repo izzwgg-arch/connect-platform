@@ -34,6 +34,125 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — every shortcode SMS was silently discarded, platform-wide (2026-08-16) — READ FIRST for ANY "the verification code never arrived", before trusting Connect's SMS inbox as proof of what was received, or before adding a `return null` to an ingest path
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SMS_SHORTCODE_DROP_2026-08-16.md`**
+(`6dd6cdca` on `feat/ivr-migration-takeover`. **worker + api DEPLOYED and
+container-verified.** No migration, no PBX write, no flag flipped.)
+
+- ⛔⛔ **CONNECT THREW AWAY EVERY INBOUND MESSAGE SENT FROM A SHORT CODE — for
+  the life of the platform, with no log line anywhere.** That is every WhatsApp
+  verification code, every bank code, every 2FA message, on every customer
+  number. Found only because a WhatsApp registration "never received its code".
+- ⛔ **THE PROOF IS TWO READINGS FROM OPPOSITE ENDS OF THE PIPE.** VoIP.ms
+  `getSMS` for DID 8455577768 held `2026-08-16 11:37:22 from 29283 | "Your
+  WhatsApp code: 588-217"` while Connect showed **0 inbound on that number in
+  12 h**; and **0 of 571 SMS threads** platform-wide had a non-E.164 sender.
+  Zero, ever — that is a total filter, not a delivery gap.
+- **The mechanism:** `normalizeUsCanadaToE164` takes only 10-digit, 11-digit-
+  starting-1, or `+`-prefixed 10–15 digits. A short code is **3–8 digits**
+  (WhatsApp uses `29283`), so it returned `unsupported_format`, and the poller
+  did `if (!from.ok || !to.ok) return null` — **no warn, no `SmsRoutingLog`
+  row, nothing to grep**. The row was fetched from the carrier and dropped.
+- ⛔ **THE TWO INBOUND PATHS DISAGREED, AND THE BROKEN ONE CARRIES ALL THE
+  TRAFFIC.** The webhook (`handleVoipMsInbound`) already coped — `nf.ok ?
+  nf.e164 : rawFrom`. Only the **poll** dropped, and inbound arrives by poll.
+  Same family as the two IVR publish paths. Both now call one shared helper.
+- **The fix:** `canonicalSmsSender()` in `packages/shared/src/phoneE164.ts` —
+  identical E.164 for anything that is a real number, 3–8 digits → short code,
+  alphanumeric sender IDs upper-cased for a stable thread key, junk refused
+  **and logged**. ⛔ **THE SENDER/DESTINATION ASYMMETRY IS THE DESIGN — never
+  collapse the two functions.** A `to` must be one of our own DIDs and stays on
+  strict `canonicalSmsPhone`; a test asserts `canonicalSmsPhone("29283")` still
+  fails. Safe to change the canonical form only because 0 of 571 threads used
+  it, so no `dedupeKey` can collide.
+- ⛔ **ASK THE CARRIER, NOT THE DATABASE, WHETHER A MESSAGE ARRIVED.** Connect's
+  inbox can only ever show what survived ingest. Per-DID `getSMS` is ground
+  truth and it settled a question two sessions had argued over — it also showed
+  **+18457231213 returning `status=no_sms`** for codes Meta insisted it sent, so
+  two different failures were being read as one.
+- ⛔ **An unassigned spare number is NEVER POLLED AT ALL** —
+  `voipMsInboundSyncJob.ts:655` filters `tenantId: { not: null }`. A code sent
+  to a spare cannot appear in Connect even with this fix. Assign it first.
+- ⏳ **NOT PROVEN: no shortcode message has been seen landing in an inbox on the
+  new code.** The poller fetches a **2-day window**, so the 11:37 WhatsApp code
+  should back-fill itself. Acceptance query and the log line to watch are in §6
+  of the handoff. Tests: 8 new cases + worker 99 pass / 0 fail, api phone +
+  shared-inbox 17 pass / 0 fail.
+- ⛔ **Replying to a shortcode thread will fail at the provider** — untouched by
+  this change; those threads are effectively read-only.
+- **Related, same investigation:** the WhatsApp integration itself still cannot
+  send anything (see the WhatsApp audit section) — this fix is about Connect's
+  own SMS inbox, not about WhatsApp working.
+
+## ⛔⛔ AGENT HANDOFF — a voice note cut off after seconds, and our own denoiser made the sender sound "like I'm in a dungeon" (2026-08-16) — READ FIRST before touching chat attachments, ANY portal media player, the voice-note audio chain, or before trusting a timestamp on this server
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CHAT_VOICE_NOTES_2026-08-16.md`**
+(`e2b4699b` playback + `f0911881` audio, merge `eae7a0e8` on
+`feat/ivr-migration-takeover`. **portal + api DEPLOYED and container-verified.**)
+
+- ⛔⛔ **THE SERVER CLOCK WAS ~3 DAYS BEHIND AND WAS CORRECTED MID-SESSION.**
+  Izzy's "I just sent it" voice note is stamped **`2026-08-13T14:17:50Z`**, as are
+  the nginx lines for its playback, deploy-queue rows created in-session, and
+  `docker inspect .State.StartedAt` for containers started then. Proven: a Prisma
+  error echoed the container's own `new Date()` as Aug 12 for a 24h window, and a
+  job created in-session carries epoch `1786632839` (Aug 13 13:33 UTC) while the
+  host later read `1786903514` (Aug 16 18:05 UTC) — same box, 3.13 days apart.
+  ✅ `chronyc tracking` is healthy **now** (68 µs off NTP, `NTPSynchronized=yes`).
+  ⛔ **NOT INVESTIGATED, Izzy's call:** how long it lasted and what carries wrong
+  timestamps — invoice dating, `DidSwitchSchedule`, port-watchdog spacing, rate
+  limit / login-throttle windows, signed-URL `exp`, CDR times, audit rows.
+  **Do not "correct" any stored timestamp without his word.**
+  ⛔ **The lesson: `date` on the box is not a fact you can assume.** When a stored
+  timestamp disagrees with what a human just told you they did, check the clock
+  before doubting the human and hunting an imaginary bug.
+- ⛔ **THE PORTAL RE-SIGNS EVERY ATTACHMENT URL ON EVERY POLL, AND CHAT POLLS
+  EVERY 7s.** `/chat/threads/:id/messages` mints a fresh `exp`/`sig` per
+  attachment per fetch; both surfaces fed that changing string into `<audio src>`,
+  and a changed src makes the browser treat it as a different file — it aborts and
+  reloads. **That is the whole "it stopped after a few seconds".** The stored file
+  was always fine (decodes clean, full 63.9 s); nginx logged it downloaded **13
+  times in 90 seconds** from one browser. Fixed by pinning the first URL per
+  attachment id until within 120 s of expiry
+  (`stabilizeMessageAttachmentUrls`, `chatPresentation.ts`).
+  ⛔ **The mobile app already had this fix** — phones were fine, only web/desktop
+  was broken. Keep the two in step. ⛔ **Apply the pin at EVERY message-fetch
+  site**; the defect was a CALLER, so the test reads both surfaces' SOURCE.
+  ⛔ **Verify this deploy by grepping the bundle for the regex literal
+  `(?:exp|e)=`** — minification renames consts, so grepping the function name
+  returns 0 and reads exactly like a failed deploy.
+- ⛔⛔ **WE RUINED THE AUDIO OURSELVES, WITH ONE NUMBER.** `chatVoiceNoteDenoise.ts`
+  processes every voice note at upload and **replaces the stored original**. It
+  passed **`afftdn=nr=10:nf=-25`**. `nf` is the noise floor — "everything below
+  this is noise" — range **-80..-20, default -50**, so **-25 is nearly the most
+  destructive value the filter accepts**, and speech averages about -20 dB. It was
+  told to treat the voice as noise and stripped the body and tails off every word:
+  the hollow, watery, "far away on the water / in a dungeon" sound. Measured on
+  the real note: **-18.4 LUFS** (it undershot its own -16 target), **LRA 11.0 LU**
+  with quiet passages at -27 LUFS, and **96 kHz** on a mono voice note because
+  `-ar` was never pinned. Chain is now `nf=-50` + a 300 Hz mud cut + a **2.6 kHz
+  presence lift** + **compression** (this is what stops speech sounding distant) +
+  `LRA=7` + `-ar 48000`, exported as `VOICE_NOTE_FILTER_CHAIN` so it is assertable.
+  ⛔ **A filter typo makes `denoiseVoiceNote` return `null` and silently disables
+  ALL processing** — validate any chain edit against a real ffmpeg run, not by
+  reading it. ⛔ **It cannot repair existing notes** — the raw audio of anything
+  already sent is gone. ⛔ Mobile capture is untouched (needs an app build).
+- ⛔ **A bare `getUserMedia({ audio: true })` is not "default good".** The portal
+  recorded with no constraints, leaving automatic gain / noise suppression / echo
+  cancellation to whatever Chrome or the Electron shell felt like — which is how a
+  laptop-mic note arrives quiet and roomy before the server ever sees it. Now
+  requested explicitly; **`autoGainControl` is the one that makes a voice sound
+  close.**
+- ⛔ **`apps/portal/package.json`'s `test` script NAMES EACH FILE, and
+  `components/chat/messagePresentation.test.ts` was missing from it — so it had
+  never run once** and had drifted red against a badge string deliberately changed
+  in `f4fae3f4`. Registered + corrected. **A new portal test does nothing until you
+  add it to that list.**
+- ⏳ **NOT PROVEN: nobody has recorded or listened to a voice note on the new
+  build.** Acceptance: restart the desktop app (an open window keeps the old
+  bundle), record a fresh note, then confirm the stored file reads **48000 Hz** and
+  about **-16 LUFS / LRA ≈ 7** (the bad one read -18.4 / 11.0).
+
 ## ⛔⛔ AGENT HANDOFF — the login brute-force limiter had NEVER run; the portal ships no security headers; Cloudflare is NOT in front of us (2026-08-16) — READ FIRST before any auth/login work, before filing a TLS or firewall finding, before using `req.ip`, or before believing Cloudflare protects Connect
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md`**
@@ -948,7 +1067,8 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_AGENT_PROVISIONING_2026-08-07.md`
 ## ⛔ AGENT HANDOFF — an extension that could not be deleted (2026-08-13) — READ FIRST for any red "Fatal error … delete() on null" in the VitalPBX panel, before deleting ANY extension, or before assuming a panel fatal is chronic
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_EXTENSION_DELETE_MOBILE_FLAG_2026-08-13.md`**
-(**PBX data repair only** — one `UPDATE` of one column on one row. No code, no
+(doc committed + pushed as `32115851` on `feat/ivr-migration-takeover`.
+**PBX data repair only** — one `UPDATE` of one column on one row. No code, no
 deploy, no regeneration, no reload. Read-only everywhere else.)
 
 - ⛔ **An extension whose device row says `mobile_client='yes'` while having NO
@@ -990,6 +1110,22 @@ deploy, no regeneration, no reload. Read-only everywhere else.)
   307 exist only in Connect.
 - ⏳ **NOT PROVEN: nobody has pressed Delete since the repair.** It is proven as
   data (orphan query empty, flag matches reality), not as a completed delete.
+- ⛔⛔ **THE DATES IN THAT HANDOFF ARE NOT TRUSTWORTHY — a SECOND sighting of the
+  clock problem, and it is UNRESOLVED (§10 of the handoff).** The PBX log stamps
+  the incident `2026/08/13 11:30–12:03` and this workstation stamped the doc
+  commit `2026-08-13 12:56`, while parallel sessions stamped their commits
+  `2026-08-16 13:51–14:12` the same afternoon — yet at session end **all three
+  machines agreed on 2026-08-16 18:13 UTC**, NTP-synced. Evidence on both sides
+  (an unbroken Aug 2→16 rotation sequence vs. three rotation files appearing
+  mid-session) **contradicts itself and the contradiction stands.** The repair is
+  unaffected — it rests on DB state and generated config, never on a clock — but
+  **do not build a timeline on these timestamps.**
+  ⛔ **The git trap this produced: `git log --oneline -3` did NOT show the commit**
+  while `git merge-base --is-ancestor` said it was in HEAD, `git ls-tree HEAD`
+  listed the file and `git branch -r --contains` put it on origin. **A
+  date-skewed commit sinks below newer ones and reads exactly like a lost commit
+  or a branch rollback.** Verify with `--is-ancestor` / `ls-tree`, never by
+  eyeballing the log.
 
 ## ⛔ AGENT HANDOFF — number ports land themselves now (2026-08-12) — READ FIRST for ANY port-in work, "the port completed and nothing happened", the port watchdog, or before touching portLanding/portWatchdog
 
