@@ -50,6 +50,12 @@ import {
 } from "./ops/serverHealthCache";
 import { registerStorageMaintenanceRoutes } from "./ops/storageMaintenance/routes";
 import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
+import {
+  clientIpFromForwardedFor,
+  evaluateLoginAttempt,
+  recordLoginFailure,
+  recordLoginSuccess,
+} from "./loginThrottle";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity, deriveCanonicalPbxHost, normalizeSipWsUrlHost, isIpLiteralHost } from "./voiceProvisioningBundle";
 import {
@@ -5558,15 +5564,30 @@ app.post("/auth/signup", async (req, reply) => {
 app.post("/auth/login", async (req, reply) => {
   const input = z.object({ email: z.string().email(), password: z.string().min(8) }).parse(req.body);
   const emailKey = input.email.toLowerCase();
-  const loginRateLimitEnabled = process.env.NODE_ENV === "production"
-    || (process.env.LOGIN_RATE_LIMIT_DEV || "").toLowerCase() === "1";
-  if (
-    loginRateLimitEnabled
-    && !checkBillingRateLimit(`login:${emailKey}`, 10, 15 * 60 * 1000)
-  ) {
-    app.log.warn({ email: emailKey, ip: req.ip, endpoint: "/auth/login" }, "rate_limit_login");
+  // ⛔ The limiter that used to live here was gated on `process.env.NODE_ENV ===
+  // "production"`, and the api container sets NO NODE_ENV (telephony does; api does
+  // not). It was dead code and had never run in production — same class as the
+  // error-leak handler fixed in 4fb512ed. Nothing below reads NODE_ENV.
+  // See apps/api/src/loginThrottle.ts for the full note.
+  const loginSourceIp = clientIpFromForwardedFor(req.headers["x-forwarded-for"]);
+  const throttle = evaluateLoginAttempt(emailKey, loginSourceIp);
+  if (throttle.action !== "allow") {
+    app.log.warn(
+      {
+        email: emailKey,
+        sourceIp: loginSourceIp,
+        endpoint: "/auth/login",
+        action: throttle.action,
+        reason: throttle.reason,
+        detail: throttle.detail,
+      },
+      "login_throttled",
+    );
     loginFailuresTotal.labels("rate_limit").inc();
-    return reply.status(429).send({ error: "RATE_LIMITED" });
+    return reply
+      .status(429)
+      .header("Retry-After", String(throttle.retryAfterSeconds))
+      .send({ error: "RATE_LIMITED" });
   }
   // Primary lookup against the canonical (lowercased) form; fall back to a
   // case-insensitive match so a user imported with mixed-case email (e.g.
@@ -5583,6 +5604,10 @@ app.post("/auth/login", async (req, reply) => {
     }
   }
   if (!user) {
+    // Counted so that probing for VALID usernames is itself throttled — an attacker
+    // enumerating addresses must not get an unlimited free budget just because none
+    // of the accounts exist.
+    recordLoginFailure(emailKey, loginSourceIp);
     loginFailuresTotal.labels("not_found").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
   }
@@ -5591,9 +5616,13 @@ app.post("/auth/login", async (req, reply) => {
     return reply.status(403).send({ error: "account_disabled" });
   }
   if (!(await bcrypt.compare(input.password, user.passwordHash))) {
+    recordLoginFailure(emailKey, loginSourceIp);
     loginFailuresTotal.labels("bad_password").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
   }
+  // A person who eventually remembers their own password walks away with a clean
+  // slate — the failures that got them here must not linger and lock them out later.
+  recordLoginSuccess(emailKey);
   loginSuccessTotal.inc();
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
   const token = await reply.jwtSign({
