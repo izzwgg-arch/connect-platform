@@ -160,10 +160,53 @@ which is now history.
 - ⏳ **Only 6 of 29 documents carry real knowledge** (Gesheft, Create A Box,
   Trust Bookkeepings, Displaydex, inii mini, Landau Home). The other 23 are live
   facts with an empty "What we have learned about them". Fill them as you learn.
-- ⏳ **Part 2 — "Fix it!" by SMS reply — is NOT built.** Design agreed: the
-  escalation SMS carries a one-time code, the owner replies `FIX <code>`, and the
-  agent executes ONLY the existing safe capability catalog. Nothing of it exists
-  yet; today the escalation still ends at a human.
+- ✅ **Part 2 — "Fix it!" by text — IS BUILT** (`242d1a40`). See the section
+  immediately below.
+
+## ⛔⛔ AGENT HANDOFF — reply `FIX <code>` to an escalation text and the fix HAPPENS (2026-08-16) — READ FIRST before touching escalations, the confirmation gates, or anything that could let a message cause a change
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FIX_BY_TEXT_2026-08-16.md`**
+(`242d1a40` on `feat/ivr-migration-takeover`). Supersedes the 2026-08-12 note
+that reply-approval "was deliberately NOT built".
+
+- ⛔ **THE RULE: a text may only ever say YES to something already written
+  down.** The SMS path NEVER composes an action out of prose. It can only spend
+  a **DRAFT `AgentAction`** that the ordinary `prepare_*` tools created during
+  the chat — params already hashed, capability re-authorising itself at
+  execution time. `findPreparedFix` links one only when it is from the SAME
+  conversation, same tenant, still DRAFT, recent, and **the only candidate**;
+  two drafts means the owner decides on screen.
+- ⛔ **The password is not skipped — it is REPLACED.** `applyConfirmedAction`
+  now takes a `credential` union (`password` | `one_time_code`), so both
+  channels run the SAME role gate, tenant scoping, params hash, capability
+  authorisation, atomic claim and audit. **Never add a second apply path** —
+  that is how the two would drift.
+- ⛔ **Four checks before anything runs** (`applyFixByCode`): sender is in
+  `AGENT_ESCALATION_SMS_TO`; the code matches **by hash** (it is never stored —
+  the SMS is the only place it exists in the clear); unexpired + unclaimed; and
+  the claim is atomic (`updateMany … fixCodeUsedAt: null`), so a second text
+  updates 0 rows.
+- ⛔ **"ok" is NOT an approval.** The parser demands the word AND a 6-digit
+  code; `ok`, `yes`, `do it`, `approved`, a bare number and "can you fix this"
+  are all refused. Those are what people type by reflex into a thread that also
+  carries ordinary conversation.
+- ⛔ **A refusal or a failure leaves the code SPENT** — a re-usable code turns a
+  rate limit into an SMS retry loop, and re-running half-done external work is
+  worse than not finishing it. ⛔ **An unknown sender is told NOTHING and the
+  code is not burned** (else a stranger both probes and destroys).
+- ⛔ **The code TTL and the draft's approvable age are ONE number**
+  (`apps/api/src/agentFixPolicy.ts`, 24 h). The on-screen draft TTL is 30 min;
+  a code outliving its draft would answer "expired" exactly when the owner
+  replied in the morning. `maxAgeMs` is passed ONLY by this path.
+- **Replies arrive** as `ConnectChatMessage` rows on the admin thread for
+  (845) 557-7768 via the worker's VoIP.ms poll (~2.5 min); a 60 s api sweep
+  reads only that number's threads from allow-listed senders.
+- **One SUPER_ADMIN exists** (izzywgg@gmail.com), so the approver resolves with
+  no config. With more than one and no `AGENT_FIX_APPROVER_EMAIL`, it REFUSES
+  rather than pick — the audit trail would otherwise name the wrong person.
+- ⏳ **NOT PROVEN: no code has ever been texted back.** 13 gate tests + 10
+  parser tests, migration applied, api deployed — but no human has replied to a
+  real escalation. Acceptance test in §4 of the handoff.
 
 ## ⛔ AGENT HANDOFF — the assistant had NO access to any MD file, and its knowledge base was dead code (2026-08-16, FIXED same day by the section above) — READ FIRST before saying the assistant "knows" something we wrote down, or before answering "does the agent have the docs?"
 
