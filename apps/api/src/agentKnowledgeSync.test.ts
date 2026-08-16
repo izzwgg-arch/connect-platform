@@ -167,3 +167,30 @@ test("staff-only sections are stored apart from the customer-safe body", async (
   assert.match(sys.internalBody, /staff only/);
   await rm(dir, { recursive: true, force: true });
 });
+
+test("⛔ the directory is found by walking up — cwd is /app/apps/api in the container", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-knowledge-root-"));
+  await mkdir(path.join(root, "docs", "agent-knowledge", "tenants"), { recursive: true });
+  await writeFile(path.join(root, "docs", "agent-knowledge", "system.md"), "# Connect\nfound me\n", "utf8");
+  await mkdir(path.join(root, "apps", "api"), { recursive: true });
+
+  delete process.env.AGENT_KNOWLEDGE_DIR;
+  const cwd = process.cwd();
+  process.chdir(path.join(root, "apps", "api"));
+  try {
+    const s = await syncAgentKnowledgeDocs();
+    assert.equal(s.missingDir, false, "must find docs/ two levels up, as it sits in the container");
+    assert.equal(s.published, 1);
+  } finally {
+    process.chdir(cwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit AGENT_KNOWLEDGE_DIR still wins over the walk-up", async () => {
+  await makeDir({ "system.md": "# Connect\nexplicit\n" });
+  const s = await syncAgentKnowledgeDocs();
+  assert.equal(s.dir, dir);
+  assert.equal(s.published, 1);
+  await rm(dir, { recursive: true, force: true });
+});

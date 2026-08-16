@@ -40,11 +40,33 @@ export interface KnowledgeSyncSummary {
   missingDir: boolean;
 }
 
-export function agentKnowledgeDir(): string {
+/**
+ * Where the knowledge files are.
+ *
+ * ⛔ `process.cwd()` is NOT the repo root here — the api starts in
+ * `/app/apps/api` inside the container while the documents ship at
+ * `/app/docs/agent-knowledge`. Assuming cwd cost one deploy: the sync reported
+ * a missing directory and published nothing (harmlessly, because deletion is
+ * gated on actually reading one). So walk up looking for the directory instead
+ * of guessing a depth, and let the environment override for anything unusual.
+ */
+export async function resolveAgentKnowledgeDir(): Promise<string | null> {
   const configured = String(process.env.AGENT_KNOWLEDGE_DIR || "").trim();
   if (configured) return configured.replace(/[\\/]+$/, "");
-  // `/app` inside the container; the repo root when running from source.
-  return path.join(process.cwd(), "docs", "agent-knowledge");
+  let base = process.cwd();
+  for (let i = 0; i < 5; i++) {
+    const candidate = path.join(base, "docs", "agent-knowledge");
+    try {
+      const st = await fsp.stat(candidate);
+      if (st.isDirectory()) return candidate;
+    } catch {
+      /* keep walking up */
+    }
+    const parent = path.dirname(base);
+    if (parent === base) break;
+    base = parent;
+  }
+  return null;
 }
 
 function sha256(s: string): string {
@@ -116,10 +138,10 @@ export async function syncAgentKnowledgeDocs(log?: {
   info: (o: any, m: string) => void;
   warn: (o: any, m: string) => void;
 }): Promise<KnowledgeSyncSummary> {
-  const dir = agentKnowledgeDir();
+  const dir = (await resolveAgentKnowledgeDir()) ?? "";
   const summary: KnowledgeSyncSummary = { dir, scanned: 0, published: 0, unchanged: 0, removed: 0, skipped: [], missingDir: false };
 
-  const files = await readCandidates(dir);
+  const files = dir ? await readCandidates(dir) : null;
   if (files === null) {
     summary.missingDir = true;
     log?.info({ knowledgeSync: summary }, "agent knowledge: no docs/agent-knowledge directory — nothing published");

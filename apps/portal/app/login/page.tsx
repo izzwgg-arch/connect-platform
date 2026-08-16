@@ -108,23 +108,47 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="stack" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: "24px" }}>
-      <form className="panel stack" onSubmit={submit} style={{ width: "min(440px, 92vw)" }}>
-        <h2>Connect Communications</h2>
-        <p className="muted">Sign in to access your telecom workspace.</p>
-        <label className="stack">
-          <span className="muted">Email</span>
-          <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
+    <main className="lc-login">
+      <form className="lc-login-card" onSubmit={submit}>
+        {/* Signal Core wordmark. Transparent PNG, one file for both themes —
+            there is deliberately no light-mode variant. See
+            docs/brand/loopcom/README.md before swapping this asset. */}
+        <img
+          className="lc-login-logo"
+          src="/brand/loopcom/loopcom-wordmark-560.png"
+          alt="LoopCom"
+          width={560}
+          height={99}
+        />
+        <label className="lc-login-field">
+          <span className="lc-login-label">Email</span>
+          <input
+            className="lc-login-input"
+            type="email"
+            autoComplete="username"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@company.com"
+          />
         </label>
-        <label className="stack">
-          <span className="muted">Password</span>
-          <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+        <label className="lc-login-field">
+          <span className="lc-login-label">Password</span>
+          <input
+            className="lc-login-input"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+          />
         </label>
-        {error ? <div className="chip danger">{error}</div> : null}
-        <button className="btn" type="submit" disabled={loading}>{loading ? "Signing in..." : "Sign in"}</button>
+        {error ? <div className="lc-login-error" role="alert">{error}</div> : null}
+        <button className="lc-login-submit" type="submit" disabled={loading}>
+          {loading ? "Signing in..." : "Sign in"}
+        </button>
         {showLocalDevSignIn ? (
           <button
-            className="btn ghost"
+            className="lc-login-ghost"
             type="button"
             disabled={loading}
             onClick={() => void devQuickSignIn()}
@@ -132,7 +156,7 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Local dev sign-in"}
           </button>
         ) : null}
-        <Link className="muted" href="/auth/password/forgot" style={{ textAlign: "center" }}>Forgot password?</Link>
+        <Link className="lc-login-forgot" href="/auth/password/forgot">Forgot password?</Link>
       </form>
     </main>
   );

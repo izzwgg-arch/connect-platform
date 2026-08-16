@@ -37594,3 +37594,141 @@ table tr:hover {
 /* Name + read-state tag grouped on the chat row top line */
 .cc-thread-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .cc-thread-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ============================================================
+   LoopCom sign-in (/login) — 2026-08-16
+   Every colour comes from the app's own theme tokens, so this page
+   follows the in-app light/dark switch, NOT the operating system.
+   The wordmark is ONE transparent PNG used in both themes on purpose —
+   do not add a light-mode logo variant. See docs/brand/loopcom/README.md.
+   ============================================================ */
+.lc-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+  background-image: radial-gradient(
+    58% 42% at 50% 0%,
+    color-mix(in srgb, var(--accent) 12%, transparent),
+    transparent 70%
+  );
+}
+
+.lc-login-card {
+  width: min(392px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 30px 32px 32px;
+  position: relative;
+  box-shadow: var(--shadow);
+}
+
+.lc-login-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto;
+  height: 2px;
+  border-radius: 18px 18px 0 0;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent);
+}
+
+.lc-login-logo {
+  width: 252px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 2px auto 26px;
+}
+
+.lc-login-field {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+}
+
+.lc-login-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 7px;
+}
+
+.lc-login-input {
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  padding: 0 14px;
+  font-size: 15px;
+  font-family: inherit;
+  width: 100%;
+}
+
+.lc-login-input::placeholder { color: var(--text-dim); }
+
+.lc-login-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.lc-login-error {
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 13px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin-bottom: 16px;
+}
+
+.lc-login-submit,
+.lc-login-ghost {
+  height: 46px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.lc-login-submit {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+}
+
+.lc-login-ghost {
+  margin-top: 10px;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.lc-login-submit:disabled,
+.lc-login-ghost:disabled { opacity: 0.6; cursor: default; }
+
+.lc-login-submit:focus-visible,
+.lc-login-ghost:focus-visible,
+.lc-login-forgot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lc-login-forgot {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.lc-login-forgot:hover { color: var(--accent); }
