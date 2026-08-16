@@ -37,7 +37,7 @@ test("logo url honours the deployment's public origin", () => {
 
 test("logo carries alt text, so a blocked image still names the brand", () => {
   const { html } = build();
-  assert.match(html, /<img[^>]+alt="LoopCom"/);
+  assert.match(html, /<img[^>]+alt="Loopcom"/);
   // width/height attributes, not just CSS — Outlook needs the attributes
   assert.match(html, /<img[^>]+width="168"[^>]*>/);
   assert.match(html, /<img[^>]+height="30"[^>]*>/);
@@ -73,7 +73,7 @@ test("mobile media query is present and is an enhancement, not the layout", () =
 
 test("every line of the original copy survives the redesign", () => {
   const { html, subject } = build();
-  assert.equal(subject, "Welcome to Connect Communications — Create Your Password");
+  assert.equal(subject, "Welcome to Loopcom — Create Your Password");
   for (const fragment of [
     // esc() escapes & < > " only, so apostrophes stay literal
     "You're Invited",
@@ -100,30 +100,38 @@ test("every line of the original copy survives the redesign", () => {
 
 test("the Android block is present when there is an APK, and absent when there is not", () => {
   const withApk = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" }).html;
-  assert.ok(withApk.includes("Connect Mobile (Android)"), "Android heading missing");
-  assert.ok(withApk.includes("Download Connect for Android"), "Android button missing");
+  assert.ok(withApk.includes("Loopcom Mobile (Android)"), "Android heading missing");
+  assert.ok(withApk.includes("Download Loopcom for Android"), "Android button missing");
   assert.ok(
     withApk.includes("Android may ask you to allow installs from this source the first time"),
     "Android install note missing",
   );
 
   const withoutApk = build({ androidApkUrl: null }).html;
-  assert.ok(!withoutApk.includes("Download Connect for Android"));
+  assert.ok(!withoutApk.includes("Download Loopcom for Android"));
 });
 
-test("copyright reads LoopCom", () => {
+test("copyright reads Loopcom — lowercase c, matching the iOS app name", () => {
   const { html } = build();
-  assert.match(html, /&copy; \d{4} LoopCom/);
+  assert.match(html, /&copy; \d{4} Loopcom/);
+  assert.ok(!/LoopCom/.test(html), "brand name must not appear as LoopCom in customer-facing text");
   assert.ok(!/\d{4} Connect Communications &middot; All rights reserved/.test(html));
+});
+
+test("the invite email no longer says Connect Communications anywhere", () => {
+  const built = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" });
+  for (const part of [built.html, built.text, built.subject]) {
+    assert.ok(!part.includes("Connect Communications"), "Connect Communications still present");
+  }
 });
 
 test("the plain-text part is untouched — text-only clients see exactly what they did before", () => {
   const { text } = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" });
-  assert.ok(text.startsWith("Welcome to Connect Communications"));
+  assert.ok(text.startsWith("Welcome to Loopcom"));
   assert.ok(text.includes("Hi Izzy,"));
   assert.ok(text.includes(BASE.setupUrl));
   assert.ok(text.includes("This one-time link expires in 48 hours."));
-  assert.ok(text.includes("Connect Mobile (Android):"));
+  assert.ok(text.includes("Loopcom Mobile (Android):"));
   assert.ok(text.includes("If you were not expecting this invite, you can safely ignore this email."));
 });
 

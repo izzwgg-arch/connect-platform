@@ -17,7 +17,7 @@ export function LoopComLogo({ className }: { className?: string }) {
   return (
     <img
       src="/brand/loopcom/loopcom-wordmark-560.png"
-      alt="LoopCom"
+      alt="Loopcom"
       className={className}
       width={560}
       height={99}

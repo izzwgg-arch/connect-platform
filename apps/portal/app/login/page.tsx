@@ -118,7 +118,7 @@ export default function LoginPage() {
         <img
           className="lc-login-logo"
           src="/brand/loopcom/loopcom-wordmark-560.png"
-          alt="LoopCom"
+          alt="Loopcom"
           width={560}
           height={99}
         />

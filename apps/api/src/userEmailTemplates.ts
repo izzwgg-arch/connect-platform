@@ -167,7 +167,7 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
         <!-- Logo, on the card. One asset, no dark plate, no tagline. -->
         <tr>
           <td align="center" class="lc-pad" style="padding:32px 44px 20px;">
-            <img src="${esc(brandLogoUrl())}" alt="LoopCom" width="168" height="30" class="lc-logo"
+            <img src="${esc(brandLogoUrl())}" alt="Loopcom" width="168" height="30" class="lc-logo"
                  style="display:block;border:0;outline:none;text-decoration:none;width:168px;height:30px;color:#0f172a;font-family:${font};font-size:19px;font-weight:700;letter-spacing:-.02em;">
           </td>
         </tr>
@@ -200,7 +200,7 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
         <tr>
           <td class="lc-pad" bgcolor="#f8fafc" style="padding:18px 44px 24px;background:#f8fafc;border-top:1px solid #e5e7eb;">
             <p style="margin:0;font-size:11.5px;color:#9ca3af;line-height:1.6;font-family:${font};">
-              &copy; ${year} LoopCom &middot; All rights reserved.<br>
+              &copy; ${year} Loopcom &middot; All rights reserved.<br>
               This email was sent on behalf of your organization.
             </p>
           </td>
@@ -325,10 +325,10 @@ export function welcomeCreatePasswordEmail(input: {
     ? `
 ${divider()}
 
-<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Connect Mobile (Android)</p>
-<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Connect app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
+<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Loopcom Mobile (Android)</p>
+<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Loopcom app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
 
-${lcSecondaryButton("Download Connect for Android", input.androidApkUrl)}
+${lcSecondaryButton("Download Loopcom for Android", input.androidApkUrl)}
 
 <p style="margin:8px 0 0;font-size:12px;color:#94a3b8;">Android may ask you to allow installs from this source the first time.</p>
 `
@@ -336,7 +336,7 @@ ${lcSecondaryButton("Download Connect for Android", input.androidApkUrl)}
 
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
-<p style="margin:0 0 18px;">You've been invited to join <strong>${esc(input.tenantName)}</strong> on Connect Communications.</p>
+<p style="margin:0 0 18px;">You've been invited to join <strong>${esc(input.tenantName)}</strong> on Loopcom.</p>
 <p style="margin:0 0 20px;color:#64748b;">Your account is ready. Create a password to get started — it only takes a moment.</p>
 
 ${lcBadges(badges)}
@@ -352,11 +352,11 @@ ${divider()}
 <p style="margin:0;font-size:13px;color:#94a3b8;">If you were not expecting this invite, you can safely ignore this email. No account will be created without your action.</p>`;
 
   const text = [
-    `Welcome to Connect Communications`,
+    `Welcome to Loopcom`,
     ``,
     `Hi ${firstName},`,
     ``,
-    `You've been invited to join ${input.tenantName} on Connect Communications.`,
+    `You've been invited to join ${input.tenantName} on Loopcom.`,
     ...(input.extensionNumber ? [`Extension: ${input.extensionNumber}`] : []),
     ``,
     `Create your password: ${input.setupUrl}`,
@@ -365,10 +365,10 @@ ${divider()}
     ``,
     ...(input.androidApkUrl
       ? [
-          `Connect Mobile (Android):`,
+          `Loopcom Mobile (Android):`,
           `After creating your password, install the app from:`,
           input.androidApkUrl,
-          `(Opens the Connect download page with the latest APK. Android may ask you to allow installs from this source the first time.)`,
+          `(Opens the Loopcom download page with the latest APK. Android may ask you to allow installs from this source the first time.)`,
           ``,
         ]
       : []),
@@ -376,9 +376,9 @@ ${divider()}
   ].join("\n");
 
   return {
-    subject: `Welcome to Connect Communications — Create Your Password`,
+    subject: `Welcome to Loopcom — Create Your Password`,
     html: loopComShell({
-      preheaderText: `Hi ${firstName}, your Connect Communications account at ${input.tenantName} is ready. Create your password to get started.`,
+      preheaderText: `Hi ${firstName}, your Loopcom account at ${input.tenantName} is ready. Create your password to get started.`,
       headerTitle: "You're Invited",
       headerSubtitle: `Welcome to ${input.tenantName}`,
       body,
