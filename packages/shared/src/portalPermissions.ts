@@ -158,6 +158,21 @@ export const ACTION_PERMISSION_KEYS = [
   // can manage prompts. Someone without it sees the ElevenLabs flow exactly as
   // before; the Polly option simply isn't offered.
   "can_use_amazon_polly",
+  // ── Queues ────────────────────────────────────────────────────────────────
+  // Three keys rather than one, because these are genuinely different jobs and
+  // an owner may well want a supervisor on the live board but nowhere near the
+  // per-agent history:
+  //   can_view_queues          — the live status page: who is waiting, who is
+  //                              free, and how each queue is coping right now.
+  //   can_view_queue_wallboard — TV mode, the full-screen wall display.
+  //   can_view_queue_reports   — the historical reports, which include a
+  //                              per-agent league table. That is performance
+  //                              data about named people, so it is separable
+  //                              from watching the queue and is deliberately
+  //                              NOT granted to an ordinary user by default.
+  "can_view_queues",
+  "can_view_queue_wallboard",
+  "can_view_queue_reports",
   // Lets a person switch the customer-facing screens into Yiddish. Separate
   // from the tenant-level switch: the tenant chooses at sign-up whether
   // Yiddish is offered at all, this decides who inside it may use it.
@@ -236,10 +251,6 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_pbx_softphone",
     "can_view_pbx_sbc_connectivity",
     "can_view_settings_system_health",
-    // Queues ride the "can view calls" legacy key rather than "can view
-    // reports": the wallboard is a live phone-operations screen, and the
-    // person who watches calls is the person who watches the queue.
-    "can_view_pbx_queues",
   ],
   can_view_voicemail: [...WORKSPACE_SECTION, "can_view_workspace_voicemail"],
   can_view_chat: [...WORKSPACE_SECTION, "can_view_workspace_chat"],
@@ -249,6 +260,13 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     ...PBX_SECTION,
     ...BILLING_SECTION,
     "can_view_pbx_call_reports",
+    // The Queues nav item hangs off "can view reports", NOT "can view calls".
+    // ⛔ It was on can_view_calls first, and that was wrong: END_USER holds
+    // can_view_calls, so every ordinary user would have seen a Queues menu
+    // item that then denied them at the page — the worst of both, a visible
+    // door that doesn't open. can_view_reports is a TENANT_ADMIN key, so nav
+    // visibility and the action keys below now switch on together.
+    "can_view_pbx_queues",
     "can_view_billing_overview",
     "can_view_billing_invoices",
     "can_view_billing_payments",
@@ -364,6 +382,11 @@ const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_delete_voicemail",
   "can_manage_contacts",
   "can_view_reports",
+  // Queues: on for a tenant admin, off for an ordinary user, and every one of
+  // the three individually revocable from a custom role.
+  "can_view_queues",
+  "can_view_queue_wallboard",
+  "can_view_queue_reports",
   "can_view_admin",
   "can_manage_integrations",
   "can_manage_voip_ms",

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, Moon, Sun, Tv, X } from "lucide-react";
+import { PermissionGate } from "../../../../components/PermissionGate";
 import {
   AGENT_STATE_META,
   formatDuration,
@@ -33,7 +34,7 @@ import {
 type TvTheme = "app" | "dark" | "light";
 const TV_THEME_KEY = "cc-queue-wall-theme";
 
-export default function QueueWallPage() {
+function QueueWallPageInner() {
   const { queues, live, configError } = useQueueBoard();
   const [now, setNow] = useState<Date | null>(null);
   const [tvTheme, setTvTheme] = useState<TvTheme>("app");
@@ -304,5 +305,25 @@ export default function QueueWallPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/**
+ * ⛔ The page gates itself. Hiding the sidebar item is presentation, not
+ * access — without this a link, a bookmark or a typed URL would still render
+ * the screen for somebody whose role has it switched off.
+ */
+export default function QueueWallPage() {
+  return (
+    <PermissionGate
+      permission={"can_view_queue_wallboard" as never}
+      fallback={
+        <div className="qb-page">
+          <p className="qb-notice qb-notice-warn">The wall display is switched off for your account.</p>
+        </div>
+      }
+    >
+      <QueueWallPageInner />
+    </PermissionGate>
   );
 }

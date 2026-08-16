@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, BarChart3 } from "lucide-react";
+import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiPost } from "../../../../services/apiClient";
 import { formatDuration, formatDurationLong } from "../queueBoard";
 
@@ -81,7 +82,7 @@ const RANGES = [
   { label: "90 days", days: 90 },
 ];
 
-export default function QueueReportsPage() {
+function QueueReportsPageInner() {
   const [days, setDays] = useState(30);
   const [data, setData] = useState<ReportsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -475,5 +476,25 @@ function TrendTable({ title, rows }: { title: string; rows: TimeBucketRow[] }) {
         </table>
       </div>
     </section>
+  );
+}
+
+/**
+ * ⛔ The page gates itself. Hiding the sidebar item is presentation, not
+ * access — without this a link, a bookmark or a typed URL would still render
+ * the screen for somebody whose role has it switched off.
+ */
+export default function QueueReportsPage() {
+  return (
+    <PermissionGate
+      permission={"can_view_queue_reports" as never}
+      fallback={
+        <div className="qb-page">
+          <p className="qb-notice qb-notice-warn">Queue reports are switched off for your account.</p>
+        </div>
+      }
+    >
+      <QueueReportsPageInner />
+    </PermissionGate>
   );
 }

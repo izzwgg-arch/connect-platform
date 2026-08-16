@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { Activity, BarChart3, ListOrdered, RefreshCw, Tv, Users } from "lucide-react";
+import { PermissionGate } from "../../../components/PermissionGate";
 import {
   AGENT_STATE_META,
   describeStrategy,
@@ -19,7 +20,7 @@ import {
  * filtered, clicked through to reports), the wall one is only read. Merging
  * them would compromise both.
  */
-export default function QueuesPage() {
+function QueuesPageInner() {
   const { queues, loading, configError, live, reload } = useQueueBoard();
 
   const allAgents = useMemo(() => mergeAgentsAcrossQueues(queues), [queues]);
@@ -268,5 +269,25 @@ function Stat({ label, value, tone }: { label: string; value: string; tone: stri
       <div className={`qb-stat-v qb-${tone}`}>{value}</div>
       <div className="qb-stat-k">{label}</div>
     </div>
+  );
+}
+
+/**
+ * ⛔ The page gates itself. Hiding the sidebar item is presentation, not
+ * access — without this a link, a bookmark or a typed URL would still render
+ * the screen for somebody whose role has it switched off.
+ */
+export default function QueuesPage() {
+  return (
+    <PermissionGate
+      permission={"can_view_queues" as never}
+      fallback={
+        <div className="qb-page">
+          <p className="qb-notice qb-notice-warn">Queue status is switched off for your account.</p>
+        </div>
+      }
+    >
+      <QueuesPageInner />
+    </PermissionGate>
   );
 }

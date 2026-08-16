@@ -17638,11 +17638,15 @@ async function resolveQueueTenantContext(
 // when somebody edits a queue in the panel, not second to second, and the
 // wallboard re-reads this on every mount.
 app.get("/voice/queues", async (req, reply) => {
+  // ⛔ Gated on the queue's OWN key, not a borrowed one. `can_view_queues` is
+  // separately revocable per user through a custom role, and the wall display
+  // and the reports each have their own key on top — see the queue block in
+  // packages/shared/src/portalPermissions.ts.
   const user = await requireRoleOrPortalPermission(
     req,
     reply,
     (u) => isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]),
-    "can_view_live_calls",
+    "can_view_queues",
   );
   if (!user) return;
 
@@ -17672,11 +17676,14 @@ app.get("/voice/queues", async (req, reply) => {
 // is a confident lie; the UI needs to be able to say "reports aren't connected
 // yet, here is exactly what's missing".
 app.post("/voice/queues/reports", async (req, reply) => {
+  // ⛔ Its own key, and deliberately a DIFFERENT one from the live board.
+  // These reports name individual agents and rank them, so an owner may well
+  // want a supervisor watching the queue without access to per-person history.
   const user = await requireRoleOrPortalPermission(
     req,
     reply,
     (u) => isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]),
-    "can_view_reports",
+    "can_view_queue_reports",
   );
   if (!user) return;
 
