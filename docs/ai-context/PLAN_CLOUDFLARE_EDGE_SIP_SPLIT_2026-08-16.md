@@ -212,10 +212,64 @@ mail.** That is the whole risk of this task and it is not visible from the domai
 ⛔ **`loopcom.net` has NO DMARC** — same gap that was just closed on
 connectcomunications.com, and it matters more here because Workspace mail is live.
 
+### ⛔ OWNER'S DECISION, 2026-08-16 — both domains stand ALONE
+
+Izzy, verbatim: *"both domains should have their own DNS records to the server. It
+shouldn't go back to connectcomunications."* And on why the old domain stays put:
+*"I don't want to take down the connectcomunications because they saw a lot of people
+logged into it, so I don't want to change it overnight. For now, let's have them both."*
+
+So the target is **Connect served on BOTH domains in parallel**, each self-contained,
+with `connectcomunications.com` **left exactly as it is**.
+
+**Two choices he made, both to be honoured:**
+
+1. **`app.loopcom.net` → 45.14.194.179, and ONLY that.** ⛔ **Do NOT repoint the apex
+   or `www`** — they serve the **live Squarespace marketing site**, and moving them
+   takes it down the moment DNS propagates. The subdomain is purely additive: site up,
+   mail up, nothing existing can break. It mirrors `app.connectcomunications.com`.
+2. **DMARC reports go to `dmarc@loopcom.net`**, not to the other domain.
+
+⛔ **A correction to undo:** loopcom.net's `rua` currently still points at
+`support@connectcomunications.com`, and
+`loopcom.net._report._dmarc.connectcomunications.com` was added in Cloudflare to
+authorise that hop. **That is exactly the coupling the owner rejected.** Fix the `rua`
+first, then delete the authorisation record — it is inert once the `rua` is
+same-domain. Deliberately left in place rather than deleted early, so the domain is
+never sitting in a half-migrated state.
+
+### ⛔ THE BLOCKER: Squarespace demands a Google re-auth an agent cannot pass
+
+Every DNS edit on these domains triggers **"Verify to continue as
+support@connectcomunications.com — Login with Google to continue."** An agent must not
+authenticate as the owner, so **all Squarespace DNS work needs Izzy at the keyboard.**
+It reappears after a short idle, so it will interrupt a long session more than once.
+
+### Remaining steps, in order
+
+**At Squarespace** (loopcom.net → DNS → *Custom records*):
+1. Add record — Type `A`, Name `app`, Data `45.14.194.179`.
+2. Edit the existing `_dmarc` TXT → `v=DMARC1; p=none; rua=mailto:dmarc@loopcom.net`.
+3. Create `dmarc@loopcom.net` as a Google Workspace alias. ⛔ Without the mailbox,
+   reports bounce and are **silently** lost — the record will look perfect.
+
+**In Cloudflare** (connectcomunications.com → DNS): delete
+`loopcom.net._report._dmarc` once step 2 has landed.
+
+**On the server**, only after `app.loopcom.net` resolves:
+`certbot --nginx -d app.loopcom.net`, then an nginx server block mirroring the
+`app.connectcomunications.com` one. ⛔ **DNS alone does nothing** — until that block
+exists the hostname answers on the wrong certificate.
+
+⛔ **Serving the portal on a SECOND hostname is not just DNS + nginx.** Sessions,
+cookies and the CSP `connect-src` are host-scoped, and clients are still handed
+`wss://app.connectcomunications.com/sip` for SIP (see `sipPublicEndpoint.ts` — it is a
+single global value, **not per-domain**, so a second domain does NOT get its own SIP
+host without further work). **Budget a real test pass on login and softphone
+registration from the new domain; do not assume it just works.**
+
 ⛔ **"They're gonna do the same thing" is a FUTURE state, not the current one.**
-`loopcom.net` today serves a Squarespace marketing site, not Connect. Pointing it at
-Connect is a separate piece of work (nginx server block, certificate, and a decision
-about what it actually serves) — it is not a by-product of the DNS move.
+`loopcom.net` today serves a Squarespace marketing site, not Connect.
 
 ✅ **DMARC IS DONE ON loopcom.net (2026-08-16)** — added as a Squarespace *custom
 record*, `p=none` monitor mode. Verified resolving, and the **5 Google MX records are
