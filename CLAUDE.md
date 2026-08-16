@@ -259,6 +259,26 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   the `#141f2b` panel, so a stacked answered/timeout/abandoned bar was rejected
   for per-queue answered-rate meters plus an exact table, and every state chip
   carries a symbol **and** a word.
+- ✅ **Sonata Stats has a FULL REST API — 79 routes, mapped 2026-08-16** (handoff
+  §4b). Laravel 10 + JWT at **`https://<pbx>/sonata/service/v1/api/<route>`**:
+  `POST api/login` → bearer, then `summary`, `calls-by-queue`, `service-level`,
+  `agents-on-queue`, `agent-availability`, `agent-pauses`, `call-traffic`,
+  `disconnection-causes`, `call-detail/-events`, GET `queues`/`agents`/
+  **`tenants`**, plus a scheduled-report engine. Reporting routes are **POST**
+  with a filter body. ⛔ **This means Route C may not need the `queues_log`
+  ingest at all** — Connect could ask Sonata. ⛔ `routes/api.php` + controllers are
+  **ionCube-encrypted**; recover the surface from the plaintext Laravel route
+  cache `bootstrap/cache/routes-v7.php`, where **`'methods'` precedes `'uri'`**
+  (a regex assuming the reverse matches nothing). Verified live: `api/version`
+  → 401, `api/summary` → **405 "Supported methods: POST"** (which is what proves
+  routing resolves behind the nginx alias). ✅ Gesheft has **Stats** accounts too
+  (`sonata_stats.users`, tenant 8 — same two people as `astboard.users`).
+  ⛔ **UNPROVEN: the license gate.** Every route carries **`check_app`** and
+  **`/var/lib/sonata/stats/lic/` is EMPTY** with no license table anywhere —
+  a running UI is NOT proof the API is unlocked. One real login + `api/version`
+  settles it; don't guess a credential. ⛔ The API also exposes DELETE
+  (`users`, `roles`, `shifts`, `delete-license`) — least-privilege only, and
+  reads are fine under the read-only guardrail but writes are not.
 - ⏳ **NOT DECIDED, NOT BUILT.** Three routes are with Izzy (A: build a Sonata
   queue layout — a PBX write needing a mandate; **B, recommended**: do A now and
   let two weeks of real use write the spec; C: build native now). Open questions

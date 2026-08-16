@@ -189,6 +189,61 @@ reaches a human.
 
 ---
 
+## 4b. Sonata Stats HAS a full REST API (mapped 2026-08-16)
+
+**This materially changes the cost of Route C.** Connect would not have to ingest
+`queues_log` to get reports — it could ask Sonata for them.
+
+- **Stack:** Laravel 10 + `tymon/jwt-auth` at
+  `/usr/share/queues-stats/backend`. ⛔ `routes/api.php` and the controllers are
+  **ionCube-encrypted** — do not try to read them. The route surface is instead
+  recoverable in plaintext from the **Laravel route cache**,
+  `bootstrap/cache/routes-v7.php` (a `var_export` array, ~141 KB). In that file
+  **`'methods'` comes BEFORE `'uri'`** — a regex assuming the reverse silently
+  matches nothing.
+- **Base URL:** `https://<pbx>/sonata/service/v1/api/<route>`. Verified live:
+  `GET api/version` → **401** `{"message":"Unauthenticated."}`, and
+  `GET api/summary` → **405** *"Supported methods: POST"*. The 405 proves routing
+  resolves correctly behind the nginx alias.
+- **79 routes.** Auth is JWT: `POST api/login` (public) → bearer token; then
+  `auth:api` on everything else. Reporting endpoints are **POST** with a filter
+  body; list endpoints are GET.
+- **The reporting surface** (all JWT, all POST unless noted):
+  `summary`, `summary-dashboard`, `calls-by-queue`, `call-by-queue-detail`,
+  `call-by-agent-detail`, `lost-calls-by-agents`, `abandoned-calls-track` (GET),
+  `service-level`, `call-traffic`, `calltraffic-dashboard`,
+  `disconnection-causes(-dashboard)`, `direct-calls(-detail)`,
+  `outgoing-calls(-detail)`, `call-detail`, `call-events`,
+  `agent-availability(-detail)`, `agent-pauses(-detail)`, `agent-by-hour`,
+  `agent-session-time-by-day`/`-by-hour`, `agent-session-pause-duration(-detail)`,
+  **`agents-on-queue`**; plus GET `queues`, `agents`, `extensions`, **`tenants`**,
+  `users`, `roles`, `permissions`, `shifts`, `version`, `license-data`, and a
+  scheduled-report engine (`report-builder`, `report-schedule`, `report-monitor`,
+  incl. `report-schedule/send/{id}`).
+- ✅ **It is tenant-aware** (`GET api/tenants`, and `sonata_stats.users.tenant_id`),
+  so a Connect integration could scope per customer rather than leaking across
+  tenants.
+- ✅ **Gesheft already has Stats accounts too**, not just Switchboard:
+  `sonata_stats.users` holds `Gesheft` / 6623885@gmail.com and
+  `contact@Gesheftkosher.com`, both `tenant_id 8`, created 2025-12-24 and
+  2026-03-01 — the same two people as `astboard.users`.
+- ⛔ **UNPROVEN — the license gate.** Every route carries a **`check_app`**
+  middleware (99 occurrences in the route cache), and
+  **`/var/lib/sonata/stats/lic/` is EMPTY** — there is no license file, and no
+  license table exists in any database on the box. Whether `check_app` passes
+  is **not established**: proving it needs one real login, and I will not guess
+  or enter a credential. `sonata-stats.service` is running and `/stats` serves
+  200, so the UI is alive; that is not the same as the API being unlocked.
+  **Acceptance test:** `POST /sonata/service/v1/api/login` with a known Stats
+  user, then `GET api/version` with the bearer token — a version number means the
+  API is usable, a license error means Route C's "just call Sonata" shortcut is
+  closed until the add-on is paid for.
+- ⛔ **The API also exposes DELETE routes** (`users/{user}`, `roles/{role}`,
+  `shifts/{shift}`, `report-*`, `delete-license`) and POST `activate-product` /
+  `migrate-product`. Any credential Connect stores for this must be
+  **least-privilege**, and calling it is reaching into the PBX — reads are fine
+  under the read-only guardrail, writes are not.
+
 ## 5. Design decisions already made (so they are not re-litigated)
 
 - The mockups use **Connect's own theme tokens** (`--bg #0c1218`,
