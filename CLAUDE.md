@@ -362,7 +362,8 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md`**
 container-verified 2026-08-16; nginx security headers LIVE; Cloudflare DMARC + edge
 TLS applied.** No PBX interaction.)
 Cutover plan for the edge: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md`**
-(⛔ PLAN ONLY, nothing executed).
+(⛔ **no longer plan-only** — Phase A done, Phase B's server side done, `app.loopcom.net`
+live. See the two bullets on the edge/SIP split below before touching any of it.)
 
 - ✅ **THE LOGIN THROTTLE IS LIVE AND PROVEN IN PRODUCTION** — not inferred from tests:
   12 posts to `/api/auth/login` for one throwaway account returned **401 ×10 then 429
@@ -404,13 +405,16 @@ Cutover plan for the edge: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_202
   ⛔ **Do NOT "fix" this by setting NODE_ENV=production on the container** — that
   flips all of them at once with unknown blast radius. Remove the NODE_ENV
   dependency per gate so each defaults to secure, one at a time, each with a test.
-- ⛔ **THE PORTAL SHIPS ZERO SECURITY HEADERS.** nginx `add_header` is **not
-  inherited into a location block that has its own** — `location /` sets
-  `add_header Cache-Control`, which cancels all five server-level headers (CSP,
-  X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy) for **every HTML
-  page**. Proven: `/api/health` returns them, `/login` returns none. The whole
-  customer-facing app is clickjackable with no CSP. Fix is 5 duplicated lines —
-  **needs Izzy's approval (nginx is off-limits to agents per AGENTS.md).**
+- ⛔ **THE PORTAL SHIPPED ZERO SECURITY HEADERS — FIXED, see the ✅ bullet above; this
+  entry is kept only for the RULE.** nginx `add_header` is **not inherited into a
+  location block that has its own**, and `location /` sets `add_header Cache-Control`,
+  which cancelled all five server-level headers (CSP, X-Frame-Options, nosniff,
+  Referrer-Policy, Permissions-Policy) for **every HTML page** while `/api/health`
+  returned them — so the server block *looked* correct. ⛔ **Any NEW server block or
+  any location that adds its own `add_header` must `include
+  /etc/nginx/connectcomms/security-headers.conf`** or it silently reintroduces this.
+  Re-proven live 2026-08-16 on both domains: `/login` returns all five **and** keeps
+  `Cache-Control: no-store`.
 - ⛔ **CLOUDFLARE IS NOT IN FRONT OF CONNECT.** Account inspected live 2026-08-16 via
   Izzy's browser. Plan is **Free**. Of 8 DNS records **only `portal.` (a third-party
   Telocall GUI) is proxied**; `app.` → origin 45.14.194.179 and `m.` → the PBX are
@@ -430,12 +434,38 @@ Cutover plan for the edge: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_202
   ⛔ **A displayed-once secret must never be screenshotted "to confirm success"** —
   a token value landed in the session transcript that way; it was rolled and verified
   dead. Confirm from the token LIST page, which shows status but not the value.
-- ⛔⛔ **PROXYING `app.` IS NOT A TOGGLE — SIP IS THE BLOCKER.** nginx `location /sip`
-  on `app.` proxies WebSocket SIP to the PBX, and four tenants (Gesheft, Displaydex,
-  Loopcom Demo, inii mini) register through it. Cloudflare idles WebSockets out at
-  ~100 s; a dropped WSS is a phone that does not ring. Move SIP to its own DNS-only
-  hostname and let every client re-register FIRST — and remember the app **never
-  refreshes a cached `sipWsUrl`**, so each user must sign out and back in.
+- ⛔⛔ **PROXYING `app.` IS NOT A TOGGLE — SIP IS THE BLOCKER, AND IT IS STILL THE
+  BLOCKER TODAY.** nginx `location /sip` on `app.` proxies WebSocket SIP to the PBX, and
+  four tenants (Gesheft, Displaydex, Loopcom Demo, inii mini) register through it.
+  Cloudflare idles WebSockets out at ~100 s; a dropped WSS is a phone that does not ring.
+  ✅ **`sip.connectcomunications.com` now exists (DNS-only, own cert, `/sip` → 101) and
+  the api hands out `wss://sip.connectcomunications.com/sip`** — `SIP_PUBLIC_WS_URL` was
+  set in `.env.platform` on 2026-08-16 (owner-approved) and container-verified.
+  ⛔⛔ **AND NOT ONE PHONE HAS MOVED.** The apps **never refresh a cached `sipWsUrl`**,
+  so every live session still registers against `app.` until its user signs out and back
+  in. **Do NOT flip `app.` to Proxied** — that migration is Izzy's to schedule, and the
+  fact to check is the PBX contact list (`pjsip show endpoint T<t>_<ext>_1` reading
+  `Avail`), never a client's own "registered".
+- ✅ **`app.loopcom.net` SERVES CONNECT (2026-08-16), as a SECOND self-contained
+  hostname** — owner's decision, `connectcomunications.com` deliberately untouched
+  because people are logged into it. Own Let's Encrypt cert (exp. 2026-11-14,
+  auto-renewing) + a NEW nginx file `/etc/nginx/sites-available/connectcomms-loopcom`
+  mirroring the `app.` block. Verified from outside: `/` 200, `/api/health` 200, login
+  401 on bad creds, all five security headers on `/login`, `/sip` 101, and path-for-path
+  parity with `app.connectcomunications.com`.
+  ⛔ **ONLY the `app.` subdomain points at us.** loopcom.net's apex + `www` serve a LIVE
+  Squarespace site and the domain carries LIVE Google Workspace mail (5 MX records, all
+  re-verified untouched after the change). **Never repoint apex, www, or MX.**
+  ⛔ **The nginx filename is load-bearing:** `sites-enabled/*` is included in sorted
+  order and the FIRST `listen 443` block is the default server for unmatched hostnames.
+  `connectcomms-loopcom` sorts after `connectcomms`, so the default stays the old
+  domain; a name sorting earlier would silently have hijacked it.
+  ⛔ **`certbot --nginx` cannot be the first step for a brand-new hostname** — it needs a
+  vhost carrying that `server_name` to install into. Create a throwaway port-80 block,
+  then use `certbot certonly` so certbot never rewrites your hand-written vhost.
+  ⏳ **NOT PROVEN: nobody has signed in on it in a browser**, and clients there are still
+  handed the `sip.connectcomunications.com` SIP URL — `sipPublicEndpoint.ts` holds ONE
+  global value, **not per-domain**. Making it per-domain is an OPEN owner decision.
 - ⛔ **TLS IS FINE — do not file it as a finding.** `/etc/nginx/nginx.conf` still
   carries Ubuntu's default `ssl_protocols TLSv1 TLSv1.1 …`, but the certbot include
   overrides it at server level. **Real handshake test: TLS 1.0 and 1.1 REFUSED, 1.2

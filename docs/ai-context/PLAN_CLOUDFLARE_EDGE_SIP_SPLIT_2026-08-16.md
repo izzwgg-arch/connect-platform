@@ -1,6 +1,13 @@
 # PLAN — put Connect behind Cloudflare, and the SIP split-out that has to happen first
 
-Status: **PHASE A IS DONE AND VERIFIED (2026-08-16). Phases B and C are NOT started.**
+Status (2026-08-16): **PHASE A DONE AND VERIFIED. PHASE B'S SERVER SIDE IS DONE —
+BUT NOT ONE TENANT HAS MOVED. PHASE C NOT STARTED.**
+⛔ **Read that middle clause literally.** `SIP_PUBLIC_WS_URL` is set and the api serves
+`wss://sip.connectcomunications.com/sip`, but **the apps never refresh a cached
+`sipWsUrl`**, so every phone signed in today is still registering against `app.` and
+will keep doing so until its user signs out and back in. **Phase B is NOT complete and
+`app.` MUST NOT be proxied yet.** Migrating the four tenants is the owner's to schedule.
+Also new this day: **`app.loopcom.net` now serves Connect** (§4b).
 Every step is reversible and each carries its own rollback.
 
 ✅ **Plan upgraded to Cloudflare Pro** on `connectcomunications.com` (2026-08-16,
@@ -151,9 +158,35 @@ by two tests that read `server.ts`'s **source** and fail if any literal returns 
 test of the helper alone passes straight through that bug, because the defect is in a
 caller).
 
-**So the remaining flip is one env var + a restart:**
-`SIP_PUBLIC_WS_URL=wss://sip.connectcomunications.com/sip`
-Rollback: unset it and restart. Under a minute, no deploy.
+✅ **THE ENV FLIP IS APPLIED (2026-08-16, owner-approved) — AND IT HAS MOVED NOBODY.**
+`SIP_PUBLIC_WS_URL=wss://sip.connectcomunications.com/sip` appended to
+`/opt/connectcomms/env/.env.platform` (backup
+`/opt/connectcomms/env/.env.platform.bak.20260816T180855Z`; a `diff` against that backup
+shows **exactly the 4 added lines and nothing else**). The api was recreated through the
+deploy queue's normal blue/green path — job `success`, commit `f0e1a7a0`,
+`app-api-1` healthy, upstream include back to `server 127.0.0.1:3001;`.
+
+**Proven, not asserted:**
+- `docker exec app-api-1 sh -c 'echo [$SIP_PUBLIC_WS_URL]'` →
+  `[wss://sip.connectcomunications.com/sip]`.
+- Evaluated **inside the running container** against the real module's own
+  `LEGACY_SIP_WS_URL` constant: `publicSipWsUrl` and the readiness `probeUrl` both
+  resolve to the **new** host. `grep -c "app.connectcomunications.com/sip"` on the
+  container's `server.ts` is **0**.
+- `/api/health` **200**, bad-credential `POST /api/auth/login` **401**,
+  `/api/voice/sbc/status` **401** unauthenticated (route alive).
+- All three hostnames still upgrade: `sip.` **101**, `app.` **101**,
+  `app.loopcom.net` **101**.
+
+⛔⛔ **NOT PROVEN AND DELIBERATELY NOT ATTEMPTED: no tenant has migrated.** Gesheft,
+Displaydex, Loopcom Demo and inii mini are all still registered via `app.` because a live
+session keeps its cached `sipWsUrl` forever. Nothing was done to force re-registration —
+no tenant row touched, no telephony restart, nobody contacted. **Step 8 below is still
+open and is the owner's scheduling call**, and step 9's `pjsip show endpoint` check has
+not been run because there is nothing yet to check.
+
+**Rollback:** delete the `SIP_PUBLIC_WS_URL` line (and its two comment lines) from
+`.env.platform`, redeploy api. Under a minute, no code change.
 
 ### Phase B (remainder) — move the clients (the customer-visible step)
 
@@ -251,8 +284,8 @@ It reappears after a short idle, so it will interrupt a long session more than o
 1. ✅ **DONE 2026-08-16** — `app.loopcom.net` A → `45.14.194.179`. Verified resolving,
    and verified **non-destructive**: apex still returns all four Squarespace A records,
    `https://loopcom.net/` still answers **200**, and the **5 Google MX records are
-   untouched**. ⛔ It resolves but does NOT yet serve Connect — the cert and nginx block
-   below are what make it real.
+   untouched**. ✅ **It now SERVES Connect too** — cert + nginx block landed the same
+   day, see the server section below.
 2. Edit the existing `_dmarc` TXT → `v=DMARC1; p=none; rua=mailto:dmarc@loopcom.net`.
 3. Create `dmarc@loopcom.net` as a Google Workspace alias. ⛔ Without the mailbox,
    reports bounce and are **silently** lost — the record will look perfect.
@@ -260,10 +293,56 @@ It reappears after a short idle, so it will interrupt a long session more than o
 **In Cloudflare** (connectcomunications.com → DNS): delete
 `loopcom.net._report._dmarc` once step 2 has landed.
 
-**On the server**, only after `app.loopcom.net` resolves:
-`certbot --nginx -d app.loopcom.net`, then an nginx server block mirroring the
-`app.connectcomunications.com` one. ⛔ **DNS alone does nothing** — until that block
-exists the hostname answers on the wrong certificate.
+**On the server** — ✅ **DONE AND VERIFIED FROM OUTSIDE, 2026-08-16.**
+`app.loopcom.net` now serves Connect on its own Let's Encrypt certificate.
+
+- **Certificate:** `certbot certonly --nginx -d app.loopcom.net --cert-name
+  app.loopcom.net --deploy-hook 'systemctl reload nginx'`, expires **2026-11-14**,
+  auto-renewing. ⛔ **`certbot --nginx` (the installer form) cannot be the first step** —
+  it needs a server block already carrying that `server_name` or it has nothing to
+  install into. A throwaway port-80 block was created first, then `certonly` was used so
+  **certbot never rewrote the hand-written vhost** (it merged 80 and 443 into one block
+  when it did own the `sip.` file — see Phase A).
+- **nginx:** a NEW file, `/etc/nginx/sites-available/connectcomms-loopcom`, symlinked
+  into `sites-enabled`. ⛔ **`/etc/nginx/sites-enabled/connectcomms` was NOT touched** —
+  people are logged into that domain. Verified byte-identical to its pre-change backup.
+- ⛔ **The filename matters.** `sites-enabled/*` is included in sorted order and the
+  FIRST `listen 443` block is nginx's default server for unmatched hostnames. The name
+  `connectcomms-loopcom` sorts **after** `connectcomms`, so the default stays the
+  `app.connectcomunications.com` block. A name like `app-loopcom` would silently have
+  become the default server for every unmatched TLS hostname.
+- ⛔ **`security-headers.conf` is `include`d into `location /` and `location = /privacy`
+  here too.** nginx does not inherit `add_header` into a block that defines its own, and
+  both of those set `Cache-Control`. Without the include this domain would have shipped
+  the same zero-security-header portal that was just fixed on the other one.
+- **Proven from an external workstation, not from the box:** cert `CN=app.loopcom.net`;
+  `/` **200**; `/api/health` **200 `{"ok":true}`**; `http://` → **301**; `/login` returns
+  all five security headers **and** `Cache-Control: no-store, must-revalidate`;
+  `POST /api/auth/login` with bad credentials → **401**; a real `/_next/static/*.css`
+  → **200**; `/sip` → **101 Switching Protocols**. Path-by-path parity against
+  `app.connectcomunications.com` on `/healthz`, `/api/health`, `/privacy`,
+  `/desktop/latest.yml`, `/agent-api/health` — **identical status codes on every one**.
+- **Non-destructive, re-verified after the change:** loopcom.net apex still returns all
+  four Squarespace A records, `https://loopcom.net/` still **200**, and all **5 Google
+  MX records are untouched**.
+- **Backups:** `/root/nginx-connectcomms-backup-20260816-180406.conf`,
+  `/root/nginx-connectcomms-sip-backup-20260816-180406.conf`,
+  `/root/nginx-full-backup-20260816-180406.tar.gz` (whole `/etc/nginx`),
+  `/root/nginx-connectcomms-loopcom-stage1-backup-20260816-180406.conf`.
+  Rollback: `rm /etc/nginx/sites-enabled/connectcomms-loopcom && nginx -t &&
+  systemctl reload nginx` — the new domain goes back to answering on the wrong cert and
+  **nothing else changes**.
+
+⛔ **STILL TRUE AND STILL UNRESOLVED: clients on `app.loopcom.net` are handed a SIP URL
+on a DIFFERENT hostname.** `apps/api/src/sipPublicEndpoint.ts` holds **one global
+value**, so a softphone signed in on loopcom.net registers against
+`sip.connectcomunications.com`. It works, but it means the domains are not actually
+independent. Making it per-domain (or per-tenant) is an **OPEN DESIGN DECISION the owner
+has not made** — deliberately not "fixed" here.
+
+⏳ **NOT PROVEN: nobody has signed into the portal on `app.loopcom.net` in a browser**,
+and no softphone has registered from it. Sessions, cookies and CSP are host-scoped, so
+that pass is real work, not a formality.
 
 ⛔ **Serving the portal on a SECOND hostname is not just DNS + nginx.** Sessions,
 cookies and the CSP `connect-src` are host-scoped, and clients are still handed
