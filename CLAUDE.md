@@ -1,5 +1,85 @@
 # Connect 2 — working rules for Claude
 
+## ⛔⛔ THE TWO RULES THAT WRAP EVERY TASK (2026-08-16, Izzy's standing instruction) — these are not optional and they are never waived by "it's a small change"
+
+**START of every prompt / every task — READ THE MD FILES FIRST.** Before any
+investigation, any edit, any command: read this file (`CLAUDE.md`) and the
+relevant `docs/ai-context/AGENT_HANDOFF_*.md` handoffs for whatever you are
+about to touch. ⛔ Do not start work off memory, off the file tree, or off a
+guess about what a system does — the handoff for that exact area almost
+certainly exists and almost certainly records the trap you are about to walk
+into. Izzy should never have to say "read the MD files."
+
+**END of every task — UPDATE THE MD FILES, AUTOMATICALLY.** Izzy will never ask
+you to. Before you report a task done:
+1. **Update `CLAUDE.md`** — a new ⛔ AGENT HANDOFF section for the area you
+   touched, or an edit to the existing one so it stops being wrong. Say plainly
+   what is DEPLOYED and container-verified vs ⏳ NOT PROVEN.
+2. **Write/update the full handoff** under `docs/ai-context/` when the work has
+   detail that does not fit in a summary bullet.
+3. **Update the memory files** under the memory dir + its `MEMORY.md` index when
+   the lesson outlives this repo state.
+4. ⛔ **Tell Izzy in your reply that you updated them, and which files.** An
+   update he doesn't know about is an update that didn't happen.
+
+**THE WORK TREE MUST BE EMPTY BY THE END OF THE DAY.** So every finished task
+ends: **commit → push → deploy.** Not "committed, will push later."
+- ⛔ Stage **explicit paths, never `git add -A`** — other sessions edit this same
+  tree (see [[shared-worktree-commit-hazard]]), and CLAUDE.md in particular often
+  carries another session's in-flight handoff text. Check `git status` and
+  `git diff --cached --name-only` before every commit.
+- Deploy through the queue / `deploy-direct.sh` per the deploy sections below,
+  then **verify the running container**, and say so.
+- If something genuinely cannot be deployed (mobile build, agent rebuild, a
+  change Izzy has to approve), say that explicitly in the reply instead of
+  quietly leaving it — an unstated gap is how "it's fixed" becomes false.
+
+## ⛔ AGENT HANDOFF — the Call History player was a SECOND player, and it never got the fix (2026-08-13) — READ FIRST for any "recording won't play / jumps back" report, before touching a portal recording player, or before adding a new one
+
+Commits `033d0e6c` + `f95f7969` on `feat/ivr-migration-takeover` — portal
+**DEPLOYED and container-verified** (new player chunk + spinner CSS grep'd
+inside `app-portal-1`'s `.next`).
+
+- ⛔ **THE RULE: the portal had TWO recording players, and the 2026-08-11
+  spinner/honest-error fix landed on only one of them.** `CrmRecordingPlayer`
+  (CRM timeline + both recordings pages) got it; the **Call History detail
+  panel (`/calls`) had its own inline player with NONE of it** — a failed or
+  slow `play()` silently snapped the button back. Izzy's "I was told this was
+  fixed and it was not" was literally true — fixed on the player he doesn't
+  use. Same family as the two IVR publish paths: find EVERY player before
+  believing a playback feature is live.
+- **All playback now goes through `apps/portal/services/recordingPlayback.ts`**
+  — single stream/download URL builder + one-byte failure classifier
+  (`not_recorded` / `forbidden` / `temporary`). ⛔ Any NEW recording player
+  must use it; `git grep "voice/recording/" apps/portal` — only
+  `recordingPlayback.ts` and `recordingDownload.ts` may build those URLs.
+- **The `/calls` player now:** spinner + "Loading…" the moment play needs a
+  network fetch; "This call wasn't recorded" REPLACES the player on a
+  confirmed-permanent 404; transient failure shows Try-again — ⛔ retries are
+  USER-initiated only (an auto-retry loop against a dead recording is the
+  exact flood that once wedged the PBX helper); 45 s stall watchdog; CDR
+  talk-time as the duration until audio metadata arrives (kills 0:00/0:00);
+  Download switched from a bare `<a>` (which silently saved JSON error bodies
+  as `.wav`) to `downloadRecordingWithReason`.
+- **Fleet sweep of dead play buttons** (dry-run first: **9 of the newest 60
+  advertised recordings don't exist**). Runner `/root/recording-verify-sweep.js`
+  on loopcom mints an in-container SUPER_ADMIN service JWT and drives the real
+  `POST /voice/recordings/verify` (`docker exec -i app-api-1 node /tmp/rvs.js
+  '{"dryRun":false,"limit":5000}'`). Two traps, both paid for:
+  ⛔ **node's `fetch` kills the client at 5 minutes** (undici headers timeout)
+  — "ERR fetch failed" while the route handler KEEPS RUNNING server-side; the
+  script now uses `node:http` (no timeout). ⛔ **an api deploy recreating
+  `app-api-1` kills the in-process sweep handler AND wipes `docker logs`** —
+  a missing completion line proves nothing; judge progress by
+  `count(recordingMissingAt not null)`. Pass 1 stamped **752 dead buttons
+  (186 → 938)** before the 14:52Z deploy killed it; a retry loop
+  (`/root/recording-verify-loop.sh`, log `/root/recording-verify-loop.log`,
+  6 attempts) is finishing the newest-5000 pass. Stamps are idempotent and
+  cumulative; history deeper than that cleans up honestly per click.
+- ⏳ **NOT PROVEN:** nobody has pressed play on the new player in a real
+  browser. Open windows/desktop installs keep the old bundle until reloaded
+  (the reload banner appears within ~5 min).
+
 ## ⛔ AGENT HANDOFF — payment links: copy, text from Connect's number, one link for ALL open invoices (2026-08-12) — READ FIRST for billing SMS, pay-link work, or before touching the sms-payment-link route or billingPayToken
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_BILLING_PAYLINK_SMS_2026-08-12.md`**
@@ -98,6 +178,52 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_AGENT_PROVISIONING_2026-08-07.md`
   confirm with a password, check the welcome email lands and the invoice preview
   moves by exactly the quoted amount. Also open: 7 red tests in
   `pbxTenantDirectorySync` that are NOT from this work.
+
+## ⛔ AGENT HANDOFF — an extension that could not be deleted (2026-08-13) — READ FIRST for any red "Fatal error … delete() on null" in the VitalPBX panel, before deleting ANY extension, or before assuming a panel fatal is chronic
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_EXTENSION_DELETE_MOBILE_FLAG_2026-08-13.md`**
+(**PBX data repair only** — one `UPDATE` of one column on one row. No code, no
+deploy, no regeneration, no reload. Read-only everywhere else.)
+
+- ⛔ **An extension whose device row says `mobile_client='yes'` while having NO
+  row in `ombutel.ombu_mobile_devices` CANNOT be deleted.** `Extension->delete()`
+  calls `_deleteMobileAccount()`, gets `null`, and fatals — the panel dies with
+  `Call to a member function delete() on null`, **naming no extension**, so it
+  reads like a broken panel rather than one bad record. Nothing is deleted and
+  nothing is half-deleted (verified: DB rows, pjsip endpoint, hints and mailbox
+  all intact after eight attempts). ⛔ `Extension.php` is **ionCube-encrypted** —
+  judge it from the DB, the generated config and `/var/log/nginx/error.log`, and
+  don't waste time trying to read it.
+- **The one query that scopes it fleet-wide** (read-only): left-join
+  `ombu_devices` to `ombu_mobile_devices` on `device_id` where
+  `mobile_client='yes' and m.id is null`. **Empty = no extension on the box has
+  this fault.** On 2026-08-13 it returned exactly ONE row across all 27 tenants —
+  device 171, Secro Selutions ext 103 "Fix Up Group" — and returns empty now.
+- **The fix is to make the record honest:** `update ombutel.ombu_devices set
+  mobile_client='no' where device_id=<id>`. ⛔ **Do NOT fix it through the panel**
+  — toggling Mobile Client to No and pressing Update *is* "delete the mobile
+  account", so it very likely hits the same crash. ⛔ **The flag is inert to call
+  handling, proven not assumed**: the generated `[T3_103]` pjsip block is
+  identical to an unflagged extension's apart from `callerid`, which is why **no
+  regeneration and no reload** were needed. Backup
+  `/root/ombu_devices_171_backup_20260813.sql`.
+- ⛔ **`deleteMobileAccount` appears nowhere else in the nginx error log's
+  history** — all 8 fatals were Izzy's own attempts, 11:30–12:03 ET the same day.
+  **Grep the log's whole history before calling a panel fatal chronic.**
+- **Before deleting any extension, check what dies with it.** For 103: no
+  `ombu_destinations` row with `module_id=1, index=130` and the tenant's DID goes
+  to a time condition, so no route breaks — but it IS the **only member of ring
+  group 822**, which would be left empty. ⛔ `ombu_destinations` is
+  `(id, category_id, module_id, index)` where `index` is the target row's id
+  within that module; module **1** = extensions, **20** = ring_group,
+  **29** = inbound_route.
+- ⛔ **Deleting on the PBX does not stop the billing** — Connect keeps its own
+  `Extension` row, still billable, still on the invoice, still in the app's Team
+  list. **OPEN, flagged to Izzy, not investigated:** Connect bills Secro
+  Selutions for **6** extensions at $25 while the PBX holds **3** — 305, 306 and
+  307 exist only in Connect.
+- ⏳ **NOT PROVEN: nobody has pressed Delete since the repair.** It is proven as
+  data (orphan query empty, flag matches reality), not as a completed delete.
 
 ## ⛔ AGENT HANDOFF — number ports land themselves now (2026-08-12) — READ FIRST for ANY port-in work, "the port completed and nothing happened", the port watchdog, or before touching portLanding/portWatchdog
 
@@ -361,7 +487,7 @@ Portal CSS only, one screen; nothing touching call routing, the PBX or billing.)
   explanation now sits ON the `REBUILT` list itself — read it before adding any
   screen under `/admin/billing`.
 
-## ⛔⛔ AGENT HANDOFF — voicemail-to-email is sent BY THE PBX, not by Connect (2026-08-09) — READ FIRST for ANY "customer didn't get their voicemail email", before looking inside Connect for it, and before believing alert emails are off
+## ⛔⛔ AGENT HANDOFF — voicemail-to-email is sent BY THE PBX, not by Connect (2026-08-09) — READ FIRST for ANY "customer didn't get their voicemail email", and before looking inside Connect for it
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_PBX_2026-08-09.md`**
 (**Read-only investigation — no deploy, no code change, no PBX write.** Evidence
@@ -425,13 +551,15 @@ current to 2026-08-09; §7 and §11 re-verified 2026-08-12.)
   `Voicemail.receivedAt` **is exactly** the spool `origtime` epoch (**40/40** over
   Aug 8–9, absolute UTC); **Connect's ingest is reliable** — 40 spool ↔ 40 rows,
   1:1 on ext/duration/caller/origtime, so nothing "failed to save".
-- ⛔ **"ALERT EMAILS ARE CURRENTLY OFF" (the 2026-08-06 section below) is STALE —
-  alerting is back ON.** The kill switch self-expired as predicted and nothing
-  replaced it; the script sits inert at `/root/alert-email-killswitch.sh`. Izzy
-  confirmed 2026-08-12 he is still receiving them. Sent/day: `08-06 399` → **`08-08
-  40, 08-09 40, 08-10 40, 08-11 40`** → `08-12 sent=6 skipped=34`. **The
-  40-per-rolling-24h ceiling IS holding** — but 40/day still comes out of the same
-  500/day mailbox as customer invoices and every voicemail notification.
+- ⛔ **Alert emails: this bullet used to say "alerting is back ON" and that is now
+  wrong twice over — see the `ALERTS_MUTED` section at the TOP of this file, which
+  is the authority.** Short version: the 2026-08-06 kill switch expired, alerts ran
+  five days at the ceiling's 40/day, then a **code-level mute landed 2026-08-11
+  ~22:18 EDT** and they stopped. ⛔ The mistake worth avoiding: I read the
+  `08-12 skipped=34` rows as the 40/day ceiling; they were the mute. **Tell them
+  apart by `lastErrorCode`** (`ALERTS_MUTED` = mute, empty = ceiling), never by
+  status. The mailbox-sharing problem outlives the mute: customer invoices and
+  every voicemail notification still share one 500/day allowance.
 - ⛔ **Never check for a process with `pgrep -f` over ssh** — it matched its own
   command line and reported the kill switch alive. Use
   `ps -eo pid,etime,cmd | grep "[a]lert-email-killswitch"`. Documented three times
@@ -731,11 +859,15 @@ container-verified; ⛔ the WORKER half is committed and NOT deployed.**)
   midnight reset**, and ⛔ **a 550 refusal is permanent — nothing is retried when
   capacity returns.** Recordings are always safe (`delete=yes` appears nowhere);
   only the notification is lost.
-- ⛔ **`ALERTING IS OFF`**: `/root/alert-email-killswitch.sh` on loopcom marks
-  every `ADMIN_ALERT` job dead before the sender sees it (customer email is never
-  touched). **It self-expires ~23:41 ET 2026-08-06**, at which point the OLD
-  behaviour silently returns unless the worker is deployed. `pkill -f
-  alert-email-killswitch` to lift it early.
+- ⛔ **HISTORICAL — the kill switch described here is DEAD; do not act on it.**
+  `/root/alert-email-killswitch.sh` on loopcom marked every `ADMIN_ALERT` job dead
+  before the sender saw it (customer email was never touched). **It self-expired
+  ~23:41 ET 2026-08-06 and alerts silently ran for five more days** — the exact
+  failure that motivated replacing it. The script still sits on disk, inert; there
+  is nothing to `pkill` and nothing to lift. Alerts are now muted **in code** at
+  the send door — see the `ALERTS_MUTED` section at the TOP of this file, which is
+  the authority. **Lesson kept on purpose: a mitigation with a timer in it is not a
+  fix, and its expiry will not announce itself.**
 - ⛔ **The alert cooldown was in a `Map`.** The API restarted **56 times** that
   day and every restart re-armed every alert — that is how a six-hour cooldown
   sent one message every 25 minutes. Now `packages/shared/src/adminAlertBudget.ts`:
