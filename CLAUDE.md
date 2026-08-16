@@ -74,6 +74,70 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   forward-save fix (`3f323182`) and the chat voice-note fixes
   (`e2b4699b` / `f0911881`). The recording-player work did get one.
 
+## ⛔ AGENT HANDOFF — the PBX ALREADY ships a queue wallboard, and Gesheft already has logins for it (2026-08-16) — READ FIRST before building ANY queue wallboard / call-centre dashboard, before querying queue history, or before believing Connect has queue reporting
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_QUEUE_WALLBOARD_2026-08-16.md`**
+(**Read-only investigation — no PBX write, no code, no deploy.** Deliverable was
+mockups only, per Izzy: "show me mockups before you build anything." Mockups:
+<https://claude.ai/code/artifact/0b5450cd-b0ae-43bf-ad62-ef7ecd05d208>)
+
+- ⛔ **THE RULE: check the PBX for an existing add-on before building a PBX-shaped
+  feature.** `sonata-switchboard` (live queue monitoring, `/live-monitoring`) and
+  `sonata-stats` (queue reporting, `/stats`) are **installed, served and answering
+  200**; `sonata-stats.service` is running. Switchboard is plain PHP under nginx
+  with **no systemd unit** — "the service isn't running" is not a valid diagnosis
+  for it, and `/sonata/service/v1/` answering **404** at the bare path is normal.
+- ⛔ **Gesheft is already IN the Switchboard and pointed at the wrong screen.**
+  `astboard.users` holds two tenant-8 accounts — **Joel Landau** (ext 53,
+  2025-12-24) and **Pinchas Meislish** (2026-03-01) — both on **`layout_id 1`
+  (`layout.default`)**, whose widgets are `extensions`/`queues`/`conferences`/
+  `parking_lots`. The stock layout, not a queue board. The catalog already
+  contains **`queues_wallboard`**, `queue_members`, `queued_calls`,
+  `queue_overview`, `queues_calls_counter`, `queues_stats_summary` — so "we have
+  no wallboard" and "the PBX has a wallboard" are both true.
+- ⛔ **Gesheft (PBX tenant 8) is the ONLY tenant on the whole PBX with queue
+  traffic.** A queue feature is today a one-customer feature. Queues: **750 Phone
+  Orders** (ringall/30s, 8 members), **751 Customer Service** (linear/15s, 3),
+  **752 After Hours CS** (ringall/15s, 3). 30 days: 750 answers **92.1%** of
+  2,041; **751 answers 45.3% and TIMES OUT 46.2%**; **752 answers 11.0% and times
+  out 81.8%**. ⛔ **108, 117, 118 took ZERO queue calls in 30 days** and **102
+  alone carries 48%** of Phone Orders. Flagged to Izzy, deliberately NOT acted on
+  — strategy/membership changes are PBX writes.
+- ⛔ **Query traps, each of which produced a wrong answer first:** queue names in
+  the log are **`T8_Q750`**, not `750` (bare ext returns zero rows and reads like
+  "no data"); the table is **`asterisk.queues_log`** (plural) — there is **no
+  `asteriskcdrdb`** on this box; `ombu_queues` is keyed **`queue_id`** not `id`
+  and `ombu_extensions` has **`name`**, not `description`; and `data1/2/3` are
+  **varchar**, so `max()` string-compares (an abandon "max" came back below its
+  own average) — `cast(dataN as unsigned)`. Field meaning is per-event:
+  COMPLETE* → data1 hold/data2 talk, **ABANDON → data3 waittime**.
+  `RINGNOANSWER` is **structural for ringall** (one per losing member per round),
+  never a fault count.
+- **Connect's side:** live queue state DOES exist —
+  `apps/telephony/.../QueueStateStore.ts` from AMI, shipped as `LiveQueueState`
+  over `/ws/telephony`. ⛔ But it is **in-memory, live-only, and rebuilt from zero
+  on every telephony restart** (`callerCount` is a running counter, not a real
+  depth read) — never build reports on it. ⛔ **Connect does not read
+  `queues_log` at all**; ingesting it is the real cost of a native reports tab.
+  ⛔ The existing `apps/portal/app/(platform)/crm/wallboard/page.tsx` is a **CRM**
+  wallboard (campaigns/dispositions/tasks) — different feature, don't grow it into
+  this one.
+- ⛔ **Palette decision, already validated — do not re-litigate.** Agent state is
+  never colour alone: Connect's `--success #34c27b` beside `--warning #f0b655`
+  fails colourblind separation at **ΔE 5.2 protan** (below even the 6–8 floor) on
+  the `#141f2b` panel, so a stacked answered/timeout/abandoned bar was rejected
+  for per-queue answered-rate meters plus an exact table, and every state chip
+  carries a symbol **and** a word.
+- ⏳ **NOT DECIDED, NOT BUILT.** Three routes are with Izzy (A: build a Sonata
+  queue layout — a PBX write needing a mandate; **B, recommended**: do A now and
+  let two weeks of real use write the spec; C: build native now). Open questions
+  that change the design: one tenant vs platform; wall TV vs browser tab (a TV
+  needs a no-login, never-expiring surface); alarms — ⛔ which **cannot** ride
+  `ADMIN_ALERT` (muted platform-wide), so on-screen or escalation only.
+  ⛔ **Listen/Whisper/Barge are drawn in the mockup and are UNVERIFIED** — they
+  need `ChanSpy` confirmed on the PBX and a Connect permission gate; neither was
+  checked. Don't promise them off the picture.
+
 ## ⛔ AGENT HANDOFF — the Call History player was a SECOND player, and it never got the fix (2026-08-13) — READ FIRST for any "recording won't play / jumps back" report, before touching a portal recording player, or before adding a new one
 
 Commits `033d0e6c` + `f95f7969` on `feat/ivr-migration-takeover` — portal
