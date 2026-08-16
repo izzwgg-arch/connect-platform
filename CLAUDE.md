@@ -28,6 +28,16 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   tree (see [[shared-worktree-commit-hazard]]), and CLAUDE.md in particular often
   carries another session's in-flight handoff text. Check `git status` and
   `git diff --cached --name-only` before every commit.
+  ⛔⛔ **STAGING EXPLICIT PATHS IS NOT ENOUGH — proven the hard way 2026-08-16.**
+  `git add <mine> && git diff --cached --name-only && git commit -m …` as ONE
+  chained command swept another session's staged CLAUDE.md **and a deletion of
+  their brand-new handoff doc** into commit `250af641`, pushed before it could be
+  caught — because they staged in the gap between the `add` and the `commit`.
+  **The check printed all three files and was useless: it ran inside the same
+  chain as the commit.** Always `git commit -F - -- <explicit paths>` (the
+  pathspec makes the rest of the index irrelevant, so the race cannot reach your
+  commit), and run the staged-list check as its **own** command that you actually
+  read first. Recovery recipe in [[shared-worktree-commit-hazard]].
 - Deploy through the queue / `deploy-direct.sh` per the deploy sections below,
   then **verify the running container**, and say so.
 - If something genuinely cannot be deployed (mobile build, agent rebuild, a
