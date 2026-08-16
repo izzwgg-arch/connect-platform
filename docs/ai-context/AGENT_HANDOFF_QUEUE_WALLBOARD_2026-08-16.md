@@ -469,6 +469,36 @@ four `announce_*` fields, `alertinfo`, the hangup destination, and **per-member
   the dedup shifts every index and the penalties align to `members` by position.
 - ⛔ **Apply Changes is still never fired.** The form says so *before* you submit.
 
+#### ⛔ Two defects a real create found that a 200 would not have (`2c7657f3`)
+
+Proven by creating a queue on the Loopcom Demo tenant (PBX 102) through the
+real route and reading every column back out of `ombu_queues`.
+
+1. **A queue MUST have a last destination.** The first attempt was refused:
+   `Destination Module is required. | Destination is required.` The
+   `mod_dest`/`destination` pair was only pushed `if (spec.lastDestination)`, so
+   **any queue created without one failed** — loudly, thanks to `assertSaved`,
+   but only after the whole form was submitted. The route now refuses up front
+   with a plain sentence, and the dialog makes the field required and pre-fills
+   it with the first person ticked. The "Nowhere — just hang up" option was
+   deleted: the phone system never accepted it.
+2. **`autofill` and `autopause` are CHECKBOXES, not selects.** Sending
+   `autofill=no` stored **`yes`** — the panel reads *field present* as *box
+   ticked* whatever the value is. They now go through `checkbox()`, which emits
+   nothing when off. ⛔ **`joinempty`/`leavewhenempty` ARE selects** and DO carry
+   `"yes"`/`"no"`; they round-tripped correctly **in the same request**, which
+   is what proves the split is real rather than a theory.
+
+Everything else landed byte-exact, **including `rrmemory`** — so the strategy
+list is now proven rather than assumed — along with `servicelevel 30`,
+`wrapuptime 9`, `memberdelay 2`, `weight 4`, `penaltymemberslimit 3`, all four
+`announce_*` fields, `alertinfo`, and per-member penalties `0`/`1`.
+Probe queue deleted; tenant 102 is back to zero queues.
+
+Guarded by `apps/api/src/pbx/teamBuilder.queue.test.ts` (8 tests): the
+checkbox-vs-select split, `""`-not-`"0"`, strategy not hardcoded, and
+Apply Changes never fired.
+
 **Permission:** new **`can_create_queues`**. ⛔ `POST /voice/teams` accepts it
 **OR** the IVR-management key (via the new optional `requireQueueCreator` dep),
 and the button checks exactly the same pair — so it can never be a visible

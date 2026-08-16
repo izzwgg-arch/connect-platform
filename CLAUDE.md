@@ -660,6 +660,21 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   says so before you submit. New key **`can_create_queues`**, which the route
   accepts **OR** the IVR-management key — the button checks the same pair, so it
   can never 403.
+- ⛔⛔ **TWO THINGS A REAL CREATE FOUND THAT A 200 WOULD NOT HAVE** (`2c7657f3`,
+  proven by creating a queue on the Loopcom Demo tenant and reading the row
+  back): **(1) A QUEUE MUST HAVE A LAST DESTINATION.** The panel refused with
+  *"Destination Module is required. | Destination is required."* — and
+  `mod_dest`/`destination` were only sent when one was supplied, so any queue
+  created without one failed at the very end of the form. Now refused up front
+  and the field is required in the dialog (a "just hang up" option was removed —
+  the phone system never accepted it). **(2) `autofill` and `autopause` are
+  CHECKBOXES, not selects.** Sending `autofill=no` stored **yes**, because the
+  panel reads *field present* as *box ticked* whatever the value is; an
+  unchecked box must be **absent**. ⛔ `joinempty`/`leavewhenempty` ARE selects
+  and DO carry "yes"/"no" — they round-tripped correctly in the same request,
+  which is what proves the split is real. Everything else landed exactly as
+  sent, **including `rrmemory`** — so the strategy list is now proven, not
+  assumed. 8 guard tests in `teamBuilder.queue.test.ts` pin all of it.
 - ⏳ **YIDDISH IS WIRED ON ALL FOUR QUEUE SCREENS BUT ONLY 26 OF 176 PHRASES
   TRANSLATED.** 150 fail at Yiddish Labs and the reason is **unreadable**:
   `/agent/ui/translate` catches bare (`catch { failed.push(s); }`) and throws
