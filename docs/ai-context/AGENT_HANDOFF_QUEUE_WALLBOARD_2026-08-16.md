@@ -244,6 +244,109 @@ reaches a human.
   **least-privilege**, and calling it is reaching into the PBX — reads are fine
   under the read-only guardrail, writes are not.
 
+## 4c. BUILT AND DEPLOYED 2026-08-16 — Route C, native
+
+Commits `28861ec6` + `c21a6eca` on `feat/ivr-migration-takeover`.
+**api + portal DEPLOYED and container-verified.** Izzy chose to build native
+and authorised the `queues_log` grant.
+
+### What shipped
+
+| Piece | Where |
+|---|---|
+| Queue config + membership reader | `apps/api/src/pbxQueueDirectory.ts` |
+| Queue history + report aggregates | `apps/api/src/pbxQueueStats.ts` |
+| Guard tests (14) | `apps/api/src/pbxQueueStats.test.ts` |
+| Routes | `GET /voice/queues`, `POST /voice/queues/reports` (server.ts ~17559) |
+| Supervisor console | `apps/portal/app/(platform)/queues/page.tsx` |
+| Wall display | `.../queues/wall/page.tsx` |
+| Detailed reports | `.../queues/reports/page.tsx` |
+| Shared live/config join | `.../queues/queueBoard.ts` |
+| Styles | `.qb-*` / `.qw-*` appended to `globals.css` |
+| Nav + permission key | `navConfig.ts`, `portalPermissions.ts` (`can_view_pbx_queues`) |
+
+- **Live state is NOT a new API.** It rides the existing `/ws/telephony`
+  `LiveQueueState`. ⛔ Do not add a REST "live queues" endpoint — that would be
+  a second source of truth for the same fact.
+- Permission keys are **reused, not invented**: `can_view_live_calls` gates the
+  status route, `can_view_reports` gates reporting, and the nav item's
+  `can_view_pbx_queues` rides the `can_view_calls` legacy expansion.
+
+### ⛔ The one thing left to run — the GRANT
+
+Reports are built and deployed but **return no data until this runs on the
+PBX**. Izzy approved it 2026-08-16; it is a PBX privilege change, so it stays a
+human action under the read-only guardrail:
+
+```sql
+GRANT SELECT ON `asterisk`.`queues_log` TO 'connect_read'@'45.14.194.179';
+FLUSH PRIVILEGES;
+```
+
+Until then the endpoint answers **200 with `available:false`,
+`reason:"queue_log_access_denied"`** and the screen prints that exact SQL.
+✅ **Proven live inside `app-api-1` on 2026-08-16** — the directory reader
+returned all three Gesheft queues with correct members, and the stats reader
+returned precisely `queue_log_access_denied`. Re-verify after the grant with
+the same probe (§4d).
+
+### Five traps encoded in code, each with a test
+
+1. **Queue naming** — `T8_Q750`, never `750`. Assembled ONCE, in
+   `queueLogName()`. A test asserts no other module builds it.
+2. **`data1/2/3` are varchar** — `max()` string-compares. Every numeric read is
+   `CAST(... AS UNSIGNED)`; a test greps for an uncast aggregate.
+3. **Field meaning is per-event** — `ABANDON` carries waittime in **data3**
+   (data1 is the position). A test pins the abandon query to data3.
+4. **`time` is a varchar in UTC; `created` is a real timestamp in PBX-local
+   time**, proven exactly **240 minutes** apart on live rows. Reports use
+   `created`, and the range is evaluated **by MySQL** (`DATE_SUB(NOW(), …)`) so
+   no JS timezone guess can exist. A test forbids `getUTCFullYear` here.
+5. **`RINGNOANSWER` is structural under ringall** — 20,112 against 1,880
+   answered calls. Carried as its own labelled field, never folded into a
+   missed-call or per-agent fault count.
+
+Plus: **config is authoritative for membership**. Live state is in-memory and
+rebuilt from zero on telephony restart, so an agent absent from the live payload
+renders **offline**, never "not a member" — otherwise a restart would appear to
+delete a customer's team.
+
+### ⛔ Deploy trap paid for here
+
+**A Next.js App Router `page.tsx` may only export a default component.** A
+named export (`export function describeStrategy`) fails the production build
+with *"does not match the required types of a Next.js Page"* — and
+**`tsc --noEmit` does NOT catch it**, so it passed every local check and failed
+in the deploy's build stage. Portal helpers belong in a sibling module, never
+in the page file. Fixed in `c21a6eca`.
+
+### ⏳ NOT PROVEN
+
+- **Nobody has opened any of the three screens in a browser.** Proven as
+  plumbing: containers verified, modules executed live against the real PBX,
+  typecheck clean, 14 + 33 tests green.
+- **No report has ever rendered with data** — that needs the grant.
+- **Wait-time and agent-state live values are unproven against a real ringing
+  call.** The live join is written against `LiveQueueState` / `LiveCall` shapes
+  but has not been watched during an actual queue call.
+- Listen / Whisper / Barge are **not built** — deliberately. They need
+  `ChanSpy` verified on the PBX and a permission gate; neither was done.
+
+## 4d. Re-verification probe
+
+Run inside the api container after the grant lands. Proves the whole chain
+without a browser:
+
+```bash
+docker cp qtest.ts app-api-1:/app/apps/api/qtest.ts
+docker exec -w /app/apps/api app-api-1 npx tsx qtest.ts
+```
+where `qtest.ts` calls `listQueuesFromOmbutel("8", inst.ombuMysqlUrlEncrypted)`
+then `loadQueueStats({ queues, range: { kind: "lastDays", days: 30 } })`.
+Expected after the grant: `STATS OK`, Phone Orders `offered=2041
+answered=1880 (92.1%)`, service level ~78% @20s. ⛔ Delete the probe from the
+container afterwards.
+
 ## 5. Design decisions already made (so they are not re-litigated)
 
 - The mockups use **Connect's own theme tokens** (`--bg #0c1218`,

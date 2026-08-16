@@ -335,7 +335,38 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   settles it; don't guess a credential. ⛔ The API also exposes DELETE
   (`users`, `roles`, `shifts`, `delete-license`) — least-privilege only, and
   reads are fine under the read-only guardrail but writes are not.
-- ⏳ **NOT DECIDED, NOT BUILT.** Three routes are with Izzy (A: build a Sonata
+- ✅ **BUILT AND DEPLOYED 2026-08-16 — native, Route C** (`28861ec6` +
+  `c21a6eca`; api + portal container-verified). Handoff §4c. **`/queues`**
+  (supervisor console), **`/queues/wall`** (TV display), **`/queues/reports`**.
+  Backend: `pbxQueueDirectory.ts` (config + membership from ombutel, and the
+  ONE place `T<n>_Q<ext>` is assembled) + `pbxQueueStats.ts` (outcomes, service
+  level, wait distributions, per-agent, hour/day/weekday) + `GET /voice/queues`
+  and `POST /voice/queues/reports`. ⛔ **Live state is NOT a new API — it rides
+  the existing `/ws/telephony` `LiveQueueState`; never add a REST "live queues"
+  endpoint** (second source of truth for the same fact). Permission keys are
+  **reused**: `can_view_live_calls` / `can_view_reports`, nav key
+  `can_view_pbx_queues` on the `can_view_calls` expansion.
+- ⛔⛔ **REPORTS RETURN NOTHING UNTIL ONE GRANT RUNS.** `connect_read` has
+  SELECT on **`ombutel` only**; `queues_log` is in the **`asterisk`** schema.
+  Izzy approved it 2026-08-16 but it is a PBX privilege change, so it stays a
+  human action: `GRANT SELECT ON \`asterisk\`.\`queues_log\` TO
+  'connect_read'@'45.14.194.179'; FLUSH PRIVILEGES;`. Until then the route
+  answers **200 `available:false` / `queue_log_access_denied`** and the screen
+  prints that exact SQL — ⛔ **deliberately never an empty report**, which would
+  render as "this customer had no calls" about a queue doing 2,000 a month.
+  ✅ Both halves proven live inside `app-api-1`: directory returned all three
+  Gesheft queues with correct members; stats returned exactly
+  `queue_log_access_denied`.
+- ⛔ **A Next.js App Router `page.tsx` may ONLY export a default component.** A
+  named export fails the production build ("does not match the required types
+  of a Next.js Page") and **`tsc --noEmit` does NOT catch it** — it passed every
+  local check and died in the deploy's build stage. Portal helpers go in a
+  sibling module, never the page file.
+- ⏳ **NOT PROVEN: nobody has opened any of the three screens in a browser**,
+  no report has rendered with data (needs the grant), and the live wait/agent
+  values have never been watched during a real queue call.
+- ⏳ **Superseded below, kept for context — the three routes originally offered:**
+  (A: build a Sonata
   queue layout — a PBX write needing a mandate; **B, recommended**: do A now and
   let two weeks of real use write the spec; C: build native now). Open questions
   that change the design: one tenant vs platform; wall TV vs browser tab (a TV
