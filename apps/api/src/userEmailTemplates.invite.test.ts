@@ -75,7 +75,8 @@ test("every line of the original copy survives the redesign", () => {
   const { html, subject } = build();
   assert.equal(subject, "Welcome to Connect Communications — Create Your Password");
   for (const fragment of [
-    "You&#39;re Invited",
+    // esc() escapes & < > " only, so apostrophes stay literal
+    "You're Invited",
     "Welcome to Trust Bookkeepings",
     "Hi Izzy,",
     "You've been invited to join",
@@ -129,13 +130,14 @@ test("the plain-text part is untouched — text-only clients see exactly what th
 // ─── both queueing paths ─────────────────────────────────────────────────────
 
 test("BOTH invite paths call the same template — neither can drift onto an old design", async () => {
+  // ⛔ __dirname, not import.meta: this package is CommonJS and import.meta is a
+  // TS1343 error here.
   const { readFile } = await import("node:fs/promises");
-  for (const file of ["./server.ts", "./onboarding/setupOrchestrator.ts"]) {
-    const source = await readFile(new URL(file, import.meta.url ?? `file://${__filename}`), "utf8").catch(
-      async () => readFile(require("node:path").join(__dirname, file), "utf8"),
-    );
+  const path = await import("node:path");
+  for (const file of ["server.ts", "onboarding/setupOrchestrator.ts"]) {
+    const source = await readFile(path.join(__dirname, file), "utf8");
     assert.ok(
-      String(source).includes("welcomeCreatePasswordEmail("),
+      source.includes("welcomeCreatePasswordEmail("),
       `${file} no longer builds the invite email through welcomeCreatePasswordEmail`,
     );
   }
