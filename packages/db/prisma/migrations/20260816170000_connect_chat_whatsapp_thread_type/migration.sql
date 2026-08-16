@@ -1,0 +1,24 @@
+-- Adds WHATSAPP to ConnectChatThreadType.
+--
+-- Why this exists: packages/db/prisma/schema.prisma has declared this enum value
+-- since commit ee78362c (2026-05-24), but no migration was ever written for it.
+-- Production's type is still (SMS, DM, GROUP, TENANT_GROUP).
+--
+-- The live consequence: apps/worker/src/whatsappProject.ts creates threads with
+--   type: "WHATSAPP" as any
+-- so enabling WHATSAPP_PROJECT_TO_CONNECT_CHAT_ENABLED today makes the first real
+-- inbound message fail with 22P02 (invalid input value for enum) and retry-loop.
+-- apps/worker/scripts/wa_project_verify.ts cannot catch this — line 47 forces the
+-- flag to "false", so the harness never reaches the write it nominally verifies.
+--
+-- PostgreSQL 15: ALTER TYPE ... ADD VALUE is permitted inside a transaction block.
+-- The new label cannot be *referenced* until that transaction commits — this
+-- migration only adds it and never references it, so Prisma's wrapping is fine.
+--
+-- IF NOT EXISTS makes this idempotent and safe to re-run.
+--
+-- ONE-WAY DOOR: PostgreSQL has no DROP VALUE for enums. Undoing this means
+-- recreating the type and rewriting every column that uses it. The label is inert
+-- until code writes it, so the cost of having it is nil — but it does not come back out.
+
+ALTER TYPE "ConnectChatThreadType" ADD VALUE IF NOT EXISTS 'WHATSAPP';
