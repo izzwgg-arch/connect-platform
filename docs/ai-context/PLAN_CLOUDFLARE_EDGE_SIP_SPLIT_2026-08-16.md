@@ -248,7 +248,11 @@ It reappears after a short idle, so it will interrupt a long session more than o
 ### Remaining steps, in order
 
 **At Squarespace** (loopcom.net → DNS → *Custom records*):
-1. Add record — Type `A`, Name `app`, Data `45.14.194.179`.
+1. ✅ **DONE 2026-08-16** — `app.loopcom.net` A → `45.14.194.179`. Verified resolving,
+   and verified **non-destructive**: apex still returns all four Squarespace A records,
+   `https://loopcom.net/` still answers **200**, and the **5 Google MX records are
+   untouched**. ⛔ It resolves but does NOT yet serve Connect — the cert and nginx block
+   below are what make it real.
 2. Edit the existing `_dmarc` TXT → `v=DMARC1; p=none; rua=mailto:dmarc@loopcom.net`.
 3. Create `dmarc@loopcom.net` as a Google Workspace alias. ⛔ Without the mailbox,
    reports bounce and are **silently** lost — the record will look perfect.
