@@ -12,12 +12,14 @@ browser pass on it found the **public pay pages were DEAD there** (hardcoded abs
 API URL → CORS block). Fixed and deployed the same day, `93a85d25`; ⛔ **read the
 "second hostname makes every hardcoded absolute API URL a bug class" section in §4b
 before adding any URL to a portal page.**
-⛔ **Also 2026-08-16: `sip.loopcom.net` (the LoopCom-branded SIP hostname) was
-ATTEMPTED AND IS BLOCKED — see Phase A2.** It does **not** exist: no DNS record, no
-cert, no nginx block, and `SIP_PUBLIC_WS_URL` still reads
-`wss://sip.connectcomunications.com/sip`. **Nothing was changed anywhere.** The single
-blocker is Squarespace's Google re-auth, which only an agent cannot pass — Izzy must add
-one `A` record. Phase A2 carries the exact record and the whole ready-to-run runbook.
+⛔ **Also 2026-08-16: `sip.loopcom.net` IS LIVE AND SERVING SIP (101) — but the flip to
+it is STAGED, NOT APPLIED. See Phase A2.** DNS, cert and nginx are done and proven, and
+all three pre-existing SIP hostnames still return 101. **However `.env.platform` says
+`wss://sip.loopcom.net/sip` while the running `app-api-1` still says
+`wss://sip.connectcomunications.com/sip`** — `deploy-direct.sh` **skipped the restart and
+still printed `success`**, because an env var is not a code path. ⛔ **There is no
+sanctioned deploy path for an env-only change**; the next api deploy touching api code
+will ship this flip unobserved. Read Phase A2 before deploying api.
 Every step is reversible and each carries its own rollback.
 
 ✅ **Plan upgraded to Cloudflare Pro** on `connectcomunications.com` (2026-08-16,
@@ -46,63 +48,134 @@ Enterprise**, so Pro does NOT remove the need for the SIP split below.
 
 ---
 
-## Phase A2 — `sip.loopcom.net` (the LoopCom-branded SIP hostname) — ⛔ BLOCKED AT STEP 1, NOTHING CHANGED
+## Phase A2 — `sip.loopcom.net` — ✅ SERVING SIP. ⛔ THE ENV FLIP IS STAGED BUT THE CONTAINER HAS NOT PICKED IT UP
 
-Attempted 2026-08-16. Owner's decision: the SIP hostname should carry LoopCom branding,
-so `sip.loopcom.net` becomes the **handed-out** value in place of
-`sip.connectcomunications.com`. **Additive only — `sip.connectcomunications.com` and
-every other hostname stay live indefinitely, because clients cache their SIP URL
-forever.**
+Done 2026-08-16. Owner's decision: the SIP hostname should carry LoopCom branding, so
+`sip.loopcom.net` becomes the **handed-out** value in place of
+`sip.connectcomunications.com`. **Additive only — every existing hostname stays live
+indefinitely, because clients cache their SIP URL forever.**
 
-⛔⛔ **STATUS: NOT DONE. `sip.loopcom.net` DOES NOT EXIST.** The DNS record was never
-created, so there is no cert, no nginx block, and `SIP_PUBLIC_WS_URL` was **not**
-touched — it still reads `wss://sip.connectcomunications.com/sip`. **Zero changes were
-made to DNS, nginx, `.env.platform`, any container, any tenant row, or the PBX.**
+✅ **DNS, cert and nginx are DONE and PROVEN.** `sip.loopcom.net` returns **101
+Switching Protocols** + `Sec-WebSocket-Protocol: sip`, on its own Let's Encrypt cert,
+and **all three pre-existing SIP hostnames still return 101** (no regression).
 
-### The blocker — Squarespace's Google re-auth, hit and confirmed
+⛔⛔ **BUT THE FLIP HAS NOT TAKEN EFFECT, AND THIS IS THE ONE THING TO READ.**
+`.env.platform` says `wss://sip.loopcom.net/sip`; **the running `app-api-1` still says
+`wss://sip.connectcomunications.com/sip`.** Clients are still being handed the OLD
+hostname. See "the deploy that cannot happen" below — it is a real gap in the deploy
+tooling, not an oversight.
 
-The Squarespace session was live (the domains list and loopcom.net's DNS page both
-rendered fully, read-only). But **the moment `ADD RECORD` under *Custom records* is
-clicked, Squarespace throws the modal:**
+### ⛔ THE DEPLOY THAT REPORTS `success` AND CHANGES NOTHING — env-only changes have NO sanctioned path
+
+`deploy-direct.sh api` ran, printed **`[deploy-direct] success`**, and **did not
+recreate the container.** The log line that matters is buried mid-output:
+
+```
+[deploy-common] skip=unrelated_paths
+[deploy-api] commit changed cf8d16ff..ae594eda but no api-relevant paths changed — skipping build/restart
+```
+
+⛔ **`deploy_common_needs_rebuild` (`scripts/lib/deploy-common.sh:313`) decides purely on
+whether api-relevant PATHS changed between the deployed commit and HEAD. An environment
+variable is not a path, so an env-only change can never trigger a rebuild** — and the
+script still exits `success`. This is the same family as the `deploy-worker.sh`
+self-skip, and it is **more dangerous here because the success line is the last thing
+printed.** ⛔ **After any env change, `docker exec app-api-1 sh -c 'echo
+$SIP_PUBLIC_WS_URL'` is the ONLY proof. Never trust the deploy's exit line.**
+
+⛔ **`DEPLOY_FORCE_RESTART=1` DOES NOT WORK for api** — it was tried and produced the
+identical skip. There is **no `--force` flag on `deploy-direct.sh`** (its only flags are
+`--branch`, `--commit`, `--dry-run`, `--skip-queue-check`), and the deploy queue runs the
+same `deploy-api.sh`, so it skips identically. ⛔ `docker compose up -d api` by hand is
+**forbidden** (AGENTS.md rule 12 — the non-blue/green path destroys the listening
+container before nginx has a candidate, which is the historic `/api/*` 502 class).
+**So there is genuinely no sanctioned way to recreate the api container for an env-only
+change, and this session deliberately stopped rather than improvise one.**
+
+**How it takes effect:** the next api deploy that touches an api-relevant path rebuilds
+and picks the value up automatically. ⛔ **That means the SIP hostname handed to clients
+will change during someone else's unrelated deploy** — the container's `/app/.build-commit`
+still reads `cf8d16ff`, so the comparison window is already open. Whoever deploys api
+next is the one who ships this flip. It is the intended change and the route is proven,
+but nobody will be watching for it, so **it is called out here on purpose.**
+
+⛔ **Rollback, if the flip should NOT ship:** restore
+`/opt/connectcomms/env/.env.platform` from
+**`/opt/connectcomms/env/.env.platform.bak.20260816T202641Z`** (a `diff` against it shows
+**exactly one changed line**, 106). Nothing else to undo — the DNS record, cert and nginx
+block are additive and harmless whether or not the env value points at them.
+
+### The Squarespace blocker — hit twice, then cleared by the owner
+
+The session **reads** fine unattended, but clicking `ADD RECORD` throws:
 
 > **Verify to continue as support@connectcomunications.com** — *Login with Google to
 > continue.* [CONTINUE]
 
-⛔ **An agent must not authenticate as the owner, so this is a hard stop, not a retry.**
-The modal was dismissed with its ✕ and the page left untouched. **Izzy has to add this
-one record himself.** Note it gates the *write*, not the *read* — so a future session
-can still inspect and verify loopcom.net's DNS without him, and should, before asking.
+⛔ **An agent must not authenticate as the owner.** This session stopped twice and handed
+back; **Izzy completed the Google sign-in**, after which the record was added by the
+agent with no further prompt. The gate covers the **write**, not the **read**, so
+inspection and verification never need him.
 
-**The one record he needs to add** (loopcom.net → DNS → *Custom records* → ADD RECORD):
+⛔ **Two UI traps on that form, both of which silently produce a wrong record:**
+1. **`ADD RECORD` needs TWO clicks** — the first silently does nothing (the row list just
+   re-orders). Do not conclude the gate fired because nothing opened.
+2. **The record TYPE is a custom `DIV`, not a `<select>`** — `form_input` fails on it
+   with "Element type DIV is not a supported form input"; it must be clicked open and the
+   option clicked. ✅ **The tell that the type actually took is that the last field's
+   label changes from `DATA` to `IP ADDRESS`.** Re-read the form before saving; a
+   coordinate click that misses a control is this project's most repeated DNS mistake.
 
-| Type | Name | Data | TTL |
-|---|---|---|---|
-| `A` | `sip` | `45.14.194.179` | leave default (4 hrs) |
+**The record, as saved and verified:** `A` / `sip` / `45.14.194.179` / TTL 4 hrs.
+Squarespace confirmed *"A custom record was saved"*.
 
-⛔ **Touch nothing else on that page.** Verified present and to be left exactly as-is:
-the **four apex `A` records** (198.185.159.144/145, 198.49.23.144/145 — the live
-Squarespace marketing site), the **`www` CNAME**, the **`HTTPS` service record**, the
-**five Google MX records** (priorities 1/5/5/10/10), the Google verification TXT, and
-the existing custom records **`A app → 45.14.194.179`** and **`TXT _dmarc`**.
+⛔ **Nothing else on that page was touched**, verified before and after: the **four apex
+`A` records** (198.185.159.144/145, 198.49.23.144/145 — the live Squarespace marketing
+site), the **`www` CNAME** (`ext-sq.squarespace.com`), the **`HTTPS` service record**,
+the **five Google MX records**, the Google verification TXT, and the pre-existing custom
+records **`A app`** and **`TXT _dmarc`**. Re-checked after the change: apex still returns
+all four A records, **MX count still 5**, `https://loopcom.net/` still **200**.
 Squarespace is not Cloudflare — there is **no proxy toggle** on this form, so the
-grey-cloud trap from Phase A does not apply here; the record is DNS-only by nature.
+grey-cloud trap from Phase A does not apply; the record is DNS-only by nature, confirmed
+by it resolving to the origin `45.14.194.179` and not a Cloudflare anycast address.
 
-### Baseline captured before the attempt — this is the "nothing regressed" evidence
+### What was changed, and the backups
 
-Measured 2026-08-16, **from the server** (see the filter trap below for why that
-matters), all with the real WebSocket upgrade headers and `--http1.1`:
+| # | change | rollback |
+|---|---|---|
+| 1 | Squarespace custom record `A sip → 45.14.194.179` | delete the record |
+| 2 | Cert `sip.loopcom.net` (LE, expires **2026-11-14**, auto-renewing, `--deploy-hook 'systemctl reload nginx'`) | `certbot delete --cert-name sip.loopcom.net` |
+| 3 | **NEW** `/etc/nginx/sites-available/connectcomms-sip-loopcom` + symlink | `rm` the symlink, `nginx -t && systemctl reload nginx` |
+| 4 | `.env.platform:106` → `wss://sip.loopcom.net/sip` (**staged, not live**) | restore the `.bak` below |
+
+**Backups:** `/root/nginx-full-backup-20260816-222322.tar.gz` (whole `/etc/nginx`),
+`/root/nginx-connectcomms-backup-20260816-222322.conf`,
+`/root/nginx-connectcomms-sip-backup-20260816-222322.conf`,
+`/root/connectcomms-sha256-20260816-222322.txt`, and
+`/opt/connectcomms/env/.env.platform.bak.20260816T202641Z`.
+
+⛔ **`certonly` did its job — proven, not assumed.** `sites-available/connectcomms` is
+**byte-identical** after the whole operation (sha256 `a33f0c7f…` before and after, which
+is why that hash was captured up front), and the stage-1 file was **not** rewritten into
+a merged 80+443 block the way certbot did to the `sip.` file in Phase A.
+
+### Verified after the change — all from the SERVER
 
 | check | result |
 |---|---|
-| `sip.connectcomunications.com/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
-| `app.connectcomunications.com/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
-| `app.loopcom.net/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
-| `sip.loopcom.net` | **NXDOMAIN** (the blocker) |
-| `docker exec app-api-1 … $SIP_PUBLIC_WS_URL` | `[wss://sip.connectcomunications.com/sip]` |
-| `/api/health` | **200** |
-| bad-credential `POST /api/auth/login` | **401 `invalid_credentials`** |
-| default TLS server (unmatched SNI) | `CN = app.connectcomunications.com` |
-| deploy queue | `runningCount: 0` |
+| `sip.loopcom.net/sip` | **101** + `Sec-WebSocket-Protocol: sip` |
+| `sip.connectcomunications.com/sip` | **101** (no regression) |
+| `app.connectcomunications.com/sip` | **101** (no regression) |
+| `app.loopcom.net/sip` | **101** (no regression) |
+| `http://sip.loopcom.net/sip` | **301** → `https://sip.loopcom.net/sip` |
+| `https://sip.loopcom.net/` (non-`/sip`) | **404** (as designed) |
+| cert on new host | `CN = sip.loopcom.net`, `notAfter Nov 14 2026` |
+| **default TLS server (unmatched SNI)** | **still `CN = app.connectcomunications.com`** |
+| `/api/health` (both hosts) | **200** |
+| portal `/` | **200** |
+| bad-credential login | **401** |
+| `app-api-1` | healthy |
+| ⛔ `docker exec app-api-1 … $SIP_PUBLIC_WS_URL` | ⛔ **still the OLD value** |
 
 ⛔⛔ **THE TRAP THAT ALMOST GOT FILED AS A REGRESSION: from Izzy's own workstation,
 `app.connectcomunications.com/sip` and `app.loopcom.net/sip` return `403 Forbidden`,
@@ -122,11 +195,26 @@ cutover.** `sites-available/connectcomms` proxies `/sip` to **`https://127.0.0.1
 `https://m.connectcomunications.com:8089/ws`**. All three return 101, so the upgrade
 proves the *route*, not the *call*. The new block must mirror the **direct-to-PBX** form.
 
-### The runbook — every remaining step, ready to run once the A record exists
+### How it was built — the procedural facts worth reusing
 
-⛔ **Step 0, non-negotiable: prove DNS first.** `nslookup sip.loopcom.net 8.8.8.8` must
-answer `45.14.194.179`. Running certbot before propagation burns a Let's Encrypt
-failure and reads like a broken vhost.
+⛔ **Prove DNS resolves before certbot.** Running it against an unpropagated name burns a
+Let's Encrypt failure and reads like a broken vhost. Verified from the authoritative
+nameservers **and** 8.8.8.8/1.1.1.1 before proceeding.
+
+⛔ **The filename picks nginx's default server.** `sites-enabled/*` is included in
+**sorted** order and the first `listen 443` block becomes the default for unmatched
+hostnames. Order is now `connectcomms`, `connectcomms-loopcom`, `connectcomms-platform`,
+`connectcomms-sip`, `connectcomms-sip-loopcom` — the new file sorts **last**, so the
+default stayed `app.connectcomunications.com` (re-verified by unmatched-SNI probe
+**after** the change). A name like `app-sip` would have silently stolen it.
+
+The vhost is `connectcomms-sip` **verbatim** with hostname and cert paths swapped,
+including `proxy_read_timeout 3600` / `proxy_send_timeout 3600` and
+`proxy_pass https://m.connectcomunications.com:8089/ws` — **direct to the PBX, not
+kamailio**. `/sip` is HTTPS-only; port 80 is a 301. ⛔ No `security-headers.conf` here —
+this block serves no HTML. ⛔ Always `systemctl reload`, never `restart`.
+
+**The exact sequence that was run** (repeat it for any future SIP hostname):
 
 ```bash
 # 1) CERT. ⛔ `certbot --nginx` (installer form) CANNOT be first — it needs a vhost
@@ -195,10 +283,29 @@ diff /opt/connectcomms/env/.env.platform.bak.* /opt/connectcomms/env/.env.platfo
 
 curl -s http://127.0.0.1:3910/ops/deploy/status        # ⛔ require runningCount: 0
 cd /opt/connectcomms/app && bash scripts/deploy-direct.sh api --branch feat/ivr-migration-takeover
-docker exec app-api-1 sh -c 'echo [$SIP_PUBLIC_WS_URL]'
+docker exec app-api-1 sh -c 'echo [$SIP_PUBLIC_WS_URL]'   # ⛔ THIS is the proof, not the exit line
 ```
 ⛔ **Never `docker compose up` by hand** — api is blue/green (AGENTS.md rule 12).
-**Rollback is under a minute:** put the old value back, redeploy api.
+⛔ **Step 4's deploy SKIPPED and still said `success`** — see the section above. The env
+value is staged on disk and **not** in the container.
+
+### ⛔ THE ONE STEP LEFT — and it needs the owner
+
+**The api container must be recreated for the flip to reach clients**, and there is **no
+sanctioned script that will do it for an env-only change.** Options, owner's call:
+
+1. **Do nothing** — the next api deploy touching api code picks it up automatically.
+   Simplest, but it ships unobserved during someone else's work.
+2. **Piggyback deliberately** — let the next real api deploy carry it, with someone
+   watching the `docker exec` check afterwards.
+3. **Force a recreate now** — needs Izzy's explicit go-ahead, because it means stepping
+   outside `deploy-direct.sh`.
+4. **Back it out** — restore `.env.platform.bak.20260816T202641Z`. Costs nothing; the new
+   hostname keeps working, just unused.
+
+⛔ **Whichever is chosen, the acceptance test is the same and it is NOT the deploy's exit
+line:** `docker exec app-api-1 sh -c 'echo $SIP_PUBLIC_WS_URL'` must read
+`wss://sip.loopcom.net/sip`.
 
 ### What this does and does not change
 

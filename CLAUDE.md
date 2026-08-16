@@ -702,24 +702,53 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   files. Fully recovered, nothing lost — but compare by inspecting which files the
   errors land in, never by stashing.
 
-## ⛔ AGENT HANDOFF — `sip.loopcom.net` does NOT exist; the SIP hostname handed to clients is still the connectcomunications one (2026-08-16) — READ FIRST before any SIP-hostname work, before believing LoopCom branding reached SIP, or before retiring ANY SIP hostname
+## ⛔⛔ AGENT HANDOFF — `sip.loopcom.net` is LIVE, but the flip onto it is STAGED AND NOT IN THE CONTAINER (2026-08-16) — READ FIRST before deploying api, before any SIP-hostname work, before trusting a deploy's `success` line, or before retiring ANY SIP hostname
 
-Full runbook: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md` → Phase A2**
-(**Attempted and BLOCKED. Nothing changed: no DNS record, no cert, no nginx block, no
-env edit, no deploy, no tenant row, no PBX interaction.**)
+Full detail: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md` → Phase A2**
+(DNS + cert + nginx **DONE and verified**; env flip **staged on disk only**. No tenant
+row touched, no telephony restart, no customer contacted, no PBX interaction.)
 
-- ⛔⛔ **`sip.loopcom.net` DOES NOT RESOLVE (NXDOMAIN) and the platform still hands out
-  `wss://sip.connectcomunications.com/sip`** — proven, not assumed:
-  `docker exec app-api-1 sh -c 'echo [$SIP_PUBLIC_WS_URL]'` reads
-  `[wss://sip.connectcomunications.com/sip]`. **The LoopCom rebrand has NOT reached SIP.**
-- ⛔ **THE BLOCKER IS ONE DNS RECORD ONLY IZZY CAN ADD.** The Squarespace session is
-  live and loopcom.net's DNS page **reads** fine, but clicking `ADD RECORD` throws
-  **"Verify to continue as support@connectcomunications.com — Login with Google"**, and
-  an agent must not authenticate as the owner. He needs to add exactly one custom
-  record: **`A` / name `sip` / data `45.14.194.179`** — and touch nothing else on that
-  page (four apex A records = the live Squarespace site, `www` CNAME, `HTTPS` record,
-  **five Google MX records**, and the existing `_dmarc` TXT). The gate blocks the
-  **write**, not the **read**, so inspection and verification still work unattended.
+- ✅ **`sip.loopcom.net` SERVES SIP.** 101 + `Sec-WebSocket-Protocol: sip`, own Let's
+  Encrypt cert (expires 2026-11-14, auto-renewing), port 80 → 301, non-`/sip` → 404.
+  **All three pre-existing SIP hostnames still return 101** — additive, no regression.
+  `/api/health` 200, portal 200, bad login 401, default TLS server still
+  `CN = app.connectcomunications.com`.
+- ⛔⛔ **BUT CLIENTS ARE STILL BEING HANDED THE OLD HOSTNAME.** `.env.platform:106` reads
+  `wss://sip.loopcom.net/sip`; **the running `app-api-1` still reads
+  `wss://sip.connectcomunications.com/sip`.** The flip has NOT taken effect.
+- ⛔⛔ **THE TRAP THAT CAUSED IT — A DEPLOY THAT PRINTS `success` AND CHANGES NOTHING.**
+  `deploy-direct.sh api` exited **`success`** while logging, mid-output,
+  `skip=unrelated_paths` → *"no api-relevant paths changed — skipping build/restart"*.
+  `deploy_common_needs_rebuild` (`scripts/lib/deploy-common.sh:313`) decides purely on
+  whether api-relevant **paths** changed — **an env var is not a path, so an env-only
+  change can NEVER trigger a rebuild.** ⛔ **After any env change the ONLY proof is
+  `docker exec app-api-1 sh -c 'echo $SIP_PUBLIC_WS_URL'`. Never trust the exit line** —
+  it is the last thing printed and it says success.
+- ⛔ **`DEPLOY_FORCE_RESTART=1` DOES NOT WORK for api** (tried; identical skip). There is
+  **no `--force` flag** on `deploy-direct.sh`, and the deploy queue runs the same script.
+  `docker compose up -d api` is **forbidden** (AGENTS.md rule 12 — the historic `/api/*`
+  502 class). **So an env-only api change has NO sanctioned deploy path** — this session
+  stopped rather than improvise one. ⛔ **Consequence: the next api deploy touching api
+  code will ship this SIP-hostname flip unobserved.** The container's `.build-commit` is
+  still `cf8d16ff`, so the window is already open. Read Phase A2 before deploying api.
+- **Rollback if it should not ship:** restore
+  `/opt/connectcomms/env/.env.platform.bak.20260816T202641Z` (diff = exactly one line,
+  106). The DNS record, cert and nginx block are additive and harmless either way.
+- ⛔ **Squarespace's Google re-auth gates the WRITE, not the READ.** The DNS page renders
+  unattended, but `ADD RECORD` throws *"Verify to continue as support@…"*; **Izzy had to
+  sign in**, after which the record went in with no further prompt. Two UI traps on that
+  form: **`ADD RECORD` needs TWO clicks** (the first silently does nothing), and the
+  **TYPE control is a custom `DIV`, not a `<select>`** — `form_input` fails on it; click
+  it open and click the option. ✅ **The tell that the type took is the last field's label
+  changing from `DATA` to `IP ADDRESS`.** Re-read the form before saving.
+- **Backups:** `/root/nginx-full-backup-20260816-222322.tar.gz` (whole `/etc/nginx`),
+  `/root/nginx-connectcomms-backup-20260816-222322.conf`,
+  `/root/nginx-connectcomms-sip-backup-20260816-222322.conf`,
+  `/root/connectcomms-sha256-20260816-222322.txt`,
+  `/opt/connectcomms/env/.env.platform.bak.20260816T202641Z`. ⛔ **`certonly` proved
+  itself:** `sites-available/connectcomms` is **byte-identical** after the whole
+  operation (sha256 `a33f0c7f…`) — capture that hash up front, it is the only way to know
+  certbot did not rewrite a hand-written vhost.
 - ⛔⛔ **A `403` ON `app.*/sip` FROM IZZY'S WORKSTATION IS HIS CONTENT FILTER, NOT A
   REGRESSION — this was one step from being filed as an outage.** From his line,
   `app.connectcomunications.com/sip` and `app.loopcom.net/sip` return **403** while
@@ -739,21 +768,21 @@ env edit, no deploy, no tenant row, no PBX interaction.**)
   hostnames. Today that is `connectcomms` (verified live: unmatched SNI returns
   `CN = app.connectcomunications.com`). Use **`connectcomms-sip-loopcom`**, which sorts
   last; a name like `app-sip` would silently steal the default server.
-- ⛔ **When it does land, this is ADDITIVE and `sip.connectcomunications.com` can NEVER
-  be retired on a schedule.** Clients cache `sipWsUrl` forever and the apps never
-  refresh it — which is exactly why the flip is safe *and* why it moves nobody until
-  they sign out and back in. Retiring an old SIP hostname while one client still holds
-  it cached is the only way this work causes an outage.
+- ⛔ **This is ADDITIVE and `sip.connectcomunications.com` can NEVER be retired on a
+  schedule.** Clients cache `sipWsUrl` forever and the apps never refresh it — which is
+  exactly why the flip is safe *and* why it moves nobody until they sign out and back in.
+  Retiring an old SIP hostname while one client still holds it cached is the only way
+  this work causes an outage.
 - ⛔ `apps/api/src/sipPublicEndpoint.ts` is **one global value by design** — after the
   flip a portal user on `app.connectcomunications.com` would be handed a **loopcom.net**
   SIP host. Per-domain SIP is an **open decision the owner has not made**; do not "fix"
   it unasked.
-- ✅ **Baseline proven before the attempt and unchanged after it** (deploy queue idle,
-  `runningCount: 0`): all three existing hostnames **101** from the server,
-  `/api/health` **200**, bad-credential login **401 `invalid_credentials`**, default TLS
-  server still `app.connectcomunications.com`. ⛔ That 401 first read as a **500** —
-  that was **shell-quoting mangling the JSON through nested ssh**, not the API. Send the
-  body with `--data @file` before believing a login 500.
+- ⛔ **A bad-credential login that reads 500 is probably your shell.** It first returned
+  **500** here; that was **nested-ssh quoting mangling the JSON**, not the API. With
+  `--data @file` it is a clean **401 `invalid_credentials`**.
+- ✅ **loopcom.net was not collaterally damaged** — re-verified after the DNS edit: apex
+  still returns all **four** Squarespace A records, **five** Google MX records intact,
+  `www` CNAME intact, `https://loopcom.net/` still **200**.
 
 ## ⛔⛔ AGENT HANDOFF — the customer's price is ALL-INCLUSIVE now; taxes live INSIDE the total (2026-08-16) — READ FIRST before any billing-calculation work, before adding a tax or fee line, before quoting a price, or for "why did this customer's total change?"
 
