@@ -202,8 +202,8 @@ export default function PublicBillingInvoicePayPage() {
     <main className="billing-pay-page" data-pay-theme={payTheme}>
       <div className="billing-pay-bg" aria-hidden="true" />
       <div className="billing-pay-shell">
-        <div className="billing-pay-logo" aria-label="Connect Communications">
-          <Image src="/connect-logo.png" alt="Connect Communications" width={150} height={42} priority />
+        <div className="billing-pay-logo" aria-label="Loopcom">
+          <Image src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} priority />
         </div>
 
         <section className="billing-pay-card" aria-label="Secure invoice payment">

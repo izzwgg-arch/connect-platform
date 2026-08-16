@@ -28,12 +28,11 @@ export function PaymentTrustBadge({ theme = "light" }: PaymentTrustBadgeProps) {
           <CreditCard size={17} aria-hidden="true" />
           <span>We accept</span>
         </div>
-        <div className="billing-pay-card-brands" aria-label="Visa, Mastercard, Amex, Discover, and Apple Pay accepted">
+        <div className="billing-pay-card-brands" aria-label="Visa, Mastercard, Amex and Discover accepted">
           <b className="brand-visa">Visa</b>
           <b className="brand-mastercard">Mastercard</b>
           <b className="brand-amex">Amex</b>
           <b className="brand-discover">Discover</b>
-          <b className="brand-apple-pay">Apple Pay</b>
         </div>
       </div>
     </footer>

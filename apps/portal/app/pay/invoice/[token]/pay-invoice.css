@@ -678,7 +678,6 @@ body:has(.billing-pay-page) {
 .billing-pay-card-brands .brand-mastercard { color: #ea580c; }
 .billing-pay-card-brands .brand-amex { color: #2563eb; }
 .billing-pay-card-brands .brand-discover { color: #b45309; }
-.billing-pay-card-brands .brand-apple-pay { color: #111827; }
 
 .billing-pay-page[data-pay-theme="dark"] .billing-pay-card-brands b {
   color: #e8f1ff;
