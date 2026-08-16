@@ -15,6 +15,7 @@ import { hasEffectivePortalPermission } from "./platformRolePermissions";
 import {
   buildVoipMsSmsWebhookCallbackUrl,
   canonicalSmsPhone,
+  canonicalSmsSender,
   buildSmsDedupeKey,
   isSharedTenantSmsInbox,
   normalizeSmsInboxAssignmentMode,
@@ -2250,14 +2251,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const providerMessageId = String(payload.id ?? payload.sms ?? payload.sms_id ?? payload.message_id ?? "").trim();
     const mmsUrls = extractInboundMmsUrls(payload);
 
-    const nf = canonicalSmsPhone(rawFrom);
+    // Sender may be a short code or an alphanumeric sender ID, never assume a
+    // phone number; destination must be one of our DIDs, so it stays strict.
+    const nf = canonicalSmsSender(rawFrom);
     const nt = canonicalSmsPhone(rawTo);
     if (!nt.ok) {
       await db.smsRoutingLog.create({
         data: {
           rawFrom,
           rawTo,
-          normalizedFrom: nf.ok ? nf.e164 : null,
+          normalizedFrom: nf.ok ? nf.sender : null,
           normalizedTo: null,
           direction: "inbound",
           status: "invalid_to",
@@ -2280,7 +2283,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         data: {
           rawFrom,
           rawTo,
-          normalizedFrom: nf.ok ? nf.e164 : null,
+          normalizedFrom: nf.ok ? nf.sender : null,
           normalizedTo: nt.e164,
           direction: "inbound",
           status: "unassigned",
@@ -2291,7 +2294,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return reply.type("text/plain").send("ok");
     }
 
-    const extE164 = nf.ok ? nf.e164 : rawFrom;
+    const extE164 = nf.ok ? nf.sender : rawFrom;
     const inboxScope = await resolveSmsInboxOwnerUserId({
       tenantId: num.tenantId,
       assignedUserId: num.assignedUserId || null,
@@ -2351,7 +2354,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       data: {
         rawFrom,
         rawTo,
-        normalizedFrom: nf.ok ? nf.e164 : null,
+        normalizedFrom: nf.ok ? nf.sender : null,
         normalizedTo: nt.e164,
         direction: "inbound",
         resolvedTenantId: num.tenantId,

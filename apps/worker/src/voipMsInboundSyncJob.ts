@@ -2,6 +2,7 @@ import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import {
   canonicalSmsPhone,
+  canonicalSmsSender,
   buildSmsDedupeKey,
   normalizeSmsInboxAssignmentMode,
   resolveSmsInboxScope,
@@ -130,12 +131,23 @@ function normalizeInboundRow(raw: unknown, tenantDidE164: string): InboundRow | 
   const row = raw as Record<string, unknown>;
   const fromRaw = firstString(row, ["from", "src", "callerid", "contact", "sender"]);
   const toRaw = firstString(row, ["to", "dst", "did", "recipient"]);
-  const from = canonicalSmsPhone(fromRaw);
+  // ⛔ The sender is NOT always a phone number — verification codes arrive from
+  // numeric short codes (WhatsApp uses 29283). Running it through the strict
+  // `canonicalSmsPhone` and returning null here silently discarded every one of
+  // them. The destination stays strict: it must be our own DID.
+  const from = canonicalSmsSender(fromRaw);
   const to = canonicalSmsPhone(toRaw || tenantDidE164);
-  if (!from.ok || !to.ok) return null;
+  if (!to.ok) return null;
   if (to.e164 !== tenantDidE164) return null;
+  if (!from.ok) {
+    // Never silent: a dropped inbound message must leave a trace to grep for.
+    console.warn(
+      `[voipms-inbound] dropped inbound message: unusable sender ${JSON.stringify(fromRaw)} on ${tenantDidE164} (${from.error})`,
+    );
+    return null;
+  }
 
-  if (from.e164 === tenantDidE164) return null;
+  if (from.sender === tenantDidE164) return null;
 
   const body = firstString(row, ["message", "body", "msg", "text"]);
   const mediaUrls = parseMediaUrls(row);
@@ -147,11 +159,11 @@ function normalizeInboundRow(raw: unknown, tenantDidE164: string): InboundRow | 
 
   const providerId =
     firstString(row, ["id", "sms", "sms_id", "message_id", "mms", "mms_id"]) ||
-    `${tenantDidE164}:${from.e164}:${firstString(row, ["date", "timestamp", "created_at"])}:${body}:${mediaUrls.join(",")}`;
+    `${tenantDidE164}:${from.sender}:${firstString(row, ["date", "timestamp", "created_at"])}:${body}:${mediaUrls.join(",")}`;
 
   return {
     providerMessageId: `voipms:${providerId}`,
-    from: from.e164,
+    from: from.sender,
     to: to.e164,
     body,
     mediaUrls,
