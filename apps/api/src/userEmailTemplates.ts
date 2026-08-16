@@ -81,6 +81,185 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
 </html>`;
 }
 
+// ─── LoopCom shell ────────────────────────────────────────────────────────────
+// Used by the invite email. The other templates below still use `shell()` above;
+// they are deliberately unchanged until their redesign is approved.
+
+/**
+ * Absolute URL of the LoopCom wordmark for emails.
+ *
+ * ⛔ Resolved HERE, from the environment at CALL time — never passed in by the
+ * caller. TWO paths queue the invite email (server.ts admin invites and
+ * onboarding/setupOrchestrator.ts sign-ups) and passing this as an input is
+ * exactly how the Android APK link went missing from every self-service sign-up
+ * while admin invites still had it. Neither caller can forget what it never
+ * supplies.
+ *
+ * ⛔ Email clients cannot read a relative path or a data: URI — this must stay an
+ * absolute https URL to a publicly reachable file.
+ */
+export function brandLogoUrl(): string {
+  const origin = String(
+    process.env.PORTAL_PUBLIC_URL
+    || process.env.CONNECT_APP_URL
+    || process.env.APP_PUBLIC_URL
+    || "https://app.connectcomunications.com"
+  ).replace(/\/+$/, "");
+  return `${origin}/brand/loopcom/loopcom-wordmark-560.png`;
+}
+
+/**
+ * Light-only email shell in the LoopCom theme.
+ *
+ * Built to render on phones, desktop webmail AND Outlook's Word engine, which
+ * means every one of these is deliberate — do not "modernise" them away:
+ *   - tables + inline styles only; Outlook ignores <style> for layout
+ *   - an mso conditional wrapper gives Outlook a fixed 600px table, because it
+ *     does not support max-width and would otherwise render full-bleed
+ *   - every gradient sits on top of a solid `bgcolor` attribute, so Outlook
+ *     degrades to flat brand blue instead of to nothing
+ *   - the <style> block carries ONLY the mobile media query, which is an
+ *     enhancement; the email is already correct without it
+ *   - color-scheme meta pins light, since the design is light by default.
+ *     ⛔ This is a request, not a guarantee: Gmail and Apple Mail may still
+ *     auto-invert on a phone and no sender can prevent that.
+ */
+function loopComShell(opts: {
+  preheaderText?: string;
+  headerTitle: string;
+  headerSubtitle?: string;
+  body: string;
+}): string {
+  const year = new Date().getFullYear();
+  const font = `-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
+  return `<!doctype html>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>${esc(opts.headerTitle)}</title>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
+  <style>
+    @media only screen and (max-width:620px) {
+      .lc-card { width:100% !important; }
+      .lc-pad { padding-left:22px !important; padding-right:22px !important; }
+      .lc-h1 { font-size:22px !important; }
+      .lc-logo { width:142px !important; height:auto !important; }
+      .lc-btn a { display:block !important; text-align:center !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#f1f4f8;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+${opts.preheaderText ? preheader(opts.preheaderText) : ""}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#f1f4f8" style="background:#f1f4f8;">
+  <tr>
+    <td align="center" style="padding:34px 14px 42px;">
+
+      <!--[if mso]><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600"><tr><td><![endif]-->
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" class="lc-card" bgcolor="#ffffff" style="max-width:600px;width:100%;background:#ffffff;border-radius:18px;">
+
+        <!-- Logo, on the card. One asset, no dark plate, no tagline. -->
+        <tr>
+          <td align="center" class="lc-pad" style="padding:32px 44px 20px;">
+            <img src="${esc(brandLogoUrl())}" alt="LoopCom" width="168" height="30" class="lc-logo"
+                 style="display:block;border:0;outline:none;text-decoration:none;width:168px;height:30px;color:#0f172a;font-family:${font};font-size:19px;font-weight:700;letter-spacing:-.02em;">
+          </td>
+        </tr>
+
+        <!-- Accent rule -->
+        <tr>
+          <td class="lc-pad" style="padding:0 44px;">
+            <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+              <tr><td height="2" bgcolor="#22a8ff" style="height:2px;line-height:2px;font-size:0;background:#22a8ff;background-image:linear-gradient(90deg,#22a8ff,#4f7bff);">&nbsp;</td></tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Title -->
+        <tr>
+          <td class="lc-pad" style="padding:26px 44px 0;">
+            <h1 class="lc-h1" style="margin:0;font-size:26px;line-height:1.25;color:#0f172a;font-weight:800;font-family:${font};mso-line-height-rule:exactly;">${esc(opts.headerTitle)}</h1>
+            ${opts.headerSubtitle ? `<p style="margin:8px 0 0;font-size:15px;color:#64748b;font-family:${font};">${esc(opts.headerSubtitle)}</p>` : ""}
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td class="lc-pad" style="padding:22px 44px 30px;color:#374151;font-size:15px;line-height:1.75;font-family:${font};mso-line-height-rule:exactly;">
+            ${opts.body}
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td class="lc-pad" bgcolor="#f8fafc" style="padding:18px 44px 24px;background:#f8fafc;border-top:1px solid #e5e7eb;">
+            <p style="margin:0;font-size:11.5px;color:#9ca3af;line-height:1.6;font-family:${font};">
+              &copy; ${year} LoopCom &middot; All rights reserved.<br>
+              This email was sent on behalf of your organization.
+            </p>
+          </td>
+        </tr>
+
+      </table>
+      <!--[if mso]></td></tr></table><![endif]-->
+
+    </td>
+  </tr>
+</table>
+</body>
+</html>`;
+}
+
+/** Brand-blue CTA. Gradient over a solid bgcolor so Outlook degrades to flat. */
+function lcCtaButton(label: string, url: string): string {
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" class="lc-btn" style="margin:30px 0 4px;">
+  <tr>
+    <td align="center" bgcolor="#22a8ff" style="border-radius:10px;background:#22a8ff;background-image:linear-gradient(135deg,#22a8ff,#4f7bff);">
+      <a href="${esc(url)}" target="_blank" style="display:inline-block;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:15px 30px;border-radius:10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:.01em;">${esc(label)}</a>
+    </td>
+  </tr>
+</table>`;
+}
+
+/** Outlined secondary CTA (the Android download). */
+function lcSecondaryButton(label: string, url: string): string {
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" class="lc-btn" style="margin:14px 0 4px;">
+  <tr>
+    <td align="center" bgcolor="#ffffff" style="border:1.5px solid #22a8ff;border-radius:10px;background:#ffffff;">
+      <a href="${esc(url)}" target="_blank" style="display:inline-block;color:#0b6fc4;text-decoration:none;font-weight:700;font-size:14px;padding:13px 26px;border-radius:10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:.01em;">${esc(label)}</a>
+    </td>
+  </tr>
+</table>`;
+}
+
+/** Info badges with the brand accent rail. */
+function lcBadges(badges: Array<{ label: string; value: string }>): string {
+  if (!badges.length) return "";
+  const font = `-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
+  const rows = badges.map(
+    (b) => `<tr>
+      <td style="padding:4px 0;">
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+          <tr>
+            <td bgcolor="#f1f5f9" style="padding:9px 14px;background:#f1f5f9;border-radius:8px;border-left:3px solid #22a8ff;">
+              <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:#6b7280;font-family:${font};">${esc(b.label)}&nbsp; </span><span style="font-size:14px;font-weight:600;color:#1e293b;font-family:${font};">${esc(b.value)}</span>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>`
+  );
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:20px 0 24px;">
+  ${rows.join("\n")}
+</table>`;
+}
+
 function ctaButton(label: string, url: string, color = "#2563eb"): string {
   return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:30px 0 4px;">
   <tr>
@@ -149,7 +328,7 @@ ${divider()}
 <p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Connect Mobile (Android)</p>
 <p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Connect app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
 
-${secondaryCtaButton("Download Connect for Android", input.androidApkUrl)}
+${lcSecondaryButton("Download Connect for Android", input.androidApkUrl)}
 
 <p style="margin:8px 0 0;font-size:12px;color:#94a3b8;">Android may ask you to allow installs from this source the first time.</p>
 `
@@ -160,9 +339,9 @@ ${secondaryCtaButton("Download Connect for Android", input.androidApkUrl)}
 <p style="margin:0 0 18px;">You've been invited to join <strong>${esc(input.tenantName)}</strong> on Connect Communications.</p>
 <p style="margin:0 0 20px;color:#64748b;">Your account is ready. Create a password to get started — it only takes a moment.</p>
 
-${infoBadgesTable(badges)}
+${lcBadges(badges)}
 
-${ctaButton("Create Your Password", input.setupUrl)}
+${lcCtaButton("Create Your Password", input.setupUrl)}
 
 <p style="margin:20px 0 0;font-size:13px;color:#94a3b8;">This one-time link expires in <strong>${input.expiresHours} hours</strong>. After that you can request a new invite from your administrator.</p>
 
@@ -198,7 +377,7 @@ ${divider()}
 
   return {
     subject: `Welcome to Connect Communications — Create Your Password`,
-    html: shell({
+    html: loopComShell({
       preheaderText: `Hi ${firstName}, your Connect Communications account at ${input.tenantName} is ready. Create your password to get started.`,
       headerTitle: "You're Invited",
       headerSubtitle: `Welcome to ${input.tenantName}`,

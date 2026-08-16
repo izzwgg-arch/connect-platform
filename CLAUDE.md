@@ -245,6 +245,16 @@ which is now history.
   those rows. **This is the whole design**: the agent is a manual rebuild, so
   knowledge baked into its image would need a hand-built container per wording
   change. **Edit a file → deploy the api → the assistant knows it.**
+- ⛔⛔ **WHEN YOU DO REBUILD THE AGENT: it builds the server clone's WORKING
+  TREE, not the branch tip — `git fetch` alone does not move it.** On
+  2026-08-16 a rebuild reported success, came up healthy, and did NOT contain
+  the commit pushed minutes earlier (clone `2ffa720f`, origin `91f47e34`).
+  Earlier rebuilds worked only because an api deploy had just hard-reset the
+  clone. **Always** `cd /opt/connectcomms/app && git fetch origin <branch> &&
+  git reset --hard origin/<branch>` first — after the deploy queue's
+  `runningCount` reaches 0, never under a running deploy — and then **verify
+  the CONTAINER, not the build log**: `docker exec app-agent-1 grep -c
+  <new-symbol> /app/apps/agent/src/...`. See [[agent-rebuild-needs-clone-reset]].
 - ⛔ **`process.cwd()` is `/app/apps/api`, NOT the repo root.** The first deploy
   published NOTHING and logged `missingDir` because the default path was
   `cwd/docs/agent-knowledge`. It deleted nothing — deletion is gated on having
@@ -324,6 +334,20 @@ that reply-approval "was deliberately NOT built".
   (`apps/api/src/agentFixPolicy.ts`, 24 h). The on-screen draft TTL is 30 min;
   a code outliving its draft would answer "expired" exactly when the owner
   replied in the morning. `maxAgeMs` is passed ONLY by this path.
+- ⛔ **The escalation text MUST name the company AND the person** (Izzy,
+  2026-08-16, after a real text said "User: Unknown user"). Fixed `91f47e34`:
+  the user id is looked for in the turn context **and then on the CONVERSATION
+  row**, and `resolveEscalationUserName()` can never return "Unknown user" — a
+  genuinely signed-out chat now reads **"not signed in (chat widget)"**, which
+  is a fact he can act on rather than a bug in us. An unidentified escalation
+  is audited (`escalation.user_unidentified`) so it is countable.
+  ✅ **97 of 98 live conversations DO carry a user id** — the one that does not
+  is the internal-secret test path, which is exactly the conversation that
+  produced that text. Real portal chats were never affected.
+- ⛔ **"Reply OK here to approve" was REMOVED from the escalation SMS.** It
+  became false the moment approval moved to the one-time FIX code — the parser
+  deliberately ignores "ok", so the text was teaching a gesture that silently
+  does nothing.
 - **Replies arrive** as `ConnectChatMessage` rows on the admin thread for
   (845) 557-7768 via the worker's VoIP.ms poll (~2.5 min); a 60 s api sweep
   reads only that number's threads from allow-listed senders.
