@@ -1,7 +1,31 @@
 # PLAN — put Connect behind Cloudflare, and the SIP split-out that has to happen first
 
-Status: **PLAN ONLY. Nothing in here has been executed.** Written 2026-08-16 at Izzy's
-request. Every step below is reversible and each carries its own rollback.
+Status: **PHASE A IS DONE AND VERIFIED (2026-08-16). Phases B and C are NOT started.**
+Every step is reversible and each carries its own rollback.
+
+✅ **Plan upgraded to Cloudflare Pro** on `connectcomunications.com` (2026-08-16,
+verified: badge reads `pro`, DNS limit 200 → 3,500, Spectrum appeared). ⛔ **Pro is
+PER ZONE** — `loopcom.net`/`.org`/`.ai` would each need their own upgrade.
+⛔ Spectrum on Pro covers SSH/Minecraft only; **arbitrary TCP (i.e. real SIP) is
+Enterprise**, so Pro does NOT remove the need for the SIP split below.
+
+## Phase A — COMPLETE, verified 2026-08-16
+
+- `sip.connectcomunications.com` A → 45.14.194.179, **DNS only**. Verified it resolves
+  to the origin and not a Cloudflare address. ⛔ On the Add-record form the proxy
+  toggle defaults to **Proxied** and a coordinate click missed it — it was caught by
+  re-reading the dialog, which still said "proxied through Cloudflare". **Always
+  re-read the summary sentence before saving a DNS record.**
+- Let's Encrypt cert issued (expires 2026-11-14, auto-renewing).
+- nginx: `/etc/nginx/sites-available/connectcomms-sip`, **HTTPS only** for `/sip`
+  (port 80 returns 301). ⛔ certbot merged 80 and 443 into ONE server block, which
+  would have served `/sip` over plaintext HTTP — split into two blocks by hand.
+  Backups: `/root/nginx-connectcomms-sip-backup-*.conf`.
+- **Proven:** `sip.…/sip` returns **`101 Switching Protocols`** +
+  `Sec-WebSocket-Protocol: sip`; `app.…/sip` still returns **101** (no regression);
+  port 80 returns **301**.
+- ⛔ **Nothing has moved for any customer.** Both hostnames serve SIP; all four
+  tenants still use `app.` until Phase B changes the code.
 
 ---
 
@@ -145,6 +169,48 @@ policy — so switching it on while something is still broken can make the broke
 unreachable.
 
 ---
+
+## 4b. The OTHER three domains — loopcom.net / .org / .ai (2026-08-16)
+
+Izzy is adding **loopcom.net** and wants both domains treated the same. Inventory
+taken before any change; **nothing on these domains has been modified.**
+
+The Squarespace account holds **four** domains: `connectcomunications.com` (already on
+Cloudflare nameservers), plus **`loopcom.ai`** (exp. 2028-07-12), **`loopcom.net`** and
+**`loopcom.org`** (both exp. 2027-07-12), all three still on
+**`nsc1-4.squarespacedns.com`**.
+
+⛔ **`loopcom.net` IS NOT A PARKED DOMAIN — it carries LIVE Google Workspace email**
+(full `aspmx.l.google.com` MX set, priorities 1/5/5/10/10) **and a live Squarespace
+site** (four A records to 198.49.23.144/145 + 198.185.159.144/145, `www` CNAME →
+`ext-sq.squarespace.com`, plus an `HTTPS` service record). **Moving nameservers to
+Cloudflare without replicating every one of those first takes down the website AND all
+mail.** That is the whole risk of this task and it is not visible from the domain list.
+
+⛔ **`loopcom.net` has NO DMARC** — same gap that was just closed on
+connectcomunications.com, and it matters more here because Workspace mail is live.
+
+⛔ **"They're gonna do the same thing" is a FUTURE state, not the current one.**
+`loopcom.net` today serves a Squarespace marketing site, not Connect. Pointing it at
+Connect is a separate piece of work (nginx server block, certificate, and a decision
+about what it actually serves) — it is not a by-product of the DNS move.
+
+**Order of work when this is picked up:**
+1. Add DMARC at Squarespace (`p=none`, monitor) — safe, no nameserver change needed.
+   Do this even if the migration never happens.
+2. Export the FULL record set for the domain, including the `HTTPS` record and any
+   Google verification TXT.
+3. Create the Cloudflare zone, **re-enter every record and verify each one**, and only
+   then change nameservers at Squarespace. Keep MX and SPF/DKIM **DNS-only**.
+4. ⛔ Verify mail flow (send + receive) and the website **before** proxying anything.
+
+⛔ **UNRELATED BUT URGENT, found on the Squarespace domains page:** a banner reads
+*"There was a problem with your email address — We couldn't reach the email address
+support@connectcomunications.com."* An unverified ICANN registrant contact can get a
+domain **SUSPENDED**, and it also means renewal notices are reaching nobody.
+`connectcomunications.com` expires **2027-08-13**. This is plausibly downstream of the
+known `support@` mail problems (the bounce-loop `discard:` transport and the shared
+500/day Gmail cap). **Needs a human to fix the contact address.**
 
 ## 5. What I recommend
 
