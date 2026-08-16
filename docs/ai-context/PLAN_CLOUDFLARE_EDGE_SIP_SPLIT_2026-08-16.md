@@ -133,7 +133,29 @@ the orange cloud alone.
 At the end of Phase A both hostnames serve SIP. Nothing has moved. This is a safe
 resting point and can sit here indefinitely.
 
-### Phase B — move the clients (the customer-visible step)
+### Phase B — CODE HALF IS DONE (2026-08-16). The flip itself is NOT done.
+
+✅ **Landed and deployed as a no-op** (`95ab783d`, api container-verified: the new
+module is present and `grep -c "app.connectcomunications.com/sip"` in the running
+container is **0**). `SIP_PUBLIC_WS_URL` is **unset**, so clients still receive the
+`app.` URL and nothing has changed for anyone. Proven after cutover: `/api/health`
+200, login still 401 on bad credentials, and **both** `app./sip` and `sip./sip` still
+answer **101**.
+
+⛔ **The URL was hardcoded in THREE places, not the two this plan originally claimed.**
+The third is the **SBC readiness probe** (`fetch("https://app.…/sip")`), which does not
+look like a URL definition. Had only the client-facing one moved, the probe would have
+kept asserting a hostname nobody registers against — so a broken new route would have
+reported healthy. All three now come from `apps/api/src/sipPublicEndpoint.ts`, guarded
+by two tests that read `server.ts`'s **source** and fail if any literal returns (a unit
+test of the helper alone passes straight through that bug, because the defect is in a
+caller).
+
+**So the remaining flip is one env var + a restart:**
+`SIP_PUBLIC_WS_URL=wss://sip.connectcomunications.com/sip`
+Rollback: unset it and restart. Under a minute, no deploy.
+
+### Phase B (remainder) — move the clients (the customer-visible step)
 
 5. **Code:** replace the two hardcoded literals with an env-driven value
    (`SIP_PUBLIC_WS_URL`, defaulting to the current `app.` URL so the deploy itself is a
