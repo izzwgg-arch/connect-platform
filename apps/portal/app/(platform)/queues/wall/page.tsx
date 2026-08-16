@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Maximize2, Minimize2, Moon, Sun, Tv, X } from "lucide-react";
 import {
   AGENT_STATE_META,
   formatDuration,
@@ -11,25 +11,111 @@ import {
 } from "../queueBoard";
 
 /**
- * The wall display — a TV in the office.
+ * TV mode — the wall display.
  *
- * Rendered as a fixed, full-viewport overlay rather than a normal page so it
- * covers the sidebar and app chrome on a screen nobody is going to navigate,
- * while still sitting inside the authenticated layout (a wall board that
- * bypassed sign-in would be a hole, not a feature).
+ * Rendered as a fixed, full-viewport overlay so it covers the sidebar and app
+ * chrome on a screen nobody is going to navigate, while still sitting inside
+ * the authenticated layout (a wall board that bypassed sign-in would be a hole,
+ * not a feature).
  *
- * ⛔ Everything here must be legible from across a room and must never depend
- * on colour alone — every agent state carries a symbol and a word.
+ * Three things a TV needs that an app page doesn't:
+ *   • real fullscreen, so the browser's own chrome goes away too;
+ *   • a screen wake lock, or the panel sleeps and the board is useless;
+ *   • controls that get out of the way — they fade after a few seconds of no
+ *     mouse, because a permanent row of buttons on a wall is just clutter.
+ *
+ * ⛔ The theme choice is applied as token overrides scoped to `.qw-root`, NOT
+ * by writing `data-theme` on <html>. The app context owns that attribute and
+ * would fight us for it, and leaving TV mode could strand the whole portal in
+ * the wrong theme.
  */
+
+type TvTheme = "app" | "dark" | "light";
+const TV_THEME_KEY = "cc-queue-wall-theme";
+
 export default function QueueWallPage() {
   const { queues, live, configError } = useQueueBoard();
   const [now, setNow] = useState<Date | null>(null);
+  const [tvTheme, setTvTheme] = useState<TvTheme>("app");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wakeLock = useRef<any>(null);
 
-  // Rendered client-side only: a server-rendered clock would hydrate mismatched.
+  // Rendered client-side only: a server-rendered clock hydrates mismatched.
   useEffect(() => {
     setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(TV_THEME_KEY) as TvTheme | null;
+      if (saved === "dark" || saved === "light" || saved === "app") setTvTheme(saved);
+    } catch { /* private mode — the default is fine */ }
+  }, []);
+
+  const chooseTheme = useCallback((t: TvTheme) => {
+    setTvTheme(t);
+    try { window.localStorage.setItem(TV_THEME_KEY, t); } catch { /* non-fatal */ }
+  }, []);
+
+  // ── Screen wake lock ─────────────────────────────────────────────────────
+  // Released by the browser whenever the tab is hidden, so it must be
+  // re-acquired on every return to visibility or the TV sleeps overnight.
+  useEffect(() => {
+    let cancelled = false;
+    const acquire = async () => {
+      try {
+        const anyNav = navigator as any;
+        if (!anyNav.wakeLock?.request) return; // unsupported — not an error
+        if (document.visibilityState !== "visible") return;
+        wakeLock.current = await anyNav.wakeLock.request("screen");
+      } catch { /* denied or unsupported; the board still works */ }
+    };
+    const onVisible = () => { if (!cancelled && document.visibilityState === "visible") void acquire(); };
+    void acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      try { wakeLock.current?.release?.(); } catch { /* already gone */ }
+      wakeLock.current = null;
+    };
+  }, []);
+
+  // ── Fullscreen ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch { /* blocked without a user gesture — button press supplies one */ }
+  }, []);
+
+  // ── Auto-hiding controls ─────────────────────────────────────────────────
+  useEffect(() => {
+    const show = () => {
+      setControlsVisible(true);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = setTimeout(() => setControlsVisible(false), 4000);
+    };
+    show();
+    window.addEventListener("mousemove", show);
+    window.addEventListener("touchstart", show);
+    window.addEventListener("keydown", show);
+    return () => {
+      window.removeEventListener("mousemove", show);
+      window.removeEventListener("touchstart", show);
+      window.removeEventListener("keydown", show);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
   }, []);
 
   const agents = useMemo(() => mergeAgentsAcrossQueues(queues), [queues]);
@@ -50,7 +136,7 @@ export default function QueueWallPage() {
   }, [queues, agents]);
 
   return (
-    <div className="qw-root">
+    <div className="qw-root" data-tv-theme={tvTheme}>
       <header className="qw-top">
         <div>
           <div className="qw-brand">Queues</div>
@@ -66,9 +152,42 @@ export default function QueueWallPage() {
             {now ? now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" }) : ""}
           </div>
         </div>
-        <Link href="/queues" className="qw-close" aria-label="Leave wall display">
-          <X size={20} aria-hidden />
-        </Link>
+
+        <div className={`qw-controls ${controlsVisible ? "" : "is-hidden"}`}>
+          <div className="qw-themeswitch" role="group" aria-label="Wall display theme">
+            <button
+              type="button" className={tvTheme === "app" ? "is-on" : ""}
+              aria-pressed={tvTheme === "app"} onClick={() => chooseTheme("app")}
+              title="Follow the app theme"
+            >
+              <Tv size={15} aria-hidden /><span className="qw-sr">Follow app</span>
+            </button>
+            <button
+              type="button" className={tvTheme === "dark" ? "is-on" : ""}
+              aria-pressed={tvTheme === "dark"} onClick={() => chooseTheme("dark")}
+              title="Always dark — easiest on a wall panel"
+            >
+              <Moon size={15} aria-hidden /><span className="qw-sr">Dark</span>
+            </button>
+            <button
+              type="button" className={tvTheme === "light" ? "is-on" : ""}
+              aria-pressed={tvTheme === "light"} onClick={() => chooseTheme("light")}
+              title="Always light"
+            >
+              <Sun size={15} aria-hidden /><span className="qw-sr">Light</span>
+            </button>
+          </div>
+          <button
+            type="button" className="qw-ctl" onClick={toggleFullscreen}
+            title={isFullscreen ? "Leave fullscreen" : "Fullscreen"}
+          >
+            {isFullscreen ? <Minimize2 size={18} aria-hidden /> : <Maximize2 size={18} aria-hidden />}
+            <span className="qw-sr">{isFullscreen ? "Leave fullscreen" : "Fullscreen"}</span>
+          </button>
+          <Link href="/queues" className="qw-ctl" aria-label="Leave wall display">
+            <X size={18} aria-hidden />
+          </Link>
+        </div>
       </header>
 
       {configError && <p className="qw-error">Queues could not be loaded: {configError}</p>}

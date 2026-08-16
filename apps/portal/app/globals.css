@@ -37802,6 +37802,30 @@ table tr:hover {
    colourblind separation (measured ΔE 5.2 protan on the panel surface).
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* ── Status INK vs status FILL ─────────────────────────────────────────────
+   --success / --warning / --danger / --accent are DISPLAY colours. They are
+   correct for bars, borders and left-edge stripes, and they are correct as
+   text on the dark panel (measured 7.31 / 7.76 / 4.43 / 4.53 against #141f2b).
+
+   ⛔ On the LIGHT panel the same colours as text measure 2.28 / 2.15 / 3.76 /
+   3.68 against #ffffff — success and warning are effectively unreadable. So
+   text takes its own ink token, which is darkened for light mode only. Fills
+   keep the display colour, where 3:1 for a large block is the right bar.
+
+   Bare :root is DARK here, per Connect's convention — light is opt-in. */
+:root {
+  --qb-ink-ok: var(--success);
+  --qb-ink-warn: var(--warning);
+  --qb-ink-crit: var(--danger);
+  --qb-ink-info: var(--accent);
+}
+:root[data-theme="light"] {
+  --qb-ink-ok: #0f7a4a;   /* 5.38:1 on #ffffff */
+  --qb-ink-warn: #8a5a00; /* 5.93:1 */
+  --qb-ink-crit: #c0293a; /* 5.80:1 */
+  --qb-ink-info: #1a63c4; /* 5.79:1 */
+}
+
 .qb-page { padding: 24px 28px 64px; max-width: 1500px; margin: 0 auto; }
 
 .qb-head {
@@ -37841,9 +37865,9 @@ table tr:hover {
   border: 1px solid var(--border); color: var(--text-dim); background: var(--panel-2);
 }
 .qb-livechip .qb-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.qb-livechip.is-live { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+.qb-livechip.is-live { color: var(--qb-ink-ok); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
 .qb-livechip.is-live .qb-dot { animation: qb-pulse 2s ease-in-out infinite; }
-.qb-livechip.is-stale { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.qb-livechip.is-stale { color: var(--qb-ink-warn); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
 @keyframes qb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 
 .qb-notice {
@@ -37871,9 +37895,9 @@ table tr:hover {
 }
 .qb-kpi-ok   { border-left-color: var(--success); }
 .qb-kpi-warn { border-left-color: var(--warning); }
-.qb-kpi-warn .qb-kpi-v { color: var(--warning); }
+.qb-kpi-warn .qb-kpi-v { color: var(--qb-ink-warn); }
 .qb-kpi-crit { border-left-color: var(--danger); }
-.qb-kpi-crit .qb-kpi-v { color: var(--danger); }
+.qb-kpi-crit .qb-kpi-v { color: var(--qb-ink-crit); }
 .qb-kpi-info { border-left-color: var(--accent); }
 
 .qb-grid {
@@ -37894,8 +37918,8 @@ table tr:hover {
 .qb-stat-v { font-size: 22px; font-weight: 620; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--text); }
 .qb-stat-k { font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--text-dim); margin-top: 3px; }
 
-.qb-ok { color: var(--success); } .qb-warn { color: var(--warning); }
-.qb-crit { color: var(--danger); } .qb-info { color: var(--accent); }
+.qb-ok { color: var(--qb-ink-ok); } .qb-warn { color: var(--qb-ink-warn); }
+.qb-crit { color: var(--qb-ink-crit); } .qb-info { color: var(--qb-ink-info); }
 
 .qb-badge {
   display: inline-flex; align-items: center; gap: 6px;
@@ -37903,9 +37927,9 @@ table tr:hover {
   border: 1px solid currentColor; white-space: nowrap;
 }
 .qb-badge-end { margin-left: auto; }
-.qb-badge-ok   { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
-.qb-badge-warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
-.qb-badge-crit { color: var(--danger);  background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.qb-badge-ok   { color: var(--qb-ink-ok); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.qb-badge-warn { color: var(--qb-ink-warn); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.qb-badge-crit { color: var(--qb-ink-crit);  background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 .qb-agentchips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .qb-chip {
@@ -37938,7 +37962,7 @@ table tr:hover {
 }
 .qb-foot { margin: 12px 0 0; font-size: 13px; color: var(--text-dim); line-height: 1.55; }
 .qb-foot-top { margin: 0 0 12px; }
-.qb-link { color: var(--accent); }
+.qb-link { color: var(--qb-ink-info); }
 
 .qb-tablewrap { overflow-x: auto; }
 .qb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -37956,10 +37980,10 @@ table tr:hover {
 .qb-ext { font-weight: 640; font-variant-numeric: tabular-nums; }
 
 .qb-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
-.qb-state-call   { color: var(--accent); }
-.qb-state-ring   { color: var(--warning); }
-.qb-state-ready  { color: var(--success); }
-.qb-state-paused { color: var(--danger); }
+.qb-state-call   { color: var(--qb-ink-info); }
+.qb-state-ring   { color: var(--qb-ink-warn); }
+.qb-state-ready  { color: var(--qb-ink-ok); }
+.qb-state-paused { color: var(--qb-ink-crit); }
 .qb-state-off    { color: var(--text-dim); }
 
 .qb-report-top { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(280px, 1.1fr); gap: 22px; }
@@ -38015,7 +38039,7 @@ table tr:hover {
 .qb-bar { width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; }
 .qb-barx { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .qb-details { margin-top: 14px; }
-.qb-details summary { cursor: pointer; color: var(--accent); font-size: 13px; padding: 6px 0; }
+.qb-details summary { cursor: pointer; color: var(--qb-ink-info); font-size: 13px; padding: 6px 0; }
 .qb-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 
 /* ── Wall display ──────────────────────────────────────────────────────────
@@ -38034,20 +38058,65 @@ table tr:hover {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 14px; border-radius: 999px; font-weight: 640; letter-spacing: .12em;
   font-size: clamp(11px, .95vw, 15px);
-  color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
+  color: var(--qb-ink-ok); border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
   background: color-mix(in srgb, var(--success) 10%, transparent);
 }
-.qw-live.is-stale { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: color-mix(in srgb, var(--warning) 10%, transparent); }
+.qw-live.is-stale { color: var(--qb-ink-warn); border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: color-mix(in srgb, var(--warning) 10%, transparent); }
 .qw-pulse { width: 9px; height: 9px; border-radius: 50%; background: currentColor; animation: qb-pulse 2s ease-in-out infinite; }
 .qw-clock { margin-left: auto; text-align: right; font-variant-numeric: tabular-nums; }
 .qw-time { font-size: clamp(26px, 2.8vw, 48px); font-weight: 620; line-height: 1; letter-spacing: -.02em; }
 .qw-date { font-size: clamp(11px, .95vw, 15px); color: var(--text-dim); margin-top: 5px; }
-.qw-close {
-  display: inline-grid; place-items: center; width: 40px; height: 40px; flex: none;
-  border-radius: 9px; border: 1px solid var(--border); color: var(--text-dim); background: var(--panel-2);
+/* TV controls. They fade out after a few seconds of no input — a permanent
+   row of buttons on a wall panel is clutter — but they never leave the DOM,
+   so they stay keyboard-reachable and any focus inside re-reveals them. */
+.qw-controls {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  transition: opacity .35s ease;
 }
-.qw-close:hover { color: var(--text); border-color: var(--accent); }
-.qw-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.qw-controls.is-hidden { opacity: 0; }
+.qw-controls:hover, .qw-controls:focus-within { opacity: 1; }
+
+.qw-ctl {
+  display: inline-grid; place-items: center; width: 40px; height: 40px; flex: none;
+  border-radius: 9px; border: 1px solid var(--border); color: var(--text-dim);
+  background: var(--panel-2); cursor: pointer;
+}
+.qw-ctl:hover { color: var(--text); border-color: var(--accent); }
+.qw-ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.qw-themeswitch { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.qw-themeswitch button {
+  display: inline-grid; place-items: center; width: 38px; height: 40px;
+  border: 0; border-right: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text-dim); cursor: pointer;
+}
+.qw-themeswitch button:last-child { border-right: 0; }
+.qw-themeswitch button.is-on { background: var(--accent); color: #04121d; }
+.qw-themeswitch button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Visually hidden but announced — the controls are icon-only. */
+.qw-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ── TV theme lock ─────────────────────────────────────────────────────────
+   ⛔ Applied as token overrides scoped to .qw-root, NOT by writing data-theme
+   on <html>: the app context owns that attribute and would fight us for it,
+   and leaving TV mode could strand the whole portal in the wrong theme.
+   "app" sets nothing and simply inherits whatever the user chose. */
+.qw-root[data-tv-theme="dark"] {
+  --bg: #0c1218; --panel: #141f2b; --panel-2: #1a2635;
+  --text: #e1e9f1; --text-dim: #8ea0b2; --border: #26374a;
+  --accent: #22a8ff; --success: #34c27b; --warning: #f0b655; --danger: #ea6068;
+  --qb-ink-ok: #34c27b; --qb-ink-warn: #f0b655; --qb-ink-crit: #ea6068; --qb-ink-info: #22a8ff;
+}
+.qw-root[data-tv-theme="light"] {
+  --bg: #f6f8fb; --panel: #ffffff; --panel-2: #f8fafc;
+  --text: #0f172a; --text-dim: #475569; --border: rgba(15, 23, 42, 0.16);
+  --accent: #3b82f6; --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+  --qb-ink-ok: #0f7a4a; --qb-ink-warn: #8a5a00; --qb-ink-crit: #c0293a; --qb-ink-info: #1a63c4;
+}
 .qw-error { margin: 0; padding: 12px 16px; border-radius: 10px; background: var(--panel); border-left: 3px solid var(--warning); font-size: 14px; }
 
 .qw-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(8px, 1vw, 16px); }
@@ -38060,9 +38129,9 @@ table tr:hover {
 .qw-kpi-of { font-size: .45em; color: var(--text-dim); font-weight: 500; }
 .qw-kpi.is-ok { border-left-color: var(--success); }
 .qw-kpi.is-warn { border-left-color: var(--warning); }
-.qw-kpi.is-warn .qw-kpi-v { color: var(--warning); }
+.qw-kpi.is-warn .qw-kpi-v { color: var(--qb-ink-warn); }
 .qw-kpi.is-crit { border-left-color: var(--danger); }
-.qw-kpi.is-crit .qw-kpi-v { color: var(--danger); }
+.qw-kpi.is-crit .qw-kpi-v { color: var(--qb-ink-crit); }
 .qw-kpi.is-info { border-left-color: var(--accent); }
 
 .qw-mid { display: grid; grid-template-columns: 1.35fr 1fr; gap: clamp(8px, 1vw, 16px); }
@@ -38089,7 +38158,7 @@ table tr:hover {
 .qw-qmeta { display: block; font-size: clamp(10px, .85vw, 14px); color: var(--text-dim); font-weight: 500; margin-top: 4px; }
 .qw-qstat { text-align: right; min-width: clamp(58px, 6vw, 108px); }
 .qw-qv { font-size: clamp(20px, 2.2vw, 40px); font-weight: 620; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.qw-qv.is-ok { color: var(--success); } .qw-qv.is-warn { color: var(--warning); } .qw-qv.is-crit { color: var(--danger); }
+.qw-qv.is-ok { color: var(--qb-ink-ok); } .qw-qv.is-warn { color: var(--qb-ink-warn); } .qw-qv.is-crit { color: var(--qb-ink-crit); }
 .qw-qk { font-size: clamp(9px, .8vw, 13px); letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); margin-top: 5px; }
 
 .qw-caller { display: flex; align-items: center; gap: clamp(9px, 1vw, 16px); padding: clamp(9px, 1vw, 16px) clamp(12px, 1.2vw, 20px); border-bottom: 1px solid var(--border); }
@@ -38104,7 +38173,7 @@ table tr:hover {
 .qw-cnum { display: block; font-size: clamp(14px, 1.35vw, 24px); font-weight: 570; font-variant-numeric: tabular-nums; }
 .qw-cq { display: block; font-size: clamp(10px, .85vw, 14px); color: var(--text-dim); margin-top: 3px; }
 .qw-ctime { margin-left: auto; font-size: clamp(18px, 1.9vw, 34px); font-weight: 620; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.qw-ctime.is-warn { color: var(--warning); } .qw-ctime.is-crit { color: var(--danger); }
+.qw-ctime.is-warn { color: var(--qb-ink-warn); } .qw-ctime.is-crit { color: var(--qb-ink-crit); }
 
 .qw-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(130px, 13vw, 210px), 1fr)); gap: clamp(6px, .7vw, 11px); padding: clamp(10px, 1vw, 16px); }
 .qw-agent {
@@ -38117,13 +38186,13 @@ table tr:hover {
 .qw-a-name { font-size: clamp(10px, .85vw, 14px); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qw-a-state { display: flex; align-items: center; gap: 6px; font-size: clamp(10px, .9vw, 15px); font-weight: 570; }
 .qw-s-call   { border-left-color: var(--accent); }
-.qw-s-call   .qw-a-state { color: var(--accent); }
+.qw-s-call   .qw-a-state { color: var(--qb-ink-info); }
 .qw-s-ring   { border-left-color: var(--warning); }
-.qw-s-ring   .qw-a-state { color: var(--warning); }
+.qw-s-ring   .qw-a-state { color: var(--qb-ink-warn); }
 .qw-s-ready  { border-left-color: var(--success); }
-.qw-s-ready  .qw-a-state { color: var(--success); }
+.qw-s-ready  .qw-a-state { color: var(--qb-ink-ok); }
 .qw-s-paused { border-left-color: var(--danger); }
-.qw-s-paused .qw-a-state { color: var(--danger); }
+.qw-s-paused .qw-a-state { color: var(--qb-ink-crit); }
 .qw-s-off    { border-left-color: var(--border); opacity: .5; }
 .qw-s-off    .qw-a-state { color: var(--text-dim); }
 

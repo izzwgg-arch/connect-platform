@@ -62,7 +62,7 @@ export default function QueuesPage() {
             <BarChart3 size={15} aria-hidden /> Reports
           </Link>
           <Link href="/queues/wall" className="qb-btn qb-btn-primary" target="_blank">
-            <Tv size={15} aria-hidden /> Wall display
+            <Tv size={15} aria-hidden /> TV mode
           </Link>
         </div>
       </header>
