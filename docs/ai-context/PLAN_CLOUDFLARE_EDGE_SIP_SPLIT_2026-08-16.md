@@ -217,9 +217,30 @@ connectcomunications.com, and it matters more here because Workspace mail is liv
 Connect is a separate piece of work (nginx server block, certificate, and a decision
 about what it actually serves) — it is not a by-product of the DNS move.
 
-**Order of work when this is picked up:**
-1. Add DMARC at Squarespace (`p=none`, monitor) — safe, no nameserver change needed.
-   Do this even if the migration never happens.
+✅ **DMARC IS DONE ON loopcom.net (2026-08-16)** — added as a Squarespace *custom
+record*, `p=none` monitor mode. Verified resolving, and the **5 Google MX records are
+untouched**.
+
+⛔ **A cross-domain `rua` DOES NOTHING WITHOUT AN AUTHORIZATION RECORD, and this is the
+part everyone forgets.** loopcom.net's reports go to `support@connectcomunications.com`
+— a *different* domain — and RFC 7489 requires the **receiving** domain to publish
+consent, or Google/Microsoft/Yahoo simply refuse to send. So this was also added, in
+Cloudflare on connectcomunications.com:
+
+```
+loopcom.net._report._dmarc.connectcomunications.com   TXT   "v=DMARC1"
+```
+
+Verified live. **Without it the policy record still "works" — it just silently produces
+no reports, which defeats the entire point of p=none.** Any future domain pointing its
+`rua` at connectcomunications.com needs its own matching `<domain>._report._dmarc` entry.
+
+⛔ Squarespace demands a **Google re-authentication** ("Verify to continue as
+support@…") before DNS edits. An agent cannot pass that gate — it needs the owner.
+
+**Order of work for the remaining domains (`loopcom.org`, `loopcom.ai`):**
+1. ✅ Done for loopcom.net. Repeat the same two records for `.org` and `.ai` if they
+   send mail — safe, no nameserver change needed.
 2. Export the FULL record set for the domain, including the `HTTPS` record and any
    Google verification TXT.
 3. Create the Cloudflare zone, **re-enter every record and verify each one**, and only
