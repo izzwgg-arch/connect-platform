@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { Activity, BarChart3, ListOrdered, RefreshCw, Tv, Users } from "lucide-react";
 import {
   AGENT_STATE_META,
+  describeStrategy,
   formatDuration,
   mergeAgentsAcrossQueues,
   useQueueBoard,
@@ -268,19 +269,4 @@ function Stat({ label, value, tone }: { label: string; value: string; tone: stri
       <div className="qb-stat-k">{label}</div>
     </div>
   );
-}
-
-/** Plain English for the Asterisk strategy names. */
-export function describeStrategy(s: string): string {
-  switch (s.toLowerCase()) {
-    case "ringall": return "rings everyone";
-    case "linear": return "one at a time, in order";
-    case "leastrecent": return "least recently called";
-    case "fewestcalls": return "fewest calls first";
-    case "random": return "random";
-    case "rrmemory": return "round robin";
-    case "rrordered": return "round robin, in order";
-    case "wrandom": return "weighted random";
-    default: return s;
-  }
 }

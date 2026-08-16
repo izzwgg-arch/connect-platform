@@ -291,6 +291,29 @@ export function useQueueBoard(): QueueBoardState {
   return { queues, loading, configError, live: isLive, reload };
 }
 
+/**
+ * Plain English for the Asterisk strategy names.
+ *
+ * ⛔ Lives here, not in page.tsx. A Next.js App Router page file may only
+ * export a default component (plus Next's own reserved exports) — any extra
+ * named export fails the production build with "does not match the required
+ * types of a Next.js Page". `tsc --noEmit` does NOT catch it; only `next
+ * build` does, so it surfaces at deploy time rather than locally.
+ */
+export function describeStrategy(s: string): string {
+  switch (s.toLowerCase()) {
+    case "ringall": return "rings everyone";
+    case "linear": return "one at a time, in order";
+    case "leastrecent": return "least recently called";
+    case "fewestcalls": return "fewest calls first";
+    case "random": return "random";
+    case "rrmemory": return "round robin";
+    case "rrordered": return "round robin, in order";
+    case "wrandom": return "weighted random";
+    default: return s;
+  }
+}
+
 /** Every agent across every queue, de-duplicated, for the team panel. */
 export function mergeAgentsAcrossQueues(queues: BoardQueue[]): BoardAgent[] {
   const order: AgentState[] = ["on_call", "ringing", "ready", "paused", "offline"];
