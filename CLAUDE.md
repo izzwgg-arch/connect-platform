@@ -138,6 +138,61 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   need `ChanSpy` confirmed on the PBX and a Connect permission gate; neither was
   checked. Don't promise them off the picture.
 
+## ⛔ AGENT HANDOFF — the LoopCom logo is IN THE REPO now, and wired to nothing (2026-08-16) — READ FIRST before any LoopCom branding work, before putting a logo on any screen, or before believing a logo handed to you is the current one
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_BRAND_ASSETS_2026-08-16.md`**
+(93 files **COMMITTED AND PUSHED**, ⏳ **wired to nothing, nothing deployed**.)
+
+- ⛔ **THE RULE: when a brand asset is missing, say so and ask — do not draw
+  one.** A search for a LoopCom logo found none in the repo, and this session
+  invented three marks. They already existed as **production files** on Izzy's
+  machine, in four conflicting sets, in no repo at all. *"There is a logo for
+  everything."* An asset absent from git is not an asset that doesn't exist.
+- ⛔ **Four LoopCom sets exist and the filenames LIE about which is canonical.**
+  The rejected teal set is the one named `loopcom-official-logo-aurora.png`
+  whose README says *"final masters."* Izzy chose **Signal Core** (blue chrome)
+  on 2026-08-16 — the only set with light-surface masters, a full favicon set
+  incl. `.ico`, and iOS + Android icons in both polarities. The others (aurora,
+  trio wireframe, and a July flat-indigo *vector* kit) are **not** in git. Ask,
+  never infer.
+- **Where:** whole kit in **`docs/brand/loopcom/`** (~12 MB — under `docs/`,
+  which `.easignore:66` excludes, so mobile builds pay nothing); the 13 files
+  the portal would serve in **`apps/portal/public/brand/loopcom/`** (~1.1 MB).
+  ⛔ `apps/portal/public/` is **NOT** easignored — keep it lean.
+  `docs/brand/loopcom/README.md` has the per-file guidance.
+- ⛔ **The tagline is baked into the artwork** — "THE AI COMMUNICATIONS
+  PLATFORM" is pixels in every lockup, unremovable without a re-render, so a
+  screen using it must not add a second tagline. ⛔ **No vector exists** (all
+  PNG, max 1672×941). ⛔ **`masters/loopcom-icon-mark.png` is OPAQUE** despite
+  the kit README claiming otherwise — proven from the PNG colour-type byte
+  (`xxd -p -s 25 -l 1`), not by eye; use `webapp/loopcom-icon-*` or `favicon/*`
+  for small marks. ⛔ **Never CSS-filter the dark art to fake light** — a real
+  `-light` file ships for every placement.
+- ✅ **Adopting it needs NO new colour token.** Signal Core specifies
+  `#22A8FF → #4F7BFF on #0C1218` — exactly the portal's live `--accent`,
+  `--accent-2`, `--bg` (`globals.css:3409`). Coincidence, but it holds.
+- ⛔ **The commit landed under ANOTHER session's message** (`c0fd007b`, "docs:
+  the PBX already ships a queue wallboard") because that session ran a blanket
+  `git add` **between** this one's `git status` and its explicit-path `git add`.
+  **Staging explicit paths does NOT protect your untracked files from another
+  session's blanket add** — the exposure window is however long you leave new
+  files untracked. Fix: `git add` new files the moment you create them, and
+  re-check `git diff --cached --name-only` **immediately before commit**, not
+  just before add. History deliberately NOT rewritten (another session was
+  live). Files verified byte-identical by sha256 against source, 93 on origin.
+- ⏳ **NOT DONE, and deliberately:** `apps/portal/app/login/page.tsx` is
+  untouched (still "Connect Communications", no logo); the **favicon is
+  unchanged** — the files sit under `.../brand/loopcom/favicon/` and NOT at the
+  `public/` root, because a file there is served as `/favicon.ico` and would
+  rebrand every page on deploy; app icons, invoices and invite emails all still
+  carry Connect branding.
+- ⛔ **The rebrand is half a decision and customers can see it.** Portal says
+  "Connect Communications", the iOS app is named "Loopcom", the logo says
+  "LoopCom". Three login mockups were shown to Izzy 2026-08-16; he has not
+  picked one. **Don't build the login page until he does, and don't wire the
+  favicon / app icons / invoices / emails until the naming is settled** — those
+  reach customers.
+
 ## ⛔ AGENT HANDOFF — the Call History player was a SECOND player, and it never got the fix (2026-08-13) — READ FIRST for any "recording won't play / jumps back" report, before touching a portal recording player, or before adding a new one
 
 Commits `033d0e6c` + `f95f7969` on `feat/ivr-migration-takeover` — portal
