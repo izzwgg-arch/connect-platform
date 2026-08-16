@@ -136,30 +136,40 @@ errors are elsewhere).
 
 ---
 
-## 6. Acceptance test — ⏳ NOT YET PROVEN
+## 6. ✅ PROVEN END TO END WITH REAL DATA
 
-Nothing has been proven end to end: no shortcode message has been observed
-landing in a Connect inbox on the new code.
-
-**The poller fetches a 2-day window** (`voipMsDateFromParam`), so the message
-that started all this should back-fill by itself on the next cycle after the
-worker deploy:
+Not plumbing-only. Both containers were verified (`canonicalSmsSender` present
+in `app-worker-1` and `app-api-1`, and the old `if (!from.ok || !to.ok) return
+null` line **gone** from the worker), and then the message that started all this
+**back-filled by itself** — the poller fetches a 2-day window
+(`voipMsDateFromParam`), so it re-fetched and this time kept it:
 
 ```
-2026-08-16 11:37:22  from 29283  |  "Your WhatsApp code: 588-217"   → +18455577768
+ConnectChatThread   +18455577768  <-  29283
+ConnectChatMessage  2026-08-16T15:37:22Z  |  "Your WhatsApp code: 588-217"
 ```
 
-Check for it:
+15:37 UTC = 11:37 ET, matching the carrier record to the second. That is the
+first non-E.164 sender ever recorded on this platform — the count went 0 → 1.
+
+The standing check, for any future regression:
 
 ```sql
 select t."tenantSmsE164", t."externalSmsE164", m."createdAt", left(m.body, 60)
 from "ConnectChatMessage" m join "ConnectChatThread" t on t.id = m."threadId"
-where t."externalSmsE164" = '29283' order by m."createdAt" desc;
+where left(t."externalSmsE164", 1) <> '+' order by m."createdAt" desc;
 ```
 
-A row there is the proof. Also watch `docker logs app-worker-1 | grep
-"voipms-inbound"` for the new dropped-sender warning — it should be rare, and
-anything it names is a sender shape we still do not handle.
+`docker logs app-worker-1 | grep "dropped inbound message"` was **empty** over
+the 20 minutes after deploy — no sender shape is still being refused. Anything
+that appears there in future is a shape we do not handle yet, and it is now
+visible instead of silent.
+
+⛔ **What is NOT recovered: everything older than the 2-day poll window.** Every
+shortcode message from before ~2026-08-14 was discarded at ingest and is not in
+Connect. VoIP.ms retains history longer than we poll, so a one-off back-fill
+over `getSMS` per DID is possible — **not done, and it is Izzy's call**, since it
+would drop months of old verification codes into customers' inboxes.
 
 ---
 

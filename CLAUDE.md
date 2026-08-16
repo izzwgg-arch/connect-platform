@@ -259,11 +259,19 @@ container-verified.** No migration, no PBX write, no flag flipped.)
 - ⛔ **An unassigned spare number is NEVER POLLED AT ALL** —
   `voipMsInboundSyncJob.ts:655` filters `tenantId: { not: null }`. A code sent
   to a spare cannot appear in Connect even with this fix. Assign it first.
-- ⏳ **NOT PROVEN: no shortcode message has been seen landing in an inbox on the
-  new code.** The poller fetches a **2-day window**, so the 11:37 WhatsApp code
-  should back-fill itself. Acceptance query and the log line to watch are in §6
-  of the handoff. Tests: 8 new cases + worker 99 pass / 0 fail, api phone +
-  shared-inbox 17 pass / 0 fail.
+- ✅ **PROVEN END TO END WITH REAL DATA, not plumbing-only.** Both containers
+  verified (`canonicalSmsSender` present, the old dropping line **gone**), and
+  the poller's 2-day window **back-filled the message itself**:
+  `ConnectChatMessage 2026-08-16T15:37:22Z | 29283 -> +18455577768 | "Your
+  WhatsApp code: 588-217"` — the first non-E.164 sender ever recorded here
+  (count went 0 → 1), matching the carrier to the second. Zero
+  `dropped inbound message` warnings in the 20 min after deploy. Tests: 8 new
+  cases + worker 99 pass / 0 fail, api phone + shared-inbox 17 pass / 0 fail.
+- ⛔ **NOT recovered: anything older than the 2-day poll window.** Every
+  shortcode message before ~2026-08-14 was discarded at ingest and is gone from
+  Connect. VoIP.ms keeps history longer, so a one-off back-fill is possible —
+  **not done, Izzy's call**, since it would drop months of stale verification
+  codes into customers' inboxes.
 - ⛔ **Replying to a shortcode thread will fail at the provider** — untouched by
   this change; those threads are effectively read-only.
 - **Related, same investigation:** the WhatsApp integration itself still cannot
