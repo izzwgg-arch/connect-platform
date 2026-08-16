@@ -44,6 +44,161 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — a customer saved a forward and their whole phone system went dead (2026-08-16) — READ FIRST before adding ANY new panel **Apply Changes** call site, before touching `POST /voice/forwards`, before relaxing the DID route reconciler, or for a "we're down" report the platform looks healthy for by morning
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FORWARD_APPLY_CHANGES_DEAD_AIR_2026-08-16.md`**
+(`3f323182` on `feat/ivr-migration-takeover`. **api DEPLOYED and container-verified**
+— job `c4576bef`, deployed commit `f95f7969`. One live PBX data fix (outbound
+caller ID, backed up), one stray Connect row deleted. No migration, no flag.)
+
+- ⛔⛔ **ANY PANEL `Apply Changes` WIPES THE CONNECT DOORWAY OFF EVERY ROUTE OF
+  THAT TENANT.** VitalPBX's own generator cannot render the doorway — it writes
+  `Goto(T<t>_custom-contexts,cc-<id>,1)`, and **that exten exists nowhere**, so
+  callers get INSTANT DEAD AIR. `cc-<id>` really is the doorway's custom-context
+  row, which is exactly why it reads as correct. Only the helper's bake
+  (`Goto(connect-doorway,s,1)`) works. **The proof line, once per dead call:**
+  `WARNING pbx.c: … sent to invalid extension … T105_custom-contexts,cc-4,1`.
+- **What happened:** inii mini's own admin built menu keys at midnight and created
+  two "ring an outside number" forwards. `createForward` fires Apply Changes (the
+  ONE sanctioned auto-apply, Izzy 2026-08-06 — without it callers get a busy
+  signal). **Seven consecutive inbound calls died, 0 seconds each, 00:11→00:15.**
+  The customer texted Izzy **at 12:16 — the exact minute the reconciler healed
+  it**, having given up. ⛔ **Connect was told NOTHING:** the alert hit the
+  40/24h cap *and* the platform-wide ADMIN_ALERT mute. The customer's text was the
+  only signal that a tenant's every number was dead.
+- ✅ **FIXED, two halves.** (1) `POST /voice/forwards` now **awaits**
+  `rebakeConnectRoutesAfterRegen` (`apps/api/src/pbx/applyRegenRebake.ts`) right
+  after `createForward`, re-baking every enabled connect-mode number of that
+  tenant before answering — idempotent, never throws, reconciler still behind it.
+  (2) ⛔ **The reconciler's render-drift re-bake is NO LONGER RATE-LIMITED, and
+  that was half the outage:** the customer saved TWO forwards, the first drift
+  spent the 6h allowance, the second got `re-bake rate-limited` and stayed dead
+  until the slower `doorway unhealthy` path fired. **The 6h limit belongs to the
+  ROW re-assert** (where fighting a human matters); a drifted RENDER is callers
+  broken *now*, and the re-bake only replays recorded intent.
+- ⛔ **`git grep applyChanges` before you trust this is over.** Onboarding's
+  `pbxTenantBuild.ts` fires it **~7 times** with no re-bake, and Apply Changes
+  flushes **pending changes for OTHER tenants too** — so a build for customer A
+  can wipe customer B's render. The un-rate-limited reconciler bounds that to ≤10
+  min; adding the call closes it. **Deliberately not done** (out of scope for a
+  live-outage fix).
+- ⛔ **The helper journal CANNOT see Apply Changes** — `journalctl -u
+  connect-pbx-helper` shows only `/upload-prompt` + `/flow-map`. Applies arrive
+  over the **panel**: `POST /index.php` from loopcom in the **PBX's own**
+  `/var/log/nginx/access.log`. Looking only at the helper makes the regens
+  invisible and the outage inexplicable.
+- ⛔⛔ **DO NOT panel-delete inii mini's leftover route 239** ("Main",
+  845-260-5692, the retired temp number): **it shares `ombu_destinations` row 907
+  with route 240 "Main ported", the LIVE number** — the delete cascades 907 and
+  kills their real number. Give 240 its own row first, or leave it (it is inert
+  bar +$3/mo E911). **Needs Izzy.**
+- ✅ **Outbound caller ID was the RETIRED number and is fixed** — route 126 sent
+  `<8452605692>` on live calls, so every callback reached a dead number. Both
+  halves changed (the `ombu_outbound_routes` row **and** the rendered `s-126`
+  line, then `dialplan reload`), verified live. Backup
+  `/root/outbound-cid-126-backup-*`. ⛔ Outbound routes live under **`tenant_id:
+  1`**, not the tenant's — don't filter by tenant when hunting one.
+- ⛔⛔ **THE EVIDENCE IS STAMPED 2026-08-13 AND THAT IS THE CLOCK SKEW, NOT THE
+  DATE.** Both servers ran **~3 days behind** and were corrected **during this
+  session** (loopcom read `Aug 13 13:20 CEST` early on; all three machines agreed
+  `2026-08-16 18:27 UTC` by the end). The incident was **last night**. Intervals
+  and ordering are exact (one clock throughout); the absolute date is not. The
+  12:16 text ↔ 00:16 repair alignment says the skew was whole days.
+  ⛔ **Any handoff or memory written in that window may be misdated by three
+  days**, and `git log --oneline` sinks a date-skewed commit below newer ones —
+  verify with `merge-base --is-ancestor`, never by eyeballing the log.
+- ⏳ **NOT PROVEN: nobody has saved a forward since the deploy.** Acceptance is
+  the next real one — `[APPLY_REBAKE] post-apply route re-bake complete` in the
+  api log, with `linesChanged > 0` proving it caught a live wipe. Tests: 28 pass
+  / 0 fail. ⛔ The re-bake guard **reads `forwardRoutes.ts`'s SOURCE** — the
+  defect was a CALLER-side omission, which a unit test of the function passes
+  straight through.
+
+## ⛔ AGENT HANDOFF — inii mini wants to sell by TEXT MESSAGE; Shopify scoped and quoted, nothing built (2026-08-16) — READ FIRST before any Shopify work, before designing a payment path for a customer's store, or before quoting "the agent can just browse the site"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_INII_MINI_SHOP_BY_TEXT_2026-08-16.md`**
+(⛔ **SCOPED AND QUOTED ONLY — no code, no server, no registration, no token, no
+deploy.** Repo changes are documentation only. Customer proposal:
+<https://claude.ai/code/artifact/06af7ba8-35c6-4381-8ec6-3f8b453d65f3>.)
+Memory: [[shopify-agent-integration-shape]], [[sola-is-cardknox]],
+[[dtmf-masking-cannot-be-self-administered]].
+
+- ⛔⛔ **EVERY SHOPIFY STORE ALREADY EXPOSES AN MCP ENDPOINT AND NOBODY SET IT
+  UP.** `POST https://<store>/api/mcp` → `search_catalog`, `get_product_details`,
+  `get_cart`, `update_cart`, `search_shop_policies_and_faqs`. Proven by probing
+  **four unrelated stores** (allbirds, gymshark, kith, iniimini) — identical five
+  tools, on the custom domain too. **So the whole catalog half needs NO
+  credentials and can be prototyped before the store owner is involved.**
+  ⛔ A **headless** storefront (Hydrogen — hiutdenim) returns only the policies
+  tool; don't generalise "five tools."
+- ⛔⛔ **SHOPIFY WILL NOT LET ANYTHING BUT ITS OWN CHECKOUT CHARGE A CARD** — no
+  public API submits a payment to Shopify Payments, the Payments Apps API is
+  approved-partners-only, and the card extension is invite-only closed beta
+  needing a PCI AoC. **Asked twice, same answer: an IVR charging "through
+  Shopify Payments" is impossible.** Every phone-payment product charges through
+  a **gateway** and records the result in the platform.
+- ⛔ **AND THAT COSTS NOTHING, BECAUSE `draftOrderComplete` IS WHAT MOVES
+  STOCK.** Charge at the gateway → complete the draft with `paymentPending:
+  false` → Shopify creates a real Order, marks it paid and **decrements
+  inventory exactly like a web sale.** The "how would Shopify know about the sale"
+  fear that nearly triggered a platform pivot was unfounded — **no pivot, keep
+  Shopify Payments for web.** ⛔ Two traps: **draft orders do NOT reserve stock**
+  (re-check right before charging), and **refunds are a two-system action** —
+  Shopify restocks but moves no money, so store the gateway transaction id and
+  make refund atomic across both.
+- ⛔ **SOLA *IS* CARDKNOX** (rebranded Oct 2024, docs still serve
+  `x1.cardknox.com`). "Pivot to Sola" is not a pivot. Their API has `cc:sale`,
+  `cc:save`, `xToken` card-on-file and a Customer/Recurring API — and **zero
+  mentions of IVR/DTMF/phone payments**. ⛔ A customer's merchant account opens
+  in **THEIR** name, never Connect's.
+- ⛔ **"MASKING" CANNOT BE SELF-ADMINISTERED** — the product IS that a certified
+  third party decodes the digits so yours never do; build it and your box is
+  simply the in-scope one. **PCI covers transmission, so storing nothing (or
+  "deleting after a minute") does NOT remove scope**, and DTMF tones ride inside
+  the call audio, which puts every recording and every system the audio crossed
+  in scope. Zero-scope routes: the gateway's own capture product, a rented
+  masking service, or staff keying once into the virtual terminal.
+  ⛔ **Izzy chose the DIY path anyway on 2026-08-16 after hearing all of it —
+  recorded in §2f, his call, do not re-litigate unless he raises it.**
+  **Payments are PINNED out of phase 1 entirely, so none of it blocks the build.**
+- ⛔ **A 20–30 BROWSER-SESSION FLEET WAS PROPOSED AND REJECTED**: it doesn't solve
+  payment (the agent still types card numbers into a checkout), Shopify/Cloudflare
+  treat datacenter checkout automation as bot traffic, and theme changes break it.
+  The Admin API does the same job in one call. Build on **GraphQL** — REST is
+  legacy since 2024-10-01.
+- **What Connect actually has to build is ONE connection.** ✅ MMS sending already
+  works (`sendMMS`, 3 media, `packages/integrations/src/index.ts:491` +
+  `connectChatSmsJob.ts`) and the agentic loop already exists
+  (`completeWithTools`, `apps/agent/src/llm/router.ts:251`). ⛔ **Inbound SMS does
+  NOT reach the agent** — verified: no agent reference in `voipMsInboundSyncJob.ts`
+  or `connectChatRoutes.ts`, and `apps/agent/src/channels/` has email + messaging
+  but no SMS. The brain lives on a separate VPS; Connect exposes only a
+  **Messages API** (send + inbound webhook).
+- ⛔ **The Shopify token is created by the STORE OWNER in his own admin** —
+  collaborator accounts cannot, it's shown once (`shpat_…`), never expires.
+  Scopes: products / draft orders / orders / customers / fulfillments,
+  **nothing payment-related**. Store it in the encrypted `AgentSecret` pattern
+  and ⛔ **never let it enter the model's context.**
+- ⛔ **COMPLIANCE IS PIPELINE CODE, NOT MODEL DISCRETION**: opt-in recorded before
+  first contact, **STOP → permanent suppression list checked before every
+  outbound send**, HELP, first-message disclosure, the agent identifying itself
+  as automated, 4-year records, **no cold blasts to their customer list.** TCPA is
+  **$500–$1,500 per message** and privately actionable. 10DLC registration takes
+  **1–3 weeks** and is the only clock we don't control — file it day one.
+- ⛔ **Quoted at a 20-hour / $5,000 ceiling against an honest 28–36 h estimate** —
+  a commercial decision of Izzy's, not an engineering assessment; the overrun is
+  his. Recurring: server **$9/mo billed by Connect** (servers in Izzy's name, not
+  the store's), AI $20–100/mo, **SMS 1.5¢ / MMS 2¢**, 10DLC fees. ⛔ **Separate
+  billing line from the $10/mo texting they already pay for.**
+- ⏳ **Two day-one checks gate everything and neither has been run:** do the
+  community's filtered/kosher flip phones actually **receive MMS**, and what does
+  **Sola** say about a phone-capture product (Izzy is calling them).
+  ⛔ **anymini.com is NOT their store** (static 2021 HTML, not Shopify) — the
+  store is **iniimini.com**. ⛔ Their port **already landed 2026-08-12**, so
+  10DLC goes on **646-984-6023** and there is no number decision to make.
+  ⏳ inii mini has **no billing settings row at all** — it must exist before any
+  of these recurring lines can be invoiced.
+
 ## ⛔⛔ AGENT HANDOFF — Ezra's trainer sheet, worked end to end (2026-08-16) — READ FIRST before believing a red row on that sheet, before saying a capability "needs a new integration", or for ANY `/internal/agent/*` door
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_EZRA_SHEET_2026-08-09.md`**
@@ -354,6 +509,67 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_CHAT_VOICE_NOTES_2026-08-16.md`**
   build.** Acceptance: restart the desktop app (an open window keeps the old
   bundle), record a fresh note, then confirm the stored file reads **48000 Hz** and
   about **-16 LUFS / LRA ≈ 7** (the bad one read -18.4 / 11.0).
+
+## ⛔⛔ AGENT HANDOFF — Connect is on TWO hostnames now, and that makes every hardcoded absolute API URL a DEAD PAY PAGE (2026-08-16) — READ FIRST before putting ANY url in a portal page, before "making it relative", before touching the pairing QR, and before testing a new-host bug on the old host
+
+Full handoff: the new section in
+**`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md` §4b**
+(`93a85d25` on `feat/ivr-migration-takeover`. **Portal DEPLOYED, container-verified,
+and verified in a REAL BROWSER ON BOTH HOSTS.** No nginx, no DNS, no Cloudflare, no
+env file, no PBX — portal source only.)
+
+- ⛔⛔ **THE RULE, and it is a CLASS not an incident: the moment Connect answers on a
+  second hostname, every hardcoded absolute API URL in the portal is a live outage on
+  the hostname that isn't hardcoded.** `NEXT_PUBLIC_API_URL` is **empty** in
+  `app-portal-1`, so four public pages fell through to a literal
+  `|| "https://app.connectcomunications.com/api"`. On `app.loopcom.net` that is a
+  **cross-origin** request, the api sends no `Access-Control-Allow-Origin`, and the
+  browser **blocks it**: `has been blocked by CORS policy` +
+  `Uncaught (in promise) TypeError: Failed to fetch`. ⛔ **The three public PAY pages
+  were dead on the new domain** — permanent loading state, customer cannot pay.
+- ⛔ **It is INVISIBLE from the old host** — the identical URL there returns a clean
+  404. A check run only against `app.connectcomunications.com` passes and proves
+  nothing. **Test a new-host bug on the new host.**
+- ⛔⛔ **THE TRAP THAT MAKES ONE BLANKET FIX WRONG — it breaks mobile pairing.** Two
+  different questions, two different answers, never one helper:
+  **(1) the three pay pages** (`app/p/[code]`, `app/pay/invoice/[token]`,
+  `app/pay/invoices/[token]`) fetch from the page the customer is already on → a
+  **same-origin RELATIVE base (`/api`)**, right on every hostname forever, no CORS.
+  **(2) `components/QRPairingModal.tsx` is NOT that case** — it bakes the base into a
+  **QR code scanned by a PHONE**. A relative `/api` is meaningless off-device
+  (`apps/mobile/src/api/client.ts:1210` does `fetch(\`${apiBaseUrl}/…\`)` and RN
+  rejects a relative URL), so it stays **ABSOLUTE — but built from
+  `window.location.origin` at runtime**, so a phone paired from either host talks to
+  the host it was paired from.
+- **Both answers live once**, in **`apps/portal/lib/publicApiBase.ts`**
+  (`resolveSameOriginApiBase` / `resolveAbsoluteApiBase` / `currentBrowserOrigin`).
+  ⛔ **`NEXT_PUBLIC_API_URL` still wins when set** — only the fallback changed; do not
+  remove the override, it is how local dev reaches `:3001`.
+  **`services/apiClient.ts` already did this for authenticated calls** — the public
+  pages use bare `fetch` and never got it. **Prefer `apiClient` on any new page.**
+- ⛔ **The guard reads the CALL SITES' SOURCE, not just the helpers** — the defect was
+  **four callers**, and a unit test of a resolver passes straight through it (same
+  shape as `sipPublicEndpoint.test.ts`). `apps/portal/lib/publicApiBase.test.ts`,
+  **14 tests**, registered in the portal `test` script; **proven real — all four
+  pre-fix files fail it.** It also asserts the QR modal does NOT use the same-origin
+  resolver.
+- ✅ **Proven in a browser on BOTH hosts** (probe code `PROBE000`, signed out, no real
+  card): `/p/` **404/404**, `/pay/invoice/` **410/410**, `/pay/invoices/` **401/401** —
+  **identical on both**, every request went to `app.loopcom.net/api/...`, **zero
+  requests to the other domain**, and console filtered for
+  `CORS|Failed to fetch|Content Security|Refused` had **no matches on either host**.
+  Container-verified too: `grep -c app.connectcomunications.com` on all three shipped
+  pay-page chunks inside `app-portal-1` is **0**.
+- ⏳ **NOT PROVEN: no phone has been paired from `app.loopcom.net`.** The QR half is
+  proven by unit test and by reading the shipped bundle, **never by scanning a code
+  with a real handset** — that is the acceptance test. ⏳ **No real payment has been
+  taken on either host since the change.**
+- ⏳ **Still hardcoded, deliberately out of scope, same class:**
+  `components/AppDownloadCard.tsx:8` (APK link), `navigation/navConfig.ts:88` (desktop
+  installer), `app/(platform)/billing/invoices/[id]/page.tsx:46` (mildest — already
+  prefers `window.location.origin`). ⛔ **Sweep the class, don't fix one-offs:**
+  `grep -rn "app\.connectcomunications\.com" apps/portal --include=*.ts --include=*.tsx`
+  (exclude `.next`).
 
 ## ⛔⛔ AGENT HANDOFF — the login brute-force limiter had NEVER run; the portal ships no security headers; Cloudflare is NOT in front of us (2026-08-16) — READ FIRST before any auth/login work, before filing a TLS or firewall finding, before using `req.ip`, or before believing Cloudflare protects Connect
 
