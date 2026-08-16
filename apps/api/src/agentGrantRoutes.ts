@@ -30,6 +30,7 @@ import {
   type PendingConfirmationView,
 } from "./agentConfirmations";
 import { FIX_CODE_TTL_MS } from "./agentFixPolicy";
+import { refreshTenantFactsDoc } from "./agentTenantFacts";
 import { permissionGrantCapability } from "./agentProvisioning/permissionGrantCapability";
 import { addExtensionCapability } from "./agentProvisioning/addExtensionCapability";
 import { enableSmsCapability } from "./agentProvisioning/enableSmsCapability";
@@ -176,6 +177,12 @@ export async function registerAgentGrantRoutes(
     enableSmsOnDid: deps.enableSmsOnDid,
     // The ONE place the real invoice engine is wired into the capabilities.
     billing: defaultBillingDeps,
+    // Every change the assistant makes lands in that company's knowledge
+    // document straight away, so the NEXT conversation already knows about it.
+    // Fire-and-forget by design (see ConfirmDeps.onActionApplied).
+    onActionApplied: ({ tenantId }) => {
+      void refreshTenantFactsDoc(tenantId).catch(() => {});
+    },
   };
   // The "Fix it!" sweep executes with the SAME bag, so a capability cannot
   // behave one way on screen and another way over text.

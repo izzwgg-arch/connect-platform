@@ -97,6 +97,14 @@ export interface ConfirmDeps {
     format(cents: number): string;
   };
   now?(): Date;
+  /**
+   * Fired after an action actually happened, so the company's knowledge
+   * document can record it. ⛔ ONE hook, here, rather than at each capability:
+   * this is the single point every confirmed change passes through, whichever
+   * channel approved it. Fire-and-forget — a knowledge refresh must never
+   * decide whether a change is reported as successful.
+   */
+  onActionApplied?(input: { tenantId: string; capabilityId: string }): void;
 }
 
 export interface CapabilityContext<P> {
@@ -385,9 +393,21 @@ export async function applyConfirmedAction(
   }
 
   // 7/8 ─ Claim, then do the work.
-  return capability.transactional
-    ? applyTransactional(deps, capability, ctx, now)
-    : applyExternal(deps, capability, ctx, now);
+  const result = capability.transactional
+    ? await applyTransactional(deps, capability, ctx, now)
+    : await applyExternal(deps, capability, ctx, now);
+
+  // 9 ─ Tell the knowledge layer something changed. Never awaited and never
+  // able to throw into the caller: the change already happened, and reporting
+  // it as failed because a document refresh stumbled would be a lie.
+  if (result.ok) {
+    try {
+      deps.onActionApplied?.({ tenantId, capabilityId: capability.id });
+    } catch {
+      /* the change stands on its own */
+    }
+  }
+  return result;
 }
 
 /** Claim and work share one transaction: a failure rolls the approval back. */

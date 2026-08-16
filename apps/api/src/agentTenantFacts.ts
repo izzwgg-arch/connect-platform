@@ -152,8 +152,59 @@ export async function buildTenantFactsDoc(tenantId: string): Promise<TenantFacts
     L.push(`- ${who || u.email}${u.role === "TENANT_ADMIN" ? " — the account admin" : ""}${u.uiLanguage === "yi" ? ", reads the app in Yiddish" : ""}`);
   }
 
+  // ── What the assistant has actually DONE for them ───────────────────────
+  //
+  // ⛔ Read from the record, not written at the moment of acting. Every path
+  // that changes anything writes an `AgentAction` row and every request that
+  // reached a human writes an `AgentEscalation` row, so rendering from those
+  // two tables covers work done through the chat, through the password dialog,
+  // through a texted approval, and through any path added later. Hooking each
+  // execution site instead would miss one — it always has.
+  const [done, asked] = await Promise.all([
+    (db as any).agentAction.findMany({
+      where: { tenantId, status: { in: ["EXECUTED", "REVERTED", "FAILED"] } },
+      select: { summary: true, status: true, executedAt: true, updatedAt: true, capabilityId: true },
+      orderBy: { updatedAt: "desc" },
+      take: 12,
+    }).catch(() => []),
+    (db as any).agentEscalation.findMany({
+      where: { tenantId },
+      select: { requestSummary: true, createdAt: true, fixStatus: true, fixResult: true, userName: true },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+    }).catch(() => []),
+  ]);
+
+  const day = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+
+  if (done.length > 0 || asked.length > 0) {
+    L.push("");
+    L.push("## What we have done for them recently");
+    for (const a of done) {
+      const when = day(a.executedAt ?? a.updatedAt);
+      const outcome = a.status === "EXECUTED" ? "" : a.status === "REVERTED" ? " (later undone)" : " (this did not go through)";
+      L.push(`- ${when} — ${a.summary}${outcome}`);
+    }
+    for (const e of asked) {
+      // Only requests that went to the team, and only what they asked for —
+      // never our internal handling of it.
+      const state =
+        e.fixStatus === "applied" ? "sorted" :
+        e.fixStatus === "failed" || e.fixStatus === "refused" ? "still open" :
+        "with our team";
+      L.push(`- ${day(e.createdAt)} — they asked: ${String(e.requestSummary).slice(0, 160)} (${state})`);
+    }
+    if (done.length === 0) L.push("- Nothing has been changed on their account by us.");
+  }
+
   const I: string[] = [];
   I.push(`- Connect tenant id: \`${tenant.id}\`; phone system tenant ${pbxLink?.pbxTenantId ?? "unknown"} (${pbxLink?.status ?? "no link"}).`);
+  for (const a of done.filter((x: any) => x.status !== "EXECUTED")) {
+    I.push(`- ⛔ ${day(a.executedAt ?? a.updatedAt)} ${a.capabilityId} ended ${a.status} — "${a.summary}".`);
+  }
+  for (const e of asked.filter((x: any) => x.fixResult)) {
+    I.push(`- Escalation ${day(e.createdAt)} (${e.userName}): ${e.fixStatus} — ${String(e.fixResult).slice(0, 160)}`);
+  }
   I.push(`- Customer since ${new Date(tenant.createdAt).toISOString().slice(0, 10)}.`);
   if (billing) {
     I.push(`- Billed on day ${billing.billingDayOfMonth} of the month; autopay ${billing.autopayEnabled ? "on" : "off"}; texting billing ${billing.smsBillingEnabled ? "on" : "off"}.`);

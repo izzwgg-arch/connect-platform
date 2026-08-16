@@ -33,6 +33,8 @@ mock.module("@connect/db", {
       ivrRouteProfile: table(() => state.profiles ?? []),
       tenantPbxLink: table(() => state.links ?? []),
       tenantBillingSettings: table(() => state.billing ?? []),
+      agentAction: table(() => state.actions ?? []),
+      agentEscalation: table(() => state.escalations ?? []),
       agentKnowledgeDoc: {
         findUnique: async ({ where }: any) => state.docs.find((d: any) => d.slug === where.slug) ?? null,
         findMany: async ({ where }: any) =>
@@ -63,6 +65,8 @@ beforeEach(async () => {
   state.profiles = [];
   state.links = [{ tenantId: "t_new", status: "LINKED", pbxTenantId: "42" }];
   state.billing = [];
+  state.actions = [];
+  state.escalations = [];
   state.docs = [];
   state.deleted = [];
 });
@@ -176,4 +180,52 @@ test("one company's failure never stops the rest of the sweep", async () => {
   tenantTable.findUnique = realFindUnique;
   assert.equal(s.errors, 1);
   assert.equal(s.written, 1, "the healthy company must still be written");
+});
+
+test("⛔ what the assistant DID lands in the company's document", async () => {
+  state.actions = [
+    { tenantId: "t_new", summary: "Add extension 104 for Sarah Klein.", status: "EXECUTED", executedAt: new Date("2026-08-16"), updatedAt: new Date("2026-08-16"), capabilityId: "action.add_extension" },
+  ];
+  await mod.syncAllTenantFactsDocs();
+  const doc = state.docs[0];
+  assert.match(doc.body, /What we have done for them recently/);
+  assert.match(doc.body, /2026-08-16 — Add extension 104 for Sarah Klein\./);
+});
+
+test("a change that did NOT go through is recorded honestly, and flagged for staff", async () => {
+  state.actions = [
+    { tenantId: "t_new", summary: "Turn on texting.", status: "FAILED", executedAt: null, updatedAt: new Date("2026-08-15"), capabilityId: "action.enable_sms" },
+  ];
+  await mod.syncAllTenantFactsDocs();
+  const doc = state.docs[0];
+  assert.match(doc.body, /Turn on texting\. \(this did not go through\)/);
+  assert.match(doc.internalBody, /action.enable_sms ended FAILED/);
+});
+
+test("what they ASKED for is recorded with its state, without our internal handling", async () => {
+  state.escalations = [
+    { tenantId: "t_new", requestSummary: "Their voicemail emails stopped arriving.", createdAt: new Date("2026-08-14"), fixStatus: "applied", fixResult: "Added the address to mailbox 101.", userName: "Sara" },
+  ];
+  await mod.syncAllTenantFactsDocs();
+  const doc = state.docs[0];
+  assert.match(doc.body, /they asked: Their voicemail emails stopped arriving\. \(sorted\)/);
+  assert.doesNotMatch(doc.body, /Added the address to mailbox/, "our handling notes are staff-only");
+  assert.match(doc.internalBody, /Added the address to mailbox 101/);
+});
+
+test("a company nothing has happened to gets no history section at all", async () => {
+  await mod.syncAllTenantFactsDocs();
+  assert.doesNotMatch(state.docs[0].body, /What we have done for them recently/);
+});
+
+test("a new action changes the document, so the next conversation knows", async () => {
+  await mod.syncAllTenantFactsDocs();
+  const before = state.docs[0].checksum;
+  state.actions = [
+    { tenantId: "t_new", summary: "Bought (845) 555-9999.", status: "EXECUTED", executedAt: new Date("2026-08-16"), updatedAt: new Date("2026-08-16"), capabilityId: "action.add_phone_number" },
+  ];
+  const s = await mod.syncAllTenantFactsDocs();
+  assert.equal(s.written, 1);
+  assert.notEqual(state.docs[0].checksum, before);
+  assert.match(state.docs[0].body, /Bought \(845\) 555-9999/);
 });
