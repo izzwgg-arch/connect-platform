@@ -14608,11 +14608,14 @@ body {
    looked like it had no logo in light mode at all.
    ⛔ No filter either: the chrome artwork is used exactly as delivered. */
 .brand-logo-svg {
-  /* 26px, not the old 42px: this wordmark is 5.6:1, so 42px tall would be 236px
-     wide and overflow the brand slot. Height gives way, not the slot. */
-  height: 26px;
+  /* 20px, not the old 42px: this wordmark is 5.6:1, so 42px tall would be 236px
+     wide and overflow the brand slot. Height gives way, not the slot.
+     Sized against the topbar's own type rather than the bar height — measured on
+     the live app at 26px, the letters ran ~2x the 13px search placeholder beside
+     them, which read as oversized. 20px puts them ~1.4x it. */
+  height: 20px;
   width: auto;
-  max-width: min(180px, 42vw);
+  max-width: min(150px, 40vw);
   display: block;
   flex-shrink: 0;
   margin: 0;
