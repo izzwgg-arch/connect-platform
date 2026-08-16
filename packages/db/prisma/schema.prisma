@@ -425,6 +425,22 @@ enum WhatsAppProviderType {
   WHATSAPP_META
 }
 
+/// Whose WhatsApp Business Account a number lives under. Chosen per tenant.
+///
+/// PLATFORM — the number sits under Connect's own WABA. Nothing for the customer
+/// to set up, Connect is billed by Meta and rebills. ⛔ The quality rating is
+/// SHARED: ordinary recipients blocking ordinary compliant messages still drags
+/// it down for every tenant on it. That is not something the send guard can
+/// prevent, because no rule was broken.
+///
+/// OWN — the customer has their own WABA and their own rating, so a problem stays
+/// theirs. Requires Tech Provider status, which requires business verification,
+/// so this mode cannot be switched on until that exists.
+enum WhatsAppHostingMode {
+  PLATFORM
+  OWN
+}
+
 enum EmailProviderType {
   SENDGRID
   SMTP
@@ -1885,6 +1901,15 @@ model WhatsAppAccount {
   ownershipKind             String               @default("TENANT")
   ownerUserId               String?
   providerConfigId          String?
+  /// PLATFORM = under Connect's WABA (no per-account token — the platform token
+  /// signs the send). OWN = the customer's own WABA, which brings its own token.
+  /// ⛔ Both modes must resolve credentials through ONE resolver. Two credential
+  /// paths is the exact shape that shipped the two IVR publish paths and the two
+  /// welcome-email paths half-fixed.
+  hostingMode               WhatsAppHostingMode  @default(PLATFORM)
+  /// Set only when hostingMode = OWN. Encrypted with CREDENTIALS_MASTER_KEY, the
+  /// same machinery as WhatsAppProviderConfig.credentialsEncrypted.
+  accessTokenEncrypted      String?
   settings                  Json?
   isEnabled                 Boolean              @default(true)
   lastSyncedAt              DateTime?
