@@ -34,6 +34,69 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the login brute-force limiter had NEVER run; the portal ships no security headers; Cloudflare is NOT in front of us (2026-08-16) — READ FIRST before any auth/login work, before filing a TLS or firewall finding, before using `req.ip`, or before believing Cloudflare protects Connect
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md`**
+(read-only audit + ONE code fix, `192837b5` on `feat/ivr-migration-takeover`.
+**Committed and pushed. ⛔ NOT DEPLOYED — awaiting Izzy's word.** No infrastructure
+touched, no PBX interaction, no Cloudflare change.)
+
+- ⛔⛔ **THE LOGIN LIMITER WAS DEAD CODE AND HAD NEVER RUN IN PRODUCTION.** It was
+  gated on `process.env.NODE_ENV === "production"` and **the api container sets no
+  NODE_ENV** — proven live: `docker exec app-api-1` → `NODE_ENV=[]`, while
+  `app-telephony-1` → `production`. Same class as the error-leak handler
+  (`4fb512ed`). Replaced by `apps/api/src/loginThrottle.ts` (20 tests), which reads
+  no NODE_ENV; `LOGIN_THROTTLE_DISABLED=1` is the only off switch.
+- ⛔⛔ **`req.ip` IS USELESS IN THIS CODEBASE AND USING IT NEARLY CAUSED AN OUTAGE.**
+  Fastify is built with **no `trustProxy`**, so `req.ip` is the nginx/docker hop —
+  the SAME value for every request platform-wide. Keying a source counter on it
+  would have put all customers in one bucket, and **six unrelated people mistyping a
+  password within ten minutes would have blocked login for EVERYONE.** Take the
+  **LAST** `X-Forwarded-For` entry (nginx uses `$proxy_add_x_forwarded_for`, which
+  appends the real peer to whatever the client sent, so earlier entries are
+  attacker-controlled). Reading the **first** — the usual mistake — lets an attacker
+  mint a fresh source per request and frame an innocent IP into a block.
+- ⛔ **THE NODE_ENV SWEEP NOBODY DID.** Every `NODE_ENV === "production"` branch in
+  apps/api is permanently false. Still live and dead: **`server.ts:404` — the guard
+  that refuses to boot when Cardknox is in SIMULATE mode in production**,
+  `crm/formStorage.ts:11`, `onboarding/publicRoutes.ts:61`, `redis.ts:7,30`.
+  ⛔ **Do NOT "fix" this by setting NODE_ENV=production on the container** — that
+  flips all of them at once with unknown blast radius. Remove the NODE_ENV
+  dependency per gate so each defaults to secure, one at a time, each with a test.
+- ⛔ **THE PORTAL SHIPS ZERO SECURITY HEADERS.** nginx `add_header` is **not
+  inherited into a location block that has its own** — `location /` sets
+  `add_header Cache-Control`, which cancels all five server-level headers (CSP,
+  X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy) for **every HTML
+  page**. Proven: `/api/health` returns them, `/login` returns none. The whole
+  customer-facing app is clickjackable with no CSP. Fix is 5 duplicated lines —
+  **needs Izzy's approval (nginx is off-limits to agents per AGENTS.md).**
+- ⛔ **CLOUDFLARE IS NOT IN FRONT OF CONNECT.** The nameservers are Cloudflare's
+  (`jake`/`nola.ns.cloudflare.com`) but `app.connectcomunications.com` resolves
+  **straight to the origin 45.14.194.179** — DNS-only, not proxied. No WAF, no bot
+  protection, no edge rate limiting, no DDoS absorption. ⛔ **There are NO Cloudflare
+  credentials anywhere on the server** and `cloudflared` is not installed, so the
+  account cannot be inspected — a scoped API token from Izzy is the blocker for all
+  edge work. ⛔ Do not claim Cloudflare protects anything.
+- ⛔ **TLS IS FINE — do not file it as a finding.** `/etc/nginx/nginx.conf` still
+  carries Ubuntu's default `ssl_protocols TLSv1 TLSv1.1 …`, but the certbot include
+  overrides it at server level. **Real handshake test: TLS 1.0 and 1.1 REFUSED, 1.2
+  and 1.3 accepted.** Truth-test the handshake; never file a TLS finding off the
+  config file.
+- ⛔ **Testing port 3910 FROM the server proves nothing** — traffic to your own
+  public IP goes through loopback and skips the ufw rule (it answers 401 and looks
+  reachable). From an external workstation it is correctly **blocked**. UFW is
+  active, default-deny, and every datastore (Postgres, Redis, MinIO, Grafana) is
+  loopback-only. **The server perimeter is in good shape; the auth layer is not.**
+- **Open and unfixed, needing Izzy:** session tokens **never expire** (no
+  `sign.expiresIn`, no refresh tokens, no revocation); **no MFA anywhere**, not even
+  for SUPER_ADMIN; SSH allows **root login with passwords** against 1,457 failed
+  attempts/day; **no DMARC** on the domain that sends invoices and voicemail.
+- ⛔ **Never `git stash` in this tree to compare against a baseline.** A failed
+  `stash push` followed by an unconditional `stash pop` popped an unrelated
+  2026-06-29 mobile stash into the shared tree and conflicted another session's
+  files. Fully recovered, nothing lost — but compare by inspecting which files the
+  errors land in, never by stashing.
+
 ## ⛔⛔ AGENT HANDOFF — the customer's price is ALL-INCLUSIVE now; taxes live INSIDE the total (2026-08-16) — READ FIRST before any billing-calculation work, before adding a tax or fee line, before quoting a price, or for "why did this customer's total change?"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ALL_INCLUSIVE_PRICING_2026-08-16.md`**
