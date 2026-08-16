@@ -16,7 +16,7 @@ export type InvoiceEmailBranding = {
   paymentTermsDays: number;
 };
 
-export const DEFAULT_INVOICE_DISPLAY_NAME = "Connect Communications";
+export const DEFAULT_INVOICE_DISPLAY_NAME = "Loopcom";
 
 export function escapeHtml(raw: string): string {
   return raw

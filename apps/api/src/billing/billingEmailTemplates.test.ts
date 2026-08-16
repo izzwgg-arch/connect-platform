@@ -75,10 +75,10 @@ test("invoiceSentEmail shows tenant or branded name only as billed company conte
   assert.match(t.html, /Billed company/);
   assert.match(t.html, /Northwind Telecom/);
   assert.doesNotMatch(t.subject, /Northwind Telecom/);
-  assert.doesNotMatch(t.html, /Sent by <strong[^>]*>Northwind Telecom<\/strong> via Connect Communications billing/);
+  assert.doesNotMatch(t.html, /Sent by <strong[^>]*>Northwind Telecom<\/strong> via Loopcom billing/);
 });
 
-test("invoiceSentEmail footer always uses Connect sender wording and support info", () => {
+test("invoiceSentEmail footer always uses Loopcom sender wording and support info", () => {
   const brand = resolveInvoiceEmailBranding({ invoiceFooterNote: "Tenant legal footer" }, "Landau Home");
   const t = invoiceSentEmail({
     invoiceNumber: "INV-SENDER",
@@ -88,10 +88,10 @@ test("invoiceSentEmail footer always uses Connect sender wording and support inf
     billingInvoiceId: "inv_sender_test",
     brand,
   });
-  assert.match(t.html, /Sent by Connect Communications billing\./);
-  assert.doesNotMatch(t.html, /Sent by Landau Home via Connect Communications billing/);
-  assert.match(t.html, /Connect Communications, LLC/);
-  assert.match(t.html, /support@connectcomunications\.com/);
+  assert.match(t.html, /Sent by Loopcom billing\./);
+  assert.doesNotMatch(t.html, /Sent by Landau Home via Loopcom billing/);
+  assert.match(t.html, /Loopcom/);
+  assert.match(t.html, /billing@loopcom\.net/);
   assert.match(t.html, /connectcomunications\.com/);
   assert.match(t.html, /845-723-1213/);
   assert.doesNotMatch(t.html, /Tenant legal footer/);
@@ -290,12 +290,12 @@ test("emailShell renders img tag even without logoUrl (uses fallback)", () => {
     billingInvoiceId: "inv_test",
     brand,
   });
-  // Should contain an img tag pointing to connect-logo.png
-  assert.match(t.html, /connect-logo\.png/);
+  // Should contain an img tag pointing to the Loopcom wordmark
+  assert.match(t.html, /loopcom-wordmark-560\.png/);
   assert.match(t.html, /<img/);
 });
 
-test("emailShell keeps Connect logo even when custom logoUrl is configured", () => {
+test("emailShell keeps the Loopcom logo even when a custom logoUrl is configured", () => {
   const brand = resolveInvoiceEmailBranding(
     { invoiceLogoUrl: "https://cdn.example.com/mybrand-logo.png" },
     "My Brand",
@@ -308,7 +308,7 @@ test("emailShell keeps Connect logo even when custom logoUrl is configured", () 
     billingInvoiceId: "inv_test",
     brand,
   });
-  assert.match(t.html, /connect-logo\.png/);
+  assert.match(t.html, /loopcom-wordmark-560\.png/);
   assert.doesNotMatch(t.html, /mybrand-logo\.png/);
 });
 
@@ -344,4 +344,19 @@ test("billing URL helpers are stable strings", () => {
   const token = decodeURIComponent(publicUrl.split("/pay/invoice/")[1]);
   assert.deepEqual(verifyBillingInvoicePayToken(token)?.invoiceId, "abc123");
   assert.match(billingInvoicePdfApiUrl("abc123"), /\/pdf$/);
+});
+
+test("billing emails mention Connect Communications nowhere", () => {
+  const built = invoiceSentEmail({
+    invoiceNumber: "CC-202608-00014",
+    totalCents: 30500,
+    dueDate: new Date("2026-09-01T00:00:00Z"),
+    portalInvoiceUrl: "https://example.com/i",
+    billingInvoiceId: "inv_guard",
+  });
+  for (const part of [built.html, built.text, built.subject]) {
+    assert.ok(!/Connect Communications/i.test(part), "Connect Communications still present");
+    assert.ok(!/support@connectcomunications\.com/i.test(part), "old support address still present");
+  }
+  assert.match(built.html, /billing@loopcom\.net/);
 });

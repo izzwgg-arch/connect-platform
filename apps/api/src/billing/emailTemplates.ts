@@ -10,18 +10,19 @@ function fmtDate(d: Date | string): string {
   return formatBillingDate(d);
 }
 
-/** Get fallback Connect logo URL from PUBLIC_PORTAL_URL env. */
+/** Fallback Loopcom wordmark URL, from PUBLIC_PORTAL_URL. Must stay an absolute
+ *  https URL — email clients cannot load a relative path or a data: URI. */
 function getDefaultLogoUrl(): string {
   const base = (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
-  return `${base}/connect-logo.png`;
+  return `${base}/brand/loopcom/loopcom-wordmark-560.png`;
 }
 
 const CONNECT_FALLBACK = resolveInvoiceEmailBranding({}, null);
-const CONNECT_COMPANY_NAME = "Connect Communications, LLC";
-const CONNECT_SUPPORT_EMAIL = "support@connectcomunications.com";
-const CONNECT_SUPPORT_DOMAIN = "connectcomunications.com";
+const CONNECT_COMPANY_NAME = "Loopcom";
+const CONNECT_SUPPORT_EMAIL = "billing@loopcom.net";
+const CONNECT_SUPPORT_DOMAIN = "loopcom.net";
 const CONNECT_SUPPORT_PHONE = "845-723-1213";
-const CONNECT_BLUE = "#0284c7";
+const CONNECT_BLUE = "#22a8ff";
 
 function mergeBrand(brand?: InvoiceEmailBranding | null): InvoiceEmailBranding {
   if (!brand) return CONNECT_FALLBACK;
@@ -52,7 +53,7 @@ function supportBlock(): string {
 }
 
 function brandFooter(): string {
-  return `<p style="margin:0;font-size:13px;line-height:20px;color:#64748b;">Sent by Connect Communications billing.</p>`;
+  return `<p style="margin:0;font-size:13px;line-height:20px;color:#64748b;">Sent by Loopcom billing.</p>`;
 }
 
 /**
@@ -94,8 +95,8 @@ function emailShell(title: string, body: string, _brand: InvoiceEmailBranding): 
               </tr>
               <tr>
                 <td class="email-pad" style="padding:24px 28px 18px;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;background:#ffffff;">
-                  <img src="${escapeHtml(logoSrc)}" alt="Connect Communications" width="156" style="display:block;width:156px;max-width:156px;height:auto;border:0;outline:none;text-decoration:none;margin:0 0 18px;" />
-                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Connect Communications billing</p>
+                  <img src="${escapeHtml(logoSrc)}" alt="Loopcom" width="156" height="28" style="display:block;width:156px;max-width:156px;height:28px;border:0;outline:none;text-decoration:none;margin:0 0 18px;" />
+                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Loopcom billing</p>
                   <h1 style="margin:0;font-size:26px;line-height:32px;font-weight:750;color:#0f172a;">${escapeHtml(title)}</h1>
                 </td>
               </tr>
@@ -146,7 +147,7 @@ function infoBox(rows: string): string {
 }
 
 /** Primary CTA button. */
-function ctaButton(href: string, label: string, color = "#0284c7"): string {
+function ctaButton(href: string, label: string, color = "#22a8ff"): string {
   const safeHref = escapeHtml(href);
   const safeLabel = escapeHtml(label);
   return `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;margin:24px 0 14px;">
@@ -232,7 +233,7 @@ export function invoiceSentEmail(input: {
     input.portalInvoiceUrl ? `Pay invoice: ${input.portalInvoiceUrl}` : null,
     "",
     "Your invoice PDF is attached.",
-    `Questions? Contact Connect Communications billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
+    `Questions? Contact Loopcom billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
   ].filter((line): line is string => line != null);
   const text = textLines.join("\n");
   return { subject, html: emailShell("Invoice ready", body, brand), text };
@@ -337,7 +338,7 @@ export function paymentLinkEmail(input: {
     `Invoice number: ${input.invoiceNumber}`,
     `Due date: ${fmtDate(input.dueDate)}`,
     input.payUrl ? `Pay invoice: ${input.payUrl}` : null,
-    `Questions? Contact Connect Communications billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
+    `Questions? Contact Loopcom billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
   ].filter((line): line is string => line != null).join("\n");
   return { subject, html: emailShell("Payment link", body, brand), text };
 }
