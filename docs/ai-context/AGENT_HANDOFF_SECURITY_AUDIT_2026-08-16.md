@@ -146,14 +146,66 @@ each with a test.
 
 ---
 
-## 5. What is BLOCKED
+## 5. Cloudflare — inspected live 2026-08-16 (browser access granted by Izzy)
 
-⛔ **Cloudflare cannot be inspected.** There are **no Cloudflare API credentials
-anywhere on the server**, `cloudflared` is not installed, and no `CF_*`/`CLOUDFLARE_*`
-variable exists in any env file. Mandate Phases 2, 4, 5, 6 and 7 (origin protection,
-WAF, edge rate limiting, bot protection, Zero Trust) **cannot be started** until Izzy
-supplies a scoped Cloudflare API token or does the changes himself. Everything said
-about Cloudflare above comes from DNS observation only.
+⛔ **There are still no Cloudflare credentials ON THE SERVER** — that finding stands,
+and it is why loopcom cannot call the Cloudflare API on its own. Access came from
+Izzy's logged-in browser instead.
+
+⛔ **The dashboard banner "Onboard your agent to Cloudflare — Works with Claude,
+Codex, Cursor and OpenCode" is an ADVERT, not a status.** It reads like a connected
+integration and is not one; the API-tokens page listed **zero tokens**, which is the
+authoritative check. There is also **no Cloudflare connector in the MCP registry**.
+
+**Account:** `Support@connectcomunications.com's Account`. **Plan: Free Website.**
+
+**All 8 DNS records, and which are actually protected:**
+
+| Record | Target | Proxy |
+|---|---|---|
+| `app.` | 45.14.194.179 (origin) | ⛔ **DNS only** |
+| apex | 31.220.77.60 (marketing) | DNS only |
+| `m.` | 209.145.60.79 (**the PBX**) | DNS only — ⛔ must STAY that way |
+| `portal.` | ui.zswitch.net (3rd-party Telocall GUI) | ✅ Proxied — the ONLY one |
+| `www` | CNAME apex | DNS only |
+| MX / SPF / DKIM | Google | n/a |
+
+**Total requests through Cloudflare in 24h: 1.** The edge is doing nothing.
+
+✅ **DKIM DOES exist** (`google._domainkey`, Google 2048-bit) — an earlier note in
+this file said DKIM was unverified; it is present and correct.
+
+### Live edge settings read via API
+
+`security_level medium` · `always_use_https` **off** · `automatic_https_rewrites on` ·
+`min_tls_version` **1.0** · `ssl` **full** (not strict) · **HSTS disabled**.
+
+### Changed this session
+
+1. ✅ **DMARC added** — `_dmarc TXT "v=DMARC1; p=none; rua=mailto:support@connectcomunications.com"`.
+   Verified resolving publicly. ⛔ **`p=none` is MONITOR ONLY — it does not block
+   spoofing yet.** It exists to collect reports; tightening to `p=quarantine` then
+   `p=reject` is a later step, only once reports confirm every legitimate sender
+   passes. Claiming the domain is now protected from spoofing would be false.
+   Rollback: delete the record.
+2. ✅ `min_tls_version` 1.0 → **1.2**, `always_use_https` off → **on**. Both affect
+   **proxied traffic only**, so today they touch `portal.` alone and are pre-staging
+   for a future `app.` cutover. Rollback: PATCH the setting back.
+3. ✅ **API token `connect-security-sentinel`** — Zone-scoped to this zone only:
+   `Zone Settings:Edit`, `DNS:Edit`, `Firewall Services:Edit`. No account-level
+   rights, no User rights.
+
+⛔ **NOT enabled, deliberately: HSTS.** It is semi-permanent (browsers cache the
+policy) and must not be turned on until `app.` is proxied and proven fully healthy
+over HTTPS. Enabling it early can make a broken state unreachable.
+
+⛔ **Token-handling mistake, recorded so it is not repeated:** the token value was
+captured in a zoomed screenshot while confirming creation, putting a live
+edit-capable credential into the session transcript. It was **rolled** (Cloudflare's
+"Roll" keeps the permission set and issues a new secret) and the exposed value was
+**verified dead** — `/user/tokens/verify` answers `Invalid API Token`. ⛔ When a
+secret is displayed once, do not screenshot the region "just to confirm success" —
+confirm from the token LIST page, which shows name and status but never the value.
 
 **Also out of reach without approval:** every fix in §3 touches infrastructure that
 `AGENTS.md` explicitly puts off-limits to agents (nginx config, `/etc/ssh/`, ufw,

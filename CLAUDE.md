@@ -70,13 +70,31 @@ touched, no PBX interaction, no Cloudflare change.)
   page**. Proven: `/api/health` returns them, `/login` returns none. The whole
   customer-facing app is clickjackable with no CSP. Fix is 5 duplicated lines —
   **needs Izzy's approval (nginx is off-limits to agents per AGENTS.md).**
-- ⛔ **CLOUDFLARE IS NOT IN FRONT OF CONNECT.** The nameservers are Cloudflare's
-  (`jake`/`nola.ns.cloudflare.com`) but `app.connectcomunications.com` resolves
-  **straight to the origin 45.14.194.179** — DNS-only, not proxied. No WAF, no bot
-  protection, no edge rate limiting, no DDoS absorption. ⛔ **There are NO Cloudflare
-  credentials anywhere on the server** and `cloudflared` is not installed, so the
-  account cannot be inspected — a scoped API token from Izzy is the blocker for all
-  edge work. ⛔ Do not claim Cloudflare protects anything.
+- ⛔ **CLOUDFLARE IS NOT IN FRONT OF CONNECT.** Account inspected live 2026-08-16 via
+  Izzy's browser. Plan is **Free**. Of 8 DNS records **only `portal.` (a third-party
+  Telocall GUI) is proxied**; `app.` → origin 45.14.194.179 and `m.` → the PBX are
+  both **DNS only**. **Total requests through Cloudflare in 24h: 1** — the edge does
+  nothing today. ⛔ Do not claim Cloudflare protects anything.
+  ⛔ **The dashboard banner "Onboard your agent to Cloudflare — Works with Claude…" is
+  an ADVERT, not a status** (it misled once). The authoritative check is the
+  API-tokens page; there were **zero** tokens. There is also no Cloudflare MCP
+  connector. ⛔ **No Cloudflare credentials exist ON THE SERVER** — loopcom still
+  cannot call the API itself.
+  ✅ **Done 2026-08-16:** DMARC added (`p=none` — ⛔ **monitor only, it does NOT block
+  spoofing yet**); `min_tls_version` 1.0→1.2 and `always_use_https` on (both affect
+  **proxied traffic only**, so today only `portal.`); zone-scoped API token
+  `connect-security-sentinel` (Zone Settings/DNS/Firewall Services : Edit).
+  ✅ **DKIM already existed** (`google._domainkey`). ⛔ **HSTS deliberately NOT
+  enabled** — it is semi-permanent and must wait until `app.` is proxied and proven.
+  ⛔ **A displayed-once secret must never be screenshotted "to confirm success"** —
+  a token value landed in the session transcript that way; it was rolled and verified
+  dead. Confirm from the token LIST page, which shows status but not the value.
+- ⛔⛔ **PROXYING `app.` IS NOT A TOGGLE — SIP IS THE BLOCKER.** nginx `location /sip`
+  on `app.` proxies WebSocket SIP to the PBX, and four tenants (Gesheft, Displaydex,
+  Loopcom Demo, inii mini) register through it. Cloudflare idles WebSockets out at
+  ~100 s; a dropped WSS is a phone that does not ring. Move SIP to its own DNS-only
+  hostname and let every client re-register FIRST — and remember the app **never
+  refreshes a cached `sipWsUrl`**, so each user must sign out and back in.
 - ⛔ **TLS IS FINE — do not file it as a finding.** `/etc/nginx/nginx.conf` still
   carries Ubuntu's default `ssl_protocols TLSv1 TLSv1.1 …`, but the certbot include
   overrides it at server level. **Real handshake test: TLS 1.0 and 1.1 REFUSED, 1.2
