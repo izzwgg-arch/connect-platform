@@ -113,19 +113,73 @@ present on `origin/feat/ivr-migration-takeover`, remote tip `c0fd007b`. The
 PNGs did **not** get CRLF-mangled — only the two `.md`/`.txt` files drew line-
 ending warnings.
 
-## 5. ⏳ NOT DONE — nothing is wired up
+## 5. ✅ `/login` is LIVE — and ⏳ what is still unwired
 
-Committing these files changed no behaviour. As of 2026-08-16:
+**Deployed 2026-08-16**, queue job `8e6a3525`, commit `140dec3e`, portal
+container verified plus a public-HTTPS check of the shipped bundles.
 
-- `apps/portal/app/login/page.tsx` is **untouched** — still a bare `.panel` form
-  headed "Connect Communications" with no logo at all.
-- **The favicon is unchanged.** The files sit under
+`apps/portal/app/login/page.tsx` now renders the wordmark **inside** the card,
+directly above Email, styled by a `.lc-login-*` block appended to
+`apps/portal/app/globals.css`. Every colour is a theme token
+(`--bg`, `--panel`, `--text`, `--text-dim`, `--border`, `--accent`,
+`--accent-2`), so the page follows the **in-app** light/dark switch rather than
+the operating system's — the mistake the billing screens made.
+**No sign-in logic changed**: credentials, the 401/429/500 messages, the
+localhost dev sign-in and Forgot password all behave exactly as before.
+
+### ⛔ Izzy's design decisions — do not "fix" these
+
+- **ONE transparent PNG serves both themes.** He explicitly rejected the kit's
+  deep-ink light variant: *"I never asked for two files… I only approved the one
+  I see in the dark mode page."* ⛔ Do **not** add a light-mode logo file.
+- ⛔ **No dark plate behind the logo.** An earlier mockup seated it on a
+  `#0C1218` panel so the chrome kept its highlights; he rejected that too. The
+  known trade, raised with him and accepted: on a pale ground the white bevel
+  highlights and the centre starburst read much quieter than on dark.
+- ⛔ **No tagline anywhere** — not in the artwork, and the card's
+  "Sign in to your phone system." line is gone as well. *"It should just be the
+  logo."*
+- Asset: `/brand/loopcom/loopcom-wordmark-560.png`, 560×99, 81 KB, displayed at
+  252 px (2× for retina), above the kit's 180 px minimum.
+
+### ⛔ How to verify this page — the obvious check is a FALSE POSITIVE
+
+`/login` is a **client-rendered** route. `curl https://app.…/login` returns a
+**4,858-byte cached shell** (`x-nextjs-cache: HIT`) containing none of the
+markup — so grepping it for `lc-login-card` says ABSENT on a perfectly good
+deploy, and grepping it for the OLD copy says "gone", which reads like the
+change landed. Both are meaningless. Verify from the built bundles:
+
+```bash
+# 1) the live stylesheet
+CSS=$(curl -s https://app.connectcomunications.com/login | grep -o '/_next/static/css/[a-z0-9]*\.css' | head -1)
+curl -s "https://app.connectcomunications.com$CSS" | grep -o '\.lc-login-logo{[^}]*}'
+# 2) the page chunk — find its hashed name in the container first
+docker exec app-portal-1 sh -c \
+  'grep -rl loopcom-wordmark-560 /app/apps/portal/.next/static/chunks | head -1'
+# then fetch it under /_next/... (the container path drops that prefix — adding
+# it back is easy to forget and produces a misleading "absent")
+```
+
+Confirmed on 2026-08-16: stylesheet carries
+`.lc-login-logo{width:252px;max-width:100%;height:auto;display:block;margin:2px auto 26px}`;
+chunk `app/login/page-d815b763c73d7c92.js` carries the asset path,
+`lc-login-card`, `LoopCom` and `Forgot password`, with `Connect Communications`
+and the old tagline both gone; the PNG serves 200 `image/png` at exactly 81,078
+bytes.
+
+### ⏳ Still NOT wired, deliberately
+
+- **The favicon is unchanged.** Those files sit under
   `apps/portal/public/brand/loopcom/favicon/`, deliberately **not** at the
   `public/` root — a file at that root is served as `/favicon.ico` and would
-  silently rebrand every page the moment it deployed. That is its own decision.
+  silently rebrand every page the moment it deployed. Its own decision.
 - Mobile/desktop app icons, invoice templates, welcome and invite emails all
   still carry Connect branding. The kit has files for every one of them.
-- **Nothing was deployed.** No queue job, no container change.
+- ⏳ **Nobody has opened the new page in a real browser.** It is proven from the
+  shipped bundles, not by a human signing in. ⛔ Open desktop installs and portal
+  windows keep the old bundle until reloaded (the reload banner appears within
+  ~5 min).
 
 ## 6. The open question, which is bigger than the login page
 

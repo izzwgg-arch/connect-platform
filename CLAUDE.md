@@ -269,10 +269,11 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   need `ChanSpy` confirmed on the PBX and a Connect permission gate; neither was
   checked. Don't promise them off the picture.
 
-## ⛔ AGENT HANDOFF — the LoopCom logo is IN THE REPO now, and wired to nothing (2026-08-16) — READ FIRST before any LoopCom branding work, before putting a logo on any screen, or before believing a logo handed to you is the current one
+## ⛔ AGENT HANDOFF — the LoopCom logo is in the repo and LIVE on the sign-in page (2026-08-16) — READ FIRST before any LoopCom branding work, before putting a logo on any screen, or before believing a logo handed to you is the current one
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_BRAND_ASSETS_2026-08-16.md`**
-(93 files **COMMITTED AND PUSHED**, ⏳ **wired to nothing, nothing deployed**.)
+(brand kit + the rebuilt `/login` — portal **DEPLOYED and verified over public
+HTTPS**, job `8e6a3525`, commit `140dec3e`. Everything else still unwired.)
 
 - ⛔ **THE RULE: when a brand asset is missing, say so and ask — do not draw
   one.** A search for a LoopCom logo found none in the repo, and this session
@@ -311,12 +312,32 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_BRAND_ASSETS_2026-08-16.m
   re-check `git diff --cached --name-only` **immediately before commit**, not
   just before add. History deliberately NOT rewritten (another session was
   live). Files verified byte-identical by sha256 against source, 93 on origin.
-- ⏳ **NOT DONE, and deliberately:** `apps/portal/app/login/page.tsx` is
-  untouched (still "Connect Communications", no logo); the **favicon is
-  unchanged** — the files sit under `.../brand/loopcom/favicon/` and NOT at the
-  `public/` root, because a file there is served as `/favicon.ico` and would
-  rebrand every page on deploy; app icons, invoices and invite emails all still
-  carry Connect branding.
+- ✅ **`/login` IS LIVE with the logo.** `apps/portal/app/login/page.tsx` +
+  a `.lc-login-*` block appended to `globals.css`. The wordmark sits INSIDE the
+  card above Email; page styled from `--bg`/`--panel`/`--text`/`--border`/
+  `--accent`, so it follows the **in-app** theme switch, not the OS. ⛔ **ONE
+  transparent PNG serves both themes on purpose — Izzy explicitly rejected the
+  kit's deep-ink light variant ("I never approved any other colors"). Do NOT add
+  a light-mode logo file, a dark plate behind it, or any tagline.** Asset is
+  `/brand/loopcom/loopcom-wordmark-560.png` (560×99, 81 KB).
+  **Tagline removed by CROPPING** the source at y=253 — the two ink bands are
+  y13–238 (wordmark) and y266–303 (tagline) with a clean gap — never by an edit
+  or a background remover; recipe in `docs/brand/loopcom/derived/README.md`.
+  No sign-in LOGIC changed.
+- ⛔ **`/login` renders CLIENT-SIDE, so `curl https://…/login | grep` PROVES
+  NOTHING** — you get a 4.8 KB cached shell (`x-nextjs-cache: HIT`) with no
+  markup, and a grep for the OLD copy also comes back "gone", which reads as a
+  successful verification and is a **false positive**. Verify from the built
+  bundles instead: the live stylesheet
+  (`/_next/static/css/<hash>.css` → `.lc-login-logo{width:252px…}`) and the page
+  chunk (`/_next/static/chunks/app/login/page-<hash>.js` → the asset path and
+  `lc-login-card`). Both were checked over public HTTPS on 2026-08-16.
+- ⏳ **Still NOT wired, deliberately:** the **favicon is unchanged** — those
+  files sit under `.../brand/loopcom/favicon/` and NOT at the `public/` root,
+  because a file there is served as `/favicon.ico` and would rebrand every page
+  on deploy; app icons, invoices and invite emails all still carry Connect
+  branding. ⏳ **Nobody has opened the new page in a real browser** — it is
+  proven from the shipped bundles, not by a human signing in.
 - ⛔ **The rebrand is half a decision and customers can see it.** Portal says
   "Connect Communications", the iOS app is named "Loopcom", the logo says
   "LoopCom". Three login mockups were shown to Izzy 2026-08-16; he has not
