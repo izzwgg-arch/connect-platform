@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { QrCode, X, RefreshCw, Smartphone } from "lucide-react";
 import { apiGet, apiPost } from "../services/apiClient";
+import { currentBrowserOrigin, resolveAbsoluteApiBase } from "../lib/publicApiBase";
 
 // Server-side token TTL is 120 s; we refresh 15 s early to avoid expiry races.
 const TOKEN_TTL_MS = 120_000;
@@ -22,11 +23,13 @@ type TokenState =
   | { phase: "ready"; token: string; expiresAt: Date; qrValue: string }
   | { phase: "error"; message: string; code?: string };
 
+/** ⛔ This URL is scanned by a PHONE, so it must be ABSOLUTE — a relative `/api`
+ *  means nothing on another device (React Native's `fetch` rejects it). But it
+ *  must NOT be a hardcoded domain either: Connect is served on more than one
+ *  hostname, and a phone paired from `app.loopcom.net` has to talk to the host it
+ *  was paired from. So: derive it from the current origin at runtime. */
 function buildQrValue(token: string): string {
-  const apiBase =
-    (typeof window !== "undefined"
-      ? process.env.NEXT_PUBLIC_API_URL ?? ""
-      : "") || "https://app.connectcomunications.com/api";
+  const apiBase = resolveAbsoluteApiBase(process.env.NEXT_PUBLIC_API_URL, currentBrowserOrigin());
   return JSON.stringify({
     type: "MOBILE_PROVISIONING",
     token,

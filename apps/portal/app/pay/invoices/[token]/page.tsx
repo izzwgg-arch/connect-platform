@@ -12,9 +12,12 @@ import { CheckCircle2, Lock, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../components/billing/CardknoxIFieldsForm";
 import { PaymentTrustBadge } from "../../../../components/billing/PaymentTrustBadge";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { resolveSameOriginApiBase } from "../../../../lib/publicApiBase";
 import "../../invoice/[token]/pay-invoice.css";
 
-const apiBase = (process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api").replace(/\/$/, "");
+/** Same-origin on purpose — this page is served on more than one hostname and a
+ *  hardcoded domain makes every fetch here a CORS failure on the other one. */
+const apiBase = resolveSameOriginApiBase(process.env.NEXT_PUBLIC_API_URL);
 
 type InvoiceRow = {
   invoiceId: string;

@@ -8,10 +8,13 @@ import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../compon
 import { PaymentTrustBadge } from "../../../components/billing/PaymentTrustBadge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { readAuthToken } from "../../../services/session";
+import { resolveSameOriginApiBase } from "../../../lib/publicApiBase";
 import "../../pay/invoice/[token]/pay-invoice.css";
 import "./pay-link.css";
 
-const apiBase = (process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api").replace(/\/$/, "");
+/** Same-origin on purpose — this page is served on more than one hostname and a
+ *  hardcoded domain makes every fetch here a CORS failure on the other one. */
+const apiBase = resolveSameOriginApiBase(process.env.NEXT_PUBLIC_API_URL);
 
 type PayLinkInvoiceRow = {
   invoiceNumber: string;
