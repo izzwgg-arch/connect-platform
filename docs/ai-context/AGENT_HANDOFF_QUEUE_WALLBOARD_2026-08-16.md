@@ -397,6 +397,49 @@ measures 5.15:1 on light accent and 7.31:1 on dark, better than white on both.
   would fight for it, and leaving TV mode could strand the whole portal in the
   wrong theme.
 
+### Permissions — simple in regular roles, granular in custom roles (`2ffa720f`)
+
+The two editors render different things, which is what makes the split work:
+
+| Editor | Renders | Queues shows up as |
+|---|---|---|
+| `/admin/permissions` (built-in roles) | `SIDEBAR_SECTIONS` × `SIDEBAR_ITEMS` | one **Queues** on/off under PBX |
+| `/admin/roles/[id]` (custom roles) | the above **plus** `ACTION_PERMISSION_KEYS` | the nav item **plus three** action toggles |
+
+The three action keys, deliberately separate:
+
+- **`can_view_queues`** — the live status page.
+- **`can_view_queue_wallboard`** — TV mode.
+- **`can_view_queue_reports`** — the historical reports. These rank **named
+  agents**, so an owner may well want a supervisor watching the queue and
+  nowhere near per-person history. Revoking reports leaves the live board.
+
+Defaults: **TENANT_ADMIN holds all three, END_USER holds none.** SUPER_ADMIN
+gets them from the force-add bucket, so ⛔ **no snapshot migration is needed
+when adding a permission key** — that stays true here.
+
+⛔ **The bug this fixed: a visible door that doesn't open.** The nav key
+`can_view_pbx_queues` first hung off the `can_view_calls` legacy expansion —
+and **END_USER holds `can_view_calls`**. So every ordinary user would have seen
+a Queues menu item that then denied them at the page, which reads as a broken
+app rather than a permission. It now hangs off `can_view_reports` (a
+TENANT_ADMIN key), so visibility and access switch on together.
+`portalPermissions.queues.test.ts` asserts exactly that: **no bucket may hold
+the nav key without also holding `can_view_queues`.**
+
+Two enforcement points, both required:
+- **Routes** gate on the queues' own keys (`can_view_queues` /
+  `can_view_queue_reports`) via `requireRoleOrPortalPermission`, ⛔ not the
+  role-only `requirePermission`, which is invisible to custom roles.
+- **Pages** gate themselves with `PermissionGate`. ⛔ Hiding a sidebar item is
+  presentation, not access — a bookmark or a typed `/queues` would otherwise
+  still render the screen.
+
+⛔ Remember [[custom-roles-are-authoritative]]: an active custom role REPLACES
+the bucket defaults, so a role must carry the user's full intended set. A role
+created before these keys existed simply won't have them — which fails closed,
+correctly, but means existing custom roles need the toggles ticked on.
+
 ### ⏳ Listen / Whisper / Barge — VERIFIED FEASIBLE, NOT BUILT
 
 Checked properly this time rather than promised off a mockup:

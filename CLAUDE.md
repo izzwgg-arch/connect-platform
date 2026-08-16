@@ -469,9 +469,27 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   level, wait distributions, per-agent, hour/day/weekday) + `GET /voice/queues`
   and `POST /voice/queues/reports`. ⛔ **Live state is NOT a new API — it rides
   the existing `/ws/telephony` `LiveQueueState`; never add a REST "live queues"
-  endpoint** (second source of truth for the same fact). Permission keys are
-  **reused**: `can_view_live_calls` / `can_view_reports`, nav key
-  `can_view_pbx_queues` on the `can_view_calls` expansion.
+  endpoint** (second source of truth for the same fact).
+- ✅ **PER-USER PERMISSIONS, and the two editors differ on purpose** (`2ffa720f`):
+  `/admin/permissions` (built-in roles) renders only sidebar items → **one
+  Queues on/off**; `/admin/roles/[id]` (custom roles) also renders
+  `ACTION_PERMISSION_KEYS` → the nav item **plus three** toggles,
+  **`can_view_queues`** (live), **`can_view_queue_wallboard`** (TV mode),
+  **`can_view_queue_reports`** (history). Three because the reports rank
+  **named agents** — revoking them must leave the live board. TENANT_ADMIN has
+  all three, END_USER none, SUPER_ADMIN automatic via the force-add bucket.
+  ⛔ **The bug this fixed is worth remembering: a visible door that doesn't
+  open.** The nav key first hung off `can_view_calls`, which **END_USER holds**,
+  while the pages needed tenant-admin access — so every ordinary user would have
+  seen a Queues item that denied them on click, reading as a broken app rather
+  than a permission. It now hangs off `can_view_reports`, and a test asserts no
+  bucket can hold the nav key without `can_view_queues`. ⛔ **Both layers are
+  required**: routes use `requireRoleOrPortalPermission` (the role-only
+  `requirePermission` is invisible to custom roles) **and** every page wraps
+  itself in `PermissionGate` — hiding a sidebar item is presentation, not
+  access, and a typed URL would otherwise still render. ⛔ Per
+  [[custom-roles-are-authoritative]], a custom role created before these keys
+  existed simply lacks them (fails closed) and needs them ticked on.
 - ✅ **THE GRANT IS APPLIED (2026-08-16) — reports are LIVE with real data.**
   `connect_read` now holds `ombutel.*` **plus `asterisk.queues_log`**, nothing
   else. Proven in `app-api-1`: Phone Orders **2,020 offered / 1,866 answered
