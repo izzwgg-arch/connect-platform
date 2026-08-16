@@ -33,6 +33,7 @@ import {
   mergeBillingTelecomFeesIntoMetadata,
   type BillingTelecomFeesConfig,
 } from "../billing/billingTelecomFees";
+import { mergeAllInclusivePricingIntoMetadata } from "../billing/billingAccountPricing";
 
 /** The recurring-billing mirror of the sign-up quote's fee lines. */
 export function onboardingTelecomFeesConfig(opts: { tollFreeNumber?: boolean } = {}): BillingTelecomFeesConfig {
@@ -118,9 +119,18 @@ export async function ensureOnboardingBillingDefaults(
     return { stamped: false, reason: "taxes already enabled on this tenant" };
   }
 
-  const metadata = mergeBillingTelecomFeesIntoMetadata(
-    settings?.metadata,
-    onboardingTelecomFeesConfig({ tollFreeNumber: !!opts.tollFreeNumber }),
+  // ⛔ All-inclusive pricing is stamped HERE and only here — on a tenant this
+  // sign-up is creating. It is the "going forward" half of Izzy's 2026-08-16
+  // instruction: new accounts get the (extensions × price) + one account fee
+  // model with real taxes carved out of the total, and no account that already
+  // existed is touched. This stamp cannot reach one: it refuses any tenant that
+  // already has a fee config or has taxes enabled (checked above).
+  const metadata = mergeAllInclusivePricingIntoMetadata(
+    mergeBillingTelecomFeesIntoMetadata(
+      settings?.metadata,
+      onboardingTelecomFeesConfig({ tollFreeNumber: !!opts.tollFreeNumber }),
+    ),
+    true,
   );
   const smsPatch = opts.smsEnabled ? { smsBillingEnabled: true } : {};
   await dbc.tenantBillingSettings.upsert({

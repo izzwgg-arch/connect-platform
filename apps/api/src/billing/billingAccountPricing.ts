@@ -38,11 +38,47 @@
 /** Stored on `TenantBillingSettings.metadata.billingAccountFeeCents` — no migration. */
 export const BILLING_ACCOUNT_FEE_METADATA_KEY = "billingAccountFeeCents";
 
+/** Stored on `TenantBillingSettings.metadata.billingAllInclusivePricing` — no migration. */
+export const BILLING_ALL_INCLUSIVE_METADATA_KEY = "billingAllInclusivePricing";
+
 /**
  * The fixed taxes-and-fees allocation every account carries, per month.
  * $5.00 — the "+ 5.00" in `(extension_count × 30.00) + 5.00`.
  */
 export const DEFAULT_ACCOUNT_TAXES_AND_FEES_CENTS = 500;
+
+/**
+ * Is this tenant on all-inclusive pricing?
+ *
+ * ⛔ OPT-IN, AND IT MUST STAY OPT-IN. Izzy, 2026-08-16: *"do not change any
+ * existing invoice totals. This is only going forward."* Switching a tenant on
+ * moves what they are billed — for the accounts already on the platform it
+ * would have meant +$5/month for nine of them and a cut of up to $39.98/month
+ * (Gesheft) for nine others, because tax that used to sit on top now lives
+ * inside the price. So every tenant that existed before this shipped keeps the
+ * old additive math, byte for byte, until someone deliberately moves them.
+ *
+ * ⛔ Never flip the default. A default-on gate is indistinguishable from no
+ * gate at all the moment a tenant's metadata is missing for any other reason.
+ */
+export function isAllInclusivePricingEnabled(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  return (metadata as Record<string, unknown>)[BILLING_ALL_INCLUSIVE_METADATA_KEY] === true;
+}
+
+export function mergeAllInclusivePricingIntoMetadata(
+  prev: unknown,
+  enabled: boolean | null | undefined,
+): Record<string, unknown> {
+  const prevMeta =
+    prev && typeof prev === "object" && !Array.isArray(prev) ? { ...(prev as Record<string, unknown>) } : {};
+  if (enabled === undefined) return prevMeta;
+  if (enabled === null) {
+    delete prevMeta[BILLING_ALL_INCLUSIVE_METADATA_KEY];
+    return prevMeta;
+  }
+  return { ...prevMeta, [BILLING_ALL_INCLUSIVE_METADATA_KEY]: enabled === true };
+}
 
 export function parseAccountTaxesAndFeesCents(metadata: unknown): number | null {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;

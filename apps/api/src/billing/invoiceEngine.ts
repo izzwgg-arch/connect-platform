@@ -15,6 +15,7 @@ import { addBillingDays, billingMonthBounds, billingYearMonth } from "./billingT
 import { buildBillingTelecomFeeLines, parseBillingTelecomFees } from "./billingTelecomFees";
 import {
   buildAccountPricingSummary,
+  isAllInclusivePricingEnabled,
   isGovernmentTaxOrFeeLine,
   resolveAccountTaxesAndFeesCents,
   solveTaxInclusiveTaxableBase,
@@ -513,14 +514,21 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   // customer_total = (extensions × price) + one account fee, and the real
   // taxes/fees come OUT of that total instead of being added on top. See
   // billingAccountPricing.ts for why, and for the invariant this keeps.
+  //
+  // ⛔ OPT-IN PER TENANT. A tenant without `metadata.billingAllInclusivePricing`
+  // gets exactly the math it got before this shipped — Izzy's instruction was
+  // "do not change any existing invoice totals. This is only going forward."
+  // The reporting half below still runs for everyone; only the PRICING is gated.
   const accountFeeCentsPerMonth = resolveAccountTaxesAndFeesCents(settings.metadata);
   const accountFeeCents = roundCents(accountFeeCentsPerMonth * Math.max(0, Number(periodFactor.monthCount || 1)));
   const billedExtensionCount = scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount);
+  const allInclusiveEnabled = isAllInclusivePricingEnabled(settings.metadata);
   // The per-extension line is what carries the account fee and absorbs the
   // fees. With no billable extension there is nothing to price per extension
   // against, so such an invoice keeps the old additive behaviour rather than
   // inventing a $5 charge for no service.
-  const applyAccountPricing = !!extensionLine && billingQuantities.billing.extensions > 0;
+  const applyAccountPricing =
+    allInclusiveEnabled && !!extensionLine && billingQuantities.billing.extensions > 0;
 
   let taxResult: ReturnType<typeof computeFeesAtTaxableBase>;
   let taxableBaseCents = listTaxableSubtotalCents;
@@ -608,7 +616,9 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     applied: applyAccountPricing,
     reason: applyAccountPricing
       ? "all_inclusive_extension_pricing"
-      : "no_billable_extensions_taxes_added_on_top",
+      : !allInclusiveEnabled
+        ? "legacy_pricing_taxes_added_on_top"
+        : "no_billable_extensions_taxes_added_on_top",
     extensionCount: billedExtensionCount,
     accountFeeCentsPerMonth,
     accountFeeCents: applyAccountPricing ? accountFeeCents : 0,

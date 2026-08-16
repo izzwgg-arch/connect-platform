@@ -19,6 +19,7 @@ import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_ACCOUNT_TAXES_AND_FEES_CENTS,
+  isAllInclusivePricingEnabled,
   isGovernmentTaxOrFeeLine,
   resolveAccountTaxesAndFeesCents,
   solveTaxInclusiveTaxableBase,
@@ -103,9 +104,13 @@ async function previewWith(opts: {
   metadata?: Record<string, unknown>;
   taxEnabled?: boolean;
   pbxDids?: Array<{ id: string; e164: string }>;
+  /** Omit the opt-in flag, i.e. an account that existed before this shipped. */
+  legacyPricing?: boolean;
 }) {
   state.extensionCount = opts.extensions;
-  state.metadata = opts.metadata ?? {};
+  state.metadata = opts.legacyPricing
+    ? { ...(opts.metadata ?? {}) }
+    : { billingAllInclusivePricing: true, ...(opts.metadata ?? {}) };
   state.taxEnabled = opts.taxEnabled ?? false;
   state.pbxDids = opts.pbxDids ?? [];
   const { buildBillingInvoicePreview } = await import("./invoiceEngine");
@@ -298,7 +303,7 @@ test("⛔ an UNMARKED customFee is a real fee and is absorbed — six live tenan
 
 test("the account fee is once per MONTH — a 3-month invoice carries three of them", async () => {
   state.extensionCount = 2;
-  state.metadata = {};
+  state.metadata = { billingAllInclusivePricing: true };
   state.taxEnabled = false;
   state.pbxDids = [];
   const { buildBillingInvoicePreview } = await import("./invoiceEngine");
@@ -321,6 +326,59 @@ test("a per-tenant override replaces the $5 — including zeroing it", async () 
   assert.equal(raised.totalCents, 6750);
 });
 
+// ── ⛔ The gate: no existing account's total may move ────────────────────────
+//
+// Izzy, 2026-08-16: "do not change any existing invoice totals. This is only
+// going forward." Every tenant that existed before this shipped has no
+// `billingAllInclusivePricing` flag, and must bill exactly as it did.
+
+test("⛔ WITHOUT the opt-in flag nothing changes: no $5, taxes still added on top", async () => {
+  const legacy = await previewWith({
+    extensions: 5,
+    taxEnabled: true,
+    metadata: { billingTelecomFees: ONBOARDING_FEES },
+    pbxDids: [{ id: "d1", e164: "8455550100" }],
+    legacyPricing: true,
+  });
+
+  // 5 × $30 = $150 of service, and E911 $3 + regulatory $2 ON TOP = $155.
+  assert.equal(legacy.accountPricing.applied, false);
+  assert.equal(legacy.accountPricing.reason, "legacy_pricing_taxes_added_on_top");
+  assert.equal(legacy.accountPricing.accountFeeCents, 0, "no account fee is charged to an existing account");
+  assert.equal(legacy.lineItems.find((l) => l.type === "EXTENSION")?.amountCents, 15000, "the extension line is untouched");
+  assert.equal(legacy.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 3000, "still $30 a line, not a net");
+  assert.equal(legacy.taxCents, 500);
+  assert.equal(legacy.totalCents, 15500, "$150 + $5 of tax on top — exactly what this tenant billed before");
+
+  // Same tenant, six numbers: the old math adds every $3 on top and the total RISES.
+  const legacyMoreNumbers = await previewWith({
+    extensions: 5,
+    taxEnabled: true,
+    metadata: { billingTelecomFees: { ...ONBOARDING_FEES, regulatory: { ...ONBOARDING_FEES.regulatory, enabled: false } } },
+    pbxDids: Array.from({ length: 6 }, (_, i) => ({ id: `d${i}`, e164: `84555501${10 + i}` })),
+    legacyPricing: true,
+  });
+  assert.equal(legacyMoreNumbers.totalCents, 16800, "$150 + 6 × $3 E911, added on top as before");
+});
+
+test("the reporting half runs for EVERY tenant, opted in or not", async () => {
+  // The net-revenue figures are an accounting readout, not a price change — an
+  // existing account gets them without its total moving a cent.
+  const legacy = await previewWith({
+    extensions: 5,
+    taxEnabled: true,
+    metadata: { billingTelecomFees: ONBOARDING_FEES },
+    pbxDids: [{ id: "d1", e164: "8455550100" }],
+    legacyPricing: true,
+  });
+  const ap = legacy.accountPricing;
+  assert.equal(ap.customerTotalCents, 15500);
+  assert.equal(ap.totalTaxesAndFeesCents, 500);
+  assert.equal(ap.netServiceRevenueCents, 15000);
+  assert.equal(ap.netRevenuePerExtensionCents, 3000);
+  assert.equal(ap.netServiceRevenueCents + ap.totalTaxesAndFeesCents, ap.customerTotalCents);
+});
+
 test("no billable extension: the model does not apply and taxes are not carved out of nothing", async () => {
   const preview = await previewWith({
     extensions: 0,
@@ -334,6 +392,16 @@ test("no billable extension: the model does not apply and taxes are not carved o
 });
 
 // ── Unit-level rules ────────────────────────────────────────────────────────
+
+test("isAllInclusivePricingEnabled: opt-in only — ⛔ never flip this default", () => {
+  assert.equal(isAllInclusivePricingEnabled(null), false);
+  assert.equal(isAllInclusivePricingEnabled(undefined), false);
+  assert.equal(isAllInclusivePricingEnabled({}), false, "an existing tenant's metadata must never opt itself in");
+  assert.equal(isAllInclusivePricingEnabled({ billingAllInclusivePricing: false }), false);
+  assert.equal(isAllInclusivePricingEnabled({ billingAllInclusivePricing: "true" }), false, "only a real boolean counts");
+  assert.equal(isAllInclusivePricingEnabled({ billingAllInclusivePricing: 1 }), false);
+  assert.equal(isAllInclusivePricingEnabled({ billingAllInclusivePricing: true }), true);
+});
 
 test("resolveAccountTaxesAndFeesCents: default $5, override wins, junk ignored", () => {
   assert.equal(DEFAULT_ACCOUNT_TAXES_AND_FEES_CENTS, 500);

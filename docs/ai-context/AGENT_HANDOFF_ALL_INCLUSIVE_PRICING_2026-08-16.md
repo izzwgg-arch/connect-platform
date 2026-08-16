@@ -4,8 +4,15 @@
 adding any tax or fee line, and before answering "why did this customer's total
 change?"**
 
-Status: **committed and pushed. ⛔ NOT DEPLOYED — held for Izzy's approval,**
-because it changes what 17 of 26 live customers are billed. See §6.
+Status: **committed and pushed. ⛔ NOT DEPLOYED — awaiting Izzy's word.**
+
+⛔ **GOING FORWARD ONLY.** Izzy, 2026-08-16, after seeing the impact table:
+*"No, do not change any existing invoice totals. This is only going forward."*
+The model is therefore **opt-in per tenant**
+(`TenantBillingSettings.metadata.billingAllInclusivePricing === true`), stamped
+only on tenants a NEW sign-up creates. **Every one of the 32 existing billing
+rows is off, verified live 2026-08-16 — not one existing total moves.** §6 keeps
+the impact table as the record of *why* it is gated, not as a plan.
 
 ---
 
@@ -54,8 +61,30 @@ Izzy's worked example — 5 extensions, $18 of real fees → $155 total, $137 ne
 change, no change to the billing schedule, autopay, payment processing, invoice
 editing, or the sign-up wizard.
 
+### ⛔ The gate — read before touching `applyAccountPricing`
+
+`isAllInclusivePricingEnabled(metadata)` returns **false** for anything that is
+not the literal boolean `true` under `billingAllInclusivePricing`. A tenant
+without it takes the identical code path it took before this shipped: no
+account fee, taxes added on top, extension line untouched at its list price.
+
+**The proof is that `invoiceEngine.test.ts` is byte-identical to its pre-change
+version and still passes** — every assertion in it about totals, unit prices and
+tax amounts describes a tenant with no flag. If you ever need to know whether a
+change moved existing billing, that file is the answer: restore it from before
+your commit and run it.
+
+⛔ **Never flip the default to on.** A default-on gate is indistinguishable from
+no gate the moment a tenant's metadata goes missing for some unrelated reason.
+Stamping is done in exactly one place — `ensureOnboardingBillingDefaults`, which
+already refuses any tenant that has a fee config or taxes enabled, so it cannot
+reach an existing account. To move an existing customer over deliberately, set
+the flag on their `TenantBillingSettings.metadata` and expect the delta in §6.
+
 ### The mechanism, in order
 
+0. If the tenant is not opted in, skip straight to the old additive math. The
+   **reporting** in step 5 still runs — see §5.
 1. Commercial lines are built exactly as before (extensions, virtual extensions,
    local/toll-free numbers, PBX DIDs, SMS, credits, discount, period scaling).
    Their sum is the **list** price.
@@ -123,6 +152,13 @@ by the flag.
 
 ## 5. Deliberate boundaries
 
+- **The REPORTING half runs for every tenant, gated or not.** `accountPricing`
+  is on every preview and every invoice's metadata: customer total, the
+  government-only fees inside it, net service revenue, and net revenue per
+  extension. For a legacy tenant that is a pure readout — it does not move a
+  cent — so the accounting question ("how much of this invoice is really ours?")
+  is answered for all 26 live customers today, without any pricing change.
+
 - ⛔ **No hard-coded $30.** The commercial extension price comes from
   `resolveTenantBillingPricing` as it always has — live tenants are on **$25.00,
   $26.70, $27.00 and $30.00**, and hard-coding the sign-up constant would have
@@ -148,11 +184,16 @@ by the flag.
 
 ---
 
-## 6. ⛔ What this does to live customers — read before deploying
+## 6. ⛔ Why it is gated — what it WOULD do to a live customer
+
+⛔ **None of this happens.** Every existing tenant is off the flag (verified
+live: 32 billing rows, 0 opted in). This table is the record of what moving one
+of them over would cost, and it is why Izzy said "going forward only". **Read it
+before setting `billingAllInclusivePricing` on any existing account.**
 
 Replayed read-only against production config on 2026-08-16 (approximate: the
 replay ignores credits, discounts, virtual extensions and $0 PBX DID lines).
-**26 live tenants; 17 change; net −$44.07/month.**
+**26 live tenants; 17 would change; net −$44.07/month.**
 
 **Nine tenants go UP by exactly $5.00** — the account fee, on accounts that have
 no tax configuration at all so all of it stays service revenue:
@@ -179,19 +220,22 @@ price:
 | McNamara Lion | $35.74 | $35.00 | −$0.74 | $5.67 |
 
 That is the model working as specified — but it is a price cut for nine paying
-customers and a $5 rise for nine others, so **it is Izzy's call, not a
-deployment detail.** Nothing is deployed.
+customers and a $5 rise for nine others. **Izzy's answer was no: existing
+totals stand.** Hence the gate.
 
 ---
 
 ## 7. Open, deliberately not done
 
 1. ⛔ **The sign-up quote still adds E911 per NUMBER**
-   (`packages/shared/src/onboardingPricing.ts` → `$30/ext + $3/number + $2`).
-   For a one-number customer that is $35 and agrees with the new recurring
-   total exactly. **For a two-number customer the quote says $38 and month 2
-   will say $35.** The quote is customer-facing UI and was explicitly out of
-   scope. Someone has to decide whether the quote follows the formula.
+   (`packages/shared/src/onboardingPricing.ts` → `$30/ext + $3/number + $2`),
+   and new tenants ARE stamped onto the new model — so this is now a live edge
+   for future customers, not a hypothetical. For a **one-number** sign-up the
+   quote is $35 and month 2 is $35: they agree exactly, which is every sign-up
+   the platform has taken so far. **For a two-number sign-up the quote says $38
+   and month 2 will say $35** (the second number's $3 E911 moves inside the
+   price). The quote is customer-facing UI and was explicitly out of scope;
+   aligning it is a one-line change to `quoteOnboarding` and needs Izzy's word.
 2. **The admin taxes-and-fees screen's estimator**
    (`apps/portal/lib/billingTelecomFees.ts`) still applies percentages to the
    gross, so it now over-states a percentage fee slightly. It is labelled
@@ -207,7 +251,10 @@ deployment detail.** Nothing is deployed.
 
 ## 8. Proof
 
-- `apps/api` billing + onboarding suites: **598 pass, 0 fail, 2 skipped**
+- ⛔ **`invoiceEngine.test.ts` is byte-identical to its pre-change version and
+  passes** — the strongest available proof that no existing tenant's math moved.
+- **32 live billing rows checked, 0 opted in** (read-only, 2026-08-16).
+- `apps/api` billing + onboarding suites: **601 pass, 0 fail, 2 skipped**
   (the 2 need `CREDENTIALS_MASTER_KEY` and were already skipped).
 - Whole `apps/api` suite: **2400 pass, 7 fail** — the 7 are the pre-existing
   `pbxTenantDirectorySync` failures documented in CLAUDE.md, untouched by this.
@@ -220,8 +267,14 @@ Run them with:
 cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/billing/*.test.ts" "src/onboarding/*.test.ts"
 ```
 
-⏳ **NOT PROVEN: no real invoice has been generated under this math.** It is
-proven by unit test against the real engine and by a read-only replay over live
-tenant config — not by an invoice a customer has received. The acceptance test
-is one preview through `GET /admin/billing/tenants/:id/preview` after deploy,
-checked against the table in §6.
+⏳ **NOT PROVEN: no real invoice has been generated under this math**, because
+no tenant is on it yet — the first one will be the next sign-up. Proven by unit
+test against the real engine and by read-only replay over live config, not by an
+invoice a customer received.
+
+**Acceptance test after deploy, in two parts:**
+1. Preview any existing customer (`GET /admin/billing/tenants/:id/preview`) and
+   confirm the total is **unchanged** and `accountPricing.applied` is `false`.
+2. Run one sign-up through the wizard, then preview month 2: the total must be
+   `(extensions × their rate) + $5`, with `accountPricing.applied` true and
+   `netServiceRevenueCents + totalTaxesAndFeesCents` equal to it.

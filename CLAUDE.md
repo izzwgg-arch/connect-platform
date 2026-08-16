@@ -38,9 +38,21 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ALL_INCLUSIVE_PRICING_2026-08-16.md`**
 (new module `billingAccountPricing.ts` + `invoiceEngine.ts` on
-`feat/ivr-migration-takeover`. **Committed and pushed. ⛔ NOT DEPLOYED — held for
-Izzy's approval, because it changes what 17 of 26 live customers are billed.**)
+`feat/ivr-migration-takeover`. **Committed and pushed. ⛔ NOT DEPLOYED — awaiting
+Izzy's word.**)
 
+- ⛔⛔ **GOING FORWARD ONLY, AND IT IS OPT-IN. Izzy, 2026-08-16: "No, do not
+  change any existing invoice totals. This is only going forward."** The model
+  runs only when `TenantBillingSettings.metadata.billingAllInclusivePricing ===
+  true`, stamped solely by `ensureOnboardingBillingDefaults` on a tenant a NEW
+  sign-up creates (it already refuses any tenant with a fee config or taxes
+  enabled, so it cannot reach an existing account). **Verified live 2026-08-16:
+  32 billing rows, 0 opted in — not one existing total moves.** ⛔ **Never flip
+  the default to on** — a default-on gate is indistinguishable from no gate the
+  moment metadata goes missing. ⛔ **The proof that nothing moved is that
+  `invoiceEngine.test.ts` is BYTE-IDENTICAL to its pre-change version and still
+  passes**; if you ever need to know whether a billing change touched existing
+  customers, restore that file from before your commit and run it.
 - **The model (Izzy, 2026-08-16):** `customer_total = (extension_count × $30) + $5`,
   where the **$5 is charged ONCE PER ACCOUNT, never per extension** — 1 ext $35,
   2 $65, 3 $95, 5 $155, 10 $305. Then
@@ -78,31 +90,38 @@ Izzy's approval, because it changes what 17 of 26 live customers are billed.**)
   companies. Only the **$5** is a constant, overridable per tenant via
   `metadata.billingAccountFeeCents` (including `0`). **Zero billable extensions →
   the model does not apply** (no $5, taxes added on top as before).
-- ⛔ **Live impact, replayed read-only (26 tenants, 17 change, net −$44.07/mo):**
-  **+$5 for nine** with no tax config at all (A plus center, B Visible, Comfort
-  control, Create A Box, Displaydex, Ezra stress test 1, Landau Home, Loopcom
-  Demo, RSBK); **unchanged for eight** whose real fees already total exactly $5;
-  **DOWN for nine** where tax used to be added on top — **Gesheft −$39.98**,
-  Trimpro −$18.36, Yossis −$15.06, Solidify −$7.28, inii mini/Matamim −$3.00,
-  LUZER −$1.65, McNamara Lion −$0.74. That is the model working as specified,
-  and it is a price cut for nine paying customers — **Izzy's call, not a deploy
-  detail.**
-- ⏳ **OPEN: the sign-up quote still adds E911 per NUMBER**
-  (`packages/shared/src/onboardingPricing.ts`). One number → $35, agrees with
-  month 2 exactly. **Two numbers → the quote says $38 and month 2 says $35.**
-  Customer-facing UI, deliberately out of scope — somebody has to decide whether
-  the quote follows the formula.
-- **Accounting reads `metadata.accountPricing`** on the invoice (and
-  `preview.accountPricing`): customer total, government-only fees, net service
-  revenue, net per extension. ⛔ **`BillingInvoice.taxCents` still counts a
+- ⛔ **What moving an EXISTING tenant over would cost — none of this happens,
+  it is why the gate exists.** Replayed read-only (26 tenants, 17 would change,
+  net −$44.07/mo): **+$5 for nine** with no tax config at all (A plus center,
+  B Visible, Comfort control, Create A Box, Displaydex, Ezra stress test 1,
+  Landau Home, Loopcom Demo, RSBK); **unchanged for eight** whose real fees
+  already total exactly $5; **DOWN for nine** where tax used to be added on top
+  — **Gesheft −$39.98**, Trimpro −$18.36, Yossis −$15.06, Solidify −$7.28,
+  inii mini/Matamim −$3.00, LUZER −$1.65, McNamara Lion −$0.74. **Read this
+  table before setting `billingAllInclusivePricing` on any existing account.**
+- ⏳ **OPEN, and now a LIVE edge for future customers: the sign-up quote still
+  adds E911 per NUMBER** (`packages/shared/src/onboardingPricing.ts`) while new
+  tenants ARE stamped onto the new model. One number → quote $35, month 2 $35,
+  they agree exactly (every sign-up so far). **Two numbers → the quote says $38
+  and month 2 says $35.** Customer-facing UI, deliberately out of scope —
+  aligning it is one line in `quoteOnboarding` and needs Izzy's word.
+- ✅ **The REPORTING half runs for EVERY tenant, gated or not** — `accountPricing`
+  on every preview and every invoice's `metadata`: customer total,
+  government-only fees inside it, net service revenue, net revenue per
+  extension. For a legacy tenant it is a pure readout that moves nothing, so
+  "how much of this invoice is really ours?" is answered for all 26 live
+  customers with no pricing change. ⛔ **`BillingInvoice.taxCents` still counts a
   `serviceCharge` line as tax** (pre-existing — those lines are typed
   `REGULATORY_FEE`); use `accountPricing.totalTaxesAndFeesCents` for the honest
   government figure.
-- ⏳ **NOT PROVEN: no real invoice has been generated under this math.** Proven
-  by 14 new tests + the existing suites (598 pass / 0 fail across billing +
-  onboarding; whole api suite 2400 pass / 7 fail, all 7 the pre-existing
-  `pbxTenantDirectorySync` ones) and by a read-only replay over live config —
-  not by an invoice a customer received.
+- ⏳ **NOT PROVEN: no real invoice has been generated under this math**, because
+  no tenant is on it — the first will be the next sign-up. Proven by 17 new
+  tests + the existing suites (601 pass / 0 fail across billing + onboarding;
+  whole api suite 2400 pass / 7 fail, all 7 the pre-existing
+  `pbxTenantDirectorySync` ones) and by read-only replay over live config.
+  **Acceptance after deploy: (1) preview an existing customer — total unchanged,
+  `accountPricing.applied` false; (2) run one sign-up and preview month 2 —
+  `(extensions × their rate) + $5`, applied true.**
 
 ## ⛔ AGENT HANDOFF — the WhatsApp integration cannot send, and its projection path would CRASH on day one (2026-08-16) — READ FIRST before any WhatsApp work, before quoting BUILD_STATUS's "✅ live", or before flipping any `WHATSAPP_*` flag
 
@@ -187,6 +206,18 @@ which is now history.
   human knowledge, and human knowledge must never go stale pretending to be a
   fact. ⛔ **The agent fetches them SEPARATELY, by `source`** — one `findFirst`
   returns whichever was written last and silently loses the other.
+- ✅ **EVERY ACTION THE ASSISTANT TAKES IS RECORDED IN THAT COMPANY'S
+  DOCUMENT** (Izzy's rule, 2026-08-16: *"every time the agent does anything,
+  always have to update the MD files"*). The facts document carries **"What we
+  have done for them recently"** + what they asked for, rendered from
+  `AgentAction` + `AgentEscalation` — ⛔ **read from the record, never written
+  at the moment of acting**, so it covers the chat, the password dialog, a
+  texted approval and any path added later. A FAILED change is recorded as
+  failed; a history of successes only is worse than none. Immediacy comes from
+  **one** hook (`ConfirmDeps.onActionApplied`) at the single point every
+  confirmed change passes through — **fire-and-forget**, because a knowledge
+  refresh must never be able to report a completed change as failed. Staff-only
+  detail (capability id, failure reason, our handling) stays internal.
 - ✅ **A NEW CLIENT IS AUTOMATIC.** `syncAllTenantFactsDocs` sweeps every live
   tenant 2 min after boot and every 6 h (`AGENT_FACTS_REFRESH_MS`), creating the
   document for any company that lacks one and deleting it for any that left.
