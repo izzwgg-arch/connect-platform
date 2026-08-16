@@ -440,6 +440,73 @@ the bucket defaults, so a role must carry the user's full intended set. A role
 created before these keys existed simply won't have them — which fails closed,
 correctly, but means existing custom roles need the toggles ticked on.
 
+### 4c-3. Creating a queue, and Yiddish (`607d9c2e`)
+
+**Creation goes through the EXISTING `POST /voice/teams`** — the route the IVR
+Studio already uses. ⛔ No second creation path was added; that is exactly how
+the two IVR publish paths drifted apart.
+
+`teamBuilder.createQueue` had **14 values hardcoded**. Now configurable:
+`strategy`, `servicelevel`, `wrapuptime`, `joinempty`, `leavewhenempty`,
+`autofill`, `autopause`, `memberdelay`, `weight`, `penaltymemberslimit`, the
+four `announce_*` fields, `alertinfo`, the hangup destination, and **per-member
+`penalty`**.
+
+- ⛔ **Strategy was checked before being offered.** The panel contract doc records
+  that only `ringall` was ever captured from a real save. Verified first: the
+  value passes **straight into the generated `queues.conf`** (both
+  `strategy=ringall` and `strategy=linear` appear live in
+  `/etc/asterisk/vitalpbx/queues__*.conf`), and a value the panel refuses fails
+  loudly via `assertSaved`. So the full Asterisk set is offered, with `ringall`
+  and `linear` the two proven on this box.
+- ⛔ **`queue_callback_id` stays empty on purpose.** It points at a row in
+  `ombu_queues_callback`, configured on a panel screen that was never recorded —
+  offering it would mean guessing the contract.
+- ⛔ **The panel sends `""`, not `"0"`, for a blank numeric field.** `numField()`
+  preserves that distinction, because `servicelevel=0` and `servicelevel=` are
+  different things and 0 is legitimate for several of these.
+- ⛔ **Member penalties are attached during resolution, before the dedup**, since
+  the dedup shifts every index and the penalties align to `members` by position.
+- ⛔ **Apply Changes is still never fired.** The form says so *before* you submit.
+
+**Permission:** new **`can_create_queues`**. ⛔ `POST /voice/teams` accepts it
+**OR** the IVR-management key (via the new optional `requireQueueCreator` dep),
+and the button checks exactly the same pair — so it can never be a visible
+control that 403s, the mistake fixed earlier in this session.
+
+**Extension list** rides along on `GET /voice/queues` rather than getting its own
+endpoint — same tenant scope, same connection, and the picker degrades to "no
+extensions" rather than a 500.
+
+### ⏳ Yiddish — wired everywhere, warming only PARTLY worked
+
+All four screens (`/queues`, `/queues/wall`, `/queues/reports`, the new-queue
+dialog) register byte-exact phrase lists and render through `useUiLanguage`.
+Sub-components call `useUiLanguage()` with no phrases to borrow the same
+translator — the page has already registered them.
+
+⛔ **26 of 176 phrases translated; 150 fail.** Ruled out, with evidence:
+
+- **Not rate limiting** — they still fail spaced 8 s apart, one at a time.
+- **Not punctuation** — `"Longest wait — seconds"` fails, and so does the
+  pure-ASCII `"Longest wait - seconds"`.
+- **Not length** — `"Most callers allowed to wait"` (28 chars) succeeds while
+  `"seconds"` (7) fails. `"Longest wait"` succeeds; `"seconds"` does not.
+
+The cause is **unreadable from outside**: `/agent/ui/translate` catches the
+error bare (`catch { failed.push(s); }`), discarding the HTTP status that
+`processText` puts in the message. Diagnosing it needs that catch to log —
+which is an **agent change, and the agent is a manual rebuild**.
+
+✅ **It degrades safely.** An untranslated phrase renders English, which is the
+designed behaviour — the endpoint explicitly never invents Yiddish and never
+dresses the English string up as a translation. So the screens are correct in
+both languages today; the Yiddish is just incomplete.
+
+**To finish it:** log the status in that catch, rebuild the agent (⛔ reset the
+server clone first — it builds the working tree, not the branch tip), re-run the
+warm, and read the real reason.
+
 ### ⏳ Listen / Whisper / Barge — VERIFIED FEASIBLE, NOT BUILT
 
 Checked properly this time rather than promised off a mockup:

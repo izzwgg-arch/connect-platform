@@ -643,6 +643,34 @@ mockups only, per Izzy: "show me mockups before you build anything." Mockups:
   scoped to `.qw-root`, never `data-theme` on `<html>`** — the app context owns
   that attribute and leaving TV mode could strand the whole portal in the wrong
   theme.
+- ✅ **CREATING A QUEUE ships from `/queues`** (`607d9c2e`) — everyday options up
+  front, advanced collapsed, both in plain language. ⛔ It extends the
+  **EXISTING `POST /voice/teams`**; no second creation path (that is how the two
+  IVR publish paths drifted). `teamBuilder.createQueue` had **14 hardcoded
+  values** — strategy, servicelevel, wrapuptime, joinempty, leavewhenempty,
+  autofill, autopause, memberdelay, weight, penaltymemberslimit, the four
+  `announce_*`, alertinfo, hangup destination and per-member penalty are now all
+  configurable. ⛔ **Strategy was CHECKED before being offered** (the contract doc
+  says only `ringall` was ever captured): the value passes straight into the
+  generated `queues.conf` — `ringall` and `linear` both appear live — and a bad
+  value fails loudly via `assertSaved`. ⛔ **`queue_callback_id` stays empty** —
+  its panel screen was never recorded. ⛔ **The panel sends `""`, not `"0"`, for
+  a blank numeric field** (`numField()`), because `servicelevel=0` and
+  `servicelevel=` differ. ⛔ **Apply Changes is still never fired**, and the form
+  says so before you submit. New key **`can_create_queues`**, which the route
+  accepts **OR** the IVR-management key — the button checks the same pair, so it
+  can never 403.
+- ⏳ **YIDDISH IS WIRED ON ALL FOUR QUEUE SCREENS BUT ONLY 26 OF 176 PHRASES
+  TRANSLATED.** 150 fail at Yiddish Labs and the reason is **unreadable**:
+  `/agent/ui/translate` catches bare (`catch { failed.push(s); }`) and throws
+  away the HTTP status `processText` put in the message. Ruled out with evidence
+  — **not rate limiting** (they fail spaced 8 s apart, one at a time), **not
+  punctuation** (`"Longest wait - seconds"` fails in pure ASCII too), **not
+  length** (`"Most callers allowed to wait"` succeeds, `"seconds"` fails).
+  ✅ **It degrades safely** — an untranslated phrase renders English, which is
+  the designed behaviour; the endpoint never invents Yiddish. To finish: log the
+  status in that catch, **rebuild the agent** (⛔ reset the server clone first),
+  re-warm, read the real reason.
 - ⏳ **Listen/Whisper/Barge: VERIFIED FEASIBLE, deliberately NOT built.**
   `app_chanspy.so` is loaded; VitalPBX already ships `[sub-extension-spy]` in
   `extensions__20-baseplan.conf` mapping **`qS` listen / `qwS` whisper / `qBS`
