@@ -44,6 +44,181 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — Ezra's trainer sheet, worked end to end (2026-08-16) — READ FIRST before believing a red row on that sheet, before saying a capability "needs a new integration", or for ANY `/internal/agent/*` door
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_EZRA_SHEET_2026-08-09.md`**
+(the sheet is **"Loopcom Edits"**, 3 pages — memory [[ezra-trainer-bug-sheet]].
+~15 commits; **api + portal + agent all DEPLOYED and container-verified**, desktop
+**0.1.6** published to the update feed. One PBX GRANT under a one-time mandate.)
+
+- ⛔⛔ **I SAID "THAT NEEDS A NEW INTEGRATION" TWICE AND WAS WRONG BOTH TIMES.**
+  Izzy pushed back both times and the thing already existed. **DND rides the
+  SAME helper as hold music** — `getPbxDiversion`/`setPbxDiversion` in
+  `pbxInboundRouteHelperClient.ts` → helper `/get-diversion`, `/set-diversion`,
+  recorded in `AGENT_HANDOFF_SHAMMES_PBX_MS.md` as "M11 DND | LIVE, proven".
+  **Screenshot understanding** needed no new plumbing either — both SDKs already
+  take image content. **Deleting a queue/ring group** needed no VitalPBX API —
+  the panel robot that CREATES them deletes them too.
+  ⛔ **The search that lied: grepping for a ROUTE with the feature name in the
+  path.** There is no route with "dnd" in it — the door is
+  `/internal/agent/extfeature/action`. **Grep the helper CLIENT and the
+  capability list, never route strings**, before declaring anything unbuilt.
+- ⛔⛔ **TWO BUGS STACKED KILLED THE PROVISIONING TOOLS FOR SIX DAYS**, and
+  "I couldn't retrieve the account setup details" was the only symptom.
+  **(1) `/internal/agent/account-setup-info` was missing from
+  `jwtPublicRouteBypass.ts`**, so the global hook 401'd it before its own
+  shared-secret check ran — the agent shipped the caller, the api shipped the
+  route, nothing connected them. ⛔ **THE STATUS CODE TELLS THEM APART: these
+  doors answer 403 on a bad secret, so a 401 means you never reached the route.**
+  **Every new `/internal/agent/*` door must be added to the bypass list AND the
+  all-doors guard loop in `publicReadyJwtBypass.test.ts` in the SAME commit.**
+  **(2) the schema model is `TenantBillingSettings` → accessor
+  `tenantBillingSettings`, and every call site had the words transposed** —
+  proven against the live client (`billingTenantSettings: undefined`).
+  ⛔ **It shipped green because every site was `(db as any)` or an injected
+  `deps.db`, AND `capabilities.test.ts` MOCKED THE WRONG NAME TOO** — 16 tests
+  passing against a fake db that agreed with the bug. The casts are gone from
+  the real-client sites so the next transposition is a build error.
+  ⛔ Do NOT "fix" `apps/api/src/billing/*` — those are imports of a MODULE named
+  `billingTenantSettingsMetadata`, not accessors.
+- ⛔ **CLOSED HOURS: the per-number dialplan path ignores the mode ENTIRELY.**
+  `Set(DID_MENU=${DB(connect/didmap/<did>/profile_id)})` → `Goto(connect-menu,...)`
+  is unconditional, so an assigned number played its business menu around the
+  clock and the trainer re-pointed it BY HAND at every open/close. Fixed
+  api-side: **`resolveDidmapProfileId()`** (`ivrModeSelection.ts`, 7 tests)
+  resolves the pointer THROUGH the mode inside `didBuildPublishValues` — the one
+  derivation behind both publish paths, the DID switch routes **and the drift
+  reconciler** (which would otherwise revert it within ~10 min).
+  ⛔ **The mode sweep was INNOCENT** — zero `[IVR_MODE]` flips in 24 h is correct
+  for a schedule with hours on Monday only. **And the holiday MENU selector had
+  never existed on any screen** while `holidayProfileId` was honoured all the way
+  down, so holidays silently played the closed menu.
+- ⛔ **THREE UNRELATED THINGS WERE ALL CALLED "DND"**: the portal toggle
+  (localStorage only, never sent anywhere), the API's `presence` (the hardcoded
+  literal `"AVAILABLE"` in `formatExtensionControlPanel`), and the assistant's
+  real PBX write. That is why the button and the assistant disagreed in both
+  directions. The toggle now says **"Mute this browser"**; a real
+  **`GET`/`POST /voice/extensions/me/dnd`** wraps the proven M11 calls, answers
+  **200 `supported:false`** (never 403/503) when the tenant has no PBX link, and
+  **reads back** so it can never claim a state the phone system did not confirm.
+  ⛔ The old `cc-extension-dnd` flag is **never** promoted into real DND.
+- ⛔ **CHECK THE CLOCK BEFORE BELIEVING A RED ROW.** Two "still broken" items
+  were tested MINUTES before the deploy carrying their fix landed; both worked
+  when re-run through the real chat. Several other reds were **already fixed**
+  (row 50 Prisma crash, row 52 delete button, row 17 SMS, the Android backspace —
+  live since May, he was on an old APK), and one was **never a bug** ("only one
+  extension assigned" was true — his 1102/1103 request had never been actioned).
+- **Also shipped:** `voicemails` / `list_contacts` read tools;
+  `mark_my_chats_read` + `cancel_my_requests` (⛔ the ONLY self-scoped writes in
+  the tool surface — `selfServiceTools.ts`'s header is the fence for the next
+  one; new enum `CANCELLED`, applied); `companyNumbers` from
+  **`PbxTenantInboundDid`** (⛔ NOT the `phoneNumber` table — zero rows for
+  onboarded tenants); the widget's `context:{page,path}` finally read by the
+  engine (the schema had silently dropped it); IVR timeout + retries pickers;
+  history window 20 → 40; desktop **right-click** (Electron shows NO context menu
+  unless the shell builds one); and 8 portal UI fixes incl. the light-theme-only
+  select geometry and the composer/assistant overlap.
+- ⏳ **NOT PROVEN — the honest list.** ⛔ **No IVR item is proven until someone
+  CALLS**: closed hours, holiday, queues, unanswered-extension routing and early
+  keypresses all end in what a caller hears. Three chat smoke tests are also
+  unrun ("summarize my voicemails", "mark my chats read", "cancel my requests"),
+  and nobody has uploaded a screenshot or deleted a team in a browser.
+  ⛔ **Ezra's schedule has opening hours on MONDAY ONLY** — the new "Closed right
+  now — no opening hours are set for Tuesday" line on the HoursCard is what
+  explains his "the store is OPEN and I hear after-hours" report. Fix the days
+  before re-testing. **Still unbuilt:** live page-CONTENTS awareness (the call
+  list), and Teams membership editing (only create/delete exist).
+
+## ⛔⛔ AGENT HANDOFF — a custom role REPLACES the user's permissions; and one phone's second company is now visible in call history (2026-08-13) — READ FIRST before granting ANYONE a custom role, before touching /calls/history scoping or recording auth, or for "one extension, two companies"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_LINKED_SIP_CALL_VISIBILITY_2026-08-13.md`**
+(`4ca72f44` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED and
+container-verified**, one migration applied, and a live data change: the switch
+is ON for Trust Bookkeepings and one custom role was created + assigned. No PBX
+write.)
+
+- ⛔⛔ **A CUSTOM ROLE IS NOT ADDITIVE — IT REPLACES THE BUILT-IN ROLE ENTIRELY.**
+  `computeAuthoritativePortalPermissions` (`crm/portalCrmPermissions.ts:26`):
+  any non-SUPER_ADMIN with ≥1 ACTIVE custom role gets **exactly** that role's
+  keys, literally, no legacy expansion — the bucket then grants nothing. **So a
+  role containing only the keys you want to ADD deletes the user's whole
+  portal.** To add a capability, build the role as
+  `their current effective set + the additions`.
+  ⛔ **And the "current effective set" is NOT `DEFAULT_ROLE_PERMISSIONS` in the
+  code — it is the ONE live row `PlatformRolePermissionSnapshot(id="default")`,
+  version 2, read literally.** Proven live: END_USER there is **54 keys and does
+  NOT contain `can_view_recordings` / `can_download_recordings`** (ordinary users
+  reach their own recordings only via the owner carve-out). Building from the
+  code defaults would have handed the owner two keys he never had.
+  ⛔ Assignments are looked up by **userId only** — never filter by the user's own
+  tenantId (rows live under the assigning admin's tenant; that is the historic
+  "custom role does nothing" bug). See [[custom-roles-are-authoritative]].
+- ⛔ **REQUIREMENT 2 LOOKED ALREADY-TRUE AND WAS FALSE.** Izzy asked for the
+  owner to "see everybody's calls and voicemails" as if he already could. All
+  five Trust Bookkeepings users are `role = USER` with **zero** custom roles, so
+  every one of them — owner included — was **extension-scoped and saw only their
+  own extension**. Shipping only the cross-tenant half would have been a feature
+  hung on a view that did not exist. **Check what the customer can see today
+  before building on top of it.**
+- **What shipped:** `Tenant.linkedSipCallVisibilityEnabled` (default **false**),
+  flipped per tenant from the **Admin → Tenants** page (⛔ that screen had never
+  written anything before — first mutation on it) or
+  `POST /admin/tenants/:id/linked-sip-call-visibility` (super-admin + audit
+  `TENANT_LINKED_SIP_VISIBILITY_UPDATED`). ⛔ **A new Tenant column does NOT
+  appear in `GET /admin/tenants` unless you add it to the hand-built row
+  projection.** When ON, holders of `can_view_tenant_call_history` also see, in
+  `/calls/history`, the calls of foreign extensions attached to this tenant's
+  users via **`UserSipAccount`** — **those extensions only**; and may play/download
+  those recordings with `can_view_tenant_call_recordings`.
+- ⛔ **`UserSipAccount.tenantId` is the EXTENSION's tenant, not the user's.**
+  The cross-tenant query is `{ user: { tenantId }, NOT: { tenantId } }`; getting
+  it backwards returns nothing and reads exactly like "no links exist".
+- ⛔ **THE FOREIGN ROWS MUST BE FILTERED IN MEMORY, NOT IN SQL.** A
+  `fromNumber/toNumber IN (...)` clause **misses every queue and ring-group
+  call** — on those the extension appears only in `channelsSeen`
+  (`PJSIP/T11_102_1-…`) or the dialplan context. Reuses the same
+  digit-boundary matcher the extension-scoped path has always used, so `102`
+  matches the channel but **not** the phone number `845-102-5555`.
+- ⛔ **The recording resolver had to start selecting `fromNumber`, `toNumber`,
+  `channelsSeen`, `dcontextsSeen`, `dcontext`** — without them the linked-scope
+  check silently answers "no" for every queue/ring-group recording; the single
+  derived `extension` field is not enough.
+- ⛔ **THE OWNER CARVE-OUT IS DELIBERATELY DISABLED FOR LINKED RECORDINGS.**
+  Everywhere else, "it's my own extension" lets you listen without a recordings
+  key — but owned numbers are HOME-tenant numbers, so a Trust user owning ext 102
+  in Trust would be handed **Trimpro's** ext 102 audio by pure number
+  coincidence. A linked recording requires the tenant-wide key outright.
+- **The live case (the only cross-tenant link on the platform):**
+  lschwartz@trustbookkeepingny.com (Trust Bookkeepings) carries **Trimpro ext
+  102 "Mrs. Schwarts"**. 14 days: Trimpro had **692** calls, **52** involve 102
+  (**45** with real audio) — so 52 rows are added and the other **640** are
+  correctly withheld. Owner `vigdor@trustbookkeepingny.com` holds the new role
+  **"Owner — company-wide calls & voicemails"** (59 keys); the other four users
+  were not touched.
+- ⛔ **Voicemails were NOT extended across the tenant boundary** — he asked for
+  his own company's voicemails, then separately for call history + recordings on
+  the linked extension. Deliberate, not an omission.
+- **Fixed in passing:** `/calls/history` **overwrote** `where.AND` when a search
+  term was present, silently dropping the `hasRecording` filter — and the
+  Recordings + PBX Call Recordings pages send **both** whenever anyone types in
+  the search box. Now merged.
+- ⛔ **`git log --oneline` does NOT show `4ca72f44`** — this branch's clock skew
+  sinks it below newer commits. It IS in HEAD and on origin (`merge-base
+  --is-ancestor`, `ls-tree`, `branch -r --contains` all confirm). Do not read the
+  log as a lost commit or a rollback.
+- ⏳ **NOT PROVEN: nobody has signed in and looked.** vigdor's `lastLoginAt` is
+  **2026-08-04**, before any of this existed. Proven as tests (15 new + 6
+  existing), typecheck (72 errors = the exact pre-existing baseline, none in the
+  edited ranges), container greps, the migration, and live data — **not** by a
+  human seeing a Trimpro call in Trust's list. **Acceptance in §10 of the
+  handoff, and the negative matters most: the 640 non-102 Trimpro calls must be
+  ABSENT, and flipping the switch off must remove the 102 rows and nothing else.**
+- ⏳ **Also open, deliberately:** Mrs. Schwartz still cannot see her own Trimpro
+  line in her personal history (this extends the TENANT-WIDE view, not a user's
+  own scope), and the dashboard KPI tiles / `/dashboard/call-traffic` do **not**
+  include linked calls — so those counts will not match the list for a tenant
+  with the switch on.
+
 ## ⛔⛔ AGENT HANDOFF — every shortcode SMS was silently discarded, platform-wide (2026-08-16) — READ FIRST for ANY "the verification code never arrived", before trusting Connect's SMS inbox as proof of what was received, or before adding a `return null` to an ingest path
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SMS_SHORTCODE_DROP_2026-08-16.md`**
@@ -109,6 +284,15 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_CHAT_VOICE_NOTES_2026-08-16.md`**
   job created in-session carries epoch `1786632839` (Aug 13 13:33 UTC) while the
   host later read `1786903514` (Aug 16 18:05 UTC) — same box, 3.13 days apart.
   ✅ `chronyc tracking` is healthy **now** (68 µs off NTP, `NTPSynchronized=yes`).
+  ⛔ **It was NOT chrony that fixed it, and it can recur.** Ruled out afterwards:
+  **no reboot** (up 16 weeks since 2026-04-26), the journal is **persistent back to
+  2026-02-26 and records no time change**, chrony logged nothing and
+  `/var/log/chrony/` is empty — and `makestep 1 3` means chrony may step only in
+  its **first 3 updates after starting**, so it structurally *could not* have
+  closed a 3-day gap. A step with no reboot, no chrony action and no journal entry
+  means a **hypervisor-side correction** (VPS migration/resume, kvm-clock),
+  invisible from inside the VM. **If timestamps look wrong again, check `date`
+  against a known-good source — the journal will be silent, so don't dig there.**
   ⛔ **NOT INVESTIGATED, Izzy's call:** how long it lasted and what carries wrong
   timestamps — invoice dating, `DidSwitchSchedule`, port-watchdog spacing, rate
   limit / login-throttle windows, signed-URL `exp`, CDR times, audit rows.
