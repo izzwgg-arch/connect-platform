@@ -4,6 +4,7 @@ import { LOCAL_DEV_EMAIL, LOCAL_DEV_PASSWORD } from "@connect/shared";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { LoginThemeToggle } from "../../components/LoginThemeToggle";
 import { ApiError, apiPost } from "../../services/apiClient";
 import { applyPortalPermissionsFromLogin } from "../../services/portalPermissionHydration";
 import { writeAuthToken } from "../../services/session";
@@ -109,6 +110,7 @@ export default function LoginPage() {
 
   return (
     <main className="lc-login">
+      <LoginThemeToggle />
       <form className="lc-login-card" onSubmit={submit}>
         {/* Signal Core wordmark. Transparent PNG, one file for both themes —
             there is deliberately no light-mode variant. See
