@@ -44,6 +44,69 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — a blank mini dialer, because we flooded a customer off our own server (2026-08-17) — READ FIRST for ANY "the app is blank / won't load" report, before debugging a customer-side UI fault, before adding a prefetch/warm-up loop, or before trusting a query parameter you send
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_MINI_DIALER_BLANK_VOICEMAIL_PRELOAD_2026-08-17.md`**
+(**portal + api DEPLOYED and container-verified**; customer unblocked live at
+nginx. No PBX interaction, no migration, no data change, no flag flipped.)
+Memory: [[blank-app-means-check-the-ban-first]], [[prefetch-must-fit-its-cache]].
+
+- ⛔⛔ **"BLANK WINDOW" WAS NOT AN APP BUG — THE CUSTOMER'S WHOLE OFFICE WAS
+  BANNED AT NGINX.** `denylist.conf` is included at the TOP of the server block,
+  so a ban refuses **everything**: the API, the page's own HTML and JavaScript,
+  `/ringtones/*`, `/version`. A reopened window cannot download the code that
+  would draw anything, so it paints a blank box and shows no error — **which is
+  exactly why closing and reopening it can never help.**
+  ⛔⛔ **THE ONE-GREP TELL: `/version` IS UNAUTHENTICATED.** If it is 403ing
+  next to the API calls, the fault is in front of the app — stop reading
+  application code. A permission or login problem cannot reach an endpoint that
+  checks neither. ⛔ **The api log is the WRONG place to look** — banned requests
+  never reach the api, so its log goes *quieter* during the outage.
+  **Check `/etc/nginx/connectcomms/denylist.json` FIRST for any "it's blank / it
+  stopped working" report.** Unblock is `/opt/connectcomms/scripts/unblock_ip.sh <ip>`,
+  and ⛔ **allowlist BEFORE unblocking** — `monitor.sh` runs every 60 s and
+  re-bans inside a minute (`if ip in allow or ip in already: continue`).
+- ⛔⛔ **WE SET THE BAN OFF OURSELVES, AND IT WAS TWO BUGS STACKED.**
+  **(1) `GET /voice/voicemail` never declared `pageSize`, and zod strips what it
+  does not declare** — so two portal screens that had been asking for **20** rows
+  for months were silently handed **100** (`const take = 100`), proven on the
+  wire (a `pageSize=20` request answered **33.4 KB** ≈ 100 records).
+  **(2) The mini dialer then warmed audio for all 100 into a 30-entry cache**, so
+  70 were evicted on arrival, found missing by the 30 s refresh, and downloaded
+  again — forever. Measured, one office, seven minutes: **1,521 downloads of only
+  102 distinct voicemails, 15–24× each, 963 MB**, ~250 req/min → over the
+  `req5m > 1200` threshold → banned.
+- ⛔ **A WARM-UP MUST NEVER FETCH MORE THAN ITS CACHE CAN HOLD, AND "EQUAL" IS
+  NOT ENOUGH.** The eviction loop is `while (size >= MAX)`, so inserting entry 30
+  evicts entry 1 and that one message thrashes forever. New `VM_PRELOAD_MAX = 20`
+  is **strictly** under `VM_CACHE_MAX_ENTRIES = 30`. ⛔ **The cap lives INSIDE
+  `preloadVoicemailAudio`, never at the call site** — the defect was a caller
+  handing over a longer list than it promised, and a bound that only exists where
+  today's single caller sits is one new caller away from being gone.
+- ⛔ **The bug was NOT specific to the banned office — every machine on that
+  extension was doing it**: 963 + 345 + 227 + 123 MB per seven minutes ≈ **1.65 GB
+  per 7 min for ONE extension, ~14 GB/hour.** The office with two PCs behind one
+  IP merely crossed the threshold first. **Lifting the ban alone would have left
+  all of it running** — which is why the code fix shipped with it.
+- ⛔ **`pageSize` defaults to 100 and MUST stay that way.** Three callers page
+  through this endpoint without sending it (`apps/mobile/src/api/client.ts:268`,
+  the portal voicemail page, `desktopNotificationPoll.ts`) and are byte-for-byte
+  unchanged. Only a caller that ASKS for less now gets less.
+- **Identifying "which one is it" when several people share a login:** the
+  voicemail stream URL carries the JWT in the query string, so
+  `grep <base64-payload> access.log | <ip + user-agent>` enumerates every machine
+  on an account. Ext 101 had **five**; the two affected were the only ones at the
+  banned IP, and were provably two PCs (two desktop versions, two `iat`s).
+  ⛔ **Their old shells (0.1.3 / 0.1.5 vs published 0.1.6) were a coincidence,
+  not the cause** — the desktop app wraps the hosted portal, so all five ran the
+  same bundle.
+- ⏳ **NOT PROVEN: nobody at that office has opened the mini dialer since.**
+  Proven as restored HTTP service (403s stopped at 18:39 CEST, 200s resumed) and
+  as a deployed bundle — **not** by a human seeing the dialer draw. ⛔ **They must
+  close and reopen the desktop app**; an open window keeps the old bundle.
+  ⏳ The temporary `allow 38.105.207.69;` line **can now be removed** — it was
+  insurance while the fix was undeployed.
+
 ## ⛔⛔ AGENT HANDOFF — remote support: we can now watch and drive a customer's Windows machine (2026-08-16) — READ FIRST before touching remote support, the desktop app's capture/input code, the LAN phone inventory, or before adding ANY capability that observes or acts on a customer's computer
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_REMOTE_SUPPORT_LAN_PHONES_2026-08-16.md`**

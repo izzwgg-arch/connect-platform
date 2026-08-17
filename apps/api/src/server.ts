@@ -18473,6 +18473,16 @@ app.get("/voice/voicemail", async (req, reply) => {
     extension: z.string().optional(),
     tenantId:  z.string().optional(),
     page:      z.coerce.number().int().min(1).optional().default(1),
+    // ⛔ This was MISSING while two portal screens had been sending pageSize=20
+    // for months — zod strips what it does not declare, so they silently got 100
+    // rows every time. The mini dialer then warmed audio for all 100 into a
+    // 30-slot cache and re-downloaded the overflow every 30s; on Gesheft ext 101
+    // (15.5k voicemails, ~600 KB each) that was ~963 MB per office per seven
+    // minutes, which tripped nginx's auto-ban and blanked their app entirely.
+    // Default stays 100 so the paging callers (mobile, the voicemail page, the
+    // desktop notification poll — none of which send it) are byte-for-byte
+    // unchanged; only a caller that ASKS for less now gets less.
+    pageSize:  z.coerce.number().int().min(1).max(100).optional().default(100),
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
@@ -18546,7 +18556,7 @@ app.get("/voice/voicemail", async (req, reply) => {
     }
   }
 
-  const take = 100;
+  const take = q.pageSize;
   const skip = (q.page - 1) * take;
 
   // ── Hide unplayable voicemails (Izzy 2026-07-31) ──────────────────────────

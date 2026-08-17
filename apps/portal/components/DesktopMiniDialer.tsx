@@ -275,6 +275,17 @@ const vmAudioGone = new Set<string>();
 let vmAudioCacheBytes = 0;
 const VM_CACHE_MAX_ENTRIES = 30;
 const VM_CACHE_MAX_BYTES = 64 * 1024 * 1024; // ~64 MB ≈ hours of 48k MP3 / PCM voicemail
+// ⛔ NEVER warm more messages than the cache can hold, or the warm-up eats itself:
+// anything past entry 30 evicts an earlier one, the next 30s refresh finds it
+// missing and downloads it again — forever. Gesheft ext 101 lived this on
+// 2026-08-17: the list endpoint ignored our pageSize=20 and returned 100, so
+// each machine re-downloaded ~70 voicemails every 30 seconds — 963 MB in seven
+// minutes from one office, which tripped nginx's auto-ban and left the mini
+// dialer BLANK (every request from that IP refused, its own scripts included).
+// The cap lives INSIDE the warm-up, not at the call site: this defect arrived as
+// a caller handing over a longer list than it promised, and a bound that only
+// exists at one call site is one new caller away from being gone.
+const VM_PRELOAD_MAX = 20;
 
 function vmCacheEvictOldest(): void {
   const oldest = vmAudioCache.keys().next();
@@ -288,7 +299,7 @@ function vmCacheEvictOldest(): void {
 }
 
 function preloadVoicemailAudio(ids: string[]): void {
-  for (const id of ids) {
+  for (const id of ids.slice(0, VM_PRELOAD_MAX)) {
     if (vmAudioCache.has(id) || vmAudioInFlight.has(id) || vmAudioGone.has(id)) continue;
     vmAudioInFlight.add(id);
     const base = voicemailStreamUrl(id);
