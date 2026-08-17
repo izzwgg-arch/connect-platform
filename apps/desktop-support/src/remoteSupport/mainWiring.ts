@@ -268,6 +268,26 @@ export function registerRemoteSupportIpc(options: {
     options.onStopRequested();
   });
 
+  // ── Stubs the portal's desktop paths expect ───────────────────────────────
+  // The portal calls these without optional chaining; see the note in
+  // preload.ts. They are answered here rather than left to reject, because an
+  // unhandled rejection in a React effect is just as capable of breaking the
+  // page as a missing key.
+  ipcMain.handle("support:minimize", (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
+  ipcMain.handle("support:notification", (_event, payload: { title?: string; body?: string }) => {
+    // Real notifications, since a support session starting is worth surfacing.
+    try {
+      const { Notification } = require("electron") as typeof import("electron");
+      if (Notification.isSupported()) {
+        new Notification({ title: String(payload?.title || "Loopcom Support"), body: String(payload?.body || "") }).show();
+      }
+    } catch {
+      /* a failed notification must never break a session */
+    }
+  });
+
   // ── LAN phone discovery ───────────────────────────────────────────────────
   ipcMain.handle("lan-scan:subnets", () => localScannableSubnets());
   ipcMain.handle("lan-scan:run", async () => {

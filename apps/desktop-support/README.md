@@ -64,5 +64,30 @@ pnpm --filter @connect/desktop-support dist        # installer in release/
 
 Point it at a different portal with `CONNECT_PORTAL_URL`.
 
-Logs go to `%APPDATA%/Loopcom Support/logs/support.log` — its own folder, so
-nothing here can confuse a Connect diagnosis.
+## Where it actually lands on disk (verified by installing, not assumed)
+
+| | Connect | Loopcom Support |
+|---|---|---|
+| Program files | `%LOCALAPPDATA%\Programs\@connectdesktop` | `%LOCALAPPDATA%\Programs\Loopcom Support` |
+| App data | `%APPDATA%\@connect\desktop` | `%APPDATA%\@connect\desktop-support` |
+| Logs | — | `%APPDATA%\@connect\desktop-support\logs\support.log` |
+
+⛔ The data folders share the `@connect` parent because Electron derives
+`userData` from the package **name**, not `productName` — but the subfolders
+differ, so settings, localStorage and cache stay completely separate. Do not
+"tidy" the two package names into one.
+
+⛔ The install directory does NOT follow `productName` predictably either:
+Connect displays as "Connect" and installs to `@connectdesktop`. Read the real
+path off the installer or off disk; never guess it (an antivirus exclusion
+pointing at a folder that does not exist looks like protection and is not).
+
+## ⛔ Known: it loads the whole portal, including the softphone
+
+Because it loads the same portal, the SIP phone starts here too. Signing into
+BOTH Connect and Loopcom Support as the same user puts two registrations on one
+extension, which is the contact-churn problem documented for Loopcom Demo.
+
+For now: do not run both signed in as the same person. The proper fix is for the
+portal to skip `SipPhoneProvider` when the `support=1` parameter is present
+(this app already sends it).

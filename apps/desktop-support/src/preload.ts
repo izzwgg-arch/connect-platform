@@ -21,11 +21,86 @@ import type {
  * ⛔ Nothing here starts on its own. Every call is the result of the customer
  * answering a prompt.
  */
+/** A listener registration that does nothing but still returns an unsubscribe. */
+const noopSubscribe = (_listener: unknown) => () => { /* nothing to unsubscribe */ };
+
 const supportApi = {
   isDesktop: true,
   /** How the portal tells this app apart from the Connect desktop app. */
   isSupportApp: true,
   platform: process.platform,
+
+  /**
+   * ⛔ MUST BE "full". The portal treats any other value as a passive
+   * secondary window (the mini dialer) and changes how AuthGate and the
+   * notification bridge behave.
+   */
+  windowKind: "full" as const,
+
+  /**
+   * ⛔ EVERYTHING BELOW IS A STUB AND ALL OF IT IS LOAD-BEARING.
+   *
+   * Setting `isDesktop: true` tells the portal it is running inside the Connect
+   * desktop app, and the portal then calls parts of this bridge WITHOUT
+   * optional chaining — `connectDesktop.phone.sendFromEngine(...)`,
+   * `connectDesktop.window.getSettings()`. With those keys missing the page
+   * throws a TypeError while mounting, React tears the tree down, and the login
+   * form silently stops working: the page still renders, the button still
+   * clicks, and no request is ever sent. That looked exactly like a network or
+   * password problem and was neither — 359 GETs left the app and not one POST.
+   *
+   * So this app must present the SAME SHAPE as the Connect bridge even though
+   * it implements almost none of it. ⛔ Every `onX` must return an unsubscribe
+   * function, because callers use it directly as a React effect cleanup — a
+   * bare `undefined` throws on unmount instead of on mount.
+   *
+   * ⛔ If the Connect app's preload ever gains a key, add a stub here too.
+   */
+  window: {
+    openMini: async () => undefined,
+    openFull: async () => undefined,
+    expandToFull: async () => undefined,
+    closeMini: async () => undefined,
+    minimize: () => ipcRenderer.invoke("support:minimize"),
+    toggleAlwaysOnTop: async () => undefined,
+    // Shape-compatible defaults; nothing in this app reads them back.
+    getSettings: async () => ({
+      alwaysOnTop: false,
+      startOnLogin: false,
+      openMinimizedToTray: false,
+      openMiniOnStartup: false,
+      minimizeToTray: false,
+      miniBounds: { width: 360, height: 640 },
+    }),
+    updateSettings: async (patch: unknown) => patch,
+    onSettings: noopSubscribe,
+    setMiniTheme: async () => undefined,
+    onMiniTheme: noopSubscribe,
+  },
+
+  /**
+   * The softphone. Deliberately inert — this is a support tool and has no
+   * business registering a second SIP endpoint against the same extension as
+   * the user's real Connect app.
+   */
+  phone: {
+    sendFromEngine: () => undefined,
+    sendCommand: async () => undefined,
+    onEngineEvent: noopSubscribe,
+    onCommand: noopSubscribe,
+  },
+
+  notifications: {
+    show: (payload: { kind: string; title: string; body?: string; route?: string }) =>
+      ipcRenderer.invoke("support:notification", payload),
+  },
+
+  /** No auto-updater in this build, so it is permanently "up to date". */
+  updates: {
+    getState: async () => ({ status: "uptodate" as const, installedVersion: "0.0.1" }),
+    install: async () => false,
+    onState: noopSubscribe,
+  },
 
   remoteSupport: {
     listScreens: () => ipcRenderer.invoke("remote-support:list-screens") as Promise<DesktopScreenSource[]>,
