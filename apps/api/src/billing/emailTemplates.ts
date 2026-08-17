@@ -52,14 +52,45 @@ function supportBlock(): string {
   </table>`;
 }
 
-function brandFooter(): string {
-  return `<p style="margin:0;font-size:13px;line-height:20px;color:#64748b;">Sent by Loopcom billing.</p>`;
+function brandFooter(note = "Sent by Loopcom billing."): string {
+  return `<p style="margin:0;font-size:13px;line-height:20px;color:#64748b;">${escapeHtml(note)}</p>`;
 }
+
+/** Options for reusing this shell outside billing. Omit them and the output is
+ *  byte-identical to what the nine billing emails have always produced —
+ *  `billingEmailTemplates.test.ts` asserts exactly that. */
+export type EmailShellOptions = {
+  /** Small uppercase label above the heading. `null` omits it entirely. */
+  eyebrow?: string | null;
+  /** Footer line. Defaults to the billing wording. */
+  footerNote?: string;
+  /** The "Need help with billing?" card. Off for non-billing senders. */
+  includeSupportBlock?: boolean;
+};
 
 /**
  * White/light email shell — table-based and Outlook-safe for major email clients.
+ *
+ * ⛔ This is the HARDENED shell (VML roundrect button, `[if mso]` 600px wrapper,
+ * every gradient over a solid bgcolor). The invite shell in
+ * `userEmailTemplates.ts` is deliberately separate and less hardened — do not
+ * merge them. Non-billing senders should reuse THIS one via `opts` rather than
+ * making a third copy.
  */
-function emailShell(title: string, body: string, _brand: InvoiceEmailBranding): string {
+export function emailShell(
+  title: string,
+  body: string,
+  _brand: InvoiceEmailBranding,
+  opts: EmailShellOptions = {},
+): string {
+  const eyebrow = opts.eyebrow === undefined ? "Billing" : opts.eyebrow;
+  const footerNote = opts.footerNote ?? "Sent by Loopcom billing.";
+  // Kept as one expression each so the default output stays byte-for-byte what
+  // the billing emails produced before this became reusable.
+  const eyebrowHtml = eyebrow
+    ? `<p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">${escapeHtml(eyebrow)}</p>\n                  `
+    : "";
+  const supportHtml = opts.includeSupportBlock === false ? "" : supportBlock();
   const logoSrc = getDefaultLogoUrl();
   return `<!doctype html>
 <html lang="en">
@@ -96,19 +127,18 @@ function emailShell(title: string, body: string, _brand: InvoiceEmailBranding): 
               <tr>
                 <td class="email-pad" style="padding:24px 28px 18px;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;background:#ffffff;">
                   <img src="${escapeHtml(logoSrc)}" alt="Loopcom" width="156" height="28" style="display:block;width:156px;max-width:156px;height:28px;border:0;outline:none;text-decoration:none;margin:0 0 18px;" />
-                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Billing</p>
-                  <h1 style="margin:0;font-size:26px;line-height:32px;font-weight:750;color:#0f172a;">${escapeHtml(title)}</h1>
+                  ${eyebrowHtml}<h1 style="margin:0;font-size:26px;line-height:32px;font-weight:750;color:#0f172a;">${escapeHtml(title)}</h1>
                 </td>
               </tr>
               <tr>
                 <td class="email-pad" style="padding:0 28px 26px;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;background:#ffffff;color:#1e293b;font-size:16px;line-height:25px;">
                   ${body}
-                  ${supportBlock()}
+                  ${supportHtml}
                 </td>
               </tr>
               <tr>
                 <td class="email-pad" style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:18px 28px;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;">
-                  ${brandFooter()}
+                  ${brandFooter(footerNote)}
                 </td>
               </tr>
             </table>

@@ -48,6 +48,7 @@ import {
   inspectPbxInboundRoute,
   resolvePbxRouteHelperConfig,
 } from "../pbxInboundRouteHelperClient";
+import { PORT_COMPLETE_EMAIL_TYPE, buildPortCompleteEmail } from "./portCompleteEmail";
 
 export type PortLandingDeps = {
   db: any;
@@ -458,6 +459,43 @@ export async function runPortLanding(
         textBody: lines.join("\n"),
       },
     }).catch(() => { /* the completedAt stamp below still ends the loop */ });
+
+    // ── 6b. Tell the CUSTOMER, on a channel that actually sends ─────────────
+    // ⛔ The alert above is an ADMIN_ALERT and the send door drops every one of
+    // those (`ALERTS_MUTED`, owner directive 2026-08-12) — so before this, the
+    // customer was told nothing at all when their number went live. This is a
+    // separate job on its own type, addressed to them, on their own tenant.
+    // Never fold the two together: muting the owner's alerts must not mute the
+    // customer's, and vice versa.
+    const customerEmail = String(row.mainEmail || row.billingEmail || "").trim();
+    if (customerEmail) {
+      const mail = buildPortCompleteEmail({ portedDid, tempDid: tempDid || null });
+      const queued = await db.emailJob
+        .create({
+          data: {
+            tenantId,
+            invoiceId: null,
+            type: PORT_COMPLETE_EMAIL_TYPE,
+            toEmail: customerEmail,
+            subject: mail.subject,
+            htmlBody: mail.html,
+            textBody: mail.text,
+          },
+        })
+        .then(() => true)
+        .catch(() => false);
+      await logEvent(
+        db,
+        row.id,
+        queued
+          ? `Customer told their number is live — emailed ${customerEmail}.`
+          : `Could not queue the customer's "number is live" email to ${customerEmail} — tell them by hand.`,
+      );
+    } else {
+      // Silence here would be indistinguishable from a delivered email.
+      await logEvent(db, row.id, "No contact email on the sign-up — the customer was NOT told their number is live.");
+    }
+
     await mergeLanding(db, row, { completedAt: new Date().toISOString(), lastError: null });
     await logEvent(db, row.id, `Port landing complete — ${portedDid} fully live, admin emailed.`);
   }

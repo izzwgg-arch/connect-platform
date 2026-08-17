@@ -541,3 +541,103 @@ test("Connect world: publish runs only AFTER the switch lands, and a failed publ
   assert.equal(publishCalls.length, 2);
   assert.ok(row.answers.provisioning.portLanding.publishedAt);
 });
+
+// ── The customer's own "your number is live" email ────────────────────────────
+//
+// The builder is unit-tested in portCompleteEmail.test.ts. These test the part
+// a unit test cannot see: that the LANDING actually queues it, on a channel
+// that sends. Before this existed the customer was told nothing at all — the
+// only completion email was an ADMIN_ALERT, which the send door drops.
+
+/** Drive a submission all the way to a finished landing. */
+async function landCompletely(s: S, row: any, calls: VmsCall[]) {
+  const d = deps(s, ROUTED_OK, calls);
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  return { d, result: await landing.runPortLanding(row, CREDS, true, d) };
+}
+
+test("completion emails the CUSTOMER as well as the owner, on a channel that sends", async () => {
+  const s = makeState();
+  const row = submission(s, { mainEmail: "office@matamimweekly.com" });
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const { result } = await landCompletely(s, row, calls);
+  assert.equal(result.done, true);
+
+  assert.equal(s.emails.length, 2, "expected the owner alert AND the customer email");
+
+  const owner = s.emails.find((e) => e.type === "ADMIN_ALERT");
+  assert.ok(owner, "the internal alert must still be queued");
+
+  const customer = s.emails.find((e) => e.type !== "ADMIN_ALERT");
+  assert.ok(customer, "no customer email was queued");
+  // ⛔ The whole point: ADMIN_ALERT is muted at the send door, so a customer
+  // email on that type would be built, logged clean, and never delivered.
+  assert.notEqual(customer.type, "ADMIN_ALERT");
+  assert.equal(customer.toEmail, "office@matamimweekly.com");
+  assert.equal(customer.tenantId, "tenant1", "must be the customer's tenant, not the alert tenant");
+  assert.notEqual(customer.tenantId, owner.tenantId);
+  assert.match(customer.subject, /Your number is live/);
+  assert.match(customer.htmlBody, /\(646\) 984-6023/);
+  assert.match(customer.htmlBody, /\(845\) 260-5692/); // the retired temp number
+  assert.ok(customer.textBody.length > 0);
+});
+
+test("the customer is emailed exactly once, however many sweeps run", async () => {
+  const s = makeState();
+  const row = submission(s, { mainEmail: "office@matamimweekly.com" });
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const { d } = await landCompletely(s, row, calls);
+  assert.equal(s.emails.filter((e) => e.type !== "ADMIN_ALERT").length, 1);
+
+  await landing.runPortLanding(row, CREDS, true, d);
+  await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(s.emails.filter((e) => e.type !== "ADMIN_ALERT").length, 1);
+});
+
+test("falls back to the billing email when there is no main contact", async () => {
+  const s = makeState();
+  const row = submission(s, { mainEmail: null, billingEmail: "pay@matamimweekly.com" });
+  seedTempState(s);
+  await landCompletely(s, row, []);
+  const customer = s.emails.find((e) => e.type !== "ADMIN_ALERT");
+  assert.ok(customer);
+  assert.equal(customer.toEmail, "pay@matamimweekly.com");
+});
+
+test("no contact email: the landing still completes, and the timeline SAYS nobody was told", async () => {
+  const s = makeState();
+  const row = submission(s); // no mainEmail, no billingEmail
+  seedTempState(s);
+  const { result } = await landCompletely(s, row, []);
+  assert.equal(result.done, true, "a missing email must never block the landing");
+  assert.equal(s.emails.filter((e) => e.type !== "ADMIN_ALERT").length, 0);
+  // Silence here would be indistinguishable from a delivered email.
+  assert.ok(
+    s.events.some((e) => /NOT told their number is live/.test(e.message)),
+    "the timeline must record that the customer was not told",
+  );
+});
+
+test("a failed customer email is recorded, and never blocks completion", async () => {
+  const s = makeState();
+  const row = submission(s, { mainEmail: "office@matamimweekly.com" });
+  seedTempState(s);
+  const d = deps(s, ROUTED_OK, []);
+  // The owner alert lands; the customer job blows up.
+  let n = 0;
+  d.db.emailJob.create = async ({ data }: any) => {
+    if (++n === 1) { s.emails.push(data); return data; }
+    throw new Error("db down");
+  };
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  const r = await landing.runPortLanding(row, CREDS, true, d);
+
+  assert.equal(r.done, true, "a failed email must not strand the port");
+  assert.ok(s.events.some((e) => /tell them by hand/.test(e.message)));
+});

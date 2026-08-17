@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { autopayReminderEmail, invoiceSentEmail, paymentLinkEmail, paymentReceiptEmail, paymentFailedEmail } from "./emailTemplates";
+import { autopayReminderEmail, emailShell, invoiceSentEmail, paymentLinkEmail, paymentReceiptEmail, paymentFailedEmail } from "./emailTemplates";
 import { billingInvoicePdfApiUrl, billingInvoicePortalUrl, billingInvoicePublicPayUrl } from "./billingEmailLifecycle";
 import { verifyBillingInvoicePayToken } from "./billingPayToken";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
@@ -362,4 +362,48 @@ test("billing emails mention Connect Communications nowhere", () => {
     assert.ok(!/support@connectcomunications\.com/i.test(part), "old support address still present");
   }
   assert.match(built.html, /billing@loopcom\.net/);
+});
+
+// ---------------------------------------------------------------------------
+// emailShell defaults
+//
+// The shell became reusable on 2026-08-17 so the port-complete customer email
+// could sit on the hardened chrome instead of a third copy of it. Every option
+// defaults to the billing behaviour, and these assertions are what stop a
+// future non-billing caller from "simplifying" the defaults and silently
+// restyling nine live billing emails. Proven byte-identical against the
+// pre-change file at the time of the change.
+// ---------------------------------------------------------------------------
+
+test("billing emails keep the Billing eyebrow, the billing footer and the support card", () => {
+  const built = invoiceSentEmail({
+    invoiceNumber: "CC-202608-00099",
+    totalCents: 3500,
+    dueDate: new Date("2026-09-01T00:00:00Z"),
+    portalInvoiceUrl: "https://example.com/i",
+    billingInvoiceId: "inv_shell",
+  });
+  assert.match(built.html, />Billing<\/p>/, "the Billing eyebrow disappeared from billing email");
+  assert.match(built.html, /Sent by Loopcom billing\./, "the billing footer changed");
+  assert.match(built.html, /Need help with billing\?/, "the billing support card disappeared");
+});
+
+test("the shell can drop its billing chrome without touching the billing defaults", () => {
+  const plain = emailShell("Heading", "<p>Body</p>", resolveInvoiceEmailBranding({}, null), {
+    eyebrow: null,
+    footerNote: "Sent by Loopcom.",
+    includeSupportBlock: false,
+  });
+  assert.ok(!/>Billing<\/p>/.test(plain));
+  assert.ok(!/Sent by Loopcom billing\./.test(plain));
+  assert.ok(!/Need help with billing\?/.test(plain));
+  assert.match(plain, /Sent by Loopcom\./);
+  // …and the hardening survives the stripped-down variant.
+  assert.match(plain, /<!--\[if mso\]>/);
+  assert.match(plain, /max-width:600px/);
+
+  // The very next call with no options is still a billing email.
+  const billing = emailShell("Heading", "<p>Body</p>", resolveInvoiceEmailBranding({}, null));
+  assert.match(billing, />Billing<\/p>/);
+  assert.match(billing, /Sent by Loopcom billing\./);
 });
