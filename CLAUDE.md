@@ -171,6 +171,56 @@ created** — blocked on the employee's name and email.)
   word. And the earlier PH employee (`.3`/`.4`) is on a stale tunnel; **which
   tenant they belong to was never established.**
 
+## ⛔ AGENT HANDOFF — Create A Box ext 102 answered and got voicemail AGAIN, because his phone is 8 days behind (2026-08-17) — READ FIRST before investigating ANY "I answered and nothing happened" on a mobile app, and before opening a call-path investigation on any extension
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANSWER_UNACKED_PUSH_CHANNEL_2026-08-06.md` §9**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**)
+Memory: [[createabox-102-answer-failure]].
+
+- ⛔⛔ **CHECK THE INSTALLED APP VERSION BEFORE DIAGNOSING ANYTHING.** Sender Weiss
+  (ext 102) runs **`1.0.0+20260804-202642`**; the published APK is
+  **`1.0.0+20260812-215020`** (2026-08-13), whose own release note reads *"Answering a
+  call retries instead of dying silently"* — that IS the `c55ae840` bounded-retry +
+  `answer_unacked` rescue. §8 of that handoff said those mobile fixes were "on NO
+  phone"; they shipped, **his phone was never updated**. The recommendation is an APK
+  install, not engineering.
+- **It recurred today, 16:47 ET, on a real customer call:** he tapped Answer,
+  received **0 audio packets** for 10 s, hung up — while Asterisk logged
+  *"Nobody picked up in 30000 ms"* → voicemail. `Endpoint T7_102_1 is now Unreachable`
+  8 s after the tap; contact removed 28 s later. Identical to 2026-08-05.
+- ⛔ **THE CDR LIES ABOUT WHO ANSWERED — use the PBX `app_dial.c … answered` line.**
+  That lost call is stored `disposition: answered, talk=63s` — which is the **IVR plus
+  voicemail** answering, not a human. ⛔ And an inbound CDR carries **both** legs
+  (`PJSIP/T7_102_1-…` app, `PJSIP/T7_102-…` desk) because the PBX rings both, so the
+  app leg's presence proves it was **rung**, never that it **answered**.
+- **Today: 5 inbound — app answered 1** (quality **poor**, 8.34 % loss, 186 packets, on
+  T-Mobile), **desk answered 2, 2 lost to voicemail**; all **8 outbound came off the
+  desk phone**. Three voicemails on ext 102 sit **UNHEARD**, one from the lost 16:47 call.
+- ⛔ **The app endpoint had no live contact for 93 minutes today — 8.9 % of the day**,
+  across **27 gaps of ≥30 s** (many 3–6 min) plus 25 sub-30 s blips; 137 REGISTERED /
+  118 UNREGISTERED in one day. **A call in any ≥30 s gap cannot ring the app** — that is
+  precisely how the 11:46 call was lost (app offline 11:43:40→11:47:44).
+- ⛔ **He roamed 14 source IPs today** — T-Mobile CGNAT (`172.56.x`/`172.59.x`), two
+  fixed lines, and **`45.14.194.179` = loopcom, i.e. the office GL.iNet → WireGuard
+  tunnel**. ⛔⛔ **Create A Box is NOT on the 443 SIP route** (`webrtcRouteViaSbc: false`,
+  `sipWsUrl` still `wss://m.connectcomunications.com:8089/ws`), so a loopcom contact IP
+  on THIS tenant means the **office tunnel** — do not read it the way you would for
+  Gesheft / Displaydex / inii mini / B Visible / Loopcom Demo. **Both networks hurt him
+  today**: T-Mobile gave the 8.34 % loss, the tunnel gave the dead answer.
+- ⛔ **Do NOT reflexively move this tenant to 443** — it would route his SIP through
+  France deliberately, and his contact RTT through the tunnel is already **305 ms**
+  (desk 237 ms). Izzy's call, on evidence.
+- ✅ **Superseded good news:** he IS on the fast direct-FCM push channel now — a NEW
+  `MobileDevice` row `cmsgbqocr0hbrtd136dxshbsf` carries `nativeFcmToken`. ⛔ **Order his
+  devices by `updatedAt` and read the newest**; the old `cmr9epohm0db5pe13ib1hmur5` row
+  still reads `hasFcm: false` and reproduces the stale 2026-08-05 conclusion.
+- **Field traps:** `ConnectCdr` uses **`durationSec`/`talkSec`** (not `…Seconds`);
+  `Voicemail` uses **`callerNumber`/`durationSec`/`listened`** (not
+  `callerId`/`durationSeconds`/`readAt`).
+- ⏳ **NOT DONE:** nobody has told Sender to update the app, and the office's internet
+  (T-Mobile cellular behind the GL.iNet box) is unchanged — the long-term cure is still
+  **real wired internet at that office**.
+
 ## ⛔⛔ AGENT HANDOFF — a blank mini dialer, because we flooded a customer off our own server (2026-08-17) — READ FIRST for ANY "the app is blank / won't load" report, before debugging a customer-side UI fault, before adding a prefetch/warm-up loop, or before trusting a query parameter you send
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_MINI_DIALER_BLANK_VOICEMAIL_PRELOAD_2026-08-17.md`**
@@ -1771,6 +1821,30 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_REBRAND_EMAILS_2026-08-16
   email and passing it in is exactly how the Android APK link went missing from
   every self-service sign-up. A test asserts both paths still route through the
   template.
+- ✅ **THE EMAIL LOGO IS A HOSTED FILE FETCHED ON EVERY OPEN — and it was costing
+  81 KB each time (fixed 2026-08-17, `49799cb7`, portal + api DEPLOYED and
+  container-verified).** Izzy: *"why is it when I open the email, the logo loads
+  like two seconds later"*. **Two causes, and the header one is the trap:**
+  ⛔ **nginx served it `Cache-Control: no-store, must-revalidate`** — that header
+  belongs to `location /`, which keeps portal HTML fresh so a deploy is never
+  stale, and **any static asset without its own location block falls through to
+  it.** So the logo was re-downloaded on *every open of every email, forever*.
+  Fixed with a dedicated **`location /brand/`** (immutable, 1 year) placed before
+  `location /`; the HTML rule is untouched and still `no-store` (verified). Backup
+  `/root/nginx-connectcomms-backup-20260817-210131-brandcache.conf`.
+  ⛔ **And the email pointed at the PORTAL wordmark** — 560px/81 KB rendered in a
+  **168px** slot. Email now uses `loopcom-wordmark-email-336.png` (a true 2×,
+  34 KB); **the portal keeps the 560px file.** Measured: first open **81,078 →
+  34,458 bytes**, 1.12 s → 0.82 s; repeat opens now cost nothing (and a
+  revalidating client gets a **304, 0 bytes**).
+  ⛔ **A colour-quantised 9 KB version was built and REJECTED — check the alpha
+  channel, not the pixels.** It looked identical, but quantising caps alpha at
+  **253**, so the logo would render faintly translucent everywhere — the wrong
+  direction on a white background where it already reads soft. `alpha=255 count`
+  was **0**. Never judge a logo swap by eye alone.
+  ⛔ **Deploy ORDER is load-bearing: portal BEFORE api.** The api commit points
+  the template at the new file; ship it first and every email logo 404s. The new
+  asset was confirmed 200 + byte-identical by sha256 before the api went out.
 - ⛔ **`billing@loopcom.net`: the DOMAIN is verified, the MAILBOX is not.**
   `loopcom.net` has full Google MX and serves a site — that does **not** prove
   the `billing@` user exists, and Google bounces mail to a non-existent user.

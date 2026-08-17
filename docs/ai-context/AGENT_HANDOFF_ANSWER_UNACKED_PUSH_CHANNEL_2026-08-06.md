@@ -197,3 +197,111 @@ docker logs --since 25m app-telephony-1 | grep '"changed":true,"from":15,"to":30
 # PBX (read-only):
 asterisk -rx "database get <hash>/extensions/<ext>/followme ringtime"
 ```
+
+---
+
+## 9. ⛔ RECHECK 2026-08-17 — IT HAPPENED AGAIN, and the reason is that he is 8 days behind on the app
+
+**Read-only investigation. No code change, no deploy, no PBX write, no data change.**
+Izzy asked: is Create A Box ext 102 using the mobile app today, and is it working
+well for him? Answer: **yes he is using it, and no it is not working well.** The
+un-ACKed-answer failure described in §2 recurred **today at 16:47 ET**, on a real
+customer call, and the caller went to voicemail.
+
+### 9a. ⛔⛔ THE HEADLINE: the fix for this exact failure IS published and he does NOT have it
+
+| | |
+|---|---|
+| His installed build | **`1.0.0+20260804-202642`** (from diag `SESSION_START`, 3× today) |
+| Currently published | **`1.0.0+20260812-215020`** (published 2026-08-13, `/opt/connectcomms/downloads/`) |
+| That build's own release note | *"**Answering a call retries instead of dying silently**, phones can report their fast push token even when the slow one fails…"* |
+
+That release note **is** the §3 fix (bounded answer attempts + the `answer_unacked`
+rescue, `c55ae840`). §8 of this handoff said those mobile fixes were "on NO phone" —
+they shipped on 2026-08-13 and **his phone was never updated**. So the failure below
+is not a new defect and needs no new engineering: **he needs to install the current
+APK.** ⛔ Do not open a fresh investigation into the answer path for this extension
+until he is on `20260812-215020` or later.
+
+✅ What DID stick from the Aug 5/6 work: a new `MobileDevice` row
+(`cmsgbqocr0hbrtd136dxshbsf`, created 2026-08-05 16:51Z) carries **`nativeFcmToken`
+set** — he is on the fast direct-FCM push channel now, not the Expo relay. The four
+older rows are stale (`appVersion "1.0.0"`, no FCM); ⛔ **query his devices ordered by
+`updatedAt` and read the newest — reading the old `cmr9epohm0db5pe13ib1hmur5` row
+still shows `hasFcm: false` and reproduces the old, now-wrong conclusion.**
+
+### 9b. What today actually looked like (all times ET)
+
+Five inbound calls reached ext 102. Ground truth is the PBX `app_dial.c … answered`
+line, never the CDR — ⛔ **the CDR marks the 16:47 call `disposition: answered,
+talk=63s`, which is the IVR + voicemail answering, not a human.**
+
+| time | what happened | who answered |
+|---|---|---|
+| 11:41 | **app answered** — 74 s call | `PJSIP/T7_102_1` (APP) ✅ but **quality `poor`: 8.34 % packet loss, 186 lost** |
+| 11:46 | rang, nobody got it → **voicemail** | none ❌ — the app was **offline 11:43:40→11:47:44**, the call landed in the hole |
+| 15:10 | answered | `PJSIP/T7_102` (DESK) |
+| 15:37 | answered | `PJSIP/T7_102` (DESK) |
+| 16:47 | **the §2 failure, again** → **voicemail** | none ❌ (detail below) |
+
+All **8 outbound** calls today came off the **desk phone**, not the app.
+
+**The 16:47 failure, minute by minute** (caller `8456627956`, `C-0000ae33`):
+
+```
+16:47:32  PBX dials both legs; PJSIP/T7_102-000184ff and PJSIP/T7_102_1-00018500 both ringing
+16:47:48  app callStart — HE TAPPED ANSWER (voiceDiag CALL_QUALITY_REPORT timeline)
+16:47:56  Asterisk: "Endpoint T7_102_1 is now Unreachable"
+16:47:58  app callEnd, endReason "user_hangup", packetsReceived: 0, primaryCause "one_way_audio"
+16:48:02  PBX: "Nobody picked up in 30000 ms" -> CALL_STATUS=NOANSWER -> VoiceMail(102@create_a_box-voicemail)
+16:48:11  "Recording the message"
+16:48:24  contact 'sip:sd2hlkoq@...:36398' removed from AOR T7_102_1 due to shutdown
+```
+
+**He answered, heard nothing for ten seconds, and hung up — while Asterisk never saw
+the answer at all and sent the caller to voicemail.** Identical shape to 2026-08-05.
+⛔ The voicemail it produced (`8456627956`, 6 s, 2026-08-17 16:48:11) was still
+**UNHEARD** at the time of writing, as were two more on ext 102 from 08-16.
+
+### 9c. The backdrop: the app has no stable network, on either side
+
+- **The app endpoint had no live contact for 93 minutes today — 8.9 % of the day**,
+  across **27 gaps of ≥30 s** (many 3–6 min) plus 25 sub-30 s blips. 137 REGISTERED /
+  118 UNREGISTERED events in one day. A call arriving in any ≥30 s gap cannot ring the
+  app at all — that is exactly the 11:46 loss.
+- ⛔ **He roamed across 14 distinct source IPs today.** T-Mobile CGNAT
+  (`172.56.x`/`172.59.x`, the majority), two fixed lines (`96.56.30.234`,
+  `69.123.169.102`), and **`45.14.194.179` = loopcom, i.e. the office Wi-Fi going out
+  through the GL.iNet box → WireGuard → loopcom (France) → PBX (St. Louis)**.
+- **Both networks hurt him today, differently:** the 11:41 poor-audio call was on
+  **T-Mobile** (`172.59.212.134`, 8.34 % loss); the 16:47 dead-answer call was on the
+  **office tunnel** (`45.14.194.179`, zero packets received, contact dropped mid-answer).
+- ⛔ **Create A Box is NOT on the 443 SIP route** (`webrtcRouteViaSbc: false`,
+  `sipWsUrl: wss://m.connectcomunications.com:8089/ws`). A `45.14.194.179` contact on
+  this tenant therefore means **the office tunnel**, not the 443 route — do not read it
+  the way you would for Gesheft/Displaydex/inii mini/B Visible/Loopcom Demo.
+- Current contact RTT: app **305 ms**, desk **237 ms** (both via the tunnel) — that is
+  the France detour, and it is the tenant's normal, not a fault.
+
+### 9d. What to do (none of it is code)
+
+1. **Get him onto `1.0.0+20260812-215020`** from
+   `https://app.connectcomunications.com/api/downloads/connectcomms-latest.apk`.
+   This is the whole recommendation — the answer-retry/rescue fix is in it.
+2. Tell him the three unheard voicemails are waiting (one from today 16:48).
+3. The registration churn and the office tunnel are **unfixed and not fixable in the
+   app**. The long-term cure is still the one in the 2026-08-05 handoff §5: **real
+   wired internet at that office**. Until then, expect the desk phone to be the
+   reliable device and the app to be best-effort.
+4. ⛔ Do **not** move this tenant to the 443 route as a reflex — it would route his
+   SIP through France on purpose, and his RTT is already 305 ms through the tunnel.
+   That is Izzy's call, on evidence, not a default.
+
+### 9e. Query notes paid for this session
+
+- `ConnectCdr` has **`durationSec`/`talkSec`**, not `durationSeconds`/`talkSeconds`.
+- `Voicemail` has **`callerNumber`/`durationSec`/`listened`**, not
+  `callerId`/`durationSeconds`/`readAt`.
+- Ext attribution on a CDR is only via `channelsSeen`; `PJSIP/T7_102_1-…` = app leg,
+  `PJSIP/T7_102-…` = desk leg. ⛔ **An inbound CDR shows BOTH legs because the PBX
+  rings both — its presence proves the app was *rung*, never that it *answered*.**
