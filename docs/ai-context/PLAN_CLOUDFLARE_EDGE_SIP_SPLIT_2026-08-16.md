@@ -12,14 +12,16 @@ browser pass on it found the **public pay pages were DEAD there** (hardcoded abs
 API URL → CORS block). Fixed and deployed the same day, `93a85d25`; ⛔ **read the
 "second hostname makes every hardcoded absolute API URL a bug class" section in §4b
 before adding any URL to a portal page.**
-⛔ **Also 2026-08-16: `sip.loopcom.net` IS LIVE AND SERVING SIP (101) — but the flip to
-it is STAGED, NOT APPLIED. See Phase A2.** DNS, cert and nginx are done and proven, and
-all three pre-existing SIP hostnames still return 101. **However `.env.platform` says
-`wss://sip.loopcom.net/sip` while the running `app-api-1` still says
-`wss://sip.connectcomunications.com/sip`** — `deploy-direct.sh` **skipped the restart and
-still printed `success`**, because an env var is not a code path. ⛔ **There is no
-sanctioned deploy path for an env-only change**; the next api deploy touching api code
-will ship this flip unobserved. Read Phase A2 before deploying api.
+⛔⛔ **2026-08-17: `sip.loopcom.net` IS LIVE AND SERVING SIP (101), the global flip
+SHIPPED, and it has now been BACKED OUT AT THE FILE LEVEL. See the update box at the top
+of Phase A2 — read it before any SIP work.** Izzy's decision: **existing customers stay
+exactly as they are; only new sign-ups get the Loopcom hostname.** A single global
+`SIP_PUBLIC_WS_URL` cannot express that, so `.env.platform:106` is back to
+`wss://sip.connectcomunications.com/sip` — while the **running container still reads
+`wss://sip.loopcom.net/sip`**, because an env-only change has no sanctioned deploy path.
+⛔ **The per-tenant replacement is NOT built**: `tenant.sipWsUrl` wins over
+`webrtcRouteViaSbc`, so stamping new tenants would also move them onto the nginx 443
+proxy route — a decision Izzy has not made. Read Phase A2 before deploying api.
 Every step is reversible and each carries its own rollback.
 
 ✅ **Plan upgraded to Cloudflare Pro** on `connectcomunications.com` (2026-08-16,
@@ -48,7 +50,75 @@ Enterprise**, so Pro does NOT remove the need for the SIP split below.
 
 ---
 
-## Phase A2 — `sip.loopcom.net` — ✅ SERVING SIP. ⛔ THE ENV FLIP IS STAGED BUT THE CONTAINER HAS NOT PICKED IT UP
+## Phase A2 — `sip.loopcom.net` — ✅ SERVING SIP. ⛔ THE GLOBAL FLIP SHIPPED, THEN WAS BACKED OUT (2026-08-17)
+
+> ### ⛔⛔ 2026-08-17 UPDATE — READ THIS BEFORE THE REST OF PHASE A2, WHICH IS NOW HISTORY
+>
+> **Owner's decision (Izzy, 2026-08-17):** *existing customers should stay exactly as they
+> are; only accounts that sign up from today onward should use the Loopcom SIP hostname.*
+>
+> `SIP_PUBLIC_WS_URL` is **one global value**, so it cannot express that. The flip shipped
+> on an unrelated api deploy (exactly as this document predicted) and was then **backed
+> out at the file level the same day**:
+>
+> | | value | as of 2026-08-17 21:10 UTC |
+> |---|---|---|
+> | `.env.platform:106` | `wss://sip.connectcomunications.com/sip` | ✅ restored |
+> | running `app-api-1` | `wss://sip.loopcom.net/sip` | ⛔ still the flipped value |
+>
+> ⛔ **They disagree ON PURPOSE and the next api deploy closes it.** An env-only change has
+> no sanctioned deploy path (see "the deploy that cannot happen" below), and the session
+> that backed this out was instructed not to deploy. **Until that deploy, the five
+> global-dependent tenants are still handed `sip.loopcom.net` on a fresh sign-in.**
+> Nothing breaks either way — all four SIP hostnames return **101** and no client refreshes
+> a cached URL. Backup: `/opt/connectcomms/env/.env.platform.bak.20260817T210850Z.sipflipbackout`
+> (`diff` = **exactly one changed line**).
+>
+> ⛔⛔ **CORRECTION TO §2 OF THIS DOCUMENT: "`sipWsUrl` is NULL on all four tenants" was
+> only ever true of those four.** Read live 2026-08-17 across **29 live tenants**:
+> **20 have `sipWsUrl` SET, 9 NULL, 5 on `webrtcRouteViaSbc=true`.** The global reaches
+> **only** the five that are `viaSbc=true` **and** `sipWsUrl=null` — **inii mini, Loopcom
+> Demo, B Visible, Displaydex, Gesheft**. Twenty tenants are already pinned per-tenant to a
+> **direct-PBX** URL, and four more (`sipWsUrl=null`, `viaSbc=false`) take `PBX_WS_ENDPOINT`
+> and are untouched by the global. **The per-tenant mechanism this plan says does not exist
+> is in fact the dominant one already in production.**
+>
+> ### ⛔ Per-tenant SIP for new sign-ups — INVESTIGATED, **NOT BUILT**, blocked on Izzy
+>
+> `resolveWebrtcConfig` (`apps/api/src/server.ts:773`) resolves:
+>
+> ```
+> tenant.sipWsUrl (non-empty)   → WINS OUTRIGHT
+>   else webrtcRouteViaSbc      → sipPublicWsUrl()   (the global env value)
+>   else                        → pbxWsEndpoint      (wss://209.145.60.79:8089/ws, direct to PBX)
+> then normalizeSipWsUrlHost()  → rewrites IP-LITERAL hosts only
+> ```
+>
+> ⛔ **`tenant.sipWsUrl` takes effect even when `webrtcRouteViaSbc` is false** — proven by
+> the code *and* by live data (20 tenants sit on an explicit `sipWsUrl` with `viaSbc=false`).
+> **So stamping new tenants with `wss://sip.loopcom.net/sip` would move every new customer
+> off the direct-to-PBX `:8089` connection and onto the nginx `/sip` 443 proxy route.**
+> That is a material architectural change for every new account, not a hostname change —
+> **Izzy's to decide deliberately, and he has not.** Do not implement it until he does.
+>
+> ⛔ **A missed creation path would fail permanently, not softly.** Nothing sets `sipWsUrl`
+> at creation — **all five** creation sites (`onboarding/onboardingPayment.ts:89`,
+> `onboarding/setupOrchestrator.ts:269`, `pbxExtensionSync.ts:312`, `server.ts:2390`,
+> `server.ts:5557`) create it **null**; it is stamped **later** by two WebRTC-enable
+> backfills (`server.ts:9511`, `pbxExtensionSync.ts:628`) that write the **direct-PBX**
+> endpoint under a `!tenantRow.sipWsUrl` guard. A path that missed the shared helper would
+> be **pinned to the old route forever** by the first extension sync. Route all five
+> through one helper and guard it with a test that reads every call site's **source**.
+>
+> ⛔ **`webrtcRouteViaSbc` is consumed by NO live client** — every reference outside
+> `apps/api/src` is in `apps/frontend-legacy/portal-v2-legacy/`, which is dead code. It is
+> purely a server-side fallback selector.
+>
+> ⛔ Pre-existing, **not** fixed: `server.ts:9500` canonicalises the IP before persisting
+> `sipWsUrl`; `pbxExtensionSync.ts:620` does **not** — which is why the five newest tenants
+> carry a raw-IP `sipWsUrl` and older ones carry the FQDN.
+>
+> **Everything below this box describes the 2026-08-16 state and is kept as history.**
 
 Done 2026-08-16. Owner's decision: the SIP hostname should carry LoopCom branding, so
 `sip.loopcom.net` becomes the **handed-out** value in place of
