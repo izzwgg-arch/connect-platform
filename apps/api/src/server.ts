@@ -9495,7 +9495,7 @@ app.post("/pbx/link", async (req, reply) => {
   // and QR-code provisioning work immediately without a separate manual step.
   const tenantRow = await db.tenant.findUnique({
     where: { id: admin.tenantId },
-    select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true },
+    select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true, webrtcRouteViaSbc: true },
   });
   if (tenantRow && !tenantRow.webrtcEnabled) {
     // Never bake a raw-IP WS URL into the tenant row: rewrite it to the PBX's
@@ -9517,7 +9517,13 @@ app.post("/pbx/link", async (req, reply) => {
       where: { id: admin.tenantId },
       data: {
         webrtcEnabled: true,
-        ...(!tenantRow.sipWsUrl && rawWsEndpoint ? { sipWsUrl: rawWsEndpoint } : {}),
+        // ⛔ Same rule as pbxExtensionSync: a tenant on the 443 route must keep
+        // sipWsUrl NULL. An explicit value beats the flag in resolveWebrtcConfig,
+        // so stamping the direct 8089 endpoint here would quietly cancel the
+        // route for every new tenant while the flag still read true.
+        ...(!tenantRow.sipWsUrl && !tenantRow.webrtcRouteViaSbc && rawWsEndpoint
+          ? { sipWsUrl: rawWsEndpoint }
+          : {}),
         ...(!tenantRow.sipDomain && resolvedDomain ? { sipDomain: resolvedDomain } : {}),
       },
     });

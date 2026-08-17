@@ -774,7 +774,12 @@ model Tenant {
   smsSubscriptionRequired         Boolean                           @default(true)
   smsBillingEnforced              Boolean                           @default(true)
   webrtcEnabled                   Boolean                           @default(false)
-  webrtcRouteViaSbc               Boolean                           @default(false)
+  /// Send this tenant's softphones through Connect on 443 instead of straight
+  /// to the PBX on 8089. Default TRUE since 2026-08-17 (owner's instruction):
+  /// filtered/geo-blocked internet is the norm for our customers, 443 is the
+  /// one port that is never blocked, and it needs nothing installed on the
+  /// device. ⛔ A non-null `sipWsUrl` OVERRIDES this — see resolveWebrtcConfig.
+  webrtcRouteViaSbc               Boolean                           @default(true)
   sipWsUrl                        String?
   sipDomain                       String?
   iceServers                      Json?

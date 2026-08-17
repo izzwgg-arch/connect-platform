@@ -612,7 +612,7 @@ export async function syncExtensionsFromPbx(
         try {
           const tenantRow = await db.tenant.findUnique({
             where: { id: resolvedTenantId },
-            select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true },
+            select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true, webrtcRouteViaSbc: true },
           });
           if (tenantRow && !tenantRow.webrtcEnabled) {
             // Derive defaults from the PBX_WS_ENDPOINT env var (e.g. wss://host:8089/ws)
@@ -625,7 +625,14 @@ export async function syncExtensionsFromPbx(
               where: { id: resolvedTenantId },
               data: {
                 webrtcEnabled: true,
-                ...(!tenantRow.sipWsUrl && rawWsEndpoint ? { sipWsUrl: rawWsEndpoint } : {}),
+                // ⛔ NEVER stamp a direct-to-PBX URL onto a tenant that routes
+                // through Connect on 443. `resolveWebrtcConfig` prefers an
+                // explicit `sipWsUrl` over the flag, so writing the 8089
+                // endpoint here would silently defeat the 443 route on every
+                // brand-new tenant — the flag would read true and do nothing.
+                ...(!tenantRow.sipWsUrl && !tenantRow.webrtcRouteViaSbc && rawWsEndpoint
+                  ? { sipWsUrl: rawWsEndpoint }
+                  : {}),
                 ...(!tenantRow.sipDomain && derivedDomain ? { sipDomain: derivedDomain } : {}),
               },
             });

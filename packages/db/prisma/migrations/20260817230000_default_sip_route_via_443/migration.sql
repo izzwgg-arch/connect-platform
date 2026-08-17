@@ -1,0 +1,20 @@
+-- Every new tenant's softphones go through Connect on 443 by default.
+--
+-- Owner's instruction, 2026-08-17. Filtered and geo-blocked internet is the
+-- norm across this customer base, not the exception: 443 is the one port that
+-- is never blocked, the PBX sees Connect's own whitelisted address instead of
+-- the customer's, and it needs nothing installed on the device. Proven the same
+-- day by a B Visible employee in the Philippines, whose phone registered fine
+-- over 443 while the WireGuard tunnel built for him was never used once.
+--
+-- ⛔ SET DEFAULT applies to NEW rows only. Existing tenants keep whatever they
+-- have — this is deliberately "from now on", not a migration of live customers,
+-- because moving an existing tenant means its users must sign out and back in
+-- before their app picks up the new address.
+--
+-- ⛔ The flag alone is not enough: `resolveWebrtcConfig` prefers a non-null
+-- `Tenant.sipWsUrl` over it, and two bootstrap paths used to stamp the direct
+-- 8089 endpoint onto any tenant that had none. Both now skip that write when
+-- the tenant is on the 443 route; without that fix this default would read true
+-- on every new tenant and do nothing at all.
+ALTER TABLE "Tenant" ALTER COLUMN "webrtcRouteViaSbc" SET DEFAULT true;
