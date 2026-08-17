@@ -2532,6 +2532,30 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_PBX_2026-08-09.md
 (**Read-only investigation — no deploy, no code change, no PBX write.** Evidence
 current to 2026-08-09; §7 and §11 re-verified 2026-08-12.)
 
+> ⛔⛔ **SUPERSEDED FOR EVERY TENANT EXCEPT GESHEFT, 2026-08-17 — the title of
+> this section is now TRUE ONLY FOR GESHEFT.** Connect's own voicemail email went
+> live and the PBX's was switched off everywhere else, on Izzy's instruction
+> ("switch it off. not gesheft"). Cutover handoff:
+> **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_CUTOVER_2026-08-17.md`**.
+> **So "the customer didn't get their voicemail email" is now a CONNECT question
+> for 26 tenants and a PBX question for Gesheft (PBX tenant 8) only** — establish
+> which before investigating, exactly as the rule below says.
+> ⛔ **The mechanism is the same either way: the address is the switch.** The 3rd
+> comma field was emptied in BOTH `ombutel.ombu_extensions.email` (55 rows → 0)
+> and the 26 generated confs, then `voicemail reload`. **Both halves are
+> mandatory** — DB only and Asterisk keeps emailing; conf only and the next regen
+> puts every address back. ⛔ **Apply Changes was deliberately NOT used** (it
+> wipes the Connect doorway and sends live callers to dead air).
+> ⛔ **It was gated on a coverage join, not on optimism**: all 53 PBX mailboxes
+> that emailed were checked against Connect's recipients — **53 covered, 0 would
+> go dark** — and each category where Connect stays silent was cleared
+> individually (`too_short` = 0–1 s hang-ups; `no_recording` = all Loopcom Demo,
+> whose PBX addresses are fake `@example.com`; `no_recipient` = mailboxes already
+> blind on the PBX too). **Repeat that join before any similar cutover.**
+> Rollback: `/root/vm-email-switchoff-20260817-173339/RESTORE.sql` + the conf
+> tarball on the PBX. ⏳ **NOT PROVEN: no voicemail has arrived since the
+> cutover.**
+
 - ⛔ **THE RULE: the voicemail emails customers receive come from Asterisk on the
   PBX. Connect has nothing to do with them.** This session opened inside Connect,
   found Connect's own voicemail-email job had never processed a single row, and
