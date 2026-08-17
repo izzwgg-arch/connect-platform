@@ -138,6 +138,60 @@ ban threshold. **Fixing only the ban would have left all of that running.**
 
 ---
 
+## 3b. ⛔⛔ A SECOND CUSTOMER, BLANK WITH NO BAN — the ban was never the disease
+
+Trust Bookkeepings reported the identical symptom ~40 minutes later, and **they
+were never banned**: no denylist entry today, 403s a flat ~180/hour all day
+(background `/crm/notifications`, not a ban's several-hundred-per-ten-minutes
+spike across every endpoint), and 192 of their last 200 requests were 200s.
+**Their network was fine and their mini dialer was blank anyway.**
+
+They were running the same loop, proven the same way — Trust office IP,
+14:00–15:59 CEST: **2,350 downloads of only 40 distinct voicemails, 59× each,
+721 MB.** A clean metronome of **1,200 downloads / 367 MB per hour**.
+
+⛔⛔ **SO THE 100-ROW PAGE WAS NEVER THE REAL THRESHOLD — 30 IS.** Any inbox
+holding **more than `VM_CACHE_MAX_ENTRIES` (30)** thrashes, because a working
+set larger than the cache evicts everything on each pass. Trust never received
+100 rows; 40 was enough. The oversized page made Gesheft's case violent enough
+to trip a rate limit, but the defect bites at 31 messages.
+
+**And it predicts exactly who complains.** Trust inbox counts:
+
+| ext | who | inbox | thrashes? |
+|---|---|---|---|
+| **105** | **Mrs. Halpert — the reporter** | **163** | yes, worst |
+| 104 | Mrs. Schwartz | 150 | yes |
+| 101 | Mr. Sofer | 82 | yes |
+| 389 / 106 / 107 | Rollup / Spilman / Pollak | 9 / 4 / 2 | **no — fits in 30** |
+
+The two people with big mailboxes are the two whose windows died; their
+colleagues with 2–4 voicemails were never affected. Same at Gesheft: ext 101
+holds 15,559.
+
+**What the timeline shows at Trust** (their voicemail audio downloads per hour,
+CEST): `12:00 → 1200`, `13:00 → 1200`, `14:00 → 1200`, `15:00 → 1150`,
+**`16:00 → 0`, `17:00 → 0`**, `18:00 → 241`. The preloader — which only the mini
+dialer runs — **stopped dead at 16:00**, and their mini-dialer request rate fell
+from 2,424/hour to 612/hour at the same moment while their *total* traffic
+carried on (they moved to the main portal window). The app stopped, the network
+did not.
+
+⚠️ **INFERRED, NOT PROVEN — say so out loud.** The step from "downloaded 367 MB
+an hour into blob object URLs for hours" to "the Electron renderer gave out and
+painted white" is the obvious reading and it fits every timestamp, but there is
+**no client-side crash telemetry** and nobody has captured a renderer log. What
+IS proven: the flood, its volume, that it stopped exactly when the window went
+blank, and that no server refusal was involved. ⛔ **Do not write this up as a
+confirmed OOM** until someone reads a renderer log.
+
+⛔ **Consequence for triage: an unbanned customer can have this too.** The ban is
+one way it surfaces (Gesheft) and the client dying is the other (Trust). Judge
+by the **refetch ratio** — total voicemail-stream requests versus distinct ids
+for that IP — not by whether a ban exists.
+
+---
+
 ## 4. The fix
 
 **Portal — `DesktopMiniDialer.tsx` (this is the one that actually stops it):**

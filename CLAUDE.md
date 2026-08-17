@@ -88,6 +88,31 @@ Memory: [[blank-app-means-check-the-ban-first]], [[prefetch-must-fit-its-cache]]
   per 7 min for ONE extension, ~14 GB/hour.** The office with two PCs behind one
   IP merely crossed the threshold first. **Lifting the ban alone would have left
   all of it running** — which is why the code fix shipped with it.
+- ⛔⛔ **A SECOND CUSTOMER WENT BLANK WITH NO BAN AT ALL — so the ban was never
+  the disease.** Trust Bookkeepings reported the same symptom ~40 min later,
+  never banned (403s a flat ~180/h of background `/crm/notifications`, 192 of
+  their last 200 requests were 200s), and was running the identical loop:
+  **2,350 downloads of only 40 distinct voicemails, 59× each, 721 MB in two
+  hours.** Their audio downloads ran a metronome 1,200/hour and **fell to ZERO at
+  16:00 CEST**, exactly when their mini-dialer traffic dropped 2,424→612/hour
+  while total traffic continued — **the app stopped, the network did not.**
+  ⛔ **THEREFORE THE REAL THRESHOLD IS 30, NOT 100:** any inbox holding more than
+  `VM_CACHE_MAX_ENTRIES` thrashes, because a working set bigger than the cache
+  evicts everything each pass. The oversized 100-row page only made Gesheft
+  violent enough to trip a rate limit. ⛔ **Triage by the REFETCH RATIO (total
+  voicemail-stream requests vs distinct ids for that IP), never by whether a ban
+  exists.**
+- ⛔ **It predicts exactly who complains — whoever has the most voicemail.** Trust
+  inboxes: **105 Mrs. Halpert 163 (the reporter)**, 104 Mrs. Schwartz 150,
+  101 Mr. Sofer 82 — all thrashing; while 389/106/107 hold 9/4/2 and **fit inside
+  the 30-slot cache, so those colleagues were never affected.** Gesheft ext 101
+  holds 15,559.
+- ⚠️ **INFERRED, NOT PROVEN, and must be repeated as such:** the step from
+  "downloaded ~367 MB/hour into blob object URLs for hours" to "the Electron
+  renderer gave out and painted white" fits every timestamp but rests on **no
+  client-side crash telemetry** — nobody has read a renderer log. Proven: the
+  flood, its volume, that it stopped the minute the window went blank, and that
+  no server refusal was involved at Trust.
 - ⛔ **`pageSize` defaults to 100 and MUST stay that way.** Three callers page
   through this endpoint without sending it (`apps/mobile/src/api/client.ts:268`,
   the portal voicemail page, `desktopNotificationPoll.ts`) and are byte-for-byte
