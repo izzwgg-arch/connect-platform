@@ -207,6 +207,31 @@ of those, so the person whose number moved found out by dialling it.
   against `git show HEAD:` of the pre-change file. `billingEmailTemplates.test.ts`
   guards the defaults. The invite shell in `userEmailTemplates.ts` stays separate
   as before.
+- ✅ **WHO IT GOES TO, and the gap that audit closed** (`20fb2416`, deployed).
+  The chain is `mainEmail → billingEmail → the tenant's OLDEST TENANT_ADMIN`.
+  The admin fallback is not a nicety: a sign-up with no contact fields would
+  otherwise mean the person whose number just moved is the one person nobody
+  tells. ⛔ It never reaches for an ordinary `USER`, never crosses a tenant
+  boundary, and a DB failure returns nobody rather than throwing into the middle
+  of a port. Proven against the live database, not just the fake one.
+- ⛔⛔ **"EVERY PORT GETS THE EMAIL" IS TRUE ONLY FOR PORTS THE WATCHDOG CAN
+  SEE — and two shapes are invisible to it.** Audited 2026-08-17; state these
+  plainly rather than implying blanket coverage:
+  **(1) A port filed BY HAND at VoIP.ms.** The sweep requires
+  `answers.provisioning.portFiled` + `portId` on a paid submission. **Matamim's
+  port was exactly this shape** and only entered the pipeline because a session
+  hand-backfilled those fields. File a port outside the wizard and set nothing,
+  and there is no landing, no retirement and no email — silently.
+  **(2) A port for an EXISTING customer.** The whole pipeline is
+  sign-up-scoped: the only filing path is `voipMsProvisioning.ts:672` inside
+  onboarding, and the only caller of `runPortLanding` is the watchdog sweep over
+  `OnboardingSubmission`. An established tenant porting a number later has no
+  submission, so nothing tracks it at all.
+  ⛔ Both are structural, not bugs in this email. Closing them means giving
+  ports a home outside onboarding — real work, not yet started.
+- **Live audit at the time of writing:** 2 paid submissions ever, both ports,
+  both landed, both with contact emails; `getLNPList` shows **0 open orders**, so
+  nothing is currently untracked.
 - ⏳ **NOT PROVEN: nobody has received it.** 11 builder tests + 5 caller tests
   (⛔ the caller ones matter most — a builder-only test passes straight through a
   wiring bug, which is how the APK link went missing from every self-service

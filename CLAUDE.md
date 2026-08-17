@@ -2276,6 +2276,20 @@ own port — the first sweep landed it end-to-end, temp number retired, no human
   behaviour**; all **eight** billing emails were proven **byte-identical**
   against the pre-change file. Do not make a third copy, and do not "simplify"
   those defaults — nine live billing emails ride them.
+  ✅ **Recipient chain (`20fb2416`): `mainEmail → billingEmail → the tenant's
+  OLDEST TENANT_ADMIN`** — proven against the live database. ⛔ Never an ordinary
+  `USER`, never another tenant's admin, and a DB failure returns nobody rather
+  than throwing into a port. When the admin fallback is used the timeline says so.
+  ⛔⛔ **"EVERY PORT GETS IT" IS TRUE ONLY FOR PORTS THE WATCHDOG CAN SEE, AND
+  TWO SHAPES ARE INVISIBLE** (audited 2026-08-17 — do not claim blanket
+  coverage): **(1) a port filed BY HAND at VoIP.ms** — the sweep needs
+  `provisioning.portFiled` + `portId` on a paid submission, and **Matamim's was
+  exactly this shape**, entering the pipeline only because a session backfilled
+  those fields; **(2) a port for an EXISTING customer** — the only filing path is
+  inside onboarding and the only caller of `runPortLanding` is the sweep over
+  `OnboardingSubmission`, so an established tenant porting later has no
+  submission and nothing tracks it. Both are structural; closing them means
+  giving ports a home outside onboarding, which is **not started**.
   ⏳ **NOT PROVEN: no customer has received it.** Proven as 11 new builder tests
   + 5 caller tests (the landing actually queues it — a builder-only test passes
   straight through a wiring bug), the full onboarding suite 174/174, and the
