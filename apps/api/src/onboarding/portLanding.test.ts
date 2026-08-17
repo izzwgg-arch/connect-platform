@@ -657,7 +657,7 @@ test("retirement asks the phone system to drop the temporary number, with the ri
   seedTempState(s);
   const seen: any[] = [];
   const d = deps(s, ROUTED_OK, []);
-  d.retireTempRoute = async (input: any) => {
+  (d as any).retireTempRoute = async (input: any) => {
     seen.push(input);
     return { deleted: true, reason: "route 237 owns its row alone", routeId: "237" };
   };
@@ -683,7 +683,7 @@ test("a refusal is written down in plain words and does NOT block the port", asy
   const row = submission(s);
   seedTempState(s);
   const d = deps(s, ROUTED_OK, []);
-  d.retireTempRoute = async () => ({
+  (d as any).retireTempRoute = async () => ({
     deleted: false,
     reason: "route 239 shares destination row 907 with 240:6469846023 — deleting it would break the other number",
   });
@@ -704,7 +704,7 @@ test("it is attempted once, not on every later sweep", async () => {
   seedTempState(s);
   let calls = 0;
   const d = deps(s, ROUTED_OK, []);
-  d.retireTempRoute = async () => { calls++; return { deleted: true, reason: "ok", routeId: "237" }; };
+  (d as any).retireTempRoute = async () => { calls++; return { deleted: true, reason: "ok", routeId: "237" }; };
 
   await landing.runPortLanding(row, CREDS, true, d);
   s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
@@ -721,7 +721,7 @@ test("a refusal is not retried forever either — it needs a person, not a loop"
   seedTempState(s);
   let calls = 0;
   const d = deps(s, ROUTED_OK, []);
-  d.retireTempRoute = async () => { calls++; return { deleted: false, reason: "shares a destination row" }; };
+  (d as any).retireTempRoute = async () => { calls++; return { deleted: false, reason: "shares a destination row" }; };
 
   await landing.runPortLanding(row, CREDS, true, d);
   s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";

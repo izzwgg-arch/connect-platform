@@ -5,6 +5,7 @@ import {
   PORT_COMPLETE_EMAIL_TYPE,
   buildPortCompleteEmail,
   formatTenDigitsForHumans,
+  resolvePortCompleteRecipient,
 } from "./portCompleteEmail";
 
 const MATAMIM = { portedDid: "9293598299", tempDid: "7244198226" };
@@ -97,4 +98,59 @@ test("a customer name with markup in it cannot inject into the email", () => {
   });
   assert.ok(!mail.html.includes("<script>"));
   assert.ok(mail.html.includes("&lt;script&gt;"));
+});
+
+// ── Who gets told ─────────────────────────────────────────────────────────────
+//
+// A sign-up with no contact email would otherwise mean the one person who most
+// needs to know their number moved is the one person nobody tells.
+
+function fakeDb(users: Array<{ tenantId: string; role: string; email: string; createdAt: Date }>) {
+  return {
+    user: {
+      findFirst: async ({ where, orderBy }: any) => {
+        const hits = users
+          .filter((u) => u.tenantId === where.tenantId && u.role === where.role)
+          .sort((a, b) => (orderBy?.createdAt === "asc" ? +a.createdAt - +b.createdAt : 0));
+        return hits[0] || null;
+      },
+    },
+  };
+}
+
+test("uses the sign-up's main contact when there is one", async () => {
+  const r = await resolvePortCompleteRecipient(fakeDb([]), { mainEmail: "office@x.com", billingEmail: "pay@x.com" }, "t1");
+  assert.deepEqual(r, { email: "office@x.com", source: "mainEmail" });
+});
+
+test("falls back to the billing email", async () => {
+  const r = await resolvePortCompleteRecipient(fakeDb([]), { mainEmail: "  ", billingEmail: "pay@x.com" }, "t1");
+  assert.deepEqual(r, { email: "pay@x.com", source: "billingEmail" });
+});
+
+test("falls back to the account admin when the sign-up carries no contact at all", async () => {
+  const db = fakeDb([
+    { tenantId: "t1", role: "TENANT_ADMIN", email: "owner@x.com", createdAt: new Date("2026-01-01") },
+    { tenantId: "t1", role: "TENANT_ADMIN", email: "later@x.com", createdAt: new Date("2026-06-01") },
+    { tenantId: "t1", role: "USER", email: "staff@x.com", createdAt: new Date("2025-01-01") },
+  ]);
+  const r = await resolvePortCompleteRecipient(db, { mainEmail: null, billingEmail: null }, "t1");
+  // Oldest admin — onboarding promotes the first extension's owner, so on a
+  // sign-up-built tenant that is the account owner, not a later addition.
+  assert.deepEqual(r, { email: "owner@x.com", source: "tenantAdmin" });
+});
+
+test("never reaches for an ordinary user, and never another tenant's admin", async () => {
+  const db = fakeDb([
+    { tenantId: "t1", role: "USER", email: "staff@x.com", createdAt: new Date("2025-01-01") },
+    { tenantId: "t2", role: "TENANT_ADMIN", email: "someone@else.com", createdAt: new Date("2025-01-01") },
+  ]);
+  const r = await resolvePortCompleteRecipient(db, { mainEmail: null, billingEmail: null }, "t1");
+  assert.equal(r, null);
+});
+
+test("a database failure returns nobody rather than throwing into the port", async () => {
+  const db = { user: { findFirst: async () => { throw new Error("db down"); } } };
+  const r = await resolvePortCompleteRecipient(db, { mainEmail: null, billingEmail: null }, "t1");
+  assert.equal(r, null);
 });

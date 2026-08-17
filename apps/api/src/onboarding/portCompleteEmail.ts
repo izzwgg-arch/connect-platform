@@ -29,6 +29,40 @@ function escapeHtml(v: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Who gets told their number is live.
+ *
+ * The sign-up's own contact fields come first. The tenant's admin is a genuine
+ * fallback rather than a nicety: a sign-up with no `mainEmail` would otherwise
+ * mean the one person who most needs to know their number moved is the one
+ * person nobody tells. Returns null only when the account has no reachable
+ * human at all, which the caller must record rather than pass over in silence.
+ */
+export async function resolvePortCompleteRecipient(
+  db: any,
+  row: { mainEmail?: string | null; billingEmail?: string | null },
+  connectTenantId: string,
+): Promise<{ email: string; source: "mainEmail" | "billingEmail" | "tenantAdmin" } | null> {
+  const main = String(row?.mainEmail || "").trim();
+  if (main) return { email: main, source: "mainEmail" };
+  const billing = String(row?.billingEmail || "").trim();
+  if (billing) return { email: billing, source: "billingEmail" };
+  if (!connectTenantId) return null;
+  try {
+    // Oldest admin: onboarding promotes the first extension's owner to
+    // TENANT_ADMIN, so on a sign-up-built tenant that is the account owner.
+    const admin = await db.user.findFirst({
+      where: { tenantId: connectTenantId, role: "TENANT_ADMIN" },
+      orderBy: { createdAt: "asc" },
+      select: { email: true },
+    });
+    const email = String(admin?.email || "").trim();
+    return email ? { email, source: "tenantAdmin" } : null;
+  } catch {
+    return null;
+  }
+}
+
 export type PortCompleteEmailInput = {
   /** The customer's real number, now live. Ten digits. */
   portedDid: string;

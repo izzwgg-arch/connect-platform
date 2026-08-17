@@ -48,7 +48,7 @@ import {
   inspectPbxInboundRoute,
   resolvePbxRouteHelperConfig,
 } from "../pbxInboundRouteHelperClient";
-import { PORT_COMPLETE_EMAIL_TYPE, buildPortCompleteEmail } from "./portCompleteEmail";
+import { PORT_COMPLETE_EMAIL_TYPE, buildPortCompleteEmail, resolvePortCompleteRecipient } from "./portCompleteEmail";
 import { loadPanelConfig, PanelSession } from "./panelClient";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
 import { retireTempPbxRoute, type TempRouteRetirement } from "./retireTempPbxRoute";
@@ -550,7 +550,8 @@ export async function runPortLanding(
     // separate job on its own type, addressed to them, on their own tenant.
     // Never fold the two together: muting the owner's alerts must not mute the
     // customer's, and vice versa.
-    const customerEmail = String(row.mainEmail || row.billingEmail || "").trim();
+    const customerRecipient = await resolvePortCompleteRecipient(db, row, tenantId);
+    const customerEmail = customerRecipient?.email || "";
     if (customerEmail) {
       const mail = buildPortCompleteEmail({ portedDid, tempDid: tempDid || null });
       const queued = await db.emailJob
@@ -571,12 +572,12 @@ export async function runPortLanding(
         db,
         row.id,
         queued
-          ? `Customer told their number is live — emailed ${customerEmail}.`
+          ? `Customer told their number is live — emailed ${customerEmail}${customerRecipient?.source === "tenantAdmin" ? " (the account admin — the sign-up had no contact email)" : ""}.`
           : `Could not queue the customer's "number is live" email to ${customerEmail} — tell them by hand.`,
       );
     } else {
       // Silence here would be indistinguishable from a delivered email.
-      await logEvent(db, row.id, "No contact email on the sign-up — the customer was NOT told their number is live.");
+      await logEvent(db, row.id, "No contact email and no account admin — the customer was NOT told their number is live. Tell them by hand.");
     }
 
     await mergeLanding(db, row, { completedAt: new Date().toISOString(), lastError: null });
