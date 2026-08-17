@@ -1,0 +1,236 @@
+/**
+ * Wiring: the two sweeps and the attachment hook.
+ *
+ * Kept out of server.ts so the moving parts are testable and so server.ts needs
+ * only three lines: two timers and one attachment call.
+ */
+import { db } from "@connect/db";
+
+import {
+  loadVoicemailAudioAttachmentForEmailJob,
+  type VoicemailAudioAttachment,
+} from "./voicemailEmailAttachment";
+import {
+  VOICEMAIL_EMAIL_TYPE,
+  processVoicemailForEmail,
+  voicemailEmailEnabled,
+  voicemailEmailExcludedTenantIds,
+  type ExtensionEmailConfig,
+} from "./voicemailEmailSender";
+import {
+  describeVoicemailEmailGaps,
+  findVoicemailEmailGaps,
+  gapsWorthAlerting,
+  type VoicemailEmailGap,
+} from "./voicemailEmailWatchdog";
+import { extractVoicemailIdFromEmailBody } from "./voicemailEmail";
+
+type Log = { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void };
+
+/**
+ * ⛔ A WIDE window on purpose. The design this replaces used 30 minutes, so a
+ * voicemail that failed once aged out and was never seen again. Seven days means
+ * a message can still be recovered days later — after an outage, a bad deploy,
+ * or a mailbox address finally being filled in.
+ */
+const SWEEP_WINDOW_MS = 7 * 24 * 3600_000;
+const SWEEP_BATCH = 50;
+
+export const VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS = 60_000;
+export const VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS = 15 * 60_000;
+
+/** Attachment for a queued voicemail email. Null = do not send yet. */
+export async function loadVoicemailAudioAttachment(job: {
+  type: string;
+  htmlBody?: string | null;
+  textBody?: string | null;
+}): Promise<VoicemailAudioAttachment | null> {
+  if (job.type !== VOICEMAIL_EMAIL_TYPE) return null;
+  return loadVoicemailAudioAttachmentForEmailJob(job, {
+    findVoicemail: async (id) =>
+      (await (db as any).voicemail.findUnique({
+        where: { id },
+        select: { localAudioPath: true, receivedAt: true },
+      })) || null,
+  });
+}
+
+async function loadExtensionConfig(tenantId: string, extension: string): Promise<ExtensionEmailConfig | null> {
+  const ext = await (db as any).extension.findFirst({
+    where: { tenantId, extNumber: extension, status: "ACTIVE" },
+    select: {
+      id: true, displayName: true, pbxUserEmail: true, vmEmailEnabled: true,
+      voicemailEmailRecipients: { select: { email: true } },
+    },
+  });
+  if (!ext) return null;
+  return {
+    id: ext.id,
+    displayName: ext.displayName ?? null,
+    pbxUserEmail: ext.pbxUserEmail ?? null,
+    vmEmailEnabled: ext.vmEmailEnabled !== false,
+    extraRecipients: (ext.voicemailEmailRecipients || []).map((r: { email: string }) => r.email),
+  };
+}
+
+/** Queue emails for voicemails that need one. Safe to run every minute. */
+export async function runVoicemailEmailSweep(log: Log): Promise<void> {
+  if (!voicemailEmailEnabled()) return;
+  try {
+    const since = new Date(Date.now() - SWEEP_WINDOW_MS);
+    const pending = await (db as any).voicemail.findMany({
+      where: { emailedAt: null, receivedAt: { gte: since }, deletedAt: null },
+      orderBy: { receivedAt: "asc" },
+      take: SWEEP_BATCH,
+      select: {
+        id: true, tenantId: true, extension: true, callerName: true, callerNumber: true,
+        durationSec: true, receivedAt: true, transcript: true, transcriptLanguage: true,
+        localAudioPath: true, audioGoneAt: true, emailedAt: true,
+      },
+    });
+    if (pending.length === 0) return;
+
+    let queued = 0;
+    const skipped: Record<string, number> = {};
+    for (const vm of pending) {
+      try {
+        const out = await processVoicemailForEmail(vm, {
+          loadExtension: loadExtensionConfig,
+          queueEmail: async (p) =>
+            (db as any).emailJob.create({
+              data: {
+                tenantId: p.tenantId, type: p.type, toEmail: p.toEmail,
+                subject: p.subject, htmlBody: p.htmlBody, textBody: p.textBody,
+              },
+            }),
+          markProcessed: async (id, reason) =>
+            (db as any).voicemail.update({
+              where: { id },
+              data: { emailedAt: new Date(), emailSkipReason: reason },
+            }),
+        });
+        if (out.queued) queued++;
+        else skipped[out.reason] = (skipped[out.reason] || 0) + 1;
+      } catch (err) {
+        // ⛔ One bad voicemail must never stop the sweep for the rest. It stays
+        // unstamped, so the next pass retries it.
+        log.warn({ voicemailId: vm.id, err: (err as Error)?.message }, "voicemail-email: one message failed, will retry");
+      }
+    }
+    if (queued > 0 || Object.keys(skipped).length > 0) {
+      log.info({ queued, skipped, considered: pending.length }, "voicemail-email: sweep complete");
+    }
+  } catch (err) {
+    log.warn({ err: (err as Error)?.message }, "voicemail-email: sweep failed");
+  }
+}
+
+/**
+ * Reconcile what happened against what should have happened, and escalate any
+ * real loss.
+ *
+ * ⛔⛔ Escalation, NEVER an ADMIN_ALERT email — that type is marked SKIPPED at
+ * the send door platform-wide, so an alert sent that way reaches nobody. This is
+ * a safety net; a safety net that cannot raise its voice is decoration.
+ */
+export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmailGap[]> {
+  if (!voicemailEmailEnabled()) return [];
+  try {
+    const since = new Date(Date.now() - SWEEP_WINDOW_MS);
+    const excluded = voicemailEmailExcludedTenantIds();
+
+    const rows = await (db as any).voicemail.findMany({
+      where: { receivedAt: { gte: since }, deletedAt: null, tenantId: { not: null } },
+      orderBy: { receivedAt: "desc" },
+      take: 2000,
+      select: {
+        id: true, tenantId: true, extension: true, receivedAt: true,
+        emailedAt: true, emailSkipReason: true,
+        tenant: { select: { name: true } },
+      },
+    });
+
+    const eligible = rows
+      .filter((r: any) => r.tenantId && !excluded.has(r.tenantId))
+      .map((r: any) => ({
+        id: r.id, tenantId: r.tenantId, tenantName: r.tenant?.name ?? null,
+        extension: r.extension, receivedAt: r.receivedAt,
+        emailedAt: r.emailedAt, emailSkipReason: r.emailSkipReason,
+      }));
+    if (eligible.length === 0) return [];
+
+    // Map voicemail id -> the outcome of its email job, via the body marker.
+    const jobs = await (db as any).emailJob.findMany({
+      where: { type: VOICEMAIL_EMAIL_TYPE, createdAt: { gte: since } },
+      select: { htmlBody: true, textBody: true, status: true, lastErrorMessage: true },
+      take: 5000,
+    });
+    const jobStatusByVoicemailId = new Map<string, { status: string; lastErrorMessage?: string | null }>();
+    for (const j of jobs) {
+      const id = extractVoicemailIdFromEmailBody(`${j.htmlBody || ""}\n${j.textBody || ""}`);
+      if (!id) continue;
+      const prev = jobStatusByVoicemailId.get(id);
+      // A SENT job wins over a failed earlier attempt for the same voicemail.
+      if (!prev || j.status === "SENT") jobStatusByVoicemailId.set(id, { status: j.status, lastErrorMessage: j.lastErrorMessage });
+    }
+
+    const gaps = findVoicemailEmailGaps({ eligible, jobStatusByVoicemailId });
+    const alertable = gapsWorthAlerting(gaps);
+
+    if (gaps.length > 0) {
+      log.warn(
+        { total: gaps.length, alertable: alertable.length, byProblem: countBy(gaps) },
+        "voicemail-email: watchdog found gaps",
+      );
+    }
+
+    if (alertable.length > 0) {
+      const summary = describeVoicemailEmailGaps(alertable);
+      await raiseVoicemailEscalation(summary, alertable.length, log);
+    }
+    return gaps;
+  } catch (err) {
+    log.warn({ err: (err as Error)?.message }, "voicemail-email: watchdog failed");
+    return [];
+  }
+}
+
+function countBy(gaps: VoicemailEmailGap[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const g of gaps) out[g.problem] = (out[g.problem] || 0) + 1;
+  return out;
+}
+
+/**
+ * ⛔ De-duplicated: one open escalation at a time. Without this a persistent
+ * fault texts on every sweep until the phone is unusable and the alarm is muted
+ * by the human — which is the same as having no alarm.
+ */
+async function raiseVoicemailEscalation(summary: string, count: number, log: Log): Promise<void> {
+  try {
+    const open = await (db as any).agentEscalation.findFirst({
+      where: { requestSummary: { startsWith: "Voicemail emails did not go out" }, status: { in: ["QUEUED", "SENT"] } },
+      select: { id: true, createdAt: true },
+    });
+    if (open) {
+      log.info({ existing: open.id }, "voicemail-email: gap already escalated, not re-alerting");
+      return;
+    }
+    const tenant = await (db as any).tenant.findFirst({ select: { id: true, name: true } });
+    if (!tenant) return;
+    await (db as any).agentEscalation.create({
+      data: {
+        tenantId: tenant.id,
+        tenantName: tenant.name || "Loopcom",
+        userName: "voicemail watchdog",
+        requestSummary: `Voicemail emails did not go out (${count})`,
+        smsBody: `Loopcom: ${count} voicemail email${count === 1 ? "" : "s"} did not reach anyone. Check the voicemail watchdog.`,
+        report: summary,
+        proposedFix: "Check the email outbox and the voicemail sender log. Affected messages are listed above and can be re-sent once the cause is fixed.",
+      },
+    });
+    log.warn({ count }, "voicemail-email: escalation raised");
+  } catch (err) {
+    log.warn({ err: (err as Error)?.message }, "voicemail-email: could not raise escalation");
+  }
+}

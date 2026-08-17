@@ -129,6 +129,13 @@ import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningR
 import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
 import { warnIfOnboardingStorageEphemeral } from "./onboarding/storage";
 import {
+  VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS,
+  VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS,
+  loadVoicemailAudioAttachment,
+  runVoicemailEmailSweep,
+  runVoicemailEmailWatchdog,
+} from "./voicemail/voicemailEmailRuntime";
+import {
   readVoicemailAudio,
   saveVoicemailAudio,
   voicemailAudioExtFromFilename,
@@ -1060,7 +1067,14 @@ async function sendEmailJobNow(job: any): Promise<void> {
     }
     const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
     const fromName = provider.fromName || "Connect Communications";
-    const pdfAttachments = await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
+    // One list, two sources. Typed explicitly because `.catch(() => [])` alone
+    // infers never[] and then nothing else can join it.
+    const pdfAttachments: Array<{ filename: string; content: Buffer; contentType: string }> =
+      await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
+    // Voicemail audio rides the same attachment slot. ⛔ Both send paths must
+    // carry this — a voicemail email without its recording is worse than none.
+    const voicemailAudio = await loadVoicemailAudioAttachment(job).catch(() => null);
+    if (voicemailAudio) pdfAttachments.push(voicemailAudio);
     const toAddresses = String(job.toEmail || "")
       .split(",")
       .map((e: string) => e.trim())
@@ -1124,7 +1138,14 @@ async function sendEmailJobNow(job: any): Promise<void> {
   });
 
   try {
-    const pdfAttachments = await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
+    // One list, two sources. Typed explicitly because `.catch(() => [])` alone
+    // infers never[] and then nothing else can join it.
+    const pdfAttachments: Array<{ filename: string; content: Buffer; contentType: string }> =
+      await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
+    // Voicemail audio rides the same attachment slot. ⛔ Both send paths must
+    // carry this — a voicemail email without its recording is worse than none.
+    const voicemailAudio = await loadVoicemailAudioAttachment(job).catch(() => null);
+    if (voicemailAudio) pdfAttachments.push(voicemailAudio);
     await transporter.sendMail({
       from: fromName ? `"${fromName}" <${fromEmail}>` : fromEmail,
       to: job.toEmail,
@@ -5210,6 +5231,15 @@ registerShutdownTimer(setTimeout(() => {
 }, 90_000));
 registerShutdownTimer(setTimeout(() => { void runWakeHealthSweep(); }, 120_000));
 registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 3600_000));
+
+// ── Voicemail-to-email: the sweep queues, the watchdog proves nothing was lost ──
+// ⛔ Both are inert until VOICEMAIL_EMAIL_ENABLED=1, so deploying changes nothing.
+// `as unknown as NodeJS.Timeout`: this tsconfig resolves the DOM timer overload,
+// which returns number. Pre-existing quirk (see processLifecycle.test.ts:22) —
+// cast rather than add three more errors to the baseline.
+registerShutdownTimer(setTimeout(() => { void runVoicemailEmailSweep(app.log); }, 45_000) as unknown as NodeJS.Timeout);
+registerShutdownTimer(setInterval(() => { void runVoicemailEmailSweep(app.log); }, VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS) as unknown as NodeJS.Timeout);
+registerShutdownTimer(setInterval(() => { void runVoicemailEmailWatchdog(app.log); }, VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS) as unknown as NodeJS.Timeout);
 
 // ── Hourly inbound-DID sync + unattributed-call alarm ────────────────────────
 // Owner directive 2026-08-02: "there should never be a reason why the system
