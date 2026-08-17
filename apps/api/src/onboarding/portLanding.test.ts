@@ -641,3 +641,104 @@ test("a failed customer email is recorded, and never blocks completion", async (
   assert.equal(r.done, true, "a failed email must not strand the port");
   assert.ok(s.events.some((e) => /tell them by hand/.test(e.message)));
 });
+
+// ── Taking the temp number off the customer's phone system ────────────────────
+//
+// Routing the DID back to the master account is only half of retirement. The
+// tenant's inbound route survived, `pbxTenantInboundDidSync` kept seeing it, and
+// E911 bills per phone number — so the customer went on paying $3/month for a
+// number they no longer own. The guard itself is unit-tested in
+// retireTempPbxRoute.test.ts; these test that the landing calls it correctly and
+// survives every answer it can give.
+
+test("retirement asks the phone system to drop the temporary number, with the right identifiers", async () => {
+  const s = makeState();
+  const row = submission(s, { pbxTenantPath: "4de9a88870cd2add" });
+  seedTempState(s);
+  const seen: any[] = [];
+  const d = deps(s, ROUTED_OK, []);
+  d.retireTempRoute = async (input: any) => {
+    seen.push(input);
+    return { deleted: true, reason: "route 237 owns its row alone", routeId: "237" };
+  };
+
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  const r = await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(r.done, true);
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].connectTenantId, "tenant1");
+  assert.equal(seen[0].tenantPath, "4de9a88870cd2add");
+  assert.equal(seen[0].tempDid, "8452605692");
+  assert.equal(seen[0].portedDid, "6469846023");
+  assert.ok(s.events.some((e) => /removed from their phone system/.test(e.message)));
+});
+
+test("a refusal is written down in plain words and does NOT block the port", async () => {
+  // The inii mini shape: the guard says no because deleting would break their
+  // live number. That must surface, not vanish.
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const d = deps(s, ROUTED_OK, []);
+  d.retireTempRoute = async () => ({
+    deleted: false,
+    reason: "route 239 shares destination row 907 with 240:6469846023 — deleting it would break the other number",
+  });
+
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  const r = await landing.runPortLanding(row, CREDS, true, d);
+
+  assert.equal(r.done, true, "a refused cleanup must never hold the port open");
+  assert.ok(s.events.some((e) => /still on their phone system/.test(e.message)));
+  assert.ok(s.events.some((e) => /shares destination row 907/.test(e.message)));
+});
+
+test("it is attempted once, not on every later sweep", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  let calls = 0;
+  const d = deps(s, ROUTED_OK, []);
+  d.retireTempRoute = async () => { calls++; return { deleted: true, reason: "ok", routeId: "237" }; };
+
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  await landing.runPortLanding(row, CREDS, true, d);
+  await landing.runPortLanding(row, CREDS, true, d);
+  await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(calls, 1);
+});
+
+test("a refusal is not retried forever either — it needs a person, not a loop", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  let calls = 0;
+  const d = deps(s, ROUTED_OK, []);
+  d.retireTempRoute = async () => { calls++; return { deleted: false, reason: "shares a destination row" }; };
+
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  await landing.runPortLanding(row, CREDS, true, d);
+  await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(calls, 1);
+});
+
+test("no PBX wiring at all (unit-test world): the port still completes", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const d = deps(s, ROUTED_OK, []); // no retireTempRoute
+  await landing.runPortLanding(row, CREDS, true, d);
+  s.mappings.find((m) => m.e164 === "+6469846023")!.routingMode = "connect";
+  s.schedules[0].status = "activated";
+  const r = await landing.runPortLanding(row, CREDS, true, d);
+  assert.equal(r.done, true);
+});

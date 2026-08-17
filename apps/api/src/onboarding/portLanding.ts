@@ -49,6 +49,9 @@ import {
   resolvePbxRouteHelperConfig,
 } from "../pbxInboundRouteHelperClient";
 import { PORT_COMPLETE_EMAIL_TYPE, buildPortCompleteEmail } from "./portCompleteEmail";
+import { loadPanelConfig, PanelSession } from "./panelClient";
+import { connectOmbutelMysql } from "../pbxQueueDirectory";
+import { retireTempPbxRoute, type TempRouteRetirement } from "./retireTempPbxRoute";
 
 export type PortLandingDeps = {
   db: any;
@@ -69,6 +72,18 @@ export type PortLandingDeps = {
    * in unit tests.
    */
   publishTenant?: (tenantId: string) => Promise<void>;
+  /**
+   * Delete the temporary number's inbound route from the customer's tenant, so
+   * the phone system stops listing a number they no longer own — and Connect
+   * stops billing $3/month of E911 for it. Guarded and non-throwing; see
+   * `retireTempPbxRoute.ts`. Absent in unit tests, which have no PBX.
+   */
+  retireTempRoute?: (input: {
+    connectTenantId: string;
+    tenantPath: string;
+    tempDid: string;
+    portedDid: string;
+  }) => Promise<TempRouteRetirement>;
 };
 
 /** Default copy: helper inspect on both routes, then the native set-destination. */
@@ -128,12 +143,55 @@ async function defaultCopyPbxDestination(
   };
 }
 
+/**
+ * The PBX half of retirement, wired to the real phone system.
+ *
+ * `readRoutesForRetirement` needs VitalPBX's numeric tenant id, which the
+ * submission does not carry — only the path hash. `PbxTenantInboundDid` holds
+ * both, and it is the same table the E911 billing counts, so resolving from
+ * there keeps the fix and the charge looking at one source.
+ */
+async function defaultRetireTempRoute(input: {
+  connectTenantId: string;
+  tenantPath: string;
+  tempDid: string;
+  portedDid: string;
+}): Promise<TempRouteRetirement> {
+  try {
+    const link = await (realDb as any).pbxTenantInboundDid.findFirst({
+      where: { connectTenantId: input.connectTenantId },
+      select: { vitalTenantId: true, pbxInstance: { select: { ombuMysqlUrlEncrypted: true } } },
+    });
+    if (!link?.vitalTenantId) {
+      return { deleted: false, reason: "could not work out which phone-system tenant this is" };
+    }
+    return await retireTempPbxRoute({
+      vitalTenantId: link.vitalTenantId,
+      tenantPath: input.tenantPath,
+      tempDid: input.tempDid,
+      portedDid: input.portedDid,
+      ombuMysqlUrlEncrypted: link.pbxInstance?.ombuMysqlUrlEncrypted ?? null,
+      connectMysql: connectOmbutelMysql,
+      openPanel: async () => {
+        const cfg = loadPanelConfig();
+        if (!cfg || !cfg.accounts.length) return null;
+        const s = new PanelSession(cfg.baseUrl, cfg.accounts[0]);
+        await s.login();
+        return s;
+      },
+    });
+  } catch (e: any) {
+    return { deleted: false, reason: `phone-system cleanup failed: ${String(e?.message || e).slice(0, 200)}` };
+  }
+}
+
 export function defaultPortLandingDeps(): PortLandingDeps {
   return {
     db: realDb,
     vms: realVms,
     enableSmsOnDid: realEnableSmsOnDid,
     copyPbxDestination: defaultCopyPbxDestination,
+    retireTempRoute: defaultRetireTempRoute,
   };
 }
 
@@ -431,6 +489,31 @@ export async function runPortLanding(
     }
     await mergeLanding(db, row, { tempRetiredAt: new Date().toISOString() });
     await logEvent(db, row.id, `Temporary number ${tempDid} retired — routed back to the master account (spare pool).`);
+  }
+
+  // ── 5b. Take the temporary number off their phone system too ───────────────
+  // Routing the DID back to the master account is only half of retirement. The
+  // tenant's inbound route for it survived, `pbxTenantInboundDidSync` kept
+  // seeing it, and E911 is billed per phone number — so the customer went on
+  // paying $3/month for a number they no longer own. ⛔ The guard inside
+  // refuses any route sharing its destination row with another (inii mini's
+  // temp route shares row 907 with their LIVE number), and Apply Changes is
+  // never fired. It cannot throw; a refusal is recorded and the port completes.
+  if (deps.retireTempRoute && tempDid && !landing.pbxRouteRetiredAt && !landing.pbxRouteRetireSkipped) {
+    const outcome = await deps.retireTempRoute({
+      connectTenantId: tenantId,
+      tenantPath: String(row.pbxTenantPath || ""),
+      tempDid,
+      portedDid,
+    });
+    if (outcome.deleted) {
+      await mergeLanding(db, row, { pbxRouteRetiredAt: new Date().toISOString() });
+      await logEvent(db, row.id, `Temporary number ${tempDid} removed from their phone system — they stop being billed for it.`);
+    } else {
+      // Recorded, not retried forever: every refusal here needs a person.
+      await mergeLanding(db, row, { pbxRouteRetireSkipped: outcome.reason });
+      await logEvent(db, row.id, `Temporary number ${tempDid} is still on their phone system — ${outcome.reason}`);
+    }
   }
 
   // ── 6. Completion email, once ──────────────────────────────────────────────
