@@ -219,6 +219,52 @@ of those, so the person whose number moved found out by dialling it.
   these files removed too). The documented 7 `pbxTenantDirectorySync` failures
   are still there. Totals fluctuate 8–9 between runs.
 
+### 4d. ✅ The temp number leaves the PBX too (2026-08-17, `ed3c561f`, DEPLOYED)
+
+⛔ **This was a customer overcharge, not housekeeping.** Retirement routed the
+temp DID back to the master VoIP.ms account, but the customer's tenant kept its
+inbound route. `pbxTenantInboundDidSync` reads **`ombu_inbound_routes`** to fill
+`PbxTenantInboundDid`, and `invoiceEngine.ts:447` counts that table
+(`active: true`) for the **`per_phone_number`** E911 fee — so **every ported
+customer kept paying $3/month for a number they no longer owned.**
+
+- **`apps/api/src/onboarding/retireTempPbxRoute.ts`**, called from
+  `portLanding.ts` §5b right after the carrier-side retirement.
+- ⛔⛔ **VITALPBX CASCADES `ombu_destinations` WHEN YOU DELETE A ROUTE POINTING
+  AT IT.** Ports built before `5330620d` gave the temp route and the real route
+  the SAME row — **inii mini's 239 and 240 both point at row 907**, so deleting
+  their leftover cascades 907 and **kills 646-984-6023, their live number.**
+  `decideTempRouteDeletion` is pure and refuses: a shared destination row
+  (checked **across every tenant** — nothing scopes a destination row to one), a
+  route with no destination row, the ported number's own route, and any case
+  with two routes on the temp number. 9 tests, written from both real shapes.
+- ⛔ **Apply Changes is never fired.** It wipes the Connect doorway off every
+  route of every tenant with pending changes — an outage risk out of all
+  proportion to a $3 cleanup. The stale dialplan exten it leaves behind is
+  **inert**: the number is already on the master account, so no call can arrive
+  on it, and the next legitimate regen clears it.
+- ⛔ **Attempted once, never looped, and never fatal.** A refusal is stamped
+  (`portLanding.pbxRouteRetireSkipped`) and written on the sign-up timeline in
+  plain words — retrying could never make a shared row unshared, and a port must
+  not stay open over a cleanup.
+- ✅ **Proven live on Matamim** under Izzy's go-ahead (the PBX is otherwise
+  read-only). Backup `/root/matamim-route-backup-20260817-165444/` (route rows,
+  destination rows, tenant DID list, dialplan). Route **237 deleted**,
+  destination row **899 cascaded**, route **241 "Main ported" and row 912
+  untouched**, and the live number still renders
+  `exten => _9293598299 … Goto(T104_cos-all,101,1)`. `PbxTenantInboundDid` went
+  **2 active → 1**, so their **E911 drops $6 → $3**.
+- ⏳ **inii mini is deliberately NOT done** (Izzy's call, 2026-08-17): their live
+  route 240 needs its own destination row first. Until then they keep paying the
+  extra $3 and the guard correctly refuses — which is the guard working, not a
+  bug.
+- ⏳ The temp DID also remains in **`ombu_tenant_dids`** for tenant 104. That is a
+  different table from the routes and **does not drive billing**; left alone
+  rather than widening a mandated single-route delete.
+- ⏳ **NOT PROVEN: the automation has never run itself.** Matamim's was driven by
+  hand through the same deployed functions. The next real port exercises the
+  wired path.
+
 **Left open by design, both needing Izzy:**
 1. The temp number's PBX inbound route (**899, "Main", 7244198226 on tenant
    104**) is still there and still renders — the documented per-retirement

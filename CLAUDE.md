@@ -2049,11 +2049,39 @@ own port — the first sweep landed it end-to-end, temp number retired, no human
   rows platform-wide** — `+9293598299` is house convention, not a bug (chased as
   one this session). `TenantSmsNumber.phoneE164` **is** full E.164. The two
   tables genuinely differ; don't "fix" either.
-  ⏳ **Two leftovers, both needing Izzy:** the temp number's PBX inbound route
-  (**899 "Main"** on tenant 104) still renders and costs **+$3/mo E911** until
-  deleted in the panel — it now points at a number the tenant no longer owns; and
-  texting on the ported number is a **shared inbox** (no temp SMS row existed to
-  copy an assignment from), so flip it to Joel personally if that's wanted.
+  ✅ **THE TEMP NUMBER NOW LEAVES THE PHONE SYSTEM TOO — and this was a CUSTOMER
+  OVERCHARGE, not a tidiness nit** (`ed3c561f`, api DEPLOYED; Matamim's cleaned
+  up live 2026-08-17). Routing the DID back to the master VoIP.ms account was
+  only half of retirement: the tenant kept its inbound route,
+  `pbxTenantInboundDidSync` reads **`ombu_inbound_routes`** to fill
+  `PbxTenantInboundDid`, and `invoiceEngine.ts:447` counts that table
+  (`active: true`) for the **`per_phone_number` E911 fee** — so **every ported
+  customer went on paying $3/month for a number they no longer owned.**
+  Matamim's active DIDs went **2 → 1**, so their E911 goes **$6 → $3**.
+  ⛔⛔ **THE GUARD IS THE POINT, NOT THE DELETE — VitalPBX CASCADES THE
+  DESTINATION ROW.** Ports built before `5330620d` gave the temp route and the
+  real route the SAME `ombu_destinations` row: **inii mini's 239 and 240 both
+  point at row 907**, so deleting their leftover would silently kill
+  **646-984-6023, their live number**. `retireTempPbxRoute.ts`'s
+  `decideTempRouteDeletion` is a PURE function that refuses any route sharing
+  its destination row (checked **across all tenants** — nothing scopes a
+  destination row to one), refuses a route with no destination row, and refuses
+  to touch the ported number. 9 tests, built from both real shapes.
+  ⛔ **Apply Changes is NEVER fired here** — it wipes the Connect doorway off
+  every route of every tenant with pending changes, which is a platform-wide
+  outage risk for a $3 cleanup. **The stale dialplan exten left behind is inert**
+  (the number is on the master account, so no call can reach it) and clears at
+  the next legitimate regen. Matamim's still shows one such line — expected.
+  ⛔ The cleanup **cannot throw, is attempted ONCE, and a refusal is written on
+  the sign-up timeline in plain words** — retrying would never make a shared row
+  unshared; it needs a person.
+  ⏳ **STILL OPEN: inii mini's shared row** (Izzy deferred it 2026-08-17 — it is
+  live-number surgery). Their live route 240 needs its own destination row
+  before their leftover 239 can go; until then they keep paying the extra $3 and
+  the guard correctly refuses. ⏳ Also still open: the temp DID remains listed in
+  **`ombu_tenant_dids`** for tenant 104 (a different table from the routes —
+  **it does NOT drive billing**, the routes do), and texting on the ported number
+  is a **shared inbox**, so flip it to Joel personally if that's wanted.
   ✅ **THE CUSTOMER IS NOW TOLD — built and DEPLOYED 2026-08-17 (`32dfccfb`,
   container-verified).** Until today the only completion mail was the owner's
   **`ADMIN_ALERT`, which the send door drops** — so the person whose number moved
