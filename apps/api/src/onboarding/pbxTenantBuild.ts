@@ -467,6 +467,68 @@ export async function createInboundRoute(s: PanelSession, did: string, destExtId
   await applyChanges(s, "inbound-route");
 }
 
+// ── One extension on a tenant that already exists ─────────────────────────────
+
+/**
+ * Add ONE extension to an ALREADY-BUILT tenant — the everyday "a new person
+ * joined" case, which until now had no code path at all.
+ *
+ * ⛔ This is the ONLY working way to create an extension on this PBX.
+ * `POST /pbx/extensions` (server.ts) drives the VitalPBX REST API, which has no
+ * extension-create endpoint — our own VitalPbxClient throws NOT_SUPPORTED for
+ * it, and the audit log holds zero successful creates in the platform's whole
+ * history. Worse, that route writes the Connect Extension row BEFORE calling
+ * the PBX, so its failure leaves a billable row for a line that does not exist.
+ * Extensions are created HERE, in the panel, and reach Connect afterwards via
+ * `POST /pbx/extensions/sync`.
+ *
+ * ⛔ Extracted from `buildPbxTenant`'s per-person loop, which now calls it — so
+ * there is exactly ONE implementation. Do not fork a second one: two
+ * near-duplicate publish paths is the recurring defect of this codebase (the
+ * two IVR publish paths, the two SMS ingest paths), and a fix applied to one
+ * silently skips the other.
+ *
+ * Idempotent by design, like the loop it came from: an extension that already
+ * resolves is adopted rather than re-imported (the panel rejects duplicate
+ * imports), and `addDevice` returns early when the device is already present.
+ * Safe to re-run after a failure part-way through.
+ *
+ * Every extension gets PJSIP (from the CSV import) **+ WebRTC**. ⛔ The WebRTC
+ * device is not optional: it is what the mobile app and the desktop/portal
+ * softphone register as, so an extension without one is a desk-phone-only line
+ * however the customer was sold it.
+ *
+ * ⛔ Fires Apply Changes (whole-PBX regen), exactly as the build loop does.
+ * Callers that have database access should follow it with
+ * `rebakeConnectRoutesAfterRegen` for every tenant holding Connect-routed
+ * numbers — VitalPBX's regenerator cannot render the Connect doorway, and the
+ * regen flushes pending changes for OTHER tenants too.
+ *
+ * @returns the panel's internal extension id (not the extension number).
+ */
+export async function addExtensionToTenant(
+  s: PanelSession,
+  tenantPath: string,
+  person: PbxPerson,
+  log: (msg: string) => void = () => {},
+): Promise<string> {
+  s.setTenant(tenantPath);
+  // Resume guard: skip the CSV import when the extension already resolves.
+  let extId: string;
+  try {
+    extId = await extensionId(s, person.ext);
+    log(`extension ${person.ext} already existed (id ${extId}) — adopting`);
+  } catch {
+    await importExtension(s, person);
+    extId = await extensionId(s, person.ext);
+  }
+  await addDevice(s, extId, person, "webrtc"); // always: PJSIP + WebRTC
+  if (person.cellNumber && person.cellMode) await addDevice(s, extId, person, "cell");
+  await applyChanges(s, "extensions");
+  log(`extension ${person.ext} ${person.name} ok (id ${extId}${person.cellNumber ? `, cell ${person.cellMode}` : ""})`);
+  return extId;
+}
+
 // ── One whole build ───────────────────────────────────────────────────────────
 
 export async function buildPbxTenant(
@@ -508,20 +570,10 @@ export async function buildPbxTenant(
   s.setTenant(tenantPath);
   let firstExtId: string | null = null;
   for (const person of job.people) {
-    // Resume guard: skip the CSV import when the extension already resolves
-    // (the panel rejects duplicate imports).
-    let extId: string;
-    try {
-      extId = await extensionId(s, person.ext);
-    } catch {
-      await importExtension(s, person);
-      extId = await extensionId(s, person.ext);
-    }
+    // ⛔ ONE implementation, shared with the "a new person joined" path. Do not
+    // re-inline this loop body — see addExtensionToTenant.
+    const extId = await addExtensionToTenant(s, tenantPath, person, log);
     if (!firstExtId) firstExtId = extId;
-    await addDevice(s, extId, person, "webrtc"); // always: PJSIP + WebRTC
-    if (person.cellNumber && person.cellMode) await addDevice(s, extId, person, "cell");
-    await applyChanges(s, "extensions");
-    log(`extension ${person.ext} ${person.name} ok (id ${extId}${person.cellNumber ? `, cell ${person.cellMode}` : ""})`);
   }
   await createInboundRoute(s, job.did, firstExtId as string);
   log(`inbound route ok`);

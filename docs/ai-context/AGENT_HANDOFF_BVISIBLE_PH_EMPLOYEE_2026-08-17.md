@@ -169,20 +169,110 @@ and `tollFreeNumbers` **manual 1**. Raised with Izzy; no change made.
 
 ---
 
-## 7. ⏳ NOT DONE — the extension itself
+## 7. ✅ DONE — extension 111, Lester Tan, live
 
-Blocked on two facts only Izzy has: **the employee's name** and **his email
-address** (the email is the Connect login and where the welcome email with the
-app links goes).
+**Lester Tan, `lt@bvisible.us`, iPhone** (Izzy, 2026-08-17).
 
-Also note: **extensions 105, 106 and 107 have no Connect user at all**
-(`ownerUserId: null`). Only four logins exist on this account —
-`sales@`, `printing@`, `nechamyaweiss@gmail.com`, `artwork@`. So "add an
-extension" here has historically meant a PBX line with no app login. Confirm
-which is wanted.
+⛔ **Izzy was right and this handoff was wrong for one round: the machinery IS
+wired in.** The previous version of §7 concluded a human had to do the panel
+work, having checked only `/opt/connect-robot/provision-tenant.js`. It never
+looked at **`apps/api/src/onboarding/pbxTenantBuild.ts`**, which creates
+extensions through the panel in production and has done so for every onboarded
+customer. **Check the api's own onboarding code before declaring a PBX operation
+manual.**
 
-⛔ **Creating the extension is a PBX WRITE** and the PBX is read-only by standing
-rule — it needs Izzy's explicit go-ahead, and Apply Changes stays his click.
+### What was built: `addExtensionToTenant()`
+
+The per-person block of `buildPbxTenant` (CSV import → WebRTC device → Apply
+Changes) is now an exported function, and **`buildPbxTenant` calls it** — so
+there is exactly one implementation. Do not fork a second one.
+
+```ts
+addExtensionToTenant(session, tenantPath, { name, ext, email }, log) => panelExtensionId
+```
+
+Idempotent, inheriting the loop's resume guards: an extension that already
+resolves is adopted rather than re-imported, and `addDevice` returns early when
+the device is present. 5 new tests (33 total in that file, 0 fail) assert it
+imports once, adds **PJSIP + WebRTC**, sets recording + voicemail on, touches
+**no** trunk/route/tenant/inbound-route, fires exactly one Apply Changes, adopts
+on re-run, and fails loudly rather than leaving a half-built line.
+
+### Proven live, twice
+
+1. **Test first, on a throwaway** — ext **199 "Claude Test"** on *Ezra stress
+   test 1* (T101, path `95bd6bbfdf7183fe`), panel id 403. Verified on the PBX:
+   devices `199` (Default PJSIP Profile) + `199_1` (Default WebRTC Profile),
+   and `[T101_199]` / `[T101_199_1]` rendered in
+   `pjsip__50-101-extensions.conf`. ⏳ **Still there** — deleting an extension
+   has its own fatal-crash trap, so it was left in place.
+2. **Then B Visible** — ext **111 "Lester Tan"**, panel id 404. Devices `111` +
+   `111_1`, `[T9_111]` / `[T9_111_1]` rendered, and **all five existing B Visible
+   desk phones still `Avail`** immediately afterwards.
+
+### The Apply Changes exposure was handled, and measured
+
+The runner called `rebakeConnectRoutesAfterRegen` for **every** Connect-routed
+tenant immediately after each Apply Changes. Both runs reported
+`attempted:1, rebaked:1, linesChanged:0` for A plus center, Connect
+Communications and inii mini — **`linesChanged: 0` means the regen did not in
+fact wipe those renders this time.** Worth knowing, but do not turn it into a
+rule: the re-bake is cheap and the failure mode is a customer with dead air.
+
+### ⛔⛔ THE TRAP: the PBX sync SILENTLY CREATES A LOGIN NOBODY CAN USE
+
+`POST /pbx/extensions/sync` (11 found, 11 upserted) did more than import the
+line — because the CSV carried `email`, it **created a Connect `User` for
+`lt@bvisible.us` by itself** and stamped it as the extension's owner. That user
+was:
+
+- **`status: ACTIVE`** with a password hash nobody knows,
+- **`forcePasswordReset: false`**, so nothing would ever prompt him,
+- **no first name, last name or display name**,
+- and **no invitation email was ever queued.**
+
+So the person has an account they cannot sign into and have not been told about,
+and `POST /admin/users` then refuses the extension outright (409
+`extension_already_assigned`) — which reads like the flow is broken when it has
+in fact already half-run. ⛔ **After any sync that pulls in an extension carrying
+an email, check whether a user appeared and finish it**, or the customer's new
+hire silently has nothing.
+
+Finished here through the real routes, as a short-lived SUPER_ADMIN service
+token (the `didSwitchSchedule.injectAsService` pattern):
+
+| step | route | result |
+|---|---|---|
+| name the account | `PATCH /admin/users/:id` | Lester Tan |
+| send the invitation | `POST /admin/users/:id/resend-invite` | `USER_INVITE` **SENT** 21:06:49Z, *"Welcome to Loopcom — Create Your Password"*; status → INVITED, forcePasswordReset → true |
+| enable his softphone | `POST /admin/users/:id/phone/provision` | `PROVISIONED`, endpoint `T9_111_1` |
+
+⛔ **`phone/provision` was needed precisely because the sync created the user.**
+The lazy "mark PROVISIONED if the link already has a SIP password" snapshot lives
+in `POST /admin/users` — the path that was refused — so the link sat `PENDING`
+with a perfectly good password. That route is the safe fix: it flips the status
+and **never resets the extension password**, so live desk phones are untouched.
+
+### TestFlight
+
+`lt@bvisible.us` added to **"Loopcom Testers"** (`fe508ee6-4a3f-49dd-bf53-858839fa2f06`),
+confirmed back from Apple as **INVITED**. Build **52** is attached to the group
+(also 48 and 45), so adding the tester is the whole job — Apple sends the mail.
+⛔ Read the attachment the right way round:
+`GET /v1/builds?filter[betaGroups]={id}` — `GET /v1/betaGroups/{id}/builds`
+answers empty even when builds are attached.
+
+### ⏳ What is still unproven
+
+- **Nobody has signed in as Lester, and no call has been made to or from 111.**
+  Proven as PBX config, rendered dialplan, a Connect row, a SENT email and an
+  Apple INVITED state — not by a human using a phone.
+- `T9_111` has **no contact** yet, which is correct: nothing has registered.
+- **The 443 route has never been exercised from the Philippines.** Try him with
+  WireGuard **off** first; that is the real test.
+- **The old `POST /pbx/extensions` route is still broken and still wired to the
+  agent's `action.add_extension`.** Repointing that capability at
+  `addExtensionToTenant` is the obvious follow-up and was NOT done here.
 
 ### ⛔⛔ `POST /pbx/extensions` CANNOT CREATE AN EXTENSION ON THIS PBX — do not drive it
 

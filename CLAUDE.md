@@ -106,13 +106,36 @@ created** — blocked on the employee's name and email.)
   offers only assign / set-sip-password / sync), and **the agent's
   `action.add_extension` capability is built on this same route**, so it cannot
   work here either.
-  ✅ **The real flow is PBX → Connect:** create it in the **panel** (PJSIP **+
-  WebRTC** — ⛔ WebRTC is what the app and computer register, so the 443 route has
-  nothing without it; recording + voicemail on per Izzy's standing rule) → **Apply
-  Changes** → **`POST /pbx/extensions/sync`** → **`POST /admin/users`**
-  (`sendInvite: true`; ✅ it accepts a `tenantId` in the body, so a SUPER_ADMIN
-  service token can drive it cross-tenant — pure DB + email, no PBX).
-  ⛔ `provision-tenant.js` is **whole-tenant only** — no add-one-extension mode.
+  ✅ **BUT THE PANEL PATH IS WIRED IN AND IT IS NOW A FUNCTION.** ⛔ Izzy had to
+  correct this session: I checked only `/opt/connect-robot/provision-tenant.js`
+  (whole-tenant only) and declared it manual, without looking at
+  **`apps/api/src/onboarding/pbxTenantBuild.ts`**, which creates extensions
+  through the panel in production for every onboarded customer. **Check the api's
+  own onboarding code before declaring a PBX operation manual.**
+  New export **`addExtensionToTenant(session, tenantPath, person, log)`** —
+  extracted from `buildPbxTenant`'s per-person loop, which now CALLS it, so there
+  is exactly one implementation (⛔ do not fork a second). Idempotent: adopts an
+  existing extension, skips a device already present. 5 new tests, 33 pass / 0
+  fail. **Proven live twice**: ext **199 "Claude Test"** on *Ezra stress test 1*
+  (a throwaway, tested FIRST — it is still there), then **111 "Lester Tan"** on
+  B Visible; both with PJSIP + WebRTC devices and rendered `[T9_111]` /
+  `[T9_111_1]`, and all five existing B Visible phones still `Avail` after.
+- ⛔⛔ **THE PBX SYNC SILENTLY CREATES A LOGIN NOBODY CAN USE.** Because the CSV
+  carried `email`, `POST /pbx/extensions/sync` **created the Connect `User`
+  itself** and made it the extension's owner — **`status: ACTIVE`, a password
+  hash nobody knows, `forcePasswordReset: false`, no name, and NO invitation
+  email.** The person has an account they cannot sign into and were never told
+  about, and `POST /admin/users` then answers **409 `extension_already_assigned`**,
+  which reads like a broken flow when it has actually already half-run.
+  ✅ **Finish it with the real routes** (SUPER_ADMIN service token, the
+  `injectAsService` pattern): `PATCH /admin/users/:id` for the name →
+  **`POST /admin/users/:id/resend-invite`** (queues the real welcome email and
+  sets INVITED + forcePasswordReset) → ⛔ **`POST /admin/users/:id/phone/provision`**,
+  which is needed *because* the sync made the user: the "mark PROVISIONED if the
+  link already has a SIP password" snapshot lives in `POST /admin/users`, the
+  path that was refused, so the link sits **PENDING with a perfectly good
+  password**. That route only flips the status and **never resets the extension
+  password**, so live desk phones are safe.
 - ⛔ **APPLY CHANGES FOR B VISIBLE WOULD BRIEFLY BREAK THREE OTHER CUSTOMERS.**
   It flushes pending changes for other tenants too, and VitalPBX cannot render the
   Connect doorway. B Visible itself is safe (**no Connect-mode routes**), but
@@ -122,14 +145,27 @@ created** — blocked on the employee's name and email.)
   fires (`POST /voice/forwards`); a human pressing the panel button gets the
   reconciler, so expect **up to ~10 minutes**. Bounded (no longer rate-limited),
   but do it outside business hours.
-- ⏳ **BLOCKED on one thing only: the extension existing.** Employee is **Lester
-  Tan, lt@bvisible.us, iPhone** (given 2026-08-17). Once the line is on the PBX,
-  the Connect side is sync → create user (sends the invitation email) → add to
-  TestFlight group **"Loopcom Testers"** `fe508ee6-4a3f-49dd-bf53-858839fa2f06`
-  (Apple sends that invite itself — adding the tester IS the whole job).
-- ⛔ **105, 106 and 107 have NO Connect user** (`ownerUserId: null`) — only four
-  logins exist on this account. "Add an extension" here has historically meant a
-  PBX line with no app login. Confirm which is wanted.
+- ✅ **DONE for Lester Tan (`lt@bvisible.us`, iPhone): extension 111 is live**,
+  his login is created and named, the invitation **`USER_INVITE` is SENT**
+  (*"Welcome to Loopcom — Create Your Password"*, 21:06:49Z), his softphone is
+  **PROVISIONED** (`T9_111_1`), and he is **INVITED** on TestFlight group
+  **"Loopcom Testers"** `fe508ee6-4a3f-49dd-bf53-858839fa2f06` with build **52**
+  attached — Apple sends that mail itself, so adding the tester IS the whole job.
+  ⛔ Ask Apple which builds a group has the right way round:
+  `GET /v1/builds?filter[betaGroups]={id}` — `GET /v1/betaGroups/{id}/builds`
+  answers **empty even when builds are attached**.
+- ⏳ **NOT PROVEN: nobody has signed in as Lester and no call has touched 111.**
+  `T9_111` has no contact yet, which is correct — nothing has registered. ⛔ **Try
+  him with WireGuard OFF first**: that is the real test of the 443 route, which
+  has never been exercised from the Philippines.
+- ⛔ **105, 106 and 107 still have NO Connect user** (`ownerUserId: null`) — those
+  extensions carry no email on the PBX, which is exactly why the sync never
+  invented users for them. "Add an extension" here has historically meant a PBX
+  line with no app login.
+- ⏳ **The agent's `action.add_extension` still points at the broken route.**
+  Repointing it at `addExtensionToTenant` is the obvious follow-up and was NOT
+  done. ⏳ Test extension **199 "Claude Test"** is still on *Ezra stress test 1* —
+  left deliberately, since deleting an extension has its own fatal-crash trap.
 - ⏳ **Housekeeping, not acted on:** Gesheft's Brazil peer `10.88.0.5` was flagged
   "revoke on return" on 2026-08-02 and has **never handshaken** — needs Izzy's
   word. And the earlier PH employee (`.3`/`.4`) is on a stale tunnel; **which
@@ -967,24 +1003,86 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   files. Fully recovered, nothing lost — but compare by inspecting which files the
   errors land in, never by stashing.
 
-## ⛔⛔ AGENT HANDOFF — `sip.loopcom.net` is LIVE, but the flip onto it is STAGED AND NOT IN THE CONTAINER (2026-08-16) — READ FIRST before deploying api, before any SIP-hostname work, before trusting a deploy's `success` line, or before retiring ANY SIP hostname
+## ⛔⛔ AGENT HANDOFF — the global SIP flip to loopcom was BACKED OUT; only NEW tenants should get it, and that is NOT BUILT (2026-08-17) — READ FIRST before deploying api, before any SIP-hostname work, before setting `tenant.sipWsUrl` on anybody, before trusting a deploy's `success` line, or before retiring ANY SIP hostname
 
 Full detail: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md` → Phase A2**
-(DNS + cert + nginx **DONE and verified**; env flip **staged on disk only**. No tenant
-row touched, no telephony restart, no customer contacted, no PBX interaction.)
+(DNS + cert + nginx **DONE and verified**. **env flip SHIPPED 2026-08-17 and was BACKED
+OUT the same day** — see the two bullets below. No tenant row touched, no telephony
+restart, no customer contacted, no PBX interaction, **no deploy run by this session**.)
+
+- ⛔⛔ **OWNER'S DECISION, 2026-08-17 — the global flip was WRONG and is backed out.**
+  Izzy: **existing customers stay exactly as they are; only accounts that sign up from
+  today onward use the Loopcom SIP hostname.** `SIP_PUBLIC_WS_URL` is **ONE GLOBAL
+  VALUE**, so flipping it moves every tenant that depends on it at their next sign-in —
+  the opposite of what he asked for. **`.env.platform:106` is back to
+  `wss://sip.connectcomunications.com/sip`** (backup
+  `/opt/connectcomms/env/.env.platform.bak.20260817T210850Z.sipflipbackout`; `diff` shows
+  **exactly one changed line**, and only one occurrence of the variable exists in the file).
+  ⛔ **THE BACKOUT IS NOT YET IN THE CONTAINER, AND CANNOT BE.** `docker exec app-api-1`
+  still reads **`wss://sip.loopcom.net/sip`**, because an env-only change has no
+  sanctioned deploy path (below) and this session was told not to deploy. **So the five
+  global-dependent tenants are still handed loopcom on a fresh sign-in until the next api
+  deploy carries the backout.** Nothing breaks either way — **all four SIP hostnames
+  return 101** and no client refreshes a cached URL — but the window is open and is the
+  one thing to watch.
+- ⛔⛔ **ONLY FIVE TENANTS EVER DEPENDED ON THE GLOBAL — the plan doc's "sipWsUrl is NULL
+  on all four" was NEVER true platform-wide, and this is the fact that changes the shape
+  of the work.** Read live 2026-08-17, 29 live tenants: **20 have `sipWsUrl` SET, 9 NULL,
+  5 on `webrtcRouteViaSbc=true`.** The global reaches **only** the five that are
+  `viaSbc=true` **and** `sipWsUrl=null` — **inii mini, Loopcom Demo, B Visible,
+  Displaydex, Gesheft**. The other 20 are already pinned per-tenant to a **direct-PBX**
+  URL (`wss://m.connectcomunications.com:8089/ws`, or the raw IP `wss://209.145.60.79:8089/ws`
+  on the five newest), and four more (NY Garden Sprinkler, Connect, Coat One Seal Coating,
+  Connect Communications) are `sipWsUrl=null` **and** `viaSbc=false`, so they take
+  `PBX_WS_ENDPOINT` and the global never touches them either.
+- ⛔⛔ **PER-TENANT SIP FOR NEW SIGN-UPS IS **NOT BUILT** — it was investigated, and the
+  precedence check FAILED, so it was deliberately stopped before any code was written.**
+  `resolveWebrtcConfig` (`apps/api/src/server.ts:773`) resolves in this order:
+  **`tenant.sipWsUrl` (if non-empty) WINS OUTRIGHT → else if `webrtcRouteViaSbc` then the
+  global `sipPublicWsUrl()` → else `pbxWsEndpoint`**, and only then does
+  `normalizeSipWsUrlHost` rewrite **IP-literal hosts only**. ⛔ **So `tenant.sipWsUrl`
+  takes effect even when `webrtcRouteViaSbc` is false** — proven by code *and* by live
+  data (20 tenants sit on an explicit `sipWsUrl` with `viaSbc=false`). **Therefore
+  stamping new tenants with `wss://sip.loopcom.net/sip` would move every new customer off
+  the direct-to-PBX `:8089` connection and onto the nginx `/sip` 443 proxy route** — a
+  material architectural change for every new account, not a hostname change. **That is
+  Izzy's call to make deliberately and he has not made it.** ⛔ Do not implement this
+  until he does.
+- ⛔ **AND A MISSED CREATION PATH WOULD FAIL PERMANENTLY, NOT SOFTLY.** Nothing sets
+  `sipWsUrl` at tenant creation — **all five creation sites**
+  (`onboarding/onboardingPayment.ts:89`, `onboarding/setupOrchestrator.ts:269`,
+  `pbxExtensionSync.ts:312`, `server.ts:2390`, `server.ts:5557`) create it **null**. It is
+  stamped **later**, by two WebRTC-enable backfills (`server.ts:9511`,
+  `pbxExtensionSync.ts:628`), each writing the **direct-PBX** endpoint under a
+  `!tenantRow.sipWsUrl` guard. **So a creation path that missed the new helper would be
+  pinned to the OLD route forever by the first extension sync** — the rule would fail
+  silently and permanently for that customer. Any implementation must route **all five**
+  through one shared helper and guard it with a test that reads every call site's source.
+  ⛔ Also noted in passing, pre-existing and **not** fixed: `server.ts:9500` canonicalises
+  the IP before persisting and `pbxExtensionSync.ts:620` does **not**, which is why the
+  five newest tenants carry a raw-IP `sipWsUrl` while older ones carry the FQDN.
+- ⛔ **`webrtcRouteViaSbc` is consumed by NO live client.** Every reference outside
+  `apps/api/src` is in `apps/frontend-legacy/portal-v2-legacy/`, which CLAUDE.md already
+  records as dead code (in no compose file, no workspace entry). It is purely a
+  server-side selector for *which fallback* to use — so it cannot be relied on to signal
+  anything to a phone.
 
 - ✅ **`sip.loopcom.net` SERVES SIP.** 101 + `Sec-WebSocket-Protocol: sip`, own Let's
   Encrypt cert (expires 2026-11-14, auto-renewing), port 80 → 301, non-`/sip` → 404.
   **All three pre-existing SIP hostnames still return 101** — additive, no regression.
   `/api/health` 200, portal 200, bad login 401, default TLS server still
   `CN = app.connectcomunications.com`.
-- ✅ **THE FLIP HAS NOW SHIPPED — verified in the container 2026-08-17.**
-  `docker exec app-api-1 sh -c 'echo $SIP_PUBLIC_WS_URL'` reads
-  **`wss://sip.loopcom.net/sip`**, matching `.env.platform:106`. It rode an api
-  deploy exactly as the warning below predicted (the container was on
-  `2e30e13e` by then, well past the `cf8d16ff` that opened the window), so **no
-  further action is needed and nothing here is pending.**
-  ⛔ **What that does and does not mean:** new sign-ins are handed
+- ⛔ **THE FLIP SHIPPED 2026-08-17 AND WAS BACKED OUT THE SAME DAY — this bullet used to
+  say "no further action is needed and nothing here is pending", and that is now WRONG in
+  both directions.** It did ship: it rode an unrelated api deploy exactly as the warning
+  below predicted, and `docker exec app-api-1 sh -c 'echo $SIP_PUBLIC_WS_URL'` **still
+  reads `wss://sip.loopcom.net/sip`** (container built `ed3c561f`, started
+  2026-08-17 21:03 UTC). But **the file no longer agrees** — `.env.platform:106` was
+  restored to `wss://sip.connectcomunications.com/sip` on Izzy's instruction, because a
+  single global value cannot express "new customers only". ⛔ **So the file and the
+  container DISAGREE on purpose, and the next api deploy is what closes it.** Read the
+  owner's-decision bullet at the top of this section before touching any of it.
+  ⛔ **What the live value does and does not mean:** new sign-ins are handed
   `sip.loopcom.net`; **every already-signed-in client keeps its cached
   `sipWsUrl` forever**, so almost nobody has actually moved. Judge who moved by
   the PBX contact list (`pjsip show endpoint T<t>_<ext>_1` reading `Avail`),

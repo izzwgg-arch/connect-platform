@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PanelSession } from "./panelClient";
-import { buildPbxTenant, slugify, type PbxBuildJob } from "./pbxTenantBuild";
+import { addExtensionToTenant, buildPbxTenant, slugify, type PbxBuildJob } from "./pbxTenantBuild";
 
 const CSRF = "deadbeefdeadbeefdeadbeef";
 
@@ -758,4 +758,90 @@ test("garbled portedDid falls back to the single-number build instead of failing
   const route = fake.puts.find((p) => p.cls === "trunk_group")!;
   assert.equal(get(route.fields, "cid_number"), "8455577726");
   assert.equal(fake.inboundRoutes.length, 1);
+});
+
+// ── Adding one extension to a tenant that already exists ─────────────────────
+//
+// The everyday "a new person joined" case. It shares its implementation with
+// buildPbxTenant's per-person loop ON PURPOSE — these tests exist so a future
+// refactor cannot quietly fork a second one, which is the recurring defect of
+// this codebase (two IVR publish paths, two SMS ingest paths).
+
+async function addOne(fake: FakePanel, person: Parameters<typeof addExtensionToTenant>[2]) {
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const built = await buildPbxTenant(s, MAIN, job());
+  const before = { puts: fake.puts.length, imports: fake.csvImports.length, applies: fake.applies };
+  const extId = await addExtensionToTenant(s, built.tenantPath, person);
+  return { fake, extId, before, tenantPath: built.tenantPath };
+}
+
+test("adds one extension to an existing tenant — CSV import + WebRTC, and NO infrastructure is touched", async () => {
+  const { fake, extId, before } = await addOne(new FakePanel(), { name: "Lester Tan", ext: "111", email: "lt@x.com" });
+
+  assert.ok(extId, "returns the panel's internal extension id");
+  assert.equal(fake.csvImports.length, before.imports + 1, "exactly one CSV import");
+  assert.equal(fake.extensions.length, 4, "the three built people plus the new one");
+
+  // ⛔ No trunk / outbound route / route selection / tenant / inbound route.
+  // Adding a person must never re-touch the company's infrastructure.
+  const newPuts = fake.puts.slice(before.puts);
+  for (const cls of ["trunks", "trunk_group", "ars", "tenants", "inbound_route"]) {
+    assert.equal(newPuts.filter((p) => p.cls === cls).length, 0, `must not write ${cls}`);
+  }
+
+  const added = fake.extensions.find((e) => e.ext === "111")!;
+  assert.equal(added.name, "Lester Tan");
+  // ⛔ PJSIP (from the import) + WebRTC (the device the app and computer
+  // register as). An extension without the WebRTC device is desk-phone-only.
+  const users = added.devices.map((d) => d.user);
+  assert.ok(users.includes("111"), "PJSIP device");
+  assert.ok(users.includes("111_1"), "WebRTC device — this is what the app registers as");
+});
+
+test("the new extension carries recording and voicemail on, like every other one", async () => {
+  const { fake } = await addOne(new FakePanel(), { name: "Lester Tan", ext: "111" });
+  const csv = fake.csvImports[fake.csvImports.length - 1];
+  const [header, row] = csv.trim().split("\n");
+  const cols = header.split(",");
+  const cell = (n: string) => row.split(",")[cols.indexOf(n)];
+  assert.equal(cell("extension"), "111");
+  assert.equal(cell("incoming_rec"), "yes");
+  assert.equal(cell("outgoing_rec"), "yes");
+  assert.equal(cell("vm_enabled"), "yes");
+  assert.equal(cell("technology"), "pjsip");
+});
+
+test("re-running it adopts the existing extension — no duplicate import, no duplicate device", async () => {
+  const person = { name: "Lester Tan", ext: "111", email: "lt@x.com" };
+  const { fake, extId, tenantPath } = await addOne(new FakePanel(), person);
+  const afterFirst = { puts: fake.puts.length, imports: fake.csvImports.length };
+
+  const s2 = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const again = await addExtensionToTenant(s2, tenantPath, person);
+
+  assert.equal(again, extId, "adopts the same extension");
+  assert.equal(fake.csvImports.length, afterFirst.imports, "must not re-import");
+  assert.equal(fake.puts.length, afterFirst.puts, "must not re-add the device");
+  assert.equal(fake.extensions.filter((e) => e.ext === "111").length, 1);
+  const users = fake.extensions.find((e) => e.ext === "111")!.devices.map((d) => d.user);
+  assert.equal(new Set(users).size, users.length, "grew duplicate devices");
+});
+
+test("it fires Apply Changes — the line is nothing until the dialplan is regenerated", async () => {
+  const { fake, before } = await addOne(new FakePanel(), { name: "Lester Tan", ext: "111" });
+  assert.equal(fake.applies, before.applies + 1, "exactly one Apply Changes");
+});
+
+test("a hidden error dialog on the device save fails loudly instead of leaving a half-built line", async () => {
+  install(new FakePanel());
+  const fake = new FakePanel();
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const built = await buildPbxTenant(s, MAIN, job());
+  fake.suppressDeviceMarkers = true; // device never appears on the extension
+  await assert.rejects(
+    addExtensionToTenant(s, built.tenantPath, { name: "Lester Tan", ext: "111" }),
+    /device not found on extension 111/i,
+  );
 });
