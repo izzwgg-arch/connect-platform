@@ -65,13 +65,51 @@ function GeneralTab() {
   const [saveMsg, setSaveMsg] = useState("");
   const [displayName, setDisplayName] = useState(user.name);
   const [language, setLanguage] = useState("en");
-  const [pushEnabled, setPushEnabled] = useState(true);
+  // Voicemail-to-email, per extension. Loaded from the server rather than
+  // defaulted, so the control can never show a state the account is not in.
+  const [vmEmail, setVmEmail] = useState<
+    { id: string; extension: string; primaryEmail: string | null; enabled: boolean }[]
+  >([]);
+  const [vmEmailLoaded, setVmEmailLoaded] = useState(false);
+  const [vmEmailBusy, setVmEmailBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await apiGet<{ extensions: typeof vmEmail }>("/me/voicemail-email");
+        if (!cancelled) setVmEmail(res?.extensions || []);
+      } catch {
+        // Leave the list empty; the section renders nothing rather than a lie.
+      } finally {
+        if (!cancelled) setVmEmailLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function toggleVoicemailEmail(id: string, enabled: boolean) {
+    setVmEmailBusy(true);
+    const before = vmEmail;
+    setVmEmail((rows) => rows.map((r) => (r.id === id ? { ...r, enabled } : r)));
+    try {
+      await apiPatch(`/me/voicemail-email/${encodeURIComponent(id)}`, { enabled });
+    } catch {
+      // ⛔ Put it back. A toggle that shows the new state after a failed save is
+      // how someone believes their voicemail emails are on when they are not.
+      setVmEmail(before);
+      setSaveMsg("Couldn't change that — your voicemail email setting is unchanged.");
+    } finally {
+      setVmEmailBusy(false);
+    }
+  }
+
 
   async function handleSave() {
     setSaving(true);
     setSaveMsg("");
     try {
-      await apiPatch("/me/settings", { displayName, language, pushEnabled });
+      await apiPatch("/me/settings", { displayName, language });
       setSaveMsg("Settings saved.");
     } catch {
       setSaveMsg("Save failed — changes may not persist.");
@@ -134,15 +172,35 @@ function GeneralTab() {
             />
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 2 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={pushEnabled}
-                onChange={(e) => setPushEnabled(e.target.checked)}
-                style={{ width: 16, height: 16, cursor: "pointer" }}
-              />
-              Enable push notifications
-            </label>
+            {vmEmailLoaded && vmEmail.length > 0 ? (
+              <div style={{ display: "grid", gap: 6 }}>
+                {vmEmail.map((row) => (
+                  <label
+                    key={row.id}
+                    style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: vmEmailBusy ? "wait" : "pointer" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={row.enabled}
+                      disabled={vmEmailBusy}
+                      onChange={(e) => void toggleVoicemailEmail(row.id, e.target.checked)}
+                      style={{ width: 16, height: 16, cursor: "inherit" }}
+                    />
+                    <span>
+                      Email me my voicemails
+                      {vmEmail.length > 1 ? <span className="muted"> (ext {row.extension})</span> : null}
+                      {row.primaryEmail ? (
+                        <span className="muted" style={{ display: "block", fontSize: 11 }}>to {row.primaryEmail}</span>
+                      ) : (
+                        <span style={{ display: "block", fontSize: 11, color: "var(--warning)" }}>
+                          No email address set for this extension
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       </section>

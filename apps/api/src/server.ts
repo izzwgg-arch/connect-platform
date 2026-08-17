@@ -24974,6 +24974,96 @@ app.get("/me/onboarding-setup-state", async (req, reply) => {
   return reply.send({ show: menus === 0 });
 });
 
+// ── Voicemail-to-email settings ──────────────────────────────────────────────
+// The toggle beside Theme in Settings, and the extra addresses an admin adds on
+// the voicemail page. ⛔ The PBX address (Extension.pbxUserEmail) is ALWAYS a
+// recipient and is not stored here — this table is additional addresses only, so
+// removing one can never stop a person receiving their own voicemail.
+
+/** Extensions this signed-in user may manage voicemail email for. */
+async function voicemailEmailScopeFor(user: any) {
+  const isAdmin = String(user?.role || "") === "TENANT_ADMIN" || String(user?.role || "") === "SUPER_ADMIN";
+  const where: any = { tenantId: user.tenantId, status: "ACTIVE" };
+  if (!isAdmin) where.ownerUserId = user.sub;
+  return { isAdmin, where };
+}
+
+app.get("/me/voicemail-email", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true);
+  if (!user) return;
+  const { isAdmin, where } = await voicemailEmailScopeFor(user);
+  const rows = await (db as any).extension.findMany({
+    where,
+    orderBy: { extNumber: "asc" },
+    select: {
+      id: true, extNumber: true, displayName: true, pbxUserEmail: true, vmEmailEnabled: true,
+      voicemailEmailRecipients: { select: { id: true, email: true }, orderBy: { createdAt: "asc" } },
+    },
+  });
+  return reply.send({
+    canManageOthers: isAdmin,
+    extensions: rows.map((e: any) => ({
+      id: e.id,
+      extension: e.extNumber,
+      name: e.displayName || null,
+      // The address that already receives this mailbox's voicemail today.
+      primaryEmail: e.pbxUserEmail || null,
+      enabled: e.vmEmailEnabled !== false,
+      extraEmails: e.voicemailEmailRecipients || [],
+    })),
+  });
+});
+
+/** Turn voicemail email on or off for one extension. */
+app.patch("/me/voicemail-email/:extensionId", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true);
+  if (!user) return;
+  const body = z.object({ enabled: z.boolean() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const { where } = await voicemailEmailScopeFor(user);
+  const id = String((req.params as any).extensionId || "");
+  const ext = await (db as any).extension.findFirst({ where: { ...where, id }, select: { id: true } });
+  if (!ext) return reply.code(404).send({ error: "extension_not_found" });
+  await (db as any).extension.update({ where: { id: ext.id }, data: { vmEmailEnabled: body.data.enabled } });
+  return reply.send({ ok: true, enabled: body.data.enabled });
+});
+
+/** Add another address to an extension's voicemail email. Admins only. */
+app.post("/me/voicemail-email/:extensionId/recipients", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true);
+  if (!user) return;
+  const { isAdmin, where } = await voicemailEmailScopeFor(user);
+  if (!isAdmin) return reply.code(403).send({ error: "forbidden", detail: "Only an administrator can add extra addresses." });
+  const body = z.object({ email: z.string().trim().email() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_email", detail: "That doesn't look like an email address." });
+  const id = String((req.params as any).extensionId || "");
+  const ext = await (db as any).extension.findFirst({ where: { ...where, id }, select: { id: true, tenantId: true } });
+  if (!ext) return reply.code(404).send({ error: "extension_not_found" });
+  const email = body.data.email.toLowerCase();
+  const created = await (db as any).voicemailEmailRecipient.upsert({
+    where: { extensionId_email: { extensionId: ext.id, email } },
+    create: { tenantId: ext.tenantId, extensionId: ext.id, email, createdById: user.sub },
+    update: {},
+    select: { id: true, email: true },
+  });
+  return reply.send({ ok: true, recipient: created });
+});
+
+/** Remove an extra address. ⛔ Never removes the PBX address — that is not here. */
+app.delete("/me/voicemail-email/:extensionId/recipients/:recipientId", async (req, reply) => {
+  const user = await requirePermission(req, reply, () => true);
+  if (!user) return;
+  const { isAdmin, where } = await voicemailEmailScopeFor(user);
+  if (!isAdmin) return reply.code(403).send({ error: "forbidden" });
+  const id = String((req.params as any).extensionId || "");
+  const ext = await (db as any).extension.findFirst({ where: { ...where, id }, select: { id: true } });
+  if (!ext) return reply.code(404).send({ error: "extension_not_found" });
+  await (db as any).voicemailEmailRecipient.deleteMany({
+    where: { id: String((req.params as any).recipientId || ""), extensionId: ext.id },
+  });
+  return reply.send({ ok: true });
+});
+
 app.get("/me/language", async (req, reply) => {
   const user = await requirePermission(req, reply, () => true); // any signed-in user
   if (!user) return;
