@@ -949,6 +949,7 @@ model Tenant {
   remoteSupportSessions           RemoteSupportSession[]
   lanDiscoveryRuns                LanDiscoveryRun[]
   lanDiscoveredPhones             LanDiscoveredPhone[]
+  voicemailEmailRecipients VoicemailEmailRecipient[]
 }
 
 model User {
@@ -2660,6 +2661,8 @@ model Extension {
   mobileDevices            MobileDevice[]
   userSipAccounts          UserSipAccount[]
 
+  voicemailEmailRecipients VoicemailEmailRecipient[]
+
   @@unique([tenantId, extNumber])
   @@index([tenantId, status])
   @@index([tenantId, ownerUserId])
@@ -2937,6 +2940,24 @@ model ConnectCdr {
   @@index([tenantId, direction, startedAt]) // typed per-tenant KPI queries
 }
 
+/// Extra addresses an admin has added to receive an extension's voicemail email.
+/// The address the PBX already uses lives on Extension.pbxUserEmail and is always
+/// included first - this table is purely ADDITIONAL recipients.
+model VoicemailEmailRecipient {
+  id          String   @id @default(cuid())
+  tenantId    String
+  extensionId String
+  email       String
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+
+  @@unique([extensionId, email])
+  @@index([tenantId])
+}
+
 model Voicemail {
   id             String    @id @default(cuid())
   tenantId       String? // Connect Tenant.id; null = unresolved
@@ -2984,6 +3005,10 @@ model Voicemail {
   // historical backlog can never be emailed.
   emailedAt  DateTime?
   emailError String?
+  /// Why no email was produced: disabled | no_recording | too_short | no_recipient.
+  /// null = an email was queued. Lets the watchdog tell a deliberate skip from a
+  /// failure without guessing, which is what stops the alarm crying wolf.
+  emailSkipReason String?
 
   // ── Local audio copy + audio-gone verdict ──────────────────────────────
   // localAudioPath: filename inside VOICEMAIL_AUDIO_STORAGE_DIR ("<vmId>.<ext>").
