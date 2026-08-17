@@ -9,6 +9,7 @@ import net from "net";
 import dgram from "dgram";
 import { Readable } from "node:stream";
 import nodemailer from "nodemailer";
+import { loadJobAttachments } from "./emailAttachments";
 import { promises as fsp } from "fs";
 import os from "node:os";
 import path from "node:path";
@@ -1075,6 +1076,11 @@ async function sendEmailJobNow(job: any): Promise<void> {
     // carry this — a voicemail email without its recording is worse than none.
     const voicemailAudio = await loadVoicemailAudioAttachment(job).catch(() => null);
     if (voicemailAudio) pdfAttachments.push(voicemailAudio);
+    // Files someone deliberately attached to this job. ⛔ NOT caught: the two
+    // loaders above are derived and regenerable, these ARE the point of the
+    // email — delivering "here are your files" with nothing on it is worse
+    // than failing and retrying. See emailAttachments.ts.
+    pdfAttachments.push(...loadJobAttachments(job));
     const toAddresses = String(job.toEmail || "")
       .split(",")
       .map((e: string) => e.trim())
@@ -1146,6 +1152,9 @@ async function sendEmailJobNow(job: any): Promise<void> {
     // carry this — a voicemail email without its recording is worse than none.
     const voicemailAudio = await loadVoicemailAudioAttachment(job).catch(() => null);
     if (voicemailAudio) pdfAttachments.push(voicemailAudio);
+    // See the matching note on the SendGrid path: deliberate attachments are
+    // never swallowed.
+    pdfAttachments.push(...loadJobAttachments(job));
     await transporter.sendMail({
       from: fromName ? `"${fromName}" <${fromEmail}>` : fromEmail,
       to: job.toEmail,

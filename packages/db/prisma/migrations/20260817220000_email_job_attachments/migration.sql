@@ -1,0 +1,15 @@
+-- General file attachments for EmailJob.
+--
+-- The send pipeline could already attach things it DERIVED for itself (the
+-- invoice PDF, the voicemail recording) but there was no way to say "send this
+-- email with this file on it" — which is why handing a customer a WireGuard
+-- config meant sending it from a personal mailbox.
+--
+-- Bytes are stored in the row as base64 rather than as a path on disk. A path
+-- would need a mounted volume in BOTH api compose blocks, and getting that
+-- wrong is silent data loss that only surfaces at the next deploy (see
+-- AGENT_HANDOFF_ONBOARDING_UPLOADS_VOLUME_2026-08-06). Size is bounded at
+-- creation time in emailAttachments.ts: 5 files, 2 MB each, 5 MB total.
+--
+-- Default '[]' so every existing row and every existing caller is unchanged.
+ALTER TABLE "EmailJob" ADD COLUMN "attachments" JSONB NOT NULL DEFAULT '[]';

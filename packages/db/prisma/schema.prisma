@@ -2361,6 +2361,10 @@ model EmailJob {
   subject          String
   htmlBody         String
   textBody         String
+  /// Files to send with this email: [{ filename, contentType, contentBase64 }].
+  /// Bytes live here rather than on disk on purpose — see emailAttachments.ts.
+  /// Capped at 5 files / 5 MB decoded, enforced when the job is created.
+  attachments      Json           @default("[]")
   status           EmailJobStatus @default(QUEUED)
   attempts         Int            @default(0)
   maxAttempts      Int            @default(5)
