@@ -92,12 +92,41 @@ created** — blocked on the employee's name and email.)
   `action.add_extension` reconciliation — which refuses to report success unless
   the monthly total RISES — will complain on this tenant even though nothing is
   wrong.** Check for a flat rate before quoting any customer a per-extension price.
-- ⏳ **BLOCKED, and it is the whole remaining job:** the employee's **name and
-  email**. Izzy also wants an **invitation email + a TestFlight invite** sent once
-  it exists — so his **email address and whether he is on iPhone or Android** are
-  needed too (TestFlight is iOS-only; Android gets the APK link the invite email
-  already carries). ⛔ Creating the extension is a **PBX write** and needs Izzy's
-  explicit go-ahead; Apply Changes stays his click.
+- ⛔⛔ **`POST /pbx/extensions` CANNOT CREATE AN EXTENSION ON THIS PBX — DO NOT
+  DRIVE IT.** It was one command from being run on a live customer. **0
+  `PBX_EXTENSION_CREATED` and 0 `PBX_EXTENSION_QUEUED` audit rows exist
+  platform-wide** — it has never worked here. It POSTs `<baseUrl>/extensions`
+  against **VitalPBX**, whose own client in this repo throws **`NOT_SUPPORTED` —
+  "VitalPBX public docs do not expose extension create endpoint"**
+  (`vitalpbx/client.ts:550`). ⛔ **The failure is the expensive part:** the route
+  creates the **Connect Extension row FIRST** (`server.ts:9642`), then calls the
+  PBX in a `try` — so a failure answers **202** and leaves a row that is
+  **billable and in the directory for a line that does not exist**, plus a job
+  retrying forever. ⛔ **The portal has no create button at all** (Extensions
+  offers only assign / set-sip-password / sync), and **the agent's
+  `action.add_extension` capability is built on this same route**, so it cannot
+  work here either.
+  ✅ **The real flow is PBX → Connect:** create it in the **panel** (PJSIP **+
+  WebRTC** — ⛔ WebRTC is what the app and computer register, so the 443 route has
+  nothing without it; recording + voicemail on per Izzy's standing rule) → **Apply
+  Changes** → **`POST /pbx/extensions/sync`** → **`POST /admin/users`**
+  (`sendInvite: true`; ✅ it accepts a `tenantId` in the body, so a SUPER_ADMIN
+  service token can drive it cross-tenant — pure DB + email, no PBX).
+  ⛔ `provision-tenant.js` is **whole-tenant only** — no add-one-extension mode.
+- ⛔ **APPLY CHANGES FOR B VISIBLE WOULD BRIEFLY BREAK THREE OTHER CUSTOMERS.**
+  It flushes pending changes for other tenants too, and VitalPBX cannot render the
+  Connect doorway. B Visible itself is safe (**no Connect-mode routes**), but
+  **A plus center (845-782-3064), Connect Communications (845-723-1213) and inii
+  mini (646-984-6023)** are the platform's only Connect-mode numbers and would go
+  to dead air. `rebakeConnectRoutesAfterRegen` only covers applies **Connect**
+  fires (`POST /voice/forwards`); a human pressing the panel button gets the
+  reconciler, so expect **up to ~10 minutes**. Bounded (no longer rate-limited),
+  but do it outside business hours.
+- ⏳ **BLOCKED on one thing only: the extension existing.** Employee is **Lester
+  Tan, lt@bvisible.us, iPhone** (given 2026-08-17). Once the line is on the PBX,
+  the Connect side is sync → create user (sends the invitation email) → add to
+  TestFlight group **"Loopcom Testers"** `fe508ee6-4a3f-49dd-bf53-858839fa2f06`
+  (Apple sends that invite itself — adding the tester IS the whole job).
 - ⛔ **105, 106 and 107 have NO Connect user** (`ownerUserId: null`) — only four
   logins exist on this account. "Add an extension" here has historically meant a
   PBX line with no app login. Confirm which is wanted.

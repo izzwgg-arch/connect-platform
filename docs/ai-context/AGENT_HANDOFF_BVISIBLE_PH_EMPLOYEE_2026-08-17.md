@@ -184,15 +184,82 @@ which is wanted.
 ⛔ **Creating the extension is a PBX WRITE** and the PBX is read-only by standing
 rule — it needs Izzy's explicit go-ahead, and Apply Changes stays his click.
 
-Two sanctioned paths, both replaying the real routes rather than reimplementing
-them (`AGENT_HANDOFF_AGENT_PROVISIONING_2026-08-07.md` §2):
-1. **Portal / assistant chat** — Izzy asks for the extension and confirms with
-   his own password. Everything (PBX line, SIP device, invite token, welcome
-   email with the APK link, audit rows) is byte-identical to clicking the buttons.
-2. **`POST /pbx/extensions` then `POST /admin/users`** signed as the confirming
-   admin. ⛔ `/pbx/extensions` stamps `ownerUserId` with its creator and
-   `/admin/users` then refuses that extension (409 `extension_already_assigned`)
-   — ownership must be handed back in between.
+### ⛔⛔ `POST /pbx/extensions` CANNOT CREATE AN EXTENSION ON THIS PBX — do not drive it
+
+The obvious automated path is a trap, and it was one command from being used on
+a live customer. Established 2026-08-17:
+
+- **It has never once succeeded in production.** `AuditLog` holds **0**
+  `PBX_EXTENSION_CREATED` **and 0** `PBX_EXTENSION_QUEUED` rows platform-wide, and
+  `PbxJob` holds no `CREATE_EXTENSION` row. Every extension on this platform got
+  here another way.
+- **The portal has no caller.** `/pbx/extensions` (the Extensions page) offers
+  only **assign**, **set-sip-password** and **sync** — there is no create button
+  anywhere. The route exists solely for the agent capability.
+- **It would fail by construction.** `server.ts:9648` calls
+  `getWirePbxClient().createExtension`, which POSTs to **`<baseUrl>/extensions`**.
+  B Visible's `PbxInstance` is "Main", `baseUrl https://m.connectcomunications.com`
+  — VitalPBX, which has no such endpoint. The project's own VitalPBX client is
+  explicit: `createExtension` throws **`NOT_SUPPORTED` — "VitalPBX public docs do
+  not expose extension create endpoint"** (`vitalpbx/client.ts:550`).
+- ⛔ **The failure is the expensive part, not the error.** The route creates the
+  **Connect `Extension` row FIRST** (`server.ts:9642`), then calls the PBX inside
+  a `try`. On failure it answers **202** and queues a retry — leaving a row that
+  is **billable and in the directory for a line that does not exist**, plus a job
+  that will retry forever against an endpoint that will never exist. That is the
+  "silently free / silently fake" family, and cleaning it up is the awkward case
+  in `AGENT_HANDOFF_EXTENSION_DELETE_MOBILE_FLAG_2026-08-13.md`.
+- ⛔ The agent's `action.add_extension` capability is built on this route, so
+  **that capability cannot work on this PBX either** — which is consistent with
+  it having been "never walked in a browser."
+
+### The path that actually works
+
+Extensions reach Connect **from** the PBX, not the other way round — which is why
+105, 106 and 107 exist here with no Connect user:
+
+1. **Create the extension in the VitalPBX panel** (a human, or the panel robot's
+   CSV import — `class=menu4`, see `connect-panel-automation-contract`). Izzy's
+   standing per-extension rule: `incoming_rec=yes`, `outgoing_rec=yes`,
+   `vm_enabled=yes`, and **PJSIP + WebRTC devices**. ⛔ **The WebRTC device is
+   not optional here** — it is what the iPhone app and the computer register, so
+   without it the 443 route has nothing to attach to. Extension 107 has no PJSIP
+   device at all and is the cautionary example.
+2. **Apply Changes** — Izzy's click. See the warning below.
+3. **`POST /pbx/extensions/sync`** pulls it into Connect.
+4. **`POST /admin/users`** with `tenantId`, `extensionId`, `role`, name, email,
+   `sendInvite: true` — creates the login and sends the invitation email.
+   ✅ This one **does** accept a `tenantId` in the body
+   (`resolveManagedTenant`), so a SUPER_ADMIN service token can drive it for
+   another tenant. It is pure Connect DB + email, no PBX.
+   ⛔ It refuses an extension that already has an owner (409
+   `extension_already_assigned`), so `ownerUserId` must be null first.
+
+⛔ **`/opt/connect-robot/provision-tenant.js` is whole-tenant only** — it demands
+a company, DID and VoIP.ms credentials and builds trunk → outbound route → ars →
+tenant → extensions → inbound route. There is **no add-one-extension-to-an-
+existing-tenant mode**. Using it for a single extension means writing new
+automation and debuting it on a live customer.
+
+### ⛔ Apply Changes here will briefly break THREE OTHER CUSTOMERS' numbers
+
+Apply Changes flushes pending changes for **other tenants too**, and VitalPBX's
+regenerator cannot render the Connect doorway. B Visible itself is safe — it has
+**no Connect-mode routes at all** — but these three do, and they are what a
+B Visible apply would wipe:
+
+| Number | Tenant |
+|---|---|
+| +1 845-782-3064 | A plus center |
+| +1 845-723-1213 | Connect Communications (our own main number) |
+| +1 646-984-6023 | inii mini |
+
+`rebakeConnectRoutesAfterRegen` closes this window to seconds — but **only for
+applies Connect itself fires** (`POST /voice/forwards`). A human pressing the
+panel button gets the reconciler instead, so expect **up to ~10 minutes** of dead
+air on those three numbers. It is no longer rate-limited, so it will heal; the
+exposure is real but bounded. **Best done outside business hours**, and confirm
+afterwards with `[APPLY_REBAKE]` / reconciler lines in the api log.
 
 Per `connect-panel-automation-contract`, Izzy's standing per-extension rule is
 `incoming_rec=yes`, `outgoing_rec=yes`, `vm_enabled=yes`, and every extension
