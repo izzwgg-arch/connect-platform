@@ -129,6 +129,60 @@ so none of the system's prep existed. Backfilled this session:
   point at ext 101 → no-op confirm) → publish → on "completed": temp
   724-419-8226 retired to the master pool.
 
+### 4b. ✅ IT RAN. Verified 2026-08-17 — arrival→completion, zero human input
+
+**This is the "not proven" item in §6 closing.** The prediction above is what
+happened, to the stage. No human touched anything after the 2026-08-12 backfill.
+
+- **Arrival, 2026-08-13 00:06** — one sweep walked every stage in **31
+  seconds**: `routedAt 00:06:39` → `smsAt 00:06:46` → mapping created
+  `00:06:46.9` → `destCopiedAt 00:06:47` → `publishedAt 00:06:49`.
+  ⛔ **The number arrived FOUR DAYS before the order read completed** — exactly
+  the gap the retirement gate exists for. Gating on arrival would have cut the
+  customer over on Aug 13 and stranded them.
+- **Completion, 2026-08-17 18:24:30Z** — `getLNPStatus` flipped to
+  `completed`, and **11 seconds later** the temp number was retired
+  (`tempRetiredAt 18:24:41.816`, `completedAt 18:24:41.859`).
+- **Verified at the carrier, not from our own flags** (`getDIDsInfo`, this
+  session): ported **9293598299 → `account:344022_Matamih8gmrh`, sms_enabled 1**;
+  temp **7244198226 → `account:344022`** (master spare pool). Order 217946 →
+  `post_status: completed`.
+- **Verified on the PBX** (read-only, `extensions__50-104-dialplan.conf:378`):
+  `exten => _9293598299` renders `Goto(T104_cos-all,101,1)` — the ported number
+  really rings ext 101. The temp route at :370 renders identically (see the
+  leftover below).
+- **Verified by real traffic**: two inbound calls to 9293598299 on 2026-08-17
+  18:11 from 213-935-1789, both `answered`. ⛔ Both were **0–1 s** — that is a
+  robocall/wardialer signature, not a proof of conversation. It proves the
+  number rings and connects; it does not prove anyone has held a call on it.
+- **The watchdog stood down by itself.** Sweeps logged `scanned:1` every 15 min
+  through 18:24:41Z and **nothing since** — the sweep filter drops any row with
+  `portLanding.completedAt`, so silence after completion is the correct
+  behaviour, not a stalled watchdog. ⛔ The log line only fires when the sweep
+  *acts*; absence of the line is not absence of the sweep.
+- **The completion email queued and was SKIPPED**, exactly as designed while the
+  mute stands: `[Connect] Port complete: Matamim — 9293598299 is live`,
+  `ADMIN_ALERT / SKIPPED / ALERTS_MUTED`, 18:24:41.852Z. **Nobody was told.** The
+  timeline is the only record a human can read.
+- ⛔ **A `DidRouteMapping.e164` of `+9293598299` is NOT malformed** — it is
+  missing the country code and it is *supposed* to be. **All 29 mapping rows on
+  the platform are `+<10 digits>`**, human-created and machine-created alike.
+  This was investigated as a suspected bug this session and is house convention.
+  Don't "fix" it; a lone `+1`-prefixed row is what would break lookups.
+  (`TenantSmsNumber.phoneE164` **is** full E.164 — `+19293598299`. The two
+  tables genuinely differ.)
+
+**Left open by design, both needing Izzy:**
+1. The temp number's PBX inbound route (**899, "Main", 7244198226 on tenant
+   104**) is still there and still renders — the documented per-retirement
+   leftover, +$3/mo E911 until someone deletes it in the panel. The DID itself
+   is back in the spare pool, so the route points at a number the tenant no
+   longer owns.
+2. Texting on the ported number is a **shared inbox** (`isTenantDefault: true`,
+   `assignedUserId`/`assignedExtensionId` both null) because there was no temp
+   `TenantSmsNumber` row to copy an assignment from. Predicted in §4; flip it to
+   Joel personally if that's what he wants.
+
 ## 5. Traps this session paid for (don't re-pay)
 
 - ⛔ **The tenant EDIT form has no `name` input** (name is fixed after
@@ -153,11 +207,13 @@ so none of the system's prep existed. Backfilled this session:
 
 ## 6. Open / follow-ups
 
-- ⏳ **The Matamim test itself** — nothing has exercised the build-side
-  dual-number path (only future SYSTEM ports do that; Matamim was
-  hand-backfilled), and no port has yet gone arrival→completion under the
-  watchdog in one automated run. Watch ~Aug 17: timeline should walk
-  arrived → texting → pointing → published → retired without a human.
+- ✅ **The Matamim test is DONE and passed — see §4b** (2026-08-17). A port has
+  now gone arrival→completion under the watchdog with no human input, verified
+  at the carrier, on the PBX and by real inbound calls.
+  ⏳ **Still unexercised: the build-side dual-number path.** Matamim was
+  hand-backfilled, so `pbxTenantBuild`'s "prepare BOTH numbers" code has never
+  run for real — only a future SYSTEM-filed port does that. **§2A remains
+  unproven**; don't read §4b as covering it.
 - Completion/rejection emails are ALERTS_MUTED — decide whether ports
   deserve an unmuted channel (they're rare and actionable).
 - Retired temp numbers leave their PBX inbound route behind (+$3/mo E911

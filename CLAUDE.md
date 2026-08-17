@@ -1920,15 +1920,38 @@ own port — the first sweep landed it end-to-end, temp number retired, no human
   `ALERTS_MUTED`.** They queue and are skipped; the sign-up timeline is the
   record. A rejected port needs a human and nobody is emailed while the mute
   stands.
-- ⏳ **Matamim is the staged first start-to-finish test** (submission
-  `cmsey1yel0002o4xoogh8gmrh`, PBX tenant 104): port **217946 →
-  929-359-8299, FOC 2026-08-17**. ⛔ The wizard had recorded the WRONG number
-  (8456282646) — corrected on the submission. Hand-backfilled because the
-  port was filed manually: tenant lists both numbers, route 241
-  "Main ported" → ext 101 (own destination row), outbound CID now the ported
-  number, watchdog tracking (`lastPortStatus: foc_received`). Around Aug 17
-  the timeline should walk arrived → texting → pointing → published →
-  (on completed) temp 724-419-8226 retired — with zero human input.
+- ✅ **MATAMIM LANDED ITSELF — the automation is PROVEN end to end (2026-08-17).**
+  Submission `cmsey1yel0002o4xoogh8gmrh`, PBX tenant 104, port **217946 →
+  929-359-8299**. **No human touched anything** after the 2026-08-12 backfill.
+  One sweep walked **arrival → texting → mapping → destination copy → publish in
+  31 seconds** (2026-08-13 00:06); the order read `completed` at 18:24:30Z on
+  Aug 17 and the temp number was retired **11 seconds later**. Verified at the
+  carrier, not from our own flags: ported **9293598299 → `344022_Matamih8gmrh`,
+  sms_enabled 1**; temp **7244198226 → `account:344022`** (spare pool). Verified
+  on the PBX: `exten => _9293598299` renders `Goto(T104_cos-all,101,1)`. Two real
+  inbound calls answered on it — ⛔ both **0–1 s** (robocall shape), so it proves
+  the number rings, **not** that anyone has held a call on it. Full evidence in
+  **§4b** of the handoff.
+  ⛔ **THE NUMBER ARRIVED FOUR DAYS BEFORE THE ORDER SAID COMPLETED** — this is
+  exactly why retirement gates on the ORDER, never on arrival. Gating on arrival
+  would have cut the customer over on Aug 13.
+  ⛔ **The watchdog going silent afterwards is CORRECT, not a stall** — the sweep
+  filter drops any row with `portLanding.completedAt`, and the log line only
+  fires when a sweep *acts*.
+  ⛔ **`DidRouteMapping.e164` is `+<10 digits>` with NO country code, on all 29
+  rows platform-wide** — `+9293598299` is house convention, not a bug (chased as
+  one this session). `TenantSmsNumber.phoneE164` **is** full E.164. The two
+  tables genuinely differ; don't "fix" either.
+  ⏳ **Two leftovers, both needing Izzy:** the temp number's PBX inbound route
+  (**899 "Main"** on tenant 104) still renders and costs **+$3/mo E911** until
+  deleted in the panel — it now points at a number the tenant no longer owns; and
+  texting on the ported number is a **shared inbox** (no temp SMS row existed to
+  copy an assignment from), so flip it to Joel personally if that's wanted.
+  ⛔ Nobody was emailed: the completion mail queued and was **SKIPPED
+  `ALERTS_MUTED`**. The sign-up timeline is the only record a human can read.
+  ⏳ **Still unproven: the build-side dual-number path** (`pbxTenantBuild`'s
+  "prepare BOTH numbers"). Matamim was hand-backfilled, so only a future
+  SYSTEM-filed port exercises it.
 - **Per-retirement leftover:** the temp number's old PBX inbound route stays
   (panel deletes have no captured contract) and counts **$3/mo E911** until
   deleted in the panel. First one: inii mini's "Main" 8452605692 on tenant 105.
