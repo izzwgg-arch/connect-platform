@@ -21,14 +21,14 @@ function build(extra: Partial<typeof BASE> & { androidApkUrl?: string | null } =
 test("logo is an absolute https URL — a relative path or data: URI cannot load in email", () => {
   const url = brandLogoUrl();
   assert.match(url, /^https:\/\//, "must be absolute");
-  assert.match(url, /\/brand\/loopcom\/loopcom-wordmark-560\.png$/);
+  assert.match(url, /\/brand\/loopcom\/loopcom-wordmark-email-336\.png$/);
 });
 
 test("logo url honours the deployment's public origin", () => {
   const prev = process.env.PORTAL_PUBLIC_URL;
   process.env.PORTAL_PUBLIC_URL = "https://portal.example.com/";
   try {
-    assert.equal(brandLogoUrl(), "https://portal.example.com/brand/loopcom/loopcom-wordmark-560.png");
+    assert.equal(brandLogoUrl(), "https://portal.example.com/brand/loopcom/loopcom-wordmark-email-336.png");
   } finally {
     if (prev === undefined) delete process.env.PORTAL_PUBLIC_URL;
     else process.env.PORTAL_PUBLIC_URL = prev;

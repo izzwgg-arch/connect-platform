@@ -105,7 +105,14 @@ export function brandLogoUrl(): string {
     || process.env.APP_PUBLIC_URL
     || "https://app.connectcomunications.com"
   ).replace(/\/+$/, "");
-  return `${origin}/brand/loopcom/loopcom-wordmark-560.png`;
+  // ⛔ The EMAIL asset, not the portal one. Mail clients refetch this every time
+  // a message is opened, and the email renders it at 168px — the 560px portal
+  // file was 81 KB for no visible gain. This is 336px (a true 2x) at 34 KB,
+  // same pixels, just not three times more than anyone sees.
+  // ⛔ Do NOT swap in a colour-quantised version to shrink it further: those
+  // top out at alpha 253, so the logo renders faintly translucent — the wrong
+  // direction on a white background where it already reads soft.
+  return `${origin}/brand/loopcom/loopcom-wordmark-email-336.png`;
 }
 
 /**
