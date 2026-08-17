@@ -172,6 +172,53 @@ happened, to the stage. No human touched anything after the 2026-08-12 backfill.
   (`TenantSmsNumber.phoneE164` **is** full E.164 — `+19293598299`. The two
   tables genuinely differ.)
 
+### 4c. ✅ The customer is told now (2026-08-17, `32dfccfb`, api DEPLOYED)
+
+Matamim's landing exposed the gap: **the customer was told nothing.** The
+completion mail is an `ADMIN_ALERT` to the owner, the send door drops every one
+of those, so the person whose number moved found out by dialling it.
+
+- **`apps/api/src/onboarding/portCompleteEmail.ts`** — `buildPortCompleteEmail()`
+  + the new type **`PORT_COMPLETE`**. Queued in `portLanding.ts` §6b beside the
+  owner alert, `toEmail` = `mainEmail || billingEmail`, `tenantId` = the
+  customer's own tenant.
+- ⛔⛔ **THE TYPE IS THE WHOLE FEATURE.** On `ADMIN_ALERT` this email would be
+  built, log nothing, and never arrive — the most expensive shape of bug in this
+  repo. `portCompleteEmail.test.ts` asserts the type can never be that.
+  **The owner's alert is deliberately untouched and still muted**: muting his
+  must not mute theirs, and vice versa.
+- ⛔ **Failure modes are all recorded, never silent** — no contact email, or an
+  insert that throws, each write a timeline line ("the customer was NOT told" /
+  "tell them by hand"), and **neither can block the landing**. Silence would be
+  indistinguishable from a delivered email.
+- ⛔ **The temp-number paragraph drops out when there was no temp number.**
+  Telling a customer to stop using a number they never had is worse than saying
+  nothing.
+- **Copy is option C of three mockups**, Izzy's pick:
+  <https://claude.ai/code/artifact/6cc32750-47dc-401c-a466-b3bb1f15f6b5>.
+  Four sentences, no button, no support card — **"reply to this email" is the
+  whole support path**, which is what keeps it working without depending on a
+  mailbox nobody has created. Replies land at the platform sender,
+  `support@connectcomunications.com` (`EmailProviderConfig.replyTo` is null).
+- ⛔ **The billing shell is now reusable rather than copied a third time.**
+  `emailShell` is exported from `billing/emailTemplates.ts` with `eyebrow` /
+  `footerNote` / `includeSupportBlock`, **every one defaulting to the billing
+  behaviour**; all **eight** billing emails were verified **byte-identical**
+  against `git show HEAD:` of the pre-change file. `billingEmailTemplates.test.ts`
+  guards the defaults. The invite shell in `userEmailTemplates.ts` stays separate
+  as before.
+- ⏳ **NOT PROVEN: nobody has received it.** 11 builder tests + 5 caller tests
+  (⛔ the caller ones matter most — a builder-only test passes straight through a
+  wiring bug, which is how the APK link went missing from every self-service
+  sign-up), onboarding suite 174/174, api typecheck 75 errors = the exact
+  pre-existing baseline, and the deployed container rendering the real email.
+  **The next real port is the acceptance test** — Matamim's is already complete
+  and will not re-fire.
+- ⚠️ Suite note: the api suite now shows a flaky **`userEmailTemplates.invite`**
+  failure that passes in isolation and is **not** from this work (it fails with
+  these files removed too). The documented 7 `pbxTenantDirectorySync` failures
+  are still there. Totals fluctuate 8–9 between runs.
+
 **Left open by design, both needing Izzy:**
 1. The temp number's PBX inbound route (**899, "Main", 7244198226 on tenant
    104**) is still there and still renders — the documented per-retirement

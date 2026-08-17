@@ -887,9 +887,25 @@ row touched, no telephony restart, no customer contacted, no PBX interaction.)
   **All three pre-existing SIP hostnames still return 101** — additive, no regression.
   `/api/health` 200, portal 200, bad login 401, default TLS server still
   `CN = app.connectcomunications.com`.
-- ⛔⛔ **BUT CLIENTS ARE STILL BEING HANDED THE OLD HOSTNAME.** `.env.platform:106` reads
-  `wss://sip.loopcom.net/sip`; **the running `app-api-1` still reads
-  `wss://sip.connectcomunications.com/sip`.** The flip has NOT taken effect.
+- ✅ **THE FLIP HAS NOW SHIPPED — verified in the container 2026-08-17.**
+  `docker exec app-api-1 sh -c 'echo $SIP_PUBLIC_WS_URL'` reads
+  **`wss://sip.loopcom.net/sip`**, matching `.env.platform:106`. It rode an api
+  deploy exactly as the warning below predicted (the container was on
+  `2e30e13e` by then, well past the `cf8d16ff` that opened the window), so **no
+  further action is needed and nothing here is pending.**
+  ⛔ **What that does and does not mean:** new sign-ins are handed
+  `sip.loopcom.net`; **every already-signed-in client keeps its cached
+  `sipWsUrl` forever**, so almost nobody has actually moved. Judge who moved by
+  the PBX contact list (`pjsip show endpoint T<t>_<ext>_1` reading `Avail`),
+  never by a client's own "registered".
+  ⛔ **This makes retiring `sip.connectcomunications.com` MORE dangerous, not
+  less** — clients still hold it cached, and it must never be retired on a
+  schedule.
+  ⛔ *(Historical, kept because the lesson stands: this line used to read
+  "clients are still being handed the old hostname". An env-only change cannot
+  trigger a rebuild, so it sat staged on disk until an unrelated api deploy
+  carried it — which is exactly why an env change is only ever proven by
+  `docker exec`, never by a deploy's exit line.)*
 - ⛔⛔ **THE TRAP THAT CAUSED IT — A DEPLOY THAT PRINTS `success` AND CHANGES NOTHING.**
   `deploy-direct.sh api` exited **`success`** while logging, mid-output,
   `skip=unrelated_paths` → *"no api-relevant paths changed — skipping build/restart"*.
@@ -1947,8 +1963,33 @@ own port — the first sweep landed it end-to-end, temp number retired, no human
   deleted in the panel — it now points at a number the tenant no longer owns; and
   texting on the ported number is a **shared inbox** (no temp SMS row existed to
   copy an assignment from), so flip it to Joel personally if that's wanted.
-  ⛔ Nobody was emailed: the completion mail queued and was **SKIPPED
-  `ALERTS_MUTED`**. The sign-up timeline is the only record a human can read.
+  ✅ **THE CUSTOMER IS NOW TOLD — built and DEPLOYED 2026-08-17 (`32dfccfb`,
+  container-verified).** Until today the only completion mail was the owner's
+  **`ADMIN_ALERT`, which the send door drops** — so the person whose number moved
+  found out by trying it. `portCompleteEmail.ts` adds a short customer email on
+  the new type **`PORT_COMPLETE`**, addressed to `mainEmail` (falling back to
+  `billingEmail`) and billed to **their own tenant**, queued at the completion
+  stage beside the owner alert.
+  ⛔⛔ **THE TYPE IS THE ENTIRE POINT — never put a customer email on
+  ADMIN_ALERT.** It would build clean, log clean and never arrive; a test
+  asserts `PORT_COMPLETE_EMAIL_TYPE !== "ADMIN_ALERT"`. **The owner's alert is
+  unchanged and still muted** — muting his must never mute theirs.
+  ⛔ The temp-number paragraph **drops out when there was no temp number**, a
+  missing contact email and a failed insert are both **recorded on the timeline**
+  (silence is indistinguishable from a delivered email), and neither can block
+  the landing. Wording is Izzy's pick (option C of the three mockups,
+  <https://claude.ai/code/artifact/6cc32750-47dc-401c-a466-b3bb1f15f6b5>).
+  ⛔ **The billing shell is now REUSABLE, not copied** —
+  `billing/emailTemplates.ts`'s `emailShell` is exported with `eyebrow` /
+  `footerNote` / `includeSupportBlock`, **all defaulting to the billing
+  behaviour**; all **eight** billing emails were proven **byte-identical**
+  against the pre-change file. Do not make a third copy, and do not "simplify"
+  those defaults — nine live billing emails ride them.
+  ⏳ **NOT PROVEN: no customer has received it.** Proven as 11 new builder tests
+  + 5 caller tests (the landing actually queues it — a builder-only test passes
+  straight through a wiring bug), the full onboarding suite 174/174, and the
+  deployed container rendering the real email. **The next real port is the
+  acceptance test**; Matamim's already completed, so it will not re-fire.
   ⏳ **Still unproven: the build-side dual-number path** (`pbxTenantBuild`'s
   "prepare BOTH numbers"). Matamim was hand-backfilled, so only a future
   SYSTEM-filed port exercises it.
