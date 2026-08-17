@@ -249,7 +249,7 @@ export async function linkSolaTokenToPaymentMethod(input: {
   await deps.logEvent({
     tenantId,
     type: "billing.sola_external_token_linked",
-    message: "Sola vault token linked to Connect PaymentMethod. No charge. Old Sola schedule unchanged.",
+    message: "Sola vault token linked to Loopcom PaymentMethod. No charge. Old Sola schedule unchanged.",
     metadata: {
       linkId: input.linkId,
       solaScheduleId: link.solaScheduleId,
@@ -358,10 +358,10 @@ export async function getBillingCutoverReadiness(input: {
   if (!importedScheduleMapped) blockers.push("No Sola schedule mapped to this tenant.");
   if (!paymentMethodLinked) blockers.push("Card token not yet linked — run Link card token first.");
   if (connectAutopayEnabled && nonCutoverActiveLinks.length > 0)
-    blockers.push("Connect autopay is already enabled while old Sola schedule is active. Double-charge risk.");
+    blockers.push("Loopcom autopay is already enabled while old Sola schedule is active. Double-charge risk.");
   if (connectAutopayEnabled && !nonCutoverActiveLinks.length) {
     // Nothing to cut over; already done or Connect autopay is from another source
-    warnings.push("Connect autopay is already enabled for this tenant.");
+    warnings.push("Loopcom autopay is already enabled for this tenant.");
   }
 
   if (oldSolaScheduleActive && !connectAutopayEnabled) {
@@ -477,7 +477,7 @@ export async function takeOverBillingFromSola(
   await d.logEvent({
     tenantId: input.tenantId,
     type: "billing.sola_cutover_started",
-    message: "Operator initiated Connect billing takeover from Sola.",
+    message: "Operator initiated Loopcom billing takeover from Sola.",
     metadata: {
       operatorId: input.operatorId,
       solaScheduleLinkId: link.id,
@@ -506,7 +506,7 @@ export async function takeOverBillingFromSola(
     await d.logEvent({
       tenantId: input.tenantId,
       type: "billing.sola_schedule_disable_failed",
-      message: "Failed to disable old Sola recurring schedule. Connect autopay NOT enabled.",
+      message: "Failed to disable old Sola recurring schedule. Loopcom autopay NOT enabled.",
       metadata: {
         operatorId: input.operatorId,
         solaScheduleLinkId: link.id,
@@ -603,7 +603,7 @@ export async function takeOverBillingFromSola(
   await d.logEvent({
     tenantId: input.tenantId,
     type: "billing.connect_autopay_enabled",
-    message: "Connect autopay enabled after successful Sola schedule disable.",
+    message: "Loopcom autopay enabled after successful Sola schedule disable.",
     metadata: {
       operatorId: input.operatorId,
       paymentMethodId: pm.id,
@@ -633,7 +633,7 @@ export async function takeOverBillingFromSola(
   await d.logEvent({
     tenantId: input.tenantId,
     type: "billing.sola_cutover_completed",
-    message: "Billing cutover to Connect complete. No immediate charge created.",
+    message: "Billing cutover to Loopcom complete. No immediate charge created.",
     metadata: {
       operatorId: input.operatorId,
       solaScheduleLinkId: link.id,

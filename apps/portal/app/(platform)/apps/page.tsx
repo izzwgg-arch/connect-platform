@@ -12,10 +12,10 @@ export default function AppsPage() {
       <section className="grid two">
         <AppDownloadCard
           variant="mobile"
-          title="ConnectComms Mobile"
+          title="Loopcom Mobile"
           description="Android APK and iOS App Store access for extension login and on-the-go calling."
         />
-        <AppDownloadCard title="ConnectComms Desktop" description="Desktop softphone rollout channel for Windows and macOS users." />
+        <AppDownloadCard title="Loopcom Desktop" description="Desktop softphone rollout channel for Windows and macOS users." />
       </section>
       <section className="panel">
         <h3>Operations Apps</h3>

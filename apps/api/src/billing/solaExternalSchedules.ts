@@ -507,7 +507,7 @@ export async function mapSolaExternalSchedule(input: {
   await logTenant({
     tenantId: input.tenantId,
     type: "billing.sola_external_schedule_mapped",
-    message: "Sola recurring schedule linked to Connect tenant (no charge)",
+    message: "Sola recurring schedule linked to Loopcom tenant (no charge)",
     metadata: {
       linkId: input.linkId,
       solaScheduleId: link.solaScheduleId,

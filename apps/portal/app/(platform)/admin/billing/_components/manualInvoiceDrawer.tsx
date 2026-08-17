@@ -521,7 +521,7 @@ export function ManualInvoiceDrawer({
                     checked={markPaid}
                     onChange={(e) => setMarkPaid(e.target.checked)}
                   />
-                  Mark as paid immediately (payment already received outside Connect)
+                  Mark as paid immediately (payment already received outside Loopcom)
                 </label>
                 {markPaid && (
                   <div

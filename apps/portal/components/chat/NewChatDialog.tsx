@@ -55,7 +55,7 @@ export function NewChatDialog({
         <header className="cc-dialog-head">
           <div>
             <h3>New chat</h3>
-            <p>Start an SMS thread or internal Connect conversation.</p>
+            <p>Start an SMS thread or internal Loopcom conversation.</p>
           </div>
           <button type="button" className="cc-icon-btn" onClick={onClose}><X size={18} /></button>
         </header>

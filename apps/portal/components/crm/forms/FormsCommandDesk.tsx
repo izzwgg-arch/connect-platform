@@ -749,7 +749,7 @@ function UploadFormModal({ onClose, onUploaded }: { onClose: () => void; onUploa
             <div className="min-w-0">
               <p className="forms-upload-modal-eyebrow">Forms library</p>
               <h2 id="forms-upload-title">Upload PDF form</h2>
-              <p>Bring a reusable PDF into Connect, then map signer fields and CRM auto-fill tokens.</p>
+              <p>Bring a reusable PDF into Loopcom, then map signer fields and CRM auto-fill tokens.</p>
             </div>
             <button type="button" onClick={onClose} className="forms-upload-modal-close" aria-label="Close upload form">
               <X className="h-4 w-4" />

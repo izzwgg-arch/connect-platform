@@ -277,11 +277,11 @@ export class VitalPbxClient {
         method: endpoint.method,
         path: endpoint.path,
         errorCode: "PBX_MUTATION_BLOCKED",
-        message: `Blocked PBX config mutation '${endpointKey}' — Connect is in PBX read-only safe mode`,
+        message: `Blocked PBX config mutation '${endpointKey}' — Loopcom is in PBX read-only safe mode`,
       });
       throw makeVitalPbxError(
         `Blocked PBX configuration change '${endpointKey}' (${endpoint.method} ${endpoint.path}). ` +
-          `Connect runs in PBX READ-ONLY SAFE MODE and must NOT modify the PBX without explicit operator permission. ` +
+          `Loopcom runs in PBX READ-ONLY SAFE MODE and must NOT modify the PBX without explicit operator permission. ` +
           `To intentionally allow a specific, human-authorized operation, set PBX_ALLOW_CONFIG_MUTATIONS=1 on the server ` +
           `(or construct the client with allowConfigMutations: true).`,
         "PBX_MUTATION_BLOCKED",

@@ -298,7 +298,7 @@ export default function SettingsEmailPage() {
                   </div>
                   <p className="gw-hint">
                     Recommended: Google <strong>App password</strong> with SMTP — <code>smtp.gmail.com</code>, port{" "}
-                    <code>587</code>, STARTTLS (TLS). OAuth Gmail API can be enabled later; Connect stores refresh tokens
+                    <code>587</code>, STARTTLS (TLS). OAuth Gmail API can be enabled later; Loopcom stores refresh tokens
                     encrypted like other secrets.
                   </p>
                   <p className="gw-hint" style={{ marginTop: 8 }}>
@@ -324,7 +324,7 @@ export default function SettingsEmailPage() {
                   <div className="gw-grid">
                     <div className="gw-field">
                       <label>From name</label>
-                      <input className="input" value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="Connect Communications" />
+                      <input className="input" value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="Loopcom" />
                     </div>
                     <div className="gw-field">
                       <label>From email</label>
@@ -425,7 +425,7 @@ export default function SettingsEmailPage() {
 
             <section className="gw-card">
               <h3>Test email</h3>
-              <p className="gw-hint">Sends &quot;Connect Communications test email&quot; through your saved provider configuration (same path as production mail).</p>
+              <p className="gw-hint">Sends &quot;Loopcom test email&quot; through your saved provider configuration (same path as production mail).</p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12, alignItems: "flex-end" }}>
                 <div style={{ flex: "1 1 240px" }}>
                   <label className="muted" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>

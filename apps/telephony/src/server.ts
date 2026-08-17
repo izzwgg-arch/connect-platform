@@ -27,7 +27,7 @@ async function main() {
       amiPort: env.AMI_PORT,
       ariBase: env.ARI_BASE_URL,
     },
-    "ConnectComms telephony service starting",
+    "Loopcom telephony service starting",
   );
 
   // Confirm loaded credentials (username only — never log password)

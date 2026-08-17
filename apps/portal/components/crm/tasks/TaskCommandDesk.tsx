@@ -52,7 +52,7 @@ const DEV_TASK_ROWS: CrmTask[] = [
     updatedAt: "2026-06-05T19:20:00.000Z",
     assignedTo: { id: "dev-user", displayName: "Local Dev" },
     createdBy: { id: "dev-user", displayName: "Local Dev" },
-    contact: { id: "dev-contact-side-panel", displayName: "Side Panel QA Contact", company: "Connect QA" },
+    contact: { id: "dev-contact-side-panel", displayName: "Side Panel QA Contact", company: "Loopcom QA" },
   },
   {
     id: "dev-task-live-call",

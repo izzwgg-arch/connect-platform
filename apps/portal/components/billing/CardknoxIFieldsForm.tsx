@@ -251,7 +251,7 @@ export function CardknoxIFieldsForm({
     <form ref={formRef} id={formId} className={formClass} onSubmit={onSubmit}>
       {secureNote ?? (
         <p className="billing-pay-secure-note">
-          Card details are entered in a PCI-compliant secure field hosted by our payment processor. Connect never sees or stores your full card number or CVV.
+          Card details are entered in a PCI-compliant secure field hosted by our payment processor. Loopcom never sees or stores your full card number or CVV.
         </p>
       )}
       <label className="billing-field-cardholder">

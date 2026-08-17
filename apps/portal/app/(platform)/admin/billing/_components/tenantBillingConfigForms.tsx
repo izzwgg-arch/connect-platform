@@ -501,7 +501,7 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
         <label>
           Tax calculation provider
           <select name="taxProviderId" defaultValue={taxProviderId}>
-            <option value="tax_profile_v1">Tax profile (configurable rates in Connect)</option>
+            <option value="tax_profile_v1">Tax profile (configurable rates in Loopcom)</option>
             <option value="external_telecom_stub">External telecom stub (no tax lines — placeholder)</option>
           </select>
         </label>
@@ -636,7 +636,7 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
             }
             const pin = String(form.get("webhookSecret") || "").trim();
             if (mode === "prod" && !pin && !(config?.masked?.webhookSecret === "********")) {
-              window.alert("Production mode requires a Webhook Verification PIN (same value in Connect and in SOLA postback security).");
+              window.alert("Production mode requires a Webhook Verification PIN (same value in Loopcom and in SOLA postback security).");
               return;
             }
             await apiPut(`/admin/billing/platform/tenants/${detail.tenant.id}/sola-config`, {

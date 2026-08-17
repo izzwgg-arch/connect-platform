@@ -144,7 +144,7 @@ function regulatoryNotices(settings: any, row: any): string[] {
   if (supportEmail || supportPhone) {
     notices.push(`For billing questions, disputes, or remittance support, contact ${[supportEmail, supportPhone].filter(Boolean).join(" or ")}. Include invoice ${row.invoiceNumber || row.id} with your request.`);
   } else {
-    notices.push(`For billing questions, disputes, or remittance support, contact your Connect billing administrator and include invoice ${row.invoiceNumber || row.id}.`);
+    notices.push(`For billing questions, disputes, or remittance support, contact your Loopcom billing administrator and include invoice ${row.invoiceNumber || row.id}.`);
   }
 
   return [...notices, ...splitPlainText(settings?.invoiceFooterNote)];
@@ -226,7 +226,8 @@ export default function BillingInvoiceDetailPage() {
             <article className="invoice-document" aria-label={`Invoice ${row.invoiceNumber || row.id}`}>
               <header className="invoice-hero">
                 <div className="invoice-brand-lockup">
-                  <img src="/connect-logo.png" alt="Connect Communications" className="invoice-logo" />
+                  {/* The invoice document renders on white in every theme, so the deep-ink lockup is always correct. */}
+                  <img src="/loopcom-invoice.png" alt="Loopcom" className="invoice-logo" />
                   <div>
                     <p className="invoice-eyebrow">Enterprise VoIP billing</p>
                     <h1>Invoice</h1>
@@ -242,7 +243,7 @@ export default function BillingInvoiceDetailPage() {
               <section className="invoice-command-grid">
                 <div className="invoice-party-card">
                   <span className="invoice-section-kicker">Bill from</span>
-                  <h2>{settingsData?.invoiceCompanyName || "Connect Communications"}</h2>
+                  <h2>{settingsData?.invoiceCompanyName || "Loopcom"}</h2>
                   {settingsData?.invoiceSupportEmail ? <p>{settingsData.invoiceSupportEmail}</p> : null}
                   {settingsData?.invoiceSupportPhone ? <p>{settingsData.invoiceSupportPhone}</p> : null}
                 </div>

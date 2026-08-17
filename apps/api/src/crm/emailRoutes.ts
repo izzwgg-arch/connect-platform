@@ -825,9 +825,9 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "invalid_payload", detail: "valid toEmail required" });
     }
     const to = requestedTo || sender.emailAddress;
-    const subject = "Connect CRM test email";
+    const subject = "Loopcom CRM test email";
     const bodyText = [
-      "This is a test email from Connect CRM.",
+      "This is a test email from Loopcom CRM.",
       "",
       "Reply directly to this message to verify CRM reply tracking for this sender.",
     ].join("\n");

@@ -43,7 +43,7 @@ export default function TrackingIntegrationsPage() {
 
         <CRMCard>
           <div className="mb-2 flex items-center gap-2"><Phone size={16} className="text-crm-accent" /><h2 className="text-sm font-semibold text-crm-text">Telephony &amp; SMS</h2><span className="ml-auto"><Status tone="ok">reused</Status></span></div>
-          <p className="text-sm text-crm-muted">Delivery reuses Connect's existing SMS and PBX/voice — no parallel stack. SMS sends stay in <b>test mode</b> and voice/IVR is <b>read-only</b> (no VitalPBX writes) until carrier/compliance sign-off.</p>
+          <p className="text-sm text-crm-muted">Delivery reuses Loopcom's existing SMS and PBX/voice — no parallel stack. SMS sends stay in <b>test mode</b> and voice/IVR is <b>read-only</b> (no VitalPBX writes) until carrier/compliance sign-off.</p>
           <div className="mt-3 flex items-center justify-between text-xs">
             <span className="text-crm-muted">Voice mode</span>
             <span className="font-mono text-crm-text">{cfg?.voiceMode || "PRERECORDED_NUMBER_PLAYBACK"}</span>

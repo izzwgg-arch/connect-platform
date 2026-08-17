@@ -311,7 +311,7 @@ export class CpuConsumerTracker {
     if (dockerConsumers.length > 0) {
       this.lastSnapshot = {
         scope: "docker_containers",
-        scopeNote: "Per-container CPU from Docker (all Connect services on this host)",
+        scopeNote: "Per-container CPU from Docker (all Loopcom services on this host)",
         consumers: dockerConsumers,
         sampledAt,
       };

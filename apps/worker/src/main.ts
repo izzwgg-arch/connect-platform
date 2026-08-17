@@ -2289,7 +2289,7 @@ async function getAndConsumeBillingScheduleOverride(
         invoiceId,
         runId,
         type: "billing.autopay_skipped_schedule_override",
-        message: "Connect autopay skipped this month — skipNextPayment override consumed.",
+        message: "Loopcom autopay skipped this month — skipNextPayment override consumed.",
         metadata: {
           reason: override.skipReason || "operator_override",
           skipNextPaymentConsumed: true,
@@ -2311,7 +2311,7 @@ async function getAndConsumeBillingScheduleOverride(
           invoiceId,
           runId,
           type: "billing.autopay_skipped_future_payment_date",
-          message: `Connect autopay skipped — next payment date override is ${override.nextPaymentDate}, not yet reached.`,
+          message: `Loopcom autopay skipped — next payment date override is ${override.nextPaymentDate}, not yet reached.`,
           metadata: {
             nextPaymentDate: override.nextPaymentDate,
             today: today.toISOString(),
@@ -2491,7 +2491,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               tenantId: setting.tenantId,
               runId: run.id,
               type: "billing.autopay_skipped_not_due_yet",
-              message: "Connect autopay skipped — scheduled charge time has not arrived.",
+              message: "Loopcom autopay skipped — scheduled charge time has not arrived.",
               metadata: {
                 reason: "not_due_yet",
                 scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
@@ -2516,7 +2516,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               tenantId: setting.tenantId,
               runId: run.id,
               type: "billing.autopay_skipped_active_sola_schedule",
-              message: `Connect autopay skipped — tenant has active Sola recurring schedule not yet cut over. Schedule link ID: ${activeSolaBlock.linkId}. Disable old schedule and complete cutover before Connect charges.`,
+              message: `Loopcom autopay skipped — tenant has active Sola recurring schedule not yet cut over. Schedule link ID: ${activeSolaBlock.linkId}. Disable old schedule and complete cutover before Loopcom charges.`,
               metadata: {
                 solaScheduleLinkId: activeSolaBlock.linkId,
                 solaScheduleId: activeSolaBlock.solaScheduleId,
@@ -2539,7 +2539,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               tenantId: setting.tenantId,
               runId: run.id,
               type: "billing.autopay_skipped_sola_cutover_not_due_yet",
-              message: `Connect autopay skipped — Sola cutover complete but nextConnectChargeAt has not been reached. Current period was already paid by Sola. First Connect charge will be at ${cutoverChargeBlock.nextConnectChargeAt.toISOString()}.`,
+              message: `Loopcom autopay skipped — Sola cutover complete but nextConnectChargeAt has not been reached. Current period was already paid by Sola. First Loopcom charge will be at ${cutoverChargeBlock.nextConnectChargeAt.toISOString()}.`,
               metadata: {
                 solaScheduleLinkId: cutoverChargeBlock.linkId,
                 solaScheduleId: cutoverChargeBlock.solaScheduleId,
@@ -2566,7 +2566,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: paidCoverage.invoiceId,
               runId: run.id,
               type: "billing.autopay_skipped_period_already_paid",
-              message: "Connect autopay skipped — this billing period is already covered by a paid invoice.",
+              message: "Loopcom autopay skipped — this billing period is already covered by a paid invoice.",
               metadata: {
                 reason: paidCoverage.reason,
                 paidInvoiceId: paidCoverage.invoiceId,
@@ -2586,7 +2586,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               tenantId: setting.tenantId,
               runId: run.id,
               type: "autopay_missing_invoice_on_due_date",
-              message: "CRITICAL: Connect autopay due date reached but no invoice exists for this billing period. Manual intervention required.",
+              message: "CRITICAL: Loopcom autopay due date reached but no invoice exists for this billing period. Manual intervention required.",
               metadata: {
                 scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
                 paymentDate: schedule.paymentDate,
@@ -2653,7 +2653,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: invoice.id,
               runId: run.id,
               type: "billing.autopay_skipped_already_paid",
-              message: "Connect autopay skipped — invoice already paid or has no balance due.",
+              message: "Loopcom autopay skipped — invoice already paid or has no balance due.",
               metadata: { status: invoice.status, balanceDueCents: balanceDue },
             },
           }).catch(() => null);
@@ -2669,7 +2669,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: invoice.id,
               runId: run.id,
               type: "billing.autopay_skipped_awaiting_dunning",
-              message: "Connect monthly autopay skipped — existing failed invoice is waiting for the dunning retry schedule.",
+              message: "Loopcom monthly autopay skipped — existing failed invoice is waiting for the dunning retry schedule.",
               metadata: {
                 status: invoice.status,
                 attempts: dunning.attempts,
@@ -2694,7 +2694,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: invoice.id,
               runId: run.id,
               type: "billing.autopay_skipped_pending_operation_exists",
-              message: "Connect autopay skipped — an approved or pending billing charge operation already exists.",
+              message: "Loopcom autopay skipped — an approved or pending billing charge operation already exists.",
               metadata: {
                 reason: "pending_operation_exists",
                 operationId: existingOperation.id,
@@ -2714,7 +2714,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: invoice.id,
               runId: run.id,
               type: "billing.autopay_skipped_live_charges_disabled",
-              message: "Connect autopay skipped — live billing charges are disabled.",
+              message: "Loopcom autopay skipped — live billing charges are disabled.",
               metadata: { reason: "live_charges_disabled" },
             },
           }).catch(() => null);
@@ -2730,7 +2730,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: invoice.id,
               runId: run.id,
               type: "autopay_charge_started",
-              message: "Connect autopay charge starting on payment due date.",
+              message: "Loopcom autopay charge starting on payment due date.",
               metadata: { scheduledChargeAt: schedule.scheduledChargeAt.toISOString() },
             },
           }).catch(() => null);
@@ -2742,7 +2742,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
                 invoiceId: invoice.id,
                 runId: run.id,
                 type: "autopay_charge_succeeded",
-                message: "Connect autopay charge succeeded.",
+                message: "Loopcom autopay charge succeeded.",
                 metadata: { transactionId: transaction.id },
               },
             }).catch(() => null);
@@ -2753,7 +2753,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
                 invoiceId: invoice.id,
                 runId: run.id,
                 type: "autopay_charge_failed",
-                message: "Connect autopay charge failed.",
+                message: "Loopcom autopay charge failed.",
                 metadata: { transactionId: transaction.id, status: transaction.status },
               },
             }).catch(() => null);
@@ -2765,7 +2765,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               invoiceId: invoice.id,
               runId: run.id,
               type: "billing.autopay_skipped_missing_default_payment_method",
-              message: "Connect autopay skipped — no active default payment method is set.",
+              message: "Loopcom autopay skipped — no active default payment method is set.",
               metadata: {
                 reason: "missing_default_payment_method",
                 defaultPaymentMethodId: setting.defaultPaymentMethodId || null,

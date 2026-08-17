@@ -328,7 +328,7 @@ export default function DidRoutingPage() {
 
   const switchToConnect = useCallback(async (m: DidMapping) => {
     if (!m.ivrProfileId) {
-      setError("Assign an IVR profile to this DID before switching to Connect IVR.");
+      setError("Assign an IVR profile to this DID before switching to Loopcom IVR.");
       return;
     }
     const live = inspectByMapping[m.id]?.pbxLive;
@@ -336,7 +336,7 @@ export default function DidRoutingPage() {
     if (!confirm(
       `Take over ${m.e164}?\n\n` +
       `Current PBX destination:\n  ${currentDest}\n\n` +
-      `After: the PBX will enter [connect-tenant-ivr] for this DID and Connect's IVR profile "${m.ivrProfile?.name ?? "?"}" will answer.\n\n` +
+      `After: the PBX will enter [connect-tenant-ivr] for this DID and Loopcom's IVR profile "${m.ivrProfile?.name ?? "?"}" will answer.\n\n` +
       `The original PBX destination is saved and can be restored at any time.`,
     )) return;
     setBusy(m.id);
@@ -346,20 +346,20 @@ export default function DidRoutingPage() {
       await reload();
       await loadInspect(m.id);
     } catch (e: any) {
-      setError(e?.message ?? "Switch to Connect failed");
+      setError(e?.message ?? "Switch to Loopcom failed");
     } finally { setBusy(null); }
   }, [inspectByMapping, reload, loadInspect]);
 
   const switchToPbx = useCallback(async (m: DidMapping) => {
     if (!m.originalPbxDestination || !m.originalPbxDestinationType) {
-      setError("Connect has no stored pre-takeover destination for this DID. Use Override restore (not yet exposed in this UI) or contact support.");
+      setError("Loopcom has no stored pre-takeover destination for this DID. Use Override restore (not yet exposed in this UI) or contact support.");
       return;
     }
     const target = `${m.originalPbxDestinationType} → ${m.originalPbxDestination}`;
     if (!confirm(
       `Restore ${m.e164} to the PBX?\n\n` +
       `Target (captured ${m.originalCapturedAt ? new Date(m.originalCapturedAt).toLocaleString() : "at takeover"}):\n  ${target}\n\n` +
-      `Connect will stop answering this DID and the PBX takes over again.`,
+      `Loopcom will stop answering this DID and the PBX takes over again.`,
     )) return;
     setBusy(m.id);
     setError(null);
@@ -582,7 +582,7 @@ export default function DidRoutingPage() {
                         onClick={() => switchToConnect(m)}
                         style={buttonPrimary}
                         disabled={busy === m.id || !m.ivrProfileId}
-                        title={!m.ivrProfileId ? "Assign an IVR profile first" : "Point this DID at Connect IVR"}
+                        title={!m.ivrProfileId ? "Assign an IVR profile first" : "Point this DID at Loopcom IVR"}
                       >{busy === m.id ? "…" : "Take over"}</button>
                     )}
                     {canPublish && mode === "connect" && (
@@ -638,7 +638,7 @@ export default function DidRoutingPage() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, fontSize: 12 }}>
             <div>
-              <div style={{ color: "#94a3b8", marginBottom: 4 }}>Configured (Connect)</div>
+              <div style={{ color: "#94a3b8", marginBottom: 4 }}>Configured (Loopcom)</div>
               <div>Tenant: <strong>{preview.mapping.tenant?.name ?? preview.mapping.tenantId}</strong></div>
               <div>IVR: {preview.mapping.ivrProfile?.name ?? "—"}</div>
               <div>Hold profile: {preview.mapping.mohProfile?.name ?? "—"}</div>
@@ -681,9 +681,9 @@ function ModeBadge({ mode }: { mode: "pbx" | "connect" }) {
         border: `1px solid ${isConnect ? "rgba(34,197,94,0.4)" : "rgba(148,163,184,0.35)"}`,
         color: isConnect ? "#86efac" : "#cbd5e1",
       }}
-      title={isConnect ? "Connect has taken over this DID's routing" : "Routing still controlled by VitalPBX"}
+      title={isConnect ? "Loopcom has taken over this DID's routing" : "Routing still controlled by VitalPBX"}
     >
-      {isConnect ? "Connect IVR" : "PBX"}
+      {isConnect ? "Loopcom IVR" : "PBX"}
     </span>
   );
 }

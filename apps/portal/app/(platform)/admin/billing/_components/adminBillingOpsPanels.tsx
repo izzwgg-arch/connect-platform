@@ -1027,7 +1027,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
             </div>
           )}
 
-          {/* Official Cardknox/Sola React iFields component. Raw card data never touches Connect. */}
+          {/* Official Cardknox/Sola React iFields component. Raw card data never touches Loopcom. */}
           {canAddCard && showAddCard && ifieldsAccount ? (
             <form
               className="billing-form"
@@ -1259,7 +1259,7 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
   const invoiceIsPaid = String(invoice.status || "").toUpperCase() === "PAID";
   const smsAmount = invoiceIsPaid ? invoice.totalCents : invoice.balanceDueCents;
   const smsVerb = invoiceIsPaid ? "View paid invoice" : "Pay invoice";
-  const msgPreview = `${invoice.tenant?.name || "Connect"}: ${smsVerb} ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(smsAmount)}): ${payUrl}`;
+  const msgPreview = `${invoice.tenant?.name || "Loopcom"}: ${smsVerb} ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(smsAmount)}): ${payUrl}`;
 
   async function send() {
     if (submitted.current || busy) return;
@@ -1810,7 +1810,7 @@ export function InvoicesTab() {
               <li><strong>Status</strong> {invoiceStatusLabel(markPaidTarget.status)}</li>
             </ul>
           )}
-          notice="Recommended next step: attach your internal reference in your accounting system — Connect stores the status change only."
+          notice="Recommended next step: attach your internal reference in your accounting system — Loopcom stores the status change only."
           footer={(
             <>
               <button className="btn ghost" type="button" disabled={!!busy} onClick={() => setMarkPaidTarget(null)}>Cancel</button>

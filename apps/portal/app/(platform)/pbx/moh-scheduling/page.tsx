@@ -340,7 +340,7 @@ interface PbxMohClassRow {
 //   2. The PBX-wide "system" classes the admin tenant ships (default / main /
 //      No Music) — always appended so a tenant with zero own classes still has
 //      working options to pick from.
-//   3. Connect-uploaded MOH assets (MohAsset → class connect_<slug>_<name>).
+//   3. Loopcom-uploaded MOH assets (MohAsset → class connect_<slug>_<name>).
 //   4. Runtime values for PBX-native classes are moh<groupId> from ombu_music_groups.
 // Legacy-safe: if the saved value isn't in the merged catalog we still render
 // it at the top of the options, but the API will block saving until a valid
@@ -375,7 +375,7 @@ function MohClassPicker({
     yours:  tenantSlug ? `This tenant (${tenantSlug})` : "This tenant",
     system: "System (available to all tenants)",
     other:  "Other tenants on this PBX",
-    upload: "Uploaded on Connect (connect_* — PBX needs connect-media-sync + musiconhold include)",
+    upload: "Uploaded on Loopcom (connect_* — PBX needs connect-media-sync + musiconhold include)",
     legacy: "Saved value (not in catalog)",
   };
 
@@ -423,7 +423,7 @@ function MohClassPicker({
     seen.add(v);
     options.push({
       value: v,
-      label: `${a.name} → ${v} · Connect upload`,
+      label: `${a.name} → ${v} · Loopcom upload`,
       group: "upload",
     });
   }
@@ -451,7 +451,7 @@ function MohClassPicker({
     <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
       <span>
         {ownCount} yours · {systemCount} system
-        {uploadCount ? ` · ${uploadCount} Connect upload${uploadCount === 1 ? "" : "s"}` : ""}
+        {uploadCount ? ` · ${uploadCount} Loopcom upload${uploadCount === 1 ? "" : "s"}` : ""}
         {otherCount ? ` · ${otherCount} other` : ""}
       </span>
       {canSyncPbx && onSync && (
@@ -502,9 +502,9 @@ function MohClassPicker({
       />
       {value.trim().toLowerCase().startsWith("connect_") && (
         <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 8, lineHeight: 1.45, padding: "8px 10px", borderRadius: 6, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)" }}>
-          <strong>Coverage scope:</strong> Connect-uploaded MOH (<code style={{ color: "#fde68a" }}>connect_*</code>) only applies to <em>Connect-managed routes</em> &mdash; inbound DIDs that flow through Connect&apos;s tenant router/IVR (AstDB <code style={{ color: "#fde68a" }}>connect/t_&lt;slug&gt;/moh_class</code>).
+          <strong>Coverage scope:</strong> Loopcom-uploaded MOH (<code style={{ color: "#fde68a" }}>connect_*</code>) only applies to <em>Connect-managed routes</em> &mdash; inbound DIDs that flow through Connect&apos;s tenant router/IVR (AstDB <code style={{ color: "#fde68a" }}>connect/t_&lt;slug&gt;/moh_class</code>).
           <br />
-          Native VitalPBX inbound routes, extension hold, transfer hold, parking, and queue hold music continue to use <code style={{ color: "#fde68a" }}>mohN</code> unless you map a native music group separately on the PBX. To cover those paths, pick a <code style={{ color: "#fde68a" }}>mohN</code> class instead (or contact ops to map this Connect upload as a native music group).
+          Native VitalPBX inbound routes, extension hold, transfer hold, parking, and queue hold music continue to use <code style={{ color: "#fde68a" }}>mohN</code> unless you map a native music group separately on the PBX. To cover those paths, pick a <code style={{ color: "#fde68a" }}>mohN</code> class instead (or contact ops to map this Loopcom upload as a native music group).
         </div>
       )}
       {controls}
@@ -550,7 +550,7 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
   useEffect(() => { reloadCatalog(); }, [reloadCatalog]);
 
   const autoSyncMohClasses = useCallback(async () => {
-    if (!confirm("Sync existing MOH classes from VitalPBX into Connect? Reads from the PBX's ombutel MySQL (same read-only channel as DID/prompt sync).")) return;
+    if (!confirm("Sync existing MOH classes from VitalPBX into Loopcom? Reads from the PBX's ombutel MySQL (same read-only channel as DID/prompt sync).")) return;
     setSyncing(true); setSyncMsg(null);
     try {
       const r = await apiPost<{ ok: boolean; skipReason?: string; result?: { rowsRead: number; created: number; updated: number; unassigned: number } }>(
@@ -625,7 +625,7 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
               onClick={autoSyncMohClasses}
               disabled={syncing}
               style={btnSmall("#334155")}
-              title="Index existing VitalPBX MOH classes into Connect so the MOH-class dropdown has options"
+              title="Index existing VitalPBX MOH classes into Loopcom so the MOH-class dropdown has options"
             >
               {syncing ? "Syncing…" : "Sync PBX MOH classes"}
             </button>
@@ -1091,7 +1091,7 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
           <p style={{ fontSize: 12, color: "#64748b", margin: "0 0 12px", lineHeight: 1.5 }}>
             <strong style={{ color: "#94a3b8" }}>Scope:</strong> this publish targets the tenant&apos;s default/channel hold profile (AstDB). Inbound-route MOH on DIDs is configured under DID routing.
             <br />
-            For <code style={{ color: "#cbd5e1" }}>connect_*</code> classes the publish only covers Connect-managed inbound routes (DIDs flowing through Connect&apos;s tenant router/IVR). Native VitalPBX inbound routes, extensions, transfers, parking, and queue hold music continue using <code style={{ color: "#cbd5e1" }}>mohN</code> unless a native music group is mapped on the PBX. Pick a <code style={{ color: "#cbd5e1" }}>mohN</code> class to cover those native paths.
+            For <code style={{ color: "#cbd5e1" }}>connect_*</code> classes the publish only covers Loopcom-managed inbound routes (DIDs flowing through Connect&apos;s tenant router/IVR). Native VitalPBX inbound routes, extensions, transfers, parking, and queue hold music continue using <code style={{ color: "#cbd5e1" }}>mohN</code> unless a native music group is mapped on the PBX. Pick a <code style={{ color: "#cbd5e1" }}>mohN</code> class to cover those native paths.
           </p>
 
           {/* Current runtime state table */}
@@ -1299,7 +1299,7 @@ function AssetsTab({ tenantId, canUpload }: { tenantId: string; canUpload: boole
       {verifyResult && verifyFor && (
         <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 10, marginBottom: 16, fontSize: 12, color: "#cbd5e1" }}>
           <div style={{ fontWeight: 700, color: "#e2e8f0" }}>Verify: <code style={{ color: "#93c5fd" }}>{verifyFor}</code></div>
-          <div>Asset uploaded: {verifyResult.db.assetExists ? "yes" : "no"} · Conversion: {verifyResult.db.conversionStatus ?? "—"} · PBX artifact on Connect disk: {verifyResult.storage.pbxArtifactExists ? "yes" : "no"} · Manifest row: {verifyResult.sync.manifestAvailable ? "yes" : "no"}</div>
+          <div>Asset uploaded: {verifyResult.db.assetExists ? "yes" : "no"} · Conversion: {verifyResult.db.conversionStatus ?? "—"} · PBX artifact on Loopcom disk: {verifyResult.storage.pbxArtifactExists ? "yes" : "no"} · Manifest row: {verifyResult.sync.manifestAvailable ? "yes" : "no"}</div>
           <div>Last publish (proxy): {verifyResult.sync.lastSyncStatus ?? "—"} {verifyResult.sync.lastSyncAt ?? ""}</div>
           {verifyResult.warnings.length > 0 && (
             <ul style={{ margin: 0, paddingLeft: 18, color: "#fbbf24" }}>

@@ -78,7 +78,7 @@ const DEMO_FORM: PublicForm = {
   },
   contact: {
     displayName: "Jordan Rivera",
-    company: "Connect Demo Co",
+    company: "Loopcom Demo Co",
     primaryPhone: "(555) 010-9881",
     primaryEmail: "demo.user@example.com",
   },
@@ -91,7 +91,7 @@ const DEMO_FORM: PublicForm = {
   },
   fields: [
     { id: "f1", fieldType: "TEXT",      label: "Full legal name",    autoFillToken: "contact.fullName",  defaultValue: "Jordan Rivera",          required: true,  pageNumber: 1, x: 60, y: 120, width: 180, height: 18 },
-    { id: "f2", fieldType: "TEXT",      label: "Business / DBA name", autoFillToken: "business.dba",     defaultValue: "Connect Demo Services",  required: false, pageNumber: 1, x: 60, y: 150, width: 180, height: 18 },
+    { id: "f2", fieldType: "TEXT",      label: "Business / DBA name", autoFillToken: "business.dba",     defaultValue: "Loopcom Demo Services",  required: false, pageNumber: 1, x: 60, y: 150, width: 180, height: 18 },
     { id: "f3", fieldType: "TEXT",      label: "Entity type",         autoFillToken: "business.entityType", defaultValue: "LLC",                required: false, pageNumber: 1, x: 60, y: 180, width: 120, height: 18 },
     { id: "f4", fieldType: "TEXT",      label: "Email address",       autoFillToken: "contact.email",    defaultValue: "demo.user@example.com",  required: true,  pageNumber: 1, x: 60, y: 210, width: 180, height: 18 },
     { id: "f5", fieldType: "TEXT",      label: "Phone number",        autoFillToken: "contact.phone",    defaultValue: "(555) 010-9881",         required: false, pageNumber: 1, x: 60, y: 240, width: 140, height: 18 },
@@ -1077,7 +1077,7 @@ export default function PublicFormSigningPage() {
               {/* Trust footer */}
               <div className="flex items-center justify-center gap-2 pb-2 text-xs text-slate-400">
                 <Shield className="h-3.5 w-3.5 text-slate-300" />
-                Powered by Connect CRM · All submissions are encrypted and timestamped
+                Powered by Loopcom CRM · All submissions are encrypted and timestamped
               </div>
             </aside>
           </div>

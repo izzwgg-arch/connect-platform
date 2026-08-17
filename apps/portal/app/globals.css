@@ -14601,33 +14601,24 @@ body {
 
 /* ?? Topbar: dark premium header ???????????????????????????????????????????? */
 
-.brand-logo-svg {
-  height: 42px;
+/* One full-colour lockup serves both themes — the gradient wordmark keeps 10.3:1
+   against white, so it does not need a flattened deep-ink variant here. */
+.brand-logo-img {
+  height: 38px;
   width: auto;
-  max-width: min(168px, 40vw);
+  max-width: min(186px, 42vw);
   display: block;
   flex-shrink: 0;
   margin: 0;
   padding: 0;
   object-fit: contain;
   object-position: left center;
-  filter: saturate(0.88);
 }
 
-/* Dark mode: show SVG logo, hide text */
-:root[data-theme="dark"] .brand-logo-svg {
-  display: block;
-}
-:root[data-theme="dark"] .brand-name {
-  display: none;
-}
-
-/* Light mode: hide SVG logo (white text invisible on light bg), show text */
-:root[data-theme="light"] .brand-logo-svg {
-  display: none;
-}
-
+/* The lockup already carries the wordmark, so the text label is redundant in both
+   themes. It stays in the DOM purely as a no-image fallback. */
 .brand-name {
+  display: none;
   font-size: 15px;
   font-weight: 700;
   color: var(--console-text);
@@ -19383,10 +19374,6 @@ table tr:hover {
     color-mix(in srgb, var(--surface-2) 85%, transparent) 0%,
     transparent 72%
   );
-}
-
-:root[data-theme="light"] .brand-logo-svg {
-  filter: none;
 }
 
 :root[data-theme="light"] .topbar-center .global-search .input,

@@ -341,7 +341,7 @@ function DesktopSettingsMenu({
             <span className="fd-settings-icon"><Headphones size={15} /></span>
             <span>
               <strong>Headset settings</strong>
-              <small>Choose the devices Connect uses for calls.</small>
+              <small>Choose the devices Loopcom uses for calls.</small>
             </span>
           </div>
           <label className="fd-settings-field">
@@ -370,7 +370,7 @@ function DesktopSettingsMenu({
           <SettingsRow
             checked={settings.startOnLogin !== false}
             label="Start with Windows"
-            hint="Open Connect when this computer starts"
+            hint="Open Loopcom when this computer starts"
             onChange={(checked) => onUpdate({ startOnLogin: checked })}
           />
           <SettingsRow

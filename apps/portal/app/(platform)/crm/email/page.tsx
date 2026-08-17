@@ -700,7 +700,7 @@ export default function CrmEmailLandingPage() {
                 compact
                 icon={<Mail className="h-6 w-6" aria-hidden />}
                 title="CRM Email"
-                subtitle="Metadata-first email operations. Send from Connect - reply and converse in Gmail."
+                subtitle="Metadata-first email operations. Send from Loopcom - reply and converse in Gmail."
                 className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
                 actions={
                   <div className="campaigns-hero-actions flex flex-wrap items-center gap-2">
@@ -1021,7 +1021,7 @@ export default function CrmEmailLandingPage() {
 
                 <section className="crm-email-quick-actions crm-queue-list-panel px-4 py-4 sm:px-5">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Gmail-first workflow</p>
-                  <h3 className="mt-1 text-sm font-bold text-crm-text">Reply in Gmail, track activity in Connect</h3>
+                  <h3 className="mt-1 text-sm font-bold text-crm-text">Reply in Gmail, track activity in Loopcom</h3>
                   <p className="mt-1 max-w-2xl text-xs leading-relaxed text-crm-muted">
                     Connect sends outbound CRM email and stores metadata only. When a contact replies, open the thread in Gmail to continue the conversation.
                     {lastActivity ? ` Last activity: ${formatWhen(lastActivity.when)} - ${lastActivity.label}.` : null}

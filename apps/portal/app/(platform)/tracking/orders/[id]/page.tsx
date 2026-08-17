@@ -173,7 +173,7 @@ export default function DeliveryOrderDetailPage() {
           <CRMCard>
             <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-crm-muted">Status mapping</h2>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-crm-muted">Connect (normalized)</span>
+              <span className="text-crm-muted">Loopcom (normalized)</span>
               <span className={cn("rounded-full border px-2 py-0.5 text-xs font-semibold", statusTone(order.status))}>{order.status}</span>
             </div>
             <div className="my-2 h-px bg-crm-border" />

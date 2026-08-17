@@ -107,7 +107,7 @@ const mockScripts = [
     isActive: true,
     createdAt: "2026-05-20T14:30:00.000Z",
     updatedAt: "2026-05-26T20:45:00.000Z",
-    body: "# Opening\nHi, this is [Your Name] from Connect Solar. Is this a good time to talk for a minute about lowering your electric bill?\n\n---\n\n# Discovery / Qualification\nHave you looked into solar before?\n\nWhat is your biggest goal with solar?\n\n---\n\n# Value Proposition\nWe help homeowners reduce energy costs and take advantage of available incentives with no pressure.",
+    body: "# Opening\nHi, this is [Your Name] from Loopcom Solar. Is this a good time to talk for a minute about lowering your electric bill?\n\n---\n\n# Discovery / Qualification\nHave you looked into solar before?\n\nWhat is your biggest goal with solar?\n\n---\n\n# Value Proposition\nWe help homeowners reduce energy costs and take advantage of available incentives with no pressure.",
   },
 ];
 

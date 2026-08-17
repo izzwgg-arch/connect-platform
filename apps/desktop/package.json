@@ -12,7 +12,7 @@
   },
   "build": {
     "appId": "com.connectcommunications.desktop",
-    "productName": "Connect",
+    "productName": "Loopcom",
     "directories": {
       "output": "release"
     },

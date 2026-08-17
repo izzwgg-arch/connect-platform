@@ -419,7 +419,7 @@ export class CdrNotifier {
 
     log.error(
       { linkedId: payload.linkedId, err: (lastErr as Error)?.message, attempts: MAX_ATTEMPTS },
-      "cdr: ingest failed after all retries — call will be missing from Connect",
+      "cdr: ingest failed after all retries — call will be missing from Loopcom",
     );
   }
 }

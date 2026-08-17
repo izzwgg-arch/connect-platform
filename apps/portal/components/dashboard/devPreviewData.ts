@@ -90,7 +90,7 @@ export function buildDashboardDevPreviewTraffic(range: DateRangeValue, now = Dat
 }
 
 export function buildDashboardDevPreviewCalls(tenantId: string | null, tenantName: string | null | undefined, now = Date.now()): LiveCall[] {
-  const tenantLabel = tenantName || "Connect Demo Co";
+  const tenantLabel = tenantName || "Loopcom Demo Co";
   return [
     {
       id: "dev-preview-call-1",
@@ -231,7 +231,7 @@ export function buildDashboardDevPreviewCommunications(now = Date.now()): Commun
         },
         {
           threadId: "dev-preview-thread-3",
-          counterpartyLabel: "Connect Support Queue",
+          counterpartyLabel: "Loopcom Support Queue",
           preview: "Callback scheduled and assigned to ext 104.",
           createdAt: isoAt(now, -2 * 60 * 60_000),
           unread: false,

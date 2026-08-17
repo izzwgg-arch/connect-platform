@@ -1100,7 +1100,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         const raw = e instanceof Error ? e.message : "EXTENSION_NOT_FOUND";
         const msg =
           e instanceof ApiError && e.status === 403
-            ? "FORBIDDEN — Your account cannot load Connect phone settings. Ask an administrator to update your permissions."
+            ? "FORBIDDEN — Your account cannot load Loopcom phone settings. Ask an administrator to update your permissions."
             : raw.includes("EXTENSION_NOT_PROVISIONED")
               ? `EXTENSION_NOT_PROVISIONED — ${fromBody?.message || `Extension ${extNum || "?"} is not linked to the PBX yet. Ask an administrator to sync or re-provision WebRTC.`}`
               : raw.includes("EXTENSION_NOT_ASSIGNED") || raw.includes("EXTENSION_NOT_FOUND")

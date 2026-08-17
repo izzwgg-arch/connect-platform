@@ -176,7 +176,7 @@ export function AdminExtensionPairingQrModal(props: {
         </div>
 
         <p className="muted" style={{ fontSize: 12, lineHeight: 1.55, margin: "14px 0 8px" }}>
-          Open the Connect mobile app and scan this QR code to pair this extension.
+          Open the Loopcom mobile app and scan this QR code to pair this extension.
         </p>
 
         <div

@@ -94,7 +94,7 @@ function shortTime(value?: string): string {
 }
 
 function initials(value: string | null | undefined): string {
-  const source = (value || "Connect").trim();
+  const source = (value || "Loopcom").trim();
   return source
     .split(/[\s._-]+/)
     .filter(Boolean)
@@ -398,7 +398,7 @@ export function DesktopMiniDialer() {
         <div className="mini-identity">
           <div className="mini-avatar">{initials(user?.name || tenant?.name)}</div>
           <div>
-            <strong>{user?.name || tenant?.name || "Connect"}</strong>
+            <strong>{user?.name || tenant?.name || "Loopcom"}</strong>
             <span className={`mini-status ${registration.tone}`}>{registration.label}</span>
           </div>
         </div>
@@ -453,7 +453,7 @@ export function DesktopMiniDialer() {
                 <MiniToggle
                   checked={settings.startOnLogin !== false}
                   label="Start with Windows"
-                  hint="Open Connect when this computer starts"
+                  hint="Open Loopcom when this computer starts"
                   onChange={(checked) => updateDesktopSettings({ startOnLogin: checked })}
                 />
                 <MiniToggle

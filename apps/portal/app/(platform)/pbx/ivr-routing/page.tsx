@@ -572,7 +572,7 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
   const [showSync, setShowSync] = useState(false);
   const [autoSyncing, setAutoSyncing] = useState(false);
   const runAutoSync = useCallback(async () => {
-    if (!confirm("Auto-sync all VitalPBX System Recordings into Connect? This reads from the PBX's ombutel MySQL and updates the per-tenant dropdowns.")) return;
+    if (!confirm("Auto-sync all VitalPBX System Recordings into Loopcom? This reads from the PBX's ombutel MySQL and updates the per-tenant dropdowns.")) return;
     setAutoSyncing(true);
     try {
       const j = await apiPost<{
@@ -791,7 +791,7 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
                 onClick={runAutoSync}
                 disabled={autoSyncing}
                 style={btnStyle("#0d9488")}
-                title="Pull every VitalPBX System Recording into Connect's catalog (read-only MySQL — no filenames to type)"
+                title="Pull every VitalPBX System Recording into Loopcom's catalog (read-only MySQL — no filenames to type)"
               >
                 {autoSyncing ? "Syncing…" : "Auto-Sync from VitalPBX"}
               </button>
@@ -851,7 +851,7 @@ function RouteProfilesTab({ profiles, tenantId, tenantLabel, tenantSlug, canMana
                     title={
                       profileMissing
                         .map((m) => `${m.fieldLabel}: ${m.ref} (not in catalog)`)
-                        .join("\n") + "\n\nPublish will be rejected until these recordings are uploaded to VitalPBX and synced into Connect."
+                        .join("\n") + "\n\nPublish will be rejected until these recordings are uploaded to VitalPBX and synced into Loopcom."
                     }
                     style={{
                       fontSize: 11,
@@ -1416,7 +1416,7 @@ function PromptPicker({
           ))}
         </select>
         {/* ▶ Play button — only active when the selected recording has audio
-             synced into Connect. Otherwise shows a disabled grey button with
+             synced into Loopcom. Otherwise shows a disabled grey button with
              a tooltip explaining why. */}
         <PlayPromptButton
           selectedRow={selectedRow}
@@ -1489,7 +1489,7 @@ function PromptPicker({
           }}
         >
           ⚠ <strong>{value}</strong> isn't in this tenant's PBX prompt catalog. Publish will be rejected
-          until the recording is uploaded to VitalPBX (and synced into Connect) or a different recording is selected.
+          until the recording is uploaded to VitalPBX (and synced into Loopcom) or a different recording is selected.
         </div>
       )}
       <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1527,7 +1527,7 @@ function PromptPicker({
             </span>
           ) : (
             <span
-              title="Click Upload audio to provide a WAV/MP3. Connect will never synthesise a fallback tone."
+              title="Click Upload audio to provide a WAV/MP3. Loopcom will never synthesise a fallback tone."
               style={{
                 color: "#fbbf24",
                 background: "#451a03",
@@ -1545,7 +1545,7 @@ function PromptPicker({
           <span
             title={
               selectedRow.ownershipConfidence === "manual"
-                ? "Ownership set manually by a Connect admin."
+                ? "Ownership set manually by a Loopcom admin."
                 : selectedRow.ownershipConfidence === "prefix"
                   ? "Ownership inferred from filename prefix. Run Auto-Sync to confirm from VitalPBX."
                   : selectedRow.ownershipConfidence === "path"
@@ -3208,7 +3208,7 @@ function PublishTab({ history, preview, profiles, tenantId, canManage, onRefresh
             </div>
             <div style={{ color: "#fde68a", marginBottom: 8 }}>
               Publishing will be rejected because these recordings aren't uploaded to VitalPBX
-              (or haven't been synced into Connect yet). Upload them in VitalPBX System Recordings,
+              (or haven't been synced into Loopcom yet). Upload them in VitalPBX System Recordings,
               click <strong>Auto-Sync from VitalPBX</strong> on the Route Profiles tab, then retry.
             </div>
             <ul style={{ margin: 0, paddingLeft: 20, color: "#fde68a" }}>

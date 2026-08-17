@@ -53,7 +53,7 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
     return {
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
-      companyName: brand.displayName || invoice.tenant?.name || "Connect Communications",
+      companyName: brand.displayName || invoice.tenant?.name || "Loopcom",
       status: invoice.status,
       canPay,
       currency: invoice.currency || "USD",

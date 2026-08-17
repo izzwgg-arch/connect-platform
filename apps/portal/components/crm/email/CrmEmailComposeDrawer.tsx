@@ -307,7 +307,7 @@ export function CrmEmailComposeDrawer({
 
         <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-crm-border px-5 py-3">
           <p className="text-[11px] text-crm-muted">
-            Metadata-first. Connect stores subject + snippet only — never your full inbox.
+            Metadata-first. Loopcom stores subject + snippet only — never your full inbox.
           </p>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} className={cn(crm.btnGhost, "text-xs")} disabled={sending}>Cancel</button>

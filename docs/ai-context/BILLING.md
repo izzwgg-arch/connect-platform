@@ -57,7 +57,7 @@ This pass converts `/billing` into a premium SaaS finance workspace with light-m
 - Do not replace the Sola mark with plain text when the official asset is available.
 - Do not stretch, recolor, invert, or distort the logo; preserve the original `1100x300` aspect ratio.
 - Theme behavior for the hosted page: `?theme=dark` / `?theme=light` override for QA and shared links, existing app theme when available, and `prefers-color-scheme` fallback.
-- Trust/security copy is intentionally conservative: "Secured & powered by", "Secure payment", "256-bit SSL encryption", and "Connect Communications never stores your full card number or CVV." Do not add PCI or "bank-grade" claims unless separately documented and approved.
+- Trust/security copy is intentionally conservative: "Secured & powered by", "Secure payment", "256-bit SSL encryption", and "Loopcom never stores your full card number or CVV." Do not add PCI or "bank-grade" claims unless separately documented and approved.
 
 > Read `CURSOR_START_HERE.md` first. High-risk: payments and invoices.
 
@@ -964,9 +964,9 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **Files touched:** `apps/api/src/billing/emailTemplates.ts`, `apps/api/src/billing/billingEmailTemplates.test.ts`, `apps/api/src/billing/invoiceBranding.test.ts`, and this doc. No invoice PDF generation, billing math, payment execution, queueing, or email infrastructure changed.
 
-**Structure:** Billing HTML emails use a single responsive, Outlook-safe shell: light page background, centered 600px white table card, small Connect-blue top accent, Connect logo, “Connect Communications billing” heading, clean body copy, readable light summary card, optional CTA table button, attachment note, support block, and footer.
+**Structure:** Billing HTML emails use a single responsive, Outlook-safe shell: light page background, centered 600px white table card, small Connect-blue top accent, Loopcom logo, “Loopcom billing” heading, clean body copy, readable light summary card, optional CTA table button, attachment note, support block, and footer.
 
-**Sender wording rule:** The footer must always be exactly `Sent by Connect Communications billing.` Never render `Sent by [tenant] via Connect Communications billing.` Tenant/customer names may appear only as billed company/customer context, such as the `Billed company` summary row.
+**Sender wording rule:** The footer must always be exactly `Sent by Loopcom billing.` Never render `Sent by [tenant] via Loopcom billing.` Tenant/customer names may appear only as billed company/customer context, such as the `Billed company` summary row.
 
 **Support info:** HTML billing emails show fixed Connect support details: `Connect Communications, LLC`, `support@connectcomunications.com`, `connectcomunications.com`, and `845-723-1213`.
 

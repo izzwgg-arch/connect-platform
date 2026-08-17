@@ -103,7 +103,7 @@ export function ChatConversation({
         <div className="cc-empty-chat">
           <span>💬</span>
           <h2>Select a conversation</h2>
-          <p>Choose a thread or start a new SMS / internal Connect chat.</p>
+          <p>Choose a thread or start a new SMS / internal Loopcom chat.</p>
         </div>
       </main>
     );

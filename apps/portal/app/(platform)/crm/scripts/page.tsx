@@ -51,7 +51,7 @@ const DEV_SCRIPT_ROWS: Script[] = [
     isActive: true,
     createdAt: "2026-05-21T14:00:00.000Z",
     updatedAt: "2026-06-05T18:20:00.000Z",
-    body: "## Greeting\nHi [First name], this is [Agent] with Connect.\n\n## Reason\nI am calling about your recent request and want to make sure we have the right details.\n\n## Transition\nDo you have two minutes to confirm the next step?",
+    body: "## Greeting\nHi [First name], this is [Agent] with Loopcom.\n\n## Reason\nI am calling about your recent request and want to make sure we have the right details.\n\n## Transition\nDo you have two minutes to confirm the next step?",
   },
   {
     id: "dev-script-campaign-launch",

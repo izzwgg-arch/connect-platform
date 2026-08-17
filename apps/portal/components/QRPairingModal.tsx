@@ -149,7 +149,7 @@ export function QRPairingModal() {
                     Scan to connect your phone
                   </div>
                   <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                    Open the Connect mobile app and scan to link your extension
+                    Open the Loopcom mobile app and scan to link your extension
                   </div>
                 </div>
               </div>

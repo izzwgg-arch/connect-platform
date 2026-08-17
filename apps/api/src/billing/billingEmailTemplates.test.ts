@@ -75,10 +75,10 @@ test("invoiceSentEmail shows tenant or branded name only as billed company conte
   assert.match(t.html, /Billed company/);
   assert.match(t.html, /Northwind Telecom/);
   assert.doesNotMatch(t.subject, /Northwind Telecom/);
-  assert.doesNotMatch(t.html, /Sent by <strong[^>]*>Northwind Telecom<\/strong> via Connect Communications billing/);
+  assert.doesNotMatch(t.html, /Sent by <strong[^>]*>Northwind Telecom<\/strong> via Loopcom billing/);
 });
 
-test("invoiceSentEmail footer always uses Connect sender wording and support info", () => {
+test("invoiceSentEmail footer always uses Loopcom sender wording and support info", () => {
   const brand = resolveInvoiceEmailBranding({ invoiceFooterNote: "Tenant legal footer" }, "Landau Home");
   const t = invoiceSentEmail({
     invoiceNumber: "INV-SENDER",
@@ -88,8 +88,8 @@ test("invoiceSentEmail footer always uses Connect sender wording and support inf
     billingInvoiceId: "inv_sender_test",
     brand,
   });
-  assert.match(t.html, /Sent by Connect Communications billing\./);
-  assert.doesNotMatch(t.html, /Sent by Landau Home via Connect Communications billing/);
+  assert.match(t.html, /Sent by Loopcom billing\./);
+  assert.doesNotMatch(t.html, /Sent by Landau Home via Loopcom billing/);
   assert.match(t.html, /Connect Communications, LLC/);
   assert.match(t.html, /support@connectcomunications\.com/);
   assert.match(t.html, /connectcomunications\.com/);
@@ -290,12 +290,12 @@ test("emailShell renders img tag even without logoUrl (uses fallback)", () => {
     billingInvoiceId: "inv_test",
     brand,
   });
-  // Should contain an img tag pointing to connect-logo.png
-  assert.match(t.html, /connect-logo\.png/);
+  // Should contain an img tag pointing to loopcom-email.png
+  assert.match(t.html, /loopcom-email\.png/);
   assert.match(t.html, /<img/);
 });
 
-test("emailShell keeps Connect logo even when custom logoUrl is configured", () => {
+test("emailShell keeps Loopcom logo even when custom logoUrl is configured", () => {
   const brand = resolveInvoiceEmailBranding(
     { invoiceLogoUrl: "https://cdn.example.com/mybrand-logo.png" },
     "My Brand",
@@ -308,7 +308,7 @@ test("emailShell keeps Connect logo even when custom logoUrl is configured", () 
     billingInvoiceId: "inv_test",
     brand,
   });
-  assert.match(t.html, /connect-logo\.png/);
+  assert.match(t.html, /loopcom-email\.png/);
   assert.doesNotMatch(t.html, /mybrand-logo\.png/);
 });
 

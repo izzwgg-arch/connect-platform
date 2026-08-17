@@ -165,7 +165,7 @@ export const ContactSmsPanel = forwardRef<
         <div className="crm-contact-sms-chat-frame">
           <div className="crm-contact-sms-conversation-header">
             <div className="min-w-0">
-              <p className="crm-contact-sms-eyebrow">Connect Chat SMS</p>
+              <p className="crm-contact-sms-eyebrow">Loopcom Chat SMS</p>
               <h2 className="crm-contact-sms-title">Conversation with {contactName}</h2>
               <div className="crm-contact-sms-header-meta">
                 <span>{selectedPhone?.numberRaw ?? "No phone selected"}</span>
@@ -190,7 +190,7 @@ export const ContactSmsPanel = forwardRef<
             ) : messages.length === 0 ? (
               <div className="crm-contact-sms-empty crm-contact-module-empty py-2 text-sm">
                 <p className="font-semibold text-crm-text">No SMS activity yet.</p>
-                <p className="mt-1 text-crm-muted">Send the first SMS below. It appears in Connect Chat and here.</p>
+                <p className="mt-1 text-crm-muted">Send the first SMS below. It appears in Loopcom Chat and here.</p>
               </div>
             ) : (
               <div ref={threadRef} className="crm-contact-sms-thread flex max-h-80 flex-col overflow-y-auto">

@@ -120,7 +120,7 @@ async function main(): Promise<void> {
     } else if (p.action === "skip") {
       console.log(`  ${p.tenantCode.padEnd(4)} ${p.displayName.padEnd(36)} → SKIP`);
     } else {
-      console.log(`  ${p.tenantCode.padEnd(4)} ${p.displayName.padEnd(36)} → will find-or-create Connect tenant`);
+      console.log(`  ${p.tenantCode.padEnd(4)} ${p.displayName.padEnd(36)} → will find-or-create Loopcom tenant`);
     }
   }
 
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   }
 
   if (toProvision.length === 0) {
-    console.log("Nothing to do — all PBX tenants already have a linked Connect tenant.\n");
+    console.log("Nothing to do — all PBX tenants already have a linked Loopcom tenant.\n");
   }
 
   // ── 5. Find-or-create + link ──────────────────────────────────────────────

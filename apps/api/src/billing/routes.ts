@@ -1056,7 +1056,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (solaWebhookPinMissingForProd(input.mode, nextSecrets.webhookSecret)) {
       return reply.code(400).send({
         error: "sola_webhook_pin_required",
-        message: "Production mode requires a webhook verification PIN (store the same value in Connect and in the SOLA/Cardknox webhook/postback settings).",
+        message: "Production mode requires a webhook verification PIN (store the same value in Loopcom and in the SOLA/Cardknox webhook/postback settings).",
       });
     }
 
@@ -2702,7 +2702,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const invoiceIsPaid = invoice.status === "PAID";
     const smsAmountCents = invoiceIsPaid ? invoice.totalCents : (invoice.balanceDueCents ?? invoice.totalCents);
     const balanceStr = centsToDollarsStr(smsAmountCents);
-    const msgBody = `${invoice.tenant?.name || "Connect"}: ${invoiceIsPaid ? "View paid invoice" : "Pay invoice"} ${invLabel} (${balanceStr}): ${payUrl}`;
+    const msgBody = `${invoice.tenant?.name || "Loopcom"}: ${invoiceIsPaid ? "View paid invoice" : "Pay invoice"} ${invLabel} (${balanceStr}): ${payUrl}`;
 
     let providerMessageId: string | undefined;
     try {

@@ -201,7 +201,7 @@ export function SolaImportsWorkspace() {
       <div className="billing-sola-trust" role="note">
         <span>This does not charge customers.</span>
         <span>This does not disable existing Sola schedules.</span>
-        <span>Mapping only links schedules to Connect tenants.</span>
+        <span>Mapping only links schedules to Loopcom tenants.</span>
       </div>
       {effectiveTenantId ? (
         <p className="muted billing-sola-scope-hint">
@@ -283,7 +283,7 @@ export function SolaImportsWorkspace() {
                           type="button"
                           className="btn ghost"
                           disabled={linkingToken === row.id}
-                          title="Store vault token in Connect. Does not charge or disable old schedule."
+                          title="Store vault token in Loopcom. Does not charge or disable old schedule."
                           onClick={() => void (async () => {
                             setLinkingToken(row.id);
                             setActionError("");
@@ -304,7 +304,7 @@ export function SolaImportsWorkspace() {
                         <button
                           type="button"
                           className="btn primary"
-                          title="Disable old Sola schedule and enable Connect autopay."
+                          title="Disable old Sola schedule and enable Loopcom autopay."
                           onClick={() => setCutoverTarget({ row, step: "warning" })}
                         >
                           Take over billing
@@ -364,13 +364,13 @@ export function SolaImportsWorkspace() {
           <div className="billing-p8-drawer billing-sola-cutover-drawer" onClick={(e) => e.stopPropagation()}>
             {cutoverTarget.step === "warning" && (
               <>
-                <h3>Take over billing in Connect</h3>
+                <h3>Take over billing in Loopcom</h3>
                 <div className="billing-sola-cutover-warnings">
                   <p className="billing-sola-cutover-warn-item">⚠ The old Sola recurring schedule will be <strong>permanently disabled</strong>.</p>
-                  <p className="billing-sola-cutover-warn-item">⚠ Connect autopay will be <strong>enabled</strong> for this tenant.</p>
+                  <p className="billing-sola-cutover-warn-item">⚠ Loopcom autopay will be <strong>enabled</strong> for this tenant.</p>
                   <p className="billing-sola-cutover-warn-item billing-sola-cutover-warn-item--safe">
                     ✓ <strong>This will NOT charge the card today.</strong>{" "}
-                    The current billing period was already paid by Sola. Connect will only charge starting on the <strong>next</strong> billing cycle.
+                    The current billing period was already paid by Sola. Loopcom will only charge starting on the <strong>next</strong> billing cycle.
                   </p>
                   {cutoverTarget.row.nextRunAt && (
                     <p className="billing-sola-cutover-warn-item billing-sola-cutover-warn-item--info">
@@ -378,7 +378,7 @@ export function SolaImportsWorkspace() {
                       This period is already covered by Sola. First Connect charge will be after this date.
                     </p>
                   )}
-                  <p className="billing-sola-cutover-warn-item">⚠ Never run both old Sola schedule and Connect autopay at the same time.</p>
+                  <p className="billing-sola-cutover-warn-item">⚠ Never run both old Sola schedule and Loopcom autopay at the same time.</p>
                 </div>
                 <p style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
                   Customer: <strong>{cutoverTarget.row.customerName || cutoverTarget.row.companyName || "—"}</strong>
@@ -435,7 +435,7 @@ export function SolaImportsWorkspace() {
                       }
                     })()}
                   >
-                    {cutoverWorking ? "Taking over…" : "Confirm — disable Sola and enable Connect billing"}
+                    {cutoverWorking ? "Taking over…" : "Confirm — disable Sola and enable Loopcom billing"}
                   </button>
                   <button type="button" className="btn ghost" disabled={cutoverWorking} onClick={() => setCutoverTarget(null)}>Cancel</button>
                 </div>

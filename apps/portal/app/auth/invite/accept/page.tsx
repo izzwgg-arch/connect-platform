@@ -53,7 +53,7 @@ export default function AcceptInvitePage() {
   return (
     <main className="stack" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <form className="panel stack" onSubmit={submit} style={{ width: "min(500px, 94vw)", padding: 28 }}>
-        <h2>Create your Connect password</h2>
+        <h2>Create your Loopcom password</h2>
         {info ? <p className="muted">Welcome {info.name}. Your account is for {info.tenantName}{info.extension ? `, extension ${info.extension}` : ""}.</p> : <p className="muted">Validating invite...</p>}
         <label className="stack"><span className="muted">Password</span><input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /></label>
         <label className="stack"><span className="muted">Confirm password</span><input className="input" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" /></label>

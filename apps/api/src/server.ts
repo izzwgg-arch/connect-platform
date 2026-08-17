@@ -767,7 +767,7 @@ async function queueReceiptEmail(params: { tenantId: string; to: string; amountC
     tenantId: params.tenantId,
     type: "PAYMENT_SUCCEEDED",
     toEmail: params.to,
-    subject: "Your Connect Communications payment receipt",
+    subject: "Your Loopcom payment receipt",
     htmlBody: `<p>Your payment of <strong>$${dollars}</strong> succeeded.</p><p>Next billing date: ${due}</p><p>Receipt ID: ${params.receiptId}</p>`,
     textBody: `Payment succeeded. Amount: $${dollars}. Next billing date: ${due}. Receipt ID: ${params.receiptId}`
   });
@@ -780,7 +780,7 @@ async function queueInvoiceCreatedEmail(params: { tenantId: string; invoiceId: s
     invoiceId: params.invoiceId,
     type: "INVOICE_CREATED",
     toEmail: params.to,
-    subject: "Your Connect Communications invoice",
+    subject: "Your Loopcom invoice",
     htmlBody: `<p>Invoice amount: <strong>$${dollars}</strong></p><p><a href="${params.payUrl}">Pay now</a></p>`,
     textBody: `Invoice amount: $${dollars}. Pay now: ${params.payUrl}`
   });
@@ -902,7 +902,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
       throw err;
     }
     const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
-    const fromName = provider.fromName || "Connect Communications";
+    const fromName = provider.fromName || "Loopcom";
     const pdfAttachments = await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
     const toAddresses = String(job.toEmail || "")
       .split(",")
@@ -957,7 +957,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
   }
 
   const fromEmail = provider.fromEmail || "noreply@connectcomunications.com";
-  const fromName = provider.fromName || "Connect Communications";
+  const fromName = provider.fromName || "Loopcom";
 
   const transporter = nodemailer.createTransport({
     host: smtpHost,
@@ -4338,7 +4338,7 @@ function renderAndroidApkDownloadPage(input: {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Connect for Android</title>
+  <title>Loopcom for Android</title>
   <style>
     :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1120; color: #e5e7eb; }
@@ -4353,7 +4353,7 @@ function renderAndroidApkDownloadPage(input: {
 <body>
   <main>
     <div class="mark">↓</div>
-    <h1>Connect for Android</h1>
+    <h1>Loopcom for Android</h1>
     <div class="version">${escapeHtmlForApkPage(versionText)}</div>
     ${dateLine}
     <a class="button" href="${input.apkUrl}" download>Download</a>
@@ -4533,7 +4533,7 @@ collectDefaultMetrics({ register: apiRegistry });
 
 const apiRequestDuration = new Histogram({
   name: "connect_api_request_duration_seconds",
-  help: "HTTP request duration for the Connect API",
+  help: "HTTP request duration for the Loopcom API",
   labelNames: ["method", "route", "status"] as const,
   buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
   registers: [apiRegistry],
@@ -9004,7 +9004,7 @@ app.get("/voice/me/extension", async (req, reply) => {
     return reply.status(404).send({
       error: "EXTENSION_NOT_PROVISIONED",
       extensionNumber: ext.extNumber,
-      message: "Extension exists in Connect but is not linked to the PBX. Ask an administrator to sync or re-provision WebRTC for this extension.",
+      message: "Extension exists in Loopcom but is not linked to the PBX. Ask an administrator to sync or re-provision WebRTC for this extension.",
     });
   }
 
@@ -9143,7 +9143,7 @@ app.post("/voice/me/reset-sip-password", async (req, reply) => {
       return reply.status(404).send({
         error: code,
         extensionNumber,
-        message: "Extension exists in Connect but is not linked to the PBX. Ask an administrator to sync or re-provision WebRTC for this extension.",
+        message: "Extension exists in Loopcom but is not linked to the PBX. Ask an administrator to sync or re-provision WebRTC for this extension.",
       });
     }
     return reply.status(400).send({ error: code });
@@ -12734,7 +12734,7 @@ app.get("/admin/ops-center", async (req, reply) => {
   const webrtcStatus = iceFailureRate > 0.2 ? "critical" : iceFailureRate > 0.05 ? "warning" : "ok";
 
   const globalHealth = {
-    api: { status: "ok" as const, label: "Connect API", lastIncident: null },
+    api: { status: "ok" as const, label: "Loopcom API", lastIncident: null },
     database: { status: (dbOk ? "ok" : "down") as "ok" | "down", label: "Database", lastIncident: null },
     pbx: {
       status: (pbxOk ? "ok" : telephonyHealth ? "degraded" : "unknown") as "ok" | "degraded" | "down" | "unknown",
@@ -13218,7 +13218,7 @@ app.get("/admin/incidents", async (req, reply) => {
       severity: "critical",
       category: "connectivity",
       title: "PBX Connection Lost",
-      description: "The Connect platform has lost its connection to the PBX phone system. Live call data is unavailable. Existing calls are unaffected, but no new call events are being received.",
+      description: "The Loopcom platform has lost its connection to the PBX phone system. Live call data is unavailable. Existing calls are unaffected, but no new call events are being received.",
       affectedTenant: null,
       affectedUsers: 0,
       likelyCause: telephonyHealth.ami.lastError
@@ -13239,7 +13239,7 @@ app.get("/admin/incidents", async (req, reply) => {
       affectedTenant: null,
       affectedUsers: 0,
       likelyCause: telephonyHealth.ari.lastError ?? "ARI endpoint may be disabled or the port is blocked.",
-      suggestedAction: "Verify ARI is enabled on the PBX (port 8088). Check firewall rules between the Connect server and PBX.",
+      suggestedAction: "Verify ARI is enabled on the PBX (port 8088). Check firewall rules between the Loopcom server and PBX.",
       startedAt: new Date().toISOString(),
       callCount: 0,
       drillDownPath: null,
@@ -18985,7 +18985,7 @@ app.post("/voice/ivr/route-profiles", async (req, reply) => {
   if (!connectTenantId) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before routing calls.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before routing calls.",
     });
   }
   assertIvrTenantAccess(user, connectTenantId);
@@ -20557,7 +20557,7 @@ app.put("/voice/ivr/schedule", async (req, reply) => {
   if (!connectTenantId) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before saving an IVR schedule.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before saving an IVR schedule.",
     });
   }
   assertIvrTenantAccess(user, connectTenantId);
@@ -20635,7 +20635,7 @@ app.post("/voice/ivr/override/activate", async (req, reply) => {
     ? await resolveConnectTenantIdFromScope(d.tenantId)
     : d.tenantId;
   if (!connectTenantId) {
-    return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to Connect before using IVR overrides." });
+    return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to Loopcom before using IVR overrides." });
   }
   assertIvrTenantAccess(user, connectTenantId);
   d.tenantId = connectTenantId;
@@ -20669,7 +20669,7 @@ app.post("/voice/ivr/override/deactivate", async (req, reply) => {
     ? await resolveConnectTenantIdFromScope(body.data.tenantId)
     : body.data.tenantId;
   if (!connectTenantId) {
-    return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to Connect before using IVR overrides." });
+    return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to Loopcom before using IVR overrides." });
   }
   assertIvrTenantAccess(user, connectTenantId);
   const override = await (db as any).ivrOverrideState.upsert({
@@ -20827,7 +20827,7 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   if (!connectTenantId) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before publishing IVR routing.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before publishing IVR routing.",
     });
   }
   assertIvrTenantAccess(user, connectTenantId);
@@ -21186,7 +21186,7 @@ app.post("/voice/did/mappings", async (req, reply) => {
   if (!connectTenantId) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before mapping DIDs.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before mapping DIDs.",
     });
   }
   assertIvrTenantAccess(user, connectTenantId);
@@ -21538,7 +21538,7 @@ app.get("/voice/did/capabilities", async (req, reply) => {
     // Hint to help super-admins turn it on without a doc-dive.
     howToEnable: inboundApiEnabled || routeHelperEnabled
       ? null
-      : "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Connect API environment and restart to enable DID takeover.",
+      : "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Loopcom API environment and restart to enable DID takeover.",
   });
 });
 
@@ -21885,7 +21885,7 @@ app.post("/voice/did/:id/switch-to-connect", async (req, reply) => {
   if (!inboundApiEnabled) {
     return reply.code(503).send({
       error: "pbx_inbound_api_disabled",
-      detail: "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Connect API environment to allow DID takeover.",
+      detail: "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Loopcom API environment to allow DID takeover.",
     });
   }
 
@@ -22105,7 +22105,7 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
   if (!inboundApiEnabled) {
     return reply.code(503).send({
       error: "pbx_inbound_api_disabled",
-      detail: "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Connect API environment to allow DID restore.",
+      detail: "Set PBX_ROUTE_HELPER_* or PBX_INBOUND_API=true in the Loopcom API environment to allow DID restore.",
     });
   }
 
@@ -22118,7 +22118,7 @@ app.post("/voice/did/:id/switch-to-pbx", async (req, reply) => {
   if (!destinationType || !destination) {
     return reply.code(409).send({
       error: "no_original_captured",
-      detail: "Connect has no stored pre-takeover destination for this DID. Call /inspect then pass overrideDestinationType and overrideDestination.",
+      detail: "Loopcom has no stored pre-takeover destination for this DID. Call /inspect then pass overrideDestinationType and overrideDestination.",
     });
   }
 
@@ -22417,16 +22417,16 @@ async function assertMohRuntimeReadiness(tenantId: string, value: string): Promi
   switch (result.reason) {
     case "invalid_moh_runtime_class":
       statusCode = 400;
-      detail = "MOH profiles must use a VitalPBX class (e.g. moh3) or a Connect upload class (connect_<slug>_<name>).";
+      detail = "MOH profiles must use a VitalPBX class (e.g. moh3) or a Loopcom upload class (connect_<slug>_<name>).";
       break;
     case "connect_asset_not_pbx_ready":
       detail =
-        `Connect MOH upload ${result.selectedClass} is not PBX-ready. Required: status=ready, conversionStatus=ready, `
+        `Loopcom MOH upload ${result.selectedClass} is not PBX-ready. Required: status=ready, conversionStatus=ready, `
         + `pbxStorageKey set, pbxFormat Asterisk-safe (wav_*). Re-upload the audio (a .wav source is recommended) and wait for conversion to finish, then publish again.`;
       break;
     case "connect_asset_not_in_sync_manifest":
       detail =
-        `Connect MOH upload ${result.selectedClass} would not be advertised in /voice/moh/sync-manifest. The PBX media-sync helper would not mirror any file for this class.`;
+        `Loopcom MOH upload ${result.selectedClass} would not be advertised in /voice/moh/sync-manifest. The PBX media-sync helper would not mirror any file for this class.`;
       break;
     case "moh_runtime_class_not_synced":
       detail = `Runtime MOH class ${result.selectedClass} is not present in the synced VitalPBX MOH catalog for this tenant.`;
@@ -22834,7 +22834,7 @@ async function doMohPublish(
     });
     throw Object.assign(new Error("native_tenant_moh_sync_failed"), {
       statusCode: 502,
-      detail: "Connect wrote the runtime AstDB keys, but could not update the tenant's native VitalPBX inbound routes/extensions. Fix the PBX helper and republish.",
+      detail: "Loopcom wrote the runtime AstDB keys, but could not update the tenant's native VitalPBX inbound routes/extensions. Fix the PBX helper and republish.",
       nativeSync,
     });
   }
@@ -22899,7 +22899,7 @@ app.post("/voice/moh/profiles", async (req, reply) => {
   if (!connectTenantId) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before creating MOH profiles.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before creating MOH profiles.",
     });
   }
   assertMohTenantAccess(user, connectTenantId);
@@ -23032,7 +23032,7 @@ app.put("/voice/moh/extension-overrides", async (req, reply) => {
   if (!tid) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before saving an extension override.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before saving an extension override.",
     });
   }
 
@@ -23147,7 +23147,7 @@ app.put("/voice/moh/schedule", async (req, reply) => {
   if (!tid) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before saving the Hold schedule.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before saving the Hold schedule.",
     });
   }
   assertMohTenantAccess(user, tid);
@@ -23586,7 +23586,7 @@ app.post("/voice/moh/assets", async (req, reply) => {
   if (!resolvedTenantId) {
     return reply.code(400).send({
       error: "tenant_not_linked",
-      detail: "This VitalPBX tenant has no Connect tenant link yet. Link it in Admin → PBX before uploading MOH assets.",
+      detail: "This VitalPBX tenant has no Loopcom tenant link yet. Link it in Admin → PBX before uploading MOH assets.",
     });
   }
   assertIvrTenantAccess(user, resolvedTenantId);
@@ -23808,7 +23808,7 @@ app.get("/voice/moh/status", async (req, reply) => {
   const warnings: string[] = [];
 
   if (!isValidMohRuntimeClass(mohClassName)) {
-    warnings.push("mohClassName is not a valid VitalPBX (mohN) or Connect-upload (connect_…) runtime class.");
+    warnings.push("mohClassName is not a valid VitalPBX (mohN) or Loopcom-upload (connect_…) runtime class.");
     return reply.send({
       tenantId: connectTenantId,
       mohClassName: rawName,
@@ -23832,7 +23832,7 @@ app.get("/voice/moh/status", async (req, reply) => {
   const classType: "native" | "connect" = isConnectMohRuntimeClass(mohClassName) ? "connect" : "native";
   if (classType === "connect") {
     warnings.push(
-      "Connect-uploaded MOH is intended for tenant/channel default hold (AstDB). Queue-level hold music in VitalPBX still uses native mohN unless a separate queue musicclass mapping is installed on the PBX.",
+      "Loopcom-uploaded MOH is intended for tenant/channel default hold (AstDB). Queue-level hold music in VitalPBX still uses native mohN unless a separate queue musicclass mapping is installed on the PBX.",
     );
   }
 
@@ -23884,14 +23884,14 @@ app.get("/voice/moh/status", async (req, reply) => {
       : "";
 
   if (classType === "connect" && asset?.conversionStatus === "ready" && !pbxArtifactExists) {
-    warnings.push("PBX WAV artifact missing from Connect storage — PBX sync cannot succeed until the file exists.");
+    warnings.push("PBX WAV artifact missing from Loopcom storage — PBX sync cannot succeed until the file exists.");
   }
   if (classType === "connect" && asset && asset.conversionStatus !== "ready") {
     warnings.push(`Conversion status is "${asset.conversionStatus}" — asset is not eligible for PBX manifest until ready.`);
   }
   if (classType === "connect") {
     warnings.push(
-      "lastSyncAt/lastSyncStatus are the last successful Connect publish for this class, not proof the PBX finished connect-media-sync.",
+      "lastSyncAt/lastSyncStatus are the last successful Loopcom publish for this class, not proof the PBX finished connect-media-sync.",
     );
   }
 
@@ -25189,7 +25189,7 @@ app.put("/billing/sola/config", async (req, reply) => {
   if (solaWebhookPinMissingForProd(input.mode, nextSecrets.webhookSecret)) {
     return reply.status(400).send({
       error: "SOLA_WEBHOOK_PIN_REQUIRED",
-      message: "Production mode requires a webhook verification PIN. Enter the same PIN in Connect and in the SOLA/Cardknox webhook or postback security settings.",
+      message: "Production mode requires a webhook verification PIN. Enter the same PIN in Loopcom and in the SOLA/Cardknox webhook or postback security settings.",
     });
   }
 
@@ -25535,7 +25535,7 @@ app.post("/settings/email/test", async (req, reply) => {
       tenantId: admin.tenantId,
       type: "EMAIL_TEST",
       toEmail: target,
-      subject: "Connect Communications email test",
+      subject: "Loopcom email test",
       htmlBody: "<p>Email provider test successful.</p>",
       textBody: "Email provider test successful."
     });
@@ -25764,10 +25764,10 @@ app.post("/admin/email-settings/google-workspace/test", async (req, reply) => {
   }
   const sentAt = new Date().toISOString();
   const fromAddr = (row.fromEmail || "noreply@connectcomunications.com").trim();
-  const subject = "Connect Communications test email";
+  const subject = "Loopcom test email";
   const htmlBody = `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
 <p><strong>Your Google Workspace email integration is working.</strong></p>
-<p>This message was sent from Connect using your configured mailbox.</p>
+<p>This message was sent from Loopcom using your configured mailbox.</p>
 <ul>
 <li><strong>From:</strong> ${fromAddr}</li>
 <li><strong>Sent:</strong> ${sentAt}</li>
@@ -28992,7 +28992,7 @@ app.post("/internal/pbx/wake-extension", async (req, reply) => {
     }).catch(() => undefined);
     app.log.warn(
       { pbxCallId: input.pbxCallId, pbxVitalTenantId: input.pbxVitalTenantId },
-      "wake-extension: no Connect tenant for PBX vitalTenantId",
+      "wake-extension: no Loopcom tenant for PBX vitalTenantId",
     );
     return reply.code(200).send({ ok: false, reason: "TENANT_NOT_FOUND", elapsedMs: Date.now() - t0 });
   }
@@ -33774,7 +33774,7 @@ async function runCdrPipelineReconciliation(params: {
     { cause: "heuristic_short_from_long_to_not_outgoing", count: heuristicShortFromLongNotOutgoing, note: "Possible outbound misclassified as incoming/internal." },
     { cause: "heuristic_long_from_short_to_not_incoming", count: heuristicLongFromShortNotIncoming, note: "Possible inbound misclassified." },
     { cause: "ConnectCdr_only_not_in_pbx_window", count: onlyConnectKeys.length, note: "LinkedIds in Connect but not in PBX pull — timezone/window, tenant scope, or REST vs AMI id mismatch." },
-    { cause: "pbx_rows_without_join_key", count: pbxRowsWithoutJoinKey, note: "PBX rows missing linkedid and uniqueid — cannot join to Connect." },
+    { cause: "pbx_rows_without_join_key", count: pbxRowsWithoutJoinKey, note: "PBX rows missing linkedid and uniqueid — cannot join to Loopcom." },
     { cause: "kpi_query_exclusion", count: kpiExclusionVsPersisted, note: "Reserved; 0 when KPI uses same startedAt window as this diagnostic." },
   ].sort((a, b) => b.count - a.count);
 
@@ -33817,7 +33817,7 @@ async function runCdrPipelineReconciliation(params: {
       pbxCanonicalCalls: pbxCanonicalTotal,
       pbxByDirection: pbxByDir,
       connectCdrRows: connectTotal,
-      connectRawLegTotal,                    // SUM(rawLegCount) — PBX-style channel-leg count from Connect
+      connectRawLegTotal,                    // SUM(rawLegCount) — PBX-style channel-leg count from Loopcom
       connectLegsPerCall: connectTotal > 0 ? Math.round((connectRawLegTotal / connectTotal) * 100) / 100 : null,
       connectByDirection: connectByDir,
       kpiQuerySameWindow: { incoming: kpiIncoming, outgoing: kpiOutgoing, internal: kpiInternal },
@@ -34100,10 +34100,10 @@ app.get("/admin/diagnostics/dashboard-reconciliation", async (req, reply) => {
       },
       nullTenantRows: nullTenantCount,
       countingModelNote: [
-        "Connect stores one row per linked call (deduplicated by linkedId).",
+        "Loopcom stores one row per linked call (deduplicated by linkedId).",
         "The PBX CDR database stores one record per channel leg.",
-        "A single logical call (e.g. inbound → IVR → queue → extension) creates 3–5 CDR records in Asterisk but only 1 row in Connect.",
-        "Therefore Connect totals will be lower than PBX dashboard totals even after direction correction.",
+        "A single logical call (e.g. inbound → IVR → queue → extension) creates 3–5 CDR records in Asterisk but only 1 row in Loopcom.",
+        "Therefore Loopcom totals will be lower than PBX dashboard totals even after direction correction.",
         "This is expected and not a bug — it reflects different counting models (calls vs call-legs).",
       ].join(" "),
       backfillNote: directionMismatches.length > 0
@@ -34299,9 +34299,9 @@ app.get("/admin/diagnostics/raw-vs-deduped", async (req, reply) => {
       })),
       // ── Explanation ───────────────────────────────────────────────────────
       explanation: [
-        `Connect stores one row per linkedId (logical call). rawLegCount on each row counts how many AMI Cdr events (channel legs) were received for that call.`,
+        `Loopcom stores one row per linkedId (logical call). rawLegCount on each row counts how many AMI Cdr events (channel legs) were received for that call.`,
         `connectRawLegTotal (${rawLegTotal}) is the PBX-style raw CDR count — this should approximate the PBX dashboard total.`,
-        `connectUniqueCalls (${uniqueCalls}) is Connect's deduplicated logical call count.`,
+        `connectUniqueCalls (${uniqueCalls}) is Loopcom's deduplicated logical call count.`,
         legsPerCall !== null
           ? `Average ${legsPerCall}× legs per logical call — consistent with Asterisk generating ${legsPerCall}× CDR records per call through IVR/queue/extension routing.`
           : "No calls in window.",

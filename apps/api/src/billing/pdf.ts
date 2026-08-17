@@ -5,13 +5,15 @@ import { money } from "./emailTemplates";
 import { billingInvoicePublicPayUrl } from "./billingEmailLifecycle";
 import { resolveInvoiceEmailBranding, sanitizePlainText } from "./invoiceBranding";
 
-const BUNDLED_LOGO_PATH = path.join(__dirname, "assets", "connect-logo.png");
+const BUNDLED_LOGO_PATH = path.join(__dirname, "assets", "loopcom-logo.png");
 const BUNDLED_INTER_PATH = path.join(__dirname, "assets", "InterVariable.ttf");
 const FONT_REGULAR = "ConnectSans";
 const FONT_MEDIUM = "ConnectSans-Medium";
 const FONT_SEMIBOLD = "ConnectSans-Semibold";
 const FONT_BOLD = "ConnectSans-Bold";
 
+// Legal entity, deliberately NOT rebranded to Loopcom: the invoice/receipt must name the
+// LLC that actually bills the customer. Only the logo and display branding are Loopcom.
 const CONNECT_LEGAL_NAME = "Connect Communications, LLC";
 const CONNECT_FOOTER_NAME = "Connect Communications LLC";
 const CONNECT_SUPPORT_EMAIL = "support@connectcomunications.com";
@@ -402,7 +404,10 @@ export async function renderBillingInvoicePdf(invoice: any, options?: RenderBill
     // Header: logo left, invoice title/number right.
     if (logo) {
       try {
-        doc.image(logo, ml + 2, 34, { fit: [155, 48] });
+        // Box widened 155 -> 193 so the wider lockup still draws 42.7pt tall — the exact
+        // height the previous logo occupied. Everything else on the page is positioned by
+        // absolute coordinate, so only the logo's own size is affected.
+        doc.image(logo, ml + 2, 34, { fit: [193, 48] });
       } catch {
         doc.fillColor(ink).font(FONT_BOLD).fontSize(15.5).text(CONNECT_LEGAL_NAME, ml, 44, { width: 210 });
       }

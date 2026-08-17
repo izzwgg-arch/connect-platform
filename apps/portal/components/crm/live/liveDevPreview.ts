@@ -21,7 +21,7 @@ export const DEV_PREVIEW_CONTACT: DevPreviewLiveContact = {
   displayName: "Jordan Martinez",
   firstName: "Jordan",
   lastName: "Martinez",
-  company: "Connect Demo Co LLC",
+  company: "Loopcom Demo Co LLC",
   title: "Operations Manager",
   crmStage: "QUALIFIED",
   doNotCall: false,
@@ -64,7 +64,7 @@ export const DEV_PREVIEW_SCRIPT_SUMMARIES: ScriptSummary[] = [
 export const DEV_PREVIEW_SCRIPT: Script = {
   ...DEV_PREVIEW_SCRIPT_SUMMARIES[0],
   body: `Opening:
-Hi Jordan, this is [Agent Name] from Connect Communications. I'm reaching out about the follow-up you requested on your business phone plan.
+Hi Jordan, this is [Agent Name] from Loopcom. I'm reaching out about the follow-up you requested on your business phone plan.
 
 Need Discovery:
 Before I share options, can you tell me how your team currently handles outbound callbacks and voicemail follow-up?

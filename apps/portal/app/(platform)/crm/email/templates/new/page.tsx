@@ -702,7 +702,7 @@ export default function CrmEmailTemplateBuilderPage() {
                   <PanelTitle title="Global Styles" />
                   <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
                     Primary Color
-                    <input className="mt-2 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500 outline-none" value="Connect Blue" disabled title="Primary color is not configurable in the current branding API." />
+                    <input className="mt-2 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500 outline-none" value="Loopcom Blue" disabled title="Primary color is not configurable in the current branding API." />
                   </label>
 
                   <PanelTitle title="Template Details" />

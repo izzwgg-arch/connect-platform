@@ -328,7 +328,7 @@ export default function CrmEmailSettingsPage() {
       <CRMPageHeader
         icon={<Server className="h-5 w-5" />}
         title="CRM Email Settings"
-        subtitle="Sender infrastructure, reply tracking, and sync diagnostics for CRM email. Metadata-first — Connect never archives inboxes."
+        subtitle="Sender infrastructure, reply tracking, and sync diagnostics for CRM email. Metadata-first — Loopcom never archives inboxes."
       />
 
       <div className="sticky top-2 z-20 rounded-crm-lg border border-crm-border/75 bg-crm-surface/90 px-3 py-2 shadow-[0_14px_40px_-24px_rgba(0,0,0,0.7)] backdrop-blur-md">

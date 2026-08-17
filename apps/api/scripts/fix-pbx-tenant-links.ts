@@ -102,7 +102,7 @@ async function main(): Promise<void> {
 
   // ── 3. All Connect tenants ────────────────────────────────────────────────
   const allTenants = await db.tenant.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } });
-  console.log("=== Connect Tenants ===");
+  console.log("=== Loopcom Tenants ===");
   for (const t of allTenants) console.log(`  id=${t.id}  name=${t.name}`);
 
   // ── 4. All existing TenantPbxLink rows ───────────────────────────────────
@@ -144,7 +144,7 @@ No changes made. To create tenants + link + backfill, re-run with --fix:
 
   pnpm exec tsx scripts/fix-pbx-tenant-links.ts --fix
 
-Or supply existing Connect tenant IDs to skip creation:
+Or supply existing Loopcom tenant IDs to skip creation:
 
   pnpm exec tsx scripts/fix-pbx-tenant-links.ts --fix \\
     --t2=<connectTenantId-for-a_plus_center> \\
@@ -169,10 +169,10 @@ Or supply existing Connect tenant IDs to skip creation:
     const existing = await findTenantByName(pbxName2);
     if (existing) {
       tenantT2 = existing;
-      console.log(`\n[T2] Found existing Connect tenant: id=${tenantT2.id}  name=${tenantT2.name}`);
+      console.log(`\n[T2] Found existing Loopcom tenant: id=${tenantT2.id}  name=${tenantT2.name}`);
     } else {
       tenantT2 = await createTenant(pbxName2);
-      console.log(`\n[T2] Created new Connect tenant: id=${tenantT2.id}  name=${tenantT2.name}`);
+      console.log(`\n[T2] Created new Loopcom tenant: id=${tenantT2.id}  name=${tenantT2.name}`);
     }
   }
 
@@ -185,16 +185,16 @@ Or supply existing Connect tenant IDs to skip creation:
     const existing = await findTenantByName(pbxName8);
     if (existing) {
       tenantT8 = existing;
-      console.log(`[T8] Found existing Connect tenant: id=${tenantT8.id}  name=${tenantT8.name}`);
+      console.log(`[T8] Found existing Loopcom tenant: id=${tenantT8.id}  name=${tenantT8.name}`);
     } else {
       tenantT8 = await createTenant(pbxName8);
-      console.log(`[T8] Created new Connect tenant: id=${tenantT8.id}  name=${tenantT8.name}`);
+      console.log(`[T8] Created new Loopcom tenant: id=${tenantT8.id}  name=${tenantT8.name}`);
     }
   }
 
   console.log(`\n[FIX] Will link:`);
-  console.log(`  T2 (vitalTenantId=2, code=T2) → Connect tenant id=${tenantT2.id}  name=${tenantT2.name}`);
-  console.log(`  T8 (vitalTenantId=8, code=T8) → Connect tenant id=${tenantT8.id}  name=${tenantT8.name}`);
+  console.log(`  T2 (vitalTenantId=2, code=T2) → Loopcom tenant id=${tenantT2.id}  name=${tenantT2.name}`);
+  console.log(`  T8 (vitalTenantId=8, code=T8) → Loopcom tenant id=${tenantT8.id}  name=${tenantT8.name}`);
 
   // ── 7. Upsert TenantPbxLink for T2 and T8 ────────────────────────────────
   const linkT2 = await db.tenantPbxLink.upsert({

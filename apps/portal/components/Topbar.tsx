@@ -24,8 +24,8 @@ export function Topbar({ onToggleNav }: TopbarProps) {
         >
           <Menu size={18} />
         </button>
-        <ConnectLogo className="brand-logo-svg" />
-        <span className="brand-name">Connect</span>
+        <ConnectLogo />
+        <span className="brand-name">Loopcom</span>
       </div>
 
       <div className="topbar-center">

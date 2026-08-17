@@ -452,7 +452,7 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
           <label style={{ fontSize: 13 }}>
             Tax calculation provider
             <select value={providerId} onChange={(e) => setProviderId(e.target.value)} style={{ display: "block", marginTop: 6, width: "100%" }}>
-              <option value="tax_profile_v1">Tax profile (Connect manual rates)</option>
+              <option value="tax_profile_v1">Tax profile (Loopcom manual rates)</option>
               <option value="external_telecom_stub">External stub (no tax lines)</option>
             </select>
           </label>

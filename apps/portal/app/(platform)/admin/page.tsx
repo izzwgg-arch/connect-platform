@@ -40,7 +40,7 @@ export default function AdminPage() {
             <AdminModuleCard title="Deploy Center" summary="Enqueue, monitor, and manage production deployments through the safe deploy queue. View logs and cancel jobs." href="/admin/deploy-center" />
             <AdminModuleCard
               title="Server Health"
-              summary="Live CPU, RAM, storage, and service health for the Connect app host with light and dark themes."
+              summary="Live CPU, RAM, storage, and service health for the Loopcom app host with light and dark themes."
               href="/admin/server-health"
             />
             <AdminModuleCard

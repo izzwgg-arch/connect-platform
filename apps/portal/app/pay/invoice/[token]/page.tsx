@@ -194,8 +194,9 @@ export default function PublicBillingInvoicePayPage() {
     <main className="billing-pay-page" data-pay-theme={payTheme}>
       <div className="billing-pay-bg" aria-hidden="true" />
       <div className="billing-pay-shell">
-        <div className="billing-pay-logo" aria-label="Connect Communications">
-          <Image src="/connect-logo.png" alt="Connect Communications" width={150} height={42} priority />
+        <div className="billing-pay-logo">
+          {/* The full-colour lockup reads on both the light and dark ground this page uses. */}
+          <Image src="/loopcom-logo.png" alt="Loopcom" width={150} height={33} priority />
         </div>
 
         <section className="billing-pay-card" aria-label="Secure invoice payment">
@@ -268,7 +269,7 @@ export default function PublicBillingInvoicePayPage() {
                 secureNote={(
                   <div className="billing-pay-secure-note">
                     <ShieldCheck size={20} />
-                    <p>Connect Communications never stores your full card number or CVV.</p>
+                    <p>Loopcom never stores your full card number or CVV.</p>
                   </div>
                 )}
                 onSubmitCardToken={submitPayment}

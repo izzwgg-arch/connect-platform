@@ -40,5 +40,5 @@ test("invoiceSentEmail embeds company display name as billed company context", (
   });
   assert.match(t.html, /Billed company/);
   assert.match(t.html, /Northwind/);
-  assert.doesNotMatch(t.html, /Sent by Northwind via Connect Communications billing/);
+  assert.doesNotMatch(t.html, /Sent by Northwind via Loopcom billing/);
 });

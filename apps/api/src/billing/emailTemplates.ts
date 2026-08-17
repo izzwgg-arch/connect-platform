@@ -10,13 +10,19 @@ function fmtDate(d: Date | string): string {
   return formatBillingDate(d);
 }
 
-/** Get fallback Connect logo URL from PUBLIC_PORTAL_URL env. */
+/**
+ * Fallback Loopcom logo URL, taken from PUBLIC_PORTAL_URL.
+ *
+ * Deep-ink rendition — the email shell is white. The old `/connect-logo.png` is kept
+ * served on the portal so already-delivered emails keep rendering their logo.
+ */
 function getDefaultLogoUrl(): string {
   const base = (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
-  return `${base}/connect-logo.png`;
+  return `${base}/loopcom-email.png`;
 }
 
 const CONNECT_FALLBACK = resolveInvoiceEmailBranding({}, null);
+// Legal entity, deliberately NOT rebranded — this names the LLC that bills the customer.
 const CONNECT_COMPANY_NAME = "Connect Communications, LLC";
 const CONNECT_SUPPORT_EMAIL = "support@connectcomunications.com";
 const CONNECT_SUPPORT_DOMAIN = "connectcomunications.com";
@@ -52,7 +58,7 @@ function supportBlock(): string {
 }
 
 function brandFooter(): string {
-  return `<p style="margin:0;font-size:13px;line-height:20px;color:#64748b;">Sent by Connect Communications billing.</p>`;
+  return `<p style="margin:0;font-size:13px;line-height:20px;color:#64748b;">Sent by Loopcom billing.</p>`;
 }
 
 /**
@@ -94,8 +100,11 @@ function emailShell(title: string, body: string, _brand: InvoiceEmailBranding): 
               </tr>
               <tr>
                 <td class="email-pad" style="padding:24px 28px 18px;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;background:#ffffff;">
-                  <img src="${escapeHtml(logoSrc)}" alt="Connect Communications" width="156" style="display:block;width:156px;max-width:156px;height:auto;border:0;outline:none;text-decoration:none;margin:0 0 18px;" />
-                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Connect Communications billing</p>
+                  <!-- 194px wide renders 43px tall, exactly the height the previous logo occupied
+                       at 156px. Sized by height, not width, so the lockup's wider aspect ratio
+                       does not pull the rest of the email upward. -->
+                  <img src="${escapeHtml(logoSrc)}" alt="Loopcom" width="194" style="display:block;width:194px;max-width:194px;height:auto;border:0;outline:none;text-decoration:none;margin:0 0 18px;" />
+                  <p style="margin:0 0 6px;font-size:13px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${CONNECT_BLUE};">Loopcom billing</p>
                   <h1 style="margin:0;font-size:26px;line-height:32px;font-weight:750;color:#0f172a;">${escapeHtml(title)}</h1>
                 </td>
               </tr>
@@ -232,7 +241,7 @@ export function invoiceSentEmail(input: {
     input.portalInvoiceUrl ? `Pay invoice: ${input.portalInvoiceUrl}` : null,
     "",
     "Your invoice PDF is attached.",
-    `Questions? Contact Connect Communications billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
+    `Questions? Contact Loopcom billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
   ].filter((line): line is string => line != null);
   const text = textLines.join("\n");
   return { subject, html: emailShell("Invoice ready", body, brand), text };
@@ -251,7 +260,7 @@ export function autopayReminderEmail(input: {
 }): { subject: string; html: string; text: string } {
   const brand = mergeBrand(input.brand ?? null);
   const bal = input.balanceDueCents != null ? input.balanceDueCents : input.totalCents;
-  const subject = `Your Connect payment is due in 3 days`;
+  const subject = `Your Loopcom payment is due in 3 days`;
 
   const rows = [
     summaryRow("Amount due", `<strong style="color:${CONNECT_BLUE};">${money(bal)}</strong>`, false, true),
@@ -337,7 +346,7 @@ export function paymentLinkEmail(input: {
     `Invoice number: ${input.invoiceNumber}`,
     `Due date: ${fmtDate(input.dueDate)}`,
     input.payUrl ? `Pay invoice: ${input.payUrl}` : null,
-    `Questions? Contact Connect Communications billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
+    `Questions? Contact Loopcom billing at ${CONNECT_SUPPORT_EMAIL} or ${CONNECT_SUPPORT_PHONE}.`,
   ].filter((line): line is string => line != null).join("\n");
   return { subject, html: emailShell("Payment link", body, brand), text };
 }

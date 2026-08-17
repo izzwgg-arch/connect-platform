@@ -106,7 +106,7 @@ function createFullWindow(show = true): BrowserWindow {
     minWidth: 980,
     minHeight: 640,
     show,
-    title: "Connect",
+    title: "Loopcom",
     backgroundColor: "#07111f",
     icon: iconPath,
     webPreferences: webPreferences("full"),
@@ -144,7 +144,7 @@ function createMiniWindow(show = true): BrowserWindow {
     minWidth: 320,
     minHeight: 560,
     show: false,
-    title: "Connect Mini Dialer",
+    title: "Loopcom Mini Dialer",
     frame: false,
     resizable: true,
     alwaysOnTop: settings.alwaysOnTop,
@@ -192,7 +192,7 @@ function createPhoneEngineWindow(): BrowserWindow {
     width: 420,
     height: 620,
     show: false,
-    title: "Connect Phone Engine",
+    title: "Loopcom Phone Engine",
     backgroundColor: "#07111f",
     icon: iconPath,
     webPreferences: webPreferences("phone-engine"),
@@ -218,11 +218,11 @@ function showMiniForIncomingCall(): void {
 function rebuildTray(): void {
   if (!tray) {
     tray = new Tray(createAppIcon(16));
-    tray.setToolTip("Connect");
+    tray.setToolTip("Loopcom");
   }
 
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Open Connect", click: () => createFullWindow(true) },
+    { label: "Open Loopcom", click: () => createFullWindow(true) },
     { label: "Open Mini Dialer", click: () => createMiniWindow(true) },
     {
       label: settings.alwaysOnTop ? "Turn Off Always On Top" : "Keep Mini Dialer On Top",
@@ -230,7 +230,7 @@ function rebuildTray(): void {
     },
     { type: "separator" },
     {
-      label: "Quit Connect",
+      label: "Quit Loopcom",
       click: () => {
         isQuitting = true;
         app.quit();
@@ -308,7 +308,7 @@ function registerIpc(): void {
         if (Notification.isSupported()) {
           const note = new Notification({
             title: "Incoming call",
-            body: state.remoteParty ? String(state.remoteParty) : "Connect call",
+            body: state.remoteParty ? String(state.remoteParty) : "Loopcom call",
             icon: iconPath,
           });
           note.on("click", showMiniForIncomingCall);

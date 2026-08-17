@@ -88,7 +88,7 @@ export default function LoginPage() {
       const looksLikeHtml = /<!DOCTYPE|Expected JSON from API/i.test(raw);
       setError(
         looksLikeHtml
-          ? "Cannot reach the Connect API (got HTML instead of JSON). Start the API (pnpm --filter @connect/api dev) and ensure port 3001 is free — another app may be using it. Restart the portal dev server after fixing."
+          ? "Cannot reach the Loopcom API (got HTML instead of JSON). Start the API (pnpm --filter @connect/api dev) and ensure port 3001 is free — another app may be using it. Restart the portal dev server after fixing."
           : raw,
       );
     } finally {
@@ -110,7 +110,7 @@ export default function LoginPage() {
   return (
     <main className="stack" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: "24px" }}>
       <form className="panel stack" onSubmit={submit} style={{ width: "min(440px, 92vw)" }}>
-        <h2>Connect Communications</h2>
+        <h2>Loopcom</h2>
         <p className="muted">Sign in to access your telecom workspace.</p>
         <label className="stack">
           <span className="muted">Email</span>

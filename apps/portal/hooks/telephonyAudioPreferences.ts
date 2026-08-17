@@ -3,7 +3,7 @@ export const WEB_RINGER_ENABLED_STORAGE_KEY = "connect_web_ringer_enabled";
 export const WEB_RINGER_ENABLED_EVENT = "connect:web-ringer-enabled";
 
 export const WEB_RINGTONE_OPTIONS = [
-  { id: "connect-default", label: "Connect Default" },
+  { id: "connect-default", label: "Loopcom Default" },
   { id: "classic", label: "Classic Ring" },
 ] as const;
 
@@ -27,7 +27,7 @@ export function setWebIncomingRingtone(next: WebRingtoneId): void {
 }
 
 export function getWebIncomingRingtoneLabel(id: WebRingtoneId): string {
-  return WEB_RINGTONE_OPTIONS.find((option) => option.id === id)?.label ?? "Connect Default";
+  return WEB_RINGTONE_OPTIONS.find((option) => option.id === id)?.label ?? "Loopcom Default";
 }
 
 export function getWebRingerEnabled(): boolean {

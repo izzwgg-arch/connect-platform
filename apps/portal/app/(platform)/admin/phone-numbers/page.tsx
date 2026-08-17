@@ -104,7 +104,7 @@ function statusBadge(source: "pbx_did" | "connect", status: string) {
 function sourceBadge(source: "pbx_did" | "connect") {
   return source === "pbx_did"
     ? <span className="badge info">PBX DID</span>
-    : <span className="badge neutral">Connect</span>;
+    : <span className="badge neutral">Loopcom</span>;
 }
 
 // ── Page ───────────────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ function sourceBadge(source: "pbx_did" | "connect") {
 const SOURCE_OPTIONS = [
   { value: "", label: "All sources" },
   { value: "pbx_did", label: "PBX DIDs" },
-  { value: "connect", label: "Connect numbers" },
+  { value: "connect", label: "Loopcom numbers" },
 ];
 
 const STATUS_OPTIONS = [
@@ -271,7 +271,7 @@ export default function AdminPhoneNumbersPage() {
       <div className="stack" style={{ gap: 18 }}>
         <PageHeader
           title="Phone Numbers"
-          subtitle="All PBX inbound DIDs and Connect phone numbers across tenants."
+          subtitle="All PBX inbound DIDs and Loopcom phone numbers across tenants."
           actions={
             <button
               className="btn btn-sm btn-ghost"
@@ -296,7 +296,7 @@ export default function AdminPhoneNumbersPage() {
             <div className="stat-value">{isLoading ? "—" : pbxTotal}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Connect Numbers</div>
+            <div className="stat-label">Loopcom Numbers</div>
             <div className="stat-value">{isLoading ? "—" : cnTotal}</div>
           </div>
           <div className="stat-card">

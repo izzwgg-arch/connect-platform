@@ -6,7 +6,7 @@ const port = Number(process.env.PORT ?? 3003);
 const base = `http://127.0.0.1:${port}`;
 
 async function run() {
-  console.log(`\nConnectComms Telephony Smoke Test → ${base}\n`);
+  console.log(`\nLoopcom Telephony Smoke Test → ${base}\n`);
 
   try {
     const health = await fetch(`${base}/health`).then((r) => r.json());

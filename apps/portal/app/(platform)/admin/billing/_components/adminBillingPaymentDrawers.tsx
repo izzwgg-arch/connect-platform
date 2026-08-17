@@ -756,7 +756,7 @@ export function OneTimeChargeDrawer({
 
                 <input type="radio" name="chargeMode" checked={chargeMode === "new_card"} onChange={() => setChargeMode("new_card")} />
 
-                <span><strong>Charge a new card</strong><span>Secure Cardknox iFields — card data never touches Connect</span></span>
+                <span><strong>Charge a new card</strong><span>Secure Cardknox iFields — card data never touches Loopcom</span></span>
 
               </label>
 

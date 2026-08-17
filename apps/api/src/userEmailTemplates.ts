@@ -39,7 +39,7 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
       <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;margin-bottom:18px;">
         <tr>
           <td align="center">
-            <span style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#6366f1;font-weight:800;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">Connect Communications</span>
+            <span style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#6366f1;font-weight:800;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">Loopcom</span>
           </td>
         </tr>
       </table>
@@ -50,7 +50,7 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
         <!-- Card header -->
         <tr>
           <td style="padding:40px 44px 34px;background:linear-gradient(135deg,#1e3a8a 0%,#2563eb 55%,#0891b2 100%);">
-            <p style="margin:0 0 10px;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);font-weight:700;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">Connect Communications</p>
+            <p style="margin:0 0 10px;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);font-weight:700;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">Loopcom</p>
             <h1 style="margin:0;font-size:27px;line-height:1.25;color:#ffffff;font-weight:800;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">${esc(opts.headerTitle)}</h1>
             ${opts.headerSubtitle ? `<p style="margin:9px 0 0;font-size:15px;color:rgba(255,255,255,0.72);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">${esc(opts.headerSubtitle)}</p>` : ""}
           </td>
@@ -67,7 +67,7 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
         <tr>
           <td style="padding:18px 44px 24px;background:#f8fafc;border-top:1px solid #e5e7eb;">
             <p style="margin:0;font-size:11.5px;color:#9ca3af;line-height:1.6;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Helvetica,Arial,sans-serif;">
-              © ${year} Connect Communications · All rights reserved.<br>
+              © ${year} Loopcom · All rights reserved.<br>
               This email was sent on behalf of your organization.
             </p>
           </td>
@@ -146,10 +146,10 @@ export function welcomeCreatePasswordEmail(input: {
     ? `
 ${divider()}
 
-<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Connect Mobile (Android)</p>
-<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Connect app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
+<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Loopcom Mobile (Android)</p>
+<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Loopcom app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
 
-${secondaryCtaButton("Download Connect for Android", input.androidApkUrl)}
+${secondaryCtaButton("Download Loopcom for Android", input.androidApkUrl)}
 
 <p style="margin:8px 0 0;font-size:12px;color:#94a3b8;">Android may ask you to allow installs from this source the first time.</p>
 `
@@ -157,7 +157,7 @@ ${secondaryCtaButton("Download Connect for Android", input.androidApkUrl)}
 
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
-<p style="margin:0 0 18px;">You've been invited to join <strong>${esc(input.tenantName)}</strong> on Connect Communications.</p>
+<p style="margin:0 0 18px;">You've been invited to join <strong>${esc(input.tenantName)}</strong> on Loopcom.</p>
 <p style="margin:0 0 20px;color:#64748b;">Your account is ready. Create a password to get started — it only takes a moment.</p>
 
 ${infoBadgesTable(badges)}
@@ -173,11 +173,11 @@ ${divider()}
 <p style="margin:0;font-size:13px;color:#94a3b8;">If you were not expecting this invite, you can safely ignore this email. No account will be created without your action.</p>`;
 
   const text = [
-    `Welcome to Connect Communications`,
+    `Welcome to Loopcom`,
     ``,
     `Hi ${firstName},`,
     ``,
-    `You've been invited to join ${input.tenantName} on Connect Communications.`,
+    `You've been invited to join ${input.tenantName} on Loopcom.`,
     ...(input.extensionNumber ? [`Extension: ${input.extensionNumber}`] : []),
     ``,
     `Create your password: ${input.setupUrl}`,
@@ -186,10 +186,10 @@ ${divider()}
     ``,
     ...(input.androidApkUrl
       ? [
-          `Connect Mobile (Android):`,
+          `Loopcom Mobile (Android):`,
           `After creating your password, install the app from:`,
           input.androidApkUrl,
-          `(Opens the Connect download page with the latest APK. Android may ask you to allow installs from this source the first time.)`,
+          `(Opens the Loopcom download page with the latest APK. Android may ask you to allow installs from this source the first time.)`,
           ``,
         ]
       : []),
@@ -197,9 +197,9 @@ ${divider()}
   ].join("\n");
 
   return {
-    subject: `Welcome to Connect Communications — Create Your Password`,
+    subject: `Welcome to Loopcom — Create Your Password`,
     html: shell({
-      preheaderText: `Hi ${firstName}, your Connect Communications account at ${input.tenantName} is ready. Create your password to get started.`,
+      preheaderText: `Hi ${firstName}, your Loopcom account at ${input.tenantName} is ready. Create your password to get started.`,
       headerTitle: "You're Invited",
       headerSubtitle: `Welcome to ${input.tenantName}`,
       body,
@@ -223,19 +223,19 @@ export function passwordCreatedConfirmationEmail(input: {
 
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
-<p style="margin:0 0 18px;">Your <strong>Connect Communications</strong> account at <strong>${esc(input.tenantName)}</strong> is now active.</p>
-<p style="margin:0 0 20px;color:#64748b;">Your password has been created and you can now sign in and start using Connect.</p>
+<p style="margin:0 0 18px;">Your <strong>Loopcom</strong> account at <strong>${esc(input.tenantName)}</strong> is now active.</p>
+<p style="margin:0 0 20px;color:#64748b;">Your password has been created and you can now sign in and start using Loopcom.</p>
 
 ${infoBadgesTable(badges)}
 
-${ctaButton("Log In to Connect", input.loginUrl, "#059669")}
+${ctaButton("Log In to Loopcom", input.loginUrl, "#059669")}
 
 ${divider()}
 
 <p style="margin:0;font-size:13px;color:#94a3b8;">If you did not create this account or set this password, contact your administrator immediately.</p>`;
 
   const text = [
-    `Your Connect Communications account is ready`,
+    `Your Loopcom account is ready`,
     ``,
     `Hi ${firstName},`,
     ``,
@@ -248,9 +248,9 @@ ${divider()}
   ].join("\n");
 
   return {
-    subject: `Your Connect Communications account is ready`,
+    subject: `Your Loopcom account is ready`,
     html: shell({
-      preheaderText: `Your account at ${input.tenantName} is active. Log in to Connect Communications.`,
+      preheaderText: `Your account at ${input.tenantName} is active. Log in to Loopcom.`,
       headerTitle: "Your Account Is Ready",
       headerSubtitle: `Welcome aboard, ${firstName}`,
       body,
@@ -269,7 +269,7 @@ export function passwordResetEmail(input: {
   const firstName = input.userName.split(" ")[0] || "there";
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
-<p style="margin:0 0 18px;">We received a request to reset your <strong>Connect Communications</strong> password.</p>
+<p style="margin:0 0 18px;">We received a request to reset your <strong>Loopcom</strong> password.</p>
 <p style="margin:0 0 20px;color:#64748b;">Click the button below to choose a new password. This link is single-use and expires in ${input.expiresMinutes} minutes.</p>
 
 ${ctaButton("Reset Password", input.resetUrl, "#7c3aed")}
@@ -279,7 +279,7 @@ ${divider()}
 <p style="margin:0;font-size:13px;color:#94a3b8;">If you did not request a password reset, no action is needed. Your password will remain unchanged.</p>`;
 
   const text = [
-    `Reset your Connect Communications password`,
+    `Reset your Loopcom password`,
     ``,
     `Hi ${firstName},`,
     ``,
@@ -291,9 +291,9 @@ ${divider()}
   ].join("\n");
 
   return {
-    subject: `Reset your Connect Communications password`,
+    subject: `Reset your Loopcom password`,
     html: shell({
-      preheaderText: `Reset your Connect Communications password. This link expires in ${input.expiresMinutes} minutes.`,
+      preheaderText: `Reset your Loopcom password. This link expires in ${input.expiresMinutes} minutes.`,
       headerTitle: "Reset Your Password",
       body,
     }),
@@ -309,7 +309,7 @@ export function passwordChangedEmail(input: {
   const firstName = input.userName.split(" ")[0] || "there";
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
-<p style="margin:0 0 18px;">Your <strong>Connect Communications</strong> password was changed successfully.</p>
+<p style="margin:0 0 18px;">Your <strong>Loopcom</strong> password was changed successfully.</p>
 <p style="margin:0 0 20px;color:#64748b;">If you made this change, no further action is needed.</p>
 
 ${divider()}
@@ -317,12 +317,12 @@ ${divider()}
 <p style="margin:0;font-size:13px;color:#ef4444;font-weight:500;">If you did not change your password, contact your administrator immediately.</p>`;
 
   return {
-    subject: `Your Connect Communications password was changed`,
+    subject: `Your Loopcom password was changed`,
     html: shell({
-      preheaderText: `Your Connect Communications password was changed. If this wasn't you, contact your administrator.`,
+      preheaderText: `Your Loopcom password was changed. If this wasn't you, contact your administrator.`,
       headerTitle: "Password Changed",
       body,
     }),
-    text: `Your Connect Communications password was changed successfully.\n\nIf this was not you, contact your administrator immediately.`,
+    text: `Your Loopcom password was changed successfully.\n\nIf this was not you, contact your administrator immediately.`,
   };
 }

@@ -86,7 +86,7 @@ const DEV_PREVIEW_DROPS: CrmVoicemailDrop[] = Array.from({ length: 6 }, (_, inde
     durationSeconds: 18 + index * 4,
     originalFileName: `connect-demo-${index + 1}.mp3`,
     originalMimeType: "audio/mpeg",
-    campaign: { id: `dev-preview-campaign-${index + 1}`, name: index % 2 === 0 ? "Connect Demo Co LLC" : "Lead follow-up" },
+    campaign: { id: `dev-preview-campaign-${index + 1}`, name: index % 2 === 0 ? "Loopcom Demo Co LLC" : "Lead follow-up" },
     isDefault: index === 0,
     usageCount: index === 0 ? 18 : index * 3,
     conversionStatus: statuses[index] === "FAILED" ? "FAILED" : "READY",
@@ -798,7 +798,7 @@ function NewVoicemailPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               </span>
               <span className="text-sm font-black text-crm-text">{file ? file.name : "Drop in any audio or media file"}</span>
               <span className="text-xs leading-relaxed text-crm-muted">
-                {file ? `${file.type || "Media file"} ${fmtFileSize(file.size) ? `· ${fmtFileSize(file.size)}` : ""}` : "Connect extracts audio and converts uploads to a PBX-safe voicemail format."}
+                {file ? `${file.type || "Media file"} ${fmtFileSize(file.size) ? `· ${fmtFileSize(file.size)}` : ""}` : "Loopcom extracts audio and converts uploads to a PBX-safe voicemail format."}
               </span>
               <VoicemailWaveform muted={!file} />
               <input

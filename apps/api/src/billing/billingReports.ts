@@ -158,7 +158,7 @@ export function csvMeta(reportName: string, generatedBy: string): string {
 // ── Today's date for filename suffix ─────────────────────────────────────────
 
 export function todayDateSuffix(): string {
-  return formatBillingDateIso(new Date()); // YYYY-MM-DD in Connect billing time.
+  return formatBillingDateIso(new Date()); // YYYY-MM-DD in Loopcom billing time.
 }
 
 // ── Aging report ─────────────────────────────────────────────────────────────

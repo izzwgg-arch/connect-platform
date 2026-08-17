@@ -149,7 +149,7 @@ export function SolaLinkedSchedulesSection({ tenantId, compact }: { tenantId: st
                 </p>
               ) : s.isActive ? (
                 <p style={{ margin: "6px 0 0", fontSize: 12, color: "#92400e" }}>
-                  ⚠ Old schedule still active. Disable it and complete cutover before enabling Connect autopay.{" "}
+                  ⚠ Old schedule still active. Disable it and complete cutover before enabling Loopcom autopay.{" "}
                   <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage in Sola imports →</Link>
                 </p>
               ) : null}

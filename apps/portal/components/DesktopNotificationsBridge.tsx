@@ -39,7 +39,7 @@ export function DesktopNotificationsBridge() {
       void window.connectDesktop.notifications?.show({
         kind: "missed-call",
         title: "Missed call",
-        body: prev.remoteParty || "Connect call",
+        body: prev.remoteParty || "Loopcom call",
         route: "/calls",
       });
     }

@@ -283,7 +283,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("write_blocked") || msg.includes("already been submitted")) {
-        setSubmitError("This form has already been submitted. If you need to make changes, please contact your Connect Communications representative for a new link.");
+        setSubmitError("This form has already been submitted. If you need to make changes, please contact your Loopcom representative for a new link.");
       } else {
         setSubmitError(msg || "Submission failed. Please try again.");
       }
@@ -327,7 +327,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         </div>
         <div className="ob-invalid-title">This onboarding link is not active</div>
         <p className="ob-invalid-body">
-          Please contact your Connect Communications contact for a new link.
+          Please contact your Loopcom contact for a new link.
         </p>
         <p className="ob-invalid-support">
           Need help?{" "}
@@ -378,7 +378,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               <line x1="8" y1="8" x2="13" y2="11" stroke="rgba(255,255,255,0.5)" strokeWidth="0.8"/>
             </svg>
           </div>
-          <span className="ob-logo-text">Connect</span>
+          <span className="ob-logo-text">Loopcom</span>
         </div>
         <div className="ob-save-indicator" style={{ opacity: saveState !== "idle" ? 1 : 0 }}>
           {saveState === "saving" ? (

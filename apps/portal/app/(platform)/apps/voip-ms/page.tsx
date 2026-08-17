@@ -73,7 +73,7 @@ export default function VoipMsIntegrationPage() {
   // test SMS form
   const [testFrom, setTestFrom] = useState("");
   const [testTo, setTestTo] = useState("");
-  const [testMsg, setTestMsg] = useState("Test from Connect");
+  const [testMsg, setTestMsg] = useState("Test from Loopcom");
   const [testSending, setTestSending] = useState(false);
 
   // routing preview
