@@ -124,7 +124,7 @@ export function brandLogoUrl(): string {
  *     ⛔ This is a request, not a guarantee: Gmail and Apple Mail may still
  *     auto-invert on a phone and no sender can prevent that.
  */
-function loopComShell(opts: {
+export function loopComShell(opts: {
   preheaderText?: string;
   headerTitle: string;
   headerSubtitle?: string;
