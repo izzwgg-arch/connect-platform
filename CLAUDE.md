@@ -44,6 +44,68 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — B Visible's Philippines employee: tunnel built, tenant moved to 443, extension NOT created (2026-08-17) — READ FIRST before adding a WireGuard peer, before assuming an address is geo-blocked, before quoting what an extra extension costs a customer, or before reading a "V" extension as a free slot
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_BVISIBLE_PH_EMPLOYEE_2026-08-17.md`**
+(**Two live changes: two WireGuard peers on loopcom, and ONE Connect DB row.**
+No PBX write, no deploy, no code change. ⏳ **The extension itself is NOT
+created** — blocked on the employee's name and email.)
+
+- ⛔ **107 AND 108 WERE BOTH TAKEN, and every "V" extension is a FORWARD, not a
+  free slot.** Izzy asked for 107, then 108. T9 holds **101–110**: 101–106 are
+  real phones, while **107 "Chesky Goldberger", 108 "102 V", 109 "104 V" and
+  110 "101 V" are `technology=virtual` devices that ring an EXTERNAL number.**
+  Deleting 108 would stop extension 102 ringing that outside phone. ⛔ 107 has
+  **no pjsip device and no AOR**, so "no contact for 107" is normal, not a fault.
+  **Decision: 111** (Izzy, 2026-08-17).
+- ⛔⛔ **THE BLACKLIST TEST ALONE GIVES THE WRONG ANSWER — READ THE CHAIN ORDER.**
+  `blacklist_ph` is real (1,628 entries, **77,886 packets dropped**), so a
+  Philippine device genuinely cannot reach the PBX. But **loopcom
+  (45.14.194.179) is ALSO in `blacklist_fr`** — the Connect server is in France —
+  and it works anyway because `INPUT_direct` runs **`vpbx_white_list` BEFORE
+  `geo_firewall`**. Testing an ipset without checking what precedes it reads as
+  "our own server is blocked."
+  ⛔ **The whitelist already holds four PH residential IPs** (`120.28.184.152`,
+  `120.28.184.186`, `49.147.38.234`, `143.44.196.225`) — somebody has been
+  hand-allowlisting a home address, which is exactly what the tunnel replaces —
+  and the ipset is **`maxelem 31`, 15 used**. It cannot absorb that forever.
+- ✅ **WireGuard peers BUILT AND LIVE**: computer `10.88.0.6`, phone
+  `10.88.0.7`, configs + QR in `/root/wg-peers/bvisible-ph-*`, script
+  `provision-bvisible-ph.sh` (refuses to run twice, backs up first, never touches
+  an existing peer). ⛔ `SaveConfig=false`, so **both** the live `wg set` and the
+  `[Peer]` block in `wg0.conf` are mandatory — a live-only peer vanishes on
+  reboot. ⏳ **Nobody has connected with either config.**
+- ✅ **B VISIBLE MOVED ONTO THE 443 ROUTE** (`webrtcRouteViaSbc` false→**true**,
+  `sipWsUrl` →**null**; `sipDomain` was already the hostname so this was two
+  fields, not three). ⛔ **This matters MORE than the tunnel**: the earlier
+  Philippines employee's peers last handshook **4 and 5 days ago**, and a phone
+  that must ring cannot depend on a user keeping a VPN up. The 443 route needs
+  nothing installed. Doorway verified `101 Switching Protocols` **from loopcom**
+  before flipping (⛔ plain curl returns 426 — wrong test; ⛔ Izzy's own line 403s
+  the `app.` hostname). Read live per request — no deploy. ⛔ Desk phones
+  unaffected; existing app users stay on 8089 until they **sign out and back in**.
+- ⛔⛔ **ADDING THIS EXTENSION WILL NOT MOVE THEIR BILL — the normal rule is
+  INVERTED here.** `metadata.billingFlatRate` is `{enabled:true,
+  appliesTo:"extensions", amountCents:10500}`, and `buildExtensionInvoiceLine`
+  returns **one $105 line, quantity 1**, however many extensions exist. Last two
+  invoices **$140.00 PAID**, autopay on. **So the assistant's
+  `action.add_extension` reconciliation — which refuses to report success unless
+  the monthly total RISES — will complain on this tenant even though nothing is
+  wrong.** Check for a flat rate before quoting any customer a per-extension price.
+- ⏳ **BLOCKED, and it is the whole remaining job:** the employee's **name and
+  email**. Izzy also wants an **invitation email + a TestFlight invite** sent once
+  it exists — so his **email address and whether he is on iPhone or Android** are
+  needed too (TestFlight is iOS-only; Android gets the APK link the invite email
+  already carries). ⛔ Creating the extension is a **PBX write** and needs Izzy's
+  explicit go-ahead; Apply Changes stays his click.
+- ⛔ **105, 106 and 107 have NO Connect user** (`ownerUserId: null`) — only four
+  logins exist on this account. "Add an extension" here has historically meant a
+  PBX line with no app login. Confirm which is wanted.
+- ⏳ **Housekeeping, not acted on:** Gesheft's Brazil peer `10.88.0.5` was flagged
+  "revoke on return" on 2026-08-02 and has **never handshaken** — needs Izzy's
+  word. And the earlier PH employee (`.3`/`.4`) is on a stale tunnel; **which
+  tenant they belong to was never established.**
+
 ## ⛔⛔ AGENT HANDOFF — a blank mini dialer, because we flooded a customer off our own server (2026-08-17) — READ FIRST for ANY "the app is blank / won't load" report, before debugging a customer-side UI fault, before adding a prefetch/warm-up loop, or before trusting a query parameter you send
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_MINI_DIALER_BLANK_VOICEMAIL_PRELOAD_2026-08-17.md`**
