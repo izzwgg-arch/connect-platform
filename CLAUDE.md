@@ -47,8 +47,17 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 ## ⛔⛔ NEW TENANTS DEFAULT TO SIP-OVER-443, AND AN EMAIL CAN CARRY A FILE (2026-08-17) — READ FIRST before touching `webrtcRouteViaSbc`, the WebRTC bootstrap stamp, or before saying Connect cannot attach a file
 
 Commits `66dbaa9c` (attachments) + `8495d379` (443 default) on
-`feat/ivr-migration-takeover`. **Committed and pushed. ⛔ NOT DEPLOYED and the
-two migrations are NOT APPLIED — awaiting Izzy's word.**
+`feat/ivr-migration-takeover`. ✅ **DEPLOYED and container-verified 2026-08-17**
+(job `92a145f9`, container `f4dd8edd`), **both migrations applied**
+(`20260817220000_email_job_attachments` 21:52Z,
+`20260817230000_default_sip_route_via_443` 22:07Z).
+
+✅ **Verified against the live database, not just the container:** the column
+default really is `true` in `information_schema`, `EmailJob.attachments` is
+`jsonb DEFAULT '[]'`, and — the check that mattered — **29 live tenants, still
+exactly 5 on 443** (Loopcom Demo, inii mini, Gesheft, B Visible, Displaydex).
+**No existing customer moved**, and **0 tenants on 443 carry an explicit
+`sipWsUrl`**, which is the invariant the whole thing rests on.
 
 - ✅ **`Tenant.webrtcRouteViaSbc` now `@default(true)`** (Izzy, 2026-08-17:
   *"every new phone that's created in the Connect web app and soft phone, by
@@ -89,11 +98,22 @@ two migrations are NOT APPLIED — awaiting Izzy's word.**
   ⛔ **A declared attachment that will not decode FAILS the send** — the derived
   loaders swallow errors because a PDF can be regenerated; these ARE the point of
   the email.
-- ⏳ **NOT DEPLOYED, NOT MIGRATED, and nothing emailed to Lester.** Two
-  migrations wait: `20260817220000_email_job_attachments` and
-  `20260817230000_default_sip_route_via_443`. Acceptance after deploy: create a
-  tenant and confirm `webrtcRouteViaSbc: true` **and `sipWsUrl` still null after
-  its first extension sync** — the null is the half that proves the guard works.
+- ⏳ **NOT PROVEN: no tenant has been created since the deploy.** The acceptance
+  test is one sign-up — confirm the new tenant reads `webrtcRouteViaSbc: true`
+  **and that `sipWsUrl` is still null after its first extension sync.** ⛔ The
+  null is the half that proves the guard; the flag on its own proves nothing.
+  ⏳ **No email has been sent with an attachment yet** either — the plumbing is
+  live, nothing has used it. ⛔ **Nothing was emailed to Lester**: he does not
+  need WireGuard (Izzy, 2026-08-17), so his two peers sit unused as a spare key.
+- ⚠️ **Lester's phone unregistered at 22:04–22:05Z, inside the deploy window,
+  and had not come back 10 minutes later.** Reported honestly rather than
+  waved off — but the api is **not** in the SIP path (phone → nginx `/sip` →
+  PBX), and **five other app users were registered through the same 443 route
+  throughout and stayed `Avail`** (T7_102_1, T8_101_1 ×3, T8_114_1), as did all
+  five B Visible desk phones. His contact had also already rotated once
+  (`r9iq2eaq` → `h4rjv962`), which is ordinary re-registration. Most likely he
+  closed the app — it was ~06:05 local. **The check is whether he registers
+  again next time he opens it.**
 
 ## ⛔ AGENT HANDOFF — B Visible's Philippines employee: tunnel built, tenant moved to 443, extension NOT created (2026-08-17) — READ FIRST before adding a WireGuard peer, before assuming an address is geo-blocked, before quoting what an extra extension costs a customer, or before reading a "V" extension as a free slot
 
