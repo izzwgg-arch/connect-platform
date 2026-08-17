@@ -90,6 +90,30 @@ Nobody has opened the rebuilt `/login` or the pay pages in a browser either.
 
 ## 6. Designed, agreed, NOT built
 
+- **Number-transfer complete email** (added 2026-08-17, awaiting Izzy's pick) —
+  the email a customer gets the moment their ported number goes live. Three
+  mockups on the billing shell, built from Matamim's real port:
+  <https://claude.ai/code/artifact/6cc32750-47dc-401c-a466-b3bb1f15f6b5>
+  (A: matches the invoice emails — recommended; B: the number as a large hero;
+  C: a four-sentence note).
+  ⛔ **The blocker is the CHANNEL, not the copy.** Port completion already
+  queues an email today — `[Connect] Port complete: …` from `portLanding.ts` —
+  and it is an **`ADMIN_ALERT`, so the send door drops it `ALERTS_MUTED`**
+  (Matamim's was dropped 2026-08-17 18:24). A customer email must therefore be a
+  **new EmailJob type**, never ADMIN_ALERT, or it will be built and silently
+  never send. Keep the internal alert as it is; this is additional.
+  ⛔ **All three drafts route support through "reply to this email" on purpose**
+  — that sidesteps the unverified-mailbox problem in §4, but only works if
+  replies land somewhere a person reads. Open question.
+  Conditional content: the texting line needs the tenant to have texting; the
+  temporary-number paragraph needs a temp number to have existed (a
+  hand-filed port may have none).
+- ⛔ **One customer-facing "Connect" survives the rebrand and the tests do not
+  catch it**: `billing/emailTemplates.ts:255`, the autopay T-3 reminder subject
+  — *"Your **Connect** payment is due in 3 days"*. The guard asserts only that
+  **"Connect Communications"** is absent, so a bare "Connect" passes. Found
+  2026-08-17, deliberately not changed (customer-facing copy + needs a deploy).
+  **Widen the assertion when you fix it**, or the next one slips through too.
 - **Voicemail email** — no button, MP3 attached always, transcript when present
   with `dir="rtl"` (**72% of transcripts are Yiddish**), and **no email at all
   when there is no recording**. ⛔ Blocked: the PBX already emails voicemail, so
