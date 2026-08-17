@@ -59,6 +59,23 @@ code comments still use camel case — that is fine, they are not customer text.
   every self-service sign-up. A test asserts both paths still route through the
   template.
 - **`import.meta` is a TS1343 error in apps/api** (CommonJS). Use `__dirname`.
+- ⛔ **A static asset with no `location` block of its own inherits `location /`'s
+  headers — and `location /` sets `Cache-Control: no-store, must-revalidate`.**
+  That rule exists so portal HTML is never stale after a deploy, and it is
+  correct; the accident is that everything under `public/` fell through to it. An
+  email logo is refetched by the mail client on **every open**, so the logo was
+  paying full download cost forever. Fixed 2026-08-17 with a dedicated
+  `location /brand/` (immutable, 1 year) inserted **before** `location /`, in
+  `/etc/nginx/sites-enabled/connectcomms`.
+  ⛔ **That file is a REAL FILE, not a symlink to `sites-available/connectcomms`,
+  and the two have drifted.** Editing the wrong one changes nothing and reads as
+  a failed fix — this cost time here.
+- ⛔ **Judge an image swap by measuring the file, not by looking at it.** A
+  colour-quantised email logo was 9 KB vs 34 KB and looked pixel-identical at
+  display size (mean difference 2.62/255). It was rejected because its **alpha
+  channel maxes out at 253** — zero fully-opaque pixels — so the whole logo would
+  render ~1% translucent on white, where it already reads soft. Check
+  `max(alpha)` and the count at 255 before shipping any re-encoded logo.
 - **The preview panel and artifacts block external images.** A hosted logo will
   not render there; that is the viewer's CSP, not a broken email. Verify the
   `<img>` tag and fetch the URL instead, or inline the image in a preview copy.
