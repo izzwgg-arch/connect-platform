@@ -44,6 +44,57 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ NEW TENANTS DEFAULT TO SIP-OVER-443, AND AN EMAIL CAN CARRY A FILE (2026-08-17) — READ FIRST before touching `webrtcRouteViaSbc`, the WebRTC bootstrap stamp, or before saying Connect cannot attach a file
+
+Commits `66dbaa9c` (attachments) + `8495d379` (443 default) on
+`feat/ivr-migration-takeover`. **Committed and pushed. ⛔ NOT DEPLOYED and the
+two migrations are NOT APPLIED — awaiting Izzy's word.**
+
+- ✅ **`Tenant.webrtcRouteViaSbc` now `@default(true)`** (Izzy, 2026-08-17:
+  *"every new phone that's created in the Connect web app and soft phone, by
+  default, will go on 443 and that's it"*). ⛔ **The schema default is the lever
+  on purpose** — five code paths create a tenant, and hooking each is exactly how
+  the two IVR publish paths and the two SMS ingest paths shipped half-broken.
+  ⛔ **Existing tenants are NOT migrated** — `SET DEFAULT` touches new rows only,
+  and moving a live tenant makes its users sign out and back in before the app
+  picks up the new address. **24 of 29 are still on 8089.**
+- ⛔⛔ **THE DEFAULT ALONE DOES NOTHING, AND IT NEARLY SHIPPED THAT WAY.**
+  `resolveWebrtcConfig` prefers a non-null `sipWsUrl` **over** the flag, and TWO
+  bootstrap paths stamped the direct endpoint onto any tenant that had none
+  (`pbxExtensionSync.ts` ~628, `server.ts` ~9520, both gated on
+  `!webrtcEnabled`). **`PBX_WS_ENDPOINT` IS set in production**
+  (`wss://209.145.60.79:8089/ws`) — so every brand-new tenant would have been
+  stamped on its first extension sync and dialled the PBX direct **while the flag
+  read true**. Both paths now skip that write for 443 tenants.
+  `sipRouteDefault.test.ts` reads the schema AND both call sites; a unit test of
+  any one function passes straight through this.
+- ✅ **PROVEN BEFORE IT WAS MADE THE DEFAULT.** Lester Tan (B Visible ext 111)
+  registered **from the Philippines** at 21:33Z over 443 —
+  `T9_111_1/sip:…@45.14.194.179` is loopcom, so the PBX sees our whitelisted
+  address and `blacklist_ph` never applies — while **both WireGuard peers built
+  for him have never handshaken once**. ⛔ So a tunnel is now the FALLBACK, not
+  the answer: the earlier Philippines peers date from **2026-07-29**, a week
+  before the 443 route existed at all, which is the only reason they were needed.
+- ✅ **AN EMAIL CAN CARRY A FILE NOW** — `EmailJob.attachments` +
+  `queueEmailWithAttachments()` (`apps/api/src/emailAttachments.ts`).
+  ⛔ **Correction to a claim made earlier in that session: the pipeline could
+  already attach things**, just only ones it derived itself (invoice PDF,
+  voicemail recording). What was missing was "send THIS file". **Both send paths
+  (SendGrid + SMTP) must carry it** — the guard test reads `server.ts`'s source
+  for two call sites, because that is the shape of every attachment bug here.
+  ⛔ **Bytes live in the row as base64, never on disk** — a path needs a mounted
+  volume in BOTH api compose blocks and getting it wrong is silent data loss at
+  the next deploy. Hence caps: 5 files, 2 MB each, 5 MB total, refused **when the
+  job is created** so a bad attachment is a loud error, not a 2am retry loop.
+  ⛔ **A declared attachment that will not decode FAILS the send** — the derived
+  loaders swallow errors because a PDF can be regenerated; these ARE the point of
+  the email.
+- ⏳ **NOT DEPLOYED, NOT MIGRATED, and nothing emailed to Lester.** Two
+  migrations wait: `20260817220000_email_job_attachments` and
+  `20260817230000_default_sip_route_via_443`. Acceptance after deploy: create a
+  tenant and confirm `webrtcRouteViaSbc: true` **and `sipWsUrl` still null after
+  its first extension sync** — the null is the half that proves the guard works.
+
 ## ⛔ AGENT HANDOFF — B Visible's Philippines employee: tunnel built, tenant moved to 443, extension NOT created (2026-08-17) — READ FIRST before adding a WireGuard peer, before assuming an address is geo-blocked, before quoting what an extra extension costs a customer, or before reading a "V" extension as a free slot
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_BVISIBLE_PH_EMPLOYEE_2026-08-17.md`**
