@@ -66,6 +66,32 @@ test("server.ts holds NO hardcoded SIP endpoint — all three call sites use the
   }
 });
 
+// ---------------------------------------------------------------------------
+// 2026-08-17 — the global is now the NEW-TENANT hostname, not the platform one.
+// Existing tenants were pinned to `wss://sip.connectcomunications.com/sip` first,
+// so that flipping this variable reaches nobody who already exists. The precedence
+// that makes that work lives in resolveWebrtcConfig; assert it here too, because
+// this module's whole meaning depends on it.
+// ---------------------------------------------------------------------------
+
+test("an explicit tenant sipWsUrl beats this global — the pin depends on it", () => {
+  const src = fs.readFileSync(path.join(__dirname, "server.ts"), "utf8");
+  assert.ok(
+    src.includes("explicitSipWsUrl || fallbackSipWsUrl"),
+    "resolveWebrtcConfig must prefer tenant.sipWsUrl over sipPublicWsUrl(); without that " +
+      "precedence, pinning a tenant does not protect it and flipping this global moves " +
+      "existing customers — the exact outcome the owner ruled out",
+  );
+});
+
+test("the module documents pin-before-flip, because reversing the order is the outage", () => {
+  const doc = fs.readFileSync(path.join(__dirname, "sipPublicEndpoint.ts"), "utf8");
+  assert.ok(
+    /pin first, flip\s+\*?\s*second/i.test(doc.replace(/\n/g, " ")),
+    "the ordering rule must stay written down next to the value it protects",
+  );
+});
+
 test("the readiness probe does not fetch a literal host", () => {
   const src = fs.readFileSync(path.join(__dirname, "server.ts"), "utf8");
   assert.ok(

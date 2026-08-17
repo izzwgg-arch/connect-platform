@@ -16,18 +16,47 @@
  * diagnostics report a URL that is no longer in use — which is exactly how a future
  * session loses a day chasing a disagreement between the app and the dashboard.
  *
- * ⛔ Tenants do NOT store this. `sipWsUrl` is NULL on all four tenants using the 443
- * route (`webrtcRouteViaSbc = true`), so there is no per-tenant DB edit that can move
- * them — the value comes from here. A tenant that DOES set `sipWsUrl` still wins.
+ * ⛔⛔ WHAT THIS VALUE MEANS CHANGED ON 2026-08-17 — READ THIS BEFORE EDITING IT.
  *
- * The default is deliberately the CURRENT production hostname, so deploying this
- * change is a no-op. Moving to `sip.connectcomunications.com` is a config flip:
+ * Izzy's decision that day: **existing customers stay exactly as they are; only accounts
+ * created from then onward use the Loopcom SIP hostname.** This is ONE GLOBAL VALUE, so
+ * it cannot express that on its own. It was made to express it by **pinning every tenant
+ * that depended on the global to the hostname it already resolved to**:
  *
- *     SIP_PUBLIC_WS_URL=wss://sip.connectcomunications.com/sip
+ *     UPDATE "Tenant" SET "sipWsUrl" = 'wss://sip.connectcomunications.com/sip'
+ *       WHERE "webrtcRouteViaSbc" AND "sipWsUrl" IS NULL;   -- exactly 5 rows, 2026-08-17
  *
- * ⛔ And the flip is inert on a live session — the apps never refresh a cached
- * `sipWsUrl`, so every affected user must sign out and back in. That is the whole
- * customer-visible cost of Phase B; do not expect the change to take effect on its own.
+ * (B Visible, Displaydex, Gesheft, inii mini, Loopcom Demo — behaviour-preserving,
+ * because that string was the live value of this env var at the moment they were pinned.)
+ *
+ * ⛔ SO THE ORDER IS SAFETY-CRITICAL AND MUST NEVER BE REVERSED: **pin first, flip
+ * second.** Flip the global while a live tenant still has `sipWsUrl = NULL` and that
+ * tenant is handed the new hostname on its users' next sign-in — the exact thing the
+ * owner ruled out.
+ *
+ * ⛔ Therefore this value is now the **NEW-TENANT** hostname, not the platform hostname.
+ * It reaches only tenants with `webrtcRouteViaSbc = true` AND `sipWsUrl IS NULL` —
+ * which, since `8495d379` made `webrtcRouteViaSbc` default to `true`, means brand-new
+ * tenants and nobody else. Before touching it, re-run the check:
+ *
+ *     SELECT name FROM "Tenant"
+ *      WHERE "pbxRemovedAt" IS NULL AND "webrtcRouteViaSbc" AND "sipWsUrl" IS NULL;
+ *
+ * Any EXISTING customer in that list would be moved by a change here. It should list
+ * only accounts you are content to move.
+ *
+ * ⛔ An explicit `tenant.sipWsUrl` wins outright — even when `webrtcRouteViaSbc` is
+ * false (`resolveWebrtcConfig`, server.ts). That precedence is what makes the pin work,
+ * and `sipRouteDefault.test.ts` exists to keep it true.
+ *
+ * The default below is still the pre-split hostname purely so an unset env is harmless;
+ * production has always set the variable.
+ *
+ * ⛔ And every flip is inert on a live session — the apps never refresh a cached
+ * `sipWsUrl`, so nobody moves until they sign out and back in. That cuts both ways: it
+ * is why a flip breaks nothing immediately, and why it also achieves nothing immediately.
+ * ⛔ It is also why NO old SIP hostname may EVER be retired on a schedule: clients hold
+ * theirs cached indefinitely. All four hostnames stay live, at zero cost.
  */
 
 /** The hostname SIP rode before the split. Kept as the default so a deploy changes nothing. */
