@@ -24974,6 +24974,34 @@ app.get("/me/onboarding-setup-state", async (req, reply) => {
   return reply.send({ show: menus === 0 });
 });
 
+// ── GET /admin/voicemail-email/status ────────────────────────────────────────
+// "Make sure the system is going to watch and nothing is missing" needs a way to
+// SEE that, not just an alarm that may or may not have fired. This runs the same
+// reconciliation the watchdog runs and shows the answer.
+app.get("/admin/voicemail-email/status", async (req, reply) => {
+  const user = await requirePermission(req, reply, (p: any) => p.isSuperAdmin || p.isTenantAdmin);
+  if (!user) return;
+  const gaps = await runVoicemailEmailWatchdog(app.log);
+  const since = new Date(Date.now() - 7 * 24 * 3600_000);
+  const [queued, sent, failed, noRecipient] = await Promise.all([
+    (db as any).emailJob.count({ where: { type: "VOICEMAIL_NOTIFICATION", createdAt: { gte: since } } }),
+    (db as any).emailJob.count({ where: { type: "VOICEMAIL_NOTIFICATION", status: "SENT", createdAt: { gte: since } } }),
+    (db as any).emailJob.count({ where: { type: "VOICEMAIL_NOTIFICATION", status: "FAILED", createdAt: { gte: since } } }),
+    (db as any).extension.count({ where: { status: "ACTIVE", pbxUserEmail: null } }),
+  ]);
+  return reply.send({
+    enabled: String(process.env.VOICEMAIL_EMAIL_ENABLED || "") === "1",
+    excludedTenantIds: String(process.env.VOICEMAIL_EMAIL_EXCLUDED_TENANT_IDS || "").split(",").map((x) => x.trim()).filter(Boolean),
+    lastSevenDays: { queued, sent, failed },
+    // Standing condition, not an incident: these mailboxes have nobody to email.
+    extensionsWithNoAddress: noRecipient,
+    gaps: gaps.map((g) => ({
+      voicemailId: g.voicemailId, tenant: g.tenantName, extension: g.extension,
+      problem: g.problem, detail: g.detail ?? null, receivedAt: g.receivedAt,
+    })),
+  });
+});
+
 // ── Voicemail-to-email settings ──────────────────────────────────────────────
 // The toggle beside Theme in Settings, and the extra addresses an admin adds on
 // the voicemail page. ⛔ The PBX address (Extension.pbxUserEmail) is ALWAYS a
