@@ -46,9 +46,10 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 
 ## ⛔⛔ AGENT HANDOFF — the voice changer: a recording comes back in a different voice, and the audio NEVER becomes text (2026-08-18) — READ FIRST before touching `apps/api/src/voice/elevenLabs*`, before adding any speech feature for Yiddish, or before "improving" this with speech recognition
 
-(`58be00f7` on `feat/ivr-migration-takeover`. **api only. ⏳ NOT DEPLOYED, no UI,
-and no clip has ever been converted.** No migration, no PBX write, no env change,
-no permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
+(`58be00f7` + `95f9e9d4` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED
+and container-verified at `95f9e9d4`. ⏳ No clip has ever been converted — nobody
+has pressed the button.** No migration, no PBX write, no env change, no
+permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
 [[no-voice-provider-speaks-yiddish]].
 
 - ⛔⛔ **THE RULE THIS EXISTS TO PROTECT: nothing in this path may ever
@@ -113,18 +114,36 @@ no permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
   only my two hunks → `hash-object` → `GIT_INDEX_FILE` + `read-tree HEAD` +
   `update-index` + `write-tree` + `commit-tree`. Verified `git diff --stat HEAD
   $TREE` showed **8 files and server.ts +7 lines** before committing.
-- ⏳ **NOT PROVEN, and the list is short and honest: no clip has ever been
-  converted, nothing is deployed, and the recording dialog cannot reach this.**
-  `ivr-studio/MakeRecording.tsx` still offers only text-to-speech (ElevenLabs and
-  Polly). Deliberate — **the acceptance test is one Yiddish recording, and that
-  needs no UI.** Proven as 13 api + 5 shared tests, both registered, **every
-  source guard reading 0 against `HEAD`**; api typecheck **75 = the exact
-  baseline**, none in an edited file; voice suite 124/124, shared 360/360.
-- ⏳ **Open, needs Izzy:** convert one Yiddish clip and listen (the whole point);
-  then the UI — a third mode in the recording dialog, which is the bigger half
-  because this takes an upload rather than text. ⛔ `docs/ai-context/TESTS_RUN.md`
-  was **not** updated: another session has it staged with large changes and
-  fighting over it would risk their work.
+- ✅ **THE SCREEN: `ivr-studio/ConvertRecording.tsx`**, opened by a **"Change my
+  voice"** button in the key editor. Record from the microphone or choose a file,
+  pick the target voice, and one action converts, saves and pushes to the PBX.
+  ⛔ **A SEPARATE DIALOG FROM `MakeRecording.tsx` ON PURPOSE** — that one is built
+  around TYPING (templates, character counter, monthly allowance, a preview you
+  can re-roll for free) and this takes a FILE; folding them together would branch
+  nearly every field in an 850-line component and put the working greeting flow at
+  risk. They share one `onRecordingCreated` handler, so where a new row lands
+  (library / key / menu greeting) never depends on which dialog made it, and the
+  now-exported `MakeRecordingStyles` rather than a second copy of the CSS.
+  ⛔ **No free preview** — converting is what costs money, so preview-then-save
+  would bill twice; the result is played back from the saved row instead, so what
+  they hear is exactly what the phone system now has.
+- ⛔ **The button is rendered ONLY when the status route said `allowed: true`.**
+  The page asks once on load; a 404 (older api) or any error is read as **no
+  option**, never as a button that fails when pressed. `onConvertRecording` is
+  `undefined` for everyone else, so `KeyEditor` draws nothing at all.
+- ⏳ **NOT PROVEN: no clip has ever been converted and nobody has pressed the
+  button.** Proven as 13 api + 5 shared tests, both registered, **every source
+  guard reading 0 against `HEAD`**; api typecheck **75 = the exact baseline**,
+  none in an edited file; voice suite 124/124, shared 360/360; portal typecheck
+  **0** and 179/181 (the two documented pre-existing failures); and both
+  containers grepped after deploy. **The acceptance test is one Yiddish
+  recording.** ⛔ An already-open Studio tab or desktop window keeps the OLD
+  bundle until it is reloaded.
+- ⏳ **Open:** ⛔ `docs/ai-context/TESTS_RUN.md` was **not** updated — another
+  session has it staged with large changes and fighting over it would risk their
+  work. ⚠️ Whether ElevenLabs honours a `speed` in `voice_settings` here is still
+  unverified; Polly's generative engine already burned us by accepting one and
+  discarding it, so compare output bytes before exposing any such control.
 
 ## ⛔⛔ AGENT HANDOFF — the last seven tenant-scoping findings are closed, and TWO of them were never live (2026-08-18) — READ FIRST before judging who can reach an `/admin/apps/voip-ms/*` route, before assigning or DUPLICATING a custom role, before streaming a recording that has no tenant on it, or before adding a signed URL that is not bound to a tenant
 
