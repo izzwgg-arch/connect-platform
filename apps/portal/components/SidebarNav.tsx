@@ -21,8 +21,6 @@ type SidebarNavProps = {
   isMobile: boolean;
   railMode: boolean;
   onToggleRail: () => void;
-  /** Ref for the <aside>, so the glide can drive it without re-rendering. */
-  navRef?: React.Ref<HTMLElement>;
   /** False until the stored rail choice has been applied and painted. While
    *  false the sidebar does not animate, so restoring a saved collapsed
    *  sidebar is instant rather than a slide on every page load. */
@@ -131,7 +129,6 @@ export function SidebarNav({
   railMode,
   onToggleRail,
   settled = true,
-  navRef,
   badges = {},
 }: SidebarNavProps) {
   const pathname = usePathname();
@@ -186,7 +183,7 @@ export function SidebarNav({
     .join(" ");
 
   return (
-    <aside className={asideClass} ref={navRef}>
+    <aside className={asideClass}>
       {/* ⛔ Everything the sidebar draws lives inside this sheet, which is
           absolutely positioned at a fixed 280px. That keeps ~500 nodes OUT of
           the layout path, so changing the sidebar's width no longer re-lays

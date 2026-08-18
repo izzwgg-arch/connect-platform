@@ -127,10 +127,6 @@ test("the sidebar's width is never transitioned", () => {
     /transition:[^;]*width/,
     "animating width forces a full layout every frame - that was the stutter",
   );
-  assert.doesNotMatch(
-    ruleBody(css, ".console-nav.nav-rail {"),
-    /transition/,
-  );
 });
 
 test("the sidebar's contents sit out of the layout path in a fixed-size sheet", () => {
@@ -140,20 +136,38 @@ test("the sidebar's contents sit out of the layout path in a fixed-size sheet", 
   assert.equal(count(sidebar, 'className="nav-sheet"'), 1, "exactly one sheet wraps the sidebar");
 });
 
-test("the motion is a clip plus a transform, and the width moves once", () => {
-  assert.match(css, /\.console-nav\.nav-gliding \.nav-sheet \{[^}]*transition:\s*clip-path/);
-  assert.match(css, /\.console-workspace\.ws-gliding \{[^}]*transition:\s*transform/);
-  const hook = read("../hooks/useSidebarGlide.ts");
-  assert.match(hook, /void workspace\.offsetWidth/, "the forced commit is load-bearing - a rAF instead measured 5x worse");
-  const shell = read("PageShell.tsx");
-  assert.match(shell, /useSidebarGlide\(railMode/);
-  assert.match(shell, /ref=\{workspaceRef\}/);
+test("the panel floats over the page and the content never resizes", () => {
+  // The single remaining cost of the old design was the one layout when the
+  // content area changed width — ~30ms on the owner's GPU, worth ~2 dropped
+  // frames a toggle. The panel overhangs a fixed 68px box instead, so a toggle
+  // lays out nothing at all. Measured: 2.1-2.4 dropped frames -> 0.1.
+  const desktop = css.slice(css.indexOf("@media (min-width: 1081px)"));
+  const navWidth = desktop.slice(0, desktop.indexOf("\n}"));
+  assert.match(navWidth, /width:\s*68px/);
+  assert.doesNotMatch(
+    navWidth,
+    /\.console-nav\.nav-expanded\s*\{[^}]*width/,
+    "the box must reserve the rail width in BOTH states — resizing it is the jank",
+  );
+  assert.match(ruleBody(css, "\n.console-nav {\n  overflow: visible"), /overflow:\s*visible/);
+});
+
+test("the motion is a clip over a panel that never changes size", () => {
+  const sheet = ruleBody(css, "\n.nav-sheet {\n  transition:");
+  assert.match(sheet, /transition:\s*clip-path/);
+  assert.match(css, /\.console-nav\.nav-rail \.nav-sheet \{[^}]*clip-path:\s*inset\(0 212px 0 0\)/);
+  // A restored collapsed sidebar must not animate shut on every page load.
+  assert.match(css, /\.console-nav\.nav-no-anim \.nav-sheet/);
+  assert.equal(
+    count(css, "ws-gliding"),
+    0,
+    "the workspace no longer moves at all — nothing to transition",
+  );
 });
 
 test("the rail edge lands in the gap, so no label is ever sliced in half", () => {
   // 10 nav padding + 3 link border + 6 link padding + 34 icon column + 15 gap
   // = 68, which is exactly the rail width.
-  assert.match(ruleBody(css, ".console-nav.nav-rail {"), /width:\s*68px/);
   const link = ruleBody(css, "\n.drawer-nav-link {");
   assert.match(link, /grid-template-columns:\s*34px 1fr auto/);
   assert.match(link, /gap:\s*15px/);

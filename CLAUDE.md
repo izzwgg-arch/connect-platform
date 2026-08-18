@@ -296,6 +296,17 @@ Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]]
   worse**. ⏳ ~1 dropped frame per toggle remains: the one unavoidable layout
   when the content area resizes. Removing that needs an overlay sidebar (content
   never resizes), which is Izzy's product call, not a bug.
+- ✅✅ **FINAL (`5b2f0188` → the overlay): THE PANEL FLOATS OVER THE PAGE AND THE
+  CONTENT AREA NEVER RESIZES.** `.console-nav` reserves **68px in BOTH states**;
+  the 280px `.nav-sheet` overhangs it and a `clip-path` is the entire animation.
+  Because nothing outside the sidebar changes width, a toggle lays out and
+  repaints **nothing else on the page**. Measured on the owner's GPU: pushing the
+  content = **2.1-2.4 dropped frames/toggle, ~300ms layout per 10 toggles**;
+  floating over it = **0.1 dropped frames (nine of ten toggles perfectly clean),
+  9.6ms**. ⛔ **Never give `.console-nav` a width per mode again** — that one
+  layout is the whole remaining cost, ~30ms on this hardware. The trade Izzy
+  accepted 2026-08-17: while open, the panel covers 212px of the page's left edge
+  (6% of a 3440px screen), as Slack/VS Code/mobile drawers do.
 - ⛔ **The mobile/narrow drawer animated `left`, a LAYOUT property** — relaying
   out the drawer and the page behind it every frame. It is `transform:
   translate3d(-100%,0,0)` now (compositor only). ⛔ **That created a trap and it

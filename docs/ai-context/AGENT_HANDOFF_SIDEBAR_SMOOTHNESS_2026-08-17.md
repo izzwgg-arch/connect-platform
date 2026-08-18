@@ -238,6 +238,36 @@ single unavoidable layout when the content area changes width. On this GPU that
 one relayout is 40–120 ms. Eliminating it entirely requires the content area to
 never resize (an overlay sidebar), which is a product decision, not a fix.
 
+## 4d. ✅ THE OVERLAY — what actually reached zero flicker
+
+§4c's mechanism shipped and was measured **against the deployed bundle** on the
+owner's machine: **2.1-2.4 dropped frames per toggle** (down from 5-6) with
+~300ms of layout across ten toggles. Better, not flawless. The whole of that
+residue was the **one layout when the content area changes width** — ~30ms on
+this GPU.
+
+So the content area stopped changing width. `.console-nav` now reserves **68px
+in both states**; the 280px `.nav-sheet` overhangs it, and the `clip-path` is the
+entire animation. Nothing outside the sidebar is laid out or repainted.
+
+| on the deployed bundle, same window, 10 toggles | dropped frames | layout |
+|---|---|---|
+| content pushed across (§4c) | 2.1-2.4 per toggle | ~300 ms |
+| **content left alone (shipped)** | **0.1** — `[1,0,0,0,0,0,0,0,0,0]` | **9.6 ms** |
+
+Idle control in the same window: 0 dropped, three runs.
+
+**The trade, accepted by Izzy 2026-08-17:** while the sidebar is open it covers
+212px of the page's left edge instead of pushing the content across — 6% of his
+3440px screen, and the behaviour Slack, VS Code and every mobile drawer already
+have.
+
+⛔ **Never reintroduce a per-mode width on `.console-nav`.** That single layout
+is the entire difference between 0.1 and 2.4 dropped frames here.
+✅ The orchestration hook is **gone** — with the content fixed there is nothing
+to co-ordinate, so the animation is pure CSS. `.nav-no-anim` still covers the
+sheet so a restored collapsed sidebar does not animate shut on every page load.
+
 ## 5. ⛔ The trap the mobile change created, and why the toasts moved
 
 `DesktopUpdateToast` is `position: fixed` and used to render **inside** the
