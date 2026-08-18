@@ -1,57 +1,39 @@
 /**
  * Turns "this tenant is interrupted" into the exact set of PBX changes, and
- * back again when they pay.
+ * back again when they pay. Pure: builds a plan, executes nothing.
  *
- * Pure: builds and returns a plan, executes nothing. The caller applies it.
+ * ⛔⛔ THE LEVER IS `ombu_ars_members.enabled`, NOT THE ROUTE.
+ * `ombu_outbound_routes` has no enabled column, and a route can be referenced
+ * by more than one tenant's route selection — switching the ROUTE off could
+ * take out somebody else. Disabling the tenant's ARS *members* is per-tenant,
+ * per-profile and precisely reversible.
  *
- * ⛔⛔ THE EMERGENCY OUTBOUND ROUTE IS PERMANENT AND BELONGS TO EVERY CUSTOMER.
- * The owner's design (2026-08-17): a separate outbound route that matches
- * nothing but 911 and 845-783-1212 is attached to every account when the
- * account is created, and is NEVER deactivated. Interruption switches off all
- * the OTHER outbound routes; this one carries emergency calls out.
+ * ⛔ EVERY PROFILE, NOT JUST THE FIRST. Several customers run multiple
+ * businesses off one account, each an outbound profile with its own caller ID
+ * (Trust Bookkeepings has 9, A plus center 4, Displaydex 3). An extension is
+ * assigned ONE profile, so disabling only the first leaves most of their
+ * extensions dialling out normally.
  *
- * That is what makes "deactivate all their outbound routes" and "911 always
- * works" both true at once. Taken literally, the first cancels the second —
- * 911 leaves the building through an outbound route, so switching every one of
- * them off would silently disconnect emergency calling for a customer who is
- * behind on a phone bill.
- *
- * ⛔ Therefore `buildInterruptionPlan` FAILS CLOSED: a tenant whose emergency
- * route is missing or switched off is NOT interrupted at all. Refusing to cut
- * someone off is recoverable; cutting off their 911 is not.
+ * ⛔ 911 IS NOT HANDLED HERE AND MUST NOT BE. Emergency calls are matched by
+ * VitalPBX's native `T<n>_emergency-calls` context, which the dialplan reaches
+ * BEFORE it reads the outbound profile — proven live 2026-08-17, each number
+ * ending in `Gosub(trk-<id>)` straight to the trunk. So emergency dialling is
+ * unaffected by everything in this file, by construction rather than by a
+ * carve-out somebody has to remember to maintain.
  */
 
-import { EMERGENCY_ALLOWED_DESTINATIONS } from "./serviceInterruptionPolicy";
-
-/** Name of the permanent per-customer outbound route. */
-export const EMERGENCY_OUTBOUND_ROUTE_NAME = "connect-emergency-only";
-
-/** Dial patterns the emergency route matches — and only these. */
-export function emergencyDialPatterns(): string[] {
-  const patterns: string[] = [];
-  for (const d of EMERGENCY_ALLOWED_DESTINATIONS) {
-    patterns.push(d);
-    // North American dialling: some handsets send a leading 1.
-    if (d.length === 10) patterns.push(`1${d}`);
-  }
-  return patterns;
-}
-
-/** The route every customer gets at creation. */
-export function emergencyRouteSpec(): { name: string; patterns: string[]; neverDeactivate: true } {
-  return { name: EMERGENCY_OUTBOUND_ROUTE_NAME, patterns: emergencyDialPatterns(), neverDeactivate: true };
-}
-
-export type OutboundRouteRef = {
-  /** `ombu_outbound_routes` row id. */
-  id: number;
-  name: string;
-  /** Whether the route is currently active on the PBX. */
-  active: boolean;
+export type ArsMemberRef = {
+  /** `ombu_ars.ars_id` — the outbound profile. */
+  arsId: string;
+  /** `ombu_ars_members.outbound_route_id`. */
+  outboundRouteId: string;
+  /** Current state, as read from the panel form ("1" / "0"). */
+  enabled: boolean;
+  /** `ombu_ars_members.sort` — preserved so the order never shifts. */
+  sort: number;
 };
 
 export type InboundRouteRef = {
-  /** `ombu_inbound_routes` row id. */
   id: number;
   did: string;
   /** True when the route already points at the Connect doorway. */
@@ -59,81 +41,93 @@ export type InboundRouteRef = {
 };
 
 export type InterruptionPlan = {
-  /** Outbound routes to switch off. Never contains the emergency route. */
-  deactivateOutbound: OutboundRouteRef[];
-  /** The emergency route that is being left alone — recorded so the audit
-   *  trail shows which route kept 911 alive. */
-  emergencyRouteKept: OutboundRouteRef;
-  /**
-   * Inbound routes that must be re-pointed at the Connect doorway first,
-   * because a call can only be answered with a busy signal once it reaches us.
-   */
+  /** Members to switch off, across every profile. */
+  disable: ArsMemberRef[];
+  /** Members already off — left alone, and NOT recorded for restore. */
+  alreadyDisabled: ArsMemberRef[];
+  /** Profiles touched, so the caller knows how many form posts to make. */
+  arsIds: string[];
+  /** Inbound routes needing a re-point so Connect can answer them busy. */
   repointInboundToDoorway: InboundRouteRef[];
-  /** Inbound routes already on the doorway — Connect answers these itself. */
+  /** Inbound routes Connect already answers. */
   inboundHandledInConnect: InboundRouteRef[];
 };
 
 export type RestorePlan = {
-  reactivateOutbound: OutboundRouteRef[];
+  /** Exactly what we disabled — nothing else. */
+  enable: Array<{ arsId: string; outboundRouteId: string }>;
+  arsIds: string[];
   restoreInbound: InboundRouteRef[];
 };
 
-export class EmergencyRouteMissingError extends Error {
-  constructor(readonly reason: "absent" | "inactive") {
-    super(
-      `Refusing to interrupt this tenant: the ${EMERGENCY_OUTBOUND_ROUTE_NAME} outbound route is ` +
-        `${reason}. Deactivating the remaining outbound routes would disconnect ` +
-        `${EMERGENCY_ALLOWED_DESTINATIONS.join(" and ")}. Provision the emergency route first.`,
-    );
-    this.name = "EmergencyRouteMissingError";
+export class NothingToInterruptError extends Error {
+  constructor() {
+    super("Refusing to interrupt: this tenant has no enabled outbound members, so there is nothing to switch off.");
+    this.name = "NothingToInterruptError";
   }
 }
 
-/** Find the tenant's permanent emergency route, if it has one. */
-export function findEmergencyRoute(outboundRoutes: OutboundRouteRef[]): OutboundRouteRef | undefined {
-  return outboundRoutes.find((r) => r.name === EMERGENCY_OUTBOUND_ROUTE_NAME);
-}
-
 /**
- * What must change on the PBX to interrupt this tenant.
- * @throws EmergencyRouteMissingError when 911 would be lost — see the header.
+ * What must change to interrupt this tenant.
+ * @throws NothingToInterruptError when there is nothing enabled — better to
+ *   report that than to record an empty interruption and later "restore" it.
  */
 export function buildInterruptionPlan(params: {
-  outboundRoutes: OutboundRouteRef[];
+  members: ArsMemberRef[];
   inboundRoutes: InboundRouteRef[];
 }): InterruptionPlan {
-  const emergency = findEmergencyRoute(params.outboundRoutes);
-  if (!emergency) throw new EmergencyRouteMissingError("absent");
-  if (!emergency.active) throw new EmergencyRouteMissingError("inactive");
+  const disable = params.members.filter((m) => m.enabled);
+  if (disable.length === 0) throw new NothingToInterruptError();
 
   return {
-    // Filtering by name as well as by identity: the emergency route cannot end
-    // up in this list however the caller assembled its input.
-    deactivateOutbound: params.outboundRoutes.filter(
-      (r) => r.active && r.name !== EMERGENCY_OUTBOUND_ROUTE_NAME,
-    ),
-    emergencyRouteKept: emergency,
+    disable,
+    // ⛔ A member the customer had already switched off is not ours to restore.
+    alreadyDisabled: params.members.filter((m) => !m.enabled),
+    arsIds: [...new Set(disable.map((m) => m.arsId))],
     repointInboundToDoorway: params.inboundRoutes.filter((r) => !r.pointsAtConnectDoorway),
     inboundHandledInConnect: params.inboundRoutes.filter((r) => r.pointsAtConnectDoorway),
   };
 }
 
-/**
- * What must change to put the tenant back exactly as they were.
- * ⛔ The emergency route is NOT touched — it is permanent, and it was never
- * switched off, so there is nothing to undo.
- */
+/** What must change to put the tenant back exactly as they were. */
 export function buildRestorePlan(params: {
-  /** The routes recorded as deactivated when service was switched off. */
-  deactivatedOutbound: OutboundRouteRef[];
-  /** The routes recorded as re-pointed when service was switched off. */
+  /** Recorded when service was switched off. */
+  disabledMembers: Array<{ arsId: string; outboundRouteId: string }>;
   repointedInbound: InboundRouteRef[];
 }): RestorePlan {
   return {
-    // Reactivate only what WE switched off, and never the emergency route.
-    reactivateOutbound: params.deactivatedOutbound.filter((r) => r.name !== EMERGENCY_OUTBOUND_ROUTE_NAME),
+    enable: params.disabledMembers,
+    arsIds: [...new Set(params.disabledMembers.map((m) => m.arsId))],
     restoreInbound: params.repointedInbound,
   };
+}
+
+/**
+ * Flip the enabled flag on the named members. Input order is preserved — this
+ * only changes flags.
+ *
+ * ⛔ It does NOT sort. `sort` is per-profile, so ordering a list that spans
+ * profiles by `sort` alone interleaves them. Use `membersForProfile` to get
+ * one profile's rows in their real order before posting.
+ */
+export function applyEnabledState(
+  members: ArsMemberRef[],
+  change: { arsId: string; outboundRouteIds: Set<string>; enabled: boolean },
+): ArsMemberRef[] {
+  return members.map((m) =>
+    m.arsId === change.arsId && change.outboundRouteIds.has(m.outboundRouteId)
+      ? { ...m, enabled: change.enabled }
+      : m,
+  );
+}
+
+/**
+ * One profile's members, in the order the panel expects them back.
+ * The ARS form is a full replace: anything left out of the post is deleted,
+ * so this must return every member of that profile, not just changed ones.
+ */
+export function membersForProfile(members: ArsMemberRef[], arsId: string): ArsMemberRef[] {
+  return members.filter((m) => m.arsId === arsId).sort((a, b) => a.sort - b.sort);
 }
 
 /**

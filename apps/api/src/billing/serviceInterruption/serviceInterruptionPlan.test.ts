@@ -2,24 +2,21 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import {
-  EMERGENCY_OUTBOUND_ROUTE_NAME,
-  EmergencyRouteMissingError,
+  NothingToInterruptError,
+  applyEnabledState,
   buildInterruptionPlan,
   buildRestorePlan,
-  emergencyDialPatterns,
-  emergencyRouteSpec,
-  findEmergencyRoute,
   inboundTreatmentFor,
+  membersForProfile,
+  type ArsMemberRef,
 } from "./serviceInterruptionPlan";
-import { isOutboundCallAllowed } from "./serviceInterruptionPolicy";
 
-const EMERGENCY = { id: 999, name: EMERGENCY_OUTBOUND_ROUTE_NAME, active: true };
-
-const routes = () => [
-  { id: 126, name: "Main outbound", active: true },
-  { id: 127, name: "International", active: true },
-  { id: 128, name: "Disabled by customer", active: false },
-  { ...EMERGENCY },
+/** Trust Bookkeepings' shape: several profiles, one route each. */
+const multiProfile = (): ArsMemberRef[] => [
+  { arsId: "50", outboundRouteId: "101", enabled: true, sort: 0 },
+  { arsId: "49", outboundRouteId: "102", enabled: true, sort: 0 },
+  { arsId: "48", outboundRouteId: "103", enabled: true, sort: 0 },
+  { arsId: "47", outboundRouteId: "104", enabled: false, sort: 0 }, // customer's own choice
 ];
 
 const inbound = () => [
@@ -27,83 +24,90 @@ const inbound = () => [
   { id: 241, did: "8457231213", pointsAtConnectDoorway: false },
 ];
 
-// ─── The route every customer gets ───────────────────────────────────────────
+// ─── Every profile, not just the first ───────────────────────────────────────
 
-test("the emergency route matches 911 and the EMS/fire line, and nothing else", () => {
-  const spec = emergencyRouteSpec();
-  assert.equal(spec.name, EMERGENCY_OUTBOUND_ROUTE_NAME);
-  assert.deepEqual(spec.patterns, ["911", "8457831212", "18457831212"]);
-  assert.equal(spec.neverDeactivate, true);
+test("every enabled member across every profile is disabled", () => {
+  const plan = buildInterruptionPlan({ members: multiProfile(), inboundRoutes: [] });
+  assert.deepEqual(plan.disable.map((m) => m.outboundRouteId), ["101", "102", "103"]);
+  assert.deepEqual(plan.arsIds.sort(), ["48", "49", "50"]);
 });
 
-test("the plan's dial patterns and the runtime gate agree with each other", () => {
-  // Two independent paths decide "is this allowed" — the dialplan patterns on
-  // the PBX and the gate in code. They must never disagree.
-  for (const p of emergencyDialPatterns()) {
-    assert.equal(isOutboundCallAllowed({ interrupted: true, dialed: p }), true, p);
+test("a customer with nine profiles has all nine switched off", () => {
+  const nine: ArsMemberRef[] = Array.from({ length: 9 }, (_, i) => ({
+    arsId: String(40 + i),
+    outboundRouteId: String(200 + i),
+    enabled: true,
+    sort: 0,
+  }));
+  const plan = buildInterruptionPlan({ members: nine, inboundRoutes: [] });
+  assert.equal(plan.disable.length, 9);
+  assert.equal(plan.arsIds.length, 9);
+});
+
+test("a member the customer already disabled is left alone and not restored later", () => {
+  const plan = buildInterruptionPlan({ members: multiProfile(), inboundRoutes: [] });
+  assert.deepEqual(plan.alreadyDisabled.map((m) => m.outboundRouteId), ["104"]);
+  const restore = buildRestorePlan({
+    disabledMembers: plan.disable.map((m) => ({ arsId: m.arsId, outboundRouteId: m.outboundRouteId })),
+    repointedInbound: [],
+  });
+  assert.equal(restore.enable.some((m) => m.outboundRouteId === "104"), false);
+});
+
+test("a tenant with nothing enabled is refused, not recorded as interrupted", () => {
+  const allOff = multiProfile().map((m) => ({ ...m, enabled: false }));
+  assert.throws(() => buildInterruptionPlan({ members: allOff, inboundRoutes: [] }), NothingToInterruptError);
+  assert.throws(() => buildInterruptionPlan({ members: [], inboundRoutes: [] }), NothingToInterruptError);
+});
+
+// ─── Round trip ──────────────────────────────────────────────────────────────
+
+test("interrupt then restore returns exactly the starting state", () => {
+  const before = multiProfile();
+  const plan = buildInterruptionPlan({ members: before, inboundRoutes: inbound() });
+  const restore = buildRestorePlan({
+    disabledMembers: plan.disable.map((m) => ({ arsId: m.arsId, outboundRouteId: m.outboundRouteId })),
+    repointedInbound: plan.repointInboundToDoorway,
+  });
+
+  let state = before;
+  for (const arsId of plan.arsIds) {
+    state = applyEnabledState(state, {
+      arsId,
+      outboundRouteIds: new Set(plan.disable.filter((m) => m.arsId === arsId).map((m) => m.outboundRouteId)),
+      enabled: false,
+    });
   }
-  for (const blocked of ["5551234567", "8459111234", "911911", "84578312125"]) {
-    assert.equal(emergencyDialPatterns().includes(blocked), false, blocked);
-    assert.equal(isOutboundCallAllowed({ interrupted: true, dialed: blocked }), false, blocked);
+  assert.equal(state.every((m) => !m.enabled), true, "everything is off while interrupted");
+
+  for (const arsId of restore.arsIds) {
+    state = applyEnabledState(state, {
+      arsId,
+      outboundRouteIds: new Set(restore.enable.filter((m) => m.arsId === arsId).map((m) => m.outboundRouteId)),
+      enabled: true,
+    });
   }
-});
-
-// ─── Outbound ────────────────────────────────────────────────────────────────
-
-test("every active outbound route is deactivated", () => {
-  const plan = buildInterruptionPlan({ outboundRoutes: routes(), inboundRoutes: inbound() });
-  assert.deepEqual(plan.deactivateOutbound.map((r) => r.id), [126, 127]);
-});
-
-test("multiple outbound routes are ALL deactivated, not just the first", () => {
-  const many = [1, 2, 3, 4, 5].map((id) => ({ id, name: `Route ${id}`, active: true }));
-  const plan = buildInterruptionPlan({ outboundRoutes: [...many, { ...EMERGENCY }], inboundRoutes: [] });
-  assert.equal(plan.deactivateOutbound.length, 5);
-});
-
-test("a route the customer already switched off is left alone", () => {
-  const plan = buildInterruptionPlan({ outboundRoutes: routes(), inboundRoutes: [] });
-  assert.equal(plan.deactivateOutbound.some((r) => r.id === 128), false);
-});
-
-// ─── The safety property ─────────────────────────────────────────────────────
-
-test("the emergency route is never in the deactivate list", () => {
-  const plan = buildInterruptionPlan({ outboundRoutes: routes(), inboundRoutes: [] });
-  assert.equal(plan.deactivateOutbound.some((r) => r.name === EMERGENCY_OUTBOUND_ROUTE_NAME), false);
-  assert.equal(plan.deactivateOutbound.some((r) => r.id === 999), false);
-  assert.equal(plan.emergencyRouteKept.id, 999);
-});
-
-test("a tenant with NO emergency route is not interrupted at all", () => {
-  const withoutEmergency = routes().filter((r) => r.name !== EMERGENCY_OUTBOUND_ROUTE_NAME);
-  assert.throws(
-    () => buildInterruptionPlan({ outboundRoutes: withoutEmergency, inboundRoutes: [] }),
-    (err: EmergencyRouteMissingError) => err.name === "EmergencyRouteMissingError" && err.reason === "absent",
+  assert.deepEqual(
+    state.map((m) => ({ id: m.outboundRouteId, on: m.enabled })),
+    before.map((m) => ({ id: m.outboundRouteId, on: m.enabled })),
+    "restore puts back exactly the starting state, including the customer's own disabled route",
   );
 });
 
-test("a tenant whose emergency route is switched off is not interrupted either", () => {
-  const inactive = [...routes().filter((r) => r.id !== 999), { ...EMERGENCY, active: false }];
-  assert.throws(
-    () => buildInterruptionPlan({ outboundRoutes: inactive, inboundRoutes: [] }),
-    (err: EmergencyRouteMissingError) => err.reason === "inactive",
-  );
-});
-
-test("the refusal names the numbers that would have been lost", () => {
-  try {
-    buildInterruptionPlan({ outboundRoutes: [], inboundRoutes: [] });
-    assert.fail("should have refused");
-  } catch (err) {
-    assert.match((err as Error).message, /911/);
-    assert.match((err as Error).message, /8457831212/);
-  }
-});
-
-test("findEmergencyRoute locates it among the tenant's routes", () => {
-  assert.equal(findEmergencyRoute(routes())?.id, 999);
-  assert.equal(findEmergencyRoute([]), undefined);
+test("applying a change preserves sort order and untouched members", () => {
+  const members: ArsMemberRef[] = [
+    { arsId: "7", outboundRouteId: "11", enabled: true, sort: 1 },
+    { arsId: "7", outboundRouteId: "10", enabled: true, sort: 0 },
+    { arsId: "8", outboundRouteId: "99", enabled: true, sort: 0 },
+  ];
+  const out = applyEnabledState(members, { arsId: "7", outboundRouteIds: new Set(["10"]), enabled: false });
+  assert.deepEqual(out.map((m) => m.outboundRouteId), ["11", "10", "99"], "input order preserved — flags only");
+  // Ordering is per profile, and only when posting that profile back.
+  assert.deepEqual(membersForProfile(out, "7").map((m) => m.outboundRouteId), ["10", "11"]);
+  assert.deepEqual(membersForProfile(out, "8").map((m) => m.outboundRouteId), ["99"]);
+  assert.equal(out.find((m) => m.outboundRouteId === "10")!.enabled, false);
+  assert.equal(out.find((m) => m.outboundRouteId === "11")!.enabled, true);
+  assert.equal(out.find((m) => m.outboundRouteId === "99")!.enabled, true, "another profile is untouched");
 });
 
 // ─── Inbound ─────────────────────────────────────────────────────────────────
@@ -114,48 +118,18 @@ test("a caller gets a busy signal, never the IVR and never dead air", () => {
 });
 
 test("a number already on the Connect doorway needs no PBX change", () => {
-  const plan = buildInterruptionPlan({ outboundRoutes: routes(), inboundRoutes: inbound() });
+  const plan = buildInterruptionPlan({ members: multiProfile(), inboundRoutes: inbound() });
   assert.deepEqual(plan.inboundHandledInConnect.map((r) => r.id), [240]);
   assert.deepEqual(plan.repointInboundToDoorway.map((r) => r.id), [241]);
 });
 
-// ─── Restore ─────────────────────────────────────────────────────────────────
+// ─── The 911 guarantee is structural ─────────────────────────────────────────
 
-test("paying reactivates exactly what we switched off", () => {
-  const plan = buildInterruptionPlan({ outboundRoutes: routes(), inboundRoutes: inbound() });
-  const restore = buildRestorePlan({
-    deactivatedOutbound: plan.deactivateOutbound,
-    repointedInbound: plan.repointInboundToDoorway,
-  });
-  assert.deepEqual(restore.reactivateOutbound.map((r) => r.id), [126, 127]);
-  assert.deepEqual(restore.restoreInbound.map((r) => r.id), [241]);
-});
-
-test("restoring does not switch on a route the customer had disabled", () => {
-  const plan = buildInterruptionPlan({ outboundRoutes: routes(), inboundRoutes: [] });
-  const restore = buildRestorePlan({ deactivatedOutbound: plan.deactivateOutbound, repointedInbound: [] });
-  assert.equal(restore.reactivateOutbound.some((r) => r.id === 128), false);
-});
-
-test("restoring never touches the permanent emergency route", () => {
-  const restore = buildRestorePlan({
-    deactivatedOutbound: [{ ...EMERGENCY, active: false }],
-    repointedInbound: [],
-  });
-  assert.equal(restore.reactivateOutbound.length, 0);
-  assert.equal("removeEmergencyRoute" in restore, false);
-});
-
-test("interrupt then restore returns the tenant to exactly the starting state", () => {
-  const before = routes();
-  const plan = buildInterruptionPlan({ outboundRoutes: before, inboundRoutes: inbound() });
-  const restore = buildRestorePlan({
-    deactivatedOutbound: plan.deactivateOutbound,
-    repointedInbound: plan.repointInboundToDoorway,
-  });
-  const activeAfter = new Set([
-    ...before.filter((r) => r.active && !plan.deactivateOutbound.includes(r)).map((r) => r.id),
-    ...restore.reactivateOutbound.map((r) => r.id),
-  ]);
-  assert.deepEqual([...activeAfter].sort((a, b) => a - b), [126, 127, 999]);
+test("no part of the plan touches emergency dialling", () => {
+  const plan = buildInterruptionPlan({ members: multiProfile(), inboundRoutes: inbound() });
+  const serialised = JSON.stringify(plan);
+  // Emergency calls never traverse an ARS member, so nothing here can name them.
+  assert.equal(serialised.includes("911"), false);
+  assert.equal(serialised.includes("8457831212"), false);
+  assert.equal(serialised.includes("emergency"), false);
 });
