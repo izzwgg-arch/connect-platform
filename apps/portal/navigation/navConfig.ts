@@ -41,6 +41,7 @@ import {
   Network,
   Phone,
   PhoneForwarded,
+  Radio,
   Plane,
   Receipt,
   Rocket,
@@ -152,6 +153,11 @@ export const navItems: NavItem[] = [
   { id: "apps.sms_campaigns", href: "/apps/sms-campaigns", label: "SMS Campaigns", icon: "SC", lucide: Megaphone, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_sms_campaigns" },
   { id: "apps.whatsapp", href: "/apps/whatsapp", label: "WhatsApp Inbox", icon: "WA", lucide: MessageCircle, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_whatsapp_inbox" },
   { id: "apps.voip_ms", href: "/apps/voip-ms", label: "VoIP.ms", icon: "VP", lucide: PhoneForwarded, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_voip_ms" },
+  // SignalWire evaluation console (2026-08-18) — the carrier being tested to
+  // replace VoIP.ms. Shares VoIP.ms's view key in the catalog, but is forced
+  // SUPER_ADMIN-only in isNavItemVisibleForUser (like pbx.ivr_migration): it
+  // spends the platform's own money and there is deliberately no grantable key.
+  { id: "apps.signalwire", href: "/apps/signalwire", label: "SignalWire", icon: "SW", lucide: Radio, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_voip_ms" },
   { id: "apps.customers", href: "/apps/customers", label: "Customer Hub", icon: "CU", lucide: UsersRound, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_customer_hub" },
 
   { id: "tracking.dashboard", href: "/tracking/dashboard", label: "Dashboard", icon: "TD", lucide: LayoutDashboard, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_dashboard" },
@@ -200,5 +206,7 @@ export function isNavItemVisibleForUser(
   // this line ANY role granted "IVR Studio" also saw Migration. Super admin
   // only, always; there is deliberately no permission that can grant it.
   if (item.id === "pbx.ivr_migration" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The SignalWire test bench spends the platform owner's money; owner only.
+  if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

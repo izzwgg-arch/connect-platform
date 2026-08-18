@@ -331,6 +331,7 @@ import { buildMobileDevicePushWhere, isSyntheticVmrInviteId, validateCallerSipEn
 import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
+import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
 import { registerForwardRoutes } from "./pbx/forwardRoutes";
 import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler, injectAsService as didInjectAsService } from "./didSwitchSchedule";
@@ -2833,6 +2834,10 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/call-timeline", permission: "can_view_admin_call_timeline" },
   { prefix: "/admin/call-flight", permission: "can_view_admin_call_flight" },
   { prefix: "/admin/apps/voip-ms", permission: "can_view_apps_voip_ms" },
+  // SignalWire evaluation console (2026-08-18). Platform-owner only — every
+  // handler ALSO calls requireSuperAdmin; this rule exists so the route is not
+  // silently outside the global permission gate (the /admin/wake-health class).
+  { prefix: "/admin/apps/signalwire", permission: "can_manage_global_settings" },
   { prefix: "/admin/numbers", permission: "can_view_admin_billing" },
   { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/sms", permission: "can_view_apps_sms_campaigns" },
@@ -23463,6 +23468,18 @@ registerPollyRoutes({
   resolvePbxRouteHelperConfig,
   pushPromptToHelper,
   PromptPushError,
+});
+
+// ═══ SignalWire evaluation console (2026-08-18) ═════════════════════
+// The carrier being evaluated to replace VoIP.ms. A test bench, not a
+// cut-over: nothing here is wired into onboarding, chat, billing SMS, the
+// worker or the PBX. Platform owner only — it spends real money against the
+// platform's own account. The two /webhooks/signalwire/* paths it registers
+// are PUBLIC (JWT bypass) and signature-verified, fail closed.
+registerSignalWireRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
 });
 
 // ── GET /voice/ivr/prompts/sync-manifest ────────────────────────────────────

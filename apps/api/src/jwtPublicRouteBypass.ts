@@ -156,7 +156,13 @@ export function shouldSkipJwtVerification(path: string): boolean {
       "/webhooks/whatsapp/meta",
       "/webhooks/whatsapp/twilio/status",
       "/webhooks/voipms/sms",
+      // SignalWire evaluation console (2026-08-18): inbound SMS + delivery
+      // status callbacks. Both verify X-SignalWire-Signature in-handler and
+      // FAIL CLOSED without a signing key (signalwire/signalWireWebhookAuth.ts).
+      "/webhooks/signalwire/sms",
+      "/webhooks/signalwire/sms-status",
     ].includes(path) || path.endsWith("/webhooks/voipms/sms")
+    || path.endsWith("/webhooks/signalwire/sms") || path.endsWith("/webhooks/signalwire/sms-status")
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")
