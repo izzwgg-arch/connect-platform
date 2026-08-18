@@ -13,9 +13,17 @@
  * ⛔ If you add a new early return, it MUST return a decision with a reason.
  *
  * ── Rule 2: never invent a recipient, never silently have none ──────────────
- * Recipients come from the addresses that already receive this mailbox's
- * voicemail on the PBX (`Extension.pbxUserEmail`), plus any addresses an admin
- * has added. ⛔ We do NOT fall back to the owner's login email: for 7 live
+ * Recipients are the mailbox's own list in Connect (`VoicemailEmailRecipient`,
+ * editable in Settings) plus whatever address the PBX still carries for it
+ * (`Extension.pbxUserEmail`, a MIRROR of the PBX field). ⛔ Since the 2026-08-17
+ * cutover the PBX field is BLANK for every tenant except Gesheft — blanking it
+ * is how the PBX's own emailing was switched off — and the sync faithfully
+ * mirrors that blank into Connect. So for a cut-over tenant `pbxUserEmail` is
+ * null by design and `VoicemailEmailRecipient` is the ONLY source; on
+ * 2026-08-18 the 55 addresses were restored into it from the PBX backup. Never
+ * "fix" a null `pbxUserEmail` by putting the address back on the PBX (that
+ * resumes duplicate emails) and never make the sync keep a stale one (then the
+ * mirror lies). ⛔ We do NOT fall back to the owner's login email: for 7 live
  * extensions the two differ, and Gesheft 101's voicemail goes to a shared
  * `orders@` inbox rather than to the person who signs in. Substituting the login
  * address would silently move a customer's voicemail to a different human.

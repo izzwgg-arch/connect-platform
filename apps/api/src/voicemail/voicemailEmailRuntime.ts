@@ -33,8 +33,40 @@ type Log = { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: stri
  * a message can still be recovered days later — after an outage, a bad deploy,
  * or a mailbox address finally being filled in.
  */
-const SWEEP_WINDOW_MS = 7 * 24 * 3600_000;
-const SWEEP_BATCH = 50;
+export const SWEEP_WINDOW_MS = 7 * 24 * 3600_000;
+export const SWEEP_BATCH = 50;
+
+/**
+ * The sweep's query, as one pure function so a test can hold it to account.
+ *
+ * ⛔⛔ Excluded tenants (Gesheft, still emailed by the PBX) MUST be filtered
+ * HERE, in the query — never after the batch is chosen. Their voicemails are
+ * deliberately never stamped (so they stay eligible the day they are
+ * un-excluded), which makes them permanently `emailedAt: null`, permanently the
+ * OLDEST rows, and therefore permanently the entire ascending batch of 50.
+ * That is exactly what happened on 2026-08-18: every sweep for a day logged
+ * `skipped: { excluded_tenant: 50 }` and no other tenant's voicemail was ever
+ * looked at. Gesheft alone produces ~50 voicemails a day inside a 7-day window,
+ * so the block can never clear on its own.
+ *
+ * `tenantId: null` (unresolved) rows are filtered for the same reason: the
+ * sender cannot process them and never stamps them.
+ */
+export function buildVoicemailSweepWhere(input: { since: Date; excludedTenantIds: Iterable<string> }): {
+  emailedAt: null;
+  receivedAt: { gte: Date };
+  deletedAt: null;
+  tenantId: { not: null; notIn?: string[] };
+} {
+  const excluded = Array.from(new Set(Array.from(input.excludedTenantIds).map((s) => String(s || "").trim()).filter(Boolean)));
+  return {
+    emailedAt: null,
+    receivedAt: { gte: input.since },
+    deletedAt: null,
+    // ⛔ `notIn` is only added when non-empty; keep `not: null` unconditional.
+    tenantId: excluded.length > 0 ? { not: null, notIn: excluded } : { not: null },
+  };
+}
 
 export const VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS = 60_000;
 export const VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS = 15 * 60_000;
@@ -79,7 +111,7 @@ export async function runVoicemailEmailSweep(log: Log): Promise<void> {
   try {
     const since = new Date(Date.now() - SWEEP_WINDOW_MS);
     const pending = await (db as any).voicemail.findMany({
-      where: { emailedAt: null, receivedAt: { gte: since }, deletedAt: null },
+      where: buildVoicemailSweepWhere({ since, excludedTenantIds: voicemailEmailExcludedTenantIds() }),
       orderBy: { receivedAt: "asc" },
       take: SWEEP_BATCH,
       select: {
@@ -139,6 +171,11 @@ export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmai
     const since = new Date(Date.now() - SWEEP_WINDOW_MS);
     const excluded = voicemailEmailExcludedTenantIds();
 
+    // ⛔ `Voicemail` has a `tenantId` COLUMN and NO `tenant` RELATION. Selecting
+    // `tenant: { select: { name } }` here is a Prisma validation error, and it
+    // made this watchdog throw on every run from its first deploy until
+    // 2026-08-18 — a warn line nobody read, while the sweep it was built to
+    // audit sat blocked for a day. Names are looked up separately.
     const rows = await (db as any).voicemail.findMany({
       where: { receivedAt: { gte: since }, deletedAt: null, tenantId: { not: null } },
       orderBy: { receivedAt: "desc" },
@@ -146,14 +183,23 @@ export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmai
       select: {
         id: true, tenantId: true, extension: true, receivedAt: true,
         emailedAt: true, emailSkipReason: true,
-        tenant: { select: { name: true } },
       },
     });
+
+    const tenantIds = Array.from(new Set(rows.map((r: any) => r.tenantId).filter(Boolean))) as string[];
+    const tenantNameById = new Map<string, string | null>();
+    if (tenantIds.length > 0) {
+      const tenants = await (db as any).tenant.findMany({
+        where: { id: { in: tenantIds } },
+        select: { id: true, name: true },
+      });
+      for (const t of tenants) tenantNameById.set(t.id, t.name ?? null);
+    }
 
     const eligible = rows
       .filter((r: any) => r.tenantId && !excluded.has(r.tenantId))
       .map((r: any) => ({
-        id: r.id, tenantId: r.tenantId, tenantName: r.tenant?.name ?? null,
+        id: r.id, tenantId: r.tenantId, tenantName: tenantNameById.get(r.tenantId) ?? null,
         extension: r.extension, receivedAt: r.receivedAt,
         emailedAt: r.emailedAt, emailSkipReason: r.emailSkipReason,
       }));
