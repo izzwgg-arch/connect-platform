@@ -115,6 +115,51 @@ x = −280, open at x = 0, `transitionProperty` is exactly `transform`.
 
 ---
 
+## 4b. ⛔⛔ THE FIRST FIX WAS NOT ENOUGH — THE DASHBOARD CHART WAS EATING EVERY FRAME
+
+Izzy re-tested after the deploy above and said it was **still jittery**. He was
+right, and the reason is a component the harness could never have contained.
+
+`components/dashboard/CallVolumeChart.tsx` runs a `ResizeObserver` on its own
+container and calls `setSize({w})` on every change. `size.w` feeds the `useMemo`
+that rebuilds **every grid line, every series path string, every x tick and every
+hover position**. The sidebar slide changes that container's width on **every
+frame**, so every frame ran: resize → React render → rebuild all geometry →
+mutate dozens of SVG attributes → **pay the ~70 ms style-recalc tax from §2.**
+
+**Measured on the live dashboard, in the real browser, not a harness:**
+
+| | |
+|---|---|
+| One chart rebuild (paths + grid lines + labels) | **23.2 ms** (worst 44.6) |
+| Frames in a 200 ms slide | ~12 |
+| Work forced into that 200 ms window | **~278 ms** |
+| Frame budget at 60 Hz | 16.7 ms |
+
+So the chart alone blew the budget **on every single frame**. On the dashboard —
+the page users land on — the animation could not have been smooth whatever was
+done to the sidebar itself.
+
+⛔ **The re-render was very nearly pointless during the slide.** The `<svg>` is
+`width="100%"` with a `viewBox` and `preserveAspectRatio="none"`, so **the browser
+already scales the drawing to the new width for free.** The JS recompute exists
+only to restore true proportions — and that is needed once, when resizing stops.
+
+✅ **Fix: the observer commits on the TRAILING EDGE only** (120 ms idle), with the
+very first measurement committed immediately so the chart still draws at once on
+load. Per-frame chart work during the slide goes **23.2 ms → 0**.
+
+⛔ **Nothing else in the portal is width-driven** — `CallVolumeChart` holds the
+only `ResizeObserver` in `apps/portal`, and the three `addEventListener("resize")`
+call sites are **window**-level (`InvoiceRowMenu`, `ContactRightRailSectionList`,
+`ViewportDropdown`), which the sidebar never triggers. Verified by grep.
+
+⛔ **THE GENERAL RULE, and it is the lesson of this whole engagement: a component
+that recomputes on its own width is a component that recomputes on every frame the
+sidebar moves.** Any future one must commit on the trailing edge, and must never
+be measured in a harness that does not contain it — which is exactly the mistake
+that produced the premature "fixed" above.
+
 ## 5. ⛔ The trap the mobile change created, and why the toasts moved
 
 `DesktopUpdateToast` is `position: fixed` and used to render **inside** the

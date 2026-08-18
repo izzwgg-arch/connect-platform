@@ -78,16 +78,42 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
   const [hover, setHover] = useState<HoverState>(null);
 
   // Resize observer for the SVG container.
+  // ⛔ TRAILING EDGE ONLY, AND THAT IS THE WHOLE POINT. This fires on every
+  // frame that the container's width changes — which is every frame of the
+  // sidebar's collapse/expand slide. Committing the width there re-ran the
+  // memo below (every grid line, every path string, every tick), React then
+  // mutated dozens of SVG attributes, and each of those DOM mutations costs
+  // ~70ms of style recalculation because globals.css carries 73 `:has()` rules
+  // whose invalidation is paid per mutation. Twelve frames of that is hundreds
+  // of milliseconds of work inside a 200ms animation, and it is what the
+  // sidebar animation actually stuttered on.
+  // Nothing is lost by waiting: the <svg> is width="100%" with a viewBox and
+  // preserveAspectRatio="none", so the browser scales the drawing to the new
+  // width on its own. The recompute only exists to restore true proportions,
+  // and it does that once, when the resizing stops.
   useEffect(() => {
-    if (!wrapRef.current) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    let timer = 0;
+    let measured = false;
+    let pending: { w: number; h: number } | null = null;
+    const commit = () => { if (pending) { setSize(pending); pending = null; } };
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const cr = entry.contentRect;
-        setSize({ w: Math.max(280, Math.floor(cr.width)), h: 240 });
+        pending = { w: Math.max(280, Math.floor(entry.contentRect.width)), h: 240 };
       }
+      if (!measured) {
+        // First measurement is the real one — draw immediately, don't make the
+        // chart wait to appear.
+        measured = true;
+        commit();
+        return;
+      }
+      window.clearTimeout(timer);
+      timer = window.setTimeout(commit, 120);
     });
-    ro.observe(wrapRef.current);
-    return () => ro.disconnect();
+    ro.observe(el);
+    return () => { ro.disconnect(); window.clearTimeout(timer); };
   }, []);
 
   const { hoverPositions, viewBox, series, gridLines, xTicks, hasData } = useMemo(() => {

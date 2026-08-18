@@ -234,6 +234,23 @@ Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]]
   leaves the label column zero pixels wide and the aside clips it, so the slide
   draws the text away by itself. The icon well is **one size in both modes**;
   centring in the rail is a padding change on the **one** scroll container.
+- ⛔⛔ **THE SIDEBAR FIX ALONE WAS NOT ENOUGH, AND THE SECOND CAUSE IS THE ONE TO
+  REMEMBER: `CallVolumeChart` on the DASHBOARD rebuilt itself on every frame of
+  the slide.** It runs a `ResizeObserver` on its own container and feeds the width
+  into a `useMemo` that rebuilds every path, grid line and tick — so each frame
+  mutated dozens of SVG attributes and paid the ~70 ms tax above. **Measured on
+  the live dashboard: one rebuild = 23.2 ms, × 12 frames = ~278 ms of work inside
+  a 200 ms animation**, against a 16.7 ms budget. The animation could not have
+  been smooth on the landing page whatever the sidebar did. ✅ Fixed by committing
+  the observer on the **trailing edge** (120 ms idle; first measurement still
+  immediate). ⛔ **The re-render was nearly pointless anyway** — the `<svg>` is
+  `width="100%"` + `viewBox` + `preserveAspectRatio="none"`, so the browser
+  already scales it for free; the recompute only restores true proportions, once.
+  ⛔ **THE RULE: any component that recomputes on its own width recomputes on
+  every frame the sidebar moves.** It is also why the first fix was reported too
+  early — **the harness did not contain the chart.** `CallVolumeChart` is the only
+  `ResizeObserver` in apps/portal; the three `resize` listeners are window-level
+  and the sidebar never fires them.
 - ⛔ **The mobile/narrow drawer animated `left`, a LAYOUT property** — relaying
   out the drawer and the page behind it every frame. It is `transform:
   translate3d(-100%,0,0)` now (compositor only). ⛔ **That created a trap and it
