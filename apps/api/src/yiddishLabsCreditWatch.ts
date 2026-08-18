@@ -76,6 +76,12 @@ const DISABLED = () => process.env.YIDDISHLABS_CREDIT_CHECK_DISABLED === "1";
 /** How long a probe may hang before we call it "unknown" (never "out"). */
 const PROBE_TIMEOUT_MS = 20_000;
 
+/** Far enough after boot that the check never competes with startup work. */
+const BOOT_CHECK_DELAY_MS = Math.max(
+  10_000,
+  Number(process.env.YIDDISHLABS_CREDIT_CHECK_BOOT_DELAY_MS || 120_000),
+);
+
 export type CreditState = "ok" | "out" | "unknown" | "unconfigured";
 
 export interface CreditCheckOutcome {
@@ -333,6 +339,19 @@ export interface CreditWatchDeps {
   fetchImpl?: typeof fetch;
   resolveKey?: () => Promise<string | null>;
   now?: () => Date;
+  /**
+   * Skip entirely when a check was already recorded this recently.
+   *
+   * ⛔ THIS IS WHAT MAKES THE BOOT RUN SAFE, AND THE BOOT RUN IS WHAT MAKES THE
+   * WATCHER WORK AT ALL. On a timer alone the first check lands one interval
+   * after boot, and every api deploy restarts the process and resets that
+   * clock — on a busy day (44 deploys in one day, on the record) the check
+   * would never once run, and the alert would look armed while being dead.
+   * Running at boot fixes that; this skip stops a run of deploys from probing
+   * (and paying a credit) every few minutes, and keeps the real cadence hourly
+   * across restarts.
+   */
+  skipIfCheckedWithinMs?: number;
 }
 
 /**
@@ -347,6 +366,15 @@ export async function runYiddishLabsCreditCheck(
   const now = deps.now ?? (() => new Date());
   try {
     const previous = await lastRecordedState(database);
+
+    // A restart moments after the last check has nothing new to learn.
+    if (deps.skipIfCheckedWithinMs != null && previous) {
+      const age = now().getTime() - previous.ts.getTime();
+      if (age >= 0 && age < deps.skipIfCheckedWithinMs) {
+        return { state: previous.state, balance: null, required: null, via: "none", detail: "skipped_recent" };
+      }
+    }
+
     // First run has no window to look back over; use one interval.
     const since = previous?.ts ?? new Date(now().getTime() - CREDIT_CHECK_INTERVAL_MS);
 
@@ -401,6 +429,15 @@ export async function runYiddishLabsCreditCheck(
  */
 export function startYiddishLabsCreditWatch(log?: any): NodeJS.Timeout | null {
   if (DISABLED()) return null;
+
+  // ⛔ Check shortly after boot as well as on the interval — see
+  // `skipIfCheckedWithinMs` for why a timer alone leaves this permanently dead
+  // on a day with frequent deploys. Delayed so it never competes with boot.
+  const first = setTimeout(() => {
+    void runYiddishLabsCreditCheck({ skipIfCheckedWithinMs: CREDIT_CHECK_INTERVAL_MS }, log);
+  }, BOOT_CHECK_DELAY_MS) as unknown as NodeJS.Timeout;
+  (first as any).unref?.();
+
   const timer = setInterval(() => {
     void runYiddishLabsCreditCheck({}, log);
   }, CREDIT_CHECK_INTERVAL_MS) as unknown as NodeJS.Timeout;

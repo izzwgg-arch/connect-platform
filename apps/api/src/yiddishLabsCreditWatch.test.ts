@@ -237,6 +237,58 @@ test("it does NOT text again while it is still out", async () => {
   assert.equal(database.audits.length, 1, "but every check is still recorded");
 });
 
+// ── the boot run, and why it must not re-probe on every deploy ───────────────
+
+test("a restart moments after a check does no work and spends nothing", async () => {
+  const database = fakeDb({ lastState: "ok" }); // recorded an hour ago in the fake
+  let probed = false;
+  const out = await runYiddishLabsCreditCheck({
+    db: database,
+    resolveKey: async () => "k",
+    skipIfCheckedWithinMs: 6 * 3600_000, // wide window: the last check counts as recent
+    fetchImpl: (async () => {
+      probed = true;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch,
+  });
+  assert.equal(out.detail, "skipped_recent");
+  assert.equal(probed, false, "a run of deploys must not probe every few minutes");
+  assert.equal(database.audits.length, 0, "a skipped check is not a check");
+});
+
+test("the boot run DOES work when the last check is older than the window", async () => {
+  const database = fakeDb({ lastState: "ok" }); // an hour old in the fake
+  const out = await runYiddishLabsCreditCheck({
+    db: database,
+    resolveKey: async () => "k",
+    skipIfCheckedWithinMs: 60_000, // one minute: the last check is well outside it
+    fetchImpl: (async () => new Response(REFUSAL, { status: 402 })) as unknown as typeof fetch,
+  });
+  assert.equal(out.state, "out");
+  assert.equal(database.escalations.length, 1);
+});
+
+test("a first-ever run is never skipped — there is no previous check to lean on", async () => {
+  const database = fakeDb({ lastState: null });
+  const out = await runYiddishLabsCreditCheck({
+    db: database,
+    resolveKey: async () => "k",
+    skipIfCheckedWithinMs: 6 * 3600_000,
+    fetchImpl: (async () => new Response(REFUSAL, { status: 402 })) as unknown as typeof fetch,
+  });
+  assert.equal(out.state, "out");
+  assert.equal(database.escalations.length, 1, "a fresh database must still get its first alert");
+});
+
+test("it checks at boot, not only on the timer", () => {
+  assert.match(
+    CODE,
+    /setTimeout\([\s\S]{0,200}runYiddishLabsCreditCheck/,
+    "on a timer alone, every deploy resets the clock and the check never runs",
+  );
+  assert.match(CODE, /skipIfCheckedWithinMs:\s*CREDIT_CHECK_INTERVAL_MS/, "the boot run must not re-probe every deploy");
+});
+
 test("with no key configured it stays silent and never probes", async () => {
   const database = fakeDb({ lastState: null });
   let probed = false;
