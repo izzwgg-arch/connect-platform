@@ -144,6 +144,19 @@ permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
   `onerror` was unhandled, and `stop()` on an already-inactive recorder throws
   and leaves the button stuck on "Stop". The captured size is now stated as
   TEXT, so "did that work?" has an answer even when the player cannot draw.
+- ⛔⛔ **AND THE PROVIDER'S CONTENT-TYPE MUST NOT BE TRUSTED — ElevenLabs' CDN
+  serves those samples as `text/plain`.** Proven live: 200, **31,364 bytes, ID3
+  magic — an MP3 labelled as text**. Forwarding that header verbatim hands the
+  browser audio bytes marked as text and `<audio>` silently declines to decode
+  them, with no error and no failed request anywhere. Anything not `audio/*` is
+  forced to `audio/mpeg`, and the client builds its blob with an explicit audio
+  type as well, so neither side alone can reintroduce it. A test pins both.
+  ⛔ **THE PATTERN WORTH CARRYING: all three of this feature's bugs presented as
+  "the button does nothing" — a WebM blob with no duration, a CSP-blocked src,
+  and a mislabelled MIME type. When a media control does nothing, suspect the
+  CONTAINER, the CSP and the CONTENT-TYPE before reading any logic.** And probe
+  the route with a real token before theorising: one curl showed the bytes were
+  already correct and the header was not.
 - ⛔⛔ **VOICE SAMPLES MUST BE PROXIED, NEVER LINKED — the portal's CSP is
   `default-src 'self'`.** An `<audio>` pointed at ElevenLabs' CDN is blocked by
   the browser as a **silent console violation**: the play button simply does
