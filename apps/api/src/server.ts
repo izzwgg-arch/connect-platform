@@ -11,6 +11,7 @@ import { Readable } from "node:stream";
 import nodemailer from "nodemailer";
 import { loadJobAttachments } from "./emailAttachments";
 import { checkInternalSecret } from "./internalSecret";
+import { assertCardknoxNotSimulating } from "./cardknoxSimulateGuard";
 import { promises as fsp } from "fs";
 import os from "node:os";
 import path from "node:path";
@@ -422,9 +423,12 @@ const pbxWebhookAllowedIps = (process.env.PBX_WEBHOOK_ALLOWED_IPS || "")
   .map((x) => x.trim())
   .filter(Boolean);
 
-if (process.env.NODE_ENV === "production" && (process.env.SOLA_CARDKNOX_SIMULATE || "false").toLowerCase() === "true") {
-  throw new Error("SOLA_CARDKNOX_SIMULATE is not allowed in production");
-}
+// ⛔ Refuse to boot when the card gateway would FAKE approvals. This used to be
+// gated on `NODE_ENV === "production"` and the api container sets no NODE_ENV,
+// so the guard had never once run. It also only recognised the spelling
+// "true" while solaGateway.ts turns simulate on for "1". Both fixed — see
+// cardknoxSimulateGuard.ts. Never re-add a NODE_ENV condition here.
+assertCardknoxNotSimulating();
 if (!canUseCredentialCrypto) app.log.warn("Provider credential endpoints disabled: CREDENTIALS_MASTER_KEY missing or invalid");
 
 // ── Telephony / WebRTC startup validation ─────────────────────────────────────
@@ -1832,11 +1836,19 @@ function constantTimeEqualStr(a: string, b: string): boolean {
 
 /**
  * TEMPORARY: gate for POST /admin/dev/generate-observe-token (remove when observation is done).
- * Allowed when NODE_ENV=development, or when DEV_OBSERVE_TOKEN_SECRET (≥16 chars) matches
- * header X-Dev-Observe-Secret or JSON body field "secret" (constant-time compare).
+ * Allowed ONLY when DEV_OBSERVE_TOKEN_SECRET (≥16 chars) matches header
+ * X-Dev-Observe-Secret or JSON body field "secret" (constant-time compare).
+ *
+ * ⛔ There used to be an `if (NODE_ENV === "development") return true;` first
+ * line — a no-secret-required bypass on a JWT-bypassed route that mints a
+ * **SUPER_ADMIN token scoped to tenantId "global"** for up to 120 minutes.
+ * It was dead in production only by accident (the api container sets no
+ * NODE_ENV), so anyone who ever set NODE_ENV=development on this container —
+ * the very "fix" CLAUDE.md forbids — would have opened it to anonymous
+ * callers. Removed: the secret is now the only key. This is a behaviour no-op
+ * in production and closes the fail-open direction.
  */
 function canIssueDevObserveJwt(req: { headers: Record<string, unknown>; body?: unknown }): boolean {
-  if ((process.env.NODE_ENV || "") === "development") return true;
   const envSecret = (process.env.DEV_OBSERVE_TOKEN_SECRET || "").trim();
   if (envSecret.length < 16) return false;
   const h = String(req.headers["x-dev-observe-secret"] ?? "").trim();

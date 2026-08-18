@@ -126,18 +126,30 @@ test("CRM public form DTO hides fields after completion", () => {
   assert.deepEqual(dto.submission, { submittedAt: "2026-05-31T00:00:00.000Z" });
 });
 
-test("CRM form storage fails closed in production without persistent root", () => {
+// ⛔ This test used to set NODE_ENV="production" to make the guard fire. That is
+// exactly what hid the bug: the api container sets NO NODE_ENV, so the guard was
+// permanently false in the only place it mattered and the test passed anyway.
+// It now asserts the guard fires with NODE_ENV UNSET — production's real shape.
+// Full matrix + source guards live in `nodeEnvGates.test.ts`.
+test("CRM form storage fails closed without a persistent root, NODE_ENV unset (production's real shape)", () => {
   const oldNodeEnv = process.env.NODE_ENV;
   const oldFormDir = process.env.CRM_FORM_STORAGE_DIR;
   const oldDocDir = process.env.CRM_DOC_STORAGE_DIR;
-  process.env.NODE_ENV = "production";
+  const oldAllow = process.env.CRM_FORM_STORAGE_ALLOW_EPHEMERAL;
+  delete process.env.NODE_ENV;
   delete process.env.CRM_FORM_STORAGE_DIR;
   delete process.env.CRM_DOC_STORAGE_DIR;
-  assert.throws(() => getCrmFormStorageRoot(), /crm_form_storage_dir_required/);
-  if (oldNodeEnv === undefined) delete process.env.NODE_ENV;
-  else process.env.NODE_ENV = oldNodeEnv;
-  if (oldFormDir === undefined) delete process.env.CRM_FORM_STORAGE_DIR;
-  else process.env.CRM_FORM_STORAGE_DIR = oldFormDir;
-  if (oldDocDir === undefined) delete process.env.CRM_DOC_STORAGE_DIR;
-  else process.env.CRM_DOC_STORAGE_DIR = oldDocDir;
+  delete process.env.CRM_FORM_STORAGE_ALLOW_EPHEMERAL;
+  try {
+    assert.throws(() => getCrmFormStorageRoot(), /crm_form_storage_dir_required/);
+  } finally {
+    if (oldNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = oldNodeEnv;
+    if (oldFormDir === undefined) delete process.env.CRM_FORM_STORAGE_DIR;
+    else process.env.CRM_FORM_STORAGE_DIR = oldFormDir;
+    if (oldDocDir === undefined) delete process.env.CRM_DOC_STORAGE_DIR;
+    else process.env.CRM_DOC_STORAGE_DIR = oldDocDir;
+    if (oldAllow === undefined) delete process.env.CRM_FORM_STORAGE_ALLOW_EPHEMERAL;
+    else process.env.CRM_FORM_STORAGE_ALLOW_EPHEMERAL = oldAllow;
+  }
 });

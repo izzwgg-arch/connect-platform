@@ -2,13 +2,42 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { sanitizeTenantScope, sanitizeBaseName } from "../promptStorage";
+import { isEnvFlagEnabled } from "../envFlag";
 
 const DEFAULT_ROOT = path.resolve(__dirname, "../../data/crm-forms");
 const PDF_MIME = "application/pdf";
 
+/** Explicit opt-in for a throwaway, container-local storage root (dev only). */
+export const CRM_FORM_ALLOW_EPHEMERAL_VAR = "CRM_FORM_STORAGE_ALLOW_EPHEMERAL";
+
+/**
+ * ⛔ `DEFAULT_ROOT` is INSIDE the container image. Anything written there is
+ * destroyed by the next api deploy while the database row that points at it
+ * survives — the exact data-loss shape as the onboarding-uploads bug
+ * (`AGENT_HANDOFF_ONBOARDING_UPLOADS_VOLUME_2026-08-06.md`), where a customer's
+ * uploaded phone bill was silently erased and a port order was filed without it.
+ * Silent at every step: the write succeeds, the deploy succeeds.
+ *
+ * The guard against that used to read `!configuredRoot && NODE_ENV ===
+ * "production"`, and **the api container sets no NODE_ENV** (proven live
+ * 2026-08-18), so it was permanently false — the fallback was reachable in
+ * production. See CLAUDE.md → "THE NODE_ENV SWEEP NOBODY DID".
+ *
+ * ✅ Safe to make it unconditional: verified live 2026-08-18 that
+ * `CRM_DOC_STORAGE_DIR=/var/lib/connect/crm-lead-docs` is set inside
+ * `app-api-1`, and that BOTH api compose blocks carry it with the
+ * `crm-lead-docs` named volume mounted (`docker-compose.app.yml` lines
+ * 154/209 for `api` and 327/364 for `api_candidate`) — so blue/green cannot
+ * cut over onto a container that lacks it. `configuredRoot` is always truthy
+ * in production; this throw cannot fire there.
+ *
+ * ⛔ Read at CALL time, and only from per-request paths
+ * (`resolveCrmFormStoragePath`) — never at module load — so a misconfiguration
+ * is a loud 500 on one upload, never a container that will not boot.
+ */
 export function getCrmFormStorageRoot(): string {
   const configuredRoot = process.env.CRM_FORM_STORAGE_DIR || process.env.CRM_DOC_STORAGE_DIR;
-  if (!configuredRoot && process.env.NODE_ENV === "production") {
+  if (!configuredRoot && !isEnvFlagEnabled(process.env[CRM_FORM_ALLOW_EPHEMERAL_VAR])) {
     throw new Error("crm_form_storage_dir_required");
   }
   return (configuredRoot || DEFAULT_ROOT).replace(/\/+$/, "");
