@@ -4,7 +4,7 @@
 `6961ea9e` (sweep + watchdog select) and `47c3ff45` (watchdog grace) on
 `feat/ivr-migration-takeover`; **api container-verified**; **53 recipient
 addresses restored into Connect** from the PBX backup; **9 voicemail emails
-SENT / 0 failed within an hour of the deploy**. No PBX write, no migration.
+SENT / 0 failed within an hour of the deploy, 11 by 18:10Z**. No PBX write, no migration.
 §§1–5 below are the morning's read-only diagnosis, kept verbatim because the
 mechanism is the lesson; **§6 is what was done and how it was proven.**
 
@@ -244,8 +244,11 @@ the MFA session's uncommitted work).
 - Deploy: `6961ea9e` rode another session's `deploy-direct api` of the branch
   tip; container `0b28b348` (contains `6961ea9e`, verified with
   `merge-base --is-ancestor` and `grep -c buildVoicemailSweepWhere` = 2 in the
-  container). The `47c3ff45` deploy was queued behind a portal heavy-job lock
-  (`/root/vm-watchdog-grace-deploy2.log`) — see CLAUDE.md for its state.
+  container). `47c3ff45` then shipped in the docs-tip deploy: **container
+  `d2b35642`, `verify: container commit d2b35642dc7d matches target`,
+  `NEVER_PROCESSED_GRACE_MS` grep = 2 inside it**; health 200; a fresh
+  voicemail was emailed by that container (`queued: 1`) within its first
+  two minutes.
 - **First sweep on the new container, 17:38:38Z: 5 queued → 5 SENT within
   15 s** (bianca@yossiswoodworx.com, leahw@apluscenterinc.org,
   sales@bvisible.us, office@matamimweekly.com,
@@ -270,7 +273,5 @@ the MFA session's uncommitted work).
   will get PBX + Connect duplicates until that path sends `""` and writes the
   address into `VoicemailEmailRecipient` instead. Not done.
 - The 5 already-blind mailboxes above (Trimpro 102/104, A plus 108).
-- `47c3ff45` deploy state — verify `docker exec app-api-1 cat
-  /app/.build-commit` reads `47c3ff45…` or later.
 - No human has opened one of today's Connect voicemail emails and pressed
   play on the attachment; proven as SENT by the outbox, not by an inbox.

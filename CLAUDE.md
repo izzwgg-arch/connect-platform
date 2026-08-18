@@ -146,7 +146,7 @@ Full detail: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md
 (§1–5 = the morning's read-only diagnosis by one session; **§6 = the fix, by a
 second session the same afternoon.** `6961ea9e` + `47c3ff45` on
 `feat/ivr-migration-takeover`; **api DEPLOYED and container-verified
-(`0b28b348` ⊇ `6961ea9e`); one live data write: 53 rows into
+(`d2b35642` ⊇ both); one live data write: 53 rows into
 `VoicemailEmailRecipient`; 9 no_recipient stamps cleared.** No PBX write, no
 migration.) Memory: [[voicemail-email-recipients-live-in-connect-now]].
 
@@ -204,10 +204,13 @@ migration.) Memory: [[voicemail-email-recipients-live-in-connect-now]].
 - ⏳ **STILL OPEN:** **onboarding writes `email: person.email` onto the PBX
   extension** (`pbxTenantBuild.ts:313`), so a NEW sign-up gets PBX + Connect
   duplicates until it sends `""` and writes `VoicemailEmailRecipient` instead;
-  the 5 blind mailboxes above; whether the `47c3ff45` deploy landed
-  (`/root/vm-watchdog-grace-deploy2.log`; check `/app/.build-commit`); and no
-  human has opened one of today's emails — proven SENT by the outbox, not by an
-  inbox.
+  the 5 blind mailboxes above; and no human has opened one of today's emails —
+  proven SENT by the outbox (**11 SENT / 0 failed** by 18:10Z, including one
+  fresh voicemail emailed by the final `d2b35642` container), not by an inbox.
+  ⛔ Deploy trap re-hit here: a waiter loop that counts `ps | grep
+  deploy-direct.sh` never reaches 0 while OTHER sessions' `until pgrep -f
+  deploy-direct.sh` waiters exist — their command lines contain the string.
+  Two such waiters (PIDs 1873319, 2429874) have sat on loopcom for 6–14 h.
 
 ## ⛔ AGENT HANDOFF — a source-reading guard test that fails ONLY on Windows is a CRLF artifact, not a regression (2026-08-18) — READ FIRST before "fixing" production code because `userDisplayName.callsites`, `supportReport` or any `readFileSync(...)`-based test went red on this machine
 
