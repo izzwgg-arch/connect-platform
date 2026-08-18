@@ -1278,7 +1278,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           // Any other failure: no extra accounts — the phone works exactly as before.
         });
     }
-    fetchAccounts(0);
+    // Same rule as init() below: signed out (login page, public pages, a
+    // session the api just refused) means every call here is a guaranteed 401.
+    if (hasBrowserAuthToken()) fetchAccounts(0);
     return () => { cancelled = true; };
   }, []);
 

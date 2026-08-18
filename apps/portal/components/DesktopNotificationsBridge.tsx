@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
-import { ApiError, apiGet } from "../services/apiClient";
+import { ApiError, apiGet, hasBrowserAuthToken } from "../services/apiClient";
 import { fetchTenantSmsInboxThreads, type SmsThread } from "../services/platformData";
 import {
   buildDesktopVoicemailInboxProbePath,
@@ -105,6 +105,11 @@ export function DesktopNotificationsBridge() {
 
     const poll = async () => {
       if (cancelled) return;
+      // Mounted globally, so this also ticks on /login and after the api has
+      // refused our session and the token was cleared. Signed out = nothing to
+      // notify about and every probe would be a guaranteed 401 — the shape that
+      // trips the nginx auto-ban on the customer's office IP.
+      if (!hasBrowserAuthToken()) return;
 
       let smsThreads: SmsThread[] | null = null;
       if (!backoff.shouldSkip("sms")) {

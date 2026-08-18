@@ -1,4 +1,9 @@
 import { getVisualQaMockResponse } from "./visualQaMockApi";
+import {
+  handleDeadSessionInBrowser,
+  isDeadSessionResponse,
+  shouldShortCircuitInBrowser,
+} from "../lib/sessionExpiry";
 
 export class ApiError extends Error {
   status: number;
@@ -85,6 +90,52 @@ export function hasBrowserAuthToken(): boolean {
   return !!browserToken();
 }
 
+/**
+ * ⛔ THE GLOBAL 401 HANDLER. Every authenticated request in this file funnels
+ * its non-2xx response through here. A `401 { error: "unauthorized" }` on a
+ * request that carried a bearer token means the api no longer accepts our
+ * session (missing / bad / expired token — that hook cannot tell them apart and
+ * neither can we). `handleDeadSessionInBrowser` then, ONCE per dead token,
+ * clears the stored session, tells `AuthGate`, and in a full window sends the
+ * person to `/login?next=…`. See `lib/sessionExpiry.ts` for why a permission
+ * failure (403 `forbidden`), a bad login (401 `invalid_credentials`, sent with
+ * no token) or a bad signed URL (401 `bad_signature`) can never trip this.
+ */
+function noteUnauthorizedResponse(status: number, payload: unknown, tokenUsed: string): void {
+  if (isDeadSessionResponse({ status, body: payload, sentWithToken: Boolean(tokenUsed) })) {
+    handleDeadSessionInBrowser(tokenUsed);
+  }
+}
+
+/**
+ * Thrown locally — no network — for any request that would go out with the
+ * dead token (or none) on an authenticated path while the session is being
+ * torn down. This is what stops the pollers: they keep ticking for the few
+ * hundred milliseconds until the window navigates or `AuthGate` unmounts them,
+ * and every tick ends here instead of at nginx.
+ */
+function sessionExpiredError(): ApiError {
+  return new ApiError("session_expired: your session has ended — sign in again", 401, { error: "session_expired" });
+}
+
+/**
+ * Canary for callers that saw an ambiguous refusal (the telephony WebSocket's
+ * `1008 Unauthorized`, which its server also sends on its own DB hiccups). Asks
+ * `/me` — a route every signed-in user may call — whether the session is still
+ * good. A dead session answers 401 and the global handler above fires as a
+ * side effect; the caller only needs to stop.
+ */
+export async function probeSessionAlive(): Promise<"alive" | "dead" | "unknown"> {
+  if (!browserToken()) return "dead";
+  try {
+    await apiRequest<unknown>("GET", "/me", undefined, undefined, { timeoutMs: 8_000 });
+    return "alive";
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return "dead";
+    return "unknown";
+  }
+}
+
 export function browserTenantContext(): string {
   if (typeof window === "undefined") return "";
   const scope = safeStorageGet("cc-admin-scope") || "TENANT";
@@ -112,6 +163,11 @@ async function apiRequest<T>(
   const visualQaMock = getVisualQaMockResponse(method, path, body);
   if (visualQaMock.handled) return visualQaMock.data as T;
 
+  // Resolved ONCE per request so the token we check, the token we send and the
+  // token we hand to the dead-session handler are the same string.
+  const bearer = token || browserToken();
+  if (shouldShortCircuitInBrowser(bearer)) throw sessionExpiredError();
+
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 10000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -120,7 +176,7 @@ async function apiRequest<T>(
       method,
       headers: {
         ...(body ? { "content-type": "application/json" } : {}),
-        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {})
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -135,6 +191,7 @@ async function apiRequest<T>(
       } catch {
         errPayload = null;
       }
+      noteUnauthorizedResponse(res.status, errPayload, bearer);
       const errCode = String(errPayload?.error || "").trim();
       const errMessage = String(errPayload?.message || "").trim();
       const detail = [errCode, errMessage].filter(Boolean).join(": ");
@@ -213,10 +270,12 @@ export async function apiFetchBlob(absoluteUrl: string, timeoutMs = 60_000): Pro
 
     if (!res.ok) {
       let errCode = `http_${res.status}`;
+      let json: unknown = null;
       try {
-        const json = await res.json();
-        errCode = json?.error ?? errCode;
+        json = await res.json();
+        errCode = (json as { error?: string } | null)?.error ?? errCode;
       } catch { /* non-JSON error body */ }
+      noteUnauthorizedResponse(res.status, json, token);
       throw new ApiError(`Document fetch failed: ${errCode}`, res.status);
     }
     return await res.blob();
@@ -269,6 +328,7 @@ export async function apiUploadCrmVoicemailDrop(
       } catch {
         errPayload = null;
       }
+      noteUnauthorizedResponse(res.status, errPayload, token || browserToken());
       const detail = [errPayload?.error, errPayload?.message].filter(Boolean).join(": ");
       throw new ApiError(detail || `Upload failed (${res.status})`, res.status, errPayload);
     }
@@ -321,6 +381,7 @@ export async function apiUploadChatAttachment(
       } catch {
         errPayload = null;
       }
+      noteUnauthorizedResponse(res.status, errPayload, token || browserToken());
       const ep = errPayload as { error?: string; message?: string } | null;
       const detail = [ep?.error, ep?.message].filter(Boolean).join(": ");
       throw new ApiError(detail || `Upload failed (${res.status})`, res.status);
@@ -360,6 +421,7 @@ export async function apiUploadContactAvatar(
       } catch {
         errPayload = null;
       }
+      noteUnauthorizedResponse(res.status, errPayload, token || browserToken());
       const ep = errPayload as { error?: string; message?: string } | null;
       const detail = [ep?.error, ep?.message].filter(Boolean).join(": ");
       throw new ApiError(detail || `Upload failed (${res.status})`, res.status);
@@ -394,6 +456,7 @@ export async function apiUploadUserAvatar(
     if (!res.ok) {
       let errPayload: unknown = null;
       try { errPayload = text.trim() ? JSON.parse(text) : null; } catch { errPayload = null; }
+      noteUnauthorizedResponse(res.status, errPayload, token || browserToken());
       const ep = errPayload as { error?: string; message?: string } | null;
       throw new ApiError(ep?.error || ep?.message || `Upload failed (${res.status})`, res.status);
     }
@@ -445,6 +508,7 @@ export async function apiUploadVoicemailGreeting(
       } catch {
         errPayload = null;
       }
+      noteUnauthorizedResponse(res.status, errPayload, token || browserToken());
       const ep = errPayload as { error?: string; message?: string } | null;
       const detail = [ep?.error, ep?.message].filter(Boolean).join(": ");
       throw new ApiError(detail || `Upload failed (${res.status})`, res.status);

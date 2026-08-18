@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { probeSessionAlive } from "../services/apiClient";
 import type {
   LiveCall,
   LiveExtensionState,
@@ -36,12 +37,21 @@ function wsUrl(): string {
 
 function getToken(): string {
   if (typeof window === "undefined") return "";
-  return (
-    localStorage.getItem("token") ||
-    localStorage.getItem("cc-token") ||
-    localStorage.getItem("authToken") ||
-    ""
-  );
+  try {
+    return (
+      localStorage.getItem("token") ||
+      localStorage.getItem("cc-token") ||
+      localStorage.getItem("authToken") ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+/** The telephony server's close for a token it would not verify (TelephonySocketServer.ts). */
+function isUnauthorizedClose(ev: CloseEvent): boolean {
+  return ev.code === 1008 && /unauthori[sz]ed/i.test(String(ev.reason || ""));
 }
 
 // Composite keys so the Map can hold multiple tenants' same-number entries
@@ -176,8 +186,16 @@ export function useTelephonySocket(): TelephonySocketState {
       return;
     }
 
+    // Signed out (login page, public pages, a session the api just refused):
+    // there is nobody to stream calls to. Do not open a socket the server will
+    // only close `1008 Unauthorized` — the token-arrival listener in the effect
+    // below connects the moment a sign-in writes one.
     const token = getToken();
-    const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
+    if (!token) {
+      setStatus("idle");
+      return;
+    }
+    const fullUrl = `${url}?token=${encodeURIComponent(token)}`;
 
     setStatus("connecting");
 
@@ -198,8 +216,7 @@ export function useTelephonySocket(): TelephonySocketState {
       setStatus("error");
     };
 
-    ws.onclose = () => {
-      wsRef.current = null;
+    const scheduleReconnect = () => {
       if (stoppedRef.current) return;
       if (attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
         setStatus("failed");
@@ -211,6 +228,33 @@ export function useTelephonySocket(): TelephonySocketState {
       backoffRef.current = Math.min(delay * 2, MAX_BACKOFF_MS);
       reconnectTimer.current = setTimeout(connect, delay);
     };
+
+    ws.onclose = (ev) => {
+      wsRef.current = null;
+      if (stoppedRef.current) return;
+      if (isUnauthorizedClose(ev)) {
+        // The server refused our token. That is USUALLY a dead session — but
+        // TelephonySocketServer also closes 1008 when its own extension lookup
+        // throws, so a close alone is not proof. Ask the api (`/me`) once: a
+        // dead session answers 401, the global handler in apiClient clears it
+        // and sends the window to /login, and we simply stop reconnecting; a
+        // live session means the refusal was telephony-side and the normal
+        // backoff continues. ⛔ Never keep hammering a socket that just said
+        // "unauthorized" without asking — that loop is what this file exists
+        // to avoid.
+        setStatus("disconnected");
+        void probeSessionAlive().then((verdict) => {
+          if (stoppedRef.current) return;
+          if (verdict === "dead") {
+            setStatus("failed");
+            return;
+          }
+          scheduleReconnect();
+        });
+        return;
+      }
+      scheduleReconnect();
+    };
   }, [handleMessage]);
 
   useEffect(() => {
@@ -218,8 +262,30 @@ export function useTelephonySocket(): TelephonySocketState {
     attemptsRef.current = 0;
     connect();
 
+    // A sign-in in THIS window fires `cc-portal-permissions-saved`; one in
+    // another window (the desktop main window signing in while a passive window
+    // waits) fires `storage`. Either way: if we are idle/failed and a token now
+    // exists, start over with a fresh backoff.
+    const onTokenMaybeArrived = () => {
+      if (stoppedRef.current) return;
+      if (!getToken()) return;
+      const existing = wsRef.current;
+      if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      attemptsRef.current = 0;
+      backoffRef.current = MIN_BACKOFF_MS;
+      connect();
+    };
+    window.addEventListener("storage", onTokenMaybeArrived);
+    window.addEventListener("cc-portal-permissions-saved", onTokenMaybeArrived);
+
     return () => {
       stoppedRef.current = true;
+      window.removeEventListener("storage", onTokenMaybeArrived);
+      window.removeEventListener("cc-portal-permissions-saved", onTokenMaybeArrived);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (wsRef.current) {
         wsRef.current.close();

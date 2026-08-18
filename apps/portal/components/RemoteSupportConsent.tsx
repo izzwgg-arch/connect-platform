@@ -36,6 +36,7 @@ import {
   type RemoteSupportSession,
 } from "../services/remoteSupport";
 import { sanitizeIncomingInput } from "../lib/remoteSupportGuards";
+import { hasBrowserAuthToken } from "../services/apiClient";
 
 type Screen = { id: string; name: string; thumbnailDataUrl: string; isScreen: boolean };
 
@@ -105,6 +106,10 @@ export default function RemoteSupportConsent() {
     let cancelled = false;
     const tick = async () => {
       if (cancelled || live) return;
+      // Signed out — on /login, or after the api refused our session and the
+      // token was cleared — there is nobody to ask. Every 5-second probe would
+      // be a guaranteed 401, and 60 of those in five minutes is the nginx ban.
+      if (!hasBrowserAuthToken()) return;
       try {
         const res = await pendingForMe();
         const waiting = res.sessions.find((s) => s.status === "REQUESTED");
