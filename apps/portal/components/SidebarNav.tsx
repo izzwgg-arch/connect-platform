@@ -184,13 +184,6 @@ export function SidebarNav({
 
   return (
     <aside className={asideClass}>
-      {/* ⛔ Everything the sidebar draws lives inside this sheet, which is
-          absolutely positioned at a fixed 280px. That keeps ~500 nodes OUT of
-          the layout path, so changing the sidebar's width no longer re-lays
-          them out — the measured difference between 5-6 dropped frames per
-          toggle and 0-2 on the owner's hardware. Do not move these children
-          back onto <aside>. */}
-      <div className="nav-sheet">
       <div className="drawer-profile">
         <div className="drawer-user" title={effectiveRail ? displayName : undefined}>
           <UserAvatarUpload
@@ -290,7 +283,6 @@ export function SidebarNav({
           </button>
         </div>
       ) : null}
-      </div>
     </aside>
   );
 }

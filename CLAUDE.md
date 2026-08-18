@@ -389,8 +389,21 @@ Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]]
   worse**. ⏳ ~1 dropped frame per toggle remains: the one unavoidable layout
   when the content area resizes. Removing that needs an overlay sidebar (content
   never resizes), which is Izzy's product call, not a bug.
-- ✅✅ **FINAL (`5b2f0188` → the overlay): THE PANEL FLOATS OVER THE PAGE AND THE
-  CONTENT AREA NEVER RESIZES.** `.console-nav` reserves **68px in BOTH states**;
+- ⛔⛔ **REVERTED 2026-08-17, AND THIS IS THE RULE THAT MATTERS MOST HERE:
+  IZZY'S SIDEBAR DESIGN IS NOT YOURS TO CHANGE.** The overlay below was measured
+  at 0.07 dropped frames — the fastest thing in this whole engagement — and he
+  rejected it outright: *"You change things around... The way it was was perfect
+  if it worked efficiently. Now it closes better, but it's stupid. It's not nice.
+  It's not my style."* **A performance win that alters the look is not a win.**
+  The rail is **72px** with **36px icon wells on 40px rows**, the panel **pushes
+  the content across** (it does not float over it), the icon-to-label gap is
+  **6px**, and section headings are **hidden** in the rail with dividers between
+  groups. All of that is restored and verified rule-by-rule against the pre-work
+  file. ⛔ Keep only optimisations the eye cannot see; if a change is visible,
+  ask first.
+- ~~**FINAL (`5b2f0188` → the overlay): THE PANEL FLOATS OVER THE PAGE AND THE
+  CONTENT AREA NEVER RESIZES.**~~ (measured 0.07 dropped frames/toggle, then
+  REVERTED on his instruction — kept here only so nobody rebuilds it: `.console-nav` reserves **68px in BOTH states**;
   the 280px `.nav-sheet` overhangs it and a `clip-path` is the entire animation.
   Because nothing outside the sidebar changes width, a toggle lays out and
   repaints **nothing else on the page**. Measured on the owner's GPU: pushing the

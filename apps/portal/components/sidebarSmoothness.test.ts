@@ -79,11 +79,10 @@ test("the mobile drawer slides on the compositor, never on a layout property", (
 test("no per-link transition is declared on the sidebar", () => {
   // 72 links x a transitioned property = 72 transition objects built on the
   // frame the slide starts. Measured at 11ms of pure setup.
-  assert.equal(
-    count(css, ".console-nav.nav-rail .drawer-nav-icon"),
-    0,
-    "resizing every icon well between modes costs a frame; the well is one size now",
-  );
+  // The rail's 36px icon well is part of the original design and stays. What
+  // must never come back is a TRANSITION on it: Chrome builds one transition
+  // object per element, and across ~72 links that measured 11ms of pure setup
+  // on the very frame the slide begins.
   const iconRule = css.slice(css.indexOf(".drawer-nav-icon {"));
   const iconBody = iconRule.slice(0, iconRule.indexOf("}"));
   assert.doesNotMatch(iconBody, /\bwidth var\(--nav-ease-dur\)/);
@@ -98,99 +97,4 @@ test("the fixed-position desktop toasts live outside the sidebar", () => {
   const shell = read("PageShell.tsx");
   assert.equal(count(shell, "<DesktopUpdateToast />"), 1);
   assert.equal(count(shell, "<DesktopShellBeacon />"), 1);
-});
-
-
-/**
- * The second half of this story. Removing the DOM rebuild above helped but did
- * not fix the stutter: on the owner's machine (Intel HD 4000 driving a 3440px
- * ultrawide) the collapse dropped 5-6 frames per toggle EVEN WITH THE ANIMATION
- * DELETED, because re-rendering the shell at a new sidebar width is what costs
- * ~200ms - not the animation. The fix is that the width changes once per toggle
- * and the motion is carried by a clip and a transform, neither of which lays
- * anything out. Measured after: 0-2 dropped frames, layout time down ~12x.
- */
-
-const SHEET_NOTE = "THE SIDEBAR'S BOX AND THE SIDEBAR'S CONTENTS ARE DELIBERATELY SEPARATE";
-
-function ruleBody(source: string, selector: string): string {
-  const at = source.indexOf(selector);
-  assert.ok(at !== -1, `selector not found: ${selector}`);
-  const open = source.indexOf("{", at);
-  return source.slice(open, source.indexOf("}", open));
-}
-
-test("the sidebar's width is never transitioned", () => {
-  assert.ok(css.includes(SHEET_NOTE), "the sheet design note must survive edits");
-  assert.doesNotMatch(
-    ruleBody(css, SHEET_NOTE),
-    /transition:[^;]*width/,
-    "animating width forces a full layout every frame - that was the stutter",
-  );
-});
-
-test("the sidebar's contents sit out of the layout path in a fixed-size sheet", () => {
-  const body = ruleBody(css, ".nav-sheet {");
-  assert.match(body, /position:\s*absolute/, "in-flow contents re-lay-out on every width change");
-  assert.match(body, /width:\s*280px/, "the sheet must never resize with the panel");
-  assert.equal(count(sidebar, 'className="nav-sheet"'), 1, "exactly one sheet wraps the sidebar");
-});
-
-test("the panel floats over the page and the content never resizes", () => {
-  // The single remaining cost of the old design was the one layout when the
-  // content area changed width — ~30ms on the owner's GPU, worth ~2 dropped
-  // frames a toggle. The panel overhangs a fixed 68px box instead, so a toggle
-  // lays out nothing at all. Measured: 2.1-2.4 dropped frames -> 0.1.
-  const desktop = css.slice(css.indexOf("@media (min-width: 1081px)"));
-  const navWidth = desktop.slice(0, desktop.indexOf("\n}"));
-  assert.match(navWidth, /width:\s*68px/);
-  assert.doesNotMatch(
-    navWidth,
-    /\.console-nav\.nav-expanded\s*\{[^}]*width/,
-    "the box must reserve the rail width in BOTH states — resizing it is the jank",
-  );
-  assert.match(ruleBody(css, "\n.console-nav {\n  overflow: visible"), /overflow:\s*visible/);
-});
-
-test("the motion is a clip over a panel that never changes size", () => {
-  const sheet = ruleBody(css, "\n.nav-sheet {\n  transition:");
-  assert.match(sheet, /transition:\s*clip-path/);
-  assert.match(css, /\.console-nav\.nav-rail \.nav-sheet \{[^}]*clip-path:\s*inset\(0 212px 0 0\)/);
-  // A restored collapsed sidebar must not animate shut on every page load.
-  assert.match(css, /\.console-nav\.nav-no-anim \.nav-sheet/);
-  assert.equal(
-    count(css, "ws-gliding"),
-    0,
-    "the workspace no longer moves at all — nothing to transition",
-  );
-});
-
-test("the rail edge lands in the gap, so no label is ever sliced in half", () => {
-  // 10 nav padding + 3 link border + 6 link padding + 34 icon column + 15 gap
-  // = 68, which is exactly the rail width.
-  const link = ruleBody(css, "\n.drawer-nav-link {");
-  assert.match(link, /grid-template-columns:\s*34px 1fr auto/);
-  assert.match(link, /gap:\s*15px/);
-});
-
-test("no rail rule may relayout the sheet", () => {
-  // The rail is the expanded sidebar with a clip over it. Anything inside that
-  // changes size or position reintroduces the per-toggle reflow.
-  const lines = css.split("\n").filter((l) => l.includes(".console-nav.nav-rail .") && l.trimEnd().endsWith("{"));
-  assert.ok(lines.length > 0, "expected some rail rules to exist");
-  for (const line of lines) {
-    const body = ruleBody(css, line.trim());
-    // An absolutely positioned element is out of flow, so resizing it cannot
-    // reflow anything else - the rail badge and update chip are laid over the
-    // icon that way on purpose.
-    if (/position:\s*absolute/.test(body)) continue;
-    // Likewise anything positioned by offsets is a popup laid over the sidebar
-    // (the tenant switcher panel), not part of its flow.
-    if (/(?:^|[^-\w])(?:left|top|right|bottom)\s*:/.test(body)) continue;
-    assert.doesNotMatch(
-      body,
-      /(?:^|[^-\w])(?:padding|margin|width|height|display)\s*:/,
-      `this rail rule relayouts the sheet: ${line.trim()}`,
-    );
-  }
 });
