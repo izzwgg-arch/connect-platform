@@ -288,27 +288,67 @@ operation — re-read before assuming a slow write failed.
 
 ---
 
-## 7c. The customer email — built, NOT wired ⏳
+## 7c. The customer email — BUILT AND WIRED ✅
 
-Izzy, 2026-08-17: once onboarding completes, the customer should get a separate
-email saying 911 was activated **and stating the address the dispatcher will be
-given** — *"before you deploy the emails, show me markups."*
+Izzy, 2026-08-17: once onboarding completes, tell the customer 911 was activated
+**and state the address a dispatcher will be given**. He asked for mockups
+first, picked **option A** (the short note) from
+<https://claude.ai/code/artifact/4ed02ad7-f4ec-4701-bfae-619b2fd1499a>, and
+added: *"the email should say E911 is set."*
 
-`apps/api/src/onboarding/e911ActivatedEmail.ts` exists and renders. **Nothing
-imports it and nothing sends it.** Three wordings are with Izzy:
-<https://claude.ai/code/artifact/4ed02ad7-f4ec-4701-bfae-619b2fd1499a>
+**What sends** (`e911ActivatedEmail.ts`, queued at the end of
+`setupOrchestrator` after the sign-up is marked done):
 
-- ⛔ Type is **`E911_ACTIVATED`** — never `ADMIN_ALERT`, which the send door
-  drops with `ALERTS_MUTED`. Same trap the port-complete email documents.
-- It shows the **registered** address, not what the customer typed, because that
-  is what a dispatcher receives. Options B and C carry one line explaining why
-  the town may look unfamiliar — without it, a Monsey customer reads "Spring
-  Valley" and thinks we got their address wrong.
-- Reuses the shared `emailShell` with `includeSupportBlock: false`; "reply to
-  this email" is the whole support path, so it needs no new mailbox.
-- **Still to build once he picks:** the recipient resolution (reuse
-  `resolvePortCompleteRecipient`), the queue call at the end of the setup
-  orchestrator, and a test asserting the type is not `ADMIN_ALERT`.
+```
+Subject: E911 is set for your phones
+
+E911 is set on your phones. If anyone dials 911, this is the address the
+dispatcher gets:
+
+    15 VAN BUREN DR, KIRYAS JOEL V, NY 10950
+
+If that is not where your phones are, reply to this email and we will fix it.
+```
+
+- ⛔ **Type is `E911_ACTIVATED`, never `ADMIN_ALERT`.** Same trap the
+  port-complete email documents: that channel is muted platform-wide, so the
+  email would build clean, log clean, and reach nobody. Asserted by test.
+- **Recipient chain:** `mainEmail` → `billingEmail` → the tenant's oldest
+  TENANT_ADMIN (on a sign-up-built tenant, that is the account owner). Billed to
+  the customer's own tenant, never the platform's.
+- ⛔ **It shows the address AS REGISTERED, not as typed.** That is the point —
+  it is what a dispatcher receives, and the two differ often here.
+  ⚠️ **Option A carries NO explanation of the town correction**, so a customer
+  who wrote Monroe reads "Kiryas Joel V" with nothing saying why. Izzy chose
+  that with the trade-off written on the mockup page; B and C had the line.
+  **If support calls start about "you got our address wrong", that is the cause
+  and the fix is one paragraph.**
+
+### ⛔⛔ The guard is the whole feature
+
+**It sends only when 911 really is registered, and only when the address was
+recorded.** Every other outcome — `address_invalid`, `address_incomplete`,
+`failed`, `dry_run` — queues nothing and writes the reason on the timeline.
+
+**Telling a customer "E911 is set" when it is not is worse than telling them
+nothing**, because they will believe help is coming to an address the emergency
+service has never heard of. There is a test that walks all four statuses and
+asserts zero emails.
+
+It also sends **once** (`emailedAt` on the record), and **cannot fail a finished
+sign-up** — every path is caught and reported, never thrown.
+
+⛔ **`applyE911ForDid` had to start recording the registered address**
+(`answers.provisioning.e911.address`), and to carry it across a re-run that
+returns `already_registered` — that verdict has no address of its own, so
+without the carry-over a customer whose first attempt half-failed would never
+be told. Guarded by a test that reads the source.
+
+⏳ **NOT PROVEN: nobody has received this email.** It is proven as 16 tests, a
+render of the real template, and the wiring read out of the deployed container
+— not by a message in an inbox. **Matamim will not get one**: their sign-up
+finished days ago, so the orchestrator will not run again for them. The first
+real sign-up is the acceptance test.
 
 ---
 
