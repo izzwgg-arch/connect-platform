@@ -21,6 +21,7 @@
  * verified to exist (via the panel itself) before the flow continues.
  */
 
+import { provisionTenantEmergency } from "../billing/serviceInterruption/emergencyProvisioning";
 import {
   PanelSession,
   PanelStepError,
@@ -77,6 +78,24 @@ export type PbxBuildJob = {
    * known by, not the temporary one). Port day then needs zero panel work.
    */
   portedDid?: string | null;
+  /**
+   * The customer's service address, for VitalPBX's native emergency calling.
+   *
+   * ⛔ Optional ONLY so a legacy resume without one can still finish the build.
+   * A tenant with no emergency location cannot be interrupted for non-payment
+   * at all — `serviceInterruptionPlan` refuses — so a missing address is a
+   * loudly-logged gap, never a silent one.
+   * ⛔ `stateId` is `ombutel.states.id` (New York is 3956), resolved by the
+   * CALLER: this module talks to the panel only and has no database.
+   */
+  emergency?: {
+    street: string;
+    city: string;
+    stateId: string;
+    zip: string;
+    /** Notified alongside the owner when someone dials an emergency number. */
+    customerEmail?: string | null;
+  } | null;
   people: PbxPerson[];
 };
 
@@ -89,6 +108,12 @@ export type PbxBuildResult = {
   arsId: string;
   firstExtId: string;
 };
+
+/** Notified when a customer dials an emergency number, alongside the customer
+ *  (Izzy, 2026-08-17: "both"). Read from the database, not assumed — the one
+ *  SUPER_ADMIN is izzywgg@gmail.com, one letter off the address that appears
+ *  in some tooling. */
+export const EMERGENCY_NOTIFY_OWNER = process.env.EMERGENCY_NOTIFY_EMAIL || "izzywgg@gmail.com";
 
 export const slugify = (c: string): string =>
   c.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -566,6 +591,38 @@ export async function buildPbxTenant(
   log(`route selection ok (id ${arsId})`);
   const tenantPath = await createTenant(s, label, slug, tenantDids, arsId, resolveTenantPath);
   log(`tenant ok (path ${tenantPath})`);
+
+  // Native emergency calling, so 911 works from day one AND survives the
+  // overdue-account cutoff (the dialplan checks T<n>_emergency-calls before it
+  // reads the outbound profile, so it needs no carve-out).
+  // ⛔ NON-FATAL: a phone system that works is worth more than a build that
+  // aborts over a missing zip code. The gap is logged so it can be filled.
+  if (job.emergency?.street && job.emergency?.city && job.emergency?.stateId && job.emergency?.zip) {
+    try {
+      await provisionTenantEmergency(
+        s,
+        {
+          tenantPath,
+          companyName: co,
+          address: {
+            street: job.emergency.street,
+            city: job.emergency.city,
+            stateId: job.emergency.stateId,
+            zip: job.emergency.zip,
+          },
+          cidNumber: outboundCid,
+          trunkIds: [trunkId],
+          emailAddresses: [EMERGENCY_NOTIFY_OWNER, job.emergency.customerEmail || ""].filter(Boolean),
+        },
+        log,
+      );
+    } catch (e: any) {
+      log(`⛔ emergency calling NOT set up: ${e?.message || e} — 911 still works via the carrier, but this tenant cannot be interrupted for non-payment until it is fixed`);
+    }
+    s.setTenant(tenantPath);
+  } else {
+    log("⛔ emergency calling skipped — no service address on the sign-up; this tenant cannot be interrupted for non-payment until one is added");
+  }
 
   s.setTenant(tenantPath);
   let firstExtId: string | null = null;
