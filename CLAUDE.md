@@ -44,6 +44,78 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the Yiddish assistant answers in fluent Yiddish and says NOTHING, because the Yiddish Labs account is OUT OF CREDITS (2026-08-18) — READ FIRST for any "the agent isn't picking up Yiddish" / "it's not using Yiddish Labs" report, before re-pasting the YL key, or before touching the translate bridge
+
+Full detail: **`docs/ai-context/AGENT_HANDOFF_IVR_YIDDISH_2026-08-04.md`**
+(appended 2026-08-18). **Read-only investigation — no code change, no deploy, no
+PBX write, no data change, no credits spent.** Memory:
+[[yiddish-labs-out-of-credits]].
+
+- ⛔⛔ **THE ACCOUNT IS AT NEGATIVE THREE CREDITS AND HAS BEEN SINCE
+  2026-08-16 17:34 UTC.** Every Yiddish Labs call since then that is not a cache
+  hit answers **`402 insufficient_credits`**. Proven live against the deployed
+  key, not inferred: *"This action requires 1 credits but you only have -3
+  available."* **Nothing in Connect is broken and there is nothing to deploy —
+  it needs credits buying.** The key is read live from the store, so the bridge
+  resumes on the next message with **no restart and no agent rebuild**.
+- ⛔⛔ **THE SYMPTOM IS DISGUISED, WHICH IS WHY IT READS AS "it ignored my
+  Yiddish".** `finishBridged()` (`apps/agent/src/conversation/engine.ts:230`)
+  catches the failure and returns `fallbackReply("yi")` — a **hard-coded**
+  sentence: *"איך האָב אײַער מעסעדזש באַקומען און איבערגעגעבן צום טים"* ("I've
+  received your message and passed it to the team"). So the customer gets
+  **fluent Yiddish that answers nothing**. ✅ That degradation is CORRECT and
+  must stay — it never passes model-written Yiddish off as YL's. The defect is
+  that **nobody is told**.
+- ✅ **Everything on our side was verified working, so do not go looking:**
+  `AGENT_YIDDISH_BRIDGE=1` on `app-agent-1` (default ON; only `0` disables),
+  `/agent/yiddishlabs/status` → `configured: true`, the stored key is 72 chars
+  and **authenticates**, and the audit rows read `"language":"yi","bridged":true`
+  — i.e. detection ran and the bridge really did call YL.
+  ⛔ **A dead key answers 401; an empty wallet answers 402. DO NOT re-paste or
+  rotate the key on this symptom** — same shape as the ElevenLabs trap: let the
+  provider refuse, then read *which* refusal. ⛔ And do NOT set
+  `AGENT_YIDDISH_BRIDGE=0` "until it's fixed" — that makes the model write
+  Yiddish itself, the one thing Izzy has ruled out.
+- ⛔ **The env var is a decoy.** `YIDDISHLABS_API_KEY` in the container is the
+  34-char `(paste…)` placeholder; the real key is in the encrypted `AgentSecret`
+  store. **Judge configuration from `/agent/yiddishlabs/status`, never `env`.**
+- ⛔ **It can look INTERMITTENT, and that is the cache.** Every translation goes
+  through `AgentTranslation` first, so a repeated phrase still answers, free.
+  **`select max("createdAt") from "AgentTranslation"` is the single most useful
+  query here — it is the last moment YL actually worked** (`2026-08-16T17:34:39Z`).
+  The verbatim 402 **including the live balance** is in `AgentAuditLog` where
+  `event = 'chat.bridge_out_failed'`.
+- ⛔⛔ **THIS RETIRES A RECORDED-BUT-WRONG ROOT CAUSE.** The 2026-08-16 warm of
+  the 176 queue-screen phrases (**26 translated, 150 failed**) was written up as
+  "YL rejects most UI phrases for an unreadable reason — not rate limiting, not
+  punctuation, not length". **It was insufficient credits, and the 26 successes
+  were cache hits.** Checked each documented string against the cache, **7 for
+  7**: every "success" (`Longest wait`, `Refresh`, `Most callers allowed to
+  wait`) was already cached, every "failure" (`seconds`, `Advanced`, `Loading
+  reports…`) was not. `/agent/ui/translate` is **cache-first**, so cached =
+  free = "works" and uncached = 402. **THE LESSON: when a pass/fail pattern
+  makes no sense and there is a CACHE in front of the call, you are measuring
+  cache membership, not the property you are testing.**
+- ✅ **Blast radius measured, not assumed.** Yiddish assistant chat: **dead**.
+  UI phrase warming: **dead** (an untranslated phrase renders English — safe,
+  just incomplete; the queue screens sit at 26 of 176). **Voicemail
+  transcription is NOT affected** — it runs on `stt-yi` (ivrit.ai), not YL:
+  **126 voicemails transcribed** since credits ran out, latest 2026-08-18 03:39Z.
+  Nothing in calls, billing or routing touches YL.
+- ⏳ **OPEN, and it is the real defect: the outage is INVISIBLE.** The 402 lands
+  in `AgentAuditLog` and nowhere else — no alert, no banner, no log line a human
+  reads. A customer complaint surfaced an outage 36 hours old, and the previous
+  occurrence produced a documented-but-wrong root cause. Two small fixes, **both
+  NOT done** (each needs a manual agent rebuild — ⛔ reset the server clone
+  first): make `/agent/ui/translate`'s bare `catch { failed.push(s); }` log the
+  HTTP status, and surface a 402 somewhere a person sees. ⛔ It **cannot** ride
+  `ADMIN_ALERT` (muted platform-wide) — escalation or a badge on the Assistant
+  page.
+- ⏳ **NOT PROVEN: no Yiddish conversation has succeeded since the top-up,
+  because there has been no top-up.** Acceptance is one Yiddish message
+  afterwards coming back as a real answer instead of the "passed it to the team"
+  sentence.
+
 ## ⛔⛔ AGENT HANDOFF — the PBX name is what we call people now, on screen and in every email (2026-08-17) — READ FIRST before rendering a person's name ANYWHERE, before adding a naming fallback, or before "fixing" a name that looks wrong
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_USER_NAMES_EMAIL_VS_PBX_2026-08-17.md`**

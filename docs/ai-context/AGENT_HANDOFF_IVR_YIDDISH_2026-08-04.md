@@ -279,3 +279,164 @@ nothing: the intended rollout order.
    Announcements are now END-TO-END live.
 2. Queue callback recording (still pinned).
 3. A Plus Center go-live flip on 8457823064 (still held).
+
+---
+
+# APPENDED 2026-08-18 — the Yiddish bridge is not broken; the Yiddish Labs account is OUT OF CREDITS
+
+**Read-only investigation. No code change, no deploy, no PBX write, no data
+change, no credits spent.** Triggered by Izzy: *"Yiddish Labs is not picking up
+the Yiddish when I speak Yiddish to the agent. It's not using Yiddish Labs."*
+
+## 1. The finding
+
+⛔⛔ **Yiddish Labs is refusing EVERY call with HTTP 402 `insufficient_credits`.
+The account balance is NEGATIVE THREE.** Probed live against the deployed key on
+2026-08-18:
+
+```
+HTTP 402
+{"error":{"code":"insufficient_credits",
+ "message":"This action requires 1 credits but you only have -3 available.
+            Please purchase more credits to continue."}}
+```
+
+**Nothing in Connect is broken and there is nothing to deploy. It needs credits
+buying at Yiddish Labs.** Everything on our side was verified working:
+
+| Check | Result |
+|---|---|
+| `AGENT_YIDDISH_BRIDGE` on `app-agent-1` | `1` — bridge **enabled** (default ON; only `0` disables) |
+| `GET /agent/yiddishlabs/status` on the live agent | `{"configured":true,…}` |
+| Stored API key (`AgentSecret.yiddishlabs_api_key`) | present, 72 chars, **authenticates fine** — a bad key answers **401**, this answers **402** |
+| Yiddish detection | working — the audit rows read `"language":"yi","bridged":true` |
+| The bridge actually calling YL | yes — that is what produced the 402 |
+
+⛔ **The env var is a decoy, as always here.** `YIDDISHLABS_API_KEY` inside the
+container is 34 chars — the literal `(paste…)` placeholder. The real key is in
+the encrypted `AgentSecret` store. Judge configuration from
+`/agent/yiddishlabs/status`, never from `env`. See
+[[yiddish-labs-real-capabilities]].
+
+## 2. Why it looks like "it isn't using Yiddish Labs at all"
+
+The failure is **silent and disguised**. `finishBridged()`
+(`apps/agent/src/conversation/engine.ts:230`) catches the YL failure and returns
+`fallbackReply("yi")` — a **hard-coded** Yiddish sentence:
+
+> איך האָב אײַער מעסעדזש באַקומען און איבערגעגעבן צום טים — עמעצער וועט זיך באַלד פֿאַרבינדן מיט אײַך.
+> *("I've received your message and passed it to the team — someone will contact you shortly.")*
+
+So the customer gets **fluent Yiddish that answers nothing**. It does not look
+like a translation failure; it looks like the assistant ignored the question, or
+like the bridge never ran. Both live Yiddish conversations show exactly this:
+
+```
+[user]      רעד צו מיר אידיש            contentEn = "Speak to me in Yiddish."
+[assistant] איך האָב אײַער מעסעדזש...   contentEn = "I can help you in Yiddish through the translation service…"
+```
+
+⛔ **`contentEn` on the USER message is not proof the input leg called YL** —
+Izzy typed the identical phrase both times, so the second was a **cache hit**
+(0 credits). Only the **output** leg needs a fresh translation of the model's
+reply, so the output leg is what fails first and fails always.
+
+✅ **The degradation is correct and must stay that way** — it never passes
+model-generated Yiddish off as YL's, and never shows the customer raw English.
+The problem is only that **nobody is told**.
+
+## 3. When it broke, proven from data
+
+**The last successful Yiddish Labs call was `2026-08-16T17:34:39Z`** —
+`max(createdAt)` on `AgentTranslation`, where one row = one YL call that
+succeeded. Every YL call since then that was not already cached has failed.
+
+Every `chat.bridge_out_failed` row that has EVER been written is one of these
+two, both 402, both balance `-3`:
+
+```
+2026-08-17T00:42:01Z  requires 21 credits, you have -3
+2026-08-18T03:33:27Z  requires 16 credits, you have -3
+```
+
+Credits scale with reply length: ~**15–21 credits per assistant reply**, 1 for a
+one-word probe.
+
+## 4. ⛔ THIS ALSO EXPLAINS THE "UNEXPLAINABLE" 2026-08-16 WARMING FAILURE — a recorded theory was WRONG
+
+`[[yiddish-labs-warming-fails-silently]]` recorded that warming the 176
+queue-screen phrases returned **26 translations and 150 failures**, and that the
+cause could not be found — "not rate limiting, not punctuation, not length",
+with a maddening pattern where `"Most callers allowed to wait"` (28 chars)
+succeeded while `"seconds"` (7 chars) failed.
+
+**The cause was insufficient credits, and the "successes" were cache hits.** The
+warm ran at 17:34 on 2026-08-16 — the exact minute the last translation ever
+recorded was written. Checked each documented string against
+`AgentTranslation`, **7 for 7**:
+
+| String | Recorded as | In cache? |
+|---|---|---|
+| `Longest wait` | success | **IN CACHE** (2026-08-16T17:34:19Z) |
+| `Refresh` | success | **IN CACHE** (2026-08-16T17:34:00Z) |
+| `Most callers allowed to wait` | success | **IN CACHE** (2026-08-04) |
+| `seconds` | failure | not cached |
+| `Advanced` | failure | not cached |
+| `Longest wait — seconds` | failure | not cached |
+| `Loading reports…` | failure | not cached |
+
+`/agent/ui/translate` is **cache-first**, so a cached phrase "succeeds" for free
+while every uncached one calls YL and gets 402. Whether a phrase happened to be
+cached is arbitrary from the outside — which is precisely why it read as "not
+length, not punctuation, not rate limiting". **The lesson: when a pass/fail
+pattern makes no sense and there is a cache in front of the call, you are
+looking at cache membership, not at the property you are testing.**
+
+## 5. Blast radius — measured, not assumed
+
+- ⛔ **Yiddish assistant chat: dead** since 2026-08-16 17:34, for every uncached
+  reply. A repeated question can still answer from cache, which makes it look
+  intermittent.
+- ⛔ **UI phrase warming: dead.** An untranslated phrase renders **English**,
+  which is safe but permanently incomplete on the queue screens (26 of 176).
+- ✅ **Voicemail transcription is NOT affected.** It runs on `stt-yi`
+  (ivrit.ai/Everett), not YL — **126 voicemails transcribed** since credits ran
+  out, most recent `2026-08-18T03:39Z`, `language: yi-en`. Do not report Yiddish
+  voicemail as broken.
+- ✅ Nothing else: no calls, no billing, no routing touches YL.
+
+## 6. The fix, and what NOT to do
+
+1. **Buy credits at Yiddish Labs.** That is the whole fix. Nothing to deploy —
+   the key is read live from the store, so the bridge resumes on the next
+   message with no restart and no rebuild.
+2. ⛔ **Do NOT re-paste or rotate the API key.** It authenticates. A rotation
+   would spend an evening chasing a key that was never wrong (this exact trap
+   already cost a session — see the ElevenLabs handoff, same shape: *let the
+   provider refuse, and read WHICH refusal*).
+3. ⛔ **Do NOT set `AGENT_YIDDISH_BRIDGE=0` "until it's fixed".** That makes the
+   model write Yiddish itself, which is the one thing Izzy has ruled out.
+4. After topping up, **re-run the queue-screen warm** to finish the 150 phrases.
+
+## 7. ⏳ Open — the real defect is that this was invisible
+
+The outage is recorded in `AgentAuditLog` and **nowhere else**: no alert, no
+banner, no log line a human reads. It took a customer complaint to surface an
+outage that had started 36 hours earlier, and the previous time it happened it
+produced a documented-but-wrong root cause.
+
+Two small changes would fix that, **neither done** (both need an agent rebuild,
+which is manual — ⛔ reset the server clone first, it builds the working tree):
+
+- `/agent/ui/translate` in `apps/agent/src/server.ts` catches bare —
+  `catch { failed.push(s); }` — discarding the HTTP status, which is the only
+  place the reason lives. **Log the error.**
+- A 402 from YL should raise something a person sees. ⛔ It cannot ride
+  `ADMIN_ALERT` (muted platform-wide) — it has to be an escalation, or a badge
+  on the Assistant page beside the key.
+
+⏳ **NOT PROVEN: nobody has held a Yiddish conversation since credits ran out and
+succeeded.** The diagnosis is proven by a live 402 against the deployed key, by
+the audit rows, and by `AgentTranslation`'s last write — **acceptance is one
+Yiddish message after the top-up**, which should come back as a real answer
+rather than the "passed it to the team" sentence quoted in §2.
