@@ -131,6 +131,28 @@ permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
   The page asks once on load; a 404 (older api) or any error is read as **no
   option**, never as a button that fails when pressed. `onConvertRecording` is
   `undefined` for everyone else, so `KeyEditor` draws nothing at all.
+- ⛔⛔ **`MediaRecorder` WITH NO `mimeType` PRODUCES A DEAD GREY PLAYER — first
+  bug Izzy hit, within minutes.** The default is WebM, whose blobs carry **no
+  duration in the header**, so the browser reports the clip as infinitely long
+  and draws unpressable controls. It reads exactly as *"it doesn't record
+  anything"*. ⛔ **`ChatComposer.tsx` in this repo already solved this** by
+  preferring **`audio/mp4`** (real duration, and on ElevenLabs' accepted list) —
+  I wrote a second recorder instead of grepping for the existing one. **Check
+  for a proven implementation before writing a new one.** Fixed alongside, all
+  presenting as the same symptom: an empty recording used to set a preview and
+  enable Convert (surfacing only as a provider error *after* a charge),
+  `onerror` was unhandled, and `stop()` on an already-inactive recorder throws
+  and leaves the button stuck on "Stop". The captured size is now stated as
+  TEXT, so "did that work?" has an answer even when the player cannot draw.
+- ⛔⛔ **VOICE SAMPLES MUST BE PROXIED, NEVER LINKED — the portal's CSP is
+  `default-src 'self'`.** An `<audio>` pointed at ElevenLabs' CDN is blocked by
+  the browser as a **silent console violation**: the play button simply does
+  nothing, with no network error to find. `GET
+  /voice/elevenlabs/voices/:voiceId/sample` serves the provider's own hosted
+  clip from our origin. ⛔ **Auditioning is FREE** — it is a static file, not a
+  synthesis — and a test fails if anyone ever routes it through
+  `synthesiseSpeech`, which would bill for every one of the 38 voices a customer
+  tries. ⛔ Buffered and **returned**, never an un-returned stream send.
 - ⏳ **NOT PROVEN: no clip has ever been converted and nobody has pressed the
   button.** Proven as 13 api + 5 shared tests, both registered, **every source
   guard reading 0 against `HEAD`**; api typecheck **75 = the exact baseline**,
