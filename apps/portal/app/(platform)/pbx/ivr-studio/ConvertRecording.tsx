@@ -43,7 +43,7 @@ const PHRASES = [
   "You already have a recording called that. Pick a different name.",
   "Give this recording a name so you can find it later.",
   "Pick the voice it should become.", "Record or choose a file first.",
-  "Listen", "Stop", "Couldn't play that voice.",
+  "Listen", "Stop", "Couldn't play that voice.", "Press play to hear it.",
   "The words, timing and delivery stay exactly as you recorded them. Only the voice changes.",
   "Your microphone isn't available. Choose a file instead.",
   "Nothing was recorded. Check the microphone and try again.",
@@ -115,6 +115,9 @@ export function ConvertRecording({
   const [samplingId, setSamplingId] = useState<string | null>(null);
   const sampleAudioRef = useRef<HTMLAudioElement | null>(null);
   const sampleUrlRef = useRef<string | null>(null);
+  /** State, not the ref: a ref change does not re-render, so keying the
+   *  player's visibility off sampleUrlRef would never show it. */
+  const [sampleReady, setSampleReady] = useState(false);
   const sourceUrlRef = useRef<string | null>(null);
   const resultUrlRef = useRef<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -218,12 +221,25 @@ export function ConvertRecording({
     setErr(null);
     try {
       const r = await api(`/voice/elevenlabs/voices/${encodeURIComponent(id)}/sample`);
-      const blob = await r.blob();
+      // ⛔ Build the blob with an explicit audio type rather than inheriting
+      // whatever the response says. Belt and braces with the server-side
+      // forcing: a blob typed text/plain will not play, and the failure is
+      // silent — no error, no network fault, just a button that does nothing.
+      const blob = new Blob([await r.arrayBuffer()], { type: "audio/mpeg" });
       if (sampleUrlRef.current) URL.revokeObjectURL(sampleUrlRef.current);
       const url = URL.createObjectURL(blob);
       sampleUrlRef.current = url;
+      setSampleReady(true);
       el.src = url;
-      await el.play().catch(() => undefined);
+      try {
+        await el.play();
+      } catch {
+        // Autoplay can be refused because the click was consumed by the fetch
+        // that preceded it. Never swallow that silently — the visible player
+        // below means they can still press play themselves.
+        setSamplingId(null);
+        setErr(t("Press play to hear it."));
+      }
     } catch {
       setSamplingId(null);
       setErr(t("Couldn't play that voice."));
@@ -492,9 +508,10 @@ export function ConvertRecording({
             {/* One shared element for auditioning, kept out of the way. */}
             <audio
               ref={sampleAudioRef}
+              className="mr-player"
+              controls
               onEnded={() => setSamplingId(null)}
-              onPause={() => setSamplingId(null)}
-              style={{ display: "none" }}
+              style={{ display: sampleReady ? "block" : "none" }}
             />
 
             <button className="mr-adv" onClick={() => setAdvanced((a) => !a)}>

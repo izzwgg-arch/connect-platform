@@ -288,6 +288,13 @@ test("⛔ auditioning a voice is FREE — the sample route must never synthesise
   // The un-returned reply.send() trap: an async handler that does not RETURN
   // the send answers 200 with an empty body and logs nothing anywhere.
   assert.ok(route.includes("return reply.send("), "the send must be returned");
+  // ⛔ Proven live: ElevenLabs' CDN serves these clips as text/plain. Passing
+  // that through hands the browser audio bytes labelled as text and <audio>
+  // silently refuses to decode them — the play button does nothing.
+  assert.ok(
+    route.includes('startsWith("audio/")') && route.includes('"audio/mpeg"'),
+    "the upstream content-type must not be trusted — force an audio type",
+  );
   assert.ok(!/reply\.send\(res\.body\)|pipe\(/.test(route), "buffered, not streamed — see CLAUDE.md");
 });
 

@@ -385,7 +385,14 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
       // log line anywhere — the trap recorded in CLAUDE.md. Samples are a few
       // hundred KB, so there is nothing to gain from streaming.
       const bytes = Buffer.from(await res.arrayBuffer());
-      reply.header("Content-Type", res.headers.get("content-type") || "audio/mpeg");
+      // ⛔⛔ DO NOT PASS THE UPSTREAM CONTENT-TYPE THROUGH. ElevenLabs' CDN
+      // serves these clips as `text/plain` (verified live: 200, 31,364 bytes,
+      // ID3 magic — an MP3 labelled as text). Forwarding that verbatim hands
+      // the browser audio bytes marked as text, and <audio> silently refuses
+      // to decode them: the play button does nothing, with no error anywhere.
+      // The bytes are what matter, and they are MP3.
+      const upstream = res.headers.get("content-type") || "";
+      reply.header("Content-Type", upstream.startsWith("audio/") ? upstream : "audio/mpeg");
       reply.header("Content-Length", String(bytes.byteLength));
       reply.header("Content-Disposition", "inline");
       // The sample for a given voice never changes.
