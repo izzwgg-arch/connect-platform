@@ -215,9 +215,13 @@ async function call(
       headers: {
         "xi-api-key": apiKey,
         Accept: init.accept ?? "application/json",
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        // ⛔ Never set Content-Type for FormData. fetch generates a multipart
+        // boundary token and puts it IN that header; overriding it produces a
+        // body the provider cannot parse, and the failure comes back as a
+        // generic 400 that reads like a bad request rather than a bad header.
+        ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
       },
-      body: init.body ? JSON.stringify(init.body) : undefined,
+      body: init.body instanceof FormData ? init.body : init.body ? JSON.stringify(init.body) : undefined,
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -486,6 +490,145 @@ export async function synthesiseSpeech(
   }
   // Unreachable — the loop either returns or throws.
   throw new ElevenLabsError("elevenlabs_no_format", 502, "Couldn't generate the audio. Nothing was changed.");
+}
+
+/**
+ * Voice changer (ElevenLabs calls it "speech to speech").
+ *
+ * ⛔⛔ THIS IS NOT TRANSCRIPTION AND MUST NEVER BECOME IT. Audio goes in, audio
+ * comes out; the words are never turned into text at any point. That is the
+ * entire reason it works on Yiddish — no speech engine on the market can
+ * transcribe or speak Yiddish, but the voice changer does not need to know what
+ * was said. It re-voices the sounds. If anyone ever "improves" this by routing
+ * it through speech recognition and text-to-speech, every language we actually
+ * care about stops working.
+ *
+ * What the customer keeps: their words, timing, pauses, rhythm, emphasis,
+ * accent and emotion. What changes: who it sounds like. There is deliberately
+ * no speed or rhythm control — ElevenLabs does not expose one on this endpoint,
+ * and the pacing coming from the original performance is the feature.
+ *
+ * ⛔ Billing is PER MINUTE OF AUDIO here, not per character as it is for
+ * text-to-speech, so MAX_TTS_CHARS has no equivalent and the caller MUST bound
+ * the duration before calling this. See MAX_CONVERT_SECONDS.
+ */
+export const VOICE_CHANGER_MODELS = [
+  {
+    id: "eleven_multilingual_sts_v2",
+    label: "Any language",
+    detail: "The right choice for Yiddish and anything else. ElevenLabs recommend it even for English.",
+  },
+  { id: "eleven_english_sts_v2", label: "English only", detail: "Slightly tuned for English. Nothing else." },
+] as const;
+
+export type VoiceChangerModelId = (typeof VOICE_CHANGER_MODELS)[number]["id"];
+
+export function isVoiceChangerModelId(v: unknown): v is VoiceChangerModelId {
+  return VOICE_CHANGER_MODELS.some((m) => m.id === v);
+}
+
+/**
+ * How much audio we will convert in one request.
+ *
+ * ElevenLabs' own ceiling is 5 minutes / 50 MB, but theirs is a technical limit
+ * and this is a spending limit — a phone greeting is seconds long, and the
+ * difference between a 30-second recording and somebody uploading an hour of a
+ * meeting is entirely a billing question. Deliberately well under the provider
+ * limit so the refusal is ours, in plain English, before any money moves.
+ */
+export const MAX_CONVERT_SECONDS = 180;
+
+/** Bytes we will accept regardless of duration — a crude backstop for a file
+ *  whose duration we could not read. Well under the provider's 50 MB. */
+export const MAX_CONVERT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Re-voice a recording. Returns raw PCM plus the rate it actually arrived at,
+ * exactly like synthesiseSpeech, so both feed the same pcmToWav → store →
+ * push-to-PBX tail with no special cases downstream.
+ */
+export async function convertSpeech(
+  apiKey: string,
+  input: {
+    voiceId: string;
+    /** The recording as uploaded. Sent to the provider AS-IS — see below. */
+    audio: Buffer;
+    filename: string;
+    contentType?: string;
+    model?: VoiceChangerModelId;
+    tuning?: Partial<VoiceTuning>;
+    /** Ask the provider to strip room noise before converting. Off by default:
+     *  it is a real change to the customer's audio and should be a choice. */
+    removeBackgroundNoise?: boolean;
+  },
+): Promise<{ pcm: Buffer; sampleRate: number; model: VoiceChangerModelId }> {
+  if (!input.voiceId) throw new ElevenLabsError("no_voice", 400, "Pick the voice to convert into first.");
+  if (!input.audio?.length) throw new ElevenLabsError("empty_audio_upload", 400, "That file had no audio in it.");
+  if (input.audio.length > MAX_CONVERT_BYTES) {
+    throw new ElevenLabsError(
+      "audio_too_large",
+      400,
+      `That recording is too big (limit ${Math.floor(MAX_CONVERT_BYTES / (1024 * 1024))} MB).`,
+    );
+  }
+
+  const model: VoiceChangerModelId = isVoiceChangerModelId(input.model) ? input.model : "eleven_multilingual_sts_v2";
+  const t = { ...IVR_VOICE_TUNING, ...(input.tuning ?? {}) };
+
+  // ⛔ The recording is forwarded to the provider in the format it arrived in.
+  // ElevenLabs accepts mp3/m4a/wav/flac/ogg directly, which covers every phone
+  // and browser, and transcoding first would throw away quality for nothing —
+  // every re-encode of already-lossy phone audio is damage the voice changer
+  // then has to work through.
+  const build = (): FormData => {
+    const form = new FormData();
+    form.append("audio", new Blob([new Uint8Array(input.audio)], { type: input.contentType || "application/octet-stream" }), input.filename || "recording");
+    form.append("model_id", model);
+    // ⛔ voice_settings goes over multipart as a JSON *string*, not as fields.
+    // Sent as individual form fields it is silently ignored and every tuning
+    // dial in the UI quietly does nothing.
+    form.append(
+      "voice_settings",
+      JSON.stringify({
+        stability: clamp01(t.stability),
+        similarity_boost: clamp01(t.similarityBoost),
+        style: clamp01(t.style),
+        use_speaker_boost: Boolean(t.useSpeakerBoost),
+      }),
+    );
+    if (input.removeBackgroundNoise) form.append("remove_background_noise", "true");
+    return form;
+  };
+
+  // Same 8 kHz-first ladder as synthesiseSpeech, and for the same reason: it is
+  // the native rate of the phone network, so a successful pcm_8000 answer needs
+  // no resampling at all before it reaches Asterisk.
+  for (const [format, rate] of [["pcm_8000", 8000], ["pcm_16000", 16000]] as const) {
+    try {
+      const res = await call(apiKey, `/speech-to-speech/${encodeURIComponent(input.voiceId)}?output_format=${format}`, {
+        method: "POST",
+        body: build(),
+        accept: "audio/*",
+      });
+      const pcm = Buffer.from(await res.arrayBuffer());
+      if (pcm.length === 0) {
+        throw new ElevenLabsError("empty_audio", 502, "The voice service returned no audio. Try again.", "", "No audio came back. Try again.", true);
+      }
+      return { pcm, sampleRate: rate, model };
+    } catch (err: any) {
+      // Identical reasoning to synthesiseSpeech: only the FORMAT is worth a
+      // second attempt. A rejected key also answers 400, and retrying at 16 kHz
+      // cannot help — it only buries the one useful message under a duplicate.
+      const aboutTheKey = err instanceof ElevenLabsError && /api_key|authentication/i.test(err.providerCode);
+      const canRetryAtHigherRate =
+        format === "pcm_8000" &&
+        err instanceof ElevenLabsError &&
+        !aboutTheKey &&
+        (err.httpStatus === 400 || err.httpStatus === 403 || err.httpStatus === 422);
+      if (!canRetryAtHigherRate) throw err;
+    }
+  }
+  throw new ElevenLabsError("elevenlabs_no_format", 502, "Couldn't convert the recording. Nothing was changed.");
 }
 
 function clamp01(n: unknown): number {

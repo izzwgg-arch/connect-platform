@@ -23417,10 +23417,17 @@ app.post("/billing/card-test/start", async (req, reply) => {
 // ═══ ElevenLabs greeting generation ════════════════════════════
 // Lives in its own module (voice/elevenLabsRoutes.ts) with the pieces that
 // belong to this file passed in, rather than the module reaching back in here.
+// The voice changer rides this same module and adds a SECOND gate on top of
+// the prompt-manager one: `can_use_voice_changer`, a key in neither default
+// bucket, so it reaches people one custom role at a time. Same deliberate
+// absence of a role fallback as hasPollyPermission — a tenant admin does not
+// get the voice changer by virtue of being a tenant admin. (SUPER_ADMIN still
+// passes, because its bucket contains every key.)
 registerElevenLabsRoutes({
   app,
   db,
   requirePromptManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvrPrompts, "can_manage_ivr_prompts"),
+  hasVoiceChangerPermission: (user) => userHasActionPermission(user, "can_use_voice_changer"),
   resolvePbxRouteHelperConfig,
   pushPromptToHelper,
   PromptPushError,

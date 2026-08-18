@@ -158,6 +158,27 @@ export const ACTION_PERMISSION_KEYS = [
   // can manage prompts. Someone without it sees the ElevenLabs flow exactly as
   // before; the Polly option simply isn't offered.
   "can_use_amazon_polly",
+  // The voice changer: upload a recording of a REAL PERSON speaking and have it
+  // come back in one of the platform's voices, keeping the original words,
+  // timing, rhythm and delivery. Nothing is transcribed and nothing is
+  // translated — the audio never becomes text — which is the whole reason it
+  // works on Yiddish and on any other language no speech engine supports.
+  //
+  // Absent from BOTH default buckets, including TENANT_ADMIN, exactly like
+  // can_use_amazon_polly, and for two reasons rather than one:
+  //   1. it is billed PER MINUTE of audio against Connect's own ElevenLabs
+  //      account, not per character, so a long upload is a real bill;
+  //   2. re-voicing a recording of a person is the kind of thing that should
+  //      be handed to named people deliberately, not switched on for everyone
+  //      who can manage prompts.
+  // SUPER_ADMIN still receives it automatically via the force-add bucket, so
+  // no snapshot migration is needed.
+  //
+  // ⛔ Someone without it must not see the option AT ALL — the status route
+  // answers `allowed: false` and the recording dialog omits the tab entirely.
+  // A visible control that refuses on click reads as a broken product, not as
+  // a permission (the mistake the Queues keys already record).
+  "can_use_voice_changer",
   // ── Queues ────────────────────────────────────────────────────────────────
   // Three keys rather than one, because these are genuinely different jobs and
   // an owner may well want a supervisor on the live board but nowhere near the

@@ -56,6 +56,9 @@ before(async () => {
     app,
     db: {} as any,
     requirePromptManager: async () => ({ sub: "stress-user", role: "SUPER_ADMIN", tenantId: "t1" }),
+    // This suite stresses the text-to-speech path only; the voice changer has
+    // its own budget and its own tests. Permitted here so the module registers.
+    hasVoiceChangerPermission: async () => true,
     resolvePbxRouteHelperConfig: () => null,
     pushPromptToHelper: async () => ({}),
     PromptPushError: class PromptPushError extends Error { httpStatus = 500; },
