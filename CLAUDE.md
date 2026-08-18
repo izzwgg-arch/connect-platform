@@ -44,6 +44,88 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the voice changer: a recording comes back in a different voice, and the audio NEVER becomes text (2026-08-18) — READ FIRST before touching `apps/api/src/voice/elevenLabs*`, before adding any speech feature for Yiddish, or before "improving" this with speech recognition
+
+(`58be00f7` on `feat/ivr-migration-takeover`. **api only. ⏳ NOT DEPLOYED, no UI,
+and no clip has ever been converted.** No migration, no PBX write, no env change,
+no permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
+[[no-voice-provider-speaks-yiddish]].
+
+- ⛔⛔ **THE RULE THIS EXISTS TO PROTECT: nothing in this path may ever
+  transcribe or translate.** ElevenLabs' "speech to speech" is audio in, audio
+  out — it re-voices the sounds and never learns what was said. **That is the
+  only reason it works on Yiddish**, because no provider on earth can transcribe
+  or speak Yiddish (proven live: ElevenLabs' 74-language `eleven_v3` has `he` and
+  no `yi`; the two conversion models list neither; **Polly has 109 voices across
+  41 languages and neither Hebrew nor Yiddish**). A future "improvement" that
+  routes this through speech recognition + text-to-speech would read as a quality
+  upgrade in a diff and would **silently break every language this platform
+  actually serves.** A guard test reads the SOURCE of both files, **comments
+  stripped**, and fails on `speech-to-text` / `whisper` / `transcri*` /
+  `translat*`. ⛔ Strip the comments — the doc blocks say "nothing here
+  transcribes", so a naive substring match fails on correct code.
+- ✅ **What exists.** `convertSpeech()` beside `synthesiseSpeech()` in
+  `voice/elevenLabs.ts`; `POST /voice/ivr/prompts/convert` (multipart) and
+  `GET /voice/elevenlabs/voice-changer/status` in `voice/elevenLabsRoutes.ts`.
+  Same key, same 8 kHz-first ladder, same error classification, same
+  `pcmToWav` → store → catalog → push-to-PBX tail as text-to-speech — a converted
+  greeting and a generated one are the same thing by the time Asterisk sees them.
+  Models: `eleven_multilingual_sts_v2` (default, 29 languages) and
+  `eleven_english_sts_v2`. ⛔ **No model does both jobs** — a TTS model id is
+  refused here and vice versa; read `can_do_voice_conversion` on `/v1/models`,
+  never the model's name.
+- ⛔⛔ **BILLED PER MINUTE OF AUDIO, NOT PER CHARACTER — `MAX_TTS_CHARS` has no
+  equivalent and file size is not a proxy** (a 5-minute MP3 is smaller than a
+  30-second WAV). The cost guard is **ffprobe reading the duration BEFORE the
+  provider is called** (`MAX_CONVERT_SECONDS` 180, deliberately under
+  ElevenLabs' own 5 min so the refusal is ours and in plain English), and ⛔ **a
+  file whose length cannot be read is REFUSED, not forwarded on trust** — that
+  would be billing blind. Its own rate limit (6/min) and concurrency gate (2),
+  separate from the synthesis ones. A test pins that the probe precedes the call.
+- ⛔ **`can_use_voice_changer` is in NEITHER default bucket, not even
+  TENANT_ADMIN** — the `can_use_amazon_polly` pattern exactly, granted one custom
+  role at a time. **SUPER_ADMIN gets it via the all-keys bucket, so NO snapshot
+  migration.** Every route needs BOTH gates: `can_manage_ivr_prompts` says a
+  person may make recordings at all, this says they may make them THIS way.
+  ⛔ **`hasVoiceChangerPermission` is an authoritative key check with no role
+  fallback** — a tenant admin does not get it for being a tenant admin.
+- ⛔ **Someone without it must see NOTHING** (Izzy, 2026-08-18: *"if somebody
+  doesn't have permission, they don't see that option at all"*). The status route
+  answers **200 `allowed: false`, never 403** — the Studio asks on every open, and
+  a console full of 403s for the ordinary case buries real failures. A visible
+  control that refuses on click reads as a broken product, not as a permission.
+- ⛔ **Two provider traps, both guarded:** never set `Content-Type` on the
+  FormData (fetch generates the multipart boundary and puts it in that header;
+  overriding it yields a generic 400 that reads like a bad request), and
+  **`voice_settings` goes as ONE JSON string**, not separate form fields — as
+  fields it is silently ignored and every tuning dial does nothing.
+- **Tone is adjustable, rhythm is not.** `stability` / `similarity_boost` /
+  `style` change expressiveness and how hard the target voice's character shows.
+  There is **no speed or rhythm control on this endpoint** and none is exposed —
+  the pacing comes from the customer's own performance, which is the feature.
+  ⚠️ ElevenLabs' general voice settings carry a `speed`; whether it is honoured
+  here is **unverified**, and Polly's generative engine has already burned us by
+  accepting a speed setting and silently discarding it. Test it by comparing
+  output bytes before exposing it.
+- ⛔ **Committed with a PRIVATE INDEX** — `server.ts` carried three hunks from
+  another live session and the real index held their staged deletions, so a
+  pathspec commit would have swept both in. `git show HEAD:…server.ts` → apply
+  only my two hunks → `hash-object` → `GIT_INDEX_FILE` + `read-tree HEAD` +
+  `update-index` + `write-tree` + `commit-tree`. Verified `git diff --stat HEAD
+  $TREE` showed **8 files and server.ts +7 lines** before committing.
+- ⏳ **NOT PROVEN, and the list is short and honest: no clip has ever been
+  converted, nothing is deployed, and the recording dialog cannot reach this.**
+  `ivr-studio/MakeRecording.tsx` still offers only text-to-speech (ElevenLabs and
+  Polly). Deliberate — **the acceptance test is one Yiddish recording, and that
+  needs no UI.** Proven as 13 api + 5 shared tests, both registered, **every
+  source guard reading 0 against `HEAD`**; api typecheck **75 = the exact
+  baseline**, none in an edited file; voice suite 124/124, shared 360/360.
+- ⏳ **Open, needs Izzy:** convert one Yiddish clip and listen (the whole point);
+  then the UI — a third mode in the recording dialog, which is the bigger half
+  because this takes an upload rather than text. ⛔ `docs/ai-context/TESTS_RUN.md`
+  was **not** updated: another session has it staged with large changes and
+  fighting over it would risk their work.
+
 ## ⛔⛔ AGENT HANDOFF — a sold-out area code said NOTHING, and that silence put one person's address on another company's 911 (2026-08-18) — READ FIRST before touching the sign-up number search, before making a wizard field required, before removing the `ep3wlb` tag from a PBX name, or for "a customer's details are wrong and nobody typed them"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_NUMBER_SEARCH_REQUIRED_DETAILS_2026-08-18.md`**
