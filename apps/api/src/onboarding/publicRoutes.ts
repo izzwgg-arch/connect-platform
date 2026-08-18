@@ -697,9 +697,16 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       if (typeof body.language === "string") {
         answers.language = String(body.language).toLowerCase() === "yi" ? "yi" : "en";
       }
-      // The E911 address must survive submit even if an autosave was missed.
-      if (typeof body.address === "string" && body.address.trim()) {
-        answers.contact = { ...(answers.contact || {}), address: body.address.trim() };
+      // The 911 address must survive submit even if an autosave was missed —
+      // all four pieces of it, because the registration needs the city, state
+      // and ZIP as their own fields (see publicSubmitSchema).
+      const addressPatch: Record<string, string> = {};
+      if (typeof body.address === "string" && body.address.trim()) addressPatch.address = body.address.trim();
+      if (typeof body.addressCity === "string" && body.addressCity.trim()) addressPatch.addressCity = body.addressCity.trim();
+      if (typeof body.addressState === "string" && body.addressState.trim()) addressPatch.addressState = body.addressState.trim().toUpperCase();
+      if (typeof body.addressZip === "string" && body.addressZip.trim()) addressPatch.addressZip = body.addressZip.trim();
+      if (Object.keys(addressPatch).length) {
+        answers.contact = { ...(answers.contact || {}), ...addressPatch };
       }
       answers.phone = {
         ...(answers.phone || {}),

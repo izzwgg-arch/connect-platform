@@ -37,9 +37,11 @@
  */
 import { db as realDb } from "@connect/db";
 import {
+  applyE911ForDid as realApplyE911ForDid,
   enableSmsOnDid as realEnableSmsOnDid,
   readSubaccount,
   vms as realVms,
+  voipmsAutoProvisionEnabled,
   type VmsCreds,
 } from "./voipMsProvisioning";
 import {
@@ -57,6 +59,21 @@ export type PortLandingDeps = {
   db: any;
   vms: (creds: VmsCreds, method: string, params?: Record<string, string>) => Promise<any>;
   enableSmsOnDid: (creds: VmsCreds, did: string) => Promise<{ ok: boolean; detail: string }>;
+  /**
+   * Register the customer's 911 address on the number that just landed.
+   *
+   * ⛔ The temporary number was registered at sign-up; this is the REAL number
+   * they keep, and 911 has to follow them onto it. Same helper as onboarding,
+   * so a ported customer's 911 record can never be built differently from a
+   * new customer's.
+   */
+  applyE911?: (
+    creds: VmsCreds,
+    row: any,
+    did: string,
+    subUsername: string,
+    live: boolean,
+  ) => Promise<{ status: string; detail: string; needsAttention: boolean }>;
   /**
    * Make the ported number's PBX inbound route point at whatever the
    * temporary number's route points at — an extension, a ring group, a PBX
@@ -190,6 +207,7 @@ export function defaultPortLandingDeps(): PortLandingDeps {
     db: realDb,
     vms: realVms,
     enableSmsOnDid: realEnableSmsOnDid,
+    applyE911: realApplyE911ForDid,
     copyPbxDestination: defaultCopyPbxDestination,
     retireTempRoute: defaultRetireTempRoute,
   };
@@ -277,6 +295,31 @@ export async function runPortLanding(
     }
     await mergeLanding(db, row, { routedAt: new Date().toISOString() });
     await logEvent(db, row.id, `Ported number ${portedDid} arrived — routed to ${sub.username}.`);
+  }
+
+  // ── 1b. 911 on the real number ────────────────────────────────────────────
+  // The temporary number was registered at sign-up; this is the one they
+  // keep. Best-effort and recorded either way — a refused address must never
+  // hold up a landing that is otherwise complete, but it must not be silent.
+  if (!landing.e911At && deps.applyE911) {
+    try {
+      const e911 = await deps.applyE911(creds, row, portedDid, sub.username, voipmsAutoProvisionEnabled());
+      // ⛔ Only a SETTLED outcome closes this step. "failed" means the provider
+      // was unreachable or would not say whether the DID was already
+      // registered — retrying that is free and correct, and stamping it done
+      // would leave the number they keep with no 911 address and nothing to
+      // notice it. A refused or incomplete address IS settled: it needs a
+      // person, not another identical attempt.
+      if (e911.status !== "failed") {
+        await mergeLanding(db, row, { e911At: new Date().toISOString(), e911Status: e911.status });
+      }
+      if (e911.needsAttention) {
+        await logEvent(db, row.id, `911 on the ported number ${portedDid} needs a person: ${e911.detail}`);
+      }
+    } catch (e: any) {
+      // Never fatal, and never marked done — the next sweep tries again.
+      await logEvent(db, row.id, `911 registration on ${portedDid} errored: ${String(e?.message || e).slice(0, 160)}`);
+    }
   }
 
   // ── 2. Texting on the real number ─────────────────────────────────────────

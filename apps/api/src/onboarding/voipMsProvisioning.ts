@@ -5,6 +5,8 @@ import { db } from "@connect/db";
 import { decryptJson, encryptJson } from "@connect/security";
 import { ensureProvisioningIdentity, subAccountName } from "./provisioningIdentity";
 import { resolveOnboardingStoragePath } from "./storage";
+import { parseServiceAddressLine, type ParsedAddressLine } from "./e911Address";
+import { ensureE911ForSubmission, setSubaccountDefaultE911, type E911Result } from "./voipMsE911";
 
 export { subAccountName };
 
@@ -48,6 +50,15 @@ export type ProvisionResult = { ok: boolean; live: boolean; detail: string };
 
 function liveEnabled(): boolean {
   return String(process.env.VOIPMS_AUTO_PROVISION || "").toLowerCase() === "on";
+}
+
+/**
+ * The purchase gate, for the paths that live outside this file (port landing).
+ * Everything that spends the customer's money — or registers a billable 911
+ * address — reads the SAME switch, so a dry run is dry everywhere.
+ */
+export function voipmsAutoProvisionEnabled(): boolean {
+  return liveEnabled();
 }
 
 export async function loadMasterCreds(): Promise<VmsCreds | null> {
@@ -102,7 +113,13 @@ export async function vms(creds: VmsCreds, method: string, params: Record<string
       const detail = [json?.error, json?.message, json?.description, json?.reason]
         .map((v) => String(v || "").replace(/\s+/g, " ").trim())
         .find((v) => v && v.toLowerCase() !== status.toLowerCase());
-      throw new Error(`voipms ${method} failed: ${status}${detail ? ` (${detail.slice(0, 160)})` : ""}`);
+      const err: any = new Error(`voipms ${method} failed: ${status}${detail ? ` (${detail.slice(0, 160)})` : ""}`);
+      // Some methods put the useful part in the body of a FAILED answer —
+      // e911Validate returns its address corrections as `alternatives` on an
+      // `invalid_address` status, and a message string cannot carry them.
+      // Callers that need the body read `err.voipmsResponse`.
+      err.voipmsResponse = json;
+      throw err;
     }
     return json;
   }
@@ -526,6 +543,61 @@ async function enableSms(creds: VmsCreds, submissionId: string, did: string, liv
   }
 }
 
+// ── 911 ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Register the customer's service address as the 911 address on the DID they
+ * are about to use, and point their trunk at it.
+ *
+ * ⛔ BEST-EFFORT BY DESIGN, AND THE VERDICT IS ALWAYS RECORDED. The customer
+ * has paid and their phones have to come up, so a refused address can never
+ * fail the number stage — but "we quietly did not register 911" is exactly
+ * the kind of silence that only surfaces during an emergency. Every outcome
+ * lands on the sign-up timeline AND in answers.provisioning.e911, and the
+ * ones a person must act on carry needsAttention.
+ *
+ * Exported so the port-landing sweep registers the REAL number the same way
+ * when it arrives — a ported customer spends their first weeks on a temporary
+ * DID, and 911 has to follow them onto the number they keep.
+ */
+export async function applyE911ForDid(
+  creds: VmsCreds,
+  row: any,
+  did: string,
+  subUsername: string,
+  live: boolean,
+): Promise<E911Result> {
+  const submissionId = row.id;
+  const deps = { vms, log: (message: string) => logEvent(submissionId, message) };
+  const result = await ensureE911ForSubmission(deps, { creds, did, row, live });
+
+  if (live && result.status === "provisioned" && subUsername) {
+    // Belt to the braces: a 911 call that leaves with some other caller ID
+    // still resolves to a real address. Never fatal — the DID registration
+    // above is what actually matters.
+    const fallback = await setSubaccountDefaultE911(deps, { creds, subUsername, did });
+    if (!fallback.ok) {
+      await logEvent(submissionId, `Could not make ${did} the trunk's default 911 number (${fallback.detail}) — the number itself IS registered.`);
+    }
+  }
+
+  try {
+    await mergeProvisioningState(row, {
+      e911: {
+        did,
+        status: result.status,
+        detail: result.detail,
+        corrected: result.corrected || null,
+        needsAttention: result.needsAttention,
+        at: new Date().toISOString(),
+      },
+    });
+  } catch {
+    /* recording the verdict must never break provisioning */
+  }
+  return result;
+}
+
 // ── Port-in ───────────────────────────────────────────────────────────────────
 
 /**
@@ -563,27 +635,18 @@ function splitPersonName(name: string): { firstName: string; lastName: string } 
   return { firstName, lastName };
 }
 
-export type ParsedPortAddress = { address1: string; city: string; state: string; zip: string };
+export type ParsedPortAddress = ParsedAddressLine;
 
 /**
- * Legacy fallback: older submissions collected the service address as ONE
- * free-text line ("123 Main St, Monsey, NY 10952"). Pull the ZIP and 2-letter
- * state off the end, take the last comma part as the city, and leave the rest
- * as the street. Best-effort — a miss just means the LNP desk sees the pieces
- * in the wrong boxes plus the original line in the notes.
+ * Legacy fallback for submissions that collected the service address as ONE
+ * free-text line ("123 Main St, Monsey, NY 10952").
+ *
+ * ⛔ ONE implementation, in e911Address.ts, re-exported here for the callers
+ * that already import it. The porting filing and the 911 registration both
+ * read the same stored line, and two parsers would eventually disagree about
+ * where a customer lives — on the one field where that matters most.
  */
-export function parseServiceAddressLine(line: string): ParsedPortAddress {
-  let rest = String(line || "").replace(/\s+/g, " ").trim();
-  const zipMatch = rest.match(/\b(\d{5})(?:-\d{4})?\s*$/);
-  const zip = zipMatch ? zipMatch[1] : "";
-  if (zipMatch) rest = rest.slice(0, zipMatch.index).replace(/[\s,]+$/, "");
-  const stateMatch = rest.match(/[,\s]([A-Za-z]{2})\.?\s*$/);
-  const state = stateMatch ? stateMatch[1].toUpperCase() : "";
-  if (stateMatch) rest = rest.slice(0, stateMatch.index).replace(/[\s,]+$/, "");
-  const parts = rest.split(",").map((p) => p.trim()).filter(Boolean);
-  const city = parts.length > 1 ? parts.pop()! : "";
-  return { address1: parts.join(", "), city, state, zip };
-}
+export { parseServiceAddressLine };
 
 /**
  * The full addLNPPort parameter set for a submission. The wizard collects a
@@ -867,6 +930,12 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
     }
 
     if (smsEnabled && did) await enableSms(creds, submissionId, did, live);
+
+    // 911 on every sign-up, using the address the customer gave us (Izzy,
+    // 2026-08-17). Runs for a brand-new number AND for the temporary number a
+    // porting customer starts on — they can dial 911 from day one, and the
+    // port-landing sweep re-registers the real number when it arrives.
+    if (did) await applyE911ForDid(creds, row, did, sub.username, live);
 
     await (db as any).onboardingSubmission.update({
       where: { id: submissionId },

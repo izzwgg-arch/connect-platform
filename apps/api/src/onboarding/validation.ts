@@ -39,7 +39,18 @@ export const publicSubmitSchema = z.object({
   // The E911 registration address. Without this field zod STRIPPED the value
   // the wizard sent, leaving the 911 address to survive only via autosave —
   // one missed autosave and it was silently gone.
+  //
+  // ⛔ `address` is the STREET LINE and the three fields below are the rest of
+  // it. They are separate because VoIP.ms's 911 registration refuses a single
+  // line — it wants street number, street name, city, state and ZIP as their
+  // own parameters (proven live 2026-08-17: sending "30 ROBERT PITT DR" as the
+  // street name answers `missing_street_number`). Drafts saved before these
+  // fields existed still carry the whole address in `address`; buildE911Address
+  // parses that shape, so an old draft finishing today still registers 911.
   address: z.string().max(300).optional(),
+  addressCity: z.string().max(120).optional(),
+  addressState: z.string().max(2).optional(),
+  addressZip: z.string().max(10).optional(),
   // "yi" switches the tenant's screens to Yiddish. Also used to be stripped
   // here, which made the whole language feature unreachable dead code.
   language: z.string().max(8).optional(),

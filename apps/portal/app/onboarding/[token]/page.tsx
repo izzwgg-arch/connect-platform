@@ -36,7 +36,14 @@ type FormData = {
   firstName: string;
   lastName: string;
   mainPhone: string;
+  // The 911 address, in pieces. `address` is the STREET LINE only — the
+  // emergency registration at VoIP.ms refuses a single combined line (it wants
+  // the street number, city, state and ZIP as separate fields), so this is
+  // collected the same way the porting step already collects its address.
   address: string;
+  addressCity: string;
+  addressState: string;
+  addressZip: string;
   mainEmail: string;
   billingEmail: string;
   numberChoice: "new" | "port" | "";
@@ -59,12 +66,34 @@ function withOneOwner(exts: Extension[]): Extension[] {
 
 const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
-  mainPhone: "", address: "", mainEmail: "", billingEmail: "",
+  mainPhone: "", address: "", addressCity: "", addressState: "", addressZip: "", mainEmail: "", billingEmail: "",
   numberChoice: "", selectedNumber: "", numberKind: "",
   porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", serviceCity: "", serviceState: "", serviceZip: "", isMobile: false, portPin: "", loaFileName: "", billFileName: "" },
   extensions: [{ ...EMPTY_EXT, isOwner: true }],
   smsEnabled: false,
 };
+
+/**
+ * Split a saved one-line address back into street / city / state / ZIP.
+ *
+ * Drafts started before the 911 address was collected in pieces hold the whole
+ * thing in `address`. Without this they would reopen with three empty required
+ * boxes and the customer would be blocked on a step they had already finished.
+ * Mirrors parseServiceAddressLine on the server, which still handles anything
+ * this misses.
+ */
+function splitSavedAddress(line: string): { address: string; city: string; state: string; zip: string } {
+  let rest = String(line || "").replace(/\s+/g, " ").trim();
+  const zipMatch = rest.match(/\b(\d{5})(?:-\d{4})?\s*$/);
+  const zip = zipMatch ? zipMatch[1] : "";
+  if (zipMatch) rest = rest.slice(0, zipMatch.index).replace(/[\s,]+$/, "");
+  const stateMatch = rest.match(/[,\s]([A-Za-z]{2})\.?\s*$/);
+  const state = stateMatch ? stateMatch[1].toUpperCase() : "";
+  if (stateMatch) rest = rest.slice(0, stateMatch.index).replace(/[\s,]+$/, "");
+  const parts = rest.split(",").map((x) => x.trim()).filter(Boolean);
+  const city = parts.length > 1 ? parts.pop()! : "";
+  return { address: parts.join(", "), city, state, zip };
+}
 
 /** Cents → "$30.00". Never floats anywhere near money. */
 function money(cents: number): string {
@@ -124,7 +153,13 @@ function validateStep(step: number, f: FormData): string | null {
   }
   if (step === 1) {
     if (f.mainPhone.trim().length < 7) return "A valid phone number is required.";
-    if (f.address.trim().length < 3) return "Service address is required.";
+    if (f.address.trim().length < 3) return "Street address is required.";
+    // 911 sends help to this address, so it is collected in pieces and each
+    // piece is checked — a half-filled address registers nothing.
+    if (!/^\d/.test(f.address.trim())) return "Start the street address with the building number, like 123 Main St.";
+    if (f.addressCity.trim().length < 2) return "City is required.";
+    if (!/^[A-Za-z]{2}$/.test(f.addressState.trim())) return "Enter the 2-letter state, like NY.";
+    if (!/^\d{5}$/.test(f.addressZip.trim())) return "Enter the 5-digit ZIP code.";
     if (!isEmail(f.mainEmail)) return "A valid main email is required.";
     // Billing email is optional — when blank we bill to the main email.
     if (f.billingEmail.trim() && !isEmail(f.billingEmail)) return "The billing email doesn't look right — fix it or leave it blank.";
@@ -244,13 +279,22 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         if (r.exists === false) { setTokenError("not_active"); return; }
         const a = r.submission?.answers || {};
         if (a.submit || a.company || a.contact || a.phone || a.extensions || a.addons) {
+          // A draft from before the address was collected in pieces keeps the
+          // whole thing on one line — split it so the customer does not come
+          // back to empty required boxes.
+          const savedStreet = a.submit?.address || a.contact?.address || "";
+          const savedCity = a.submit?.addressCity || a.contact?.addressCity || "";
+          const legacy = savedStreet && !savedCity ? splitSavedAddress(savedStreet) : null;
           setForm((prev) => ({
             ...prev,
             companyName:   a.submit?.companyName   || a.company?.companyName   || prev.companyName,
             firstName:     a.submit?.firstName     || a.company?.firstName     || prev.firstName,
             lastName:      a.submit?.lastName      || a.company?.lastName      || prev.lastName,
             mainPhone:     a.submit?.mainPhone     || a.contact?.mainPhone     || prev.mainPhone,
-            address:       a.submit?.address       || a.contact?.address       || prev.address,
+            address:       (legacy?.address || savedStreet)                    || prev.address,
+            addressCity:   savedCity              || legacy?.city  || prev.addressCity,
+            addressState:  a.submit?.addressState  || a.contact?.addressState  || legacy?.state || prev.addressState,
+            addressZip:    a.submit?.addressZip    || a.contact?.addressZip    || legacy?.zip   || prev.addressZip,
             mainEmail:     a.submit?.mainEmail     || a.contact?.mainEmail     || prev.mainEmail,
             billingEmail:  a.submit?.billingEmail  || a.contact?.billingEmail  || prev.billingEmail,
             numberChoice:  a.phone?.choice         || prev.numberChoice,
@@ -300,7 +344,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             currentStep,
             answers: {
               company:    { companyName: f.companyName, firstName: f.firstName, lastName: f.lastName },
-              contact:    { mainPhone: f.mainPhone, address: f.address, mainEmail: f.mainEmail, billingEmail: f.billingEmail },
+              contact:    { mainPhone: f.mainPhone, address: f.address, addressCity: f.addressCity, addressState: f.addressState, addressZip: f.addressZip, mainEmail: f.mainEmail, billingEmail: f.billingEmail },
               phone:      { choice: f.numberChoice, selectedNumber: f.selectedNumber, numberKind: f.numberKind || undefined, details: f.porting },
               extensions: f.extensions,
               addons:     { smsEnabled: f.smsEnabled },
@@ -597,6 +641,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         contactFirstName:   form.firstName,
         contactLastName:    form.lastName,
         address:            form.address,
+        addressCity:        form.addressCity,
+        addressState:       form.addressState.trim().toUpperCase(),
+        addressZip:         form.addressZip,
         mainPhone:          form.mainPhone,
         mainEmail:          form.mainEmail,
         // No separate billing contact? Bills go to the main email.
@@ -789,9 +836,14 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
           <div>
             <div className="ob-field"><label className="ob-label">Main phone number</label><input className="ob-input" placeholder="(555) 000-0000" value={form.mainPhone} onChange={(e) => updateForm({ mainPhone: e.target.value })} /></div>
             <div className="ob-field">
-              <label className="ob-label">Service address</label>
-              <input className="ob-input" placeholder="123 Main St, City, State 00000" value={form.address} onChange={(e) => updateForm({ address: e.target.value })} />
-              <div className="ob-field-hint">Used for 911 registration and number provisioning.</div>
+              <label className="ob-label">Street address</label>
+              <input className="ob-input" placeholder="123 Main St, Suite 200" value={form.address} onChange={(e) => updateForm({ address: e.target.value })} />
+              <div className="ob-field-hint">This is the address emergency services are sent to when someone dials 911 from your phones. Give the address where the phones actually are.</div>
+            </div>
+            <div className="ob-field-row ob-field-row--city">
+              <div><label className="ob-label">City</label><input className="ob-input" placeholder="Monsey" value={form.addressCity} onChange={(e) => updateForm({ addressCity: e.target.value })} /></div>
+              <div><label className="ob-label">State</label><input className="ob-input" placeholder="NY" maxLength={2} value={form.addressState} onChange={(e) => updateForm({ addressState: e.target.value.toUpperCase() })} /></div>
+              <div><label className="ob-label">ZIP code</label><input className="ob-input" placeholder="10952" maxLength={5} value={form.addressZip} onChange={(e) => updateForm({ addressZip: e.target.value })} /></div>
             </div>
             <div className="ob-field-row">
               <div><label className="ob-label">Primary email</label><input className="ob-input" type="email" placeholder="jane@acme.com" value={form.mainEmail} onChange={(e) => updateForm({ mainEmail: e.target.value })} /></div>
@@ -1096,7 +1148,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             <div className="ob-review-section">
               <div className="ob-review-section-title">Contact details</div>
               <div className="ob-review-row"><span className="ob-review-key">Phone</span><span className="ob-review-val">{form.mainPhone}</span></div>
-              <div className="ob-review-row"><span className="ob-review-key">Address</span><span className="ob-review-val">{form.address}</span></div>
+              <div className="ob-review-row"><span className="ob-review-key">Address</span><span className="ob-review-val">{[form.address, form.addressCity, [form.addressState, form.addressZip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}</span></div>
               <div className="ob-review-row"><span className="ob-review-key">Email</span><span className="ob-review-val">{form.mainEmail}</span></div>
             </div>
             <div className="ob-review-section">

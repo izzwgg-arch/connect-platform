@@ -129,7 +129,16 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 /* ── Fields ─────────────────────────────────────────────────────────────────── */
 .ob-field { margin-bottom:16px; }
 .ob-field-row { display:grid; grid-template-columns:1fr 1fr; gap:13px; margin-bottom:16px; }
-@media (max-width:480px) { .ob-field-row { grid-template-columns:1fr; } }
+/* City / State / ZIP — the 911 address. The state box only ever holds two
+   letters and the ZIP five digits, so they get just enough room and the city
+   keeps the rest. */
+.ob-field-row--city { grid-template-columns:1fr 88px 130px; }
+@media (max-width:480px) {
+  .ob-field-row { grid-template-columns:1fr; }
+  /* On a phone the city takes its own line and State/ZIP share the next one. */
+  .ob-field-row--city { grid-template-columns:1fr 1fr; }
+  .ob-field-row--city > :first-child { grid-column:1 / -1; }
+}
 .ob-label { display:block; font-size:12.5px; font-weight:580; color:var(--text-2); margin-bottom:6px; }
 .ob-label-optional { font-size:11px; font-weight:400; color:var(--muted); margin-left:5px; }
 .ob-input {
