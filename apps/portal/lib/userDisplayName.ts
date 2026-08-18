@@ -1,4 +1,4 @@
-import { resolvePersonDisplayName, stripExtensionNumberPrefix } from "@connect/shared";
+import { capitalizeNameWords, resolvePersonDisplayName, stripExtensionNumberPrefix } from "@connect/shared";
 
 /**
  * Portal-side wrapper over the ONE naming rule in
@@ -32,12 +32,15 @@ export function formatUserNameFallback(name?: string | null, email?: string | nu
 }
 
 export function getExtensionDisplayName(source?: ExtensionNameSource | string | null): string | null {
+  // ⛔ Capitalised here, not at the call sites — this is the path the sidebar,
+  // profile menu and dashboard all take, and "baila" must read "Baila" on every
+  // one of them.
   if (typeof source === "string") {
-    return stripExtensionNumberPrefix(source) || null;
+    return capitalizeNameWords(stripExtensionNumberPrefix(source)) || null;
   }
   const candidates = [source?.displayName, source?.name, source?.label];
   for (const candidate of candidates) {
-    const value = stripExtensionNumberPrefix(cleanDisplayValue(candidate));
+    const value = capitalizeNameWords(stripExtensionNumberPrefix(cleanDisplayValue(candidate)));
     if (value) return value;
   }
   return null;

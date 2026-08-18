@@ -34,6 +34,17 @@ test("the extension number prefix never reaches the screen", () => {
   assert.equal(getExtensionDisplayName({ displayName: "106 - Miss Spilman" }), "Miss Spilman");
 });
 
+test("a lower-case PBX name is capitalised on every portal surface", () => {
+  // "baila" is inii mini's real extension name; the sidebar, profile menu and
+  // dashboard all resolve through here.
+  assert.equal(getPreferredUserDisplayName({ name: "sales", email: "sales@iniimini.com", extensionDisplayName: "baila" }), "Baila");
+  assert.equal(getExtensionDisplayName("home 2"), "Home 2");
+  // number prefix stripped AND the words capitalised, in one pass
+  assert.equal(getExtensionDisplayName({ displayName: "105 - mrs. halpert" }), "Mrs. Halpert");
+  // ...and an intentionally upper-case name is left alone.
+  assert.equal(getExtensionDisplayName("TEMP"), "TEMP");
+});
+
 test("a department stays a department", () => {
   assert.equal(
     getPreferredUserDisplayName({ name: "sales", email: "sales@bvisible.us", extensionDisplayName: "Front Desk" }),
@@ -42,8 +53,8 @@ test("a department stays a department", () => {
 });
 
 test("falls back to the email only when there is no extension", () => {
-  assert.equal(getPreferredUserDisplayName({ name: null, email: "support@connectcomunications.com" }), "support");
-  assert.equal(formatUserNameFallback(null, "vigdor@trustbookkeepingny.com"), "vigdor");
+  assert.equal(getPreferredUserDisplayName({ name: null, email: "support@connectcomunications.com" }), "Support");
+  assert.equal(formatUserNameFallback(null, "vigdor@trustbookkeepingny.com"), "Vigdor");
   assert.equal(getExtensionDisplayName(null), null);
   assert.equal(getExtensionDisplayName({ displayName: "   " }), null);
 });

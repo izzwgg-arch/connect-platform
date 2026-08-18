@@ -56,6 +56,28 @@ export function stripExtensionNumberPrefix(rawName?: string | null): string {
 }
 
 /**
+ * Capitalise the first letter of each word, however the name was typed
+ * (Izzy, 2026-08-17: *"even if the customer enters it in lower case, you should
+ * always use uppercase on the first"*). So `baila` reads **Baila** and
+ * `home 2` reads **Home 2**.
+ *
+ * ⛔ It only ever RAISES a lowercase first letter — it never lowercases
+ * anything. That is what protects the names people deliberately typed that way:
+ * `TEMP` stays TEMP, `S M Weiss` stays, `McNamara` keeps its inner capital, and
+ * `Mrs. Halpert` is untouched. A naive `toLowerCase()` first would wreck all
+ * four.
+ *
+ * ⛔ Words split on whitespace and hyphens, NOT apostrophes — `mary-jane`
+ * becomes Mary-Jane, but treating `'` as a separator would turn
+ * `shloime's phone` into "Shloime'S Phone".
+ */
+export function capitalizeNameWords(rawName?: string | null): string {
+  const name = clean(rawName);
+  if (!name) return "";
+  return name.replace(/(^|[\s\-–—])(\p{Ll})/gu, (_m, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
+/**
  * True when the stored name is nothing but initials — `firstName:"e"`,
  * `lastName:"l"` for Eli Lovi. Thirteen live users carry these (seeded
  * 2026-04-06) and they are what produced real emails reading "Hi e,".
@@ -78,8 +100,10 @@ function isInitialsOnly(parts: string[]): boolean {
  * "Mrs. Halpert" becomes "Hi Mrs.," — both worse than saying the full name.
  */
 export function resolvePersonDisplayName(input: PersonNameInput, fallback = "there"): string {
+  // Every branch below returns through capitalizeNameWords() — a name typed in
+  // lower case still reads as a name on screen and in an email.
   const fromPbx = stripExtensionNumberPrefix(input.extensionDisplayName);
-  if (fromPbx) return fromPbx;
+  if (fromPbx) return capitalizeNameWords(fromPbx);
 
   const stored = clean(input.displayName);
   const email = clean(input.email);
@@ -87,12 +111,12 @@ export function resolvePersonDisplayName(input: PersonNameInput, fallback = "the
 
   // An "@" in the stored name means somebody pasted an address into the name
   // box; that is the email address wearing a hat, so treat it as absent.
-  if (stored && !stored.includes("@")) return stored;
+  if (stored && !stored.includes("@")) return capitalizeNameWords(stored);
 
   const parts = [input.firstName, input.lastName].map(clean).filter(Boolean);
-  if (parts.length && !isInitialsOnly(parts)) return parts.join(" ");
+  if (parts.length && !isInitialsOnly(parts)) return capitalizeNameWords(parts.join(" "));
 
-  return emailLocal || fallback;
+  return capitalizeNameWords(emailLocal) || fallback;
 }
 
 /**

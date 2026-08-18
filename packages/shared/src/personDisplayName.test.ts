@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  capitalizeNameWords,
   resolvePersonDisplayName,
   resolvePersonGreetingName,
   stripExtensionNumberPrefix,
@@ -98,20 +99,20 @@ test("initials-only stored names are skipped — this is the 'Hi s,' bug", () =>
   // No extension to fall back on, so the email local part must win over "e e".
   assert.equal(
     resolvePersonDisplayName({ firstName: "e", lastName: "l", email: "eli@displaydex.com" }),
-    "eli",
+    "Eli",
   );
   assert.equal(
     resolvePersonDisplayName({ firstName: "y", lastName: "p", email: "yossi@yossiswoodworx.com" }),
-    "yossi",
+    "Yossi",
   );
   assert.equal(
     resolvePersonDisplayName({ firstName: "S.", lastName: "W.", email: "shia@trimprony.com" }),
-    "shia",
+    "Shia",
   );
   // ...but a genuinely short real name is NOT initials.
   assert.equal(
     resolvePersonDisplayName({ firstName: "fix", lastName: "up", email: "fixupusa1@gmail.com" }),
-    "fix up",
+    "Fix Up",
   );
 });
 
@@ -120,13 +121,13 @@ test("falls back cleanly when there is no extension", () => {
     resolvePersonDisplayName({ displayName: "Pilot CRM Agent (13C)", email: "crm.pilot.agent.p13c@connect-internal.test" }),
     "Pilot CRM Agent (13C)",
   );
-  assert.equal(resolvePersonDisplayName({ email: "support@connectcomunications.com" }), "support");
+  assert.equal(resolvePersonDisplayName({ email: "support@connectcomunications.com" }), "Support");
   assert.equal(resolvePersonDisplayName({}), "there");
   assert.equal(resolvePersonDisplayName({}, "User"), "User");
   // An address pasted into the name box is the email wearing a hat.
   assert.equal(
     resolvePersonDisplayName({ displayName: "someone@example.com", email: "someone@example.com" }),
-    "someone",
+    "Someone",
   );
 });
 
@@ -139,8 +140,39 @@ test("a new sign-up needs no special case — their typed name IS the extension 
   );
 });
 
+test("a lower-case name is capitalised, however it was typed", () => {
+  // "baila" is the real live extension name on inii mini.
+  assert.equal(resolvePersonDisplayName({ extensionDisplayName: "baila" }), "Baila");
+  assert.equal(resolvePersonDisplayName({ extensionDisplayName: "home 2" }), "Home 2");
+  assert.equal(resolvePersonDisplayName({ extensionDisplayName: "eli lovi" }), "Eli Lovi");
+  // The fallback is capitalised too, or the rule would only half-apply.
+  assert.equal(resolvePersonDisplayName({ email: "support@connectcomunications.com" }), "Support");
+  assert.equal(resolvePersonDisplayName({ firstName: "fix", lastName: "up", email: "x@y.com" }), "Fix Up");
+});
+
+test("capitalising only ever RAISES a letter — it never lowercases", () => {
+  // Each of these is a real live name that a toLowerCase()-first approach ruins.
+  assert.equal(capitalizeNameWords("TEMP"), "TEMP");
+  assert.equal(capitalizeNameWords("S M Weiss"), "S M Weiss");
+  assert.equal(capitalizeNameWords("Mrs. Halpert"), "Mrs. Halpert");
+  assert.equal(capitalizeNameWords("McNamara Lion"), "McNamara Lion");
+  assert.equal(capitalizeNameWords("LUZER"), "LUZER");
+  assert.equal(capitalizeNameWords("Accounts Receivable"), "Accounts Receivable");
+});
+
+test("word splitting handles hyphens but not apostrophes", () => {
+  assert.equal(capitalizeNameWords("mary-jane cohen"), "Mary-Jane Cohen");
+  // Treating "'" as a separator would give "Shloime'S Phone".
+  assert.equal(capitalizeNameWords("shloime's phone"), "Shloime's Phone");
+  assert.equal(capitalizeNameWords("o'brien"), "O'brien");
+  // Leading digits are not letters — the letter after them still gets raised.
+  assert.equal(capitalizeNameWords("2nd floor"), "2nd Floor");
+  assert.equal(capitalizeNameWords(""), "");
+  assert.equal(capitalizeNameWords(null), "");
+});
+
 test("whitespace and non-string junk never crash it", () => {
   assert.equal(resolvePersonDisplayName({ extensionDisplayName: "   Eli Lovi  " }), "Eli Lovi");
-  assert.equal(resolvePersonDisplayName({ extensionDisplayName: "   ", displayName: "  eli " }), "eli");
+  assert.equal(resolvePersonDisplayName({ extensionDisplayName: "   ", displayName: "  eli " }), "Eli");
   assert.equal(resolvePersonDisplayName({ extensionDisplayName: undefined, displayName: null, email: undefined }), "there");
 });
