@@ -157,14 +157,95 @@ async function userHasCrmAccess(
 }
 
 /**
+ * The viewer's real identity, as read from the `User` row — never from the
+ * request body.
+ */
+export type TrustedViewerIdentity = {
+  tenantId: string;
+  role: string;
+  status: string;
+};
+
+export type TrustedViewerDecision = {
+  /** false → answer with no match at all; never leak a field. */
+  ok: boolean;
+  /** The role the CRM access checks may use. Undefined when `ok` is false. */
+  role?: string;
+  reason?:
+    | "user_not_found"
+    | "user_disabled"
+    | "tenant_mismatch";
+};
+
+/**
+ * ⛔ THE RULE: the caller's ROLE is never taken from the request body.
+ *
+ * `POST /internal/telephony/inbound-crm-match` is an internal door — it carries
+ * a shared secret, not a user session — so the body used to hand us both the
+ * `tenantId` to search and the `viewer.role` to authorize with. Both
+ * `userHasCrmAccess` and `userCanAccessCrmContact` open with
+ * `if (isAdminRole(role)) return true`, so a body of
+ * `{"viewer":{"role":"SUPER_ADMIN"}}` short-circuited every CRM access check
+ * for every tenant. Anything holding the secret was a CRM contact oracle.
+ *
+ * This decides the role from the User row instead, and pins an admin's
+ * bypass to their OWN tenant:
+ *
+ *  - the user must exist and must not be DISABLED (matches the login gate at
+ *    `server.ts:5734` — anything stricter could refuse a legitimate live
+ *    WebSocket viewer);
+ *  - SUPER_ADMIN keeps cross-tenant reach on purpose: the platform admin's
+ *    telephony feed carries other tenants' calls, so scoping them to their own
+ *    tenant would silently drop enrichment they legitimately see today;
+ *  - every other role (including TENANT_ADMIN and ADMIN) may only be used
+ *    against the tenant that user belongs to. An admin of tenant A asking
+ *    about tenant B gets nothing.
+ *
+ * Ordinary users were already safe — `crmUserAccess.findUnique({ tenantId_userId })`
+ * is tenant-scoped — so the admin bypass was the whole hole.
+ *
+ * Pure on purpose, so the decision is testable without a database.
+ */
+export function decideTrustedViewerRole(
+  requestedTenantId: string,
+  identity: TrustedViewerIdentity | null,
+): TrustedViewerDecision {
+  if (!identity) return { ok: false, reason: "user_not_found" };
+  if (identity.status === "DISABLED") return { ok: false, reason: "user_disabled" };
+  if (identity.role !== "SUPER_ADMIN" && identity.tenantId !== requestedTenantId) {
+    return { ok: false, reason: "tenant_mismatch" };
+  }
+  return { ok: true, role: identity.role };
+}
+
+/**
  * Resolve CRM caller display fields for one viewer on an inbound/return call.
  * Returns null when CRM is off, no match, or viewer lacks access (no field leakage).
+ *
+ * ⛔ `input.viewer.role` is DELIBERATELY IGNORED — see `decideTrustedViewerRole`.
  */
 export async function resolveInboundCrmCallerForViewer(
   input: InboundCrmMatchRequest,
 ): Promise<CrmInboundCallFields | null> {
   const { tenantId, phone, viewer } = input;
   if (!tenantId || !phone?.trim() || !viewer.userId) return null;
+
+  const identity = await db.user.findUnique({
+    where: { id: viewer.userId },
+    select: { tenantId: true, role: true, status: true },
+  });
+  const decision = decideTrustedViewerRole(
+    tenantId,
+    identity
+      ? {
+          tenantId: String(identity.tenantId),
+          role: String(identity.role),
+          status: String(identity.status),
+        }
+      : null,
+  );
+  if (!decision.ok) return null;
+  const trustedRole = decision.role;
 
   const settings = await db.crmTenantSettings.findUnique({
     where: { tenantId },
@@ -175,12 +256,12 @@ export async function resolveInboundCrmCallerForViewer(
   const base = await matchTenantContactByPhone(tenantId, phone);
   if (!base) return null;
 
-  if (!(await userHasCrmAccess(tenantId, viewer.userId, viewer.role))) return null;
+  if (!(await userHasCrmAccess(tenantId, viewer.userId, trustedRole))) return null;
 
   const allowed = await userCanAccessCrmContact(
     tenantId,
     viewer.userId,
-    viewer.role,
+    trustedRole,
     base.contactId,
   );
   if (!allowed) return null;

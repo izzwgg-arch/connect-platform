@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+
+// The signed-URL helpers now REFUSE to sign without a key rather than falling
+// back to the repo literal "dev-signing-secret" (tenant-isolation audit §3b).
+// These tests exercise signature mechanics, not key resolution — key resolution
+// has its own suite in `urlSigningSecret.test.ts` — so pin one here.
+process.env.CRM_VOICEMAIL_DROP_URL_SIGNING_SECRET ||= "test-crm-vm-drop-signing-secret";
+
 import {
   buildSignedCrmVoicemailDropUrl,
   buildPbxFileBaseName,

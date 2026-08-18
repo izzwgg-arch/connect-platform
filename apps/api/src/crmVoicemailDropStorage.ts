@@ -10,6 +10,7 @@ import {
   sanitizeBaseName,
   sanitizeTenantScope,
 } from "./promptStorage";
+import { resolveUrlSigningKey } from "./urlSigningSecret";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,14 +32,13 @@ export function resolveCrmVoicemailDropStoragePath(storageKey: string): string {
   return full;
 }
 
+/**
+ * HMAC key for signed CRM voicemail-drop stream URLs.
+ * ⛔ The old chain borrowed three unrelated secrets and ended on the repo literal
+ * "dev-signing-secret". See `urlSigningSecret.ts`.
+ */
 function signingSecret(): string {
-  return (
-    process.env.CRM_VOICEMAIL_DROP_URL_SIGNING_SECRET ||
-    process.env.PROMPT_URL_SIGNING_SECRET ||
-    process.env.MOH_URL_SIGNING_SECRET ||
-    process.env.CDR_INGEST_SECRET ||
-    "dev-signing-secret"
-  ).trim();
+  return resolveUrlSigningKey("crm-voicemail-drop");
 }
 
 function safeExt(filename: string, mimeType?: string | null): string {

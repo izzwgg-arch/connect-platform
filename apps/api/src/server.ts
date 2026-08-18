@@ -308,6 +308,7 @@ import {
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
+import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
 import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
 import { sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
@@ -1773,6 +1774,42 @@ function canAccessAdminSbc(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN"]);
 }
 
+/**
+ * ⛔ `requireAdmin` admits ADMIN, TENANT_ADMIN **and** SUPER_ADMIN, but several
+ * `/admin/*` handlers behind it were written as super-admin screens and query
+ * with no tenant filter. §4 of
+ * `docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md`.
+ *
+ * There are 8 ACTIVE TENANT_ADMIN accounts across 8 real customer tenants, so
+ * blanket-blocking is a customer-facing risk. Where a route has a sensible
+ * per-tenant answer the fix is to SCOPE it; only genuinely platform-wide
+ * controls move to SUPER_ADMIN.
+ *
+ * This returns the `where` fragment for the scoping half.
+ *
+ * ⛔ FAILS CLOSED. A non-super-admin whose token carries no usable tenantId
+ * (`""`, `"local"`, the `"global"` marker) gets `{ id: { in: [] } }` — an empty
+ * result — never `undefined`, which Prisma would read as "no filter" and hand
+ * back the entire platform. That inversion is the whole bug class.
+ */
+function ownTenantScopeWhere(user: JwtUser): { id: string } | { id: { in: string[] } } | undefined {
+  if (isRole(user, ["SUPER_ADMIN"])) return undefined;
+  const tenantId = String(user.tenantId || "").trim();
+  if (!tenantId || tenantId === "local" || tenantId === "global" || tenantId.startsWith("vpbx:")) {
+    return { id: { in: [] } };
+  }
+  return { id: tenantId };
+}
+
+/** Same rule for models keyed on a `tenantId` column rather than `id`. */
+function ownTenantIdScopeWhere(user: JwtUser): { tenantId: string } | { tenantId: { in: string[] } } | undefined {
+  const scope = ownTenantScopeWhere(user);
+  if (scope === undefined) return undefined;
+  return "id" in scope && typeof scope.id === "string"
+    ? { tenantId: scope.id }
+    : { tenantId: { in: [] } };
+}
+
 function canAccessAdminBilling(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN"]);
 }
@@ -2765,6 +2802,13 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/cdr-tenant-map", permission: "can_view_admin_cdr_tenant_map" },
   { prefix: "/admin/ops", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/server-health", permission: "can_view_admin_server_health" },
+  // ⛔ Added 2026-08-18 (audit §4a). /admin/wake-health matched NO rule at all,
+  // so the global preHandler permission gate never ran for it and `requireAdmin`
+  // was its only protection — while it returns every active Android device on
+  // the platform with its user's email address. It is a platform diagnostic with
+  // no per-tenant version, so it takes the platform health key (which the live
+  // TENANT_ADMIN bucket does not hold) on top of the SUPER_ADMIN role gate.
+  { prefix: "/admin/wake-health", permission: "can_view_admin_server_health" },
   { prefix: "/admin/storage-health", permission: "can_view_admin_storage_health" },
   { prefix: "/admin/deploy", permission: "can_view_admin_deploy_center" },
   { prefix: "/admin/incidents", permission: "can_view_admin_incidents" },
@@ -5401,8 +5445,16 @@ async function runHourlyInboundDidSync(): Promise<void> {
 registerShutdownTimer(setTimeout(() => { void runHourlyInboundDidSync(); }, 150_000));
 registerShutdownTimer(setInterval(() => { void runHourlyInboundDidSync(); }, INBOUND_DID_SYNC_INTERVAL_MS));
 
+/**
+ * ⛔ SUPER_ADMIN ONLY (audit §4a). `computeWakeHealth()` returns every active
+ * Android device on the platform with its user's EMAIL ADDRESS and tenant NAME,
+ * and it matches no entry in PORTAL_API_PERMISSION_RULES — so `requireAdmin` was
+ * the only thing in front of it and any tenant admin could read the lot.
+ * There is no per-tenant version of this screen; it is a platform diagnostic.
+ * Measured before changing: 0 calls in 14 days of nginx logs.
+ */
 app.get("/admin/wake-health", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
   return computeWakeHealth();
 });
@@ -8743,7 +8795,19 @@ app.get("/admin/tenants", async (req, reply) => {
   if (!admin) return;
 
   const query = z.object({ light: z.coerce.boolean().optional().default(false) }).parse(req.query || {});
-  const tenants = await db.tenant.findMany({ orderBy: { createdAt: "desc" } });
+  // ⛔ SCOPED, not blocked (audit §4a). This used to return EVERY tenant row on
+  // the platform — name, PBX link, isApproved, dailySmsCap, perSecondRate, user
+  // and campaign counts — to any TENANT_ADMIN, i.e. one customer's admin could
+  // read the full customer list including their competitors.
+  //
+  // Blocking would have been the wrong fix: `/admin/tenant-options` right below
+  // already answers this shape per-tenant for non-super-admins, and both the
+  // `?light=1` callers degrade rather than fail. A non-super-admin now sees
+  // exactly one row — their own tenant — which keeps every screen working.
+  const tenants = await db.tenant.findMany({
+    where: ownTenantScopeWhere(admin),
+    orderBy: { createdAt: "desc" },
+  });
   if (query.light) {
     const customerTenants = tenants.filter((t) => (t as any).kind === "CUSTOMER" && t.isApproved === true);
     const pbxLinks = await db.tenantPbxLink.findMany({
@@ -8802,8 +8866,21 @@ app.get("/admin/tenants", async (req, reply) => {
   return rows;
 });
 
+/**
+ * ⛔ SUPER_ADMIN ONLY (audit §4a). Every field here is a PLATFORM guardrail that
+ * Connect holds over a customer — approval status, the daily SMS cap, the
+ * per-second send rate, and whether a first campaign needs approval. Under
+ * `requireAdmin` this was `db.tenant.update({ where: { id } })` with no tenant
+ * filter, so any of the 8 tenant admins could have set another customer's
+ * `dailySmsCap` to 0 and `isApproved` to false and silently killed their texting.
+ *
+ * ⛔ Scoping to their own tenant is NOT the right fix here: a customer raising
+ * their own SMS cap or approving their own account defeats the control's
+ * purpose. Measured before changing: **0 calls to this route in 14 days of nginx
+ * logs**, so nothing is in the habit of using it.
+ */
 app.patch("/admin/tenants/:id", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const input = z.object({ isApproved: z.boolean().optional(), dailySmsCap: z.number().int().positive().optional(), perSecondRate: z.number().positive().optional(), firstCampaignRequiresApproval: z.boolean().optional() }).parse(req.body);
@@ -9444,15 +9521,37 @@ app.post("/sms/send", async (req, reply) => {
   return { ok: true, threadId: thread.threadId, messageId: sent.messageId, status: sent.deliveryStatus };
 });
 
+/**
+ * ⛔ SCOPED (audit §4a). This was an unfiltered `findMany`, so any tenant admin
+ * could read every company's campaign names, message bodies and statuses. A
+ * per-tenant answer is the right one here, so it is scoped rather than blocked.
+ * ⛔ Note the permission gate is `can_view_apps_sms_campaigns`, which the
+ * END_USER bucket ALSO holds — the only thing keeping ordinary users out is
+ * `requireAdmin`'s role check, not the permission layer. Do not rely on the gate.
+ * Measured before changing: 0 rows in the table and 0 calls in 14 days.
+ */
 app.get("/admin/sms/campaigns", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;
   const query = z.object({ status: z.enum(["NEEDS_APPROVAL", "QUEUED", "SENDING", "SENT", "FAILED", "PAUSED", "DRAFT"]).optional() }).parse(req.query || {});
-  return db.smsCampaign.findMany({ where: query.status ? { status: query.status } : undefined, orderBy: { createdAt: "desc" } });
+  const tenantScope = ownTenantIdScopeWhere(admin);
+  const where = { ...(tenantScope ?? {}), ...(query.status ? { status: query.status } : {}) };
+  return db.smsCampaign.findMany({
+    where: Object.keys(where).length > 0 ? (where as any) : undefined,
+    orderBy: { createdAt: "desc" },
+  });
 });
 
+/**
+ * ⛔ SUPER_ADMIN ONLY (audit §4a). `findUnique({ id })` with no tenant filter, so
+ * under `requireAdmin` a tenant admin could release ANOTHER company's held
+ * campaign to send. ⛔ Scoping to their own tenant is deliberately NOT the fix:
+ * `firstCampaignRequiresApproval` exists so that Connect approves a customer's
+ * first campaign — letting the customer approve their own defeats the control
+ * entirely. Measured before changing: 0 calls in 14 days, 0 campaigns exist.
+ */
 app.post("/admin/sms/campaigns/:id/approve", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const campaign = await db.smsCampaign.findUnique({ where: { id } });
@@ -9464,8 +9563,13 @@ app.post("/admin/sms/campaigns/:id/approve", async (req, reply) => {
   return updated;
 });
 
+/**
+ * ⛔ SUPER_ADMIN ONLY (audit §4a) — the mirror of approve. Unfiltered
+ * `findUnique({ id })`, so a tenant admin could kill another company's campaign
+ * and mark all of its queued messages FAILED. 0 calls in 14 days.
+ */
 app.post("/admin/sms/campaigns/:id/reject", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
   const { id } = req.params as { id: string };
   const input = z.object({ reason: z.string().min(2) }).parse(req.body);
@@ -38496,6 +38600,13 @@ const agentEscalationTimer = registerShutdownTimer(
   }, 30_000),
 );
 agentEscalationTimer.unref();
+
+// Yiddish Labs credit watch — the owner is texted the moment Yiddish stops
+// working. It writes a QUEUED AgentEscalation and the sweep above delivers it;
+// see yiddishLabsCreditWatch.ts for why it must not be an ADMIN_ALERT and why
+// an account in daily use costs nothing to monitor.
+const yiddishCreditTimer = startYiddishLabsCreditWatch(app.log);
+if (yiddishCreditTimer) registerShutdownTimer(yiddishCreditTimer);
 
 // "Fix it!" — the owner's reply to an escalation text. Inbound SMS arrives by
 // the worker's VoIP.ms poll (a couple of minutes), so a 60s sweep is as fast as

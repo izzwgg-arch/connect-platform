@@ -93,6 +93,14 @@ services:
       MOH_SYNC_SHARED_SECRET: ${MOH_SYNC_SHARED_SECRET:-}
       # Signs the short-lived download URLs embedded in the manifest. Keep
       # separate from CDR_INGEST so a CDR secret leak doesn't grant file read.
+      # ⛔ This `environment:` line OVERRIDES the 43-char value in
+      # .env.platform with "" (the deploy shell never sources that file) — the
+      # same trap that left CDR_INGEST_SECRET empty for the life of the platform.
+      # It is LEFT AS IS on purpose: nothing outside apps/api mints or verifies a
+      # MOH URL, so api deriving its key from JWT_SECRET is deterministic and
+      # correct. Deleting this line would hand api the 43-char file value and
+      # rotate every outstanding MOH URL (harmless — 10-min TTL — but deliberate,
+      # not accidental). See apps/api/src/urlSigningSecret.ts.
       MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}
       # Shared chat attachment storage. The worker mounts the same volume so
       # it can transcode voice notes before VoIP.ms MMS submission.
@@ -136,8 +144,13 @@ services:
       ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
       # ── CRM lead document storage ─────────────────────────────────────────
       # Volume-backed directory for imported tenant Drive documents. Files survive
-      # container rebuilds. Signed open URLs use PROMPT_URL_SIGNING_SECRET as
-      # fallback HMAC secret if CRM_DOC_URL_SIGNING_SECRET is not set explicitly.
+      # container rebuilds.
+      # ⛔ CORRECTED 2026-08-18: signed open URLs NO LONGER borrow
+      # PROMPT_URL_SIGNING_SECRET (nor MOH's, nor CDR_INGEST_SECRET, nor the repo
+      # literal "dev-signing-secret" that chain ended on). The key is
+      # CRM_DOC_URL_SIGNING_SECRET, else one derived from JWT_SECRET, else the
+      # helper THROWS. See apps/api/src/urlSigningSecret.ts and
+      # docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md §3b.
       CRM_DOC_STORAGE_DIR: ${CRM_DOC_STORAGE_DIR:-/var/lib/connect/crm-lead-docs}
       # CRM voicemail drop converted WAV storage. Must be volume-backed so
       # previews and PBX pushes survive API rebuilds and blue/green rollouts.
@@ -281,6 +294,14 @@ services:
       # docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md
       MOH_STORAGE_DIR: ${MOH_STORAGE_DIR:-/var/lib/connect/moh-assets}
       MOH_SYNC_SHARED_SECRET: ${MOH_SYNC_SHARED_SECRET:-}
+      # ⛔ This `environment:` line OVERRIDES the 43-char value in
+      # .env.platform with "" (the deploy shell never sources that file) — the
+      # same trap that left CDR_INGEST_SECRET empty for the life of the platform.
+      # It is LEFT AS IS on purpose: nothing outside apps/api mints or verifies a
+      # MOH URL, so api deriving its key from JWT_SECRET is deterministic and
+      # correct. Deleting this line would hand api the 43-char file value and
+      # rotate every outstanding MOH URL (harmless — 10-min TTL — but deliberate,
+      # not accidental). See apps/api/src/urlSigningSecret.ts.
       MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}
       CHAT_STORAGE_DIR: ${CHAT_STORAGE_DIR:-/var/lib/connect/chat-attachments}
       # Same onboarding upload volume as the stable api service — port

@@ -22,6 +22,12 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+
+// The signed-URL helpers now REFUSE to sign without a key rather than falling
+// back to the repo literal "dev-signing-secret" (tenant-isolation audit §3b).
+// These tests exercise signature mechanics, not key resolution — key resolution
+// has its own suite in `urlSigningSecret.test.ts` — so pin one here.
+process.env.CRM_DOC_URL_SIGNING_SECRET ||= "test-crm-doc-signing-secret";
 import {
   buildDocStorageKey,
   isGoogleWorkspaceMime,

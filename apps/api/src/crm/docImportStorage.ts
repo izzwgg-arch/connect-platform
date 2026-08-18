@@ -19,6 +19,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { sanitizeTenantScope, sanitizeBaseName } from "../promptStorage";
+import { resolveUrlSigningKey } from "../urlSigningSecret";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -36,14 +37,13 @@ export function getCrmDocMaxBytes(): number {
   return Number.isFinite(n) && n > 0 ? n : 50 * 1024 * 1024;
 }
 
+/**
+ * HMAC key for signed CRM lead-document open URLs.
+ * ⛔ The old chain borrowed three unrelated secrets and ended on the repo literal
+ * "dev-signing-secret". See `urlSigningSecret.ts`.
+ */
 function signingSecret(): string {
-  return (
-    process.env.CRM_DOC_URL_SIGNING_SECRET ||
-    process.env.PROMPT_URL_SIGNING_SECRET ||
-    process.env.MOH_URL_SIGNING_SECRET ||
-    process.env.CDR_INGEST_SECRET ||
-    "dev-signing-secret"
-  ).trim();
+  return resolveUrlSigningKey("crm-doc");
 }
 
 // ── MIME → extension ──────────────────────────────────────────────────────────

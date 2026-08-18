@@ -30,6 +30,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { resolveUrlSigningKey } from "./urlSigningSecret";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,11 +40,20 @@ export function getMohStorageRoot(): string {
   return (process.env.MOH_STORAGE_DIR || DEFAULT_ROOT).replace(/\/+$/, "");
 }
 
-/** HMAC secret for signed download URLs. Falls back to CDR_INGEST_SECRET so
- *  deployments don't need a new env var on day one; production should set a
- *  distinct MOH_URL_SIGNING_SECRET to isolate blast radius. */
+/**
+ * HMAC key for signed MOH download URLs.
+ *
+ * ⛔ The old chain fell back to the internal-door auth secret and then to the
+ * literal "dev-signing-secret". See `urlSigningSecret.ts`. Now:
+ * MOH_URL_SIGNING_SECRET, else a key derived from JWT_SECRET, else THROW.
+ *
+ * ⛔ Note for anyone tempted to "align" env across containers: app-worker-1 and
+ * app-telephony-1 carry a 43-char MOH_URL_SIGNING_SECRET that app-api-1 does not.
+ * Nothing outside apps/api mints or verifies a MOH URL (checked), so that
+ * divergence is inert today — but setting it on api WOULD change the key.
+ */
 function signingSecret(): string {
-  return (process.env.MOH_URL_SIGNING_SECRET || process.env.CDR_INGEST_SECRET || "dev-signing-secret").trim();
+  return resolveUrlSigningKey("moh");
 }
 
 /** Allow only a-z, 0-9, _, - in slug-like path segments. */

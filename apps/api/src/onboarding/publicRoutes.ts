@@ -57,12 +57,37 @@ async function loadGlobalVoipMsCreds(): Promise<VoipMsCredentials | null> {
   }
 }
 
-function isProduction(): boolean {
-  return String(process.env.NODE_ENV || "development") === "production";
-}
-
-function canLazyCreate(): boolean {
-  return !isProduction();
+/**
+ * ⛔ Whether an UNKNOWN onboarding token may conjure a submission row out of
+ * nothing. Defaults to NO — this is a fail-closed gate.
+ *
+ * It used to read `NODE_ENV !== "production"`. **`app-api-1` sets no NODE_ENV**
+ * (see CLAUDE.md, and `AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §4), so the
+ * gate was permanently OPEN in production and the whole `/onboarding/` prefix is
+ * JWT-bypassed. That let an anonymous caller
+ * `PUT /api/onboarding/<anything>/save` a row into existence, then submit it,
+ * then check out — which mints a real `Tenant` (`isApproved: true`) and a real
+ * `BillingInvoice`, emails the owner on every first open, and drives the master
+ * VoIP.ms reseller account. It also accepted unvalidated `answers`, so
+ * `{"reusableTestLink":true}` turned the fabricated row into an unlimited spawn
+ * template.
+ *
+ * ⛔ Do NOT "fix" this by setting `NODE_ENV=production` on the container — that
+ * flips several unrelated dead gates at once with unknown blast radius. The
+ * dependency is removed instead, per CLAUDE.md's standing instruction.
+ *
+ * Nothing legitimate needs it: every real link is created by an authenticated
+ * admin (`provisioningRoutes.ts:30`) or spawned from an existing reusable
+ * template (`:154`), so the row always exists before a customer opens it.
+ * Verified against production 2026-08-18 — **0 of 21 submissions** carry the
+ * "Submission created (lazy)" event; 10 were spawns and the rest admin-created.
+ *
+ * Local dev opts in explicitly with `ONBOARDING_ALLOW_LAZY_CREATE=1`.
+ * Read at CALL time, never at module load, so it is testable.
+ */
+export function canLazyCreate(): boolean {
+  const raw = String(process.env.ONBOARDING_ALLOW_LAZY_CREATE || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 function generatePublicToken(bytes: number = 24): string {
@@ -321,7 +346,15 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const body = publicSaveSchema.parse((req as any).body || {});
     let row = await ensureRowForToken(token);
     if (!row) {
-      if (!canLazyCreate()) return reply.code(404).send({ error: "invalid_token" });
+      if (!canLazyCreate()) {
+        // Loud on purpose: if a legitimate flow ever DOES need this, the refusal
+        // must be greppable rather than presenting as "the link stopped working".
+        app.log.warn(
+          { route: "PUT /onboarding/:token/save", tokenPrefix: String(token).slice(0, 8) },
+          "onboarding lazy-create refused — unknown token (set ONBOARDING_ALLOW_LAZY_CREATE=1 for local dev only)",
+        );
+        return reply.code(404).send({ error: "invalid_token" });
+      }
       row = await (db as any).onboardingSubmission.create({
         data: {
           publicToken: token,

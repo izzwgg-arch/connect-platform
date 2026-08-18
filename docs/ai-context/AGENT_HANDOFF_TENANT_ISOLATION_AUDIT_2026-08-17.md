@@ -27,13 +27,190 @@ is **rejected**.
 | § | Finding | Status |
 |---|---|---|
 | **§1** | `/internal/*` unauthenticated + publicly reachable | ✅ **FULLY CLOSED 2026-08-18** — nginx deny (kept, defence in depth) **and** the code now fails closed (`6ab8c74b`), with the secret distributed to api, telephony and worker. See §0b |
-| **§1a** | `inbound-crm-match` takes role from body | ✅ Now needs the shared secret as well (`server.ts:35782` injects `verifyCdrSecret` into it, so it inherited the fail-closed change; probed live — **403** without the header, **400** with) **and** is unreachable from the internet. ⛔ The body-supplied `viewer.role` is **still trusted** — a caller that holds the secret can still claim SUPER_ADMIN. Unfixed, and now the weakest thing behind the door |
+| **§1a** | `inbound-crm-match` takes role from body | ✅ **CLOSED 2026-08-18** — the role now comes from the `User` row, never the body. See §0c |
 | **§2** | VoIP.ms SMS webhook unauthenticated | ✅ **FIXED, fails closed** (`apps/api/src/voipMsWebhookAuth.ts`) |
 | **§3a** | chat-db URLs signed with unkeyed `createHash` | ✅ **FIXED — keyed HMAC** |
-| **§3b** | signing secret falls back to `"dev-signing-secret"` | ✅ **FIXED for chat** (derives from `JWT_SECRET`, never a literal). ⛔ The other four helpers (prompt / MOH / CRM doc / CRM voicemail-drop) are **UNCHANGED** and still resolve to the literal |
-| **§4** | `TENANT_ADMIN` reaches `/admin/*` | ⏳ **OPEN — deliberately out of scope**, needs permission-model scoping |
-| **§5** | Anonymous tenant creation via the `NODE_ENV` gate | ⏳ **OPEN — deliberately out of scope** |
+| **§3b** | signing secret falls back to `"dev-signing-secret"` | ✅ **CLOSED 2026-08-18** — the other four helpers now share one resolver that throws rather than use a literal. See §0c |
+| **§4** | `TENANT_ADMIN` reaches `/admin/*` | ✅ **CLOSED 2026-08-18** — two routes scoped, four moved to SUPER_ADMIN, one permission-map hole filled. See §0c |
+| **§5** | Anonymous tenant creation via the `NODE_ENV` gate | ✅ **CLOSED 2026-08-18** — the gate defaults closed and the `NODE_ENV` dependency is gone. See §0c |
 | §6a–§6l | Medium / low | ⏳ **OPEN**, untouched |
+
+### ✅ §0c — THE REMAINING FOUR CRITICALS ARE CLOSED (2026-08-18)
+
+**One api commit. No migration, no PBX write, no nginx change, no env change, no
+DNS change, and no tenant row or user role was touched.** Tests: **2328 pass /
+8 fail**, and all 8 are pre-existing — 7 × `syncPbxTenantDirectoryFromRows`, plus
+`userDisplayName.callsites` which fails on any **Windows** checkout because it
+slices source on a literal `"\n}\n"` (proven by replaying that slice against
+unmodified `HEAD` re-encoded to CRLF: it fails identically, with zero of this
+work applied). Typecheck: **75 errors, the exact pre-existing baseline, none in
+any edited file.**
+
+#### §1a — the CRM oracle now reads the role from the database
+
+`crm/inboundCallerMatch.ts` gains the pure `decideTrustedViewerRole()`;
+`resolveInboundCrmCallerForViewer` looks the viewer up with
+`db.user.findUnique({ where: { id: viewer.userId } })` and passes **that** role
+into `userHasCrmAccess` and `userCanAccessCrmContact`. The route now forwards
+**`{ userId }` only**.
+
+- ⛔ **The body still ACCEPTS `viewer.role`, deliberately.** `apps/telephony`'s
+  `CrmInboundCallerEnricher` still sends it, and tightening the schema would 400
+  a running telephony container mid-deploy. It is parsed and dropped.
+- **An admin's bypass is now pinned to their own tenant.** `isAdminRole(role)`
+  short-circuits both CRM checks, so a TENANT_ADMIN of tenant A asking about
+  tenant B used to get an answer; that is now `tenant_mismatch` → no match, no
+  field leakage. ⛔ **SUPER_ADMIN keeps cross-tenant reach on purpose** — the
+  platform admin's telephony feed genuinely carries other tenants' calls, so
+  scoping them would silently drop enrichment they legitimately see today.
+- ⛔ **Ordinary users were already safe and are unchanged:**
+  `crmUserAccess.findUnique({ tenantId_userId })` is already tenant-scoped. The
+  admin bypass was the entire hole.
+- The status gate matches the **login** gate (`server.ts:5734`): only `DISABLED`
+  is refused. Anything stricter could refuse a legitimate live WebSocket viewer.
+- Cost: one indexed `User` lookup per enrichment cache miss (telephony caches
+  60 s per tenant|user|phone).
+- Guard: `crm/inboundCrmMatchViewerRole.test.ts`, 16 cases. ⛔ Half of them read
+  the **source of both call sites** — the defect was a caller, so a test of the
+  pure function passes straight through it. Proven real: all five source
+  assertions fail against the pre-change files.
+
+#### §5 — lazy tenant creation defaults closed
+
+`onboarding/publicRoutes.ts`: `canLazyCreate()` no longer reads `NODE_ENV` at
+all. It returns true only for an explicit `ONBOARDING_ALLOW_LAZY_CREATE` of
+`1` / `true` / `yes` / `on`; everything else — unset, `""`, junk — is closed. A
+refusal on the write path logs a warning naming the route and the token prefix,
+so a legitimate need is greppable rather than presenting to a customer as "the
+link stopped working".
+
+- ⛔ **Checked before closing, not assumed: nothing legitimate uses it.** All
+  **21** `OnboardingSubmission` rows in production carry a `CREATED` event reading
+  either "Admin-created link" or "Spawned from reusable test link" — **0 carry
+  "Submission created (lazy)"**. Every real link is minted by an authenticated
+  admin (`provisioningRoutes.ts:30`) or spawned from an existing template
+  (`publicRoutes.ts:154`), so the row always exists before a customer opens it.
+- ⛔ **Not fixed by setting `NODE_ENV=production`** on the container — that flips
+  several unrelated dead gates at once. CLAUDE.md's standing instruction, followed.
+- Guard: `onboarding/lazyCreateGate.test.ts`, 9 cases, including an explicit
+  sweep asserting the gate stays closed for `NODE_ENV` of unset / `""` /
+  `development` / `test` / `staging` / `production` — **the old gate returned
+  true for every one of those.**
+
+#### §3b — one resolver, no literal, and the key had already moved once
+
+New module **`apps/api/src/urlSigningSecret.ts`**. All four helpers
+(`promptStorage`, `mohStorage`, `crmVoicemailDropStorage`,
+`crm/docImportStorage`) now call `resolveUrlSigningKey(scheme)`: the scheme's own
+variable, else a key **derived from `JWT_SECRET`** under a per-scheme label, else
+**throw**.
+
+- ⛔⛔ **THE KEY HAD ALREADY ROTATED SILENTLY, hours before this fix.** The old
+  chain ended `… || CDR_INGEST_SECRET || "dev-signing-secret"`, and populating
+  `CDR_INGEST_SECRET` to close §1 turned that third rung into a real 64-char
+  value. Verified live: all four schemes in `app-api-1` were resolving to the CDR
+  secret (`sha256[0:12] = 994ecc32aee9`), **not** the literal — so anything minted
+  before that deploy was already unverifiable. That is precisely why a chain of
+  unrelated fallbacks is the wrong shape: a change made for one reason rotates
+  keys for four others, with no log line.
+- ⛔ **`CDR_INGEST_SECRET` is deliberately removed from the chain.** It is an
+  *authentication* credential whose rotation CLAUDE.md now documents as a
+  four-step, multi-service operation; borrowing it as a signing key means every
+  such rotation silently invalidates every outstanding signed URL.
+- ⛔ **Per-scheme labels are load-bearing, not decoration.** `promptStorage` and
+  `mohStorage` sign the byte-identical payload `${storageKey}:${exp}`, so while
+  they shared one key a valid MOH signature was **also** a valid PROMPT signature
+  for the same storage key. Domain separation ends that for free.
+- **Blast radius, measured not assumed — essentially nil.** All four mint **and**
+  verify inside `apps/api` (one process; blue/green shares one env), the TTLs are
+  300–900 s, and 14 days of nginx logs hold: prompt download **0**, MOH download
+  **2** (both from the PBX on 2026-08-10, fetched within seconds of minting), CRM
+  voicemail-drop stream **0**, CRM doc open **0**. ⛔ The 20 apparent
+  `/crm/voicemail-drops/` hits are Next.js JS chunk fetches for the portal page,
+  not the signed route — count the signed path, not the substring.
+- ⛔ **`JWT_SECRET` is verified present and byte-identical** across api, telephony
+  and worker (64 chars, `a0ecb5fb982e`) and comes from `env_file` with **no
+  `environment:` override**, so the throw path cannot fire in production and
+  `api_candidate` necessarily agrees with `api`.
+- ⛔ **Noted and deliberately NOT changed:** api and api_candidate carry
+  `MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}` in `environment:`, which
+  overrides the 43-char `.env.platform` value with `""` — the same trap that left
+  `CDR_INGEST_SECRET` empty for the life of the platform. It is left in place
+  because nothing outside `apps/api` mints or verifies a MOH URL, so api deriving
+  from `JWT_SECRET` is deterministic and correct. Both compose blocks now carry a
+  comment saying that deleting the line would hand api the 43-char file value and
+  rotate every outstanding MOH URL.
+- Two existing suites (`crm/docImportRoutes.test.ts`,
+  `crmVoicemailDropStorage.test.ts`) now pin a test key at the top. They exercise
+  signature mechanics, and key resolution has its own suite. ⛔ **They were
+  silently exercising the repo literal before** — which is itself the proof the
+  literal was reachable.
+- Guard: `urlSigningSecret.test.ts`, 28 cases. All 16 source assertions fail
+  against the pre-change modules.
+
+#### §4 — scoped where a per-tenant answer exists, restricted where it does not
+
+⛔ **Investigated before restricting, because these are 8 real customer
+administrators.** What the evidence showed:
+
+- The live `PlatformRolePermissionSnapshot(id="default")` v2 gives TENANT_ADMIN
+  92 keys including `can_view_admin_tenants` — but **NOT `can_view_section_admin`**
+  and **NOT `can_switch_tenants`**. `navConfig.ts` gates every admin item on
+  `sectionPermission: "can_view_section_admin"`, so **the whole Admin section is
+  already hidden from a tenant admin's sidebar.**
+- `useAppContext.tsx:408` forces `adminScope` to `"TENANT"` for anyone who is not
+  SUPER_ADMIN, and every `platformData.ts` call to `/admin/tenants` sits inside
+  `if (scope === "GLOBAL")` — structurally unreachable for a tenant admin.
+- The paired `/admin/tenants` + `/admin/pbx/tenants` fetch comes from
+  `loadTenantOptions()`, gated on `can_switch_tenants`, which TENANT_ADMIN does
+  not hold. The logs agree: of **363** `GET /admin/tenants` calls in 14 days,
+  **335 came from two of the SUPER_ADMIN's own IPs**, and every remaining IP shows
+  the same 1:1 pairing — the tenant-switcher boot, not deliberate browsing.
+- **`PATCH /admin/tenants/:id`, `/admin/wake-health`, `GET /admin/sms/campaigns`
+  and both campaign approve/reject routes had ZERO calls in 14 days**, and
+  `SmsCampaign` holds 0 rows platform-wide.
+- The two remaining `?light=1` callers (`tenantData.ts:159`,
+  `pbx/moh-scheduling`) already use `.catch(() => null)` / `Promise.allSettled`,
+  so they degrade rather than break.
+
+What changed, per route:
+
+| Route | Change | Why this shape |
+|---|---|---|
+| `GET /admin/tenants` | **SCOPED** — `db.tenant.findMany({ where: ownTenantScopeWhere(admin) })` | A per-tenant answer exists, and `/admin/tenant-options` right below already answers exactly this way for non-super-admins. One query feeds both the `?light=1` and the full response, so neither shape can leak |
+| `GET /admin/sms/campaigns` | **SCOPED** by `tenantId` | Same reasoning. ⛔ Its permission gate is `can_view_apps_sms_campaigns`, which the **END_USER** bucket also holds — `requireAdmin` is the only thing keeping ordinary users out, so never rely on that gate |
+| `PATCH /admin/tenants/:id` | **SUPER_ADMIN** | Every field is a platform guardrail Connect holds *over* a customer. ⛔ Scoping is the wrong fix here: a customer raising their own `dailySmsCap` or setting their own `isApproved` defeats the control |
+| `POST /admin/sms/campaigns/:id/approve` and `/reject` | **SUPER_ADMIN** | The same inversion — `firstCampaignRequiresApproval` exists so that *Connect* approves a customer's first campaign |
+| `GET /admin/wake-health` | **SUPER_ADMIN** + a new `PORTAL_API_PERMISSION_RULES` entry | A platform diagnostic returning every active Android device with its user's email address. It matched **no** permission rule at all, so the global gate never ran for it. Given `can_view_admin_server_health`, which the live TENANT_ADMIN bucket does **not** hold |
+
+- ⛔ **`requireAdmin` itself is UNCHANGED** and still admits TENANT_ADMIN — this is
+  per-route, never a global narrowing. A test asserts exactly that.
+- ⛔ **`ownTenantScopeWhere` FAILS CLOSED.** A non-super-admin whose token carries
+  no usable tenantId (`""`, `"local"`, `"global"`, a `vpbx:` marker) gets
+  `{ id: { in: [] } }` — never `undefined`, which Prisma reads as *no filter* and
+  which is the entire bug class being fixed here.
+- Guard: `adminRouteTenantScope.test.ts`, 13 cases. ⛔ Source-reading on purpose:
+  `server.ts` exports no route handlers and has a live database behind every one,
+  while the failure mode is a one-word edit (`requireSuperAdmin` → `requireAdmin`,
+  or dropping the `where`). All 9 assertions fail against the pre-change file.
+
+#### What is still open after this
+
+- ⏳ **NOT PROVEN: none of it has been exercised by a human.** No CRM screen-pop
+  since the change, no signed prompt/MOH/CRM URL fetched, no onboarding link
+  opened, and no tenant admin has loaded an admin screen. Acceptance tests:
+  1. a real inbound call to a CRM-enabled tenant still shows the caller's name on
+     the agent's screen (§1a);
+  2. publish an IVR prompt and confirm the PBX still fetches the signed URL
+     (§3b) — the tell is a **200** in the PBX's own fetch, not an absence of errors;
+  3. open a customer's onboarding link and confirm the wizard still saves (§5);
+  4. sign in as a TENANT_ADMIN and confirm `GET /api/admin/tenants` returns
+     **exactly one row — their own** (§4), and that `PATCH /api/admin/tenants/:id`
+     answers **403**. ⛔ The negative is the half that matters.
+- ⏳ **§6a–§6l are untouched**, as are the four items §0b left open.
+- ⏳ The worker still runs the old `chatSignedUrl` module (§0b's note) — unrelated
+  to these four, still a recommended follow-up.
+
 
 ### ✅ §0b — THE CODE FIX IS DONE (2026-08-18). Commit `6ab8c74b`, api DEPLOYED and container-verified (`/app/.build-commit` = `6ab8c74bc132`).
 

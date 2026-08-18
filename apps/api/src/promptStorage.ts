@@ -24,6 +24,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { resolveUrlSigningKey } from "./urlSigningSecret";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,16 +34,16 @@ export function getPromptStorageRoot(): string {
   return (process.env.PROMPT_STORAGE_DIR || DEFAULT_ROOT).replace(/\/+$/, "");
 }
 
-/** HMAC secret for signed download URLs. Reuses MOH_URL_SIGNING_SECRET /
- *  CDR_INGEST_SECRET so no new env var is required on day one; production
- *  can set PROMPT_URL_SIGNING_SECRET to isolate blast radius. */
+/**
+ * HMAC key for signed prompt download URLs.
+ *
+ * ⛔ The old chain ended on the literal "dev-signing-secret" and also borrowed
+ * MOH's and the internal-door auth secret. See `urlSigningSecret.ts` for why all
+ * three of those were wrong. It now resolves to PROMPT_URL_SIGNING_SECRET, else a
+ * key derived from JWT_SECRET, else it THROWS. Never add a literal back.
+ */
 function signingSecret(): string {
-  return (
-    process.env.PROMPT_URL_SIGNING_SECRET ||
-    process.env.MOH_URL_SIGNING_SECRET ||
-    process.env.CDR_INGEST_SECRET ||
-    "dev-signing-secret"
-  ).trim();
+  return resolveUrlSigningKey("prompt");
 }
 
 const ALLOWED_EXTS = new Set([

@@ -7,6 +7,15 @@ const matchBodySchema = z.object({
   phone: z.string().min(4),
   viewer: z.object({
     userId: z.string().min(1),
+    /**
+     * ⛔ ACCEPTED FOR WIRE COMPATIBILITY AND DELIBERATELY IGNORED.
+     *
+     * `apps/telephony/.../CrmInboundCallerEnricher.ts` still sends it, and
+     * refusing the field would break a running telephony container mid-deploy.
+     * `resolveInboundCrmCallerForViewer` reads the role from the `User` row
+     * instead — see `decideTrustedViewerRole` in `inboundCallerMatch.ts` for why.
+     * Do NOT wire this back into any authorization decision.
+     */
     role: z.string().optional(),
   }),
 });
@@ -32,7 +41,8 @@ export function registerInboundCrmMatchInternalRoute(
     const match = await resolveInboundCrmCallerForViewer({
       tenantId: parsed.data.tenantId,
       phone: parsed.data.phone,
-      viewer: parsed.data.viewer,
+      // ⛔ userId ONLY. The body's `role` must never reach the resolver.
+      viewer: { userId: parsed.data.viewer.userId },
     });
     return { match };
   });
