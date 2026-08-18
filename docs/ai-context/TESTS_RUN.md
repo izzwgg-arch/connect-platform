@@ -4,6 +4,52 @@ Newest entries first.
 
 ---
 
+## Voicemail email: sweep unblocked, watchdog runs, recipients restored (2026-08-18)
+
+Branch `feat/ivr-migration-takeover`, `6961ea9e` + `47c3ff45`. api only. Full record:
+`AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md` §6.
+
+### New suite
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/voicemail/voicemailEmailRuntime.test.ts
+```
+
+**Result:** 5/5. A faked `@connect/db` that behaves like Prisma (throws on an unknown
+`select` key), 60 old excluded-tenant rows + 1 unresolved + 1 customer row → the customer
+row is queued and stamped, the excluded ones never stamped, `where.tenantId` is
+`{not: null, notIn: [...]}`; the watchdog completes, selects no `tenant` relation, looks
+names up in one `tenant.findMany`, and reports the two-day-old gap by tenant name. Two
+SOURCE guards (CRLF-normalised) on the sweep's `where:` and the watchdog's `select`.
+
+### Proven non-vacuous
+
+Replayed against the pre-change runtime (`git show HEAD:…voicemailEmailRuntime.ts` copied
+over the module, restored after): **5 of 5 fail.**
+
+### Whole voicemail suite
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/voicemail/*.test.ts"
+```
+
+**Result:** 61/61 (includes the two watchdog-grace cases in `voicemailEmailSender.test.ts`:
+an unprocessed voicemail older than `NEVER_PROCESSED_GRACE_MS` is `never_processed`; one 30 s
+old is not a gap; one with no `receivedAt` still is).
+
+### apps/api typecheck
+
+76 errors — 75 baseline + 1 in `server.ts` from another session's uncommitted MFA work;
+**0 in `src/voicemail/`.**
+
+### Live (not a test, but the acceptance)
+
+Container `0b28b348` (⊇ `6961ea9e`). First sweep 17:38:38Z: 5 queued → 5 SENT in 15 s.
+After clearing 9 post-cutover `no_recipient` stamps: 4 more SENT, 5 re-stamped (mailboxes
+with no address on the PBX either). **9 SENT / 0 failed** since 17:30Z.
+
+---
+
 ## Login: a malformed body is 401 invalid_credentials, never 500 (2026-08-18)
 
 Branch `feat/ivr-migration-takeover`. api only. New `apps/api/src/loginRequest.ts` +
