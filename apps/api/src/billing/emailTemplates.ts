@@ -165,10 +165,19 @@ function summaryRow(label: string, value: string, topBorder = true, bold = false
   </tr>`;
 }
 
-/** Light, readable invoice summary card. */
-function infoBox(rows: string): string {
+/** Light, readable invoice summary card.
+ *
+ *  `paintForOutlook` adds the old `bgcolor` attribute, which is the only way
+ *  Word (i.e. Outlook) paints a cell — it drops the CSS `background` shorthand.
+ *  ⛔ It is OFF by default on purpose: the nine existing billing emails are
+ *  asserted byte-for-byte by `billingEmailTemplates.test.ts`, so the default
+ *  output must not move. New emails opt in. */
+function infoBox(rows: string, opts: { paintForOutlook?: boolean } = {}): string {
+  const cell = opts.paintForOutlook
+    ? `<td bgcolor="#f8fafc" style="padding:18px 20px;background:#f8fafc;">`
+    : `<td style="padding:18px 20px;">`;
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;background:#f8fafc;border:1px solid #dbe4ee;border-radius:14px;margin:22px 0;">
-  <tr><td style="padding:18px 20px;">
+  <tr>${cell}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       ${rows}
     </table>
@@ -572,4 +581,158 @@ export function billingApologyEmail(input: BillingApologyEmailInput): { subject:
     html: emailShell("Billing update", body, brand),
     text: `${subject}\n${greeting}\nA duplicate charge occurred this month. A full refund has been issued and should appear within 2-3 business days.`,
   };
+}
+
+// ─── Overdue-account service interruption ─────────────────────────────────────
+// Copy approved by Izzy 2026-08-17. Deliberately short: the banner, one
+// sentence, the amount, the button. Do not pad these back out.
+
+/** The coloured strip at the top. Its only job is the number of days left. */
+function interruptionBanner(input: { headline: string; sub?: string | null; tone: "calm" | "warn" | "crit" | "good" }): string {
+  const tones = {
+    calm: { bg: "#f0f9ff", border: "#bae6fd", text: "#075985" },
+    warn: { bg: "#fff7ed", border: "#fed7aa", text: "#b4470f" },
+    crit: { bg: "#fef2f2", border: "#fecaca", text: "#b3231f" },
+    good: { bg: "#f0fdf4", border: "#bbf7d0", text: "#15803d" },
+  } as const;
+  const t = tones[input.tone];
+  const sub = input.sub
+    ? `\n      <p style="margin:0;font-size:14px;line-height:21px;color:#475569;">${escapeHtml(input.sub)}</p>`
+    : "";
+  // bgcolor as well as CSS: Word drops the shorthand and the strip would go white.
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:separate;border-spacing:0;background:${t.bg};border:1px solid ${t.border};border-radius:12px;">
+    <tr><td align="center" bgcolor="${t.bg}" style="padding:16px 18px;background:${t.bg};font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,Arial,sans-serif;">
+      <p style="margin:0${input.sub ? " 0 3px" : ""};font-size:${input.sub ? "24px" : "22px"};line-height:${input.sub ? "30px" : "29px"};font-weight:800;color:${t.text};">${escapeHtml(input.headline)}</p>${sub}
+    </td></tr>
+  </table>`;
+}
+
+/** Daily countdown reminder. Sent once a day while service is still on. */
+export function serviceInterruptionReminderEmail(input: {
+  daysLeft: number;
+  invoiceNumber: string;
+  balanceDueCents: number;
+  interruptAt: Date;
+  payUrl: string;
+  brand?: InvoiceEmailBranding | null;
+}): { subject: string; html: string; text: string } {
+  const brand = mergeBrand(input.brand ?? null);
+  const days = input.daysLeft === 1 ? "1 day" : `${input.daysLeft} days`;
+  const subject = `Friendly reminder — ${days} left to make a payment`;
+  const interruptOn = `Service interruption on ${fmtDate(input.interruptAt)}`;
+
+  const rows = [
+    summaryRow("Amount due", `<strong style="color:${CONNECT_BLUE};">${money(input.balanceDueCents)}</strong>`, false, true),
+    summaryRow("Invoice", escapeHtml(input.invoiceNumber)),
+  ];
+
+  const body = `
+    ${interruptionBanner({
+      headline: input.daysLeft === 1 ? "1 day left" : `${input.daysLeft} days left`,
+      sub: interruptOn,
+      tone: input.daysLeft <= 1 ? "crit" : input.daysLeft <= 3 ? "warn" : "calm",
+    })}
+    <p style="margin:0;font-size:16px;line-height:25px;color:#334155;">
+      This is a friendly reminder that your payment didn't go through. Please make a payment to
+      avoid service interruption.
+    </p>
+    ${infoBox(rows.join(""), { paintForOutlook: true })}
+    ${ctaButton(input.payUrl, "Pay now", "#15803d")}
+  `;
+
+  const text = [
+    subject,
+    interruptOn,
+    "",
+    "This is a friendly reminder that your payment didn't go through. Please make a payment to avoid service interruption.",
+    "",
+    `Amount due: ${money(input.balanceDueCents)}`,
+    `Invoice: ${input.invoiceNumber}`,
+    "",
+    `Pay now: ${input.payUrl}`,
+  ].join("\n");
+
+  return { subject, html: emailShell("Friendly reminder", body, brand), text };
+}
+
+/** Sent once, when service is switched off. This is the Reconnect email. */
+export function serviceInterruptedEmail(input: {
+  invoiceNumber: string;
+  balanceDueCents: number;
+  payUrl: string;
+  brand?: InvoiceEmailBranding | null;
+}): { subject: string; html: string; text: string } {
+  const brand = mergeBrand(input.brand ?? null);
+  const subject = "Your service has been interrupted — make a payment to reconnect";
+
+  const rows = [
+    summaryRow("Amount due", `<strong style="color:${CONNECT_BLUE};">${money(input.balanceDueCents)}</strong>`, false, true),
+    summaryRow("Invoice", escapeHtml(input.invoiceNumber)),
+  ];
+
+  const body = `
+    ${interruptionBanner({ headline: "Service interrupted", tone: "crit" })}
+    <p style="margin:0;font-size:16px;line-height:25px;color:#334155;">
+      Your payment didn't go through, so your service has been interrupted. Make a payment to
+      reconnect — your service comes back on within a few minutes.
+    </p>
+    <p style="margin:12px 0 0;font-size:16px;line-height:25px;color:#334155;">
+      You can still call <strong>911</strong> and your local EMS and fire department on
+      <strong>845-783-1212</strong> at any time.
+    </p>
+    ${infoBox(rows.join(""), { paintForOutlook: true })}
+    ${ctaButton(input.payUrl, "Reconnect", "#15803d")}
+  `;
+
+  const text = [
+    subject,
+    "",
+    "Your payment didn't go through, so your service has been interrupted. Make a payment to reconnect — your service comes back on within a few minutes.",
+    "",
+    "You can still call 911 and your local EMS and fire department on 845-783-1212 at any time.",
+    "",
+    `Amount due: ${money(input.balanceDueCents)}`,
+    `Invoice: ${input.invoiceNumber}`,
+    "",
+    `Reconnect: ${input.payUrl}`,
+  ].join("\n");
+
+  return { subject, html: emailShell("Make a payment to reconnect", body, brand), text };
+}
+
+/** Sent within minutes of the payment landing. */
+export function serviceRestoredEmail(input: {
+  invoiceNumber: string;
+  amountPaidCents: number;
+  restoredAt: Date;
+  brand?: InvoiceEmailBranding | null;
+}): { subject: string; html: string; text: string } {
+  const brand = mergeBrand(input.brand ?? null);
+  const subject = "Your service is back on";
+
+  const rows = [
+    summaryRow("Amount paid", `<strong style="color:#15803d;">${money(input.amountPaidCents)}</strong>`, false, true),
+    summaryRow("Invoice", escapeHtml(input.invoiceNumber)),
+    summaryRow("Back on since", fmtDate(input.restoredAt)),
+  ];
+
+  const body = `
+    ${interruptionBanner({ headline: "Service restored", tone: "good" })}
+    <p style="margin:0;font-size:16px;line-height:25px;color:#334155;">
+      We received your payment and your service is back on.
+    </p>
+    ${infoBox(rows.join(""), { paintForOutlook: true })}
+  `;
+
+  const text = [
+    subject,
+    "",
+    "We received your payment and your service is back on.",
+    "",
+    `Amount paid: ${money(input.amountPaidCents)}`,
+    `Invoice: ${input.invoiceNumber}`,
+    `Back on since: ${fmtDate(input.restoredAt)}`,
+  ].join("\n");
+
+  return { subject, html: emailShell("Thank you", body, brand), text };
 }
