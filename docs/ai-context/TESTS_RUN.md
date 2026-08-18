@@ -4,6 +4,43 @@ Newest entries first.
 
 ---
 
+## Voicemail/email guardrails + self-healing (2026-08-18, evening)
+
+Branch `feat/ivr-migration-takeover`, `9ae26e04`. api only. Handoff
+`AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md` §7.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/voicemail/voicemailEmailGuardrails.test.ts src/voicemail/voicemailEmailRuntime.test.ts
+```
+
+**Result:** 21/21 (15 new + 6 runtime). Thresholds pinned: heartbeat staleness
+(fresh process not judged; very-old heartbeat still counts; mature + none = dead;
+sweep 10 min, watchdog 45 min), recipient-coverage drop (55→0 yes, 55→53 no, 10→7 yes,
+100→97 no), preserve value→blank (lowercased) vs change, outbox stall/failure, requeue
+cap/age/proof-of-recovery. Fake-db runners: escalation de-dupe, third-failure escalation
++ reset, preserve writes the recipient row, outbox queries all carry
+`type: {not: ADMIN_ALERT}`, requeue capped at 2, liveness mature vs fresh. SOURCE guards
+(CRLF-normalised): runtime records both heartbeats + escalates in its catch; watchdog
+processes stranded + re-queues; sync calls `preserveBlankedPbxEmail` BEFORE the upsert;
+server.ts calls `startEmailGuardrails`. Runtime: the 2-day-old never_processed voicemail
+is now RESCUED (job queued, stamped, not a gap); an empty sweep still heartbeats.
+
+### Voicemail + extension-sync suites
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/voicemail/*.test.ts" src/pbxExtensionSync.backfillReconcile.test.ts src/pbxExtensionSync.webrtcLiveDetection.test.ts
+```
+
+**Result:** 87/87. apps/api typecheck **75 = baseline**, 0 in `src/voicemail/`.
+
+### Live (acceptance)
+
+Container `9ae26e04`; within 5 min of boot: sweep heartbeats once a minute, the first
+`recipient_coverage` row (55 of 103 covered, no drop), zero escalations, 12 voicemail
+emails SENT since 17:30Z. No guardrail has fired for real yet.
+
+---
+
 ## Voicemail email: sweep unblocked, watchdog runs, recipients restored (2026-08-18)
 
 Branch `feat/ivr-migration-takeover`, `6961ea9e` + `47c3ff45`. api only. Full record:

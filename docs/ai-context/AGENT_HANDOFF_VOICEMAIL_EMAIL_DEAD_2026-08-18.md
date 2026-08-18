@@ -275,3 +275,57 @@ the MFA session's uncommitted work).
 - The 5 already-blind mailboxes above (Trimpro 102/104, A plus 108).
 - No human has opened one of today's Connect voicemail emails and pressed
   play on the attachment; proven as SENT by the outbox, not by an inbox.
+
+---
+
+## 7. ✅ GUARDRAILS + SELF-HEALING (2026-08-18, evening) — `9ae26e04`
+
+Izzy, after reading §6: *"What happened today could never, ever happen again. We
+need to have safeguards and guardrails. Emails cannot stop working ever,
+especially voicemail or SMS emails. You need to put self-healing on this."*
+
+Everything lives in **`apps/api/src/voicemail/voicemailEmailGuardrails.ts`**
+(pure decisions + runners + timers), wired from `voicemailEmailRuntime.ts`
+(heartbeats, watchdog self-heal, watchdog failure escalation),
+`pbxExtensionSync.ts` (preserve-before-null) and one line in `server.ts`
+(`startEmailGuardrails(app.log)`).
+
+| Fault from §2 | Self-heal | Alarm |
+|---|---|---|
+| 1 — recipients erased by a config change | sync promotes a blanked PBX email into `VoicemailEmailRecipient` BEFORE nulling the mirror (`preserveBlankedPbxEmail`) | hourly recipient-coverage count; drop ≥ 3 and ≥ 20 % escalates by company |
+| 2 — sweep head-of-line blocked | the watchdog re-processes any voicemail unprocessed > 10 min through its OWN query (same sender, same stamps); dead voicemail jobs re-queued (≤ 2×, ≥ 1 h old, only after a newer SENT proves the outbox works) | sweep heartbeat every pass; liveness check escalates when > 10 min stale |
+| 3 — watchdog never ran | — | watchdog heartbeat every pass (> 45 min stale escalates); 3 consecutive throws escalate the error text |
+| (new) the outbox itself | — | every 5 min, EVERY type except ADMIN_ALERT: a due job unsent 20 min = "not sending"; ≥ 5 FAILED/hour = "failing" + top cause |
+
+Design rules (all in the file header): escalation never ADMIN_ALERT; de-dupe on
+an open escalation with the same `ALARM_PREFIX`; state in `AgentAuditLog`
+(`voicemail_email.sweep_heartbeat`, `.watchdog_heartbeat`,
+`.recipient_coverage`, `.job_requeued`), never a module variable; a fresh
+container gets 20 min before its heartbeats are judged.
+
+**Tests:** `voicemailEmailGuardrails.test.ts` — 15: every threshold pinned
+(staleness incl. fresh-process/very-old-heartbeat, coverage 55→0 vs 55→53 vs
+10→7 vs 100→97, preserve value→blank vs change, outbox stall/failure, requeue
+cap/age/proof-of-recovery), fake-db runners (de-dupe, third-failure escalation
++ reset, preserve writes the row, outbox queries all carry `type: {not:
+ADMIN_ALERT}`, requeue capped at 2, liveness mature-vs-fresh), and four SOURCE
+guards (runtime records both heartbeats and escalates in its catch; watchdog
+processes stranded + requeues; sync calls the guard BEFORE the upsert;
+server.ts starts the timers). Runtime tests updated: the 2-day-old
+never_processed voicemail is now RESCUED (job queued, stamped, no longer a gap)
+and the empty sweep still heartbeats. Voicemail + sync suites **87/87**;
+typecheck **75 = baseline**, 0 in `voicemail/`.
+
+**Deployed and container-verified:** `verify: container commit 9ae26e04bd54
+matches target`, `startEmailGuardrails` present in the container's server.ts,
+health 200. **Watched alive on the real container within its first 5 minutes:**
+sweep heartbeats once a minute (8 rows), the first `recipient_coverage` row
+written 3 min after boot — **55 of 103 ACTIVE non-Gesheft mailboxes have a
+recipient** (`previous: null`, so no comparison yet, `dropped: false`), listing
+per company (A plus center 6, Yossis Wood Works 7, B Visible 5, Trust
+Bookkeepings 5, Trimpro 4 …) — **zero escalations raised**, 12 voicemail
+emails SENT since 17:30Z. The watchdog heartbeat lands on its first 15-min tick.
+That 55 is the baseline the hourly drop check now compares against.
+
+⏳ **NOT PROVEN: no guardrail has fired for real.** The acceptance test is the
+first real fault or a deliberate one (which texts both phones — ask first).

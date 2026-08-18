@@ -138,6 +138,76 @@ no tenant row edited, no E911 record changed.)
   both type into a field still overwrite each other. Per-visitor drafts or an
   "already open elsewhere" warning is a product decision.
 
+## ⛔⛔ AGENT HANDOFF — email guardrails + self-healing are LIVE (2026-08-18): the pipeline repairs itself, and the alarm has an alarm — READ FIRST before adding ANY email path, before touching the voicemail sweep/watchdog, before muting an escalation, or for "did the guardrails fire?"
+
+Izzy's standing rule (2026-08-18, after the outage below): **"What happened today
+could never, ever happen again. Emails cannot stop working ever, especially
+voicemail. Put self-healing on this."** Memory: [[emails-must-never-stop-silently]].
+Built as **`apps/api/src/voicemail/voicemailEmailGuardrails.ts`** (`9ae26e04` on
+`feat/ivr-migration-takeover`; **api DEPLOYED and container-verified
+(`9ae26e04bd54`), heartbeats and the coverage baseline (55 of 103) watched
+landing on the live container, zero escalations**). No migration, no PBX
+write, no env change.
+Full detail: `docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md` §7.
+
+- ⛔⛔ **THE SHAPE, and it is the rule for ANY new email path:** a PURE decision
+  function with a threshold test → a thin runner against the db → an
+  **ESCALATION** when it fires (SMS to (562) 209-6644 + (845) 723-1213 and the
+  `AGENT_ESCALATION` email — the ONLY alarm channel that reaches a person;
+  ⛔ never `ADMIN_ALERT`, which is muted at the send door and would build clean
+  and reach nobody) → **de-duplicated on an open escalation with the same summary
+  prefix** (a persistent fault texts once) → **state in `AgentAuditLog`, never a
+  module variable** (the api restarts dozens of times a day). ⛔ And a **SOURCE
+  guard test proving the guard is actually CALLED** — the old watchdog existed,
+  was wired, and had thrown on every run since deploy; a guard nobody calls is the
+  failure shape itself.
+- ✅ **SELF-HEALING (three repairs, each maps to a fault from the outage):**
+  (1) **the watchdog REPAIRS, not just reports** — any voicemail the sweep never
+  reached (older than the 10-min grace) is processed BY THE WATCHDOG through its
+  own query, same sender, same stamps; a blocked or dead sweep can no longer
+  strand anything. (2) **dead voicemail email jobs are re-queued** once the
+  outbox has proven it can send again (a SENT job newer than the failure), not
+  before an hour, **at most twice per job** (`decideRequeue`, counted in
+  `AgentAuditLog voicemail_email.job_requeued`). (3) **the extension sync can no
+  longer erase an address**: `preserveBlankedPbxEmail` runs BEFORE the extension
+  upsert; a PBX email going value → blank is promoted into
+  `VoicemailEmailRecipient` first, so the mirror stays honest and the customer
+  keeps getting emailed. Only a human removing it in Settings takes it away.
+  The exact 2026-08-17 cutover mechanism is inert.
+- ✅ **ALARMS:** **liveness** — the sweep and the watchdog write a heartbeat
+  (`voicemail_email.sweep_heartbeat` / `watchdog_heartbeat`) on EVERY completed
+  pass including empty ones; a separate 5-min check escalates when a heartbeat
+  is stale (**sweep 10 min, watchdog 45 min**, boot grace 20 min so a fresh
+  container is not judged before its first tick — but a heartbeat already very
+  old from a previous process still counts). **Watchdog failing** — 3 consecutive
+  throws escalate the error text. **Recipient coverage** — hourly count of
+  ACTIVE non-excluded mailboxes with any address (mirror OR `VoicemailEmailRecipient`);
+  a drop of **≥ 3 AND ≥ 20 %** (the cutover shape, 55 → 0) escalates by company;
+  one customer removing one address does not. **Outbox health, EVERY email type
+  except ADMIN_ALERT** (5-min): a due job unsent for **20 min** = "Email outbox
+  is not sending"; **≥ 5 FAILED in an hour** = "Emails are failing to send" with
+  the top cause (a Gmail 550 quota burst will name itself).
+- ⛔ **`no_recipient` still does not alert on its own** — it is a standing
+  condition (5 blind mailboxes today); the coverage DROP is what alerts. Add an
+  address in Settings; do not "fix" it by widening the alarm.
+- ⛔ **Escalation summary prefixes are the de-dupe keys** (`ALARM_PREFIX`):
+  "Voicemail email sweep has stopped", "Voicemail email watchdog has stopped",
+  "Voicemail email watchdog is failing", "Voicemail email addresses disappeared",
+  "Email outbox is not sending", "Emails are failing to send". **Resolving the
+  escalation row (status not QUEUED/SENT) re-arms it.** Renaming a prefix
+  orphans the de-dupe.
+- ⛔ **Read the heartbeat before diagnosing "did it run":**
+  `select event, max(ts) from "AgentAuditLog" where event like 'voicemail_email.%' group by 1`.
+  Both heartbeats within their thresholds = the timers are alive; the coverage
+  row (`voicemail_email.recipient_coverage`, hourly, `payload.covered`) is the
+  count to compare against.
+- ⏳ **NOT PROVEN: no guardrail has fired for real** — nothing is wrong to fire
+  about. Proven by 15 tests (thresholds, fake-db runners, source guards) and by
+  the deployed container writing heartbeats. **The acceptance test is the first
+  real fault, or one deliberate one** (⛔ which texts both phones — ask first).
+  ⏳ Still open from the outage: onboarding writes the email onto the PBX
+  extension (new sign-ups get duplicates); the 5 blind mailboxes.
+
 ## ⛔⛔ AGENT HANDOFF — voicemail email was DEAD for ~20 hours after the PBX cutover, FIXED and proven 2026-08-18 — READ FIRST for ANY "no voicemail emails today", before touching the voicemail-email sweep/watchdog, before "restoring" an address to the PBX, and before treating `Extension.pbxUserEmail` as a recipient
 
 Full detail: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md`**
