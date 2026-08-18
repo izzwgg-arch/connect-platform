@@ -24,7 +24,8 @@
 
 import crypto from "node:crypto";
 import { z } from "zod";
-import type { Buffer } from "node:buffer";
+// Value import, not `import type`: the voice-sample proxy calls Buffer.from().
+import { Buffer } from "node:buffer";
 import { saveGeneratedPrompt, resolveGeneratedPromptTenantId } from "./generatedPromptStore";
 
 export interface ElevenLabsRouteDeps {
@@ -338,6 +339,60 @@ export function registerElevenLabsRoutes(deps: ElevenLabsRouteDeps): void {
           .send({ error: "elevenlabs_failed", message: await messageFor(user, err) });
       }
       return reply.code(502).send({ error: "elevenlabs_failed", message: "Couldn't load the voice list." });
+    }
+  });
+
+  // ── GET /voice/elevenlabs/voices/:voiceId/sample ──────────────────────────
+  // Hear a voice before choosing it. There are 38 of them; picking one blind
+  // and paying to find out it was wrong is the opposite of useful.
+  //
+  // ⛔ THIS COSTS NOTHING. It serves ElevenLabs' own hosted sample of the voice
+  // (`preview_url`) — a static file, not a synthesis. Do NOT "improve" this by
+  // generating a sample: that would bill for every voice a customer auditions.
+  //
+  // ⛔ It must be PROXIED rather than linked. The portal ships a CSP of
+  // `default-src 'self'` with no media-src, so an <audio> pointing at
+  // ElevenLabs' CDN is blocked by the browser — silently, as a console
+  // violation, which reads as "the play button does nothing".
+  app.get("/voice/elevenlabs/voices/:voiceId/sample", async (req: any, reply: any) => {
+    const user = await requirePromptManager(req, reply);
+    if (!user) return;
+    const key = await keyOr503(reply, user);
+    if (!key) return;
+
+    const voiceId = String((req.params as any)?.voiceId || "");
+    if (!voiceId) return reply.code(400).send({ error: "voice_required" });
+
+    const { listElevenLabsVoices } = await import("./elevenLabs");
+    let previewUrl: string | null = null;
+    try {
+      // Cached read (30s) — auditioning down a list of 38 is one provider call,
+      // not 38.
+      const voices = await listElevenLabsVoices(key);
+      previewUrl = voices.find((v) => v.voiceId === voiceId)?.previewUrl ?? null;
+    } catch {
+      return reply.code(502).send({ error: "voices_unavailable", message: "Couldn't load the voice list." });
+    }
+    // Not every voice has one, and a missing sample is not an error worth
+    // alarming anyone about — the UI just doesn't offer play for that voice.
+    if (!previewUrl) return reply.code(404).send({ error: "no_sample" });
+
+    try {
+      const res = await fetch(previewUrl, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) return reply.code(502).send({ error: "sample_unavailable" });
+      // ⛔ Buffered, not streamed, and RETURNED. An un-returned reply.send() of
+      // a stream inside an async handler answers 200 with an empty body and no
+      // log line anywhere — the trap recorded in CLAUDE.md. Samples are a few
+      // hundred KB, so there is nothing to gain from streaming.
+      const bytes = Buffer.from(await res.arrayBuffer());
+      reply.header("Content-Type", res.headers.get("content-type") || "audio/mpeg");
+      reply.header("Content-Length", String(bytes.byteLength));
+      reply.header("Content-Disposition", "inline");
+      // The sample for a given voice never changes.
+      reply.header("Cache-Control", "private, max-age=86400");
+      return reply.send(bytes);
+    } catch {
+      return reply.code(502).send({ error: "sample_unavailable" });
     }
   });
 

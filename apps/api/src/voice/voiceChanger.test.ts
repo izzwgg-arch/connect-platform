@@ -274,6 +274,23 @@ test("⛔ server.ts passes the voice-changer key through, and it is an authorita
   assert.ok(!/isAdminRole|TENANT_ADMIN/.test(block), "no role shortcut may bypass the key");
 });
 
+test("⛔ auditioning a voice is FREE — the sample route must never synthesise", () => {
+  const src = read("elevenLabsRoutes.ts");
+  const start = src.indexOf('app.get("/voice/elevenlabs/voices/:voiceId/sample"');
+  assert.ok(start > 0, "sample route not found — this guard would silently pass");
+  const route = code(src.slice(start, src.indexOf('app.post("/voice/elevenlabs/preview"')));
+
+  assert.ok(route.includes("previewUrl"), "it must serve the provider's own hosted sample");
+  assert.ok(
+    !/synthesiseSpeech|convertSpeech|text-to-speech|speech-to-speech/.test(route),
+    "generating a sample would bill for every voice a customer auditions — 38 of them",
+  );
+  // The un-returned reply.send() trap: an async handler that does not RETURN
+  // the send answers 200 with an empty body and logs nothing anywhere.
+  assert.ok(route.includes("return reply.send("), "the send must be returned");
+  assert.ok(!/reply\.send\(res\.body\)|pipe\(/.test(route), "buffered, not streamed — see CLAUDE.md");
+});
+
 test("the duration and size caps are deliberately below the provider's own limits", () => {
   // ElevenLabs allows 5 minutes / 50 MB. Ours are a SPENDING limit, not a
   // technical one, so the refusal is ours and in plain English.

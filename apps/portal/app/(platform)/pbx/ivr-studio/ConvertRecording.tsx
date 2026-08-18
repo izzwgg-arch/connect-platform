@@ -43,8 +43,12 @@ const PHRASES = [
   "You already have a recording called that. Pick a different name.",
   "Give this recording a name so you can find it later.",
   "Pick the voice it should become.", "Record or choose a file first.",
+  "Listen", "Stop", "Couldn't play that voice.",
   "The words, timing and delivery stay exactly as you recorded them. Only the voice changes.",
   "Your microphone isn't available. Choose a file instead.",
+  "Nothing was recorded. Check the microphone and try again.",
+  "The recording stopped unexpectedly. Try again, or choose a file.",
+  "That file was empty.", "Ready to convert", "Recorded",
   "Saved and live - the next caller will hear it.",
   "Saved. It'll be live on your phone system within a few minutes.",
   "Couldn't convert that recording.",
@@ -104,6 +108,13 @@ export function ConvertRecording({
 
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  /** Which voice is being auditioned. Sampling is FREE — it plays
+   *  ElevenLabs' own hosted clip through our API, not a synthesis — so
+   *  someone can work down all 38 without spending anything. */
+  const [samplingId, setSamplingId] = useState<string | null>(null);
+  const sampleAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sampleUrlRef = useRef<string | null>(null);
   const sourceUrlRef = useRef<string | null>(null);
   const resultUrlRef = useRef<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -161,6 +172,7 @@ export function ConvertRecording({
     return () => {
       if (sourceUrlRef.current) URL.revokeObjectURL(sourceUrlRef.current);
       if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
+      if (sampleUrlRef.current) URL.revokeObjectURL(sampleUrlRef.current);
       recorderRef.current?.stream?.getTracks().forEach((tr) => tr.stop());
     };
   }, []);
@@ -183,23 +195,94 @@ export function ConvertRecording({
     setClip({ blob, filename, seconds: null });
   }
 
+  /**
+   * Play a voice's sample.
+   *
+   * ⛔ Fetched with the auth header and turned into a blob rather than pointed
+   * at directly: the portal's CSP is `default-src 'self'`, so an <audio> src on
+   * ElevenLabs' CDN is blocked by the browser — silently, as a console
+   * violation that reads as "the play button does nothing". Our API proxies it
+   * for the same reason.
+   */
+  async function playSample(id: string) {
+    const el = sampleAudioRef.current;
+    if (!el) return;
+    // Pressing the one that's already playing stops it.
+    if (samplingId === id && !el.paused) {
+      el.pause();
+      setSamplingId(null);
+      return;
+    }
+    el.pause();
+    setSamplingId(id);
+    setErr(null);
+    try {
+      const r = await api(`/voice/elevenlabs/voices/${encodeURIComponent(id)}/sample`);
+      const blob = await r.blob();
+      if (sampleUrlRef.current) URL.revokeObjectURL(sampleUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      sampleUrlRef.current = url;
+      el.src = url;
+      await el.play().catch(() => undefined);
+    } catch {
+      setSamplingId(null);
+      setErr(t("Couldn't play that voice."));
+    }
+  }
+
   async function startRecording() {
     setErr(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
-      const chunks: BlobPart[] = [];
+      const stream = await navigator.mediaDevices.getUserMedia({
+        // Same constraints the chat voice-note recorder uses. Mono matters
+        // twice over here: the phone system is mono anyway, and a clean single
+        // channel is what the voice changer works best from.
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      });
+
+      // ⛔⛔ THE mimeType IS NOT OPTIONAL, and leaving it out is what broke this
+      // the first time. MediaRecorder's default WebM carries NO duration in its
+      // header, so the browser reports the clip as infinitely long and draws a
+      // dead grey player you cannot press — it looks exactly like "nothing was
+      // recorded". audio/mp4 (m4a) writes a real duration, and it is also on
+      // ElevenLabs' accepted list. Same order as ChatComposer, deliberately.
+      const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
+        ? "audio/mp4"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : undefined;
+
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      chunksRef.current = [];
       rec.ondataavailable = (e) => {
-        if (e.data.size) chunks.push(e.data);
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onerror = () => {
+        stream.getTracks().forEach((tr) => tr.stop());
+        recorderRef.current = null;
+        setRecording(false);
+        setErr(t("The recording stopped unexpectedly. Try again, or choose a file."));
       };
       rec.onstop = () => {
         stream.getTracks().forEach((tr) => tr.stop());
-        const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-        // The extension has to match what was actually captured — the server
-        // forwards the file as-is and the provider reads the container.
-        const ext = (rec.mimeType || "audio/webm").includes("ogg") ? "ogg" : "webm";
-        setSource(blob, `recording.${ext}`);
+        recorderRef.current = null;
+        const parts = chunksRef.current.filter((c) => c.size > 0);
+        chunksRef.current = [];
         setRecording(false);
+        // ⛔ Say so rather than handing back an empty clip. An empty blob still
+        // sets a preview and still enables Convert, so the failure would only
+        // surface as a provider error thirty seconds and a charge later.
+        if (!parts.length) {
+          setErr(t("Nothing was recorded. Check the microphone and try again."));
+          return;
+        }
+        const blob = new Blob(parts, { type: rec.mimeType || mimeType || "audio/webm" });
+        if (blob.size === 0) {
+          setErr(t("Nothing was recorded. Check the microphone and try again."));
+          return;
+        }
+        const ext = (rec.mimeType || mimeType || "").includes("mp4") ? "m4a" : "webm";
+        setSource(blob, `recording.${ext}`);
       };
       recorderRef.current = rec;
       rec.start();
@@ -211,7 +294,11 @@ export function ConvertRecording({
   }
 
   function stopRecording() {
-    recorderRef.current?.stop();
+    const rec = recorderRef.current;
+    // "inactive" means it already stopped (or never started) — calling stop()
+    // again throws, and the throw would leave the button stuck on "Stop".
+    if (rec && rec.state !== "inactive") rec.stop();
+    else setRecording(false);
   }
 
   const takenKeys = useMemo(
@@ -333,7 +420,11 @@ export function ConvertRecording({
                   style={{ display: "none" }}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f) setSource(f, f.name);
+                    // Same reasoning as an empty recording: a 0-byte file would
+                    // set a preview, enable Convert, and only fail at the
+                    // provider — after the round trip.
+                    if (f && f.size === 0) setErr(t("That file was empty."));
+                    else if (f) { setErr(null); setSource(f, f.name); }
                     e.currentTarget.value = "";
                   }}
                 />
@@ -345,6 +436,14 @@ export function ConvertRecording({
               )}
             </div>
             {recording && <div className="mr-hint">{t("Recording...")}</div>}
+            {/* ⛔ Stated as text, not left to the player. If the browser cannot
+                draw usable controls for a container it still reports the size
+                here, so "did that work?" always has an answer on screen. */}
+            {clip && !recording && (
+              <div className="mr-hint">
+                {t("Ready to convert")} — {clip.filename} ({Math.max(1, Math.round(clip.blob.size / 1024))} KB)
+              </div>
+            )}
             {sourceUrl && (
               <audio className="mr-player" src={sourceUrl} controls preload="metadata" />
             )}
@@ -369,16 +468,34 @@ export function ConvertRecording({
             <label className="mr-lbl">{t("Which voice should it become?")}</label>
             <div className="mr-voices">
               {(status?.voices || []).map((v) => (
-                <button
-                  key={v.voiceId}
-                  className={"mr-voice" + (voiceId === v.voiceId ? " on" : "")}
-                  onClick={() => setVoiceId(v.voiceId)}
-                >
-                  <b>{v.name}</b>
-                  {v.labels?.gender && <span>{v.labels.gender}</span>}
-                </button>
+                <div key={v.voiceId} className="mr-voice-wrap">
+                  <button
+                    className={"mr-voice" + (voiceId === v.voiceId ? " on" : "")}
+                    onClick={() => setVoiceId(v.voiceId)}
+                  >
+                    <b>{v.name}</b>
+                    {v.labels?.gender && <span>{v.labels.gender}</span>}
+                  </button>
+                  {/* Sibling, not nested — a <button> inside a <button> is
+                      invalid and browsers drop the inner one. */}
+                  <button
+                    className="mr-voice-play"
+                    onClick={() => playSample(v.voiceId)}
+                    aria-label={`${t("Listen")} — ${v.name}`}
+                    title={t("Listen")}
+                  >
+                    {samplingId === v.voiceId ? "■" : "▶"}
+                  </button>
+                </div>
               ))}
             </div>
+            {/* One shared element for auditioning, kept out of the way. */}
+            <audio
+              ref={sampleAudioRef}
+              onEnded={() => setSamplingId(null)}
+              onPause={() => setSamplingId(null)}
+              style={{ display: "none" }}
+            />
 
             <button className="mr-adv" onClick={() => setAdvanced((a) => !a)}>
               {t("Advanced settings")}

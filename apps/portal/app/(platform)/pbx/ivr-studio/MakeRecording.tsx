@@ -848,6 +848,16 @@ export function MakeRecordingStyles() {
       .mr-player{width:100%;margin-top:14px;height:36px}
       .mr-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--dim,#5d6f84);cursor:pointer}
       .mr-check input{margin:0}
+      /* Voice card + its own sample button. A <button> cannot be nested inside
+         another <button>, so the card and the play control are siblings. */
+      .mr-voice-wrap{position:relative;display:flex}
+      .mr-voice-wrap .mr-voice{flex:1;padding-right:44px}
+      .mr-voice-play{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+        width:28px;height:28px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
+        font:inherit;font-size:11px;line-height:1;border:1px solid var(--line,rgba(19,32,48,.13));
+        background:var(--panel,#fff);color:var(--dim,#5d6f84)}
+      .mr-voice-play:hover{border-color:var(--accent,#2f6bff);color:var(--accent,#2f6bff)}
+      .mr-voice-play:disabled{opacity:.45;cursor:progress}
       .mr-dim{font-size:13px;color:var(--dim,#5d6f84);line-height:1.6;margin:0 0 12px}
       .mr-note{margin-top:14px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.55}
       .mr-note.bad{color:#c9414c;background:rgba(201,65,76,.08);border:1px solid rgba(201,65,76,.28)}
