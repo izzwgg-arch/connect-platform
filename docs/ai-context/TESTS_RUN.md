@@ -299,3 +299,103 @@ pnpm install --filter @connect/integrations...
 
 - Full `apps/api` typecheck — pre-existing unrelated errors in billing/onboarding/crm files
 - Production deploy — not requested in this task
+
+---
+
+# 2026-08-18 — onboarding: empty number search, required sign-up details, duplicate tenant names
+
+Commit `7ab03778` on `feat/ivr-migration-takeover`. api deployed inside
+`0b28b348`; portal deployed inside `441efd24`.
+
+## New tests
+
+```bash
+cd apps/portal && npx tsx --test lib/numberSearchMessage.test.ts
+```
+
+**Result:** 15 pass / 0 fail
+
+```bash
+cd apps/api && npx tsx --test src/onboarding/requiredSignupDetails.test.ts
+```
+
+**Result:** 17 pass / 0 fail
+
+## Non-vacuity replay (the guards fail against the pre-change files)
+
+Portal guards replayed against `git show HEAD:` copies of the wizard,
+`publicRoutes.ts` and `packages/integrations/src/index.ts`:
+
+**Result:** 10 pass / **5 fail** — every source guard fails, as required
+(renders the empty message; keeps found-nothing apart from search-broke; retry
+copy not re-inlined; api reports a failed search; `unavailable_info` treated as
+empty).
+
+API guards replayed against the pre-change blobs:
+
+**Result:** all 4 fail — submit route runs the gate; both tenant-creation paths
+number a duplicate; e911 rejects a bogus parsed state.
+
+`buildE911Address` before vs after, same input `30 Robert Pitt Dr` with a blank
+`addressState`:
+
+```
+BEFORE: ok=true   state="DR"  street="30 Robert Pitt"
+AFTER : ok=false  state=""    street="30 Robert Pitt Dr"
+```
+
+## Suites
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/onboarding/*.test.ts
+```
+
+**Result:** 280 pass / 0 fail
+
+⛔ Without `--experimental-test-module-mocks` five files die with
+`mock.module is not a function` and read as a mass regression.
+
+```bash
+cd apps/portal && npm test
+```
+
+**Result:** 171 pass / 2 fail — both pre-existing and unrelated
+(`campaignsIndexLayout`, `webrtcSdpDiagnostics`).
+
+## Typechecks
+
+```bash
+cd apps/portal && npx tsc --noEmit
+```
+
+**Result:** 0 errors
+
+```bash
+cd apps/api && npx tsc --noEmit
+```
+
+**Result:** 76 errors total, **0 in any file this change touched**.
+
+## Live provider probe (read-only)
+
+`searchDIDsUSA` against the real VoIP.ms account from inside `app-api-1` — no
+purchase, no write. 305 / 212 / 786 / 555 / 999 / 311 answer `unavailable_info`
+with 0 rows; 845 answers `success` with 5000 rows in the same minute.
+
+## Post-deploy container verification
+
+- api `0b28b348`: `requiredSignupDetails.ts` and `uniqueTenantName.ts` present;
+  `requiredSignupDetailsProblem` ×2 in `publicRoutes.ts`; `isUsStateCode` ×3 in
+  `e911Address.ts`; `uniqueTenantName` in **both** creation paths;
+  `unavailable_info` ×2 in the integrations bundle; `number_search_failed` ×2.
+- portal `441efd24`: the onboarding page chunk carries "is not available right
+  now", "Area code " (×6) and `ob-num-empty` (×3).
+
+## Not run
+
+- **Nobody has opened the sign-up wizard in a browser since the deploy.** The
+  empty-state message is proven by unit test and by grepping the shipped bundle,
+  not by a human seeing it.
+- No sign-up has been submitted, so the required-details refusal has never been
+  shown to a person.
+- No duplicate-named tenant has been created since the deploy.
