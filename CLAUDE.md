@@ -51,13 +51,27 @@ Full detail: **`docs/ai-context/AGENT_HANDOFF_IVR_YIDDISH_2026-08-04.md`**
 PBX write, no data change, no credits spent.** Memory:
 [[yiddish-labs-out-of-credits]].
 
-- ⛔⛔ **THE ACCOUNT IS AT NEGATIVE THREE CREDITS AND HAS BEEN SINCE
-  2026-08-16 17:34 UTC.** Every Yiddish Labs call since then that is not a cache
-  hit answers **`402 insufficient_credits`**. Proven live against the deployed
-  key, not inferred: *"This action requires 1 credits but you only have -3
-  available."* **Nothing in Connect is broken and there is nothing to deploy —
-  it needs credits buying.** The key is read live from the store, so the bridge
-  resumes on the next message with **no restart and no agent rebuild**.
+- ✅✅ **RESOLVED 2026-08-18 — THE ACCOUNT WAS TOPPED UP AND YIDDISH WORKS.
+  ⛔ Everything below about "-3 credits" is the OUTAGE HISTORY, not the live
+  state; re-verify before acting on any of it.** The outage ran **2026-08-16
+  17:34Z → 2026-08-18 ~03:5xZ**: last `402` at **03:33:27Z**, first successful
+  translation at **03:53:57Z**, so credits arrived in that 20-minute window.
+  ✅ **Proven by a real conversation, not by a probe:** Izzy dictated three
+  Yiddish questions at 03:53–03:55Z (*"פארשטייסט אידיש?"*, then a question about
+  headaches) and got three real answers, every turn audited **`bridged: true,
+  degraded: false`** — i.e. Yiddish Labs did both legs and the canned fallback
+  never fired. Confirmed still live at **11:50:46Z**. ⛔ **The key was never
+  touched** — as predicted, it resumed on the next message with no restart, no
+  rebuild and no deploy.
+- ⛔⛔ **THE LESSON, and it cost this session a wrong report to Izzy: a recorded
+  outage is a fact about the PAST.** This section still read "the account IS at
+  -3" hours after it had been fixed, and I repeated it to him — including
+  advising him what to check "before you top up", when he had already topped up
+  and tested it himself the previous night. **Before repeating any outage from
+  these notes, re-verify it live.** The cheapest check needs no credits and no
+  API call: **`select max("createdAt") from "AgentTranslation"`** — a row exists
+  only when Yiddish Labs really performed a translation, so a timestamp within
+  the hour means it is working right now.
 - ⛔⛔ **THE SYMPTOM IS DISGUISED, WHICH IS WHY IT READS AS "it ignored my
   Yiddish".** `finishBridged()` (`apps/agent/src/conversation/engine.ts:230`)
   catches the failure and returns `fallbackReply("yi")` — a **hard-coded**
@@ -117,19 +131,42 @@ PBX write, no data change, no credits spent.** Memory:
   for a chat reply) and **~600 voicemails ran through YL in the nine days
   before it emptied**. The chat bridge is the visible casualty, not likely the
   big consumer. ⛔ Unprovable from our side — that bare `catch` logs nothing.
-- ⏳ **OPEN, and it is the real defect: the outage is INVISIBLE.** The 402 lands
-  in `AgentAuditLog` and nowhere else — no alert, no banner, no log line a human
-  reads. A customer complaint surfaced an outage 36 hours old, and the previous
-  occurrence produced a documented-but-wrong root cause. Two small fixes, **both
-  NOT done** (each needs a manual agent rebuild — ⛔ reset the server clone
-  first): make `/agent/ui/translate`'s bare `catch { failed.push(s); }` log the
-  HTTP status, and surface a 402 somewhere a person sees. ⛔ It **cannot** ride
-  `ADMIN_ALERT` (muted platform-wide) — escalation or a badge on the Assistant
-  page.
-- ⏳ **NOT PROVEN: no Yiddish conversation has succeeded since the top-up,
-  because there has been no top-up.** Acceptance is one Yiddish message
-  afterwards coming back as a real answer instead of the "passed it to the team"
-  sentence.
+- ✅ **THE REAL DEFECT — THE OUTAGE WAS INVISIBLE — IS NOW FIXED: IZZY IS TEXTED
+  WHEN YIDDISH LABS RUNS DRY.** `apps/api/src/yiddishLabsCreditWatch.ts`
+  (`bcf18435` + `301a28b7`, **api DEPLOYED and container-verified `301a28b7fb95`**;
+  no migration, no agent rebuild, no PBX write). It writes a **QUEUED
+  `AgentEscalation`**, so it rides the delivery half that already works — SMS to
+  **(562) 209-6644 + (845) 723-1213** and the `AGENT_ESCALATION` email.
+  ⛔ **It must never become an `ADMIN_ALERT`** (muted platform-wide: it would
+  build clean, log clean and reach nobody — the exact failure it exists to end),
+  and it must never grow its own sender; a test asserts both.
+- ⛔⛔ **THERE IS NO BALANCE ENDPOINT — probed read-only, `/credits` `/balance`
+  `/account` `/usage` `/quota` `/status` and six more all 404.** The ONLY way to
+  learn the balance is to be refused, so **no early "you're running low" warning
+  is possible** — the alert fires on the first refusal, not before it. That is
+  also why the watcher takes the cheapest signal first: a customer's failed
+  Yiddish chat already in the audit trail (**free**, and it fires on the first
+  real failure) → else a fresh `AgentTranslation` row proving the wire works
+  (**free** — so an account in daily use costs nothing to monitor) → else a probe
+  that costs **1 credit when healthy and nothing when empty**.
+- ⛔ **Only a `402` texts him.** A dead key (401), a 500 or a timeout is recorded
+  and never texted — a provider blip at 3am must not ring his phone, and
+  "unreachable" is not "out of money". It is **edge-triggered with the state in
+  `AgentAuditLog`**, never a module variable: it texts once on the crossing into
+  out and re-arms only after a healthy check. ⛔ **It also checks 2 minutes after
+  boot, not only hourly** — on a timer alone every deploy resets the clock, and on
+  a 44-deploy day it would never run once while looking armed. A check recorded
+  within the interval is skipped, so a run of deploys cannot probe every few
+  minutes.
+- ✅ **Its first live verdict was correct and cost nothing:** at 11:57:01Z it read
+  the 11:50 translation row and recorded `state: ok, via: translation`.
+  ⏳ **NOT PROVEN: no alert has ever been raised or delivered** — nothing is wrong
+  to alert about. The escalation path itself is well-exercised, but this caller
+  has never driven it. **The acceptance test is the next real outage, or one
+  deliberate test** (⛔ which really does text both numbers, so ask first).
+- ⏳ Still not done, and now much less urgent: `/agent/ui/translate`'s bare
+  `catch { failed.push(s); }` still discards the HTTP status (needs a manual
+  agent rebuild — ⛔ reset the server clone first).
 
 ## ⛔⛔ AGENT HANDOFF — the PBX name is what we call people now, on screen and in every email (2026-08-17) — READ FIRST before rendering a person's name ANYWHERE, before adding a naming fallback, or before "fixing" a name that looks wrong
 
@@ -813,12 +850,38 @@ Mockups Izzy chose from: <https://claude.ai/code/artifact/66ba46a5-01a1-4b88-b19
   nothing was touched. Options **B** (capability tiles) and **C** (quiet
   composer) are still drawn in the mockups if he wants to compare.
 
-## ⛔⛔ AGENT HANDOFF — 911 nearly got switched off by a billing feature (2026-08-17) — READ FIRST before touching the overdue-account cutoff, before deactivating ANY outbound route, or before assuming a per-customer thing is per-customer
+## ⛔⛔ AGENT HANDOFF — the overdue-account cutoff is WIRED END TO END and ARMED (2026-08-18); 911 nearly got switched off building it — READ FIRST before touching the cutoff, `SERVICE_INTERRUPTION_CUTOVER_AT`, the doorway, or before deactivating ANY outbound route
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRUPTION_2026-08-17.md`**
-(`c7c1df00` → `b8e5bf1c`. **Two live PBX writes under an explicit mandate: one
-panel permission, and emergency config on two tenants. NOT deployed, NOT
-rendered into the dialplan, no customer behaviour changed.** 69 tests.)
+(`c7c1df00` → `2c8cc04e`. **PBX writes under an explicit mandate: one panel
+permission, emergency config on two tenants, helper `2026.08.18.1` installed.
+api deploy queued `7771b6cf`; portal rides the next portal deploy.** 102 tests.)
+
+- ⛔⛔ **IT IS ARMED.** `SERVICE_INTERRUPTION_CUTOVER_AT=2026-08-18T12:01:07Z` is
+  in `.env.platform`. A daily sweep (first run 5 min after api boot) sends the
+  reminders, cuts off on day 7 (disables every ARS member across every profile,
+  regens the **MAIN** tenant, re-bakes doorways, sets the inbound busy flag) and
+  restores on payment. **Any failure older than the cutover is NEVER acted on**
+  — Izzy: existing past-due accounts are handled by hand. **The per-tenant
+  switch is OFF for every existing tenant and ON for every new sign-up.** So on
+  the day of deploy the sweep should consider **0** tenants; ⛔ if it does more,
+  stop and read `docker logs app-api-1 | grep SERVICE_INTERRUPTION`.
+- ⛔ **Disarm = blank the variable + restart api. Disarm one customer = the
+  switch** (`PUT /admin/billing/tenants/:id/service-interruption {enabled:false}`
+  or the card on `/admin/billing/customer/[tenantId]`). Restore and force are
+  `POST …/restore` and `POST …/interrupt {reason}` — SUPER_ADMIN only.
+- ⛔⛔ **THE CUTOFF REGEN MUST RUN IN THE MAIN TENANT.** `ARS-<id>` renders into
+  `extensions__50-1-dialplan.conf`; regenerating the customer's own tenant left
+  Loopcom Demo dialling out while the DB said "disabled". `applyArsRegen()` is
+  the only sanctioned way. Proven 12/12 in Asterisk (§8 of the handoff).
+- ⛔⛔ **`members[N][enabled]` IS A CHECKBOX — OMIT to disable; `enabled=0`
+  ENABLES it.** Same trap as `teamBuilder.ts:228`. Two tests fail loudly on it.
+- ✅ **Inbound busy is in the doorway** (`Busy(10)` when
+  `connect/t_<slug>/interrupted=yes`; AstDB read at call time, no regen). ⛔ **Only
+  numbers ON the doorway** — Connect-mode T2/T35/T105. Loopcom Demo / Landau Home
+  keep ringing during a cutoff; logged per tenant as a warning. Open gap.
+- ⛔ **`server.ts` was committed with a PRIVATE INDEX** (3 lines, mode 100644)
+  because another session had a mode flip staged. Recipe in the handoff §10.
 
 - ⛔⛔ **"DEACTIVATE ALL THEIR OUTBOUND ROUTES" AND "911 ALWAYS WORKS" CANCEL
   EACH OTHER OUT.** 911 leaves the building through an outbound route. Taken

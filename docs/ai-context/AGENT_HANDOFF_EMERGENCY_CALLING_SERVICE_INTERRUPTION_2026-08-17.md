@@ -1,7 +1,10 @@
 # AGENT HANDOFF — overdue-account service interruption, and native emergency calling (2026-08-17)
 
-**Status: LIVE on two tenants — rendered, reloaded, and confirmed in Asterisk.
-Nothing is deployed (no api/portal change is needed for this part).**
+**Status (2026-08-18): the whole overdue-account cutoff is WIRED END TO END —
+`2c8cc04e` — sweep timer, admin routes, inbound busy in the doorway (helper
+`2026.08.18.1` installed), onboarding hook, portal card. Cutover set in
+`.env.platform` at `2026-08-18T12:01:07Z`. api deploy queued as job
+`7771b6cf`; see §10 for what is and is not proven.**
 
 Commits on `feat/ivr-migration-takeover`: `c7c1df00`, `8671b2f0`, `b8e5bf1c`.
 69 tests, registered in the api test script.
@@ -261,3 +264,71 @@ Editing the live file alone would be silently reverted at the next install.
 
 ⛔ Deliberately not started with low context remaining: a half-edited helper
 that gets installed is worse than no inbound busy at all.
+
+## 10. Wired end to end (2026-08-18) — what runs, what is proven, what is not
+
+`2c8cc04e`. Everything from "payment fails" to "service restored" is now
+connected. Read this section before believing anything above about "not built".
+
+**Runs at boot** (`serviceInterruptionBoot.ts`, 1 import + 2 calls in
+`server.ts`): a daily sweep (first run 5 min after boot), and admin routes
+under `/admin/billing/tenants/:tenantId/service-interruption` — `GET`, `PUT`
+(switch / graceDays), `POST …/restore`, `POST …/interrupt` (reason ≥ 8 chars).
+**SUPER_ADMIN only** via `canAccessPlatformAdminBillingRoutes` — a customer's
+own admin must not be able to restore themselves. Every manual action writes a
+`BillingEventLog` row (`SERVICE_INTERRUPTION_*`).
+
+⛔⛔ **THE SWEEP IS ARMED THE MOMENT THE CONTAINER SEES
+`SERVICE_INTERRUPTION_CUTOVER_AT`.** Set in `.env.platform` at
+`2026-08-18T12:01:07Z` (backup `.env.platform.bak.<ts>.service-interruption-cutover`,
+diff = 3 added, 0 removed). Any payment failure older than that is **never**
+acted on — checked before the countdown even starts, so an old invoice never
+gets a start date a later change could act on. To disarm everything at once:
+blank the variable and restart api. To disarm one customer: the switch.
+
+**Inbound busy is REAL, with one limit.** The doorway now reads
+`connect/t_<slug>/interrupted` right after resolving the tenant and returns
+`Busy(10)`. Rendered and confirmed in Asterisk (`dialplan show
+connect-doorway` carries the GotoIf + Busy). AstDB is read at call time, so
+flipping it needs no regen. Written through the telephony `ivr-publish` door
+(family `connect/t_<slug>` is on its allowlist).
+⛔ **It only reaches numbers ON the doorway** — Connect-mode today = T2 A plus
+center, T35 Connect Communications, T105 inii mini. Loopcom Demo and Landau
+Home never enter the doorway; their inbound keeps ringing during a cutoff. The
+runner logs `no Connect-mode number — inbound callers will NOT hear busy` per
+tenant. Closing that means switching the number to Connect first (the existing
+DID switch route) — not done.
+
+**New sign-ups**: `setupOrchestrator` now passes the customer's address (via
+`buildE911Address`, state resolved to `ombutel.states.id` by
+`emergencyStateId.ts` — never guessed) so `buildPbxTenant` provisions
+emergency calling; and `ensureOnboardingBillingDefaults` stamps the switch
+**ON**. Existing accounts are untouched by both.
+
+**Portal**: `ServiceInterruptionCard` on `/admin/billing/customer/[tenantId]`,
+left column under "Who gets the invoice". Shows a warning banner when the
+server is not armed.
+
+**Committed with a private index** — `server.ts` carries only the 3 new lines
+at HEAD's mode; another session's staged mode flip and yiddish module were
+left exactly as found. Verified: 10 files, `git ls-tree HEAD server.ts` =
+100644.
+
+### Proven
+- 102 module tests; api typecheck at the 75 baseline; portal typecheck 0;
+  onboarding suites 71/71 with the module-mock flag; helper drift guard 33/33.
+- Outbound cutoff/restore: **12/12 transitions in Asterisk** (§8).
+- Inbound busy: rendered and loaded in Asterisk.
+
+### ⏳ NOT proven
+- **No real sweep has run against production.** The api container is being
+  deployed as this is written (job `7771b6cf`). Acceptance: `docker logs
+  app-api-1 | grep SERVICE_INTERRUPTION` shows `sweep scheduled {armed:true}`
+  and, 5 minutes later, `sweep complete` with `considered` = the number of
+  tenants with the switch on (**0 today**, so it should be a no-op).
+- **Nobody has clicked the card**, and the two manual routes have never been
+  hit over HTTP.
+- **Multi-profile tenants** (Trust Bookkeepings' 9) exist only in unit tests.
+- **Nobody has heard busy** on a real call.
+- **No new sign-up has driven the emergency hook** — first real sign-up is
+  the acceptance test (timeline should read `emergency location ok`).
