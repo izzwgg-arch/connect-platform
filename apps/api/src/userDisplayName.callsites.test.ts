@@ -103,9 +103,18 @@ test("the naming queries actually select the extension", () => {
   }
 });
 
-test("resolveUserNameForEmail can never break an invitation", () => {
-  const at = serverSrc.indexOf("async function resolveUserNameForEmail(");
-  assert.notEqual(at, -1);
-  const body = serverSrc.slice(at, at + 1200);
-  assert.match(body, /\.catch\(\(\) => null\)/, "a name lookup must not be able to stop an email");
+test("a name lookup can never break an invitation", () => {
+  // ⛔ It must be a try/catch, NOT a promise `.catch()`. When the model accessor
+  // is missing the call throws SYNCHRONOUSLY, so `.catch` never runs and the
+  // invitation dies with it — which is exactly what the onboarding suite caught.
+  for (const [src, marker, label] of [
+    [serverSrc, "async function resolveUserNameForEmail(", "resolveUserNameForEmail"],
+    [orchestratorSrc, "let namingExtension", "onboarding invite"],
+  ] as const) {
+    const at = src.indexOf(marker);
+    assert.notEqual(at, -1, `${label}: anchor not found`);
+    const body = src.slice(at, at + 1400);
+    assert.match(body, /try \{[\s\S]*?\} catch/, `${label} must wrap the lookup in try/catch`);
+    assert.match(body, /extension\?\.findFirst\?\./, `${label} must call the model defensively`);
+  }
 });

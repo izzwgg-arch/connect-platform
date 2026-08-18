@@ -103,7 +103,9 @@ test("the invite template renders the link in both HTML and plain text", () => {
     androidApkUrl: url,
   });
   assert.ok(built.html.includes(url), "HTML body must carry the download link");
-  assert.ok(built.html.includes("Download Connect for Android"), "HTML body must carry the button label");
+  // Wording follows the Loopcom rebrand (70dda3a9) — the shipped button reads
+  // "Download Loopcom for Android"; this assertion had been left on the old text.
+  assert.ok(built.html.includes("Download Loopcom for Android"), "HTML body must carry the button label");
   assert.ok(built.text.includes(url), "plain-text body must carry the download link");
 });
 

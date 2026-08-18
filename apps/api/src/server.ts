@@ -2293,14 +2293,19 @@ async function resolveUserNameForEmail(user: any): Promise<string> {
   if (alreadyHave) return displayNameForUser(user);
   let extensionDisplayName: string | null = null;
   if (user?.id) {
-    const ext = await db.extension
-      .findFirst({
+    // ⛔ try/catch, not `.catch()`: if the model accessor is missing the call
+    // throws SYNCHRONOUSLY and a promise `.catch` never runs — which would take
+    // an invitation down with it. Proven by the onboarding suite's fake db.
+    try {
+      const ext = await (db as any).extension?.findFirst?.({
         where: { ownerUserId: String(user.id), status: "ACTIVE" },
         orderBy: { createdAt: "asc" },
         select: { displayName: true },
-      })
-      .catch(() => null);
-    extensionDisplayName = ext?.displayName ?? null;
+      });
+      extensionDisplayName = ext?.displayName ?? null;
+    } catch {
+      extensionDisplayName = null;
+    }
   }
   return displayNameForUser({ ...user, extension: extensionDisplayName ? { displayName: extensionDisplayName } : null });
 }

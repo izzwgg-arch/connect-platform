@@ -121,13 +121,19 @@ async function queueInviteEmail(input: {
   // sign-up that IS the name the customer typed, because pbxTenantBuild names
   // the extension after the person (`ext_name: person.name`) — so this needs no
   // onboarding-specific branch.
-  const namingExtension = await (db as any).extension
-    .findFirst({
-      where: { ownerUserId: input.user.id, status: "ACTIVE" },
-      orderBy: { createdAt: "asc" },
-      select: { displayName: true },
-    })
-    .catch(() => null);
+  // ⛔ try/catch, not `.catch()` — a missing model accessor throws synchronously
+  // and would abort the invitation rather than just losing the nicer name.
+  let namingExtension: { displayName?: string | null } | null = null;
+  try {
+    namingExtension =
+      (await (db as any).extension?.findFirst?.({
+        where: { ownerUserId: input.user.id, status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        select: { displayName: true },
+      })) ?? null;
+  } catch {
+    namingExtension = null;
+  }
   const userName = resolvePersonDisplayName(
     {
       extensionDisplayName: namingExtension?.displayName ?? null,
