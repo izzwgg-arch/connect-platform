@@ -588,6 +588,7 @@ export async function applyE911ForDid(
   }
 
   try {
+    const prior = (row?.answers?.provisioning?.e911 || {}) as any;
     await mergeProvisioningState(row, {
       e911: {
         did,
@@ -596,6 +597,14 @@ export async function applyE911ForDid(
         corrected: result.corrected || null,
         needsAttention: result.needsAttention,
         at: new Date().toISOString(),
+        // ⛔ The address AS REGISTERED — the customer's email states what a
+        // dispatcher will actually be handed, which is the corrected form, not
+        // what they typed. Kept from an earlier run when this pass returned
+        // already_registered and therefore has no address of its own.
+        address: result.address || prior.address || null,
+        // Set by queueE911ActivatedEmail; kept here so a re-run cannot send the
+        // customer a second "911 is on" email.
+        emailedAt: prior.emailedAt || null,
       },
     });
   } catch {

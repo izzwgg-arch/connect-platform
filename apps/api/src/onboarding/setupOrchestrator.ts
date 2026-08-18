@@ -13,6 +13,7 @@ import { buildPbxTenant, type PbxBuildJob, type PbxPerson } from "./pbxTenantBui
 import { ensureProvisioningIdentity } from "./provisioningIdentity";
 import { readSubaccount, applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { queueOnboardingSignupReport } from "./adminSignupReport";
+import { queueE911ActivatedEmail } from "./e911ActivatedEmail";
 
 /**
  * setupOrchestrator — everything that happens after the customer presses
@@ -701,6 +702,16 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     await setPbxStatus(submissionId, "done");
     await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { status: "ACTIVE" } }).catch(() => {});
     await logEvent(submissionId, `Setup complete — tenant "${company}" is live with ${people.length} extension(s) on ${did}.`);
+
+    // Tell the customer their E911 address, now that the system is actually
+    // live (Izzy, 2026-08-17). ⛔ It sends ONLY when 911 really is registered —
+    // the guard lives inside queueE911ActivatedEmail, because "E911 is set" is
+    // a promise about an emergency and must never be sent on hope.
+    await queueE911ActivatedEmail({
+      db,
+      submissionId,
+      log: (message: string) => logEvent(submissionId, message),
+    });
     // The owner's plain-English sign-up report — one per finished sign-up.
     await queueOnboardingSignupReport(submissionId, "success");
   } catch (e: any) {
