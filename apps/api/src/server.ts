@@ -139,6 +139,7 @@ import {
   runVoicemailEmailSweep,
   runVoicemailEmailWatchdog,
 } from "./voicemail/voicemailEmailRuntime";
+import { startEmailGuardrails } from "./voicemail/voicemailEmailGuardrails";
 import {
   readVoicemailAudio,
   saveVoicemailAudio,
@@ -5385,6 +5386,10 @@ registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 360
 registerShutdownTimer(setTimeout(() => { void runVoicemailEmailSweep(app.log); }, 45_000) as unknown as NodeJS.Timeout);
 registerShutdownTimer(setInterval(() => { void runVoicemailEmailSweep(app.log); }, VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS) as unknown as NodeJS.Timeout);
 registerShutdownTimer(setInterval(() => { void runVoicemailEmailWatchdog(app.log); }, VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS) as unknown as NodeJS.Timeout);
+// ⛔ The guardrails (2026-08-18): heartbeat liveness for the two timers above,
+// recipient-coverage drop detection, and outbox health for EVERY email type.
+// Each escalates (never ADMIN_ALERT). See voicemailEmailGuardrails.ts.
+for (const t of startEmailGuardrails(app.log)) registerShutdownTimer(t);
 
 // ── Hourly inbound-DID sync + unattributed-call alarm ────────────────────────
 // Owner directive 2026-08-02: "there should never be a reason why the system

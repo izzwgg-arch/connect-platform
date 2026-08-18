@@ -5,6 +5,8 @@ import { encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 
+import { preserveBlankedPbxEmail } from "./voicemail/voicemailEmailGuardrails";
+
 // NOTE: This module is strictly READ-ONLY against the PBX. It fetches extensions
 // (GET) and writes only to Connect's own database. It must never trigger a
 // VitalPBX "Apply Changes", config regenerate, or any tenant write — those are
@@ -487,6 +489,19 @@ export async function syncExtensionsFromPbx(
         seenExtNumbers.add(extNumber);
 
         try {
+          // ⛔⛔ GUARD (2026-08-18): a voicemail-email address must NEVER vanish
+          // from Connect because it was blanked on the PBX. `pbxUserEmail` is a
+          // MIRROR of the PBX field; on 2026-08-17 the PBX cutover blanked that
+          // field to switch the PBX's own emailing off, this sync faithfully
+          // mirrored the blank in, and every customer lost voicemail email for
+          // ~20 hours. So: when the PBX address goes from a value to nothing,
+          // the old value is promoted into Connect's own recipient list
+          // (`VoicemailEmailRecipient`) BEFORE the mirror is nulled. The mirror
+          // stays honest, the customer keeps getting emailed, and only a human
+          // removing it in Settings can take it away. Never throws — the sync
+          // must not fail because of a guard.
+          await preserveBlankedPbxEmail(db, { tenantId: resolvedTenantId, extNumber, nextPbxUserEmail: pbxUserEmail });
+
           // 4a. Upsert the Connect Extension record
           const connectExt = await db.extension.upsert({
             where: { tenantId_extNumber: { tenantId: resolvedTenantId, extNumber } },

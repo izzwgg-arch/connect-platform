@@ -24,6 +24,12 @@ import {
   type VoicemailEmailGap,
 } from "./voicemailEmailWatchdog";
 import { extractVoicemailIdFromEmailBody } from "./voicemailEmail";
+import {
+  noteWatchdogFailure,
+  noteWatchdogSuccess,
+  recordHeartbeat,
+  requeueDeadVoicemailEmails,
+} from "./voicemailEmailGuardrails";
 
 type Log = { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void };
 
@@ -105,6 +111,50 @@ async function loadExtensionConfig(tenantId: string, extension: string): Promise
   };
 }
 
+const VOICEMAIL_SELECT = {
+  id: true, tenantId: true, extension: true, callerName: true, callerNumber: true,
+  durationSec: true, receivedAt: true, transcript: true, transcriptLanguage: true,
+  localAudioPath: true, audioGoneAt: true, emailedAt: true,
+} as const;
+
+/** The one set of side effects the sender needs — shared by the sweep AND the watchdog's rescue. */
+function senderDeps() {
+  return {
+    loadExtension: loadExtensionConfig,
+    queueEmail: async (p: { tenantId: string; type: string; toEmail: string; subject: string; htmlBody: string; textBody: string }) =>
+      (db as any).emailJob.create({
+        data: {
+          tenantId: p.tenantId, type: p.type, toEmail: p.toEmail,
+          subject: p.subject, htmlBody: p.htmlBody, textBody: p.textBody,
+        },
+      }),
+    markProcessed: async (id: string, reason: string | null) =>
+      (db as any).voicemail.update({
+        where: { id },
+        data: { emailedAt: new Date(), emailSkipReason: reason },
+      }),
+  };
+}
+
+/** Process a list of voicemails; one bad message never stops the rest. */
+async function processVoicemails(pending: any[], log: Log): Promise<{ queued: number; skipped: Record<string, number> }> {
+  let queued = 0;
+  const skipped: Record<string, number> = {};
+  const deps = senderDeps();
+  for (const vm of pending) {
+    try {
+      const out = await processVoicemailForEmail(vm, deps as any);
+      if (out.queued) queued++;
+      else skipped[out.reason] = (skipped[out.reason] || 0) + 1;
+    } catch (err) {
+      // ⛔ One bad voicemail must never stop the sweep for the rest. It stays
+      // unstamped, so the next pass retries it.
+      log.warn({ voicemailId: vm.id, err: (err as Error)?.message }, "voicemail-email: one message failed, will retry");
+    }
+  }
+  return { queued, skipped };
+}
+
 /** Queue emails for voicemails that need one. Safe to run every minute. */
 export async function runVoicemailEmailSweep(log: Log): Promise<void> {
   if (!voicemailEmailEnabled()) return;
@@ -114,44 +164,19 @@ export async function runVoicemailEmailSweep(log: Log): Promise<void> {
       where: buildVoicemailSweepWhere({ since, excludedTenantIds: voicemailEmailExcludedTenantIds() }),
       orderBy: { receivedAt: "asc" },
       take: SWEEP_BATCH,
-      select: {
-        id: true, tenantId: true, extension: true, callerName: true, callerNumber: true,
-        durationSec: true, receivedAt: true, transcript: true, transcriptLanguage: true,
-        localAudioPath: true, audioGoneAt: true, emailedAt: true,
-      },
+      select: VOICEMAIL_SELECT,
     });
-    if (pending.length === 0) return;
-
-    let queued = 0;
-    const skipped: Record<string, number> = {};
-    for (const vm of pending) {
-      try {
-        const out = await processVoicemailForEmail(vm, {
-          loadExtension: loadExtensionConfig,
-          queueEmail: async (p) =>
-            (db as any).emailJob.create({
-              data: {
-                tenantId: p.tenantId, type: p.type, toEmail: p.toEmail,
-                subject: p.subject, htmlBody: p.htmlBody, textBody: p.textBody,
-              },
-            }),
-          markProcessed: async (id, reason) =>
-            (db as any).voicemail.update({
-              where: { id },
-              data: { emailedAt: new Date(), emailSkipReason: reason },
-            }),
-        });
-        if (out.queued) queued++;
-        else skipped[out.reason] = (skipped[out.reason] || 0) + 1;
-      } catch (err) {
-        // ⛔ One bad voicemail must never stop the sweep for the rest. It stays
-        // unstamped, so the next pass retries it.
-        log.warn({ voicemailId: vm.id, err: (err as Error)?.message }, "voicemail-email: one message failed, will retry");
-      }
+    // ⛔ Heartbeat on EVERY completed pass, including an empty one — the liveness
+    // guard reads it, and "nothing to do" is the normal state most minutes.
+    if (pending.length === 0) {
+      await recordHeartbeat("sweep", { considered: 0, queued: 0 });
+      return;
     }
+    const { queued, skipped } = await processVoicemails(pending, log);
     if (queued > 0 || Object.keys(skipped).length > 0) {
       log.info({ queued, skipped, considered: pending.length }, "voicemail-email: sweep complete");
     }
+    await recordHeartbeat("sweep", { considered: pending.length, queued });
   } catch (err) {
     log.warn({ err: (err as Error)?.message }, "voicemail-email: sweep failed");
   }
@@ -203,7 +228,11 @@ export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmai
         extension: r.extension, receivedAt: r.receivedAt,
         emailedAt: r.emailedAt, emailSkipReason: r.emailSkipReason,
       }));
-    if (eligible.length === 0) return [];
+    if (eligible.length === 0) {
+      noteWatchdogSuccess();
+      await recordHeartbeat("watchdog", { eligible: 0, gaps: 0, rescued: 0 });
+      return [];
+    }
 
     // Map voicemail id -> the outcome of its email job, via the body marker.
     const jobs = await (db as any).emailJob.findMany({
@@ -220,7 +249,30 @@ export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmai
       if (!prev || j.status === "SENT") jobStatusByVoicemailId.set(id, { status: j.status, lastErrorMessage: j.lastErrorMessage });
     }
 
-    const gaps = findVoicemailEmailGaps({ eligible, jobStatusByVoicemailId });
+    let gaps = findVoicemailEmailGaps({ eligible, jobStatusByVoicemailId });
+
+    // ── SELF-HEAL 1: a voicemail the sweep never reached is processed HERE, by
+    // the watchdog, through its own query — so a blocked or dead sweep can no
+    // longer strand anything (2026-08-18: Gesheft filled the sweep's batch for
+    // a day and 7 customer voicemails sat behind it). Same sender, same
+    // decision layer, same stamps; the only difference is who calls it.
+    const stranded = gaps.filter((g) => g.problem === "never_processed").map((g) => g.voicemailId);
+    if (stranded.length > 0) {
+      const rows = await (db as any).voicemail.findMany({
+        where: { id: { in: stranded.slice(0, 200) } },
+        select: VOICEMAIL_SELECT,
+      });
+      const healed = await processVoicemails(rows, log);
+      log.warn({ stranded: stranded.length, ...healed }, "voicemail-email: watchdog rescued voicemails the sweep never reached");
+      // Re-judge: what was just queued/stamped is no longer a gap.
+      const stampedNow = new Set(rows.map((r: any) => r.id));
+      gaps = gaps.filter((g) => !(g.problem === "never_processed" && stampedNow.has(g.voicemailId)));
+    }
+
+    // ── SELF-HEAL 2: emails the outbox gave up on get another life once the
+    // outbox has proven it can send again (bounded — see decideRequeue).
+    await requeueDeadVoicemailEmails(log);
+
     const alertable = gapsWorthAlerting(gaps);
 
     if (gaps.length > 0) {
@@ -234,9 +286,13 @@ export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmai
       const summary = describeVoicemailEmailGaps(alertable);
       await raiseVoicemailEscalation(summary, alertable.length, log);
     }
+    noteWatchdogSuccess();
+    await recordHeartbeat("watchdog", { eligible: eligible.length, gaps: gaps.length, rescued: stranded.length });
     return gaps;
   } catch (err) {
-    log.warn({ err: (err as Error)?.message }, "voicemail-email: watchdog failed");
+    // ⛔ A watchdog that cannot run must scream — its silent failure is exactly
+    // how the 2026-08-18 outage went unnoticed. Three in a row escalates.
+    await noteWatchdogFailure(err, log);
     return [];
   }
 }

@@ -21,8 +21,8 @@ import path from "node:path";
 const calls: { voicemailFindMany: any[]; tenantFindMany: any[]; emailJobFindMany: any[] } = {
   voicemailFindMany: [], tenantFindMany: [], emailJobFindMany: [],
 };
-const state: { voicemails: any[]; tenants: any[]; jobs: any[]; escalations: any[] } = {
-  voicemails: [], tenants: [], jobs: [], escalations: [],
+const state: { voicemails: any[]; tenants: any[]; jobs: any[]; escalations: any[]; audit: any[] } = {
+  voicemails: [], tenants: [], jobs: [], escalations: [], audit: [],
 };
 
 mock.module("@connect/db", {
@@ -38,6 +38,7 @@ mock.module("@connect/db", {
           const notIn: string[] = args?.where?.tenantId?.notIn || [];
           const notNull = args?.where?.tenantId?.not === null;
           let rows = state.voicemails.filter((v) => (!notNull || v.tenantId !== null) && !notIn.includes(v.tenantId));
+          if (args?.where?.id?.in) rows = rows.filter((v) => args.where.id.in.includes(v.id));
           if (args?.where?.emailedAt === null) rows = rows.filter((v) => v.emailedAt == null);
           rows = rows.slice().sort((a, b) =>
             args?.orderBy?.receivedAt === "desc" ? +b.receivedAt - +a.receivedAt : +a.receivedAt - +b.receivedAt);
@@ -59,8 +60,15 @@ mock.module("@connect/db", {
         findFirst: async () => state.tenants[0] ?? null,
       },
       emailJob: {
-        findMany: async (args: any) => { calls.emailJobFindMany.push(args); return state.jobs; },
+        findMany: async (args: any) => { calls.emailJobFindMany.push(args); return args?.where?.type === "VOICEMAIL_NOTIFICATION" && args?.where?.status === "FAILED" ? [] : state.jobs; },
+        findFirst: async () => null,
+        update: async () => ({}),
         create: async ({ data }: any) => { state.jobs.push({ ...data, status: "QUEUED" }); return data; },
+      },
+      agentAuditLog: {
+        create: async ({ data }: any) => { state.audit.push(data); return data; },
+        findFirst: async () => null,
+        findMany: async () => [],
       },
       extension: {
         findFirst: async ({ where }: any) => ({
@@ -82,7 +90,7 @@ const log = { info: () => {}, warn: () => {} };
 
 function reset() {
   calls.voicemailFindMany.length = 0; calls.tenantFindMany.length = 0; calls.emailJobFindMany.length = 0;
-  state.voicemails.length = 0; state.tenants.length = 0; state.jobs.length = 0; state.escalations.length = 0;
+  state.voicemails.length = 0; state.tenants.length = 0; state.jobs.length = 0; state.escalations.length = 0; state.audit.length = 0;
   process.env.VOICEMAIL_EMAIL_ENABLED = "1";
   process.env.VOICEMAIL_EMAIL_EXCLUDED_TENANT_IDS = GESHEFT;
 }
@@ -143,14 +151,23 @@ test("the watchdog runs to completion — no `tenant` relation in its select, na
   state.voicemails.push(vm({ id: "g1", tenantId: GESHEFT, receivedAt: new Date(Date.now() - 864e5) }));
 
   const gaps = await runVoicemailEmailWatchdog(log as any);
-  const select = calls.voicemailFindMany.at(-1)?.select || {};
-  assert.equal("tenant" in select, false, "watchdog must not select a relation Voicemail does not have");
+  const wdSelect = calls.voicemailFindMany.find((c) => c?.orderBy?.receivedAt === "desc")?.select || {};
+  assert.equal("tenant" in wdSelect, false, "watchdog must not select a relation Voicemail does not have");
   assert.equal(calls.tenantFindMany.length, 1, "tenant names are looked up in a separate query");
   assert.deepEqual([...calls.tenantFindMany[0].where.id.in].sort(), [GESHEFT, "trust"]);
-  assert.equal(gaps.length, 1);
-  assert.equal(gaps[0].voicemailId, "lost");
-  assert.equal(gaps[0].tenantName, "Trust Bookkeepings");
-  assert.equal(gaps[0].problem, "never_processed");
+  // SELF-HEAL: the stranded voicemail is not merely reported — the watchdog processed it itself.
+  assert.equal(state.jobs.length, 1, "the watchdog rescued the stranded voicemail by queueing its email");
+  assert.equal(state.jobs[0].toEmail, "trust-105@example.com");
+  assert.ok(state.voicemails.find((v) => v.id === "lost").emailedAt, "rescued voicemail is stamped");
+  assert.equal(gaps.length, 0, "a rescued voicemail is no longer a gap");
+  assert.ok(state.audit.some((a) => a.event === "voicemail_email.watchdog_heartbeat"), "watchdog heartbeat recorded");
+});
+
+test("the sweep records a heartbeat even when there is nothing to do", async () => {
+  reset();
+  const { runVoicemailEmailSweep } = await import("./voicemailEmailRuntime");
+  await runVoicemailEmailSweep(log as any);
+  assert.ok(state.audit.some((a) => a.event === "voicemail_email.sweep_heartbeat"));
 });
 
 // ── Source guards. Normalise CRLF: Windows checkouts break literal-`\n` slices.
