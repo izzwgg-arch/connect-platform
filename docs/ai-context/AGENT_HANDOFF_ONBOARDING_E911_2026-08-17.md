@@ -352,6 +352,42 @@ real sign-up is the acceptance test.
 
 ---
 
+## 7d. ⛔⛔ THIS IS ONLY HALF OF EMERGENCY CALLING — read the other handoff too
+
+A parallel session built the **PBX half** the same day:
+**`docs/ai-context/AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRUPTION_2026-08-17.md`**.
+The two are complementary and neither works properly alone.
+
+| | This handoff | The other one |
+|---|---|---|
+| Where | **Carrier** (VoIP.ms `e911Provision`) | **PBX** (VitalPBX native emergency numbers) |
+| What it decides | **The address a 911 dispatcher is handed** | **Whether the 911 call leaves the building at all** |
+| Mechanism | `e911Info` / `e911Validate` / `e911Provision`, plus `default_e911` on the trunk | `T<n>_emergency-calls` context → `Gosub(trk-<id>)`, bypassing outbound routes entirely |
+| Live on | Matamim | Matamim **and inii mini**, both carrying 911 + 8457831212 |
+
+⛔ **Their half exists because "deactivate every outbound route" for an overdue
+account would otherwise silently disconnect 911** — the native emergency check
+runs *before* `OUTBOUND_PROFILE` is read, so emergency calls survive the cutoff.
+
+⛔⛔ **THE TWO SYSTEMS HOLD THE SAME ADDRESS IN TWO DIFFERENT FORMS, AND THAT IS
+CORRECT — DO NOT "FIX" EITHER TO MATCH THE OTHER.**
+
+```
+PBX emergency location (Matamim) : 15 Van Buren Dr, Monroe, NY 10950
+VoIP.ms E911 record  (Matamim)   : 15 VAN BUREN DR, KIRYAS JOEL V, NY 10950
+```
+
+The PBX value is the **postal** address, used for the internal notification
+email. The VoIP.ms value is the **municipality** form the emergency database
+insists on (see §3) and is what a dispatcher actually receives. They describe
+the same building.
+
+⏳ Between them, the open acceptance test is shared: **nobody has dialled 911
+from either tenant.** Their handoff suggests dialling **8457831212** rather than
+911 so no dispatcher's time is wasted.
+
+---
+
 ## 8. Environment notes worth keeping
 
 - **Probing VoIP.ms read-only from inside the api container** is how all of this

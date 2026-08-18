@@ -294,6 +294,16 @@ Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]]
 ## ⛔⛔ AGENT HANDOFF — every sign-up now registers its own address for 911 (2026-08-17) — READ FIRST before touching the onboarding address fields, before trusting the VoIP.ms WSDL for a parameter name, or before adding any e911 call
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_E911_2026-08-17.md`**
+⛔⛔ **THIS IS ONLY HALF OF EMERGENCY CALLING.** The PBX half — making the 911
+call actually leave the building, and survive the overdue-account cutoff that
+deactivates every outbound route — is
+**`docs/ai-context/AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRUPTION_2026-08-17.md`**.
+This handoff decides **what address a dispatcher is handed**; that one decides
+**whether the call gets out at all**. Read both.
+⛔ **They hold the same address in two different forms ON PURPOSE** — the PBX
+carries the postal address (`15 Van Buren Dr, Monroe`) for its notification
+email, VoIP.ms carries the municipality form (`15 VAN BUREN DR, KIRYAS JOEL V`)
+because the emergency database insists on it. **Do not "fix" either to match.**
 (`f1479147` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED and
 container-verified.** No migration, no PBX write, no flag flipped, no existing
 tenant touched.) Izzy, 2026-08-17: *"use the customer's address as e911 and
