@@ -399,6 +399,61 @@ looking at cache membership, not at the property you are testing.**
   intermittent.
 - ⛔ **UI phrase warming: dead.** An untranslated phrase renders **English**,
   which is safe but permanently incomplete on the queue screens (26 of 176).
+## 2026-08-18 — RESOLVED: topped up, Yiddish works, and the outage is no longer invisible
+
+⛔ **Read this before anything below it in the 2026-08-18 section — those bullets
+are the outage HISTORY, not the live state.**
+
+**The outage ran 2026-08-16 17:34Z → 2026-08-18 ~03:5xZ.** Last `402` at
+**03:33:27Z**; first successful translation at **03:53:57Z**; so the credits
+landed inside that 20-minute window. Nothing was deployed or restarted to make
+it work — the key is read live from the store, exactly as predicted.
+
+✅ **Proven by a real conversation, not a probe.** Izzy dictated three Yiddish
+questions at 03:53–03:55Z (`פארשטייסט אידיש?`, then a headache question) and got
+three real answers. Every turn is audited **`bridged: true, degraded: false`** —
+Yiddish Labs did both legs and the canned "passed it to the team" fallback never
+fired. Still live at **11:50:46Z**.
+
+⛔⛔ **THE LESSON, and it cost a wrong report to the owner: a recorded outage is a
+fact about the PAST.** This handoff and CLAUDE.md both still asserted "the
+account IS at -3 credits" hours after it had been fixed, and that was repeated
+to him as current — including advice on what to check "before you top up", when
+he had already topped up and tested it himself the night before. **Re-verify a
+recorded outage live before repeating it.** The cheapest check spends no credits
+and makes no API call: `select max("createdAt") from "AgentTranslation"` — a row
+exists only when Yiddish Labs really performed a translation, so a recent
+timestamp means it is working right now.
+
+✅ **The invisible-outage defect is FIXED: he is texted when it next runs dry.**
+`apps/api/src/yiddishLabsCreditWatch.ts` (`bcf18435` + `301a28b7`, api DEPLOYED
+and container-verified `301a28b7fb95`). It writes a QUEUED `AgentEscalation` and
+rides the delivery half that already works (SMS to (562) 209-6644 +
+(845) 723-1213, plus the `AGENT_ESCALATION` email).
+
+- ⛔ **No balance endpoint exists** — `/credits` `/balance` `/account` `/usage`
+  `/quota` `/status` and six more all answer 404, probed read-only. The only way
+  to learn the balance is to be refused, **so no "running low" warning is
+  possible**; the alert fires on the first refusal.
+- ⛔ **Cheapest signal first:** a customer's failed Yiddish chat already in the
+  audit trail (free, fires on the first real failure) → else a fresh
+  `AgentTranslation` row (free — an account in daily use costs nothing to
+  monitor) → else a probe costing **1 credit when healthy, nothing when empty**.
+- ⛔ **Only a 402 texts him.** 401 / 5xx / timeouts are recorded and never
+  texted: a blip at 3am must not ring his phone, and unreachable is not out of
+  money. Edge-triggered, state in `AgentAuditLog` — never a module variable.
+- ⛔ **It checks 2 minutes after boot as well as hourly.** On a timer alone the
+  first check lands an hour after boot and every deploy resets that clock; on a
+  44-deploy day it would never run once while looking armed. A check recorded
+  within the interval is skipped so a run of deploys cannot probe every few
+  minutes.
+- ⛔ **Never make it an `ADMIN_ALERT`** (muted platform-wide) and never give it
+  its own SMS sender or `emailJob.create`. Tests assert both.
+- ✅ First live verdict, 11:57:01Z: `state: ok, via: translation` — correct, and
+  free. ⏳ **NOT PROVEN: no alert has ever been raised or delivered.** The
+  acceptance test is the next real outage, or one deliberate test — ⛔ which
+  really does text both numbers, so ask first.
+
 - ✅ **Voicemail transcription still works — but ⛔ NOT because YL is out of that
   path. It is IN it, first in line, and failing silently on every voicemail.**
   `yiddishPass()` (`apps/agent/src/transcription/voicemailJob.ts`) tries **Yiddish
