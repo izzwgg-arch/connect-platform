@@ -14,10 +14,38 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Bot, Send, Mic, X, Plus, Paperclip, Music, FileText } from "lucide-react";
+import {
+  Bot,
+  Send,
+  Mic,
+  X,
+  Plus,
+  Paperclip,
+  Music,
+  FileText,
+  Sparkles,
+  ChevronRight,
+  LifeBuoy,
+  ArrowLeft,
+  Check,
+  Eye,
+  Voicemail as VoicemailIcon,
+  ListOrdered,
+  LayoutPanelTop,
+  Languages,
+  AlertTriangle,
+} from "lucide-react";
+import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, assistantGreetingLine } from "@connect/shared";
+import { apiGet, apiPost, ApiError } from "../services/apiClient";
+import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
 
 type Msg = { id: string; role: "user" | "assistant"; content: string; pending?: boolean };
+
+/** Which screen the panel is showing. The report is a place, not a dialog: it
+ *  replaces the panel's body so the customer is never typing into a form that
+ *  is floating over the conversation they were just having. */
+type PanelView = "chat" | "report" | "sent";
 
 type PendingFile = {
   localId: string;
@@ -130,8 +158,21 @@ function pageLabel(pathname: string): string {
 
 export function FloatingAssistant() {
   const pathname = usePathname() || "/";
+  const { user } = useAppContext();
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<PanelView>("chat");
   const [showHint, setShowHint] = useState(true);
+  /** Unheard voicemail, so the first suggestion carries a fact rather than a
+   *  guess. Null until it answers — the row simply reads without a count. */
+  const [unheard, setUnheard] = useState<number | null>(null);
+  // ── Report a problem ─────────────────────────────────────────────────────
+  const [problem, setProblem] = useState("");
+  const [area, setArea] = useState<string>("calls");
+  const [urgent, setUrgent] = useState(false);
+  const [callback, setCallback] = useState("");
+  const [filing, setFiling] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [sent, setSent] = useState<{ reference: string; callbackPhone: string; confirmationTexted: boolean } | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -155,10 +196,41 @@ export function FloatingAssistant() {
   const { grant, refresh: refreshGrant, clear: clearGrant } = usePendingGrant();
 
   const label = useMemo(() => pageLabel(pathname), [pathname]);
+  // Re-read on every open so a panel left open overnight is not still saying
+  // "Good evening" in the morning.
+  const greeting = useMemo(() => assistantGreetingLine(user?.name), [user?.name, open]);
 
   useEffect(() => {
     if (open) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, open]);
+
+  // The unheard count for the opening screen. ⛔ `pageSize: 1` on purpose — we
+  // want the COUNT, not the rows. Asking for a full page here would be the
+  // voicemail flood again (100 rows fetched every time anyone opens the panel).
+  useEffect(() => {
+    if (!open || unheard !== null) return;
+    let cancelled = false;
+    void apiGet<{ unreadTotal?: number }>("/voice/voicemail?folder=inbox&pageSize=1")
+      .then((r) => {
+        if (!cancelled) setUnheard(Number.isFinite(r?.unreadTotal) ? Number(r.unreadTotal) : null);
+      })
+      // A missing count is not an error worth showing: the row still works.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, unheard]);
+
+  // Their own number, so the report form starts filled in. Only fetched when
+  // the report screen is actually opened.
+  useEffect(() => {
+    if (view !== "report" || callback) return;
+    void apiGet<{ callbackPhone: string | null }>("/support/context")
+      .then((r) => {
+        if (r?.callbackPhone) setCallback(r.callbackPhone);
+      })
+      .catch(() => undefined);
+  }, [view, callback]);
 
   // Auto-dismiss the "Need help?" nudge after a few seconds.
   useEffect(() => {
@@ -272,6 +344,61 @@ export function FloatingAssistant() {
     setMessages([]);
   }, [conversationId]);
 
+  const openReport = useCallback(() => {
+    uiEvent("open report a problem");
+    setReportError(null);
+    setView("report");
+  }, []);
+
+  const backToChat = useCallback(() => {
+    setView("chat");
+    setReportError(null);
+  }, []);
+
+  /**
+   * File the report. ⛔ This does NOT go through the assistant — it posts
+   * straight to the API, which writes the escalation itself. The whole point of
+   * the button is that reaching a person must not depend on a model choosing to
+   * pass something along.
+   */
+  const fileReport = useCallback(async () => {
+    if (filing) return;
+    const text = problem.trim();
+    if (text.length < SUPPORT_REPORT_PROBLEM_MIN) {
+      setReportError("Please tell us a little more about what's happening.");
+      return;
+    }
+    if (!callback.trim()) {
+      setReportError("We need a number to reach you on.");
+      return;
+    }
+    setFiling(true);
+    setReportError(null);
+    uiEvent(urgent ? "send report (phones down)" : "send report");
+    try {
+      const res = await apiPost<{ ok: boolean; reference: string; callbackPhone: string; confirmationTexted: boolean }>(
+        "/support/report",
+        { problem: text, area, urgent, callbackPhone: callback.trim(), page: label },
+      );
+      setSent({ reference: res.reference, callbackPhone: res.callbackPhone, confirmationTexted: !!res.confirmationTexted });
+      setProblem("");
+      setUrgent(false);
+      setView("sent");
+    } catch (e: unknown) {
+      // ⛔ `.body`, never `.payload` — `.payload` has never existed on ApiError
+      // and silently falls through to the bare error code. This is the one
+      // screen a customer reaches when something is already broken; a slug
+      // here is the worst possible thing to show them.
+      const body = e instanceof ApiError ? (e.body as { message?: string } | undefined) : undefined;
+      setReportError(
+        body?.message ||
+          "We couldn't send that just now. Please call us on (845) 723-1213 and we'll pick it up straight away.",
+      );
+    } finally {
+      setFiling(false);
+    }
+  }, [filing, problem, callback, area, urgent, label]);
+
   // Voice input: record a short clip in the browser (MediaRecorder), then send
   // it to the server to be transcribed by Yiddish Labs (accurate for American
   // Yiddish, auto-detects English). Click once to start, once again to stop.
@@ -340,13 +467,126 @@ export function FloatingAssistant() {
         />
       )}
 
-      {open && (
+      {open && view === "report" && (
+        <div className="fa-panel" role="dialog" aria-label="Report a problem">
+          <div className="fa-head">
+            <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
+            <div className="fa-title"><b>Report a problem</b></div>
+            <div className="fa-head-actions">
+              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+            </div>
+          </div>
+
+          <div className="fa-body custom-scrollbar">
+            <p className="fa-lead">This goes straight to a person at Loopcom — not to the assistant.</p>
+
+            <div className="fa-form">
+              <div>
+                <label className="fa-lbl" htmlFor="fa-problem">What&apos;s happening?</label>
+                <textarea
+                  id="fa-problem"
+                  className="fa-box fa-box-tall"
+                  value={problem}
+                  onChange={(e) => setProblem(e.target.value)}
+                  placeholder="The phone in the front office stopped ringing this morning…"
+                  maxLength={2000}
+                />
+              </div>
+
+              <div>
+                <span className="fa-lbl">Where?</span>
+                <div className="fa-pills" role="group" aria-label="Where is the problem">
+                  {SUPPORT_REPORT_AREAS.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className={`fa-pill${area === a.id ? " fa-pill-on" : ""}`}
+                      aria-pressed={area === a.id}
+                      onClick={() => setArea(a.id)}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className={`fa-toggle${urgent ? " fa-toggle-on" : ""}`}
+                aria-pressed={urgent}
+                onClick={() => setUrgent((v) => !v)}
+              >
+                <span className="fa-sw" aria-hidden />
+                <span className="fa-row-txt">
+                  <b>Our phones are down right now</b>
+                  <small>We&apos;ll treat it as urgent</small>
+                </span>
+                <AlertTriangle size={15} className="fa-warn" />
+              </button>
+
+              <div>
+                <label className="fa-lbl" htmlFor="fa-callback">Best number to reach you</label>
+                <input
+                  id="fa-callback"
+                  className="fa-box"
+                  value={callback}
+                  onChange={(e) => setCallback(e.target.value)}
+                  placeholder="(845) 555-0134"
+                  inputMode="tel"
+                  autoComplete="tel"
+                />
+              </div>
+
+              {reportError && <div className="fa-err" role="alert">{reportError}</div>}
+            </div>
+
+            <div className="fa-cta">
+              <button className="fa-btn" onClick={() => void fileReport()} disabled={filing}>
+                {filing ? "Sending…" : "Send to Loopcom"}
+              </button>
+              <small>We&apos;ll text you back on this number.</small>
+            </div>
+          </div>
+          <div className="fa-foot">A person from Loopcom is always behind this</div>
+        </div>
+      )}
+
+      {open && view === "sent" && (
+        <div className="fa-panel" role="dialog" aria-label="Report sent">
+          <div className="fa-head">
+            <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
+            <div className="fa-title"><b>Report a problem</b></div>
+            <div className="fa-head-actions">
+              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+            </div>
+          </div>
+          <div className="fa-done">
+            <span className="fa-ring"><Check size={26} /></span>
+            <h3>We&apos;ve got it.</h3>
+            {/* ⛔ Only promise the text when the text actually went. Saying
+                "we'll text you" after the send failed is the kind of small lie
+                that turns into "nobody ever got back to me". */}
+            <p>
+              {sent?.confirmationTexted ? (
+                <>Your message reached a person at Loopcom. We&apos;ll text you back on <b>{sent?.callbackPhone}</b>.</>
+              ) : (
+                <>Your message reached a person at Loopcom. We&apos;ll be in touch on <b>{sent?.callbackPhone}</b>.</>
+              )}
+            </p>
+            <p className="fa-ref">Reference <b>{sent?.reference}</b></p>
+            <button className="fa-ghost" onClick={backToChat}>Back to the assistant</button>
+          </div>
+          <div className="fa-foot">A person from Loopcom is always behind this</div>
+        </div>
+      )}
+
+      {open && view === "chat" && (
         <div className="fa-panel" role="dialog" aria-label="Assistant">
           <div className="fa-head">
-            <div className="fa-avatar"><Bot size={18} /></div>
+            <div className="fa-avatar"><Sparkles size={17} /></div>
             <div className="fa-title">
               <b>Assistant</b>
-              <small><span className="fa-live" /> Online — here to help</small>
+              <small><Eye size={12} /> Looking at {label} with you</small>
             </div>
             <div className="fa-head-actions">
               <button title="New chat" onClick={() => { uiEvent("new chat"); newChat(); }}><Plus size={16} /></button>
@@ -354,15 +594,48 @@ export function FloatingAssistant() {
             </div>
           </div>
 
-          <div className="fa-ctx">
-            <span className="fa-eye" aria-hidden>👁</span>
-            <span>Viewing with you: <b>{label}</b> — ask me anything on this page</span>
-          </div>
-
           <div className="fa-msgs custom-scrollbar">
             {messages.length === 0 && (
-              <div className="fa-empty">
-                Hi! How can I help? You can type in <b>English</b> or <b>ייִדיש</b>.
+              <div className="fa-open">
+                <div className="fa-greet">
+                  <h3>{greeting}</h3>
+                  <p>What can I help with?</p>
+                </div>
+                <div className="fa-rows">
+                  <button className="fa-row fa-row-lead" onClick={() => send("Summarize my new voicemails")}>
+                    <span className="fa-ico"><VoicemailIcon size={15} /></span>
+                    <span className="fa-row-txt">
+                      <b>Catch me up on voicemail</b>
+                      {/* A real number when we have one; never a made-up one. */}
+                      <small>{unheard === null ? "Read out what's waiting" : unheard === 0 ? "Nothing unheard right now" : `${unheard} unheard`}</small>
+                    </span>
+                    <ChevronRight size={15} className="fa-chev" />
+                  </button>
+                  <button className="fa-row" onClick={() => send("I want to change my phone menu")}>
+                    <span className="fa-ico"><ListOrdered size={15} /></span>
+                    <span className="fa-row-txt">
+                      <b>Change my phone menu</b>
+                      <small>Greeting, options, opening hours</small>
+                    </span>
+                    <ChevronRight size={15} className="fa-chev" />
+                  </button>
+                  <button className="fa-row" onClick={() => send(`What can I do on the ${label} page?`)}>
+                    <span className="fa-ico"><LayoutPanelTop size={15} /></span>
+                    <span className="fa-row-txt">
+                      <b>Explain this page</b>
+                      <small>What everything on {label} does</small>
+                    </span>
+                    <ChevronRight size={15} className="fa-chev" />
+                  </button>
+                  <button className="fa-row" onClick={() => send("רעד צו מיר אידיש")}>
+                    <span className="fa-ico"><Languages size={15} /></span>
+                    <span className="fa-row-txt fa-row-rtl" dir="rtl">
+                      <b>רעד צו מיר אידיש</b>
+                      <small>Switch to Yiddish</small>
+                    </span>
+                    <ChevronRight size={15} className="fa-chev" />
+                  </button>
+                </div>
               </div>
             )}
             {messages.map((m) => {
@@ -381,13 +654,19 @@ export function FloatingAssistant() {
             <div ref={bottomRef} />
           </div>
 
-          {messages.length === 0 && (
-            <div className="fa-quick">
-              <button onClick={() => send(`What can I do on the ${label} page?`)}>Help with this page</button>
-              <button onClick={() => send("Summarize my new voicemails")}>Summarize voicemails</button>
-              <button onClick={() => send("רעד צו מיר אידיש")}>רעד צו מיר אידיש</button>
-            </div>
-          )}
+          {/* ⛔ Always available, not only on the opening screen: someone who
+              has been going back and forth with the assistant for five minutes
+              without getting anywhere is exactly who needs a person. Kept
+              visually apart from the assistant's own suggestions so nobody
+              mistakes it for another thing to ask the AI. */}
+          <button className="fa-help" onClick={openReport}>
+            <span className="fa-ico fa-ico-quiet"><LifeBuoy size={15} /></span>
+            <span className="fa-row-txt">
+              <b>Something not working?</b>
+              <small>Report it — a person at Loopcom answers</small>
+            </span>
+            <ChevronRight size={15} className="fa-chev" />
+          </button>
 
           {pendingFiles.length > 0 && (
             <div className="fa-files">
@@ -465,7 +744,7 @@ export function FloatingAssistant() {
               <Send size={16} />
             </button>
           </div>
-          <div className="fa-foot">A human is always behind it</div>
+          <div className="fa-foot">A person from Loopcom is always behind this</div>
         </div>
       )}
 
@@ -502,22 +781,100 @@ const faCss = `
   box-shadow: 0 24px 60px rgba(0,0,0,.35); display: flex; flex-direction: column; overflow: hidden;
   color: var(--text, #e8ecf3);
 }
-.fa-head { background: var(--panel-2, #16233a); padding: 12px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border, #23344f); }
-.fa-avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--accent, #2f6df6); color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.fa-head { background: var(--panel, #16233a); padding: 12px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border, #23344f); }
+.fa-avatar { width: 32px; height: 32px; border-radius: 10px; background: linear-gradient(140deg, var(--accent, #2f6df6), var(--accent-2, #4f7bff)); color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.fa-back { background: none; border: none; color: var(--text-dim, #8b9ab2); cursor: pointer; padding: 4px; border-radius: 7px; display: flex; flex: 0 0 auto; }
+.fa-back:hover { background: var(--border, #23344f); color: var(--text, #fff); }
 .fa-title { flex: 1; min-width: 0; }
-.fa-title b { font-size: 14px; display: block; }
-.fa-title small { color: var(--text-dim, #7fd4a2); font-size: 11px; display: flex; align-items: center; gap: 5px; }
-.fa-live { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; }
+.fa-title b { font-size: 14px; display: block; font-weight: 620; letter-spacing: -.01em; }
+.fa-title small { color: var(--text-dim, #8b9ab2); font-size: 11.5px; display: flex; align-items: center; gap: 5px; }
 .fa-head-actions { display: flex; gap: 4px; }
 .fa-head-actions button { background: none; border: none; color: var(--text-dim, #8b9ab2); cursor: pointer; padding: 4px; border-radius: 6px; display: flex; }
 .fa-head-actions button:hover { background: var(--border, #23344f); color: var(--text, #fff); }
 
-.fa-ctx { padding: 8px 14px; border-bottom: 1px solid var(--border, #1d2a40); display: flex; align-items: center; gap: 8px; background: var(--bg, #0c1626); }
-.fa-ctx span { font-size: 11.5px; color: var(--text-dim, #7d95c0); }
-.fa-ctx b { color: var(--text, #b9d0f5); font-weight: 600; }
-
 .fa-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-.fa-empty { margin: auto; text-align: center; color: var(--text-dim, #8b9ab2); font-size: 13.5px; line-height: 1.6; padding: 0 18px; }
+
+/* ── opening screen ─────────────────────────────────────────────────────── */
+.fa-open { display: flex; flex-direction: column; }
+.fa-greet h3 { margin: 4px 0 0; font-size: 18px; font-weight: 650; letter-spacing: -.015em; color: var(--text, #e8ecf3); }
+.fa-greet p { margin: 5px 0 0; font-size: 13px; color: var(--text-dim, #8b9ab2); }
+.fa-rows { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; }
+.fa-row {
+  display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+  padding: 10px 11px; border-radius: 11px; cursor: pointer;
+  border: 1px solid var(--border, #23344f); background: var(--panel-2, #182742);
+  color: var(--text, #e8ecf3); font: inherit; transition: border-color .12s ease, background .12s ease;
+}
+.fa-row:hover { border-color: var(--accent, #2f6df6); }
+.fa-row-lead { border-color: color-mix(in srgb, var(--accent, #2f6df6) 45%, transparent); }
+.fa-ico {
+  width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+  background: color-mix(in srgb, var(--accent, #2f6df6) 12%, transparent);
+  color: var(--accent, #2f6df6); display: flex; align-items: center; justify-content: center;
+}
+.fa-ico-quiet { background: color-mix(in srgb, var(--text-dim, #8b9ab2) 14%, transparent); color: var(--text-dim, #8b9ab2); }
+.fa-row-txt { flex: 1; min-width: 0; }
+.fa-row-txt b { display: block; font-size: 13px; font-weight: 570; }
+.fa-row-txt small { display: block; font-size: 11.5px; color: var(--text-dim, #8b9ab2); margin-top: 1px; }
+.fa-row-rtl { text-align: right; }
+.fa-row-rtl b { font-size: 15px; }
+.fa-chev { color: var(--text-dim, #8b9ab2); flex: 0 0 auto; }
+
+/* ── report a problem ───────────────────────────────────────────────────── */
+.fa-help {
+  display: flex; align-items: center; gap: 10px; width: calc(100% - 24px);
+  margin: 0 12px 10px; padding: 9px 11px; border-radius: 11px; cursor: pointer;
+  border: 1px dashed color-mix(in srgb, var(--text-dim, #8b9ab2) 45%, transparent);
+  background: transparent; color: var(--text, #e8ecf3); font: inherit; text-align: left;
+}
+.fa-help:hover { border-color: var(--text-dim, #8b9ab2); background: color-mix(in srgb, var(--text-dim, #8b9ab2) 8%, transparent); }
+.fa-help .fa-row-txt b { font-size: 12.5px; }
+.fa-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px 12px; display: flex; flex-direction: column; }
+.fa-lead { margin: 0 0 14px; font-size: 12.5px; color: var(--text-dim, #8b9ab2); line-height: 1.5; }
+.fa-form { display: flex; flex-direction: column; gap: 12px; }
+.fa-lbl { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-dim, #8b9ab2); margin-bottom: 6px; }
+.fa-box {
+  width: 100%; border: 1px solid var(--border, #2a3c5f); background: var(--panel-2, #16233a);
+  color: var(--text, #e8ecf3); border-radius: 10px; padding: 10px 11px; font-size: 12.5px;
+  font-family: inherit; line-height: 1.45; outline: none;
+}
+.fa-box:focus { border-color: var(--accent, #2f6df6); }
+.fa-box-tall { min-height: 62px; resize: vertical; }
+.fa-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.fa-pill {
+  font-size: 11.5px; padding: 5px 10px; border-radius: 999px; cursor: pointer; font: inherit;
+  font-size: 11.5px; border: 1px solid var(--border, #2a3c5f); background: var(--panel-2, #16233a);
+  color: var(--text-dim, #8b9ab2);
+}
+.fa-pill-on { border-color: var(--accent, #2f6df6); background: color-mix(in srgb, var(--accent, #2f6df6) 12%, transparent); color: var(--accent, #2f6df6); font-weight: 600; }
+.fa-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: 10px; font: inherit; color: var(--text, #e8ecf3);
+  border: 1px solid var(--border, #2a3c5f); background: var(--panel-2, #16233a);
+}
+.fa-toggle-on { border-color: color-mix(in srgb, var(--warning, #f0b655) 55%, transparent); background: color-mix(in srgb, var(--warning, #f0b655) 12%, transparent); }
+.fa-sw { width: 30px; height: 18px; border-radius: 999px; flex: 0 0 auto; position: relative; background: color-mix(in srgb, var(--text-dim, #8b9ab2) 35%, transparent); transition: background .14s ease; }
+.fa-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--panel, #0f1928); transition: transform .14s ease; }
+.fa-toggle-on .fa-sw { background: var(--warning, #f0b655); }
+.fa-toggle-on .fa-sw::after { transform: translateX(12px); }
+.fa-warn { color: var(--warning, #f0b655); flex: 0 0 auto; opacity: .55; }
+.fa-toggle-on .fa-warn { opacity: 1; }
+.fa-err { font-size: 12px; color: var(--danger, #ea6068); line-height: 1.45; }
+.fa-cta { margin-top: auto; display: flex; flex-direction: column; gap: 7px; padding-top: 14px; }
+.fa-btn {
+  background: var(--accent, #2f6df6); color: #fff; border: none; border-radius: 10px;
+  padding: 11px; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.fa-btn:disabled { opacity: .6; cursor: default; }
+.fa-cta small { text-align: center; font-size: 11px; color: var(--text-dim, #8b9ab2); }
+.fa-done { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 13px; padding: 0 26px; }
+.fa-ring { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--success, #34c27b) 16%, transparent); color: var(--success, #34c27b); }
+.fa-done h3 { margin: 0; font-size: 17px; font-weight: 640; letter-spacing: -.012em; }
+.fa-done p { margin: 0; font-size: 12.5px; color: var(--text-dim, #8b9ab2); line-height: 1.5; }
+.fa-done p b { color: var(--text, #e8ecf3); font-weight: 600; }
+.fa-ref { font-size: 11px !important; }
+.fa-ghost { border: 1px solid var(--border, #2a3c5f); background: none; border-radius: 999px; padding: 7px 14px; font-size: 12px; color: var(--text-dim, #8b9ab2); cursor: pointer; font-family: inherit; margin-top: 4px; }
+.fa-ghost:hover { color: var(--text, #e8ecf3); border-color: var(--text-dim, #8b9ab2); }
 .fa-m { max-width: 84%; padding: 9px 12px; border-radius: 13px; font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
 .fa-bot { background: var(--panel-2, #182742); border: 1px solid var(--border, #23344f); align-self: flex-start; border-bottom-left-radius: 4px; }
 .fa-user { background: var(--accent, #2f6df6); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
@@ -526,9 +883,6 @@ const faCss = `
 .fa-caret { animation: fa-blink 1s steps(2) infinite; }
 @keyframes fa-blink { 50% { opacity: 0; } }
 
-.fa-quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 10px; }
-.fa-quick button { background: var(--panel-2, #14213a); border: 1px solid var(--border, #2a3c5f); color: var(--accent, #a9c2ec); font-size: 11.5px; padding: 6px 10px; border-radius: 999px; cursor: pointer; }
-.fa-quick button:hover { filter: brightness(1.08); }
 
 .fa-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; background: var(--bg, #0e1826); border-top: 1px solid var(--border, #23344f); }
 .fa-file { position: relative; overflow: hidden; display: flex; align-items: center; gap: 6px; max-width: 100%; background: var(--panel-2, #16233a); border: 1px solid var(--border, #2a3c5f); color: var(--text, #cfe0ff); border-radius: 8px; padding: 5px 8px; font-size: 11.5px; }

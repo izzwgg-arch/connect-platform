@@ -78,3 +78,5 @@ export type TenDlcSubmission = z.infer<typeof TenDlcSubmissionSchema>;
 export type SmsCampaign = z.infer<typeof SmsCampaignSchema>;
 export type PhoneNumber = z.infer<typeof PhoneNumberSchema>;
 export * from "./personDisplayName";
+export * from "./supportReport";
+export * from "./assistantGreeting";
