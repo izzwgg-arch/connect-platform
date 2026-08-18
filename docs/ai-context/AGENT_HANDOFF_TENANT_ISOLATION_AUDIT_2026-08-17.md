@@ -26,8 +26,8 @@ is **rejected**.
 
 | § | Finding | Status |
 |---|---|---|
-| **§1** | `/internal/*` unauthenticated + publicly reachable | ✅ **CLOSED AT NGINX** on both vhosts, verified externally. ⛔ **The code still fails open** — see below, it CANNOT be changed without setting the secret first |
-| **§1a** | `inbound-crm-match` takes role from body | ✅ Unreachable from the internet (same nginx rule). Code unchanged |
+| **§1** | `/internal/*` unauthenticated + publicly reachable | ✅ **FULLY CLOSED 2026-08-18** — nginx deny (kept, defence in depth) **and** the code now fails closed (`6ab8c74b`), with the secret distributed to api, telephony and worker. See §0b |
+| **§1a** | `inbound-crm-match` takes role from body | ✅ Now needs the shared secret as well (`server.ts:35782` injects `verifyCdrSecret` into it, so it inherited the fail-closed change; probed live — **403** without the header, **400** with) **and** is unreachable from the internet. ⛔ The body-supplied `viewer.role` is **still trusted** — a caller that holds the secret can still claim SUPER_ADMIN. Unfixed, and now the weakest thing behind the door |
 | **§2** | VoIP.ms SMS webhook unauthenticated | ✅ **FIXED, fails closed** (`apps/api/src/voipMsWebhookAuth.ts`) |
 | **§3a** | chat-db URLs signed with unkeyed `createHash` | ✅ **FIXED — keyed HMAC** |
 | **§3b** | signing secret falls back to `"dev-signing-secret"` | ✅ **FIXED for chat** (derives from `JWT_SECRET`, never a literal). ⛔ The other four helpers (prompt / MOH / CRM doc / CRM voicemail-drop) are **UNCHANGED** and still resolve to the literal |
@@ -35,34 +35,143 @@ is **rejected**.
 | **§5** | Anonymous tenant creation via the `NODE_ENV` gate | ⏳ **OPEN — deliberately out of scope** |
 | §6a–§6l | Medium / low | ⏳ **OPEN**, untouched |
 
-### ⛔⛔ §1: WHY THE CODE FIX WAS NOT MADE — it would have been a platform-wide outage
+### ✅ §0b — THE CODE FIX IS DONE (2026-08-18). Commit `6ab8c74b`, api DEPLOYED and container-verified (`/app/.build-commit` = `6ab8c74bc132`).
 
-The intended change ("make `verifyCdrSecret` fail closed when the secret is
-unset") was **investigated and deliberately NOT applied.** `CDR_INGEST_SECRET`
-is empty in **api, telephony AND worker**, and every caller omits the header
-when the secret is empty:
+**This section replaces "WHY THE CODE FIX WAS NOT MADE". That reasoning was
+correct and is preserved below as the ORDER, because the order is the whole
+safety property.** Owner approved the multi-service restart.
 
-```ts
-...(secret ? { "x-cdr-secret": secret } : {})   // CdrNotifier, MobilePushNotifier,
-                                                 // ConnectWakeConsumer, PbxTenantMapCache, …
-```
+#### What the door does now
 
-So failing closed today rejects **every legitimate internal caller**: CDR ingest
-(calls vanish from history — the exact 2026-08-04 wound), mobile ring/wake pushes
-(phones stop ringing), voicemail-notify, user-extensions, PBX event ingest and
-`/voice/ivr/events`.
+`checkInternalSecret` (`apps/api/src/internalSecret.ts`) is the single
+implementation; `verifyCdrSecret` and a new `guardInternalSecret` route guard
+both delegate to it. **Unset secret → 503. Header absent → 401. Header wrong →
+403.** ⛔ Not gated on `NODE_ENV` — this container sets none.
 
-⛔ **The fix is therefore a SEQUENCE, and the order is the whole safety property:**
-1. Set `CDR_INGEST_SECRET` to one shared value in `/opt/connectcomms/env/.env.platform`.
-2. Restart **api + telephony + worker** so all three carry it (they must agree; a
-   partial rollout is the same outage).
-3. *Only then* make `verifyCdrSecret` (`server.ts:18351`) and the 8 inline sites
-   fail closed, with a test.
+⛔ **The extraction found a SECOND bug nobody had noticed.** The old inline
+comparison did `padEnd(64, "\0").slice(0, 64)` on both sides, so it only ever
+compared the **first 64 characters**: two different secrets agreeing on their
+first 64 chars were accepted as equal. Both sides are SHA-256'd now, so length
+is irrelevant. A unit test caught it — the test was written to assert the old
+behaviour and failed.
 
-That is an env edit plus a coordinated three-service restart (telephony rebuilds
-live queue state from zero), which is why it was not done unattended. **The nginx
-rule already removes the internet-facing exposure**, so what remains is
-defence-in-depth against a caller that can already reach the docker bridge.
+⛔⛔ **AND THE ENV EDIT ALONE WOULD HAVE DONE NOTHING — this is the trap that
+would have made the whole operation a silent no-op.** `environment:` **wins
+over** `env_file:`, and `docker-compose.app.yml` gave api, api_candidate and
+telephony `CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}`. That substitutes from the
+**deploy shell**, and `deploy-direct.sh` sources only `.env.deploy-queue`, never
+`.env.platform`. So the file value was being overridden with `""` — which is
+exactly why the containers read *defined: true, length: 0*. **All three
+overrides are deleted.** The worker never had one, which is the only reason it
+would have picked the value up. The telephony block already carried a comment
+warning about this exact trap for `JWT_SECRET`/`AMI_PASSWORD`; nobody applied it
+to this variable.
+
+#### ⛔ THE ORDER, and it is not the obvious one
+
+The naive "restart everything" breaks the platform, and so does the naive
+"senders first" — because **api is BOTH a receiver (from telephony and the PBX)
+AND a sender (to telephony)**, and telephony's own
+`isInternalRouteAuthorized` turns strict the moment *it* has the secret. The
+dependency is circular. What was actually run:
+
+1. **Secret into `/opt/connectcomms/env/.env.platform`** — generated on the
+   server with `openssl rand -hex 32`, 64 chars. Backup
+   `/opt/connectcomms/env/.env.platform.bak.20260818T025024Z.internal-secret`;
+   `diff` = **6 lines added, 0 removed, 0 changed**. No other variable touched.
+   Fingerprint (first 12 of sha256, for future comparison): **`994ecc32aee9`**.
+2. **worker first** (deploy job `de8c3c36`). The worker calls **telephony**, so
+   it must be carrying the header before telephony starts demanding one.
+   Telephony still had no secret, so it still failed open and accepted it.
+3. **telephony second** (job `633544fa`), in a **verified idle window** — polled
+   the PBX read-only until `core show channels count` returned **0 active
+   calls**, because the restart rebuilds `CallStateStore` from zero.
+4. **api last** — `deploy-direct.sh api --branch feat/ivr-migration-takeover`,
+   blue/green, `verify: container commit 6ab8c74bc132 matches target`.
+
+⛔ **The accepted cost of that order: between step 3 and step 4 the api still had
+no secret while telephony required one, so api→telephony calls (IVR/MOH publish,
+DND publish, play-prompt, voicemail-drop, the invite-requeue rescue) were
+refused.** That window was ~5 minutes at 23:00 ET, none of those are on the
+inbound-call answer path, and the invite-requeue probe is inside a `try`.
+**The reverse order is far worse** — it refuses telephony→api CDR ingest, which
+loses call history permanently.
+
+#### Proven working afterwards, positively — not by absence of errors
+
+- **All three containers agree**: api, telephony and worker each read a 64-char
+  secret with fingerprint `994ecc32aee9`.
+- **A real call went through end to end.** `ConnectCdr` row
+  `2026-08-18T03:05:56.910Z` (outgoing/answered, linkedId `1787022285.228252`) —
+  written through `/internal/cdr-ingest` *after* the door closed. And in the same
+  second, telephony logged **`mobile-ring: API notified ok` status 200 ×2**, so
+  the push path authenticates too. ⛔ Do not accept "no errors in the log" here;
+  0 CDRs in 4 minutes at 23:00 ET is silence, not proof.
+- **Telephony's own pollers keep succeeding**: `pbx_tenant_map_refresh_success`
+  at refreshCount 5, 6, 7 (all post-deploy), plus real `POST
+  /internal/pbx/contact-status` and `GET /internal/telephony/user-extensions`
+  answering **200**. CDR retry queue depth **0** — nothing backed up.
+- **Every door was probed as a matrix** (no header / wrong header / right
+  header): all nine answer **401 or 403 without the secret and run the handler
+  with it**. `pbx-tenant-map` still returns the same **24,839 bytes / 27
+  entries** the audit reported as the anonymous leak — but now only with the
+  secret.
+- ⛔ **The check that matters most: every 401/403 since the deploy came from
+  `172.19.0.1`** — the docker bridge gateway, i.e. this session's own probes.
+  **Not one request from telephony (`172.19.0.5`), the worker (`172.19.0.4`) or
+  the PBX was refused.**
+- Platform unchanged otherwise: `/api/health` **200** on both hostnames, portal
+  **200**, bad-credential login **401 `invalid_credentials`**, and all four SIP
+  hostnames (`sip.loopcom.net`, `sip.connectcomunications.com`,
+  `app.connectcomunications.com`, `app.loopcom.net`) return **101** — ⛔ tested
+  **from the server**, because Izzy's line 403s the `app.` hostnames and fakes a
+  regression.
+- The nginx deny is **untouched and still 403 from outside** on both hostnames.
+
+#### ⛔ The PBX ended up ALIGNED, and it happened by accident
+
+`[connect-dial-with-wake]` in the live dialplan POSTs to
+`/internal/pbx/wake-extension` with
+`Set(WAKE_SECRET=${DB(connect/system/wake_api_secret)})` — it reads the secret
+**from AstDB**, it is not baked. That key was **empty**, so the PBX had been
+sending a blank header for months (its requests were 400/500 for unrelated
+reasons anyway).
+
+⛔ **Disclosed honestly: the door-matrix probe of `POST
+/internal/pbx/publish-wake-config` returned 200, which means it really ran** —
+and that route's job is to publish the wake system config, so it wrote the new
+secret into `connect/system/wake_api_secret`. Verified after the fact: the key
+now holds 64 chars with fingerprint `994ecc32aee9`. **This was an unintended
+side effect of a probe, not a planned action.** It is left in place because it
+is the correct value, it went through Connect's own sanctioned publish route
+(not a hand edit on the PBX), it changes no call behaviour, and reverting it
+would mean another PBX write to restore a *wrong* value. **The alternative — a
+fresh secret with a stale AstDB key — would have left the PBX wake POST
+returning 403 forever.**
+
+⛔ **A failed wake POST is non-blocking either way**: the dialplan NoOps the
+response, waits `wake_wait_secs` and dials regardless, and the fleet-wide
+`[connect-wake-core]` engine uses an **AMI UserEvent with no synchronous HTTP on
+the call path at all**.
+
+#### What is still open
+
+- ⏳ **`/internal/voicemail-notify` has not been exercised by a real
+  voicemail** — only by a probe (correct header → 400 on an empty body, so the
+  door opens). The next real voicemail is the acceptance test.
+- ⛔ **§1a is now the weakest thing behind the door.** `inbound-crm-match` still
+  takes `viewer.role` from the request body, so anything holding the secret can
+  claim `SUPER_ADMIN`. Deliberately not changed here.
+- ⛔ **Rotating this secret is now a four-step operation**, not an env edit:
+  `.env.platform` → worker → telephony → api, in that order, plus a
+  `publish-wake-config` call so the PBX's AstDB key follows. Skipping the last
+  one silently breaks the PBX wake POST.
+- ⛔ **Telephony talks to `http://api:3001` by docker DNS, so it bypasses
+  blue/green entirely** and its calls fail for the ~67 s the stable api
+  container is being recreated (seen this deploy: one
+  `pbx_tenant_map_refresh_failed` and two `reg-status ingest failed`, all
+  `fetch failed`, none auth-related). **Pre-existing, not caused by this
+  change**, and worth its own fix.
 
 ### The nginx mitigation, as applied
 
