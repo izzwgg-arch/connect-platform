@@ -44,6 +44,53 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — almost every customer is addressed by their EMAIL ADDRESS, not their name (2026-08-17) — READ FIRST before rendering a person's name on ANY screen or in ANY email, and before believing the sidebar and the dashboard agree
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_USER_NAMES_EMAIL_VS_PBX_2026-08-17.md`**
+(**Read-only audit — no code change, no deploy, no migration, no PBX write, no data
+change.** Answers Izzy's 2026-08-17 question directly: **no, they are not.**)
+
+- ⛔⛔ **A person's name lives in FOUR places and only ONE is right.**
+  `User.displayName` / `firstName` / `lastName` are whatever an admin or a sign-up
+  form typed; **`Extension.displayName` is the PBX name and it is the real one.**
+  Any surface that resolves a name **without consulting the extension** falls through
+  to `email.split("@")[0]`. **54 of 65 live users have no real name stored at all**,
+  so for them the email address IS the name.
+- ⛔ **The portal already has the right helper and the main dashboard doesn't call
+  it.** `getPreferredUserDisplayName` (`apps/portal/lib/userDisplayName.ts:44`)
+  prefers `extensionDisplayName`, `/me` already returns it, and the **sidebar,
+  profile menu, CRM dashboard and the mobile app all use it and are CORRECT today.**
+  `app/(platform)/dashboard/page.tsx:230` rolls its own local `firstName()` (:65)
+  that reads only `user.name`/`user.email` — **55 of 65 headlines are wrong.**
+  Live examples: **"Welcome, 845luzerj"** (Luzer Jungreis), **"Welcome, 7816646"**
+  (Barish), "Welcome, fhalpert" (Mrs. Halpert), "Welcome, smoothoffice1213"
+  (Secretary), "Welcome, nicholas" (Nick Stefanicha).
+- ⛔⛔ **EMAILS ARE WORSE AND IT IS PROVEN FROM SENT MAIL, NOT FROM TEMPLATES.**
+  `displayNameForUser()` (`apps/api/src/server.ts:2233`) **never looks at the
+  extension**, so no email can be right by accident. Real `USER_INVITE` rows opened
+  **"Hi s,"**, **"Hi g,"**, **"Hi l,"**, **"Hi y,"**, **"Hi e,"**, **"Hi fix,"** —
+  because **13 live users carry INITIALS in the name columns** (`e`/`l` = Eli Lovi,
+  `y`/`p` = Yossi Perlman, `s`/`w` = Shia Weinstock, seeded 2026-04-06) and the
+  invite template prefers `userFirstName` over the fuller `userName`.
+  ⛔ **Fixing the lookup order without cleaning those columns leaves them one code
+  path from resurfacing.**
+- ✅ **No PBX work and no re-typing is needed** — the PBX names were read directly
+  off `ombutel.ombu_extensions` for five tenants and Connect's `Extension.displayName`
+  is **byte-identical**. This is purely a lookup-order bug.
+- ⛔ **THE NAIVE FIX IS WRONG FOUR WAYS** (§6 of the handoff): Trust Bookkeepings
+  names extensions **`"105 - Mrs. Halpert"` / `"101- Mr. Sofer"`**, and the headline
+  takes the FIRST WORD — so a verbatim swap greets them **"Welcome, 105"**, worse
+  than today; **`/me` returns only the OLDEST extension** and four users own two
+  (`contact@gesheftkosher.com` → "Yossef Friedman" vs "Customer Phone 2"); several
+  logins are **role mailboxes** whose PBX name is a department ("Front Desk",
+  "Hiring", "Secretary") — *"Hi Front Desk,"* on an invoice is a decision, not an
+  improvement; and **3 users have no extension** so the fallback must survive.
+  ⛔ **The fix has TWO halves in two codebases** — changing the portal helper does
+  nothing for email.
+- ⏳ **NOTHING WAS CHANGED and the fix is Izzy's call** (the role-mailbox question
+  needs him). ⛔ Query trap: the email body column is **`textBody`/`htmlBody`**, not
+  `bodyText`.
+
 ## ⛔⛔ NEW TENANTS DEFAULT TO SIP-OVER-443, AND AN EMAIL CAN CARRY A FILE (2026-08-17) — READ FIRST before touching `webrtcRouteViaSbc`, the WebRTC bootstrap stamp, or before saying Connect cannot attach a file
 
 Commits `66dbaa9c` (attachments) + `8495d379` (443 default) on
