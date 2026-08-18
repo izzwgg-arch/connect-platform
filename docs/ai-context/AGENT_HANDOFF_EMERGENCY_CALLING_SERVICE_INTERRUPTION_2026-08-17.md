@@ -158,3 +158,42 @@ should be done with the carrier warned or by dialling 8457831212 rather than
 4. Build the per-tenant switch, the daily sweep, and the reconnect-on-payment
    hook. None of these exist yet — only the pure policy and plan do.
 5. The other 27 customers, once the owner has their addresses.
+
+## 7. The cutoff lever, and the one thing still unknown (2026-08-17, later)
+
+✅ **THE LEVER IS `ombu_ars_members.enabled`, NOT THE ROUTE.**
+`ombu_outbound_routes` has **no enabled column**. A route can also be
+referenced by more than one tenant's selection, so switching the ROUTE off
+could take out somebody else. Disabling the tenant's ARS *members* is
+per-tenant, per-profile and precisely reversible. Built and tested in
+`serviceInterruptionPlan.ts` (67 tests across the module).
+
+⛔⛔ **`members[N][enabled]` IS A CHECKBOX. To disable, OMIT THE FIELD.**
+Read off the live form:
+```
+<input type="checkbox" value="1" name="members[0][enabled]" checked="checked">
+```
+The panel reads *field present* as *ticked*, whatever the value — so sending
+`enabled=0` would **enable** it. This is the identical trap already recorded
+for `autofill`/`autopause` in `pbx/teamBuilder.ts:228` ("that is how a trunk
+got disabled during onboarding"), and there is a `checkbox()` helper there to
+copy. ⛔ Getting this backwards means the cutoff silently does nothing while
+reporting success.
+
+⛔⛔ **THE ARS EDIT FORM WILL NOT LOAD A ROW, AND THIS IS THE BLOCKER.**
+`class=ars, method=getContent, mode=edit, id=<ars_id>` (also tried `ars_id`)
+returns a **blank `mode=add` form** with an empty description. In the CUSTOMER's
+tenant context the route select has 1 option; in the **main tenant** context it
+correctly has **56** — so ARS editing must happen in the main tenant (ARS rows
+live under `tenant_id 1`), but the row-selecting parameter is still unknown.
+
+⛔ **DO NOT GUESS IT.** The ARS form is a **FULL REPLACE**: every member must
+be posted back or it is deleted. A wrong post wipes a customer's outbound
+routing entirely — an outage, on a customer whose only problem was an unpaid
+bill. Capture the real parameter first, the way the onboarding contract was
+captured (watch what the panel itself sends when a human opens a route
+selection and presses Update).
+
+**Reading the members needs no panel at all** — `ombu_ars_members` gives
+`ars_id, outbound_route_id, time_group_id, enabled, sort` directly, and that is
+already how the sweep should load them. Only the WRITE needs the form.
