@@ -308,6 +308,7 @@ import {
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
+import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
 import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
 import { sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
@@ -38599,6 +38600,13 @@ const agentEscalationTimer = registerShutdownTimer(
   }, 30_000),
 );
 agentEscalationTimer.unref();
+
+// Yiddish Labs credit watch — the owner is texted the moment Yiddish stops
+// working. It writes a QUEUED AgentEscalation and the sweep above delivers it;
+// see yiddishLabsCreditWatch.ts for why it must not be an ADMIN_ALERT and why
+// an account in daily use costs nothing to monitor.
+const yiddishCreditTimer = startYiddishLabsCreditWatch(app.log);
+if (yiddishCreditTimer) registerShutdownTimer(yiddishCreditTimer);
 
 // "Fix it!" — the owner's reply to an escalation text. Inbound SMS arrives by
 // the worker's VoIP.ms poll (a couple of minutes), so a 60s sweep is as fast as
