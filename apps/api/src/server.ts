@@ -20884,6 +20884,19 @@ async function streamCallRecording(
           reply.code(403).send({ error: "forbidden" }); return;
         }
       }
+    } else {
+      // ⛔ Unattributed CDR (tenantId null). This branch did not exist: the
+      // whole tenant check was skipped, and the owner carve-out below ALSO
+      // passes when `rec.extension` is null — which it is for every inbound
+      // call, because `toNumber` is a 10-digit DID and the extension regex is
+      // /^\d{2,6}$/. So any user holding can_view_recordings could stream one
+      // given its linkedId. Fail closed.
+      //
+      // ✅ Costs no customer anything: an unattributed row belongs to no
+      // tenant's call history, so nothing in the product ever offers it. Sized
+      // live 2026-08-18 — 4,316 of 126,052 CDRs are unattributed and exactly
+      // SIX of those still advertise a recording.
+      reply.code(403).send({ error: "forbidden" }); return;
     }
     let allowTenantWide = false;
     try {

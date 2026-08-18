@@ -2929,7 +2929,14 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     if (billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
     const methodId = invoice.paymentMethodId || invoice.tenant.billingSettings?.defaultPaymentMethodId;
-    const method = methodId ? await (db as any).paymentMethod.findUnique({ where: { id: methodId } }) : null;
+    // ⛔ Scoped to the invoice's own tenant, exactly like the admin-charge
+    // route three above. This was a bare findUnique({ id }): not exploitable,
+    // because methodId is server-derived — but one stale paymentMethodId would
+    // have charged ANOTHER COMPANY'S vaulted card and read as a gateway
+    // anomaly, not as a bug. `active: true` matches the sibling too.
+    const method = methodId
+      ? await (db as any).paymentMethod.findFirst({ where: { id: methodId, tenantId: invoice.tenantId, active: true } })
+      : null;
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
     try {
       const transaction = await chargeBillingInvoice(invoice, method, { allowRetry: true, note: "admin_retry" });

@@ -11,7 +11,14 @@
  *  - TENANT_ADMIN can only include permissions that are in their own effective
  *    permission set, minus PROTECTED_PLATFORM_ADMIN_PERMISSIONS.
  *
- * Permissions are additive only (union with built-in role bucket). No deny/override.
+ * ⛔ Permissions are NOT additive. `computeAuthoritativePortalPermissions`
+ * (crm/portalCrmPermissions.ts) makes ONE active custom role AUTHORITATIVE: a
+ * non-SUPER_ADMIN holding any active custom role gets exactly that role's keys,
+ * literally, and the built-in bucket then grants nothing. So a role built as
+ * "just the extras" DELETES the rest of that person's portal. Build one as
+ * `their current effective set + the additions`.
+ * (This block claimed "additive only, no deny/override" until 2026-08-18 — it
+ * had been wrong since custom roles became authoritative.)
  */
 
 import type { FastifyInstance } from "fastify";
@@ -91,6 +98,29 @@ export async function getGrantablePermissions(
   const all = new Set<PortalPermissionKey>([...basePerms, ...customPerms]);
   for (const p of PROTECTED_PLATFORM_ADMIN_PERMISSIONS) all.delete(p);
   return all;
+}
+
+/**
+ * Which of `perms` this actor is NOT allowed to hand out.
+ *
+ * ⛔ Grantability must be re-checked wherever a role's permissions REACH a
+ * user, not only where they are typed in. Creating and updating a role checked
+ * it; ASSIGNING one did not, and neither did DUPLICATING one — so a role
+ * carrying PROTECTED_PLATFORM_ADMIN_PERMISSIONS that a SUPER_ADMIN had created
+ * inside a customer tenant could be copied and self-assigned by that tenant's
+ * own admin. `GET /admin/custom-roles` shows them each role's full permission
+ * array, so the ids and contents were never a secret.
+ */
+async function ungrantablePermissionsFor(
+  actorRole: string,
+  actorUserId: string,
+  actorTenantId: string,
+  perms: unknown,
+): Promise<PortalPermissionKey[]> {
+  const requested = normalizePermissions(perms);
+  if (requested.length === 0) return [];
+  const grantable = await getGrantablePermissions(actorRole, actorUserId, actorTenantId);
+  return requested.filter((p) => !grantable.has(p));
 }
 
 function normalizePermissions(raw: unknown): PortalPermissionKey[] {
@@ -314,6 +344,14 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
     const tenantId = resolveTargetTenantId(actor.role, actor.tenantId, source.tenantId);
     if (source.tenantId !== tenantId) return reply.code(403).send({ error: "forbidden" });
 
+    // ⛔ A copy is a new grant. Without this, a role a SUPER_ADMIN authored in
+    // this tenant could be cloned verbatim by the tenant's own admin and then
+    // activated — the create/update grantability checks never see those keys.
+    const blockedOnCopy = await ungrantablePermissionsFor(actor.role, actor.sub, actor.tenantId, source.permissions);
+    if (blockedOnCopy.length > 0) {
+      return reply.code(403).send({ error: "ungrantable_permissions", blocked: blockedOnCopy });
+    }
+
     const baseName = `${source.name} (Copy)`;
     let newName = baseName;
     let attempt = 1;
@@ -441,10 +479,26 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
     if (roleIds.length > 0) {
       const roles = await db.customRole.findMany({
         where: { id: { in: roleIds }, tenantId: actor.tenantId },
-        select: { id: true },
+        select: { id: true, permissions: true },
       });
       if (roles.length !== roleIds.length) {
         return reply.code(400).send({ error: "invalid_role_ids", message: "One or more custom role IDs are invalid." });
+      }
+      // ⛔ Belonging to the actor's tenant is NOT enough. An active custom role
+      // is AUTHORITATIVE, so assigning one hands its keys over wholesale —
+      // including to the actor themselves. Re-check every key here or a
+      // tenant admin can self-assign a role they could never have authored.
+      const blocked = [
+        ...new Set(
+          (
+            await Promise.all(
+              roles.map((r) => ungrantablePermissionsFor(actor.role, actor.sub, actor.tenantId, (r as any).permissions)),
+            )
+          ).flat(),
+        ),
+      ];
+      if (blocked.length > 0) {
+        return reply.code(403).send({ error: "ungrantable_permissions", blocked });
       }
     }
 

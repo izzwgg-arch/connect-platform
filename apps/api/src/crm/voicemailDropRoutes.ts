@@ -514,9 +514,26 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
   });
 
   app.get("/crm/voicemail-drops/:id/stream", async (req, reply) => {
+    // ⛔ DUAL GATE — the signature alone is not access control. This was the
+    // only route in this file with no `requireCrmAccess` and no `tenantId`
+    // filter, resting entirely on an HMAC over `dropId:storageKey:exp` that is
+    // bound to NEITHER tenant nor user. So a signed URL legitimately issued to
+    // one company was replayable by any authenticated user of any other, and
+    // the row was fetched by bare id. The correct shape is next door in
+    // docImportRoutes.ts: authenticate the caller, scope the row to their
+    // tenant, THEN check the signature.
+    //
+    // ✅ Safe for <audio>: this route is NOT on the JWT bypass list and the
+    // global preHandler copies `?token=` into Authorization — which is exactly
+    // what all three portal consumers already send (voicemail-drops/page.tsx
+    // `withToken` twice, CrmVoicemailDropDrawer `tokenized`), and no mobile
+    // caller exists. Anyone holding a stream URL passed requireCrmAccess to
+    // obtain it, so this refuses nobody who could play audio before.
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
     const { id } = req.params as { id: string };
     const q = req.query as Record<string, string | undefined>;
-    const drop = await model().findFirst({ where: { id }, select: { id: true, tenantId: true, pbxStorageKey: true } });
+    const drop = await model().findFirst({ where: { id, tenantId: user.tenantId }, select: { id: true, tenantId: true, pbxStorageKey: true } });
     if (!drop?.pbxStorageKey) return reply.code(404).send({ error: "not_found" });
     const verified = verifySignedCrmVoicemailDropUrl(drop.id, drop.pbxStorageKey, q.exp, q.sig);
     if (!verified.ok) return reply.code(403).send({ error: verified.reason === "expired" ? "signed_url_expired" : "invalid_signature" });

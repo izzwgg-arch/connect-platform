@@ -1,7 +1,7 @@
 // Dispatcher API routes (Phase 3). Registered by registerDeliveryRoutes().
 import { z } from "zod";
 import { requireDeliveryDispatch, requireDeliveryConfig, requireDeliveryDriverAdmin } from "./guard";
-import { getDashboardCounts, listExceptions, listExceptionQueue, resolveExceptionRow, listDeliveryAudit, listNotifications, upsertConfig, listDrivers, getDriverDetail, createDriver, deactivateDriver } from "./dispatchService";
+import { getDashboardCounts, listExceptions, listExceptionQueue, resolveExceptionRow, listDeliveryAudit, listNotifications, upsertConfig, listDrivers, getDriverDetail, createDriver, deactivateDriver, DeliveryValidationError } from "./dispatchService";
 import { dashboardTiles, rankAttention, needsIntervention, type AttentionItem } from "./dashboard";
 import { transitionOrder } from "./orderService";
 import { mintTrackingLink } from "./customerTrackingService";
@@ -113,7 +113,16 @@ export async function registerDeliveryDispatchRoutes(app: any): Promise<void> {
     if (!user) return;
     const parsed = createDriverBody.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: "invalid_body", detail: parsed.error.flatten() });
-    return reply.send(await createDriver(user.tenantId, parsed.data.userId, parsed.data.storeIds, user.sub));
+    try {
+      return reply.send(await createDriver(user.tenantId, parsed.data.userId, parsed.data.storeIds, user.sub));
+    } catch (err: any) {
+      // A cross-tenant user or store id is a caller mistake, not a server
+      // fault — answer 400 with a readable reason rather than a raw 500.
+      if (err instanceof DeliveryValidationError) {
+        return reply.status(400).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
   });
 
   app.post("/delivery/drivers/:id/deactivate", async (req: any, reply: any) => {

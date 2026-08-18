@@ -275,14 +275,43 @@ export async function getDriverDetail(tenantId: string, driverId: string) {
   };
 }
 
+export class DeliveryValidationError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = "DeliveryValidationError";
+  }
+}
+
+/**
+ * ⛔ Both ids arrive from the caller and neither was checked against the
+ * tenant. A foreign `userId` became a DriverProfile row in THIS tenant, and
+ * `driverNameMap` (orderService.ts) then resolves profile → user with no
+ * tenantId in the where — so `GET /delivery/drivers` handed back that foreign
+ * user's display name and email. Disclosure, not privilege transfer, but it is
+ * a cross-tenant read and it is trivially closed here at the write.
+ */
 export async function createDriver(tenantId: string, userId: string, storeIds: string[], actorUserId: string) {
+  const targetUser = await db.user.findFirst({ where: { id: userId, tenantId }, select: { id: true } });
+  if (!targetUser) {
+    throw new DeliveryValidationError("driver_user_not_in_tenant", "That user does not belong to this tenant.");
+  }
+  const uniqueStoreIds = [...new Set(storeIds)];
+  if (uniqueStoreIds.length > 0) {
+    const stores = await db.deliveryStore.findMany({
+      where: { id: { in: uniqueStoreIds }, tenantId },
+      select: { id: true },
+    });
+    if (stores.length !== uniqueStoreIds.length) {
+      throw new DeliveryValidationError("store_not_in_tenant", "One or more stores do not belong to this tenant.");
+    }
+  }
   const driver = await db.driverProfile.upsert({
     where: { tenantId_userId: { tenantId, userId } },
     create: {
       tenantId,
       userId,
       active: true,
-      stores: { create: storeIds.map((storeId) => ({ tenantId, storeId })) },
+      stores: { create: uniqueStoreIds.map((storeId) => ({ tenantId, storeId })) },
     },
     update: { active: true },
     select: { id: true },

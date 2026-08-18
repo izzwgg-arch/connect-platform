@@ -4,6 +4,62 @@ Newest entries first.
 
 ---
 
+## Tenant-isolation §6a–§6g scoping fixes (2026-08-18, night)
+
+Branch `feat/ivr-migration-takeover`. api only. Handoff
+`AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md` §0d.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/tenantScopeHardening.test.ts
+```
+
+**Result:** 17/17. Five pure-function cases on the new `smsNumberAdminScope`
+(unassigned row not modifiable; own tenant only; SUPER_ADMIN keeps the platform
+inventory; a falsy actor tenant is refused rather than matched against null).
+Twelve SOURCE guards, all CRLF-normalised: routing-preview consults
+`canReadSmsNumberRow` and answers `found:false`; the numbers PATCH no longer
+carries `row.tenantId && row.tenantId !== effTenant`; role assignment selects
+`permissions` and calls `ungrantablePermissionsFor`; role DUPLICATE does too;
+the "additive only" header sentence is gone; the recording block has an `else`
+that 403s; the voicemail-drop stream calls `requireCrmAccess` and scopes by
+`tenantId: user.tenantId` while keeping the signature check; no route in that
+file fetches a drop by bare id; retry-payment uses `tenantId: invoice.tenantId`
++ `active: true` and no longer `findUnique({ id: methodId })`; `createDriver`
+validates user and stores; the route maps `DeliveryValidationError` → 400;
+`driverNameMap` filters users by tenant.
+
+### Proven non-vacuous
+
+The pre-change blobs were materialised with `git show HEAD:apps/api/src/<f>` into
+a scratch tree and the same test re-pointed at it. **12 of 12 source guards
+FAIL against `HEAD`**; the 5 unit tests pass there (they import the new module
+directly, as intended). ⛔ The first version of the §6e bare-id assertion PASSED
+on `HEAD` — it was written `{ where: { id } }` while the real line reads
+`{ where: { id }, select: …`, so it guarded nothing. Fixed and re-proven. **Only
+the replay could have caught that.**
+
+### Full suite + typecheck
+
+```bash
+cd apps/api && npm test
+cd apps/api && npx tsc --noEmit
+```
+
+**Result:** **2492 tests, 2482 pass, 7 fail, 3 skipped** — all 7 failures are the
+documented pre-existing `syncPbxTenantDirectoryFromRows` ones. Typecheck **75
+errors = the exact baseline**; the one error in an edited file
+(`delivery/dispatchService.ts:144`, an unrelated `provider: "delivery"` enum
+complaint) is byte-identical to `HEAD` and sits 134 lines above the first hunk.
+
+### Live sizing (read-only, `app-api-1`)
+
+Role census **9 TENANT_ADMIN / 1 SUPER_ADMIN / 75 USER / 1 EXTENSION_USER /
+0 ADMIN** — which is what proves §6a and §6b were latent, not live. Spare
+`TenantSmsNumber` rows **57**. CDRs **126,052 total, 4,316 unattributed, 6 of
+those still advertising a recording**.
+
+---
+
 ## Voicemail/email guardrails + self-healing (2026-08-18, evening)
 
 Branch `feat/ivr-migration-takeover`, `9ae26e04`. api only. Handoff

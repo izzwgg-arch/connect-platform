@@ -255,8 +255,12 @@ export async function driverNameMap(tenantId: string, driverIds: (string | null 
   const ids = [...new Set(driverIds.filter((x): x is string => !!x))];
   if (ids.length === 0) return new Map();
   const profiles = await db.driverProfile.findMany({ where: { tenantId, id: { in: ids } }, select: { id: true, userId: true } });
+  // ⛔ tenantId here as well as on the profiles above: belt and braces. Any
+  // pre-existing DriverProfile row pointing at a foreign user (createDriver
+  // accepted one until 2026-08-18) must not resolve to that person's name and
+  // email — it now renders as the id stub instead.
   const users = await db.user.findMany({
-    where: { id: { in: profiles.map((p) => p.userId) } },
+    where: { id: { in: profiles.map((p) => p.userId) }, tenantId },
     select: { id: true, firstName: true, lastName: true, displayName: true, email: true },
   });
   const nameByUser = new Map(

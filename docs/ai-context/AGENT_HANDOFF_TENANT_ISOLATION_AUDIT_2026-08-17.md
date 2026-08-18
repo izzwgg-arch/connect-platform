@@ -33,7 +33,99 @@ is **rejected**.
 | **§3b** | signing secret falls back to `"dev-signing-secret"` | ✅ **CLOSED 2026-08-18** — the other four helpers now share one resolver that throws rather than use a literal. See §0c |
 | **§4** | `TENANT_ADMIN` reaches `/admin/*` | ✅ **CLOSED 2026-08-18** — two routes scoped, four moved to SUPER_ADMIN, one permission-map hole filled. See §0c |
 | **§5** | Anonymous tenant creation via the `NODE_ENV` gate | ✅ **CLOSED 2026-08-18** — the gate defaults closed and the `NODE_ENV` dependency is gone. See §0c |
-| §6a–§6l | Medium / low | ⏳ **OPEN**, untouched |
+| **§6a–§6g** | Medium / low tenant scoping | ✅ **CLOSED 2026-08-18** — all seven scoped, plus a second §6c path the audit missed (role DUPLICATE). See §0d |
+| **§6k** | `/admin/dev/generate-observe-token` | ✅ **CLOSED 2026-08-18** — the route is DELETED, not re-gated. See CLAUDE.md |
+| §6h–§6j, §6l | Medium / low | ⏳ **OPEN**, untouched |
+
+⛔⛔ **CORRECTION TO THIS AUDIT, established live 2026-08-18: §6a and §6b are
+LATENT, not live.** Both routes gate on `connectChatRoutes.ts`'s own
+`isTenantAdmin()`, which admits **only `SUPER_ADMIN` and `ADMIN`** — and there
+are **ZERO `ADMIN`-role users** on this platform (live count: 9 TENANT_ADMIN,
+1 SUPER_ADMIN, 75 USER, 1 EXTENSION_USER). The audit's "any tenant admin can
+walk E.164 ranges" was read off that helper's **name**, not its contents. The
+only account that can reach either route today is `izzywgg@gmail.com`, the
+SUPER_ADMIN, for whom the behaviour is intended. ⛔ **Creating one `ADMIN`-role
+user arms both** — exactly the shape §6h already records for the raw-PBX-id
+routes. The fixes shipped anyway, because that is one `POST /admin/users` away.
+
+### ✅ §0d — §6a–§6g ARE CLOSED (2026-08-18)
+
+**One api commit on `feat/ivr-migration-takeover`. No migration, no PBX write,
+no nginx change, no env change, no DNS change, no tenant row and no user role
+touched.** apps/api typecheck **75 errors — the exact baseline**, none in an
+edited file. 17 new tests; **12 of 12 source guards fail when replayed against
+the pre-change blobs from `HEAD`.**
+
+- **§6a — `routing-preview`.** A number owned by another tenant now answers
+  **byte-identically to a number that does not exist** (`{found:false}`), rather
+  than returning its owner and the staff member it rings. The route takes an
+  arbitrary E.164, so anything less makes it a walkable directory of the
+  platform's DIDs.
+- **§6b — `PATCH /admin/apps/voip-ms/numbers/:id`.** The guard was
+  `if (row.tenantId && row.tenantId !== effTenant)` — it **skipped itself on an
+  unassigned row**, so a caller could claim a spare platform DID (57 live) or
+  one a port-in was landing for another customer, and route its inbound SMS to
+  themselves. Now strict equality, so `null` is refused. ✅ Safe to tighten: the
+  numbers LIST route already filters `{ tenantId }` for non-supers, so a
+  non-super is never shown a null-tenant row and no portal flow claims a spare.
+- ⛔⛔ **§6c — the audit found ONE path and there were TWO.** Assignment
+  (`PUT /admin/users/:userId/custom-roles`) validated only that the role ids
+  belonged to the actor's tenant and never looked at the role's `permissions` —
+  but **`POST /admin/custom-roles/:id/duplicate` copies `source.permissions`
+  verbatim with no grantability check either**, and the update route validates
+  permissions only when the body carries them, so the copy could then simply be
+  activated. Both now run `ungrantablePermissionsFor()`. ⛔ **The rule this
+  earns: re-check grantability wherever a role's permissions REACH a user, not
+  only where they are typed in.** Bounded as the audit says — this grants portal
+  permission *keys*, never the JWT `role`, so everything gated on `isSuper()`
+  stays closed.
+- ✅ **The stale header comment is corrected.** `customRoleRoutes.ts` still said
+  *"Permissions are additive only … No deny/override"*, wrong since custom roles
+  became **authoritative** — and that exact misreading is what makes someone
+  build a role as "just the extras" and delete the rest of a person's portal.
+- **§6d — unattributed recordings.** `if (rec.tenantId)` skipped the whole
+  tenant check when the CDR had no tenant, and the owner carve-out below **also**
+  passes when `rec.extension` is null — which it is for every inbound call,
+  because `toNumber` is a 10-digit DID and the regex is `/^\d{2,6}$/`. Now fails
+  closed. ✅ **Costs no customer anything, sized live:** 4,316 of 126,052 CDRs
+  are unattributed and exactly **SIX** still advertise a recording — and an
+  unattributed row appears in no tenant's history, so nothing in the product
+  ever offered it.
+- **§6e — `/crm/voicemail-drops/:id/stream`.** The only route in its file with
+  no `requireCrmAccess` and no `tenantId` filter, resting entirely on an HMAC
+  bound to **neither tenant nor user** — so a signed URL issued to one company
+  was replayable by any authenticated user of any other. Now the dual gate its
+  neighbour `docImportRoutes.ts` already uses: authenticate, scope the row to
+  the caller's tenant, **then** check the signature. ✅ **Safe for `<audio>`:**
+  the route is not JWT-bypassed and the global preHandler copies `?token=` into
+  Authorization — which all three portal consumers already send
+  (`withToken` ×2, `tokenized`), and there is no mobile caller. Anyone holding a
+  stream URL passed `requireCrmAccess` to get it.
+- **§6f — `retry-payment`.** `paymentMethod.findUnique({ id })` → `findFirst`
+  scoped to `invoice.tenantId` + `active: true`, matching the admin-charge
+  sibling three routes above. Not exploitable (the id is server-derived), but
+  one stale `paymentMethodId` would have charged **another company's vaulted
+  card** and read as a gateway anomaly rather than a bug.
+- **§6g — delivery `createDriver`.** Both caller-supplied ids are now validated
+  against the tenant, and a cross-tenant id answers **400 with a reason** rather
+  than an unhandled 500. `driverNameMap` also gained `tenantId` on its user
+  lookup, so any pre-existing profile pointing at a foreign user renders as an
+  id stub instead of that person's name and email.
+- ⛔ **A guard that guarded nothing, caught by the replay and worth recording.**
+  The §6e "no bare-id fetch" assertion was first written as
+  `findFirst({ where: { id } })` and **passed against `HEAD`** — the real
+  pre-change line is `findFirst({ where: { id }, select: … )`, so the regex
+  matched nothing in either version. **The replay against `HEAD` is what
+  exposed it; running the guards only against the fixed tree would have shipped
+  a decorative test.**
+- ⏳ **NOT PROVEN: none of this has been exercised by a human.** Proven as 17
+  tests, the 12-of-12 `HEAD` replay, a typecheck at its exact baseline, and the
+  live sizing above. **Acceptance after deploy, and the negatives matter most:**
+  a CRM user can still play a voicemail drop from their own tenant; an admin
+  retry-payment still charges; `POST /delivery/drivers` still creates a driver
+  for an own-tenant user; and `routing-preview` for a number the caller does not
+  own reads `found: false` rather than 403 (a 403 would still be an oracle).
+
 
 ### ✅ §0c — THE REMAINING FOUR CRITICALS ARE CLOSED (2026-08-18)
 

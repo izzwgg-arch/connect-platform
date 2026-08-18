@@ -31,6 +31,7 @@ import {
   verifyChatSignedDownload,
 } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
+import { canModifySmsNumberRow, canReadSmsNumberRow } from "./smsNumberAdminScope";
 import { userCanAccessCrmContact } from "./crm/crmContactAccess";
 import { isAdminRole, loadCrmUserAccessRole } from "./crm/guard";
 import { crmInboundSmsHook } from "./crm/inboundSmsHook";
@@ -2067,7 +2068,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       if (body.tenantId !== undefined && body.tenantId !== effTenant) {
         return reply.status(403).send({ error: "CANNOT_MOVE_NUMBER" });
       }
-      if (row.tenantId && row.tenantId !== effTenant) {
+      // ⛔ Strict, so an UNASSIGNED row (tenantId null) is refused too. This
+      // guard used to short-circuit on `row.tenantId &&`, which let a caller
+      // claim a spare platform DID — including one a port-in was landing for
+      // another customer — by PATCHing it with their own tenantId.
+      if (!canModifySmsNumberRow({ isSuper: false, actorTenantId: effTenant, rowTenantId: row.tenantId })) {
         return reply.status(403).send({ error: "NOT_YOUR_TENANT" });
       }
     }
@@ -2124,7 +2129,13 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       where: { phoneE164: n.e164 },
       include: { assignedExtension: { select: { ownerUserId: true } } },
     } as any) as any;
-    if (!row) return { found: false, normalized: n.e164 };
+    // ⛔ A number owned by another tenant must answer EXACTLY like a number
+    // that does not exist. This route takes an arbitrary E.164, so any other
+    // answer makes it a walkable directory of which company owns which DID and
+    // which of their staff it rings.
+    if (!row || !canReadSmsNumberRow({ isSuper: isSuper(user), actorTenantId: effectiveChatTenantId(req, user), rowTenantId: row.tenantId })) {
+      return { found: false, normalized: n.e164 };
+    }
     const extensionOwnerUserId = row.assignedExtension?.ownerUserId || null;
     return {
       found: true,
