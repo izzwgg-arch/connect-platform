@@ -88,6 +88,68 @@ production code, no deploy, no container involved.** ✅ committed + pushed to
   passes 3/3 in isolation and the file is untouched; it is a load flake, not a
   regression, and not yet hardened.
 
+## ⛔⛔ AGENT HANDOFF — session tokens still never expire, ON PURPOSE for now: adding `expiresIn` today would BAN customers' offices, not sign them out (2026-08-18) — READ FIRST before adding `expiresIn`, before adding ANY per-request user re-check to the JWT hook, before "just rejecting DISABLED users' tokens", or before assuming a client survives a 401
+
+Full detail: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §8**
+(**Read-only investigation — no code change, no deploy, no migration, no env, no
+PBX, no tenant row.** Phase 1 of the token-expiry work; Phase 2 deliberately NOT
+built.) Memory: [[token-expiry-blocked-on-client-401-handling]].
+
+- ⛔⛔ **THE FINDING THAT STOPPED THE WORK: neither client handles a 401.** The
+  mobile app has **zero** 401 handling — `apps/mobile/src/api/client.ts` throws
+  a slug on `!res.ok`, `AuthContext.tsx` never clears `cc_mobile_token`, and
+  nothing shows the login screen; the phone keeps registering off its cached
+  SIP bundle, then goes **relay-dead within 24 h** (TURN refresh needs the
+  token — the 2026-07-29 `iceHasTurn:false` failure, self-inflicted), drops out
+  of every `lastSeenAt` filter, and every screen errors — **with the user never
+  told to sign in.** The portal/desktop has **no global 401 handler** either:
+  `AuthGate` only checks a token STRING exists, `/me` failure falls back to
+  cached permissions, and the shell keeps polling with the dead token.
+- ⛔⛔ **AND A DEAD PORTAL TOKEN IS A 401 STREAM ON THE CUSTOMER'S OFFICE IP.**
+  Mini-dialer 30 s, notifications bridge 30 s, panel 60 s, chat 7 s, SIP init
+  backing off to 60 s, telephony WS reconnecting on every `1008`. `monitor.sh`
+  bans at **>30 × 401 / 5 min**. Two parked desktop apps behind one office IP
+  clear it. **So expiry would present as the 2026-08-17 blank-app incident —
+  the whole office 403 on everything, and reopening cannot help.** Setting
+  `expiresIn` is one line; its blast radius is every customer.
+- ⛔ **"Just reject DISABLED users per request" is NOT the safe half** — same
+  failure mode: the disabled person's parked desktop app becomes the 401 stream
+  on the shared IP. Today a disabled user's token keeps working on every route
+  (verified: the preHandler at `server.ts:6056` never touches the `User` row;
+  `DISABLED` is checked only at login and invite-accept) — bad, but it bans
+  nobody. **Client 401 handling must land first, regardless.**
+- ⛔ **Three service principals mint tokens whose `sub` is NOT a `User.id`:**
+  `scheduler:<id>` (`didSwitchSchedule.ts:117`, 2 m), `agent-voicemail` and
+  `agent-vm-email` (agent image, 300 s, hand-rolled HS256, ⛔ manual rebuild to
+  change). A per-request "user must exist and be ACTIVE" check that rejects an
+  unknown `sub` **silently kills the DID switch scheduler, the drift
+  reconciler, voicemail transcription and voicemail email.** The rule that fits
+  what they already emit: no `User` row + short-lived (`exp − iat ≤ 15 min`) =
+  service principal; no `User` row + long-lived or `exp`-less = reject.
+- **Every mint site, so nobody re-derives it:** `/auth/login` `server.ts:5817`,
+  `/auth/mobile-qr-exchange` `:6006`, `/auth/signup` `:5743` — all **no
+  `expiresIn`**; `GET /me` `:6125` re-signs **only when the DB role differs**
+  (the one existing "refresh", portal-only — the app persists it via
+  `writeAuthToken`; mobile never calls `/me`); the 2-minute `injectAsService`
+  tokens (`server.ts:41082`, `didSwitchSchedule.ts:117`) are fine and must stay.
+  The 401 body is `{ "error": "unauthorized" }` for missing / bad / expired
+  alike. Telephony WS, realtime and the agent verify with `jsonwebtoken`, which
+  already enforces `exp` — the rejection half needs no api change, which is
+  exactly why the flip is dangerous.
+- ✅ **THE ORDER THAT IS SAFE (§8.6 of the doc), each step deployable alone:**
+  (1) portal — global 401 → clear session → `/login?next=`, and every poller
+  STOPS on the first 401 (portal-only deploy); (2) mobile — 401 → clear token →
+  login screen, plus a sliding refresh so a phone in daily use never reaches the
+  wall (**APK + TestFlight — Izzy's call**); (3) only then the server —
+  `expiresIn` 30 d on the three user mint sites, a `sessionsInvalidatedAt`
+  column + migration, a short-TTL cache (`permissionCache.ts` pattern) in front
+  of the per-request check, the service-principal rule, and a grandfather
+  window for `exp`-less legacy tokens (rejecting them on day one signs out
+  every phone); (4) exempt `/api/auth/login` + `/api/me` 401s from the nginx
+  ban counter so a client trying to recover cannot ban itself.
+- ⏳ **NOTHING IS FIXED.** Finding B of the audit stands exactly as written; the
+  work is unblocked only by steps 1–2 above.
+
 ## ⛔⛔ AGENT HANDOFF — the Yiddish assistant answers in fluent Yiddish and says NOTHING, because the Yiddish Labs account is OUT OF CREDITS (2026-08-18) — READ FIRST for any "the agent isn't picking up Yiddish" / "it's not using Yiddish Labs" report, before re-pasting the YL key, or before touching the translate bridge
 
 Full detail: **`docs/ai-context/AGENT_HANDOFF_IVR_YIDDISH_2026-08-04.md`**
@@ -2450,7 +2512,10 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   active, default-deny, and every datastore (Postgres, Redis, MinIO, Grafana) is
   loopback-only. **The server perimeter is in good shape; the auth layer is not.**
 - **Open and unfixed, needing Izzy:** session tokens **never expire** (no
-  `sign.expiresIn`, no refresh tokens, no revocation); **no MFA anywhere**, not even
+  `sign.expiresIn`, no refresh tokens, no revocation — ⛔ investigated 2026-08-18
+  and DELIBERATELY left as is: neither client survives a 401 and a dead portal
+  token auto-bans the customer's office; see the dedicated section near the top
+  of this file and audit doc §8 before touching it); **no MFA anywhere**, not even
   for SUPER_ADMIN; SSH allows **root login with passwords** against 1,457 failed
   attempts/day; **no DMARC** on the domain that sends invoices and voicemail.
 - ⛔ **Never `git stash` in this tree to compare against a baseline.** A failed

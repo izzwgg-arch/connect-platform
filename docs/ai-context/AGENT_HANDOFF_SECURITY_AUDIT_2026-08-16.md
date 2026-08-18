@@ -241,3 +241,130 @@ table to revoke, no device registry to trust, no MFA to step up to, and no
 Cloudflare feed to ingest. **Building the intelligence layer before the foundation
 would produce a dashboard that watches an unlocked door.** Order of work is in the
 session report.
+
+---
+
+## 8. Finding B (session tokens never expire) — Phase 1 investigation, 2026-08-18. ⛔ STOPPED BEFORE BUILDING, deliberately
+
+**Read-only. No code changed, nothing deployed, no env, no PBX, no tenant row.**
+The brief was: establish from the code whether adding `expiresIn` is survivable
+by the clients, and STOP for a decision if they do not handle a 401 gracefully.
+**They do not — and worse, a dead token in the portal produces a 401 stream that
+trips the nginx auto-ban of the customer's own office IP.** So nothing was built.
+This section is the evidence, so the next session does not re-derive it.
+
+### 8.1 Every place a JWT is minted (all against the one `JWT_SECRET`)
+
+| Where | For whom | `expiresIn` | Notes |
+|---|---|---|---|
+| `apps/api/src/server.ts:5817` `POST /auth/login` | the signing-in user | **none** | portal, desktop AND mobile all sign in here |
+| `apps/api/src/server.ts:6006` `POST /auth/mobile-qr-exchange` | the paired mobile user | **none** | "same shape as /auth/login" |
+| `apps/api/src/server.ts:5743` `POST /auth/signup` (tenant self-signup) | the new user | **none** | |
+| `apps/api/src/server.ts:6125` `GET /me` | the caller, **only when their DB role differs from the token's role** | **none** | the ONLY existing "refresh" — see 8.3 |
+| `apps/api/src/server.ts:41082` `injectAsService` (agent confirm routes) | the confirming admin, read from `User` | **2m** | in-process `app.inject`, never handed to a caller |
+| `apps/api/src/didSwitchSchedule.ts:117` `injectAsService` | `sub: "scheduler:<id>"`, role SUPER_ADMIN | **2m** | callers `:445` / `:488` (switch-to-connect / -pbx) |
+| `apps/agent/src/transcription/voicemailJob.ts:117` | `sub: "agent-voicemail"`, `tenantId: ""`, SUPER_ADMIN | **300 s** | hand-rolled HS256, ⛔ lives in the AGENT image (manual rebuild) |
+| `apps/agent/src/notify/voicemailEmailJob.ts:212` | `sub: "agent-vm-email"`, same shape | **300 s** | same |
+
+⛔ **Three service principals carry a `sub` that is NOT a `User.id`**
+(`scheduler:*`, `agent-voicemail`, `agent-vm-email`). Any per-request "look the
+user up and check they are ACTIVE" rule that rejects an unknown `sub` outright
+**silently kills the DID switch scheduler, the drift reconciler, voicemail
+transcription and voicemail email.** A revocation check must recognise them —
+safest signal available today: no `User` row **and** a short-lived token
+(`exp − iat ≤ 15 min`) = service principal; no `User` row and long-lived or
+`exp`-less = a deleted user's session, reject. The two agent-side minters cannot
+be changed without an agent rebuild, so the rule has to fit what they already emit.
+
+Verifiers of the same secret elsewhere (they already honour `exp` because
+`jsonwebtoken.verify` does by default): `apps/telephony/.../TelephonySocketServer.ts:173`
+(closes the WS `1008 Unauthorized`), `apps/telephony/src/routes/telephony.ts:37`,
+`apps/realtime/src/server.ts:23`, `apps/agent/src/auth.ts:24`.
+
+### 8.2 How the clients store the token and what a 401 does to them
+
+**Mobile (`apps/mobile`)** — `context/AuthContext.tsx` keeps the token in
+SecureStore (`cc_mobile_token`) and mirrors it to native storage on Android for
+the notification reply receiver. `api/client.ts` is a thin `fetch` wrapper: every
+call `throw new Error(json?.error || "…_FAILED")` on `!res.ok`. **There is no 401
+handling anywhere in the app** (`grep -rn "401" apps/mobile/src` hits only the SIP
+code's SIP-401). Nothing clears the token, nothing shows the login screen. On an
+expired token the phone keeps its cached SIP provisioning bundle
+(`cc_mobile_provision`) so it still registers and rings **for a while**, but:
+`getFreshIceServers` fails → the TURN overlay stops refreshing → within 24 h the
+device is **relay-dead again (the 2026-07-29 fleet-wide `iceHasTurn:false`
+failure, self-inflicted)**; `registerMobileDevice` fails and is swallowed with a
+`console.warn` (`NotificationsContext.tsx:1954`) so `lastSeenAt` goes stale and the
+device drops out of every `lastSeenAt: { gte: … }` filter (worker registration
+watchdog `main.ts:1568`, wake canary enrolment); chat, voicemail, contacts,
+recents all error with a slug. **The user is never told to sign in again.**
+Fixing this needs a mobile release (APK + TestFlight) — Izzy's call.
+
+**Portal + desktop (`apps/portal`; the desktop app wraps the hosted portal)** —
+token in `localStorage` (`services/session.ts`). `AuthGate` only checks that a
+token STRING exists; `services/apiClient.ts` throws `ApiError(status 401)` and
+**no global handler clears the session or redirects to `/login`**. `/me` failing
+falls back to cached permissions (`useAppContext.tsx:252`) and renders the shell.
+The background loops keep running with the dead token: mini-dialer `refreshLists`
+every 30 s, `DesktopNotificationsBridge` every 30 s, `NotificationPanel` every 60 s,
+chat 7 s poll when open, `useSipPhone` init backing off to one request a minute,
+telephony WS reconnecting on every `1008` close. ⛔ **`monitor.sh` bans an IP for
+60 min at >30 × 401 in 5 minutes.** One parked desktop app ≈ 8–12 401s per 5 min;
+two PCs behind one office IP plus an open chat tab clears the threshold. **So
+"expire the token" reads, on the customer's side, exactly like the 2026-08-17
+blank-app incident: the office goes 403 on everything, and reopening the app
+cannot help because the ban refuses the page's own JavaScript.**
+
+### 8.3 Existing refresh — partial, portal-only, accidental
+
+`GET /me` re-signs a token when the DB role no longer matches the claim, and the
+portal writes it back (`useAppContext.tsx:188` → `writeAuthToken`). That is a
+role-refresh, not a session-refresh, and the mobile app never calls `/me`. There
+is no refresh token, no session table, no revocation list.
+
+### 8.4 Per-request re-validation: NONE
+
+The preHandler (`server.ts:6056`) does `req.jwtVerify()` and then reads the
+claims. It never touches the `User` row. **A DISABLED user's existing token keeps
+working on every route** — `status === "DISABLED"` is checked only at
+`/auth/login` (`:5797`) and invite acceptance. There is no `tokenVersion` /
+`sessionsInvalidatedAt` field on `User` (schema checked), so a password change or
+a compromise cannot invalidate anything a user already holds.
+
+### 8.5 The 401 shape
+
+`{ "error": "unauthorized" }`, HTTP 401, identical for missing / malformed /
+wrong-secret / expired. `@fastify/jwt` will enforce `exp` the moment a token
+carries it — no api change needed for the *rejection* half, which is precisely why
+adding `expiresIn` is a one-line change with platform-wide blast radius.
+
+### 8.6 Decision
+
+**Do not ship expiry or per-request revocation until the clients can survive a
+401.** The order that is safe, each step independently deployable:
+
+1. **Portal:** a global 401 handler in `apiClient.ts` — on `unauthorized`, clear
+   the session and route to `/login?next=…` (respecting the desktop passive-window
+   rule in `AuthGate`), and make every background poller stop on the first 401
+   rather than back off. This is what turns "token expired" into "please sign in"
+   instead of "office banned". Portal-only deploy.
+2. **Mobile:** on 401 from any authenticated call, clear `cc_mobile_token`, stop
+   the SIP stack, and show the login screen; add a sliding refresh (e.g.
+   `/mobile/devices/register` returning a fresh token that the app persists) so a
+   phone in daily use never reaches the wall. **Needs an APK + TestFlight build,
+   and Izzy's word.**
+3. **Server, only after 1 and 2 are on every phone that matters:** `expiresIn`
+   (30 d) on the three user-session mint sites; a `sessionsInvalidatedAt` (or
+   `tokenVersion`) column + migration; a per-request status/version check behind
+   a `permissionCache.ts`-style short-TTL cache keyed by `sub`; the
+   service-principal rule from 8.1; and a decision on `exp`-less legacy tokens
+   (grandfather for a window, then reject — rejecting on day one signs out every
+   existing session, including every phone).
+4. Only after all of that: exempt `/api/auth/login` and `/api/me` 401s from the
+   nginx ban counter so a signed-out client trying to recover cannot ban itself.
+
+⛔ **The tempting shortcut — ship revocation alone ("just reject DISABLED users
+per request") because it does not touch `exp` — has the same failure mode:** the
+disabled user's parked desktop app becomes a 401 stream on the shared office IP.
+Today, disabling a user leaves their token working (bad) but bans nobody. Step 1
+must land first regardless.
