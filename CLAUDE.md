@@ -262,6 +262,40 @@ Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]]
   early — **the harness did not contain the chart.** `CallVolumeChart` is the only
   `ResizeObserver` in apps/portal; the three `resize` listeners are window-level
   and the sidebar never fires them.
+- ⛔⛔ **AND THE ANIMATION WAS NEVER THE CAUSE — TWO FIXES MISSED BEFORE THIS WAS
+  MEASURED PROPERLY. THE FIVE-MINUTE TEST TO RUN FIRST: delete the animation
+  entirely.** With no transition at all, an instant collapse **still dropped 5-6
+  frames per toggle** (worst 180-280 ms). Chrome's counters over 4 toggles:
+  animating `width` = **23 layouts / 109.8 ms of layout**; animating `transform`
+  = **0 layouts, 0 dropped frames**; idle control = 0.
+  ⛔ **The machine matters and explains years of "everything is slow":
+  Intel HD Graphics 4000 (2012) driving a 3440x1440 ultrawide** (2752 CSS px @
+  DPR 1.25). A full-viewport repaint really is 100-250 ms there. **But do NOT
+  file that as "can't be fixed"** — on that same machine a `transform` animation
+  measured **0 dropped frames every run**. Moving a layer is nearly free;
+  repainting 4.2 megapixels is not. **Move layers, never repaint surfaces.**
+  ⛔ **Ruled out BY MEASUREMENT, so do not re-investigate:** removing the page
+  content from the DOM, `contain`, `will-change`, shorter durations, not painting
+  the sidebar contents, the workspace gradient, pinning inner widths **while in
+  flow** — and **deleting all 73 `:has()` rules (4.2 -> 4.7 dropped frames).**
+  ⛔⛔ **So the `:has()` tax above is real for DOM MUTATIONS but is NOT the
+  cause of slow toggles** — that was attempt one's headline theory and it was
+  wrong.
+  ✅ **What fixed it (`5b2f0188`):** the sidebar's contents moved into
+  **`.nav-sheet`, `position: absolute` at a fixed 280px**, taking ~500 nodes
+  **out of the layout path** (⛔ pinning their width while leaving them IN FLOW
+  had already been tried and did nothing — out-of-flow is the point); the width
+  now changes **once per toggle** with no width transition; and the motion is a
+  **`clip-path` over the sheet + a `translateX` on `.console-workspace`**,
+  neither of which lays out. Rail is **68px** and the link gap **15px** so a
+  label starts exactly at the rail edge — which is why the rail needs **no
+  layout-changing rules at all**, it is just the expanded sidebar with a clip.
+  **Measured: 5-6 -> 0-2 dropped frames per toggle, layout time down ~12x**,
+  reproduced over three runs. ⛔ The forced `void workspace.offsetWidth` in
+  `useSidebarGlide` is **load-bearing** — a double-rAF instead measured **5x
+  worse**. ⏳ ~1 dropped frame per toggle remains: the one unavoidable layout
+  when the content area resizes. Removing that needs an overlay sidebar (content
+  never resizes), which is Izzy's product call, not a bug.
 - ⛔ **The mobile/narrow drawer animated `left`, a LAYOUT property** — relaying
   out the drawer and the page behind it every frame. It is `transform:
   translate3d(-100%,0,0)` now (compositor only). ⛔ **That created a trap and it

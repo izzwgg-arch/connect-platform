@@ -160,6 +160,84 @@ sidebar moves.** Any future one must commit on the trailing edge, and must never
 be measured in a harness that does not contain it — which is exactly the mistake
 that produced the premature "fixed" above.
 
+## 4c. ⛔⛔ THE REAL CAUSE, AND IT WAS NEVER THE ANIMATION (third attempt — the one that worked)
+
+Izzy tested again after §4b and it was **still jittery**. Two "fixes" had now
+missed. The mistake in both was measuring a proxy (forced layout of a single
+width change) instead of the frames a human actually sees.
+
+### The measurement that ended the guessing
+
+**Delete the animation entirely — no transition, just an instant snap — and the
+collapse still drops 5–6 frames per toggle** (worst 180–280 ms). Run that test
+FIRST next time; it takes five minutes and would have saved two rounds.
+
+| | dropped frames / toggle | worst frame |
+|---|---|---|
+| animate `width` (what shipped) | 5–6 | 80–200 ms |
+| animate `transform` | **0** | 20 ms |
+| **no animation at all** | **5–6** | 180–280 ms |
+| idle control, same window | **0** | 20.4 ms |
+
+Chrome's own counters over 4 toggles: `width` → **23 layouts, 109.8 ms of
+layout**; `transform` → **0 layouts, 0 ms**.
+
+### Why this machine in particular
+
+```
+GPU:     Intel(R) HD Graphics 4000        (2012 integrated part)
+Display: 3440 x 1440 ultrawide            (2752 CSS px @ DPR 1.25)
+```
+
+That GPU tops out around 2560x1600; the desktop is 4.2 megapixels. **A
+full-viewport repaint genuinely costs 100–250 ms here.** It also explains the
+~51 Hz idle refresh, the long-standing "everything is slow" reports, and why the
+Windows app behaves identically (same Chromium, same GPU).
+
+⛔ **Do not read this as "the hardware is the problem, nothing to do."** On this
+exact machine a `transform` animation measured **0 dropped frames every run**.
+Moving an already-rendered layer is nearly free even on 2012 silicon. Repainting
+4.2 megapixels is not. The job is to move layers, not repaint surfaces.
+
+### Ruled out by measurement, not by argument
+
+Page content **removed from the DOM entirely**; `contain: layout paint`;
+`will-change`; a shorter duration; not painting the sidebar's contents; the
+workspace gradient; pinning the inner blocks' width while they stayed in flow;
+and — note — **deleting all 73 `:has()` rules at runtime (4.2 → 4.7 dropped
+frames).** §2's `:has()` tax is real for DOM *mutations* and is **not** what
+makes the toggle expensive. That correction matters: it was the headline theory
+of attempt one.
+
+### What actually shipped
+
+1. **`.nav-sheet`** — the sidebar's contents are now in a wrapper that is
+   `position: absolute` at a **fixed 280px**, so ~500 nodes sit **out of the
+   layout path** and the panel's width change no longer re-lays them out.
+   ⛔ An earlier attempt pinned those children to `width: 280px` while leaving
+   them **in flow** and it did nothing — in-flow children still participate in
+   layout. Out-of-flow is the whole point.
+2. **The width changes exactly once per toggle.** No width transition exists.
+3. **The motion is a `clip-path` closing over the sheet plus a `translateX` on
+   `.console-workspace`** — neither lays anything out.
+4. **Rail is 68px and the nav link's gap is 15px**, so a label begins at exactly
+   the rail edge (10 + 3 + 6 + 34 + 15 = 68) and the clip never slices text.
+   That is what lets the rail carry **no layout-changing rules at all** — it is
+   simply the expanded sidebar with a clip over it.
+
+**Result, reproduced over three runs: 0–2 dropped frames per toggle (avg 0.8–0.9),
+worst frame 40–120 ms, layout time down ~12x.**
+
+⛔ **The forced `void workspace.offsetWidth` in `useSidebarGlide` is
+load-bearing.** It commits the start position before the transition is armed.
+Replacing it with a double `requestAnimationFrame` measured **five times worse**
+(5.75 dropped frames vs 0.9).
+
+⏳ **Residual, and honest:** roughly one dropped frame per toggle remains — the
+single unavoidable layout when the content area changes width. On this GPU that
+one relayout is 40–120 ms. Eliminating it entirely requires the content area to
+never resize (an overlay sidebar), which is a product decision, not a fix.
+
 ## 5. ⛔ The trap the mobile change created, and why the toasts moved
 
 `DesktopUpdateToast` is `position: fixed` and used to render **inside** the
