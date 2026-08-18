@@ -399,10 +399,34 @@ looking at cache membership, not at the property you are testing.**
   intermittent.
 - ⛔ **UI phrase warming: dead.** An untranslated phrase renders **English**,
   which is safe but permanently incomplete on the queue screens (26 of 176).
-- ✅ **Voicemail transcription is NOT affected.** It runs on `stt-yi`
-  (ivrit.ai/Everett), not YL — **126 voicemails transcribed** since credits ran
-  out, most recent `2026-08-18T03:39Z`, `language: yi-en`. Do not report Yiddish
-  voicemail as broken.
+- ✅ **Voicemail transcription still works — but ⛔ NOT because YL is out of that
+  path. It is IN it, first in line, and failing silently on every voicemail.**
+  `yiddishPass()` (`apps/agent/src/transcription/voicemailJob.ts`) tries **Yiddish
+  Labs FIRST** and falls back to **ivrit.ai (Everett on RunPod)** inside a bare
+  `catch`. So since 2026-08-16 every Yiddish voicemail has: called YL → 402 →
+  swallowed → ivrit.ai. **Working, on the safety net alone.**
+  ⛔ **`transcriptEngine: "stt-yi"` NAMES THE LANGUAGE THAT WON, NOT THE
+  PROVIDER** — both YL and ivrit stamp the identical tag, so the column can never
+  tell you which one produced a transcript. Do not read it as "ivrit did this".
+- ✅ **And it is genuinely healthy, measured not assumed:** **126 transcribed**
+  since credits ran out vs 4 failures — and all 4 are `audio_empty` (empty
+  recordings), the same rate as the fortnight before (**3.1% after vs 3.5%
+  before**, 17 of 489). Not one `both_stt_failed`. ivrit.ai is configured and
+  answering (`/agent/everett/status` → `configured: true, endpointConfigured:
+  true`). **Do not report Yiddish voicemail as broken.**
+- ⚠️ **THE REAL COST: the redundancy is GONE while credits are out.** Yiddish
+  voicemail now has one engine, not two. `transcribeOne` throws
+  `both_stt_failed` when both passes come back empty — so an ivrit.ai outage
+  today means **no transcript at all**, where a week ago YL would have covered
+  it. Topping up restores the second engine as well as the chat.
+- ⚠️ **INFERENCE, NOT PROVEN — what probably drained the wallet.** Audio
+  transcription is far more expensive than text (a one-word text probe costs 1
+  credit; a chat reply 15–21), and **~600 voicemails ran through YL in the nine
+  days before it emptied**. The chat bridge is the visible casualty but is
+  unlikely to be the big consumer. ⛔ Cannot be proven from our side — the YL
+  attempt in `yiddishPass` is swallowed by that bare `catch`, so nothing is
+  logged. **Check the usage page in the Yiddish Labs account before assuming a
+  top-up will last**, or it empties again on the same schedule.
 - ✅ Nothing else: no calls, no billing, no routing touches YL.
 
 ## 6. The fix, and what NOT to do

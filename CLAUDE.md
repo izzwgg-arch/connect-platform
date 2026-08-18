@@ -98,10 +98,25 @@ PBX write, no data change, no credits spent.** Memory:
   cache membership, not the property you are testing.**
 - ✅ **Blast radius measured, not assumed.** Yiddish assistant chat: **dead**.
   UI phrase warming: **dead** (an untranslated phrase renders English — safe,
-  just incomplete; the queue screens sit at 26 of 176). **Voicemail
-  transcription is NOT affected** — it runs on `stt-yi` (ivrit.ai), not YL:
-  **126 voicemails transcribed** since credits ran out, latest 2026-08-18 03:39Z.
-  Nothing in calls, billing or routing touches YL.
+  just incomplete; the queue screens sit at 26 of 176). Nothing in calls,
+  billing or routing touches YL.
+- ⛔⛔ **VOICEMAIL STILL WORKS, BUT NOT BECAUSE YL IS OUT OF THAT PATH — IT IS
+  FIRST IN IT AND FAILING SILENTLY ON EVERY VOICEMAIL.** `yiddishPass()`
+  (`apps/agent/src/transcription/voicemailJob.ts`) tries **Yiddish Labs first**
+  and falls back to **ivrit.ai** inside a bare `catch`. Since 2026-08-16 every
+  Yiddish voicemail goes YL → 402 → swallowed → ivrit.ai. Healthy by
+  measurement — **126 transcribed** vs 4 failures, and all 4 are `audio_empty`
+  at the same rate as before (3.1% vs 3.5%), zero `both_stt_failed`.
+  ⛔ **`transcriptEngine: "stt-yi"` NAMES THE LANGUAGE THAT WON, NOT THE
+  PROVIDER** — YL and ivrit stamp the identical tag, so that column can never
+  tell you which one ran. ⚠️ **The cost is that the redundancy is gone**: Yiddish
+  voicemail is on ONE engine now, so an ivrit.ai outage today means no
+  transcript at all (`both_stt_failed`), where a week ago YL covered it.
+- ⚠️ **INFERENCE, NOT PROVEN — check the usage page before assuming a top-up
+  lasts.** Audio costs far more than text (1 credit for a one-word probe, 15–21
+  for a chat reply) and **~600 voicemails ran through YL in the nine days
+  before it emptied**. The chat bridge is the visible casualty, not likely the
+  big consumer. ⛔ Unprovable from our side — that bare `catch` logs nothing.
 - ⏳ **OPEN, and it is the real defect: the outage is INVISIBLE.** The 402 lands
   in `AgentAuditLog` and nowhere else — no alert, no banner, no log line a human
   reads. A customer complaint surfaced an outage 36 hours old, and the previous
