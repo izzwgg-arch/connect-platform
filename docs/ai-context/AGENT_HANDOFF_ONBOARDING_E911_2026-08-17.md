@@ -185,18 +185,17 @@ typecheck adds **0** to its 75-error baseline; portal typecheck clean. The two
 red portal tests (`campaigns index…`, `checkOfferCompatibility…`) are
 **pre-existing** — confirmed identical with these changes stashed.
 
-⏳ **NOT PROVEN — and this is the honest limit: no address has ever been
-registered.** `e911Provision` has never been called; every one of the 73 DIDs on
-the master account still reads `e911: "0"` and no sign-up has run since the
-deploy. **The acceptance test is one real sign-up:** check the timeline says
-`911 registered on <did> at <address>`, then confirm `getDIDsInfo` shows
-`e911` no longer `"0"` for that DID, and that `answers.provisioning.e911.status`
-is `provisioned`.
+✅ **SUPERSEDED — one address HAS now been registered.** Matamim, 2026-08-17:
+`9293598299` reads `e911: "1"` and `default_e911` is set on their trunk. That
+run also exposed the `language` bug (`EN`, not `en`) that would have broken
+every sign-up. **See §7b, which is the authority on what is proven.**
 
-⏳ **`default_e911` has never been written.** It is proven to *exist* as a real
-field (it is returned by `getSubAccounts` on all 61 subaccounts, currently empty
-on every one) and the write is guarded by a read-back, but no subaccount has
-been through it.
+⏳ **Still not proven: no sign-up has driven the path by itself.** Matamim was
+registered by hand through the deployed helper, because their port had already
+completed and the watchdog drops a finished row. **Acceptance is the next real
+sign-up:** its timeline should say `911 registered on <did> at <address>`, with
+`getDIDsInfo` reading `e911: "1"` and `answers.provisioning.e911.status` =
+`provisioned`.
 
 ⏳ **The cost is unconfirmed.** VoIP.ms charges a monthly fee per E911-registered
 DID, and this starts incurring it on every sign-up. Connect already bills the
@@ -205,6 +204,111 @@ it should be comfortably margin-positive — **but the actual VoIP.ms rate was n
 verified** and there is no rate method in their API. Worth one look at the next
 invoice. This is a fact to know, not a blocker: registering 911 was the
 instruction.
+
+---
+
+## 7b. The first real registration — Matamim, 2026-08-17 ✅
+
+Izzy: *"Run the test from Matamim. Activate E911 for him."* Done, through the
+deployed helper rather than a re-implementation.
+
+**Final state, read back from VoIP.ms:**
+
+```
+getDIDsInfo 9293598299  →  e911: "1"   routing: account:344022_Matamih8gmrh
+e911Info                →  Matamim, 15 VAN BUREN DR, KIRYAS JOEL V, NY 10950,
+                           US, EN, office@matamimweekly.com
+getSubAccounts          →  344022_Matamih8gmrh default_e911: "9293598299"
+                           (password verified UNCHANGED after the full update)
+```
+
+### ⛔⛔ It caught a bug that would have broken every single sign-up
+
+**`language` must be `EN`, uppercase — and `e911Validate` will not tell you.**
+Validate returned `{"status":"success"}` with `en`. `e911Provision` then refused
+the identical parameters: `no_provision`, *"The value 'en' of element 'language'
+is not valid."*
+
+⛔ **Both obvious places to copy the value from are wrong.** VoIP.ms's own
+`getLanguages` returns `en` / `es` / `fr` **lowercase**, and all 61 subaccounts
+on the account store `en`. `"English"` fails too (echoed back as `'En'`). The
+E911 `language` field is validated by the **upstream emergency provider**
+against its own list, not by VoIP.ms's account vocabulary.
+
+**The general lesson, and it is the important one: `e911Validate` is more
+lenient than `e911Provision`.** A clean validate does not mean the registration
+will go through. The only way to know is to register something.
+
+Fixed in `7913ac9f`, deployed, and pinned by a test asserting `p.language ===
+"EN"` with the reason written next to it.
+
+### The address had to be resolved before anything was registered
+
+Matamim's sign-up predates the structured fields and stored **only a street
+line**: `15 Van Buren Dr` — no city, no state, no ZIP. `buildE911Address`
+correctly refused it (`ok: false`, missing `city` and `zip`), which is the
+safety behaving exactly as designed.
+
+⛔ **Two candidate addresses existed and they disagreed:**
+
+| Source | Address | Name |
+|---|---|---|
+| Their sign-up (service address) | `15 Van Buren Dr` (street only) | Matamim |
+| Their port order, via `getLNPDetails 217946` | `4 Maglenitz St, Monroe NY 10950` | J Fulop |
+
+The port-order address is the **Google Voice account's billing address** for a
+number that was `isMobile: 1`, under a different person's name and a different
+BTN. **The service address the customer typed wins** — that field means "where
+your phones are", and it is what Izzy's instruction refers to. Both streets are
+real, both resolve to Kiryas Joel, so the two candidates are minutes apart, and
+`e911Update` can correct it any time.
+
+⛔ **`getLNPDetails <portid>` is a genuinely useful read** when a customer's
+address is missing — it returns the address the losing carrier had on file.
+Treat it as a lead, not as the answer.
+
+### And it proved the correction loop on a real customer
+
+`15 Van Buren Dr` + `Monroe` + `10950` was **refused**, with
+`alternatives: {street_name: ["VAN BUREN DR"], city: ["KIRYAS JOEL V"]}`, and
+validated on the retry. Neither Monsey nor Spring Valley recognised the street,
+which is what pinned the town. The stored address keeps the customer's own
+postal form (`Monroe`); the **registration** carries the village.
+
+### One more gap this exposed
+
+⛔ **The trunk fallback now runs on `already_registered`, not just on a fresh
+registration** (`db810f16`). Matamim's first attempt registered the DID and then
+failed on the language value, so the re-run short-circuited at
+`already_registered` and `default_e911` was never set — **a number can be
+registered while its trunk still points nowhere.**
+⛔ Also confirmed the hard way: `setSubAccount` **completed server-side after my
+shell timed out at two minutes**. Aborting the request does not cancel VoIP.ms's
+operation — re-read before assuming a slow write failed.
+
+---
+
+## 7c. The customer email — built, NOT wired ⏳
+
+Izzy, 2026-08-17: once onboarding completes, the customer should get a separate
+email saying 911 was activated **and stating the address the dispatcher will be
+given** — *"before you deploy the emails, show me markups."*
+
+`apps/api/src/onboarding/e911ActivatedEmail.ts` exists and renders. **Nothing
+imports it and nothing sends it.** Three wordings are with Izzy:
+<https://claude.ai/code/artifact/4ed02ad7-f4ec-4701-bfae-619b2fd1499a>
+
+- ⛔ Type is **`E911_ACTIVATED`** — never `ADMIN_ALERT`, which the send door
+  drops with `ALERTS_MUTED`. Same trap the port-complete email documents.
+- It shows the **registered** address, not what the customer typed, because that
+  is what a dispatcher receives. Options B and C carry one line explaining why
+  the town may look unfamiliar — without it, a Monsey customer reads "Spring
+  Valley" and thinks we got their address wrong.
+- Reuses the shared `emailShell` with `includeSupportBlock: false`; "reply to
+  this email" is the whole support path, so it needs no new mailbox.
+- **Still to build once he picks:** the recipient resolution (reuse
+  `resolvePortCompleteRecipient`), the queue call at the end of the setup
+  orchestrator, and a test asserting the type is not `ADMIN_ALERT`.
 
 ---
 

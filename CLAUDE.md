@@ -362,14 +362,45 @@ activate e911 in voip.ms on every future signup"* — *"through the voip.ms API.
   '@prisma/client'`) and run it with **`npx tsx`**, because `@connect/security`
   ships as TypeScript source and has no `dist/`. ⛔ **`e911Validate` is the safe
   probe; `e911Provision` registers and bills.**
-- ⏳ **NOT PROVEN, and it is the honest limit: no address has ever been
-  registered.** `e911Provision` has never run — all 73 DIDs still read
-  `e911: "0"` and no sign-up has happened since the deploy. Proven only up to
-  the billable step: the **deployed** builder produced a parameter set the live
-  API accepted (`{"status":"success"}` after the Monsey correction).
-  **Acceptance is one real sign-up.** ⏳ `default_e911` has never been written.
-  ⏳ **The VoIP.ms E911 rate was not verified** — this now costs money per
-  sign-up; Connect already bills the customer **$3/month** per number, so it
+- ✅ **FIRST REAL REGISTRATION DONE — Matamim, 2026-08-17.** `9293598299` now
+  reads `e911: "1"`, `e911Info` returns **15 VAN BUREN DR, KIRYAS JOEL V, NY
+  10950**, and the trunk `344022_Matamih8gmrh` has `default_e911` set to it
+  (password verified unchanged after the full update).
+  ⛔⛔ **AND IT CAUGHT A BUG THAT WOULD HAVE BROKEN EVERY SIGN-UP: the language
+  must be `EN`, UPPERCASE, and `e911Validate` WILL NOT TELL YOU.** Validate
+  returned `success` with `en`; `e911Provision` then refused the identical
+  request — `no_provision`, *"The value 'en' of element 'language' is not
+  valid."* ⛔ **Both obvious places to copy the value from are wrong**:
+  VoIP.ms's own `getLanguages` lists `en`/`es`/`fr` lowercase, and all 61 of our
+  subaccounts store `en`. `"English"` fails too (echoed back as `'En'`). The E911
+  field is validated by the upstream emergency provider against its own list.
+  **Lesson: validate is more lenient than provision — a clean validate does not
+  mean the registration will go through.**
+  ⛔ **Matamim also proves the correction loop on a real customer:** they typed
+  no city at all, their street sits in **Monroe 10950**, and the emergency
+  database refused it and returned **KIRYAS JOEL V**.
+  ⛔ **Their sign-up address disagreed with their port order** — the wizard said
+  `15 Van Buren Dr` (street only) while the Google Voice port order carried
+  `4 Maglenitz St, Monroe` under a different name. **The service address the
+  customer typed wins** — that field means "where the phones are". Both streets
+  exist and both resolve to Kiryas Joel, so the two candidates are a few
+  minutes apart; correctable any time with `e911Update`.
+- ⛔ **The trunk fallback also runs on `already_registered`, not just a fresh
+  registration.** Matamim's first attempt registered the DID and then failed, so
+  the re-run short-circuited and `default_e911` was never set — **a number can
+  be registered while its trunk still points nowhere.**
+- ⏳ **The customer-facing "911 is active, here is your address" email is BUILT
+  BUT NOT WIRED** (`e911ActivatedEmail.ts`, type **`E911_ACTIVATED`** — ⛔ never
+  `ADMIN_ALERT`, which is muted). Three wordings are with Izzy at
+  <https://claude.ai/code/artifact/4ed02ad7-f4ec-4701-bfae-619b2fd1499a>;
+  nothing sends until he picks one.
+- ⏳ **STILL NOT PROVEN: no sign-up has driven this by itself.** Matamim was
+  registered by hand through the deployed helper, because their port had
+  already completed and the watchdog drops a finished row. **Acceptance is the
+  next real sign-up** — check its timeline says `911 registered on <did> at
+  <address>` and that `getDIDsInfo` reads `e911: "1"`.
+  ⏳ **The VoIP.ms E911 rate is still unverified** — this now costs money on
+  every sign-up. Connect bills the customer **$3/month** per number, so it
   should be margin-positive, but check the next invoice.
 
 ## ⛔⛔ AGENT HANDOFF — the whole tenant directory was downloadable by a stranger, and two doors that "checked a secret" had no secret (2026-08-18) — READ FIRST before touching `/internal/*`, the VoIP.ms SMS webhook, any signed-URL helper, or before believing a guard that reads an env var
