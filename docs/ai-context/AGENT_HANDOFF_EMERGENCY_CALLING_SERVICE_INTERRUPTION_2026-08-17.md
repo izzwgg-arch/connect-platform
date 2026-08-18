@@ -149,7 +149,8 @@ should be done with the carrier warned or by dialling 8457831212 rather than
 
 ## 6. What remains
 
-1. Render the dialplan for T104/T105 (§4) and prove a real 911 call.
+1. Prove a real emergency call — dial **8457831212** (not 911) from a Matamim
+   extension and confirm it goes out on trunk 129 and the email arrives.
 2. Simplify `serviceInterruptionPlan.ts` — drop the custom-route carve-out.
 3. Wire emergency setup into `onboarding/pbxTenantBuild.ts` so every new
    customer gets it. ⛔ Use the **sweep** pattern, not a creation hook: five
