@@ -18,10 +18,27 @@
  * ⛔ ARS rows live under `tenant_id 1`, so this works in the MAIN tenant
  * context, not the customer's — in the customer's context the route select
  * offers 1 option instead of 56.
+ *
+ * ⛔⛔ AND THE REGEN AFTERWARDS MUST ALSO RUN IN THE MAIN TENANT.
+ * Flipping the flag changes `ombu_ars_members` only. Asterisk routes from the
+ * generated dialplan, and `ARS-<id>` / `trk-group-<id>` are rendered into
+ * `extensions__50-1-dialplan.conf` — TENANT 1's file — because every outbound
+ * route and route selection lives under `tenant_id 1`.
+ *
+ * Proven live on Loopcom Demo, 2026-08-18: disabling the member and
+ * regenerating the CUSTOMER's tenant left `8455551234@T102_ARS-all` resolving
+ * happily through `trk-group-123`. The customer could still dial out while the
+ * database said "disabled" — a cutoff that silently does nothing. Regenerating
+ * the MAIN tenant instead produced "There is no existence of
+ * 8455551234@T102_ARS-all", and restoring put the include straight back.
+ *
+ * ⛔ So `applyArsRegen` below is the ONLY sanctioned way to make an ARS change
+ * take effect. Never regenerate the customer's own tenant for this.
  */
 
 import {
   type PanelSession,
+  applyChanges,
   assertSaved,
   dropPairs,
   parseFormPairs,
@@ -144,4 +161,22 @@ export async function setMembersEnabled(
   if (changed.length === 0) return [];
   assertSaved("ars-member-toggle", await s.post(next));
   return changed;
+}
+
+/**
+ * Make an ARS member change take effect.
+ *
+ * ⛔ Regenerates the MAIN tenant — see the header. Regenerating the customer's
+ * own tenant is a no-op for route selections and leaves them dialling out.
+ * ⛔ An apply wipes the Connect doorway off regenerated routes, so the caller
+ * MUST re-bake immediately after (`rebakeConnectRoutesAfterRegen`), for every
+ * Connect-mode tenant, not just the one being cut off — an apply flushes other
+ * tenants' pending changes too.
+ */
+export async function applyArsRegen(
+  s: PanelSession,
+  params: { mainTenantPath: string },
+): Promise<void> {
+  s.setTenant(params.mainTenantPath);
+  await applyChanges(s, "ars-member-toggle");
 }
