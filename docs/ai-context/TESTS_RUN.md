@@ -4,6 +4,53 @@ Newest entries first.
 
 ---
 
+## Portal survives a 401 — global dead-session handler + pollers stop (2026-08-18)
+
+Branch `feat/ivr-migration-takeover`, commits `93fb96d1` + `f183ee3d`. Portal only;
+**portal DEPLOYED and container-verified** (`/app/.build-commit` = `f183ee3d`).
+
+### New suite
+
+```bash
+cd apps/portal && npx tsx --test lib/sessionExpiry.test.ts
+```
+
+**Result:** 23/23. Classifier matrix (401 unauthorized+token = dead; 403 forbidden,
+`invalid_credentials`, `bad_signature`, no-token, non-JSON = not), once-per-token
+idempotence (20 calls → 1 clear, 1 redirect), public paths and desktop passive windows
+never redirected, the local short-circuit (dead/empty token refused on authenticated paths,
+never on public paths, re-armed by a fresh token), source guards on every call site, and
+an api-contract guard that reads `apps/api/src/server.ts`.
+
+### Source guards proven non-vacuous
+
+Replayed against the pre-change files from `HEAD` in a scratch mirror (`git show HEAD:…`):
+**4 of the 4 call-site guards fail** (apiClient wiring, AuthGate listener, telephony WS
+1008 handling, the poller gates); the api-contract guard passes on both, as it should.
+
+### Portal suite + typecheck
+
+```bash
+cd apps/portal && npm test          # 158 tests, 156 pass, 2 fail — the pre-existing
+                                    # webrtcSdpDiagnostics + campaignsIndexLayout failures
+cd apps/portal && npx tsc -p tsconfig.json --noEmit    # 0 errors
+```
+
+### Live browser check on the deployed build (no sign-in, no real credentials)
+
+`https://app.connectcomunications.com/login`: form renders, only `/version → 200`, **zero
+`/api/*` requests** (the one stray `/api/me/outbound-routes → 401` from before `f183ee3d` is
+gone), no CSP/CORS console messages. `/p/PROBE000`: URL unchanged (no redirect), page reads
+"This payment link is invalid or no longer available", `404 / 404` on the two pay-link
+calls, no CSP/CORS messages. `/api/health` 200 on both hostnames.
+
+### Not run, honestly
+
+The dead-session path end to end (a real session whose token the api then refuses) — nothing
+expires today and no real credentials were used. Human recipe in the security audit §8.7.
+
+---
+
 ## Source-reading tests normalise CRLF — Windows-only failure closed (2026-08-18)
 
 Branch `feat/ivr-migration-takeover`. Test-only + docs; no production code touched.
