@@ -44,52 +44,63 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
-## ⛔⛔ AGENT HANDOFF — almost every customer is addressed by their EMAIL ADDRESS, not their name (2026-08-17) — READ FIRST before rendering a person's name on ANY screen or in ANY email, and before believing the sidebar and the dashboard agree
+## ⛔⛔ AGENT HANDOFF — the PBX name is what we call people now, on screen and in every email (2026-08-17) — READ FIRST before rendering a person's name ANYWHERE, before adding a naming fallback, or before "fixing" a name that looks wrong
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_USER_NAMES_EMAIL_VS_PBX_2026-08-17.md`**
-(**Read-only audit — no code change, no deploy, no migration, no PBX write, no data
-change.** Answers Izzy's 2026-08-17 question directly: **no, they are not.**)
+(`48052a59` + `b7244858`. **api + portal DEPLOYED and container-verified.** No
+migration, no PBX write, **no data changed** — the right names were already on the
+extension rows.) Memory: [[name-comes-from-email-not-pbx]].
 
-- ⛔⛔ **A person's name lives in FOUR places and only ONE is right.**
-  `User.displayName` / `firstName` / `lastName` are whatever an admin or a sign-up
-  form typed; **`Extension.displayName` is the PBX name and it is the real one.**
-  Any surface that resolves a name **without consulting the extension** falls through
-  to `email.split("@")[0]`. **54 of 65 live users have no real name stored at all**,
-  so for them the email address IS the name.
-- ⛔ **The portal already has the right helper and the main dashboard doesn't call
-  it.** `getPreferredUserDisplayName` (`apps/portal/lib/userDisplayName.ts:44`)
-  prefers `extensionDisplayName`, `/me` already returns it, and the **sidebar,
-  profile menu, CRM dashboard and the mobile app all use it and are CORRECT today.**
-  `app/(platform)/dashboard/page.tsx:230` rolls its own local `firstName()` (:65)
-  that reads only `user.name`/`user.email` — **55 of 65 headlines are wrong.**
-  Live examples: **"Welcome, 845luzerj"** (Luzer Jungreis), **"Welcome, 7816646"**
-  (Barish), "Welcome, fhalpert" (Mrs. Halpert), "Welcome, smoothoffice1213"
-  (Secretary), "Welcome, nicholas" (Nick Stefanicha).
-- ⛔⛔ **EMAILS ARE WORSE AND IT IS PROVEN FROM SENT MAIL, NOT FROM TEMPLATES.**
-  `displayNameForUser()` (`apps/api/src/server.ts:2233`) **never looks at the
-  extension**, so no email can be right by accident. Real `USER_INVITE` rows opened
-  **"Hi s,"**, **"Hi g,"**, **"Hi l,"**, **"Hi y,"**, **"Hi e,"**, **"Hi fix,"** —
-  because **13 live users carry INITIALS in the name columns** (`e`/`l` = Eli Lovi,
-  `y`/`p` = Yossi Perlman, `s`/`w` = Shia Weinstock, seeded 2026-04-06) and the
-  invite template prefers `userFirstName` over the fuller `userName`.
-  ⛔ **Fixing the lookup order without cleaning those columns leaves them one code
-  path from resurfacing.**
-- ✅ **No PBX work and no re-typing is needed** — the PBX names were read directly
-  off `ombutel.ombu_extensions` for five tenants and Connect's `Extension.displayName`
-  is **byte-identical**. This is purely a lookup-order bug.
-- ⛔ **THE NAIVE FIX IS WRONG FOUR WAYS** (§6 of the handoff): Trust Bookkeepings
-  names extensions **`"105 - Mrs. Halpert"` / `"101- Mr. Sofer"`**, and the headline
-  takes the FIRST WORD — so a verbatim swap greets them **"Welcome, 105"**, worse
-  than today; **`/me` returns only the OLDEST extension** and four users own two
-  (`contact@gesheftkosher.com` → "Yossef Friedman" vs "Customer Phone 2"); several
-  logins are **role mailboxes** whose PBX name is a department ("Front Desk",
-  "Hiring", "Secretary") — *"Hi Front Desk,"* on an invoice is a decision, not an
-  improvement; and **3 users have no extension** so the fallback must survive.
-  ⛔ **The fix has TWO halves in two codebases** — changing the portal helper does
-  nothing for email.
-- ⏳ **NOTHING WAS CHANGED and the fix is Izzy's call** (the role-mailbox question
-  needs him). ⛔ Query trap: the email body column is **`textBody`/`htmlBody`**, not
-  `bodyText`.
+- ⛔⛔ **ONE RULE, ONE FILE: `packages/shared/src/personDisplayName.ts`. The PBX
+  extension name is ALWAYS the source of truth** (Izzy, 2026-08-17). It holds for
+  existing customers AND new sign-ups, because at onboarding the name the customer
+  types becomes that person's extension name (`ext_name: person.name`,
+  `onboarding/pbxTenantBuild.ts`) — **so there is no "new tenants are different"
+  branch, and do not add one.** ⛔ **If the PBX says "Front Desk", the person is
+  called Front Desk** — asked and answered; do not add cleverness that detects
+  "that's not a real name" and falls back to the email.
+- ⛔ **It is SHARED between the portal and apps/api on purpose.** They each had
+  their own copy, the api's never looked at the extension, and that drift WAS the
+  bug: **55 of 65 customers were greeted by the front half of their email address**
+  ("Welcome, 845luzerj" for Luzer Jungreis, "Welcome, 7816646" for Barish) while
+  the sidebar beside it showed the real name, and real invitations went out
+  reading **"Hi s," / "Hi g," / "Hi fix,"**. Never reimplement it locally.
+- ✅ **PROVEN AGAINST LIVE DATA WITH THE DEPLOYED CODE, not inferred: 56 of 65
+  names changed and ZERO users still show an email address.** Containers verified
+  both ways — the api carries the new resolvers and the old email-only one is
+  **gone**; the portal bundle carries the prefix-strip regex and **no longer
+  contains the old `[._-]` splitter**. ⛔ Grep the shipped bundle by the **regex
+  literal**, not the function name — minification renames the name and a 0-hit
+  grep reads exactly like a failed deploy.
+- ⛔ **Two traps the rule already handles — do not "simplify" either away.**
+  (1) Some tenants prefix the extension name with its number (`"105 - Mrs. Halpert"`,
+  and `"101- Mr. Sofer"` with no space, so a stricter pattern misses it); it is
+  stripped, or the headline reads **"Welcome, 105"**. (2) **The name is NEVER cut
+  to a first word** — that turns "Front Desk" into "Front" and "Mrs. Halpert" into
+  "Mrs.". So emails now open "Hi Mrs. Halpert,". Going back to first names needs a
+  person-vs-department distinction that cannot be derived from the name.
+- ⛔⛔ **A PROMISE `.catch()` DOES NOT CATCH A SYNCHRONOUS THROW — this shipped
+  broken for one commit and the onboarding suite caught it.** The name lookup used
+  `db.extension.findFirst(...).catch(() => null)`; when the model accessor is
+  missing the call throws **before a promise exists**, so **the whole invitation
+  failed** instead of merely losing the nicer name (12 red tests,
+  `import_db.db.extension.findFirst is not a function`). It is a real `try`/`catch`
+  + optional call now, in both apps/api and onboarding.
+- ⛔ **The guard test reads the CALL SITES' source** (`userDisplayName.callsites.test.ts`,
+  `apps/portal/lib/userDisplayName.test.ts`) — the defect was callers: queries that
+  never fetched the extension, and templates handed the raw `firstName` column. A
+  unit test of the resolver passes straight through all of it. **Proven real: every
+  assertion fails against the pre-fix files.**
+- ⛔ **Sloppy PBX names are now VISIBLE, and that is correct, not a bug.**
+  `izzywkg@gmail.com` on A plus center is greeted **"TEMP"** (ext 110 is named
+  TEMP), Fixup Group's owner gets **"Office"**, inii mini's is lowercase
+  **"baila"**. **Fix those by renaming the extension on the PBX** — that is now the
+  one place a name lives.
+- ⏳ **NOT PROVEN: nobody has signed in and looked, and no email has been sent
+  since the deploy.** ⛔ Open portal windows keep the old bundle until reloaded;
+  the desktop app needs a full close and reopen. ⏳ The 13 initials rows in
+  `User.firstName`/`lastName` were deliberately left alone — the rule makes them
+  unreachable for anyone with an extension.
 
 ## ⛔⛔ AGENT HANDOFF — tenant isolation audit: the ROUTES are fine, the SECRETS are empty (2026-08-17) — READ FIRST before adding any `/internal/*` door, any signed URL, any `requireAdmin` route, or before assuming a shared secret is actually set
 

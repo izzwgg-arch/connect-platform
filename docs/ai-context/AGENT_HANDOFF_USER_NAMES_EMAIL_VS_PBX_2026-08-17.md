@@ -1,6 +1,14 @@
 # AGENT HANDOFF — most customers are addressed by their email address, not their name (2026-08-17)
 
-**Read-only audit. No code change, no deploy, no migration, no PBX write, no data change.**
+> ## FIXED AND DEPLOYED 2026-08-17 — read §10 first
+> Commits `48052a59` + `b7244858`. **api and portal both DEPLOYED and
+> container-verified.** No migration, no PBX write, **no data changed** — the
+> right names were already on the extension rows.
+> **Proven against live data with the deployed code: 56 of 65 names changed and
+> ZERO users still show an email address.** The audit below is kept as the record
+> of what was wrong and why; §10 is what shipped.
+
+**Audit was read-only. The fix that followed changed code only — no migration, no PBX write, no data change.**
 Question asked (Izzy, 2026-08-17): *"Double-check that everybody's dashboard and all
 their emails they are coming to are addressed to them. Their name matches the PBX,
 not the email address."*
@@ -206,3 +214,74 @@ compare; read `EmailJob.textBody` for the last 45 customer emails and grep the o
 `Hi ...,` line; and read `ombutel.ombu_extensions` on the PBX to confirm Connect's copy.
 ⛔ The email body column is **`textBody`/`htmlBody`**, not `bodyText` — the obvious
 guess throws a Prisma validation error.
+
+
+---
+
+## 10. What shipped (2026-08-17)
+
+**One rule, in one place: `packages/shared/src/personDisplayName.ts`.** The PBX
+extension name is the source of truth, for existing customers and new sign-ups
+alike — at onboarding the name the customer types becomes the extension name
+(`ext_name: person.name`), so there is no second branch to keep in step. Izzy,
+2026-08-17: *"the PBX is always the source of truth"*, and *"if it's front desk,
+then it's front desk."*
+
+- **Shared, not duplicated.** The portal and apps/api both call it, which is the
+  whole point — they had drifted, and that drift was the bug.
+- **Portal:** `app/(platform)/dashboard/page.tsx` now uses
+  `getPreferredUserDisplayName` instead of its own resolver. The sidebar, profile
+  menu, CRM dashboard and mobile app already did and were untouched.
+- **API:** `displayNameForUser()` takes the extension; all four customer emails
+  resolve through the new `resolveUserNameForEmail()`, which loads the extension
+  itself so a caller's query shape cannot make an invite wrong. The onboarding
+  invite uses the same rule.
+- ⛔ **The number prefix is stripped** (`"105 - Mrs. Halpert"` → `Mrs. Halpert`),
+  or the headline would read "Welcome, 105".
+- ⛔ **The name is never cut to a first word.** Splitting turns "Front Desk" into
+  "Front" and "Mrs. Halpert" into "Mrs.". So the dashboard says
+  "Welcome, Mrs. Halpert" and an email opens "Hi Mrs. Halpert,". Slightly more
+  formal than "Hi Eli," — a deliberate trade, and the one thing to change if Izzy
+  prefers first names (it would need a person-vs-department distinction that
+  cannot be derived from the name).
+
+### Proven
+
+- **Live replay of the DEPLOYED rule over all 65 users: 56 names changed, 0 still
+  show an email address.** `"7816646"` → **Barish**, `"845luzerj"` →
+  **Luzer Jungreis**, `"fhalpert"` → **Mrs. Halpert**, `"nicholas"` →
+  **Nick Stefanicha**, `"hendy.secrosolutions"` → **Hendy**.
+- Containers verified: the api carries `resolvePersonDisplayName` /
+  `resolveUserNameForEmail` and the old email-only resolver is **gone (0 hits)**;
+  the portal bundle carries the prefix-strip regex and **no longer contains the
+  old `[._-]` email-splitting resolver**.
+- Tests: 10 shared + 6 portal + 7 api call-site guards; api 261 pass / 0 fail
+  across the onboarding, naming and door-bypass suites; portal typecheck 0
+  errors, api typecheck unchanged at its 97-error baseline.
+- ⛔ **The guard test is real, not decorative:** all five of its assertions fail
+  when run against the pre-fix files.
+
+### ⛔ Two things this surfaced, both worth knowing
+
+1. **A promise `.catch()` does not catch a synchronous throw.** The name lookup
+   used `db.extension.findFirst(...).catch(() => null)`; when the model accessor
+   is missing the call throws *before* a promise exists, so **the whole invitation
+   failed** rather than losing the nicer name. The onboarding suite caught it (12
+   red tests). It is a real `try`/`catch` now, and the guard test insists on that
+   shape.
+2. **The PBX names are now visible, so sloppy ones are too.** `izzywkg@gmail.com`
+   on A plus center is greeted **"TEMP"** (ext 110 is literally named TEMP),
+   Fixup Group's owner gets **"Office"**, and inii mini's is lowercase
+   **"baila"**. That is faithful, not broken — **the place to fix it is the
+   extension name on the PBX**, which is now the single thing to edit.
+
+### ⏳ Not proven
+
+- **Nobody has signed in and seen it, and no email has been sent since the
+  deploy.** Proven by live replay of the deployed rule and by container greps —
+  **not** by a human reading "Welcome, Mrs. Halpert" on a screen.
+- ⛔ Open portal windows keep the old bundle until reloaded; the desktop app
+  needs a full close and reopen.
+- The 13 initials rows in `User.firstName`/`lastName` were **left alone** — the
+  rule makes them unreachable for anyone with an extension, and 3 extension-less
+  users are internal accounts. Cleaning them is optional tidying, not a fix.
