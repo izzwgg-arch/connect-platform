@@ -1227,6 +1227,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Signed out (login page, public pay page): a guaranteed 401 — seen live as
+    // the ONE stray `/api/me/outbound-routes → 401` on every /login load.
+    if (!hasBrowserAuthToken()) return;
     let cancelled = false;
     apiGet<{ routes: OutboundDialRoute[] }>("/me/outbound-routes")
       .then((result) => {

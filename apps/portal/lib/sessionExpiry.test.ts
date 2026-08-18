@@ -256,6 +256,8 @@ test("the globally-mounted pollers do nothing while signed out", () => {
 
   const sip = read("../hooks/useSipPhone.ts");
   assert.match(sip, /if \(hasBrowserAuthToken\(\)\) fetchAccounts\(0\);/, "the extra-accounts fetch fired unauthenticated on /login");
+  assert.match(sip, /if \(!hasBrowserAuthToken\(\)\) return;\s*\n\s*let cancelled = false;\s*\n\s*apiGet<\{ routes: OutboundDialRoute\[\] \}>\("\/me\/outbound-routes"\)/,
+    "the outbound-routes fetch was the one stray 401 on every /login load (seen live 2026-08-18)");
   assert.match(sip, /if \(!hasBrowserAuthToken\(\)\) return;\s*\n[\s\S]{0,400}audioRef/, "the primary SIP init's own signed-out guard must stay");
 });
 

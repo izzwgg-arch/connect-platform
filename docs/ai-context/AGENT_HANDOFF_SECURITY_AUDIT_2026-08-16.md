@@ -368,3 +368,105 @@ per request") because it does not touch `exp` — has the same failure mode:** t
 disabled user's parked desktop app becomes a 401 stream on the shared office IP.
 Today, disabling a user leaves their token working (bad) but bans nobody. Step 1
 must land first regardless.
+
+### 8.7 Step 1 is DONE — the portal survives a 401 (2026-08-18)
+
+Commit `93fb96d1` on `feat/ivr-migration-takeover`. **Portal only — no api, no
+mobile, no env, no nginx, no PBX. Token expiry is NOT turned on; steps 2
+(mobile) and 3 (server) remain exactly as written in 8.6.** Deployed with
+`deploy-direct.sh portal`; verification below.
+
+**What was built, and where the one rule lives:** `apps/portal/lib/sessionExpiry.ts`.
+
+- **The classifier.** A response is "session dead" iff it is `401`, its JSON body
+  is `{ error: "unauthorized" }` (any case), **and the request was sent with a
+  bearer token**. That is read from the api, not guessed: the JWT preHandler
+  (`apps/api/src/server.ts` ~6081) answers exactly that for a missing / bad /
+  expired token, and every route-level `!req.user?.sub` guard sends the same
+  body. **Permission failures answer `403 { error: "forbidden" }`** —
+  `requirePermission`, `requireAdmin`, `requireRoleOrPortalPermission`, and the
+  portal-permission gate in the same hook — so opening a screen you lack
+  permission for does NOT sign you out. The other 401 bodies the api can send
+  (`invalid_credentials` on `/auth/login`, `bad_signature` on signed URLs,
+  `missing secret` on machine doors) are excluded by body. A test reads
+  `server.ts`'s source and pins that contract — if the api's 401 body ever
+  changes, `sessionExpiry.test.ts` goes red before a customer notices.
+- **The handler, once per dead token:** `clearAuthSession()` → dispatch
+  `cc-session-expired` on `window` → in a full window on an authenticated path,
+  `window.location.replace("/login?next=<path+search>")`. Keyed on the token
+  itself, so twenty concurrent 401s from twenty pollers = one clear, one
+  navigation. Public paths (`/login`, `/auth/`, `/p/`, `/pay/`, `/onboarding/`,
+  `/track/`, `/forms/`, `/privacy`) are never redirected — the token is cleared
+  and that is all. Desktop passive windows (`/desktop/mini-dialer`,
+  `/desktop/phone-engine`) are never redirected either: `AuthGate` drops their
+  content and waits for the main window's next sign-in (the `storage` event
+  crosses windows) — the same wait it already used for a missing token.
+- **Why every poller stops without editing every poller:** before sending,
+  `apiRequest` refuses — locally, no network — any request that would carry the
+  dead token or no token on an authenticated path (`shouldShortCircuit`). The
+  pollers keep ticking for the few hundred ms until the hard navigation lands or
+  `AuthGate` unmounts them, and every tick ends in a local throw instead of at
+  nginx. A NEW token (someone signs in again) re-arms the module with no reload,
+  which is what brings a passive window back.
+- **The pollers that live OUTSIDE `AuthGate`** (mounted from `app/providers.tsx`
+  on every page including `/login`) needed their own gate, because a hard
+  navigation to `/login` remounts them and they used to fire unauthenticated
+  401s there: `DesktopNotificationsBridge` (30 s), `RemoteSupportConsent` (5 s —
+  60 per 5 min is exactly the ban threshold, though only the Loopcom Support
+  build mounts it), and `useSipPhone`'s extra-accounts fetch. All three now check
+  `hasBrowserAuthToken()` first. `useSipPhone`'s primary init and `AppProvider`'s
+  `/me` already did.
+- **The telephony WebSocket** (`hooks/useTelephonySocket.ts`) never opens a
+  socket without a token any more, and on `1008 Unauthorized` asks `/me` ONCE
+  before deciding — because `TelephonySocketServer.ts:187` also closes 1008 when
+  its own `resolveUserExtensions` throws, so a close alone is not proof. A dead
+  session: the global handler fires as a side effect of that `/me` and the hook
+  stops. A live one: the normal backoff continues. A sign-in event
+  (`cc-portal-permissions-saved` / `storage`) brings the feed back without a
+  reload — before this, a tab that sat on `/login` for ~5 min exhausted its 20
+  reconnect attempts and the live-call feed was dead until reload.
+- **`AuthGate`** listens for the event, drops the shell immediately (every
+  poller under it unmounts on that render), and does not race the handler's hard
+  navigation with a second client-side one (`hasNavigatedToLogin()`).
+
+**Tests:** `apps/portal/lib/sessionExpiry.test.ts` — 23 cases, registered in
+the portal `test` script. Covers: the classifier matrix (dead / permission 403 /
+`invalid_credentials` / `bad_signature` / no-token / non-JSON), the once-per-token
+idempotence (20 calls → 1 clear, 1 redirect), public paths never redirected,
+passive windows never redirected, the short-circuit (dead token and empty token
+refused on authenticated paths, never on public paths, re-armed by a new token),
+and source guards on every call site. ⛔ Source reads are CRLF-normalised.
+**Proven non-vacuous:** all four source guards fail against the pre-change files
+from `HEAD`; the api-contract guard passes against both. Portal typecheck **0
+errors**; suite 156/158 with the two pre-existing failures.
+
+**⛔ What could NOT be tested, honestly.** The dead-session path end to end
+needs a real signed-in session whose token the api then refuses — and the api
+refuses no token today (nothing expires) and I do not sign in with real
+credentials. So it is proven by unit tests, the classifier contract read from the
+api's source, a clean typecheck, and browser evidence on the public paths (below)
+— **not by a human watching a stale session get sent to `/login`.**
+
+**Acceptance test for a human, 3 minutes, no api change needed:** sign in on a
+browser tab, open DevTools → Application → Local Storage, overwrite `token`,
+`cc-token` and `authToken` with any garbage string (that is exactly what an
+expired token looks like to the api: `401 { error: "unauthorized" }`), then wait
+for the next poller tick (≤ 30 s) or click anything. Expect: ONE hop to
+`/login?next=<the page you were on>`, the three keys cleared, and — the negative
+that matters — **no further `/api/*` requests in the Network tab** after the
+redirect except the login page's own. Then sign in: you land back where you were.
+Repeat with the desktop app: the main window goes to `/login`, the mini-dialer
+shows "Signed out — sign in again from the main Connect window", and comes back
+by itself after the sign-in. And the permission negative: as a TENANT_ADMIN,
+`GET /api/admin/wake-health` (403 `forbidden`) must NOT sign you out.
+
+**⏳ Observed in passing, NOT changed, and worth checking before step 3:** in a
+browser, a sign-in navigates client-side (`router.replace`) and
+`SipPhoneProvider` (mounted from `providers.tsx`) runs its init effect only once
+per page load, returning early when there was no token at that moment
+(`useSipPhone.ts` ~1503, "A login navigates/reloads, which re-runs this effect").
+If that comment is wrong — if the softphone does not initialise after a login
+without a reload — then the flow this work creates (expired → `/login` → sign in
+→ back) would leave the browser softphone un-registered until a reload. Today the
+same question applies to every sign-in from a signed-out tab. Not investigated;
+the desktop app is different (its engine lives in the phone-engine window).
