@@ -855,7 +855,9 @@ Mockups Izzy chose from: <https://claude.ai/code/artifact/66ba46a5-01a1-4b88-b19
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRUPTION_2026-08-17.md`**
 (`c7c1df00` → `2c8cc04e`. **PBX writes under an explicit mandate: one panel
 permission, emergency config on two tenants, helper `2026.08.18.1` installed.
-api deploy queued `7771b6cf`; portal rides the next portal deploy.** 102 tests.)
+✅ api DEPLOYED and container-verified (`2c8cc04e`, job `7771b6cf`); portal
+DEPLOYED and bundle-verified (job `743cbf00`). First real sweep ran 5 min after
+boot: `considered: 0` — the correct answer with every switch off.** 102 tests.)
 
 - ⛔⛔ **IT IS ARMED.** `SERVICE_INTERRUPTION_CUTOVER_AT=2026-08-18T12:01:07Z` is
   in `.env.platform`. A daily sweep (first run 5 min after api boot) sends the

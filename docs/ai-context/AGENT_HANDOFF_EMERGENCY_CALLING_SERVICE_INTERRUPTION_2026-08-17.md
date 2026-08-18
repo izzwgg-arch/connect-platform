@@ -321,11 +321,13 @@ left exactly as found. Verified: 10 files, `git ls-tree HEAD server.ts` =
 - Inbound busy: rendered and loaded in Asterisk.
 
 ### ⏳ NOT proven
-- **No real sweep has run against production.** The api container is being
-  deployed as this is written (job `7771b6cf`). Acceptance: `docker logs
-  app-api-1 | grep SERVICE_INTERRUPTION` shows `sweep scheduled {armed:true}`
-  and, 5 minutes later, `sweep complete` with `considered` = the number of
-  tenants with the switch on (**0 today**, so it should be a no-op).
+- ~~No real sweep has run against production.~~ ✅ **It has.** api deployed
+  (`2c8cc04e`, job `7771b6cf`, 288 s), container carries the cutover, boot log
+  `sweep scheduled {armed:true}`, and 5 minutes later
+  `sweep complete {considered:0, remindersSent:0, interrupted:0, restored:0,
+  skippedPreCutover:0, errors:[]}` — a no-op, exactly as designed with every
+  existing switch off. Portal deployed too (job `743cbf00`); the card's text is
+  in the shipped bundle.
 - **Nobody has clicked the card**, and the two manual routes have never been
   hit over HTTP.
 - **Multi-profile tenants** (Trust Bookkeepings' 9) exist only in unit tests.
