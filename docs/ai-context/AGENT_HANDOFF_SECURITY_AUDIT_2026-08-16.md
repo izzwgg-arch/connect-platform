@@ -127,6 +127,11 @@ answers 401 `invalid_credentials` (not 400/500), it runs before
 the portal's `sessionExpiry.test.ts` 23/23 (it pins the api's 401 body) still
 pass. api typecheck: 75 → 75 (pre-existing, none in the login path).
 
+✅ **api DEPLOYED and container-verified 2026-08-18** — commit `e9a79c57`, queue job
+`4bcde036` (`verify: container commit e9a79c57b221 matches target`), and the original
+curl repro re-run over public HTTPS now answers `401 invalid_credentials`. Full
+transcript in `TESTS_RUN.md`.
+
 ⛔ **The pattern is not unique to login.** `server.ts` has ~117 more
 `.parse(req.body)` sites (9 files). Every one answers 500 to a malformed body.
 Login was fixed first because it is the one unauthenticated public door that

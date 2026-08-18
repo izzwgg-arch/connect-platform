@@ -56,9 +56,28 @@ cd apps/api && npm test
 `voice/elevenLabsRoutes.stress.test.ts` "10-wide concurrent burst" load flake. Baseline
 unchanged (2369 → 2398 = the 11 new tests + others landed since the last recorded run).
 
-### Deploy
+### Deploy — api DEPLOYED and container-verified (2026-08-18)
 
-⏳ filled in below once the queue job and container check finish.
+Pre-checks on loopcom: no stale `enqueue`/`commitHash` waiters, queue idle, container at
+`5e73ddd4`, `git diff --name-only 5e73ddd4..tip -- packages/db/prisma/` empty (no surprise
+migration), api-relevant diff = the three files of this fix only. Enqueued
+`{"service":"api","branch":"feat/ivr-migration-takeover"}` → job `4bcde036` → `success`
+(~11 min: long build, then blue/green restart). Log: `verify: container commit e9a79c57b221
+matches target`; `docker exec app-api-1 cat /app/.build-commit` = `e9a79c57…`;
+`parseLoginRequest` present in the container's `server.ts`, `loginRequest.ts` present;
+`app-api-1 Up (healthy)`.
+
+### Live proof over public HTTPS (4 requests, well under the nginx 401 ban counter)
+
+```
+{"email":"x@y.com","password":"x"}                       → 401 {"error":"invalid_credentials"}   (was 500 this morning)
+{"email":"probe-nobody-2026@example.invalid","password":"definitely-wrong-password"}
+                                                          → 401 {"error":"invalid_credentials"}   (control, unchanged)
+{}                                                        → 401 {"error":"invalid_credentials"}
+this is not json                                          → 400 {"error":"Unexpected token…"}     (Fastify's JSON parser, before the handler — pre-existing, not a 500)
+```
+
+`docker logs --since 5m app-api-1 | grep -c request_failed` → **0** during the probes.
 
 ---
 

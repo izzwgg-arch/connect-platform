@@ -2453,7 +2453,10 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   the pre-change file. ⛔ **`server.ts` still has ~117 other `.parse(req.body)` sites
   that 500 on a bad body** — authenticated routes, so a client bug not a customer
   screen; fix each with `safeParse` + a deliberate 4xx, never by weakening the error
-  handler. ⏳ api deploy status: see the TESTS_RUN entry for this fix.
+  handler. ✅ **api DEPLOYED and container-verified 2026-08-18** (`e9a79c57`, queue job
+  `4bcde036`, `verify: container commit e9a79c57b221 matches target`) and **re-proven
+  live with curl**: the exact `password:"x"` body → 401 `invalid_credentials`, wrong
+  password → 401, `{}` → 401, non-JSON → Fastify's own 400, `request_failed` count 0.
 - ✅ **THE PORTAL SECURITY HEADERS ARE LIVE.** Fixed by
   `/etc/nginx/connectcomms/security-headers.conf`, `include`d into the two locations
   that define their own `add_header` (`location /` and `location = /privacy`) — because
