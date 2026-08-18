@@ -238,6 +238,16 @@ then it's front desk."*
   invite uses the same rule.
 - ⛔ **The number prefix is stripped** (`"105 - Mrs. Halpert"` → `Mrs. Halpert`),
   or the headline would read "Welcome, 105".
+- ⛔ **A lower-case name is capitalised** (Izzy, 2026-08-17: *"even if the customer
+  enters it in lower case, you should always use uppercase on the first"*).
+  `baila` → **Baila**, `home 2` → **Home 2**, and the email fallback too
+  (`support` → **Support**). ⛔⛔ **`capitalizeNameWords` only RAISES a lower-case
+  first letter — it never lowercases**, which is the whole reason `TEMP`,
+  `S M Weiss`, `McNamara Lion` and `LUZER` survive intact; a `toLowerCase()`
+  first would have ruined every one of them. ⛔ Words split on whitespace and
+  **hyphens but not apostrophes** — `mary-jane` → Mary-Jane, while splitting on
+  `'` gives *"Shloime'S Phone"*. ⛔ Applied inside `getExtensionDisplayName`, not
+  at the call sites, so the sidebar, profile menu and dashboard cannot disagree.
 - ⛔ **The name is never cut to a first word.** Splitting turns "Front Desk" into
   "Front" and "Mrs. Halpert" into "Mrs.". So the dashboard says
   "Welcome, Mrs. Halpert" and an email opens "Hi Mrs. Halpert,". Slightly more
@@ -248,7 +258,8 @@ then it's front desk."*
 ### Proven
 
 - **Live replay of the DEPLOYED rule over all 65 users: 56 names changed, 0 still
-  show an email address.** `"7816646"` → **Barish**, `"845luzerj"` →
+  show an email address, and 0 still start with a lower-case letter** (`baila` →
+  **Baila**). `"7816646"` → **Barish**, `"845luzerj"` →
   **Luzer Jungreis**, `"fhalpert"` → **Mrs. Halpert**, `"nicholas"` →
   **Nick Stefanicha**, `"hendy.secrosolutions"` → **Hendy**.
 - Containers verified: the api carries `resolvePersonDisplayName` /

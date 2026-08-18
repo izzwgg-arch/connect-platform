@@ -79,6 +79,17 @@ extension rows.) Memory: [[name-comes-from-email-not-pbx]].
   to a first word** — that turns "Front Desk" into "Front" and "Mrs. Halpert" into
   "Mrs.". So emails now open "Hi Mrs. Halpert,". Going back to first names needs a
   person-vs-department distinction that cannot be derived from the name.
+- ⛔ **A name typed in lower case is capitalised** (Izzy, 2026-08-17: *"even if the
+  customer enters it in lower case, you should always use uppercase on the
+  first"*) — inii mini's `baila` reads **Baila**, Landau's `home 2` reads
+  **Home 2**. ⛔⛔ **`capitalizeNameWords` only ever RAISES a lower-case first
+  letter and NEVER lowercases anything** — that is what protects `TEMP`,
+  `S M Weiss`, `McNamara` and `LUZER`, all of which a `toLowerCase()`-first
+  implementation would wreck. ⛔ Words split on whitespace and hyphens but **not
+  apostrophes**: `mary-jane` → Mary-Jane, while splitting on `'` would give
+  *"Shloime'S Phone"*. ⛔ It is applied inside `getExtensionDisplayName` too, not
+  at the call sites — the sidebar, profile menu and dashboard all take that path.
+  ✅ Proven live with the deployed code: **0 of 65 names still start lower case.**
 - ⛔⛔ **A PROMISE `.catch()` DOES NOT CATCH A SYNCHRONOUS THROW — this shipped
   broken for one commit and the onboarding suite caught it.** The name lookup used
   `db.extension.findFirst(...).catch(() => null)`; when the model accessor is
