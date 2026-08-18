@@ -226,3 +226,98 @@ the transfer PIN we sent was the number's last four rather than a Verizon
 tenants. With one user on the account it behaves identically. If inii mini adds
 staff who should all see the company's texts, clear `assignedUserId` and leave
 only `assignedExtensionId` — or clear both for a fully shared inbox.
+
+---
+
+## 7. Worked example — Create A Box ext 102, 2026-08-18
+
+Second customer through this runbook, and it is the cheaper shape: **only one of
+the four steps had any work in it.** Requested by Izzy as "add SMS inbox to
+extension 102 for 8457826722".
+
+| | |
+|---|---|
+| Tenant | `cmnlgryox001ip9paov24bmr0` ("Create A Box", PBX tenant **T7** `create_a_box`) |
+| Number | **+1 845-782-6722** — their MAIN number (PBX inbound route 109, and the `invoiceSupportPhone` on their billing row) |
+| SMS number row | `cmogdrtku0085pk5eiusjeaba` (synced 2026-04-26, unclaimed until now) |
+| Pointed at | extension **102 "Sender Weiss"** (`cmnmd7qe2006pp9b0d1rsokdr`) → owner `senderweiss@gmail.com` (`cmnmjhqdt008xp96h8lvo3q1m`) |
+| Tenant default | **yes** — it is their first and only claimed SMS number |
+| Billing | ⏳ **NOT enabled** — see §7.3 |
+| VoIP.ms | `sms_enabled: "1"` **already**, routing `account:344022_cabnew` |
+
+### 7.1 What was actually done — one write
+
+Steps 1, 2 and 4 collapsed to a single `TenantSmsNumber` update, driven through
+the **real** admin route rather than a raw DB write, so the `isTenantDefault`
+clearing and the schema validation all ran as designed:
+
+```
+PATCH /admin/apps/voip-ms/numbers/cmogdrtku0085pk5eiusjeaba
+{ "tenantId": "cmnlgryox001ip9paov24bmr0",
+  "assignedExtensionId": "cmnmd7qe2006pp9b0d1rsokdr",
+  "assignedUserId": null, "isTenantDefault": true, "active": true }
+→ 200 {"ok":true}
+```
+
+Reached from inside `app-api-1` on `127.0.0.1:3001` with a **60-second
+self-signed SUPER_ADMIN token** — HS256 over `JWT_SECRET`, payload
+`{sub, tenantId, email, role}`, the same shape `injectAsService`
+(`server.ts:41161`) signs. No deploy, no PBX write, no Apply Changes, no code
+change, and nothing was written at the carrier.
+
+⛔ **Step 4 was a no-op and checking first is the lesson.** `getDIDsInfo`
+already read `sms_enabled: "1"` / `sms_available: 1` / `mms_available: 1` on a
+DID ordered **2024-07-17**. A reflexive `setSMS {enable:"1"}` would have bought
+nothing but the documented `sms_wait_message` rate-limit. **Read the live state
+before writing** — the same habit §2 preaches about the webhook flags.
+
+### 7.2 Proof (this is the part that counts)
+
+Not plumbing-only. The number joined the worker poll on the **very next cycle**
+and pulled real traffic immediately:
+
+```
+[voipms-inbound] +18457826722: fetched=7
+```
+
+Those seven became one `ConnectChatThread` (peer `+1 201-462-3963`, seven
+INBOUND messages — same-day Michaels/DoorDash delivery notifications) carrying
+`smsInboxOwnerUserId = cmnmjhqdt008xp96h8lvo3q1m`, i.e. **Sender Weiss
+personally**, which is exactly what `assignedExtensionId` is supposed to
+produce. `routing-preview` agrees: `inboundRoutesTo: "extension_owner:cmnmjhqdt008xp96h8lvo3q1m"`.
+
+⏳ **NOT proven: nothing has been sent OUT from this number, and no human has
+opened the inbox.** Per §5 the only complete proof is a text out with
+`carrier_status: "Message delivered to handset."` plus a reply. Inbound is
+proven with real customer traffic; outbound is proven only by the fact that the
+same tenant-default row is what the send path reads.
+
+### 7.3 ⛔ Two things deliberately left alone — both need Izzy
+
+**Billing is NOT switched on.** `smsBillingEnabled` is still `false`. Create A
+Box is not an ordinary onboarding tenant on the $35 quote: they are on a
+negotiated **flat $130/month** (`billingFlatRate: {enabled:true, appliesTo:
+"extensions", amountCents:13000}`), and their two extra DIDs bill **$0.00**
+because `pbxDidPriceCents` is 0. Their last three invoices are all exactly
+$130.00. ⛔ **The flat rate covers extensions only — it does not absorb an SMS
+line**, so flipping the switch adds a $10 `SMS_PACKAGE` line and takes them to
+**$140/month** from their next invoice (billing day 27). That is a price rise on
+a custom-priced account: a commercial decision, not part of the wiring, so it
+was left for the owner. Noticed in passing and **not touched**: their July
+invoice `CC-202607-00015` is sitting **FAILED** at $130.
+
+**⛔⛔ `sms_email` is a second delivery path and it is LIVE on this number.**
+`getDIDsInfo` reads:
+
+```
+sms_email: "izzwgg@gmail.com"      sms_email_enabled: "1"
+sms_sipaccount: "344022_cabnew"    sms_sipaccount_enabled: "1"
+webhook_enabled: "1"               webhook: https://m.connectcomunications.com/sms/…
+```
+
+⛔ **Do not file `sms_email` alongside the red-herring `webhook_enabled` flag in
+§2.** That flag correlates with nothing; this one demonstrably forwards every
+inbound text to a mailbox — and the mailbox here is Izzy's personal Gmail, set
+long before Connect had an inbox. It is untouched. **Read `sms_email` on every
+future activation**: a customer's texts arriving in a personal mailbox is a
+privacy question to raise, not a config detail to skim past.

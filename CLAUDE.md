@@ -5277,6 +5277,38 @@ Changes.
   1000 on every onboarding tenant, so the next invoice moves $35 → $45, nothing
   charges mid-cycle; (4) confirm `sms_enabled: "1"` on the DID at VoIP.ms
   (`setSMS {did, enable:"1"}` if not; expect `sms_wait_message` rate-limiting).
+- ✅ **DONE for Create A Box ext 102 (8457826722) 2026-08-18 — inbound PROVEN with
+  real texts, and only ONE of the four steps was actually needed.** `sms_enabled`
+  already read **"1"** at the carrier, so step 4 was a no-op; the whole job was the
+  `TenantSmsNumber` assignment (row `cmogdrtku0085pk5eiusjeaba` → tenant
+  `cmnlgryox001ip9paov24bmr0`, `assignedExtensionId` = ext **102 "Sender Weiss"**,
+  tenant default, active) through the real `PATCH /admin/apps/voip-ms/numbers/:id`
+  driven by a 60-second self-signed SUPER_ADMIN token against `127.0.0.1:3001`.
+  ⛔ **Read `getDIDsInfo` BEFORE writing anything** — a DID that has been on the
+  account for years may already be armed, and `setSMS` is rate-limited, so a
+  reflexive write buys a `sms_wait_message` and nothing else.
+  ✅ Proven, not inferred: the number joined the poll on the very next cycle
+  (`[voipms-inbound] +18457826722: fetched=7`) and **7 real inbound texts landed**
+  on a thread whose `smsInboxOwnerUserId` is **senderweiss@gmail.com** — which is
+  the entire point of pointing a number at an extension rather than the tenant.
+- ⛔⛔ **`sms_email` IS A SECOND, INVISIBLE DELIVERY PATH, AND IT IS LIVE ON THIS
+  NUMBER — Create A Box's texts have been going to `izzwgg@gmail.com` all along.**
+  `getDIDsInfo` reads `sms_email: "izzwgg@gmail.com"` with `sms_email_enabled: "1"`
+  — a carrier-side forward that predates Connect's inbox and was **left untouched**.
+  ⛔ Do NOT lump it in with the red-herring `webhook_enabled` flag above: that one
+  correlates with nothing, this one demonstrably delivers. **Read `sms_email` on
+  every activation** — a customer's texts landing in someone's personal mailbox is
+  a privacy question, not a config detail, and switching it off is Izzy's call.
+- ⏳ **Create A Box billing was DELIBERATELY NOT flipped** — `smsBillingEnabled` is
+  still **false**, so step 3 of the runbook is the one piece left open. They are on
+  a negotiated **flat $130/mo** (`billingFlatRate.appliesTo: "extensions"`, extra
+  DIDs billing $0.00 via `pbxDidPriceCents: 0`), so adding the $10 `SMS_PACKAGE`
+  line takes them to **$140** — a real price rise on a custom-priced account, which
+  is a commercial decision and not part of the wiring. ⛔ **The flat rate covers
+  EXTENSIONS ONLY and does not absorb the SMS line** — same inversion as
+  [[flat-rate-inverts-the-extension-billing-rule]]. Their July invoice
+  `CC-202607-00015` is also sitting **FAILED** at $130 (unrelated, untouched) —
+  worth clearing before stacking a rise on top of it.
 - ⛔ **The per-DID `webhook` / `sms_url_callback` fields are a red herring, and
   `setSMS` lies about them.** It answers `{"status":"success"}` and NEVER moves
   either `_enabled` flag (four param shapes tried). **Gesheft is the busiest
