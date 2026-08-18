@@ -107,6 +107,16 @@ const dbMock: any = {
       const t = state.tenants.get(where.id);
       return t ? { ...t } : null;
     },
+    // Real accessor, modelled honestly: uniqueTenantName asks the db whether a
+    // name is taken before creating a tenant. A double that omitted this would
+    // let a broken accessor name ship green — the billingTenantSettings trap.
+    findFirst: async ({ where }: any) => {
+      const want = String(where?.name?.equals ?? "").trim().toLowerCase();
+      for (const t of state.tenants.values()) {
+        if (String(t.name ?? "").trim().toLowerCase() === want) return { ...t };
+      }
+      return null;
+    },
     create: async ({ data }: any) => {
       const t = { id: nid("tenant"), ...data };
       state.tenants.set(t.id, t);

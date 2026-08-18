@@ -16,6 +16,7 @@ import { ensureProvisioningIdentity } from "./provisioningIdentity";
 import { readSubaccount, applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { queueOnboardingSignupReport } from "./adminSignupReport";
 import { queueE911ActivatedEmail } from "./e911ActivatedEmail";
+import { uniqueTenantName } from "./uniqueTenantName";
 
 /**
  * setupOrchestrator — everything that happens after the customer presses
@@ -293,7 +294,9 @@ async function ensureConnectTenant(
     }
   }
   const created = await (db as any).$transaction(async (tx: any) => {
-    const t = await tx.tenant.create({ data: { name: company, kind: "CUSTOMER", isApproved: true, yiddishEnabled: !!yiddish } });
+    // Numbered if another tenant already holds this name — see uniqueTenantName.ts.
+    // Resolved inside the transaction so it reads the freshest tenant list.
+    const t = await tx.tenant.create({ data: { name: await uniqueTenantName(tx, company), kind: "CUSTOMER", isApproved: true, yiddishEnabled: !!yiddish } });
     await tx.tenantPbxLink.create({
       data: {
         tenantId: t.id,

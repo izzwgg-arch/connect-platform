@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
+import { NUMBER_SEARCH_FAILED_MESSAGE, numberSearchEmptyMessage } from "../../../lib/numberSearchMessage";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -253,6 +254,10 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   const [numbersLoading, setNumbersLoading] = useState(false);
   const [numbersQuery, setNumbersQuery] = useState("");
   const [numbersError, setNumbersError] = useState<string | null>(null);
+  // Kept APART from numbersError on purpose: this one means "we looked and there
+  // is nothing", which is a fact about stock, not a fault. Merging the two would
+  // put "tap Search to try again" under a search that worked perfectly.
+  const [numbersNone, setNumbersNone] = useState<string | null>(null);
   // Local vs toll-free tab, where in the number the digits should sit, and the
   // "spell a word" input (toll-free vanity search).
   const [numbersTab, setNumbersTab] = useState<"local" | "tollfree">("local");
@@ -397,6 +402,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   ) => {
     setNumbersLoading(true);
     setNumbersError(null);
+    setNumbersNone(null);
     const tab = opts.tab || "local";
     const detail = opts.vanity
       ? `vanity "${opts.vanity}"`
@@ -408,19 +414,26 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       params.set("type", tab);
       if (opts.mode && tab === "local") params.set("mode", opts.mode);
       if (opts.vanity) params.set("vanity", opts.vanity);
-      const r = await apiGet<{ numbers?: AvailableNumber[] }>(
+      const r = await apiGet<{ numbers?: AvailableNumber[]; error?: string; note?: string }>(
         `/onboarding/${encodeURIComponent(token)}/numbers?${params.toString()}`,
         undefined,
         { timeoutMs: 45_000 },
       );
       const list = Array.isArray(r.numbers) ? r.numbers : [];
       setNumbers(list);
+      // A 200 carrying `error`/`note` is the provider having failed, not empty
+      // stock — the API answers 200 either way, so the BODY is the only thing
+      // that tells them apart. Read it, or an outage renders as "not available".
+      if (!list.length) {
+        if (r.error || r.note) setNumbersError(NUMBER_SEARCH_FAILED_MESSAGE);
+        else setNumbersNone(numberSearchEmptyMessage({ query, mode: opts.mode, tab, vanity: opts.vanity }));
+      }
       track("number_search", { detail, count: list.length });
     } catch {
       setNumbers([]);
       // Honest copy: Continue is blocked until a number is picked, so don't
       // promise "we'll assign one" — offer the retry that actually helps.
-      setNumbersError("We couldn't load available numbers just now — the number service may be briefly busy. Tap Search to try again in a few seconds.");
+      setNumbersError(NUMBER_SEARCH_FAILED_MESSAGE);
       track("number_search", { detail, count: -1 });
     } finally {
       setNumbersLoading(false);
@@ -429,7 +442,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
 
   // Auto-search when the customer chooses "new number".
   useEffect(() => {
-    if (step === 2 && form.numberChoice === "new" && numbers.length === 0 && !numbersLoading && !numbersError) {
+    if (step === 2 && form.numberChoice === "new" && numbers.length === 0 && !numbersLoading && !numbersError && !numbersNone) {
       const seed = numbersTab === "local" ? areaCodeFrom(form.mainPhone) || "" : "";
       setNumbersQuery(seed);
       searchNumbers(seed, { tab: numbersTab, mode: searchMode });
@@ -443,6 +456,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     setNumbersTab(tab);
     setNumbers([]);
     setNumbersError(null);
+    setNumbersNone(null);
     setVanityWord("");
     const seed = tab === "local" ? areaCodeFrom(form.mainPhone) || "" : "";
     setNumbersQuery(seed);
@@ -946,6 +960,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
 
                 {numbersLoading && <div className="ob-field-hint">Finding available numbers… this can take up to 30 seconds.</div>}
                 {numbersError && <div className="ob-field-hint">{numbersError}</div>}
+                {!numbersLoading && numbersNone && numbers.length === 0 && (
+                  <div className="ob-num-empty" role="status">{numbersNone}</div>
+                )}
                 {!numbersLoading && numbers.length > 0 && (
                   <>
                     <div className="ob-num-grid">

@@ -182,6 +182,11 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-searchbar .ob-input { flex:1; }
 .ob-btn-ghost { height:43px; padding:0 16px; border-radius:10px; border:1.5px solid var(--border); background:var(--surface-2); color:var(--text-2); font:inherit; font-size:13px; font-weight:560; cursor:pointer; white-space:nowrap; transition:border-color .15s, color .15s; }
 .ob-btn-ghost:hover { border-color:var(--accent); color:var(--text); }
+/* "Nothing available" — a real, visible answer where the results grid would be.
+   Deliberately NOT .ob-field-hint (12px muted): an empty search used to render
+   nothing at all, and the replacement has to be as easy to see as the numbers
+   it stands in for, or it is the blank screen again in a quieter font. */
+.ob-num-empty { margin-top:4px; padding:14px 16px; border:1.5px dashed var(--border); border-radius:11px; background:var(--surface-2); color:var(--text); font-size:13.5px; line-height:1.5; }
 .ob-num-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 @media (max-width:480px) { .ob-num-grid { grid-template-columns:1fr; } }
 .ob-num { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:13px 15px; border:1.5px solid var(--border); border-radius:11px; background:var(--surface-2); cursor:pointer; transition:border-color .15s, background .15s, box-shadow .15s; }

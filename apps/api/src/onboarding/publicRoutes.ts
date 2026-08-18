@@ -17,6 +17,7 @@ import { isSetupStalled } from "./setupWatchdog";
 import { toPublicUrl } from "./provisioning";
 import { resolveOnboardingStoragePath } from "./storage";
 import { recordLinkOpened, recordJourneyBeacon } from "./journeyTracking";
+import { requiredSignupDetailsProblem } from "./requiredSignupDetails";
 
 // Journey-beacon payload (see journeyTracking.ts for how each becomes a line).
 const publicTrackSchema = z.object({
@@ -252,6 +253,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         if (mode === "contains") return d.includes(digits);
         return digits.length <= 3 ? d.startsWith(digits) : d.includes(digits);
       };
+      // ⛔ "the provider FAILED" and "the provider found NOTHING" must stay
+      // apart all the way to the browser. Both used to collapse into `[]` here,
+      // so the wizard could not tell a VoIP.ms outage from an area code that is
+      // simply sold out — and rendered a blank screen for both. Telling a
+      // customer "not available" during an outage is the same class of lie as
+      // telling them their 911 address is registered when it is not.
+      let searchFailed = false;
       const [spares, results] = await Promise.all([
         listSpareDids(creds as any).catch(() => []),
         cachedPurchasable
@@ -265,7 +273,14 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
                   mode,
                   limit: 12,
                 })
-            ).catch(() => []),
+            ).catch((e: any) => {
+              searchFailed = true;
+              req.log?.warn?.(
+                { err: String(e?.message || e), code: e?.code, cacheKey },
+                "onboarding number search failed",
+              );
+              return [];
+            }),
       ]);
       const spareNumbers = spares
         .filter((s) => matchesQuery(s.did))
@@ -302,6 +317,10 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       );
 
       const numbers = [...spareNumbers, ...purchasable].slice(0, 12);
+      // Only report the failure when it actually cost the customer something:
+      // if spares still filled the list, the search breaking is invisible and
+      // must not raise an error banner over a perfectly good set of numbers.
+      if (!numbers.length && searchFailed) return { numbers: [], error: "number_search_failed" };
       return { numbers };
     } catch {
       return { numbers: [], error: "number_search_failed" };
@@ -675,6 +694,24 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
     if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
+
+    // ⛔ Company name and the 911 service address are MANDATORY, and they are
+    // checked HERE rather than only in the browser. The wizard's own check can
+    // be walked past — by an older client, a resumed draft, or (as happened on
+    // 2026-08-18) two people sharing one link, where whatever the second person
+    // left blank silently kept the first person's autosaved value. The result
+    // was a live E911 registration at the wrong address. The gate asks the same
+    // question provisioning will ask, so passing it means 911 can be registered.
+    const detailsProblem = requiredSignupDetailsProblem({
+      companyName: body.companyName,
+      address: body.address,
+      addressCity: body.addressCity,
+      addressState: body.addressState,
+      addressZip: body.addressZip,
+    });
+    if (detailsProblem) {
+      return reply.code(400).send({ error: detailsProblem.message, field: detailsProblem.field });
+    }
 
     // validate extensions numeric + long enough + unique.
     //

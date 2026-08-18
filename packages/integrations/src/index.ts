@@ -270,7 +270,15 @@ export class VoipMsNumberProvider implements NumberProvider {
     const status = String(json.status || "").toLowerCase();
     if (status !== "success") {
       // No matches is a normal, empty result — not an error the customer should see.
-      if (/no_did|no_number|not_found|no_result/.test(status)) return [];
+      //
+      // ⛔ `unavailable_info` belongs on THIS side of the line, and that was
+      // proven live (2026-08-18) rather than assumed: searchDIDsUSA answers it
+      // for 305, 212, 786, 555, 999 and 311 alike, while 845 / 562 / 929 return
+      // thousands of rows in the same minute. It is VoIP.ms saying "no stock for
+      // that query", not "the search broke" — so throwing here made EVERY
+      // area-code search look like a provider outage to the caller, which is
+      // exactly how a customer came to sit through five minutes of blank results.
+      if (/no_did|no_number|not_found|no_result|unavailable_info/.test(status)) return [];
       const err: any = new Error(`VoIP.ms number search failed: ${json.status || "unknown_error"}`);
       err.provider = "VOIPMS";
       err.code = json.status || "unknown_error";

@@ -36,6 +36,7 @@ import { createBillingInvoicePayToken } from "../billing/billingPayToken";
 import { billingLiveChargesDisabled } from "../billing/solaBillingPayments";
 import { ensureOnboardingBillingDefaults } from "./onboardingBillingDefaults";
 import { quoteInputForSubmission } from "./quoteInput";
+import { uniqueTenantName } from "./uniqueTenantName";
 
 /** Long enough to sleep on the decision; short enough that a stale link from a
  *  half-finished sign-up doesn't survive for a month. */
@@ -86,9 +87,14 @@ async function ensureTenantForSubmission(sub: { id: string; companyName?: string
     }
   }
   const wantsYiddish = String(sub.answers?.language ?? "").toLowerCase() === "yi";
+  // ⛔ Both tenant-creation paths must number a duplicate name — see
+  // uniqueTenantName.ts. Fixing only one of the two is how half-broken
+  // features keep shipping here (the two IVR publish paths, the two invite
+  // paths); a test reads both call sites' source for this reason.
+  const tenantName = await uniqueTenantName(db as any, (sub.companyName || "New customer").trim());
   const tenant = await (db as any).tenant.create({
     data: {
-      name: (sub.companyName || "New customer").trim(),
+      name: tenantName,
       kind: "CUSTOMER",
       isApproved: true,
       yiddishEnabled: wantsYiddish,

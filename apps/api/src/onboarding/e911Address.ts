@@ -213,6 +213,33 @@ export function parseServiceAddressLine(line: unknown): ParsedAddressLine {
  * `full_name` is the business, not the contact: 911 dispatch needs to know
  * what is at the address, and that is the company.
  */
+/**
+ * The real US state / territory codes, so a two-letter string can be told from
+ * an actual state.
+ *
+ * ⛔ THIS EXISTS BECAUSE A STREET SUFFIX IS TWO LETTERS TOO. Proven 2026-08-18:
+ * parseServiceAddressLine("30 Robert Pitt Dr") returns
+ * `{ address1: "30 Robert Pitt", state: "DR" }` — it reads the "Dr" as the
+ * state. The legacy-draft fallback below is gated on `parsed.state` being
+ * truthy, so for a one-line address ending in Dr / St / Ln / Rd / Ct / Pl it
+ * fired, took the suffix as the state AND cut it off the street name. That
+ * builds a 911 registration reading "30 Robert Pitt, DR" — an address no
+ * dispatcher can use. Checking against the real list closes it.
+ */
+const US_STATE_CODES = new Set([
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+  "VA","WA","WV","WI","WY",
+  "DC","AS","GU","MP","PR","VI",           // federal district + territories
+  "AA","AE","AP",                          // military
+]);
+
+/** True only for a genuine US state / territory / military code. */
+export function isUsStateCode(value: unknown): boolean {
+  return US_STATE_CODES.has(String(value ?? "").trim().toUpperCase());
+}
+
 export function buildE911Address(row: any): E911AddressBuild {
   const answers: any = row?.answers || {};
   const contact: any = answers.contact || {};
@@ -228,10 +255,14 @@ export function buildE911Address(row: any): E911AddressBuild {
     // Legacy single-line draft — recover whatever the structured fields lack,
     // and keep the structured values that ARE set (they were typed on purpose).
     const parsed = parseServiceAddressLine(rawStreet);
-    if (parsed.city || parsed.zip || parsed.state) {
+    // ⛔ Only trust a parsed state that is a REAL state — otherwise a street
+    // ending in "Dr" hands back state "DR" and takes the suffix off the street
+    // name with it. See isUsStateCode above.
+    const parsedState = isUsStateCode(parsed.state) ? parsed.state : "";
+    if (parsed.city || parsed.zip || parsedState) {
       streetLine = parsed.address1 || rawStreet;
       city = city || parsed.city;
-      state = state || parsed.state;
+      state = state || parsedState;
       zip = zip || parsed.zip;
     }
   }
