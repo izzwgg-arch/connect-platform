@@ -18,6 +18,19 @@ export type SweepInput = {
   /** The tenant's oldest unpaid failed invoice, if any. */
   openFailedInvoice: { id: string; firstFailedAt: Date; balanceDueCents: number } | null;
   now: Date;
+  /**
+   * ⛔⛔ NOTHING THAT WAS ALREADY OVERDUE GETS CUT OFF.
+   * Izzy, 2026-08-17: "Even if anything is past due, don't cut anything off.
+   * If anything is past due right now, I will do it manually, but the rule
+   * goes from now on."
+   *
+   * So a failure that happened BEFORE this moment is never acted on — no
+   * countdown, no reminder, no cutoff. Only failures from the cutover onward
+   * enter the pipeline. This is deliberately separate from the per-tenant
+   * switch: the switch is a choice, this is a promise, and a promise should
+   * not depend on someone remembering to leave a checkbox alone.
+   */
+  cutoverAt: Date | null;
 };
 
 export type SweepDecision =
@@ -48,12 +61,22 @@ export function decideForTenant(input: SweepInput): SweepDecision {
 
   const invoice = input.openFailedInvoice;
 
-  // 3. No clock yet — start it from this failure.
+  // 3. ⛔ A failure that predates the cutover is left entirely alone — the
+  //    existing backlog is handled by hand, not by this. Checked BEFORE the
+  //    countdown so such an invoice never even gets a start date recorded.
+  if (input.cutoverAt && invoice.firstFailedAt.getTime() < input.cutoverAt.getTime()) {
+    return {
+      action: "none",
+      reason: `failed ${invoice.firstFailedAt.toISOString()}, before the cutover — handled manually`,
+    };
+  }
+
+  // 4. No clock yet — start it from this failure.
   if (!s.countdownStartedAt || s.invoiceId !== invoice.id) {
     return { action: "start_countdown", invoiceId: invoice.id, failedAt: invoice.firstFailedAt };
   }
 
-  // 4. Already switched off — nothing further to do until they pay.
+  // 5. Already switched off — nothing further to do until they pay.
   if (interrupted) return { action: "none", reason: "already interrupted, waiting for payment" };
 
   const state = computeInterruptionState({
@@ -62,10 +85,10 @@ export function decideForTenant(input: SweepInput): SweepDecision {
     graceDays: s.graceDays ?? SERVICE_INTERRUPTION_GRACE_DAYS,
   });
 
-  // 5. Time is up.
+  // 6. Time is up.
   if (state.dueForInterruption) return { action: "interrupt", invoiceId: invoice.id };
 
-  // 6. Otherwise a reminder, at most one per day.
+  // 7. Otherwise a reminder, at most one per day.
   //    ⛔ Keyed on the days-left NUMBER, not on elapsed time: a worker restart
   //    or a slow sweep must not send "3 days left" twice, and a sweep that
   //    runs late must not skip a day silently.
