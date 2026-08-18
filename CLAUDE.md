@@ -619,6 +619,62 @@ Mockups Izzy chose from: <https://claude.ai/code/artifact/66ba46a5-01a1-4b88-b19
   nothing was touched. Options **B** (capability tiles) and **C** (quiet
   composer) are still drawn in the mockups if he wants to compare.
 
+## ⛔⛔ AGENT HANDOFF — 911 nearly got switched off by a billing feature (2026-08-17) — READ FIRST before touching the overdue-account cutoff, before deactivating ANY outbound route, or before assuming a per-customer thing is per-customer
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRUPTION_2026-08-17.md`**
+(`c7c1df00` → `b8e5bf1c`. **Two live PBX writes under an explicit mandate: one
+panel permission, and emergency config on two tenants. NOT deployed, NOT
+rendered into the dialplan, no customer behaviour changed.** 69 tests.)
+
+- ⛔⛔ **"DEACTIVATE ALL THEIR OUTBOUND ROUTES" AND "911 ALWAYS WORKS" CANCEL
+  EACH OTHER OUT.** 911 leaves the building through an outbound route. Taken
+  literally, the overdue cutoff disconnects emergency calling for a customer
+  who is late paying a phone bill. **Resolved with VitalPBX's native emergency
+  feature, which bypasses route selection entirely** — proven from the live
+  dialplan (`T8_cos-all-init`): the `T8_emergency-calls` GotoIf runs **before**
+  `OUTBOUND_PROFILE` is read, so it survives every route being off *and* the
+  extension's profile being `disabled`. ⛔ **A custom `connect-emergency-only`
+  route was built earlier in that session and is SUPERSEDED — do not resurrect
+  it**; `serviceInterruptionPlan.ts` still carries that shape and needs
+  simplifying.
+- ⛔ **The automation account was DENIED both emergency modules and every field
+  read said "You don't have access".** `lOOPCOMAGENT7548` (role 9) now has
+  view/add/edit on **119 `emergency_numbers`** and **138 `emergency_locations`**;
+  rollback is in `/root/grant-emergency-20260817.sql` on the PBX. Role 9 still
+  has 134 privilege rows; roles 1/4/5/6 already had access and were untouched.
+- ✅ **LIVE for Matamim (T104) and inii mini (T105) only** — 911 + 8457831212,
+  each on their own trunk (129 / 130), each presenting their own number
+  (9293598299 / 6469846023), each with a real street address, notifying
+  **izzywgg@gmail.com + the customer**. ⛔ That address was **read from the
+  database** — the session context said `izzywkg@gmail.com`, one letter out.
+- ⏳ **NOT PROVEN AND NOT WORKING YET: the dialplan is not rendered.**
+  `grep "^\[T104_emergency-calls\]"` returns nothing. It needs a per-tenant
+  regen, and ⛔ **the panel's Apply Changes is the dangerous way** — it wipes the
+  Connect doorway off every route and flushes other tenants' pending changes,
+  and **inii mini is one of only three Connect-mode numbers**. The helper has
+  **no standalone regen endpoint**; `/retarget`, `/restore` and
+  `/sync-tenant-moh` only regen as a side effect of something else.
+- ⛔⛔ **`ombu_tenant_settings(name='outbound_profiles').value` → `ombu_ars.ars_id`
+  — NOT `ombu_ars.tenant_id`.** Every real ARS row and every outbound route
+  lives under `tenant_id 1`. Joining on tenant_id concluded 26 of 28 customers
+  had no outbound routes at all. **If a query says most of the fleet is broken,
+  the query is broken.**
+- ⛔ **Several customers run MULTIPLE businesses off one account**, each its own
+  outbound profile with its own caller ID: **Trust Bookkeepings 9**,
+  A plus center 4, Displaydex 3, Secro 2. Anything "per customer" must be **per
+  profile** or it misses most of their extensions. And ⛔ **four customers' first
+  profile carries another company's caller ID** (Displaydex→Nexus Realty,
+  Trust→Avenue Filing, RSBK→Rebbe, Landau Home→a number taken off them), so
+  inheriting a caller ID by position sends dispatch to the wrong address.
+- **Facts:** `states.id` 3956 = New York, `country_id` 231 = US;
+  `ombu_ars_members.sort` is the ordering column; the api's MySQL user is
+  **`connect_read`** so PBX writes must run on the PBX from a file.
+- ✅ **The customer emails are APPROVED** (Izzy, 2026-08-17): banner with days
+  left, one sentence, the amount, the button — ⛔ **do not pad them back out**.
+  Live in `emailTemplates.ts`; the nine existing billing emails are byte-identical.
+- ⏳ **Still unbuilt: the per-tenant switch, the daily sweep, reconnect-on-payment,
+  and onboarding wiring.** Only the pure policy and plan exist.
+
 ## ⛔⛔ NEW TENANTS DEFAULT TO SIP-OVER-443, AND AN EMAIL CAN CARRY A FILE (2026-08-17) — READ FIRST before touching `webrtcRouteViaSbc`, the WebRTC bootstrap stamp, or before saying Connect cannot attach a file
 
 Commits `66dbaa9c` (attachments) + `8495d379` (443 default) on
