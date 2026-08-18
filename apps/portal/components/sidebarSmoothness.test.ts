@@ -98,3 +98,18 @@ test("the fixed-position desktop toasts live outside the sidebar", () => {
   assert.equal(count(shell, "<DesktopUpdateToast />"), 1);
   assert.equal(count(shell, "<DesktopShellBeacon />"), 1);
 });
+
+test("the sidebar's width is never animated", () => {
+  // On the owner's hardware, against a page the weight of the real dashboard:
+  // animating this width dropped 5.5 frames per toggle, removing it dropped
+  // 0.5 with half the toggles completely clean. A 120ms slide gave 4.67 and
+  // snapping the panel while gliding the page gave 2.25. The appearance is
+  // identical either way - only the motion differs.
+  const desktop = css.slice(css.indexOf("@media (min-width: 1081px)"));
+  const navRule = desktop.slice(0, desktop.indexOf("\n}"));
+  assert.doesNotMatch(
+    navRule,
+    /transition:[^;]*width/,
+    "animating the sidebar width re-lays-out and repaints the whole shell every frame",
+  );
+});

@@ -389,6 +389,22 @@ Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]]
   worse**. ⏳ ~1 dropped frame per toggle remains: the one unavoidable layout
   when the content area resizes. Removing that needs an overlay sidebar (content
   never resizes), which is Izzy's product call, not a bug.
+- ✅✅ **THE ANSWER, and it took five rounds to reach: THE SIDEBAR'S WIDTH IS NOT
+  ANIMATED.** Measured on the owner's hardware against a page **the weight of the
+  real dashboard** (⛔ the earlier harness had a 300-row table and was ~10x
+  heavier than his actual page — that mis-sizing is what sent three rounds
+  chasing the wrong thing): sliding = **5.5 dropped frames/toggle**; a 120ms
+  slide = 4.67; snapping the panel while gliding the page = 2.25; **removing the
+  animation entirely = 0.5, with half the toggles completely clean.** Idle
+  control 0. **Not one pixel of his design changes** — only the motion goes, and
+  an instant toggle has nothing left to stutter.
+  ⛔ **Never re-add `transition: width` to `.console-nav`.** Every millisecond it
+  runs re-lays-out and repaints a 3440x1440 shell on a 2012 GPU. Guarded by
+  `sidebarSmoothness.test.ts`.
+  ⛔ **AND SIZE THE HARNESS TO THE REAL PAGE FIRST.** On the real dashboard one
+  toggle's layout measured **1.7ms**; the oversized harness said 32ms. Every
+  conclusion drawn from the heavy harness about "the content relayout is the
+  floor" was wrong.
 - ⛔⛔ **REVERTED 2026-08-17, AND THIS IS THE RULE THAT MATTERS MOST HERE:
   IZZY'S SIDEBAR DESIGN IS NOT YOURS TO CHANGE.** The overlay below was measured
   at 0.07 dropped frames — the fastest thing in this whole engagement — and he

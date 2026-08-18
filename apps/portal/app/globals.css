@@ -13847,7 +13847,15 @@ body {
   .console-nav {
     width: 280px;
     border-right-width: 1px;
-    transition: width var(--nav-ease-dur) var(--nav-ease), border-color 0.2s ease;
+    /* ⛔ THE SIDEBAR'S WIDTH IS NOT ANIMATED, AND MUST NOT BE. Measured on the
+       owner's machine (Intel HD 4000 driving a 3440x1440 ultrawide) against a
+       page the weight of the real dashboard: animating this width dropped
+       **5.5 frames per toggle** because every frame re-lays-out and repaints
+       the whole shell; removing the animation drops **0.5**, with half the
+       toggles completely clean. Shortening it to 120ms gave 4.67, and snapping
+       the panel while gliding the page gave 2.25 — neither is close. The
+       appearance is unchanged either way; only the motion goes. */
+    transition: border-color 0.2s ease;
   }
 
   .console-nav.nav-rail {
