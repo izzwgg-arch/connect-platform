@@ -294,17 +294,33 @@ same tenant-default row is what the send path reads.
 
 ### 7.3 ⛔ Two things deliberately left alone — both need Izzy
 
-**Billing is NOT switched on.** `smsBillingEnabled` is still `false`. Create A
-Box is not an ordinary onboarding tenant on the $35 quote: they are on a
-negotiated **flat $130/month** (`billingFlatRate: {enabled:true, appliesTo:
-"extensions", amountCents:13000}`), and their two extra DIDs bill **$0.00**
-because `pbxDidPriceCents` is 0. Their last three invoices are all exactly
-$130.00. ⛔ **The flat rate covers extensions only — it does not absorb an SMS
-line**, so flipping the switch adds a $10 `SMS_PACKAGE` line and takes them to
-**$140/month** from their next invoice (billing day 27). That is a price rise on
-a custom-priced account: a commercial decision, not part of the wiring, so it
-was left for the owner. Noticed in passing and **not touched**: their July
-invoice `CC-202607-00015` is sitting **FAILED** at $130.
+**⛔⛔ Billing is OFF ON PURPOSE — they text for free, by Izzy's decision.**
+Asked on 2026-08-18 whether to add the $10, the answer was *"turn it on without
+charging"*. `smsBillingEnabled` therefore stays **false** and **must not be
+"fixed" by a later reader** who sees a texting tenant with the billing switch off.
+
+⛔ **The switch is billing-only and gates nothing.** Every reader is
+`invoiceEngine.ts`, `billing/usage.ts`, `billing/routes.ts` or a pure readout
+(`agentTenantFacts.ts`, `agentProvisioning/accountSetupInfoRoute.ts`) — **no code
+path gates the messaging feature on it**, which is why the seven inbound texts in
+§7.2 landed with it false. It is purely what the invoice engine counts.
+
+For the record of what flipping it would cost: Create A Box is not an ordinary
+onboarding tenant on the $35 quote — they are on a negotiated **flat $130/month**
+(`billingFlatRate: {enabled:true, appliesTo:"extensions", amountCents:13000}`),
+and their two extra DIDs bill **$0.00** because `pbxDidPriceCents` is 0. Their
+last three invoices are all exactly $130.00. ⛔ **The flat rate covers extensions
+only — it does not absorb an SMS line**, so the switch would add a $10
+`SMS_PACKAGE` line and take them to **$140/month** from billing day 27.
+
+⛔ **One latent consequence of leaving it off.** `portLanding.ts:336` moves
+texting onto a ported number only when `smsBillingEnabled` is on **or** the temp
+number already carries a claimed `TenantSmsNumber` row. Create A Box has no port
+in flight, but if 845-782-6722 is ever ported that branch will skip it silently
+and the texting will have to be moved by hand.
+
+Noticed in passing and **not touched**: their July invoice `CC-202607-00015` is
+sitting **FAILED** at $130.
 
 **⛔⛔ `sms_email` is a second delivery path and it is LIVE on this number.**
 `getDIDsInfo` reads:

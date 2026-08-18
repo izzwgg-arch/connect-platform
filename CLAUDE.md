@@ -5299,16 +5299,22 @@ Changes.
   correlates with nothing, this one demonstrably delivers. **Read `sms_email` on
   every activation** — a customer's texts landing in someone's personal mailbox is
   a privacy question, not a config detail, and switching it off is Izzy's call.
-- ⏳ **Create A Box billing was DELIBERATELY NOT flipped** — `smsBillingEnabled` is
-  still **false**, so step 3 of the runbook is the one piece left open. They are on
-  a negotiated **flat $130/mo** (`billingFlatRate.appliesTo: "extensions"`, extra
-  DIDs billing $0.00 via `pbxDidPriceCents: 0`), so adding the $10 `SMS_PACKAGE`
-  line takes them to **$140** — a real price rise on a custom-priced account, which
-  is a commercial decision and not part of the wiring. ⛔ **The flat rate covers
-  EXTENSIONS ONLY and does not absorb the SMS line** — same inversion as
-  [[flat-rate-inverts-the-extension-billing-rule]]. Their July invoice
-  `CC-202607-00015` is also sitting **FAILED** at $130 (unrelated, untouched) —
-  worth clearing before stacking a rise on top of it.
+- ⛔⛔ **CREATE A BOX TEXTS FOR FREE, BY IZZY'S DECISION (2026-08-18) —
+  `smsBillingEnabled` is `false` ON PURPOSE and must not be "fixed".** Asked
+  whether to bill the $10, his answer was *"turn it on without charging"*: they
+  keep the negotiated **flat $130/mo** and get texting at no extra charge.
+  ⛔ **The switch is BILLING-ONLY and gates nothing** — every reader is the invoice
+  engine, `billing/usage.ts`, the billing routes, or a readout (`agentTenantFacts`,
+  `accountSetupInfoRoute`); **no code path gates messaging on it**, which is why
+  texting demonstrably works today with it off. Flipping it adds a $10
+  `SMS_PACKAGE` line and takes them to **$140**, because ⛔ **the flat rate covers
+  EXTENSIONS ONLY and does not absorb the SMS line**
+  ([[flat-rate-inverts-the-extension-billing-rule]]). Their July invoice
+  `CC-202607-00015` is separately sitting **FAILED** at $130 — unrelated, untouched.
+  ⛔ **One latent consequence to know about:** `portLanding.ts:336` moves texting
+  onto a ported number only when `smsBillingEnabled` is on **or** the temp number
+  already carries a claimed row — so if this number is ever ported, that branch
+  skips it and the texting has to be moved by hand.
 - ⛔ **The per-DID `webhook` / `sms_url_callback` fields are a red herring, and
   `setSMS` lies about them.** It answers `{"status":"success"}` and NEVER moves
   either `_enabled` flag (four param shapes tried). **Gesheft is the busiest
