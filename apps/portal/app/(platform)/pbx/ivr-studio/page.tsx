@@ -1448,6 +1448,10 @@ export default function IvrStudioPage() {
                         </button>
                         <button className="btn sm" disabled={!canManage} onClick={() => setRecPickerOpen(!recPickerOpen)}>{t("Change")}</button>
                         <button className="btn sm" disabled={!canManage} onClick={() => setMakeRecOpen(true)}>{t("Make one")}</button>
+                        {voiceChangerAllowed && (
+                          <button className="btn sm" disabled={!canManage}
+                            onClick={() => { setMakeRecForKey(null); setConvertOpen(true); }}>{t("Change my voice")}</button>
+                        )}
                       </>
                     } />
 
@@ -1740,6 +1744,12 @@ export default function IvrStudioPage() {
                   onClick={() => { setMakeRecForKey(null); setMakeRecForLibrary(true); setMakeRecOpen(true); }}>
                   {t("Make a recording")}
                 </button>
+                {voiceChangerAllowed && (
+                  <button className="btn sm" disabled={!canManagePrompts}
+                    onClick={() => { setMakeRecForKey(null); setMakeRecForLibrary(true); setConvertOpen(true); }}>
+                    {t("Change my voice")}
+                  </button>
+                )}
               </div>
               <div className="card-b">
                 <div className="reclist flat">
