@@ -12,8 +12,11 @@ import { join } from "node:path";
  * Audit: docs/ai-context/AGENT_HANDOFF_USER_NAMES_EMAIL_VS_PBX_2026-08-17.md
  */
 
-const serverSrc = readFileSync(join(__dirname, "server.ts"), "utf8");
-const orchestratorSrc = readFileSync(join(__dirname, "onboarding", "setupOrchestrator.ts"), "utf8");
+// Normalise line endings: core.autocrlf=true checks these files out as CRLF on
+// Windows, and the "\n}\n" slice below would otherwise never match there.
+const readSrc = (...p: string[]) => readFileSync(join(__dirname, ...p), "utf8").replace(/\r\n/g, "\n");
+const serverSrc = readSrc("server.ts");
+const orchestratorSrc = readSrc("onboarding", "setupOrchestrator.ts");
 
 test("the naming rule is the SHARED one, never a local reimplementation", () => {
   assert.match(

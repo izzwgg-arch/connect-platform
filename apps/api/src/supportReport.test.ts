@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const src = readFileSync(join(__dirname, "supportReport.ts"), "utf8");
-const serverSrc = readFileSync(join(__dirname, "server.ts"), "utf8");
-const dispatchSrc = readFileSync(join(__dirname, "agentEscalationDispatch.ts"), "utf8");
-const bypassSrc = readFileSync(join(__dirname, "jwtPublicRouteBypass.ts"), "utf8");
+// Normalise line endings so the `;\n` matches below hold on a Windows (CRLF) checkout too.
+const readSrc = (name: string) => readFileSync(join(__dirname, name), "utf8").replace(/\r\n/g, "\n");
+const src = readSrc("supportReport.ts");
+const serverSrc = readSrc("server.ts");
+const dispatchSrc = readSrc("agentEscalationDispatch.ts");
+const bypassSrc = readSrc("jwtPublicRouteBypass.ts");
 
 test("the route is actually registered — a module nobody calls files nothing", () => {
   // The defect class here is a CALLER, not a function: `registerSupportReportRoutes`

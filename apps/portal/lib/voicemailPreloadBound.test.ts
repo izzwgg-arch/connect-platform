@@ -34,10 +34,11 @@ import path from "node:path";
    and the warm-up are module-private to a "use client" component, and a test
    that reimplemented them would be asserting its own copy, not the shipped one. */
 
-const SRC = fs.readFileSync(
-  path.join(__dirname, "..", "components", "DesktopMiniDialer.tsx"),
-  "utf8",
-);
+// Normalise line endings: on a Windows (CRLF) checkout the literal `;\n` below
+// would otherwise never match, and a doesNotMatch guard that cannot match guards nothing.
+const SRC = fs
+  .readFileSync(path.join(__dirname, "..", "components", "DesktopMiniDialer.tsx"), "utf8")
+  .replace(/\r\n/g, "\n");
 
 function readConst(name: string): number {
   const m = SRC.match(new RegExp(`const\\s+${name}\\s*=\\s*(\\d+)`));
@@ -84,10 +85,9 @@ test("the list request still asks for a small page, so the whole 100 is never sh
    reason as above — reaching this handler in isolation would mean standing up
    the whole api. */
 
-const API_SRC = fs.readFileSync(
-  path.join(__dirname, "..", "..", "api", "src", "server.ts"),
-  "utf8",
-);
+const API_SRC = fs
+  .readFileSync(path.join(__dirname, "..", "..", "api", "src", "server.ts"), "utf8")
+  .replace(/\r\n/g, "\n");
 
 test("GET /voice/voicemail declares pageSize, so asking for fewer rows is not silently ignored", () => {
   const handler = API_SRC.match(

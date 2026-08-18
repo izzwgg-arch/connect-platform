@@ -46,6 +46,14 @@ unmodified `HEAD` re-encoded to CRLF: it fails identically, with zero of this
 work applied). Typecheck: **75 errors, the exact pre-existing baseline, none in
 any edited file.**
 
+> **2026-08-18 follow-up — the Windows failure is FIXED.** `userDisplayName.callsites.test.ts`,
+> `supportReport.test.ts` and `apps/portal/lib/voicemailPreloadBound.test.ts` now normalise
+> CRLF→LF at the point they read source (`.replace(/\r\n/g, "\n")`); the production
+> `displayNameForUser` was never wrong. Expected `npm test` baseline in `apps/api` is now the
+> **7 × `syncPbxTenantDirectoryFromRows`** failures only. (A CPU-loaded full run can also flake
+> `elevenLabsRoutes.stress` "10-wide concurrent burst" — passes in isolation, not a regression.)
+> Rule for new source-reading guard tests: see CLAUDE.md "source-reading tests must normalise CRLF".
+
 #### §1a — the CRM oracle now reads the role from the database
 
 `crm/inboundCallerMatch.ts` gains the pure `decideTrustedViewerRole()`;
