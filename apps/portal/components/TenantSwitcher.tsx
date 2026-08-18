@@ -120,16 +120,20 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
     [applyKbSelection, rowsForKb.length]
   );
 
+  // ⛔ Both the full name and the two-letter rail label are always rendered;
+  // CSS shows one. Swapping this markup when the sidebar collapses is a DOM
+  // change inside .console-shell, and every one of those costs ~70ms of style
+  // recalculation — which lands exactly on the frames the sidebar is trying to
+  // animate. See the note in SidebarNav.tsx.
+  const railLabel = displayName.slice(0, 2).toUpperCase();
+
   const workspaceCard = (
     <div className={`ws-switcher-card ${railMode ? "ws-switcher-card-rail" : ""}`}>
       <div className="ws-switcher-brand ws-switcher-brand-text-only">
-        {!railMode ? (
-          <div className="ws-switcher-brand-text">
-            <div className="ws-switcher-tenant-name">{displayName}</div>
-          </div>
-        ) : (
-          <span className="ws-switcher-rail-label" title={displayName}>{displayName.slice(0, 2).toUpperCase()}</span>
-        )}
+        <div className="ws-switcher-brand-text">
+          <div className="ws-switcher-tenant-name">{displayName}</div>
+        </div>
+        <span className="ws-switcher-rail-label" title={displayName}>{railLabel}</span>
       </div>
     </div>
   );
@@ -153,14 +157,11 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
         onClick={() => setOpen((v) => !v)}
       >
         <div className="ws-switcher-trigger-inner">
-          {!railMode ? (
-            <div className="ws-switcher-trigger-text">
-              <span className="ws-switcher-trigger-tenant">{displayName}</span>
-            </div>
-          ) : (
-            <span className="ws-switcher-rail-label" title={displayName}>{displayName.slice(0, 2).toUpperCase()}</span>
-          )}
-          {!railMode ? <ChevronDown className="ws-switcher-trigger-chevron" size={16} strokeWidth={2} /> : null}
+          <div className="ws-switcher-trigger-text">
+            <span className="ws-switcher-trigger-tenant">{displayName}</span>
+          </div>
+          <span className="ws-switcher-rail-label" title={displayName}>{railLabel}</span>
+          <ChevronDown className="ws-switcher-trigger-chevron" size={16} strokeWidth={2} />
         </div>
       </button>
 

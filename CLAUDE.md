@@ -182,6 +182,76 @@ scheme. ⛔ **NOTHING IS FIXED. Every item below is still live.**)
   deploy path of their own** — an env change cannot trigger an api rebuild; it
   must ride a real `apps/api/` commit. See the SIP-hostname section below.
 
+## ⛔⛔ AGENT HANDOFF — the sidebar rebuilt itself on every toggle, and ANY DOM change in the portal costs 70ms (2026-08-17) — READ FIRST before touching the sidebar, before adding a `:has()` rule to globals.css, before animating anything in the portal, or for ANY "the app feels slow / laggy / jittery" report
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIDEBAR_SMOOTHNESS_2026-08-17.md`**
+(portal source only — six files + one new test. No api, no worker, no PBX, no
+migration, no data change, no flag.)
+Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]].
+
+- ⛔⛔ **THE FINDING THAT OUTRANKS THE SIDEBAR: any DOM mutation inside
+  `.console-shell` costs ~70 ms of style recalculation, and the cost does NOT
+  scale with the size of the mutation.** Measured against the real stylesheet:
+  rebuilding the **481-node** nav list = **78–90 ms**; rebuilding a **6-node**
+  profile block = **68–79 ms** — the same; the identical mutation **outside**
+  `.console-shell` = **3–9 ms**; and with every `:has()` rule deleted at runtime,
+  **3.5–4.0 ms**. `globals.css` carries **73 `:has()` rules**, and Chrome pays
+  their invalidation per mutation, not per node.
+  ⛔ **There is no single bad rule** — deleting them one at a time shows no
+  improvement until nearly all are gone. It is the aggregate.
+  ⛔ **So every React render anywhere in the portal that actually changes DOM
+  pays ~70 ms.** This is the app-wide cause of "everything feels sluggish", and it
+  is **NOT FIXED** — fixing it means replacing those 73 rules with classes the
+  components set themselves (`PageShell` already stamps route classes onto
+  `.console-shell` and could carry most of them). Its own engagement.
+  ✅ **A class change is not a DOM mutation and does not pay this: 0.1–0.2 ms.**
+  That is the entire basis of the sidebar fix. **Prefer a class over a conditional
+  render anywhere in the portal shell.**
+- ⛔⛔ **THE SIDEBAR MUST NEVER SWAP MARKUP.** `SidebarNav` rendered two
+  completely different trees — `nav-rail-stack` icon links vs
+  `CollapsibleNavSection` labelled links, two profile blocks, two avatars — and
+  `TenantSwitcher` did the same in miniature. One click unmounted ~490 nodes and
+  mounted ~490 others **and** paid the 70 ms tax, **right at the start of the
+  220 ms width transition**: measured **81.7 ms median (74.7–126)**. That stall
+  IS the jitter; the easing and the duration were never the problem (layout while
+  the width eases is **0.2 ms per frame**). Now one tree, rail = a class on the
+  `<aside>`: **~10–16 ms**, inside a single frame.
+- ⛔ **DO NOT ADD A PER-LINK TRANSITION** (label opacity, icon-well size,
+  anything). Chrome builds one transition object per element; across 72 links that
+  measured **11 ms of pure setup** on the exact frame the slide begins — it alone
+  took the toggle from ~10 ms back up to ~28 ms. Labels need no fade: the rail
+  leaves the label column zero pixels wide and the aside clips it, so the slide
+  draws the text away by itself. The icon well is **one size in both modes**;
+  centring in the rail is a padding change on the **one** scroll container.
+- ⛔ **The mobile/narrow drawer animated `left`, a LAYOUT property** — relaying
+  out the drawer and the page behind it every frame. It is `transform:
+  translate3d(-100%,0,0)` now (compositor only). ⛔ **That created a trap and it
+  is why `DesktopUpdateToast` + `DesktopShellBeacon` moved OUT of the sidebar into
+  `PageShell`:** a transformed ancestor makes a `position: fixed` descendant
+  position against *it*, not the viewport, so below 1081 px — which an Electron
+  window can be — the toast would ride off-screen with the closed drawer.
+  **Never put a fixed-position element inside `.console-nav`.**
+- ✅ **The load-time snap nobody had named is gone too.** `useSidebarRail` reads
+  localStorage in an effect, so the first paint is always the EXPANDED sidebar —
+  anyone working in the collapsed rail watched it animate shut on **every page
+  load**. New `settled` flag + `.console-nav.nav-no-anim` suppress the transition
+  until the stored width has been painted.
+- **Guard:** `apps/portal/components/sidebarSmoothness.test.ts`, 6 tests,
+  **registered in the portal `test` script**. ⛔ They read the components' SOURCE
+  on purpose — the defect is in what is RENDERED, so a unit test of a helper
+  passes straight through it. ✅ **Proven real: 5 of the 6 fail against `HEAD`.**
+  Typecheck 0 errors. ⛔ The portal suite has **2 pre-existing failures unrelated
+  to this** (`webrtcSdpDiagnostics`, `campaignsIndexLayout`) — their inputs are
+  untouched here; don't read them as regressions.
+- ⏳ **NOT PROVEN: nobody has watched the sidebar move in a real browser.**
+  Screenshots were unavailable in this session's browser pane, so it is proven by
+  measurement and geometry against the real stylesheet — timings, all 72 icon
+  centres at x=36.0 in a 72 px rail, zero elements overflowing, dividers, centred
+  footer button — not by a human seeing it slide. ⛔ **The Windows app keeps the
+  old bundle until it is fully closed and reopened** (it loads the hosted portal,
+  so no desktop build is needed — but an open window shows the identical old
+  behaviour).
+
 ## ⛔⛔ NEW TENANTS DEFAULT TO SIP-OVER-443, AND AN EMAIL CAN CARRY A FILE (2026-08-17) — READ FIRST before touching `webrtcRouteViaSbc`, the WebRTC bootstrap stamp, or before saying Connect cannot attach a file
 
 Commits `66dbaa9c` (attachments) + `8495d379` (443 default) on

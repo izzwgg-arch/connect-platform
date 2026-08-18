@@ -8,22 +8,22 @@ type CollapsibleNavSectionProps = {
   label: string;
   expanded: boolean;
   onToggle: () => void;
-  railMode: boolean;
   children: ReactNode;
 };
 
+/**
+ * One section of the sidebar. There is deliberately no `railMode` branch:
+ * the collapsed icon rail renders this exact markup and hides the heading in
+ * CSS. Swapping markup on the rail toggle is what made the sidebar stutter —
+ * see the note in SidebarNav.tsx.
+ */
 export function CollapsibleNavSection({
   id,
   label,
   expanded,
   onToggle,
-  railMode,
   children
 }: CollapsibleNavSectionProps) {
-  if (railMode) {
-    return <div className="nav-section-rail">{children}</div>;
-  }
-
   return (
     <div className={`nav-collapsible ${expanded ? "nav-collapsible-open" : ""}`}>
       <button

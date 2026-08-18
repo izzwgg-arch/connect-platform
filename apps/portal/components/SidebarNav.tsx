@@ -12,7 +12,7 @@ import { UserAvatarUpload } from "./UserAvatarUpload";
 import { NAV_SECTION_ORDER, navSectionMeta, type NavItem } from "../navigation/navConfig";
 import { CollapsibleNavSection } from "./CollapsibleNavSection";
 import { getPreferredUserDisplayName } from "../lib/userDisplayName";
-import { DesktopShellBeacon, DesktopUpdateToast, installDesktopUpdate, useDesktopUpdate } from "./DesktopUpdateNotice";
+import { installDesktopUpdate, useDesktopUpdate } from "./DesktopUpdateNotice";
 
 type SidebarNavProps = {
   items: NavItem[];
@@ -21,6 +21,10 @@ type SidebarNavProps = {
   isMobile: boolean;
   railMode: boolean;
   onToggleRail: () => void;
+  /** False until the stored rail choice has been applied and painted. While
+   *  false the sidebar does not animate, so restoring a saved collapsed
+   *  sidebar is instant rather than a slide on every page load. */
+  settled?: boolean;
   /** Unread count badges keyed by NavItem.badgeKey (e.g. "chat", "voicemail"). */
   badges?: Record<string, number>;
 };
@@ -124,6 +128,7 @@ export function SidebarNav({
   isMobile,
   railMode,
   onToggleRail,
+  settled = true,
   badges = {},
 }: SidebarNavProps) {
   const pathname = usePathname();
@@ -158,200 +163,111 @@ export function SidebarNav({
   };
 
   const effectiveRail = !isMobile && railMode;
+  // ⛔ The rail/expanded switch is a CLASS on the <aside> and NOTHING ELSE.
+  // It must never swap markup. Measured on the real stylesheet: any DOM
+  // mutation inside .console-shell costs ~70ms of style recalculation (the
+  // sheet carries 73 `:has()` rules, whose invalidation work is paid per
+  // mutation regardless of how small the mutation is). The old code rendered
+  // two different trees, so every toggle tore down and rebuilt all ~72 nav
+  // links and stalled the main thread for 80-130ms — right at the start of
+  // the 220ms width transition. That stall IS the jitter. A class-only
+  // toggle measures 0.2ms. Keep one tree.
   const asideClass = [
     "console-nav",
     isMobile && mobileOpen ? "open" : "",
     !isMobile && effectiveRail ? "nav-rail" : "",
-    !isMobile && !effectiveRail ? "nav-expanded" : ""
+    !isMobile && !effectiveRail ? "nav-expanded" : "",
+    settled ? "" : "nav-no-anim"
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
     <aside className={asideClass}>
-      <div className={`drawer-profile ${effectiveRail ? "drawer-profile-rail" : ""}`}>
-        {!effectiveRail ? (
-          <div className="drawer-user">
-            <UserAvatarUpload
-              name={displayName}
-              avatarUrl={user.avatarUrl}
-              size={38}
-              editable
-              onUploaded={setUserAvatarUrl}
-              className="drawer-user-avatar"
-            />
-            <div className="drawer-user-details">
-              <span className="drawer-user-name">{displayName}</span>
-            </div>
+      <div className="drawer-profile">
+        <div className="drawer-user" title={effectiveRail ? displayName : undefined}>
+          <UserAvatarUpload
+            name={displayName}
+            avatarUrl={user.avatarUrl}
+            size={38}
+            editable
+            onUploaded={setUserAvatarUrl}
+            className="drawer-user-avatar"
+          />
+          <div className="drawer-user-details">
+            <span className="drawer-user-name">{displayName}</span>
           </div>
-        ) : (
-          <div className="drawer-user-rail" title={displayName}>
-            <UserAvatarUpload
-              name={displayName}
-              avatarUrl={user.avatarUrl}
-              size={28}
-              className="drawer-user-avatar drawer-user-avatar-sm"
-            />
-          </div>
-        )}
-        <div className={`drawer-tenant-wrap ${effectiveRail ? "drawer-tenant-wrap-rail" : ""}`}>
+        </div>
+        <div className="drawer-tenant-wrap">
           <TenantSwitcher railMode={effectiveRail} />
         </div>
       </div>
 
       <nav className="drawer-nav" aria-label="Main navigation">
-        {effectiveRail ? (
-          <div className="nav-rail-stack">
-            {NAV_SECTION_ORDER.map((section) => {
-              const sectionItems = items.filter((item) => item.section === section);
-              if (sectionItems.length === 0) return null;
-              return (
-                <div key={section} className="nav-rail-group">
-                  {sectionItems.map((item) => {
-                    const active = navLinkActive(pathname, item.href);
-                    const Icon = item.lucide;
-                    const badgeCount = item.badgeKey ? (badges[item.badgeKey] ?? 0) : 0;
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        download={item.download ? "" : undefined}
-                        prefetch={item.download ? false : undefined}
-                        className={`drawer-nav-link drawer-nav-link-rail ${active ? "active" : ""}`}
-                        title={item.id === "workspace.install" && installChip ? `${t(item.label)} — ${installChip}` : t(item.label)}
-                        onClick={(event) => { handleInstallItemClick(item, event); onCloseMobile(); }}
+        {NAV_SECTION_ORDER.map((section) => {
+          const sectionItems = items.filter((item) => item.section === section);
+          if (sectionItems.length === 0) return null;
+          const label = t(navSectionMeta[section].label);
+          // In the rail there is no room for a heading, so every section is
+          // shown open (CSS forces the panel to 1fr). The stored expand/collapse
+          // choice is kept untouched and comes back when the sidebar reopens.
+          const expanded = isExpanded(section);
+          return (
+            <CollapsibleNavSection
+              key={section}
+              id={`nav-sec-${section}`}
+              label={label}
+              expanded={expanded}
+              onToggle={() => toggle(section)}
+            >
+              {sectionItems.map((item) => {
+                const active = navLinkActive(pathname, item.href);
+                const Icon = item.lucide;
+                const badgeCount = item.badgeKey ? (badges[item.badgeKey] ?? 0) : 0;
+                const isInstall = item.id === "workspace.install";
+                const itemLabel = t(item.label);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    download={item.download ? "" : undefined}
+                    prefetch={item.download ? false : undefined}
+                    className={`drawer-nav-link ${active ? "active" : ""}`}
+                    // Only the collapsed rail needs a tooltip — the expanded
+                    // sidebar already shows the label. This is an attribute
+                    // update, not a DOM change: measured 2.2ms across all links.
+                    title={
+                      effectiveRail
+                        ? isInstall && installChip
+                          ? `${itemLabel} — ${installChip}`
+                          : itemLabel
+                        : undefined
+                    }
+                    onClick={(event) => { handleInstallItemClick(item, event); onCloseMobile(); }}
+                  >
+                    <span className="drawer-nav-icon drawer-nav-icon-lucide">
+                      <Icon size={18} strokeWidth={1.85} />
+                    </span>
+                    <span className="drawer-nav-label">{itemLabel}</span>
+                    {isInstall && installChip ? (
+                      <span
+                        className={`drawer-nav-chip ${updateReady ? "drawer-nav-chip-ready" : ""}`}
+                        aria-label={installChip}
                       >
-                        <span className="drawer-nav-icon drawer-nav-icon-lucide" style={{ position: "relative" }}>
-                          <Icon size={18} strokeWidth={1.85} />
-                          {item.id === "workspace.install" && installChip && (
-                            <span
-                              aria-label={installChip}
-                              style={{
-                                position: "absolute",
-                                top: -3,
-                                right: -3,
-                                width: 9,
-                                height: 9,
-                                borderRadius: "9999px",
-                                background: "#22c55e",
-                                boxShadow: "0 0 8px rgba(34,197,94,.9)",
-                              }}
-                            />
-                          )}
-                          {badgeCount > 0 && (
-                            <span
-                              aria-label={`${badgeCount} unread`}
-                              style={{
-                                position: "absolute",
-                                top: -4,
-                                right: -4,
-                                minWidth: "1rem",
-                                height: "1rem",
-                                borderRadius: "9999px",
-                                background: "var(--danger)",
-                                color: "#fff",
-                                fontSize: "9px",
-                                fontWeight: 700,
-                                lineHeight: "1rem",
-                                textAlign: "center",
-                                padding: "0 2px",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                              }}
-                            >
-                              {badgeCount > 99 ? "99+" : badgeCount}
-                            </span>
-                          )}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          NAV_SECTION_ORDER.map((section) => {
-            const sectionItems = items.filter((item) => item.section === section);
-            if (sectionItems.length === 0) return null;
-            const label = t(navSectionMeta[section].label);
-            const expanded = isExpanded(section);
-            return (
-              <CollapsibleNavSection
-                key={section}
-                id={`nav-sec-${section}`}
-                label={label}
-                expanded={expanded}
-                onToggle={() => toggle(section)}
-                railMode={false}
-              >
-                {sectionItems.map((item) => {
-                  const active = navLinkActive(pathname, item.href);
-                  const Icon = item.lucide;
-                  const badgeCount = item.badgeKey ? (badges[item.badgeKey] ?? 0) : 0;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      download={item.download ? "" : undefined}
-                      prefetch={item.download ? false : undefined}
-                      className={`drawer-nav-link ${active ? "active" : ""}`}
-                      onClick={(event) => { handleInstallItemClick(item, event); onCloseMobile(); }}
-                    >
-                      <span className="drawer-nav-icon drawer-nav-icon-lucide">
-                        <Icon size={18} strokeWidth={1.85} />
+                        <span className="drawer-nav-chip-text">{installChip}</span>
                       </span>
-                      <span className="drawer-nav-label">{t(item.label)}</span>
-                      {item.id === "workspace.install" && installChip && (
-                        <span
-                          style={{
-                            marginLeft: "auto",
-                            borderRadius: "9999px",
-                            padding: "2px 8px",
-                            fontSize: 10,
-                            fontWeight: 800,
-                            letterSpacing: 0.2,
-                            background: updateReady ? "#22c55e" : "rgba(34,197,94,.18)",
-                            color: updateReady ? "#04120a" : "#22c55e",
-                            flexShrink: 0,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {installChip}
-                        </span>
-                      )}
-                      {badgeCount > 0 && (
-                        <span
-                          aria-label={`${badgeCount} unread`}
-                          style={{
-                            marginLeft: "auto",
-                            minWidth: "1.25rem",
-                            height: "1.25rem",
-                            borderRadius: "9999px",
-                            background: "var(--danger)",
-                            color: "#fff",
-                            fontSize: "10px",
-                            fontWeight: 700,
-                            lineHeight: "1.25rem",
-                            textAlign: "center",
-                            padding: "0 4px",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexShrink: 0,
-                          }}
-                        >
-                          {badgeCount > 99 ? "99+" : badgeCount}
-                        </span>
-                      )}
-                    </Link>
-                  );
-                })}
-              </CollapsibleNavSection>
-            );
-          })
-        )}
+                    ) : null}
+                    {badgeCount > 0 ? (
+                      <span className="drawer-nav-badge" aria-label={`${badgeCount} unread`}>
+                        {badgeCount > 99 ? "99+" : badgeCount}
+                      </span>
+                    ) : null}
+                  </Link>
+                );
+              })}
+            </CollapsibleNavSection>
+          );
+        })}
       </nav>
 
       {!isMobile ? (
@@ -367,11 +283,6 @@ export function SidebarNav({
           </button>
         </div>
       ) : null}
-
-      {/* Desktop-only: "New update ready — Install" notice (fixed position, renders app-wide). */}
-      <DesktopUpdateToast />
-      {/* Desktop-only, invisible: reports shell version + user for the install census. */}
-      <DesktopShellBeacon />
     </aside>
   );
 }

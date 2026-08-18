@@ -10,6 +10,7 @@ import { useNavBadges } from "../hooks/useNavBadges";
 import { isNavItemVisibleForUser, navItems } from "../navigation/navConfig";
 import { SidebarNav } from "./SidebarNav";
 import { Topbar } from "./Topbar";
+import { DesktopShellBeacon, DesktopUpdateToast } from "./DesktopUpdateNotice";
 import { isLocalhostDev } from "../lib/localDev";
 
 function titleFromPath(pathname: string): string {
@@ -24,7 +25,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   const pathname = usePathname();
   const { can, backendJwtRole, permissionsHydrated } = useAppContext();
   const isMobile = useMediaQuery("(max-width: 1080px)");
-  const { railMode, toggleRail } = useSidebarRail();
+  const { railMode, toggleRail, settled: sidebarSettled } = useSidebarRail();
   const rawBadges = useNavBadges();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const visibleItems = useMemo(
@@ -83,6 +84,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
           isMobile={isMobile}
           railMode={railMode}
           onToggleRail={toggleRail}
+          settled={sidebarSettled}
           badges={{
             chat: pathname.startsWith("/chat") ? 0 : rawBadges.chat,
             voicemail: pathname.startsWith("/voicemail") ? 0 : rawBadges.voicemail,
@@ -115,6 +117,15 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
           </main>
         </div>
       </div>
+
+      {/* ⛔ These two live here, NOT inside <SidebarNav>. The toast is
+          position: fixed, and at mobile widths the sidebar carries a transform
+          (it slides on the compositor now) — a transformed ancestor makes a
+          fixed descendant position against it instead of the viewport, which
+          would drag the toast off-screen with the closed drawer. */}
+      <DesktopUpdateToast />
+      {/* Desktop-only, invisible: reports shell version + user for the install census. */}
+      <DesktopShellBeacon />
 
       {/* Mobile backdrop only — hidden on desktop via CSS */}
       {isMobile && mobileNavOpen ? (

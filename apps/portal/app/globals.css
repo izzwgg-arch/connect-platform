@@ -13800,6 +13800,15 @@ body {
 }
 
 /* ?? Shell: block wrapper, header fixed at top ?????????????????????????????? */
+/* One curve and one duration for every part of the sidebar, so the panel,
+   the icons, the labels and the profile all arrive together. The curve leaves
+   fast and settles slowly (no overshoot); `ease-in-out` read as sluggish
+   because it also creeps out of the gate. */
+:root {
+  --nav-ease: cubic-bezier(0.22, 0.61, 0.24, 1);
+  --nav-ease-dur: 200ms;
+}
+
 .console-shell {
   display: flex;
   flex-direction: column;
@@ -13838,7 +13847,7 @@ body {
   .console-nav {
     width: 280px;
     border-right-width: 1px;
-    transition: width 0.22s ease-in-out, border-color 0.2s ease;
+    transition: width var(--nav-ease-dur) var(--nav-ease), border-color 0.2s ease;
   }
 
   .console-nav.nav-rail {
@@ -13850,9 +13859,41 @@ body {
   }
 }
 
+/* Before the stored rail choice has been painted, the sidebar has no
+   animation at all — see the `settled` flag in useSidebarRail. */
+.console-nav.nav-no-anim,
+.console-nav.nav-no-anim .drawer-nav,
+.console-nav.nav-no-anim .drawer-profile,
+.console-nav.nav-no-anim .nav-collapsible-panel,
+.console-nav.nav-no-anim .ws-switcher-trigger,
+.console-nav.nav-no-anim .ws-switcher-card,
+.console-nav.nav-no-anim .ws-switcher-trigger-text,
+.console-nav.nav-no-anim .ws-switcher-trigger-chevron,
+.console-nav.nav-no-anim .ws-switcher-brand-text {
+  transition: none !important;
+}
+
+/* Someone who has asked the OS for less motion gets the end state with no
+   travel — but the sidebar still opens and closes. */
+@media (prefers-reduced-motion: reduce) {
+  .console-nav,
+  .drawer-profile,
+  .drawer-nav,
+  .nav-collapsible-panel,
+  .nav-collapsible-chevron,
+  .ws-switcher-trigger,
+  .ws-switcher-card,
+  .ws-switcher-trigger-text,
+  .ws-switcher-trigger-chevron,
+  .ws-switcher-brand-text {
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ?? Drawer: profile block ??????????????????????????????????????????????????? */
 .drawer-profile {
   padding: 18px 14px 14px;
+  transition: padding var(--nav-ease-dur) var(--nav-ease);
   border-bottom: 1px solid var(--console-border);
   flex-shrink: 0;
   background: color-mix(in srgb, var(--console-panel) 80%, var(--console-bg));
@@ -13930,6 +13971,7 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 8px 10px 20px;
+  transition: padding var(--nav-ease-dur) var(--nav-ease);
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 120, 120, 0.4) transparent;
 }
@@ -14041,35 +14083,62 @@ body {
   background: color-mix(in srgb, var(--console-accent) 16%, transparent);
 }
 
-.drawer-nav-link-rail {
-  grid-template-columns: 1fr;
-  justify-items: center;
-  padding: 0 6px;
-  min-height: 40px;
+/* ?? Collapsed icon rail ????????????????????????????????????????????????????
+   The rail renders the SAME markup as the expanded sidebar; only these rules
+   differ. Nothing here may require different HTML — see SidebarNav.tsx. The
+   icon well is the only thing that changes size, and it transitions in step
+   with the sidebar width so no icon ever jumps. */
+
+/* Centring the icons is a padding change on the ONE scroll container, not a
+   size change on every icon: measured, the well's centre lands at this padding
+   + 23.4px (3px transparent left border + 6px link padding + half the 30px
+   well), so 12px puts it dead centre — dead centre of the 72px rail. It eases,
+   so the icons glide into place with the panel instead of jumping. */
+.console-nav.nav-rail .drawer-nav {
+  padding-left: 12px;
+  padding-right: 12px;
 }
 
-.drawer-nav-link-rail .drawer-nav-icon {
-  width: 36px;
-  height: 36px;
+/* The heading is removed from the layout (not just hidden) so the icons stack
+   tightly, and it stops being a tab stop. Sections are always open in the
+   rail — a hidden heading cannot be clicked to reopen one. */
+.console-nav.nav-rail .nav-collapsible-head {
+  display: none;
 }
 
-.nav-rail-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.console-nav.nav-rail .nav-collapsible-panel {
+  grid-template-rows: 1fr;
 }
 
-.nav-rail-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--console-border) 55%, transparent);
+.console-nav.nav-rail .nav-collapsible + .nav-collapsible {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--console-border) 55%, transparent);
 }
 
-.nav-rail-group:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+/* The update chip becomes the small green dot on the Install icon. */
+.console-nav.nav-rail .drawer-nav-chip {
+  position: absolute;
+  top: 6px;
+  left: 34px;
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  overflow: hidden;
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.9);
+}
+
+.console-nav.nav-rail .drawer-nav-badge {
+  position: absolute;
+  top: 3px;
+  left: 30px;
+  min-width: 1rem;
+  height: 1rem;
+  font-size: 9px;
+  line-height: 1rem;
+  padding: 0 2px;
 }
 
 .drawer-footer {
@@ -14100,23 +14169,18 @@ body {
   border-color: color-mix(in srgb, var(--console-accent) 28%, var(--console-border));
 }
 
-.drawer-profile-rail {
-  padding: 12px 8px 10px;
+/* The avatar is the same 38px in both modes, so only this padding moves — and
+   it eases, sliding the avatar to the centre of the 72px rail (17 + 19 = 36)
+   rather than snapping there. */
+.console-nav.nav-rail .drawer-profile {
+  padding: 12px 17px 10px;
 }
 
-.drawer-user-rail {
-  display: flex;
-  justify-content: center;
+.console-nav.nav-rail .drawer-user {
   margin-bottom: 8px;
 }
 
-.drawer-user-avatar-sm {
-  width: 34px;
-  height: 34px;
-  font-size: 11px;
-}
-
-.drawer-tenant-wrap-rail {
+.console-nav.nav-rail .drawer-tenant-wrap {
   margin-top: 0;
 }
 
@@ -14181,14 +14245,65 @@ body {
   min-height: 0;
 }
 
-.nav-section-rail {
-  display: contents;
-}
-
 .drawer-nav-label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ⛔ Do NOT add a per-link transition here (opacity on the labels, size on the
+   icon wells, anything). Chrome builds one transition object per element, and
+   across ~72 links that measured 11ms of setup on the exact frame the sidebar
+   starts moving. Labels need no fade: the rail leaves the label column zero
+   pixels wide and the aside clips it, so the text is drawn away by the slide
+   itself. Only the switcher's two text nodes fade, because the two-letter rail
+   label is drawn on top of them. */
+.ws-switcher-trigger-text,
+.ws-switcher-trigger-chevron,
+.ws-switcher-brand-text {
+  transition: opacity 0.14s ease-in-out;
+}
+
+/* Unread pill and desktop-update chip. These were inline styles that existed
+   twice over, once per sidebar mode; they are classes now so the rail can
+   restyle them without the markup changing. */
+.drawer-nav-badge {
+  margin-left: auto;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-align: center;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.drawer-nav-chip {
+  margin-left: auto;
+  border-radius: 9999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  background: rgba(34, 197, 94, 0.18);
+  color: #22c55e;
+  flex-shrink: 0;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drawer-nav-chip-ready {
+  background: #22c55e;
+  color: #04120a;
 }
 
 /* ?? Workspace switcher (2026) ??????????????????????????????????????????????? */
@@ -14221,7 +14336,8 @@ body {
   transition:
     border-color 0.18s ease-in-out,
     background 0.18s ease-in-out,
-    box-shadow 0.18s ease-in-out;
+    box-shadow 0.18s ease-in-out,
+    padding var(--nav-ease-dur) var(--nav-ease);
 }
 
 .ws-switcher-trigger:hover {
@@ -14272,8 +14388,9 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Rendered on every sidebar, shown only in the rail. */
 .ws-switcher-rail-label {
-  display: inline-flex;
+  display: none;
   align-items: center;
   justify-content: center;
   min-width: 0;
@@ -14283,6 +14400,28 @@ body {
   font-weight: 700;
   letter-spacing: 0.03em;
   line-height: 1;
+}
+
+.ws-switcher-rail .ws-switcher-rail-label,
+.ws-switcher-card-rail .ws-switcher-rail-label {
+  /* Laid over the row rather than inserted into it: the full name stays in
+     flow and simply fades, so nothing in the switcher shifts position on the
+     frame the sidebar starts closing. */
+  display: inline-flex;
+  position: absolute;
+  inset: 0;
+}
+
+.ws-switcher-rail .ws-switcher-trigger-text,
+.ws-switcher-rail .ws-switcher-trigger-chevron,
+.ws-switcher-card-rail .ws-switcher-brand-text {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ws-switcher-trigger-inner,
+.ws-switcher-brand-text-only {
+  position: relative;
 }
 
 .ws-switcher-trigger-chevron {
@@ -14318,6 +14457,7 @@ body {
 .ws-switcher-card {
   border-radius: 12px;
   padding: 10px 12px;
+  transition: padding var(--nav-ease-dur) var(--nav-ease);
   border: 1px solid var(--console-border);
   background: color-mix(in srgb, var(--console-panel-soft) 75%, transparent);
 }
@@ -14580,7 +14720,7 @@ body {
   border-color: color-mix(in srgb, var(--console-accent) 28%, var(--console-border));
 }
 
-.drawer-tenant-wrap-rail .ws-switcher-panel {
+.console-nav.nav-rail .drawer-tenant-wrap .ws-switcher-panel {
   left: calc(100% + 12px);
   right: auto;
   width: min(340px, calc(100vw - 100px));
@@ -15681,16 +15821,21 @@ table tr:hover {
   .console-nav {
     position: fixed;
     top: var(--topbar-height);                       /* start below fixed header */
-    left: -300px;
+    /* Slides on `transform`, never on `left`. `left` is a layout property:
+       animating it relaid out the drawer and the page behind it on every
+       frame. A transform runs on the compositor and touches neither. */
+    left: 0;
+    transform: translate3d(-100%, 0, 0);
     width: 280px;
     height: calc(100vh - var(--topbar-height));
     z-index: 120;
     border-right-width: 1px;
-    transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform var(--nav-ease-dur) var(--nav-ease);
+    will-change: transform;
   }
 
   .console-nav.open {
-    left: 0;
+    transform: translate3d(0, 0, 0);
     width: 280px;
     border-right-width: 1px;
     box-shadow: 4px 0 40px rgba(0, 0, 0, 0.4);
