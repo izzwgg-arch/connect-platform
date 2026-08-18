@@ -245,8 +245,8 @@ suite **2492 tests, 2482 pass, 7 fail — all 7 the pre-existing
   non-vacuous: all 12 source guards fail when replayed against `HEAD`**; the 5
   that pass there are the pure unit tests of the new module. All reads are
   CRLF-normalised.
-- ⏳ **NOT PROVEN: nobody has exercised any of this by hand, and it is NOT
-  DEPLOYED as of this commit.** Acceptance, negatives first: a CRM user can still
+- ✅ **DEPLOYED and CONTAINER-VERIFIED 2026-08-18.** It rode another session's api deploy: the running container's `.build-commit` is **`058002d0`**, and `git merge-base --is-ancestor d19c9c00 058002d0` confirms this work is inside it. ⛔ **A own `deploy-direct.sh api` run then printed `success` while logging `skip=unrelated_paths`** — correct, not a failure: the clone had already been built at `058002d0` and the only newer commit was docs. **The exit line is never the proof; `/app/.build-commit` plus a grep inside the container is.** All nine changes greped live — `canReadSmsNumberRow` 2, `canModifySmsNumberRow` 2, the old `row.tenantId && …` short-circuit **0**, `ungrantablePermissionsFor` 3, the stale "additive only" sentence **0**, the unattributed-CDR else-branch 1, the voicemail-drop DUAL GATE 1, retry-payment's tenant scope 2, `driver_user_not_in_tenant` 1. Health **200** on both hostnames, portal **200**, a bad credential still **401 `invalid_credentials`**, container **0 restarts**, and **no `level:50/60` line** in the 20 minutes after.
+- ⏳ **NOT PROVEN: nobody has exercised any of this by hand.** Acceptance, negatives first: a CRM user can still
   play a voicemail drop **from their own tenant**; `routing-preview` for a number
   the caller does not own reads **`found: false`**; a retry-payment still charges;
   `POST /delivery/drivers` still creates a driver for an own-tenant user.

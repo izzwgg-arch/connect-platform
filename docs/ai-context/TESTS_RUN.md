@@ -51,6 +51,20 @@ errors = the exact baseline**; the one error in an edited file
 (`delivery/dispatchService.ts:144`, an unrelated `provider: "delivery"` enum
 complaint) is byte-identical to `HEAD` and sits 134 lines above the first hunk.
 
+### Deploy (2026-08-18, container-verified)
+
+Rode another session's api deploy — container `.build-commit` **`058002d0`**, with
+`git merge-base --is-ancestor d19c9c00 058002d0` confirming this work is inside it.
+⛔ A separate `deploy-direct.sh api` run printed **`success`** while logging
+**`skip=unrelated_paths`** ("commit changed 058002d0..5873dd6c but no api-relevant
+paths changed") — correct, since the clone was already built at 058002d0 and the
+newer commit was docs-only. **Never read the exit line as proof.** Verified in the
+container: `canReadSmsNumberRow` 2, `canModifySmsNumberRow` 2, old short-circuit
+**0**, `ungrantablePermissionsFor` 3, "additive only" **0**, unattributed-CDR
+else-branch 1, voicemail-drop DUAL GATE 1, retry-payment tenant scope 2,
+`driver_user_not_in_tenant` 1. Health 200 × 2 hostnames, portal 200, bad login
+401 `invalid_credentials`, 0 restarts, no level:50/60 lines in 20 min.
+
 ### Live sizing (read-only, `app-api-1`)
 
 Role census **9 TENANT_ADMIN / 1 SUPER_ADMIN / 75 USER / 1 EXTENSION_USER /
