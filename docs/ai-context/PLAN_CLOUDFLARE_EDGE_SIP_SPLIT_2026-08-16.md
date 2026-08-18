@@ -1,7 +1,10 @@
 # PLAN — put Connect behind Cloudflare, and the SIP split-out that has to happen first
 
-Status (2026-08-16): **PHASE A DONE AND VERIFIED. PHASE B'S SERVER SIDE IS DONE —
-BUT NOT ONE TENANT HAS MOVED. PHASE C NOT STARTED.**
+Status (2026-08-17): **PHASE A DONE AND VERIFIED. PHASE A2 DONE. PHASE B'S SERVER SIDE IS
+DONE — BUT NOT ONE TENANT HAS MOVED. PHASE C IS *STAGED ONLY*: one WAF skip rule exists,
+and ⛔ `app.` IS STILL DNS-ONLY — THE PROXY FLIP HAS NOT HAPPENED.** See the update box at
+the top of Phase C before touching any Cloudflare setting; in particular **"Bot Fight
+Mode" no longer exists on this zone** and the old step 11 is un-followable as written.
 ⛔ **Read that middle clause literally.** `SIP_PUBLIC_WS_URL` is set and the api serves
 `wss://sip.connectcomunications.com/sip`, but **the apps never refresh a cached
 `sipWsUrl`**, so every phone signed in today is still registering against `app.` and
@@ -629,20 +632,225 @@ not been run because there is nothing yet to check.
 
 ### Phase C — proxy `app.` (only after B is soaked)
 
-10. Set SSL/TLS to **Full (strict)** — safe because the origin holds a valid Let's
-    Encrypt cert. Do this *before* the orange cloud, not after.
-11. Confirm **Bot Fight Mode is OFF**; add WAF skip rules for `/api/webhooks/*` and
-    `/api/internal/*`.
-12. **Flip `app.` to Proxied.** Rollback is one click back to DNS-only, effective in
-    seconds — this is genuinely the easiest step to undo in the whole plan.
-13. Soak and watch, in this order: portal login, mobile app API calls, an inbound SMS
-    (proves webhooks), a card payment callback, `/ws/telephony` staying up, and a real
-    inbound call ringing a softphone.
+> ## ✅ 2026-08-17 — PHASE C IS **STAGED**. ⛔⛔ **`app.` IS STILL DNS-ONLY. THE PROXY FLIP HAS NOT HAPPENED AND IS NOT AN AGENT'S TO MAKE.**
+>
+> **Exactly ONE thing was changed in Cloudflare: one WAF custom rule was created.**
+> **No DNS record was touched. No proxy toggle was moved. No zone setting was changed.**
+> Every item below is **inert today**, because nothing on this zone is proxied except
+> `portal.` — and the rule created is scoped so it cannot even match `portal.`
+>
+> Zone: `connectcomunications.com` = **`18df003591a21edaf96e8f5e2a20fb58`**, plan
+> **Pro Website**, DNS setup **Full**, Universal SSL **active** (Google CA, covers
+> `connectcomunications.com` + `*.connectcomunications.com` — so `app.` gets an edge
+> cert automatically the moment it is proxied; nothing to order).
+>
+> #### Proxy status — the check that matters, read back AFTER the change
+>
+> | record | | proxy |
+> |---|---|---|
+> | `A app.connectcomunications.com` | 45.14.194.179 | **DNS only** ✅ |
+> | `A connectcomunications.com` (apex) | 31.220.77.60 | **DNS only** ✅ |
+> | `A m.connectcomunications.com` (PBX) | 209.145.60.79 | **DNS only** ✅ |
+> | `A sip.connectcomunications.com` | 45.14.194.179 | **DNS only** ✅ |
+> | `CNAME www` | apex | **DNS only** ✅ |
+> | `CNAME portal` | ui.zswitch.net | **Proxied** (unchanged, the only one) |
+> | MX + 4 × TXT | | DNS only ✅ |
+>
+> 11 records before, 11 records after, identical proxy flags.
+> (`app.loopcom.net` / `sip.loopcom.net` are on **Squarespace** DNS, not this zone —
+> Cloudflare cannot proxy them and none of this reaches them.)
+
+#### C1. ⛔⛔ CORRECTION — **"Bot Fight Mode" DOES NOT EXIST ON THIS ZONE.** The old step 11 was un-followable
+
+The instruction "confirm Bot Fight Mode is OFF" is **stale and must not be repeated**.
+The zone is on **Pro**, which replaces Bot Fight Mode with **Super Bot Fight Mode**, and
+Cloudflare has since reorganised the whole area under **Security → Settings → filter
+"Bot traffic"**. A previous session looked for a Bot Fight Mode row, correctly found
+none, and had nothing to check against. **This is what actually exists, read from
+`GET /zones/<id>/bot_management` — not from the screen:**
+
+```json
+{ "enable_js": true,
+  "sbfm_definitely_automated": "allow",      // ✅ the one that would kill okhttp/webhooks
+  "sbfm_verified_bots": "allow",             // ✅
+  "sbfm_static_resource_protection": false,  // ✅
+  "ai_bots_protection": "block",             // ⚠️ see C1b
+  "content_bots_protection": "disabled", "crawler_protection": "disabled",
+  "ai_training": "disabled", "ai_search": "disabled", "ai_user": "disabled",
+  "is_robots_txt_managed": true }
+```
+
+✅ **So the bot layer was ALREADY in the safe state and NOTHING NEEDED TURNING OFF.**
+Super Bot Fight Mode's three traffic classes are all **Allow**; there is no "likely
+automated" class on Pro (that is Business+). **AI Labyrinth is OFF.** The new
+"Configure AI bot policies" card (Search / Agent / Training) is **Allow (do not block)**
+on all three.
+
+⛔ **The replacement instruction for cutover day is: confirm
+`sbfm_definitely_automated` and `sbfm_verified_bots` both read `allow`** — one API read,
+not a hunt for a toggle that no longer exists. Anything other than `allow` there
+challenges or blocks the mobile apps (`okhttp`, `Loopcom/NN`) and every inbound webhook.
+
+⚠️ **`enable_js: true` (JS Detections) is ON and was LEFT ON.** It does not block
+anything — it only injects a `/cdn-cgi/challenge-platform/` script into **HTML**
+responses to compute a bot score. It cannot touch a JSON API or a webhook POST.
+⛔ **But it is a CSP question, not a bot question:** the portal ships a real
+Content-Security-Policy from `/etc/nginx/connectcomms/security-headers.conf`, and a
+Cloudflare-injected inline script is exactly the thing a CSP blocks. **The same applies
+to `email_obfuscation: on`, which also injects script into HTML.** Neither was changed —
+both are on the soak list, and the symptom to watch for is CSP violations in the browser
+console on `/login`, **not** a failed API call.
+
+#### C1b. ⚠️ LEFT ALONE DELIBERATELY, and each needs the owner's eye on cutover day
+
+Three settings *could* challenge non-browser traffic but are **ambiguous about whether
+they actually would**, so the rule "if you cannot tell what it does to API/webhook
+traffic, leave it and report rather than guess" was applied. **All three are neutralised
+on the machine-to-machine paths by the skip rule in C2** — the residual exposure is the
+*ordinary* mobile/desktop API surface.
+
+| setting | value | why it was left |
+|---|---|---|
+| **Browser Integrity Check** (`browser_check`) | **on** | Documented to deny requests with "non standard user agents". `okhttp` is a normal UA and passes in practice — but that cannot be *proven* until `app.` is proxied. **This is the single highest-risk remaining item.** If mobile clients start getting **403** during the soak, this is the first toggle to flip, and it is one click. |
+| **Security Level** (`security_level`) | **medium** | IP-reputation challenge. ⛔ The specific worry here is **T-Mobile CGNAT** — Create A Box's ext 102 roams 14 source IPs a day on carrier NAT, and a shared CGNAT address can carry someone else's threat score. "Essentially Off" would remove it; that is a posture decision, not an agent's. |
+| **Block AI bots** (`ai_bots_protection`) | **block** | Deploys a Cloudflare-managed rule against AI **crawlers**. VoIP.ms / Twilio / Cardknox are not crawlers, so it should never match a webhook — but Cloudflare's own banner says **mixed-purpose crawlers get folded in on 2026-09-15**, and the zone is opted **in** to that (`ai_bots_migration_opt_out: false`). It runs in the managed phase, so the C2 skip rule covers the machine paths regardless. |
+
+#### C2. ✅ WAF SKIP RULE — CREATED, ACTIVE, AND READ BACK FROM THE API
+
+**This is the only change made to Cloudflare in this pass.** One custom rule, in the
+`http_request_firewall_custom` entrypoint ruleset
+`11891f351fa34a2d83c22d5d71d7a13f`, rule id **`47d54f121d6945419a6483d20f2b887a`**:
+
+**Name:** `Skip security for machine-to-machine paths (webhooks + internal)`
+**Order:** 1 of 20 · **Status:** Active · **Logging:** on
+
+**Expression — verbatim, as stored:**
+
+```
+http.host eq "app.connectcomunications.com" and (starts_with(http.request.uri.path, "/api/webhooks/") or starts_with(http.request.uri.path, "/api/internal/"))
+```
+
+**Action `skip`, with everything the Pro plan can skip:**
+
+```json
+{ "phases":   ["http_ratelimit", "http_request_firewall_managed", "http_request_sbfm"],
+  "products": ["zoneLockdown", "uaBlock", "bic", "hot", "securityLevel", "rateLimit", "waf"],
+  "ruleset":  "current" }
+```
+
+i.e. all remaining custom rules · all rate limiting rules · all managed rules · all Super
+Bot Fight Mode rules · Zone Lockdown · User Agent Blocking · **Browser Integrity Check** ·
+Hotlink Protection · **Security Level** · both legacy (previous-version) engines.
+
+⛔ **The Cardknox callback needs NO separate rule, and this was checked rather than
+assumed.** `billingSolaCardknoxWebhookUrl()` is
+`publicBillingApiBaseUrl() + "/webhooks/sola-cardknox"`, and
+`PUBLIC_API_BASE_URL` / `PUBLIC_API_URL` / `PUBLIC_PORTAL_URL` are **all empty inside
+`app-api-1`** (verified by `docker exec`), so it falls through to
+`https://app.connectcomunications.com/api` — the callback is
+**`/api/webhooks/sola-cardknox`**, already inside `/api/webhooks/`. The same is true of
+every other machine caller: `/api/webhooks/voipms/sms`, `/api/webhooks/twilio/sms-status`,
+`/api/webhooks/pbx`, `/api/webhooks/whatsapp/meta`, `/api/webhooks/whatsapp/twilio/status`.
+⛔ **If anyone ever sets `PUBLIC_API_BASE_URL` to a different host, this rule stops
+covering the Cardknox callback** — the host clause is `app.connectcomunications.com`.
+
+⛔ **The host clause is deliberate and is also the rule's main limitation.** It makes the
+rule provably inert while `app.` is DNS-only, and it stops the rule ever touching
+`portal.` (the Telocall GUI, the only proxied hostname). **But a new proxied hostname —
+including `app.loopcom.net` if loopcom.net is ever moved onto Cloudflare — gets NO
+protection from it.** Add the hostname to this expression at the same time as you proxy it.
+
+⛔ **"All remaining custom rules" is checked on purpose.** It means a future custom
+block rule cannot accidentally take out a webhook — and equally, it means a future
+deliberate block on those paths will not work. That trade was chosen the way Cloudflare's
+own API-endpoint guidance chooses it: a silent webhook outage is worse.
+
+⏳ **NOT PROVEN, and it cannot be:** the rule has matched **0 requests**, because
+`app.` is not proxied so no traffic reaches the edge. It is proven as *stored
+configuration read back from the API*, never as *a request that was skipped*.
+
+#### C3. Managed ruleset — deliberately NOT deployed
+
+`Security → Settings → Cloudflare managed ruleset` is **OFF**, and the
+`http_request_firewall_managed` entrypoint **does not exist on this zone at all** —
+there is no deployed managed ruleset, no OWASP ruleset, no exposed-credentials ruleset.
+Likewise **0 custom rules before this pass, 0 rate-limiting rules, 0 page rules, 0 IP
+access rules, 0 UA-blocking rules, 0 zone lockdowns, 0 configuration/transform/redirect
+rules.** A genuinely clean slate.
+
+⛔ **It was left off.** When it is eventually turned on it must go on in **log /
+simulate only** first (Phase C step 14), never straight to block. The C2 skip rule
+already exempts the machine paths from it in advance.
+
+#### C4. SSL/TLS — INVESTIGATED, RECOMMENDATION MADE, **NOT CHANGED**
+
+Zone mode is **`full`**, not Full (strict). It was **left at `full`.**
+
+**What was measured** (from the server, so no workstation filter in the way):
+`ui.zswitch.net` — the origin behind the only proxied record — presents a
+**valid, publicly-trusted certificate**: `CN=*.zswitch.net`,
+SAN `*.zswitch.net, zswitch.net`, issued by *Go Daddy Secure Certificate Authority - G2*,
+`notBefore Sep 27 2025` / `notAfter Oct 29 2026`, and OpenSSL returns
+**`Verify return code: 0 (ok)`**. It resolves to `161.38.209.152` / `161.38.213.152`.
+
+⛔ **That is NOT the same as proving Full (strict) is safe for `portal.`, and the
+difference is the whole reason nothing was changed.** The cert is valid for the CNAME
+**target** (`ui.zswitch.net`); it does **not** cover `portal.connectcomunications.com`.
+Cloudflare is documented to validate a CNAME origin against the record's target hostname,
+which would pass — but "documented to" is not "verified on this zone", and the cost of
+being wrong is a live third-party GUI going 526 for a customer.
+
+**Recommendation, for the owner:**
+
+1. **Preferred — do not touch the zone-wide mode at all.** Add a **Configuration Rule**
+   scoped to `http.host eq "app.connectcomunications.com"` setting SSL to **Full
+   (strict)**, and leave the zone on Full. `app.` holds a real Let's Encrypt cert, so
+   strict is correct there; `portal.` keeps today's behaviour and cannot regress.
+   Configuration Rules are available on Pro. **This was deliberately not created —
+   it is still an SSL change and belongs to the owner.**
+2. If the zone-wide flip is preferred anyway, flip it and **immediately load
+   `https://portal.connectcomunications.com/` and confirm it is not 526**; roll back by
+   setting the mode back to Full (seconds, one control).
+3. Either way, do it **before** the orange cloud on `app.`, not after.
+
+#### C5. HSTS — NOT ENABLED, and must stay that way for now
+
+Confirmed off via the API: `security_header.strict_transport_security.enabled = false`,
+`max_age 0`. ⛔ **Leave it.** Browsers cache the policy, so enabling it while something
+is still broken can make the broken state unreachable. It is the *last* step, after the
+soak, not part of the staging.
+
+#### C6. The remaining steps — unchanged, and all still the owner's
+
+10. **SSL/TLS → Full (strict)** per C4 (preferably scoped to `app.` via a Configuration
+    Rule). Do this *before* the orange cloud.
+11. ✅ **Done/superseded** — bot posture confirmed safe (C1), skip rule staged (C2).
+    Re-confirm `sbfm_definitely_automated`/`sbfm_verified_bots` are still `allow` on the
+    day.
+12. ⛔ **Flip `app.` to Proxied — OWNER ONLY, AND NOT YET.** Four tenants (Gesheft,
+    Displaydex, Loopcom Demo, inii mini) still register SIP through `app./sip` because
+    clients cache `sipWsUrl` forever and nobody has re-authenticated. Cloudflare idles a
+    WebSocket out at ~100 s; a dropped WSS is a phone that does not ring. **Phase B is
+    not finished until the PBX contact list (`pjsip show endpoint T<t>_<ext>_1` reading
+    `Avail`) shows those tenants registering somewhere other than `app.`** Rollback of
+    the flip itself is one click back to DNS-only, effective in seconds.
+13. Soak and watch, in this order: portal login (**and the browser console for CSP
+    violations from Cloudflare's injected scripts — see C1**), mobile app API calls
+    (**watch for 403s → Browser Integrity Check, C1b**), an inbound SMS (proves
+    webhooks), a card payment callback, `/ws/telephony` staying up, and a real inbound
+    call ringing a softphone.
 14. Only then: managed WAF rules in **log mode first**, then rate limiting, then HSTS.
 
 ⛔ **Do not enable HSTS before step 14.** It is semi-permanent — browsers cache the
 policy — so switching it on while something is still broken can make the broken state
 unreachable.
+
+#### C7. Rollback of everything staged in this pass
+
+**One line:** delete the custom rule
+`47d54f121d6945419a6483d20f2b887a` ("Skip security for machine-to-machine paths") from
+**Security → Security rules → Custom rules**. That restores the zone to exactly the state
+it was in before — because it is the only thing that changed.
 
 ---
 
