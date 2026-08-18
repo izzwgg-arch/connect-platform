@@ -571,7 +571,13 @@ export async function applyE911ForDid(
   const deps = { vms, log: (message: string) => logEvent(submissionId, message) };
   const result = await ensureE911ForSubmission(deps, { creds, did, row, live });
 
-  if (live && result.status === "provisioned" && subUsername) {
+  // ⛔ ALSO on already_registered, not just a fresh registration. Matamim's
+  // first run (2026-08-17) registered the DID and then failed later, so the
+  // re-run short-circuited at already_registered and the trunk fallback was
+  // never set — a DID can be registered while its trunk still points nowhere.
+  // setSubaccountDefaultE911 is itself idempotent (it returns already_set
+  // without writing), so the extra pass costs one read.
+  if (live && (result.status === "provisioned" || result.status === "already_registered") && subUsername) {
     // Belt to the braces: a 911 call that leaves with some other caller ID
     // still resolves to a real address. Never fatal — the DID registration
     // above is what actually matters.
