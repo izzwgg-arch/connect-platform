@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSidebarRail } from "../hooks/useSidebarRail";
+import { useSidebarGlide } from "../hooks/useSidebarGlide";
 import { useNavBadges } from "../hooks/useNavBadges";
 import { isNavItemVisibleForUser, navItems } from "../navigation/navConfig";
 import { SidebarNav } from "./SidebarNav";
@@ -26,6 +27,9 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   const { can, backendJwtRole, permissionsHydrated } = useAppContext();
   const isMobile = useMediaQuery("(max-width: 1080px)");
   const { railMode, toggleRail, settled: sidebarSettled } = useSidebarRail();
+  // The sidebar's motion is driven here, not by a width transition — see
+  // useSidebarGlide for why that distinction is the whole fix.
+  const { navRef, workspaceRef } = useSidebarGlide(railMode, sidebarSettled && !isMobile);
   const rawBadges = useNavBadges();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const visibleItems = useMemo(
@@ -85,12 +89,13 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
           railMode={railMode}
           onToggleRail={toggleRail}
           settled={sidebarSettled}
+          navRef={navRef}
           badges={{
             chat: pathname.startsWith("/chat") ? 0 : rawBadges.chat,
             voicemail: pathname.startsWith("/voicemail") ? 0 : rawBadges.voicemail,
           }}
         />
-        <div className="console-workspace">
+        <div className="console-workspace" ref={workspaceRef}>
           {banners ? <div className="workspace-banners">{banners}</div> : null}
           <main className="console-content custom-scrollbar">
             {permissionsHydrated && !routeAllowed ? (

@@ -13830,28 +13830,77 @@ body {
 }
 
 /* Sidebar: desktop = in-flow, always visible (full or icon rail); mobile = overlay */
+/* ⛔⛔ THE SIDEBAR'S BOX AND THE SIDEBAR'S CONTENTS ARE DELIBERATELY SEPARATE.
+   `.console-nav` is an empty box whose width defines how much room the page
+   gives the sidebar. `.nav-sheet` is the sidebar as drawn, and it is
+   ABSOLUTELY POSITIONED AT A FIXED 280px so that it is OUT OF THE LAYOUT PATH.
+   Measured on the owner's machine (Intel HD 4000 driving a 3440px ultrawide):
+   with the contents in flow, changing the sidebar's width re-laid-out all ~500
+   nodes and dropped 5-6 frames per toggle even with NO animation at all. With
+   the sheet out of flow it drops 0-2 and layout time fell ~12x.
+   ⛔ Never put the sidebar's contents back into `.console-nav`'s flow, and
+   never give `.console-nav` a width TRANSITION — the motion is done by the
+   clip below and by translating the workspace, both of which the GPU can do
+   without laying anything out. */
 .console-nav {
   height: 100%;
   flex-shrink: 0;
   overflow: hidden;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--console-panel) 92%, var(--console-bg)) 0%, var(--console-panel) 40%);
-  border-right-style: solid;
-  border-right-color: var(--console-border);
+  position: relative;
+  display: block;
+  z-index: 20;
+  background: transparent;
+  border-right: 0;
+  box-shadow: none;
+}
+
+/* Only while gliding may the sheet paint outside the box — that is what makes
+   the panel look wider than the space it currently occupies. */
+.console-nav.nav-gliding {
+  overflow: visible;
+}
+
+.nav-sheet {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 280px;
   display: flex;
   flex-direction: column;
-  z-index: 20;
+  overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--console-panel) 92%, var(--console-bg)) 0%, var(--console-panel) 40%);
+  border-right: 1px solid var(--console-border);
   box-shadow: inset -1px 0 0 color-mix(in srgb, var(--console-border) 55%, transparent);
+}
+
+.console-nav.nav-rail .nav-sheet {
+  clip-path: inset(0 212px 0 0);
+}
+
+.console-nav.nav-gliding .nav-sheet {
+  transition: clip-path var(--nav-ease-dur) var(--nav-ease);
+  will-change: clip-path;
+}
+
+/* The workspace slides into its new position instead of being re-laid-out on
+   every frame. One layout per toggle, not twelve. */
+.console-workspace.ws-gliding {
+  transition: transform var(--nav-ease-dur) var(--nav-ease);
+  will-change: transform;
 }
 
 @media (min-width: 1081px) {
   .console-nav {
     width: 280px;
-    border-right-width: 1px;
-    transition: width var(--nav-ease-dur) var(--nav-ease), border-color 0.2s ease;
   }
 
+  /* 68px, not 72: a nav link's label starts at exactly 68px (10 nav padding +
+     3 border + 6 link padding + 34 icon column + 15 gap), so the rail edge
+     lands in the gap and no label is ever sliced in half. The 30px icon well
+     sits at 19-49px, centre 34 — dead centre of 68. */
   .console-nav.nav-rail {
-    width: 72px;
+    width: 68px;
   }
 
   .console-nav.nav-expanded {
@@ -14026,7 +14075,10 @@ body {
   display: grid;
   grid-template-columns: 34px 1fr auto;
   align-items: center;
-  gap: 6px;
+  /* 15px so the label starts at exactly the rail width — see .nav-rail above.
+     ⛔ Changing this or the icon column silently starts slicing labels in the
+     collapsed rail. */
+  gap: 15px;
   min-height: 36px;
   border-radius: 10px;
   border: 1px solid transparent;
@@ -14089,31 +14141,35 @@ body {
    icon well is the only thing that changes size, and it transitions in step
    with the sidebar width so no icon ever jumps. */
 
-/* Centring the icons is a padding change on the ONE scroll container, not a
-   size change on every icon: measured, the well's centre lands at this padding
-   + 23.4px (3px transparent left border + 6px link padding + half the 30px
-   well), so 12px puts it dead centre — dead centre of the 72px rail. It eases,
-   so the icons glide into place with the panel instead of jumping. */
-.console-nav.nav-rail .drawer-nav {
-  padding-left: 12px;
-  padding-right: 12px;
+/* ⛔ NOTHING inside the sheet may change size or position between the two
+   modes — that is the whole reason the toggle is cheap now. The rail is simply
+   the expanded sidebar with a clip over it. The only rail rules permitted are
+   ones that hide text the clip would otherwise slice in half, and they must be
+   opacity (or absolute repositioning), never layout. */
+.console-nav.nav-rail .nav-collapsible-label,
+.console-nav.nav-rail .drawer-user-name,
+.console-nav.nav-rail .ws-switcher-trigger-text,
+.console-nav.nav-rail .ws-switcher-trigger-chevron,
+.console-nav.nav-rail .ws-switcher-brand-text {
+  opacity: 0;
 }
 
-/* The heading is removed from the layout (not just hidden) so the icons stack
-   tightly, and it stops being a tab stop. Sections are always open in the
-   rail — a hidden heading cannot be clicked to reopen one. */
+.nav-collapsible-label,
+.drawer-user-name {
+  transition: opacity 130ms ease-out;
+}
+
+/* ⛔ `display: none` here would relayout the sheet — the very thing this
+   design exists to avoid. The heading keeps its box (which doubles as the
+   group separator in the rail) and only its text fades. */
 .console-nav.nav-rail .nav-collapsible-head {
-  display: none;
+  pointer-events: none;
 }
 
+/* Sections are always open in the rail: a faded heading cannot be clicked to
+   reopen one, and the panel must not resize. */
 .console-nav.nav-rail .nav-collapsible-panel {
   grid-template-rows: 1fr;
-}
-
-.console-nav.nav-rail .nav-collapsible + .nav-collapsible {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid color-mix(in srgb, var(--console-border) 55%, transparent);
 }
 
 /* The update chip becomes the small green dot on the Install icon. */
@@ -14169,20 +14225,8 @@ body {
   border-color: color-mix(in srgb, var(--console-accent) 28%, var(--console-border));
 }
 
-/* The avatar is the same 38px in both modes, so only this padding moves — and
-   it eases, sliding the avatar to the centre of the 72px rail (17 + 19 = 36)
-   rather than snapping there. */
-.console-nav.nav-rail .drawer-profile {
-  padding: 12px 17px 10px;
-}
-
-.console-nav.nav-rail .drawer-user {
-  margin-bottom: 8px;
-}
-
-.console-nav.nav-rail .drawer-tenant-wrap {
-  margin-top: 0;
-}
+/* The 38px avatar already sits at 14-52px, centre 33 — within a pixel of the
+   68px rail's centre — so the profile block needs no rail rules at all. */
 
 /* Collapsible nav sections */
 .nav-collapsible {
@@ -38513,3 +38557,29 @@ table tr:hover {
 /* Wide tables must scroll inside themselves — the page body never scrolls
    sideways. */
 .rs-history, .lp-page .card { overflow-x: auto; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Sidebar panel surface — must be painted by .nav-sheet, never by .console-nav
+   ──────────────────────────────────────────────────────────────────────────
+   ⛔ `.console-nav` is now an empty box that only reserves width; the sidebar
+   as drawn is `.nav-sheet`, absolutely positioned at a fixed 280px so the
+   ~500 nodes inside it stay OUT of the layout path (that is what took the
+   collapse from 5-6 dropped frames per toggle to 0-2 on the owner's hardware).
+   Three separate light-theme blocks above still target `.console-nav`, so the
+   panel's surface is re-pointed here, once, rather than editing each of them.
+   If you restyle the sidebar's background, do it on `.nav-sheet`. */
+.console-nav {
+  background: transparent !important;
+  border-right: 0 !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme="light"] .nav-sheet {
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 32%),
+    linear-gradient(180deg, var(--surface-1), color-mix(in srgb, var(--surface-2) 88%, var(--surface-3)));
+  border-right: 1px solid var(--border-soft);
+  box-shadow:
+    inset -1px 0 0 color-mix(in srgb, var(--surface-1) 82%, transparent),
+    12px 0 34px rgba(15, 23, 42, 0.05);
+}
