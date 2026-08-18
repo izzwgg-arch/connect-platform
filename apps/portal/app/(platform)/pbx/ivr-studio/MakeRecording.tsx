@@ -790,7 +790,10 @@ function Slider({ label, hint, min, max, step, value, onChange }: {
   );
 }
 
-function MakeRecordingStyles() {
+/** Exported so the voice-changer dialog (ConvertRecording) shares exactly these
+ *  rules rather than carrying a second copy that drifts. The block is `global`,
+ *  so whichever dialog is open supplies them; rendering both is harmless. */
+export function MakeRecordingStyles() {
   return (
     <style jsx global>{`
       .mr-backdrop{position:fixed;inset:0;background:rgba(6,12,20,.55);display:grid;place-items:center;padding:20px;z-index:95}
@@ -843,6 +846,8 @@ function MakeRecordingStyles() {
       .mr-slider input[type=range]{width:100%}
       .mr-slider p{margin:4px 0 0;font-size:11.5px;color:var(--faint,#94a3b8);line-height:1.5}
       .mr-player{width:100%;margin-top:14px;height:36px}
+      .mr-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--dim,#5d6f84);cursor:pointer}
+      .mr-check input{margin:0}
       .mr-dim{font-size:13px;color:var(--dim,#5d6f84);line-height:1.6;margin:0 0 12px}
       .mr-note{margin-top:14px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.55}
       .mr-note.bad{color:#c9414c;background:rgba(201,65,76,.08);border:1px solid rgba(201,65,76,.28)}

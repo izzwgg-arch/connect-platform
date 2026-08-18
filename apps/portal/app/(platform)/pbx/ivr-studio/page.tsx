@@ -39,6 +39,7 @@ import { useAppContext } from "../../../../hooks/useAppContext";
 import { useUiLanguage, LanguageToggle } from "../../../../hooks/useUiLanguage";
 import { FirstRunSetup, type FirstRunAnswers } from "./FirstRunSetup";
 import { MakeRecording } from "./MakeRecording";
+import { ConvertRecording } from "./ConvertRecording";
 import { MakeTeam } from "./MakeTeam";
 import { NumberStep, fmtUs, type TenantNumber, type NumberPlan, type AnnouncementPlan } from "./NumberStep";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
@@ -118,7 +119,7 @@ const UI_PHRASES = [
   "A person", "A team", "Voicemail", "A recording", "Another menu", "Hang up",
   "Which person?", "Whose voicemail?", "Which team?", "Which menu?", "Which recording?",
   "After it plays, what happens?", "Back to this menu", "A voicemail",
-  "Or add a new one:", "Upload a recording", "Uploading…", "Make one with AI",
+  "Or add a new one:", "Upload a recording", "Uploading…", "Make one with AI", "Change my voice",
   "A phone number", "Which phone number?", "Or send it to a new number:",
   "Add this number", "Setting it up…",
   "No teams yet — make the first one:", "Or make a new one:", "Make a team",
@@ -288,6 +289,76 @@ export default function IvrStudioPage() {
   }>(null);
   /** Generate a greeting instead of recording one — see MakeRecording.tsx. */
   const [makeRecOpen, setMakeRecOpen] = useState(false);
+  /** Change the VOICE of a recording instead of generating one — see
+   *  ConvertRecording.tsx. Shares makeRecForKey/makeRecForLibrary, because
+   *  "what is this recording for" is the same question either way. */
+  const [convertOpen, setConvertOpen] = useState(false);
+  /** ⛔ null while unknown, so the button is not drawn OR hidden on a guess.
+   *  Someone without `can_use_voice_changer` must never see the option at all —
+   *  the server answers 200 allowed:false for them, which is not an error. */
+  const [voiceChangerAllowed, setVoiceChangerAllowed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token =
+          (typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || "";
+        const r = await fetch(`${getPortalApiBaseUrl()}/voice/elevenlabs/voice-changer/status`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = await r.json();
+        if (!cancelled) setVoiceChangerAllowed(Boolean(j?.allowed));
+      } catch {
+        // An older API answers 404 and a hiccup answers 5xx. Either way the
+        // safe reading is "no option", never a button that fails on click.
+        if (!cancelled) setVoiceChangerAllowed(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Shared by both recording dialogs: a generated greeting and a re-voiced one
+   * are the same kind of thing once they exist, so where the row goes must not
+   * depend on which dialog made it.
+   *
+   * Declared as a function (not a const) so it can sit here among the state
+   * while referring to patchProfile/flash, which are defined further down.
+   */
+  async function onRecordingCreated(prompt: { id: string; promptRef: string; displayName: string; category: string }) {
+    // Splice the one new row in rather than reloading everything —
+    // Play and the picker need it now, and nothing else changed.
+    setPrompts((ps) => [
+      ...ps.filter((p) => p.id !== prompt.id),
+      { id: prompt.id, promptRef: prompt.promptRef, displayName: prompt.displayName, category: prompt.category, hasAudio: true },
+    ]);
+    const closeBoth = () => { setMakeRecOpen(false); setConvertOpen(false); };
+    if (makeRecForLibrary) {
+      // Made from the Recordings card: it joins the library and
+      // nothing on the menu moves.
+      setMakeRecForLibrary(false);
+      closeBoth();
+      flash(`“${prompt.displayName}” added to your recordings.`);
+      return;
+    }
+    if (makeRecForKey) {
+      // Opened from a key editor: the recording belongs to that key,
+      // not to the menu greeting. The editor adopts it and stays open
+      // so "afterwards" can still be chosen before saving.
+      setAdoptRecording({ digit: makeRecForKey, promptRef: prompt.promptRef });
+      setMakeRecForKey(null);
+      closeBoth();
+      flash(`“${prompt.displayName}” is ready — save the key when you're done.`);
+      return;
+    }
+    // Point the menu at what was just made — nobody makes a greeting and then
+    // wants to go and select it separately.
+    await patchProfile({ pbxPromptRef: prompt.promptRef });
+    closeBoth();
+    flash(`“${prompt.displayName}” is now your greeting.`);
+  }
   /** Set when the recording modal/upload was opened FROM the key editor for a
    *  digit: the result becomes that key's recording, not the menu greeting. */
   const [makeRecForKey, setMakeRecForKey] = useState<string | null>(null);
@@ -1472,6 +1543,7 @@ export default function IvrStudioPage() {
                             onClose={() => setEditingDigit(null)}
                             onCreateMenu={() => setNamingFor({ mode: "create", forDigit: digit })}
                             onMakeRecording={() => { setMakeRecForKey(digit); setMakeRecOpen(true); }}
+                            onConvertRecording={voiceChangerAllowed ? () => { setMakeRecForKey(digit); setConvertOpen(true); } : undefined}
                             onUploadRecording={(file) => uploadRecordingForKey(digit, file)}
                             adoptPromptRef={adoptRecording?.digit === digit ? adoptRecording.promptRef : null}
                             onAdopted={() => setAdoptRecording(null)}
@@ -1519,6 +1591,7 @@ export default function IvrStudioPage() {
                           onClose={() => setEditingDigit(null)}
                           onCreateMenu={() => setNamingFor({ mode: "create", forDigit: editingDigit })}
                           onMakeRecording={() => { setMakeRecForKey(editingDigit); setMakeRecOpen(true); }}
+                          onConvertRecording={voiceChangerAllowed ? () => { setMakeRecForKey(editingDigit); setConvertOpen(true); } : undefined}
                           onUploadRecording={(file) => uploadRecordingForKey(editingDigit, file)}
                           adoptPromptRef={adoptRecording?.digit === editingDigit ? adoptRecording.promptRef : null}
                           onAdopted={() => setAdoptRecording(null)}
@@ -1829,38 +1902,19 @@ export default function IvrStudioPage() {
           tenantQs={qs}
           apiBase={getPortalApiBaseUrl()}
           authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
-          onCreated={async (prompt) => {
-            // Splice the one new row in rather than reloading everything —
-            // Play and the picker need it now, and nothing else changed.
-            setPrompts((ps) => [
-              ...ps.filter((p) => p.id !== prompt.id),
-              { id: prompt.id, promptRef: prompt.promptRef, displayName: prompt.displayName, category: prompt.category, hasAudio: true },
-            ]);
-            if (makeRecForLibrary) {
-              // Made from the Recordings card: it joins the library and
-              // nothing on the menu moves.
-              setMakeRecForLibrary(false);
-              setMakeRecOpen(false);
-              flash(`“${prompt.displayName}” added to your recordings.`);
-              return;
-            }
-            if (makeRecForKey) {
-              // Opened from a key editor: the recording belongs to that key,
-              // not to the menu greeting. The editor adopts it and stays open
-              // so "afterwards" can still be chosen before saving.
-              setAdoptRecording({ digit: makeRecForKey, promptRef: prompt.promptRef });
-              setMakeRecForKey(null);
-              setMakeRecOpen(false);
-              flash(`“${prompt.displayName}” is ready — save the key when you're done.`);
-              return;
-            }
-            // Point the menu at what was just made — nobody generates a
-            // greeting and then wants to go and select it separately.
-            await patchProfile({ pbxPromptRef: prompt.promptRef });
-            setMakeRecOpen(false);
-            flash(`“${prompt.displayName}” is now your greeting.`);
-          }}
+          onCreated={onRecordingCreated}
           onClose={() => { setMakeRecOpen(false); setMakeRecForKey(null); setMakeRecForLibrary(false); }}
+          existingNames={prompts.map((p) => p.displayName)}
+        />
+      )}
+
+      {convertOpen && (
+        <ConvertRecording
+          tenantQs={qs}
+          apiBase={getPortalApiBaseUrl()}
+          authToken={(typeof window !== "undefined" && (localStorage.getItem("token") || localStorage.getItem("cc-token"))) || ""}
+          onCreated={onRecordingCreated}
+          onClose={() => { setConvertOpen(false); setMakeRecForKey(null); setMakeRecForLibrary(false); }}
           existingNames={prompts.map((p) => p.displayName)}
         />
       )}
@@ -1908,7 +1962,7 @@ function Step({ digit, glyph, title, sub, kind, actions, onClick, muted, add, la
 }
 
 // ── the four choices ─────────────────────────────────────────────────────────
-function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, teamsLoading, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward, onMakeTeam, adoptTeamNumber, onAdoptedTeam }: {
+function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, teamsLoading, pendingTeamNumbers, disabled, onSave, onClear, onClose, onCreateMenu, onMakeRecording, onConvertRecording, onUploadRecording, adoptPromptRef, onAdopted, onCreateForward, onMakeTeam, adoptTeamNumber, onAdoptedTeam }: {
   digit: string;
   current: OptionRow | null;
   directory: TenantDirectory;
@@ -1924,6 +1978,9 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, teams
   onCreateMenu: () => void;
   /** Open the ElevenLabs modal for THIS key; the result comes back via adoptPromptRef. */
   onMakeRecording?: () => void;
+  /** Only supplied when this person holds can_use_voice_changer. Undefined
+   *  means the button is never rendered — not rendered-and-refused. */
+  onConvertRecording?: () => void;
   /** Upload a file for THIS key; resolves with the new promptRef or null on failure. */
   onUploadRecording?: (file: File) => Promise<string | null>;
   /** A recording just made/uploaded for this key — select it. */
@@ -2152,6 +2209,9 @@ function KeyEditor({ digit, current, directory, peopleLoaded, teamsLoaded, teams
                 )}
                 {onMakeRecording && (
                   <button className="btn sm" disabled={disabled} onClick={onMakeRecording}>{t("Make one with AI")}</button>
+                )}
+                {onConvertRecording && (
+                  <button className="btn sm" disabled={disabled} onClick={onConvertRecording}>{t("Change my voice")}</button>
                 )}
               </div>
             )}
