@@ -11,6 +11,111 @@ permission resolver, every signed-URL scheme and the storage/streaming paths.
 
 ---
 
+## 0a. ⛔ REMEDIATION STATUS — updated 2026-08-18 (read this before acting on anything below)
+
+| § | Finding | Status |
+|---|---|---|
+| **§1** | `/internal/*` unauthenticated + publicly reachable | ✅ **CLOSED AT NGINX** on both vhosts, verified externally. ⛔ **The code still fails open** — see below, it CANNOT be changed without setting the secret first |
+| **§1a** | `inbound-crm-match` takes role from body | ✅ Unreachable from the internet (same nginx rule). Code unchanged |
+| **§2** | VoIP.ms SMS webhook unauthenticated | ✅ **FIXED, fails closed** (`apps/api/src/voipMsWebhookAuth.ts`) |
+| **§3a** | chat-db URLs signed with unkeyed `createHash` | ✅ **FIXED — keyed HMAC** |
+| **§3b** | signing secret falls back to `"dev-signing-secret"` | ✅ **FIXED for chat** (derives from `JWT_SECRET`, never a literal). ⛔ The other four helpers (prompt / MOH / CRM doc / CRM voicemail-drop) are **UNCHANGED** and still resolve to the literal |
+| **§4** | `TENANT_ADMIN` reaches `/admin/*` | ⏳ **OPEN — deliberately out of scope**, needs permission-model scoping |
+| **§5** | Anonymous tenant creation via the `NODE_ENV` gate | ⏳ **OPEN — deliberately out of scope** |
+| §6a–§6l | Medium / low | ⏳ **OPEN**, untouched |
+
+### ⛔⛔ §1: WHY THE CODE FIX WAS NOT MADE — it would have been a platform-wide outage
+
+The intended change ("make `verifyCdrSecret` fail closed when the secret is
+unset") was **investigated and deliberately NOT applied.** `CDR_INGEST_SECRET`
+is empty in **api, telephony AND worker**, and every caller omits the header
+when the secret is empty:
+
+```ts
+...(secret ? { "x-cdr-secret": secret } : {})   // CdrNotifier, MobilePushNotifier,
+                                                 // ConnectWakeConsumer, PbxTenantMapCache, …
+```
+
+So failing closed today rejects **every legitimate internal caller**: CDR ingest
+(calls vanish from history — the exact 2026-08-04 wound), mobile ring/wake pushes
+(phones stop ringing), voicemail-notify, user-extensions, PBX event ingest and
+`/voice/ivr/events`.
+
+⛔ **The fix is therefore a SEQUENCE, and the order is the whole safety property:**
+1. Set `CDR_INGEST_SECRET` to one shared value in `/opt/connectcomms/env/.env.platform`.
+2. Restart **api + telephony + worker** so all three carry it (they must agree; a
+   partial rollout is the same outage).
+3. *Only then* make `verifyCdrSecret` (`server.ts:18351`) and the 8 inline sites
+   fail closed, with a test.
+
+That is an env edit plus a coordinated three-service restart (telephony rebuilds
+live queue state from zero), which is why it was not done unattended. **The nginx
+rule already removes the internet-facing exposure**, so what remains is
+defence-in-depth against a caller that can already reach the docker bridge.
+
+### The nginx mitigation, as applied
+
+Live file is **`/etc/nginx/sites-enabled/connectcomms`** (a REAL FILE) and
+**`/etc/nginx/sites-available/connectcomms-loopcom`** (symlinked).
+⛔ **This audit cited `sites-available/connectcomms:79` — that file is STALE
+(4,780 bytes vs the live 8,864, still on `127.0.0.1:3001` instead of the
+`connect_api_active` blue/green upstream). Editing it would have done nothing.**
+
+A `location /api/internal/` block now allows only `127.0.0.1`, `::1`,
+`172.16.0.0/12`, `10.0.0.0/8` and the PBX `209.145.60.79`, then `deny all`.
+
+- **Legitimate callers were checked first, not assumed.** 14 days of nginx logs
+  hold exactly **18** `/api/internal/*` requests: 17 from the PBX to
+  `/internal/pbx/wake-extension`, **all 400** (already failing, last on Aug 14),
+  and one scanner 404. Telephony/worker never appear because they use
+  `CDR_INGEST_URL=http://api:3001/internal/cdr-ingest` — **docker DNS, not nginx.**
+- **Before:** `GET /api/internal/telephony/pbx-tenant-map` → **200, 24,839 bytes**
+  anonymously from the public internet, on both hostnames.
+  **After:** **403** (nginx's own, `Server: nginx/1.24.0`), both hostnames, while
+  the same request from loopback and from the PBX still returns 200.
+- Bypasses tested and closed: `//internal`, `%69nternal`, `/x/../internal`,
+  `/api/internal` (301→403). `/api/INTERNAL/` returns **401** (the JWT hook — path
+  matching is case-sensitive), so no data escapes that way either.
+- Backups: `/root/nginx-connectcomms-backup-20260818-015655Z-internal-deny.conf`,
+  `/root/nginx-connectcomms-loopcom-backup-20260818-015655Z-internal-deny.conf`.
+- ⛔ **`/internal/deploy/auto` is now genuinely blocked from outside.** AGENTS.md
+  claimed it already was; that claim was false and has been corrected. Call it
+  from the server, or use `POST /ops/deploy/enqueue` on loopback.
+
+### §2 correction to this audit: the webhook DOES receive traffic, but never real data
+
+The audit's proposed fix warned that inverting the default alone "would stop real
+inbound SMS." **It does not.** All **127** webhook POSTs in 14 days came from
+VoIP.ms carrying their own **unsubstituted template placeholders**
+(`from={FROM}&to={TO}&message={MESSAGE}`) — the callback was never configured to
+interpolate. **Zero requests carried real data, ever.** Real inbound SMS arrives
+through the worker's `voipMsInboundSyncJob` poll. Failing closed was therefore
+safe with no secret set, and no secret was set.
+
+### §3 correction to this audit: api and worker ALREADY disagreed on the chat key
+
+The audit lists `MOH_URL_SIGNING_SECRET` as EMPTY. That is true **only in
+`app-api-1`** — in `app-worker-1` and `app-telephony-1` it is **43 chars**. Since
+the old chain was `CHAT || MOH || CDR || "dev-signing-secret"`, api signed chat
+URLs with the literal while the worker signed them with the MOH secret. **Every
+worker-minted chat link was already unverifiable in production** (nginx logs: 0
+fetches of `/api/chat/a/` in 14 days; 0 VoIP.ms-range IPs ever fetched an
+attachment). The fix collapses the chain to `CHAT_URL_SIGNING_SECRET` else a key
+**derived from `JWT_SECRET`** (verified byte-identical across all three
+containers), so the processes now agree with no new configuration — and it
+throws rather than ever use a constant.
+
+⛔ **Blast radius, measured not assumed:** `buildChatSignedDownloadUrl` carries the
+real traffic (12,960 fetches/14d) and is minted *and* verified by api alone, so an
+api-only deploy is self-consistent; clients re-fetch a fresh URL on their next
+7-second chat poll. The two worker-minted schemes have **zero** live usage
+(**0** outbound messages with attachments in 14 days).
+⏳ **The worker still runs the old module** — redeploying it is a recommended
+follow-up that would also repair the pre-existing MMS-media drift; nothing depends
+on it today.
+
+---
+
 ## 0. The one-line summary
 
 **Per-route tenant scoping in this codebase is genuinely good.** The

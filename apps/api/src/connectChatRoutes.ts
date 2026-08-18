@@ -47,6 +47,7 @@ import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { probeChatMedia } from "./chatMediaProbe";
 import { denoiseVoiceNote, isVoiceNoteUpload, isVoiceNoteFilename } from "./chatVoiceNoteDenoise";
 import { isConnectChatMessageMine } from "./connectChatMessageMine";
+import { isVoipMsWebhookAuthorized } from "./voipMsWebhookAuth";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -2227,20 +2228,34 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
 
   async function handleVoipMsInbound(req: any, reply: any) {
     const cfg = await getOrCreateGlobalVoipConfig();
-    let authorized = !cfg.webhookSecretEncrypted;
+    // ⛔ FAIL CLOSED. This gate used to read `!cfg.webhookSecretEncrypted`, i.e.
+    // "no secret stored ⇒ authorized", and the 401 below was itself gated on the
+    // secret existing — so with no secret configured (which is the production
+    // state) this public endpoint accepted anything and let anyone who knew a
+    // customer's DID inject messages into their inbox. Real inbound SMS arrives
+    // via the worker's poll, not here. See apps/api/src/voipMsWebhookAuth.ts and
+    // docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md §2.
+    let webhookSecret: string | null = null;
     if (cfg.webhookSecretEncrypted) {
       try {
-        const { secret } = decryptJson<{ secret: string }>(cfg.webhookSecretEncrypted);
-        const hdr = String(req.headers["x-voipms-signature"] || "");
-        const payload = mergeVoipMsPayload(req);
-        const tok = String(payload.token ?? "");
-        const qsig = String(payload.signature ?? "");
-        if (secret && (constantTimeEq(hdr, secret) || constantTimeEq(tok, secret) || constantTimeEq(qsig, secret))) authorized = true;
+        webhookSecret = decryptJson<{ secret: string }>(cfg.webhookSecretEncrypted).secret;
       } catch {
-        authorized = false;
+        webhookSecret = null;
       }
     }
-    if (!authorized && cfg.webhookSecretEncrypted) {
+    const authPayload = mergeVoipMsPayload(req);
+    if (
+      !isVoipMsWebhookAuthorized({
+        secret: webhookSecret,
+        headerSignature: String(req.headers["x-voipms-signature"] || ""),
+        tokenParam: String(authPayload.token ?? ""),
+        signatureParam: String(authPayload.signature ?? ""),
+      })
+    ) {
+      app.log.warn(
+        { endpoint: "/webhooks/voipms/sms", secretConfigured: Boolean(webhookSecret) },
+        "voipms inbound webhook refused — set the webhook secret via PUT /admin/apps/voip-ms/credentials to enable it",
+      );
       return reply.status(401).type("text/plain").send("unauthorized");
     }
 
@@ -2416,13 +2431,3 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
   app.get("/webhooks/voipms/sms", handleVoipMsInbound);
 }
 
-function constantTimeEq(a: string, b: string): boolean {
-  try {
-    const ba = Buffer.from(a, "utf8");
-    const bb = Buffer.from(b, "utf8");
-    if (ba.length !== bb.length) return false;
-    return ba.equals(bb);
-  } catch {
-    return false;
-  }
-}

@@ -79,6 +79,23 @@ POST /internal/deploy/auto
 ```
 
 This endpoint is **blocked externally by nginx** (same as `/internal/cdr-ingest`).
+
+> ⛔ **That statement was FALSE until 2026-08-18 and is only true now because it
+> was made true.** nginx proxied the whole `/api/` prefix with no path exclusion
+> on both hostnames, so every `/internal/*` route — all of them on the JWT bypass
+> list, guarded by a `CDR_INGEST_SECRET` that is EMPTY in production and fails
+> OPEN — was reachable anonymously from the internet. Proven, not inferred:
+> `GET https://app.connectcomunications.com/api/internal/telephony/pbx-tenant-map`
+> returned **200 with 24,839 bytes** of the whole tenant directory.
+> A `location /api/internal/` block (loopback + docker bridges + the PBX, then
+> `deny all`) now enforces it. See
+> `docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md` §0a.
+> ⛔ **Do not re-derive this claim from this file — verify it.** The one-line
+> check, run from OUTSIDE the server:
+> `curl -s -o /dev/null -w '%{http_code}\n' https://app.connectcomunications.com/api/internal/telephony/pbx-tenant-map`
+> → must be **403**. Testing from loopback or from the PBX returns 200 by design
+> and proves nothing.
+
 Call it from a server-side script, via SSH tunnel, or with an admin JWT:
 
 ```bash
