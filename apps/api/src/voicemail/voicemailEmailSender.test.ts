@@ -10,6 +10,7 @@ import {
   type VoicemailSenderDeps,
 } from "./voicemailEmailSender";
 import {
+  NEVER_PROCESSED_GRACE_MS,
   describeVoicemailEmailGaps,
   findVoicemailEmailGaps,
   gapsWorthAlerting,
@@ -161,13 +162,28 @@ test("deliberate skips never raise an alarm", () => {
   assert.deepEqual(gaps, []);
 });
 
-test("a voicemail the sender never touched is caught", () => {
+test("a voicemail the sender never touched is caught — once it is older than the grace", () => {
+  const old = new Date(Date.now() - NEVER_PROCESSED_GRACE_MS - 1000);
   const gaps = findVoicemailEmailGaps({
-    eligible: [{ id: "v1", ...gapBase, emailedAt: null, emailSkipReason: null }],
+    eligible: [{ id: "v1", ...gapBase, receivedAt: old, emailedAt: null, emailSkipReason: null }],
     jobStatusByVoicemailId: new Map(),
   });
   assert.equal(gaps.length, 1);
   assert.equal(gaps[0].problem, "never_processed");
+});
+
+test("a voicemail that just arrived is NOT a gap yet — the sweep runs every minute and has not had its turn", () => {
+  const gaps = findVoicemailEmailGaps({
+    eligible: [{ id: "v1", ...gapBase, receivedAt: new Date(Date.now() - 30_000), emailedAt: null, emailSkipReason: null }],
+    jobStatusByVoicemailId: new Map(),
+  });
+  assert.deepEqual(gaps, []);
+  // A voicemail with no receivedAt at all cannot be aged, so it IS reported.
+  const noDate = findVoicemailEmailGaps({
+    eligible: [{ id: "v2", ...gapBase, receivedAt: null, emailedAt: null, emailSkipReason: null }],
+    jobStatusByVoicemailId: new Map(),
+  });
+  assert.equal(noDate[0]?.problem, "never_processed");
 });
 
 test("a stamped voicemail with no job at all is caught — this is the silent loss", () => {

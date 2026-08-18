@@ -61,7 +61,16 @@ const DELIBERATE_SKIPS = new Set([
  * different question, and collapsing them is how a real miss gets filed as
  * normal.
  */
-export function findVoicemailEmailGaps(input: WatchdogInput): VoicemailEmailGap[] {
+/**
+ * How long a voicemail may sit unprocessed before "never_processed" is a real
+ * finding. The sweep runs every 60 s and an api deploy restarts it, so a message
+ * that arrived moments before a watchdog tick is not a loss — it is next in the
+ * queue. Without this, every watchdog run raced the sweep and could text the
+ * owner about a voicemail that emailed thirty seconds later.
+ */
+export const NEVER_PROCESSED_GRACE_MS = 10 * 60_000;
+
+export function findVoicemailEmailGaps(input: WatchdogInput, now: Date = new Date()): VoicemailEmailGap[] {
   const gaps: VoicemailEmailGap[] = [];
 
   for (const vm of input.eligible) {
@@ -83,8 +92,10 @@ export function findVoicemailEmailGaps(input: WatchdogInput): VoicemailEmailGap[
       continue;
     }
 
-    // Never touched by the sender at all.
+    // Never touched by the sender at all — but only once it has had time to be.
     if (!vm.emailedAt) {
+      const ageMs = vm.receivedAt ? now.getTime() - vm.receivedAt.getTime() : Number.POSITIVE_INFINITY;
+      if (ageMs < NEVER_PROCESSED_GRACE_MS) continue;
       gaps.push({ ...base, problem: "never_processed", detail: "the sender never reached this voicemail" });
       continue;
     }
