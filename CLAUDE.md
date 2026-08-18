@@ -2437,6 +2437,23 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   `reason: account_failure_volume, sourceIp: 50.48.58.53` — **a real client address,
   which is the proof the `X-Forwarded-For` resolution works**; with `req.ip` it would
   have read the nginx hop for everyone. Re-run that probe after any api deploy.
+- ✅ **A SHORT OR MALFORMED LOGIN BODY IS `401 invalid_credentials` NOW, NOT `500`
+  (2026-08-18; audit doc §1b).** The handler's `z.object(...).parse(req.body)` THREW on
+  `{"password":"x"}`, the global error handler turned it into `500 internal_error`
+  (proven live with curl), and the portal showed "Server error" to anyone who typed
+  fewer than 8 characters. Now `apps/api/src/loginRequest.ts` `parseLoginRequest()`
+  (safeParse, never throws) answers **exactly like a wrong password** — 401, not 400,
+  because the portal renders 401 as "Invalid email or password." and any other 4xx as
+  a raw code, and because a < 8-char password can never be right (every set-password
+  path enforces ≥ 8). ⛔ **A malformed body is answered BEFORE the throttle and is NOT
+  recorded as a login failure** — nothing was compared, it is not an oracle (same
+  answer for real and unknown accounts), and counting it would let garbage fill a
+  victim's account counter for free. Metric label `malformed`. 11 tests in
+  `loginRequest.test.ts`, four of them source guards on the handler that fail against
+  the pre-change file. ⛔ **`server.ts` still has ~117 other `.parse(req.body)` sites
+  that 500 on a bad body** — authenticated routes, so a client bug not a customer
+  screen; fix each with `safeParse` + a deliberate 4xx, never by weakening the error
+  handler. ⏳ api deploy status: see the TESTS_RUN entry for this fix.
 - ✅ **THE PORTAL SECURITY HEADERS ARE LIVE.** Fixed by
   `/etc/nginx/connectcomms/security-headers.conf`, `include`d into the two locations
   that define their own `add_header` (`location /` and `location = /privacy`) — because

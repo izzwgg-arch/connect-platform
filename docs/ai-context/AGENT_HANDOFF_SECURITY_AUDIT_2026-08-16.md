@@ -80,6 +80,60 @@ independent budgets — the same weakness that made the ADMIN_ALERT cooldown Map
 fail. It is a speed bump, not a wall. It ships this way because it adds **no new
 failure mode to the login path**; the store is pluggable for a Redis version later.
 
+### 1b. ⛔ FIXED 2026-08-18 — a short password answered `500 internal_error`
+
+**What it was.** The handler's first line was
+`z.object({ email: z.string().email(), password: z.string().min(8) }).parse(req.body)`.
+`.parse` THROWS on a bad body, the throw lands in the global `setErrorHandler`
+(`server.ts:376`), and that handler — correctly, since `4fb512ed` — turns every
+unexpected exception into `500 { error: "internal_error" }`. **Proven live
+2026-08-18** with `curl --data @file` against
+`https://app.connectcomunications.com/api/auth/login`: `{"email":"x@y.com",
+"password":"x"}` → **500**, while a well-formed wrong password → `401
+invalid_credentials`. So a person who typed 6 characters read "Server error" in
+the portal, and every such request counted as a 5xx on the api.
+
+**The fix.** `apps/api/src/loginRequest.ts` — `parseLoginRequest(body)` uses
+`safeParse`, never throws, and returns `{ ok:false, reason }` (reason is
+log-only). The handler answers a malformed body **`401 { error:
+"invalid_credentials" }`**, i.e. exactly like a wrong password. Decisions,
+each deliberate:
+
+- **401, not 400.** The portal renders 401 as "Invalid email or password." and
+  any other 4xx as the raw error code — a person should read the former, not
+  `invalid_request`. And a password under 8 characters can NEVER be right
+  (signup enforces ≥ 8, invite-accept / reset ≥ 10 via `validateNewPassword`,
+  every generated temp password is 32 chars), so "invalid credentials" is the
+  truthful answer. Same status for wrong and malformed = nothing to tell a real
+  account from a missing one.
+- **Not counted by the throttle, and answered BEFORE the throttle.** Nothing was
+  compared against a credential, so it is not a guess; the answer is identical
+  for an existing and an unknown account, so it is not an oracle; it costs no
+  bcrypt and no DB round-trip. Counting it would only give an attacker a
+  zero-cost way to fill a victim's account counter with garbage. A wrong
+  password of ≥ 8 characters keeps counting exactly as before.
+- **Metric label `malformed`** on `connect_login_failures_total`, so dashboards
+  tell it from `bad_password` / `not_found` / `rate_limit`.
+
+**Tests.** `apps/api/src/loginRequest.test.ts` (11): 23 garbage bodies never
+throw and are all refused (incl. the exact live repro `password:"x"`), the
+boundary at 8, extra fields tolerated, log reasons per field, no NODE_ENV in the
+module — plus four **source guards on the handler** (CRLF-normalised, comments
+stripped): no throwing `.parse(req.body)`, `parseLoginRequest` used, the guard
+answers 401 `invalid_credentials` (not 400/500), it runs before
+`evaluateLoginAttempt` and does not `recordLoginFailure`, label `malformed`.
+**All four guards fail against the pre-change `server.ts`** (replayed from
+`HEAD` in a scratch mirror) — non-vacuous. `loginThrottle.test.ts` 20/20 and
+the portal's `sessionExpiry.test.ts` 23/23 (it pins the api's 401 body) still
+pass. api typecheck: 75 → 75 (pre-existing, none in the login path).
+
+⛔ **The pattern is not unique to login.** `server.ts` has ~117 more
+`.parse(req.body)` sites (9 files). Every one answers 500 to a malformed body.
+Login was fixed first because it is the one unauthenticated public door that
+real people mistype into; the rest are authenticated routes where a 500 is a
+client bug, not a customer-facing "Server error". Do not "fix" them by
+weakening the error handler — fix each with `safeParse` and a deliberate 4xx.
+
 ---
 
 ## 2. Infrastructure — what is actually GOOD (do not "fix" these)

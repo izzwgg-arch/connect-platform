@@ -60,6 +60,7 @@ import {
   recordLoginFailure,
   recordLoginSuccess,
 } from "./loginThrottle";
+import { parseLoginRequest } from "./loginRequest";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity, deriveCanonicalPbxHost, normalizeSipWsUrlHost, isIpLiteralHost } from "./voiceProvisioningBundle";
 import {
@@ -5225,7 +5226,7 @@ const rateLimitHitsTotal = new Counter({
 const loginFailuresTotal = new Counter({
   name: "connect_login_failures_total",
   help: "Total failed login attempts",
-  labelNames: ["reason"] as const, // "bad_password" | "not_found" | "rate_limit"
+  labelNames: ["reason"] as const, // "bad_password" | "not_found" | "rate_limit" | "malformed"
   registers: [apiRegistry],
 });
 
@@ -5745,7 +5746,17 @@ app.post("/auth/signup", async (req, reply) => {
 });
 
 app.post("/auth/login", async (req, reply) => {
-  const input = z.object({ email: z.string().email(), password: z.string().min(8) }).parse(req.body);
+  // ⛔ NEVER `.parse(req.body)` here. A thrown ZodError lands in the global error
+  // handler and the client gets `500 internal_error` for a short password (proven
+  // live 2026-08-18). A malformed body is answered like a wrong password — 401
+  // invalid_credentials — BEFORE the throttle and without touching the DB, and it
+  // is NOT recorded as a login failure. Full reasoning in loginRequest.ts.
+  const parsed = parseLoginRequest(req.body);
+  if (!parsed.ok) {
+    loginFailuresTotal.labels("malformed").inc();
+    return reply.status(401).send({ error: "invalid_credentials" });
+  }
+  const input = parsed.value;
   const emailKey = input.email.toLowerCase();
   // ⛔ The limiter that used to live here was gated on `process.env.NODE_ENV ===
   // "production"`, and the api container sets NO NODE_ENV (telephony does; api does

@@ -4,6 +4,64 @@ Newest entries first.
 
 ---
 
+## Login: a malformed body is 401 invalid_credentials, never 500 (2026-08-18)
+
+Branch `feat/ivr-migration-takeover`. api only. New `apps/api/src/loginRequest.ts` +
+`loginRequest.test.ts`; `server.ts` `/auth/login` now goes through `parseLoginRequest`.
+Security audit doc §1b has the reasoning (401 not 400; not counted by the throttle).
+
+### New suite + the throttle suite
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/loginRequest.test.ts src/loginThrottle.test.ts
+```
+
+**Result:** 31/31 (11 new + 20 throttle). Covers 23 garbage bodies (never throws, all
+refused, incl. the live repro `password:"x"`), the boundary at 8 chars, extra fields
+tolerated, per-field log reasons, no NODE_ENV — and four source guards on the handler
+(CRLF-normalised, comment lines stripped): no throwing `.parse(req.body)`,
+`parseLoginRequest` used, guard answers `status(401)` + `invalid_credentials` (no 400/500),
+guard sits before `evaluateLoginAttempt` and never calls `recordLoginFailure`, metric label
+`malformed`.
+
+### Source guards proven non-vacuous
+
+Replayed against the pre-change `server.ts` (`git show HEAD:apps/api/src/server.ts` into a
+scratch mirror beside the module, mirror deleted after): **4 of the 4 handler guards fail**,
+7 parser tests pass — as they should.
+
+### Portal contract guard on the api's 401 body
+
+```bash
+cd apps/portal && npx tsx --test lib/sessionExpiry.test.ts   # 23/23
+```
+
+### API typecheck
+
+```bash
+cd apps/api && npx tsc -p tsconfig.json --noEmit | grep -c "error TS"   # 75 before, 75 after
+```
+
+Pre-existing errors only (shared-module resolution, Timeout typing, billing/onboarding);
+none in `loginRequest*.ts` or the login handler.
+
+### API full suite
+
+```bash
+cd apps/api && npm test
+```
+
+**Result:** 2398 tests, 2387 pass, 8 fail — the 7 pre-existing
+`syncPbxTenantDirectoryFromRows` failures plus the known
+`voice/elevenLabsRoutes.stress.test.ts` "10-wide concurrent burst" load flake. Baseline
+unchanged (2369 → 2398 = the 11 new tests + others landed since the last recorded run).
+
+### Deploy
+
+⏳ filled in below once the queue job and container check finish.
+
+---
+
 ## Portal survives a 401 — global dead-session handler + pollers stop (2026-08-18)
 
 Branch `feat/ivr-migration-takeover`, commits `93fb96d1` + `f183ee3d`. Portal only;
