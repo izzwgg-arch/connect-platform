@@ -197,3 +197,67 @@ selection and presses Update).
 **Reading the members needs no panel at all** — `ombu_ars_members` gives
 `ars_id, outbound_route_id, time_group_id, enabled, sort` directly, and that is
 already how the sweep should load them. Only the WRITE needs the form.
+
+## 8. The cutoff, proven live — and the two regen traps (2026-08-18)
+
+✅ **DISCONNECT AND RESTORE PROVEN IN ASTERISK, 12/12.** Three cycles each on
+Loopcom Demo (T102, ars 210, route 123) and Landau Home (T21, ars 83, route 65).
+Every transition asserted against the running dialplan, not the database:
+
+```
+disconnected -> "There is no existence of 8455551234@T102_ARS-all extension"
+                ARS-210 has only its invalid-destination handler
+restored     -> ARS-210: Include => 'trk-group-123', number resolves again
+```
+
+~5 s per transition (the regen dominates; the DB flip alone is ~700 ms).
+
+⛔⛔ **TRAP 1 — REGENERATE THE MAIN TENANT, NOT THE CUSTOMER'S.** `ARS-<id>` and
+`trk-group-<id>` render into **`extensions__50-1-dialplan.conf`** (tenant 1),
+because every outbound route and route selection lives under `tenant_id 1`.
+The obvious move — regenerate the customer's tenant — rewrote their file and
+left the routing untouched: the customer could still dial out while the
+database said "disabled". A cutoff that reports success and does nothing.
+File mtimes are what exposed it. Use `applyArsRegen()`.
+
+✅ **TRAP 2, AND IT IS GOOD NEWS: this regen does NOT wipe the Connect doorway.**
+`doorwaysRepaired=0` on all 12 transitions, because the doorway renders into
+each customer's own file and this only regenerates tenant 1. So the cutoff is
+materially safer than the emergency provisioning was — but keep the re-bake
+call anyway, since an apply also flushes other tenants' pending changes.
+
+⏳ **Still untested live: multi-profile tenants.** Both test tenants had one
+profile with one member. Trust Bookkeepings' **nine** profiles exist only in
+unit tests. That is the next thing to exercise.
+
+## 9. The inbound busy signal — designed, NOT built
+
+The doorway (`extensions__96-connect-doorway.conf`) resolves the tenant then
+jumps straight to the IVR:
+
+```
+Set(DOORWAY_DID_TENANT=${DB(connect/didmap/${CONNECT_DOORWAY_DID}/tenant)})
+Goto(connect-tenant-ivr,${CONNECT_DOORWAY_DID},1)
+```
+
+**So busy is a two-line insert immediately after that Set:**
+
+```
+same => n,GotoIf($["${DB(connect/interrupted/${DOORWAY_DID_TENANT})}" = "yes"]?busy)
+...
+same => n(busy),Busy()
+```
+
+✅ **AstDB is read at CALL time, so flipping a tenant between busy and normal
+needs NO regeneration** — unlike the outbound half. Connect already writes
+AstDB through AMI `dbPut` (the wake-dial work does exactly this).
+
+⛔ **BUT the doorway file is owned by the helper and self-installs**, so the
+change belongs in `scripts/pbx/vitalpbx-inbound-route-helper.py` AND its copy
+embedded in `install-vitalpbx-inbound-route-helper.sh` — they must stay in
+sync, and the 33-case drift guard
+(`install-vitalpbx-inbound-route-helper.test.ts`) must pass before installing.
+Editing the live file alone would be silently reverted at the next install.
+
+⛔ Deliberately not started with low context remaining: a half-edited helper
+that gets installed is worse than no inbound busy at all.
