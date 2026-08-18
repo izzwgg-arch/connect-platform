@@ -363,9 +363,14 @@ cleanly. Fix it in the same pass as the re-registration.
 
 ### ⏳ Still open on this account
 
-- Her **Connect invitation email named "a plus center"**. She has since gone
-  **ACTIVE**, so she signed in under the old name. `POST /admin/users/:id/resend-invite`
-  would send one carrying "TYH Industries" — **not done, Izzy's call.**
+- ⛔ **DECIDED — DO NOT RESEND HER INVITATION.** Her original welcome email named
+  *"a plus center"*, and the obvious fix looks like `POST /admin/users/:id/resend-invite`.
+  **It is not a notification — it is an invite.** `server.ts:7790` writes
+  `status: "INVITED", forcePasswordReset: true`, and she has since gone **ACTIVE**,
+  so it would **invalidate the password she set today**. It also cannot retract the
+  email already in her inbox; it only adds a second one. Asked and answered by Izzy
+  on 2026-08-18: **leave it.** Her portal, invoices and every future email already
+  say TYH Industries. ⛔ The same trap applies to any ACTIVE user.
 - **$45 was really charged** against a sign-up that carried someone else's details.
 - `PbxTenantInboundDid` holds **no rows** for this tenant, so the per-number E911
   fee currently counts zero for them. Noted, not acted on.
