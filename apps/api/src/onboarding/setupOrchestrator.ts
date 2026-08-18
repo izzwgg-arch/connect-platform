@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { db } from "@connect/db";
+import { resolvePersonDisplayName } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VitalPbxClient } from "@connect/integrations";
 import { syncPbxTenantDirectoryFromRows } from "../pbxTenantDirectorySync";
@@ -116,13 +117,30 @@ async function queueInviteEmail(input: {
       createdBy: null,
     },
   });
-  const userName =
-    String(input.user.displayName || "").trim() ||
-    [input.user.firstName, input.user.lastName].map((v) => String(v || "").trim()).filter(Boolean).join(" ") ||
-    String(input.user.email || "User").split("@")[0];
+  // Same single rule as every other surface: the PBX extension name wins. For a
+  // sign-up that IS the name the customer typed, because pbxTenantBuild names
+  // the extension after the person (`ext_name: person.name`) — so this needs no
+  // onboarding-specific branch.
+  const namingExtension = await (db as any).extension
+    .findFirst({
+      where: { ownerUserId: input.user.id, status: "ACTIVE" },
+      orderBy: { createdAt: "asc" },
+      select: { displayName: true },
+    })
+    .catch(() => null);
+  const userName = resolvePersonDisplayName(
+    {
+      extensionDisplayName: namingExtension?.displayName ?? null,
+      displayName: input.user.displayName,
+      firstName: input.user.firstName,
+      lastName: input.user.lastName,
+      email: input.user.email,
+    },
+    "User",
+  );
   const template = welcomeCreatePasswordEmail({
     userName,
-    userFirstName: String(input.user.firstName || "").trim() || null,
+    userFirstName: userName,
     tenantName: input.tenantName,
     extensionNumber: input.extensionNumber,
     setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(token)}`),

@@ -14,6 +14,7 @@ import { ActiveCallsPanel } from "../../../components/dashboard/ActiveCallsPanel
 import { CallActivityRow } from "../../../components/dashboard/CallActivityRow";
 import { CommunicationsRow, type CommunicationsData } from "../../../components/dashboard/CommunicationsRow";
 import { IvrAnalyticsCard, type IvrAnalyticsData } from "../../../components/dashboard/IvrAnalyticsCard";
+import { getPreferredUserDisplayName } from "../../../lib/userDisplayName";
 import {
   buildDashboardDevPreviewCalls,
   buildDashboardDevPreviewCommunications,
@@ -62,13 +63,12 @@ function buildIvrQuery(range: DateRangeValue, isGlobal: boolean, contextTenantId
   return `?${params.toString()}`;
 }
 
-function firstName(name: string | null | undefined, email: string | null | undefined): string {
-  const raw = (name || "").trim();
-  if (raw && !raw.includes("@")) return raw.split(/\s+/)[0] || raw;
-  const emailLocal = (email || "").split("@")[0] || "";
-  if (emailLocal) return emailLocal.split(/[._-]/)[0] || emailLocal;
-  return "there";
-}
+// ⛔ This screen used to resolve the greeting itself, off user.name + user.email
+// only — it never looked at the extension, so 55 of 65 customers were greeted by
+// the front half of their email address ("Welcome, 845luzerj") while the sidebar
+// beside it showed their real name. Use the shared helper; the PBX name is the
+// source of truth. Do NOT take the first word off it — that turns "Front Desk"
+// into "Front" and "Mrs. Halpert" into "Mrs.".
 
 const IS_DEV_PREVIEW_ENABLED = process.env.NODE_ENV === "development";
 
@@ -227,7 +227,7 @@ export default function DashboardPage() {
     return tenantKeys.size > 1;
   }, [displayLiveCalls, isGlobal]);
 
-  const greetingName = firstName(user.name, user.email);
+  const greetingName = getPreferredUserDisplayName(user) || "there";
   const usingDevPreview =
     usingTrafficPreview ||
     usingCommunicationsPreview ||

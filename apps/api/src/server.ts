@@ -309,7 +309,7 @@ import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
 import { sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
-import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, type TenantDirectory, type UsedNumbers } from "@connect/shared";
+import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, resolvePersonDisplayName, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
   createVmRecordJob,
@@ -2230,12 +2230,79 @@ function normalizeEmail(email: string): string {
   return String(email || "").trim().toLowerCase();
 }
 
-function displayNameForUser(user: { firstName?: string | null; lastName?: string | null; displayName?: string | null; email?: string | null }): string {
-  const direct = String(user.displayName || "").trim();
-  if (direct) return direct;
-  const joined = [user.firstName, user.lastName].map((v) => String(v || "").trim()).filter(Boolean).join(" ");
-  if (joined) return joined;
-  return String(user.email || "User").split("@")[0] || "User";
+/**
+ * What to call a person. ⛔ The PBX extension name is the source of truth — see
+ * `packages/shared/src/personDisplayName.ts` for the rule and why it is shared
+ * with the portal rather than reimplemented here.
+ *
+ * ⛔ Pass the extension in. This used to read only the User name columns, which
+ * is why every email Connect sent addressed people by their email address, and
+ * why 13 users with initials in those columns received real invitations opening
+ * "Hi s,". A caller that forgets `ownedExtensions` silently gets the old
+ * behaviour, so `userNamingSelect` exists to make including it the easy path and
+ * `userDisplayName.callsites.test.ts` reads this file to keep it that way.
+ */
+function displayNameForUser(user: {
+  firstName?: string | null;
+  lastName?: string | null;
+  displayName?: string | null;
+  email?: string | null;
+  ownedExtensions?: Array<{ displayName?: string | null }> | null;
+  extension?: { displayName?: string | null } | null;
+}): string {
+  return resolvePersonDisplayName(
+    {
+      extensionDisplayName:
+        user.ownedExtensions?.[0]?.displayName ?? user.extension?.displayName ?? null,
+      displayName: user.displayName,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+    },
+    "User",
+  );
+}
+
+/**
+ * The Prisma `select` fragment every naming read needs. Spread it so the
+ * extension always comes along — the PBX name cannot win a lookup that never
+ * fetched it.
+ */
+const userNamingSelect = {
+  firstName: true,
+  lastName: true,
+  displayName: true,
+  email: true,
+  ownedExtensions: {
+    where: { status: "ACTIVE" },
+    orderBy: { createdAt: "asc" },
+    take: 1,
+    select: { displayName: true },
+  },
+} as const;
+
+/**
+ * Naming for the emails Connect sends. Loads the extension when the caller did
+ * not bring one, so an invite can never fall back to the email address just
+ * because of how its query was written.
+ *
+ * ⛔ Never throws — a name lookup must not be able to stop an invitation.
+ */
+async function resolveUserNameForEmail(user: any): Promise<string> {
+  const alreadyHave = user?.ownedExtensions?.[0]?.displayName ?? user?.extension?.displayName ?? null;
+  if (alreadyHave) return displayNameForUser(user);
+  let extensionDisplayName: string | null = null;
+  if (user?.id) {
+    const ext = await db.extension
+      .findFirst({
+        where: { ownerUserId: String(user.id), status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        select: { displayName: true },
+      })
+      .catch(() => null);
+    extensionDisplayName = ext?.displayName ?? null;
+  }
+  return displayNameForUser({ ...user, extension: extensionDisplayName ? { displayName: extensionDisplayName } : null });
 }
 
 function portalPublicUrl(pathname: string): string {
@@ -2482,9 +2549,12 @@ async function createUserPasswordToken(params: {
 async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
   // Android block uses getAndroidApkUrlForInviteEmail() (defined with APK routes).
   const androidApkUrl = await getAndroidApkUrlForInviteEmail();
+  // PBX name, resolved once and used for BOTH fields. Passing the raw firstName
+  // column here is what sent real invitations reading "Hi s," / "Hi e,".
+  const personName = await resolveUserNameForEmail(input.user);
   const template = welcomeCreatePasswordEmail({
-    userName: displayNameForUser(input.user),
-    userFirstName: String(input.user.firstName || "").trim() || null,
+    userName: personName,
+    userFirstName: personName,
     tenantName: input.tenantName,
     extensionNumber: input.extensionNumber || null,
     setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(input.token)}`),
@@ -2495,9 +2565,10 @@ async function queueUserWelcomeEmail(input: { user: any; tenantName: string; ext
 }
 
 async function queuePasswordCreatedEmail(input: { user: any; tenantName: string; extensionNumber?: string | null }) {
+  const personName = await resolveUserNameForEmail(input.user);
   const template = passwordCreatedConfirmationEmail({
-    userName: displayNameForUser(input.user),
-    userFirstName: String(input.user.firstName || "").trim() || null,
+    userName: personName,
+    userFirstName: personName,
     tenantName: input.tenantName,
     extensionNumber: input.extensionNumber || null,
     loginUrl: portalPublicUrl("/login"),
@@ -2507,7 +2578,7 @@ async function queuePasswordCreatedEmail(input: { user: any; tenantName: string;
 
 async function queuePasswordResetEmail(input: { user: any; token: string }) {
   const template = passwordResetEmail({
-    userName: displayNameForUser(input.user),
+    userName: await resolveUserNameForEmail(input.user),
     resetUrl: portalPublicUrl(`/auth/password/reset?token=${encodeURIComponent(input.token)}`),
     expiresMinutes: RESET_TOKEN_MINUTES,
   });
@@ -5667,12 +5738,18 @@ app.post("/auth/login", async (req, reply) => {
   recordLoginSuccess(emailKey);
   loginSuccessTotal.inc();
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
+  // The JWT name claim is what the portal shows until /me lands, so it has to
+  // carry the PBX name too — otherwise every sign-in flashes the email address.
+  const namingExtension = await db.extension
+    .findFirst({ where: { ownerUserId: user.id, status: "ACTIVE" }, orderBy: { createdAt: "asc" }, select: { displayName: true } })
+    .catch(() => null);
+  const namedUser = { ...(user as any), ownedExtensions: namingExtension ? [namingExtension] : [] };
   const token = await reply.jwtSign({
     sub: user.id,
     tenantId: user.tenantId,
     email: user.email,
     role: user.role,
-    name: displayNameForUser(user as any),
+    name: displayNameForUser(namedUser),
   });
   const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
     user.role,
@@ -5760,7 +5837,10 @@ app.post("/auth/password/forgot", async (req) => {
 
 app.get("/auth/password/reset/validate", async (req, reply) => {
   const query = z.object({ token: z.string().min(20) }).parse(req.query || {});
-  const row = await db.userPasswordToken.findUnique({ where: { tokenHash: hashToken(query.token) }, include: { user: true } } as any) as any;
+  const row = await db.userPasswordToken.findUnique({
+    where: { tokenHash: hashToken(query.token) },
+    include: { user: { include: { ownedExtensions: { where: { status: "ACTIVE" }, orderBy: { createdAt: "asc" }, take: 1 } } } },
+  } as any) as any;
   const now = new Date();
   if (!row || row.type !== "PASSWORD_RESET" || row.usedAt || row.expiresAt < now || row.user?.status === "DISABLED") {
     return reply.status(400).send({ error: "TOKEN_INVALID_OR_EXPIRED" });
@@ -5785,7 +5865,7 @@ app.post("/auth/password/reset", async (req, reply) => {
     return tx.user.update({ where: { id: row.userId }, data: { passwordHash, status: "ACTIVE" as any, forcePasswordReset: false } as any });
   });
   await audit({ tenantId: updated.tenantId, actorUserId: updated.id, targetUserId: updated.id, action: "PASSWORD_RESET_COMPLETED", entityType: "User", entityId: updated.id });
-  const template = passwordChangedEmail({ userName: displayNameForUser(updated as any) });
+  const template = passwordChangedEmail({ userName: await resolveUserNameForEmail(updated as any) });
   await queueEmailJob({ tenantId: updated.tenantId, type: "PASSWORD_CHANGED", toEmail: updated.email, subject: template.subject, htmlBody: template.html, textBody: template.text }).catch(() => undefined);
   return { ok: true };
 });
@@ -9895,7 +9975,10 @@ app.get("/pbx/tenant-users", async (req, reply) => {
       : admin.tenantId;
   const users = await db.user.findMany({
     where: { tenantId: resolvedTenantId, status: { not: "DISABLED" } as any },
-    select: { id: true, email: true, role: true, firstName: true, lastName: true, displayName: true } as any,
+    select: {
+      id: true, email: true, role: true, firstName: true, lastName: true, displayName: true,
+      ownedExtensions: { where: { status: "ACTIVE" }, orderBy: { createdAt: "asc" }, take: 1, select: { displayName: true } },
+    } as any,
     orderBy: { email: "asc" },
     take: 200,
   });
