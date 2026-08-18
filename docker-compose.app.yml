@@ -71,8 +71,18 @@ services:
       FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/host-inventory/opt/connectcomms/env/firebase-service-account.json}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
-      # Shared secret for /internal/cdr-ingest — must match telephony service CDR_INGEST_SECRET.
-      CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # CDR_INGEST_SECRET IS DELIBERATELY *NOT* LISTED HERE.
+      # It comes from env_file (/opt/connectcomms/env/.env.platform).
+      # `environment:` WINS OVER `env_file:`, so the old line
+      #     CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # substituted the DEPLOY SHELL's value - and the deploy scripts source
+      # only .env.deploy-queue, never .env.platform. The result was an
+      # EMPTY string in api and telephony (proven live: defined=true len=0)
+      # that silently overrode the file, which is exactly why every
+      # /internal/* door ran unauthenticated for the life of the platform.
+      # Same trap the telephony block already warns about for JWT_SECRET /
+      # AMI_PASSWORD. Do not re-add it. See
+      # docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md
       # ── MOH asset storage + PBX sync ───────────────────────────────────────
       # Volume-backed directory so uploaded MOH audio survives container
       # rebuilds. Bound to the docker volume moh-assets below.
@@ -257,7 +267,18 @@ services:
       FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/host-inventory/opt/connectcomms/env/firebase-service-account.json}
       MOBILE_PUSH_SIMULATE: ${MOBILE_PUSH_SIMULATE:-false}
       VOICE_SIMULATE: ${VOICE_SIMULATE:-false}
-      CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # CDR_INGEST_SECRET IS DELIBERATELY *NOT* LISTED HERE.
+      # It comes from env_file (/opt/connectcomms/env/.env.platform).
+      # `environment:` WINS OVER `env_file:`, so the old line
+      #     CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # substituted the DEPLOY SHELL's value - and the deploy scripts source
+      # only .env.deploy-queue, never .env.platform. The result was an
+      # EMPTY string in api and telephony (proven live: defined=true len=0)
+      # that silently overrode the file, which is exactly why every
+      # /internal/* door ran unauthenticated for the life of the platform.
+      # Same trap the telephony block already warns about for JWT_SECRET /
+      # AMI_PASSWORD. Do not re-add it. See
+      # docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md
       MOH_STORAGE_DIR: ${MOH_STORAGE_DIR:-/var/lib/connect/moh-assets}
       MOH_SYNC_SHARED_SECRET: ${MOH_SYNC_SHARED_SECRET:-}
       MOH_URL_SIGNING_SECRET: ${MOH_URL_SIGNING_SECRET:-}
@@ -424,7 +445,18 @@ services:
       ENABLE_TELEPHONY_DEBUG: ${ENABLE_TELEPHONY_DEBUG:-false}
       # CDR persistence: telephony POSTs completed calls to the API for DB storage.
       CDR_INGEST_URL: ${CDR_INGEST_URL:-http://api:3001/internal/cdr-ingest}
-      CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # CDR_INGEST_SECRET IS DELIBERATELY *NOT* LISTED HERE.
+      # It comes from env_file (/opt/connectcomms/env/.env.platform).
+      # `environment:` WINS OVER `env_file:`, so the old line
+      #     CDR_INGEST_SECRET: ${CDR_INGEST_SECRET:-}
+      # substituted the DEPLOY SHELL's value - and the deploy scripts source
+      # only .env.deploy-queue, never .env.platform. The result was an
+      # EMPTY string in api and telephony (proven live: defined=true len=0)
+      # that silently overrode the file, which is exactly why every
+      # /internal/* door ran unauthenticated for the life of the platform.
+      # Same trap the telephony block already warns about for JWT_SECRET /
+      # AMI_PASSWORD. Do not re-add it. See
+      # docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md
       # ── On-ring contact-liveness probe ────────────────────────────────────
       # A phone that slept and lost its socket leaves its contact bound for at
       # least 10 minutes (minimum_expiration=600) while the PBX only re-checks

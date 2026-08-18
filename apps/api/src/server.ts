@@ -10,6 +10,7 @@ import dgram from "dgram";
 import { Readable } from "node:stream";
 import nodemailer from "nodemailer";
 import { loadJobAttachments } from "./emailAttachments";
+import { checkInternalSecret } from "./internalSecret";
 import { promises as fsp } from "fs";
 import os from "node:os";
 import path from "node:path";
@@ -18353,14 +18354,48 @@ function pickRangExtension(direction: string, fromNumber: string | null | undefi
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** Verify CDR ingest shared secret — reused by voicemail notify endpoint */
+/**
+ * The lock on `/internal/*`. ⛔ FAIL-CLOSED, deliberately.
+ *
+ * This used to `return true` when `CDR_INGEST_SECRET` was unset ("dev mode")
+ * while the variable was EMPTY in api, telephony and worker — so the doors had
+ * no lock at all. See ./internalSecret.ts and
+ * docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md §1.
+ * Never restore the allow-on-missing branch, and never gate it on NODE_ENV —
+ * this container sets none, which is how several safety checks sat dead.
+ */
 function verifyCdrSecret(req: any): boolean {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  if (!secret) return true; // not configured → allow (dev mode)
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!incoming) return false;
-  const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-  const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-  return timingSafeEqual(a, b);
+  const verdict = checkInternalSecret(
+    process.env.CDR_INGEST_SECRET,
+    (req?.headers as Record<string, string | undefined> | undefined)?.["x-cdr-secret"],
+  );
+  if (!verdict.ok && verdict.reason === "not_configured") {
+    app.log.error("CDR_INGEST_SECRET not set - refusing internal request (fail closed)");
+  }
+  return verdict.ok;
+}
+
+/**
+ * Route-level guard for the `/internal/*` doors. Returns false once it has
+ * already answered, so a handler reads:
+ *   `if (!guardInternalSecret(req, reply, "/internal/x")) return reply;`
+ *
+ * ⛔ One implementation on purpose. The fail-open behaviour survived for years
+ * because it lived in eight near-identical inline copies.
+ */
+function guardInternalSecret(req: any, reply: any, endpoint: string): boolean {
+  const verdict = checkInternalSecret(
+    process.env.CDR_INGEST_SECRET,
+    (req?.headers as Record<string, string | undefined> | undefined)?.["x-cdr-secret"],
+  );
+  if (verdict.ok) return true;
+  if (verdict.reason === "not_configured") {
+    app.log.error({ endpoint }, "CDR_INGEST_SECRET not set - refusing internal request (fail closed)");
+  } else if (verdict.reason === "mismatch") {
+    app.log.warn({ ip: req?.ip, endpoint }, "internal_secret_mismatch");
+  }
+  reply.code(verdict.status).send({ error: verdict.error });
+  return false;
 }
 
 /**
@@ -33655,17 +33690,7 @@ function parsePbxEndpointName(endpoint: string): {
 }
 
 app.post("/internal/pbx/contact-status", async (req, reply) => {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (secret) {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      app.log.warn({ ip: req.ip, endpoint: "/internal/pbx/contact-status" }, "internal_secret_mismatch");
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/pbx/contact-status")) return reply;
 
   const schema = z.object({
     endpoint: z.string().min(1).max(128),
@@ -33776,20 +33801,7 @@ app.post("/internal/pbx/contact-status", async (req, reply) => {
 // No user auth required — secured by a shared CDR_INGEST_SECRET header.
 // Performs an upsert by linkedId to prevent duplicate rows.
 app.post("/internal/cdr-ingest", async (req, reply) => {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!secret) {
-    app.log.warn({ endpoint: "/internal/cdr-ingest" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
-  } else {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    // Constant-time compare
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      app.log.warn({ ip: req.ip, endpoint: "/internal/cdr-ingest" }, "rate_limit_internal_secret_mismatch");
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/cdr-ingest")) return reply;
 
   const schema = z.object({
     linkedId:    z.string().min(1),
@@ -34278,19 +34290,7 @@ function wasPbxCallCanceled(pbxCallId: string): boolean {
 // Creates a CallInvite and sends an Expo push to the owner's mobile devices.
 // Secured by the same CDR_INGEST_SECRET shared header.
 app.post("/internal/mobile-ring-notify", async (req, reply) => {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!secret) {
-    app.log.warn({ endpoint: "/internal/mobile-ring-notify" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
-  } else {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      app.log.warn({ ip: req.ip, endpoint: "/internal/mobile-ring-notify" }, "rate_limit_internal_secret_mismatch");
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/mobile-ring-notify")) return reply;
 
   const input = z.object({
     linkedId: z.string().min(1),
@@ -34696,19 +34696,7 @@ function prewakeCooldownGate(tenantId: string, userId: string): boolean {
 }
 
 app.post("/internal/mobile-prewake", async (req, reply) => {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!secret) {
-    app.log.warn({ endpoint: "/internal/mobile-prewake" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
-  } else {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      app.log.warn({ ip: req.ip, endpoint: "/internal/mobile-prewake" }, "prewake_secret_mismatch");
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/mobile-prewake")) return reply;
 
   if ((process.env.PBX_INBOUND_PREWAKE ?? "1") !== "1") {
     return { ok: false, disabled: true };
@@ -34959,18 +34947,7 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
 // Returns:
 //   { ok, slug, wakeUrl, wakeWaitSecs, hasSecret, tenantPublished, pbxTenantId, pbxTenantCode }
 app.post("/internal/pbx/publish-wake-config", async (req, reply) => {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!secret) {
-    app.log.warn({ endpoint: "/internal/pbx/publish-wake-config" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
-  } else {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/pbx/publish-wake-config")) return reply;
 
   const input = z.object({
     tenantId: z.string().nullable().optional(),
@@ -35013,7 +34990,9 @@ app.post("/internal/pbx/publish-wake-config", async (req, reply) => {
     slug,
     wakeUrl: `${baseUrl}/internal/pbx/wake-extension`,
     wakeWaitSecs: Number.parseInt(process.env.PBX_WAKE_WAIT_SECS ?? "10", 10) || 10,
-    hasSecret: Boolean(secret),
+    // The guard above already proved the secret is configured; read it back
+    // from env rather than a local that no longer exists.
+    hasSecret: Boolean(String(process.env.CDR_INGEST_SECRET || "").trim()),
     systemPublished,
     tenantPublished,
     error: publishError,
@@ -35201,19 +35180,7 @@ app.post("/admin/pbx/republish-wake-config", async (req, reply) => {
 // Auth: same x-cdr-secret header as the rest of the /internal/* endpoints.
 app.post("/internal/pbx/wake-extension", async (req, reply) => {
   const t0 = Date.now();
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!secret) {
-    app.log.warn({ endpoint: "/internal/pbx/wake-extension" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
-  } else {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      app.log.warn({ ip: req.ip, endpoint: "/internal/pbx/wake-extension" }, "wake_extension_secret_mismatch");
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/pbx/wake-extension")) return reply;
 
   const input = z.object({
     pbxCallId: z.string().min(1),
@@ -35715,19 +35682,7 @@ app.get("/mobile/wake/timeline", async (req, reply) => {
 
 // Internal: telephony service pulls PBX tenant → Connect tenant map (same auth as cdr-ingest).
 app.get("/internal/telephony/pbx-tenant-map", async (req, reply) => {
-  const secret = process.env.CDR_INGEST_SECRET?.trim();
-  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
-  if (!secret) {
-    app.log.warn({ endpoint: "/internal/telephony/pbx-tenant-map" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
-  } else {
-    if (!incoming) return reply.code(401).send({ error: "missing secret" });
-    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
-    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
-    if (!timingSafeEqual(a, b)) {
-      app.log.warn({ ip: req.ip, endpoint: "/internal/telephony/pbx-tenant-map" }, "rate_limit_internal_secret_mismatch");
-      return reply.code(403).send({ error: "forbidden" });
-    }
-  }
+  if (!guardInternalSecret(req, reply, "/internal/telephony/pbx-tenant-map")) return reply;
   const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) return reply.send({ version: 1, pbxInstanceId: null, fetchedAt: new Date().toISOString(), entries: [] });
   const [rows, links, didRows, extensionRows] = await Promise.all([
