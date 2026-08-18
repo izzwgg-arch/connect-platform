@@ -139,6 +139,12 @@ export function shouldSkipJwtVerification(path: string): boolean {
       "/api/ready",
       "/auth/signup",
       "/auth/login",
+      // MFA second step (2026-08-18). Carries a 5-minute PRE-AUTH token — not a
+      // session — and verifies it in-handler with a key derived from JWT_SECRET,
+      // so the JWT hook could never accept it anyway. ⛔ The ONLY /auth/mfa/*
+      // path that may be here: setup / verify / disable / status all need a
+      // real session. `mfa.test.ts` pins that.
+      "/auth/mfa/challenge",
       "/auth/mobile-qr-exchange",
       "/auth/invite/validate",
       "/auth/invite/accept",

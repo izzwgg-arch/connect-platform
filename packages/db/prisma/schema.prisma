@@ -1065,6 +1065,38 @@ model User {
   webrtcCallingIncidentDismissals   WebrtcCallingIncidentDismissal[]
   webrtcPlatformOutageDismissals    WebrtcPlatformOutageDismissal[]
   sipAccounts                       UserSipAccount[]                  @relation("UserSipAccountUser")
+  /// Multi-factor authentication (Phase 11, 2026-08-18). Absent = MFA off.
+  mfa                               UserMfa?
+}
+
+/// One row per user who has started (or finished) MFA enrolment.
+/// `enabledAt` null = a setup was started but the first code was never
+/// confirmed; such a row is inert at login. The TOTP secret is stored as the
+/// AES-256-GCM / CREDENTIALS_MASTER_KEY envelope (`@connect/security`
+/// encryptJson), never in the clear. `lastUsedCounter` is the RFC 6238 time-step
+/// of the last ACCEPTED code — the replay guard.
+model UserMfa {
+  id                  String                @id @default(cuid())
+  userId              String                @unique
+  totpSecretEncrypted String
+  enabledAt           DateTime?
+  lastUsedCounter     Int?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodes       UserMfaRecoveryCode[]
+}
+
+/// Single-use recovery codes, bcrypt-hashed. `usedAt` set = spent.
+model UserMfaRecoveryCode {
+  id        String    @id @default(cuid())
+  userMfaId String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  userMfa   UserMfa   @relation(fields: [userMfaId], references: [id], onDelete: Cascade)
+
+  @@index([userMfaId, usedAt])
 }
 
 enum UserRole {

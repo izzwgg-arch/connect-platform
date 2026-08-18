@@ -269,6 +269,8 @@ import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { registerRemoteSupportRoutes } from "./remoteSupportRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
+import { registerMfaRoutes, buildMfaDeps } from "./mfa/mfaRoutes";
+import { decideLoginMfa } from "./mfa/mfaService";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
 import { registerAccountSetupInfoRoute } from "./agentProvisioning/accountSetupInfoRoute";
 import { registerAgentContactsInfoRoute } from "./agentProvisioning/contactsInfoRoute";
@@ -5818,14 +5820,69 @@ app.post("/auth/login", async (req, reply) => {
   // slate — the failures that got them here must not linger and lock them out later.
   recordLoginSuccess(emailKey);
   loginSuccessTotal.inc();
+  // ── MFA (Phase 11, 2026-08-18) ────────────────────────────────────────────
+  // Decided ONLY after the password matched, so a wrong password answers the
+  // identical 401 whether or not the account has MFA — the login response never
+  // leaks enrolment. Three outcomes; two of them leave the response byte-for-
+  // byte what it always was:
+  //   none           → the pre-MFA body `{ token, portalPermissionSet? }`
+  //   enroll_grace   → the same body + `mfaEnrollmentRequired: true` (a required
+  //                    role that has not enrolled yet; GRACE mode signs them in)
+  //   challenge      → NO session token: `{ mfaChallengeRequired, preAuthToken,
+  //                    expiresInSeconds, methods, error: "mfa_required" }` —
+  //                    the session is minted by POST /auth/mfa/challenge.
+  //   enroll_required→ 403 (only when MFA_ENFORCEMENT=required, which is NOT set)
+  // See apps/api/src/mfa/mfaService.ts for the contract and mfaPolicy.ts for
+  // why grace is the default and the only mode that has ever been turned on.
+  const mfaOutcome = await decideLoginMfa(mfaDeps, { id: user.id, role: String(user.role) });
+  if (mfaOutcome.kind === "enroll_required") {
+    app.log.warn({ userId: user.id, role: user.role, endpoint: "/auth/login" }, "login_refused_mfa_enrollment_required");
+    return reply.status(403).send({
+      error: "mfa_enrollment_required",
+      message: "Your role requires two-step verification, and this account hasn't set it up yet. Ask a platform administrator to reset your access.",
+    });
+  }
+  if (mfaOutcome.kind === "challenge") {
+    // lastLoginAt is stamped when the challenge completes, not here — a password
+    // alone is not a sign-in for an MFA account.
+    return {
+      mfaChallengeRequired: true,
+      preAuthToken: mfaOutcome.preAuthToken,
+      expiresInSeconds: mfaOutcome.expiresInSeconds,
+      methods: mfaOutcome.methods,
+      // For clients written before MFA existed (the mobile app throws
+      // `json.error || "LOGIN_FAILED"` when there is no token): a readable slug
+      // instead of a generic failure. Not an error for a client that knows MFA.
+      error: "mfa_required",
+    };
+  }
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
+  const session = await issueLoginSession(user.id);
+  return {
+    ...session,
+    ...(mfaOutcome.kind === "enroll_grace" ? { mfaEnrollmentRequired: true } : {}),
+  };
+});
+
+/**
+ * The ONE place the session claim shape and the login response body live.
+ * `/auth/login` (no-MFA path) and `POST /auth/mfa/challenge` (after the code)
+ * both return exactly this — so a client cannot tell from the body which door
+ * the session came through, and the two can never drift.
+ *
+ * Returns `{ token, portalPermissionSet? }`. Throws only if the user vanished
+ * between the password check and here.
+ */
+async function issueLoginSession(userId: string): Promise<{ token: string; portalPermissionSet?: string[] }> {
+  const user = await db.user.findUnique({ where: { id: userId } });
+  if (!user) throw new Error("login_user_not_found");
   // The JWT name claim is what the portal shows until /me lands, so it has to
   // carry the PBX name too — otherwise every sign-in flashes the email address.
   const namingExtension = await db.extension
     .findFirst({ where: { ownerUserId: user.id, status: "ACTIVE" }, orderBy: { createdAt: "asc" }, select: { displayName: true } })
     .catch(() => null);
   const namedUser = { ...(user as any), ownedExtensions: namingExtension ? [namingExtension] : [] };
-  const token = await reply.jwtSign({
+  const token = app.jwt.sign({
     sub: user.id,
     tenantId: user.tenantId,
     email: user.email,
@@ -5841,7 +5898,11 @@ app.post("/auth/login", async (req, reply) => {
     token,
     ...(portalPermissionSet ? { portalPermissionSet } : {}),
   };
-});
+}
+
+// The MFA service dependencies live here (not at the registration site far
+// below) because `/auth/login` above needs `decideLoginMfa` at request time.
+const mfaDeps = buildMfaDeps({ audit, issueSession: issueLoginSession });
 
 app.get("/auth/invite/validate", async (req, reply) => {
   const query = z.object({ token: z.string().min(20) }).parse(req.query || {});
@@ -6091,6 +6152,14 @@ app.addHook("preHandler", async (req, reply) => {
   try {
     await req.jwtVerify();
   } catch {
+    return reply.status(401).send({ error: "unauthorized" });
+  }
+  // ⛔ An MFA pre-auth token is NOT a session. It is signed with a key derived
+  // from JWT_SECRET (never the raw secret — see mfa/preAuthToken.ts), so
+  // jwtVerify above already rejects it as a bad signature; this is belt and
+  // braces for the day someone signs one with the session key. Only
+  // POST /auth/mfa/challenge (on the bypass list) may accept it.
+  if ((req.user as any)?.mfa_pending === true) {
     return reply.status(401).send({ error: "unauthorized" });
   }
   // SUPER_ADMIN VitalPBX tenant context override.
@@ -41124,6 +41193,11 @@ const port = Number(process.env.PORT || 3001);
   // named person's screen".
   await registerRemoteSupportRoutes(app, { audit });
   await registerLanPhoneRoutes(app, { audit });
+  // Multi-factor authentication (Phase 11, 2026-08-18): enrol / challenge /
+  // disable / recovery codes. `/auth/mfa/challenge` is the ONLY public route in
+  // it (bypass list) and verifies its own pre-auth token; everything else is an
+  // ordinary JWT-gated route. Login itself decides via `decideLoginMfa` above.
+  await registerMfaRoutes(app, { audit, issueSession: issueLoginSession, service: mfaDeps });
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);

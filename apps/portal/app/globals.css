@@ -37892,6 +37892,33 @@ table tr:hover {
 
 .lc-login-forgot:hover { color: var(--accent); }
 
+/* Two-step verification (MFA) step of sign-in — same card, one extra line of
+   copy, a wide-spaced code field, and a text-styled "Back" button. */
+.lc-login-step {
+  margin: -8px 0 18px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.lc-login-code {
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  font-size: 18px;
+}
+
+.lc-login-linkbtn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+
+.lc-login-linkbtn:disabled { opacity: 0.6; cursor: default; }
+
 /* Sign-in light/dark switch. Presentation only — the theme authority is
    useAppContext (see components/LoginThemeToggle.tsx). Default is light and a
    stored cc-theme wins; nothing here pre-sets a theme. */

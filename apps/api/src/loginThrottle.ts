@@ -99,6 +99,39 @@ export function resetLoginThrottle() {
   store = { account: new Map(), source: new Map() };
 }
 
+/**
+ * A SECOND, independent instance of the same throttle — used by the MFA
+ * challenge endpoint (2026-08-18). Same two dimensions (account + source), same
+ * decision logic, its own store and its own limits, so five wrong TOTP codes
+ * throttle the challenge without touching the password throttle's counters and
+ * vice versa. The module-level functions above stay exactly as they were for
+ * `/auth/login`; nothing about their behaviour changes.
+ */
+export type LoginThrottleInstance = {
+  evaluate: (account: string, sourceIp: string | undefined | null, now?: number) => LoginThrottleDecision;
+  recordFailure: (account: string, sourceIp: string | undefined | null, now?: number) => void;
+  recordSuccess: (account: string) => void;
+  reset: () => void;
+};
+
+export function createLoginThrottle(config: LoginThrottleConfig): LoginThrottleInstance {
+  let own: LoginThrottleStore = { account: new Map(), source: new Map() };
+  return {
+    evaluate: (account, sourceIp, now = Date.now()) => evaluateWithStore(own, account, sourceIp, now, config),
+    recordFailure: (account, sourceIp, now = Date.now()) => recordFailureWithStore(own, account, sourceIp, now, config),
+    recordSuccess: (account) => {
+      try {
+        own.account.delete((account || "").toLowerCase());
+      } catch {
+        /* never break the caller */
+      }
+    },
+    reset: () => {
+      own = { account: new Map(), source: new Map() };
+    },
+  };
+}
+
 function prune(times: number[], threshold: number): number[] {
   return times.filter((t) => t >= threshold);
 }
@@ -174,6 +207,16 @@ export function evaluateLoginAttempt(
   now: number = Date.now(),
   config: LoginThrottleConfig = DEFAULT_LOGIN_THROTTLE_CONFIG,
 ): LoginThrottleDecision {
+  return evaluateWithStore(store, account, sourceIp, now, config);
+}
+
+function evaluateWithStore(
+  store: LoginThrottleStore,
+  account: string,
+  sourceIp: string | undefined | null,
+  now: number,
+  config: LoginThrottleConfig,
+): LoginThrottleDecision {
   try {
     if (isLoginThrottleDisabled()) return ALLOW;
     const accountKey = (account || "").toLowerCase();
@@ -240,6 +283,16 @@ export function recordLoginFailure(
   sourceIp: string | undefined | null,
   now: number = Date.now(),
   config: LoginThrottleConfig = DEFAULT_LOGIN_THROTTLE_CONFIG,
+): void {
+  recordFailureWithStore(store, account, sourceIp, now, config);
+}
+
+function recordFailureWithStore(
+  store: LoginThrottleStore,
+  account: string,
+  sourceIp: string | undefined | null,
+  now: number,
+  config: LoginThrottleConfig,
 ): void {
   try {
     const accountKey = (account || "").toLowerCase();

@@ -588,6 +588,18 @@ export function ProfileMenu() {
           </div>
         </section>
 
+        {/* Account security (two-step verification). Every signed-in person can
+            reach it — it is their own account, no permission key. */}
+        <section className="ecp-logout" style={{ background: "transparent", paddingBottom: 0 }}>
+          <button
+            className="ecp-secondary-btn"
+            type="button"
+            style={{ width: "100%" }}
+            onClick={() => { closeMenu(); router.push("/account/security"); }}
+          >
+            Security &amp; two-step verification
+          </button>
+        </section>
         <section className="ecp-logout">
           <button className="ecp-logout-btn" onClick={logout}>Logout</button>
         </section>

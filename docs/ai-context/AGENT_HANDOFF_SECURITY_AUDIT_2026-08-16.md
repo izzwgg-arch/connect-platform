@@ -524,3 +524,37 @@ without a reload — then the flow this work creates (expired → `/login` → s
 → back) would leave the browser softphone un-registered until a reload. Today the
 same question applies to every sign-in from a signed-out tab. Not investigated;
 the desktop app is different (its engine lives in the phone-engine window).
+
+---
+
+## 9. Phase 11 — MFA (TOTP) is BUILT: administrators can carry a second factor, ordinary users can opt in (2026-08-18)
+
+Full handoff: **`AGENT_HANDOFF_MFA_2026-08-18.md`** (route map, the exact login
+contract, the mobile limitation, the hard-enforcement flip, tests). Summary:
+
+- **Before:** zero MFA anywhere. `/auth/login` = bcrypt → JWT with no expiry, and the
+  one SUPER_ADMIN could move money and provision telephony with a password alone.
+- **Now:** TOTP (RFC 6238, no new dependency) with ten bcrypt-hashed single-use
+  recovery codes; the secret encrypted at rest with the same AES-256-GCM /
+  `CREDENTIALS_MASTER_KEY` envelope every other credential uses; `/auth/login` for an
+  enrolled account answers a **5-minute pre-auth token** (signed with a key DERIVED
+  from `JWT_SECRET`, so every verifier on the platform rejects it as a session
+  unchanged) and `POST /auth/mfa/challenge` turns it into the ordinary session body;
+  the challenge is throttled on the same account + source dimensions as the login
+  throttle (own instance, 5 wrong codes → 10 min); enrol / disable / recovery-code
+  use / admin reset are audited; the portal has the sign-in step and a Security page.
+- **Enforcement is GRACE, by design and by default:** `MFA_REQUIRED_ROLES` defaults to
+  `SUPER_ADMIN`; an unenrolled admin still signs in and is prompted (sign-in redirect
+  to `/account/security` + a dashboard banner). `MFA_ENFORCEMENT=required` (NOT set)
+  refuses their login with `403 mfa_enrollment_required` — flip only after every
+  required-role person has enrolled (§8 of the MFA handoff has the query).
+- **Normal login is unchanged, proven from the source:** the no-MFA body is exactly
+  `issueLoginSession`'s `{ token, portalPermissionSet? }`; a wrong password answers the
+  identical 401 whether or not MFA is on (the decision runs only after bcrypt).
+- ⛔ **Mobile has no MFA UI.** A user who enrols cannot finish sign-in on the current
+  app (`login()` throws on a body with no `token`; the body says `error: "mfa_required"`
+  so it reads as that, not `LOGIN_FAILED`). Opt-in exposure only; grace forces nobody.
+  `/auth/mobile-qr-exchange` deliberately untouched.
+- **What this does NOT change:** tokens still never expire (Finding B / §8 above),
+  there is still no session table, and the mobile 401 gap from §8.2 stands.
+- Deploy status is recorded in CLAUDE.md's MFA section and `TESTS_RUN.md`.

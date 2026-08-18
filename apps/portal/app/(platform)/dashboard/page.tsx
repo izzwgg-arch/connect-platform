@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../../../services/apiClient";
 import { PermissionGate } from "../../../components/PermissionGate";
+import { MfaEnrollmentNudge } from "../../../components/MfaEnrollmentNudge";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useTelephony } from "../../../contexts/TelephonyContext";
@@ -237,6 +238,7 @@ export default function DashboardPage() {
   return (
     <PermissionGate permission="can_view_dashboard" fallback={<div className="state-box">You do not have dashboard access.</div>}>
       <div className="dash-v2-shell workspace-overview">
+        <MfaEnrollmentNudge />
         {/* Header */}
         <header className="dash-v2-header">
           <div className="dash-v2-header-text">
