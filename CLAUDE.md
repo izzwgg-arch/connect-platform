@@ -647,13 +647,24 @@ rendered into the dialplan, no customer behaviour changed.** 69 tests.)
   (9293598299 / 6469846023), each with a real street address, notifying
   **izzywgg@gmail.com + the customer**. ⛔ That address was **read from the
   database** — the session context said `izzywkg@gmail.com`, one letter out.
-- ⏳ **NOT PROVEN AND NOT WORKING YET: the dialplan is not rendered.**
-  `grep "^\[T104_emergency-calls\]"` returns nothing. It needs a per-tenant
-  regen, and ⛔ **the panel's Apply Changes is the dangerous way** — it wipes the
-  Connect doorway off every route and flushes other tenants' pending changes,
-  and **inii mini is one of only three Connect-mode numbers**. The helper has
-  **no standalone regen endpoint**; `/retarget`, `/restore` and
-  `/sync-tenant-moh` only regen as a side effect of something else.
+- ✅ **RENDERED AND LIVE on both, confirmed in Asterisk** (`dialplan show
+  T104_emergency-calls`): each number ends in **`Gosub(trk-129/130,...)`** —
+  straight to the trunk, no outbound route, no ARS. That is the proof the
+  cutoff can switch every outbound route off without touching 911.
+  ⛔ **`setTenant(path)` BEFORE `applyChanges`** — fired in the robot's home
+  tenant it returns `success` in 0.7 s and regenerates **nothing**.
+  ✅ **The doorway wipe is REAL and was caught live**: applying in inii mini's
+  context logged *"Apply Changes had wiped this number's doorway routing —
+  re-baked"* for +6469846023, repaired inside the same 2.4 s by
+  `rebakeConnectRoutesAfterRegen`. ⛔ **That only covers numbers Connect
+  tracks** — inii mini's second doorway route (the retired temp 8452605692) was
+  left wiped and healed by the drift reconciler ~40 s later, so **a doorway
+  count taken seconds after an apply can read mid-repair and look like an
+  outage that is already healing.** Back to baseline after: T2 1/0, T35 1/0,
+  T105 2/0 doorway/dead-air.
+- ⏳ **NOT PROVEN: nobody has dialled 911 on either tenant** and no notification
+  email has arrived. ⛔ Test with **8457831212**, not 911 — do not tie up a
+  dispatcher.
 - ⛔⛔ **`ombu_tenant_settings(name='outbound_profiles').value` → `ombu_ars.ars_id`
   — NOT `ombu_ars.tenant_id`.** Every real ARS row and every outbound route
   lives under `tenant_id 1`. Joining on tenant_id concluded 26 of 28 customers

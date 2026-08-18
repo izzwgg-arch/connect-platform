@@ -1,7 +1,7 @@
 # AGENT HANDOFF — overdue-account service interruption, and native emergency calling (2026-08-17)
 
-**Status: config landed on two tenants, NOT yet rendered into the dialplan.
-No customer behaviour has changed. Nothing is deployed.**
+**Status: LIVE on two tenants — rendered, reloaded, and confirmed in Asterisk.
+Nothing is deployed (no api/portal change is needed for this part).**
 
 Commits on `feat/ivr-migration-takeover`: `c7c1df00`, `8671b2f0`, `b8e5bf1c`.
 69 tests, registered in the api test script.
@@ -83,28 +83,47 @@ by trusting the panel's response. `emergency locations on other tenants: 0`.
 ⛔ **`izzywgg@gmail.com` was read from the database, not assumed** — the
 session context showed `izzywkg@gmail.com`, one letter different. Check it.
 
-## 4. ⏳ NOT DONE — the dialplan is not rendered
+## 4. ✅ RENDERED AND LIVE — and the apply DID wipe a doorway
 
-`grep "^\[T104_emergency-calls\]"` returns **nothing**. The rows exist; the
-context does not. **So emergency calling via this feature does not work yet.**
-It needs a per-tenant regeneration.
+Applied per tenant. ⛔ **The tenant cookie must be set before Apply Changes** —
+a first attempt fired it in the robot's home tenant, returned `success` in
+0.7 s and regenerated **nothing** (no file mtime moved). `setTenant(path)`
+first, then `applyChanges`.
 
-⛔ **The panel's Apply Changes is the dangerous way to do it**: it wipes the
-Connect doorway off every route of the tenant AND flushes other tenants'
-pending changes. **inii mini is one of only three Connect-mode numbers on the
-platform** (with A plus center and Connect Communications), so an apply can put
-those numbers on dead air until the reconciler heals them — up to ~10 minutes.
-The mitigation already exists: `rebakeConnectRoutesAfterRegen`
-(`apps/api/src/pbx/applyRegenRebake.ts`), which `POST /voice/forwards` calls.
+Confirmed in Asterisk, not just on disk (`dialplan show T104_emergency-calls`):
 
-⛔ **The helper has no standalone "regenerate this tenant" endpoint.**
-`/retarget`, `/restore` and `/sync-tenant-moh` each run a per-tenant regen as a
-side effect of doing something else. Using one of those for an unrelated
-purpose is a hack and was deliberately not done.
+```
+'_8457831212' => NoOp(Emergency Call to: Local EMS and fire department)
+                 ...
+                 System(... NotifyEmergencyCall ... "izzywgg@gmail.com,office@matamimweekly.com" ...)
+                 Gosub(trk-129,${EXTEN},1(from-trk-grp))
+```
 
-**Acceptance test, once rendered:** dial 911 from a Matamim extension with
-every outbound route deactivated and confirm it still goes out on trunk 129 —
-and that the notification email arrives.
+⛔ **`Gosub(trk-<id>)` is the whole point** — it goes straight to the trunk. No
+outbound route, no ARS, no class of service. That is why the overdue cutoff can
+switch every outbound route off and 911 still leaves the building.
+
+✅ **THE DOORWAY WIPE IS REAL, NOT THEORETICAL — it happened here and was
+caught.** Applying in inii mini's context produced:
+
+```
+WARN [APPLY_REBAKE] Apply Changes had wiped this number's doorway routing —
+re-baked {"e164":"+6469846023","changed":1}
+```
+
+`rebakeConnectRoutesAfterRegen` repaired it inside the same 2.4 s run.
+⛔ **It only repairs numbers Connect tracks.** inii mini has TWO doorway routes;
+the second (8452605692, the retired temp) was left wiped and was healed by the
+drift reconciler ~40 s later. Verified back to baseline afterwards:
+T2 1 doorway/0 dead-air, T35 1/0, T105 **2/0**.
+⛔ **So the apply must be fired per tenant with the re-bake immediately after,
+and the doorway counts checked before AND after** — a count taken 30 s after
+the apply can read mid-repair and look like an outage that is already healing.
+
+⏳ **NOT PROVEN: nobody has dialled 911 from either tenant**, and no
+notification email has been received. That is the acceptance test, and it
+should be done with the carrier warned or by dialling 8457831212 rather than
+911 so nobody wastes a dispatcher's time.
 
 ## 5. Facts worth keeping
 
