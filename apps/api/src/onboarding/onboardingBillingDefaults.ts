@@ -28,6 +28,7 @@
 // no-ops.
 
 import { ONBOARDING_PRICES } from "@connect/shared";
+import { writeServiceInterruption } from "../billing/serviceInterruption/serviceInterruptionSettings";
 import {
   BILLING_TELECOM_FEES_METADATA_KEY,
   mergeBillingTelecomFeesIntoMetadata,
@@ -125,12 +126,19 @@ export async function ensureOnboardingBillingDefaults(
   // model with real taxes carved out of the total, and no account that already
   // existed is touched. This stamp cannot reach one: it refuses any tenant that
   // already has a fee config or has taxes enabled (checked above).
-  const metadata = mergeAllInclusivePricingIntoMetadata(
-    mergeBillingTelecomFeesIntoMetadata(
-      settings?.metadata,
-      onboardingTelecomFeesConfig({ tollFreeNumber: !!opts.tollFreeNumber }),
+  // Izzy, 2026-08-17: the overdue-account service interruption "goes from now
+  // on for any new customer" — so a fresh sign-up has the switch ON. Existing
+  // accounts are untouched (this stamp cannot reach them), and the sweep's
+  // cutover date guarantees no failure from before it is ever acted on.
+  const metadata = writeServiceInterruption(
+    mergeAllInclusivePricingIntoMetadata(
+      mergeBillingTelecomFeesIntoMetadata(
+        settings?.metadata,
+        onboardingTelecomFeesConfig({ tollFreeNumber: !!opts.tollFreeNumber }),
+      ),
+      true,
     ),
-    true,
+    { enabled: true },
   );
   const smsPatch = opts.smsEnabled ? { smsBillingEnabled: true } : {};
   await dbc.tenantBillingSettings.upsert({

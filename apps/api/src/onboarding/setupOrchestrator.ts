@@ -10,6 +10,8 @@ import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
 import { getAndroidApkUrlForInviteEmail } from "../androidApkInviteUrl";
 import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
 import { buildPbxTenant, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
+import { buildE911Address } from "./e911Address";
+import { resolveOmbutelStateId } from "./emergencyStateId";
 import { ensureProvisioningIdentity } from "./provisioningIdentity";
 import { readSubaccount, applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { queueOnboardingSignupReport } from "./adminSignupReport";
@@ -515,6 +517,29 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       .replace(/\D/g, "")
       .replace(/^1(?=\d{10}$)/, "");
     const portedDid = numberChoice === "port" && portedDigits.length === 10 ? portedDigits : null;
+    // Emergency calling for the new tenant: the address the customer typed,
+    // through the same builder the E911 registration uses, with the state
+    // resolved to ombutel.states.id from the PBX itself. ⛔ Best-effort: any
+    // gap leaves `emergency` null and buildPbxTenant logs a loud skip — never
+    // a guessed state, never half an address.
+    let emergency: PbxBuildJob["emergency"] = null;
+    try {
+      const built = buildE911Address(fresh);
+      const a = built.address;
+      const stateId = await resolveOmbutelStateId(a.state);
+      if (a.streetName && a.city && a.zip && stateId) {
+        emergency = {
+          street: [a.streetNumber, a.streetName].filter(Boolean).join(" "),
+          city: a.city,
+          stateId,
+          zip: a.zip,
+          customerEmail: String(fresh?.mainEmail || fresh?.billingEmail || "").trim() || null,
+        };
+      }
+    } catch {
+      emergency = null;
+    }
+
     const job: PbxBuildJob = {
       company,
       slug: identity.tenantSlug,
@@ -523,6 +548,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       portedDid,
       voipms: { user: sub.username, pass: sub.password, server: sub.server },
       people,
+      emergency,
     };
 
     if (!live) {

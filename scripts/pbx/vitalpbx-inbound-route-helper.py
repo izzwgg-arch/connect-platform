@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.12.1"
+VERSION = "2026.08.18.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -301,9 +301,17 @@ exten => s,1,NoOp(Connect doorway - dnid=${CALLERID(dnid)} slug=${TENANT_SLUG})
  same => n,GotoIf($["${CONNECT_DOORWAY_DID}" = ""]?nodid)
  same => n,Set(DOORWAY_DID_TENANT=${DB(connect/didmap/${CONNECT_DOORWAY_DID}/tenant)})
  same => n,ExecIf($["${DOORWAY_DID_TENANT}" != ""]?Set(__TENANT_SLUG=${DOORWAY_DID_TENANT}))
+ same => n,GotoIf($["${DOORWAY_DID_TENANT}" != "" & "${DB(connect/t_${DOORWAY_DID_TENANT}/interrupted)}" = "yes"]?interrupted)
  same => n,Goto(connect-tenant-ivr,${CONNECT_DOORWAY_DID},1)
  same => n(nodid),NoOp(Connect doorway: no DNID on channel - fallback)
  same => n,Goto(connect-default-fallback,s,1)
+; Overdue-account service interruption: Connect sets connect/t_<slug>/interrupted=yes
+; when a customer is cut off for non-payment. Callers hear BUSY - never the IVR and
+; never dead air (dead air is indistinguishable from an outage). AstDB is read at
+; call time, so switching a tenant back on needs no regen and no reload.
+ same => n(interrupted),NoOp(Connect doorway: ${DOORWAY_DID_TENANT} interrupted for non-payment - busy)
+ same => n,Busy(10)
+ same => n,Hangup()
 
 ; Direct-DID entry: works if a future render (or a hand-built Goto) passes the
 ; dialled number through as the extension instead of "s".
@@ -311,7 +319,11 @@ exten => _[+0-9].,1,NoOp(Connect doorway direct - did=${EXTEN})
  same => n,Set(CONNECT_DOORWAY_DID=${FILTER(0-9,${EXTEN})})
  same => n,Set(DOORWAY_DID_TENANT=${DB(connect/didmap/${CONNECT_DOORWAY_DID}/tenant)})
  same => n,ExecIf($["${DOORWAY_DID_TENANT}" != ""]?Set(__TENANT_SLUG=${DOORWAY_DID_TENANT}))
+ same => n,GotoIf($["${DOORWAY_DID_TENANT}" != "" & "${DB(connect/t_${DOORWAY_DID_TENANT}/interrupted)}" = "yes"]?interrupted)
  same => n,Goto(connect-tenant-ivr,${CONNECT_DOORWAY_DID},1)
+ same => n(interrupted),NoOp(Connect doorway direct: ${DOORWAY_DID_TENANT} interrupted for non-payment - busy)
+ same => n,Busy(10)
+ same => n,Hangup()
 
 exten => i,1,Goto(connect-default-fallback,s,1)
 exten => t,1,Goto(connect-default-fallback,s,1)

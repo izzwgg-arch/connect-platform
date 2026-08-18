@@ -27,8 +27,9 @@ export const SERVICE_INTERRUPTION_EMAIL = {
 
 export type RunnerContext = {
   db: any;
-  /** Opens a logged-in panel session. */
-  panel: () => Promise<{ session: any; mainTenantPath: string }>;
+  /** Opens a logged-in panel session. `release` MUST be called when done —
+   *  it hands the robot account back to the onboarding pool. */
+  panel: () => Promise<{ session: any; mainTenantPath: string; release?: () => void }>;
   /** Reads the tenant's outbound profiles and their members from ombutel. */
   readArsMembers: (pbxTenantId: string) => Promise<ArsMemberRef[]>;
   /** Re-bakes Connect doorways after a regen. */
@@ -135,22 +136,26 @@ export function buildSweepDeps(ctx: RunnerContext): Omit<SweepDeps, "now"> {
       // better than recording an empty interruption and "restoring" it later.
       const plan = buildInterruptionPlan({ members, inboundRoutes: [] });
 
-      const { session, mainTenantPath } = await ctx.panel();
+      const { session, mainTenantPath, release } = await ctx.panel();
       const disabled: Array<{ arsId: string; outboundRouteId: string }> = [];
-      for (const arsId of plan.arsIds) {
-        const ids = plan.disable.filter((m) => m.arsId === arsId).map((m) => m.outboundRouteId);
-        const changed = await setMembersEnabled(session, {
-          mainTenantPath,
-          arsId,
-          outboundRouteIds: ids,
-          enabled: false,
-        });
-        for (const c of changed) disabled.push({ arsId, outboundRouteId: c.outboundRouteId });
-      }
+      try {
+        for (const arsId of plan.arsIds) {
+          const ids = plan.disable.filter((m) => m.arsId === arsId).map((m) => m.outboundRouteId);
+          const changed = await setMembersEnabled(session, {
+            mainTenantPath,
+            arsId,
+            outboundRouteIds: ids,
+            enabled: false,
+          });
+          for (const c of changed) disabled.push({ arsId, outboundRouteId: c.outboundRouteId });
+        }
 
-      // ⛔ Without this the database says "disabled" and the customer keeps
-      // dialling out — proven live 2026-08-18. MAIN tenant, then re-bake.
-      await applyArsRegen(session, { mainTenantPath });
+        // ⛔ Without this the database says "disabled" and the customer keeps
+        // dialling out — proven live 2026-08-18. MAIN tenant, then re-bake.
+        await applyArsRegen(session, { mainTenantPath });
+      } finally {
+        release?.();
+      }
       await ctx.rebakeDoorways();
 
       const inv = await invoiceFor(db, invoiceId);
@@ -173,16 +178,20 @@ export function buildSweepDeps(ctx: RunnerContext): Omit<SweepDeps, "now"> {
         throw new Error(`tenant ${tenantId} is marked interrupted but no disabled routes were recorded`);
       }
       const plan = buildRestorePlan({ disabledMembers: members, repointedInbound: [] });
-      const { session, mainTenantPath } = await ctx.panel();
-      for (const arsId of plan.arsIds) {
-        await setMembersEnabled(session, {
-          mainTenantPath,
-          arsId,
-          outboundRouteIds: plan.enable.filter((m) => m.arsId === arsId).map((m) => m.outboundRouteId),
-          enabled: true,
-        });
+      const { session, mainTenantPath, release } = await ctx.panel();
+      try {
+        for (const arsId of plan.arsIds) {
+          await setMembersEnabled(session, {
+            mainTenantPath,
+            arsId,
+            outboundRouteIds: plan.enable.filter((m) => m.arsId === arsId).map((m) => m.outboundRouteId),
+            enabled: true,
+          });
+        }
+        await applyArsRegen(session, { mainTenantPath });
+      } finally {
+        release?.();
       }
-      await applyArsRegen(session, { mainTenantPath });
       await ctx.rebakeDoorways();
 
       await queue(

@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { apiGet, apiPut } from "../../../../../../services/apiClient";
 import { BillingNav } from "../../_new/ui";
 import "../customerBilling.css";
+import { ServiceInterruptionCard } from "./ServiceInterruptionCard";
 
 /* One customer's billing, on one screen.
    Replaces: pricing, plan assignment, quantity overrides, flat rate, toll-free /
@@ -708,6 +709,8 @@ export default function CustomerBillingPage() {
               )}
             </div>
           </section>
+
+          <ServiceInterruptionCard tenantId={tenantId} />
         </div>
 
         {/* ── Right column ────────────────────────────────────────────── */}

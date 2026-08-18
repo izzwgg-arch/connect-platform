@@ -312,6 +312,7 @@ import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
 import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
 import { sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
+import { registerServiceInterruptionRoutes, startServiceInterruptionSweep } from "./billing/serviceInterruption/serviceInterruptionBoot";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, resolvePersonDisplayName, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -41059,6 +41060,11 @@ const port = Number(process.env.PORT || 3001);
   }
 
   await registerBillingRoutes(app);
+  // Overdue-account service interruption: the switch, restore and force
+  // buttons (SUPER_ADMIN only), and the daily sweep. ⛔ Inert until
+  // SERVICE_INTERRUPTION_CUTOVER_AT is set — see serviceInterruptionJob.ts.
+  registerServiceInterruptionRoutes(app, app.log as any, { publishAstDb: publishToAstDb, tenantSlug: getIvrSlugForTenant });
+  registerShutdownTimer(startServiceInterruptionSweep(app.log as any, { publishAstDb: publishToAstDb, tenantSlug: getIvrSlugForTenant }));
   await registerPlatformRolePermissionRoutes(app);
   await registerCustomRoleRoutes(app);
   // Read-only door the assistant quotes prices from, so the figure it says in
