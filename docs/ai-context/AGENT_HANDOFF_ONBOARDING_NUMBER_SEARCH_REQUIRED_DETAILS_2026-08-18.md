@@ -316,19 +316,59 @@ right now. Try a different area code."* instead of nothing. Then search **845**
 and confirm numbers still appear. Then, at the Review step, blank the company
 name and submit — the server must refuse with a plain-English reason.
 
-### ⛔ Live items deliberately NOT changed — they need Izzy's decision
+### ✅ Acted on 2026-08-18, on Izzy's instruction ("TYH Industries / turn off e911 for now")
 
-1. **E911 for (929) 852-4026 is registered at `13 koznitz rd, Monroe NY 10950`**,
-   status `provisioned`, and the PBX emergency location carries it. **Dial 911
-   from that account today and dispatch is sent to that address.** Correcting it
-   is a billable, safety-critical write (`e911Update`) and needs the real
-   Cannvestments service address.
-2. **The tenant is named "a plus center"** (`cmsyv8mlb0yheqo13t7u7x1fe`), a
-   duplicate of the real April customer. Renaming is a live-customer write.
-3. **Golda Moldavsky received a real invitation** to an account named after
-   another company.
-4. **$45 was really charged**, and the "your E911 is set" email went to
-   `izzywgg@gmail.com`.
+1. **Tenant renamed to "TYH Industries"** (`cmsyv8mlb0yheqo13t7u7x1fe`), along with
+   `OnboardingSubmission.companyName` and `answers.company.companyName` so nothing
+   re-derives the old one. The April customer keeps **"A plus center"**; the
+   duplicate is gone.
+   ⛔ **The provisioning identity was deliberately NOT renamed** — `pbxLabel`
+   *"a plus center ep3wlb"*, `tenantSlug` *"a_plus_center_ep3wlb"*,
+   `voipmsSubName` *"apluscep3wlb"*. Those strings are matched against the **live**
+   PBX tenant T106 and the live VoIP.ms subaccount (see §7); renaming them orphans
+   the objects they point at. **The VitalPBX panel will keep showing the old label.
+   That is correct, not a missed rename.**
+2. **E911 was CANCELLED on 9298524026.** `e911Cancel` returned `success` and it was
+   verified two independent ways: `e911Info` → `e911_disable`, and `getDIDsInfo` →
+   `e911: "0"`. `answers.provisioning.e911` now reads `status: "cancelled"`,
+   `needsAttention: true`, `address: null`, with the old one kept under
+   `previousAddress`, and the sign-up timeline records it in plain words.
+3. **Golda Moldavsky was added to TestFlight** — group "Loopcom Testers"
+   (`fe508ee6-4a3f-49dd-bf53-858839fa2f06`), state `INVITED`, with build **52**
+   attached. ⛔ Apple sends the invitation email itself, so adding the tester **is**
+   the whole job; there is no separate send step. ⛔ Ask which builds a group has
+   the right way round — `GET /v1/builds?filter[betaGroups]={id}`;
+   `GET /v1/betaGroups/{id}/builds` answers empty even when builds are attached.
+
+### ⛔⛔ THE LIVE GAP THIS LEAVES: that line has NO 911
+
+Cancelling was the safer of two bad options — the address registered until then was
+**Izzy's own**, so a 911 call would have sent responders to his house — but
+**(929) 852-4026 now cannot reach emergency services at all**, and it is meant to be
+temporary. MLTS rules (Kari's Law / RAY BAUM'S Act) expect a working 911 path on a
+business line.
+
+**The way back, once TYH Industries' real service address is known:**
+`e911Validate` → apply VoIP.ms's own `alternatives` → `e911Validate` once more →
+`e911Provision`. ⛔ `language` must be **`EN`**, uppercase — validate accepts `en`
+and provision refuses it. ⛔ Never provision an address that did not validate.
+
+⛔ **The PBX side still carries the old address and was deliberately left alone.**
+T106's emergency **location** reads `13 koznitz rd, monroe` and notifies
+`izzywgg@gmail.com`; its emergency **numbers** (911 + 8457831212 via trunk 131) are
+still rendered. Harmless while the carrier registration is off — the call reaches
+VoIP.ms and is refused — and **removing the PBX emergency route would be worse**,
+because 911 would then fall through to ordinary outbound routing instead of failing
+cleanly. Fix it in the same pass as the re-registration.
+
+### ⏳ Still open on this account
+
+- Her **Connect invitation email named "a plus center"**. She has since gone
+  **ACTIVE**, so she signed in under the old name. `POST /admin/users/:id/resend-invite`
+  would send one carrying "TYH Industries" — **not done, Izzy's call.**
+- **$45 was really charged** against a sign-up that carried someone else's details.
+- `PbxTenantInboundDid` holds **no rows** for this tenant, so the per-number E911
+  fee currently counts zero for them. Noted, not acted on.
 
 ### ⏳ Known gap this does not close
 
