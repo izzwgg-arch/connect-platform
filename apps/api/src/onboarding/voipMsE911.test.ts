@@ -85,6 +85,12 @@ test("the REST parameter names are the PROVEN ones, not the WSDL's", () => {
   // street_number must be its own field or the call is refused.
   assert.equal(p.street_number, "30");
   assert.equal(p.street_name, "Robert Pitt Dr");
+  // ⛔ UPPERCASE. Proven on the first real registration: e911Validate accepts
+  // "en" and e911Provision then refuses it (no_provision). VoIP.ms's own
+  // getLanguages lists lowercase en/es/fr and every subaccount reads "en" —
+  // copying either is the trap. The E911 field wants "EN".
+  assert.equal(p.language, "EN");
+
   // Every field VoIP.ms requires is present.
   for (const required of ["did", "full_name", "street_number", "street_name", "city", "state", "country", "zip_code", "email", "language"]) {
     assert.ok(String(p[required] || "").length > 0, `${required} must be sent`);

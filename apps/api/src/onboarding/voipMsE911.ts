@@ -89,7 +89,16 @@ export function e911Params(did: string, a: E911Address): Record<string, string> 
     state: a.state,
     country: a.country || "US",
     zip_code: a.zip,
-    language: "en",
+    // ⛔ UPPERCASE "EN", AND e911Validate WILL NOT CATCH A WRONG VALUE HERE.
+    // Proven the hard way on the first real registration (Matamim, 2026-08-17):
+    // validate happily accepted `en` and then e911Provision refused it —
+    // `no_provision`, "The value 'en' of element 'language' is not valid."
+    // ⛔ It is NOT the account language vocabulary either: VoIP.ms's own
+    // `getLanguages` lists en/es/fr lowercase and every subaccount we own reads
+    // `en`, so copying that value is exactly the trap. The E911 field is
+    // validated by the upstream emergency provider against its own list, and
+    // `EN` is what it takes. "English" fails too (echoed back as 'En').
+    language: "EN",
     other_info: a.otherInfo.slice(0, 100),
     email: a.email,
   };
