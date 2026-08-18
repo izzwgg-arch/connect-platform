@@ -246,16 +246,42 @@ test("⛔ source: server.ts calls the cardknox guard, and no longer has the dead
   );
 });
 
-test("⛔ source: the dev-observe SUPER_ADMIN token route has no NODE_ENV bypass", () => {
-  // canIssueDevObserveJwt gates a JWT-BYPASSED route that mints a SUPER_ADMIN
-  // token scoped to tenantId "global". Its old first line was
-  // `if (NODE_ENV === "development") return true;` — no secret required.
-  const start = SERVER_TS.indexOf("function canIssueDevObserveJwt");
-  assert.ok(start > 0, "canIssueDevObserveJwt must still exist");
-  const body = SERVER_TS.slice(start, start + 1400);
-  const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  assert.ok(!code.includes("NODE_ENV"), "the only key to this route must be DEV_OBSERVE_TOKEN_SECRET");
-  assert.ok(code.includes("DEV_OBSERVE_TOKEN_SECRET"), "the secret check must remain");
+test("⛔ source: the dev-observe SUPER_ADMIN token route is GONE, not merely re-gated", () => {
+  // History: `POST /admin/dev/generate-observe-token` was marked TEMPORARY in
+  // March 2026 and survived. It sat on the JWT bypass list, so it ran
+  // anonymously, and nginx proxies `/api/` with no exclusion for it — so it was
+  // reachable from the public internet. Anyone holding the 48-char
+  // DEV_OBSERVE_TOKEN_SECRET could mint a SUPER_ADMIN JWT scoped to tenantId
+  // "global", valid up to 120 minutes, with no user row behind it and nothing
+  // in the audit trail naming a person. An earlier pass closed only its
+  // fail-open `NODE_ENV === "development"` branch and left the door standing.
+  // Deleted 2026-08-18 (provably unused: 0 nginx hits in 14 days, no cron, no
+  // timer, callers are March-2026 one-off scripts).
+  //
+  // ⛔ THE RULE: a shared secret may authenticate a MACHINE on a narrow door
+  // (see internalSecret.ts); it may NEVER be sufficient to mint an IDENTITY
+  // that outlives the request. Comments are stripped so the doc block that
+  // records this history cannot satisfy the assertions.
+  const executable = SERVER_TS.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.ok(
+    !executable.includes("generate-observe-token"),
+    "the dev-observe token route must not come back",
+  );
+  assert.ok(
+    !executable.includes("canIssueDevObserveJwt"),
+    "the dev-observe gate must not come back",
+  );
+  assert.ok(
+    !executable.includes("DEV_OBSERVE_TOKEN_SECRET"),
+    "nothing may read DEV_OBSERVE_TOKEN_SECRET again — a shared secret must not mint an identity",
+  );
+  // The bypass entry is what made it anonymous; it must go with the route.
+  const bypassSrc = readFileSync(path.join(__dirname, "jwtPublicRouteBypass.ts"), "utf8");
+  const bypassExecutable = bypassSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.ok(
+    !bypassExecutable.includes("generate-observe-token"),
+    "the dev-observe path must not be back on the JWT bypass list",
+  );
 });
 
 test("⛔ source: apps/api/src has exactly ONE remaining executable NODE_ENV reader", () => {

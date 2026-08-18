@@ -1823,43 +1823,41 @@ function canAccessCampaignSend(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "TENANT_ADMIN", "ADMIN", "MANAGER", "MESSAGING"]);
 }
 
-function constantTimeEqualStr(a: string, b: string): boolean {
-  try {
-    const ba = Buffer.from(a, "utf8");
-    const bb = Buffer.from(b, "utf8");
-    if (ba.length !== bb.length) return false;
-    return timingSafeEqual(ba, bb);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * TEMPORARY: gate for POST /admin/dev/generate-observe-token (remove when observation is done).
- * Allowed ONLY when DEV_OBSERVE_TOKEN_SECRET (≥16 chars) matches header
- * X-Dev-Observe-Secret or JSON body field "secret" (constant-time compare).
+/*
+ * ⛔ REMOVED 2026-08-18 — `canIssueDevObserveJwt` and its helper
+ * `constantTimeEqualStr`, together with the route they gated,
+ * `POST /admin/dev/generate-observe-token` (below, near the JWT preHandler).
  *
- * ⛔ There used to be an `if (NODE_ENV === "development") return true;` first
- * line — a no-secret-required bypass on a JWT-bypassed route that mints a
- * **SUPER_ADMIN token scoped to tenantId "global"** for up to 120 minutes.
- * It was dead in production only by accident (the api container sets no
- * NODE_ENV), so anyone who ever set NODE_ENV=development on this container —
- * the very "fix" CLAUDE.md forbids — would have opened it to anonymous
- * callers. Removed: the secret is now the only key. This is a behaviour no-op
- * in production and closes the fail-open direction.
+ * It was marked TEMPORARY in March 2026 and survived. It sat on the JWT bypass
+ * list, so it ran ANONYMOUSLY, and nginx proxies `/api/` with no exclusion for
+ * it (the 2026-08-18 deny covers `/api/internal/` only) — so it was reachable
+ * from the public internet, proven live: a secret-less POST to
+ * `https://app.connectcomunications.com/api/admin/dev/generate-observe-token`
+ * answered the HANDLER's own `404 {"error":"not_found"}`, where a genuinely
+ * unrouted path answers `{"error":"unauthorized"}` from the JWT hook.
+ *
+ * ⛔ THE RULE IT EARNED: a shared secret must never be sufficient to mint an
+ * IDENTITY. This one minted a **SUPER_ADMIN JWT scoped to tenantId "global"**,
+ * valid up to 120 minutes — i.e. whoever held one 48-character string held
+ * every tenant on the platform, with no user row behind it and nothing in the
+ * audit trail naming a person. A shared secret may authenticate a MACHINE
+ * calling a narrow door (see `internalSecret.ts`); it may never hand back a
+ * credential that outlives the request and impersonates an administrator.
+ *
+ * Deleted rather than re-gated because it is provably unused: 0 calls across
+ * 14 days of nginx logs (incl. rotated), no cron entry, no systemd timer, and
+ * its only callers are ~20 one-off diagnostic scripts under `scripts/` dated
+ * 2026-03-29/30 from the PBX↔Connect CDR investigation, which nothing runs.
+ *
+ * `DEV_OBSERVE_TOKEN_SECRET` in `/opt/connectcomms/env/.env.platform` is inert
+ * now that nothing reads it; deleting that line is Izzy's to do.
+ *
+ * ⛔ Do not reintroduce this shape. A script that needs admin authority should
+ * use the in-process service-principal pattern instead — sign a short-lived
+ * token FOR A REAL DB USER and drive the real route via `app.inject`, as
+ * `didSwitchSchedule.ts` and `registerAgentGrantRoutes`'s `injectAsService` do.
+ * Guarded by `apps/api/src/nodeEnvGates.test.ts`.
  */
-function canIssueDevObserveJwt(req: { headers: Record<string, unknown>; body?: unknown }): boolean {
-  const envSecret = (process.env.DEV_OBSERVE_TOKEN_SECRET || "").trim();
-  if (envSecret.length < 16) return false;
-  const h = String(req.headers["x-dev-observe-secret"] ?? "").trim();
-  let bodySecret = "";
-  if (req.body && typeof req.body === "object" && req.body !== null && "secret" in (req.body as object)) {
-    const s = (req.body as { secret?: unknown }).secret;
-    if (typeof s === "string") bodySecret = s.trim();
-  }
-  const provided = h.length > 0 ? h : bodySecret;
-  return constantTimeEqualStr(provided, envSecret);
-}
 
 function canManageCustomerWorkflow(user: JwtUser): boolean {
   return isRole(user, ["SUPER_ADMIN", "ADMIN", "BILLING", "SUPPORT"]);
@@ -6049,31 +6047,11 @@ app.post("/auth/mobile-qr-exchange", async (req, reply) => {
   };
 });
 
-// TEMPORARY: short-lived SUPER_ADMIN JWT for read-only observation scripts (no DB / no user creation).
-// Remove after PBX↔Connect observation. Gated by NODE_ENV=development or DEV_OBSERVE_TOKEN_SECRET.
-app.post("/admin/dev/generate-observe-token", async (req, reply) => {
-  if (!canIssueDevObserveJwt({ headers: req.headers as Record<string, unknown>, body: req.body })) {
-    return reply.status(404).send({ error: "not_found" });
-  }
-  const input = z
-    .object({
-      expiresMinutes: z.number().int().min(5).max(120).optional(),
-      secret: z.string().optional(),
-    })
-    .parse(req.body || {});
-  const minutes = Math.min(120, Math.max(5, input.expiresMinutes ?? 90));
-  const expiresInSeconds = minutes * 60;
-  const token = await reply.jwtSign(
-    {
-      sub: "dev-observe-token",
-      tenantId: "global",
-      email: "observe@dev.internal",
-      role: "SUPER_ADMIN",
-    },
-    { sign: { expiresIn: expiresInSeconds } },
-  );
-  return { token };
-});
+// ⛔ `POST /admin/dev/generate-observe-token` USED TO BE DEFINED HERE and was
+// DELETED 2026-08-18. It minted an anonymous SUPER_ADMIN JWT on `tenantId
+// "global"` to anyone holding a shared secret, from the public internet.
+// Full reasoning, evidence and the rule it earned are on the removed
+// `canIssueDevObserveJwt` block far above. Do not add it back.
 
 app.addHook("preHandler", async (req, reply) => {
   const path = req.url.split("?")[0];

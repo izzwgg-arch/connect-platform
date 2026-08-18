@@ -7,8 +7,13 @@
 export function shouldSkipJwtVerification(path: string): boolean {
   const pathWithoutApiPrefix = path.startsWith("/api/") ? path.slice(4) : path;
   // Reverse proxies often mount the API under a prefix (e.g. /api/...); req.url keeps that prefix.
-  const isDevObserveTokenPath =
-    path === "/admin/dev/generate-observe-token" || path.endsWith("/admin/dev/generate-observe-token");
+  // ⛔ `/admin/dev/generate-observe-token` was on this list until 2026-08-18.
+  // Being here is what made it run ANONYMOUSLY, and nginx proxies `/api/` with
+  // no exclusion for it — so a shared secret alone, from the public internet,
+  // minted a SUPER_ADMIN JWT scoped to tenantId "global" for up to 120 minutes.
+  // The route is deleted; this entry goes with it. Never re-add either.
+  // A shared secret may authenticate a MACHINE on a narrow door; it must never
+  // be sufficient to mint an IDENTITY that outlives the request.
   const isInternalCdrIngestPath =
     path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
   const isInternalMobileRingPath =
@@ -105,7 +110,6 @@ export function shouldSkipJwtVerification(path: string): boolean {
     // Multi-invoice short pay links (/p/{code} page): public view/config/pay by code.
     || path.startsWith("/billing/platform/pay-links/")
     || path.includes("/billing/platform/pay-links/")
-    || isDevObserveTokenPath
     || isInternalCdrIngestPath
     || isInternalMobileRingPath
     || isInternalMobilePrewakePath
