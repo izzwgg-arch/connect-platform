@@ -1,10 +1,13 @@
 # PLAN — put Connect behind Cloudflare, and the SIP split-out that has to happen first
 
-Status (2026-08-17): **PHASE A DONE AND VERIFIED. PHASE A2 DONE. PHASE B'S SERVER SIDE IS
-DONE — BUT NOT ONE TENANT HAS MOVED. PHASE C IS *STAGED ONLY*: one WAF skip rule exists,
-and ⛔ `app.` IS STILL DNS-ONLY — THE PROXY FLIP HAS NOT HAPPENED.** See the update box at
-the top of Phase C before touching any Cloudflare setting; in particular **"Bot Fight
-Mode" no longer exists on this zone** and the old step 11 is un-followable as written.
+Status (2026-08-18): **PHASE A DONE AND VERIFIED. PHASE A2 DONE. PHASE B'S SERVER SIDE IS
+DONE — BUT NOT ONE TENANT HAS MOVED. PHASE C STAGING IS COMPLETE (2026-08-18, owner-
+approved: SSL-strict config rule scoped to `app.`, WAF skip rule on both hostnames,
+LOG-only rate limit on the login path, Cloudflare Managed Ruleset in LOG mode — see the
+Phase C update box + §C8), and ⛔ `app.` IS STILL DNS-ONLY — THE PROXY FLIP HAS NOT
+HAPPENED.** See the update box at the top of Phase C before touching any Cloudflare
+setting; in particular **"Bot Fight Mode" no longer exists on this zone** and the old
+step 11 is un-followable as written.
 ⛔ **Read that middle clause literally.** `SIP_PUBLIC_WS_URL` is set and the api serves
 `wss://sip.connectcomunications.com/sip`, but **the apps never refresh a cached
 `sipWsUrl`**, so every phone signed in today is still registering against `app.` and
@@ -632,7 +635,31 @@ not been run because there is nothing yet to check.
 
 ### Phase C — proxy `app.` (only after B is soaked)
 
-> ## ✅ 2026-08-17 — PHASE C IS **STAGED**. ⛔⛔ **`app.` IS STILL DNS-ONLY. THE PROXY FLIP HAS NOT HAPPENED AND IS NOT AN AGENT'S TO MAKE.**
+> ## ✅ 2026-08-18 — PHASE C STAGING **COMPLETED** (C8 below). ⛔⛔ **`app.` IS STILL DNS-ONLY. THE PROXY FLIP HAS NOT HAPPENED AND IS NOT AN AGENT'S TO MAKE.**
+>
+> **Owner-approved second pass, 2026-08-18 (Izzy).** Four Cloudflare changes, all
+> **Log / Skip / scoped-config only — nothing that blocks or challenges anything**, and
+> every one of them is **inert today** because `app.` is not proxied. Read back from the
+> API after each write and cross-checked in the dashboard UI. **No DNS record touched, no
+> proxy toggle moved, no HSTS, no Browser Integrity Check / Security Level change, no
+> server / nginx / env / PBX change.** Full detail, verbatim expressions and rollback in
+> **§C8** at the end of Phase C.
+>
+> | # | what | id | state |
+> |---|---|---|---|
+> | 1 | **Configuration Rule** — SSL **Full (strict)** scoped to `http.host eq "app.connectcomunications.com"` ONLY | ruleset `f80c6f00fffc4da68c132f25342380ff` / rule `47b087a4a5e04d5a9d3f5cd703bf1322` | Active; **zone-wide SSL still `full`** (read back) so `portal.` cannot regress |
+> | 2 | **WAF skip rule extended** to `app.loopcom.net` too — same rule id, action + products + logging byte-identical | ruleset `11891f351fa34a2d83c22d5d71d7a13f` now **v2** / rule `47d54f121d6945419a6483d20f2b887a` | Active |
+> | 3 | **Rate limit, action `log`** on `/api/auth/login`, both hosts, 20 req / 10 s per `ip.src`+`cf.colo.id` | ruleset `e14af09b3fb44292a107cc9c02a3f05f` / rule `ab375c0db58b4f5da4938e098e298efb` | Active, **LOG ONLY** |
+> | 4 | **Cloudflare Managed Ruleset deployed with `overrides.action = "log"`** (ruleset status Default) | ruleset `ab86f7288cfc4f35bd8f8f70153fdee3` / rule `0f255a07814948f08eb7559ed203056d` executing `efb7b8c949ac4650a09736fc376e9aee` | Active, **LOG ONLY** — UI reads *Ruleset action: Log* |
+>
+> DNS after: **11 records, `portal.` still the only Proxied one**, `app.` / apex / `m.` /
+> `sip.` / `www` DNS only — identical to before. Settings after: `ssl=full`,
+> `security_level=medium`, `browser_check=on`, HSTS off, `min_tls_version=1.2`,
+> `always_use_https=on`, `sbfm_definitely_automated=allow`, `sbfm_verified_bots=allow`.
+> Server-side (from loopcom): `/api/health` **200** on both app hostnames, all four SIP
+> hostnames **101**, `portal.` **200**, bad-credential login **401** on both hosts.
+>
+> ### (the 2026-08-17 first pass, kept as history — everything below it is still true except that C3 and C4's "not changed" verdicts are now superseded by C8)
 >
 > **Exactly ONE thing was changed in Cloudflare: one WAF custom rule was created.**
 > **No DNS record was touched. No proxy toggle was moved. No zone setting was changed.**
@@ -851,6 +878,139 @@ unreachable.
 `47d54f121d6945419a6483d20f2b887a` ("Skip security for machine-to-machine paths") from
 **Security → Security rules → Custom rules**. That restores the zone to exactly the state
 it was in before — because it is the only thing that changed.
+*(2026-08-18: no longer the only thing — see C8 for the three further items and their
+rollback.)*
+
+#### C8. ✅ 2026-08-18 — the staging pass finished: SSL rule, skip rule on both hosts, LOG-only rate limit, LOG-only managed ruleset
+
+Owner-approved. **All writes were made through the dashboard's own same-origin API**
+(`https://dash.cloudflare.com/api/v4/zones/<zone>/…` with the logged-in browser
+session — the frontend uses exactly this) and **read back with a fresh GET after every
+write**, then cross-checked on the dashboard screens. ⛔ Every action created here is
+`set_config` / `skip` / `log` — **nothing blocks, nothing challenges**. ⛔ **No DNS
+record, no proxy toggle, no HSTS, no BIC, no Security Level, no server change.**
+
+**Method note, so nobody re-derives it:** the browser tool's output redactor mangles
+dotted hostnames and hex ids ("[BLOCKED: JWT token]" / "[BLOCKED: Base64]"), so read-backs
+were rendered with `.` → `·` and ids space-separated. One deliberate no-op write was made
+first to prove the session could write at all: `PATCH /settings/ssl {value:"full"}` — the
+value it already had; it answered `200 full`. Nothing else was touched as a probe.
+
+**C8.1 — Configuration Rule (`http_config_settings` entrypoint, created this pass)**
+ruleset `f80c6f00fffc4da68c132f25342380ff` v1, rule `47b087a4a5e04d5a9d3f5cd703bf1322`,
+enabled, action `set_config`, `action_parameters: { "ssl": "strict" }`.
+Expression, verbatim as stored:
+```
+http.host eq "app.connectcomunications.com"
+```
+Description: *SSL Full (strict) for app.connectcomunications.com only (zone stays Full
+because portal. CNAMEs to a third party)*. **Zone-wide `settings/ssl` read back
+`full`, unchanged.** UI: Rules → Overview → Configuration Rules → "Hostname equals
+app.connectcomunications.com · SSL · Active". Inert until `app.` is proxied; when it is,
+`app.` (real Let's Encrypt cert on the origin) is validated strictly and `portal.` keeps
+today's `full` behaviour. ⛔ It names **one** host on purpose — a broader expression
+would flip `portal.` to strict and risk a 526 on the Telocall GUI.
+
+**C8.2 — the WAF skip rule now covers both hostnames** (`http_request_firewall_custom`
+ruleset `11891f351fa34a2d83c22d5d71d7a13f`, **v1 → v2**, same rule id
+`47d54f121d6945419a6483d20f2b887a`, still order 1 of 1, Active, logging on).
+Expression, verbatim as stored:
+```
+(http.host eq "app.connectcomunications.com" or http.host eq "app.loopcom.net") and (starts_with(http.request.uri.path, "/api/webhooks/") or starts_with(http.request.uri.path, "/api/internal/"))
+```
+Action `skip`, `phases` `http_ratelimit, http_request_firewall_managed,
+http_request_sbfm`, `products` `zoneLockdown, uaBlock, bic, hot, securityLevel,
+rateLimit, waf`, `ruleset: current` — **byte-identical to before; only the host clause
+changed.** ⛔ Reminder: `app.loopcom.net` is on **Squarespace DNS**, not this zone, so
+this clause is protective-only today — it matters the day loopcom.net moves onto
+Cloudflare, and it means nobody has to remember to add it then.
+
+**C8.3 — rate limiting, LOG ONLY** (`http_ratelimit` entrypoint, created this pass)
+ruleset `e14af09b3fb44292a107cc9c02a3f05f` v1, rule `ab375c0db58b4f5da4938e098e298efb`,
+enabled, **action `log`**,
+`ratelimit: { characteristics: ["ip.src","cf.colo.id"], period: 10, requests_per_period: 20, mitigation_timeout: 10 }`.
+Expression, verbatim as stored:
+```
+(http.host eq "app.connectcomunications.com" or http.host eq "app.loopcom.net") and http.request.uri.path eq "/api/auth/login"
+```
+Description: *LOG ONLY - login bursts on /api/auth/login (edge visibility; the api has
+its own throttle - never Block here, one office NAT would be banned)*. UI: Security rules
+→ Rate limiting rules → Action **Log**, Active. ⛔ **Never change this to Block or
+Challenge on its own** — `apps/api/src/loginThrottle.ts` already limits per account,
+and a Block at the edge keyed on `ip.src` would take out a whole office behind one NAT
+(the exact 2026-08-17 blank-app failure shape). Its purpose is to accumulate what a
+threshold *would* have caught, for tuning; only after a soak, and only by the owner.
+
+**C8.4 — Cloudflare Managed Ruleset, deployed in LOG mode**
+(`http_request_firewall_managed` entrypoint, created this pass) ruleset
+`ab86f7288cfc4f35bd8f8f70153fdee3` v1, rule `0f255a07814948f08eb7559ed203056d`, enabled,
+action `execute`, expression `true`,
+`action_parameters: { id: "efb7b8c949ac4650a09736fc376e9aee", overrides: { action: "log" }, version: "latest" }`.
+Description: *Cloudflare Managed Ruleset - LOG ONLY (review before any enforcement; do
+not flip to block without the owner)*. **The dashboard's own screen reads "Ruleset
+action: Log", "Ruleset status: Default"** (Security rules → Managed rules → Cloudflare
+Managed Ruleset). Pro accepted the ruleset-level action override on the first PUT — no
+plan refusal, so the "do not deploy if it can only block" branch was not needed.
+⛔ **The scope is `true` (all incoming requests to the zone), on purpose:** today the only
+proxied hostname is `portal.` (the third-party Telocall GUI), so until `app.` is proxied
+the log will hold only portal. events — harmless, since Log never blocks; once `app.` is
+proxied it covers it with no further change. The C2/C8.2 skip rule already exempts the
+machine paths (`/api/webhooks/`, `/api/internal/`) from this phase in advance.
+⛔ "Ruleset status: Default" means rules that Cloudflare ships **disabled** stay
+disabled — the log covers the default-enabled set only. That was left deliberately: the
+override that carries into eventual enforcement is the action, and it should be the only
+one.
+⛔ **The OWASP Core Ruleset and the Exposed Credentials Check ruleset were NOT deployed.**
+
+**Left exactly as they were, and read back to prove it:** `browser_check = on`,
+`security_level = medium`, HSTS `enabled: false, max_age 0`, `min_tls_version = 1.2`,
+`always_use_https = on`, `email_obfuscation = on`, `enable_js = true`,
+`sbfm_definitely_automated = allow`, `sbfm_verified_bots = allow`,
+`sbfm_static_resource_protection = false`, `ai_bots_protection = block`. Everything C1b
+says about BIC and Security Level still stands.
+
+**DNS, before and after, from the API and from the Records screen:** 11 records both
+times; `A app` / `A @` / `A m` / `A sip` / `CNAME www` all `proxied=false`,
+`CNAME portal → ui.zswitch.net` `proxied=true` (the only one), MX + 4 × TXT unproxied.
+`dig @1.1.1.1` from loopcom: `app.` and `sip.` → `45.14.194.179`; `portal.` → Cloudflare
+addresses (104.26.x / 172.67.x). **Nothing moved.**
+
+**Server-side after the changes (from loopcom, 2026-08-18 16:52Z, so no workstation
+filter in the way):** `/api/health` **200** and `/` **200** on both
+`app.connectcomunications.com` and `app.loopcom.net`; `/sip` **101** on all four SIP
+hostnames (`app.connectcomunications.com`, `app.loopcom.net`,
+`sip.connectcomunications.com`, `sip.loopcom.net`); `portal.` **200** through the edge;
+the Cardknox webhook path answers **400** to an empty POST (reaches the app, refuses the
+body); a well-formed bad-credential login answers **401 `invalid_credentials`** on both
+hosts (⛔ `--data @file` — a 1-character password answers a **500 `internal_error`**;
+that is a pre-existing api behaviour, `server.ts:5748` `.parse()` with `min(8)` throwing
+into the global handler, not an edge effect — nothing here touches the origin path).
+
+⏳ **NOT PROVEN, and it cannot be yet:** none of the four rules has matched a real
+`app.` request, because `app.` is not proxied. They are proven as *stored configuration
+read back from the API and displayed by the dashboard*, never as *a request that was
+logged/skipped*. The managed ruleset and rate-limit logs will start filling from `portal.`
+traffic (managed) and from nothing (rate limit — its hosts are unproxied) until the flip.
+
+**Rollback of this pass (each independent, seconds, all in the dashboard):**
+1. Rules → Overview → Configuration Rules → delete
+   "SSL Full (strict) for app.connectcomunications.com only" (or
+   `DELETE /rulesets/f80c6f00fffc4da68c132f25342380ff/rules/47b087a4a5e04d5a9d3f5cd703bf1322`).
+2. Security rules → Custom rules → edit
+   "Skip security for machine-to-machine paths" and remove
+   ` or http.host eq "app.loopcom.net"` (or PATCH the rule back to the C2 expression;
+   the ruleset then becomes v3).
+3. Security rules → Rate limiting rules → delete "LOG ONLY - login bursts on
+   /api/auth/login".
+4. Security rules → Managed rules → Cloudflare Managed Ruleset → delete the deployment
+   (or `DELETE /rulesets/ab86f7288cfc4f35bd8f8f70153fdee3/rules/0f255a07814948f08eb7559ed203056d`).
+Together with C7 that restores the zone exactly.
+
+**What is still the owner's, unchanged from C6:** the orange cloud on `app.` (⛔ only
+after Phase B — the four tenants re-authenticate off `app./sip`), whether BIC comes off
+pre-emptively, whether Security Level drops for the API, HSTS last of all, and — new —
+**whether the rate limit ever leaves Log, and whether the managed ruleset ever leaves
+Log**, both only after reading what they logged during a real soak.
 
 ---
 

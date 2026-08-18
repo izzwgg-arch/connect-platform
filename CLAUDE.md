@@ -2562,12 +2562,54 @@ live. See the two bullets on the edge/SIP split below before touching any of it.
   files. Fully recovered, nothing lost — but compare by inspecting which files the
   errors land in, never by stashing.
 
-## ⛔⛔ AGENT HANDOFF — Cloudflare Phase C is STAGED and `app.` IS STILL DNS-ONLY (2026-08-17) — READ FIRST before touching ANY Cloudflare setting, before looking for "Bot Fight Mode", before adding a WAF rule, before changing SSL/TLS mode, and before anyone says "just turn the orange cloud on"
+## ⛔⛔ AGENT HANDOFF — Cloudflare Phase C staging is COMPLETE and `app.` IS STILL DNS-ONLY (2026-08-17 → 2026-08-18) — READ FIRST before touching ANY Cloudflare setting, before looking for "Bot Fight Mode", before adding a WAF rule, before changing SSL/TLS mode, before flipping ANY rule from Log to Block, and before anyone says "just turn the orange cloud on"
 
 Full detail: **`docs/ai-context/PLAN_CLOUDFLARE_EDGE_SIP_SPLIT_2026-08-16.md` → Phase C**
-(**Cloudflare only. No DNS record touched, no proxy toggle moved, no zone setting
-changed, no server config, no nginx, no env, no deploy, no PBX write, no tenant row.**
-Exactly **one** thing was created: a single WAF custom rule.)
+(2026-08-17 first pass = the update box + C1–C7; **2026-08-18 second pass = §C8**.)
+(**Cloudflare only, both passes. No DNS record touched, no proxy toggle moved, no
+server config, no nginx, no env, no deploy, no PBX write, no tenant row.**)
+
+- ✅✅ **2026-08-18, OWNER-APPROVED SECOND PASS — FOUR MORE THINGS EXIST, ALL LOG / SKIP /
+  SCOPED-CONFIG ONLY, ALL INERT UNTIL `app.` IS PROXIED, EVERY ONE READ BACK FROM THE
+  API AND SEEN ON THE DASHBOARD SCREEN AFTER THE WRITE.** (1) **Configuration Rule**
+  `47b087a4a5e04d5a9d3f5cd703bf1322` (ruleset `f80c6f00…`): expression exactly
+  `http.host eq "app.connectcomunications.com"` → SSL **Full (strict)**; ⛔ **the
+  zone-wide mode is still `full`** (read back) so `portal.` (Telocall GUI, third-party
+  CNAME) cannot regress — never widen that expression. (2) **The WAF skip rule
+  `47d54f121d6945419a6483d20f2b887a` now reads
+  `(http.host eq "app.connectcomunications.com" or http.host eq "app.loopcom.net") and (...same two paths...)`**
+  — same rule id, ruleset `11891f35…` v1→v2, action/products/logging byte-identical.
+  (3) **Rate limit `ab375c0db58b4f5da4938e098e298efb` (ruleset `e14af09b…`), action
+  `log`**, `/api/auth/login` on both hosts, 20 req/10 s per `ip.src`+`cf.colo.id`.
+  ⛔ **NEVER flip it to Block/Challenge on your own** — `loginThrottle.ts` already
+  throttles per account, and an edge block keyed on IP bans a whole office behind one
+  NAT (the 2026-08-17 blank-app shape). (4) **Cloudflare Managed Ruleset DEPLOYED with
+  `overrides.action = "log"`** (entrypoint `ab86f728…`, rule `0f255a07…`, executes
+  `efb7b8c949ac4650a09736fc376e9aee`, status Default, scope `true`) — the dashboard's
+  own screen reads **"Ruleset action: Log"**. Pro accepted the ruleset-level override
+  on the first PUT. ⛔ OWASP + Exposed-Credentials rulesets were **NOT** deployed.
+  ⛔ Nothing here blocks or challenges anything; **the acceptance test is the soak after
+  the flip — read what the two Log rules logged before anyone proposes enforcement.**
+- ✅ **How the writes were made, so nobody re-derives it:** the dashboard's own
+  same-origin API (`https://dash.cloudflare.com/api/v4/zones/<zone>/…`, browser session,
+  `credentials:'include'`) — a no-op `PATCH /settings/ssl {value:"full"}` (its existing
+  value) proved the session could write; then PUT the phase entrypoints / PATCH the one
+  rule, and GET each back. ⛔ The browser tool's redactor mangles dotted hostnames and hex
+  ids ("[BLOCKED: JWT token]") — render read-backs with `.`→`·` and ids space-split, or
+  a correct expression reads like a leak.
+- ✅ **Verified after the pass, from the server:** `/api/health` **200** + `/` **200** on
+  both app hostnames, `/sip` **101** on all four SIP hostnames, `portal.` **200**,
+  Cardknox webhook path **400** to an empty POST (reaches the app), bad-credential login
+  **401** on both hosts. DNS: **11 records, `portal.` still the only Proxied one.**
+  ⛔ Aside, pre-existing, not touched: a **1-character password** on `/api/auth/login`
+  answers **500 `internal_error`** (`server.ts:5748` `.parse()` `min(8)` throwing into
+  the global handler) — a well-formed bad credential is a clean 401; use `--data @file`.
+- ⛔ **Rollback of the 2026-08-18 pass = four independent deletes/edits in the
+  dashboard** (listed in §C8); with the C7 one-liner that restores the zone exactly.
+
+*(The bullets below are the 2026-08-17 first pass and are all still true, except that C3
+"managed ruleset deliberately NOT deployed" and C4 "SSL rule deliberately not created"
+are now superseded by the pass above.)*
 
 - ⛔⛔ **THE ORANGE CLOUD HAS NOT BEEN TURNED ON AND MUST NOT BE.** Read back from the
   Cloudflare API **after** the change: `app.` **DNS only**, apex **DNS only**, `m.` (the
