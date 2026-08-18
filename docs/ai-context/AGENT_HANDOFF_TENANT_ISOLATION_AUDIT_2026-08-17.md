@@ -13,6 +13,17 @@ permission resolver, every signed-URL scheme and the storage/streaming paths.
 
 ## 0a. ⛔ REMEDIATION STATUS — updated 2026-08-18 (read this before acting on anything below)
 
+**Commit `d4184c26` on `feat/ivr-migration-takeover`. nginx LIVE and verified from
+outside; api DEPLOYED and container-verified (`/app/.build-commit` =
+`d4184c26a828`).** ⛔ The deploy log's final line reads `done 49b617e4` — another
+session pushed portal/docs commits mid-build; the `verify:` line and
+`.build-commit` are the authority and both read `d4184c26a828`.
+
+Proven in the running container with production env (deployed module driven
+directly): the heavy chat path mints **and** verifies, the key is **not** the repo
+literal, it **is** the `JWT_SECRET`-derived value, and a forged unkeyed chat-db URL
+is **rejected**.
+
 | § | Finding | Status |
 |---|---|---|
 | **§1** | `/internal/*` unauthenticated + publicly reachable | ✅ **CLOSED AT NGINX** on both vhosts, verified externally. ⛔ **The code still fails open** — see below, it CANNOT be changed without setting the secret first |

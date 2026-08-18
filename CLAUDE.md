@@ -364,8 +364,15 @@ activate e911 in voip.ms on every future signup"* — *"through the voip.ms API.
 ## ⛔⛔ AGENT HANDOFF — the whole tenant directory was downloadable by a stranger, and two doors that "checked a secret" had no secret (2026-08-18) — READ FIRST before touching `/internal/*`, the VoIP.ms SMS webhook, any signed-URL helper, or before believing a guard that reads an env var
 
 Full detail: **`docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md` §0a**
-(nginx **LIVE and verified from outside**; api code **committed**. No PBX write, no
-migration, no env edit, no DNS/Cloudflare change, no tenant row touched.)
+(`d4184c26` on `feat/ivr-migration-takeover`. nginx **LIVE and verified from
+outside**; api **DEPLOYED and container-verified** — `/app/.build-commit` reads
+`d4184c26a828`. No PBX write, no migration, no env edit, no DNS/Cloudflare
+change, no tenant row touched.)
+⛔ **The deploy log's last line reads `done 49b617e4`, which is NOT this commit
+and is NOT a failed deploy** — another session pushed three portal/docs commits
+while the build ran, so that line reports the clone's HEAD after a later fetch.
+**The `verify:` line and `/app/.build-commit` are the authority, and both read
+`d4184c26a828`.**
 
 - ⛔⛔ **`GET /api/internal/telephony/pbx-tenant-map` RETURNED THE ENTIRE TENANT
   DIRECTORY TO AN ANONYMOUS CALLER — 200, 24,839 bytes, on BOTH hostnames.**
@@ -449,11 +456,23 @@ migration, no env edit, no DNS/Cloudflare change, no tenant row touched.)
   gate in `onboarding/publicRoutes.ts`. Both need permission-model decisions.
   ⏳ **§3b is fixed for chat only** — the prompt, MOH, CRM-doc and CRM-voicemail-drop
   helpers still resolve to `"dev-signing-secret"`.
-- ⏳ **NOT PROVEN: nobody has sent a chat attachment or a text since the deploy.**
-  The nginx half is proven from outside; the code half is proven by 34 tests, a
-  clean shared typecheck, an api typecheck at its exact 75-error baseline, and the
-  full suites (shared 352/352; api 2,190/2,200 with all 7 failures the pre-existing
-  `pbxTenantDirectorySync` ones).
+- ✅ **The signing change is PROVEN INSIDE THE RUNNING CONTAINER, not just by
+  unit test** — the deployed module was driven with production env: the heavy
+  path mints **and verifies** (`{"ok":true"}`), the key is **not** the repo
+  literal, it **is** the `JWT_SECRET`-derived value, chat-db round-trips, and a
+  forged unkeyed URL is **rejected**. So chat attachments will load.
+- ✅ **Live after deploy:** `/api/internal/telephony/pbx-tenant-map` **403** on
+  both hostnames (it survived the blue/green nginx reload — the deny block uses
+  the `connect_api_active` upstream, so it follows the flip), the VoIP.ms webhook
+  **401** (was 200), and health / portal / `/version` all **200** on both hosts.
+- ⏳ **NOT PROVEN: no human has opened a chat attachment or received a text since
+  the deploy** — it was 04:27 local and there is no customer traffic to read.
+  ⛔ **The acceptance test is the first chat attachment of the morning**: watch
+  for 200s on `/chat/attachments/download` in the nginx log and **zero** 401s
+  with `bad_signature`. Everything else is proven by 34 tests (10 of which fail
+  against the pre-fix module), a clean shared typecheck, an api typecheck at its
+  exact 75-error baseline, and the full suites (shared 352/352; api 2,190/2,200
+  with all 7 failures the pre-existing `pbxTenantDirectorySync` ones).
 
 ## ⛔⛔ AGENT HANDOFF — the assistant panel opens differently, and a customer can now reach a PERSON without the model volunteering (2026-08-17) — READ FIRST before touching `FloatingAssistant.tsx`, before adding anything that pages the owner, or for "the customer says nobody got back to them"
 
