@@ -35,7 +35,7 @@ is **rejected**.
 | **§5** | Anonymous tenant creation via the `NODE_ENV` gate | ✅ **CLOSED 2026-08-18** — the gate defaults closed and the `NODE_ENV` dependency is gone. See §0c |
 | **§6a–§6g** | Medium / low tenant scoping | ✅ **CLOSED 2026-08-18** — all seven scoped, plus a second §6c path the audit missed (role DUPLICATE). See §0d |
 | **§6k** | `/admin/dev/generate-observe-token` | ✅ **CLOSED 2026-08-18** — the route is DELETED, not re-gated. See CLAUDE.md |
-| §6h–§6j, §6l | Medium / low | ⏳ **OPEN**, untouched |
+| **§6h, §6i, §6j, §6l** | Medium / low | ✅ **CLOSED 2026-08-19** — and §6i was WORSE than written: the global limiter had never applied to any route. See §0e |
 
 ⛔⛔ **CORRECTION TO THIS AUDIT, established live 2026-08-18: §6a and §6b are
 LATENT, not live.** Both routes gate on `connectChatRoutes.ts`'s own
@@ -47,6 +47,23 @@ only account that can reach either route today is `izzywgg@gmail.com`, the
 SUPER_ADMIN, for whom the behaviour is intended. ⛔ **Creating one `ADMIN`-role
 user arms both** — exactly the shape §6h already records for the raw-PBX-id
 routes. The fixes shipped anyway, because that is one `POST /admin/users` away.
+
+### ✅ §0e — §6h, §6i, §6j, §6l ARE CLOSED (2026-08-19) — and §6i was worse than this audit said
+
+`eeec0002`, api DEPLOYED and container-verified. Detail and measurements in the
+security-audit doc §10; the CLAUDE.md section carries the rules. In one paragraph:
+**§6i** — the "one bucket for the whole platform" claim was wrong: the global limiter
+had never attached to any route (`onRoute` ordering), so there was NO bucket; now a
+real per-client-IP limiter at 480/min with internal callers exempt, proven by a
+Fastify test that declares routes before the plugin. **§6j** — `pay-multi` on the
+bypass; live: a bogus token gets the handler's 410, not the hook's 401. **§6h** —
+raw VitalPBX writes prove ownership by listing the caller's own tenant; tenants and
+trunks super-only. **§6l** — remote-support oracle closed (tenant-scoped lookup);
+`/chat/a/` anchored; scan + tracking-session tenant-scoped; campaign assignee
+validated on both writes; scheduled profile + announcement promptRef validated; MOH
+lookup scoped; agent doors constant-time; `requireCrmAdmin` honours the tenant
+switch. Left as designed: `POST /lan-phones/runs` (customer app reports its own
+scan) and the five `/internal/delivery/*` doors (secret unset ⇒ refused).
 
 ### ✅ §0d — §6a–§6g ARE CLOSED (2026-08-18)
 

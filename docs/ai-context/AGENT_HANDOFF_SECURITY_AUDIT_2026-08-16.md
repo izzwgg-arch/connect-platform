@@ -175,13 +175,13 @@ Full risk/rollback wording is in the session report. Summary:
 | A | **Portal ships ZERO security headers.** `location /` sets `add_header Cache-Control`, and nginx `add_header` is **not inherited into a block that has its own** — so all five server-level headers (CSP, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy) are cancelled for every HTML page. Proven: `/api/health` returns them, `/login` returns none. The whole customer-facing app is clickjackable and has no CSP. | HIGH |
 | B | **Session tokens never expire.** `app.register(jwt, { secret })` sets no `sign.expiresIn`, and `/auth/login` calls `reply.jwtSign(payload)` with no options. No refresh tokens, no session table, no revocation. A token stolen a year ago still works. | HIGH |
 | C | **No MFA of any kind.** No TOTP, WebAuthn, passkeys, or step-up auth anywhere in the codebase — including for SUPER_ADMIN, which can move money and provision telephony. | HIGH |
-| D | **SSH: `PermitRootLogin yes` + `PasswordAuthentication yes`** against 1,457 failed attempts in 24h / 16,031 total. Root is password-guessable from the internet; fail2ban is the only thing in the way. 8 root keys, several stale agent keys. | HIGH |
+| D | ✅ **FIXED 2026-08-19 (§10)** — keys only now. Was: **SSH: `PermitRootLogin yes` + `PasswordAuthentication yes`** against 1,457 failed attempts in 24h / 16,031 total. Root is password-guessable from the internet; fail2ban is the only thing in the way. 8 root keys, several stale agent keys. | HIGH |
 | E | **Origin fully exposed.** Cloudflare is DNS-only for `app.` — no WAF, no bot protection, no edge rate limiting, no DDoS absorption, and the origin IP is public. | HIGH |
 | F | **No DMARC record**, SPF is `~all`, no DKIM verified — on the domain that sends customer invoices and voicemail notifications. Trivially spoofable. | MEDIUM |
-| G | `JWT_SECRET` falls back to the literal `"change-me"` if unset. It **is** set (64 chars, not the fallback) — but the fallback should fail closed, not boot. | MEDIUM |
-| H | `.env.platform` is mode **644** (`.env.deploy-queue` is 600), plus **~15 historical backup copies** of it in the same directory. Mitigated by the parent dir being `750 root:root`, so not currently exploitable. | LOW |
-| I | `server_tokens off;` is commented out — nginx version leaked in every response. | LOW |
-| J | `account_disabled` returns **403** while bad credentials return 401 — a user-enumeration oracle. | LOW |
+| G | ✅ **FIXED 2026-08-19 (§10)** — fails closed at boot. Was: `JWT_SECRET` falls back to the literal `"change-me"` if unset. It **is** set (64 chars, not the fallback) — but the fallback should fail closed, not boot. | MEDIUM |
+| H | ✅ **FIXED 2026-08-19 (§10)** — `600`, backups too. Was: `.env.platform` is mode **644** (`.env.deploy-queue` is 600), plus **~15 historical backup copies** of it in the same directory. Mitigated by the parent dir being `750 root:root`, so not currently exploitable. | LOW |
+| I | ✅ **FIXED 2026-08-19 (§10)**. Was: `server_tokens off;` is commented out — nginx version leaked in every response. | LOW |
+| J | ✅ **FIXED 2026-08-19 (§10)** — checked only after bcrypt. Was: `account_disabled` returns **403** while bad credentials return 401 — a user-enumeration oracle. | LOW |
 
 ---
 
@@ -563,3 +563,84 @@ contract, the mobile limitation, the hard-enforcement flip, tests). Summary:
 - **What this does NOT change:** tokens still never expire (Finding B / §8 above),
   there is still no session table, and the mobile 401 gap from §8.2 stands.
 - Deploy status is recorded in CLAUDE.md's MFA section and `TESTS_RUN.md`.
+
+## 10. Round 2 hardening — the dead rate limiter, keys-only SSH, both-hostname parity (2026-08-19)
+
+`eeec0002`, api DEPLOYED and container-verified; nginx + sshd + env changes live.
+CLAUDE.md carries the summary section; this is the record of what was measured.
+
+### 10.1 The global rate limiter had never run (audit §6i, re-read)
+
+`app.register(rateLimit, { max: 200, timeWindow: "1 minute" })` at `server.ts:356`,
+un-awaited, followed by ~480 synchronous route declarations. `@fastify/rate-limit`
+10.3.0 with `global: true` attaches through `fastify.addHook('onRoute', …)`; Fastify
+5.7.4 runs `onRoute` hooks synchronously inside `addNewRoute` — at declaration time.
+The plugin's `onRoute` hook did not exist yet when any route was declared, so no route
+ever got the limiter. Evidence, read-only, before the fix: 24 h of nginx logs — 56 ×
+429 total, all from `/voice/me/extension`'s own route limiter; peak **357 req/min**
+platform-wide; `docker logs app-api-1 | grep -c "Rate limit exceeded"` → 0; and
+`curl -I` on `/health`, `/me`, `/admin/tenants`, `/voice/me/extension` — **no
+`x-ratelimit-*` header on any of them**. Lifecycle hooks (`onRequest` etc.) are
+different: `route.js` snapshots `this[kHooks][hook]` at `avvio.once('preReady')`,
+so a hook added inside `app.after()` binds to every route. Hence:
+`app.register(rateLimit, { global: false })` + `app.after(() => app.addHook("onRequest",
+app.rateLimit(buildGlobalRateLimitOptions(max))))`.
+
+**Sizing (per real IP per minute on `/api/`):** current log top bucket 93 (overnight);
+full previous day top **167** (50.48.58.53 = Izzy), next 137; distribution over 17,209
+buckets: >100: 20, >150: 1, >200: 0. Two days earlier: 523/480 (38.105.207.69 = the
+Gesheft voicemail-flood bug that got the office banned), 379/208 (94.26.67.x, same
+family). Ceiling **480/min**; `monitor.sh` bans at >1200/5 min behind it. Exempt:
+header-less callers (docker peers — the api port is `127.0.0.1:3001` so nothing external
+is header-less) and `/internal/*`. Key = last `X-Forwarded-For` entry.
+
+### 10.2 SSH (finding D)
+
+`sshd -T` before: `permitrootlogin yes`, `passwordauthentication yes` — the latter from
+`sshd_config.d/50-cloud-init.conf` (`yes`), which beat `60-cloudimg-settings.conf`
+(`no`) because sshd takes the FIRST value. **`auth.log` held 28 `Accepted password for
+root`, all from `50.49.194.85`, latest 2026-07-25**; 1,784 key logins in the current
+log (one fingerprint dominant); 1,222 failed password guesses in 24 h; fail2ban 1,181
+total bans. Change: `PermitRootLogin prohibit-password`; `50-cloud-init.conf` →
+`PasswordAuthentication no`; `sshd -t`; `systemctl reload ssh` (never restart);
+fresh key login proven; `ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password`
+→ `Permission denied (publickey)`. Backup `/root/sshd-backup-20260819T032626Z/`.
+⛔ Rollback = restore both files, `sshd -t`, `systemctl reload ssh`.
+
+### 10.3 nginx / env (findings I, H) + HSTS
+
+`server_tokens off;` uncommented in `/etc/nginx/nginx.conf` (backup
+`/root/nginx.conf.bak.20260819T032612Z.server-tokens`) → `Server: nginx` on both hosts.
+`chmod 600 /opt/connectcomms/env/.env.platform*` (24 backups; dir already `750`).
+HSTS `max-age=86400` added to `security-headers.conf` AND at server level in both
+vhosts (backup `/root/nginx-hsts-backup-20260819T033141Z/`); verified on `/login` and
+`/api/health` on both hosts. No `includeSubDomains`, no preload — deliberately.
+
+### 10.4 `app.loopcom.net` parity
+
+Vhosts normalised (hostname → HOST, cert path → HOST) and diffed: only `location /brand/`
+differed (present on `connectcomms` only) — added to `connectcomms-loopcom` (backup
+`/root/nginx-connectcomms-loopcom-backup-20260819T032708Z-brand.conf`), verified
+`cache-control: public, max-age=31536000, immutable` on both. SIP vhosts identical
+except `server_name`. Both vhosts have no `access_log` directive → default
+`/var/log/nginx/access.log`, the one `monitor.sh` reads; both include
+`allowlist.conf`/`denylist.conf`. Certs: 4, all auto-renewing, `certbot renew
+--dry-run` clean, timer next 23:53. Surface check (11 paths, headers, TLS, cert) —
+identical on both. **Mail posture differs**: `connectcomunications.com` has SPF
+(`include:_spf.google.com ~all`), DMARC `p=none`, Google DKIM; **`loopcom.net` has
+DMARC `p=none` only — no SPF, no DKIM selector published** — while
+`billing/emailTemplates.ts` names `billing@loopcom.net`. Records for Izzy to add at
+Squarespace (Google Workspace): TXT `@` → `v=spf1 include:_spf.google.com ~all`; DKIM:
+generate in Google Admin → Apps → Google Workspace → Gmail → Authenticate email, publish
+the `google._domainkey` TXT it prints, then "Start authentication"; DMARC stays `p=none`
+until reports are clean.
+
+### 10.5 What this deliberately did NOT do
+
+`PUBLIC_PORTAL_URL` (the canonical host in every emailed link) is unset, so links fall
+back to `app.connectcomunications.com` — a branding decision, one env line, Izzy's.
+`POST /lan-phones/runs` stays permission-less by design (the customer's own Windows app
+reports). The five `/internal/delivery/*` doors are secret-gated and the secret is
+unset. `loopcom.net` apex/`www` untouched. Cloudflare untouched. MFA enrolment, the
+mobile 401 build and `expiresIn` are unchanged.
+

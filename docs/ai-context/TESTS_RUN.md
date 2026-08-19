@@ -48,6 +48,67 @@ substitution — 347-978-0090 is not on the account).
 
 ---
 
+## Rate limiter armed for the first time, JWT fail-closed, §6h/§6j/§6l, login oracle, SSH keys-only, both-host parity (2026-08-19, early)
+
+Branch `feat/ivr-migration-takeover`, `eeec0002`. api only + live nginx/sshd/env
+changes on loopcom. Handoffs: tenant audit §0e, security audit §10.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/globalRateLimit.test.ts src/securityHardeningRound2.test.ts
+```
+
+**Result:** 28/28. `globalRateLimit.test.ts` (11): a REAL Fastify app whose routes
+are declared BEFORE `app.register(rateLimit)` — server.ts's shape — gets 200,200,200,
+429,429 with `x-ratelimit-limit: 3` under the new wiring; the OLD registration shape
+(`global:true`, routes first) is shown NOT limiting and carrying no header; buckets
+are per last-XFF entry (a spoofed first entry does not mint a bucket); header-less
+callers and `/internal/*` exempt; 429 body + `Retry-After`; pure key/max/exempt rules;
+ceiling ≥ 400; source guards on the `global:false` registration + `after()` hook and
+the JWT boot guard / no `"change-me"`. `securityHardeningRound2.test.ts` (17): pay-multi
+bypass ×4 shapes + still-gated sibling; `/chat/a/` anchored (substring routes stay
+gated); ownership rules (id-shaped fields, super-only resources, list failure =
+refusal, foreign = 404); BOTH write routes call `decideVitalWriteForCaller`;
+remote-support `findFirst` scoped; scan + session scoping; campaign assignee on add AND
+patch; schedule profile scope; announcement promptRef + server.ts wiring; MOH scope;
+constant-time compares; `requireCrmAdmin` effective tenant; bcrypt precedes the
+DISABLED check; ZodError → 400 with path/code/message only.
+
+### Proven non-vacuous
+
+Pre-change blobs (`git show HEAD:…`) into a scratch tree, tests re-pointed. **16 of 16
+source/behaviour guards FAIL on `HEAD`** (14/17 in round2 — the 3 passing are pure
+unit tests of the new module + a still-gated-route check that must pass on both; 2/11
+in the rate-limit file — the 9 passing exercise the new module directly). ⛔ Three
+guards first FAILED on the FIXED tree: they matched the old code quoted in my own doc
+comments. Comments stripped before negative matches; `assert.ok(re.test())` instead of
+`assert.match` on the 1.8 MB file.
+
+### Full suite + typecheck
+
+**2544 tests, 2510 pass, 31 fail, 3 skipped.** 7 = the documented
+`syncPbxTenantDirectoryFromRows`; **24 = `setupOrchestrator.test.ts`, introduced by
+another session's `c2d9fdd9`** (its `@connect/integrations` mock lacks
+`resolvePbxRouteHelperConfig`) — pre-existing at HEAD, not from this change. Typecheck
+**75 = baseline, identical error set** (compared with line numbers stripped).
+
+### Live (measured, both hostnames)
+
+Before: peak 357 req/min, 0 global 429s, no `x-ratelimit-*` header on any route
+(`/health`, `/me`, `/admin/tenants`, `/voice/me/extension` all probed); legit per-IP
+peak 167/min over 4 days. After deploy: boot log `GLOBAL_RATE_LIMIT_ARMED
+maxPerMinute=480`; `x-ratelimit-limit: 480` on `app.connectcomunications.com` and
+`app.loopcom.net`; `127.0.0.1:3001/health` carries none (exempt); bad login 401;
+`pay-multi/PROBE` → **410 invoice_token_invalid** (handler reached; was the hook's 401);
+telephony `pbx_tenant_map_refresh_success` ×4 after cutover; 0 api error lines.
+SSH: `sshd -T` → `permitrootlogin without-password`, `passwordauthentication no`; fresh
+key login OK; password attempt → `Permission denied (publickey)`. nginx: `Server: nginx`
+(no version) both hosts; HSTS `max-age=86400` on `/login` and `/api/health` both hosts;
+`/brand/` immutable header now on both. Env: `.env.platform` + 24 backups `600`.
+Parity: vhost diff empty after hostname normalisation; 11 path classes, 5 headers +
+HSTS + cache rule, TLS matrix, certs — identical.
+
+---
+
 ## Tenant-isolation §6a–§6g scoping fixes (2026-08-18, night)
 
 Branch `feat/ivr-migration-takeover`. api only. Handoff
