@@ -47,6 +47,7 @@ import {
   createSipEndpoint,
   createSipGateway,
   getMessage,
+  getSipProfile,
   listE911Addresses,
   listNumbers,
   listSipEndpoints,
@@ -427,12 +428,17 @@ export function registerSignalWireRoutes(deps: SignalWireRouteDeps): void {
     if (!user) return;
     const creds = await requireCreds(reply);
     if (!creds) return;
-    const [endpoints, gateways] = await Promise.all([
+    const [endpoints, gateways, profile] = await Promise.all([
       listSipEndpoints(creds).then((v) => ({ ok: true as const, value: v })).catch((e) => ({ ok: false as const, error: e instanceof SignalWireError ? e.userMessage : String(e?.message || e) })),
       listSipGateways(creds).then((v) => ({ ok: true as const, value: v })).catch((e) => ({ ok: false as const, error: e instanceof SignalWireError ? e.userMessage : String(e?.message || e) })),
+      getSipProfile(creds).catch(() => null),
     ]);
     return reply.send({
-      sipDomain: `${creds.spaceUrl.replace(/\.signalwire\.com$/i, "")}.sip.signalwire.com`,
+      // ⛔ The registrar comes from the SIP profile, never from the Space name —
+      // proven live 2026-08-18: loopcom.signalwire.com registers at
+      // loopcom-ef2ea3442802.sip.signalwire.com. A guess here registers nothing.
+      sipDomain: profile?.domain ?? null,
+      sipProfile: profile ? { defaultCodecs: profile.defaultCodecs, defaultEncryption: profile.defaultEncryption, defaultSendAs: profile.defaultSendAs } : null,
       endpoints: endpoints.ok ? endpoints.value : [],
       endpointsError: endpoints.ok ? null : endpoints.error,
       gateways: gateways.ok ? gateways.value : [],
@@ -466,11 +472,12 @@ export function registerSignalWireRoutes(deps: SignalWireRouteDeps): void {
         encryption: body.data.encryption, callHandler: body.data.callHandler ?? "passthrough",
       });
       await recordSignalWireEvent(db, "sip_endpoint_created", { by: user.sub, id: endpoint.id, username: body.data.username, sendAs, callHandler: endpoint.callHandler, via: endpoint.via });
+      const profile = await getSipProfile(creds).catch(() => null);
       return reply.send({
         ok: true,
         endpoint,
         password,
-        registrar: `${creds.spaceUrl.replace(/\.signalwire\.com$/i, "")}.sip.signalwire.com`,
+        registrar: profile?.domain ?? null,
       });
     } catch (err) {
       await recordSignalWireEvent(db, "sip_endpoint_create_failed", { by: user.sub, username: body.data.username, error: err instanceof SignalWireError ? err.code : "unknown", message: String((err as any)?.message || err).slice(0, 300) });

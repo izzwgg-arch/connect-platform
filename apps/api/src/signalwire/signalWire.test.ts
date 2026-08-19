@@ -303,3 +303,14 @@ test("portal: the nav item exists and is forced SUPER_ADMIN-only", () => {
   assert.match(nav, /id: "apps\.signalwire", href: "\/apps\/signalwire"/);
   assert.match(nav, /item\.id === "apps\.signalwire" && backendJwtRole !== "SUPER_ADMIN"\) return false;/);
 });
+
+test("⛔ the registrar host is read from the SIP profile, never guessed from the Space name", () => {
+  // Proven live 2026-08-18: loopcom.signalwire.com registers at
+  // loopcom-ef2ea3442802.sip.signalwire.com. A `<space>.sip.signalwire.com`
+  // guess registers nothing and reads exactly like a bad password.
+  const routes = stripComments(src("signalwire/signalWireRoutes.ts"));
+  assert.doesNotMatch(routes, /\.sip\.signalwire\.com`/, "routes must not build the registrar from the Space URL");
+  assert.match(routes, /getSipProfile\(creds\)/);
+  const client = stripComments(src("signalwire/signalWireClient.ts"));
+  assert.match(client, /path: "\/sip_profile"/);
+});

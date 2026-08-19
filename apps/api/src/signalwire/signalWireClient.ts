@@ -472,6 +472,39 @@ export async function getMessage(creds: StoredSignalWireCredentials, sid: string
   };
 }
 
+// ── SIP profile ─────────────────────────────────────────────────────────────
+
+export interface SwSipProfile {
+  /** The registrar host, e.g. `loopcom-ef2ea3442802.sip.signalwire.com`. */
+  domain: string | null;
+  domainIdentifier: string | null;
+  defaultCodecs: string[];
+  defaultCiphers: string[];
+  defaultEncryption: string | null;
+  defaultSendAs: string | null;
+  raw: unknown;
+}
+
+/**
+ * The Space's SIP profile — the ONLY reliable source of the registrar host.
+ * ⛔ It is NOT `<space>.sip.signalwire.com`: proven live 2026-08-18, the Space
+ * `loopcom.signalwire.com` registers at `loopcom-ef2ea3442802.sip.signalwire.com`
+ * (space + domain identifier). Guessing it from the Space URL registers nothing.
+ */
+export async function getSipProfile(creds: StoredSignalWireCredentials): Promise<SwSipProfile> {
+  const res = await swRequest(creds, { family: "relay", path: "/sip_profile" });
+  const d: any = res.data ?? {};
+  return {
+    domain: d.domain ?? null,
+    domainIdentifier: d.domain_identifier ?? null,
+    defaultCodecs: Array.isArray(d.default_codecs) ? d.default_codecs.map(String) : [],
+    defaultCiphers: Array.isArray(d.default_ciphers) ? d.default_ciphers.map(String) : [],
+    defaultEncryption: d.default_encryption ?? null,
+    defaultSendAs: d.default_send_as ?? null,
+    raw: d,
+  };
+}
+
 // ── SIP (Fabric) ─────────────────────────────────────────────────────────────
 
 export const SIP_CODECS = ["PCMU", "PCMA", "G722", "OPUS", "G729"] as const;

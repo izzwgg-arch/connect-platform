@@ -615,7 +615,7 @@ export default function SignalWirePage() {
             <p className="sw-sub">
               Two ways to get calls between SignalWire and the PBX. <b>A SIP endpoint</b> is a login the PBX registers with (like the VoIP.ms subaccount today) —
               outbound calls go through it, and a number can be told to ring it. <b>A SIP gateway</b> is SignalWire pushing inbound calls straight to the PBX's
-              address, no registration. Registrar for endpoints: <code>{sipDomain ?? "…"}</code>, port 5060 (UDP/TCP) or 5061 (TLS).
+              address, no registration. Registrar for endpoints (from the Space&apos;s SIP profile — it is <b>not</b> yourspace.sip.signalwire.com): <code>{sipDomain ?? "…"}</code>, port 5060 (UDP/TCP) or 5061 (TLS).
             </p>
             {sipError && <div className="sw-note bad">{sipError}</div>}
 
@@ -636,8 +636,12 @@ export default function SignalWirePage() {
                 <div className="sw-kv"><span>Password</span><code>{epResult.password}</code></div>
                 <div className="sw-kv"><span>Made via</span><code>{epResult.via}</code></div>
                 <p className="sw-sub" style={{ marginTop: 8, marginBottom: 0 }}>
-                  On the PBX this becomes a PJSIP trunk exactly like the VoIP.ms one: host = registrar, username/password above, from-domain = registrar, register = yes,
-                  codecs ulaw/alaw/g722. Dial out as <code>sip:+1NXXNXXXXXX@{epResult.registrar}</code>. Caller ID must be a number on this account.
+                  On the PBX this is a registered PJSIP trunk (Main tenant): host = registrar, port 5060 UDP, username/password above, from-domain = registrar,
+                  codecs ulaw/alaw/g722. Dial out as <code>sip:+1NXXNXXXXXX@{epResult.registrar}</code>; caller ID must be a number on this account.
+                  ⛔ Unlike VoIP.ms, SignalWire delivers inbound calls to the trunk with request-URI user <code>s</code> and the dialed number only in the
+                  <code>To</code> header — VitalPBX&apos;s generated <code>trk-N-in</code> answers 484 to a bare <code>s</code>, so the trunk needs the
+                  <code>[trk-N-in](+) exten =&gt; s</code> handler from <code>extensions__60_custom.conf</code> (see the SignalWire handoff), and the DID must be on
+                  the tenant&apos;s DID list as 10 digits.
                 </p>
               </div>
             )}
