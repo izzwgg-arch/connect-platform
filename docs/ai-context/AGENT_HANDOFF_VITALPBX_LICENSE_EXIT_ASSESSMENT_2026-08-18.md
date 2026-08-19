@@ -572,3 +572,46 @@ a live call); (2) the untested-on-free-tier items (manual extension *form* add, 
 provisioning past the 20 cap, geo-firewall countries) — try each on the clone before cancelling if
 they're used; (3) then cancel and re-check the first real sign-up says "via mirror". ⛔ **Rotate the
 robot panel password** (still exposed in a prior session transcript).
+
+## 14. STRESS TEST (2026-08-19, Izzy's order: "ten new tenants outside the license, five extensions each, test them all, then delete completely — Connect, DB, PBX — and just that")
+
+**Result: 10/10 PASS, and the platform is byte-for-byte back at baseline.**
+
+- **Built on the LIVE PBX through the deployed code** (`scripts/pbx/mirror/stress10.ts` run in
+  `app-api-1`): tenants `mirror_stress_01..10` (PBX ids 109–118), each created **via the mirror**
+  (the script aborts if any tenant comes back "via panel" — none did), each with **5 extensions
+  (101–105) × 2 devices** (desk + WebRTC `_1`), an inbound route, voicemail, hints, its own
+  Main-tenant trunk/outbound-route/ARS. **146–191 s per tenant, sequential; 50 extensions /
+  100 devices total.** ⛔ Numbers were fake 845‑555‑02xx placeholders (rows only) ON PURPOSE —
+  a REAL customer's DID on a test tenant's inbound route can collide with the real tenant's
+  routing; never "reuse an existing number" for tenant tests.
+- **Verified per tenant** (`stress-verify.sh`): 17/17 files, **10/10 PJSIP endpoints loaded**,
+  5/5 extensions, 10/10 devices, 5 voicemail users, 17 hints, inbound route, cos dialplan,
+  AstDB family — **all ten PASS**; doorways T2/T35/T105 `cc-wipe=0` throughout the ~30‑min run;
+  api health 200 the whole time; 0 stress CDRs; 0 unattributed CDRs in the window (the one
+  `level:50` line was the standing 24‑h `cdr_unattributed_calls_present` monitor).
+- **Deleted completely** (`stress-teardown.sh`, manifest-driven — deletes ONLY what the manifest
+  names, with description guards on every Main-tenant row): `ombu_tenants` cascade ×10, their
+  destination rows (each verified unreferenced first), Main trunks 135–144 / routes 131–140 /
+  ARS 225–243(odd), 170 conf files, static + provisioning dirs, AstDB deltree ×10.
+  **Connect side:** the ombutel DID sync had picked the fake numbers up during the window — the
+  **10 `PbxTenantInboundDid` rows were deleted**; 0 `PbxTenantDirectory` rows, 0 Connect
+  `Tenant` rows ever existed (build path never touches Connect's tenant table).
+- ⛔⛔ **THE TRAP THE TEARDOWN RE‑PROVED, now twice in this file: a direct DB delete is NOT a
+  "pending change".** After deleting the rows, Main's RENDERED files still carried all 12 fake
+  trunks (10 stress + the 2 stale ones from §13's accepted tests, which were re-registering to
+  `mirror-test.invalid` in memory) and 10 stale `ARS-*` contexts. A plain Apply in Main changed
+  NOTHING. Fix = the helper's own bookkeeping: `insert ombu_queued_changes (1,26),(1,99),(1,42),
+  (1,43),(1,110)` + `reload_dialplan=yes`, then ONE Apply in Main → fake trunks 0, stale ARS 0,
+  mirror-test registrations 0, queue drained, flag consumed back to `no`. **Any future teardown
+  that deletes Main-tenant rows by SQL must queue the modules or the render lies.**
+- **Final state, checked against the pre-test snapshot:** tenants 27, extensions 119, devices
+  167, trunks 67, outbound routes 56, ARS 80, inbound routes 75, tenant DIDs 48, destinations
+  851, conf files 546 — **every count exactly baseline**; `trk-127` (VoIP.ms) + `trk-132`
+  (SignalWire) rendered and 63 registrations in Registered state; 146 contacts Avail; doorways
+  1/1/2 with 0 cc-wipes; helper `2026.08.19.2` healthy; api + portal 200.
+- Artefacts: manifest + full log kept at loopcom `/root/stress-manifest.json`,
+  `/root/stress10.log`; teardown summary at PBX `/root/stress-teardown-summary.json`.
+  ⛔ Honest note: the teardown script's "backup row snapshots" banner is aspirational — no row
+  dump was written before deletion (deliberately acceptable for throwaway test data; do NOT
+  reuse this script on real tenants without adding a real dump first).

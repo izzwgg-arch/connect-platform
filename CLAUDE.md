@@ -199,9 +199,17 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   **doorways of T2/T35/T105 untouched**, then deleted (prod back to 27 tenants). helper
   `2026.08.19.2` (`/mirror/tenant-create` renders the baseline, `/mirror/tenant-render`
   re-renders; SELECT ON ombutel.* granted; ships vitalpbx_mirror.py + mirror_features.py); api
-  DEPLOYED `1c1d067e` (baseline render at create + final re-render). ⏳ **Before cancelling:** one
-  real phone-registers-and-call test on a mirror tenant; the free-tier untested items (manual
-  extension form, provisioning past 20, geo-firewall) if used; ⛔ rotate the robot panel password.
+  DEPLOYED `1c1d067e` (baseline render at create + final re-render). **STRESS-TESTED
+  2026-08-19 (§14): 10 tenants × 5 extensions built via the mirror on the LIVE PBX, all 10
+  verified (17 files / 10 endpoints / vm / hints each), then deleted completely — PBX DB,
+  files, AstDB, Main trunk/route/ARS rows, AND the 10 `PbxTenantInboundDid` rows Connect's DID
+  sync had picked up; every count byte-back to baseline, doorways 0 cc-wipes throughout.**
+  ⛔ Teardown re-proved the trap: a direct DB delete is NOT a pending change — Main's rendered
+  files kept all 12 fake trunks until `ombu_queued_changes (1,26),(1,99),(1,42),(1,43),(1,110)`
+  + `reload_dialplan=yes` + ONE Main Apply. ⛔ Tenant tests use fake 845-555-02xx numbers, never
+  a real DID (routing collision). ⏳ **Before cancelling:** one real phone-registers-and-call
+  test on a mirror tenant; the free-tier untested items (manual extension form, provisioning
+  past 20, geo-firewall) if used; ⛔ rotate the robot panel password.
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
