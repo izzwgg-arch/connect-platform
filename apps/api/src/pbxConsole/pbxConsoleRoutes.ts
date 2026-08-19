@@ -173,7 +173,7 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     } catch (e) { return fail(reply, e); }
   });
 
-  app.delete("/admin/pbx-console/extensions/:id", async (req: any, reply: any) => {
+  const handleDeleteExtension = async (req: any, reply: any, force: boolean) => {
     const admin = await requireOwner(req, reply); if (!admin) return;
     const instance = await resolveInstance((req.query || {}).instanceId);
     if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
@@ -182,16 +182,18 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     if (!info.ok) return reply.status(200).send({ available: false, reason: "pbx_unavailable", detail: info.reason });
     const { ext, refs, orphans } = info.data;
     if (!ext) return reply.status(404).send({ error: "extension_not_found" });
-    const force = !!body<{ force?: boolean }>(req).force;
     if (refs.length && !force) return reply.status(409).send({ error: "extension_in_use", detail: `Extension ${ext.extension} is still used: ${refs.join("; ")}. Remove those first, or confirm to delete anyway.`, references: refs });
     if (orphans.length) return reply.status(409).send({ error: "extension_delete_would_crash", detail: `Extension ${ext.extension} has a device flagged as a mobile client with no mobile record — deleting it crashes the phone system. This needs a manual repair first.`, orphans });
     try {
       const out = await withPanel(instance, async (s) => { await deleteExtension(s, ext.tenantPath, extensionId, ext.extension); return { deletedExtensionId: extensionId }; }, ext.tenantPath);
-      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_DELETED", entityType: "PbxExtension", entityId: `${ext.tenantId}/${ext.extension}`, metadata: { name: ext.name } });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_DELETED", entityType: "PbxExtension", entityId: `${ext.tenantId}/${ext.extension}`, metadata: { name: ext.name, forced: force } });
       await syncConnectExtensions(instance, ext.tenantId).catch(() => {});
       return out;
     } catch (e) { return fail(reply, e); }
-  });
+  };
+  app.delete("/admin/pbx-console/extensions/:id", (req: any, reply: any) => handleDeleteExtension(req, reply, String((req.query || {}).force) === "1"));
+  // apiDelete carries no body; a force delete (extension still referenced) uses this POST door
+  app.post("/admin/pbx-console/extensions/:id/force-delete", (req: any, reply: any) => handleDeleteExtension(req, reply, true));
 
   app.post("/admin/pbx-console/extensions/:id/devices/:deviceId/unlink", async (req: any, reply: any) => {
     const admin = await requireOwner(req, reply); if (!admin) return;

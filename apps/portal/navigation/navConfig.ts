@@ -48,6 +48,7 @@ import {
   Route,
   Send,
   Server,
+  SlidersHorizontal,
   Settings2,
   Shield,
   Stethoscope,
@@ -127,6 +128,10 @@ export const navItems: NavItem[] = [
   { id: "admin.users", href: "/admin/users", label: "Users", icon: "US", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_users" },
   { id: "admin.tenants", href: "/admin/tenants", label: "Tenants", icon: "TN", lucide: Building, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_tenants" },
   { id: "admin.pbx_instances", href: "/admin/pbx", label: "PBX Instances", icon: "PI", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
+  // PBX Console (2026-08-19) — replaces the VitalPBX panel for tenants /
+  // extensions / provisioning / geo once the licence lapses. SUPER_ADMIN only
+  // (forced below), reuses the PBX-instances view key; no grantable key.
+  { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
@@ -208,5 +213,6 @@ export function isNavItemVisibleForUser(
   if (item.id === "pbx.ivr_migration" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

@@ -23653,14 +23653,22 @@ registerPbxConsoleRoutes({
   db,
   decryptJson,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),
-  audit: (e) => audit({
-    tenantId: e.tenantId || "platform",
-    action: e.action,
-    entityType: e.entityType || "PbxConsole",
-    entityId: e.entityId || "-",
-    actorUserId: e.actorUserId || undefined,
-    metadata: e.metadata ?? undefined,
-  }),
+  audit: async (e) => {
+    // audit is best-effort and must NEVER fail a PBX write. The console is
+    // platform-wide, so there is no customer tenant to attribute it to — record
+    // it against the acting admin's tenant when we can resolve one, else skip.
+    try {
+      let tenantId = e.tenantId || null;
+      if (!tenantId && e.actorUserId) {
+        const u = await db.user.findUnique({ where: { id: e.actorUserId }, select: { tenantId: true } }).catch(() => null);
+        tenantId = u?.tenantId || null;
+      }
+      if (!tenantId) return; // nothing valid to attribute the row to
+      await audit({ tenantId, action: e.action, entityType: e.entityType || "PbxConsole", entityId: e.entityId || "-", actorUserId: e.actorUserId || undefined, metadata: e.metadata ?? undefined });
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, action: e.action }, "[PBX_CONSOLE] audit write skipped");
+    }
+  },
   log: {
     info: (o, m) => app.log.info(o, m),
     warn: (o, m) => app.log.warn(o, m),

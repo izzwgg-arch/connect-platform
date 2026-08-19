@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseForm, applyOverrides } from "./panelForm";
-import { deviceOverrides, DEVICE_FIELDS, type DeviceSpec, type ParsedForm } from "./pbxConsoleWrites";
+import { deviceOverrides, DEVICE_FIELDS, type DeviceSpec } from "./pbxConsoleWrites";
+import { type ParsedForm } from "./panelForm";
 
 const norm = (s: string) => s.replace(/\r\n/g, "\n");
 
@@ -87,21 +89,24 @@ test("deviceOverrides: a virtual device carries ONLY a phone number — no profi
 /* Source guards — these are CALLER-side promises that a unit test of the helper
    would pass straight through. */
 test("source: every console write route is SUPER_ADMIN-gated (requireOwner) and applies + re-bakes", () => {
-  const routes = norm(readFileSync(new URL("./pbxConsoleRoutes.ts", import.meta.url), "utf8"));
+  const routes = norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8"));
   // every handler opens with requireOwner
-  const handlers = routes.match(/app\.(get|post|patch|delete)\(/g) || [];
-  const owners = routes.match(/const admin = await requireOwner\(req, reply\); if \(!admin\) return;/g) || [];
-  assert.ok(owners.length >= handlers.length, `every route must gate with requireOwner (${owners.length} gates for ${handlers.length} routes)`);
+  // every route either gates inline OR delegates to handleDeleteExtension (which gates)
+  const delegating = (routes.match(/=> handleDeleteExtension\(req, reply/g) || []).length;
+  const handlers = (routes.match(/app\.(get|post|patch|delete)\(/g) || []).length;
+  const owners = (routes.match(/const admin = await requireOwner\(req, reply\); if \(!admin\) return;/g) || []).length;
+  assert.ok(owners + delegating >= handlers, `every route must gate with requireOwner (${owners} inline + ${delegating} delegated for ${handlers} routes)`);
+  assert.match(routes, /const handleDeleteExtension = async \(req: any, reply: any, force: boolean\) => \{\s*const admin = await requireOwner/, "the shared delete handler must gate");
   // writes go through withPanel, which applies + re-bakes
   assert.match(routes, /applyAndRebake\(s, applyTenantPath/, "withPanel must apply + re-bake after a write");
   assert.doesNotMatch(routes, /minRole:\s*["']customer["']/, "the console is never exposed to customers");
 });
 
 test("source: server.ts registers the console and gates the prefix; writes carry the doorway re-bake", () => {
-  const server = norm(readFileSync(new URL("../server.ts", import.meta.url), "utf8"));
+  const server = norm(readFileSync(join(__dirname, "..", "server.ts"), "utf8"));
   assert.match(server, /registerPbxConsoleRoutes\(\{/, "console routes must be registered");
   assert.match(server, /\{\s*prefix:\s*"\/admin\/pbx-console",\s*permission:\s*"can_manage_global_settings"\s*\}/, "the /admin/pbx-console prefix must be in PORTAL_API_PERMISSION_RULES");
-  const writes = norm(readFileSync(new URL("./pbxConsoleWrites.ts", import.meta.url), "utf8"));
+  const writes = norm(readFileSync(join(__dirname, "pbxConsoleWrites.ts"), "utf8"));
   assert.match(writes, /rebakeConnectRoutesAfterRegen/, "applyAndRebake must re-bake the Connect doorway (2026-08-13 dead-air incident)");
   // a general-only extension save is refused — it would re-post the raw device fields and flip DTMF
   assert.match(writes, /an extension save must carry its devices/);
