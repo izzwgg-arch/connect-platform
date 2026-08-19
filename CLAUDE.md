@@ -104,6 +104,22 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   tenants, a provisioning generator (interim clone-a-cfg), and ring groups /
   forwards / E911 / ARS-toggle for over-cap tenants if the clone says the panel
   refuses them.
+- ✅✅ **DAY 0 + DAY 1 DONE (2026-08-19, handoff §11–§12): THE UNLICENSED PANEL REFUSES ONLY
+  "CREATE TENANT".** Proven on a clone (VitalPBX 4.5.3-8 + the prod DB/files, NO licence =
+  Community — tenant create refused with the free-tier message): adding extensions/WebRTC
+  devices/ring groups/forwards/inbound routes/trunks/routes/ARS through Connect's REAL code
+  all still work, Apply Changes regenerates ONLY the changed tenant, `fully-gen-conf` renders
+  all 27 tenants (diffs = version drift + the helper-patch reverts prod's Apply does today).
+  **A tenant created by INSERTING ROWS is a fully functional tenant to the panel.** So the mirror
+  v1 = **`/mirror/tenant-create` in the helper** (`scripts/pbx/mirror/mirror_writes.py`, the
+  panel's exact rows + queued base modules + static/provisioning dirs) + a pluggable
+  `MirrorTenantCreator` in `pbxTenantBuild.createTenant` (helper-backed by default, loud
+  fallback to the panel form if the helper fails, `PBX_TENANT_CREATE_MODE=panel` to force the
+  old path). Proven end-to-end on the clone with `buildPbxTenant` (tenant 108: identical
+  render to a panel-made tenant). **api DEPLOYED `c2d9fdd9`.** ⏳ **Helper install + grants =
+  Izzy's Run buttons; then one throwaway tenant on prod; cancel LAST.** ⛔ Two-day scope
+  excludes migrating existing tenants and a provisioning generator (not needed — the panel
+  still does both unlicensed, except tenant create).
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.

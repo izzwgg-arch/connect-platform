@@ -448,3 +448,70 @@ still serves 4.5.3-1, or accept the small risk); "expired" vs "never licensed"
 untested; robot panel password landed in this session's transcript by a shell
 `eval` mistake — **rotate it** (panel user `lOOPCOMAGENT7548`, then update
 `/etc/connect-robot/credentials.env` on loopcom and the api env).
+
+## 12. DAY 1 + DAY 2 (2026-08-19): the mirror is BUILT, TESTED ON THE CLONE, api DEPLOYED — helper install + grants are the last two PBX writes
+
+**What shipped (`c2d9fdd9` + `0edf4b00` on `feat/ivr-migration-takeover`; api DEPLOYED and
+container-verified at `c2d9fdd9`, health 200):**
+- `scripts/pbx/mirror/` — `mirror_writes.py` (**`create_tenant`** row-writer: the exact rows the
+  panel writes for a new tenant, derived from T104/105/106; `add_extension`; `add_did`;
+  `apply_tenant_fs` for the static/provisioning dirs; embedded provisioning `index.php`),
+  `vitalpbx_mirror.py` + `diff_tenant.py` (byte-identical renderer + harness — **T104/T105/T106
+  18/18 files + AstDB identical**, T5/T9/T11 down to hand-edited lines/runtime AstDB, T2/T8/T7
+  differ only in ring-group/queue/IVR stretch renderers in `mirror_features.py`),
+  `compare_tenant_rows.py`, `README.md` (row spec table → columns → values), `clone-rehearsal.ts`
+  (drives Connect's REAL build code at the clone), `mirror-grants-20260819.sql`.
+- Helper `2026.08.19.1`: **`POST /mirror/tenant-create`** `{name, description, dids[],
+  outboundProfileIds[], userId}` → inserts the rows in ONE transaction (`db_conn()`), queues the
+  base modules (`BASE_RENDER_MODULES` 99/11/8/48/26/29/1 + the panel's 42/43/110), creates
+  `/var/lib/vitalpbx/static/<path>/…` + `provisioning_templates/<path>/{aastra.cfg,index.php}`
+  (CAP_CHOWN), returns `{tenantId, name, path, rows, fs}`. Installer ships `mirror_writes.py`
+  as a `PYMIRROR` heredoc **with a byte-identity drift guard**, and its grant block now adds
+  SELECT+INSERT on the 10 tenant tables + INSERT on `ombu_inbound_routes` / `ombu_destinations`
+  / `ombu_queued_changes` / `ombu_settings` for `connect_route_helper@{localhost,127.0.0.1}`.
+- api: `pbxTenantBuild.createTenant(…, tenantCreator?, log?)` — with a creator: rows via the
+  helper → `s.setTenant(path)` → **the same Apply Changes as before** (renders the tenant from
+  the queued modules) → REST resolver confirms → build continues unchanged (CSV import, devices,
+  inbound route). ⛔ **If the creator THROWS it falls back LOUDLY to the panel form** (log line
+  `⛔ mirror tenant-create failed … falling back to the panel form`) — so the api could ship
+  before the helper: while the licence is active the form still works; after the lapse the
+  form's own refusal is the visible failure. `setupOrchestrator.resolveMirrorTenantCreator()`
+  wires the helper-backed creator whenever a helper is configured for the PBX;
+  `PBX_TENANT_CREATE_MODE=panel` forces the old form. `mirrorCreatePbxTenant()` in
+  `pbxInboundRouteHelperClient.ts` (90 s).
+- Tests: `pbxTenantBuild.test.ts` **37/37** (4 new: creator used → tenants form never posted +
+  Apply still runs + build completes; failing creator → panel fallback + loud log; bad path →
+  refused; env switch), installer **35/35** (2 new drift/registration guards); api typecheck
+  **75 = baseline**.
+
+**Proven on the clone (unlicensed panel, prod data), with Connect's real code:**
+`buildPbxTenant` → trunk 133 → outbound route 130 → ARS 224 → **tenant 108 via mirror** (14
+tables, dirs created) → Apply → ext 101 + 102 with WebRTC devices → inbound route. Files:
+16 (T106 has 17 — the missing one is the empty `manager__50-t-users.conf` stub, module 47
+`astmanager_users`, harmless). `pjsip show endpoints`: `T108_101`, `T108_102`, `T108_101_1`,
+`T108_102_1` (after copying the DTLS certs into the clone — a clone artefact: **no** `_1`
+endpoint of ANY tenant loaded there before). Dialplan **identical to T106's after normalising**
+except the second extension, the DID and the (absent) emergency block; hints, voicemail
+users, AstDB family (133 keys) all present. Two clone quirks worth knowing: `pjsip reload` is
+not a command on Asterisk 20 (`module reload res_pjsip.so`), and a stuck "module reload
+already in progress" after `fully-gen-conf` needed an Asterisk restart.
+
+**Day-2 remaining, in order:** (1) ⏳ **PBX writes — Izzy's Run buttons**: scp the installer to
+the PBX and run it (backs up nothing itself — back up
+`/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py` and the grants first), verify
+`curl 127.0.0.1:8757/health` → `2026.08.19.1`, `/opt/connect-pbx-helper/mirror_writes.py`
+present, grants applied. (2) ⏳ **Prod acceptance**: one throwaway tenant through the REAL
+build with the helper creator (label it "MIRROR TEST — delete me"), watch the log line
+`tenant ok (path …, via mirror)` (NOT "via panel"), confirm `T<t>` files rendered, the app
+registers, an inbound call reaches `connect-menu`, then delete it (tenant REST delete +
+panel two-step for trunk/route/ARS, `_wipe-round2.mts` shape). (3) Cancel the subscription
+**only after** (2), and re-check the day after with `select max(...)`-style facts: a new
+sign-up says "via mirror" and its files exist.
+**Rollback:** `PBX_TENANT_CREATE_MODE=panel` in the api env (needs an api-code deploy to
+carry it — env-only changes do not rebuild) or simply the fallback (helper down = panel
+form) — while the licence is active, both restore today's behaviour exactly.
+
+⛔ **The robot panel password landed in this session's transcript** (a shell `eval` slip while
+reading credentials.env) — rotate it: change the panel user `lOOPCOMAGENT7548`'s password in
+VitalPBX, update `/etc/connect-robot/credentials.env` on loopcom (mounted into the api
+container) and restart api. Onboarding uses it for every build.
