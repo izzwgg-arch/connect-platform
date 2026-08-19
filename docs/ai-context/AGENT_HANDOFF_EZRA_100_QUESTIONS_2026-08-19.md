@@ -267,6 +267,49 @@ CLAUDE.md already sizes as *"the real cost and the real risk"* and which needs
 every admin route classified read/write/destructive first. **A is the
 recommendation**; B is where an approved plan can do something nobody modelled.
 
+## 5c. ⛔ EXACTLY how far the PBX "sandbox" reaches — measured 2026-08-19, read-only
+
+Izzy, 2026-08-19: *"He's got now a sandbox where he can actually go down to the
+PBX and run diagnostics."* Correct — that is `0ab965be`, committed 2026-08-18.
+⛔ **But it is SQL and nothing else.** There is no `child_process`, no AMI, no
+`asterisk -rx`, no ssh anywhere in `apps/api/src/agentInvestigation/` — the only
+runner is `readOnlySql.ts`. Probed through the live door:
+
+| | reach |
+|---|---|
+| ✅ `ombutel.*` (PBX config) | **119 extensions, 75 inbound routes, 38 IVR menus, 8 queues** |
+| ✅ `asterisk.queues_log` | **172,006 rows** |
+| ✅ Connect Postgres | 31 live tenants, 916 calls in 24 h |
+| ⛔ `asterisk.cdr` | **SELECT denied to `connect_read`** |
+| ⛔ `asterisk.cel` | **SELECT denied to `connect_read`** |
+| ⛔ live registration | **not in MySQL at all** |
+
+⛔⛔ **THE ONE THAT MATTERS MOST, AND A GRANT CANNOT FIX IT.** This repo's most
+repeated diagnostic rule is *"a client's own 'registered' is an OPINION; the PBX
+contact list is the FACT"* — and that fact is **unreachable from the sandbox**.
+The `ps_*` realtime tables **do not exist** on this PBX (the whole `asterisk`
+schema is `cdr`, `cel`, `queues_log`, `call_analysis`, `call_keyword_extraction`,
+`call_topic_extraction`), PJSIP realtime is not configured, and the live contacts
+live only in Asterisk's memory — `pjsip show contacts` returned **153** while the
+sandbox could see none of them. **Do not propose a GRANT for `ps_contacts`; the
+data is not there.** Same for the rendered dialplan (`dialplan show`) and
+`/var/log/asterisk/full`.
+
+**So the sandbox can answer "how is it configured?" and "what happened in the
+queue?", and cannot answer "is the phone registered right now?", "what does the
+dialplan actually render?" or "what does the log say?"** — which are exactly the
+questions the Create A Box, Luxure and Trimpro investigations turned on.
+
+**Two different sizes of fix:**
+1. ⚡ **`asterisk.cdr` + `asterisk.cel` are one GRANT away** and both exist with
+   data. ⛔ A GRANT is a PBX write and needs Izzy's explicit mandate; apply it
+   from a file (`mysql < file.sql`), never an inline heredoc — backticks do not
+   survive nested-shell quoting (see the queue-wallboard grant).
+2. 🔨 **Live registration / dialplan / log need the AMI-or-helper channel** that
+   `AGENT_HANDOFF_INVESTIGATION_WORKSPACE_2026-08-18.md` already lists as NOT
+   built. That is a real build (an AMI passthrough in `apps/telephony`, or a new
+   read-only helper endpoint = a PBX install), not a permission change.
+
 ## 6. Two smaller things worth knowing
 
 - **The LLM anchors on recent context.** Q78–Q81 asked about unanswered calls,
