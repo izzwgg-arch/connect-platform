@@ -846,3 +846,65 @@ No tenant on; no code delivered to a human; no Turnstile key. Mobile app has no 
 step (as with TOTP) — a user on an OTP tenant cannot finish sign-in in the app;
 `TENANT_ADMIN` cannot flip its own tenant (deliberate). Acceptance recipe is in the
 CLAUDE.md section.
+
+## 13. Where the security work actually stands (2026-08-19) — the honest ledger
+
+Written because Izzy asked "everything is fortified and 100% secure?" and the
+answer is no. "100% secure" is not a state a system reaches; what follows is what
+is ON, what is BUILT-BUT-OFF, and what needs a person. **Every line was read from
+the live platform on 2026-08-19, not from memory.**
+
+### 13.1 ON and proven
+
+Rounds 1–4 plus the hardening pass are deployed and container-verified across
+**api**, **portal** and **worker** (the worker last — see §11's worker bullet).
+Both hostnames are at measured parity: one vhost shape, 11 path classes, five
+security headers + HSTS, TLS 1.0/1.1 refused, valid auto-renewing certs, shared
+allow/deny lists, and SPF + DKIM + DMARC on both mail domains. SSH is keys-only.
+The `/internal/*` doors, the forgeable signed URLs, the tenant-scoping findings
+(§6a–§6l), the dead `NODE_ENV` gates and the never-run rate limiter are closed.
+**The global rate limiter is proven to refuse** (478 × 200 → 62 × 429, §10).
+
+### 13.2 BUILT but OFF — the part that matters most
+
+| control | state on 2026-08-19 |
+|---|---|
+| Cloudflare Turnstile on login | `TURNSTILE_SECRET_KEY` **unset** → mode `off`, challenges nobody |
+| Per-tenant sign-in code (2FA) | **0 of 31** live tenants switched on; **0** codes ever sent |
+| MFA / TOTP | **0** users enrolled — including the SUPER_ADMIN; `MFA_ENFORCEMENT` unset (grace) |
+| Cloudflare edge (WAF, rate rules) | `app.` is **DNS-only**; every staged rule is inert |
+| DMARC | `p=none` on both domains — reporting, not blocking |
+
+⛔ These are correct, tested and deployed. They are also **doing nothing until
+somebody turns them on**, and the roll-out order for each is written in its own
+CLAUDE.md section (Turnstile: observe → read the log → enforce).
+
+### 13.3 Deliberately NOT closed, with the reason
+
+- **Session tokens still never expire** platform-wide — only OTP tenants get 90
+  days. Blocked on the mobile 401 work (§8): a dead token today is a 401 stream
+  that auto-bans the customer's whole office.
+- **Three latent `ADMIN` findings** — raw PBX-resource writes (§6h), the chat
+  routes (§6a/§6b), and `/ws/telephony` (found 2026-08-19). **0 `ADMIN` users
+  exist**, so all three are inert; creating one arms all three at once.
+- **Turnstile is bypassed by omitting `Origin`** — deliberate, so the mobile app is
+  never challenged. It defends against browser-driven credential stuffing only.
+- **The mobile constant is committed and NOT built** — `publicOrigin.ts` still
+  resolves the OLD host, so an APK/TestFlight build today would behave identically
+  to what is on phones now. That build reaches real customers and is Izzy's call.
+
+### 13.4 Never audited
+
+`apps/agent` and `apps/worker` internals. `/ws/telephony` was audited on
+2026-08-19 (authentication and tenant scoping both correct; the `ADMIN` finding
+above is the one issue). The PBX itself is out of scope by standing rule.
+
+### 13.5 What blocks removing `connectcomunications.com`
+
+`PUBLIC_PORTAL_URL` is unset, so **every emailed link still names the old
+domain**; **`m.loopcom.net` does not resolve** (the PBX is only on the old
+hostname — DNS + cert, a PBX write); the Google OAuth redirect URIs for
+`app.loopcom.net` are not registered, so Gmail/Drive sign-in there fails **at
+Google**; `support@`/`billing@loopcom.net` are unconfirmed as real mailboxes; and
+there is no Loopcom-branded mobile or desktop build. The portal and API surfaces
+themselves are at full parity — those five items are the whole remaining gap.

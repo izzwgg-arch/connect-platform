@@ -883,6 +883,15 @@ as well."*
   the Turnstile site keys; whether `TENANT_ADMIN` should be allowed to flip its own
   tenant (today SUPER_ADMIN only — a customer turning it OFF for themselves defeats
   the control).
+- ⛔⛔ **"ARE WE 100% SECURE?" — THE HONEST LEDGER IS §13 of the security handoff,
+  and the short answer is NO, because the two headline controls are BUILT AND
+  SWITCHED OFF.** Read live, 2026-08-19: `TURNSTILE_SECRET_KEY` **unset**,
+  **0 tenants** with 2FA on, **0 codes** ever sent, **0 users** MFA-enrolled,
+  `PUBLIC_PORTAL_URL` **unset** (so every emailed link still says the OLD domain),
+  **`m.loopcom.net` does not resolve**, and `app.` is still **DNS-only** at
+  Cloudflare so the staged WAF rules are inert. ⛔ **A control nobody has turned on
+  protects nobody** — quote the switch state, never the build state, when anyone
+  asks how hardened the platform is.
 
 ## ⛔⛔ AGENT HANDOFF — the platform's public identity lives in ONE module now (`publicOrigins.ts`), the SIP/WS/pay/email links follow the host you are on, and `/auth/signup` is shut (2026-08-19) — READ FIRST before typing `app.connectcomunications.com` or `loopcom.net` into ANY source file, before adding a link to an email, before touching the Google OAuth redirect, or before answering "does Loopcom do everything the old domain does?"
 
@@ -938,6 +947,26 @@ Top to bottom, A to Z, everything."*
   `apps/mobile/src/config/publicOrigin.ts` is the ONE constant for the next
   (Loopcom) build; six literals routed through it; ⛔ no behaviour change until an
   APK/TestFlight build ships.
+- ⛔⛔ **THE WORKER HALF OF THIS SHIPPED HOURS LATE, AND THAT IS THE LESSON: an
+  api+portal deploy does NOT deploy the worker.** `deploy-direct.sh` takes
+  `api|portal` only, so `apps/worker` and `packages/integrations` sat on an
+  **18 August image** while the round-3 commit was reported deployed — found only
+  because Izzy asked "is everything from this chat deployed?" (`app-worker-1` has
+  **no `/app/.build-commit`** at all, so the usual check silently answers nothing —
+  grep the container for a marker string instead). ✅ **Deployed 2026-08-19 at
+  `95beef53`** (`DEPLOY_BRANCH=feat/ivr-migration-takeover DEPLOY_FORCE_RESTART=1
+  bash scripts/deploy-worker.sh` — ⛔ it takes **env vars, not `--branch`**, and
+  answers `FAIL: DEPLOY_BRANCH or DEPLOY_COMMIT is required` otherwise; ~15 min),
+  verified by grepping the running container (1 hit in `connectChatSmsJob.ts`, 2 in
+  `pbx-wirepbx`), 0 restarts, no error-level lines.
+  ⛔ **It changed NOTHING at the time and that is exactly why it was easy to
+  miss** — all six env names in that chain (`PUBLIC_API_BASE_URL`,
+  `API_PUBLIC_URL`, `PORTAL_PUBLIC_URL`, `PUBLIC_PORTAL_URL`, `CONNECT_APP_URL`,
+  `APP_PUBLIC_URL`) are **unset in the worker**, so old and new code both fell
+  through to the same literal. **It would have bitten at the cut-over**: the old
+  chain never reads `PUBLIC_PORTAL_URL`, so the worker would have kept emitting
+  the OLD domain in MMS media links after the flip, and if anyone ever set
+  `PORTAL_PUBLIC_URL` it would have built an API base with no `/api`.
 - ⏳ **NOT PROVEN: no Loopcom-host OAuth sign-in, no email opened from a Loopcom
   link, no phone paired from `app.loopcom.net`.** The cut-over itself
   (`PUBLIC_PORTAL_URL` → `https://app.loopcom.net`, then removing the old vhost) is

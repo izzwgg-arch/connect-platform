@@ -4,6 +4,32 @@ Newest entries first.
 
 ---
 
+## Worker deploy — round 3's other half, and how it was missed (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, worker at `95beef53`. No code change — a
+deployment that had never happened. Handoff `AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md`
+§11 (worker bullet) and §13.
+
+```bash
+DEPLOY_BRANCH=feat/ivr-migration-takeover DEPLOY_FORCE_RESTART=1 bash scripts/deploy-worker.sh
+docker exec app-worker-1 grep -c "Same chain as apps/api" /app/apps/worker/src/connectChatSmsJob.ts   # 1
+docker exec app-worker-1 grep -c "PUBLIC_PORTAL_URL" /app/packages/integrations/src/pbx-wirepbx/index.ts  # 2
+```
+
+**Result:** worker deployed (~15 min), both markers present in the running
+container, `RestartCount=0`, **0** `level:50/60` lines in the five minutes after.
+`git merge-base --is-ancestor 6a0f3a01 95beef53` → in.
+
+⛔ **How it was missed:** `deploy-direct.sh` accepts `api|portal` only, so an
+api+portal deploy leaves `apps/worker` and `packages/integrations` behind, and
+`app-worker-1` carries **no `/app/.build-commit`** — the usual verification step
+answers nothing rather than failing. ⛔ `deploy-worker.sh` takes **env vars, not
+`--branch`**. ⛔ The change was behaviourally identical at the time (all six env
+names in the chain are unset in the worker, so both versions resolved the same
+literal), which is precisely why nothing surfaced it.
+
+---
+
 ## PBX Console: geo write refuses safely, and the refusal reads as a refusal (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `81ccf2fa` (helper) + `b481ea19` (api).
