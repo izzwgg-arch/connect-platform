@@ -146,6 +146,15 @@ to see if this would be the ideal replacement … build this inside Loopcom."*
   the endpoint's `send_as` because 347-978-0090 is not on the account (the "no arbitrary CID"
   rule, seen live). Verify 3479780090 as a Verified Caller ID on the Space, or accept the 205
   number — Izzy's call. Trunk 127 (VoIP.ms) is still on the PBX, unused by T102.
+- ⛔⛔ **A FOURTH PIVOT-DECIDING FACT, seen live: SignalWire signs outbound calls at
+  STIR/SHAKEN attestation C BY DEFAULT — even from its own numbers.** Izzy checked the real
+  calls from ext 102 through trunk 132: **C**, "carriers are filtering it". Their doc: *"By
+  default, all outbound calls from phone numbers bought on the SignalWire platform receive
+  attestation level C. Levels A and B … require a vetting process … create a support ticket."*
+  Not the 347 caller ID, not the trunk config. VoIP.ms is community-reported to sign **A** for
+  account DIDs — so moving a tenant's outbound to SignalWire today DOWNGRADES it A → C (Spam
+  Likely). **Open the vetting ticket first; keep tenant outbound on VoIP.ms until A is granted.**
+  T102 stays on trunk 132 as the test bed knowingly.
 - ⛔⛔ **THE TWO WAYS A SIGNALWIRE TRUNK IS NOT A VOIP.MS TRUNK, both proven live:**
   (1) **the registrar is the SIP PROFILE's domain** — `GET /api/relay/rest/sip_profile` →
   `loopcom-ef2ea3442802.sip.signalwire.com`, NOT `loopcom.sip.signalwire.com` (the console

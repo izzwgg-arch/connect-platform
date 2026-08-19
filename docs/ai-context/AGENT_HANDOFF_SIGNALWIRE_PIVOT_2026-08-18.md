@@ -439,3 +439,19 @@ from SignalWire it must be added as a **Verified Caller ID** on the Space (Signa
 texts that number with a code — it is Loopcom Demo's VoIP.ms number, so someone at ext 101
 answers it) or the tenant's outbound CID changed to the 205 number. Izzy's call.
 ⏳ Not proven: a human placing a call from ext 101 to an outside phone and being answered.
+
+### 10.8 STIR/SHAKEN: SignalWire signs our calls at attestation **C** — by policy, not by our config (2026-08-18, late)
+Izzy checked the attestation on the outbound calls (five real calls from ext 102 through trunk
+132, 01:56–02:02Z, all answered) and got **C** — "carriers are filtering it". Read from
+SignalWire's own page (`/docs/platform/voice/stir-shaken`): *"By default, all outbound calls
+from phone numbers bought on the SignalWire platform receive attestation level C. Levels A and
+B attestation require a vetting process … please create a support ticket with us."* So it is
+**not** the 347-978-0090 caller ID and not the trunk — even a call presenting SignalWire's own
+205 number is signed C until the account passes their vetting (KYC on the business, use case).
+VoIP.ms, by contrast, is community-reported to sign **A** for calls whose CID is a DID on the
+account (B otherwise) — which is what Loopcom's tenants have today. ⛔ **This is a fourth
+pivot-deciding fact:** until the vetting is done, moving a tenant's outbound to SignalWire
+DOWNGRADES its calls from A to C and invites "Spam Likely" labels. Action is Izzy's (account
+owner): open the SignalWire support ticket for A-attestation vetting; keep tenant outbound on
+VoIP.ms until it is granted. Loopcom Demo (T102) is a test tenant, so leaving it on trunk 132
+for the evaluation is fine — its calls will show C meanwhile.
