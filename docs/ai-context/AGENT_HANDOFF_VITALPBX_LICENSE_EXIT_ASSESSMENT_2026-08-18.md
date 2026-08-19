@@ -615,3 +615,31 @@ robot panel password** (still exposed in a prior session transcript).
   ⛔ Honest note: the teardown script's "backup row snapshots" banner is aspirational — no row
   dump was written before deletion (deliberately acceptable for throwaway test data; do NOT
   reuse this script on real tenants without adding a real dump first).
+
+## 15. Vendor connectivity audit (2026-08-19, read-only — Izzy: "can VitalPBX see inside my system?")
+
+**Answer: two OUTBOUND-only connections, no inbound access of any kind. Verified on the box, not
+assumed:**
+- **Licensing:** the panel's ionCube code calls out to `licensing.vitalpbx.com` (145.223.123.175)
+  over HTTPS to validate/refresh `/var/lib/pbx-licenses/vitalpbx.lic` (hence the Aug 3 mtime). No
+  cron, no daemon; zero live connections to their hosts at audit time. ⛔ ionCube caveat: the exact
+  payload cannot be source-audited — the guarantee is behavioural (outbound-only, panel-initiated,
+  one host).
+- **Updates:** apt PULL from `repo.vitalpbx.com` (Cloudflare-fronted) when an update is run. They
+  cannot push; they see the IP + versions fetched, only when asked.
+- **No inbound door:** all 7 SSH authorized_keys are ours (connect-full/monitor, cowork-sandbox ×2,
+  claude-*); shell users = root + our own audit accounts (cursor-audit, pbx_audit,
+  codex_pbx_audit); **the running OpenVPN is the PBX's OWN server** (listens UDP 1194,
+  `server 10.8.0.0/24`, tun0=10.8.0.1, `clients_list.txt`/ccd for phones, no `remote` line, no
+  clients connected) — NOT a tunnel to the vendor; **`vpbx-monitor` is local-only** (config.ini:
+  listens :3000/:3005 with the PBX's own cert, talks to 127.0.0.1 AMI + local DB — the dashboard's
+  resource monitor, reports to nobody).
+
+**CANCEL-DAY CHECKLIST addition (PBX writes — do AFTER cancelling, not before; cutting the
+licensing host while still paying could read as an early lapse):**
+1. Comment out the four `repo.vitalpbx.com` lines in `/etc/apt/sources.list.d/` (updates are
+   frozen by mirror policy anyway — a VitalPBX package update could change the file dialect the
+   renderer is pinned to).
+2. Block outbound to `licensing.vitalpbx.com` (firewalld rich rule or /etc/hosts pin to 127.0.0.1).
+3. After that the box talks to VitalPBX in NO direction. Everything running is Debian + Asterisk +
+   config files we own/render.
