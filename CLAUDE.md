@@ -352,8 +352,44 @@ mess up any other tenants."*
   source guard matched the string quoted in the **doc comment explaining the old
   defect** and failed against correct code. **Strip comments, or assert only on
   executable lines**, before any `!includes(...)` check.
+- ✅✅ **CREATING A CUSTOMER IS BUILT AND PROVEN ON PROD (handoff §18, `3e914b4f` →
+  `4faf2635`).** The console could read, edit and delete a tenant but **not create
+  one** — precisely the operation VitalPBX blocks when the licence lapses, so the
+  console was fine today and useless on the day it matters. `POST
+  /admin/pbx-console/tenants` calls **`resolveMirrorTenantCreator`**, the same
+  wiring onboarding hands `buildPbxTenant`, so there is exactly **ONE**
+  tenant-creation implementation; a guard test reads the route's SOURCE and fails
+  if it ever posts the panel's add-tenant form. ⛔ That guard matters more here
+  than anywhere else in the console: **while the licence is live the panel form
+  works**, so a "simplification" to the panel path passes every test today and
+  fails silently on the one day nobody can afford it. It uses onboarding's
+  `slugify` for the same reason — the PBX name is matched elsewhere by slug OR
+  display name. **Scope is the panel's "add tenant" button and nothing more**: no
+  trunk, no route, no extensions, no numbers bought, no Connect tenant row.
+  ✅ **Live run, on a PBX carrying 10 calls:** create **200** (tenant 119, 13
+  baseline files) → duplicate **409** naming the existing customer → delete **200**
+  through the console's own route (doorway re-bake 3/3, **0 lines changed**) →
+  **byte-back at 27 tenants / 119 extensions / 554 settings rows / 353 conf files**,
+  doorways still 0.
+- ⛔⛔ **THE MIRROR'S *SECOND* RENDER CAN NEVER SUCCEED, and this is the ACL trap
+  this file already records as a non-fix.** The follow-up `mirror/tenant-render`
+  failed `[Errno 13] Permission denied: extensions__50-119-dialplan.conf` while
+  all 13 baseline files were correct: **the render hands each file to `www-data`**
+  so the panel can keep managing it, landing `www-data:root rw-r--r--` with the
+  **ACL mask at `r--`** — and **the helper runs as `asterisk`**, so it cannot
+  reopen the file it just wrote. (A panel-managed tenant is `www-data:www-data
+  rw-rwxr--`.) ⛔ **Do NOT widen permissions on `/etc/asterisk/vitalpbx`** to fix
+  it. Removed from the console, where it is **redundant anyway** — that route
+  writes nothing after the create, so the baseline IS the final state (onboarding
+  re-renders because it keeps adding rows). A guard fails if it is re-added.
+  ⏳ **Onboarding's final re-render (`1c1d067e`) is very likely dead the same
+  way** — same door, same already-chowned files. It is wrapped and falls back
+  correctly ("the panel-applied files remain in place"), and the panel's own
+  Apply renders extensions fine, so **nothing is broken** — but the
+  "byte-identical final re-render" claim probably is not happening. **ONE
+  measurement so far; confirm on the next real onboarding** by grepping its log
+  for that warning before fixing or deleting the claim.
 - ⏳ **NOT DONE:** nobody has opened the page in a browser; the geo build step above;
-  wiring the console "New tenant" button to the mirror (`buildPbxTenant`);
   ⛔ rotate the robot panel password.
 
 ## ⛔ AGENT HANDOFF — dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenant" is wrong — the free tier caps EXTENSIONS at 12 (2026-08-18) — READ FIRST before answering "can we cancel VitalPBX?", before touching the license, or before sizing "our own multi-tenant"
