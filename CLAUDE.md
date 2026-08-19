@@ -44,6 +44,51 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenant" is wrong — the free tier caps EXTENSIONS at 12 (2026-08-18) — READ FIRST before answering "can we cancel VitalPBX?", before touching the license, or before sizing "our own multi-tenant"
+
+Full assessment: **`docs/ai-context/AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no license touched.**
+Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
+
+- ✅ **Possible: Asterisk checks NO license.** Every cap lives in the ionCube-encrypted
+  panel and fires **at save time** (`extensions.max_reached`, `tenants.no_license`,
+  `provisioning.licensing.max_reached`, `extensions.vitxi_clients.max_reached`, …).
+  The 27 tenants / 119 extensions / 49,149 lines of generated conf / AstDB keep
+  running the day the plan stops. License file `/var/lib/pbx-licenses/vitalpbx.lic`
+  (binary, refreshed 2026-08-03 by the panel; no cron on the box).
+- ⛔⛔ **Izzy's premise "the only thing we use is multi-tenant" is not what the free
+  tier says.** Community = **12 extensions on the whole PBX**, **20 provisioned
+  phones** (we have 55), **1 country** geo-block, **1 tenant**, 0 VitalPBX Connect
+  devices. So "our own multi-tenant" MUST mean **Connect generates the per-customer
+  Asterisk config itself** (pjsip endpoints, tenant dialplan, voicemail, hints,
+  ring groups/queues, provisioning), not "our own tenant table on top of VitalPBX
+  extensions". ✅ His core point IS right and is what makes it feasible: **all 66
+  trunks / 56 outbound routes / 80 route selections live in Main (tenant 1, 3 ext)**,
+  and Connect already owns the doorway, `connect-menu`, wake-and-wait, tenant MOH
+  and the AMI/ARI layer. Emergency calling already proved Connect dialplan can
+  `Gosub(trk-<id>,…)` a VitalPBX trunk directly.
+- **Size, honestly: 2–4 months**, staged: (0) reclaim dead slots now — ~76 of 119
+  extensions registered anything in 30 d, but ~30 are legit virtual "ring my cell"
+  and T101/T102 are test tenants; (1) **hybrid first — Connect-generated config for
+  NEW customers (~4–6 wks) un-caps immediately** because the panel never sees them;
+  (2) migrate the 27 tenants keeping **identical `T<t>_<ext>[_1]` names + passwords**
+  (readable in `ombu_devices`) so no phone/app changes, rebuild provisioning, move
+  the 38 legacy IVRs into Studio, replace the **16 `ombutel.*` readers** (E911
+  billing's DID sync, queue dir, overdue cutoff's ARS toggle, `ombutel.states`);
+  (3) **cancel LAST.** The panel-replay layer, the bake/apply dance and
+  `applyRegenRebake` get DELETED, not replaced.
+- ⛔⛔ **NOT PROVEN and must be rehearsed before cancelling:** what the panel does to
+  the existing over-cap tenants after a lapse (regen refuses? drops `T<t>_*` files?).
+  Nothing public documents it. **A full snapshot exists on the box —
+  `/root/pbx-full-brain-20260609-063057/` — stand it up on a throwaway VM and let
+  the license lapse THERE first.** "Cancel and see" is the one order with an outage.
+- ⛔ **Verified unused, so nothing to replace:** VitXi (0 hits today), VitalPBX
+  Connect app, Sonata Switchboard/Stats/Billing/Dialer (Connect reads
+  `asterisk.queues_log` directly), the SMS add-on, AI assistants.
+- ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
+  (robot role lacks that module). The One plan's tier ladder was NOT confirmable
+  online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
+
 ## ⛔⛔ AGENT HANDOFF — the voice changer: a recording comes back in a different voice, and the audio NEVER becomes text (2026-08-18) — READ FIRST before touching `apps/api/src/voice/elevenLabs*`, before adding any speech feature for Yiddish, or before "improving" this with speech recognition
 
 (`58be00f7` + `95f9e9d4` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED
