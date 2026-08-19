@@ -282,24 +282,36 @@ deploy_common_mark_deployed() {
 
 # Paths that should trigger a rebuild for a given service. Keep in sync with
 # AGENTS.md "change detection" section.
+#
+# These are git pathspecs, matched with git ls-files/diff semantics.
+# ⛔ The Dockerfile* entry matches NOTHING — verified 2026-08-19: a git
+#   ls-files on that pathspec returns 0 rows, because every Dockerfile lives under
+#   apps/<service>/. It is harmless: a service own Dockerfile is already
+#   covered by its `apps/<service>/` prefix. Do NOT "fix" it to `*Dockerfile*`
+#   — that would make one app Dockerfile edit rebuild EVERY service, which is
+#   slower, not safer. Same for `tsconfig*.json`, which deliberately matches
+#   only the root tsconfig.base.json.
+# ⛔ `.dockerignore` is listed on EVERY service (added 2026-08-19): it decides
+#   what goes into every image, so a change to it must rebuild all of them.
+#   Without that entry a .dockerignore fix silently never reaches the images.
 _deploy_common_service_paths() {
   local service="$1"
   case "$service" in
     api)
-      echo "apps/api/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/api/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
       ;;
     portal)
-      echo "apps/portal/ scripts/deploy-portal.sh scripts/lib/deploy-portal-rollout.sh packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/portal/ scripts/deploy-portal.sh scripts/lib/deploy-portal-rollout.sh packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
       ;;
     telephony)
-      echo "apps/telephony/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/telephony/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
       ;;
     realtime)
-      echo "apps/realtime/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/realtime/ packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
       ;;
     worker)
       # Worker bundles API billing (invoiceEngine import). scripts/deploy-worker.sh + this file affect whether the queue rebuilds.
-      echo "apps/worker/ apps/api/src/billing/ scripts/deploy-worker.sh scripts/lib/deploy-common.sh packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* tsconfig*.json"
+      echo "apps/worker/ apps/api/src/billing/ scripts/deploy-worker.sh scripts/lib/deploy-common.sh packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
       ;;
     *)
       echo ""
