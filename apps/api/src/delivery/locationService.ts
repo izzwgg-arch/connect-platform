@@ -18,6 +18,12 @@ export interface IncomingSample {
 
 /** Start a tracking session for a run (ends any dangling open session for the driver). */
 export async function startSession(tenantId: string, runId: string, driverId: string) {
+  // The run must exist in THIS tenant and be this driver's. Without the check
+  // a caller could attach a session (and flip their status to ON_RUN pointing
+  // at it) to any run id on the platform. Data-integrity, not a read leak —
+  // the read side is already tenant-filtered — but cheap to close.
+  const run = await db.deliveryRun.findFirst({ where: { id: runId, tenantId, driverId }, select: { id: true } });
+  if (!run) throw new Error("run_not_found_in_tenant");
   await db.driverTrackingSession.updateMany({
     where: { tenantId, driverId, endedAt: null },
     data: { endedAt: new Date(), endReason: "SUPERSEDED" },

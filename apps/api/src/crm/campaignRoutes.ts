@@ -405,6 +405,17 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     const { contactIds, assignedToUserId } = parsed.data;
 
+    // Same rule the CSV import already applies below: an assignee must belong
+    // to this tenant and have CRM access. Unvalidated here, a foreign user id
+    // became the assignee of this tenant's leads.
+    if (assignedToUserId) {
+      const access = await db.crmUserAccess.findFirst({
+        where: { tenantId, userId: assignedToUserId, enabled: true },
+        select: { id: true },
+      });
+      if (!access) return reply.code(400).send({ error: "invalid_assignee", detail: "User must belong to tenant and have CRM access enabled." });
+    }
+
     // Verify all contacts exist in tenant and have crmMeta
     const contacts = await db.contact.findMany({
       where: { id: { in: contactIds }, tenantId, active: true },
@@ -871,6 +882,14 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     const parsed = patchMemberSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
+
+    if (parsed.data.assignedToUserId) {
+      const access = await db.crmUserAccess.findFirst({
+        where: { tenantId, userId: parsed.data.assignedToUserId, enabled: true },
+        select: { id: true },
+      });
+      if (!access) return reply.code(400).send({ error: "invalid_assignee", detail: "User must belong to tenant and have CRM access enabled." });
+    }
 
     const contactLive =
       !!existing.contact?.active && existing.contact.archivedAt == null;

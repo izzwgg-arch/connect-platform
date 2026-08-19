@@ -75,6 +75,14 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // stock; never buys — the purchase happens only behind the password confirm.
   const isInternalAgentNumberSearchPath =
     path === "/internal/agent/search-phone-numbers" || path.endsWith("/internal/agent/search-phone-numbers");
+  // Read-only investigation workspace: the assistant's window onto BOTH servers
+  // (Connect's Postgres and the PBX's MySQL) so it can diagnose a fault nobody
+  // pre-built a tool for. Same in-handler shared-secret auth, fail-closed.
+  // ⛔ It can only ever READ — three enforcement layers in
+  // agentInvestigation/readOnlySql.ts, the outermost being that Postgres runs
+  // it in a READ ONLY transaction and the PBX credential is SELECT-only.
+  const isInternalAgentInvestigatePath =
+    path === "/internal/agent/investigate" || path.endsWith("/internal/agent/investigate");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -107,6 +115,14 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.startsWith("/billing/invoices/pay/")
     || path.startsWith("/billing/platform/invoices/pay/")
     || path.includes("/billing/platform/invoices/pay/")
+    // Combined pay links (/pay/invoices/[token] page): view/config/pay for
+    // SEVERAL open invoices under one token. ⛔ Audit §6j: "pay-multi/" does not
+    // match "pay/", so all three routes 401'd before their handler ran and
+    // every combined pay link a customer was ever sent was dead. Fails closed,
+    // so it was an availability bug, not a leak — but a customer who cannot
+    // pay is a customer who does not pay.
+    || path.startsWith("/billing/platform/invoices/pay-multi/")
+    || path.includes("/billing/platform/invoices/pay-multi/")
     // Multi-invoice short pay links (/p/{code} page): public view/config/pay by code.
     || path.startsWith("/billing/platform/pay-links/")
     || path.includes("/billing/platform/pay-links/")
@@ -125,6 +141,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalAgentAccountSetupPath
     || isInternalAgentContactsPath
     || isInternalAgentNumberSearchPath
+    || isInternalAgentInvestigatePath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath
@@ -166,7 +183,12 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")
-    || path.includes("/chat/a/")
+    // Anchored to the path start (with or without the /api prefix). This was
+    // `path.includes("/chat/a/")` — a substring match anywhere in the URL, so
+    // any future route whose path merely CONTAINED that fragment would have
+    // gone public. Two signature-gated wildcard routes exist today; anchor now.
+    || path.startsWith("/chat/a/")
+    || path.startsWith("/api/chat/a/")
     || path.startsWith("/downloads/")
     || /\/downloads\/[^/]+$/.test(path)
     || path === "/mobile/android/download"

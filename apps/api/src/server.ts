@@ -3,6 +3,8 @@ import formbody from "@fastify/formbody";
 import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
+import { buildGlobalRateLimitOptions, resolveGlobalRateLimitMax } from "./globalRateLimit";
+import { SUPER_ONLY_VITAL_WRITE_RESOURCES, decideVitalResourceWrite } from "./pbxResourceOwnership";
 import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
@@ -353,10 +355,43 @@ const DEFAULT_MAX_CAMPAIGN = 2000;
 const app = Fastify({ logger: true, maxParamLength: 512 });
 const fallbackNumberProvider = new FakeNumberProvider();
 
-app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
+// ⛔⛔ THE GLOBAL RATE LIMITER HAD NEVER APPLIED TO A SINGLE ROUTE until 2026-08-18.
+// This used to read `app.register(rateLimit, { max: 200, timeWindow: "1 minute" })`
+// with `global: true` (the default) — but the plugin attaches its global limiter
+// through an `onRoute` hook, `onRoute` fires synchronously at route DECLARATION,
+// and every route below was declared before the un-awaited plugin ever loaded.
+// Result: no `x-ratelimit-*` header on any response, ever, and zero 429s at
+// 357 req/min peaks. So: `global: false` here (the plugin only provides the
+// `app.rateLimit()` decorator), and the real limiter is installed in
+// `app.after()` below as an `onRequest` hook — lifecycle hooks are snapshotted
+// at `preReady`, so that binds to every route regardless of order. Rules,
+// sizing and the exemptions live in ./globalRateLimit.ts.
+app.register(rateLimit, { global: false });
 // Route-scoped raw body capture (Meta webhook only). Not enabled globally.
 app.register(fastifyRawBody as any, { field: "rawBody", global: false, encoding: false, runFirst: true });
-app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
+// ⛔ JWT_SECRET must be SET, and not short. This used to fall back to the literal
+// "change-me" — a session-signing key sitting in this repository — which is not
+// a default, it is an unsigned platform. Fail closed at boot with a readable
+// reason. (Live value is 64 chars; verified before this shipped.)
+const JWT_SECRET_VALUE = String(process.env.JWT_SECRET || "").trim();
+if (JWT_SECRET_VALUE.length < 32) {
+  throw new Error(
+    "JWT_SECRET is missing or shorter than 32 characters. Refusing to start: every session on the platform is signed with it. "
+    + "Set JWT_SECRET in the environment (openssl rand -hex 32) — never a placeholder.",
+  );
+}
+app.register(jwt, { secret: JWT_SECRET_VALUE });
+app.after(() => {
+  const max = resolveGlobalRateLimitMax();
+  if (max === 0) {
+    app.log.warn("GLOBAL_RATE_LIMIT_DISABLED api_global_rate_limit_per_min=0");
+    return;
+  }
+  app.addHook("onRequest", (app as any).rateLimit(buildGlobalRateLimitOptions(max)));
+  // Grep-able boot proof, like FCM_DIRECT_ARMED: if this line is missing from
+  // `docker logs app-api-1`, the limiter is not running.
+  app.log.info({ maxPerMinute: max }, "GLOBAL_RATE_LIMIT_ARMED");
+});
 
 // Alarm for the cross-tenant leak (2026-08-02). Every time a CDR arrives
 // claiming to belong to one company while the PBX's own marker on the call says
@@ -379,6 +414,20 @@ setTenantClaimRejectionHandler((r) => {
 app.register(formbody);
 
 app.setErrorHandler((error, req, reply) => {
+  // A zod `.parse(req.body)` that throws is a CALLER's mistake, not a server
+  // fault. ~117 authenticated routes still `.parse()` their body; without this
+  // every one of them answered a malformed body with `500 internal_error`,
+  // which the portal renders as "Server error" and which pages nobody. This
+  // is NOT the handler being loosened: it answers 400 with the field paths and
+  // the zod message — the API's own contract — and never a stack, a query or
+  // a table name. Routes that already `safeParse` are untouched.
+  if (error instanceof z.ZodError) {
+    return reply.status(400).send({
+      error: "validation_error",
+      message: "The request was not in the expected shape.",
+      issues: error.issues.map((i) => ({ path: i.path.join("."), code: i.code, message: i.message })),
+    });
+  }
   const status = Number((error as { statusCode?: number }).statusCode) || 500;
   if (status >= 500) {
     // Unexpected failure (e.g. an ORM error thrown mid-handler). The raw
@@ -572,9 +621,11 @@ const testSendLimiter = new Map<string, number[]>();
 const billingRateLimiter = new Map<string, number[]>();
 const voiceDiagHeartbeatLimiter = new Map<string, number>();
 const voiceDiagEventLimiter = new Map<string, number[]>();
-const turnValidationTokenSecret = process.env.TURN_VALIDATION_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
-const mobileProvisioningTokenSecret = process.env.MOBILE_PROVISIONING_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
-const mediaTestTokenSecret = process.env.MEDIA_TEST_TOKEN_SECRET || process.env.JWT_SECRET || "change-me";
+// These fall back to the CHECKED JWT secret, never to a literal — see the boot
+// guard beside `app.register(jwt, …)`.
+const turnValidationTokenSecret = process.env.TURN_VALIDATION_TOKEN_SECRET || JWT_SECRET_VALUE;
+const mobileProvisioningTokenSecret = process.env.MOBILE_PROVISIONING_TOKEN_SECRET || JWT_SECRET_VALUE;
+const mediaTestTokenSecret = process.env.MEDIA_TEST_TOKEN_SECRET || JWT_SECRET_VALUE;
 const sbcKamailioHost = process.env.SBC_KAMAILIO_HOST || "sbc-kamailio";
 const sbcKamailioSipPort = Number(process.env.SBC_KAMAILIO_SIP_PORT || 5060);
 const sbcKamailioTcpPort = Number(process.env.SBC_KAMAILIO_TCP_PORT || 5061);
@@ -5817,14 +5868,20 @@ app.post("/auth/login", async (req, reply) => {
     loginFailuresTotal.labels("not_found").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
   }
-  if ((user as any).status === "DISABLED") {
-    loginFailuresTotal.labels("bad_password").inc();
-    return reply.status(403).send({ error: "account_disabled" });
-  }
   if (!(await bcrypt.compare(input.password, user.passwordHash))) {
     recordLoginFailure(emailKey, loginSourceIp);
     loginFailuresTotal.labels("bad_password").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
+  }
+  // ⛔ ONLY AFTER the password matched. This check used to sit BEFORE bcrypt,
+  // so `{"email": x, "password": "anything"}` answered 403 for a disabled
+  // account and 401 for everything else — a free oracle that confirmed which
+  // addresses exist (audit finding J). Someone who typed the RIGHT password for
+  // a disabled account has proven it is theirs and may be told plainly; anyone
+  // else gets the same 401 as a wrong password.
+  if ((user as any).status === "DISABLED") {
+    loginFailuresTotal.labels("account_disabled").inc();
+    return reply.status(403).send({ error: "account_disabled", message: "This account has been disabled. Contact your administrator." });
   }
   // A person who eventually remembers their own password walks away with a clean
   // slate — the failures that got them here must not linger and lock them out later.
@@ -16862,6 +16919,36 @@ async function vitalUpdateByResource(client: VitalPbxClient, resource: VitalReso
   throw new Error("resource_not_supported");
 }
 
+/**
+ * ⛔ Audit §6h: before a NON-super writes a VitalPBX resource by raw id, prove
+ * the id belongs to the caller's own PBX tenant by listing that resource for
+ * their tenant (the same call the GET route makes) and checking the id is in
+ * it. `tenants` and `trunks` are super-only outright. Rules + tests in
+ * pbxResourceOwnership.ts. A list failure is a refusal, never a pass.
+ */
+async function decideVitalWriteForCaller(
+  user: JwtUser,
+  resource: VitalResourceName,
+  id: string,
+  link: { pbxTenantId: string | null; pbxInstance: { baseUrl: string; apiAuthEncrypted: string } },
+  auth: { token: string; secret?: string },
+) {
+  const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  let ownRows: unknown | null = null;
+  if (!isSuperAdmin && !SUPER_ONLY_VITAL_WRITE_RESOURCES.has(resource) && link.pbxTenantId) {
+    try {
+      ownRows = await vitalListByResource(
+        getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }),
+        resource,
+        link.pbxTenantId,
+      );
+    } catch {
+      ownRows = null;
+    }
+  }
+  return decideVitalResourceWrite({ isSuperAdmin, resource, id, hasPbxTenantId: !!link.pbxTenantId, ownRows });
+}
+
 async function vitalDeleteByResource(client: VitalPbxClient, resource: VitalResourceName, id: string, tenantId?: string) {
   if (resource === "extensions") return client.deleteExtension(id);
   if (resource === "trunks") return client.deleteTrunk(id);
@@ -18129,6 +18216,8 @@ app.patch("/voice/pbx/resources/:resource/:id", async (req, reply) => {
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const ownership = await decideVitalWriteForCaller(user, resource, id, link, auth);
+  if (!ownership.ok) return reply.status(ownership.status).send({ error: ownership.error });
   const out = await vitalUpdateByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, input.payload, link.pbxTenantId || undefined);
   return { ok: true, resource, out };
 });
@@ -18142,6 +18231,8 @@ app.delete("/voice/pbx/resources/:resource/:id", async (req, reply) => {
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: user.tenantId }, include: { pbxInstance: true } });
   if (!link) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const ownership = await decideVitalWriteForCaller(user, resource, id, link, auth);
+  if (!ownership.ok) return reply.status(ownership.status).send({ error: ownership.error });
   await vitalDeleteByResource(getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret }), resource, id, link.pbxTenantId || undefined);
   return { ok: true, resource };
 });
@@ -25134,7 +25225,7 @@ const didSwitchDeps = {
     publishToAstDb(tenantSlug, keys),
   sweepIvrModeBoundaries,
 };
-registerDidSwitchScheduleRoutes(didSwitchDeps);
+registerDidSwitchScheduleRoutes({ ...didSwitchDeps, resolveMissingPromptRefs: ivrResolveMissingPromptRefs });
 const didSwitchSchedulerTimer = registerShutdownTimer(startDidSwitchScheduler(didSwitchDeps));
 void didSwitchSchedulerTimer;
 
@@ -26333,7 +26424,9 @@ async function didBuildPublishValues(
   }
   let mohClass = "";
   if (mapping.mohProfileId) {
-    const prof = await (db as any).mohProfile.findUnique({ where: { id: mapping.mohProfileId } });
+    // Scoped to the mapping's tenant: MOH class names are a global PBX
+    // namespace, so an unscoped lookup could publish another tenant's class.
+    const prof = await (db as any).mohProfile.findFirst({ where: { id: mapping.mohProfileId, tenantId: mapping.tenantId } });
     mohClass = didResolveMohClass(prof);
   }
   // ⛔ The pointer must be resolved THROUGH the business-hours mode. The

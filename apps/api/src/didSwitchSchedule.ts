@@ -44,6 +44,14 @@ export interface DidSwitchDeps {
    *  publishIvrForTenant and computeCurrentMode. Optional so tests that only
    *  exercise switches don't have to stub it. */
   sweepIvrModeBoundaries?: () => Promise<void>;
+  /** The IVR publish path's catalog check (server.ts `ivrResolveMissingPromptRefs`).
+   *  Optional so tests that only exercise switches don't have to stub it — but
+   *  when absent, an announcement prompt is NOT validated, so server.ts must
+   *  always pass it (a test reads that call site). */
+  resolveMissingPromptRefs?: (
+    tenantId: string,
+    candidates: Array<{ key: string; ref: string }>,
+  ) => Promise<Array<{ key: string; ref: string; reason: string }>>;
 }
 
 const RETRY_WINDOW_MS = 30 * 60 * 1000;
@@ -244,6 +252,12 @@ export function registerDidSwitchScheduleRoutes(deps: DidSwitchDeps): void {
     const mapping = await db.didRouteMapping.findUnique({ where: { id: mappingId } });
     if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
     try { assertIvrTenantAccess(user, mapping.tenantId); } catch { return reply.code(403).send({ error: "forbidden" }); }
+    // The menu being booked must be THIS tenant's — the same check the
+    // immediate `assign` route makes. Unchecked, a foreign profile id could
+    // be scheduled onto this number (it would publish under the tenant's own
+    // AstDB family, so no leak — but a broken menu at the booked hour).
+    const scheduledProfile = await db.ivrRouteProfile.findFirst({ where: { id: body.data.profileId, tenantId: mapping.tenantId }, select: { id: true } });
+    if (!scheduledProfile) return reply.code(404).send({ error: "profile_not_found" });
 
     const activateAt = new Date(body.data.activateAt);
     const endAt = body.data.endAt ? new Date(body.data.endAt) : null;
@@ -344,6 +358,21 @@ export function registerDidSwitchScheduleRoutes(deps: DidSwitchDeps): void {
     if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
     const tenantId = await resolveTenant(user, body.data.tenantId, reply);
     if (!tenantId) return;
+
+    // The recording must be in THIS tenant's prompt catalog, exactly as the
+    // IVR publish path insists. PBX prompt filenames are not tenant-
+    // partitioned, so an unchecked ref could play another tenant's recording
+    // — or dead-air on one that does not exist.
+    if (deps.resolveMissingPromptRefs) {
+      const missing = await deps.resolveMissingPromptRefs(tenantId, [{ key: "pre_announce", ref: body.data.promptRef }]);
+      if (missing.length > 0) {
+        return reply.code(422).send({
+          error: "prompt_refs_not_in_catalog",
+          message: "That recording is not in this account's catalog. Pick a recording from the library, or upload it first.",
+          missing,
+        });
+      }
+    }
 
     const startsNow = body.data.startAt === "now";
     const startAt = startsNow ? new Date() : new Date(body.data.startAt);

@@ -14,6 +14,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { agentMohSecretOk } from "../agentMohOverride";
 import { db } from "@connect/db";
 import { snapshotBilling, priceOfAddition, formatCents } from "./billingReconcile";
 import { searchAvailableNumbers } from "./addPhoneNumberCapability";
@@ -127,8 +128,8 @@ export function registerAccountSetupInfoRoute(app: FastifyInstance) {
    * password, in `addPhoneNumberCapability`.
    */
   app.post("/internal/agent/search-phone-numbers", async (req, reply) => {
-    const secret = (process.env.AGENT_INTERNAL_SECRET || "").trim();
-    if (!secret || req.headers["x-agent-internal-secret"] !== secret) {
+    // Constant-time, fail-closed (unset secret ⇒ refused) — the same helper the MOH door uses.
+    if (!agentMohSecretOk(req.headers["x-agent-internal-secret"], process.env.AGENT_INTERNAL_SECRET)) {
       return reply.code(403).send({ ok: false, error: "forbidden" });
     }
     const body = z
@@ -147,9 +148,8 @@ export function registerAccountSetupInfoRoute(app: FastifyInstance) {
   });
 
   app.post("/internal/agent/account-setup-info", async (req, reply) => {
-    const secret = (process.env.AGENT_INTERNAL_SECRET || "").trim();
-    // Fail closed: an unset secret must not become an open door.
-    if (!secret || req.headers["x-agent-internal-secret"] !== secret) {
+    // Fail closed: an unset secret must not become an open door. Constant-time compare.
+    if (!agentMohSecretOk(req.headers["x-agent-internal-secret"], process.env.AGENT_INTERNAL_SECRET)) {
       return reply.code(403).send({ ok: false, error: "forbidden" });
     }
     const body = z.object({ tenantId: z.string().min(1) }).safeParse(req.body);

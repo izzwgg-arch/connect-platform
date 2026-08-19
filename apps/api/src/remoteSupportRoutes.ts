@@ -202,8 +202,16 @@ export async function registerRemoteSupportRoutes(app: FastifyInstance, deps: Re
     }
     const { targetUserId, reason, requestControl } = parsed.data;
 
-    const target = await db.user.findUnique({
-      where: { id: targetUserId },
+    // ⛔ Scoped to the caller's own tenant unless they are SUPER_ADMIN. The
+    // lookup used to be by bare id, and the policy then answered
+    // `403 cross_tenant_not_allowed` for a foreign user vs `404 user_not_found`
+    // for a non-existent one — a platform-wide USER-ID EXISTENCE ORACLE for
+    // anyone holding can_remote_support. Now a foreign id reads exactly like a
+    // missing one. The policy still runs and still decides cross-tenant for
+    // the platform admin, who genuinely may reach other tenants.
+    const isPlatformAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+    const target = await db.user.findFirst({
+      where: isPlatformAdmin ? { id: targetUserId } : { id: targetUserId, tenantId: user.tenantId },
       select: { id: true, tenantId: true, firstName: true, lastName: true, email: true },
     });
     if (!target) {

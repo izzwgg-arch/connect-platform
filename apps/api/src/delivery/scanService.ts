@@ -43,8 +43,11 @@ export async function scanLabel(input: ScanInput): Promise<ScanResult> {
   if (!clientOpId) return { ok: false, code: "op_id_required" };
 
   // Idempotency: this exact client operation already applied?
-  const priorOp = await db.deliveryAssignment.findUnique({
-    where: { clientOpId },
+  // Tenant-scoped: `clientOpId` is client-supplied and globally unique, so a
+  // bare lookup would hand back a FOREIGN tenant's orderId on a collision.
+  // Ids are 40-bit tokens so guessing is impractical — closed anyway.
+  const priorOp = await db.deliveryAssignment.findFirst({
+    where: { clientOpId, tenantId: input.tenantId },
     select: { orderId: true, driverId: true },
   });
   if (priorOp) {

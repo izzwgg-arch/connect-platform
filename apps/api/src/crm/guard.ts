@@ -184,7 +184,12 @@ export async function requireCrmAdmin(
     return null;
   }
 
-  const tenantId = user.tenantId;
+  // ⛔ Same effective-tenant rule as requireCrmAccess. This guard used to
+  // ignore the super-admin's `x-tenant-context` switch entirely, so a
+  // SUPER_ADMIN viewing tenant B READ tenant B (via requireCrmAccess) but
+  // every admin WRITE landed on tenant A — their own. Failed safe, but wrong.
+  const effectiveUser = withEffectiveCrmTenant(req, user);
+  const tenantId = effectiveUser.tenantId;
   if (!tenantId) {
     reply.status(400).send({ error: "no_tenant" });
     return null;
@@ -201,7 +206,7 @@ export async function requireCrmAdmin(
     return null;
   }
 
-  return user;
+  return effectiveUser;
 }
 
 /**

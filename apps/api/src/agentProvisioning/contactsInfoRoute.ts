@@ -19,6 +19,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { agentMohSecretOk } from "../agentMohOverride";
 import { db } from "@connect/db";
 
 export type AgentContactsInfo = {
@@ -78,9 +79,8 @@ export async function loadAgentContactsInfo(tenantId: string, search?: string): 
 
 export function registerAgentContactsInfoRoute(app: FastifyInstance) {
   app.post("/internal/agent/contacts-info", async (req, reply) => {
-    const secret = (process.env.AGENT_INTERNAL_SECRET || "").trim();
-    // Fail closed: an unset secret must not become an open door.
-    if (!secret || req.headers["x-agent-internal-secret"] !== secret) {
+    // Fail closed: an unset secret must not become an open door. Constant-time compare.
+    if (!agentMohSecretOk(req.headers["x-agent-internal-secret"], process.env.AGENT_INTERNAL_SECRET)) {
       return reply.code(403).send({ ok: false, error: "forbidden" });
     }
     const body = z
