@@ -36,8 +36,26 @@ import {
   buildSignedCrmDocUrl,
   verifySignedCrmDocUrl,
   GOOGLE_WORKSPACE_EXPORTABLE,
+  contentTypeForCrmDoc,
 } from "./docImportStorage";
 import { DocImportError } from "./docImportService";
+
+describe("contentTypeForCrmDoc — scriptable types are neutralised (stored-XSS fence)", () => {
+  it("⛔ never serves an uploaded doc as an ACTIVE type (portal opens it same-origin as a blob)", () => {
+    // The dangerous cases: an uploaded document whose stored MIME can execute
+    // script in the portal origin and steal the session JWT.
+    for (const mime of ["text/html", "image/svg+xml", "application/xhtml+xml", "text/xml", "application/xml", "text/html; charset=utf-8"]) {
+      assert.equal(contentTypeForCrmDoc(mime, null, "x/doc"), "application/octet-stream", `${mime} must be neutralised`);
+      assert.equal(contentTypeForCrmDoc(null, mime, "x/doc"), "application/octet-stream", `${mime} (original) must be neutralised`);
+    }
+  });
+  it("leaves the real inline content types untouched", () => {
+    assert.equal(contentTypeForCrmDoc("application/pdf", null, "x/doc.pdf"), "application/pdf");
+    assert.equal(contentTypeForCrmDoc("image/png", null, "x/doc.png"), "image/png");
+    assert.equal(contentTypeForCrmDoc("image/jpeg", null, "x/doc.jpg"), "image/jpeg");
+    assert.equal(contentTypeForCrmDoc("text/plain", null, "x/doc.txt"), "text/plain");
+  });
+});
 
 // ── buildDocStorageKey ────────────────────────────────────────────────────────
 

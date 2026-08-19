@@ -249,16 +249,30 @@ export function verifySignedCrmDocUrl(
 }
 
 /**
+ * ⛔ A stored/user-supplied MIME type that can execute script must NEVER be
+ * served inline. The portal opens `/crm/documents/:id/open` as a SAME-ORIGIN
+ * blob (`URL.createObjectURL`), so serving an uploaded document as `text/html`
+ * or `image/svg+xml` would run script in the portal origin and steal the
+ * session JWT from localStorage — stored XSS. Anything scriptable is forced to
+ * `application/octet-stream` (the browser downloads it, never renders it), which
+ * costs nothing for the real content (PDFs/images/text stay inline).
+ */
+function safeInlineContentType(ct: string): string {
+  return /html|svg|xml|javascript|ecmascript/i.test(ct) ? "application/octet-stream" : ct;
+}
+
+/**
  * Returns the Content-Type header value for a stored document.
  * Uses importedMimeType (the actual stored MIME) if available, else original.
+ * Scriptable types are neutralised (see safeInlineContentType).
  */
 export function contentTypeForCrmDoc(
   importedMimeType: string | null | undefined,
   originalMimeType: string | null | undefined,
   storageKey: string,
 ): string {
-  if (importedMimeType) return importedMimeType;
-  if (originalMimeType) return originalMimeType;
+  if (importedMimeType) return safeInlineContentType(importedMimeType);
+  if (originalMimeType) return safeInlineContentType(originalMimeType);
   const ext = path.extname(storageKey).toLowerCase();
-  return MIME_TO_EXT[ext] ?? "application/octet-stream";
+  return safeInlineContentType(MIME_TO_EXT[ext] ?? "application/octet-stream");
 }

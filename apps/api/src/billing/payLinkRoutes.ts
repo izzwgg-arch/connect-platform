@@ -198,12 +198,9 @@ export function registerBillingPayLinkRoutes(
       throw e;
     }
 
-    if (input.billingEmail?.trim()) {
-      await (db as any).tenantBillingSettings.update({
-        where: { tenantId: link.tenantId },
-        data: { billingEmail: input.billingEmail.trim() },
-      }).catch(() => null);
-    }
+    // ⛔ Do NOT persist billingEmail from this UNAUTHENTICATED pay-link route: a
+    // link holder could otherwise redirect the tenant's future invoice/receipt
+    // emails to an attacker address. Accepted for compatibility, not persisted.
 
     // --- Idempotency: one operation per (link, amount); retry allowed after decline.
     const customerKey = `tenant:${link.tenantId}`;

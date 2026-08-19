@@ -188,6 +188,11 @@ const SENSITIVE_KEYS = new Set([
   "xmagstripe",
   "xmagstripeksn",
   "xtokeninput",
+  // ⛔ xtoken is the REUSABLE card-on-file token — a bearer credential that can
+  // re-charge the card. Cardknox echoes it in the cc:sale response, and the safe
+  // payload is persisted into PaymentTransaction.rawResponseSafeJson and returned
+  // to same-tenant billing admins. Redact it like a card number.
+  "xtoken",
   "xsut",
   "sut",
   "cardnumber",

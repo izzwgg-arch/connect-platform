@@ -162,12 +162,11 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       throw e;
     }
 
-    if (input.billingEmail?.trim()) {
-      await (db as any).tenantBillingSettings.update({
-        where: { tenantId },
-        data: { billingEmail: input.billingEmail.trim() },
-      }).catch(() => null);
-    }
+    // ⛔ Do NOT persist billingEmail from this UNAUTHENTICATED pay route: a
+    // pay-link holder (30-day bearer) could otherwise overwrite where the tenant's
+    // FUTURE invoices/receipts are sent, redirecting them to an attacker. The
+    // field is accepted for backward compatibility but ignored; the tenant changes
+    // its billing email from the authenticated portal only.
 
     type MultiPayResult = {
       invoiceId: string;
@@ -467,12 +466,9 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       throw e;
     }
 
-    if (input.billingEmail?.trim()) {
-      await (db as any).tenantBillingSettings.update({
-        where: { tenantId: invoice.tenantId },
-        data: { billingEmail: input.billingEmail.trim() },
-      }).catch(() => null);
-    }
+    // ⛔ Do NOT persist billingEmail from this UNAUTHENTICATED pay route (see the
+    // note on the multi-pay route above): a pay-link holder could otherwise
+    // redirect the tenant's future invoice/receipt emails. Accepted, not persisted.
 
     // A sign-up invoice is different in one non-negotiable way: the card goes
     // on file and autopay is ON, because that is how every following month is

@@ -38274,7 +38274,11 @@ app.post("/billing/invoices/pay/:token/hosted-session", async (req, reply) => {
 });
 
 app.post("/billing/invoices/:id/simulate-webhook", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  // ⛔ SUPER_ADMIN only. This marks an invoice PAID with no money moving and
+  // emails a receipt — a test/simulation endpoint. `requireAdmin` admits every
+  // TENANT_ADMIN, which let a customer self-mark their own invoices paid to
+  // evade dunning. It is Connect-staff tooling; gate it to SUPER_ADMIN.
+  const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
 
   const { id } = req.params as { id: string };
