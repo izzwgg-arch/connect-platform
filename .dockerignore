@@ -60,3 +60,30 @@ temp
 *.tar.gz
 *.tgz
 *.7z
+
+# ---------------------------------------------------------------------------
+# Large build artifacts and debug dumps that are NOT inputs to any image.
+#
+# Why this block exists (measured 2026-08-19): apps/api/Dockerfile ends in
+# `COPY . .`, which was producing an 835 MB layer and a 3.67 GB image. On every
+# api deploy that cost ~214s to COPY, ~420s to export and ~242s to unpack —
+# roughly 15 minutes of a 27-minute deploy — and it made every `docker create`
+# and `docker rm` in the blue/green rollout slow as well. None of the paths
+# below are read by any service at runtime.
+#
+# ⛔ Patterns here are DELIBERATELY exact, not globs. `release` as a bare
+# pattern would also exclude scripts/release/, which holds the deploy wrappers.
+# ⛔ Do NOT add `docs` — apps/api reads docs/agent-knowledge out of its own
+# image at boot (agentKnowledgeSync.ts); excluding it silently empties the
+# assistant's knowledge documents.
+
+# Electron installer output (~635 MB of .exe). Untracked build leftovers that
+# happened to be sitting in the server clone; the published installers live in
+# /opt/connectcomms/downloads, never in the repo.
+apps/desktop/release
+
+# Committed Asterisk/PBX trace dumps (~87 MB). Referenced by nothing in the tree.
+trace*.txt
+
+# Agent worktrees checked out inside the repo.
+.claude

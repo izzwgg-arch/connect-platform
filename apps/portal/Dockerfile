@@ -33,7 +33,17 @@ ARG NEXT_PUBLIC_FORCE_ICE_RELAY=""
 ARG NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED=""
 COPY apps/portal ./apps/portal
 COPY packages/shared ./packages/shared
-RUN --mount=type=cache,id=connect-next-cache-${BUILD_COMMIT},target=/app/apps/portal/.next/cache \
+# ⛔⛔ THE CACHE ID MUST NOT CONTAIN ${BUILD_COMMIT}.
+# It did until 2026-08-19, which meant every deploy allocated a BRAND NEW,
+# EMPTY .next/cache and Next.js did a fully cold build every single time —
+# measured at 1099s (18 min) inside a 20-min portal deploy. A stable id lets
+# the webpack/SWC module cache survive between deploys, which is the entire
+# point of the mount. Next invalidates its own entries by content hash, so a
+# warm cache cannot serve stale code.
+# sharing=locked because deploy-portal.sh builds `portal` and then
+# `portal_candidate` from this same Dockerfile. They are sequential today; the
+# lock keeps them from corrupting the shared cache if that ever changes.
+RUN --mount=type=cache,id=connect-next-cache,sharing=locked,target=/app/apps/portal/.next/cache \
   NEXT_OUTPUT_STANDALONE=1 \
   NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL}" \
   NEXT_PUBLIC_TELEPHONY_WS_URL="${NEXT_PUBLIC_TELEPHONY_WS_URL}" \
