@@ -13,7 +13,7 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("production"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
-  JWT_SECRET: z.string().min(8),
+  JWT_SECRET: z.string().min(32), // align with apps/api — a weak shared secret weakens WS + internal-route auth
 
   PBX_HOST: z.string().min(1).default("209.145.60.79"),
 

@@ -141,8 +141,13 @@ export class TelephonySocketServer {
     if (isProxied) {
       const forwarded = req.headers["x-forwarded-for"];
       if (forwarded) {
-        const firstIp = String(forwarded).split(",")[0].trim();
-        if (firstIp) return firstIp;
+        // ⛔ Use the LAST entry, not the first. nginx appends the real peer to
+        // whatever the client sent, so earlier entries are attacker-controlled —
+        // reading the first lets a client spoof its way past the per-IP cap or
+        // frame another IP. This is the convention the rest of the platform uses.
+        const parts = String(forwarded).split(",").map((s) => s.trim()).filter(Boolean);
+        const lastIp = parts[parts.length - 1];
+        if (lastIp) return lastIp;
       }
     }
     return socketIp;
@@ -175,9 +180,12 @@ export class TelephonySocketServer {
       const rawTenantId =
         typeof payload["tenantId"] === "string" ? payload["tenantId"] : null;
       role = typeof payload["role"] === "string" ? payload["role"].toUpperCase() : "";
-      // SUPER_ADMIN and ADMIN users see all tenants — treat as global (tenantId = null)
-      // so tenantFilter broadcasts every live call to them regardless of which tenant owns it.
-      const isGlobalRole = role === "SUPER_ADMIN" || role === "ADMIN";
+      // ⛔ SUPER_ADMIN ONLY sees all tenants (tenantId = null → broadcast every
+      // live call). NOT "ADMIN": ADMIN is a tenant-level role on this platform,
+      // and treating it as global would let one ADMIN user watch every company's
+      // live calls in real time. 0 ADMIN users exist today, so this is the same
+      // behaviour now and closes the latent arming (matches the api's isSuper).
+      const isGlobalRole = role === "SUPER_ADMIN";
       tenantId = isGlobalRole ? null : rawTenantId;
       // All users see all live calls for their tenant.  Fetch extensions for
       // push-notification matching and future per-user features.

@@ -66,6 +66,9 @@ export function registerTelephonyRoutes(
   // Returns every call in the store (any state), raw AMI data, and what each
   // WS client would see. Requires valid JWT (any role).
   router.get("/telephony/diag", (_req, res) => {
+    // ⛔ Cross-tenant: returns the FULL unfiltered call store, tenant map and
+    // every extension. Staff/internal only — never any tenant JWT.
+    if (!isInternalOrSuperAdmin(res)) { res.status(403).json({ error: "forbidden" }); return; }
     const allCalls = telephony.callStore.getAll();
     const activeCalls = telephony.callStore.getActive();
     const allExtensions = telephony.extStore.getAll();
@@ -163,6 +166,9 @@ export function registerTelephonyRoutes(
   // ── Action endpoints ──────────────────────────────────────────────────────────
 
   router.post("/telephony/calls/originate", async (req: Request, res: Response) => {
+    // ⛔ Acts on any channel with no tenant scoping — staff/internal only, or a
+    // tenant USER could originate/redirect calls on another company's PBX.
+    if (!isInternalOrSuperAdmin(res)) { res.status(403).json({ error: "forbidden" }); return; }
     const { channel, exten, context, callerID, timeout, variables } = req.body as {
       channel?: unknown;
       exten?: unknown;
@@ -485,6 +491,9 @@ export function registerTelephonyRoutes(
   router.delete(
     "/telephony/calls/:channelId/hangup",
     async (req: Request, res: Response) => {
+      // ⛔ Hangs up ANY channel with no tenant scoping — staff/internal only, or a
+      // tenant USER could hang up another company's live calls.
+      if (!isInternalOrSuperAdmin(res)) { res.status(403).json({ error: "forbidden" }); return; }
       const { channelId } = req.params;
       if (!channelId) {
         res.status(400).json({ error: "channelId required" });
@@ -1040,6 +1049,9 @@ export function registerTelephonyRoutes(
   router.post(
     "/telephony/calls/:channelId/transfer",
     async (req: Request, res: Response) => {
+      // ⛔ Redirects ANY channel to any context/exten with no tenant scoping —
+      // staff/internal only, or a tenant USER could hijack another company's call.
+      if (!isInternalOrSuperAdmin(res)) { res.status(403).json({ error: "forbidden" }); return; }
       const { channelId } = req.params;
       const { exten, context } = req.body as { exten?: unknown; context?: unknown };
       if (!channelId || typeof exten !== "string") {
@@ -1091,7 +1103,21 @@ function hasValidInternalSecret(req: Request): boolean {
 }
 
 function isInternalRouteAuthorized(req: Request): boolean {
-  const configured = (env.CDR_INGEST_SECRET || "").trim();
-  if (!configured) return true;
+  // ⛔ Fail CLOSED, like hasValidInternalSecret. This used to `return true` when
+  // the secret was unset ("dev mode"), which — combined with the router granting
+  // {tenantId:null, scope:"internal"} — ran every /internal/* route unauthenticated
+  // AND with global scope on a config regression. Same fail-open class the api
+  // closed. The secret is set in prod, so this is behaviour-identical there.
   return hasValidInternalSecret(req);
+}
+
+/**
+ * Internal caller (shared secret) OR a Connect-staff (SUPER_ADMIN) JWT. Gates the
+ * unscoped cross-tenant call-control + diagnostics routes: they read/act on ANY
+ * tenant's live channels, so an ordinary tenant JWT (any USER) must not reach them.
+ */
+function isInternalOrSuperAdmin(res: Response): boolean {
+  const p = res.locals["jwtPayload"] as Record<string, unknown> | undefined;
+  if (p?.["scope"] === "internal") return true;
+  return String(p?.["role"] ?? "").toUpperCase() === "SUPER_ADMIN";
 }
