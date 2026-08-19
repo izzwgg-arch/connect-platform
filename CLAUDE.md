@@ -612,10 +612,15 @@ Memory: [[global-rate-limiter-was-dead-onroute-ordering]].
   (both hosts serve every page either way). (2) Three portal download links stay
   absolute (`AppDownloadCard.tsx`, `navConfig.ts` installer, the invoice page's
   SSR fallback) — download links, fine cross-origin, not fetches.
-  (3) **`loopcom.net` has NO SPF and no Google DKIM selector** (only a DMARC
-  `p=none`), while `connectcomunications.com` has all three — and the billing
-  emails name `billing@loopcom.net`. Records to add at Squarespace are in the
-  audit doc §10. (4) `loopcom.net` apex/`www` stay on Squarespace — Izzy,
+  (3) ✅ **DONE 2026-08-19 with Izzy at the keyboard: `loopcom.net` now has SPF
+  (`v=spf1 include:_spf.google.com ~all`) and a 2048-bit Google DKIM key
+  (`google._domainkey`), added at Squarespace via the browser and **verified
+  byte-identical to Google's value at the authoritative NS, 8.8.8.8 and 1.1.1.1**;
+  Google Admin reads *"Authenticating email with DKIM"*. Mail posture is now
+  identical on both domains (SPF + DKIM + DMARC `p=none`). ⛔ Squarespace's
+  "Verify to continue as support@…" gate opens a Google popup OUTSIDE the
+  automation tab group — Izzy has to click it each write; the DKIM key is
+  generated in Google Admin (`admin.google.com` re-asks the password, his). (4) `loopcom.net` apex/`www` stay on Squarespace — Izzy,
   2026-08-19: *"I have other plans for loopcom.net."*
 - **Tests: 28** (`globalRateLimit.test.ts` 11 incl. two real-Fastify proofs;
   `securityHardeningRound2.test.ts` 17). ✅ **All 16 source guards fail replayed

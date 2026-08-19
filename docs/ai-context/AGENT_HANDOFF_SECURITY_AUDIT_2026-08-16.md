@@ -627,13 +627,19 @@ except `server_name`. Both vhosts have no `access_log` directive → default
 `allowlist.conf`/`denylist.conf`. Certs: 4, all auto-renewing, `certbot renew
 --dry-run` clean, timer next 23:53. Surface check (11 paths, headers, TLS, cert) —
 identical on both. **Mail posture differs**: `connectcomunications.com` has SPF
-(`include:_spf.google.com ~all`), DMARC `p=none`, Google DKIM; **`loopcom.net` has
+(`include:_spf.google.com ~all`), DMARC `p=none`, Google DKIM; **`loopcom.net` had
 DMARC `p=none` only — no SPF, no DKIM selector published** — while
-`billing/emailTemplates.ts` names `billing@loopcom.net`. Records for Izzy to add at
-Squarespace (Google Workspace): TXT `@` → `v=spf1 include:_spf.google.com ~all`; DKIM:
-generate in Google Admin → Apps → Google Workspace → Gmail → Authenticate email, publish
-the `google._domainkey` TXT it prints, then "Start authentication"; DMARC stays `p=none`
-until reports are clean.
+`billing/emailTemplates.ts` names `billing@loopcom.net`. ✅ **CLOSED 2026-08-19, live
+in the browser with Izzy:** TXT `@` `v=spf1 include:_spf.google.com ~all` added at
+Squarespace; DKIM generated in Google Admin (2048-bit, selector `google`), TXT
+`google._domainkey` added, `dig` at `nsc1.squarespacedns.com`, `8.8.8.8` and `1.1.1.1`
+returned the value **byte-identical** to Google's (408 chars) before "Start
+authentication" was pressed; Google now reads *"Authenticating email with DKIM"*. Both
+domains: SPF + DKIM + DMARC `p=none`. Traps: Squarespace's per-write "Verify to continue"
+opens a Google popup outside the automation tab group (Izzy clicks it); the TYPE control
+is a custom div (open it, scroll, click TXT — the last column's label flipping to TEXT is
+the tell); `admin.google.com` re-asks the password every time (his). DMARC stays `p=none`
+until the `rua` reports are clean.
 
 ### 10.5 What this deliberately did NOT do
 
