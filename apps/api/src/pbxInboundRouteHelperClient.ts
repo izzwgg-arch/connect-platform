@@ -168,7 +168,12 @@ async function callHelper<T>(
     | "/voicemail/greeting/reset"
     | "/voicemail/greeting/record-call"
     | "/mirror/tenant-create"
-    | "/mirror/tenant-render",
+    | "/mirror/tenant-render"
+    | "/console/phone-save"
+    | "/console/phone-delete"
+    | "/console/phone-render"
+    | "/console/geo-state"
+    | "/console/geo-set",
   body: Record<string, unknown>,
   // 45s, not 15s: when the helper is busy (or catching up after a restart) a
   // healthy /inspect can exceed 15s, and that abort is what failed every
@@ -636,4 +641,74 @@ export function mirrorCreatePbxTenant(
     },
     90_000,
   );
+}
+
+/* ── PBX Console: the two jobs the unlicensed panel refuses ─────────────────
+ * Phone provisioning stops at 20 devices and geo blocking at 1 country once the
+ * VitalPBX licence lapses, so these write their rows on the PBX and then render
+ * with VitalPBX's OWN generator. Everything else the console does still goes
+ * through the panel. See scripts/pbx/mirror/console_writes.py.
+ */
+
+export type ConsolePhoneRenderResult = { file: string; bytes: number };
+
+export function consoleSavePhone(
+  cfg: PbxRouteHelperConfig,
+  args: {
+    phoneId?: number | null;
+    mac: string;
+    tenantId: number;
+    modelId: number;
+    templateId?: number | null;
+    description?: string;
+    /** Ordered ombu_devices ids per line key; null for an empty line. */
+    accounts?: Array<number | null>;
+  },
+): Promise<{ phoneId: number; mac: string; rendered: ConsolePhoneRenderResult }> {
+  return callHelper(cfg, "/console/phone-save", args as any, 180_000);
+}
+
+export function consoleDeletePhone(
+  cfg: PbxRouteHelperConfig,
+  phoneId: number,
+): Promise<{ deletedPhoneId: number; mac: string; filesRemoved: string[] }> {
+  return callHelper(cfg, "/console/phone-delete", { phoneId }, 120_000);
+}
+
+/**
+ * Re-render one phone's config from its current rows. ⛔ The config is a STATIC
+ * file — a row changed any other way leaves the handset on stale settings until
+ * this runs.
+ */
+export function consoleRenderPhone(
+  cfg: PbxRouteHelperConfig,
+  args: { mac: string; tenantId: number },
+): Promise<{ ok: true; mac: string; rendered: ConsolePhoneRenderResult }> {
+  return callHelper(cfg, "/console/phone-render", args, 180_000);
+}
+
+export type ConsoleGeoState = {
+  blocked: string[];
+  /** false when /etc/firewalld cannot be read — then no enforceability claim is made. */
+  ipsetDirReadable: boolean;
+  enforceable: string[] | null;
+  missingIpset: string[] | null;
+  whitelist: Array<{ id: number; host: string; description: string; is_default: string }>;
+};
+
+export function consoleGeoState(cfg: PbxRouteHelperConfig): Promise<ConsoleGeoState> {
+  return callHelper(cfg, "/console/geo-state", {}, 30_000);
+}
+
+/**
+ * Block/unblock whole countries and rebuild the firewall. ⛔ The helper REFUSES
+ * when it cannot run the rebuild, rather than setting a flag it cannot enforce —
+ * a console that says "blocked" while the traffic still arrives is worse than
+ * one that says it could not do it.
+ */
+export function consoleGeoSet(
+  cfg: PbxRouteHelperConfig,
+  args: { block?: string[]; unblock?: string[] },
+): Promise<{ blockedBefore: number; blockedAfter: number; build: { via: string; code: number; out: string; err: string } }> {
+  return callHelper(cfg, "/console/geo-set", args, 900_000);
 }

@@ -129,7 +129,7 @@ function PbxConsole() {
             open={(e: Extension) => setEditor({ kind: "extensions", id: e.extensionId, draft: extDraft(e), base: extDraft(e) })}
             create={() => setEditor({ kind: "extensions", id: null, draft: extDraft(null, scope ? tenantByName.get(scope) : tenants.find((t) => !t.isMain)), base: null })} />
         : mod === "phones" ? <PhoneList rows={phones.filter((p) => inScope(slugForTenantId(p.tenantId, tenants)) && matches(p.mac + " " + p.description + " " + (p.model || "") + " " + p.tenantDescription))} push={push} reload={() => loadModule("phones")} />
-        : <GeoView geo={geo} />}
+        : <GeoView geo={geo} push={push} reload={() => loadModule("geo")} />}
 
       {toastNode}
     </div>
@@ -237,10 +237,29 @@ function ExtensionList({ rows, all, filter, setFilter, search, setSearch, open, 
 }
 
 function PhoneList({ rows, push, reload }: any) {
-  const resync = async (p: Phone) => { try { await apiPost(`/admin/pbx-console/phones/${p.id}/resync`, {}); push(`Resync sent to ${p.mac}.`); } catch (e) { push(errText(e, "Resync failed."), "bad"); } };
+  const [busy, setBusy] = useState<number | null>(null);
+  const resync = async (p: Phone) => {
+    setBusy(p.id);
+    try { await apiPost(`/admin/pbx-console/phones/${p.id}/resync`, {}); push(`Resync sent to ${p.mac} — it will fetch within a few seconds.`); }
+    catch (e) { push(errText(e, "Resync failed."), "bad"); }
+    setBusy(null);
+  };
+  const rebuild = async (p: Phone) => {
+    setBusy(p.id);
+    try { const r: any = await apiPost(`/admin/pbx-console/phones/${p.id}/render`, {}); push(`Settings rebuilt for ${p.mac} (${Math.round((r?.rendered?.bytes || 0) / 1024)} KB). Resync to push them now.`); }
+    catch (e) { push(errText(e, "Rebuild failed."), "bad"); }
+    setBusy(null);
+  };
+  const remove = async (p: Phone) => {
+    if (!window.confirm(`Delete ${p.mac}? The handset keeps its current settings until it next asks for new ones. This can't be undone.`)) return;
+    setBusy(p.id);
+    try { await apiDelete(`/admin/pbx-console/phones/${p.id}`); push("Phone deleted."); await reload(); }
+    catch (e) { push(errText(e, "Delete failed."), "bad"); }
+    setBusy(null);
+  };
   return (
     <>
-      <div className="pc-note warn"><span className="pc-ico">!</span><div><b>Reads and resync work now.</b> Editing or adding a phone goes through the panel, which stops accepting changes past 20 phones once the licence lapses — that page becomes a direct write later. A reboot is not the same as a re-provision; use Resync to push settings now.</div></div>
+      <div className="pc-note"><span className="pc-ico">✓</span><div><b>Phones can be changed from here, licence or not.</b> Connect writes the record and then has the phone system build the config file itself, so the file a handset downloads is exactly what the panel would have produced. <b>Rebuild settings</b> regenerates the file; <b>Resync</b> tells the handset to fetch it now — a reboot is not the same thing.</div></div>
       <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
         <thead><tr><th>MAC address</th><th>Phone</th><th>Customer</th><th>Description</th><th>Extension</th><th /></tr></thead>
         <tbody>{(rows as Phone[]).length ? (rows as Phone[]).map((p) => (
@@ -248,7 +267,11 @@ function PhoneList({ rows, push, reload }: any) {
             <td className="pc-mono">{p.mac}</td><td>{[p.brand, p.model].filter(Boolean).join(" ") || "—"}</td>
             <td className="pc-rowsub">{p.tenantDescription}</td><td>{p.description}</td>
             <td>{p.accounts.find((a) => a.extension) ? `${p.accounts.find((a) => a.extension)!.extension} — ${p.accounts.find((a) => a.extension)!.extName}` : <span className="pc-pill off">none</span>}</td>
-            <td><button className="pc-btn pc-btn-sm" onClick={() => resync(p)}>Resync</button></td>
+            <td style={{ whiteSpace: "nowrap" }}>
+              <button className="pc-btn pc-btn-sm" disabled={busy === p.id} onClick={() => rebuild(p)}>Rebuild</button>{" "}
+              <button className="pc-btn pc-btn-sm" disabled={busy === p.id} onClick={() => resync(p)}>Resync</button>{" "}
+              <button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy === p.id} onClick={() => remove(p)}>Delete</button>
+            </td>
           </tr>
         )) : <tr><td colSpan={6} className="pc-empty">No phones.</td></tr>}</tbody>
       </table></div></div>
@@ -256,15 +279,32 @@ function PhoneList({ rows, push, reload }: any) {
   );
 }
 
-function GeoView({ geo }: { geo: Geo | null }) {
+function GeoView({ geo, push, reload }: { geo: (Geo & { enforcement?: any }) | null; push: any; reload: any }) {
+  const [busy, setBusy] = useState(false);
   if (!geo) return <div className="pc-state"><span className="pc-spin" /></div>;
   const blocked = geo.countries.filter((c) => c.blocked);
+  const toggle = async (iso: string, nowBlocked: boolean) => {
+    const verb = nowBlocked ? "Unblock" : "Block";
+    if (!window.confirm(`${verb} ${iso}? This changes the live firewall for every customer.`)) return;
+    setBusy(true);
+    try {
+      await apiPost("/admin/pbx-console/geo", nowBlocked ? { unblock: [iso] } : { block: [iso] });
+      push(`${iso} ${nowBlocked ? "unblocked" : "blocked"} and the firewall was rebuilt.`);
+      await reload();
+    } catch (e) { push(errText(e, "The firewall was not changed."), "bad"); }
+    setBusy(false);
+  };
   return (
     <>
-      <div className="pc-note warn"><span className="pc-ico">!</span><div><b>Read-only for now.</b> The unlicensed panel only allows one blocked country, so changing the block list needs a direct write path (coming). The current rules keep running. The allow list is checked before the country block.</div></div>
+      <div className="pc-note"><span className="pc-ico">!</span><div><b>This is the live firewall for every customer.</b> The allow list below is checked first, which is how our own server and a blocked-country employee still get through. If the phone system can&apos;t rebuild the rules, a change is refused rather than left saying &ldquo;blocked&rdquo; while the traffic still arrives.</div></div>
       <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
-        <thead><tr><th>Blocked countries ({blocked.length})</th><th>Code</th></tr></thead>
-        <tbody>{blocked.map((c) => <tr key={c.id}><td>{c.country}</td><td className="pc-mono">{c.iso}</td></tr>)}</tbody>
+        <thead><tr><th>Country</th><th>Code</th><th>Phone traffic</th><th /></tr></thead>
+        <tbody>{geo.countries.map((c) => (
+          <tr key={c.id}>
+            <td>{c.country}</td><td className="pc-mono">{c.iso}</td>
+            <td>{c.blocked ? <span className="pc-pill bad">Blocked</span> : <span className="pc-pill ok">Allowed</span>}</td>
+            <td><button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => toggle(c.iso, c.blocked)}>{c.blocked ? "Unblock" : "Block"}</button></td>
+          </tr>))}</tbody>
       </table></div></div>
       <div style={{ height: 18 }} />
       <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">

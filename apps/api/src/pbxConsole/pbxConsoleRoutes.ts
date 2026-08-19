@@ -10,6 +10,10 @@
  * ⛔ Nothing here is tenant-scoped by a customer — it is the platform console.
  */
 import { loadPanelConfig, PanelSession, PanelStepError, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
+import {
+  consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
+  resolvePbxRouteHelperConfig,
+} from "../pbxInboundRouteHelperClient";
 import { syncExtensionsFromPbx } from "../pbxExtensionSync";
 import { acquireAccount, releaseAccount } from "../onboarding/setupOrchestrator";
 import {
@@ -78,6 +82,17 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
   };
 
   const body = <T>(req: any): T => (req.body || {}) as T;
+
+  /* Phone provisioning and geo blocking are the TWO things the unlicensed
+     panel refuses (20 phones / 1 country), so they go through the PBX helper,
+     which writes the rows and renders with VitalPBX own generator. If the
+     helper is not configured we say so plainly rather than falling back to a
+     panel path that starts refusing the day the licence ends. */
+  const helperCfg = (instance: Instance) => {
+    const cfg = resolvePbxRouteHelperConfig(instance.id);
+    if (!cfg) throw new PanelStepError("helper", "the PBX helper is not configured for this phone system, so phones and the geo firewall cannot be changed from here");
+    return cfg;
+  };
 
   /* ── tenants ───────────────────────────────────────────────────────────── */
 
@@ -239,10 +254,65 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     } catch (e) { return fail(reply, e); }
   });
 
-  // Editing/adding a provisioned phone goes through the panel, which is capped at
-  // 20 devices once the licence lapses. While licensed it works; unlicensed and
-  // over the cap it is refused — the handler surfaces that verbatim.
+  /* Editing, adding and deleting a provisioned phone all go through the helper:
+     the panel refuses these past 20 devices once the licence lapses, and we have
+     55. The helper writes the rows and then renders the config with VitalPBX's
+     OWN generator, so the file a handset downloads is byte-identical to what the
+     panel would have produced. The config is a STATIC file, so every write here
+     renders — otherwise the handset silently keeps its old settings. */
+  const phoneSaveInput = (req: any) => {
+    const b = body<{ mac?: string; pbxTenantId?: number; modelId?: number; templateId?: number | null; description?: string; accounts?: Array<number | null> }>(req);
+    if (!b.mac) throw new PanelStepError("phone", "a MAC address is required");
+    if (!b.pbxTenantId) throw new PanelStepError("phone", "pick a customer");
+    if (!b.modelId) throw new PanelStepError("phone", "pick a phone model");
+    return b;
+  };
+
+  app.post("/admin/pbx-console/phones", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    try {
+      const b = phoneSaveInput(req);
+      const out = await consoleSavePhone(helperCfg(instance), {
+        mac: String(b.mac), tenantId: Number(b.pbxTenantId), modelId: Number(b.modelId),
+        templateId: b.templateId ?? null, description: b.description || "", accounts: b.accounts,
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_PHONE_CREATED", entityType: "PbxPhone", entityId: String(out.phoneId), metadata: { mac: out.mac, bytes: out.rendered?.bytes } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
   app.patch("/admin/pbx-console/phones/:id", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const phoneId = Number((req.params as any).id);
+    try {
+      const b = phoneSaveInput(req);
+      const out = await consoleSavePhone(helperCfg(instance), {
+        phoneId, mac: String(b.mac), tenantId: Number(b.pbxTenantId), modelId: Number(b.modelId),
+        templateId: b.templateId ?? null, description: b.description || "", accounts: b.accounts,
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_PHONE_UPDATED", entityType: "PbxPhone", entityId: String(phoneId), metadata: { mac: out.mac, bytes: out.rendered?.bytes } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.delete("/admin/pbx-console/phones/:id", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const phoneId = Number((req.params as any).id);
+    try {
+      const out = await consoleDeletePhone(helperCfg(instance), phoneId);
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_PHONE_DELETED", entityType: "PbxPhone", entityId: String(phoneId), metadata: { mac: out.mac, filesRemoved: out.filesRemoved?.length } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /** Push current settings to a handset without changing anything. */
+  app.post("/admin/pbx-console/phones/:id/render", async (req: any, reply: any) => {
     const admin = await requireOwner(req, reply); if (!admin) return;
     const instance = await resolveInstance((req.query || {}).instanceId);
     if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
@@ -250,12 +320,10 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     const info = await withRead(instance, (c) => listConsolePhones(c).then((ps) => ps.find((p) => p.id === phoneId) || null));
     const phone = info.ok ? info.data : null;
     if (!phone) return reply.status(404).send({ error: "phone_not_found" });
-    const input = body<{ mac?: string; description?: string; brandId?: string; modelId?: string; templateId?: string; lines?: Record<string, string>; set?: Record<string, string>; checks?: Record<string, boolean> }>(req);
     try {
-      const cfg = panelConfig(); const account = await acquireAccount(cfg); const s = new PanelSession(cfg.baseUrl, account);
-      try { await s.login(); await savePhone(s, phone.tenantPath, phoneId, input); } finally { releaseAccount(account); }
-      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_PHONE_UPDATED", entityType: "PbxPhone", entityId: String(phoneId), metadata: { fields: Object.keys(input) } });
-      return { ok: true };
+      const out = await consoleRenderPhone(helperCfg(instance), { mac: phone.mac, tenantId: phone.tenantId });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_PHONE_RENDERED", entityType: "PbxPhone", entityId: String(phoneId), metadata: { mac: phone.mac, bytes: out.rendered?.bytes } });
+      return out;
     } catch (e) { return fail(reply, e); }
   });
 
@@ -267,7 +335,28 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
     const r = await withRead(instance, (c) => readConsoleGeo(c));
     if (!r.ok) return reply.status(200).send({ available: false, reason: "pbx_unavailable", detail: r.reason });
-    return { available: true, instanceId: instance.id, ...r.data };
+    let enforcement: any = null;
+    try { enforcement = await consoleGeoState(helperCfg(instance)); } catch { /* the helper is optional for the read */ }
+    return { available: true, instanceId: instance.id, ...r.data, enforcement };
+  });
+
+  /**
+   * Block or unblock whole countries. The helper REFUSES when it cannot rebuild
+   * the firewall rather than setting a flag it cannot enforce — a console that
+   * says "blocked" while the traffic still arrives is worse than one that says
+   * it could not do it.
+   */
+  app.post("/admin/pbx-console/geo", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ block?: string[]; unblock?: string[] }>(req);
+    if (!(b.block || []).length && !(b.unblock || []).length) return reply.status(400).send({ error: "nothing_to_change" });
+    try {
+      const out = await consoleGeoSet(helperCfg(instance), { block: b.block || [], unblock: b.unblock || [] });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_GEO_UPDATED", entityType: "PbxGeoFirewall", entityId: "geo", metadata: { block: b.block, unblock: b.unblock, blockedAfter: out.blockedAfter } });
+      return out;
+    } catch (e) { return fail(reply, e); }
   });
 
   /** After a panel extension write, pull the change into Connect's own tables. */
