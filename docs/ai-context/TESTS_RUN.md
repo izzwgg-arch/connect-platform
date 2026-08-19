@@ -4,6 +4,49 @@ Newest entries first.
 
 ---
 
+## First live geo firewall build — LOCKED OUT THE PBX; recovered; channel disarmed (2026-08-19 evening)
+
+Branch `feat/ivr-migration-takeover`. Handoff
+`AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §17a (full
+incident). Live on prod, not a unit suite.
+
+**Setup that passed before the run:** quiet window measured (calls polled
+13:49→17:26 until 0, twice-confirmed); baselines recorded (`direct.xml` mtime
+2026-04-29 = truly first run, 258 direct rules, 232 blocked in DB,
+`buildChannel: "unit"` through the deployed api); manual `direct.xml` backup
+taken on top of the runner's automatic one. §17's acceptance premise
+(`blocked='no'` country WITH an ipset) does not exist on prod — only CA/IL/US
+are unblocked — so the test inverted to unblock→re-block Tuvalu.
+
+**The run:** `POST /admin/pbx-console/geo {"unblock":["tv"]}` →
+`result.json` code 0 in 19 s → **total lockout of every NEW connection,
+whitelist included** (ping/SSH/MySQL dead from loopcom AND workstation).
+Root cause: VitalPBX's `build_geo_firewall` deleted
+`ipsets/blacklist_tv.xml` without rewriting `direct.xml` (mtime never
+changed); the reload failed on `Set blacklist_tv doesn't exist`; a failed
+reload/boot drops all NEW traffic ("full stock configuration" after reboot =
+ssh only).
+
+**Measured during the outage:** VoIP.ms CDR 17:26:55→18:06 = **25 inbound
+calls, 25 ANSWERED, 0 failed** — established conntrack flows (desk-phone
+keepalives, trunk pairs) carried calls through the lockout; only NEW
+connections (mobile wakes, re-registrations, management) were dead.
+All-phones-dead stretch was 17:59→18:04 only (Contabo reboot wiped conntrack;
+stock fallback blocks SIP).
+
+**Recovery + verification (18:04):** stale rule removed from `direct.xml`,
+`systemctl restart firewalld` → `running`, 0 journal errors, 256 rules,
+`vpbx_white_list` at `INPUT_direct` 0 ahead of `geo_firewall` 1, loopcom →
+PBX ping + helper both answering, **139 endpoints re-registered ≤ 2 min**,
+DB=firewall=231 blocked (tv left unblocked deliberately).
+
+**Not run / left disarmed:** the re-block half of the acceptance was NOT run —
+it needs the same broken builder. `connect-geo-build.path` is disabled; a
+console geo write now refuses (`buildChannel: None`). Re-arming requirements
+are in §17a.
+
+---
+
 ## Mirror stress round 2: 20 tenants × 10 extensions, outside the licence, torn down to byte-baseline (2026-08-19 evening)
 
 Branch `feat/ivr-migration-takeover`, `58d55f6d` → `3ec0648e` → `9068acca`.

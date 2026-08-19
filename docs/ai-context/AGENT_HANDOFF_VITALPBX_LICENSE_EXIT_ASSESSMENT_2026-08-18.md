@@ -847,8 +847,81 @@ Installer suite **44/44**; api typecheck **75 = baseline**; portal **0**.
 >   the journal + loopcom still reaching the helper, then unblock and verify
 >   back to 232. ⛔ Judge by direct.xml mtime + the reload, never rule counts
 >   (fail2ban's live bans make counts noisy).
+> ⛔⛔ **SUPERSEDED BY §17a BELOW — the first run happened 2026-08-19 evening and
+> locked out the PBX. The channel is DISARMED.**
 
-### ⏳ GEO: the one step NOT taken, deliberately (STATE AS OF THE MORNING — superseded by the section above)
+### ⛔⛔ §17a — THE FIRST LIVE GEO BUILD (2026-08-19 17:26 EDT): a VitalPBX builder defect locked out the whole PBX for 37 minutes; the geo channel is DISARMED until it has a fix
+
+**What ran.** Izzy gave the word; the acceptance ran in a measured quiet window
+(calls polled to 0, twice-confirmed, at 17:26 after holding since 13:49). One
+correction to the §17 recipe first: **its premise does not exist on prod** —
+the only `blocked='no'` countries are CA/IL/US (the customer countries) and
+none of the 227 `blacklist_*.xml` ipsets belongs to an unblocked country, so
+the test inverted to **unblock→re-block Tuvalu (tv)** (blocked, 1-entry ipset,
+zero traffic). `POST /admin/pbx-console/geo {"unblock":["tv"]}` from loopcom
+with a container-minted SUPER_ADMIN token.
+
+**Our channel behaved exactly as §17 designed it**: flags written (232→231),
+request file dropped, runner backed up `direct.xml`
+(`geo-build/backups/direct.xml.20260819T212654Z`), builder ran as root,
+`result.json` `{"code":0,...}` in 19 s.
+
+**The defect is VitalPBX's `build_geo_firewall`: on UNBLOCK it DELETED
+`/etc/firewalld/ipsets/blacklist_tv.xml` but did NOT rewrite `direct.xml`**
+(mtime stayed 2026-04-29), which still carried
+`-m set --match-set blacklist_tv src -j DROP`. The firewalld reload it then
+triggered failed — `iptables-restore: Set blacklist_tv doesn't exist` — and a
+failed reload **drops every NEW connection PBX-wide, whitelist included**:
+ping/SSH/MySQL/8089/443 dead from everywhere, including whitelisted loopcom
+(the api's 73-s `fetch failed` was the reload cutting the helper connection).
+The §17 whitelist-ordering inspection of the April file was true and
+irrelevant — the file was never the thing that broke. ⛔ **And the builder
+exited 0 on all of this.**
+
+**What stayed up (measured, not guessed):** established flows survive a failed
+reload — desk phones on SIP keepalives and the VoIP.ms trunk conntrack pairs
+kept passing calls the whole window. VoIP.ms CDR for 17:26:55→18:06 shows
+**25 inbound calls, 25 ANSWERED, 0 failed/noanswer** (durations up to 316 s).
+What actually broke: every NEW connection — mobile/web endpoints waking via
+push, new registrations, and all management paths. ⛔ Two lessons in one: a
+dead probe does not mean dead service, and answered calls do not mean a
+healthy firewall.
+
+**The reboot made it worse before better.** Izzy power-cycled via Contabo at
+17:59; boot re-ran the same broken config → "Failed to load user
+configuration. Falling back to full stock configuration" → ssh only, **no SIP
+at all**, and the reboot had wiped the conntrack entries that were carrying
+the desk phones — so 17:59→18:04 was the only truly all-phones-dead stretch.
+firewalld sat in state `failed`.
+
+**Fix (18:04):** removed the stale `blacklist_tv` rule line from `direct.xml`
+(backup first: `/root/direct.xml.stale-tv-ref-20260819`; the pre-build manual
+copy is `/root/direct.xml.pre-first-geo-build-20260819`), `systemctl restart
+firewalld` → `running`, 0 errors, 256 direct rules, `vpbx_white_list` at
+`INPUT_direct` 0 ahead of `geo_firewall` 1, loopcom reaching PBX + helper
+again, **139 endpoints re-registered within 2 minutes**.
+
+**State left behind:** DB and firewall agree at **231 blocked** — tv stays
+unblocked on purpose (re-blocking needs the builder, which is exactly what is
+not trusted right now). `connect-geo-build.path` is **disabled and stopped**
+(`systemctl disable --now`), so `geo_build_available()` finds no channel and a
+console geo write **refuses in plain English** (`buildChannel: None` via
+`/console/geo-state`). Helper `2026.08.19.4` itself is unchanged and fine.
+
+**⛔ Re-arming requirements (do NOT re-enable the path unit without both):**
+1. The runner must **prove the config loads before any reload**: reconcile
+   every `--match-set <name>` in `direct.xml` against `ipsets/<name>.xml`
+   after the builder runs and BEFORE firewalld is touched; on mismatch,
+   restore the backup and write a failing `result.json`. (`firewall-cmd
+   --check-config` does NOT validate direct.xml set references — tested the
+   hard way.) Trusting the builder's exit code is proven wrong.
+2. Builder output must be logged to a **file** — journald on the PBX is
+   volatile and the reboot erased both the geo-build and firewalld journals;
+   the only surviving evidence was `result.json` + file mtimes.
+
+**Escalation trail:** push notification + `AGENT_ESCALATION` email (the only
+unmuted type; plain `ADMIN_ALERT` is muted at the send door) with the recovery
+runbook, both sent within 7 minutes of the lockout.
 `set_geo_blocks` writes the flags and then calls VitalPBX's own
 `build_geo_firewall`, which needs **root** (it writes `/etc/firewalld` and
 reloads firewalld) — blocked by the same `NoNewPrivileges`. A sudoers line for

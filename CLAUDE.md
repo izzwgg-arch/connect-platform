@@ -423,37 +423,49 @@ mess up any other tenants."*
   `ReadWritePaths` (the unit is `ProtectSystem=strict`).
   ⛔ **A create whose render fails ROLLS ITS ROW BACK** — otherwise the console
   lists a phone that gets nothing (it happened on the first prod attempt).
-- ✅✅ **GEO WRITES ARE ARMED NOW (2026-08-19 afternoon) — the root path-unit
-  channel from §17's "clean design" is BUILT, INSTALLED and verified end-to-end;
-  ⛔ the FIRST live `build_geo_firewall` run is deliberately UNRUN, on Izzy's
-  word ("Hold off — I'll say when"), and THE CONSOLE'S BLOCK/UNBLOCK BUTTONS ARE
-  LIVE, so the first click IS that first run.** Helper **`2026.08.19.4`** on the
-  PBX (backup `/root/helper-backup-geo-unit-20260819/`): the helper drops a
-  request file in `/var/lib/connect-pbx-helper/geo-build/`, root
-  `connect-geo-build.path` → `connect-geo-build.service` →
-  `/usr/local/sbin/connect-geo-build` **backs up `direct.xml`** (last 10 under
-  `geo-build/backups/`) and runs VitalPBX's own builder **with no arguments**
-  (nothing from the request file but a sanitised correlation id reaches root),
-  then writes `result.json` for the helper to poll (600 s, under the api's
-  900 s; a timeout says **"the flags ARE saved, check `journalctl -u
-  connect-geo-build`"** — never "nothing changed", which would be a lie there).
-  `geo_build_available()` = direct → sudo → **unit**, and `unit` needs BOTH the
-  writable dir AND `systemctl is-active connect-geo-build.path` — a writable dir
-  with no watcher must never count. `/console/geo-state` now carries
-  **`buildChannel`**, proven through the deployed api:
-  `GET /admin/pbx-console/geo` → `enforcement.buildChannel: "unit"`, 232
-  blocked, 15 whitelist. **No api/portal change or deploy was needed.**
-  ⛔ Whitelist safety was measured before arming: `direct.xml` is written
-  wholesale by the builder family and itself carries `vpbx_white_list` at
-  `INPUT_direct` priority 0 ahead of `geo_firewall` at 1 — the builder emits
-  the ordering that keeps loopcom (in `blacklist_fr`) reachable; the runner
-  backs the file up before every build anyway. Installer suite **49/49**, all
-  **7 new guards fail replayed against HEAD**. ⏳ **Acceptance, when Izzy says
-  (quiet window):** block a `blocked='no'` country that HAS a
-  `blacklist_<iso>.xml` ipset via the console, verify `build.code 0` + fresh
-  `direct.xml` mtime + a firewalld reload in the journal + loopcom still
-  reaching the helper, then unblock back to 232. ⛔ Judge by direct.xml mtime +
-  the reload, never rule counts (fail2ban's bans make counts noisy).
+- ⛔⛔ **THE FIRST LIVE GEO BUILD RAN 2026-08-19 17:26 EDT AND LOCKED OUT THE
+  PBX — the geo channel is now DISARMED (`connect-geo-build.path` disabled +
+  removed from multi-user.target) and MUST STAY DISARMED until the builder bug
+  below has a fix.** Full incident: handoff §17a. Our channel worked exactly as
+  designed (flags written, `direct.xml` backed up, builder ran as root,
+  `result.json` code 0 in 19 s). The lockout is a **VitalPBX
+  `build_geo_firewall` defect: UNBLOCKING a country DELETES its
+  `/etc/firewalld/ipsets/blacklist_<iso>.xml` but does NOT rewrite
+  `direct.xml`** — which still carried `-m set --match-set blacklist_tv` — so
+  the firewalld reload died (`Set blacklist_tv doesn't exist`), and a failed
+  reload **drops every NEW connection PBX-wide, whitelist included** (the
+  April-file "whitelist ordering" inspection was true and irrelevant). The
+  same broken config re-fails at every boot ("Falling back to full stock
+  configuration" = ssh only, no SIP). ⛔ The builder **exited 0** on this —
+  never trust its exit code as "the firewall still loads".
+  ⛔ **Established flows SURVIVE the lockout** — desk phones on keepalives and
+  the VoIP.ms trunk pairs kept passing calls (25/25 inbound in the window show
+  ANSWERED at the carrier) while every NEW connection (probes, mobile-app
+  wakes, MySQL, SSH, ping) was dead. A dead probe does NOT equal dead service,
+  and working calls do NOT equal a healthy firewall.
+  **Recovery (18:04 EDT):** delete the stale rule line from `direct.xml`,
+  `systemctl restart firewalld` → `running`, `vpbx_white_list` back at
+  `INPUT_direct` 0 ahead of `geo_firewall` 1, 139 endpoints re-registered
+  within 2 min. Backups if ever needed again: the runner's own
+  `geo-build/backups/direct.xml.20260819T212654Z`, plus
+  `/root/direct.xml.pre-first-geo-build-20260819` and
+  `/root/direct.xml.stale-tv-ref-20260819` (the April file with the stale tv
+  reference still in it).
+  **State now:** DB and firewall agree at **231 blocked** (tv/Tuvalu stays
+  unblocked — zero-traffic microstate, matches the loaded rules); helper
+  `2026.08.19.4` unchanged; `buildChannel` reports **`None`**, so a console
+  geo write refuses in plain English instead of half-applying. ⛔ Note the
+  acceptance recipe's premise never existed on prod: the only `blocked='no'`
+  countries are CA/IL/US (customers, untouchable) and NO unblocked country has
+  an ipset — any test must run in the unblock→re-block direction.
+  ⛔ **Re-arming needs (both, not either):** (1) after the builder runs, the
+  runner must PROVE the firewalld config still loads before any reload —
+  reconcile every `--match-set` in `direct.xml` against `ipsets/*.xml` (a
+  plain-code check; `firewall-cmd --check-config` does NOT catch direct.xml
+  set references) and on mismatch restore the backup and report failure; (2)
+  journald on the PBX is VOLATILE (the reboot erased the geo-build AND
+  firewalld journals) — evidence of a build is `result.json` + file mtimes,
+  never the journal, so the runner's own log must go to a file.
 - ⛔⛔ **THE HISTORY THAT SHAPED IT — the capability check itself was the
   dangerous part (`81ccf2fa`).** `geo_build_available()` probed by **running**
   `sudo -n build_geo_firewall --connect-probe` — a **full firewall rebuild and
@@ -472,9 +484,10 @@ mess up any other tenants."*
   ⛔ **Do NOT judge this by rule count** — live reads **258 runtime / 253 permanent**
   and the gap is **fail2ban's 7 bans**, which come and go. The evidence is
   `direct.xml`'s mtime plus the absence of a reload.
-  ✅ **RESOLVED by the path-unit channel above (2026-08-19 afternoon)** — the
-  out-of-process root trigger this line asked for is installed and armed; only
-  the first live run (a quiet-window firewall reload) remains, on Izzy's word.
+  ✅ **RESOLVED by the path-unit channel above (2026-08-19 afternoon)** — and
+  the first live run happened that evening and LOCKED OUT THE PBX (builder
+  defect, not a channel defect — see the incident bullet above / handoff §17a).
+  The channel is disarmed until the builder's output is validated before reload.
 - ⛔ **Guard-test trap, hit twice here and three times in this repo:** a negative
   source guard matched the string quoted in the **doc comment explaining the old
   defect** and failed against correct code. **Strip comments, or assert only on
