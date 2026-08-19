@@ -455,3 +455,9 @@ DOWNGRADES its calls from A to C and invites "Spam Likely" labels. Action is Izz
 owner): open the SignalWire support ticket for A-attestation vetting; keep tenant outbound on
 VoIP.ms until it is granted. Loopcom Demo (T102) is a test tenant, so leaving it on trunk 132
 for the evaluation is fine — its calls will show C meanwhile.
+⛔ **And the calls did not actually reach him.** The two calls from ext 102 to Izzy's cell
+(562-209-6644, 01:58/01:59Z) read `ANSWERED, 13 s / 10 s` in the CDR — that "answer" was his
+carrier's block/spam intercept picking up, not his phone; he never got them. **A CDR
+`ANSWERED` through SignalWire is not proof a person was reached** while the account is at C.
+Loopcom Demo was deliberately left on trunk 132 (his test bed) — one panel edit reverts route
+123 to trunk 127 if the demo tenant needs to call out reliably before the vetting lands.
