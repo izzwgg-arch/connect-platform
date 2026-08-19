@@ -4,6 +4,48 @@ Newest entries first.
 
 ---
 
+## Agent escalations reached nobody; the hold-music clarify trap (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `ce9f2318`. **apps/agent only** — no api,
+no portal, no migration. Handoff `AGENT_HANDOFF_EZRA_100_QUESTIONS_2026-08-19.md`.
+
+```bash
+cd apps/agent && npm test
+cd apps/agent && npx tsc --noEmit -p tsconfig.json
+```
+
+**Result:** **643 tests, 641 pass, 2 fail.** Both failures are **pre-existing**
+and in files this change never touched — `corpus/archive.test.ts` ("export
+manifest yields (audio,text) pairs") and `transcription/everett.test.ts`
+("normalizeLanguage: hint wins"); `git diff --name-only HEAD -- apps/agent/src/corpus
+apps/agent/src/transcription` is empty. Typecheck **15 errors = the exact
+baseline** (8 × `unref` in `server.ts`, 7 × `@connect/shared` subpath resolution
+in `packages/db`), **none in an edited file**.
+
+**26 new tests**, both files picked up by the existing `src/**/*.test.ts` glob:
+`escalation/escalationGate.test.ts` (11) and `triage/mohClarifyTrap.test.ts`
+(14), plus one in `auth.test.ts`.
+
+⛔ **Proven non-vacuous, which mattered more than usual here** — the escalation
+gate had **no test coverage at all** before this. All source guards were
+replayed against `HEAD`:
+
+| guard | on HEAD |
+|---|---|
+| `routes.ts` passes `isPlatformStaff(identity.platformRole)` | absent ✅ |
+| `escalations.ts` gate reads `ctx.isPlatformStaff` | absent ✅ |
+| the old `ctx.role === "owner"` gate is gone | **present on HEAD** ✅ |
+| `auth.ts` carries `platformRole` | absent ✅ |
+| `orchestrator.ts` has `MOH_NEW_REQUEST_RE` | absent ✅ |
+| HEAD's `ESCALATION_RE` matches "the Connect team" | **no — extracted from the HEAD blob and run against the real sentence** ✅ |
+
+**Corpus replay against the real 135-message session** (2026-08-18, Ezra,
+7 conversations): **48/48 escalation promises now match, 0 false positives among
+the other 87 assistant replies.** Before: 5/48 matched, and all 48 were
+suppressed by the role gate anyway.
+
+---
+
 ## Sign-in code — hardening pass, three findings from attacking it (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `1fa34d29`. api + portal.
