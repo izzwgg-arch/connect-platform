@@ -86,3 +86,9 @@ cb19/
 # Python bytecode (scripts/pbx helper runs)
 __pycache__/
 *.pyc
+
+# Patch/merge artifacts (2026-08-19). A 1.9 MB `apps/api/src/server.ts.orig`
+# sat untracked in the shared tree for a day and was one blanket `git add -A`
+# away from being committed over the real file.
+*.orig
+*.rej
