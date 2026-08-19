@@ -38,10 +38,18 @@ import { loadStandingKnowledgeBlock } from "../knowledge/standingKnowledge";
  */
 const ESCALATION_RE = new RegExp(
   [
-    // "pass/passed/sent/forwarded/escalated <up to 60 chars> to our/the [human] [support] team"
-    String.raw`\b(?:pass(?:ed|ing)?|sent|forward(?:ed|ing)?|escalat(?:ed|ing)|submitt?(?:ed|ing)?|flagged)\b[^.!?\n]{0,60}?\bto\s+(?:our|the)\s+(?:human\s+)?(?:support\s+)?team\b`,
+    // "pass/passed/sent/forwarded/escalated <up to 60 chars> to our/the … team"
+    // ⛔ The qualifier before "team" is OPEN (up to two words), not an
+    // allow-list of "human"/"support". Measured 2026-08-19 against Ezra's
+    // trainer session: the model said "the CONNECT team" 43 times out of 48
+    // promises, and the old allow-list matched 5. The model free-forms; the
+    // idiom is "…to our/the <something> team", so match the idiom.
+    String.raw`\b(?:pass(?:ed|ing)?|sent|forward(?:ed|ing)?|escalat(?:ed|ing)|submitt?(?:ed|ing)?|flagged|relay(?:ed|ing)?|rais(?:ed|ing))\b[^.!?\n]{0,60}?\bto\s+(?:our|the|a)\s+(?:\w+[- ]){0,2}team\b`,
     String.raw`\brecorded\s+(?:and\s+passed\s+to|for)\s+the\s+team\b`,
-    String.raw`\bflagged\s+(?:it|this|that)?\s*for\s+(?:our|the)\s+team\b`,
+    String.raw`\bflagged\s+(?:it|this|that)?\s*for\s+(?:our|the)\s+(?:\w+[- ]){0,2}team\b`,
+    // "I've recorded/logged this for the team" — a promise phrased as a record
+    // rather than a handoff. Same meaning to the customer: somebody will look.
+    String.raw`\b(?:recorded|logged|noted)\b[^.!?\n]{0,40}?\bfor\s+(?:our|the)\s+(?:\w+[- ]){0,2}team\b`,
     // "I've passed along: **…**" — caught LIVE on the first post-deploy test
     // (2026-08-12): the model promised an escalation without naming a team
     // after the verb. The transcript-derived patterns above missed it; the
@@ -56,8 +64,46 @@ const ESCALATION_RE = new RegExp(
   "i",
 );
 
+/**
+ * ⛔ AN OFFER IS NOT A PROMISE.
+ *
+ * "I CAN pass that to the Connect team — which key should callers press?" and
+ * "Once I have those details, I'LL pass it on" are the assistant asking for
+ * more information, not telling the customer it has been handed over. Firing
+ * on those texts the owner a half-formed request the customer never finished,
+ * and trains everyone to ignore the alerts.
+ *
+ * Measured on the same 2026-08-18 session that motivated widening the idiom
+ * above: 9 of the 135 replies are this shape. The old narrow regex missed them
+ * by accident (they say "the Connect team", which it did not match); widening
+ * it makes the distinction explicit instead of lucky.
+ */
+const ESCALATION_CONDITIONAL_RE =
+  // "I can/could/would pass this…" — an offer, still waiting on the customer.
+  /\b(?:can|could|may|might|would|shall|should|able\s+to)\s+(?:\w+\s+){0,3}?(?:pass|send|forward|escalat|submit|flag|relay|rais)\w*\b|\b(?:if|once|when|as soon as|after)\s+(?:you|I)\b|\bbefore\s+(?:\w+\s+){0,2}?(?:passing|sending|forwarding|escalating|submitting|flagging)\b|\b(?:must|would|could|can|should|may|might)\s+be\b|\bplease\s+(?:provide|send|confirm|tell|specify|reply|share)\b/i;
+
+
+/** Sentence-ish split that keeps bullet lines apart (the model writes lists). */
+function escalationSentences(text: string): string[] {
+  return String(text || "")
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/**
+ * True when the assistant told the customer their request HAS been handed to a
+ * person. Judged sentence by sentence: a reply may promise in one sentence and
+ * ask for detail in the next ("I've passed this to the Connect team. They'll
+ * need the extension number."), and that is still a real promise.
+ */
 export function isEscalationReply(englishText: string): boolean {
-  return ESCALATION_RE.test(String(englishText || ""));
+  const text = String(englishText || "");
+  if (!ESCALATION_RE.test(text)) return false;
+  for (const sentence of escalationSentences(text)) {
+    if (ESCALATION_RE.test(sentence) && !ESCALATION_CONDITIONAL_RE.test(sentence)) return true;
+  }
+  return false;
 }
 
 /** One escalation per conversation per window — a customer restating the same
@@ -81,6 +127,11 @@ export interface EscalationTurnCtx {
   clientUserId: string | null;
   role: "owner" | "customer";
   conversationId: string;
+  /** ⛔ TRUE only for Connect's own staff (SUPER_ADMIN). Suppression hangs off
+   *  THIS, never `role` — `role: "owner"` is the agent's admin mode and
+   *  includes every customer's own TENANT_ADMIN. Absent ⇒ false ⇒ the request
+   *  reaches a person, which is the safe direction. */
+  isPlatformStaff: boolean;
 }
 
 export class EscalationService {
@@ -104,8 +155,15 @@ export class EscalationService {
   }
 
   private async considerTurnInner(ctx: EscalationTurnCtx): Promise<void> {
-    // The owner chatting with the assistant escalating to... the owner, is noise.
-    if (ctx.role === "owner") return;
+    // ⛔ CONNECT STAFF ONLY — never the agent's "owner" MODE.
+    // The platform owner chatting with the assistant, escalating to the
+    // platform owner, is noise. A TENANT_ADMIN is NOT the platform owner: they
+    // are the customer's own administrator, and they are the single likeliest
+    // person to ask for a change. From 2026-08-06 (when TENANT_ADMIN was
+    // correctly promoted to admin MODE) this test read `ctx.role === "owner"`
+    // and silently discarded every one of their escalations — 93 promises
+    // across 3 tenants, measured 2026-08-19. See `isPlatformStaff`.
+    if (ctx.isPlatformStaff) return;
     if (!this.prisma) return;
 
     const messages = await this.prisma.agentMessage.findMany({

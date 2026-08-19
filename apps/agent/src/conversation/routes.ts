@@ -16,7 +16,7 @@ import type { ConversationEngine } from "./engine";
 import type { ChatUploadStore } from "../attachments/uploadStore";
 import type { EscalationService } from "../escalation/escalations";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
-import { elevateForCustomOwnerRole } from "../authRoles";
+import { elevateForCustomOwnerRole, isPlatformStaff } from "../authRoles";
 
 const Identity = z.object({
   tenantId: z.string().min(1),
@@ -108,6 +108,10 @@ export function registerChatRoutes(
       clientUserId: identity.clientUserId ?? null,
       role: role === "owner" ? "owner" : "customer",
       conversationId: result.conversationId,
+      // ⛔ The RAW platform role decides suppression, not the agent's admin
+      // mode. `role` above says "owner" for every TENANT_ADMIN too, and using
+      // it here dropped every tenant admin's escalation from 2026-08-06.
+      isPlatformStaff: isPlatformStaff(identity.platformRole),
     });
     return result;
   });

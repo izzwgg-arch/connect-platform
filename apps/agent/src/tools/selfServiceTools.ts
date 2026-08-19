@@ -1,6 +1,6 @@
 /**
- * The two self-service WRITES the trainer kept asking for, each scoped to the
- * REQUESTER'S OWN state and nothing else:
+ * The self-service tools the trainer kept asking for, each scoped to the
+ * REQUESTER'S OWN state and nothing else — two writes and one read:
  *
  *   - mark_my_chats_read  → the caller's own read-position (lastReadAt) on
  *     their own chat threads. The same write the portal's "Mark all read"
@@ -8,6 +8,10 @@
  *   - cancel_my_requests  → withdraws the caller's own still-QUEUED
  *     escalations before they are sent to the owner. A request that already
  *     went out (SENT) is history, not state — it stays.
+ *
+ *   - my_requests         → READ-ONLY: lists those same requests and where
+ *     each one got to. Added 2026-08-19 because "any pending request?" had no
+ *     tool behind it and was answered from the conversation dossier instead.
  *
  * ⛔ These are the ONLY writes in the agent's tool surface outside the
  * password-confirmed provisioning flow, and they must stay this narrow: both
@@ -24,6 +28,56 @@ export interface SelfServiceToolDeps {
 
 export function buildSelfServiceTools(deps: SelfServiceToolDeps): ToolSpec[] {
   return [
+    {
+      // ⛔ There was a way to CANCEL requests and no way to LIST them, so
+      // "any pending request?" (Ezra, 2026-08-18) was answered from the
+      // conversation dossier — it recited requests from two weeks earlier and
+      // said it could not confirm their status. A question about the record
+      // must be answered FROM the record.
+      name: "my_requests",
+      description:
+        "The customer's OWN requests to the Connect team from this account, newest first, with what each one asked for and where it got to (waiting to send / sent to the team / cancelled / could not send). Use for 'any pending requests?', 'did my request go through?', 'what did I ask for?'. Read-only. Reports the plain-English status — never claim a request was actioned, only that it reached the team.",
+      minRole: "customer",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "How many recent requests to return. Default 10, max 25." },
+        },
+        additionalProperties: false,
+      },
+      run: async (args, ctx: ToolContext) => {
+        if (!ctx.clientUserId) {
+          return { ok: false, error: "no_user", message: "This needs a signed-in account — I can only list YOUR requests." };
+        }
+        const take = Math.min(Math.max(Math.trunc(Number(args.limit) || 10), 1), 25);
+        const rows = await deps.prisma.agentEscalation.findMany({
+          where: { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId },
+          orderBy: { createdAt: "desc" },
+          take,
+          select: { id: true, createdAt: true, status: true, requestSummary: true, proposedFix: true },
+        });
+        // Statuses are internal words; the customer gets plain English. FAILED
+        // is deliberately NOT "failed" to them — the dispatcher retries it, so
+        // from their side it is still on its way.
+        const say: Record<string, string> = {
+          QUEUED: "waiting to be sent to the team",
+          FAILED: "still being sent to the team",
+          SENT: "sent to the team",
+          CANCELLED: "cancelled by you",
+        };
+        return {
+          ok: true,
+          total: rows.length,
+          pending: rows.filter((r: any) => r.status === "QUEUED" || r.status === "FAILED").length,
+          requests: rows.map((r: any) => ({
+            askedAt: r.createdAt,
+            asked: String(r.requestSummary ?? "").slice(0, 300),
+            status: say[String(r.status)] ?? String(r.status).toLowerCase(),
+            proposedFix: r.proposedFix ? String(r.proposedFix).slice(0, 300) : null,
+          })),
+        };
+      },
+    },
     {
       name: "mark_my_chats_read",
       description:

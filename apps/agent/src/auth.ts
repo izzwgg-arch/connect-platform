@@ -15,6 +15,13 @@ export interface AgentIdentity {
   clientUserId: string | null;
   role: Role;
   email?: string;
+  /** RAW platform role from the JWT ("SUPER_ADMIN" | "TENANT_ADMIN" | "USER" …).
+   *  Kept beside the mapped `role` because the two answer different questions:
+   *  `role` is the agent's admin MODE (TENANT_ADMIN counts), `platformRole`
+   *  says whether this is Connect staff (only SUPER_ADMIN). See
+   *  `isPlatformStaff` — collapsing them silently killed every tenant admin's
+   *  escalations from 2026-08-06 to 2026-08-19. */
+  platformRole?: string;
 }
 
 function b64urlDecode(s: string): Buffer {
@@ -48,5 +55,6 @@ export function verifyPortalJwt(token: string, secret = process.env.JWT_SECRET):
     // callers top it up with elevateForCustomOwnerRole(). Fails closed here.
     role: mapUserRole(payload.role),
     email: payload.email,
+    platformRole: payload.role == null ? undefined : String(payload.role),
   };
 }

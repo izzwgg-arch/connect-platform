@@ -63,3 +63,30 @@ export async function elevateForCustomOwnerRole(
     return input.role;
   }
 }
+
+/**
+ * ⛔ CONNECT STAFF — a DIFFERENT question from `mapUserRole`, and conflating the
+ * two cost the platform every tenant admin's escalations for two weeks.
+ *
+ * `mapUserRole` answers "does this person get ADMIN MODE in the agent?", and
+ * since 2026-08-06 a TENANT_ADMIN — the customer's OWN administrator — answers
+ * yes. `isPlatformStaff` answers a different question: "is this person US?"
+ * Only SUPER_ADMIN is.
+ *
+ * The distinction matters wherever the agent decides whether to hand something
+ * to Connect. Escalating to the platform owner is noise when the platform owner
+ * is the one typing; it is the entire point when a customer's admin is typing.
+ * `EscalationService` used the agent's "owner" mode for that decision, so from
+ * 2026-08-06 every TENANT_ADMIN was told "I've passed this to the Connect team"
+ * and nothing was ever passed — 93 promises across 3 tenants, measured
+ * 2026-08-19 (Ezra's 2026-08-18 trainer session alone accounts for 48).
+ *
+ * ⛔ FAILS TOWARD ESCALATING. An unknown or missing role is NOT staff, so the
+ * request reaches a person. A spurious escalation is a text somebody reads and
+ * corrects; a dropped one is silence, and silence is the bug being fixed here.
+ */
+export const PLATFORM_STAFF_ROLES: ReadonlySet<string> = new Set(["SUPER_ADMIN"]);
+
+export function isPlatformStaff(platformRole: string | null | undefined): boolean {
+  return PLATFORM_STAFF_ROLES.has(String(platformRole ?? "").trim().toUpperCase());
+}

@@ -85,6 +85,52 @@ const MOH_UPLOAD_ACCEPT_RE = /\b(yes|yeah|yep|sure|ok(?:ay)?|please|go ahead|do 
 /** Any hold-music assistant message — context for follow-ups like "change it back in 15 minutes". */
 const MOH_CONTEXT_RE = /hold music|hold-music|האלט מוזיק/i;
 
+/**
+ * ⛔ A NEW QUESTION IS NOT AN ANSWER — the guard that ends the clarify trap.
+ *
+ * While "Which hold music would you like?" is the last assistant message, the
+ * resume below treats anything scope-shaped as the answer, and the scope test
+ * matches the bare words "extension" and "company". So an unrelated question
+ * that merely contains one of them ("Can you tell me where calls to my
+ * EXTENSION go when I don't answer?") was swallowed as a hold-music scope
+ * reply — and because the reply to it is the SAME clarify question, the state
+ * re-armed itself every turn. Self-sustaining: once entered, every later
+ * message containing those words was eaten too.
+ *
+ * Measured live 2026-08-18 (Ezra's trainer session): EIGHT consecutive
+ * unrelated questions — call forwarding, no-answer routing, restoring a setup,
+ * routing to a non-existent extension — each answered with the hold-music
+ * question, across a conversation boundary.
+ *
+ * The rule: a message that OPENS like a fresh request and never mentions hold
+ * music is a fresh request. Real answers ("Main", "the whole company", "just
+ * mine", "back to the regular schedule") do not open with an interrogative,
+ * and a genuine hold-music question still resumes because it names the thing.
+ */
+const MOH_NEW_REQUEST_RE =
+  /^\s*(?:can|could|would|will|should|do|does|did|is|are|was|were|what|where|when|why|how|which|who|tell me|show me|explain|please tell)\b/i;
+
+/** How many times we may ask the same clarifying question before giving up and
+ *  letting the ordinary path answer. Belt to the braces above: no clarify state
+ *  in this orchestrator may survive indefinitely. */
+const MOH_MAX_CONSECUTIVE_CLARIFIES = 3;
+
+/**
+ * Another part of the phone system, named outright. The MOH status question is
+ * deliberately anaphoric — "which one am I on right now?" names nothing, which
+ * is exactly why it has to be recognised from context. The cost is that
+ * `MOH_STATUS_Q_RE` also matches "what … currently …" about ANY subject, so
+ * mid-clarification "What teams or ring groups are currently configured?" was
+ * answered with the hold-music status (2026-08-18, live). A question that names
+ * a different subject is about that subject.
+ *
+ * ⛔ "extension" and "schedule" are deliberately NOT here: an extension is the
+ * scope of a hold-music setting, and "the regular schedule" is hold-music's own
+ * wording for its default state.
+ */
+const MOH_OTHER_SUBJECT_RE =
+  /\b(?:teams?|ring ?groups?|ivr|menus?|voicemails?|forward(?:ing)?|holidays?|business hours|contacts?|greetings?|recordings?|do not disturb|dnd|caller ?id)\b/i;
+
 // Scope ANSWERS (kept narrow so ordinary chat like "all good thanks" never matches).
 const MOH_ANSWER_TENANT_RE = /\bwhole\b|\bcompany\b|\beveryone\b|\beverybody\b|\bentire\b|\btenant\b|\ball (?:extensions?|phones?|users?)\b/i;
 const MOH_ANSWER_EXT_RE = /\bextension\b|\bjust me\b|\bonly me\b|\bjust mine\b|\bonly mine\b|\bmy (?:extension|phone|line)\b|\bmine\b/i;
@@ -361,7 +407,10 @@ export class TriageOrchestrator {
       // not an answer — route it to the read-only status reply (2026-07-26 live
       // failure: it fell to the LLM, which claimed it cannot check hold music).
       // Tested against the CURRENT reply only, never the combined thread text.
-      if (MOH_STATUS_Q_RE.test(t)) {
+      // ⛔ …but only when it is about hold music. The pattern is anaphoric by
+      // design ("which one am I on?"), so it also matches a question about a
+      // completely different subject — see MOH_OTHER_SUBJECT_RE.
+      if (MOH_STATUS_Q_RE.test(t) && (!MOH_OTHER_SUBJECT_RE.test(t) || MOH_CONTEXT_RE.test(t))) {
         return { kind: "action", actionType: "moh", enableHint: "yes", statusQuery: true, raw: text };
       }
       const profiles = await this.listMohProfiles(ctx.tenantId);
@@ -373,6 +422,14 @@ export class TriageOrchestrator {
       const isDeactivateAnswer = MOH_DEACTIVATE_RE.test(t);
       if (thread.kind === "clarify") {
         if (!isProfileAnswer && !isScopeAnswer && !isDeactivateAnswer) return null;
+        // A fresh question that never mentions hold music is a NEW request,
+        // however scope-shaped its wording. Without this, "Can you remove the
+        // forwarding and restore my original setup?" resumes as a hold-music
+        // answer (it contains "remove", so it reads as "turn it off").
+        if (MOH_NEW_REQUEST_RE.test(text) && !MOH_CONTEXT_RE.test(t) && !isProfileAnswer) return null;
+        // And if we have already asked this same question three times running,
+        // stop asking: the user is plainly not answering it.
+        if (thread.consecutiveAsks >= MOH_MAX_CONSECUTIVE_CLARIFIES) return null;
       } else {
         // Context follow-up after a Done/confirmation: only clear revert/back
         // phrases or an explicit profile pick — never hijack small talk.
@@ -402,7 +459,7 @@ export class TriageOrchestrator {
    *    follow-ups like "change it back in 15 minutes";
    *  - null otherwise.
    */
-  private async collectMohClarifyThread(ctx: TriageCtx): Promise<{ kind: "clarify" | "context"; priorUserText: string } | null> {
+  private async collectMohClarifyThread(ctx: TriageCtx): Promise<{ kind: "clarify" | "context"; priorUserText: string; consecutiveAsks: number } | null> {
     const msgs: Array<{ role: string; content: string | null; contentEn: string | null }> = await this.prisma.agentMessage.findMany({
       where: { conversationId: ctx.conversationId },
       orderBy: { createdAt: "desc" },
@@ -414,7 +471,7 @@ export class TriageOrchestrator {
     if (i >= msgs.length) return null;
     const textOf = (m: { content: string | null; contentEn: string | null }) => String(m.contentEn ?? m.content ?? "");
     if (!MOH_CLARIFY_MARKER_RE.test(textOf(msgs[i]))) {
-      return MOH_CONTEXT_RE.test(textOf(msgs[i])) ? { kind: "context", priorUserText: "" } : null;
+      return MOH_CONTEXT_RE.test(textOf(msgs[i])) ? { kind: "context", priorUserText: "", consecutiveAsks: 0 } : null;
     }
     const parts: string[] = [];
     let pairs = 0;
@@ -428,7 +485,7 @@ export class TriageOrchestrator {
       parts.unshift(...users.reverse());
       pairs++;
     }
-    return { kind: "clarify", priorUserText: parts.filter(Boolean).join(". ") };
+    return { kind: "clarify", priorUserText: parts.filter(Boolean).join(". "), consecutiveAsks: pairs };
   }
 
   /**
