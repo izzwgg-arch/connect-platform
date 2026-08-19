@@ -10,28 +10,41 @@
 import { PanelSession, loadPanelConfig } from "./src/onboarding/panelClient";
 import { buildPbxTenant } from "./src/onboarding/pbxTenantBuild";
 import { resolveMirrorTenantCreator, resolveMirrorTenantRenderer } from "./src/onboarding/setupOrchestrator";
+import { openReadConn } from "./src/pbxConsole/pbxConsoleReaders";
 import { db } from "@connect/db";
-import { decryptJson } from "@connect/security";
-import { VitalPbxClient } from "@connect/integrations";
 
 async function main() {
   const cfg = loadPanelConfig(); if (!cfg) throw new Error("no cfg");
   const inst = await (db as any).pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   const iid = String(inst.id);
-  const auth = decryptJson<{ token: string; secret?: string }>(inst.apiAuthEncrypted);
+  // ⛔ Resolve tenant paths from the DATABASE, never REST listTenants: the REST
+  // tenants list is CAPPED (31 rows on prod, 2026-08-19 — likely licence-tied),
+  // so any tenant past the cap is invisible to it. stress10 used REST here and
+  // got away with it only because nothing ever needed to resume; the resumed
+  // 20x10 run failed at tenant 28 exactly because the resolver could not see
+  // rows past the cap and buildPbxTenant then tried to create a duplicate.
   const resolveTenantPath = async (slug: string, label: string) => {
     try {
-      const c = new VitalPbxClient({ baseUrl: inst.baseUrl, apiToken: auth.token, apiSecret: auth.secret, timeoutMs: 20000 } as any);
-      const l: any[] = await c.listTenants();
-      const h = l.find((t: any) => String(t.name) === slug || String(t.description) === label);
-      return h?.path ? String(h.path) : null;
+      const c = await openReadConn(inst.ombuMysqlUrlEncrypted);
+      if (!c.ok) return null;
+      try {
+        const [rows]: any = await (c.conn as any).query(
+          "SELECT path FROM ombutel.ombu_tenants WHERE name = ? OR description = ? LIMIT 1", [slug, label]);
+        return rows?.[0]?.path ? String(rows[0].path) : null;
+      } finally { await (c.conn as any).end().catch(() => {}); }
     } catch { return null; }
   };
   const creator = resolveMirrorTenantCreator(iid);
   const renderer = resolveMirrorTenantRenderer(iid);
   if (!creator || !renderer) throw new Error("mirror creator/renderer not configured — aborting (would use panel form)");
   const results: any[] = [];
-  for (let i = 21; i <= 40; i++) {
+  // STRESS_START resumes an interrupted run — every build step adopts what an
+  // earlier pass already created (trunk/route/ARS/tenant by unique label,
+  // extensions by number, inbound route by DID), so re-walking a half-built
+  // tenant is safe. Needed for real on 2026-08-19: an auto-deploy recreated
+  // app-api-1 mid-run and killed the in-container exec at tenant 28.
+  const START = Math.max(21, parseInt(process.env.STRESS_START || "21", 10) || 21);
+  for (let i = START; i <= 40; i++) {
     const n = String(i); // 21..40 — round 1 used 01..10, keep the ranges disjoint forever
     const slug = `mirror_stress_${n}`;
     const label = `MIRROR STRESS ${n} delete me`;
