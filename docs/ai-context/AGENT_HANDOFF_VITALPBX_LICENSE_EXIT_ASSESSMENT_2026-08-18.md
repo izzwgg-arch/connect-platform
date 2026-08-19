@@ -1243,6 +1243,11 @@ on REST alone. 19/19 tests incl. the exact failure shape; guards fail vs HEAD.
   stands: **LUZER is being invoiced $45/mo (2× FAILED since July) for a phone
   system that is not on the PBX.** Whether to remove them properly (through the
   now-hardened sweep) or rebuild their PBX side is a business decision.
-- The sweep fix `9068acca` rides the next api deploy (auto-deploy on push).
+- ✅ The sweep fix is **DEPLOYED and container-verified** (2026-08-19 late
+  evening): `app-api-1 /app/.build-commit` = `36043a3b`, `mysqlConfirmGoneVerifier`
+  greps 3× in the shipped `server.ts` (import + both routes) and 1× in
+  `pbxOrphanTenantSweep.ts`, health 200 on both hostnames, rate limiter armed at
+  boot. Deploy log `/root/deploy-sweep-fix-20260819.log` ends
+  `done 36043a3b … success`.
 - Artefacts: loopcom `/root/stress20.log` (run 1), `/root/stress20b.log`
   (resume), `/root/stress20-manifest.json`; PBX `/root/stress-teardown-summary.json`.
