@@ -71,6 +71,60 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the AI agent treated every TENANT_ADMIN as Connect staff; fortification pass FIXED it and stress-tested the platform (2026-08-19) — READ FIRST before using the agent's `role === "owner"` to authorize anything platform-wide, before adding an `/agent-api/*` admin route, or before touching the tool tiers
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FORTIFICATION_PASS_2026-08-19.md`**
+(`5b998b5c` agent privesc + `bb3ea68f` script cred scrub + `742c02e7` realtime
+fail-closed, on `feat/ivr-migration-takeover`. **agent REBUILT + container-verified;
+realtime DEPLOYED + verified; `/api/metrics` denied at nginx on both vhosts.** No
+migration, no PBX write, no tenant row, no env value changed.)
+Izzy, 2026-08-19: *"make sure we're 100% fortified, no backdoors, and stress test
+the fuck out of it."*
+
+- ⛔⛔ **THE ONE REAL LIVE HOLE, and it is the "admin-mode ≠ Connect-staff" class
+  in the agent's OWN surface, fail-OPEN.** `verifyPortalJwt` maps **TENANT_ADMIN →
+  role "owner"** (admin mode, correct since 2026-08-06), and `/agent-api/*` is
+  public via nginx — but `requireOwner` (`role === "owner"`) and the chat tool
+  tier `toolRoleFor("owner") → "internal"` treated that as **Connect staff**. So
+  any of **9 live TENANT_ADMINs** could run raw read-only SQL against BOTH
+  production databases via the `investigate` chat tool (NOT tenant-scoped),
+  overwrite the platform's global LLM keys (`/agent/admin/secrets`), and
+  read/write other tenants' agent policies/approvals/activity/incidents/trainer/KB.
+  ⛔ **Nobody swept the agent's own admin routes + tool tier when `isPlatformStaff`
+  was added (for escalations only). `mapUserRole` answers "admin MODE?";
+  `isPlatformStaff` answers "is this US?" — never use the first for a
+  platform-wide or cross-tenant operation.**
+- ✅ **FIX (the codebase's proven pattern):** a new **`"staff"` tool tier**
+  (SUPER_ADMIN only) holds `investigate`; the chat engine gates it on
+  `isPlatformStaff(platformRole)`, so a TENANT_ADMIN and the escalation researcher
+  (runs on CUSTOMER text) no longer reach it. New `apps/agent/src/adminAuth.ts`
+  (`resolveStaffCaller` / `resolveAdminCaller`). Secrets, approvals/activity/
+  incidents, trainer, KB → **staff only**. Policies + `/agent/diag/run` → **bound
+  to the caller's own tenant unless staff** (a tenant admin still manages THEIR
+  OWN agent). ⛔ **SUPER_ADMIN (Izzy) keeps everything; failure direction is only
+  "an admin sees less".** 39 tests (tier gating, red-team, adminAuth, source
+  guards); agent suite 664/666 (2 pre-existing failures). ⏳ **Acceptance needs a
+  real TENANT_ADMIN login** (see the handoff §1) — and ⛔ if any tenant-admin
+  portal screen used approvals/activity/incidents/trainer it will now 403.
+- ✅ **Stress test — the deployed defences refuse under load, re-proven live:**
+  global rate limiter 479×200→61×429 (retry-after 46, not self-banned); login
+  throttle 10×401→429 account-scoped; malformed login bodies all 4xx (no 500s);
+  every privileged route 401 unauth; SQLi/traversal rejected. TLS 1.0/1.1 refused;
+  SSH keys-only; `/internal/*` 403 external; VoIP.ms + SignalWire webhooks 401;
+  dev-observe-token route gone; **0 ADMIN users** (3 latent findings inert).
+- ✅ **Also fixed:** `/api/metrics` was **public (200, Prometheus data)** → denied
+  at nginx on both vhosts (monitoring untouched — Prometheus scrapes `api:3001`
+  internally). `apps/realtime` verified WS tokens against `JWT_SECRET ||
+  "change-me"` → now fails closed. The **connectcomms Postgres password was
+  committed in plaintext** in 5 `scripts/*.sh` → scrubbed to require `PGPASSWORD`
+  from env. ⛔ **The scrub does NOT un-leak git history — the real fix is to
+  ROTATE that DB password** (outage-risk, multi-service; needs a window). Postgres
+  is loopback-only, so not remotely usable today.
+- ⛔ **STILL needs Izzy (the honest ledger):** rotate the DB password; the "built
+  but OFF" controls (Turnstile, per-tenant 2FA, MFA/TOTP, Cloudflare edge WAF,
+  DMARC quarantine — all 0/off); platform-wide session expiry (blocked on mobile
+  401 work); do NOT create an ADMIN-role user (arms 3 latent findings at once).
+
 ## ⛔⛔ AGENT HANDOFF — "I've passed this to the Connect team" reached NOBODY for two weeks, and a hold-music question ate eight others (2026-08-19) — READ FIRST before touching the escalation path, before using the agent's `role === "owner"` for anything, before adding a clarifying question the agent can ask, or for "the customer says they asked the assistant and nobody got back to them"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_EZRA_100_QUESTIONS_2026-08-19.md`**
