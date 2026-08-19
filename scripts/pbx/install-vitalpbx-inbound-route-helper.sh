@@ -5614,6 +5614,36 @@ GRANT SELECT ON ombutel.ombu_queues TO 'connect_route_helper'@'127.0.0.1';
 GRANT UPDATE (music_group_id) ON ombutel.ombu_queues TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_music_groups TO 'connect_route_helper'@'127.0.0.1';
 GRANT SELECT ON ombutel.ombu_destinations TO 'connect_route_helper'@'127.0.0.1';
+-- the MIRROR (2026-08-19): /mirror/tenant-create writes the rows the panel writes for a NEW tenant
+-- (scripts/pbx/mirror/mirror_writes.py::create_tenant). SELECT+INSERT only, no UPDATE/DELETE.
+GRANT SELECT, INSERT ON ombutel.ombu_tenants TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_tenants_users TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_tenant_settings TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_classes_of_service TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_dial_profiles TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_maintenance TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_parking_lots TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_numbers TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_ars TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_tenant_dids TO 'connect_route_helper'@'localhost';
+GRANT INSERT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'localhost';
+GRANT INSERT ON ombutel.ombu_destinations TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_queued_changes TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_settings TO 'connect_route_helper'@'localhost';
+GRANT SELECT, INSERT ON ombutel.ombu_tenants TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_tenants_users TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_tenant_settings TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_classes_of_service TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_dial_profiles TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_maintenance TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_parking_lots TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_numbers TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_ars TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_tenant_dids TO 'connect_route_helper'@'127.0.0.1';
+GRANT INSERT ON ombutel.ombu_inbound_routes TO 'connect_route_helper'@'127.0.0.1';
+GRANT INSERT ON ombutel.ombu_destinations TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_queued_changes TO 'connect_route_helper'@'127.0.0.1';
+GRANT SELECT, INSERT ON ombutel.ombu_settings TO 'connect_route_helper'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
 
