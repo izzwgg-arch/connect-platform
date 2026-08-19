@@ -4,6 +4,35 @@ Newest entries first.
 
 ---
 
+## SignalWire test bench — the carrier being evaluated to replace VoIP.ms (2026-08-18, evening)
+
+Branch `feat/ivr-migration-takeover`, commit `50f9fa69`. api + portal. Handoff
+`AGENT_HANDOFF_SIGNALWIRE_PIVOT_2026-08-18.md`.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/signalwire/signalWire.test.ts
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/publicReadyJwtBypass.test.ts src/deployReadinessJwtBypass.test.ts src/adminRouteTenantScope.test.ts src/internalSecret.test.ts src/nodeEnvGates.test.ts src/dependencyHygiene.test.ts
+cd apps/portal && npx tsx --test navigation/navAuthoritativeWiring.test.ts
+```
+
+**Result:** 18/18 new (glob `src/signalwire/*.test.ts` registered in `apps/api/package.json`);
+neighbours 55/55; portal nav wiring 3/3. Pure: space-URL normalisation, credential shape
+refusals, the Twilio reference signature vector (`0/KCTR6DLpKmkAf8muzZqo1nDgQ=`),
+fail-closed webhook auth (no key / no header / tampered body / wrong-then-right URL),
+public-URL rebuild from `X-Forwarded-*`. Fake-fetch client: per-family URLs, error
+classification, search query + capability mapping, Compatibility SMS form body,
+**purchase sends exactly one request on timeout**, SIP endpoint Fabric→legacy fallback only
+on 404 (403 must not), connection check GET-only. Source guards: both webhook paths bypass
+JWT and no admin path does; `server.ts` import + registration with `requireSuperAdmin` +
+the `/admin/apps/signalwire` permission rule; every admin route opens with `requireOwner`;
+the module never touches VoIP.ms/TenantSmsNumber/onboarding/integrations and never
+`console.log`s; no audit call carries a password/token/signing key; nav item exists and is
+SUPER_ADMIN-forced. **Non-vacuous:** server.ts / bypass / nav guards read 0 against `HEAD`.
+Typecheck: api 75 (= baseline), portal 0. ⛔ Nothing exercised against a real SignalWire
+account — no credentials exist yet.
+
+---
+
 ## Tenant-isolation §6a–§6g scoping fixes (2026-08-18, night)
 
 Branch `feat/ivr-migration-takeover`. api only. Handoff

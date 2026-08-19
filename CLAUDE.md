@@ -89,6 +89,87 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
 
+## ⛔⛔ AGENT HANDOFF — SignalWire is being EVALUATED to replace VoIP.ms: a test bench exists at `/apps/signalwire`, and NOTHING is cut over (2026-08-18) — READ FIRST before touching `apps/api/src/signalwire/*`, before wiring ANY carrier path away from VoIP.ms, or before answering "can SignalWire do X?"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIGNALWIRE_PIVOT_2026-08-18.md`**
+(`50f9fa69` on `feat/ivr-migration-takeover`, private-index commit. **api DEPLOYED and
+container-verified** — `/app/.build-commit` = `50f9fa69`, the module is in the image,
+`server.ts` registers it, and from OUTSIDE both hostnames answer `POST
+/api/webhooks/signalwire/sms` with the HANDLER's own `401 {"reason":"no_signing_key"}`
+(live + fail-closed through nginx), each refusal landing as a `signalwire.webhook_refused`
+audit row. **portal DEPLOYED and bundle-verified** (queue job `d8a1abd7`, container
+`9c54cfea` ⊇ `50f9fa69`; the `/apps/signalwire` page chunk and the `apps.signalwire`
+nav item are in the shipped `.next`). No migration, no PBX write, no env change, no
+tenant row touched, no VoIP.ms path touched, and **no SignalWire account touched —
+nobody has typed credentials in yet.** ⛔ An already-open portal tab or desktop window
+keeps the OLD bundle until reloaded.) Memory: [[signalwire-test-bench-built]].
+Izzy, 2026-08-18: *"I want to start pivoting away from voip.ms … set this up and test it
+to see if this would be the ideal replacement … build this inside Loopcom."*
+
+- ⛔⛔ **IT IS A TEST BENCH, NOT A CUT-OVER.** Every job VoIP.ms does today has a panel
+  on `/apps/signalwire` (SUPER_ADMIN only, forced in `isNavItemVisibleForUser` like IVR
+  Migration — no grantable key) that does the same job on SignalWire, with every action
+  and every inbound webhook written to `AgentAuditLog` `signalwire.*` as the record.
+  **Nothing is wired into onboarding, chat, billing SMS, the worker or the PBX**, and a
+  source guard in `signalWire.test.ts` fails if the module ever references
+  `globalVoipMsConfig` / `voipMs*` / `tenantSmsNumber` / `onboarding/` /
+  `@connect/integrations`. A number bought there rings nothing until a person wires it.
+- ⛔⛔ **THE THREE FACTS THAT DECIDE THE PIVOT, all read from their docs, none of them a
+  code problem:** (1) **10DLC brand + campaign registration is MANDATORY** to text from a
+  local US number on SignalWire — unregistered traffic is refused; VoIP.ms does not enforce
+  this on us today ($4 brand, campaign fee 3 months up front, 3–5 business days; an API
+  exists, not built). (2) **Porting has NO API** — dashboard + LOA only, so `portWatchdog` /
+  `portLanding` automation would have to be rebuilt around their portal or ports stay on
+  VoIP.ms. (3) **Arbitrary outbound caller ID is NOT allowed** — `send_as` must be a
+  purchased or verified number, and four tenants send another company's CID today.
+  ⚠️ Local-number and per-segment SMS **prices are not on their public pricing page** — read
+  them off the first purchase. Voice ~0.66¢/min in, 0.8¢/min out.
+- ✅ **What SignalWire DOES have, and the bench uses:** one credential (Project ID + API
+  token, HTTP Basic, scoped — a 403 means a missing scope and the page says so) over THREE
+  API families: `/api/relay/rest` (number search/buy/list/release/handlers, E911 addresses +
+  per-number registration with 422 corrections like Monsey → SPRING VALLEY, CNAM lookup),
+  `/api/fabric` (SIP endpoints the PBX registers with = the subaccount analogue, SIP gateways
+  that PUSH inbound to the PBX with no registration, phone routes), and the Twilio-shaped
+  Compatibility API for SMS send + the inbound/status webhook contract. Subprojects exist
+  (one per customer possible) but share one balance.
+- ⛔ **Credentials live in `AgentSecret` key `signalwire_credentials`** (Space URL, Project
+  ID, API token, signing key), encrypted like the ElevenLabs/Polly keys — deliberately no new
+  Prisma model, an evaluation must not cost a migration. Token + signing key are write-only.
+- ⛔ **The two public webhooks (`/webhooks/signalwire/sms`, `/sms-status`) verify
+  `X-SignalWire-Signature` (Twilio HMAC-SHA1 scheme keyed with the project SIGNING KEY) and
+  FAIL CLOSED** — no key = every inbound text refused with `webhook_refused reason=no_signing_key`
+  in the event log. Refusal rows are throttled to 30/h. If a correct URL still reads
+  `signature_mismatch`, SignalWire may be signing with the API token — one-line change in
+  `webhookGate` to try both. ⛔ The URL SignalWire signed is the PUBLIC one; the portal passes
+  `window.location.origin` so a console on `app.loopcom.net` registers loopcom webhooks
+  (the two-hostnames rule); `resolvePublicApiBase` trusts only an https origin.
+- ⛔ **A purchase is NEVER retried** — a timeout answers "may have gone through, refresh the
+  list before trying again". A generated SIP endpoint password is returned ONCE and never
+  stored or audited (a test greps every audit call). `createSipEndpoint` tries Fabric first
+  and falls back to the deprecated `/api/relay/rest/endpoints/sip` only on 404, reporting
+  `via` — a 403 must NOT fall back (a test pins it).
+- **Tests: 18** (Twilio signature reference vector, fail-closed auth, fake-fetch client incl.
+  one-request purchase, source guards on `server.ts` registration + permission rule + bypass
+  list + every admin route opening with `requireOwner` + the module's no-VoIP.ms promise +
+  the nav force). **Proven non-vacuous: server.ts, bypass and nav guards read 0 against
+  `HEAD`.** api typecheck **75 = the exact baseline**, portal **0**; neighbours 55/55.
+  ⛔ Two authoring traps: a comment-stripper applied to `server.ts` opens a fake block
+  comment at a regex literal and swallows the registration — do positive matches on the raw
+  file; and `assert.match` on a 1.8 MB string prints the whole file on failure.
+- ⏳ **NOT PROVEN: nothing has been exercised against a real SignalWire account.** The
+  acceptance list is §6 of the handoff, cheapest first: creds (Numbers + Messaging + Calling
+  scopes) → search 845 (then 212 for the honest empty) → buy ONE number (⛔ real money — and
+  the first time we learn the price) → text it from a phone (`inbound_sms` within ~10 s) →
+  text out (⛔ `undelivered` on an unregistered local number is 10DLC, not a bug) → create a
+  SIP endpoint, build the PJSIP trunk on the PBX from the recipe on the page (⛔ PBX write,
+  Izzy's mandate) → "Ring a SIP endpoint…" and call it, dial out → E911 address + register →
+  dial **933**, never 911 → release the number.
+- ⏳ **What a real cut-over would need (§8, NOT started, Izzy's decisions):** 10DLC first;
+  a porting answer; a caller-ID audit; `TenantSmsNumber.provider = SIGNALWIRE` migration +
+  worker switch (inbound is a WEBHOOK on SignalWire vs a POLL on VoIP.ms); a
+  `pbxTenantBuild.createTrunk` SignalWire variant; a `voipMsE911.ts` sibling; whether to use
+  subprojects.
+
 ## ⛔⛔ AGENT HANDOFF — the voice changer: a recording comes back in a different voice, and the audio NEVER becomes text (2026-08-18) — READ FIRST before touching `apps/api/src/voice/elevenLabs*`, before adding any speech feature for Yiddish, or before "improving" this with speech recognition
 
 (`58be00f7` + `95f9e9d4` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED
