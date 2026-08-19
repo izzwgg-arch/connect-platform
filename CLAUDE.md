@@ -38,6 +38,33 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   pathspec makes the rest of the index irrelevant, so the race cannot reach your
   commit), and run the staged-list check as its **own** command that you actually
   read first. Recovery recipe in [[shared-worktree-commit-hazard]].
+  ⛔⛔ **AND "CLEAR THE WORK TREE" IS A TRIAGE, NEVER `git add -A` + commit —
+  proven 2026-08-19, when the obvious move would have reverted the 2FA feature.**
+  `git status` showed 10 files as `MM`; the **staged half was a 1,256-line
+  REVERT** of the whole tenant login-OTP feature (incl. `decideChallengeReuse`,
+  the SMS-flood cap), 522 lines of this file and 295 of TESTS_RUN.md — because
+  another session had committed that work with the **private-index technique**,
+  so the SHARED index still held the pre-commit snapshot.
+  ⛔ **The one-command test: `git diff HEAD --stat` vs `git diff --cached
+  --stat`.** A file that is `MM` but ABSENT from `git diff HEAD` has
+  HEAD == worktree, so only the INDEX is stale → the fix is **`git add` those
+  paths**, which makes them vanish from status. **Never commit them.**
+  ⛔⛔ **And a WORKTREE file can be OLDER than HEAD, so "commit everything
+  dirty" can write a FALSE record.** Same day: the onboarding number-search
+  handoff's dirty copy said *"E911 for (929) 852-4026 is registered at 13
+  koznitz rd"* — Izzy's own home — while HEAD correctly recorded it as
+  **CANCELLED** (TYH Industries). Committing the dirty file would have replaced
+  a true safety-critical fact with one that sends an ambulance to the wrong
+  house. **Meanwhile a second doc was dirty in the OPPOSITE direction** (the
+  voicemail-email ALERTS_MUTED correction, where HEAD was the stale one).
+  ⛔ **So direction is PER FILE and must never be assumed — read the diff and
+  check it against this file before committing. "It is dirty, so it is newer"
+  is false in this tree.** Four buckets: index stale → `git add`; worktree
+  stale → `git checkout HEAD --`; real work → commit by pathspec; artifacts →
+  delete (⛔ `apps/portal/tsconfig.tsbuildinfo` is TRACKED and dirtied by every
+  `tsc`; `*.orig`/`*.rej` are gitignored as of `dbaa890a`). **Back up anything
+  you discard to the scratchpad first** — being wrong about direction is not
+  recoverable once you have overwritten.
 - Deploy through the queue / `deploy-direct.sh` per the deploy sections below,
   then **verify the running container**, and say so.
 - If something genuinely cannot be deployed (mobile build, agent rebuild, a
