@@ -515,3 +515,60 @@ form) — while the licence is active, both restore today's behaviour exactly.
 reading credentials.env) — rotate it: change the panel user `lOOPCOMAGENT7548`'s password in
 VitalPBX, update `/etc/connect-robot/credentials.env` on loopcom (mounted into the api
 container) and restart api. Onboarding uses it for every build.
+
+## 13. DAY 2 DONE (2026-08-19): PROVEN ON PRODUCTION — and the render design changed because of what prod's 4.5.3-1 does
+
+**The test Izzy asked for ran on the live PBX and passed.** But it first uncovered the real
+production behaviour, which is different from the clone (4.5.3-8):
+
+⛔⛔ **ON PROD (VitalPBX 4.5.3-1) NO "APPLY CHANGES" DOES A TENANT'S *FIRST* GENERATION.** The
+mirror wrote a correct row set for tenant 107 (verified: 21 settings, CoS, DID, both inbound
+routes, extension + desk/WebRTC devices — matching a real tenant), but **the panel's
+`generateConfigurations` produced ZERO files**, and so did the official REST
+`UPDATE /api/v2/tenants/107/apply_changes` (returned `200 "successfully applied"` and rendered
+nothing). Apply Changes on 4.5.3-1 is INCREMENTAL only — it updates an already-generated tenant;
+the panel's own create-time ionCube generator is what does the first gen, and that is exactly the
+step we skip. (On the clone's 4.5.3-8 the panel Apply *did* first-gen a mirror tenant — a genuine
+version difference. Trust prod.)
+
+✅✅ **THE FIX (already the §9 design): the mirror RENDERS the baseline itself.** The
+byte-identical renderer (`vitalpbx_mirror.py`) wrote tenant 107's **full 17-file set**, and after
+`module reload res_pjsip.so` **both endpoints loaded** — `T107_101` (desk, max_contacts 1),
+`T107_101_1` (WebRTC, max_contacts 5, dtmf auto), 13 hints, the `cos-all` dialplan, the inbound
+route for the DID, the voicemail user — with **T2/T35/T105 doorways untouched** (0 cc-wipes).
+
+✅✅ **AND THE ANSWER TO "can I still modify existing tenants after cancelling": YES, definitively.**
+Once a tenant has baseline files, prod's **incremental** Apply works normally — adding extension
+102 to the (now-rendered) tenant 107 through the ordinary panel path rendered it into the pjsip
+file and loaded both new endpoints. The 27 existing tenants already have baseline files, so
+extensions / devices / ring groups / forwards / edits keep working through the panel exactly as
+today. **The mirror renderer is needed ONLY for a brand-new tenant's first generation.**
+
+**Final design (deployed):**
+- Helper `2026.08.19.2`: `/mirror/tenant-create` writes the rows AND renders the baseline
+  (`render_and_install_pbx` → files 0644 www-data:root, AstDB seed, `module reload res_pjsip.so`
+  / `dialplan reload` / `voicemail reload` / `module reload res_parking.so`); new
+  `/mirror/tenant-render` re-renders from the complete rows. Reader uses a broad-SELECT connection
+  (`OMBU_MYSQL_RO_*` or the helper user once granted `SELECT ON ombutel.*`). Installer ships
+  `vitalpbx_mirror.py` + `mirror_features.py` (drift-guarded) and adds the SELECT grant.
+- api `1c1d067e`: `buildPbxTenant` renders the baseline at create (so the panel's per-extension
+  Apply has something to update) and re-renders once at the very end (`opts.tenantRenderer`) so the
+  on-disk files are byte-identical to a panel-made tenant. Non-fatal; a failed re-render leaves the
+  working incrementally-applied files in place.
+
+**PRODUCTION ACCEPTANCE (2026-08-19), full build through the DEPLOYED code:** tenant 108
+"MIRROR TEST delete me 0819b" — trunk 134 → route 130 → ARS 223 → **tenant via mirror** (no panel
+form) → baseline render → **ext 101 + ext 102** each with desk + WebRTC → inbound route → final
+re-render, in 109 s. Verified on the PBX: **17 files, 4 endpoints loaded** (T108_101/102 +
+`_1`), inbound route for 8455550120, 14 hints, 2 voicemail users, outbound ARS in the dialplan,
+**T2/T35/T105 doorways 0 cc-wipes**. Then fully deleted — prod back to exactly **27 tenants**,
+helper healthy. **Nothing on any existing tenant was touched at any point.**
+
+**So the two-day goal is met and PROVEN on prod:** a new tenant is created and rendered entirely by
+Connect's own code with no licence; existing tenants are unaffected and stay editable through the
+panel. ⏳ **Remaining before cancelling:** (1) a real end-to-end acceptance where a phone actually
+registers to a mirror-made tenant and a call connects (this test proved config + endpoint load, not
+a live call); (2) the untested-on-free-tier items (manual extension *form* add, desk-phone
+provisioning past the 20 cap, geo-firewall countries) — try each on the clone before cancelling if
+they're used; (3) then cancel and re-check the first real sign-up says "via mirror". ⛔ **Rotate the
+robot panel password** (still exposed in a prior session transcript).

@@ -185,22 +185,23 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   tenants, a provisioning generator (interim clone-a-cfg), and ring groups /
   forwards / E911 / ARS-toggle for over-cap tenants if the clone says the panel
   refuses them.
-- ✅✅ **DAY 0 + DAY 1 DONE (2026-08-19, handoff §11–§12): THE UNLICENSED PANEL REFUSES ONLY
-  "CREATE TENANT".** Proven on a clone (VitalPBX 4.5.3-8 + the prod DB/files, NO licence =
-  Community — tenant create refused with the free-tier message): adding extensions/WebRTC
-  devices/ring groups/forwards/inbound routes/trunks/routes/ARS through Connect's REAL code
-  all still work, Apply Changes regenerates ONLY the changed tenant, `fully-gen-conf` renders
-  all 27 tenants (diffs = version drift + the helper-patch reverts prod's Apply does today).
-  **A tenant created by INSERTING ROWS is a fully functional tenant to the panel.** So the mirror
-  v1 = **`/mirror/tenant-create` in the helper** (`scripts/pbx/mirror/mirror_writes.py`, the
-  panel's exact rows + queued base modules + static/provisioning dirs) + a pluggable
-  `MirrorTenantCreator` in `pbxTenantBuild.createTenant` (helper-backed by default, loud
-  fallback to the panel form if the helper fails, `PBX_TENANT_CREATE_MODE=panel` to force the
-  old path). Proven end-to-end on the clone with `buildPbxTenant` (tenant 108: identical
-  render to a panel-made tenant). **api DEPLOYED `c2d9fdd9`.** ⏳ **Helper install + grants =
-  Izzy's Run buttons; then one throwaway tenant on prod; cancel LAST.** ⛔ Two-day scope
-  excludes migrating existing tenants and a provisioning generator (not needed — the panel
-  still does both unlicensed, except tenant create).
+- ✅✅ **DONE AND PROVEN ON PRODUCTION (2026-08-19, handoff §11–§13). A new tenant is created
+  AND rendered entirely by Connect's own code, no licence; existing tenants are untouched and
+  stay editable.** The clone confirmed the unlicensed panel refuses ONLY "create tenant". Prod
+  (VitalPBX 4.5.3-1) then revealed the real behaviour: **no Apply Changes does a tenant's FIRST
+  generation** (panel Apply AND the REST per-tenant apply both rendered ZERO files for a
+  row-inserted tenant), so the mirror **renders the baseline itself** (the byte-identical
+  `vitalpbx_mirror.py`). ⛔ **And once a tenant has baseline files, prod's INCREMENTAL Apply works
+  normally** — adding an extension to a mirror-made tenant rendered + loaded through the ordinary
+  panel path — which is exactly why the 27 existing tenants keep working after the lapse. Live
+  acceptance: a full `buildPbxTenant` on prod created tenant 108 via the mirror, rendered 17 files,
+  **4 PJSIP endpoints loaded** (desk + WebRTC × 2 extensions), inbound route, hints, voicemail,
+  **doorways of T2/T35/T105 untouched**, then deleted (prod back to 27 tenants). helper
+  `2026.08.19.2` (`/mirror/tenant-create` renders the baseline, `/mirror/tenant-render`
+  re-renders; SELECT ON ombutel.* granted; ships vitalpbx_mirror.py + mirror_features.py); api
+  DEPLOYED `1c1d067e` (baseline render at create + final re-render). ⏳ **Before cancelling:** one
+  real phone-registers-and-call test on a mirror tenant; the free-tier untested items (manual
+  extension form, provisioning past 20, geo-firewall) if used; ⛔ rotate the robot panel password.
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
