@@ -85,6 +85,13 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
      error so it never pollutes the signal that something is genuinely wrong. */
   const REFUSALS: Array<{ match: string; message: string }> = [
     {
+      // raised by the mirror when ombu_tenants.name is taken; reachable when the
+      // route's own pre-check could not run because the database read was down
+      match: "already exists",
+      message:
+        "The phone system already has a customer filed under that system name. Pick a different name, or edit the existing one.",
+    },
+    {
       match: "geo_build_not_permitted",
       message:
         "Blocking a country needs one more setup step on the phone system: rebuilding the firewall runs as root, which the Connect helper is not allowed to do yet. Nothing was changed — the countries you had blocked are still exactly as they were.",
@@ -166,6 +173,16 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     if (!slug) return reply.status(400).send({ error: "pbx_console_write_failed", detail: "that name has no letters or digits in it, so it cannot be turned into a system name" });
     const dids = (b.dids || []).map((d) => String(d).replace(/\D/g, "")).filter(Boolean);
     const arsIds = (b.outboundProfileIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+    /* ⛔ The mirror door takes ONE profile. Accepting a list and quietly using
+       the first would be a setting that looks applied and is not — say so
+       instead. A tenant can be given more profiles afterwards through the
+       ordinary edit, which posts the panel's own multi-select. */
+    if (arsIds.length > 1) {
+      return reply.status(400).send({
+        error: "pbx_console_write_failed",
+        detail: "Pick one outbound profile to start with. You can add the others by editing the customer once it exists.",
+      });
+    }
 
     // ⛔ Refuse a duplicate by NAME before writing anything. The mirror raises on
     // it too (the column is unique), but a refusal that names the existing
