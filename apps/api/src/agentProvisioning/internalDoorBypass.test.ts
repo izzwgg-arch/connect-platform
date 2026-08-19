@@ -42,6 +42,13 @@ test("the doors the assistant depends on are named explicitly", () => {
   for (const p of [
     "/internal/agent/account-setup-info",
     "/internal/agent/search-phone-numbers",
+    // The read-only investigation workspace (both servers). Registered in
+    // agentInvestigation/investigationRoute.ts, so the derived scan above —
+    // which only reads accountSetupInfoRoute.ts — cannot see it. Without this
+    // line the door would 401 at the JWT hook and the whole feature would look
+    // alive while returning "I couldn't look that up", exactly as the
+    // account-setup door did for six days.
+    "/internal/agent/investigate",
   ]) {
     assert.equal(shouldSkipJwtVerification(p), true, p);
   }

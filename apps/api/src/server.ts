@@ -277,6 +277,7 @@ import { decideLoginMfa } from "./mfa/mfaService";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
 import { registerAccountSetupInfoRoute } from "./agentProvisioning/accountSetupInfoRoute";
 import { registerAgentContactsInfoRoute } from "./agentProvisioning/contactsInfoRoute";
+import { registerAgentInvestigationRoute } from "./agentInvestigation/investigationRoute";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
   PORTAL_ROLE_BUCKETS,
@@ -41276,6 +41277,11 @@ const port = Number(process.env.PORT || 3001);
   // chat is the one the invoice engine will actually bill.
   registerAccountSetupInfoRoute(app);
   registerAgentContactsInfoRoute(app);
+  // Read-only investigation workspace: lets the assistant query BOTH servers
+  // (Connect's Postgres and the PBX's MySQL) to diagnose a fault nobody built a
+  // tool for. It can look at anything and change nothing — three enforcement
+  // layers in agentInvestigation/readOnlySql.ts.
+  registerAgentInvestigationRoute(app);
   // Confirm-by-password: the agent may only PREPARE (a permission grant, a new
   // extension, …); these routes apply it after re-checking authority and the
   // requester's own password.
