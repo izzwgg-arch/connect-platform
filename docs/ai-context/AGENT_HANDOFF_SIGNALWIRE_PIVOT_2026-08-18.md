@@ -10,8 +10,11 @@
 
 Commit `50f9fa69` on `feat/ivr-migration-takeover` (private-index commit — `server.ts`
 was carrying another session's staged + unstaged edits). Deploy state: see §7.
-**No migration, no PBX write, no env change, no tenant row touched, no VoIP.ms
-path touched, no SignalWire account touched (nobody has typed credentials in).**
+**No migration, no env change, no tenant row touched, no VoIP.ms path touched.**
+⛔ **UPDATE, same evening: credentials ARE in (Space `loopcom.signalwire.com`, project "Main"),
+one number is on the account, and under Izzy's explicit instruction a real trunk was built —
+PBX writes, all backed up. See §10 before touching trunk 132, `extensions__60_custom.conf`'s
+`[trk-132-in](+)` block, or Loopcom Demo's DID list.**
 
 ---
 
@@ -280,3 +283,135 @@ Owner account, `/apps/signalwire`. In this order, cheapest first:
   `signature_mismatch` on a correct URL, try the API token as the key (some older SignalWire
   guides used it) — one-line change in `webhookGate` (`creds.signingKey` → try both).
 - ⏳ 10DLC registration, porting, CNAM ticketing and subproject creation are NOT on the page.
+
+---
+
+## 10. THE FIRST REAL TRUNK IS LIVE — +1 (205) 351-3327 rings Loopcom Demo ext 101 through SignalWire (2026-08-18, evening)
+
+Izzy, 2026-08-18: *"create a trunk for that phone number that's currently in SignalWire"* …
+*"it's not going to be the same way that we're doing the VoIP.ms trunks, so open the
+browser … and check how we're supposed to set up this trunk."* He was right, in one specific
+way (§10.3). Everything below is **PBX writes under that explicit instruction**, all logged as
+`signalwire.*` audit rows, all with backups named here.
+
+### 10.1 What SignalWire's own docs say the trunk is
+Read in the browser before touching anything: `/docs/platform/voice/sip/trunking`,
+`/docs/platform/freepbx`, `/docs/platform/voice/sip/sip-credentials` and the blog "The Best Way
+to Use SignalWire for SIP Trunking with Asterisk or FreePBX".
+- A trunk = a **SIP credential the PBX REGISTERS with** at the Space's SIP domain — the same
+  shape as the VoIP.ms subaccount, so VitalPBX's registered PJSIP trunk form fits.
+- ⛔ **The registrar is the SIP PROFILE's `domain`, not `<space>.sip.signalwire.com`.**
+  `GET /api/relay/rest/sip_profile` → `loopcom-ef2ea3442802.sip.signalwire.com` (space +
+  `domain_identifier`). The console guessed the short form until `8d3dfd04`; the guess registers
+  nothing and reads exactly like a bad password.
+- Inbound calls "arrive from a number of different IP addresses" — identify by domain / the
+  registration, never by a single IP. In practice VitalPBX's `line=yes` on the registration did
+  it: SignalWire INVITEs the registered Contact **with the `;line=` parameter**, so PJSIP ties
+  the request to the endpoint whatever the source address (152.42.144.114 today).
+- ⛔ **The DID is in the `To:` header and the request-URI user is literally `s`** — the
+  FreePBX guide's whole custom context is `[from-signalwire] exten => s` extracting the number
+  from `To`. That is the one place VitalPBX and SignalWire genuinely disagree (§10.3).
+- Encryption: their guide sets the endpoint to Required + SRTP; the profile default is
+  `optional`. The trunk was built plain (RTP over UDP 5060, endpoint `optional`) to match how
+  every other trunk on this PBX runs; SRTP is a follow-up.
+
+### 10.2 What was built, in order
+1. **SignalWire** (`sw-build-trunk.ts` run in the api container, via the module's own client):
+   Fabric SIP endpoint **`loopcom-pbx`** id `d70efe1e-8620-4e33-ac78-249cee8e3a47`
+   (`call_handler passthrough` = may dial the PSTN, `send_as +12053513327`, codecs
+   PCMU/PCMA/G722, encryption optional; password generated, travelled to SignalWire and to the
+   panel form only, never printed or stored). Number **+12053513327**
+   (id `6dc9dc7e-d2f8-4293-997a-8283ecffe783`) pointed at it with
+   `POST /api/fabric/resources/{ep}/phone_routes {phone_route_id, handler:"calling"}` — the
+   Fabric route worked first try, no fallback needed.
+2. **VitalPBX trunk 132 "SignalWire loopcom-pbx"** in Main — panel replay with the SAME field
+   set onboarding's `createTrunk` posts (so it renders like every VoIP.ms trunk), differences:
+   `outgoing[host]/[match]/[fromdomain]` = the profile domain, `outgoing[username]/[defaultuser]/
+   [fromuser]/[contact_header]` = `loopcom-pbx`, `codecs[]` ulaw/alaw/g722, `get_did_from=to`
+   (harmless — see §10.3, the generated "Build DID from headers" branch is never reached).
+   Rendered as `[loopcom-pbx]` endpoint/auth/aor + `identify match=<domain>` (resolves to
+   159.65.244.171 + 152.42.144.114) + `registration … line=yes`, inbound `context=trk-132-in`.
+   Apply Changes (18 s) → **`pjsip show registrations`: `Registered (exp. 574s)`**, contact
+   `Avail` at 40 ms. Re-bake on T2/T35/T105 afterwards: **0 lines changed** — the apply did not
+   wipe the doorway (nothing was pending on those tenants at that moment).
+3. **Tenant DID**: `INSERT INTO ombutel.ombu_tenant_dids (102,'2053513327','SignalWire test')`
+   from `/root/sw-tenant-did-102.sql`, backup `/root/ombu_tenant_dids-backup-20260819T012113Z.sql`
+   on the PBX. ⛔ **`default-trunk` in Main is generated from this table** (`exten =>
+   _2053513327 → Forwarding call to Loopcom Demo tenant`); an inbound route alone does NOT get a
+   DID into the tenant. And ⛔ **a direct DB write is not a "pending change" — the panel's Apply
+   in Main regenerated nothing (0.4 s, file mtime unchanged) until the tenants module was queued
+   the way the PBX helper does it**: `INSERT IGNORE INTO ombu_queued_changes (tenant_id,
+   module_id) VALUES (1, 99)` (99 = tenants) + `UPDATE ombu_settings SET value='yes' WHERE
+   name='reload_dialplan'` (`/root/sw-queue-main-tenants.sql`), then Apply in Main context
+   (`cfg.mainTenant` = `2dc3974017c1bc65`, 1.9 s, `default-trunk` rendered).
+4. **Inbound route** in T102 (`9b501d62d63478a9`): `createInboundRoute(session, "2053513327",
+   extensionId("101") = 395, "SignalWire 2053513327")` → route id **244** → ext 101, applied in
+   T102 context (T102 file rendered `_2053513327 INBOUND_ROUTE: SignalWire 2053513327`).
+   Re-bake after every apply: **0 lines changed** each time; T2 1/0, T35 1/0, T105 2/0
+   throughout.
+5. **The `s` handler** — appended to `/etc/asterisk/extensions__60_custom.conf` (backup
+   `extensions__60_custom.conf.bak.signalwire-trunk.20260819T012xxxZ`), then `dialplan reload`:
+   `[trk-132-in](+)` / `exten => s,1,NoOp(Incoming call through: SignalWire loopcom-pbx (DID from To))`
+   → set `__TRUNK_ID=132`, `CDR(trunk)=132` → `SWDID = FILTER(0-9, user part of To)` → strip a
+   leading `1` when 11 digits → set `__DID_NUMBER`, `CDR(did)`, `DID` → if 10 digits
+   `Goto(default-trunk,${SWDID},1)` else `Hangup(1)`. `(+)` extends the generated context (the
+   custom file is `#include`d after `vitalpbx/extensions__*.conf`), so it survives every regen.
+   Verified with `dialplan show trk-132-in`: exten `s` (11 priorities from the custom file)
+   beside the generated pattern.
+
+### 10.3 The bug that would have hidden forever behind "it registers": 484 Address Incomplete
+First test call (PBX → trunk → SignalWire → hairpin back): SignalWire's INVITE was
+`INVITE sip:s@209.145.60.79:5060;line=uuklawl` with `To: <sip:+12053513327@loopcom-ef2ea…>`.
+VitalPBX's generated `[trk-132-in]` has only `_[+*#0-9A-Za-z].` — a **2+ character** pattern —
+so a bare `s` *half-matched* it and Asterisk answered **`484 Address Incomplete`** (proven with
+`pjsip set logger host 152.42.144.114`; SignalWire then retried from four different media
+nodes, ~1.5 s apart, each 484). No channel is created and **nothing is logged at NOTICE**, so
+without the SIP trace this reads as "the call just doesn't arrive". `get_did_from=to` cannot help
+because the generated "Build DID from headers" lines sit INSIDE that pattern branch. Hence the
+exact `exten => s` above, which wins over the pattern.
+⛔ **VoIP.ms puts the DID in the request URI; SignalWire does not.** Every future SignalWire
+trunk on VitalPBX needs its own `[trk-N-in](+) exten => s` block (or a shared one, if
+several trunks are built — a follow-up), and the DID on the tenant as **10 digits**.
+⛔ Also learned: `parseFormPairs()` omits checkboxes whose state VitalPBX sets by JS — trunk
+132's edit form reads `outgoing[type]`/`[trunk]`/`[qualify]` as ABSENT — so a full-form
+re-post of a trunk (or tenant) can silently untick them. Trunk 132 was therefore never edited;
+the DID went in by SQL + queued regen instead.
+
+### 10.4 Proven, with a real call
+`channel originate PJSIP/+12053513327@loopcom-pbx application Playback demo-congrats` (PBX
+dials its own SignalWire number through the trunk; SignalWire routes the number to the endpoint
+and pushes it back — both directions in one call, rings nobody outside):
+`s@trk-132-in` → `SWDID=12053513327` → `2053513327` → `default-trunk: Forwarding call to
+Loopcom Demo tenant` → `T102_default-trunk` → `T102_incoming-calls: INBOUND_ROUTE: SignalWire
+2053513327` → **`Dial(PJSIP/T102_101&Local/T102_101_1@connect-mobile-wake-dial/n,30,…)` ringing
+ext 101** (desk + wake-dial leg). Caller ID delivered as `+12053513327`. Hung up by hand after
+~28 s; CDR rows `+12053513327 → 101 / T102_101_1, NO ANSWER, 28 s`. Outbound worked implicitly
+(SignalWire accepted and completed the PBX's INVITE — `passthrough`, `send_as` = the number).
+
+### 10.5 What is NOT done / not proven
+- ⏳ **No human has heard audio on it** — the proof is signalling + dialplan, not a two-way
+  conversation. Acceptance: call **(205) 351-3327** from any phone → Loopcom Demo ext 101 must
+  ring; answer and talk both ways. Then dial out from ext 101 through the trunk — ⛔ **no
+  outbound route / ARS selection points at trunk 132 yet**, so today no tenant dials out via
+  SignalWire; that is a route + route-selection change (Main), same shape as onboarding's
+  `createOutboundRoute` + ARS.
+- ⏳ SRTP/TLS not enabled (plain, like every other trunk here). ⏳ E911 not registered on the
+  number (an unregistered 911 call costs $100 at SignalWire — dial 933, never 911, from this
+  trunk). ⏳ Texting on the number is pointed at Loopcom's webhook but no 10DLC campaign exists,
+  so outbound texts will be `undelivered`.
+- ⚠️ **Pre-existing, noticed in passing:** `ombu_queued_changes` holds pending rows for tenants
+  2, 3, 4, 5, … (modules 42/43/110) and `T2_reload_dialplan=yes` — somebody's saved-but-not-
+  applied panel edits. The next Apply in one of those tenants' contexts flushes them (T2 is a
+  Connect-mode tenant → doorway wipe → the reconciler / re-bake covers). Not touched.
+- ⚠️ `agentProvisioning/addPhoneNumberCapability.ts` passes `pbxTenantId` ("102") to
+  `session.setTenant()`, which expects the tenant PATH HASH (`9b501d62d63478a9`). Never proven
+  live; likely a latent bug in that (unrelated) path.
+
+### 10.6 Rollback
+Reverse order, all local to this test: delete inbound route 244 in T102 (panel);
+`DELETE FROM ombutel.ombu_tenant_dids WHERE tenant_id=102 AND did='2053513327'` (or restore
+`/root/ombu_tenant_dids-backup-20260819T012113Z.sql`); queue tenants for Main + apply; delete
+trunk 132 (panel) + apply; restore `extensions__60_custom.conf` from the `.bak.signalwire-trunk.*`
+copy + `dialplan reload`; then on SignalWire delete the phone route / endpoint `d70efe1e-…`
+(dashboard or `DELETE /api/fabric/resources/{id}`). Every apply → re-bake the Connect doorway
+(`rebakeConnectRoutesAfterRegen`) for T2/T35/T105.

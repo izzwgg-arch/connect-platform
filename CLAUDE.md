@@ -108,7 +108,7 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
 
-## ⛔⛔ AGENT HANDOFF — SignalWire is being EVALUATED to replace VoIP.ms: a test bench exists at `/apps/signalwire`, and NOTHING is cut over (2026-08-18) — READ FIRST before touching `apps/api/src/signalwire/*`, before wiring ANY carrier path away from VoIP.ms, or before answering "can SignalWire do X?"
+## ⛔⛔ AGENT HANDOFF — SignalWire is being EVALUATED to replace VoIP.ms: a test bench exists at `/apps/signalwire`, and the FIRST REAL TRUNK IS LIVE — (205) 351-3327 rings Loopcom Demo ext 101 (2026-08-18) — READ FIRST before touching `apps/api/src/signalwire/*`, PBX trunk 132, `[trk-132-in](+)` in `extensions__60_custom.conf`, before wiring ANY carrier path away from VoIP.ms, or before answering "can SignalWire do X?"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIGNALWIRE_PIVOT_2026-08-18.md`**
 (`50f9fa69` on `feat/ivr-migration-takeover`, private-index commit. **api DEPLOYED and
@@ -125,6 +125,44 @@ keeps the OLD bundle until reloaded.) Memory: [[signalwire-test-bench-built]].
 Izzy, 2026-08-18: *"I want to start pivoting away from voip.ms … set this up and test it
 to see if this would be the ideal replacement … build this inside Loopcom."*
 
+- ✅✅ **THE FIRST REAL TRUNK IS LIVE AND PROVEN WITH A CALL (2026-08-18 evening, handoff §10)
+  — Izzy: *"create a trunk for that phone number … it's not going to be the same way that we're
+  doing the VoIP.ms trunks, open the browser and check how we're supposed to set up this trunk."*
+  He was right.** SignalWire endpoint **`loopcom-pbx`** (Fabric, `passthrough`, `send_as
+  +12053513327`) ← number **+12053513327** routed to it via `phone_routes`; **VitalPBX trunk
+  132 "SignalWire loopcom-pbx"** in Main (panel replay, onboarding's `createTrunk` field set,
+  ulaw/alaw/g722) → **`Registered`**, contact `Avail` 40 ms; DID `2053513327` on **Loopcom Demo
+  (T102)** + inbound route **244 → ext 101**. Test call (PBX → trunk → SignalWire → back in) ran
+  the whole chain and **rang ext 101** (desk + wake-dial); every apply was followed by a doorway
+  re-bake (0 lines changed each time; T2/T35/T105 stayed 1/0, 1/0, 2/0). ⏳ Nobody has heard
+  audio on it — acceptance is one real call to **(205) 351-3327**. ⛔ No outbound route/ARS
+  points at trunk 132 yet, so no tenant dials OUT via SignalWire.
+- ⛔⛔ **THE TWO WAYS A SIGNALWIRE TRUNK IS NOT A VOIP.MS TRUNK, both proven live:**
+  (1) **the registrar is the SIP PROFILE's domain** — `GET /api/relay/rest/sip_profile` →
+  `loopcom-ef2ea3442802.sip.signalwire.com`, NOT `loopcom.sip.signalwire.com` (the console
+  guessed that until `8d3dfd04`; a guess registers nothing and reads like a bad password).
+  (2) **SignalWire delivers inbound calls with request-URI user `s` and the DID ONLY in `To:`**
+  (`INVITE sip:s@pbx;line=…`, `To: <sip:+12053513327@…>`) — VitalPBX's generated `trk-N-in`
+  has only a 2+-char pattern, so a bare `s` half-matches and Asterisk answers **484 Address
+  Incomplete with NO channel and NO log line**; SignalWire retries from four nodes and gives up.
+  It reads as "the call never arrives". Fix = `[trk-132-in](+) exten => s` in
+  `/etc/asterisk/extensions__60_custom.conf` (backup `.bak.signalwire-trunk.*`) that lifts the
+  DID out of `To`, strips `+1`, and `Goto(default-trunk,<10 digits>,1)`. **Every future
+  SignalWire trunk on this PBX needs that block** (VoIP.ms puts the DID in the request URI;
+  SignalWire does not). ⛔ `line=yes` on the registration is what identifies the inbound INVITE
+  regardless of source IP — SignalWire INVITEs the registered Contact with the `;line=` param.
+- ⛔ **Two panel/regen traps hit on the way, both worth carrying:** `default-trunk` (Main) is
+  generated from **`ombu_tenant_dids`**, so a DID must be on the tenant's list, not just on an
+  inbound route — and **a direct DB write is not a "pending change": Apply in Main regenerated
+  NOTHING (0.4 s) until `ombu_queued_changes (1, 99)` + `reload_dialplan=yes` were set the way
+  the PBX helper does it.** And `parseFormPairs()` omits checkboxes VitalPBX ticks by JS
+  (`outgoing[type]/[trunk]/[qualify]` read as absent on trunk 132's edit form) — **a full-form
+  re-post of a trunk or tenant can silently untick them**; trunk 132 was never edited.
+- ⚠️ Noticed, NOT touched: `ombu_queued_changes` holds pending rows for tenants 2, 3, 4, 5, …
+  (modules 42/43/110) and `T2_reload_dialplan=yes` — somebody's unapplied panel edits; the next
+  apply in those contexts flushes them (T2 = doorway wipe → re-bake/reconciler). And
+  `addPhoneNumberCapability.ts` passes `pbxTenantId` where `setTenant()` wants the tenant PATH
+  hash — a latent bug in that never-proven path.
 - ⛔⛔ **IT IS A TEST BENCH, NOT A CUT-OVER.** Every job VoIP.ms does today has a panel
   on `/apps/signalwire` (SUPER_ADMIN only, forced in `isNavItemVisibleForUser` like IVR
   Migration — no grantable key) that does the same job on SignalWire, with every action

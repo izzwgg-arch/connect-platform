@@ -31,6 +31,15 @@ SUPER_ADMIN-forced. **Non-vacuous:** server.ts / bypass / nav guards read 0 agai
 Typecheck: api 75 (= baseline), portal 0. ⛔ Nothing exercised against a real SignalWire
 account — no credentials exist yet.
 
+**Trunk build, same evening (`8d3dfd04`):** 19/19 (new guard: the registrar comes from
+`/sip_profile`, never `<space>.sip.signalwire.com` — reads 2 hits against the pre-fix routes).
+Live proof on the PBX, not a test: `pjsip show registrations` → `loopcom-pbx … Registered`;
+`pjsip set logger` captured SignalWire's `INVITE sip:s@…;line=…` and the PBX's `484 Address
+Incomplete` before the `exten => s` handler existed; after it, `channel originate
+PJSIP/+12053513327@loopcom-pbx` traced `s@trk-132-in → default-trunk → T102_incoming-calls
+INBOUND_ROUTE: SignalWire 2053513327 → Dial(PJSIP/T102_101&…)` ringing ext 101; doorway
+counts T2 1/0, T35 1/0, T105 2/0 unchanged across three applies (re-bake 0 lines each).
+
 ---
 
 ## Tenant-isolation §6a–§6g scoping fixes (2026-08-18, night)
