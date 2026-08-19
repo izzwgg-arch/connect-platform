@@ -4,6 +4,44 @@ Newest entries first.
 
 ---
 
+## PBX Console: geo write refuses safely, and the refusal reads as a refusal (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `81ccf2fa` (helper) + `b481ea19` (api).
+Handoff `AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §17.
+
+```bash
+node --experimental-test-module-mocks --import tsx --test apps/api/src/pbxConsole/pbxConsole.test.ts
+npx tsx --test scripts/pbx/install-vitalpbx-inbound-route-helper.test.ts
+cd apps/api && npx tsc --noEmit -p tsconfig.json
+```
+
+**Result:** console suite **9 tests, 9 pass, 0 fail**; installer drift guard
+**45 tests, 45 pass, 0 fail**; api typecheck **75 errors = the exact baseline**,
+**0 in `pbxConsole/`**.
+
+**Proven non-vacuous.** The new guard *"a known refusal answers 409 with a
+sentence, never 500"* was replayed against `HEAD`'s `pbxConsoleRoutes.ts` and
+**fails** there (8 pass / 1 fail), then passes on the fixed tree. The installer
+guard *"the geo capability check never RUNS the firewall builder"* likewise fails
+against the pre-change `console_writes.py`.
+
+**⛔ Two guards had to be rewritten because they were matching my own doc
+comments** — the comment above each fix quotes the defect it describes, so a
+naive `!includes("--connect-probe")` failed on correct code. Both now strip
+comments or assert only on executable lines. **Third recorded instance of this
+trap in this repo.**
+
+**Verified on production, not just in tests:** `POST /admin/pbx-console/geo`
+answers **409** with the plain-English sentence (was 500); all three console
+reads answer **200**; `/etc/firewalld/direct.xml` is **still stamped
+2026-04-29**, firewalld shows **no reload**, and the PBX is byte-back at
+**27 tenants / 119 extensions / 55 phones** with **0 doorway wipes** on
+T2/T35/T105.
+⛔ A firewall **rule count is a noisy check** — live reads 258 runtime / 253
+permanent and the gap is fail2ban's 7 bans, which come and go.
+
+---
+
 ## The agent's read-only investigation workspace, wired up (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `95beef53`. **apps/agent only** — no api,
