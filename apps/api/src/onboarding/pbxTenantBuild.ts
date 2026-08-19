@@ -263,7 +263,8 @@ async function findTenantPath(
  */
 export type MirrorTenantCreateArgs = { slug: string; label: string; dids: string[]; arsId: string };
 export type MirrorTenantCreator = (args: MirrorTenantCreateArgs) => Promise<{ tenantId: number; path: string }>;
-export type PbxBuildOptions = { tenantCreator?: MirrorTenantCreator | null };
+export type MirrorTenantRenderer = (tenantId: number) => Promise<void>;
+export type PbxBuildOptions = { tenantCreator?: MirrorTenantCreator | null; tenantRenderer?: MirrorTenantRenderer | null };
 
 async function createTenant(
   s: PanelSession,
@@ -274,7 +275,9 @@ async function createTenant(
   resolve?: TenantPathResolver,
   tenantCreator?: MirrorTenantCreator | null,
   log?: (msg: string) => void,
+  onCreatedId?: (id: number) => void,
 ): Promise<string> {
+  let createdTenantNumericId = 0;
   const pre = await findTenantPath(s, label, slug, resolve);
   if (pre) return pre;
   if (tenantCreator) {
@@ -306,6 +309,7 @@ async function createTenant(
       }
       // The rows are in and Apply ran; the directory lookup is the only thing that
       // lagged — the path we were handed is authoritative.
+      if (createdTenantNumericId) onCreatedId?.(createdTenantNumericId);
       return made.path;
     }
   }
@@ -637,7 +641,8 @@ export async function buildPbxTenant(
   log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""})`);
   const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
-  const tenantPath = await createTenant(s, label, slug, tenantDids, arsId, resolveTenantPath, opts.tenantCreator, log);
+  let mirrorTenantId = 0;
+  const tenantPath = await createTenant(s, label, slug, tenantDids, arsId, resolveTenantPath, opts.tenantCreator, log, (id) => { mirrorTenantId = id; });
   log(`tenant ok (path ${tenantPath}${opts.tenantCreator ? ", via mirror" : ", via panel"})`);
 
   // Native emergency calling, so 911 works from day one AND survives the
@@ -687,6 +692,19 @@ export async function buildPbxTenant(
     // is only a VoIP.ms repoint — no panel work, nothing to forget.
     await createInboundRoute(s, portedDid, firstExtId as string, "Main ported");
     log(`inbound route for ported number ${portedDid} ok`);
+  }
+  // ⛔ FINAL RENDER (prod / VitalPBX 4.5.3-1): the mirror rendered the baseline at tenant-create so
+  // the panel's incremental Apply could add extensions/routes above; now re-render the tenant's files
+  // from the COMPLETE row set so the on-disk config is byte-identical to a panel-made tenant. Skipped
+  // for panel-created tenants (VitalPBX rendered them fully) and never fatal — a failed re-render
+  // leaves the (working) incrementally-applied files in place and is logged.
+  if (opts.tenantRenderer && mirrorTenantId) {
+    try {
+      await opts.tenantRenderer(mirrorTenantId);
+      log(`tenant files re-rendered from final rows (mirror)`);
+    } catch (e: any) {
+      log(`⚠️ final mirror re-render failed (${e?.message || e}) — the panel-applied files remain in place`);
+    }
   }
   return { company: co, slug, tenantPath, trunkId, routeId, arsId, firstExtId: firstExtId as string };
 }

@@ -519,7 +519,7 @@ def add_extension(conn, tenant_id: int, ext: str, name: str, email: str = "",
 # render_and_install
 # --------------------------------------------------------------------------- #
 
-RELOAD_COMMANDS = ["pjsip reload", "dialplan reload", "voicemail reload", "module reload res_parking.so"]
+RELOAD_COMMANDS = ["module reload res_pjsip.so", "dialplan reload", "voicemail reload", "module reload res_parking.so"]
 
 
 def render_and_install(conn, tenant_id: int, target_dir: str, *, apply: bool = False,
@@ -554,6 +554,38 @@ def render_and_install(conn, tenant_id: int, target_dir: str, *, apply: bool = F
 
 
 # --------------------------------------------------------------------------- #
+def render_and_install_pbx(conn, tenant_id: int, *, reload: bool = True,
+                          target_dir: str = "/etc/asterisk/vitalpbx") -> Dict[str, Any]:
+    """PBX-side: render the tenant's files, install them 0644 owned www-data:root (VitalPBX conf
+    ownership), seed the AstDB keys, and reload the affected Asterisk modules. Idempotent — safe to
+    re-run; it re-renders the current DB state. Returns the file list + counts. Ownership + reload
+    need CAP_CHOWN and the Asterisk control socket (the helper has both)."""
+    import grp
+    import pwd
+    import subprocess
+    res = render_and_install(conn, tenant_id, target_dir, apply=True, astdb_apply=True)
+    # VitalPBX conf files are www-data:root 0644 so the panel can still rewrite them later.
+    try:
+        wd = pwd.getpwnam("www-data").pw_uid
+        root_g = grp.getgrnam("root").gr_gid
+        for name in res["files"]:
+            fp = os.path.join(target_dir, name)
+            try:
+                os.chown(fp, wd, root_g)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    reloads = []
+    if reload:
+        for c in RELOAD_COMMANDS:
+            r = subprocess.run(["asterisk", "-rx", c], capture_output=True, text=True)
+            reloads.append({"cmd": c, "rc": r.returncode})
+    res["reloads"] = reloads
+    res["fileCount"] = len(res["files"])
+    return res
+
+
 # insert_extension_surgical — pure text
 # --------------------------------------------------------------------------- #
 

@@ -167,7 +167,8 @@ async function callHelper<T>(
     | "/voicemail/greeting/get"
     | "/voicemail/greeting/reset"
     | "/voicemail/greeting/record-call"
-    | "/mirror/tenant-create",
+    | "/mirror/tenant-create"
+    | "/mirror/tenant-render",
   body: Record<string, unknown>,
   // 45s, not 15s: when the helper is busy (or catching up after a restart) a
   // healthy /inspect can exceed 15s, and that abort is what failed every
@@ -611,6 +612,13 @@ export type MirrorTenantCreateResponse = {
   rows: Record<string, number>;
   fs?: { created: string[]; chown_errors: string[] };
 };
+
+export function mirrorRenderPbxTenant(
+  cfg: PbxRouteHelperConfig,
+  tenantId: number | string,
+): Promise<{ ok: true; tenantId: number; fileCount: number; files: string[]; reloads: Array<{ cmd: string; rc: number }> }> {
+  return callHelper(cfg, "/mirror/tenant-render", { tenantId }, 120_000);
+}
 
 export function mirrorCreatePbxTenant(
   cfg: PbxRouteHelperConfig,

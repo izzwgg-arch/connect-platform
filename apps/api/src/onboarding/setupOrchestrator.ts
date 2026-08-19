@@ -10,8 +10,8 @@ import { welcomeCreatePasswordEmail } from "../userEmailTemplates";
 import { getAndroidApkUrlForInviteEmail } from "../androidApkInviteUrl";
 import { loadPanelConfig, PanelSession, type PanelConfig, type RobotAccount } from "./panelClient";
 import { buildPbxTenant, type PbxBuildJob, type PbxPerson } from "./pbxTenantBuild";
-import { mirrorCreatePbxTenant, resolvePbxRouteHelperConfig } from "../pbxInboundRouteHelperClient";
-import type { MirrorTenantCreator } from "./pbxTenantBuild";
+import { mirrorCreatePbxTenant, mirrorRenderPbxTenant, resolvePbxRouteHelperConfig } from "../pbxInboundRouteHelperClient";
+import type { MirrorTenantCreator, MirrorTenantRenderer } from "./pbxTenantBuild";
 import { buildE911Address } from "./e911Address";
 import { resolveOmbutelStateId } from "./emergencyStateId";
 import { ensureProvisioningIdentity } from "./provisioningIdentity";
@@ -95,6 +95,16 @@ export function resolveMirrorTenantCreator(pbxInstanceId?: string | null): Mirro
   return async (args) => {
     const r = await mirrorCreatePbxTenant(cfg, args);
     return { tenantId: Number(r.tenantId), path: String(r.path) };
+  };
+}
+
+/** The final byte-identical re-render of a mirror-created tenant, after every row is written. */
+export function resolveMirrorTenantRenderer(pbxInstanceId?: string | null): MirrorTenantRenderer | null {
+  if (String(process.env.PBX_TENANT_CREATE_MODE || "").trim().toLowerCase() === "panel") return null;
+  const cfg = resolvePbxRouteHelperConfig(pbxInstanceId);
+  if (!cfg) return null;
+  return async (tenantId) => {
+    await mirrorRenderPbxTenant(cfg, tenantId);
   };
 }
 
@@ -619,7 +629,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
           void logEvent(submissionId, `PBX build: ${msg}`);
         },
         resolveTenantPath,
-        { tenantCreator: resolveMirrorTenantCreator(pbx.instanceId) },
+        { tenantCreator: resolveMirrorTenantCreator(pbx.instanceId), tenantRenderer: resolveMirrorTenantRenderer(pbx.instanceId) },
       );
       tenantPath = result.tenantPath;
     } finally {

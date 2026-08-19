@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.19.1"
+VERSION = "2026.08.19.2"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2529,8 +2529,49 @@ def mirror_tenant_create(body):
         fs = mw.apply_tenant_fs(row["path"])
     except Exception as exc:  # the dirs are created lazily by the panel too; report, never fail the tenant
         fs = {"error": str(exc)}
+    # ⛔ THE CRUCIAL STEP ON PROD (VitalPBX 4.5.3-1): the panel's Apply Changes only does INCREMENTAL
+    # regen — it will NOT do the FIRST generation of a tenant that has never been rendered (proven
+    # live 2026-08-19: rows + panel Apply produced zero files; the byte-identical renderer produced
+    # the full 17-file set and both endpoints loaded). So we render the baseline ourselves here.
+    # Once the baseline exists, every later panel Apply (extensions, routes, edits) works normally —
+    # which is why EXISTING tenants keep working unchanged after the licence lapses.
+    render = None
+    try:
+        render = mw.render_and_install_pbx(_mirror_read_conn(), int(row["tenant_id"]))
+    except Exception as exc:
+        render = {"error": str(exc)}
     return {"ok": True, "tenantId": int(row["tenant_id"]), "name": row["name"], "path": row["path"],
-            "rows": plan.rows_by_table(), "ids": {k: int(v) for k, v in ids.items()}, "fs": fs}
+            "rows": plan.rows_by_table(), "ids": {k: int(v) for k, v in ids.items()}, "fs": fs, "render": render}
+
+
+def _mirror_read_conn():
+    """A read connection for the renderer, which needs SELECT across the whole ombutel schema.
+    Uses OMBU_MYSQL_RO_* if set (e.g. connect_read), else the helper's own user (grant it
+    SELECT ON ombutel.* — the installer does)."""
+    import pymysql
+    host = os.environ.get("OMBU_MYSQL_RO_HOST") or CFG.mysql_host
+    port = int(os.environ.get("OMBU_MYSQL_RO_PORT") or CFG.mysql_port or 3306)
+    user = os.environ.get("OMBU_MYSQL_RO_USER") or CFG.mysql_user
+    pw = os.environ.get("OMBU_MYSQL_RO_PASSWORD")
+    if pw is None:
+        pw = CFG.mysql_password
+    db = os.environ.get("OMBU_MYSQL_RO_DB") or CFG.mysql_db
+    kw = dict(user=user, password=pw, database=db, charset="utf8mb4",
+              cursorclass=pymysql.cursors.DictCursor, autocommit=True)
+    sock = os.environ.get("OMBU_MYSQL_RO_SOCKET") or CFG.mysql_socket
+    if sock:
+        return pymysql.connect(unix_socket=sock, **kw)
+    return pymysql.connect(host=host, port=port, **kw)
+
+
+def mirror_tenant_render(body):
+    """Re-render an EXISTING tenant's files from its current DB rows (belt-and-braces after a build,
+    or to repair a new tenant). Never touches other tenants."""
+    mw = _load_mirror_writes()
+    tenant_id = require_num("tenant_id", body.get("tenantId"))
+    res = mw.render_and_install_pbx(_mirror_read_conn(), int(tenant_id))
+    return {"ok": True, "tenantId": int(tenant_id), "fileCount": res.get("fileCount"),
+            "files": res.get("files"), "reloads": res.get("reloads")}
 
 
 def media_sync_trigger(body):
@@ -4059,6 +4100,7 @@ class Handler(BaseHTTPRequestHandler):
             "/doorway-repair": doorway_repair,
             "/media-sync": media_sync_trigger,
             "/mirror/tenant-create": mirror_tenant_create,
+            "/mirror/tenant-render": mirror_tenant_render,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
             "/voicemail/greeting/get": vm_greeting_status,

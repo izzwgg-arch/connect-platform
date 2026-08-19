@@ -420,3 +420,26 @@ test("helper registers /mirror/tenant-create and defines mirror_tenant_create (i
     assert.match(src, /queue_base_modules=True/);
   }
 });
+
+for (const spec of [
+  { file: "vitalpbx_mirror.py", marker: "cat >/opt/connect-pbx-helper/vitalpbx_mirror.py <<'PYMIRRORVM'\n", term: "\nPYMIRRORVM\n" },
+  { file: "mirror_features.py", marker: "cat >/opt/connect-pbx-helper/mirror_features.py <<'PYMIRRORFEAT'\n", term: "\nPYMIRRORFEAT\n" },
+]) {
+  test(`embedded ${spec.file} heredoc is byte-identical to scripts/pbx/mirror/${spec.file}`, () => {
+    const start = SCRIPT.indexOf(spec.marker);
+    assert.ok(start !== -1, `installer must ship ${spec.file}`);
+    const bodyStart = start + spec.marker.length;
+    const end = SCRIPT.indexOf(spec.term, bodyStart);
+    assert.ok(end !== -1, `${spec.file} heredoc terminator must exist`);
+    const embedded = SCRIPT.slice(bodyStart, end + 1).replace(/\r\n/g, "\n");
+    const src = readFileSync(join(__dirname, "mirror", spec.file), "utf8").replace(/\r\n/g, "\n");
+    assert.equal(embedded, src, `embedded ${spec.file} drifted — re-sync the heredoc`);
+  });
+}
+
+test("helper registers /mirror/tenant-render and renders the baseline at create (installer + .py)", () => {
+  for (const src of [SCRIPT, HELPER]) {
+    assert.match(src, /"\/mirror\/tenant-render": mirror_tenant_render,/);
+    assert.match(src, /render_and_install_pbx\(_mirror_read_conn\(\), int\(row\["tenant_id"\]\)\)/);
+  }
+});
