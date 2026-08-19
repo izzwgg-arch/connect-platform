@@ -84,7 +84,7 @@ mock.module("../billing/billingSmsSender", {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { registerLoginOtpRoutes, startOtpChallenge, checkTrustedDevice, resetOtpVerifyThrottle } = require("./loginOtpRoutes") as typeof import("./loginOtpRoutes");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { decideOtpGate, hashOtpCode } = require("./loginOtp") as typeof import("./loginOtp");
+const { decideOtpGate, hashOtpCode, LOGIN_OTP_MAX_ATTEMPTS } = require("./loginOtp") as typeof import("./loginOtp");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { shouldSkipJwtVerification } = require("../jwtPublicRouteBypass") as typeof import("../jwtPublicRouteBypass");
 
@@ -305,4 +305,53 @@ test("admin switch: SUPER_ADMIN reads/sets per tenant with an audit row; a tenan
   const tenantAdmin = { authorization: `Bearer ${sessionFor({ ...BAILA, role: "TENANT_ADMIN" })}` };
   assert.equal((await app.inject({ method: "PUT", url: `/admin/tenants/${TENANT.id}/login-otp`, headers: tenantAdmin, payload: { required: true } })).statusCode, 403);
   assert.equal((await app.inject({ method: "GET", url: `/admin/tenants/nope/login-otp`, headers: admin })).statusCode, 404);
+});
+
+test("⛔ signing in again while a code is still live sends NOTHING and the code already on their phone still works", async () => {
+  reset();
+  const { app, deps } = await buildApp();
+  const first = await loginAfterPassword(deps, BAILA);
+  assert.equal(state.sms.length, 1);
+  const code = codeFromMessages();
+
+  // Ten more logins with the correct password — the shape an attacker (or a
+  // customer hammering Sign in) produces. Before the reuse rule each of these
+  // sent a fresh text with a fresh code.
+  const bodies = [];
+  for (let i = 0; i < 10; i++) bodies.push((await loginAfterPassword(deps, BAILA)).body!);
+  assert.equal(state.sms.length, 1, "still ONE text after eleven sign-ins");
+  assert.equal(state.challenges.length, 1, "and ONE challenge row, re-bound each time");
+  for (const b of bodies) {
+    assert.equal(b.sent, false);
+    assert.equal((b as any).reason, "already_sent");
+    assert.equal(b.destination, "•••-•••-1234", "the masked destination is still shown");
+  }
+
+  // The ORIGINAL code still works — but only for the newest login, and the
+  // older pre-auth tokens are dead (the challenge was re-bound).
+  const stale = await app.inject({ method: "POST", url: "/auth/otp/verify", payload: { preAuthToken: first.body!.preAuthToken, code } });
+  assert.equal(stale.statusCode, 401, "an older login cannot spend the code");
+  const ok = await app.inject({ method: "POST", url: "/auth/otp/verify", payload: { preAuthToken: bodies[bodies.length - 1].preAuthToken, code } });
+  assert.equal(ok.statusCode, 200, ok.body);
+  assert.ok(ok.json().token);
+
+  // Once spent, the next sign-in is a genuinely new challenge and does send.
+  await loginAfterPassword(deps, BAILA);
+  assert.equal(state.sms.length, 2);
+  assert.equal(state.challenges.length, 2);
+});
+
+test("a challenge that burned its five tries is replaced, not reused — the person is never handed a dead code", async () => {
+  reset();
+  const { app, deps } = await buildApp();
+  const { body } = await loginAfterPassword(deps, BAILA);
+  const wrong = codeFromMessages() === "000000" ? "000001" : "000000";
+  for (let i = 0; i < LOGIN_OTP_MAX_ATTEMPTS; i++) {
+    await app.inject({ method: "POST", url: "/auth/otp/verify", payload: { preAuthToken: body!.preAuthToken, code: wrong }, headers: { "x-forwarded-for": "198.51.100.7" } });
+  }
+  assert.equal(state.challenges[0].attempts, LOGIN_OTP_MAX_ATTEMPTS);
+  const next = await loginAfterPassword(deps, BAILA);
+  assert.equal(next.body!.sent, true, "a fresh code really is sent");
+  assert.equal(state.challenges.length, 2);
+  assert.equal(state.sms.length, 2);
 });

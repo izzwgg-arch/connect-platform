@@ -34,6 +34,8 @@ export type LoginApiResponse = {
   channels?: string[];
   destination?: string;
   sent?: boolean;
+  /** "already_sent" = a code we sent earlier is still valid; we did NOT send another. */
+  reason?: string;
   /** Returned by /auth/otp/verify when "remember this device" was ticked. */
   trustedDeviceToken?: string;
   trustedDeviceExpiresAt?: string;
@@ -42,7 +44,7 @@ export type LoginApiResponse = {
 export type ClassifiedLogin =
   | { kind: "session"; token: string; portalPermissionSet?: string[]; mfaEnrollmentRequired: boolean; trustedDeviceToken?: string; trustedDeviceExpiresAt?: string }
   | { kind: "mfa_challenge"; preAuthToken: string; expiresInSeconds: number; methods: string[] }
-  | { kind: "otp_challenge"; preAuthToken: string; expiresInSeconds: number; channel: string; channels: string[]; destination: string; sent: boolean }
+  | { kind: "otp_challenge"; preAuthToken: string; expiresInSeconds: number; channel: string; channels: string[]; destination: string; sent: boolean; reason?: string }
   | { kind: "failed"; error: string };
 
 export function classifyLoginResponse(res: LoginApiResponse | null | undefined): ClassifiedLogin {
@@ -66,6 +68,7 @@ export function classifyLoginResponse(res: LoginApiResponse | null | undefined):
       channels: Array.isArray(res?.channels) && res!.channels.length ? res!.channels.map(String) : ["EMAIL"],
       destination: String(res?.destination || ""),
       sent: res?.sent !== false,
+      ...(res?.reason ? { reason: String(res.reason) } : {}),
     };
   }
   if (res?.mfaChallengeRequired === true && preAuth) {

@@ -82,6 +82,36 @@ export function decideOtpGate(input: OtpGateInput): OtpGate {
   return { kind: "challenge" };
 }
 
+// ── one live code per person, however many times they sign in ────────────────
+
+/**
+ * ⛔ WHY THIS EXISTS: without it, every POST /auth/login for an OTP tenant
+ * minted a fresh code and sent a fresh TEXT. Resends are capped per challenge
+ * (`LOGIN_OTP_MAX_SENDS`), but nothing capped creating CHALLENGES — so anyone
+ * holding a valid password could spend our SMS balance at the global rate
+ * limit (480/min per IP), and an ordinary customer double-clicking Sign in
+ * got two texts with two different codes, of which only the newer worked.
+ *
+ * So a login that finds a LIVE challenge (unconsumed, unexpired, and with
+ * tries left) re-binds that challenge to the new login instead of sending
+ * anything: the code already on their phone stays the one that works, and
+ * only the newest login can spend it. SMS per person is then bounded by the
+ * resend cap inside one 10-minute window, not by how often login is called.
+ *
+ * ⛔ A challenge that has burned its attempts is NOT reused — that would hand
+ * someone a dead code and no way forward until it expired. Burning those five
+ * attempts is itself throttled, so this is not a way to force new texts.
+ */
+export type LiveChallengeRow = { attempts: number; consumedAt: Date | null; expiresAt: Date } | null;
+
+export function decideChallengeReuse(row: LiveChallengeRow, nowMs: number): { reuse: boolean } {
+  if (!row) return { reuse: false };
+  if (row.consumedAt) return { reuse: false };
+  if (row.expiresAt.getTime() <= nowMs) return { reuse: false };
+  if (row.attempts >= LOGIN_OTP_MAX_ATTEMPTS) return { reuse: false };
+  return { reuse: true };
+}
+
 // ── channels ─────────────────────────────────────────────────────────────────
 
 export type ChannelChoice = { channels: OtpChannel[]; preferred: OtpChannel };

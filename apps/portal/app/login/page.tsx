@@ -49,7 +49,7 @@ export default function LoginPage() {
   const codeRef = useRef<HTMLInputElement | null>(null);
   // Per-tenant sign-in code (2FA-by-code): a code sent by text/email after the
   // password, "remember this device" for 90 days. Same pre-auth-token rule as MFA.
-  const [otp, setOtp] = useState<{ preAuthToken: string; expiresAt: number; channel: string; channels: string[]; destination: string; sent: boolean } | null>(null);
+  const [otp, setOtp] = useState<{ preAuthToken: string; expiresAt: number; channel: string; channels: string[]; destination: string; sent: boolean; reason?: string } | null>(null);
   const [otpCode, setOtpCode] = useState("");
   const [rememberDevice, setRememberDevice] = useState(true);
   const [otpNotice, setOtpNotice] = useState("");
@@ -125,9 +125,19 @@ export default function LoginPage() {
           channels: classified.channels,
           destination: classified.destination,
           sent: classified.sent,
+          reason: classified.reason,
         });
         setOtpCode("");
-        setOtpNotice(classified.sent ? "" : "We could not send the code. Try \u201cSend it again\u201d \u2014 by the other method if one is offered.");
+        // "already_sent" is not a failure: a code we sent moments ago is still
+        // good, so we deliberately did not send a second one. Saying "we could
+        // not send it" there would send people chasing a problem that is not.
+        setOtpNotice(
+          classified.sent
+            ? ""
+            : classified.reason === "already_sent"
+              ? `We already sent a code to ${classified.destination}. Enter it below, or choose "Send it again".`
+              : "We could not send the code. Try again, or use the other method if one is offered.",
+        );
         return;
       }
       completeSignIn(classified);
@@ -327,7 +337,9 @@ export default function LoginPage() {
           <p className="lc-login-step" role="status">
             {otp.sent
               ? `We sent a 6-digit code by ${via} to ${otp.destination}. Enter it to finish signing in.`
-              : `We could not send your code by ${via}.`}
+              : otp.reason === "already_sent"
+                ? `Enter the 6-digit code we sent by ${via} to ${otp.destination}.`
+                : `We could not send your code by ${via}.`}
           </p>
           <label className="lc-login-field">
             <span className="lc-login-label">Sign-in code</span>

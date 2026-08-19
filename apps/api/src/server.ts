@@ -5972,7 +5972,17 @@ app.post("/auth/login", async (req, reply) => {
   // is not TOTP-enrolled (an enrolled user already carries a stronger factor).
   // OFF for every tenant until an administrator turns it on. Contract and rules
   // in mfa/loginOtp.ts; a "remembered device" token skips the code for 90 days.
-  const otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true, loginOtpChannel: true } }).catch(() => null);
+  // ⛔ FAILS CLOSED. This read decides whether a second factor is required, so a
+  // `.catch(() => null)` here would let a transient database error hand out a
+  // session with NO code asked for — the same fail-open shape as the empty
+  // CDR_INGEST_SECRET and the dead NODE_ENV gates. If we cannot tell, we refuse.
+  let otpTenant: { loginOtpRequired?: boolean; loginOtpChannel?: string } | null;
+  try {
+    otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true, loginOtpChannel: true } });
+  } catch (err) {
+    app.log.error({ err, userId: user.id }, "login_otp_tenant_lookup_failed");
+    return reply.status(503).send({ error: "service_unavailable", message: "We couldn't complete sign-in just now. Please try again in a moment." });
+  }
   if (otpTenant?.loginOtpRequired) {
     const trusted = input.trustedDeviceToken ? await checkTrustedDevice(otpDeps, user.id, input.trustedDeviceToken) : null;
     const otpGate = decideOtpGate({ tenantOtpRequired: true, userHasTotp: false, trustedDevice: trusted });
@@ -6017,7 +6027,10 @@ async function issueLoginSession(userId: string): Promise<{ token: string; porta
   // (2026-08-19): a tenant with the sign-in code switched on gets 90-day
   // sessions — "they should have to re-login every 90 days if 2FA is enabled".
   // Opt-in per tenant, off by default, so nobody's phone breaks on ship day.
-  const otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true } }).catch(() => null);
+  // ⛔ No `.catch()` here either: swallowing a failure would mint a session that
+  // NEVER expires for a tenant that asked for 90-day sign-ins. A throw becomes a
+  // 500 and the person simply signs in again — the honest failure.
+  const otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true } });
   const signOpts = otpTenant?.loginOtpRequired ? { expiresIn: OTP_SESSION_EXPIRES_IN } : undefined;
   const token = signOpts
     ? app.jwt.sign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role, name: displayNameForUser(namedUser) }, signOpts)

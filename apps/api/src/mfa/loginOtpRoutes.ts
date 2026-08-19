@@ -27,6 +27,7 @@ import {
   LOGIN_OTP_MAX_SENDS,
   LOGIN_OTP_TTL_SECONDS,
   chooseChannels,
+  decideChallengeReuse,
   decideOtpVerify,
   decideTrustedDevice,
   generateOtpCode,
@@ -119,6 +120,30 @@ export async function startOtpChallenge(deps: OtpRouteDeps, input: StartOtpInput
   const pre = mintPreAuthToken(input.user.id, now, OTP_PRE_AUTH_PURPOSE);
   const code = generateOtpCode();
   const to = choice.preferred === "SMS" ? String(phone) : input.user.email;
+
+  // ⛔ One live code per person — see decideChallengeReuse(). A second sign-in
+  // while a code is still good re-binds the existing challenge to THIS login
+  // and sends nothing, so hitting /auth/login in a loop cannot spend the SMS
+  // balance and a customer never holds two codes of which only one works.
+  const existing = await (db as any).loginOtpChallenge
+    .findFirst({ where: { userId: input.user.id, consumedAt: null }, orderBy: { createdAt: "desc" }, select: { id: true, attempts: true, consumedAt: true, expiresAt: true, channel: true, destinationMasked: true } })
+    .catch(() => null);
+  if (decideChallengeReuse(existing, now).reuse) {
+    await (db as any).loginOtpChallenge.update({ where: { id: existing.id }, data: { preAuthJti: pre.jti } });
+    void deps.audit({ tenantId: input.user.tenantId, actorUserId: input.user.id, action: "LOGIN_OTP_REUSED", entityType: "User", entityId: input.user.id, metadata: { channel: existing.channel } });
+    return {
+      otpChallengeRequired: true as const,
+      preAuthToken: pre.token,
+      expiresInSeconds: pre.expiresInSeconds,
+      channel: String(existing.channel),
+      channels: choice.channels,
+      destination: String(existing.destinationMasked),
+      sent: false,
+      reason: "already_sent" as const,
+      error: "otp_required" as const,
+    };
+  }
+
   const row = await (db as any).loginOtpChallenge.create({
     data: {
       userId: input.user.id,

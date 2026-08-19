@@ -12,6 +12,7 @@ import {
   LOGIN_OTP_MAX_ATTEMPTS,
   OTP_SESSION_EXPIRES_IN,
   chooseChannels,
+  decideChallengeReuse,
   decideOtpGate,
   decideOtpVerify,
   decideTrustedDevice,
@@ -208,4 +209,49 @@ test("⛔ the OTP routes reach accessors that EXIST on the generated Prisma clie
     const model = a.charAt(0).toUpperCase() + a.slice(1);
     assert.equal((Prisma.ModelName as any)[model], model, `client.${a} must map to a real model — ${model} is missing from the generated client (run prisma generate / check the schema)`);
   }
+});
+
+// ─── hardening pass (2026-08-19): the adversarial findings ───────────────────
+
+test("reuse: a live code is re-bound, not re-sent — so hitting /auth/login in a loop cannot spend the SMS balance", () => {
+  const now = Date.now();
+  const live = { attempts: 0, consumedAt: null as Date | null, expiresAt: new Date(now + 60_000) };
+  assert.deepEqual(decideChallengeReuse(live, now), { reuse: true });
+  assert.deepEqual(decideChallengeReuse(null, now), { reuse: false }, "nothing to reuse → send one");
+  assert.deepEqual(decideChallengeReuse({ ...live, consumedAt: new Date(now) }, now), { reuse: false }, "a spent code is never handed back");
+  assert.deepEqual(decideChallengeReuse(live, now + 61_000), { reuse: false }, "expired → send a fresh one");
+  assert.deepEqual(
+    decideChallengeReuse({ ...live, attempts: LOGIN_OTP_MAX_ATTEMPTS }, now),
+    { reuse: false },
+    "⛔ a challenge that burned its tries is NOT reused — that would hand someone a dead code with no way forward",
+  );
+  assert.deepEqual(decideChallengeReuse({ ...live, attempts: LOGIN_OTP_MAX_ATTEMPTS - 1 }, now), { reuse: true }, "one try left is still usable");
+});
+
+test("⛔ the login handler FAILS CLOSED when it cannot read the tenant's 2FA setting", () => {
+  const s = stripComments(src("server.ts"));
+  const start = s.indexOf('app.post("/auth/login"');
+  const body = s.slice(start, s.indexOf("async function issueLoginSession(", start));
+  // The lookup that decides whether a second factor is required must not swallow errors.
+  assert.doesNotMatch(
+    body,
+    /loginOtpRequired: true, loginOtpChannel: true \} \}\)\.catch\(/,
+    "a .catch() on this read would issue a session with NO code asked for",
+  );
+  assert.match(body, /login_otp_tenant_lookup_failed/);
+  assert.match(body, /status\(503\)\.send\(\{ error: "service_unavailable"/);
+  // And the 90-day-session read must not silently fall back to a never-expiring session.
+  const issue = s.slice(s.indexOf("async function issueLoginSession("), s.indexOf("const mfaDeps = buildMfaDeps("));
+  assert.doesNotMatch(issue, /select: \{ loginOtpRequired: true \} \}\)\.catch\(/);
+});
+
+test("startOtpChallenge reuses before it sends — the order is what makes the cap real", () => {
+  const s = stripComments(src("mfa/loginOtpRoutes.ts"));
+  const fn = s.slice(s.indexOf("export async function startOtpChallenge("), s.indexOf("export async function checkTrustedDevice("));
+  const reuseAt = fn.indexOf("decideChallengeReuse(");
+  const createAt = fn.indexOf("loginOtpChallenge.create(");
+  const sendAt = fn.indexOf("sendCode(deps");
+  assert.ok(reuseAt > 0 && createAt > reuseAt && sendAt > createAt, "reuse check → create → send");
+  assert.match(fn, /reason: "already_sent" as const/);
+  assert.match(fn, /sent: false/);
 });
