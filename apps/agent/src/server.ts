@@ -22,6 +22,8 @@ import { makeAccountSetupInfoClient, makePhoneNumberSearchClient } from "./pbx/a
 import { buildContactsTools } from "./tools/contactsTools";
 import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
 import { buildSelfServiceTools } from "./tools/selfServiceTools";
+import { buildInvestigationTools } from "./tools/investigationTools";
+import { makeInvestigationClient } from "./pbx/investigationClient";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
 import { ActionService } from "./actions/service";
@@ -264,6 +266,13 @@ async function main() {
       // "Mark my chats read" / "cancel my requests" — the only self-scoped
       // writes in the tool surface; see the file's header for the fence.
       ...buildSelfServiceTools({ prisma }),
+      // The read-only investigation workspace on BOTH production databases.
+      // ⛔ minRole "internal", so `toolsForRole` keeps it out of every
+      // customer-facing conversation — the door is deliberately not
+      // tenant-scoped and is staff-side only. It can look at anything and
+      // change nothing; see investigationTools.ts for the four layers that
+      // enforce that.
+      ...buildInvestigationTools({ investigation: makeInvestigationClient() }),
     ];
     // Standing knowledge: the platform document + the ONE document belonging to
     // the company this person is from, published from docs/agent-knowledge by
