@@ -650,3 +650,199 @@ reports). The five `/internal/delivery/*` doors are secret-gated and the secret 
 unset. `loopcom.net` apex/`www` untouched. Cloudflare untouched. MFA enrolment, the
 mobile 401 build and `expiresIn` are unchanged.
 
+## 11. Round 3 — Loopcom parity in CODE: one public-identity module, same-origin everywhere, `/auth/signup` shut (2026-08-19)
+
+`6a0f3a01`. api + portal DEPLOYED and container-verified. Izzy's mandate: the whole
+platform becomes Loopcom; set it up 100% in parallel before the old domain is removed.
+
+### 11.1 The inventory (why a module, not a sweep of string replaces)
+
+`grep -rn "connectcomunications.com" apps packages --include=*.ts --include=*.tsx`
+(excluding tests/comments) found the literal in ~30 executable places in apps/api
+alone, plus the worker, `packages/integrations`, the portal and the mobile app. They
+disagreed with each other: pay links read `PUBLIC_PORTAL_URL` **or** `PORTAL_PUBLIC_URL`
+**or** `CONNECT_APP_URL` **or** `APP_PUBLIC_URL` **or** nothing (11 pay-link sites had
+no override at all); the PBX webhook default, the Cardknox callback and the OAuth
+redirect each had their own chain. A rebrand by string replace would have left the
+seven env names disagreeing exactly as before.
+
+### 11.2 `apps/api/src/publicOrigins.ts`
+
+- `PLATFORM_PORTAL_HOSTS = { app.connectcomunications.com, app.loopcom.net }`.
+- `canonicalPortalOrigin()` — `PUBLIC_PORTAL_URL` → `PORTAL_PUBLIC_URL` → `CONNECT_APP_URL`
+  → `APP_PUBLIC_URL` → default; `canonicalApiBase()` = origin + `/api`. For **durable**
+  links (emails, PDFs, texted pay links) that must still work when opened months later
+  from anywhere. **One env flip moves the platform.**
+- `requestPortalOrigin(req)` — `x-forwarded-host`/`host`, accepted **only** when it is
+  one of our hosts (else the canonical); `portalOriginForRequest` / `apiBaseForRequest`
+  for **browser-facing** answers (the pay page a customer is already on, the QR the
+  portal draws). A forged `Host` header cannot mint a link to an attacker's domain.
+- `oauthRedirectUriForRequest(req, registered)` — keeps the registered PATH, swaps only
+  the origin, at both the start and the code-exchange step (Google requires the two to
+  match byte-for-byte). ⛔ Register `https://app.loopcom.net/api/crm/email/oauth/callback`
+  and the drive callback in Google Cloud — until then Loopcom OAuth fails **at Google**.
+- `platformMailDomain()` / `platformSupportEmail()` / `platformBillingFromEmail()` /
+  `platformNoreplyEmail()` / `platformWebsite()` — `PLATFORM_MAIL_DOMAIN` (default
+  `connectcomunications.com`), so the From/Reply-To of every email flips with one var.
+  ⛔ Flipping it to `loopcom.net` requires the mailboxes to EXIST in Google Workspace and
+  the SMTP credentials to be for that domain — the domain being verified is not that.
+- `publicOrigins.test.ts` (11): resolution order, host allow-list, OAuth path-keeping,
+  and a **tree sweep** that fails if the literal hostname reappears as executable code
+  anywhere in `apps/api/src` (allow-list: `LEGACY_SIP_WS_URL` in `sipPublicEndpoint.ts`,
+  a deliberate pin).
+
+### 11.3 Sites routed through it
+
+api: `server.ts` (pay links ×11, invite/e911/port emails, PBX webhook default, SBC
+probe, dev-only URLs), `billing/{billingEmailLifecycle,emailTemplates,payLink,routes,pdf}.ts`,
+`billing/serviceInterruption/serviceInterruptionRunner.ts`, `androidApkInviteUrl.ts`,
+`userEmailTemplates.ts`, `crm/{formService,emailRoutes,driveRoutes}.ts`,
+`connectChatRoutes.ts`, `signalwire/signalWireRoutes.ts`, `onboarding/setupOrchestrator.ts`.
+Worker: `connectChatSmsJob.ts`. `packages/integrations`: `pbx-wirepbx`, `sola-cardknox`
+(the latter had used `PORTAL_PUBLIC_URL`, an origin, as an API base). Portal:
+`hooks/useTelephonySocket.ts` (`resolveTelephonyWsUrl(envValue, loc)` — same-origin
+unless the build env names the very host you are on, or localhost),
+`components/AppDownloadCard.tsx`, `navigation/navConfig.ts` (relative
+`/desktop/...`), `lib/platformIdentity.ts` + the onboarding pages;
+`docker-compose.app.yml` no longer bakes `NEXT_PUBLIC_TELEPHONY_WS_URL` to the old host.
+Mobile: `src/config/publicOrigin.ts` (`DEFAULT_PUBLIC_ORIGIN`, `DEFAULT_API_BASE`,
+`DEFAULT_TELEPHONY_WS_URL`, `resolveApiBase`) used by `api/client.ts`, `api/realtime.ts`,
+`context/NotificationsContext.tsx`, `screens/DiagnosticsScreen.tsx`, `sip/jssip.ts` —
+no behaviour change until a build ships.
+
+### 11.4 `/auth/signup`
+
+Was: public, unverified, `role = email.startsWith("support") && endsWith("@connectcomunications.com") ? "ADMIN" : "USER"`.
+0 references in the repo, 1 hit in 14 days of nginx logs. Now: `PUBLIC_SIGNUP_ENABLED=1`
+required (else `404 not_found`, indistinguishable from an unrouted path), role always
+`USER`. `ADMIN` is the role that arms the three latent findings recorded in the
+tenant-isolation audit (§6a/§6b/§6h) — no code path may hand it out from a request.
+
+### 11.5 What parity does NOT yet cover (Izzy / browser)
+
+Google Workspace: are `support@` and `billing@loopcom.net` mailboxes or aliases (an
+alias delivers, but SMTP `From:` needs the sending account to own it); Google Cloud
+OAuth redirect URIs for `app.loopcom.net`; `m.loopcom.net` → PBX (Squarespace A record +
+PBX cert = PBX write); `loopcom.net` apex forwarding (→ `app.loopcom.net` or the coming
+`loopcom.ai` site); the `PUBLIC_PORTAL_URL` flip (the cut-over lever); the legal entity
+name on invoice PDFs; Loopcom-branded mobile/desktop builds; moving `loopcom.net`'s NS to
+Cloudflare (a decision, not a task).
+
+## 12. Round 4 — per-tenant sign-in code (2FA by text/email) + Cloudflare Turnstile (2026-08-19)
+
+`fc551996`. api DEPLOYED (migration `20260819080000_tenant_login_otp` applied) + portal
+DEPLOYED. Every switch OFF. Izzy's spec, verbatim: *"2FA with a switch to turn it on and
+off per tenant. When they log in, they get a text or email with a code, and they have to
+hit 'Remember me' to be able to log in without it. They should have to re-login every 90
+days if 2FA is enabled."* Plus *"the Cloudflare check in the login page."*
+
+### 12.1 Data
+
+`Tenant.loginOtpRequired Boolean @default(false)`, `Tenant.loginOtpChannel String
+@default("EITHER")` (`EMAIL|SMS|EITHER`); `LoginOtpChallenge` (userId, tenantId,
+preAuthJti, channel, destinationMasked, **codeHash**, attempts, sendCount, expiresAt,
+consumedAt); `TrustedLoginDevice` (userId, tenantId, **tokenHash @unique**, label,
+expiresAt, lastUsedAt, revokedAt). Migration verified column-identical to
+`prisma migrate diff`. `Prisma.ModelName` carries both — a test asserts every
+`(db as any).xxx` accessor in the routes maps to a real model.
+
+### 12.2 The login contract (`server.ts /auth/login`, order pinned by a source guard)
+
+```
+throttle (evaluateLoginAttempt)
+→ Turnstile gate (turnstileGate — before ANY DB read)
+→ user lookup → bcrypt
+→ TOTP decision (decideLoginMfa)            # unchanged
+→ OTP gate (checkTrustedDevice → decideOtpGate)
+     none      → issueLoginSession (byte-identical pre-2FA body)
+     trusted   → issueLoginSession (90d)
+     challenge → 200 { otpChallengeRequired: true, preAuthToken, expiresInSeconds: 300,
+                       channel, channels, destination, sent, error: "otp_required" }
+```
+
+`decideOtpGate({ tenantOtpRequired, userHasTotp, trustedDevice })`: OFF → none;
+TOTP-enrolled → none (the authenticator IS their second factor; never asked twice);
+valid trusted device for THIS user → trusted; else challenge.
+
+### 12.3 The code
+
+`mfa/loginOtp.ts` (pure): 6 digits (`randomInt`, leading zeros kept), TTL 10 min,
+max 5 attempts, max 3 sends per login, `hashOtpCode(code, challengeId)` = SHA-256
+salted with the challenge id, `otpCodeMatches` timing-safe, `maskDestination`
+(`•••-•••-1234`, `i•••@example.com`), ASCII-only SMS body (one emoji would flip the
+segment to UCS-2), `chooseChannels(setting, hasPhone, requested)` — an SMS-only tenant
+with a phoneless user still gets EMAIL rather than a lockout; a request for a
+disallowed channel is ignored.
+`mfa/loginOtpRoutes.ts`: SMS via `resolveBillingSmsSender` (the platform's (845) 723-1213),
+email as `EmailJob` type `LOGIN_CODE` on the user's tenant (⛔ never `ADMIN_ALERT`);
+`POST /auth/otp/verify` — parse → verify pre-auth (purpose `otp_challenge`) → its OWN
+`createLoginThrottle` (5/10 min per account, 25 per source, **429 + Retry-After**) →
+`decideOtpVerify` (no_challenge / wrong_login (jti or user mismatch) / consumed /
+expired / too_many_attempts / wrong_code) → atomic consume → optional
+`TrustedLoginDevice` (token returned once, hash stored) → `deps.issueSession`;
+`POST /auth/otp/resend` — new code, previous dead, cap 3, other channel allowed;
+`GET/DELETE /auth/otp/trusted-devices` (session-gated); `GET/PUT
+/admin/tenants/:id/login-otp` (SUPER_ADMIN, audit `TENANT_LOGIN_OTP_UPDATED`,
+channel case-insensitive). Every send/verify/resend/revoke writes an audit row.
+
+### 12.4 Pre-auth token purposes
+
+`mintPreAuthToken(userId, now, purpose)` → `{ token, expiresInSeconds, jti }`;
+`verifyPreAuthToken(token, now, purpose)` answers `wrong_purpose` across the two.
+Same derived key, same 5 min, still rejected by every session verifier. Bypass list:
+`/auth/otp/verify`, `/auth/otp/resend` only.
+
+### 12.5 90-day sessions
+
+`issueLoginSession` and `/verify` sign `{ expiresIn: "90d" }` **only** for OTP
+tenants; the no-OTP branch is the exact pre-existing sign call (a guard matches it
+literally). Platform-wide expiry stays blocked on the mobile 401 work (§8).
+
+### 12.6 Turnstile (`apps/api/src/turnstile.ts`)
+
+`turnstileMode(env)`: no `TURNSTILE_SECRET_KEY` → `off`; key → `observe`;
+`TURNSTILE_ENFORCE=1` → `enforce`. `isBrowserOnPlatformHost(headers)`: Origin/Referer
+host ∈ `PLATFORM_PORTAL_HOSTS` — the mobile app (no Origin) is never challenged.
+`turnstileGate` → `allow` (off / not_browser / verified / observed_missing /
+observed_invalid) or `refuse` (`400 human_check_required`, `400 human_check_failed`,
+`503 human_check_unavailable` — an outage at Cloudflare is not a login failure).
+`siteverify` with a 5 s timeout, remoteip = last X-Forwarded-For. Login logs
+`login_refused_turnstile` / `turnstile_observed`; metric label `human_check`.
+Portal: `components/TurnstileWidget.tsx` renders nothing without
+`NEXT_PUBLIC_TURNSTILE_SITE_KEY`; explicit render, `expired-callback` clears the
+token; a `human_check_*` refusal resets the widget. nginx CSP on both vhosts +
+`security-headers.conf` allow `https://challenges.cloudflare.com` in `frame-src`
+(script/connect already did); backup `/root/nginx-csp-turnstile-backup-20260819T054753Z`.
+Roll-out: create the Turnstile site for BOTH hostnames → secret into `.env.platform`
++ api deploy → observe log → site key into the portal build → `TURNSTILE_ENFORCE=1`.
+
+### 12.7 Portal
+
+`lib/mfaLogin.ts` classifies `otp_challenge` (a token always wins; no pre-auth token →
+failed); `lib/trustedDevice.ts` (localStorage `cc-trusted-device`, expiry honoured
+locally); `app/login/page.tsx` — sends `trustedDeviceToken` + `turnstileToken`, OTP
+step with `autoComplete="one-time-code"`, "Remember this device for 90 days" (default
+on), "Send it again", "Text/Email me the code instead", plain-English refusals
+(`otp_invalid` with tries left, dead challenge → back to password); the ONE
+`writeAuthToken` and the ONE `writeTrustedDeviceToken` both live in `completeSignIn`
+on a classified session. Admin → Tenants: "Sign-in code (2FA)" column (On/Off +
+channel select) via `PUT /admin/tenants/:id/login-otp`.
+
+### 12.8 Tests
+
+`mfa/loginOtp.test.ts` (15) — gate, channels, hash/compare, verify decision, trusted
+device, masking/ASCII, purposes, Turnstile mode/host/gate, wiring guards (bypass list,
+handler order, expiresIn scoping, parser), Prisma accessor guard.
+`mfa/loginOtpRoutes.test.ts` (7) — real Fastify + `@fastify/jwt`, faked db + senders:
+SMS happy path (code never stored clear), email fallback (`LOGIN_CODE`), remember →
+skip → foreign user still challenged → revoke; wrong/cross-user/replay/forged/2-digit;
+5 attempts then dead; resend other channel + cap 3; admin switch + 403/400/404.
+Portal `lib/mfaLogin.test.ts` +3. Guards replayed against `HEAD`: 9/9 fail.
+Typecheck api 75 = baseline, portal 0. Neighbouring suites 147/147, mfa 46/46.
+
+### 12.9 Not proven / open
+
+No tenant on; no code delivered to a human; no Turnstile key. Mobile app has no OTP
+step (as with TOTP) — a user on an OTP tenant cannot finish sign-in in the app;
+`TENANT_ADMIN` cannot flip its own tenant (deliberate). Acceptance recipe is in the
+CLAUDE.md section.

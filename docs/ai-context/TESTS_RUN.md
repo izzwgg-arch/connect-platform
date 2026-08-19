@@ -4,6 +4,61 @@ Newest entries first.
 
 ---
 
+## Per-tenant sign-in code (2FA by text/email) + Turnstile (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `fc551996`. api + portal + db migration.
+Handoff `AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §12.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/mfa/loginOtp.test.ts src/mfa/loginOtpRoutes.test.ts src/mfa/mfa.test.ts
+cd apps/portal && node --import tsx --test lib/mfaLogin.test.ts
+```
+
+**Result:** api **46/46** (15 rules+guards, 7 end-to-end routes through a real
+Fastify + `@fastify/jwt` against a faked db, 24 existing MFA), portal **11/11**
+(+3). Neighbouring api suites (bypass list, internal doors, loginRequest,
+loginThrottle, nodeEnvGates, tenantScopeHardening, securityHardeningRound2,
+globalRateLimit, publicOrigins, internalSecret, userDisplayName.callsites,
+sipRouteDefault, sipPublicEndpoint) **147/147**. **All 9 source guards fail
+replayed against `HEAD`** (bypass entries, `turnstileGate(`, `decideOtpGate(`,
+`registerLoginOtpRoutes`, `expiresIn: OTP_SESSION_EXPIRES_IN`, `loginRequest`
+fields, portal `/auth/otp/verify`, `TurnstileWidget`, `writeTrustedDeviceToken`).
+Also: every `(db as any).xxx` accessor in the routes maps to a real
+`Prisma.ModelName`. Typecheck: api **75 = baseline**, portal **0**. Migration
+`20260819080000_tenant_login_otp` verified column-identical to `prisma migrate diff`.
+
+### Live (acceptance)
+
+See the deploy bullets in CLAUDE.md's section. ⏳ No tenant switched on; no code
+sent to a human; no Turnstile key exists.
+
+---
+
+## Loopcom parity in code — publicOrigins, same-origin WS, signup gate (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `6a0f3a01`. api + portal + worker/integrations/mobile source.
+Handoff `AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §11.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/publicOrigins.test.ts
+cd apps/portal && node --import tsx --test lib/loopcomParity.test.ts
+```
+
+**Result:** api **11/11** (resolution order, host allow-list, OAuth path-keeping,
+tree sweep for the literal hostname as CODE), portal **5/5** (same-origin telephony
+WS, relative download links, platform identity). 8/8 source guards fail replayed
+against the pre-change files. Typecheck: api **75 = baseline** (identical set),
+portal **0**, integrations **0**; worker/mobile only their pre-existing errors.
+
+### Live (acceptance)
+
+✅ api + portal DEPLOYED and container-verified at `6a0f3a01`. Both hostnames:
+health 200, portal 200, bad-credential login 401; `/auth/signup` → 404. ⏳ No
+Loopcom-host OAuth sign-in, no email opened from a Loopcom link, no phone paired
+from `app.loopcom.net`.
+
+---
+
 ## Overdue cutoff sweep — invalid invoice status, the sweep had never run (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `97cad9f7`. api only. Handoff
