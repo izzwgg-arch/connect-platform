@@ -635,7 +635,32 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   ⛔ Teardown re-proved the trap: a direct DB delete is NOT a pending change — Main's rendered
   files kept all 12 fake trunks until `ombu_queued_changes (1,26),(1,99),(1,42),(1,43),(1,110)`
   + `reload_dialplan=yes` + ONE Main Apply. ⛔ Tenant tests use fake 845-555-02xx numbers, never
-  a real DID (routing collision). ⏳ **Before cancelling:** one real phone-registers-and-call
+  a real DID (routing collision).
+  ✅✅ **ROUND 2, 2026-08-19 evening (handoff §20): 20 tenants × 10 extensions, all via the
+  mirror, all 20 verified (17 files / 20 endpoints / 20 devices each), torn down to
+  byte-baseline on BOTH systems** — and it earned four rules worth more than the run:
+  ⛔⛔ **(1) VitalPBX's REST tenant list is a STALE CACHED SNAPSHOT** — it answered 31 rows
+  against a DB of 35, then 41 against 27, for 40+ minutes across two Applies. **Resolve tenant
+  membership from `ombutel.ombu_tenants` (MySQL), never REST**, for anything that decides
+  existence. ⛔⛔ **(2) That staleness made the orphan sweep AUTO-MARK TWO LIVE CUSTOMERS
+  REMOVED** (Comfort control + LUZER: delisted, links UNLINKED, autopay off, LUZER archived)
+  when `sync-tenant-dids` was called mid-test — exactly 3 "orphans", inside the auto cap, and
+  `isPbxAnswerHealthy` can't see a full-length lie. **Both restored within the hour; fixed in
+  `9068acca`**: marking now requires MySQL to confirm each PBX tenant id is gone (`ConfirmGone`
+  / `mysqlConfirmGoneVerifier`); no verifier or unreachable MySQL marks NOTHING; the confirm
+  route 503s. ⛔ **The real standing fact for Izzy: Comfort control's and LUZER's PBX tenants
+  (ids 10, 26) genuinely do not exist** — pre-existing, LUZER still invoiced $45/mo (2× FAILED)
+  for a system not on the PBX; their fate is his call. **(3) The tenant cascade does NOT clean
+  `ombu_settings`** — every mirror tenant leaves `T<n>_reload`/`T<n>_reload_dialplan` rows (65
+  orphaned rows from §13/§14/§18/§20 all cleaned, guarded on tenant-gone); and ⛔ the teardown's
+  reload flag lives in **`ombu_settings`**, NOT `ombu_tenant_settings` — the wrong table
+  silently no-ops and Main's dialplan keeps every stale ARS context (check with `ARS-[0-9]+`,
+  `[0-9]*` matches `ARS-all`). **(4) The PBX→Connect sync auto-creates Connect Tenant shells**
+  for stress tenants (14 appeared, 10 billable Extension rows each) — a teardown must erase
+  them (money/user guards) and the 20 fake `PbxTenantInboundDid` rows too. ⛔ **Long api-side
+  scripts run in `docker compose run --no-deps` one-offs** — an auto-deploy recreated
+  app-api-1 mid-run and killed the in-container exec at tenant 28; `STRESS_START` resumes, and
+  every build step adopts what an earlier pass created (proven live). ⏳ **Before cancelling:** one real phone-registers-and-call
   test on a mirror tenant; the free-tier untested items (manual extension form, provisioning
   past 20, geo-firewall) if used; ⛔ rotate the robot panel password.
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**

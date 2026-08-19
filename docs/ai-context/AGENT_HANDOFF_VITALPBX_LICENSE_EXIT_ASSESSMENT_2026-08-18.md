@@ -1155,3 +1155,94 @@ step.
 ### Everything is committed and pushed
 Branch `feat/ivr-migration-takeover`, tip **`20248b00`** at stop, all pushed to
 origin. Nothing of this session's work exists only on disk.
+
+## 20. STRESS TEST ROUND 2 (2026-08-19 evening, Izzy's order: "Create 20 tenants, each of them with 10 extensions, then delete any trace of them. Do all that outside the license.")
+
+**Result: 20/20 built via the mirror and verified, then torn down to byte-baseline
+on BOTH systems — and the teardown surfaced a REST staleness bug that auto-marked
+TWO LIVE CUSTOMERS removed, now fixed in code (`9068acca`).**
+
+### The build (harness `scripts/pbx/mirror/stress20.ts`, twin of §14 at 2x scale)
+- **20 tenants `mirror_stress_21..40`** (PBX ids 120–139), each **via the mirror**
+  (the script aborts on any "via panel" — none), each with **10 extensions
+  (101–110) × 2 devices**, inbound route on a fake `84555503xx` number, voicemail,
+  hints, own Main trunk/route/ARS. ~300–370 s per tenant with 10 extensions.
+- ⛔⛔ **An AUTO-DEPLOY killed the run at tenant 28** — deploys fire on pushes now
+  and a fleet redeploy recreated `app-api-1`, killing the in-container exec (the
+  documented docker-exec trap, now proven against a stress run). **The rerun runs
+  in a one-off `docker compose run --no-deps` container, which deploys cannot
+  touch** — that is the pattern for ANY long api-side script from now on.
+- ⛔⛔ **The resume then found the day's biggest lesson: VitalPBX's REST tenant
+  list serves a STALE CACHED SNAPSHOT.** Observed live: 31 rows while
+  `ombu_tenants` held 35, later 41 rows while it held 27 — 40+ minutes stale,
+  surviving two panel Applies. The stress script's tenant-path resolver used REST,
+  could not see tenant 28, and buildPbxTenant tried to create a duplicate (both
+  the mirror and the panel correctly refused). **Resolvers now read
+  `ombutel.ombu_tenants` via the console's read connection** (`3ec0648e`), and
+  `STRESS_START` resumes an interrupted run — every build step adopts what an
+  earlier pass created (proven live: tenant 28 adopted trunk 152/route 148/ARS 260
+  and its 4 existing extensions, then continued).
+- **Verified (`stress20-verify.sh`): all 20 PASS** — 17/17 files, 20/20 endpoints
+  loaded, 10/10 extensions, 20/20 devices, 10 vm users, 22 hints, inbound route,
+  cos dialplan each; doorways T2/T35/T105 clean the whole run; api 200 throughout.
+
+### The teardown — four kinds of trace, two of them new
+1. **PBX rows/files/AstDB** (`stress-teardown.sh`, manifest-driven, slug +
+   description guards): 20 cascades, 340 files, static + provisioning dirs, AstDB
+   ×20, Main trunks/routes/ARS by manifest id. Then the §14 trap AGAIN: **Main's
+   rendered files kept all 20 fake trunks and 20 stale ARS-* contexts** until the
+   module queue + reload flag + ONE Apply (`stress-main-reapply.ts` — Apply via
+   the console's own `applyAndRebake`, so every doorway re-bakes after).
+   ⛔ **The reload flag lives in `ombu_settings` (name `reload_dialplan`, or
+   `T<n>_`-prefixed per tenant), NOT `ombu_tenant_settings`** — an UPDATE against
+   the wrong table silently no-ops and the dialplan half of the regen never runs
+   (trunks cleared, ARS contexts stayed; caught by re-checking, fixed, re-applied).
+2. **`ombu_settings` orphans — NEW, and §14 left the same trace:** each mirror
+   tenant writes `T<n>_reload` + `T<n>_reload_dialplan` rows that the tenant
+   cascade does NOT remove. Deleted **65** rows guarded on "tenant id no longer
+   exists" — this run's 40, §14's 20 (T109–118, still there from yesterday), and
+   §13/§18's leftovers. **Any future teardown must sweep `ombu_settings` too.**
+3. **Connect shells — NEW: the background PBX→Connect sync auto-created 14
+   Connect `Tenant` rows** ("MIRROR STRESS 21..34 delete me", 10 billable
+   Extension rows each, 0 users/invoices) while the stress tenants lived. Erased
+   all 14 + §13's leftover "MIRROR TEST delete me 0819" through the sanctioned
+   guards (money/user re-check per tenant; PBX absence verified against MySQL,
+   never REST). The 20 fake `PbxTenantInboundDid` rows the DID sync picked up
+   were deleted; total back to baseline 76.
+4. **Final state, measured not assumed:** tenants 27, extensions 119, devices
+   167, trunks 67, outbound routes 56, ARS 80, inbound routes 75, tenant DIDs 48,
+   destinations 853, conf files 546 — **every count exactly the pre-test
+   baseline**; 0 `mirror-test.invalid` anywhere, 0 stale ARS contexts (⛔ compare
+   with `ARS-[0-9]+`, not `ARS-[0-9]*` — the `*` matches the legit `ARS-all` and
+   fakes one stale row), 63 registrations, doorways 1/1/2 with 0 cc-wipes, api
+   200 on both hostnames. REST converged back to 27 on its own (~50 min) and the
+   warm sync then self-cleaned the 14 stale directory rows.
+
+### ⛔⛔ THE INCIDENT: the orphan sweep auto-marked TWO LIVE CUSTOMERS (fixed `9068acca`)
+Calling `POST /admin/pbx/instances/:id/sync-tenant-dids` while REST was stale
+rebuilt the directory from the 41-row snapshot; that made exactly **three**
+tenants look orphaned — inside `MAX_AUTO_REMOVALS` — and `runOrphanSweepAfterSync`
+marked all three: §13's test leftover and **Comfort control + LUZER**
+(`pbxRemovedAt` set, delisted everywhere, links UNLINKED, **autopay switched
+off**; LUZER also `archivedAt`, having paid invoices). `isPbxAnswerHealthy`
+cannot catch this — 41 of 41 known reads as perfectly healthy. **Both customers
+were fully restored within the hour** (flags cleared, links re-LINKED, autopay
+re-enabled — LUZER's invoice history proves autopay was on; ⛔ Comfort control's
+prior autopay value is unknowable, the sweep overwrote it — set ON, flip it off
+if they were deliberately un-billed). **The fix:** `ConfirmGone` — marking now
+requires **ombutel MySQL to confirm each PBX tenant id is really gone**; a REST
+lie is dropped and logged (`pbx_orphan_rest_disagrees_with_mysql`); no verifier
+or unreachable MySQL marks nothing; the confirm route 503s rather than proceed
+on REST alone. 19/19 tests incl. the exact failure shape; guards fail vs HEAD.
+
+### ⏳ Open after §20 — needs Izzy
+- **Comfort control and LUZER are GENUINE pre-existing orphans**: their PBX
+  tenants (ids 10 and 26) do not exist in `ombu_tenants` under any name — they
+  were deleted on the PBX at some point before today. Both are restored to
+  exactly their pre-test state (visible, billed), but the underlying fact
+  stands: **LUZER is being invoiced $45/mo (2× FAILED since July) for a phone
+  system that is not on the PBX.** Whether to remove them properly (through the
+  now-hardened sweep) or rebuild their PBX side is a business decision.
+- The sweep fix `9068acca` rides the next api deploy (auto-deploy on push).
+- Artefacts: loopcom `/root/stress20.log` (run 1), `/root/stress20b.log`
+  (resume), `/root/stress20-manifest.json`; PBX `/root/stress-teardown-summary.json`.

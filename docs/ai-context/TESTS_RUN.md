@@ -4,6 +4,42 @@ Newest entries first.
 
 ---
 
+## Mirror stress round 2: 20 tenants × 10 extensions, outside the licence, torn down to byte-baseline (2026-08-19 evening)
+
+Branch `feat/ivr-migration-takeover`, `58d55f6d` → `3ec0648e` → `9068acca`.
+Handoff `AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §20.
+
+**Live on the PBX, not a unit suite:** 20 tenants `mirror_stress_21..40` built
+via the mirror through the deployed code (abort-if-via-panel guard never fired),
+**20/20 PASS** in `stress20-verify.sh` (17 files / 20 endpoints / 10 exts / 20
+devices / vm / hints / inbound route / cos each), then deleted: PBX rows + 340
+files + AstDB + Main trunk/route/ARS rows, 65 orphaned `ombu_settings` rows
+(incl. §13/§14/§18 leftovers), 14 auto-created Connect shells + `MIRROR TEST
+delete me 0819` (money/user guards on every erase), 20 fake `PbxTenantInboundDid`
+rows. **Every count byte-back to the pre-test snapshot** (27/119/167/67/56/80/
+75/48/853/546 conf 546), 0 `mirror-test.invalid`, 0 stale ARS contexts, doorways
+1/1/2 with 0 cc-wipes throughout, api 200 on both hostnames.
+
+**The sweep-hardening fix that fell out of it (`9068acca`):**
+
+```bash
+node --experimental-test-module-mocks --import tsx --test apps/api/src/pbxOrphanTenantSweep.test.ts
+cd apps/api && npx tsc --noEmit -p tsconfig.json
+```
+
+**Result: 19 tests, 19 pass, 0 fail** (12 existing + 7 new, incl. the exact
+2026-08-19 failure shape: REST says gone, MySQL says alive → NOT marked). api
+typecheck **75 = the exact baseline**, none in an edited file. **All 3 new
+source guards on `server.ts` fail replayed against `HEAD`** (sync route passes
+the verifier; confirm route verifies; unreachable MySQL answers 503).
+
+**The incident that motivated it, for the record:** calling `sync-tenant-dids`
+over VitalPBX's stale REST cache auto-marked Comfort control + LUZER removed;
+both fully restored within the hour; their PBX tenants (ids 10, 26) genuinely
+do not exist — a pre-existing condition now awaiting Izzy's decision.
+
+---
+
 ## PBX Console: geo writes armed via the root path-unit channel (2026-08-19 afternoon)
 
 Branch `feat/ivr-migration-takeover`. Handoff
