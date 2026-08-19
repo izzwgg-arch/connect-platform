@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.19.3"
+VERSION = "2026.08.19.4"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2569,6 +2569,12 @@ def console_geo_state(body):
     try:
         state = cw.geo_state(conn)
         state["whitelist"] = cw.whitelist_state(conn)
+        # Which channel could actually run a rebuild right now: "direct", "sudo",
+        # "unit" (the root connect-geo-build.path watcher) or None. Lets the
+        # console show "geo writes are armed" without attempting one — the
+        # probe ASKS and never runs the builder (see geo_build_available).
+        runner = cw.geo_build_available()
+        state["buildChannel"] = runner[0] if runner else None
         return state
     finally:
         conn.close()

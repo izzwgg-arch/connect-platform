@@ -193,7 +193,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.19.3"
+VERSION = "2026.08.19.4"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2736,6 +2736,12 @@ def console_geo_state(body):
     try:
         state = cw.geo_state(conn)
         state["whitelist"] = cw.whitelist_state(conn)
+        # Which channel could actually run a rebuild right now: "direct", "sudo",
+        # "unit" (the root connect-geo-build.path watcher) or None. Lets the
+        # console show "geo writes are armed" without attempting one — the
+        # probe ASKS and never runs the builder (see geo_build_available).
+        runner = cw.geo_build_available()
+        state["buildChannel"] = runner[0] if runner else None
         return state
     finally:
         conn.close()
@@ -7396,13 +7402,30 @@ no on-demand generation on the way in (proven: removing the file makes the fetch
 404). So a row change that is not followed by a render leaves the handset on its
 old settings, silently, forever. Every write here renders.
 """
+import json
 import os
 import re
 import subprocess
+import time
 
 PROV_ROOT = "/var/lib/vitalpbx/provisioning/provisioning_templates"
 IPSET_DIR = "/etc/firewalld/ipsets"
 GEO_BUILD = "/usr/share/vitalpbx/scripts/build_geo_firewall"
+# ── the geo build's out-of-process channel (2026-08-19) ─────────────────────
+# The builder needs root (it writes /etc/firewalld and reloads firewalld) and
+# the helper unit sets NoNewPrivileges=yes, so sudo can NEVER work from here.
+# The clean design (handoff §17): the helper drops a request file, a root-owned
+# systemd .path unit (connect-geo-build.path) sees it and runs the builder as
+# root, then writes result.json back where this process can read it. Same
+# pattern as connect-media-sync.path. The privilege boundary stays honest: the
+# root side runs ONE fixed command and takes no arguments from the request
+# file, so owning this process buys "trigger a rebuild of what the DB already
+# says" and nothing more.
+GEO_UNIT_DIR = "/var/lib/connect-pbx-helper/geo-build"
+GEO_UNIT_REQUEST = os.path.join(GEO_UNIT_DIR, "request")
+GEO_UNIT_RESULT = os.path.join(GEO_UNIT_DIR, "result.json")
+GEO_UNIT_PATH_UNIT = "connect-geo-build.path"
+GEO_UNIT_TIMEOUT_S = int(os.environ.get("CONNECT_GEO_BUILD_TIMEOUT_S", "600"))
 PHP_BIN = "/usr/bin/php"
 CLI_INCLUDE = "/usr/share/vitalpbx/www/includes/cli.php"
 
@@ -7633,7 +7656,59 @@ def geo_build_available():
         return ["direct"]
     probe = subprocess.run(["sudo", "-n", "-l", GEO_BUILD], text=True,
                            capture_output=True, timeout=30, check=False)
-    return ["sudo"] if probe.returncode == 0 else None
+    if probe.returncode == 0:
+        return ["sudo"]
+    if _geo_unit_ready():
+        return ["unit"]
+    return None
+
+
+def _geo_unit_ready():
+    """Is the root-side build channel installed and armed?
+
+    Both halves are required: the request directory this process can write, AND
+    the root path unit actively watching it. A writable directory with no
+    watcher would accept requests that nothing ever runs — the console saying
+    "blocked" while the firewall never changes, the exact lie set_geo_blocks
+    exists to refuse. `systemctl is-active` is a read-only query and works for
+    an unprivileged user; NoNewPrivileges does not affect it.
+    """
+    if not (os.path.isdir(GEO_UNIT_DIR) and os.access(GEO_UNIT_DIR, os.W_OK)):
+        return False
+    probe = subprocess.run(["systemctl", "is-active", "--quiet", GEO_UNIT_PATH_UNIT],
+                           timeout=15, check=False)
+    return probe.returncode == 0
+
+
+def _geo_unit_build():
+    """Hand the rebuild to the root path unit and wait for its verdict.
+
+    The request file carries ONLY a correlation id — the root side runs a fixed
+    command and reads nothing else from it. We poll result.json for our own id;
+    a stale result from an earlier build can never be mistaken for this one.
+    """
+    req_id = "geo-%d-%d" % (os.getpid(), time.time_ns())
+    tmp = GEO_UNIT_REQUEST + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(req_id + "\n")
+    os.replace(tmp, GEO_UNIT_REQUEST)
+    deadline = time.monotonic() + GEO_UNIT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            with open(GEO_UNIT_RESULT) as fh:
+                res = json.load(fh)
+            if res.get("requestId") == req_id:
+                return {"code": int(res.get("code", -1)),
+                        "out": str(res.get("output") or "").strip()[:400], "err": ""}
+        except (OSError, ValueError):
+            pass
+        time.sleep(1)
+    # ⛔ By this point the blocked flags ARE in the database and the build may
+    # still be running — say exactly that, never "nothing was changed".
+    raise ValueError(
+        "geo_build_timeout: the firewall rebuild was handed to the root unit and has not "
+        "reported back within %ss. The country flags ARE saved and the rebuild may still be "
+        "running — check `journalctl -u connect-geo-build` on the PBX before retrying." % GEO_UNIT_TIMEOUT_S)
 
 
 def set_geo_blocks(conn, *, block=(), unblock=()):
@@ -7658,7 +7733,8 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
     runner = geo_build_available()
     if not runner:
         raise ValueError("geo_build_not_permitted: the firewall rebuild needs root "
-                         "(add the sudoers line the installer ships), so the block was NOT applied")
+                         "(install/enable the connect-geo-build path unit the installer ships), "
+                         "so the block was NOT applied")
     before = geo_state(conn)
     with conn.cursor() as cur:
         if block:
@@ -7668,9 +7744,17 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
             cur.execute("UPDATE ombutel.ombu_geo_firewall SET blocked='no' WHERE lower(iso) IN (%s)"
                         % ",".join(["%s"] * len(unblock)), unblock)
     conn.commit()
+    if runner == ["unit"]:
+        build = _geo_unit_build()
+    else:
+        cmd = [GEO_BUILD] if runner == ["direct"] else ["sudo", "-n", GEO_BUILD]
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=900, check=False)
+        build = {"code": proc.returncode, "out": (proc.stdout or "").strip()[:400],
+                 "err": (proc.stderr or "").strip()[:400]}
+    # ⛔ The after-state is read AFTER the build on purpose: the enforceability
+    # view is about ipset files the builder itself maintains, so reading it
+    # before the build reports the world the build is about to replace.
     after = geo_state(conn)
-    cmd = [GEO_BUILD] if runner == ["direct"] else ["sudo", "-n", GEO_BUILD]
-    build = subprocess.run(cmd, text=True, capture_output=True, timeout=900, check=False)
     # ⛔ `enforceable`/`missingIpset` are None when /etc/firewalld cannot be read
     # (see geo_state) — len(None) is what turned an honest refusal into a Python
     # error in the caller's face.
@@ -7679,8 +7763,7 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
         "blockedBefore": n(before["blocked"]), "blockedAfter": n(after["blocked"]),
         "enforceableBefore": n(before["enforceable"]), "enforceableAfter": n(after["enforceable"]),
         "missingIpset": after["missingIpset"],
-        "build": {"via": runner[0], "code": build.returncode, "out": (build.stdout or "").strip()[:400],
-                  "err": (build.stderr or "").strip()[:400]},
+        "build": {"via": runner[0], "code": build["code"], "out": build["out"], "err": build["err"]},
     }
 
 
@@ -7759,6 +7842,89 @@ asterisk ALL=(root) NOPASSWD: /usr/share/vitalpbx/scripts/build_geo_firewall
 SUDOERS
 chmod 0440 /etc/sudoers.d/connect-pbx-console
 visudo -cf /etc/sudoers.d/connect-pbx-console >/dev/null || { echo "sudoers file invalid - removing"; rm -f /etc/sudoers.d/connect-pbx-console; }
+
+# -- PBX Console: the geo build's OUT-OF-PROCESS root channel (2026-08-19) ----
+# The sudoers line above can never actually fire from the helper: the unit sets
+# NoNewPrivileges=yes, so sudo is refused outright ("the no new privileges flag
+# is set"). It stays because it costs nothing and works the day anyone runs the
+# builder from a root shell. The path that DOES work is this one — the same
+# design as connect-media-sync.path: the helper (as asterisk) drops a request
+# file, a root path unit sees it and runs VitalPBX's OWN build_geo_firewall,
+# then writes result.json back where the helper can read it.
+# ⛔ The privilege boundary is the whole point: the root side runs ONE fixed
+# command and reads NOTHING from the request file except a correlation id it
+# sanitises — so a compromised helper buys "rebuild what the DB already says"
+# and nothing more.
+install -d -m 0755 -o asterisk -g asterisk /var/lib/connect-pbx-helper/geo-build
+
+cat >/usr/local/sbin/connect-geo-build <<'GEOBUILD'
+#!/usr/bin/env bash
+# connect-geo-build — root-side runner for PBX Console geo firewall rebuilds.
+# Triggered by connect-geo-build.path when the helper drops a request file.
+# ⛔ Takes NO input from the request file except a correlation id (sanitised).
+# ⛔ Backs up /etc/firewalld/direct.xml before every build — that file's mtime
+#    is the authoritative "did the build run" evidence (rule counts are noisy:
+#    fail2ban's live bans come and go).
+set -u
+DIR=/var/lib/connect-pbx-helper/geo-build
+REQ="$DIR/request"
+WORK="$DIR/request.working.$$"
+RESULT="$DIR/result.json"
+BACKUPS="$DIR/backups"
+BUILDER=/usr/share/vitalpbx/scripts/build_geo_firewall
+
+[ -f "$REQ" ] || exit 0
+mv -f "$REQ" "$WORK" 2>/dev/null || exit 0   # a parallel run consumed it first
+
+REQ_ID=$(head -c 200 "$WORK" | tr -cd 'A-Za-z0-9._-' | head -c 80)
+rm -f "$WORK"
+
+install -d -m 0700 "$BACKUPS"
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+[ -f /etc/firewalld/direct.xml ] && cp -a /etc/firewalld/direct.xml "$BACKUPS/direct.xml.$TS"
+ls -1t "$BACKUPS"/direct.xml.* 2>/dev/null | tail -n +11 | xargs -r rm -f
+
+START=$(date -u +%FT%TZ)
+OUT=$("$BUILDER" 2>&1); CODE=$?
+END=$(date -u +%FT%TZ)
+echo "connect-geo-build: request=$REQ_ID code=$CODE"
+
+# result.json is written atomically and left world-readable so the helper
+# (running as asterisk) can poll it. The exit code travels IN the result; the
+# unit itself always succeeds so a builder failure cannot wedge the path unit.
+TMP=$(mktemp "$DIR/.result.XXXXXX")
+OUT_JSON=$(printf '%s' "$OUT" | tail -c 800 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+printf '{"requestId":"%s","code":%d,"startedAt":"%s","finishedAt":"%s","output":%s}\n' \
+  "$REQ_ID" "$CODE" "$START" "$END" "$OUT_JSON" > "$TMP"
+chmod 0644 "$TMP"
+mv -f "$TMP" "$RESULT"
+exit 0
+GEOBUILD
+chmod 0755 /usr/local/sbin/connect-geo-build
+
+cat >/etc/systemd/system/connect-geo-build.service <<'GEOSVC'
+[Unit]
+Description=Connect PBX Console - geo firewall rebuild (root side)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/connect-geo-build
+GEOSVC
+
+cat >/etc/systemd/system/connect-geo-build.path <<'GEOPATH'
+[Unit]
+Description=Connect PBX Console - watch for geo firewall build requests
+
+[Path]
+PathExists=/var/lib/connect-pbx-helper/geo-build/request
+Unit=connect-geo-build.service
+
+[Install]
+WantedBy=multi-user.target
+GEOPATH
+
+systemctl daemon-reload
+systemctl enable --now connect-geo-build.path
 
 cat >/etc/connect-pbx-helper.env <<EOF
 CONNECT_PBX_HELPER_BIND=${HELPER_BIND}

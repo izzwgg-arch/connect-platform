@@ -514,3 +514,64 @@ test("the geo capability check never RUNS the firewall builder", () => {
   // and an unreadable /etc/firewalld must not crash the refusal with len(None)
   assert.ok(CW.includes("n = lambda v: (len(v) if v is not None else None)"), "counts must tolerate an unknown enforcement view");
 });
+
+// ── geo build via the root path unit (2026-08-19) ─────────────────────────
+// The builder needs root and the helper unit sets NoNewPrivileges=yes, so sudo
+// is structurally dead from the helper. The working channel is the same design
+// as connect-media-sync.path: request file in, root unit builds, result.json
+// out. These guards pin the privilege boundary — the root side must run ONE
+// fixed command and take nothing from the request file but a sanitised id.
+
+test("geo: the installer ships the root path unit, service and runner, and arms them", () => {
+  assert.ok(SCRIPT.includes("cat >/usr/local/sbin/connect-geo-build <<'GEOBUILD'"), "the root runner must be shipped");
+  assert.ok(SCRIPT.includes("cat >/etc/systemd/system/connect-geo-build.service <<'GEOSVC'"), "the oneshot service must be shipped");
+  assert.ok(SCRIPT.includes("cat >/etc/systemd/system/connect-geo-build.path <<'GEOPATH'"), "the path unit must be shipped");
+  assert.ok(SCRIPT.includes("PathExists=/var/lib/connect-pbx-helper/geo-build/request"), "the path unit must watch the request file");
+  assert.ok(SCRIPT.includes("ExecStart=/usr/local/sbin/connect-geo-build"), "the service must run the fixed runner");
+  assert.ok(SCRIPT.includes("systemctl enable --now connect-geo-build.path"), "the path unit must be armed at install time");
+  assert.ok(SCRIPT.includes("install -d -m 0755 -o asterisk -g asterisk /var/lib/connect-pbx-helper/geo-build"),
+    "the request dir must be writable by the helper's own user");
+});
+
+test("geo: the root runner executes the builder with NO arguments and backs up direct.xml first", () => {
+  const start = SCRIPT.indexOf("cat >/usr/local/sbin/connect-geo-build <<'GEOBUILD'");
+  const end = SCRIPT.indexOf("\nGEOBUILD\n", start);
+  assert.ok(start !== -1 && end !== -1, "the GEOBUILD heredoc must exist");
+  const runner = SCRIPT.slice(start, end);
+  // the ONE builder invocation, argument-free — nothing from the request file
+  // may ever reach the command line
+  assert.ok(runner.includes('OUT=$("$BUILDER" 2>&1); CODE=$?'), "the builder is run bare, output captured");
+  assert.ok(!/\$BUILDER"?\s+["$]/.test(runner), "the builder must never be passed an argument");
+  // the request id is sanitised to a safe charset before any use
+  assert.ok(runner.includes("tr -cd 'A-Za-z0-9._-'"), "the correlation id must be sanitised");
+  // direct.xml backed up BEFORE the build — its mtime is the build evidence
+  const backupAt = runner.indexOf('cp -a /etc/firewalld/direct.xml "$BACKUPS/direct.xml.$TS"');
+  const buildAt = runner.indexOf('OUT=$("$BUILDER"');
+  assert.ok(backupAt !== -1 && backupAt < buildAt, "direct.xml must be backed up before the build runs");
+  // result.json written atomically, and the unit itself never fails
+  assert.ok(runner.includes('mv -f "$TMP" "$RESULT"'), "the result must land atomically");
+});
+
+test("geo: console_writes prefers the unit channel and requires the watcher to be ACTIVE", () => {
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(CW.includes('return ["unit"]'), "geo_build_available must know the unit channel");
+  // a writable dir with no watcher must NOT count as available — that is the
+  // console saying "blocked" while nothing ever rebuilds the firewall
+  assert.ok(CW.includes('subprocess.run(["systemctl", "is-active", "--quiet", GEO_UNIT_PATH_UNIT]'),
+    "_geo_unit_ready must check the path unit is active, not just that the dir exists");
+  // the request file carries ONLY the correlation id
+  assert.ok(/fh\.write\(req_id \+ "\\n"\)/.test(CW), "the request file must carry nothing but the id");
+  // the result is matched by id, never taken on faith
+  assert.ok(CW.includes('res.get("requestId") == req_id'), "a stale result must never satisfy a new request");
+  // a timeout must say the flags ARE saved — "nothing was changed" would be a lie there
+  assert.ok(CW.includes("The country flags ARE saved"), "the timeout message must not claim nothing changed");
+});
+
+test("geo: set_geo_blocks reads the after-state AFTER the build", () => {
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8").replace(/\r\n/g, "\n");
+  const body = CW.slice(CW.indexOf("def set_geo_blocks"));
+  const buildAt = body.indexOf("build = _geo_unit_build()");
+  const afterAt = body.indexOf("after = geo_state(conn)");
+  assert.ok(buildAt !== -1 && afterAt !== -1 && buildAt < afterAt,
+    "the enforceability after-view must be read after the build, not before it");
+});

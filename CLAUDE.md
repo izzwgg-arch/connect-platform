@@ -352,8 +352,39 @@ mess up any other tenants."*
   `ReadWritePaths` (the unit is `ProtectSystem=strict`).
   ⛔ **A create whose render fails ROLLS ITS ROW BACK** — otherwise the console
   lists a phone that gets nothing (it happened on the first prod attempt).
-- ⛔⛔ **GEO IS STILL REFUSED, AND THE CAPABILITY CHECK ITSELF WAS THE DANGEROUS
-  PART (`81ccf2fa`).** `geo_build_available()` probed by **running**
+- ✅✅ **GEO WRITES ARE ARMED NOW (2026-08-19 afternoon) — the root path-unit
+  channel from §17's "clean design" is BUILT, INSTALLED and verified end-to-end;
+  ⛔ the FIRST live `build_geo_firewall` run is deliberately UNRUN, on Izzy's
+  word ("Hold off — I'll say when"), and THE CONSOLE'S BLOCK/UNBLOCK BUTTONS ARE
+  LIVE, so the first click IS that first run.** Helper **`2026.08.19.4`** on the
+  PBX (backup `/root/helper-backup-geo-unit-20260819/`): the helper drops a
+  request file in `/var/lib/connect-pbx-helper/geo-build/`, root
+  `connect-geo-build.path` → `connect-geo-build.service` →
+  `/usr/local/sbin/connect-geo-build` **backs up `direct.xml`** (last 10 under
+  `geo-build/backups/`) and runs VitalPBX's own builder **with no arguments**
+  (nothing from the request file but a sanitised correlation id reaches root),
+  then writes `result.json` for the helper to poll (600 s, under the api's
+  900 s; a timeout says **"the flags ARE saved, check `journalctl -u
+  connect-geo-build`"** — never "nothing changed", which would be a lie there).
+  `geo_build_available()` = direct → sudo → **unit**, and `unit` needs BOTH the
+  writable dir AND `systemctl is-active connect-geo-build.path` — a writable dir
+  with no watcher must never count. `/console/geo-state` now carries
+  **`buildChannel`**, proven through the deployed api:
+  `GET /admin/pbx-console/geo` → `enforcement.buildChannel: "unit"`, 232
+  blocked, 15 whitelist. **No api/portal change or deploy was needed.**
+  ⛔ Whitelist safety was measured before arming: `direct.xml` is written
+  wholesale by the builder family and itself carries `vpbx_white_list` at
+  `INPUT_direct` priority 0 ahead of `geo_firewall` at 1 — the builder emits
+  the ordering that keeps loopcom (in `blacklist_fr`) reachable; the runner
+  backs the file up before every build anyway. Installer suite **49/49**, all
+  **7 new guards fail replayed against HEAD**. ⏳ **Acceptance, when Izzy says
+  (quiet window):** block a `blocked='no'` country that HAS a
+  `blacklist_<iso>.xml` ipset via the console, verify `build.code 0` + fresh
+  `direct.xml` mtime + a firewalld reload in the journal + loopcom still
+  reaching the helper, then unblock back to 232. ⛔ Judge by direct.xml mtime +
+  the reload, never rule counts (fail2ban's bans make counts noisy).
+- ⛔⛔ **THE HISTORY THAT SHAPED IT — the capability check itself was the
+  dangerous part (`81ccf2fa`).** `geo_build_available()` probed by **running**
   `sudo -n build_geo_firewall --connect-probe` — a **full firewall rebuild and
   firewalld reload on a PBX carrying live calls**, performed just to answer *"am I
   allowed?"*. Worse, it read sudo's `NoNewPrivileges` refusal (*"the no new
@@ -370,11 +401,9 @@ mess up any other tenants."*
   ⛔ **Do NOT judge this by rule count** — live reads **258 runtime / 253 permanent**
   and the gap is **fail2ban's 7 bans**, which come and go. The evidence is
   `direct.xml`'s mtime plus the absence of a reload.
-  ⏳ **To finish geo:** `build_geo_firewall` needs root, so either relax
-  `NoNewPrivileges` for the helper unit or trigger the build **out-of-process** (a
-  root path-unit watching a flag file is the clean design) — **and its first live
-  run must happen in a quiet window**, since it reloads the firewall on a PBX
-  carrying calls. Until then a geo change is **refused, never half-applied**.
+  ✅ **RESOLVED by the path-unit channel above (2026-08-19 afternoon)** — the
+  out-of-process root trigger this line asked for is installed and armed; only
+  the first live run (a quiet-window firewall reload) remains, on Izzy's word.
 - ⛔ **Guard-test trap, hit twice here and three times in this repo:** a negative
   source guard matched the string quoted in the **doc comment explaining the old
   defect** and failed against correct code. **Strip comments, or assert only on
@@ -448,8 +477,10 @@ mess up any other tenants."*
   polling for portal == `1fa34d29` (a commit the portal had already moved past;
   exact-match, could never fire) was killed.
 - ⏳ **NOT DONE:** nobody has opened the page in a browser (the single most
-  valuable next step — it needs Izzy's login); the geo
-  build step; ⛔ rotate the robot panel password.
+  valuable next step — it needs Izzy's login); the FIRST live geo firewall
+  build (channel installed + armed 2026-08-19; Izzy said "hold off — I'll say
+  when", and ⛔ the console's Block/Unblock click now IS that first run, so do
+  it in a quiet window); ⛔ rotate the robot panel password.
 
 ## ⛔ AGENT HANDOFF — dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenant" is wrong — the free tier caps EXTENSIONS at 12 (2026-08-18) — READ FIRST before answering "can we cancel VitalPBX?", before touching the license, or before sizing "our own multi-tenant"
 

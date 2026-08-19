@@ -21,13 +21,30 @@ no on-demand generation on the way in (proven: removing the file makes the fetch
 404). So a row change that is not followed by a render leaves the handset on its
 old settings, silently, forever. Every write here renders.
 """
+import json
 import os
 import re
 import subprocess
+import time
 
 PROV_ROOT = "/var/lib/vitalpbx/provisioning/provisioning_templates"
 IPSET_DIR = "/etc/firewalld/ipsets"
 GEO_BUILD = "/usr/share/vitalpbx/scripts/build_geo_firewall"
+# ── the geo build's out-of-process channel (2026-08-19) ─────────────────────
+# The builder needs root (it writes /etc/firewalld and reloads firewalld) and
+# the helper unit sets NoNewPrivileges=yes, so sudo can NEVER work from here.
+# The clean design (handoff §17): the helper drops a request file, a root-owned
+# systemd .path unit (connect-geo-build.path) sees it and runs the builder as
+# root, then writes result.json back where this process can read it. Same
+# pattern as connect-media-sync.path. The privilege boundary stays honest: the
+# root side runs ONE fixed command and takes no arguments from the request
+# file, so owning this process buys "trigger a rebuild of what the DB already
+# says" and nothing more.
+GEO_UNIT_DIR = "/var/lib/connect-pbx-helper/geo-build"
+GEO_UNIT_REQUEST = os.path.join(GEO_UNIT_DIR, "request")
+GEO_UNIT_RESULT = os.path.join(GEO_UNIT_DIR, "result.json")
+GEO_UNIT_PATH_UNIT = "connect-geo-build.path"
+GEO_UNIT_TIMEOUT_S = int(os.environ.get("CONNECT_GEO_BUILD_TIMEOUT_S", "600"))
 PHP_BIN = "/usr/bin/php"
 CLI_INCLUDE = "/usr/share/vitalpbx/www/includes/cli.php"
 
@@ -258,7 +275,59 @@ def geo_build_available():
         return ["direct"]
     probe = subprocess.run(["sudo", "-n", "-l", GEO_BUILD], text=True,
                            capture_output=True, timeout=30, check=False)
-    return ["sudo"] if probe.returncode == 0 else None
+    if probe.returncode == 0:
+        return ["sudo"]
+    if _geo_unit_ready():
+        return ["unit"]
+    return None
+
+
+def _geo_unit_ready():
+    """Is the root-side build channel installed and armed?
+
+    Both halves are required: the request directory this process can write, AND
+    the root path unit actively watching it. A writable directory with no
+    watcher would accept requests that nothing ever runs — the console saying
+    "blocked" while the firewall never changes, the exact lie set_geo_blocks
+    exists to refuse. `systemctl is-active` is a read-only query and works for
+    an unprivileged user; NoNewPrivileges does not affect it.
+    """
+    if not (os.path.isdir(GEO_UNIT_DIR) and os.access(GEO_UNIT_DIR, os.W_OK)):
+        return False
+    probe = subprocess.run(["systemctl", "is-active", "--quiet", GEO_UNIT_PATH_UNIT],
+                           timeout=15, check=False)
+    return probe.returncode == 0
+
+
+def _geo_unit_build():
+    """Hand the rebuild to the root path unit and wait for its verdict.
+
+    The request file carries ONLY a correlation id — the root side runs a fixed
+    command and reads nothing else from it. We poll result.json for our own id;
+    a stale result from an earlier build can never be mistaken for this one.
+    """
+    req_id = "geo-%d-%d" % (os.getpid(), time.time_ns())
+    tmp = GEO_UNIT_REQUEST + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(req_id + "\n")
+    os.replace(tmp, GEO_UNIT_REQUEST)
+    deadline = time.monotonic() + GEO_UNIT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            with open(GEO_UNIT_RESULT) as fh:
+                res = json.load(fh)
+            if res.get("requestId") == req_id:
+                return {"code": int(res.get("code", -1)),
+                        "out": str(res.get("output") or "").strip()[:400], "err": ""}
+        except (OSError, ValueError):
+            pass
+        time.sleep(1)
+    # ⛔ By this point the blocked flags ARE in the database and the build may
+    # still be running — say exactly that, never "nothing was changed".
+    raise ValueError(
+        "geo_build_timeout: the firewall rebuild was handed to the root unit and has not "
+        "reported back within %ss. The country flags ARE saved and the rebuild may still be "
+        "running — check `journalctl -u connect-geo-build` on the PBX before retrying." % GEO_UNIT_TIMEOUT_S)
 
 
 def set_geo_blocks(conn, *, block=(), unblock=()):
@@ -283,7 +352,8 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
     runner = geo_build_available()
     if not runner:
         raise ValueError("geo_build_not_permitted: the firewall rebuild needs root "
-                         "(add the sudoers line the installer ships), so the block was NOT applied")
+                         "(install/enable the connect-geo-build path unit the installer ships), "
+                         "so the block was NOT applied")
     before = geo_state(conn)
     with conn.cursor() as cur:
         if block:
@@ -293,9 +363,17 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
             cur.execute("UPDATE ombutel.ombu_geo_firewall SET blocked='no' WHERE lower(iso) IN (%s)"
                         % ",".join(["%s"] * len(unblock)), unblock)
     conn.commit()
+    if runner == ["unit"]:
+        build = _geo_unit_build()
+    else:
+        cmd = [GEO_BUILD] if runner == ["direct"] else ["sudo", "-n", GEO_BUILD]
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=900, check=False)
+        build = {"code": proc.returncode, "out": (proc.stdout or "").strip()[:400],
+                 "err": (proc.stderr or "").strip()[:400]}
+    # ⛔ The after-state is read AFTER the build on purpose: the enforceability
+    # view is about ipset files the builder itself maintains, so reading it
+    # before the build reports the world the build is about to replace.
     after = geo_state(conn)
-    cmd = [GEO_BUILD] if runner == ["direct"] else ["sudo", "-n", GEO_BUILD]
-    build = subprocess.run(cmd, text=True, capture_output=True, timeout=900, check=False)
     # ⛔ `enforceable`/`missingIpset` are None when /etc/firewalld cannot be read
     # (see geo_state) — len(None) is what turned an honest refusal into a Python
     # error in the caller's face.
@@ -304,8 +382,7 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
         "blockedBefore": n(before["blocked"]), "blockedAfter": n(after["blocked"]),
         "enforceableBefore": n(before["enforceable"]), "enforceableAfter": n(after["enforceable"]),
         "missingIpset": after["missingIpset"],
-        "build": {"via": runner[0], "code": build.returncode, "out": (build.stdout or "").strip()[:400],
-                  "err": (build.stderr or "").strip()[:400]},
+        "build": {"via": runner[0], "code": build["code"], "out": build["out"], "err": build["err"]},
     }
 
 

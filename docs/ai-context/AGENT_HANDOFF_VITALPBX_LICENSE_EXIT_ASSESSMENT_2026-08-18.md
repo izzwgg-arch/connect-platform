@@ -804,7 +804,51 @@ Create a phone on Loopcom Demo (T102): **185,209-byte config**, `account.1.user_
 → delete (rows + both cached files removed) → **devices back to baseline 55**.
 Installer suite **44/44**; api typecheck **75 = baseline**; portal **0**.
 
-### ⏳ GEO: the one step NOT taken, deliberately
+### ✅ GEO WRITES ARE ARMED (2026-08-19 afternoon) — the root path-unit channel is INSTALLED and verified end-to-end; the FIRST live build still awaits Izzy's word
+
+> The section below this one is the state as of the morning; this is the
+> resolution. **Helper `2026.08.19.4` + the `connect-geo-build` root channel are
+> live on the PBX.** The design is the one §17 named: the helper (as
+> `asterisk`) drops a request file in `/var/lib/connect-pbx-helper/geo-build/`,
+> a **root** `connect-geo-build.path` unit sees it, `connect-geo-build.service`
+> runs `/usr/local/sbin/connect-geo-build`, which **backs up
+> `/etc/firewalld/direct.xml`** (last 10 kept under `geo-build/backups/`), runs
+> VitalPBX's own `build_geo_firewall` **with no arguments**, and writes
+> `result.json` back where the helper polls it (correlation id, sanitised,
+> `CONNECT_GEO_BUILD_TIMEOUT_S` default 600 s — under the api client's 900 s).
+> ⛔ **The privilege boundary is the point**: the root side runs ONE fixed
+> command and reads nothing from the request file but the id, so owning the
+> helper buys "rebuild what the DB already says" and nothing more.
+> - `geo_build_available()` now answers `direct → sudo → unit`; `unit` requires
+>   BOTH the writable request dir AND `systemctl is-active
+>   connect-geo-build.path` — a writable dir with no watcher must never count.
+> - `/console/geo-state` (and therefore `GET /admin/pbx-console/geo` →
+>   `enforcement`) now carries **`buildChannel`**; proven live through the
+>   deployed api: `200 {blocked: 232, buildChannel: "unit", whitelist: 15}`.
+>   **No api or portal change was needed** — the client timeout (900 s) and
+>   response shape already fit, and extra fields pass through.
+> - A **timeout** leaves the flags WRITTEN and says so plainly ("The country
+>   flags ARE saved… check `journalctl -u connect-geo-build`") — never
+>   "nothing was changed", which would be a lie in that state.
+> - Whitelist safety was checked before arming: `direct.xml` is owned wholesale
+>   by the builder family and itself carries `vpbx_white_list` at
+>   `INPUT_direct` priority 0 with `geo_firewall` at priority 1 — the builder
+>   emits the ordering that keeps loopcom (in `blacklist_fr`) reachable. The
+>   runner backs the file up before every build regardless.
+> - Tests: installer suite **49/49**; all **7 new guards fail replayed against
+>   HEAD**. Backups on the PBX: `/root/helper-backup-geo-unit-20260819/`.
+> - ⛔⛔ **THE CONSOLE'S BLOCK/UNBLOCK BUTTONS ARE LIVE NOW — the first click IS
+>   the first-ever run of `build_geo_firewall` under our control.** Izzy chose
+>   (2026-08-19, asked directly) to hold that first run for his word rather
+>   than run it mid-day with 5 active calls. **Run it in a quiet window.**
+>   Acceptance recipe: pick a country with `blocked='no'` AND an existing
+>   `blacklist_<iso>.xml` ipset, block it via `POST /admin/pbx-console/geo`,
+>   verify `build.code 0` + a fresh `direct.xml` mtime + a firewalld reload in
+>   the journal + loopcom still reaching the helper, then unblock and verify
+>   back to 232. ⛔ Judge by direct.xml mtime + the reload, never rule counts
+>   (fail2ban's live bans make counts noisy).
+
+### ⏳ GEO: the one step NOT taken, deliberately (STATE AS OF THE MORNING — superseded by the section above)
 `set_geo_blocks` writes the flags and then calls VitalPBX's own
 `build_geo_firewall`, which needs **root** (it writes `/etc/firewalld` and
 reloads firewalld) — blocked by the same `NoNewPrivileges`. A sudoers line for

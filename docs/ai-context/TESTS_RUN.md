@@ -4,6 +4,44 @@ Newest entries first.
 
 ---
 
+## PBX Console: geo writes armed via the root path-unit channel (2026-08-19 afternoon)
+
+Branch `feat/ivr-migration-takeover`. Handoff
+`AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §17 (the "GEO
+WRITES ARE ARMED" subsection). Touched: `scripts/pbx/mirror/console_writes.py`,
+`scripts/pbx/vitalpbx-inbound-route-helper.py` (2026.08.19.4 + `buildChannel`
+on geo-state), the installer (embedded copies re-synced + the
+`connect-geo-build` runner/service/path-unit ship section), and the guard
+suite. **No api/portal code touched — no Connect deploy needed.**
+
+```bash
+npx tsx --test scripts/pbx/install-vitalpbx-inbound-route-helper.test.ts
+python -m py_compile scripts/pbx/vitalpbx-inbound-route-helper.py scripts/pbx/mirror/console_writes.py
+```
+
+**Result: 49 tests, 49 pass, 0 fail** (was 45 — 4 new geo guards). Both
+embedded-copy byte-identity drift guards pass, which is the proof the re-embeds
+are exact. Remote `py_compile` under the PBX's own venv also clean before
+install.
+
+**Proven non-vacuous:** all 7 new assertions (installer ships/arms the path
+unit, runner heredoc exists, `unit` channel in `geo_build_available`,
+`systemctl is-active` gate, request-file-carries-only-the-id, after-state read
+after the build) **fail when replayed against `HEAD`'s blobs**.
+
+**Proven on the live PBX (read/inert only — no firewall build was run):**
+helper `/health` → `2026.08.19.4`; `systemctl is-active connect-geo-build.path`
+→ `active`; `/console/geo-state` → `buildChannel: "unit"`, 232 blocked, 15
+whitelist; and through the deployed api with a self-signed SUPER_ADMIN token,
+`GET /admin/pbx-console/geo` → `200 enforcement.buildChannel: "unit"`.
+
+**Deliberately NOT run: the first live `build_geo_firewall`** — Izzy's explicit
+answer was "Hold off — I'll say when" (midday, 5 active calls). `direct.xml` is
+still stamped 2026-04-29 and the journal shows no firewalld reload from this
+work.
+
+---
+
 ## PBX Console: creating a customer (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `3e914b4f` → `4faf2635`. Handoff
