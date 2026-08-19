@@ -1,6 +1,7 @@
 #!/bin/bash
+: "${PGPASSWORD:?Set PGPASSWORD to the connectcomms DB password before running. It is intentionally NOT stored in this repo; provide it from your environment.}"
 # Probe VitalPBX extension fields
-DB="postgresql://connectcomms:7d5b4ceaaa74883911a6fb06a3c1b6a6ec8054c507393bab@connectcomms-postgres:5432/connectcomms"
+DB="postgresql://connectcomms:${PGPASSWORD}@connectcomms-postgres:5432/connectcomms"
 
 # Get first PBX instance base_url
 BASE_URL=$(docker exec connectcomms-postgres psql "$DB" -t -c 'SELECT base_url FROM "PbxInstance" WHERE is_enabled=true LIMIT 1' | tr -d ' \n')

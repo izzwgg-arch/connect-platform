@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
+: "${PGPASSWORD:?Set PGPASSWORD to the connectcomms DB password before running. It is intentionally NOT stored in this repo; provide it from your environment.}"
 # Run on app server: bash /opt/connectcomms/app/scripts/db-edge-audit.sh
 set -e
-DB="postgresql://connectcomms:7d5b4ceaaa74883911a6fb06a3c1b6a6ec8054c507393bab@127.0.0.1:5432/connectcomms"
+DB="postgresql://connectcomms:${PGPASSWORD}@127.0.0.1:5432/connectcomms"
 
 run_q() {
   local label="$1"

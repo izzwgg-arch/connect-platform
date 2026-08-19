@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+: "${PGPASSWORD:?Set PGPASSWORD to the connectcomms DB password before running. It is intentionally NOT stored in this repo; provide it from your environment.}"
 # Audit missing calls: PBX unique linkedId count vs Connect unique linkedId count
 # Run on app server: bash /opt/connectcomms/app/scripts/audit-missing-calls.sh
 set -euo pipefail
-DB="postgresql://connectcomms:7d5b4ceaaa74883911a6fb06a3c1b6a6ec8054c507393bab@127.0.0.1:5432/connectcomms"
+DB="postgresql://connectcomms:${PGPASSWORD}@127.0.0.1:5432/connectcomms"
 
 echo ""
 echo "=== CONNECT DB: unique linkedId count (today: America/New_York) ==="
