@@ -146,3 +146,48 @@ test("a known refusal answers 409 with a sentence, never 500", () => {
   const genericAt = src.indexOf("pbx_console_write_failed", refusalAt);
   assert.ok(refusalAt > 0 && genericAt > refusalAt, "the refusal branch must come first");
 });
+
+/*
+ * ⛔ TENANT CREATE IS THE ONE JOB THE UNLICENSED PANEL REFUSES, and the whole
+ * point of routing it through the mirror is that it keeps working after the
+ * licence ends. A future "simplification" that posts the panel's add-tenant
+ * form here would pass every functional test today (the licence is still live)
+ * and fail silently on the day it lapses — which is exactly the day nobody can
+ * afford to discover it. These read the route file's SOURCE for that reason.
+ */
+test("source: creating a tenant goes through the MIRROR, never the panel form", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  const create = src.slice(src.indexOf('app.post("/admin/pbx-console/tenants"'));
+  assert.ok(create.length > 200, "the create route must exist");
+  const body = create.slice(0, create.indexOf('app.patch("/admin/pbx-console/tenants/:id"'));
+  assert.match(body, /resolveMirrorTenantCreator\(/, "create must use the mirror creator");
+  // ⛔ never the panel add form: those are the pairs the panel's add-tenant post carries
+  assert.doesNotMatch(body, /\["mode",\s*"add"\]/, "create must not post the panel add-tenant form");
+  assert.doesNotMatch(body, /withPanel\(/, "create must not open a panel session at all");
+});
+
+test("source: the create route reuses onboarding's slug rule rather than inventing one", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  // the PBX name is matched elsewhere by slug OR display name, so a second
+  // slug variant would create tenants those lookups cannot find
+  assert.match(src, /import \{ slugify \} from "\.\.\/onboarding\/pbxTenantBuild"/, "must import the one slug rule");
+  assert.doesNotMatch(src, /function\s+normaliseTenantSlug|const\s+normaliseTenantSlug/, "must not define a second slug rule");
+});
+
+test("source: a duplicate customer is refused by name, before anything is written", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  const create = src.slice(src.indexOf('app.post("/admin/pbx-console/tenants"'));
+  const body = create.slice(0, create.indexOf('app.patch("/admin/pbx-console/tenants/:id"'));
+  const clashAt = body.indexOf("tenant_exists");
+  const createAt = body.indexOf("await creator(");
+  assert.ok(clashAt > 0, "a duplicate must be refused by name");
+  assert.ok(createAt > clashAt, "the duplicate check must run BEFORE the tenant is created");
+});
+
+test("source: a failed re-render does not fail the create", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  const create = src.slice(src.indexOf('app.post("/admin/pbx-console/tenants"'));
+  const body = create.slice(0, create.indexOf('app.patch("/admin/pbx-console/tenants/:id"'));
+  // the tenant exists either way; a person can re-render from the list
+  assert.match(body, /resolveMirrorTenantRenderer[\s\S]{0,400}catch/, "the re-render must be wrapped");
+});

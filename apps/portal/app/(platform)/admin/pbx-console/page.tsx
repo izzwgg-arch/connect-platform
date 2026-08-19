@@ -53,6 +53,8 @@ function useToasts() {
 function PbxConsole() {
   const [mod, setMod] = useState<Module>("extensions");
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [outboundProfiles, setOutboundProfiles] = useState<Array<{ id: number; label: string; inUseBy: number }>>([]);
+  const [newTenant, setNewTenant] = useState(false);
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [phones, setPhones] = useState<Phone[]>([]);
   const [catalog, setCatalog] = useState<{ brands: any[]; models: any[]; templates: any[] } | null>(null);
@@ -67,9 +69,10 @@ function PbxConsole() {
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const t = await apiGet<{ available: boolean; tenants?: Tenant[]; detail?: string }>("/admin/pbx-console/tenants");
+      const t = await apiGet<{ available: boolean; tenants?: Tenant[]; outboundProfiles?: Array<{ id: number; label: string; inUseBy: number }>; detail?: string }>("/admin/pbx-console/tenants");
       if (!t.available) { setError(t.detail || "The phone system database is unreachable."); setLoading(false); return; }
       setTenants(t.tenants || []);
+      setOutboundProfiles(t.outboundProfiles || []);
     } catch (e) { setError(errText(e, "Could not load the phone system.")); }
     setLoading(false);
   }, []);
@@ -124,12 +127,21 @@ function PbxConsole() {
         : error ? <div className="pc-note warn"><span className="pc-ico">!</span><div>{error} <button className="pc-btn pc-btn-sm" onClick={() => void loadAll()}>Retry</button></div></div>
         : editor ? <Editor editor={editor} setEditor={setEditor} tenants={tenants} tenantName={tenantName} saving={saving} setSaving={setSaving} dirty={!!dirty} close={closeEditor} push={push}
             afterSave={async () => { await loadAll(); await loadModule(mod); }} catalog={catalog} />
-        : mod === "tenants" ? <TenantList rows={tenants.filter((t) => inScope(t.name) && matches(t.description + " " + t.name + " " + t.dids.join(" ")))} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} all={tenants} open={(t: Tenant) => setEditor({ kind: "tenants", id: t.tenantId, draft: tenantDraft(t), base: tenantDraft(t) })} />
+        : mod === "tenants" ? <TenantList rows={tenants.filter((t) => inScope(t.name) && matches(t.description + " " + t.name + " " + t.dids.join(" ")))} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} all={tenants} open={(t: Tenant) => setEditor({ kind: "tenants", id: t.tenantId, draft: tenantDraft(t), base: tenantDraft(t) })} create={() => setNewTenant(true)} />
         : mod === "extensions" ? <ExtensionList rows={extensions.filter((e) => inScope(tenantSlugOf(e, tenantByName)) && matches(e.extension + " " + e.name + " " + e.tenantDescription))} all={extensions} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch}
             open={(e: Extension) => setEditor({ kind: "extensions", id: e.extensionId, draft: extDraft(e), base: extDraft(e) })}
             create={() => setEditor({ kind: "extensions", id: null, draft: extDraft(null, scope ? tenantByName.get(scope) : tenants.find((t) => !t.isMain)), base: null })} />
         : mod === "phones" ? <PhoneList rows={phones.filter((p) => inScope(slugForTenantId(p.tenantId, tenants)) && matches(p.mac + " " + p.description + " " + (p.model || "") + " " + p.tenantDescription))} push={push} reload={() => loadModule("phones")} />
         : <GeoView geo={geo} push={push} reload={() => loadModule("geo")} />}
+
+      {newTenant ? (
+        <NewTenantDialog
+          profiles={outboundProfiles}
+          push={push}
+          onClose={() => setNewTenant(false)}
+          onCreated={async () => { await loadAll(); }}
+        />
+      ) : null}
 
       {toastNode}
     </div>
@@ -176,13 +188,132 @@ function Filters({ search, setSearch, chips, filter, setFilter, placeholder }: a
   );
 }
 
-function TenantList({ rows, all, filter, setFilter, search, setSearch, open }: any) {
+/*
+ * Creating a customer is the ONE job the VitalPBX panel refuses once the licence
+ * lapses, so it does not go through the panel form at all - it goes through
+ * Connect's own mirror, the same generator onboarding already uses. That is why
+ * this is its own dialog rather than a mode of the editor: the editor is built
+ * around re-posting a rendered panel form, and this write has no panel form
+ * behind it. Folding them together would put the working edit flow at risk for
+ * no gain.
+ *
+ * It deliberately asks for very little. This is the panel's "add tenant" button,
+ * not onboarding: no trunk, no outbound route, no extensions, no phone numbers
+ * bought. Everything else about the customer is editable straight afterwards
+ * through the ordinary edit screen, which keeps working with no licence.
+ */
+function NewTenantDialog({ profiles, onClose, onCreated, push }: {
+  profiles: Array<{ id: number; label: string; inUseBy: number }>;
+  onClose: () => void;
+  onCreated: () => Promise<void> | void;
+  push: (m: string, k?: string) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [slug, setSlug] = useState("");
+  const [dids, setDids] = useState("");
+  const [profileId, setProfileId] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // the same rule the server uses, so what is previewed is what gets created
+  const toSlug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const effectiveSlug = slugTouched ? toSlug(slug) : toSlug(label);
+  const didList = dids.split(/[^0-9]+/).filter(Boolean);
+  const ready = !!label.trim() && !!effectiveSlug && !busy;
+
+  const submit = async () => {
+    if (!ready) return;
+    setBusy(true);
+    try {
+      await apiPost<{ createdTenantId: number; name: string }>("/admin/pbx-console/tenants", {
+        label: label.trim(),
+        slug: effectiveSlug,
+        dids: didList,
+        outboundProfileIds: profileId ? [Number(profileId)] : [],
+      });
+      push("Created " + label.trim() + " on the phone system.");
+      onClose();
+      await onCreated();
+    } catch (e) {
+      // the server sends a sentence for every refusal it recognises
+      push(errText(e, "The customer was not created."), "bad");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="pc-modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="pc-modal" role="dialog" aria-modal="true" aria-label="New customer">
+        <h3>New customer on the phone system</h3>
+        <div className="pc-mbody">
+          <div className="pc-f">
+            <label htmlFor="nt-label">Customer name</label>
+            <input id="nt-label" className="pc-ctl" value={label} autoFocus placeholder="Acme Bakery"
+              onChange={(e) => setLabel(e.target.value)} />
+            <div className="pc-help">What you and the customer call them. This is what shows in every list.</div>
+          </div>
+          <div className="pc-f">
+            <label htmlFor="nt-slug">Name on the PBX</label>
+            <input id="nt-slug" className="pc-ctl pc-mono" value={effectiveSlug} placeholder="acme_bakery"
+              onChange={(e) => { setSlugTouched(true); setSlug(e.target.value); }} />
+            <div className="pc-help">
+              Filled in from the name above. Letters, digits and underscores only &mdash; it is what the phone system
+              files everything under, so it cannot be changed afterwards.
+            </div>
+          </div>
+          <div className="pc-f">
+            <label htmlFor="nt-dids">Phone numbers <span className="pc-rowsub">(optional)</span></label>
+            <input id="nt-dids" className="pc-ctl pc-mono" value={dids} placeholder="8455577768, 8457231213"
+              onChange={(e) => setDids(e.target.value)} />
+            <div className="pc-help">
+              {didList.length
+                ? didList.length + (didList.length === 1 ? " number: " : " numbers: ") + didList.join(", ")
+                : "Numbers this customer answers. You can add them later instead."}
+            </div>
+          </div>
+          <div className="pc-f">
+            <label htmlFor="nt-prof">Outbound profile <span className="pc-rowsub">(optional)</span></label>
+            <select id="nt-prof" className="pc-ctl" value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+              <option value="">None &mdash; set this up later</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={String(p.id)}>{p.label}{p.inUseBy ? " - used by " + p.inUseBy : ""}</option>
+              ))}
+            </select>
+            <div className="pc-help">How their outgoing calls leave the building. Leave this alone unless you know which one they should share.</div>
+          </div>
+          <div className="pc-note">
+            <span className="pc-ico">i</span>
+            <div>
+              This creates the customer on the phone system and nothing else &mdash; no extensions, no trunk, no numbers
+              bought. Add their extensions next.
+            </div>
+          </div>
+        </div>
+        <div className="pc-mfoot">
+          <button className="pc-btn pc-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="pc-btn pc-btn-primary" onClick={() => void submit()} disabled={!ready}>
+            {busy ? "Creating..." : "Create customer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TenantList({ rows, all, filter, setFilter, search, setSearch, open, create }: any) {
   let r = rows as Tenant[];
   if (filter === "enabled") r = r.filter((t) => t.enabled);
   return (
     <>
-      <Filters search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} placeholder="Search customers, names or numbers"
-        chips={[{ k: "all", label: "All", n: (all as Tenant[]).length }, { k: "enabled", label: "Enabled", n: (all as Tenant[]).filter((t) => t.enabled).length }]} />
+      <div className="pc-filters">
+        <div className="pc-search"><span>&#128269;</span><input placeholder="Search customers, names or numbers" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+        <div className="pc-chipset">
+          <button className="pc-chip" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All {(all as Tenant[]).length}</button>
+          <button className="pc-chip" aria-pressed={filter === "enabled"} onClick={() => setFilter("enabled")}>Enabled {(all as Tenant[]).filter((t) => t.enabled).length}</button>
+        </div>
+        <span className="pc-spacer" />
+        <button className="pc-btn pc-btn-primary pc-btn-sm" onClick={create}>New customer</button>
+      </div>
       <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
         <thead><tr><th>Customer</th><th>Name on the PBX</th><th className="pc-num">Extensions</th><th className="pc-num">Numbers</th><th>Outbound profile</th><th>Status</th><th /></tr></thead>
         <tbody>{r.length ? r.map((t) => (
@@ -196,7 +327,7 @@ function TenantList({ rows, all, filter, setFilter, search, setSearch, open }: a
           </tr>
         )) : <tr><td colSpan={7} className="pc-empty">No customers match.</td></tr>}</tbody>
       </table></div></div>
-      <div className="pc-legend">Editing a customer works with no licence. Creating one uses Connect&apos;s own mirror generator (from onboarding).</div>
+      <div className="pc-legend">Editing a customer replays the PBX&apos;s own form, which keeps working with no licence. Creating one is the single job the panel refuses, so it goes through Connect&apos;s own generator instead.</div>
     </>
   );
 }

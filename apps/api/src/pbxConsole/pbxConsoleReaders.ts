@@ -312,3 +312,35 @@ export async function readConsoleGeo(conn: Conn): Promise<ConsoleGeo> {
     whitelist: wl.map((w) => ({ id: Number(w.firewall_whitelist_id), host: String(w.host ?? ""), description: String(w.description ?? ""), isDefault: yes(w.default) })),
   };
 }
+
+/**
+ * The outbound profiles (route selections) a new tenant can be pointed at.
+ *
+ * ⛔ THE JOIN THAT LOOKS WRONG AND IS RIGHT: a tenant's profiles live in
+ * `ombu_tenant_settings(name='outbound_profiles')` as a comma list of
+ * `ombu_ars.ars_id`, and **every real ARS row sits under tenant_id 1 (Main)**.
+ * Joining `ombu_ars` on a tenant_id concludes that almost no customer has
+ * outbound routing at all — a wrong answer this repo has already produced once.
+ *
+ * `inUseBy` is how many tenants already point at each profile, so a person
+ * picking one for a new tenant can see whether it is a shared profile or a
+ * customer's own. Most onboarding-created rows are literally described "none",
+ * which is existing data, not a bug — hence `label`, which never renders empty.
+ */
+export async function listOutboundProfiles(conn: Conn): Promise<Array<{ id: number; description: string; label: string; inUseBy: number }>> {
+  const ars = await q(conn, `SELECT ars_id, description FROM ombutel.ombu_ars ORDER BY ars_id`);
+  const settings = await q(conn, `SELECT value FROM ombutel.ombu_tenant_settings WHERE name = 'outbound_profiles'`);
+  const uses = new Map<number, number>();
+  for (const s of settings) {
+    for (const raw of String(s.value ?? "").split(",")) {
+      const id = Number(raw.trim());
+      if (Number.isFinite(id) && id > 0) uses.set(id, (uses.get(id) || 0) + 1);
+    }
+  }
+  return ars.map((r) => {
+    const id = Number(r.ars_id);
+    const description = String(r.description ?? "").trim();
+    const named = description && description.toLowerCase() !== "none";
+    return { id, description, label: named ? `${description} (#${id})` : `Profile #${id}`, inUseBy: uses.get(id) || 0 };
+  });
+}

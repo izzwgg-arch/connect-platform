@@ -10,6 +10,8 @@
  * ⛔ Nothing here is tenant-scoped by a customer — it is the platform console.
  */
 import { loadPanelConfig, PanelSession, PanelStepError, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
+import { slugify } from "../onboarding/pbxTenantBuild";
+import { resolveMirrorTenantCreator, resolveMirrorTenantRenderer } from "../onboarding/setupOrchestrator";
 import {
   consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
   resolvePbxRouteHelperConfig,
@@ -19,8 +21,7 @@ import { acquireAccount, releaseAccount } from "../onboarding/setupOrchestrator"
 import {
   findConsoleExtension, findConsoleTenant, extensionReferences, listConsoleExtensions, listConsolePhones,
   listConsoleTenants, listProvisioningCatalog, openReadConn, orphanMobileFlagDevices, readConsoleGeo,
-  type ConsoleExtensionRow,
-} from "./pbxConsoleReaders";
+  type ConsoleExtensionRow, listOutboundProfiles,} from "./pbxConsoleReaders";
 import {
   applyAndRebake, createExtension, deleteExtension, deleteTenant, rebootPhone,
   saveExtension, savePhone, saveTenant, unlinkDevice, MAIN_TENANT_PATH_DEFAULT,
@@ -122,7 +123,98 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
     const r = await withRead(instance, (c) => listConsoleTenants(c));
     if (!r.ok) return reply.status(200).send({ available: false, reason: "pbx_unavailable", detail: r.reason });
-    return { available: true, instanceId: instance.id, tenants: r.data };
+    // the create form needs the pickable profiles, and they come from the same read
+    const p = await withRead(instance, (c) => listOutboundProfiles(c));
+    return { available: true, instanceId: instance.id, tenants: r.data, outboundProfiles: p.ok ? p.data : [] };
+  });
+
+  /**
+   * Create a phone-system tenant.
+   *
+   * ⛔⛔ THIS IS THE ONE OPERATION THE UNLICENSED PANEL REFUSES OUTRIGHT
+   * ("maximum number of free tenants"), which is exactly why it goes through the
+   * MIRROR and not the panel form: the mirror writes the same `ombutel` rows the
+   * panel would, in ONE transaction, and then renders the baseline itself.
+   * ⛔ Rendering is not optional and is not something Apply Changes can do for
+   * us: on prod (VitalPBX 4.5.3-1) neither the panel Apply nor the REST
+   * per-tenant apply will perform a tenant's FIRST generation — both produced
+   * zero files for a row-inserted tenant. Once the baseline exists every later
+   * Apply behaves normally, which is why the 27 existing tenants keep working.
+   *
+   * ⛔ We deliberately do NOT re-implement any of that here. `buildPbxTenant`
+   * already owns the mirror path for onboarding, and `resolveMirrorTenantCreator`
+   * is its wiring — reusing it means there is exactly ONE tenant-creation
+   * implementation. A second one is the failure shape this repo keeps hitting
+   * (two IVR publish paths, two SMS ingest paths, two invite paths).
+   *
+   * What this route does NOT do, on purpose: no trunk, no outbound route, no
+   * extensions, no VoIP.ms, no Connect tenant row. It is the panel's "add
+   * tenant" button, not onboarding. Everything else is editable afterwards
+   * through the ordinary tenant edit, which works unlicensed.
+   */
+  app.post("/admin/pbx-console/tenants", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ label?: string; slug?: string; dids?: string[]; outboundProfileIds?: Array<number | string> }>(req);
+    const label = String(b.label || "").trim();
+    if (!label) return reply.status(400).send({ error: "pbx_console_write_failed", detail: "give the customer a name" });
+    // ⛔ the SAME slug rule onboarding uses — the PBX name is matched by other
+    // code (findPbxDirectoryEntry matches on slug OR displayName), so a second
+    // variant here would create tenants those lookups cannot find.
+    const slug = slugify(b.slug || label);
+    if (!slug) return reply.status(400).send({ error: "pbx_console_write_failed", detail: "that name has no letters or digits in it, so it cannot be turned into a system name" });
+    const dids = (b.dids || []).map((d) => String(d).replace(/\D/g, "")).filter(Boolean);
+    const arsIds = (b.outboundProfileIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+
+    // ⛔ Refuse a duplicate by NAME before writing anything. The mirror raises on
+    // it too (the column is unique), but a refusal that names the existing
+    // customer is the difference between "already taken" and a stack trace.
+    const existing = await withRead(instance, (c) => listConsoleTenants(c));
+    if (existing.ok) {
+      const clash = existing.data.find((t) => t.name === slug || t.description.trim().toLowerCase() === label.toLowerCase());
+      if (clash) {
+        return reply.status(409).send({
+          error: "pbx_console_refused",
+          reason: "tenant_exists",
+          detail: `The phone system already has a customer called "${clash.description}" (system name ${clash.name}). Pick a different name, or edit that one.`,
+        });
+      }
+    }
+
+    const creator = resolveMirrorTenantCreator(instance.id);
+    if (!creator) {
+      return reply.status(409).send({
+        error: "pbx_console_refused",
+        reason: "mirror_unavailable",
+        detail: "Creating a customer needs the Connect helper on the phone system, and it is not reachable right now. Nothing was created.",
+      });
+    }
+
+    try {
+      const made = await creator({ slug, label, dids, arsId: arsIds.length ? String(arsIds[0]) : "" });
+      if (!/^[0-9a-f]{16}$/.test(String(made.path || ""))) {
+        throw new PanelStepError("tenant", `the phone system did not return a usable tenant path (${JSON.stringify(made)})`);
+      }
+      /* ⛔ Re-render AFTER the rows are all in, exactly as onboarding does. The
+         create call renders a baseline; this second pass is what makes the files
+         byte-identical to what the panel would have produced. It must never fail
+         the create — the tenant exists either way, and a person can re-render it
+         from the tenant list. */
+      let rendered: unknown = null;
+      try {
+        const renderer = resolveMirrorTenantRenderer(instance.id);
+        if (renderer) { await renderer(made.tenantId); rendered = true; }
+      } catch (e: any) {
+        log.warn({ err: e?.message, tenantId: made.tenantId }, "[PBX_CONSOLE] tenant created but the re-render failed");
+        rendered = { error: e?.message || "render failed" };
+      }
+      await audit({
+        actorUserId: admin.sub, action: "PBX_CONSOLE_TENANT_CREATED", entityType: "PbxTenant",
+        entityId: String(made.tenantId), metadata: { name: slug, label, dids: dids.length, outboundProfileIds: arsIds },
+      });
+      return { createdTenantId: made.tenantId, name: slug, label, path: made.path, dids, outboundProfileIds: arsIds, rendered };
+    } catch (e) { return fail(reply, e); }
   });
 
   app.patch("/admin/pbx-console/tenants/:id", async (req: any, reply: any) => {
