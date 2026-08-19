@@ -500,3 +500,17 @@ test("render_phone.php only renders — it can never write rows", () => {
     "the sudo-run script must not be able to change data");
   assert.ok(PHP.includes("preg_match('/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/'"), "it must validate the MAC before use");
 });
+
+test("the geo capability check never RUNS the firewall builder", () => {
+  // ⛔ An earlier version probed by executing `sudo -n <builder> --connect-probe`,
+  // which would have rebuilt and reloaded the LIVE firewall just to answer a
+  // capability question. `sudo -l` asks without executing.
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8");
+  assert.ok(CW.includes('subprocess.run(["sudo", "-n", "-l", GEO_BUILD]'), "the check must use sudo -l");
+  // ⛔ Read the CODE, not the prose: the doc comment above the fix names the old
+  // dangerous pattern, and a naive scan matches that and fails on correct code.
+  const runsBuilder = CW.split(String.fromCharCode(10)).filter((l) => l.includes("subprocess.run") && l.includes("GEO_BUILD"));
+  assert.ok(runsBuilder.every((l) => l.includes('"-l"')), "the capability check must never execute the builder");
+  // and an unreadable /etc/firewalld must not crash the refusal with len(None)
+  assert.ok(CW.includes("n = lambda v: (len(v) if v is not None else None)"), "counts must tolerate an unknown enforcement view");
+});

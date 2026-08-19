@@ -243,16 +243,22 @@ def geo_state(conn):
 
 def geo_build_available():
     """Can we actually rebuild the firewall? The builder writes /etc/firewalld and
-    reloads firewalld, so it needs root: the installer adds ONE narrow sudoers
-    line for exactly this script (no arguments, no wildcard)."""
-    if os.access(GEO_BUILD, os.X_OK) and os.geteuid() == 0:
+    reloads firewalld, so it needs root.
+
+    ⛔⛔ NEVER PROBE BY RUNNING THE BUILDER. An earlier version ran
+    `sudo -n <builder> --connect-probe` and treated "no error" as "available" —
+    which would have REBUILT AND RELOADED THE LIVE FIREWALL just to answer a
+    capability question, on a PBX carrying calls. It also mis-read the refusal:
+    under `NoNewPrivileges=yes` sudo says "the no new privileges flag is set",
+    which matched none of the strings it looked for, so it reported the build as
+    available and the caller wrote flags it could not enforce.
+    `sudo -l` ASKS without executing, which is the only safe question.
+    """
+    if os.geteuid() == 0 and os.access(GEO_BUILD, os.X_OK):
         return ["direct"]
-    probe = subprocess.run(["sudo", "-n", GEO_BUILD, "--connect-probe"], text=True,
+    probe = subprocess.run(["sudo", "-n", "-l", GEO_BUILD], text=True,
                            capture_output=True, timeout=30, check=False)
-    # sudo prints "a password is required" / "not allowed" to stderr when refused
-    if "password is required" in (probe.stderr or "") or "not allowed" in (probe.stderr or ""):
-        return None
-    return ["sudo"]
+    return ["sudo"] if probe.returncode == 0 else None
 
 
 def set_geo_blocks(conn, *, block=(), unblock=()):
@@ -290,9 +296,13 @@ def set_geo_blocks(conn, *, block=(), unblock=()):
     after = geo_state(conn)
     cmd = [GEO_BUILD] if runner == ["direct"] else ["sudo", "-n", GEO_BUILD]
     build = subprocess.run(cmd, text=True, capture_output=True, timeout=900, check=False)
+    # ⛔ `enforceable`/`missingIpset` are None when /etc/firewalld cannot be read
+    # (see geo_state) — len(None) is what turned an honest refusal into a Python
+    # error in the caller's face.
+    n = lambda v: (len(v) if v is not None else None)
     return {
-        "blockedBefore": len(before["blocked"]), "blockedAfter": len(after["blocked"]),
-        "enforceableBefore": len(before["enforceable"]), "enforceableAfter": len(after["enforceable"]),
+        "blockedBefore": n(before["blocked"]), "blockedAfter": n(after["blocked"]),
+        "enforceableBefore": n(before["enforceable"]), "enforceableAfter": n(after["enforceable"]),
         "missingIpset": after["missingIpset"],
         "build": {"via": runner[0], "code": build.returncode, "out": (build.stdout or "").strip()[:400],
                   "err": (build.stderr or "").strip()[:400]},
