@@ -345,6 +345,7 @@ import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
+import { registerPbxConsoleRoutes } from "./pbxConsole/pbxConsoleRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
 import { registerForwardRoutes } from "./pbx/forwardRoutes";
 import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler, injectAsService as didInjectAsService } from "./didSwitchSchedule";
@@ -2899,6 +2900,8 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // SignalWire evaluation console (2026-08-18). Platform-owner only — every
   // handler ALSO calls requireSuperAdmin; this rule exists so the route is not
   // silently outside the global permission gate (the /admin/wake-health class).
+  // PBX Console (2026-08-19) — platform-owner only; every handler also calls requireOwner.
+  { prefix: "/admin/pbx-console", permission: "can_manage_global_settings" },
   { prefix: "/admin/apps/signalwire", permission: "can_manage_global_settings" },
   { prefix: "/admin/numbers", permission: "can_view_admin_billing" },
   { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
@@ -23639,6 +23642,31 @@ registerSignalWireRoutes({
   app,
   db,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+});
+
+// ── PBX Console (2026-08-19) ────────────────────────────────────────────────
+// Replaces the VitalPBX panel for tenants / extensions / phone provisioning /
+// geo firewall once the licence lapses. SUPER_ADMIN only; writes replay the
+// panel through a robot session and always re-bake the Connect doorway.
+registerPbxConsoleRoutes({
+  app,
+  db,
+  decryptJson,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+  audit: (e) => audit({
+    tenantId: e.tenantId || "platform",
+    action: e.action,
+    entityType: e.entityType || "PbxConsole",
+    entityId: e.entityId || "-",
+    actorUserId: e.actorUserId || undefined,
+    metadata: e.metadata ?? undefined,
+  }),
+  log: {
+    info: (o, m) => app.log.info(o, m),
+    warn: (o, m) => app.log.warn(o, m),
+    error: (o, m) => app.log.error(o, m),
+  },
+  getVitalPbxClient,
 });
 
 // ── GET /voice/ivr/prompts/sync-manifest ────────────────────────────────────
