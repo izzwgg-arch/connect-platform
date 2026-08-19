@@ -643,3 +643,105 @@ licensing host while still paying could read as an early lapse):**
 2. Block outbound to `licensing.vitalpbx.com` (firewalld rich rule or /etc/hosts pin to 127.0.0.1).
 3. After that the box talks to VitalPBX in NO direction. Everything running is Debian + Asterisk +
    config files we own/render.
+
+## 16. THE PBX CONSOLE — the panel-replacement pages are BUILT and the READS + one EXTENSION CREATE are PROVEN ON PROD (2026-08-19)
+
+Izzy, 2026-08-19: *"since tenants are not going to be able to be controlled
+through the PBX anymore … create a page for extensions … and tenants that has
+all the options, just like the PBX … same for provisioning, same for geo
+firewall … I give you full permission to wire it into the PBX, 100% in
+production. Be careful. Don't mess up any other tenants."*
+
+**Commits `6378cb8b` (backend) + `fd3d0a3c` (portal + fixes) on
+`feat/ivr-migration-takeover`. api DEPLOYED and container-verified at `6378cb8b`
+(portal + the audit fix are in the deploy queue as of this writing). One
+throwaway prod write: ext 155 created on Loopcom Demo (T102), then removed.**
+
+### What it is
+`/admin/pbx-console` (SUPER_ADMIN only — forced in `navConfig.isNavItemVisibleForUser`
+AND `PermissionGate` AND `requireOwner` in every route; the `/admin/pbx-console`
+prefix is in `PORTAL_API_PERMISSION_RULES` with `can_manage_global_settings`).
+Four tabs: **Tenants**, **Extensions**, **Phone Provisioning**, **Geo Firewall**,
+a top-bar customer switcher, search/filter, an editor.
+
+### The architecture, and the ONE rule that governs it
+- **Reads** = SELECTs through the read-only `connect_read` MySQL user
+  (`apps/api/src/pbxConsole/pbxConsoleReaders.ts`). Granted `SELECT ON
+  provisioning.*` on prod for the phone pages (backup
+  `/root/pbx-console-grants-20260819T060722Z/`).
+- **Writes** = replay the VitalPBX **panel** through a robot `PanelSession`, one
+  build per robot account, exactly like onboarding
+  (`apps/api/src/pbxConsole/pbxConsoleWrites.ts`). ⛔⛔ **The panel is
+  ionCube-encrypted, so the ONLY honest description of a record is the FORM the
+  panel renders. `panelForm.ts` parses that form and re-emits the exact pairs a
+  browser would post; a write applies the person's changes on top.** THE CHECKBOX
+  RULE lives there: an unticked checkbox is **OMITTED**, never sent as `=no`
+  (which TICKS it). A unit test pins it.
+- ⛔ **`applyAndRebake()` is the ONLY apply, and it ALWAYS re-bakes the Connect
+  doorway on every Connect-routed number afterwards** — Apply Changes is
+  whole-PBX and VitalPBX's regenerator cannot render the doorway (2026-08-13
+  dead-air). Proven on prod: the ext-155 create's apply left T2/T35/T105 at
+  **0 cc-wipes**.
+
+### ⛔⛔ THE FOUR UNLICENSED-PANEL CAPS — mapped on the clone, and they decide the design
+Tested on the unlicensed clone (prod data copy, 55 phones / 119 exts / no `.lic`):
+
+| Operation | Unlicensed panel | Console today |
+|---|---|---|
+| **Extension** create / edit / delete / device add-edit-unlink | ✅ **works** (no `extensions.max_reached`) | ✅ full CRUD, PROVEN on clone AND one create on prod |
+| **Tenant edit / delete** | ✅ works | ✅ full, PROVEN on clone |
+| Tenant **create** | ⛔ "maximum number of free tenants" | (already solved — the MIRROR, §11–§14) |
+| **Provisioning save** (edit OR add) | ⛔ **"maximum number of provisioned devices"** over 20 | read + resync only; write needs a direct-DB path |
+| **Geo block** | ⛔ **"you may only block one country on the free version"** | read only; write needs a direct-DB path |
+
+So **Extensions and Tenant-edit go through the panel and survive the lapse;
+Provisioning and Geo writes do NOT** — they need a direct `ombu_*` /
+`ombu_geo_firewall` write + regen (like the mirror), which is the next build.
+
+### ⛔ Traps proven on the clone (in `deviceOverrides`), each with a test
+- **DTMF**: the rendered form has NO `rfc4733` option (the panel's JS renames
+  rfc2833→rfc4733 for pjsip after load), so re-posting the raw value silently
+  flips a desk phone to rfc2833. Desk = **rfc4733**, WebRTC app = **rfc2833**
+  (matches the live rows), set explicitly.
+- **Extension create is ALWAYS a desk (pjsip) CSV base row**, then reshaped — a
+  CSV import with a virtual base row answers "Import failed" and leaves a bare
+  extension. App-only / virtual-only extensions get the base desk device
+  **unlinked** at the end.
+- **A device's TYPE can't be changed** after creation — a spec that says
+  "virtual" for an existing desk device is REFUSED, not applied (it rewrote the
+  desk phone as a cell forward on the clone).
+- **A general-only extension save is refused** — it would re-post the raw device
+  sub-form and flip DTMF; every save carries every device with its DB dtmf.
+- **Secrets are preserved** across edits (blank password = keep current).
+
+### Proven on the clone end-to-end (`scripts/pbx/console/clone-console-check.ts`)
+extension create (desk+app+cell / virtual-only / app-only) → edit (name +
+checkbox round trip) → device add-edit-unlink → delete + verify-gone; tenant
+cid + inbound-number round trip; DB read back each time. 8 unit + source-guard
+tests (`apps/api/src/pbxConsole/pbxConsole.test.ts`).
+
+### Proven on PRODUCTION (deployed `6378cb8b`, self-signed SUPER_ADMIN probe)
+All four **reads**: 27 tenants, extension devices, 55 phones + 427-model catalog,
+geo 232 blocked + 15 whitelist. One **write**: `POST
+/admin/pbx-console/extensions` created ext 155 "Console Prod Test" on Loopcom
+Demo (T102) — desk `T102_155` (rfc4733, max 1), WebRTC `T102_155_1` (rfc2833,
+max 5, vitxi), virtual 8455550155 — **both PJSIP endpoints loaded in Asterisk**,
+doorways T2/T35/T105 **0 cc-wipes**.
+⛔ **A create SUCCEEDED but the first attempt returned 500** because the old
+audit wrote `tenantId: "platform"` (FK violation) AFTER the panel write. Audit
+is now best-effort (attributes to the admin's tenant or skips, wrapped in
+try/catch). Fixed in `fd3d0a3c` — in the deploy queue.
+
+### ⏳ NOT DONE / next
+1. **The delete round trip on prod returning 200** (ext 155 was verified formed;
+   its removal + a fresh 200/200 create-delete is the last acceptance, after the
+   `fd3d0a3c` api redeploy).
+2. **Nobody has opened the portal page in a browser** — proven by tests +
+   typecheck + the live API, not by a human clicking.
+3. **Provisioning + Geo WRITES** — capped by the unlicensed panel; need a
+   direct-DB helper endpoint (geo = `ombu_geo_firewall` + `build_geo_firewall`;
+   provisioning = `provisioning.devices`/`accounts` + config render, the harder
+   one). Reads + resync work now.
+4. Tenant **create** in the console UI still routes nowhere — it's the mirror's
+   job (§11–§14); wiring the "New tenant" button to `buildPbxTenant` is a follow-up.
+5. ⛔ Still open from earlier: **rotate the robot panel password**.
