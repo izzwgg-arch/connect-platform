@@ -4,6 +4,41 @@ Newest entries first.
 
 ---
 
+## Sign-in code — hardening pass, three findings from attacking it (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `1fa34d29`. api + portal.
+Handoff `AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §12.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/mfa/*.test.ts" src/publicReadyJwtBypass.test.ts src/loginRequest.test.ts src/loginThrottle.test.ts src/nodeEnvGates.test.ts src/globalRateLimit.test.ts src/publicOrigins.test.ts src/tenantScopeHardening.test.ts src/securityHardeningRound2.test.ts src/internalSecret.test.ts
+cd apps/portal && node --import tsx --test lib/mfaLogin.test.ts
+```
+
+**Result:** api security sweep **178/178** (mfa 18 + 9 + 24 after +5 new), portal
+**11/11**. New: `decideChallengeReuse` rules; a source guard that the login
+handler has **no** `.catch()` on the 2FA tenant read and **does** answer 503; a
+guard that `startOtpChallenge` checks reuse **before** it creates or sends; and
+two end-to-end route tests — **eleven consecutive sign-ins produce ONE text and
+ONE challenge row**, the original code still verifies through the newest login
+while older pre-auth tokens are dead, and a challenge that burned its five tries
+really is replaced rather than handed back.
+
+**Replayed against the shipped commit `07105681`** (i.e. the code as deployed
+when the pass started): all five markers confirm the findings were real — the
+login gate carried the fail-open `.catch`, `issueLoginSession` carried it too,
+there was no 503 branch, no `decideChallengeReuse`, and `startOtpChallenge` sent
+unconditionally. api typecheck **75 = baseline**, portal **0**.
+
+Also verified by reading rather than assuming: `EmailJob.type` is a plain
+`String` (no enum), so `LOGIN_CODE` inserts; and the send door skips **only**
+`ADMIN_ALERT`, so a login code really is sent.
+
+### Live (acceptance)
+
+See the deploy bullets. ⏳ Still no tenant switched on and no code sent to a human.
+
+---
+
 ## Per-tenant sign-in code (2FA by text/email) + Turnstile (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `fc551996`. api + portal + db migration.

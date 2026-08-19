@@ -653,6 +653,39 @@ as well."*
   creates a Turnstile site for BOTH hostnames → secret into `.env.platform` +
   api deploy (observe) → site key into the portal build → read the observe log →
   only then `TURNSTILE_ENFORCE=1`.**
+- ⛔⛔ **HARDENED HOURS LATER BY ATTACKING IT (`1fa34d29`), and all three findings
+  were real on the shipped commit — none was reachable, because no tenant is on.**
+  **(1) NOTHING CAPPED SENDING A CODE.** `LOGIN_OTP_MAX_SENDS` caps resends WITHIN
+  a challenge; every `POST /auth/login` minted a NEW challenge and a NEW text — so
+  anyone holding a valid password could spend the SMS balance at the global rate
+  limit (**480/min per IP**), and a customer double-clicking Sign in got two texts
+  carrying two different codes **of which only the newer one worked**. Now a login
+  that finds a LIVE challenge (unconsumed, unexpired, tries left) **re-binds it to
+  the new login and sends nothing** (`decideChallengeReuse`): the code already on
+  their phone stays the one that works, **only the newest login can spend it**, and
+  texts per person are bounded by the resend cap inside one 10-minute window
+  however often login is called. ⛔ A challenge that has **burned its five tries is
+  NOT reused** — that would hand someone a dead code with no way forward; burning
+  those five is itself throttled. Proven end to end: **eleven consecutive sign-ins
+  → ONE text, ONE challenge row.**
+  **(2) THE 2FA GATE FAILED OPEN.** The tenant lookup deciding whether a code is
+  required ended `.catch(() => null)`, so a transient database error made
+  `loginOtpRequired` falsy and **issued an ordinary session with no code asked
+  for** — the exact shape of the empty `CDR_INGEST_SECRET` and the dead `NODE_ENV`
+  gates. It now fails **closed**: `503 service_unavailable` plus a
+  `login_otp_tenant_lookup_failed` error line so it is greppable, never silent.
+  **(3)** the 90-day-session lookup in `issueLoginSession` had the same `.catch`,
+  which would have minted a **never-expiring** session for a tenant that asked for
+  90-day sign-ins; it throws now.
+  ⛔ **The rule this re-earns: `.catch(() => null)` on a read that DECIDES a
+  security question is a fail-open gate.** Swept the rest of the auth surface for
+  it afterwards — `hasEffectivePortalPermission(...).catch(() => false)` and the
+  CRM resolver both fail CLOSED and are correct; no other instance was found.
+  ⚠️ **Known and accepted: Turnstile is bypassed by simply omitting `Origin`.**
+  That is deliberate (the mobile app sends none and must never be challenged), so
+  Turnstile protects against **browser-driven** credential stuffing only — the
+  defence against scripted attacks is the login throttle plus the global rate
+  limiter, not this. Do not "fix" it by challenging Origin-less callers.
 - **Tests: 15 rules + wiring guards (`mfa/loginOtp.test.ts`) + 7 end-to-end route
   tests through a real Fastify + `@fastify/jwt` against a faked db
   (`mfa/loginOtpRoutes.test.ts`) + 3 portal (`lib/mfaLogin.test.ts`), all
@@ -856,8 +889,17 @@ Memory: [[global-rate-limiter-was-dead-onroute-ordering]].
   the 24 `setupOrchestrator.test.ts` failures now in `HEAD` come from another
   session's `c2d9fdd9` (its `@connect/integrations` mock lacks the
   `resolvePbxRouteHelperConfig` the orchestrator now calls). Not touched.
-- ⏳ **NOT PROVEN by a human:** nobody has been rate-limited for real (nothing
-  legitimate comes close), nobody has paid through a combined link since, and
+- ✅✅ **PROVEN FIRING, 2026-08-19 — the limiter really does refuse.** 540 requests
+  to `/api/health` fired from loopcom against its own public IP in 18 s answered
+  **478 × 200 then 62 × 429**, i.e. it cut off at the configured **480**. The
+  refusal carries `retry-after: 10`, `x-ratelimit-remaining: 0` and a
+  plain-English body (*"Too many requests from this connection — slow down and
+  try again in 10 seconds."*), the IP was **not** banned by `monitor.sh`, and the
+  same IP was back to **200** once the window rolled. Both hostnames stayed
+  healthy throughout. ⛔ Run it from the SERVER, never a customer line: nginx
+  appends the real peer as the LAST `X-Forwarded-For` entry, so the bucket you
+  fill is whatever IP you call from.
+- ⏳ **NOT PROVEN by a human:** nobody has paid through a combined link since, and
   Izzy has not yet logged in over SSH with his key since the change (I have).
   ⏳ **Still open and needing Izzy:** MFA enrolment; the mobile 401 build (then
   server `expiresIn`); the Cloudflare proxy flip; DMARC `p=quarantine` on
@@ -1606,6 +1648,17 @@ medium/low items §6a–§6l ARE still open.)
   with 4,310 unattributed but **only 6** advertising a live recording; **58
   unassigned `TenantSmsNumber` rows**; 20 active mobile devices; 0 SMS campaigns;
   0 10DLC submissions.
+- ⛔ **A THIRD LATENT `ADMIN` FINDING, found 2026-08-19 in the one place the audit
+  said it had never looked: `/ws/telephony`.** The live-call socket authenticates
+  properly (`jwt.verify` against `JWT_SECRET`, `1008 Unauthorized` on failure, a
+  per-IP connection cap) and its snapshots ARE tenant-scoped — a scoped viewer
+  sees only its own tenant and records with no tenant are dropped for them. But
+  `TelephonySocketServer.handleConnection` treats **`SUPER_ADMIN` *or* `ADMIN`**
+  as global (`tenantId = null`), which bypasses the filter entirely — so creating
+  one `ADMIN` user lets them watch **every company's live calls in real time**.
+  Same class as the raw-PBX-id routes and the chat routes: harmless today (0
+  `ADMIN` users), armed the moment one exists. **Deliberately NOT changed** — it
+  is a telephony deploy, and `SUPER_ADMIN`-global is intended.
 - ⛔ **Two findings are LATENT because no `ADMIN`-role user exists** —
   `PATCH`/`DELETE /voice/pbx/resources/:resource/:id` pass a raw id straight to
   VitalPBX with the platform app-key and **no tenant scope**, including
