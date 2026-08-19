@@ -184,10 +184,19 @@ test("source: a duplicate customer is refused by name, before anything is writte
   assert.ok(createAt > clashAt, "the duplicate check must run BEFORE the tenant is created");
 });
 
-test("source: a failed re-render does not fail the create", () => {
+test("source: the create does NOT re-render, because it cannot and need not", () => {
   const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
   const create = src.slice(src.indexOf('app.post("/admin/pbx-console/tenants"'));
   const body = create.slice(0, create.indexOf('app.patch("/admin/pbx-console/tenants/:id"'));
-  // the tenant exists either way; a person can re-render from the list
-  assert.match(body, /resolveMirrorTenantRenderer[\s\S]{0,400}catch/, "the re-render must be wrapped");
+  /*
+   * ⛔ Two independent reasons, and BOTH have to keep holding for this to stay
+   * right, which is why the guard is here rather than a comment alone:
+   *  - redundant: this route writes nothing after the create, so the baseline
+   *    the mirror renders IS the final state (onboarding differs — it keeps
+   *    adding rows, which is why IT re-renders at the end);
+   *  - impossible: the render hands each file to www-data with an ACL mask of
+   *    r--, and the helper runs as asterisk, so a second pass gets EACCES on
+   *    the file it just wrote. Proven on prod (tenant 119).
+   */
+  assert.doesNotMatch(body, /resolveMirrorTenantRenderer/, "the create must not re-render");
 });

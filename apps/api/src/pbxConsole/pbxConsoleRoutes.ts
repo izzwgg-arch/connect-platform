@@ -11,7 +11,7 @@
  */
 import { loadPanelConfig, PanelSession, PanelStepError, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
 import { slugify } from "../onboarding/pbxTenantBuild";
-import { resolveMirrorTenantCreator, resolveMirrorTenantRenderer } from "../onboarding/setupOrchestrator";
+import { resolveMirrorTenantCreator } from "../onboarding/setupOrchestrator";
 import {
   consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
   resolvePbxRouteHelperConfig,
@@ -218,19 +218,23 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
       if (!/^[0-9a-f]{16}$/.test(String(made.path || ""))) {
         throw new PanelStepError("tenant", `the phone system did not return a usable tenant path (${JSON.stringify(made)})`);
       }
-      /* ⛔ Re-render AFTER the rows are all in, exactly as onboarding does. The
-         create call renders a baseline; this second pass is what makes the files
-         byte-identical to what the panel would have produced. It must never fail
-         the create — the tenant exists either way, and a person can re-render it
-         from the tenant list. */
-      let rendered: unknown = null;
-      try {
-        const renderer = resolveMirrorTenantRenderer(instance.id);
-        if (renderer) { await renderer(made.tenantId); rendered = true; }
-      } catch (e: any) {
-        log.warn({ err: e?.message, tenantId: made.tenantId }, "[PBX_CONSOLE] tenant created but the re-render failed");
-        rendered = { error: e?.message || "render failed" };
-      }
+      /* ⛔⛔ NO SECOND RENDER HERE, AND THAT IS DELIBERATE — it was tried on
+         production and it is BOTH redundant and impossible.
+         Redundant: onboarding re-renders at the very end because it keeps
+         writing rows after the tenant exists (extensions, devices, routes), so
+         its baseline is stale by the time it finishes. This route writes NOTHING
+         after the create, so the baseline the mirror just rendered is already
+         the final state.
+         Impossible: the mirror's render hands each file it writes to www-data so
+         the panel can keep managing it, and the ACL mask ends up `r--`. The
+         helper runs as `asterisk`, so a second render cannot reopen the file it
+         just created — proven on prod 2026-08-19, tenant 119:
+         `[Errno 13] Permission denied: extensions__50-119-dialplan.conf`, with
+         all 13 baseline files present and correct.
+         ⛔ Do NOT "fix" that by widening permissions on /etc/asterisk/vitalpbx —
+         CLAUDE.md already records a one-off chown and a bare ACL as non-fixes
+         there. See the handoff before touching it. */
+      const rendered = "baseline";
       await audit({
         actorUserId: admin.sub, action: "PBX_CONSOLE_TENANT_CREATED", entityType: "PbxTenant",
         entityId: String(made.tenantId), metadata: { name: slug, label, dids: dids.length, outboundProfileIds: arsIds },
