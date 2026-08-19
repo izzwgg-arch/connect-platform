@@ -771,6 +771,16 @@ model Tenant {
   /// call history + recordings for extensions in OTHER tenants that are linked
   /// into this tenant via UserSipAccount rows (scoped to those extensions only).
   linkedSipCallVisibilityEnabled  Boolean                           @default(false)
+  /// Per-tenant sign-in code (2FA-by-code, 2026-08-19). When ON, every user of
+  /// this tenant who is not TOTP-enrolled must enter a one-time code sent by
+  /// text or email after their password, unless they signed in from a device
+  /// they chose to "remember" (TrustedLoginDevice, 90 days). Sessions issued
+  /// under this switch expire after 90 days. OFF for every tenant until an
+  /// administrator turns it on — nobody is affected on the day it ships.
+  loginOtpRequired                Boolean                           @default(false)
+  /// "EMAIL" | "SMS" | "EITHER" — which channels the code may go out on. SMS
+  /// needs User.phone; a user with none is emailed even under "SMS".
+  loginOtpChannel                 String                            @default("EITHER")
   smsSubscriptionRequired         Boolean                           @default(true)
   smsBillingEnforced              Boolean                           @default(true)
   webrtcEnabled                   Boolean                           @default(false)
@@ -1067,6 +1077,9 @@ model User {
   sipAccounts                       UserSipAccount[]                  @relation("UserSipAccountUser")
   /// Multi-factor authentication (Phase 11, 2026-08-18). Absent = MFA off.
   mfa                               UserMfa?
+  /// Per-tenant sign-in codes (2026-08-19).
+  loginOtpChallenges                LoginOtpChallenge[]
+  trustedLoginDevices               TrustedLoginDevice[]
 }
 
 /// One row per user who has started (or finished) MFA enrolment.
@@ -1097,6 +1110,49 @@ model UserMfaRecoveryCode {
   userMfa   UserMfa   @relation(fields: [userMfaId], references: [id], onDelete: Cascade)
 
   @@index([userMfaId, usedAt])
+}
+
+/// A one-time sign-in code (per-tenant 2FA-by-code, 2026-08-19). The code is
+/// stored ONLY as a SHA-256 hash; the clear text exists in the text/email and
+/// nowhere else. `preAuthJti` binds the code to the pre-auth token the login
+/// answered with, so a code can only be spent by the login that requested it.
+/// `consumedAt` set = spent. `attempts` counts wrong guesses (max 5).
+model LoginOtpChallenge {
+  id                String    @id @default(cuid())
+  userId            String
+  tenantId          String
+  preAuthJti        String
+  channel           String
+  destinationMasked String
+  codeHash          String
+  attempts          Int       @default(0)
+  sendCount         Int       @default(1)
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([preAuthJti])
+}
+
+/// "Remember this device" for the sign-in code. The token the browser keeps is
+/// random and stored ONLY as a SHA-256 hash; presenting it at login skips the
+/// code until `expiresAt` (90 days) or revocation. Bound to ONE user — it can
+/// never skip the code for anyone else.
+model TrustedLoginDevice {
+  id         String    @id @default(cuid())
+  userId     String
+  tenantId   String
+  tokenHash  String    @unique
+  label      String?
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
 
 enum UserRole {

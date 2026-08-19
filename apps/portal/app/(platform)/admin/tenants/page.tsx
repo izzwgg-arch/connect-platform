@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
-import { apiGet, apiPost } from "../../../../services/apiClient";
+import { apiGet, apiPost, apiPut } from "../../../../services/apiClient";
 import { DataTable } from "../../../../components/DataTable";
 import { EmptyState } from "../../../../components/EmptyState";
 import { ErrorState } from "../../../../components/ErrorState";
@@ -30,6 +30,21 @@ export default function AdminTenantsPage() {
     }
   };
 
+  // Per-tenant sign-in code (2FA-by-code, 2026-08-19). SUPER_ADMIN only on the api.
+  const setLoginOtp = async (tenantId: string, required: boolean, channel?: string) => {
+    setTogglingId(tenantId);
+    setToggleError(null);
+    try {
+      await apiPut(`/admin/tenants/${tenantId}/login-otp`, { required, ...(channel ? { channel } : {}) });
+      setRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      const detail = e?.body?.message || e?.body?.error || e?.message || "Could not update the setting.";
+      setToggleError(`Sign-in code for this tenant was not changed — ${detail}`);
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   const rows = tenants.status === "success"
     ? tenants.data.map((tenant, idx) => ({
         id: String(tenant.id || idx),
@@ -37,6 +52,8 @@ export default function AdminTenantsPage() {
         approved: tenant.isApproved === false ? "No" : "Yes",
         createdAt: String(tenant.createdAt || "-"),
         linkedSipEnabled: tenant.linkedSipCallVisibilityEnabled === true,
+        loginOtpRequired: tenant.loginOtpRequired === true,
+        loginOtpChannel: String(tenant.loginOtpChannel || "EITHER"),
       }))
     : [];
 
@@ -67,6 +84,37 @@ export default function AdminTenantsPage() {
                   >
                     {togglingId === r.id ? "Saving…" : r.linkedSipEnabled ? "On" : "Off"}
                   </button>
+                ),
+              },
+              {
+                key: "loginOtp",
+                label: "Sign-in code (2FA)",
+                render: (r) => (
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className={r.loginOtpRequired ? "btn primary" : "btn ghost"}
+                      disabled={togglingId === r.id}
+                      onClick={() => setLoginOtp(r.id, !r.loginOtpRequired)}
+                      title="When ON, everyone in this tenant enters a one-time code (text or email) after their password unless they chose to remember their device for 90 days; sessions expire after 90 days. Users who already use an authenticator app are not asked twice. Off by default. ⛔ Phone-app users cannot finish sign-in on the current app until the build with the code step ships."
+                    >
+                      {togglingId === r.id ? "Saving…" : r.loginOtpRequired ? "On" : "Off"}
+                    </button>
+                    {r.loginOtpRequired ? (
+                      <select
+                        className="input"
+                        style={{ height: 30, fontSize: 12 }}
+                        value={r.loginOtpChannel}
+                        disabled={togglingId === r.id}
+                        onChange={(e) => setLoginOtp(r.id, true, e.target.value)}
+                        aria-label="How the code is sent"
+                      >
+                        <option value="EITHER">Text or email</option>
+                        <option value="SMS">Text only</option>
+                        <option value="EMAIL">Email only</option>
+                      </select>
+                    ) : null}
+                  </span>
                 ),
               },
               { key: "createdAt", label: "Created", render: (r) => r.createdAt }

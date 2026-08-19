@@ -90,7 +90,8 @@ test("⛔ login page: the pre-auth token is NEVER written as a session, and the 
   // writeAuthToken is called exactly once, on a classified SESSION token.
   const writes = src.match(/writeAuthToken\(/g) ?? [];
   assert.equal(writes.length, 1, "exactly one writeAuthToken call site");
-  assert.match(src, /function completeSignIn\(session: Extract<ClassifiedLogin, \{ kind: "session" \}>\) \{\s*\n\s*writeAuthToken\(session\.token\);/);
+  assert.match(src, /function completeSignIn\(session: Extract<ClassifiedLogin, \{ kind: "session" \}>\) \{[\s\S]{0,400}?writeAuthToken\(session\.token\);/);
+  assert.match(src, /writeAuthToken\(session\.token\);/, "the ONE write is the classified session token");
   assert.doesNotMatch(src, /writeAuthToken\([^)]*preAuth/i, "the pre-auth token must never be stored as a session");
   assert.doesNotMatch(src, /localStorage\.setItem\([^)]*preAuth/i);
   // Errors are read from .body, never .payload.
@@ -135,4 +136,59 @@ test("⛔ the security page is reachable: profile menu links it, and the dashboa
   assert.match(nudge, /if \(!hasBrowserAuthToken\(\)\) return;/, "the nudge must not fire an unauthenticated /auth/mfa/status");
   assert.match(nudge, /"\/auth\/mfa\/status"/);
   assert.match(nudge, /href="\/account\/security\?setup=1"/);
+});
+
+// ─── per-tenant sign-in code + Turnstile (2026-08-19) ────────────────────────
+
+test("classifyLoginResponse: the OTP challenge shape has NO token; a token still always wins; trusted-device fields ride the session", () => {
+  const otp = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), expiresInSeconds: 600, channel: "SMS", channels: ["SMS", "EMAIL"], destination: "•••-•••-1234", sent: true, error: "otp_required" });
+  assert.equal(otp.kind, "otp_challenge");
+  if (otp.kind === "otp_challenge") {
+    assert.equal(otp.channel, "SMS");
+    assert.deepEqual(otp.channels, ["SMS", "EMAIL"]);
+    assert.equal(otp.sent, true);
+    assert.equal(otp.expiresInSeconds, 600);
+  }
+  const notSent = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), sent: false });
+  assert.equal(notSent.kind === "otp_challenge" && notSent.sent, false);
+  assert.equal(classifyLoginResponse({ otpChallengeRequired: true }).kind, "failed", "no pre-auth token → not a challenge");
+  const withToken = classifyLoginResponse({ token: "t", otpChallengeRequired: true, preAuthToken: "p".repeat(40) });
+  assert.equal(withToken.kind, "session", "a token always wins");
+  const remembered = classifyLoginResponse({ token: "t", trustedDeviceToken: "d".repeat(48), trustedDeviceExpiresAt: "2026-11-17T00:00:00.000Z" });
+  assert.equal(remembered.kind === "session" && remembered.trustedDeviceToken, "d".repeat(48));
+  const plain = classifyLoginResponse({ token: "t" });
+  assert.equal(plain.kind === "session" && "trustedDeviceToken" in plain, false, "no device token → the field is absent, not empty");
+});
+
+test("⛔ login page: the OTP step posts to /auth/otp/verify with the pre-auth token, remembers only on request, and never stores the pre-auth token", () => {
+  const src = read("../app/login/page.tsx");
+  assert.match(src, /apiPost<LoginApiResponse>\("\/auth\/otp\/verify", \{\s*\n\s*preAuthToken: otp\.preAuthToken,\s*\n\s*code: trimmed,\s*\n\s*rememberDevice,/);
+  assert.match(src, /apiPost<[^>]*>\("\/auth\/otp\/resend", \{\s*\n\s*preAuthToken: otp\.preAuthToken,/);
+  assert.match(src, /classified\.kind === "otp_challenge"/);
+  // The remembered-device token is stored ONLY inside completeSignIn, from a classified session, and sent on the next login.
+  const deviceWrites = src.match(/writeTrustedDeviceToken\(/g) ?? [];
+  assert.equal(deviceWrites.length, 1, "exactly one place stores the device token");
+  assert.match(src, /if \(session\.trustedDeviceToken && session\.trustedDeviceExpiresAt\) \{\s*\n\s*writeTrustedDeviceToken\(session\.trustedDeviceToken, session\.trustedDeviceExpiresAt\);/);
+  assert.match(src, /const trustedDeviceToken = readTrustedDeviceToken\(\);/);
+  assert.match(src, /\.\.\.\(trustedDeviceToken \? \{ trustedDeviceToken \} : \{\}\)/);
+  assert.doesNotMatch(src, /writeTrustedDeviceToken\([^)]*preAuth/i);
+  // "Remember this device" is a real choice on screen, defaulting to on.
+  assert.match(src, /useState\(true\)/);
+  assert.match(src, /Remember this device for 90 days/);
+  assert.match(src, /autoComplete="one-time-code"/);
+  // Turnstile: rendered only when a site key is configured; the token rides the login body; a human_check_ refusal resets the widget.
+  assert.match(src, /TURNSTILE_SITE_KEY \? <TurnstileWidget/);
+  assert.match(src, /\.\.\.\(turnstileToken \? \{ turnstileToken \} : \{\}\)/);
+  assert.match(src, /errCode\.startsWith\("human_check_"\)/);
+});
+
+test("⛔ trustedDevice + TurnstileWidget: expiry is honoured locally; the widget renders nothing without a site key and loads only Cloudflare's script", () => {
+  const td = read("./trustedDevice.ts");
+  assert.match(td, /exp <= nowMs/);
+  assert.match(td, /localStorage\.removeItem\(KEY\)/);
+  const tw = read("../components/TurnstileWidget.tsx");
+  assert.match(tw, /if \(!TURNSTILE_SITE_KEY\) return null;/);
+  assert.match(tw, /https:\/\/challenges\.cloudflare\.com\/turnstile\/v0\/api\.js/);
+  assert.doesNotMatch(tw, /TURNSTILE_SECRET/, "the secret never reaches the browser");
+  assert.match(tw, /"expired-callback": \(\) => onToken\(""\)/, "an expired token is cleared, not resent");
 });

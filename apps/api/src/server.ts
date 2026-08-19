@@ -12,6 +12,9 @@ import {
   platformBillingFromEmail,
   platformNoreplyEmail,
 } from "./publicOrigins";
+import { turnstileGate } from "./turnstile";
+import { checkTrustedDevice, registerLoginOtpRoutes, startOtpChallenge } from "./mfa/loginOtpRoutes";
+import { OTP_SESSION_EXPIRES_IN, decideOtpGate } from "./mfa/loginOtp";
 import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
@@ -5866,6 +5869,24 @@ app.post("/auth/login", async (req, reply) => {
       .header("Retry-After", String(throttle.retryAfterSeconds))
       .send({ error: "RATE_LIMITED" });
   }
+  // ── Cloudflare Turnstile (2026-08-19) — the "are you a person" check on the
+  // portal's sign-in form. Off until TURNSTILE_SECRET_KEY is set; observe-only
+  // until TURNSTILE_ENFORCE=1; never applied to a caller without a browser
+  // Origin on one of our hosts (the mobile app). Full contract in turnstile.ts.
+  const human = await turnstileGate({ headers: req.headers as any, token: input.turnstileToken, remoteIp: loginSourceIp });
+  if (human.action === "refuse") {
+    loginFailuresTotal.labels("human_check").inc();
+    app.log.warn({ email: emailKey, sourceIp: loginSourceIp, error: human.error }, "login_refused_turnstile");
+    return reply.status(human.status).send({
+      error: human.error,
+      message: human.error === "human_check_unavailable"
+        ? "We could not verify that you are a person right now. Try again in a moment."
+        : "Please complete the security check on the sign-in form and try again.",
+    });
+  }
+  if (human.note && human.note.startsWith("observed_")) {
+    app.log.warn({ email: emailKey, sourceIp: loginSourceIp, note: human.note }, "turnstile_observed");
+  }
   // Primary lookup against the canonical (lowercased) form; fall back to a
   // case-insensitive match so a user imported with mixed-case email (e.g.
   // "Relaxtires@gmail.com" from VitalPBX sync) is not permanently locked out
@@ -5943,6 +5964,25 @@ app.post("/auth/login", async (req, reply) => {
       error: "mfa_required",
     };
   }
+  // ── Per-tenant sign-in code (2FA-by-code, 2026-08-19) ────────────────────
+  // Only reached when the TOTP decision above did NOT challenge — i.e. the user
+  // is not TOTP-enrolled (an enrolled user already carries a stronger factor).
+  // OFF for every tenant until an administrator turns it on. Contract and rules
+  // in mfa/loginOtp.ts; a "remembered device" token skips the code for 90 days.
+  const otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true, loginOtpChannel: true } }).catch(() => null);
+  if (otpTenant?.loginOtpRequired) {
+    const trusted = input.trustedDeviceToken ? await checkTrustedDevice(otpDeps, user.id, input.trustedDeviceToken) : null;
+    const otpGate = decideOtpGate({ tenantOtpRequired: true, userHasTotp: false, trustedDevice: trusted });
+    if (otpGate.kind === "challenge") {
+      // lastLoginAt is stamped when the code is verified, not here — a password
+      // alone is not a sign-in for a tenant that asked for a code.
+      return await startOtpChallenge(otpDeps, {
+        user: { id: user.id, tenantId: user.tenantId, email: user.email, phone: (user as any).phone },
+        tenantChannelSetting: otpTenant.loginOtpChannel,
+        requestedChannel: input.otpChannel,
+      });
+    }
+  }
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
   const session = await issueLoginSession(user.id);
   return {
@@ -5969,13 +6009,16 @@ async function issueLoginSession(userId: string): Promise<{ token: string; porta
     .findFirst({ where: { ownerUserId: user.id, status: "ACTIVE" }, orderBy: { createdAt: "asc" }, select: { displayName: true } })
     .catch(() => null);
   const namedUser = { ...(user as any), ownedExtensions: namingExtension ? [namingExtension] : [] };
-  const token = app.jwt.sign({
-    sub: user.id,
-    tenantId: user.tenantId,
-    email: user.email,
-    role: user.role,
-    name: displayNameForUser(namedUser),
-  });
+  // ⛔ Sessions still never expire platform-wide (CLAUDE.md, token-expiry section:
+  // the mobile app cannot survive a 401 yet). The ONE exception, by Izzy's ask
+  // (2026-08-19): a tenant with the sign-in code switched on gets 90-day
+  // sessions — "they should have to re-login every 90 days if 2FA is enabled".
+  // Opt-in per tenant, off by default, so nobody's phone breaks on ship day.
+  const otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true } }).catch(() => null);
+  const signOpts = otpTenant?.loginOtpRequired ? { expiresIn: OTP_SESSION_EXPIRES_IN } : undefined;
+  const token = signOpts
+    ? app.jwt.sign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role, name: displayNameForUser(namedUser) }, signOpts)
+    : app.jwt.sign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role, name: displayNameForUser(namedUser) });
   const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
     user.role,
     user.id,
@@ -5990,6 +6033,9 @@ async function issueLoginSession(userId: string): Promise<{ token: string; porta
 // The MFA service dependencies live here (not at the registration site far
 // below) because `/auth/login` above needs `decideLoginMfa` at request time.
 const mfaDeps = buildMfaDeps({ audit, issueSession: issueLoginSession });
+// The sign-in-code deps live here for the same reason: `/auth/login` above
+// needs `startOtpChallenge` / `checkTrustedDevice` at request time.
+const otpDeps = { audit, issueSession: issueLoginSession, requireSuperAdmin, log: app.log };
 
 app.get("/auth/invite/validate", async (req, reply) => {
   const query = z.object({ token: z.string().min(20) }).parse(req.query || {});
@@ -9017,6 +9063,8 @@ app.get("/admin/tenants", async (req, reply) => {
       perSecondRate: t.perSecondRate,
       firstCampaignRequiresApproval: t.firstCampaignRequiresApproval,
       linkedSipCallVisibilityEnabled: (t as any).linkedSipCallVisibilityEnabled === true,
+      loginOtpRequired: (t as any).loginOtpRequired === true,
+      loginOtpChannel: String((t as any).loginOtpChannel || "EITHER"),
       stats: { users: userCount, campaigns: campaignCount },
     };
   }));
@@ -41358,6 +41406,7 @@ const port = Number(process.env.PORT || 3001);
   // it (bypass list) and verifies its own pre-auth token; everything else is an
   // ordinary JWT-gated route. Login itself decides via `decideLoginMfa` above.
   await registerMfaRoutes(app, { audit, issueSession: issueLoginSession, service: mfaDeps });
+  await registerLoginOtpRoutes(app, otpDeps);
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);

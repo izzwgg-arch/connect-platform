@@ -28,11 +28,21 @@ export type LoginApiResponse = {
   expiresInSeconds?: number;
   methods?: string[];
   error?: string;
+  /** Per-tenant sign-in code (2FA-by-code, 2026-08-19). */
+  otpChallengeRequired?: boolean;
+  channel?: string;
+  channels?: string[];
+  destination?: string;
+  sent?: boolean;
+  /** Returned by /auth/otp/verify when "remember this device" was ticked. */
+  trustedDeviceToken?: string;
+  trustedDeviceExpiresAt?: string;
 };
 
 export type ClassifiedLogin =
-  | { kind: "session"; token: string; portalPermissionSet?: string[]; mfaEnrollmentRequired: boolean }
+  | { kind: "session"; token: string; portalPermissionSet?: string[]; mfaEnrollmentRequired: boolean; trustedDeviceToken?: string; trustedDeviceExpiresAt?: string }
   | { kind: "mfa_challenge"; preAuthToken: string; expiresInSeconds: number; methods: string[] }
+  | { kind: "otp_challenge"; preAuthToken: string; expiresInSeconds: number; channel: string; channels: string[]; destination: string; sent: boolean }
   | { kind: "failed"; error: string };
 
 export function classifyLoginResponse(res: LoginApiResponse | null | undefined): ClassifiedLogin {
@@ -43,9 +53,21 @@ export function classifyLoginResponse(res: LoginApiResponse | null | undefined):
       token,
       portalPermissionSet: Array.isArray(res?.portalPermissionSet) ? res!.portalPermissionSet : undefined,
       mfaEnrollmentRequired: res?.mfaEnrollmentRequired === true,
+      ...(res?.trustedDeviceToken ? { trustedDeviceToken: String(res.trustedDeviceToken), trustedDeviceExpiresAt: String(res.trustedDeviceExpiresAt || "") } : {}),
     };
   }
   const preAuth = String(res?.preAuthToken || "");
+  if (res?.otpChallengeRequired === true && preAuth) {
+    return {
+      kind: "otp_challenge",
+      preAuthToken: preAuth,
+      expiresInSeconds: Number.isFinite(res?.expiresInSeconds) ? Number(res!.expiresInSeconds) : 300,
+      channel: String(res?.channel || "EMAIL"),
+      channels: Array.isArray(res?.channels) && res!.channels.length ? res!.channels.map(String) : ["EMAIL"],
+      destination: String(res?.destination || ""),
+      sent: res?.sent !== false,
+    };
+  }
   if (res?.mfaChallengeRequired === true && preAuth) {
     return {
       kind: "mfa_challenge",

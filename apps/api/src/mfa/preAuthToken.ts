@@ -27,6 +27,10 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const PRE_AUTH_TOKEN_TTL_SECONDS = 5 * 60;
 export const PRE_AUTH_PURPOSE = "mfa_challenge";
+/** The per-tenant sign-in code (2FA-by-code, 2026-08-19) — a DIFFERENT purpose so a
+ *  TOTP pre-auth token can never be spent on the code route and vice versa. */
+export const OTP_PRE_AUTH_PURPOSE = "otp_challenge";
+export type PreAuthPurpose = typeof PRE_AUTH_PURPOSE | typeof OTP_PRE_AUTH_PURPOSE;
 /** ⛔ Frozen: changing it invalidates every outstanding pre-auth token (harmless, they live 5 min). */
 const DERIVATION_LABEL = "connect:mfa-preauth-token:v1";
 
@@ -34,7 +38,7 @@ export type PreAuthClaims = {
   sub: string;
   /** Distinct claim so a reader can never mistake this for a session. */
   mfa_pending: true;
-  purpose: typeof PRE_AUTH_PURPOSE;
+  purpose: PreAuthPurpose;
   iat: number;
   exp: number;
   jti: string;
@@ -54,12 +58,16 @@ function sign(signingInput: string): string {
   return b64url(createHmac("sha256", preAuthKey()).update(signingInput).digest());
 }
 
-export function mintPreAuthToken(userId: string, nowMs: number = Date.now()): { token: string; expiresInSeconds: number } {
+export function mintPreAuthToken(
+  userId: string,
+  nowMs: number = Date.now(),
+  purpose: PreAuthPurpose = PRE_AUTH_PURPOSE,
+): { token: string; expiresInSeconds: number; jti: string } {
   const iat = Math.floor(nowMs / 1000);
   const claims: PreAuthClaims = {
     sub: userId,
     mfa_pending: true,
-    purpose: PRE_AUTH_PURPOSE,
+    purpose,
     iat,
     exp: iat + PRE_AUTH_TOKEN_TTL_SECONDS,
     jti: randomBytes(12).toString("base64url"),
@@ -67,14 +75,18 @@ export function mintPreAuthToken(userId: string, nowMs: number = Date.now()): { 
   const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload = b64url(JSON.stringify(claims));
   const signingInput = `${header}.${payload}`;
-  return { token: `${signingInput}.${sign(signingInput)}`, expiresInSeconds: PRE_AUTH_TOKEN_TTL_SECONDS };
+  return { token: `${signingInput}.${sign(signingInput)}`, expiresInSeconds: PRE_AUTH_TOKEN_TTL_SECONDS, jti: claims.jti };
 }
 
 export type PreAuthVerifyResult =
   | { ok: true; claims: PreAuthClaims }
   | { ok: false; reason: "malformed" | "bad_signature" | "expired" | "wrong_purpose" };
 
-export function verifyPreAuthToken(token: unknown, nowMs: number = Date.now()): PreAuthVerifyResult {
+export function verifyPreAuthToken(
+  token: unknown,
+  nowMs: number = Date.now(),
+  purpose: PreAuthPurpose = PRE_AUTH_PURPOSE,
+): PreAuthVerifyResult {
   const raw = String(token ?? "").trim();
   const parts = raw.split(".");
   if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return { ok: false, reason: "malformed" };
@@ -95,7 +107,7 @@ export function verifyPreAuthToken(token: unknown, nowMs: number = Date.now()): 
     return { ok: false, reason: "malformed" };
   }
   if (!claims || typeof claims.sub !== "string" || !claims.sub) return { ok: false, reason: "malformed" };
-  if (claims.mfa_pending !== true || claims.purpose !== PRE_AUTH_PURPOSE) return { ok: false, reason: "wrong_purpose" };
+  if (claims.mfa_pending !== true || claims.purpose !== purpose) return { ok: false, reason: "wrong_purpose" };
   if (typeof claims.exp !== "number" || claims.exp * 1000 <= nowMs) return { ok: false, reason: "expired" };
   return { ok: true, claims: claims as PreAuthClaims };
 }
