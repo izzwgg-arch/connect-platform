@@ -93,6 +93,17 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   `<tenant-hash>/<mac>.cfg` provisioning files — acceptance = `diff` against the
   546 files on disk reads 0. ⛔ Do NOT rewrite `extensions__20-baseplan.conf` — it
   ships with the free edition we keep and every tenant dialplan calls into it.
+- ⏳ **Izzy asked for a TWO-DAY A-to-Z plan (2026-08-18) — it is §10 of the doc:** scope
+  = every write Connect makes FROM NOW ON goes through the mirror (tenant create,
+  add extension/device, DID + inbound route, voicemail, hints, AstDB, reloads);
+  the 27 existing tenants stay on VitalPBX's files. Day 0 = baseline fixture +
+  clone with **Revoke License** to learn what the free panel still allows on
+  over-cap tenants; Day 1 = diff harness + generator to 0 on T104/T5/T9/T2; Day 2 =
+  wire onboarding + `addExtensionToTenant`, one real throwaway tenant end-to-end,
+  cancel only after Day 0's table is read. NOT in two days: migrating existing
+  tenants, a provisioning generator (interim clone-a-cfg), and ring groups /
+  forwards / E911 / ARS-toggle for over-cap tenants if the clone says the panel
+  refuses them.
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.

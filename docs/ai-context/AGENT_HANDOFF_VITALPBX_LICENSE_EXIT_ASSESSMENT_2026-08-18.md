@@ -310,3 +310,90 @@ our config; the baseplan is part of the free edition we keep — not legal advic
 that point and the cap stops mattering) → ring groups / queues / time conditions /
 IVRs / tenants + DIDs + inbound routes (~2–3) → provisioning (~1–2) → tenant-by-
 tenant cutover rehearsed on the clone (~1–2) → cancel LAST.
+
+## 10. Izzy (2026-08-18): "A-to-Z plan, TWO DAYS, production-ready to migrate; existing tenants stay, only from here on" — the plan, and the honest scope
+
+**His premise, checked:** *"if I cancel, existing tenants are not deleted, I just can't
+create new ones."* Correct as far as anything runtime goes — nothing on the PBX
+deletes config; Asterisk keeps every file. Two "ifs" remain, both cheap to settle:
+(1) what the panel's **regenerator** does to the 27 over-cap tenants on its next
+Apply Changes after the lapse (unknown — see §2); (2) "existing stays the same"
+almost certainly also means **you cannot EDIT them in the panel either** (add an
+extension to Gesheft, change a ring group) — so the panel-free path must cover
+add-extension-to-EXISTING-tenant, not only new tenants. The panel has a **"Revoke
+License"** button (`addons.revoke_license`), so the lapse can be simulated on the
+clone in minutes instead of waiting for an expiry.
+
+**What "two days" CAN mean (the scope of this plan):** every write Connect performs
+from today on stops going through the panel and goes through a mirror generator that
+writes the same `ombutel` rows and byte-identical files. The 27 existing tenants stay
+on their VitalPBX-generated files untouched. Regularity measured live: a 1-ext tenant
+(T104) = 644 lines / 14 files, 21 `ombu_tenant_settings` rows, 2 devices, 2 DIDs,
+2 inbound routes, 3 queued_changes, ~25 AstDB keys per extension + ~6 per tenant; T104
+vs T5 (4 ext) differ by 287 normalised lines = repeated per-extension blocks +
+emergency + ARS. Tables an extension/tenant touches: `ombu_tenants`,
+`ombu_tenants_users`, `ombu_tenant_settings`, `ombu_tenant_dids`, `ombu_extensions`,
+`ombu_devices` (+`ombu_pjsip_devices`, `ombu_virtual_devices`), `ombu_extensions_vm`,
+`ombu_extensions_contact_info`, `ombu_extension_diversions`, `ombu_extension_pea`,
+`ombu_followme`, `ombu_inbound_routes` + `ombu_destinations`, `ombu_parking_lots`,
+`ombu_classes_of_service`, `ombu_ars` (Main), `ombu_ami_users`, `ombu_queued_changes`,
+`ombu_drivers_to_reload`.
+
+**What two days does NOT include (say it up front):** migrating the 27 existing tenants
+onto our generator (not needed under his premise); a full desk-phone provisioning
+generator (the 55 rendered files stay; new phones get an interim clone-a-cfg script);
+ring groups / queues / forwards / E911 / ARS-toggle for over-cap tenants **if** the
+clone shows the free panel refuses those edits (then Day 3–5: `teamBuilder` and
+`forwardBuilder` move to the mirror). Anything that does not `diff` to 0 does not ship.
+
+### Day 0 (tonight, 3–4 h) — know before you cancel, and freeze the spec
+1. **Baseline fixture from prod, read-only:** `sha256sum` of all 546 files in
+   `/etc/asterisk/vitalpbx/`, `database show` dump, `mysqldump --no-data` +
+   `--single-transaction` of `ombutel` and `provisioning` → `/root/mirror-baseline-<ts>/`
+   on the PBX (also the rollback reference).
+2. **Clone:** stand up `/root/pbx-full-brain-20260609-063057/` in a throwaway VM
+   (fresh VitalPBX 4.5.3 ISO + restore). Then simulate the lapse: Admin → Add-ons →
+   **Revoke License** (and, if it needs the server, delete
+   `/var/lib/pbx-licenses/vitalpbx.lic` + restart php-fpm). Record: can the panel
+   (a) create an extension in an over-cap tenant, (b) EDIT one, (c) create a ring
+   group / queue / forward / inbound route, (d) run Apply Changes — and do the
+   `T<t>_*` files stay **sha256-identical** after it, (e) still manage Main / trunks
+   / ARS / provisioning. This table is the Day-2 exception list.
+
+### Day 1 (build, ~10–12 h) — the mirror generator, proven against every tenant
+1. **Diff harness first**: `scripts/pbx/mirror/diff-tenant` — render tenant *t* to a
+   temp dir from the live DB and diff against `/etc/asterisk/vitalpbx/` + the AstDB
+   family. Targets: T104/T105/T106 (1 ext) → T5 (4) → T9 (11, virtual devices) →
+   T2 (21) read 0 on every file the mirror owns.
+2. **Generator** as new endpoints in the helper (Python already runs on the PBX with
+   MySQL access; new `/mirror/render` dry-run, `/mirror/tenant-create`,
+   `/mirror/extension-add`, `/mirror/device-add`, `/mirror/did-route`): emits the 13
+   per-tenant files + `extensions__25-<t>-hints.conf`, writes the table rows above,
+   seeds the AstDB keys, chowns to `www-data` 0644, then `pjsip reload` /
+   `dialplan reload` / `voicemail reload` / `module reload res_parking` (targeted —
+   never `generateConfigurations`).
+3. **Grants** for the helper's MySQL user on those tables (a PBX write → Izzy's Run
+   button, SQL file, backup first).
+4. New extension numbering / passwords: same rules the CSV path used
+   (`T<t>_<ext>` + `_1` WebRTC device on profile 12, `vitxi_client` no longer needed
+   for anything — but keep the column identical so the diff stays 0).
+
+### Day 2 (wire + prove, ~10 h) — production-ready
+1. `apps/api/src/onboarding/pbxTenantBuild.ts`: tenant → extensions → inbound route
+   steps call the mirror; trunk / outbound route / ARS stay on the panel in Main
+   **only if** Day 0 (e) said they still save; else the mirror emits
+   `pjsip__50-1-trunks` blocks too. `addExtensionToTenant()` → mirror. Doorway
+   registration for the new DID is already ours.
+2. **Real proof on prod**: one throwaway tenant, 2 extensions, a spare DID: app
+   registers (`pjsip show endpoint … Avail`), inbound call lands in `connect-menu`,
+   outbound call over its own trunk with the right CID, voicemail left and emailed;
+   then a panel-made twin of the same tenant on the clone is **byte-identical**.
+3. Interim `clone-phone-cfg` for new desk phones (copy same-model
+   `<hash>/<mac>.cfg`, swap MAC / account / password) — until the provisioning
+   generator lands.
+4. Cutover rules written down: tenants are the mirror's, the panel is for Main and
+   for reading; **no Apply Changes for tenants, ever**; VitalPBX package updates
+   frozen until the harness is re-run.
+5. Tests + docs + deploy api; helper install = PBX write (Run button); CLAUDE.md +
+   TESTS_RUN.
+6. **Cancel only after Day 0's table is read** — the license stays until then.
