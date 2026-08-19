@@ -1919,8 +1919,28 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRU
 permission, emergency config on two tenants, helper `2026.08.18.1` installed.
 ✅ api DEPLOYED and container-verified (`2c8cc04e`, job `7771b6cf`); portal
 DEPLOYED and bundle-verified (job `743cbf00`). First real sweep ran 5 min after
-boot: `considered: 0` — the correct answer with every switch off.** 102 tests.)
+boot: `considered: 0` — the correct answer with every switch off.** 125 tests
+after `97cad9f7`, see the 2026-08-19 bullet.)
 
+- ⛔⛔ **2026-08-19 — IT HAD NEVER ACTUALLY RUN FOR ANYONE.** The sweep's invoice
+  query said `status: { in: ["FAILED","OVERDUE","UNPAID"] }` and
+  `BillingInvoiceStatus` is `DRAFT|OPEN|PAID|FAILED|OVERDUE|VOID` — no `UNPAID`
+  — so Prisma rejected the WHOLE query, the tenant landed in `errors[]`
+  (`[SERVICE_INTERRUPTION] tenant failed … Invalid value for argument 'in'`),
+  and the only switched-on tenant (TYH Industries, the first sign-up after
+  arming) was skipped on every run. `considered: 1` looked healthy; the
+  `errors` array was the tell. **Fixed `97cad9f7`**:
+  `UNPAID_FAILURE_STATUSES = ["FAILED","OVERDUE"]` — ⛔ `OPEN` is NOT in it on
+  purpose (an OPEN invoice is issued but not yet collected; invoices are created
+  ahead of the payment date, so counting OPEN would start the countdown before
+  the card was charged — the rule is "when a payment FAILS"). ⛔ **The 102 tests
+  passed because the fake db ignored `where.status`** — it now validates every
+  `in` member against the enum parsed from `schema.prisma` and throws Prisma's
+  message (9/13 fail on the old list; 125/125 now). Also closed:
+  `mergeDunningAfterFailure` never wrote the `dunning.firstFailedAt` the sweep
+  reads for the 7-day grace, so it always fell back to `createdAt` — it stamps
+  it once now. ✅ api DEPLOYED and container-verified `97cad9f7` (`deploy-direct.sh api`, 295 s, `.build-commit` = `97cad9f7`, `grep -n 'UNPAID_FAILURE_STATUSES = ' …serviceInterruptionJob.ts` → line 68 `["FAILED", "OVERDUE"]`, `firstFailedAt,` at `billingDunning.ts:109`). Boot log `sweep scheduled {armed:true, cutoverAt:2026-08-18T12:01:07Z}`; five minutes later `sweep complete {considered:1, remindersSent:0, interrupted:0, restored:0, skippedPreCutover:0, errors:[]}` — **no `tenant failed` line**. The `considered:1` is TYH Industries, whose only invoice is PAID, so no countdown — the correct answer. On the previous build (`1c1d067e`, same day) the same tenant had produced `errors:[{…Invalid value for argument 'in'. Expected BillingInvoiceStatus.}]`. ⛔ **When you read `sweep complete`, read
+  `errors` — `considered` alone hides a tenant that blew up.** Handoff §11.
 - ⛔⛔ **IT IS ARMED.** `SERVICE_INTERRUPTION_CUTOVER_AT=2026-08-18T12:01:07Z` is
   in `.env.platform`. A daily sweep (first run 5 min after api boot) sends the
   reminders, cuts off on day 7 (disables every ARS member across every profile,

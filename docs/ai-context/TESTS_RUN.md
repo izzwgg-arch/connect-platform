@@ -4,6 +4,31 @@ Newest entries first.
 
 ---
 
+## Overdue cutoff sweep — invalid invoice status, the sweep had never run (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `97cad9f7`. api only. Handoff
+`AGENT_HANDOFF_EMERGENCY_CALLING_SERVICE_INTERRUPTION_2026-08-17.md` §11.
+
+```bash
+cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/billing/serviceInterruption/*.test.ts" src/billing/billingDunning.test.ts
+```
+
+**Result:** 125/125 (job suite 13, of which 3 new; dunning suite +1). The job
+suite's fake db now parses `BillingInvoiceStatus` out of `schema.prisma`
+(CRLF-normalised) and throws Prisma's message on any non-member in `status.in`.
+**Replayed against the OLD list** (`["FAILED","OVERDUE","UNPAID"]`, swap the
+constant and re-run): **9/13 fail** with `Invalid value for argument 'in'.
+Expected BillingInvoiceStatus. (got "UNPAID")` — restored, 13/13. Also pinned:
+FAILED and OVERDUE start a countdown, OPEN does not; `mergeDunningAfterFailure`
+stamps `firstFailedAt` once and a retry never moves it. apps/api typecheck
+**75 = baseline**, 0 in the four edited files.
+
+### Live (acceptance)
+
+✅ api DEPLOYED and container-verified `97cad9f7` (`deploy-direct.sh api`, 295 s, `.build-commit` = `97cad9f7`, `grep -n 'UNPAID_FAILURE_STATUSES = ' …serviceInterruptionJob.ts` → line 68 `["FAILED", "OVERDUE"]`, `firstFailedAt,` at `billingDunning.ts:109`). Boot log `sweep scheduled {armed:true, cutoverAt:2026-08-18T12:01:07Z}`; five minutes later `sweep complete {considered:1, remindersSent:0, interrupted:0, restored:0, skippedPreCutover:0, errors:[]}` — **no `tenant failed` line**. The `considered:1` is TYH Industries, whose only invoice is PAID, so no countdown — the correct answer. On the previous build (`1c1d067e`, same day) the same tenant had produced `errors:[{…Invalid value for argument 'in'. Expected BillingInvoiceStatus.}]`.
+
+---
+
 ## SignalWire test bench — the carrier being evaluated to replace VoIP.ms (2026-08-18, evening)
 
 Branch `feat/ivr-migration-takeover`, commit `50f9fa69`. api + portal. Handoff

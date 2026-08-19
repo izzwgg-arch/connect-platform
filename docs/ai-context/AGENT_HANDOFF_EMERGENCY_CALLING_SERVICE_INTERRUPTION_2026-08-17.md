@@ -1,5 +1,9 @@
 # AGENT HANDOFF — overdue-account service interruption, and native emergency calling (2026-08-17)
 
+**⛔ 2026-08-19: the sweep had NEVER RUN FOR ANYONE — it queried an invoice status
+that does not exist (`UNPAID`) and Prisma rejected the whole query. Fixed
+`97cad9f7`, deployed. Read §11 first.**
+
 **Status (2026-08-18): the whole overdue-account cutoff is WIRED END TO END —
 `2c8cc04e` — sweep timer, admin routes, inbound busy in the doorway (helper
 `2026.08.18.1` installed), onboarding hook, portal card. Cutover set in
@@ -7,7 +11,8 @@
 `7771b6cf`; see §10 for what is and is not proven.**
 
 Commits on `feat/ivr-migration-takeover`: `c7c1df00`, `8671b2f0`, `b8e5bf1c`.
-69 tests, registered in the api test script.
+69 tests, registered in the api test script (125 across the module + dunning
+after `97cad9f7`).
 
 ---
 
@@ -334,3 +339,86 @@ left exactly as found. Verified: 10 files, `git ls-tree HEAD server.ts` =
 - **Nobody has heard busy** on a real call.
 - **No new sign-up has driven the emergency hook** — first real sign-up is
   the acceptance test (timeline should read `emergency location ok`).
+
+## 11. The sweep had never run for anyone — an invoice status that does not exist (2026-08-19)
+
+**Seen live** in `docker logs app-api-1` on build `1c1d067e`, five minutes after
+boot: `[SERVICE_INTERRUPTION] tenant failed` for `cmsyv8mlb0yheqo13t7u7x1fe`
+(TYH Industries — the first sign-up after arming, and the only tenant with the
+switch ON), then
+
+```
+sweep complete {considered:1, remindersSent:0, interrupted:0, restored:0,
+  skippedPreCutover:0, errors:[{tenantId:"cmsyv8mlb0yheqo13t7u7x1fe",
+  error:"Invalid `db.billingInvoice.findFirst()` invocation …
+         Invalid value for argument 'in'. Expected BillingInvoiceStatus."}]}
+```
+
+**Why.** `oldestOpenFailure()` queried
+`status: { in: ["FAILED", "OVERDUE", "UNPAID"] }`. `BillingInvoiceStatus` in
+`packages/db/prisma/schema.prisma` is `DRAFT | OPEN | PAID | FAILED | OVERDUE |
+VOID` — there is no `UNPAID`. Prisma validates every member of an `in` list and
+rejects the WHOLE query on one bad value, so the tenant went to `errors[]`
+before `decideForTenant` was ever called. Every sweep since arming did that.
+`considered: 0` on deploy day was genuinely correct (every switch off);
+`considered: 1` the next day *looked* healthy and was not. ⛔ **When you read a
+`sweep complete` line, read `errors` — `considered` alone hides a tenant that
+blew up.**
+
+**What the statuses mean** — read from the code that writes them, not guessed:
+
+- `FAILED` — a charge was attempted and declined. `solaBillingPayments.ts` sets
+  `status: "FAILED", failedAt: now` at three sites (autopay / SUT charge,
+  one-time card, gateway webhook). A retry that fails again keeps it FAILED;
+  payment makes it PAID; nothing moves it back to OPEN.
+- `OVERDUE` — set only by hand in the invoice editor (`invoiceEditEngine.ts`
+  accepts DRAFT | OPEN | OVERDUE). ⛔ There is **no automated
+  BillingInvoice→OVERDUE transition** — `processInvoiceOverdueBatch` in
+  `server.ts` works on the tenant CRM `Invoice` table, a different thing.
+  Still means "unpaid and past due", so it counts.
+- `OPEN` — issued, nobody has tried to collect it yet. ⛔ **Deliberately
+  excluded.** Invoices are created ahead of the payment date ("charge only on
+  the payment date"), so counting OPEN would start the countdown — and the
+  "N days left" emails — before the card was even charged. The owner's rule is
+  "when a payment FAILS". Consequence worth knowing: a customer with **no card
+  on file** never fails a charge, so never enters the countdown. That is a
+  policy question for Izzy, not a defect in this list.
+- `DRAFT`, `PAID`, `VOID` — never owed / already settled / cancelled.
+
+**Fix** (`97cad9f7`, `serviceInterruptionJob.ts`):
+`export const UNPAID_FAILURE_STATUSES = ["FAILED", "OVERDUE"] as const;` and the
+query spreads it. The constant is exported so the test can check it against
+the schema.
+
+**Why 102 tests did not catch it.** The suite's fake `billingInvoice.findFirst`
+returned the fixture for `where.tenantId` and ignored `where.status` entirely.
+It now (a) parses the real enum out of `schema.prisma` (CRLF-normalised — see
+[[source-reading-tests-must-normalise-crlf]]), (b) throws Prisma's exact
+message on any non-member in `status.in`, (c) honours the status filter for a
+fixture that names one. Three new tests: the constant is a subset of the enum
+and contains FAILED + OVERDUE but not OPEN; the query the sweep really issues
+carries only enum members and the tenant lands with `errors: []` and a started
+countdown; FAILED and OVERDUE start a countdown while OPEN does not.
+**Replayed against the old list: 9 of 13 fail** with `Invalid value for
+argument 'in'. Expected BillingInvoiceStatus. (got "UNPAID")`. Fixed: 13/13;
+whole module + dunning suite 125/125. api typecheck 75 = baseline.
+
+**A second gap closed in passing.** The sweep reads
+`metadata.dunning.firstFailedAt` to count the 7-day grace ("never the latest
+attempt, or an autopay retry would push the cutoff back forever") — but
+`mergeDunningAfterFailure` only ever wrote `lastFailureAt`, so the sweep always
+fell back to invoice `createdAt`. `billingDunning.ts` now stamps
+`firstFailedAt` once and never moves it on a retry (`billingDunning.test.ts`
+pins it: first call stamps ~now, a retry keeps the earlier value, garbage in
+the slot is replaced). Invoices that failed before this deploy still fall back
+to `createdAt` — earlier than the real failure, so it errs towards LESS grace,
+never more. The slice (and the stamp) is cleared on payment as before.
+
+**Deployed / verified.** ✅ api DEPLOYED and container-verified `97cad9f7` (`deploy-direct.sh api`, 295 s, `.build-commit` = `97cad9f7`, `grep -n 'UNPAID_FAILURE_STATUSES = ' …serviceInterruptionJob.ts` → line 68 `["FAILED", "OVERDUE"]`, `firstFailedAt,` at `billingDunning.ts:109`). Boot log `sweep scheduled {armed:true, cutoverAt:2026-08-18T12:01:07Z}`; five minutes later `sweep complete {considered:1, remindersSent:0, interrupted:0, restored:0, skippedPreCutover:0, errors:[]}` — **no `tenant failed` line**. The `considered:1` is TYH Industries, whose only invoice is PAID, so no countdown — the correct answer. On the previous build (`1c1d067e`, same day) the same tenant had produced `errors:[{…Invalid value for argument 'in'. Expected BillingInvoiceStatus.}]`.
+
+**Still ⏳ NOT proven** (unchanged from §10): nobody has clicked the card, no
+manual route hit over HTTP, nobody has heard busy, and — new — **no real
+FAILED invoice has yet driven a countdown in production.** TYH's only invoice
+is PAID, so the first sweep after this deploy correctly did nothing for them.
+The first real acceptance is a declined card on a switched-on tenant: expect
+`countdown started`, then one reminder a day.
