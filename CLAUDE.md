@@ -389,8 +389,33 @@ mess up any other tenants."*
   "byte-identical final re-render" claim probably is not happening. **ONE
   measurement so far; confirm on the next real onboarding** by grepping its log
   for that warning before fixing or deleting the claim.
-- ⏳ **NOT DONE:** nobody has opened the page in a browser; the geo build step above;
-  ⛔ rotate the robot panel password.
+- ⛔⛔ **WORK STOPPED MID-SHIP 2026-08-19 ~15:15 UTC — THE TWO HALVES ARE AT
+  DIFFERENT DEPLOY STATES. Read handoff §19 before touching this.** ✅ **api
+  `3e914b4f` is LIVE, healthy and proven** (tenant create works end to end on
+  prod). ⛔ **The PORTAL is NOT deployed** — the container is still `d0c435b9`,
+  which predates the New-customer dialog, **so a person cannot create a customer
+  from the screen yet**; only the API can, which is what the acceptance run used.
+  Finish with `deploy-direct.sh portal --branch feat/ivr-migration-takeover`,
+  then grep the bundle for the STRING `New customer on the phone system` (never a
+  function name — minification renames it and a 0-hit grep reads like a failed
+  deploy).
+  ⏳ **One thing was in flight:** an api deploy to **`20248b00`** was still
+  *building* at stop. It was deliberately **left to finish rather than killed** —
+  the build stage is before any container is touched, so a failure there changes
+  nothing, whereas killing a docker build risks leaving the **heavy-build lock**
+  held and blocking the next agent. **Check `docker exec app-api-1 cat
+  /app/.build-commit` first: `20248b00` means it landed, `3e914b4f` means it did
+  not — and BOTH are good states**, because `3e914b4f` is the commit that was
+  proven on production. `20248b00` adds only three refinements (a second outbound
+  profile is refused instead of silently dropped; the tenants list opens one PBX
+  connection instead of two; the create no longer re-renders).
+  ⛔ **`20248b00` is a DOCS commit and that is expected** — `deploy-direct.sh`
+  hard-resets to the branch TIP, so the container is stamped with the tip, not
+  with the code commit you have in mind. A waiter watching for the code commit
+  never fires; that mistake was made and corrected in this session.
+- ⏳ **NOT DONE:** nobody has opened the page in a browser (the single most
+  valuable next step — it needs Izzy's login); the portal deploy above; the geo
+  build step; ⛔ rotate the robot panel password.
 
 ## ⛔ AGENT HANDOFF — dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenant" is wrong — the free tier caps EXTENSIONS at 12 (2026-08-18) — READ FIRST before answering "can we cancel VitalPBX?", before touching the license, or before sizing "our own multi-tenant"
 
