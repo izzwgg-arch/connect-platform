@@ -863,3 +863,130 @@ matched the string quoted in the **doc comment explaining the old defect**
 (`render_phone.php`, then `--connect-probe`). Strip comments — or assert only on
 executable lines — before any `!includes(...)` guard. This is the third
 recorded instance of that trap in this repo.
+
+## 18. The console can CREATE a customer — the one job the panel refuses (2026-08-19)
+
+§16 gave the console reads plus extension and tenant **edit**; §17 beat the
+provisioning and geo caps. The remaining hole was the one that matters most on
+the day the licence lapses: **the console could read, edit and delete a tenant
+but not create one**, which is exactly the operation VitalPBX blocks
+("maximum number of free tenants"). The console was therefore fine today and
+useless the day it was needed. Commits `3e914b4f` + `b1f3fb2e`.
+
+### ⛔ It goes through the MIRROR, never the panel form
+`POST /admin/pbx-console/tenants` calls **`resolveMirrorTenantCreator`** — the
+same wiring `setupOrchestrator` hands to `buildPbxTenant` for onboarding — so
+there is exactly **ONE** tenant-creation implementation on the platform. A
+second one is the failure shape this repo keeps hitting (two IVR publish paths,
+two SMS ingest paths, two invite paths, two recording players).
+
+⛔ **A guard test reads the route's SOURCE and fails if it ever posts the
+panel's add-tenant form.** That matters more here than anywhere else in the
+console: while the licence is still live the panel form *works*, so a
+"simplification" to the panel path would pass every functional test today and
+fail silently on the one day nobody can afford it.
+
+### ⛔ It uses onboarding's `slugify`, not a second slug rule
+The PBX name is matched elsewhere by **slug OR display name**
+(`findPbxDirectoryEntry`), so a second slug variant would create tenants those
+lookups cannot find. The helper independently validates
+`^[a-z0-9_]{1,255}$`, which is exactly what `slugify` emits.
+
+### Scope, deliberately small
+This is the panel's **"add tenant" button**, not onboarding: no trunk, no
+outbound route, no extensions, no numbers bought, **no Connect tenant row**.
+Everything else is editable immediately afterwards through the ordinary tenant
+edit, which keeps working unlicensed. Optional inputs are phone numbers and one
+outbound profile.
+
+### What it refuses, and why each refusal exists
+- **A duplicate name, checked BEFORE anything is written**, naming the customer
+  that already holds it — the difference between "already taken" and a stack
+  trace. The mirror raises on it too (the column is unique); that error is now
+  mapped to the same refusal, because the pre-check is skipped whenever the
+  database read is down, which is exactly when someone retries a used name.
+- **More than one outbound profile.** The mirror door takes one. Accepting a
+  list and quietly using the first is a setting that looks applied and is not.
+- **The helper being unreachable** — said in plain words, rather than a 500.
+
+### ⛔ The re-render can fail without failing the create
+`/mirror/tenant-create` renders the baseline itself (it must — on prod neither
+the panel Apply nor the REST per-tenant apply will perform a tenant's FIRST
+generation). The second `mirror/tenant-render` pass is what makes the files
+byte-identical to the panel's, and it is wrapped: the tenant exists either way,
+and a person can re-render from the list. `rendered` in the response says which
+happened.
+
+### The new reader
+`listOutboundProfiles` gives the create form its picker, and carries the note
+that **every real ARS row lives under Main (tenant_id 1)** — joining `ombu_ars`
+on a tenant_id concludes almost no customer has outbound routing, a wrong answer
+this repo has already produced once. Most onboarding-created rows are literally
+described `none`, which is existing data; `label` never renders empty.
+
+### The screen
+A dedicated **New customer** dialog on the Tenants tab, not a mode of the
+editor — the editor is built around re-posting a rendered panel form and this
+write has no panel form behind it. The PBX name is previewed live from the
+customer name using the same rule the server applies, so what is shown is what
+gets created.
+
+### PROVEN ON PRODUCTION, then torn back down
+Throwaway customer **"ZZ Console Check"** created through the deployed route on
+the live PBX (which was carrying **10 active calls** at the time):
+
+| step | result |
+|---|---|
+| create | **200** — tenant **119**, path `9e0782f877162015`, **13 baseline files rendered** |
+| profiles offered | **80** (the picker is real, read from `ombu_ars`) |
+| duplicate | **409 `tenant_exists`** — *"already has a customer called ZZ Console Check (system name zz_console_check)"* |
+| in the list | `id=119 enabled=true ext=0` — it reads back like any other customer |
+| delete | **200** via the console's OWN delete route, doorway re-bake `tenants:3 rebaked:3 linesChanged:0` |
+
+**Byte-back at baseline afterwards**, every count checked against the
+pre-test snapshot: **27 tenants, 119 extensions, 554 tenant-settings rows,
+353 tenant conf files, 0 files or rows mentioning 119**, and doorways on
+T2/T35/T105 still **0 cc-wipes**.
+
+### ⛔⛔ THE FINDING THE PROD RUN PRODUCED: the mirror's SECOND render can never succeed
+The create's follow-up `mirror/tenant-render` failed with
+
+```
+[Errno 13] Permission denied: /etc/asterisk/vitalpbx/extensions__50-119-dialplan.conf
+```
+
+while all 13 baseline files were present and correct. The mechanism, read off
+the live file rather than guessed: the render **hands each file it writes to
+`www-data`** so the panel can keep managing it, and the file lands
+`www-data:root`, mode `rw-r--r--`, with the **ACL mask at `r--`** (so even the
+`user:www-data:rw-` entry is effectively read-only). **The helper runs as
+`asterisk`**, which falls into `other` — so it cannot reopen the file it just
+wrote. Compare a panel-managed tenant, which is `www-data:www-data rw-rwxr--`.
+⛔ **This is the ACL trap this document already records as a NON-FIX** (§ the
+panel-lockout work: "a POSIX ACL alone" fails because the regen's `chmod 0644`
+sets the mask to `r--`). Do not widen permissions on `/etc/asterisk/vitalpbx`
+to make it go away.
+
+✅ **For the console the re-render is simply removed**, because it is also
+*redundant*: this route writes nothing after the create, so the mirror's
+baseline already IS the final state. A guard test now fails if anyone re-adds
+it, and carries both reasons — only the redundancy is obvious from the code.
+
+⏳ **CARRIED OVER, NOT FIXED: onboarding's final re-render is very likely dead
+the same way.** `buildPbxTenant` calls the same `/mirror/tenant-render` at the
+end (`1c1d067e`), against files the create has already chowned, so it should hit
+the identical EACCES. It is wrapped and logs *"final mirror re-render failed —
+the panel-applied files remain in place"*, and that fallback is correct (the
+panel's own Apply Changes runs as www-data and renders the extensions fine —
+which is why tenant 108's four endpoints loaded). **So nothing is broken, but
+the "byte-identical final re-render" this document claims is probably not
+happening.** ⛔ Evidence so far is ONE measurement, on a console-created tenant.
+**Confirm on the next real onboarding** by grepping its log for that warning
+before either fixing it or deleting the claim.
+
+### ⏳ Still open after §18
+- **Nobody has opened the console in a browser.** Everything above is proven
+  through the deployed HTTP routes and the PBX's own state, never by a person
+  clicking. That needs Izzy's login.
+- **Geo writes** still need root (§17).
+- **The robot panel password** still wants rotating.
