@@ -48,20 +48,42 @@ export function serviceInterruptionCutover(env: NodeJS.ProcessEnv = process.env)
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * The invoice statuses that mean "a payment failed and the balance is still
+ * owed". ⛔⛔ Every value MUST be a member of `BillingInvoiceStatus` in
+ * `packages/db/prisma/schema.prisma` (DRAFT | OPEN | PAID | FAILED | OVERDUE |
+ * VOID). Until 2026-08-19 this list carried `"UNPAID"`, which is not in the
+ * enum — Prisma rejected the WHOLE query with `Invalid value for argument 'in'`,
+ * the tenant landed in `errors[]`, and the reminder/cutoff logic had never run
+ * for anyone. `serviceInterruptionJob.test.ts` checks this list against the
+ * real schema now.
+ *
+ * - `FAILED`  — a charge was attempted and declined (`solaBillingPayments.ts`).
+ * - `OVERDUE` — marked past due by hand in the invoice editor.
+ * ⛔ `OPEN` is deliberately NOT here: an OPEN invoice is issued but nobody has
+ * tried to collect it yet — invoices are created ahead of the payment date, so
+ * counting OPEN would start the countdown before the card was even charged.
+ * The owner's rule is "when a payment FAILS".
+ */
+export const UNPAID_FAILURE_STATUSES = ["FAILED", "OVERDUE"] as const;
+
 /** The tenant's oldest still-unpaid failed invoice. */
 async function oldestOpenFailure(db: any, tenantId: string) {
   const inv = await db.billingInvoice.findFirst({
     where: {
       tenantId,
-      status: { in: ["FAILED", "OVERDUE", "UNPAID"] },
+      status: { in: [...UNPAID_FAILURE_STATUSES] },
       balanceDueCents: { gt: 0 },
     },
     orderBy: { createdAt: "asc" },
     select: { id: true, balanceDueCents: true, createdAt: true, metadata: true, updatedAt: true },
   });
   if (!inv) return null;
-  // The FIRST failure, from the dunning slice if it recorded one — never the
-  // latest attempt, or an autopay retry would push the cutoff back forever.
+  // The FIRST failure, from the dunning slice (`mergeDunningAfterFailure`
+  // stamps `firstFailedAt` once and never moves it) — never the latest attempt,
+  // or an autopay retry would push the cutoff back forever. An invoice that
+  // failed before that stamp existed falls back to `createdAt`, which is
+  // earlier than the real failure — it errs towards LESS grace, never more.
   const dunning = (inv.metadata as any)?.dunning ?? {};
   const firstFailedAt = dunning.firstFailedAt ? new Date(dunning.firstFailedAt) : new Date(inv.createdAt);
   return {

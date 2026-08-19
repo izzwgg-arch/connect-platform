@@ -33,6 +33,22 @@ test("mergeDunningAfterFailure defaults declined-card retry to 12 hours", () => 
   }
 });
 
+test("mergeDunningAfterFailure stamps firstFailedAt once and a retry never moves it", () => {
+  const first = mergeDunningAfterFailure({});
+  const stamped = (first.metadata as any).dunning.firstFailedAt;
+  assert.ok(typeof stamped === "string" && Number.isFinite(Date.parse(stamped)), "first failure stamps an ISO date");
+  assert.ok(Math.abs(Date.parse(stamped) - Date.now()) < 10_000, "…of roughly now");
+  // A later retry: attempts move, lastFailureAt moves, firstFailedAt does NOT.
+  const earlier = "2026-08-10T09:00:00.000Z";
+  const retry = mergeDunningAfterFailure({ dunning: { ...(first.metadata as any).dunning, firstFailedAt: earlier } });
+  assert.equal(retry.attempts, 2);
+  assert.equal((retry.metadata as any).dunning.firstFailedAt, earlier, "the service-interruption grace counts from the FIRST failure");
+  assert.notEqual((retry.metadata as any).dunning.lastFailureAt, earlier);
+  // Garbage in the slot is replaced, not propagated.
+  const fixed = mergeDunningAfterFailure({ dunning: { attempts: 1, firstFailedAt: "nonsense" } });
+  assert.ok(Number.isFinite(Date.parse((fixed.metadata as any).dunning.firstFailedAt)));
+});
+
 test("clearDunningSlice removes dunning", () => {
   const cleared = clearDunningSlice({ dunning: { attempts: 2 }, other: 1 });
   assert.equal((cleared as any).dunning, undefined);

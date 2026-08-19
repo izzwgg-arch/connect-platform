@@ -1,7 +1,9 @@
 import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { runServiceInterruptionSweep, serviceInterruptionCutover } from "./serviceInterruptionJob";
+import { UNPAID_FAILURE_STATUSES, runServiceInterruptionSweep, serviceInterruptionCutover } from "./serviceInterruptionJob";
 import { readServiceInterruption, startCountdown, writeServiceInterruption } from "./serviceInterruptionSettings";
 
 const DAY = 24 * 3600 * 1000;
@@ -10,10 +12,44 @@ const CUTOVER = "2026-08-01T00:00:00Z";
 
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 
+/**
+ * The REAL `BillingInvoiceStatus` enum, read from the Prisma schema — not a
+ * copy. ⛔ Seen live 2026-08-19: the sweep queried `status: { in: [..., "UNPAID"] }`,
+ * a value that is not in the enum, so Prisma rejected the whole query
+ * (`Invalid value for argument 'in'. Expected BillingInvoiceStatus.`), the only
+ * switched-on tenant landed in `errors[]` on every run, and this suite — whose
+ * fake db ignored `where.status` — passed 102/102 while production never ran
+ * the cutoff logic for anyone. The fake now behaves like Prisma on this point.
+ */
+const SCHEMA_PATH = resolve(__dirname, "../../../../../packages/db/prisma/schema.prisma");
+const BILLING_INVOICE_STATUSES: readonly string[] = (() => {
+  const src = readFileSync(SCHEMA_PATH, "utf8").replace(/\r\n/g, "\n");
+  const m = src.match(/enum BillingInvoiceStatus \{([^}]*)\}/);
+  assert.ok(m, "enum BillingInvoiceStatus not found in schema.prisma");
+  return m[1]
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("//"));
+})();
+
+/** What Prisma does with a bad enum member in an `in:` list — throws, whole query. */
+function assertPrismaEnumIn(where: any) {
+  const list: unknown = where?.status?.in;
+  if (list === undefined) return;
+  assert.ok(Array.isArray(list), "status.in must be an array");
+  for (const v of list) {
+    if (!BILLING_INVOICE_STATUSES.includes(String(v))) {
+      throw new Error(`Invalid value for argument 'in'. Expected BillingInvoiceStatus. (got ${JSON.stringify(v)})`);
+    }
+  }
+}
+
 function fakeDb(rows: Array<{ tenantId: string; metadata: unknown }>, invoices: Record<string, any>) {
   const store = new Map(rows.map((r) => [r.tenantId, r.metadata]));
+  const queries: any[] = [];
   return {
     store,
+    queries,
     tenantBillingSettings: {
       findMany: async () => [...store.entries()].map(([tenantId, metadata]) => ({ tenantId, metadata })),
       update: async ({ where, data }: any) => {
@@ -21,7 +57,16 @@ function fakeDb(rows: Array<{ tenantId: string; metadata: unknown }>, invoices: 
       },
     },
     billingInvoice: {
-      findFirst: async ({ where }: any) => invoices[where.tenantId] ?? null,
+      findFirst: async ({ where }: any) => {
+        queries.push(where);
+        assertPrismaEnumIn(where);
+        const row = invoices[where.tenantId] ?? null;
+        if (!row) return null;
+        // Honour the status filter like the database would: a fixture that
+        // names a status only comes back when the query asks for it.
+        if (row.status && Array.isArray(where?.status?.in) && !where.status.in.includes(row.status)) return null;
+        return row;
+      },
     },
   };
 }
@@ -44,6 +89,55 @@ function deps(db: any, now: Date, calls: any = {}) {
     restore: calls.restore ?? (async () => {}),
   };
 }
+
+// ─── ⛔ The invoice query must be one Prisma will actually run ───────────────
+
+test("⛔ every status the sweep queries is a real BillingInvoiceStatus (2026-08-19 regression)", () => {
+  assert.ok(BILLING_INVOICE_STATUSES.length >= 5, `schema enum looks wrong: ${BILLING_INVOICE_STATUSES.join(",")}`);
+  assert.ok(!BILLING_INVOICE_STATUSES.includes("UNPAID"), "the schema has no UNPAID — this test guards exactly that");
+  for (const s of UNPAID_FAILURE_STATUSES) {
+    assert.ok(BILLING_INVOICE_STATUSES.includes(s), `"${s}" is not a member of BillingInvoiceStatus in schema.prisma`);
+  }
+  assert.ok(UNPAID_FAILURE_STATUSES.includes("FAILED"), "a declined charge is the whole point");
+  assert.ok(UNPAID_FAILURE_STATUSES.includes("OVERDUE"), "an invoice marked past due by hand still counts");
+  assert.ok(!(UNPAID_FAILURE_STATUSES as readonly string[]).includes("OPEN"), "OPEN = not yet collected; the countdown must not start before the charge");
+});
+
+test("⛔ the query the sweep really issues carries only enum members, and the tenant is NOT skipped", async () => {
+  process.env.SERVICE_INTERRUPTION_CUTOVER_AT = CUTOVER;
+  const db = fakeDb([{ tenantId: "t1", metadata: writeServiceInterruption({}, { enabled: true }) }], {
+    t1: { ...inv(FAILED), status: "FAILED" },
+  });
+  const s = await runServiceInterruptionSweep(deps(db, FAILED));
+  assert.equal(db.queries.length, 1, "one invoice lookup for the one switched-on tenant");
+  for (const v of db.queries[0].status.in) assert.ok(BILLING_INVOICE_STATUSES.includes(v), `${v} is not in the enum`);
+  assert.deepEqual(s.errors, [], "on the old list this was [{tenantId:'t1', error:'Invalid value for argument in…'}]");
+  assert.equal(s.considered, 1);
+  assert.equal(readServiceInterruption(db.store.get("t1")).countdownStartedAt, FAILED.toISOString(), "the countdown actually started");
+});
+
+test("FAILED and OVERDUE invoices start the countdown; an OPEN one does not", async () => {
+  process.env.SERVICE_INTERRUPTION_CUTOVER_AT = CUTOVER;
+  const on = () => writeServiceInterruption({}, { enabled: true });
+  const db = fakeDb(
+    [
+      { tenantId: "failed", metadata: on() },
+      { tenantId: "overdue", metadata: on() },
+      { tenantId: "open", metadata: on() },
+    ],
+    {
+      failed: { ...inv(FAILED), status: "FAILED" },
+      overdue: { ...inv(FAILED), status: "OVERDUE" },
+      open: { ...inv(FAILED), status: "OPEN" },
+    },
+  );
+  const s = await runServiceInterruptionSweep(deps(db, FAILED));
+  assert.deepEqual(s.errors, []);
+  assert.equal(s.considered, 3);
+  assert.equal(readServiceInterruption(db.store.get("failed")).countdownStartedAt, FAILED.toISOString());
+  assert.equal(readServiceInterruption(db.store.get("overdue")).countdownStartedAt, FAILED.toISOString());
+  assert.equal(readServiceInterruption(db.store.get("open")).countdownStartedAt, null, "nobody has tried to collect an OPEN invoice yet");
+});
 
 // ─── ⛔ The cutover is the safety property ───────────────────────────────────
 

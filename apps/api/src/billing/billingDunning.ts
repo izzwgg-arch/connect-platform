@@ -94,11 +94,20 @@ export function mergeDunningAfterFailure(
   const attempts = prev.attempts + 1;
   const exhausted = attempts >= max;
   const nextRetryAt = exhausted ? null : new Date(Date.now() + delayMs);
+  const nowIso = new Date().toISOString();
+  // ⛔ `firstFailedAt` is stamped ONCE and never moved by a retry. The overdue
+  // service-interruption sweep (`serviceInterruptionJob.ts`) counts its 7-day
+  // grace from this value — `lastFailureAt` moves on every retry and would
+  // push the cutoff back forever. Cleared with the slice on payment.
+  const prevFirst = asRecord(root.dunning).firstFailedAt;
+  const firstFailedAt =
+    typeof prevFirst === "string" && Number.isFinite(Date.parse(prevFirst)) ? prevFirst : nowIso;
   root.dunning = {
     attempts,
     maxAttempts: max,
     nextRetryAt: nextRetryAt ? nextRetryAt.toISOString() : null,
-    lastFailureAt: new Date().toISOString(),
+    firstFailedAt,
+    lastFailureAt: nowIso,
   };
   return { metadata: root, exhausted, attempts, nextRetryAt };
 }
