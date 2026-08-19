@@ -990,3 +990,105 @@ before either fixing it or deleting the claim.
   clicking. That needs Izzy's login.
 - **Geo writes** still need root (§17).
 - **The robot panel password** still wants rotating.
+
+## 19. ⛔ WORK STOPPED HERE — read this before touching the PBX Console (2026-08-19, ~15:15 UTC)
+
+Izzy stopped the session mid-way through shipping §18. **Nothing is broken and
+nothing is half-applied on the PBX**, but the two halves of the feature are at
+**different** deploy states, so read this before assuming what is live.
+
+### The one-line state
+**The api half is LIVE and proven. The portal half is committed and NOT live —
+so the "New customer" button does not exist in the browser yet.**
+
+### What is actually running right now
+| piece | commit | state |
+|---|---|---|
+| **api** | `3e914b4f` | ✅ LIVE, healthy, 0 restarts. Tenant create works and was proven on prod. |
+| **api (in flight at stop)** | `20248b00` | ⏳ A deploy was **still building** when work stopped. See below. |
+| **portal** | `d0c435b9` | ⛔ **STALE** — predates the New-customer dialog entirely. |
+| **PBX helper** | `2026.08.19.3` | ✅ geo/provisioning fixes installed and verified. |
+
+Both hostnames answered **api 200 / portal 200** at the moment of stopping.
+
+### ⏳ THE ONE THING IN FLIGHT — check this FIRST
+An `api` deploy to **`20248b00`** was at the *build* stage (`exporting layers`)
+when work stopped. It was **deliberately left to finish rather than killed**:
+the build stage is *before* any container is touched, so a failure there changes
+nothing — whereas killing a docker build risks leaving the **heavy-build lock**
+held, which would block the next agent's deploys.
+
+**So the first thing to do is find out where it landed:**
+```bash
+docker exec app-api-1 cat /app/.build-commit      # 3e914b4f or 20248b00, both fine
+tail -5 /root/deploy-console-final-api2.log
+ps -eo cmd | grep "[d]eploy-api.sh"               # empty = finished
+```
+- reads **`20248b00`** → it completed; the three refinements below are live.
+- reads **`3e914b4f`** → it failed or was still going; **that is a good state too**
+  (it is the fully tested commit that was proven on production). Just re-run the
+  deploy when convenient.
+⛔ **`20248b00` is a docs commit, and that is expected** — `deploy-direct.sh`
+hard-resets to the branch TIP, so the container is stamped with the tip, not with
+the code commit you had in mind. `4faf2635` is an ancestor of it, so all the code
+is there. **A waiter watching for `4faf2635` would never fire** — that mistake was
+made and corrected during this session, and it is the same shape as the stale
+waiter noted below.
+
+### What is in `20248b00` that is NOT in the live `3e914b4f`
+Three refinements, all small, none of them load-bearing:
+1. **A second outbound profile is refused** rather than silently reduced to one
+   (the mirror door takes one). A setting that looks applied and is not.
+2. **The tenants list opens ONE PBX connection**, not two — the profile list was
+   added as its own read on the console's most-loaded route.
+3. **The create no longer re-renders** — see §18, it is redundant *and*
+   impossible (`EACCES`, the ACL trap).
+
+### ⛔ THE REAL GAP: the portal is not deployed
+`apps/portal/.../admin/pbx-console/page.tsx` carries the **New customer** dialog
+and the button that opens it, committed in `3e914b4f`. The portal container is
+still `d0c435b9`. **Until a portal deploy runs, a person cannot create a customer
+from the screen** — only through the API, which is what this session used.
+
+```bash
+cd /opt/connectcomms/app && bash scripts/deploy-direct.sh portal --branch feat/ivr-migration-takeover
+```
+⛔ Do it when the deploy lane is free (`ps -eo cmd | grep -E "[d]eploy-direct.sh|[r]un-heavy"`);
+the heavy-build lock is **separate from the queue**. ⛔ And an already-open portal
+tab or desktop window keeps the OLD bundle until it is reloaded.
+
+### ⛔ Verifying after the portal deploy
+Grep the shipped bundle for a **string**, never a function name — minification
+renames the function and a 0-hit grep reads exactly like a failed deploy:
+```bash
+docker exec app-portal-1 sh -c "grep -rl 'New customer on the phone system' /app/apps/portal/.next | head -3"
+```
+
+### Two hazards that are NOT mine and are still there
+1. ⛔⛔ **Another session's STALE staged blobs in the shared git index.**
+   `CLAUDE.md` is staged at **7,774 lines against HEAD's 8,261**, and
+   `TESTS_RUN.md` at **638 against 907**. **A bare `git commit` from any session
+   commits those and deletes ~500 lines of both files**, including several
+   sessions' handoffs. I checked before deciding: the staged CLAUDE.md holds only
+   4 unique lines, all *older wording* of sections HEAD has since updated, and the
+   staged TESTS_RUN is a strict subset of HEAD — so refreshing is provably
+   lossless. I left it because it is another session's working state. The fix:
+   ```bash
+   git add CLAUDE.md docs/ai-context/TESTS_RUN.md
+   ```
+   ⛔ Every commit in this session used **`git commit -F - -- <paths>`** or a
+   **private index**, precisely so that stale blob could never be swept in.
+2. **A waiter from another session has been polling for hours** for the portal to
+   reach `1fa34d29`, but its own deploy built `ce9f2318` and the container reads
+   `d0c435b9` — **it can never fire.** Harmless, but do not read it as evidence a
+   portal deploy is pending.
+
+### The acceptance test nobody has run
+**Nobody has opened `/admin/pbx-console` in a browser.** Everything in §16–§18 is
+proven through the deployed HTTP routes and the PBX's own state — never by a
+person clicking. That needs Izzy's login and is the single most valuable next
+step.
+
+### Everything is committed and pushed
+Branch `feat/ivr-migration-takeover`, tip **`20248b00`** at stop, all pushed to
+origin. Nothing of this session's work exists only on disk.
