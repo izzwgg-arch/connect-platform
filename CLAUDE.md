@@ -189,6 +189,33 @@ permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
   `onerror` was unhandled, and `stop()` on an already-inactive recorder throws
   and leaves the button stuck on "Stop". The captured size is now stated as
   TEXT, so "did that work?" has an answer even when the player cannot draw.
+- ⛔⛔⛔ **THE ACTUAL ROOT CAUSE OF EVERY "it does nothing" SYMPTOM WAS THE CSP:
+  `blob:` IS NOT COVERED BY `'self'`, AND THE PORTAL HAD NO `media-src` AT ALL.**
+  Media therefore fell back to `default-src 'self'`, so **every**
+  `URL.createObjectURL` audio source on the whole portal was blocked by the
+  browser — the voice samples, the voice changer's recording preview, its
+  converted-result playback, and (pre-existing) `MakeRecording`'s own preview.
+  Proven in a real browser at the real origin 2026-08-19: a **hand-built valid
+  8 kHz WAV blob** failed at `readyState 0`, `MediaError code 4`, `play()` →
+  `NotSupportedError`. ✅ Fixed by adding **`media-src 'self' blob: data:`** to
+  `/etc/nginx/connectcomms/security-headers.conf` (⛔ that file is `include`d by
+  BOTH vhosts, so one edit covers `app.connectcomunications.com` and
+  `app.loopcom.net`; backup
+  `/root/security-headers-backup-20260819-020058-mediasrc.conf`, `nginx -t` then
+  reload). After the reload the same clip reports **`duration 3.85s`,
+  `paused false`, playhead +1.43 s in 1.5 s of wall clock** — audio genuinely
+  playing, measured, not inferred.
+  ⛔ **The two fixes before this one — the WebM container and the `text/plain`
+  header — were real defects but were NOT what the customer was hitting.** Both
+  were diagnosed from reading code, both were reported as "fixed", and both were
+  wrong about the cause. **Open a browser and measure before claiming a media
+  bug is fixed.**
+  ⛔ **The subtle trap: I already knew the CSP blocks EXTERNAL media — the sample
+  route is proxied for exactly that reason — and still missed that a blob we
+  create ourselves is equally not `'self'`.**
+  ⛔ **A CSP reload race will lie to you:** the `curl` immediately after
+  `systemctl reload nginx` still returned the OLD header; the second one, seconds
+  later, was correct. Re-check before concluding the edit did not take.
 - ⛔⛔ **AND THE PROVIDER'S CONTENT-TYPE MUST NOT BE TRUSTED — ElevenLabs' CDN
   serves those samples as `text/plain`.** Proven live: 200, **31,364 bytes, ID3
   magic — an MP3 labelled as text**. Forwarding that header verbatim hands the
