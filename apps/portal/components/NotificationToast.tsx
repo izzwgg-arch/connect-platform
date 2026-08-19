@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Phone, Mail, MessageSquare, Bell, X } from "lucide-react";
+import { navigateToInternalRoute } from "../lib/safeRoute";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -63,9 +64,7 @@ function ToastItem({
   };
 
   const handleClick = () => {
-    if (notification.route) {
-      window.location.href = notification.route;
-    }
+    navigateToInternalRoute(notification.route);
     dismiss();
   };
 

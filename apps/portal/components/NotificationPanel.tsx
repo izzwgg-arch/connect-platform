@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Bell } from "lucide-react";
 import { StatusChip } from "./StatusChip";
 import { ViewportDropdown } from "./ViewportDropdown";
+import { navigateToInternalRoute } from "../lib/safeRoute";
 import { apiGet, apiPatch, apiPost } from "../services/apiClient";
 import {
   NotificationToastStack,
@@ -273,7 +274,7 @@ export function NotificationPanel() {
             const chip = kindChip(entry.kind);
             return (
               <div key={entry.id} className="notification-item" style={{ display: "grid", gap: 4 }}>
-                <button type="button" onClick={() => { window.location.href = entry.route; }} style={{ all: "unset", cursor: "pointer" }}>
+                <button type="button" onClick={() => { navigateToInternalRoute(entry.route); }} style={{ all: "unset", cursor: "pointer" }}>
                   <StatusChip tone={chip.tone} label={chip.label} />{" "}
                   <strong>{entry.title}</strong>
                   {entry.body ? (
@@ -302,7 +303,7 @@ export function NotificationPanel() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (entry.route) window.location.href = entry.route;
+                      navigateToInternalRoute(entry.route);
                     }}
                     style={{
                       all: "unset",
