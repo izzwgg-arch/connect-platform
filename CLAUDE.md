@@ -435,6 +435,18 @@ mess up any other tenants."*
   commits after it are a test file, docs and a lockfile entry — no runtime
   change, no migration), worker `95beef53` (0 worker-relevant files since),
   agent carries `95beef53`'s investigationTools, telephony unchanged in 7 days.
+  ⛔ **Update 2026-08-19 late evening: the portal is now at `de0acc46`** — the
+  deploy-speed session's warm-cache seeding deploy (23 m 09 s vs the 24 m 58 s
+  old-Dockerfile baseline) completed and container-verified AFTER its chat was
+  archived mid-run; deploys survive an archived chat, they run under nohup on
+  loopcom. That run was the FIRST build through the fixed `.dockerignore` +
+  Next cache mount, so it POPULATED the cache — **the warm-cache win is only
+  measurable on the next real portal deploy** (re-deploying the same commit or
+  the docs-only tip skips `unrelated_paths`). The session's planned api
+  re-deploy never ran and is measurement-only (pending commits are
+  Dockerfile/.dockerignore/docs — no runtime change). The 4-hour stale waiter
+  polling for portal == `1fa34d29` (a commit the portal had already moved past;
+  exact-match, could never fire) was killed.
 - ⏳ **NOT DONE:** nobody has opened the page in a browser (the single most
   valuable next step — it needs Izzy's login); the geo
   build step; ⛔ rotate the robot panel password.
