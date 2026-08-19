@@ -1,4 +1,5 @@
 import path from "node:path";
+import { platformSupportEmail, platformWebsite } from "../publicOrigins";
 import fs from "node:fs";
 import PDFDocument from "pdfkit";
 import { money } from "./emailTemplates";
@@ -14,9 +15,12 @@ const FONT_BOLD = "ConnectSans-Bold";
 
 const CONNECT_LEGAL_NAME = "Connect Communications, LLC";
 const CONNECT_FOOTER_NAME = "Connect Communications LLC";
-const CONNECT_SUPPORT_EMAIL = "support@connectcomunications.com";
+// Resolved from the platform identity (publicOrigins.ts) so the Loopcom flip
+// changes the invoice footer too. The LEGAL NAME above is a separate question —
+// it is the registered entity and only Izzy can say whether it changed.
+const CONNECT_SUPPORT_EMAIL = platformSupportEmail();
 const CONNECT_PHONE = "845-723-1213";
-const CONNECT_WEBSITE = "connectcomunications.com";
+const CONNECT_WEBSITE = platformWebsite();
 
 type InvoiceLineItem = {
   id?: string;

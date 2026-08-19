@@ -13,6 +13,7 @@
  */
 import { promises as fsp } from "fs";
 import path from "node:path";
+import { canonicalApiBase } from "./publicOrigins";
 
 export const APK_LATEST_FILENAME = "connectcomms-latest.apk";
 
@@ -23,14 +24,8 @@ export function apkDownloadDir(): string {
 export function apkPublicBaseUrl(): string {
   const configured = String(process.env.ANDROID_APK_DOWNLOAD_URL_BASE || "").trim();
   if (configured.length > 0) return configured.replace(/\/+$/, "");
-  const origin = String(
-    process.env.API_PUBLIC_URL
-    || process.env.PUBLIC_API_URL
-    || process.env.PUBLIC_API_BASE_URL
-    || process.env.PORTAL_PUBLIC_URL
-    || process.env.APP_PUBLIC_URL
-    || "https://app.connectcomunications.com"
-  ).replace(/\/+$/, "");
+  // publicOrigins.ts owns the env chain; canonicalApiBase() already ends in /api.
+  const origin = canonicalApiBase();
   return (origin.endsWith("/api") ? `${origin}/downloads` : `${origin}/api/downloads`).replace(/\/+$/, "");
 }
 

@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { resolveApiBase } from "../config/publicOrigin";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
@@ -5054,7 +5055,7 @@ export function NotificationsProvider({
 
   // ── Flight recorder: configure auth token + drain queue on foreground ────────
   useEffect(() => {
-    const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
+    const API_BASE = resolveApiBase();
     configureFlightRecorder({
       apiBaseUrl: API_BASE,
       getAuthToken: () => token,
@@ -5079,7 +5080,7 @@ export function NotificationsProvider({
       // old token-only trigger they sat on the device until the next sign-in,
       // which is why a live endless-ring report had no device-side evidence to
       // read. Best-effort; never blocks the app.
-      const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
+      const API_BASE = resolveApiBase();
       const tok = tokenRef.current;
       if (tok) void uploadAndClearIosRingLog({ apiBaseUrl: API_BASE, token: tok });
     });

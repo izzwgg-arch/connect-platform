@@ -1,3 +1,4 @@
+import { canonicalPortalOrigin } from "./publicOrigins";
 // ─── Email template helpers ──────────────────────────────────────────────────
 // All templates return { subject, html, text }.
 // Designs target Gmail, Apple Mail, and modern web clients.
@@ -99,12 +100,7 @@ ${opts.preheaderText ? preheader(opts.preheaderText) : ""}
  * absolute https URL to a publicly reachable file.
  */
 export function brandLogoUrl(): string {
-  const origin = String(
-    process.env.PORTAL_PUBLIC_URL
-    || process.env.CONNECT_APP_URL
-    || process.env.APP_PUBLIC_URL
-    || "https://app.connectcomunications.com"
-  ).replace(/\/+$/, "");
+  const origin = canonicalPortalOrigin();
   // ⛔ The EMAIL asset, not the portal one. Mail clients refetch this every time
   // a message is opened, and the email renders it at 168px — the 560px portal
   // file was 81 KB for no visible gain. This is 336px (a true 2x) at 34 KB,

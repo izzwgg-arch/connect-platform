@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { canonicalPortalOrigin } from "../publicOrigins";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
@@ -232,7 +233,7 @@ function parseBoolQuery(v: unknown): boolean {
 }
 
 function publicPortalBase(): string {
-  return process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com";
+  return canonicalPortalOrigin();
 }
 
 function centsToDollarsStr(cents: number): string {

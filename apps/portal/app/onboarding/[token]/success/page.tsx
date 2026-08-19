@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { SUPPORT_EMAIL } from "../../../../lib/platformIdentity";
 
 interface Step { key: string; label: string; done: boolean; detail: string | null }
 interface Progress {
@@ -124,7 +125,7 @@ export default function OnboardingSuccessPage() {
 
       <p className="ob-success-note">
         Questions? Reply to your onboarding email or reach us at{" "}
-        <a href="mailto:support@connectcomunications.com">support@connectcomunications.com</a>
+        <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
       </p>
 
       {/* Everything below rides the onboarding theme tokens (onboarding.css),

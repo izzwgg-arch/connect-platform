@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { resolveApiBase } from "../config/publicOrigin";
 import {
   View,
   Text,
@@ -152,7 +153,7 @@ export function DiagnosticsScreen() {
     return () => clearInterval(id);
   }, []);
 
-  const apiBase = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://app.connectcomunications.com/api';
+  const apiBase = resolveApiBase();
 
   const callStateColor = (s: string) => {
     if (s === 'connected') return colors.successText;

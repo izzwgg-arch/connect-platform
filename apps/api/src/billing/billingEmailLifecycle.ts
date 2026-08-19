@@ -4,9 +4,10 @@ import { billingApologyEmail, autopayReminderEmail, invoiceSentEmail, paymentFai
 import { clearDunningSlice } from "./billingDunning";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { createBillingInvoicePayToken } from "./billingPayToken";
+import { canonicalPortalOrigin } from "../publicOrigins";
 
 export function publicPortalBaseUrl(): string {
-  return (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
+  return canonicalPortalOrigin();
 }
 
 /** Browser API origin (JWT); PDF and pay routes live here. */

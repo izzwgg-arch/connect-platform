@@ -332,7 +332,7 @@ async function postJson(config: SolaCardknoxConfig, path: string, body: Record<s
   if (config.simulate) {
     return {
       xResult: "A",
-      hostedUrl: `${body.successUrl || "https://app.connectcomunications.com/dashboard/billing?checkout=success"}`,
+      hostedUrl: `${body.successUrl || `${(process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/+$/, "")}/dashboard/billing?checkout=success`}`,
       id: `sim_${Date.now()}`,
       ...body
     };

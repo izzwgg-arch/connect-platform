@@ -31,6 +31,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
+import { canonicalApiBase } from "../publicOrigins";
 import {
   describeSignalWireCredentials,
   resolveSignalWireCredentials,
@@ -92,8 +93,7 @@ function toE164(v: unknown): string | null {
  */
 export function resolvePublicApiBase(fromClient?: unknown): string {
   const candidate = String(fromClient ?? "").trim();
-  const env = (process.env.PUBLIC_API_BASE_URL || process.env.API_PUBLIC_URL || "").trim();
-  let base = /^https:\/\/[a-z0-9.-]+(\/api)?\/?$/i.test(candidate) ? candidate : env || "https://app.connectcomunications.com/api";
+  let base = /^https:\/\/[a-z0-9.-]+(\/api)?\/?$/i.test(candidate) ? candidate : canonicalApiBase();
   base = base.replace(/\/+$/, "");
   if (!/\/api$/.test(base)) base += "/api";
   return base;

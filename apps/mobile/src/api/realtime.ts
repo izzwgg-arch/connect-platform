@@ -1,4 +1,5 @@
 import type { LiveCall, LiveExtensionState, TelephonySnapshot } from "../types";
+import { DEFAULT_TELEPHONY_WS_URL } from "../config/publicOrigin";
 
 type TelephonyEnvelope<T = unknown> = {
   event: string;
@@ -13,7 +14,7 @@ export type LiveTelephonyState = {
 
 export type RealtimeSubscription = () => void;
 
-const DEFAULT_TELEPHONY_WS_URL = "wss://app.connectcomunications.com/ws/telephony";
+// The platform hostname lives in ../config/publicOrigin — one constant for a Loopcom build.
 
 function telephonyWsUrl(token: string): string {
   const fromEnv = process.env.EXPO_PUBLIC_TELEPHONY_WS_URL || DEFAULT_TELEPHONY_WS_URL;

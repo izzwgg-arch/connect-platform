@@ -1,3 +1,4 @@
+import { resolveApiBase } from "../config/publicOrigin";
 import type {
   SipAnswerTraceEvent,
   SipClient,

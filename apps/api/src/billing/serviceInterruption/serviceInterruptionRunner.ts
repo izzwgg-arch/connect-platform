@@ -8,6 +8,7 @@
  */
 
 import { buildBillingEmailJobCreateData } from "../billingAuth";
+import { canonicalPortalOrigin } from "../../publicOrigins";
 import { resolveInvoiceEmailBranding } from "../invoiceBranding";
 import {
   serviceInterruptedEmail,
@@ -70,7 +71,7 @@ async function invoiceFor(db: any, invoiceId: string) {
 
 /** The public pay link for this invoice. */
 function payUrl(invoiceId: string): string {
-  const base = (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
+  const base = canonicalPortalOrigin();
   return `${base}/pay/invoice/${invoiceId}`;
 }
 

@@ -28,11 +28,35 @@ const MAX_RECONNECT_ATTEMPTS = 20;
 
 // Next.js replaces NEXT_PUBLIC_* references at build time. Access via string
 // indexing so TypeScript doesn't complain about the unknown key in strict mode.
+/**
+ * ⛔ SAME-ORIGIN FIRST. Connect is served on more than one hostname
+ * (`app.connectcomunications.com`, `app.loopcom.net`), and this used to return
+ * the BUILD-TIME `NEXT_PUBLIC_TELEPHONY_WS_URL` unconditionally — baked as the
+ * old host — so a user on app.loopcom.net opened their live-call feed
+ * cross-origin to app.connectcomunications.com. It worked only because that
+ * host still existed; the day it goes, the feed on Loopcom dies silently.
+ * nginx proxies /ws/telephony on EVERY platform vhost, so the page's own origin
+ * is always right. The env value is honoured only for local dev (a localhost
+ * page pointing at :3003) or when it names the very host the page is on.
+ */
+export function resolveTelephonyWsUrl(envValue: string | undefined, loc: { protocol: string; host: string; hostname: string } | null): string {
+  const env = String(envValue ?? "").trim();
+  if (!loc) return env; // SSR: nothing to derive from; the client re-resolves.
+  const sameOrigin = `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}/ws/telephony`;
+  if (!env) return sameOrigin;
+  try {
+    const u = new URL(env);
+    const isLocalDev = loc.hostname === "localhost" || loc.hostname === "127.0.0.1";
+    if (isLocalDev || u.host === loc.host) return env;
+  } catch { /* fall through */ }
+  return sameOrigin;
+}
+
 function wsUrl(): string {
   if (typeof window === "undefined") return "";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const base = (process as unknown as Record<string, Record<string, string>>)["env"]["NEXT_PUBLIC_TELEPHONY_WS_URL"] ?? "";
-  return base;
+  return resolveTelephonyWsUrl(base, window.location);
 }
 
 function getToken(): string {

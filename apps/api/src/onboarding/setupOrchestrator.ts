@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
+import { canonicalPortalOrigin } from "../publicOrigins";
 import { db } from "@connect/db";
 import { resolvePersonDisplayName } from "@connect/shared";
 import { decryptJson } from "@connect/security";
@@ -128,9 +129,7 @@ export function releaseAccount(account: RobotAccount): void {
 // ── Connect-side helpers ──────────────────────────────────────────────────────
 
 function portalPublicUrl(pathname: string): string {
-  const origin = String(
-    process.env.PORTAL_PUBLIC_URL || process.env.CONNECT_APP_URL || process.env.APP_PUBLIC_URL || "https://app.connectcomunications.com",
-  ).replace(/\/$/, "");
+  const origin = canonicalPortalOrigin();
   return `${origin}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
 }
 

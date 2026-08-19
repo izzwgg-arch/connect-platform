@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
+import { SUPPORT_EMAIL } from "../../../lib/platformIdentity";
 import { NUMBER_SEARCH_FAILED_MESSAGE, numberSearchEmptyMessage } from "../../../lib/numberSearchMessage";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -747,7 +748,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         </div>
         <div className="ob-invalid-title">This onboarding link is not active</div>
         <p className="ob-invalid-body">Please contact your Connect Communications contact for a new link.</p>
-        <p className="ob-invalid-support">Need help? <a href="mailto:support@connectcomunications.com" className="ob-invalid-link">support@connectcomunications.com</a></p>
+        <p className="ob-invalid-support">Need help? <a href={`mailto:${SUPPORT_EMAIL}`} className="ob-invalid-link">{SUPPORT_EMAIL}</a></p>
       </div>
     );
   }

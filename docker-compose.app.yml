@@ -380,7 +380,7 @@ services:
       dockerfile: apps/portal/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ""
-        NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+        NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-}
         NEXT_PUBLIC_FORCE_ICE_RELAY: ${NEXT_PUBLIC_FORCE_ICE_RELAY:-}
         NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED: ${NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED:-true}
     environment:
@@ -392,7 +392,7 @@ services:
       PORTAL_API_INTERNAL_URL: http://api:3001
       # Live AMI event stream for call/extension/queue state in the portal dashboard.
       # Must be wss:// in production (nginx proxies wss: → ws: internally).
-      NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+      NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-}
     ports:
       - "127.0.0.1:3000:3000"
     networks:
@@ -409,13 +409,13 @@ services:
       dockerfile: apps/portal/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ""
-        NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+        NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-}
         NEXT_PUBLIC_FORCE_ICE_RELAY: ${NEXT_PUBLIC_FORCE_ICE_RELAY:-}
         NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED: ${NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED:-true}
     environment:
       NEXT_PUBLIC_API_URL: ""
       PORTAL_API_INTERNAL_URL: http://api:3001
-      NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-wss://app.connectcomunications.com/ws/telephony}
+      NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-}
     ports:
       - "127.0.0.1:3005:3000"
     stop_grace_period: 45s

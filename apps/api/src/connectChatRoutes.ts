@@ -32,6 +32,7 @@ import {
 } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
 import { canModifySmsNumberRow, canReadSmsNumberRow } from "./smsNumberAdminScope";
+import { canonicalApiBase } from "./publicOrigins";
 import { userCanAccessCrmContact } from "./crm/crmContactAccess";
 import { isAdminRole, loadCrmUserAccessRole } from "./crm/guard";
 import { crmInboundSmsHook } from "./crm/inboundSmsHook";
@@ -261,8 +262,9 @@ export type ConnectChatRoutesDeps = {
 };
 
 function publicChatDownloadBase(): string {
-  const raw = process.env.PUBLIC_API_BASE_URL || process.env.API_PUBLIC_URL || process.env.PORTAL_PUBLIC_URL || "https://app.connectcomunications.com/api";
-  return raw.replace(/\/+$/, "");
+  // ⛔ This chain used to fall through to PORTAL_PUBLIC_URL — an ORIGIN with no
+  // /api — as an API base. publicOrigins.ts owns the chain now.
+  return canonicalApiBase();
 }
 
 function pushPreview(body: string, fallback = "Sent an attachment"): string {

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { canonicalPortalOrigin } from "../publicOrigins";
 
 /** Default pay-link lifetime (30 days) — aligned with BILLING_PAY_TOKEN_TTL_MS. */
 export const BILLING_PAY_LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -51,6 +52,6 @@ export function computePayableSet(invoices: PayLinkInvoiceLike[]): {
 }
 
 export function payLinkPublicUrl(code: string): string {
-  const base = (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
+  const base = canonicalPortalOrigin();
   return `${base}/p/${encodeURIComponent(code)}`;
 }

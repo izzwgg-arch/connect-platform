@@ -1,4 +1,5 @@
 import { DEFAULT_INVOICE_DISPLAY_NAME, escapeHtml, type InvoiceEmailBranding, resolveInvoiceEmailBranding } from "./invoiceBranding";
+import { canonicalPortalOrigin, platformSupportEmail } from "../publicOrigins";
 import { formatBillingDate } from "./billingTime";
 
 export function money(cents: number): string {
@@ -13,7 +14,7 @@ function fmtDate(d: Date | string): string {
 /** Fallback Loopcom wordmark URL, from PUBLIC_PORTAL_URL. Must stay an absolute
  *  https URL — email clients cannot load a relative path or a data: URI. */
 function getDefaultLogoUrl(): string {
-  const base = (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
+  const base = canonicalPortalOrigin();
   return `${base}/brand/loopcom/loopcom-wordmark-560.png`;
 }
 

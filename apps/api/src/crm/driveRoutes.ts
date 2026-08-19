@@ -14,6 +14,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { oauthRedirectUriForRequest } from "../publicOrigins";
 import { db } from "@connect/db";
 import { hasCredentialsMasterKey, encryptJson } from "@connect/security";
 import {
@@ -182,7 +183,7 @@ export async function registerCrmDriveRoutes(app: FastifyInstance) {
     let redirectUri: string;
     try {
       clientId = requireEnv("GOOGLE_OAUTH_CLIENT_ID");
-      redirectUri = requireEnv("GOOGLE_OAUTH_REDIRECT_URI");
+      redirectUri = oauthRedirectUriForRequest(req, requireEnv("GOOGLE_OAUTH_REDIRECT_URI"));
     } catch {
       return reply.status(503).send({ error: "oauth_not_configured" });
     }
@@ -281,7 +282,7 @@ export async function registerCrmDriveRoutes(app: FastifyInstance) {
       try {
         clientId = requireEnv("GOOGLE_OAUTH_CLIENT_ID");
         clientSecret = requireEnv("GOOGLE_OAUTH_CLIENT_SECRET");
-        redirectUri = requireEnv("GOOGLE_OAUTH_REDIRECT_URI");
+        redirectUri = oauthRedirectUriForRequest(req, requireEnv("GOOGLE_OAUTH_REDIRECT_URI"));
       } catch {
         return reply.status(503).send({ error: "oauth_not_configured" });
       }

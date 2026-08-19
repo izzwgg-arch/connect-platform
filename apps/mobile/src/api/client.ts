@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { resolveApiBase } from "../config/publicOrigin";
 import * as ExpoNotifications from "expo-notifications";
 import type {
   AuthResponse,
@@ -33,7 +34,7 @@ import {
   type VoicemailApiScopeMeta,
 } from "./voicemailClientScope";
 
-export const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || "https://app.connectcomunications.com/api";
+export const API_BASE = resolveApiBase();
 
 async function parseJson(res: Response) {
   const text = await res.text();

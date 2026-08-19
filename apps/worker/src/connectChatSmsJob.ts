@@ -121,11 +121,23 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     return;
   }
 
+  // ⛔ Same chain as apps/api's publicOrigins.canonicalApiBase(): the API base
+  // env names first, then the portal origin + "/api" — this used to fall
+  // through to PORTAL_PUBLIC_URL (an ORIGIN, no /api) as an API base. The
+  // literal default is the canonical host until the Loopcom flip
+  // (PUBLIC_PORTAL_URL) moves it; both are set in the same .env.platform.
+  const portalOrigin = (
+    process.env.PUBLIC_PORTAL_URL ||
+    process.env.PORTAL_PUBLIC_URL ||
+    process.env.CONNECT_APP_URL ||
+    process.env.APP_PUBLIC_URL ||
+    "https://app.connectcomunications.com"
+  ).replace(/\/+$/, "");
   const publicBase = (
     process.env.PUBLIC_API_BASE_URL ||
     process.env.API_PUBLIC_URL ||
-    process.env.PORTAL_PUBLIC_URL ||
-    "https://app.connectcomunications.com/api"
+    process.env.PUBLIC_API_URL ||
+    `${portalOrigin}/api`
   ).replace(/\/+$/, "");
 
   const testMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";

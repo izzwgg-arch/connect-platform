@@ -5,6 +5,13 @@ import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import { buildGlobalRateLimitOptions, resolveGlobalRateLimitMax } from "./globalRateLimit";
 import { SUPER_ONLY_VITAL_WRITE_RESOURCES, decideVitalResourceWrite } from "./pbxResourceOwnership";
+import {
+  canonicalApiBase,
+  canonicalPortalHost,
+  canonicalPortalOrigin,
+  platformBillingFromEmail,
+  platformNoreplyEmail,
+} from "./publicOrigins";
 import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
@@ -1131,7 +1138,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
       err.code = "SENDGRID_API_KEY_MISSING";
       throw err;
     }
-    const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
+    const fromEmail = provider.fromEmail || platformBillingFromEmail();
     const fromName = provider.fromName || "Connect Communications";
     // One list, two sources. Typed explicitly because `.catch(() => [])` alone
     // infers never[] and then nothing else can join it.
@@ -1198,7 +1205,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
     throw err;
   }
 
-  const fromEmail = provider.fromEmail || "noreply@connectcomunications.com";
+  const fromEmail = provider.fromEmail || platformNoreplyEmail();
   const fromName = provider.fromName || "Connect Communications";
 
   const transporter = nodemailer.createTransport({
@@ -1359,7 +1366,7 @@ async function processInvoiceOverdueBatch() {
         orderBy: { createdAt: "desc" }
       });
       if (!recentReminder) {
-        const payUrl = overdue.externalPaymentLink || (overdue.payToken ? `https://app.connectcomunications.com/pay/invoice/${overdue.payToken}` : null);
+        const payUrl = overdue.externalPaymentLink || (overdue.payToken ? `${canonicalPortalOrigin()}/pay/invoice/${overdue.payToken}` : null);
         if (payUrl) {
           await queueInvoiceReminderEmail({
             tenantId: overdue.tenantId,
@@ -2418,7 +2425,7 @@ async function resolveUserNameForEmail(user: any): Promise<string> {
 }
 
 function portalPublicUrl(pathname: string): string {
-  const origin = String(process.env.PORTAL_PUBLIC_URL || process.env.CONNECT_APP_URL || process.env.APP_PUBLIC_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
+  const origin = canonicalPortalOrigin();
   return `${origin}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
 }
 
@@ -4650,7 +4657,7 @@ async function probeNginxSipProxy(): Promise<boolean> {
         Upgrade: "websocket",
         "Sec-WebSocket-Key": "U0JDUmVhZGluZXNzVGVzdA==",
         "Sec-WebSocket-Version": "13",
-        Origin: "https://app.connectcomunications.com"
+        Origin: canonicalPortalOrigin()
       }
     });
     const wsHdr = String(res.headers.get("sec-websocket-version") || "").trim();
@@ -4676,7 +4683,7 @@ async function probeRemoteWsEndpoint(host: string, port: number, timeoutMs = 350
         Upgrade: "websocket",
         "Sec-WebSocket-Key": "UmVtb3RlU2JjV3NUZXN0",
         "Sec-WebSocket-Version": "13",
-        Origin: "https://app.connectcomunications.com"
+        Origin: canonicalPortalOrigin()
       }
     });
     clearTimeout(timer);
@@ -5753,6 +5760,16 @@ function looksLikeSmokeTenantName(name: string): boolean {
 }
 
 app.post("/auth/signup", async (req, reply) => {
+  // ⛔ OFF unless explicitly enabled. Found 2026-08-19: this route was public
+  // (JWT-bypassed), had NO caller anywhere in the portal or the apps (0 refs;
+  // 1 nginx hit in 14 days — a probe), created a tenant + user with no email
+  // verification, and handed role ADMIN to any `support*@connectcomunications.com`
+  // address — the very role that arms three latent tenant-isolation findings
+  // (CLAUDE.md records "0 ADMIN users" as the reason they were latent). Sign-up
+  // is the onboarding wizard. A 404 here reads exactly like an unrouted path.
+  if (String(process.env.PUBLIC_SIGNUP_ENABLED || "").trim() !== "1") {
+    return reply.status(404).send({ error: "not_found" });
+  }
   const input = signupSchema.parse(req.body);
   const ip = String((req.headers["x-forwarded-for"] as string | undefined) || req.ip || "unknown").split(",")[0].trim();
   if (!checkBillingRateLimit(`signup:${ip}`, 5, 60 * 60 * 1000)) {
@@ -5791,7 +5808,9 @@ app.post("/auth/signup", async (req, reply) => {
 
   const passwordHash = await bcrypt.hash(input.password, 10);
   const normalizedEmail = input.email.toLowerCase();
-  const role = normalizedEmail.startsWith("support") && normalizedEmail.endsWith("@connectcomunications.com") ? "ADMIN" : "USER";
+  // ⛔ Never a privileged role from an EMAIL PATTERN. This used to grant ADMIN
+  // to `support*@connectcomunications.com` — unverified, on a public route.
+  const role = "USER";
   const user = await db.user.create({
     data: {
       tenantId: tenant.id,
@@ -9730,7 +9749,7 @@ app.post("/webhooks/twilio/sms-status", async (req, reply) => {
   const body = (req.body || {}) as Record<string, string>;
   const sid = String(body.MessageSid || "");
   const statusRaw = String(body.MessageStatus || "").toLowerCase();
-  const host = String(req.headers.host || "app.connectcomunications.com");
+  const host = String(req.headers.host || canonicalPortalHost());
   const proto = String(req.headers["x-forwarded-proto"] || "https");
   const url = `${proto}://${host}/webhooks/twilio/sms-status`;
 
@@ -16605,7 +16624,7 @@ app.post("/admin/pbx/events/register", async (req, reply) => {
   const configuredCallbackUrl = (process.env.PBX_WEBHOOK_CALLBACK_URL || "").trim();
   const publicApiBaseUrl = (process.env.NEXT_PUBLIC_API_URL || "").trim();
   const defaultCallbackUrl = configuredCallbackUrl
-    || (publicApiBaseUrl ? `${publicApiBaseUrl.replace(/\/$/, "")}/webhooks/pbx` : "https://app.connectcomunications.com/api/webhooks/pbx");
+    || (publicApiBaseUrl ? `${publicApiBaseUrl.replace(/\/$/, "")}/webhooks/pbx` : `${canonicalApiBase()}/webhooks/pbx`);
   const callbackUrl = input.callbackUrl || defaultCallbackUrl;
 
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
@@ -22180,7 +22199,7 @@ const DIDMAP_KEY_NAMES = ["tenant", "profile_id", "moh_class", "hold_announce", 
  * Idempotent: writing the same values is a no-op for the dialplan.
  */
 async function publishWakeSystemConfig(tenantSlug: string): Promise<void> {
-  const baseUrl = (process.env.PUBLIC_API_BASE_URL ?? "https://app.connectcomunications.com/api").replace(/\/$/, "");
+  const baseUrl = canonicalApiBase();
   const wakeUrl = `${baseUrl}/internal/pbx/wake-extension`;
   const wakeSecret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
   // Cold-start budget for a killed Samsung Galaxy S25 / Android 15 app:
@@ -25812,7 +25831,7 @@ app.post("/voice/ivr/menus/build", async (req, reply) => {
     }
   });
 
-  const portalBase = String(process.env.PORTAL_PUBLIC_URL || "https://app.connectcomunications.com").replace(/\/+$/, "");
+  const portalBase = canonicalPortalOrigin();
   const mainProfile = created[0];
   app.log.info({ tenantId, menus: created.length, by: (user as any).id }, "ivr: menu built from scratch (unpublished)");
 
@@ -25915,7 +25934,7 @@ app.get("/voice/ivr/explain", async (req, reply) => {
 
   // Where to send the customer to look at it. `from=assistant` makes the Studio
   // say "your assistant set this up — read it, then press Publish".
-  const portalBase = String(process.env.PORTAL_PUBLIC_URL || "https://app.connectcomunications.com").replace(/\/+$/, "");
+  const portalBase = canonicalPortalOrigin();
   const reviewUrl = `${portalBase}/pbx/ivr-studio?menu=${encodeURIComponent(profile.id)}&from=assistant`;
 
   return reply.send({
@@ -31671,7 +31690,7 @@ app.post("/settings/email/test", async (req, reply) => {
   if (!row) return reply.status(404).send({ error: "EMAIL_NOT_CONFIGURED" });
 
   try {
-    const target = (row.fromEmail || "billing@connectcomunications.com").trim();
+    const target = (row.fromEmail || platformBillingFromEmail()).trim();
     await queueEmailJob({
       tenantId: admin.tenantId,
       type: "EMAIL_TEST",
@@ -31904,7 +31923,7 @@ app.post("/admin/email-settings/google-workspace/test", async (req, reply) => {
     return reply.status(400).send({ error: "GOOGLE_WORKSPACE_NOT_CONFIGURED", message: "Save Google Workspace SMTP settings first." });
   }
   const sentAt = new Date().toISOString();
-  const fromAddr = (row.fromEmail || "noreply@connectcomunications.com").trim();
+  const fromAddr = (row.fromEmail || platformNoreplyEmail()).trim();
   const subject = "Connect Communications test email";
   const htmlBody = `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
 <p><strong>Your Google Workspace email integration is working.</strong></p>
@@ -33054,7 +33073,7 @@ app.post("/customers/:id/send-reminder", async (req, reply) => {
   });
   if (recentReminder) return reply.status(429).send({ error: "REMINDER_THROTTLED" });
 
-  const payUrl = invoice.externalPaymentLink || (invoice.payToken ? `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}` : null);
+  const payUrl = invoice.externalPaymentLink || (invoice.payToken ? `${canonicalPortalOrigin()}/pay/invoice/${invoice.payToken}` : null);
   if (!payUrl) return reply.status(400).send({ error: "PAY_LINK_MISSING" });
   await queueInvoiceReminderEmail({
     tenantId: admin.tenantId,
@@ -33093,7 +33112,7 @@ app.post("/customers/:id/send-invoice", async (req, reply) => {
   if (invoice.status === "VOID") return reply.status(400).send({ error: "INVOICE_VOIDED" });
 
   const payToken = invoice.payToken || `inv_${randomBytes(18).toString("hex")}`;
-  const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
+  const payUrl = `${canonicalPortalOrigin()}/pay/invoice/${payToken}`;
   const updated = await db.invoice.update({
     where: { id: invoice.id },
     data: {
@@ -35295,7 +35314,7 @@ app.post("/internal/pbx/publish-wake-config", async (req, reply) => {
     app.log.warn({ tenantId: resolvedTenantId, slug, err: publishError }, "publish-wake-config: failed");
   }
 
-  const baseUrl = (process.env.PUBLIC_API_BASE_URL ?? "https://app.connectcomunications.com/api").replace(/\/$/, "");
+  const baseUrl = canonicalApiBase();
   return reply.send({
     ok: systemPublished,
     slug,
@@ -37989,7 +38008,7 @@ app.post("/billing/invoices", async (req, reply) => {
 
   const tokenRaw = randomBytes(18).toString("hex");
   const payToken = `inv_${tokenRaw}`;
-  const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
+  const payUrl = `${canonicalPortalOrigin()}/pay/invoice/${payToken}`;
 
   const invoice = await db.invoice.create({
     data: {
@@ -38031,7 +38050,7 @@ app.post("/billing/invoices/:id/send", async (req, reply) => {
   if (invoice.status === "VOID") return reply.status(400).send({ error: "INVOICE_VOIDED" });
 
   const payToken = invoice.payToken || `inv_${randomBytes(18).toString("hex")}`;
-  const payUrl = `https://app.connectcomunications.com/pay/invoice/${payToken}`;
+  const payUrl = `${canonicalPortalOrigin()}/pay/invoice/${payToken}`;
   const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: "SENT", payToken, payTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), externalPaymentLink: payUrl } });
   await queueInvoiceCreatedEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, payUrl });
   await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "SENT", payload: { payUrl } });
@@ -38077,7 +38096,7 @@ app.post("/billing/invoices/:id/remind", async (req, reply) => {
   });
   if (recentReminder) return reply.status(429).send({ error: "REMINDER_THROTTLED", nextAllowedAt: new Date(recentReminder.createdAt.getTime() + 24 * 60 * 60 * 1000) });
 
-  const payUrl = invoice.externalPaymentLink || (invoice.payToken ? `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}` : null);
+  const payUrl = invoice.externalPaymentLink || (invoice.payToken ? `${canonicalPortalOrigin()}/pay/invoice/${invoice.payToken}` : null);
   if (!payUrl) return reply.status(400).send({ error: "PAY_LINK_MISSING" });
   await queueInvoiceReminderEmail({
     tenantId: admin.tenantId,
@@ -38143,8 +38162,8 @@ app.post("/billing/invoices/pay/:token/hosted-session", async (req, reply) => {
     subscriptionId: invoice.id,
     planCode: "INVOICE_PAYMENT",
     amountCents: invoice.amountCents,
-    successUrl: `https://app.connectcomunications.com/pay/invoice/${token}?result=success`,
-    cancelUrl: `https://app.connectcomunications.com/pay/invoice/${token}?result=cancel`
+    successUrl: `${canonicalPortalOrigin()}/pay/invoice/${token}?result=success`,
+    cancelUrl: `${canonicalPortalOrigin()}/pay/invoice/${token}?result=cancel`
   });
 
   await db.invoice.update({ where: { id: invoice.id }, data: { externalPaymentLink: hosted.redirectUrl, providerInvoiceRef: hosted.providerSessionId || invoice.providerInvoiceRef || null } });
@@ -38174,7 +38193,7 @@ app.post("/billing/invoices/:id/simulate-webhook", async (req, reply) => {
     return { ok: true, invoice: updated };
   }
 
-  const retryUrl = `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}`;
+  const retryUrl = `${canonicalPortalOrigin()}/pay/invoice/${invoice.payToken}`;
   const updated = await db.invoice.update({ where: { id: invoice.id }, data: { status: invoice.status === "OVERDUE" ? "OVERDUE" : "SENT", lastFailureReason: "SIMULATED_FAILURE" } });
   await queueInvoiceDeclineEmail({ tenantId: admin.tenantId, invoiceId: updated.id, to: updated.customerEmail, amountCents: updated.amountCents, retryUrl });
   await logInvoiceEvent({ tenantId: admin.tenantId, invoiceId: updated.id, type: "DECLINED", payload: { simulated: true } });
@@ -38234,8 +38253,8 @@ app.post("/billing/subscription/hosted-session", async (req, reply) => {
       subscriptionId: sub.id,
       planCode: BILLING_PLAN_CODE,
       amountCents: BILLING_PLAN_PRICE_CENTS,
-      successUrl: "https://app.connectcomunications.com/dashboard/billing?checkout=success",
-      cancelUrl: "https://app.connectcomunications.com/dashboard/billing?checkout=cancel"
+      successUrl: `${canonicalPortalOrigin()}/dashboard/billing?checkout=success`,
+      cancelUrl: `${canonicalPortalOrigin()}/dashboard/billing?checkout=cancel`
     });
   } catch (e: any) {
     const code = String(e?.code || "SOLA_REQUEST_FAILED");
@@ -38677,7 +38696,7 @@ app.post("/webhooks/sola-cardknox", { config: { rawBody: true } }, async (req, r
     }
 
     if (event.status === "FAILED") {
-      const retryUrl = `https://app.connectcomunications.com/pay/invoice/${invoice.payToken}`;
+      const retryUrl = `${canonicalPortalOrigin()}/pay/invoice/${invoice.payToken}`;
       const updated = await db.invoice.update({
         where: { id: invoice.id },
         data: {

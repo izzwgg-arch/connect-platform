@@ -5,7 +5,9 @@ import { useEffect, useState } from "react";
 function initialAndroidDownloadPageUrl(): string {
   const baked = (process.env.NEXT_PUBLIC_API_URL || "").trim().replace(/\/$/, "");
   if (baked) return `${baked}/mobile/android/download`;
-  return "https://app.connectcomunications.com/api/mobile/android/download";
+  // Same-origin: every platform hostname serves the download page. (The effect
+  // below re-derives it from window.location.origin on the client anyway.)
+  return "/api/mobile/android/download";
 }
 
 export function AppDownloadCard({

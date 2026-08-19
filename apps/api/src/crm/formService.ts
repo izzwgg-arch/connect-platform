@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import { db } from "@connect/db";
+import { canonicalPortalOrigin } from "../publicOrigins";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { resolveImplicitSenderConnectionOrder } from "./crmEmailHelpers";
 import { queueCrmEmailSend } from "./crmEmailQueue";
@@ -34,12 +35,7 @@ export function hashPublicIp(ip: string | undefined | null): string | null {
 }
 
 export function buildPublicFormUrl(token: string): string {
-  const base = (
-    process.env.PUBLIC_PORTAL_URL ||
-    process.env.PORTAL_PUBLIC_URL ||
-    process.env.PUBLIC_APP_URL ||
-    "https://app.connectcomunications.com"
-  ).replace(/\/+$/, "");
+  const base = canonicalPortalOrigin();
   return `${base}/forms/sign/${encodeURIComponent(token)}`;
 }
 

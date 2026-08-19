@@ -278,9 +278,13 @@ export class WirePbxClient {
     const configured = this.cfg.webhookCallbackUrl?.trim() || process.env.PBX_WEBHOOK_CALLBACK_URL?.trim();
     if (configured) return configured;
 
-    const publicApiBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+    const publicApiBase = (
+      process.env.PUBLIC_API_BASE_URL || process.env.API_PUBLIC_URL || process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_URL || ""
+    ).trim();
     if (publicApiBase) return `${publicApiBase.replace(/\/$/, "")}/webhooks/pbx`;
-
+    const portalOrigin = (process.env.PUBLIC_PORTAL_URL || process.env.PORTAL_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+    if (portalOrigin) return `${portalOrigin}/api/webhooks/pbx`;
+    // Canonical default until the Loopcom flip (PUBLIC_PORTAL_URL) moves it.
     return "https://app.connectcomunications.com/api/webhooks/pbx";
   }
 
