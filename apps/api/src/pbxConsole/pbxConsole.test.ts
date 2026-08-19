@@ -6,6 +6,15 @@ import { parseForm, applyOverrides } from "./panelForm";
 import { deviceOverrides, DEVICE_FIELDS, type DeviceSpec } from "./pbxConsoleWrites";
 import { type ParsedForm } from "./panelForm";
 
+/**
+ * ⛔ Strip comments before ANY negative or shape match on source. Three times in
+ * this repo a guard has failed against CORRECT code because it matched the old
+ * pattern quoted in the doc comment that explains the fix.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
 const norm = (s: string) => s.replace(/\r\n/g, "\n");
 
 /* A minimal rendered form: a text field, a select, a multi-select, two checkboxes
@@ -89,7 +98,7 @@ test("deviceOverrides: a virtual device carries ONLY a phone number — no profi
 /* Source guards — these are CALLER-side promises that a unit test of the helper
    would pass straight through. */
 test("source: every console write route is SUPER_ADMIN-gated (requireOwner) and applies + re-bakes", () => {
-  const routes = norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8"));
+  const routes = norm(readFileSync(join(__dirname, 'pbxConsoleRoutes.ts'), 'utf8'));
   // every handler opens with requireOwner
   // every route either gates inline OR delegates to handleDeleteExtension (which gates)
   const delegating = (routes.match(/=> handleDeleteExtension\(req, reply/g) || []).length;
@@ -115,4 +124,25 @@ test("source: server.ts registers the console and gates the prefix; writes carry
 test("DEVICE_FIELDS separates the device sub-form from the general form", () => {
   assert.ok(DEVICE_FIELDS.has("technology") && DEVICE_FIELDS.has("dtmfmode") && DEVICE_FIELDS.has("device_id"));
   assert.ok(!DEVICE_FIELDS.has("name") && !DEVICE_FIELDS.has("class_of_service_id"), "general fields are not device fields");
+});
+
+/*
+ * ⛔ A REFUSAL MUST NOT READ AS A CRASH. The geo rebuild needs root, so the
+ * helper refuses — and that came back as a 500, which tells the person at the
+ * screen the app is broken and sends them hunting a bug instead of doing the
+ * one setup step. This reads the route file's SOURCE because the defect is in
+ * how the handler ANSWERS, which a unit test of any helper passes straight
+ * through. Comments are stripped first: the doc block above the fix quotes the
+ * old shape, and a naive scan matches that and passes on broken code.
+ */
+test("a known refusal answers 409 with a sentence, never 500", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, 'pbxConsoleRoutes.ts'), 'utf8')));
+  assert.match(src, /geo_build_not_permitted/, "the geo refusal must be recognised by name");
+  assert.match(src, /status\(409\)[\s\S]{0,120}pbx_console_refused/, "a refusal answers 409");
+  // and it must carry a plain-English sentence, not the raw helper slug
+  assert.match(src, /rebuilding the firewall runs as root/, "the message must be in plain English");
+  // the refusal is checked BEFORE the generic 500, or it can never be reached
+  const refusalAt = src.indexOf("pbx_console_refused");
+  const genericAt = src.indexOf("pbx_console_write_failed", refusalAt);
+  assert.ok(refusalAt > 0 && genericAt > refusalAt, "the refusal branch must come first");
 });

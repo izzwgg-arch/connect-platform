@@ -75,8 +75,28 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     }
   };
 
+  /* A REFUSAL IS NOT A CRASH. The helper answers some requests with "I will not
+     do this, and here is why" — the geo rebuild needing root is the standing
+     example. Those came back as 500 `pbx_console_write_failed`, which reads to
+     the person at the screen as "the app broke" and sends them hunting a bug
+     instead of doing the one setup step. A refusal we recognise is a 409 with
+     the plain-English sentence as the message, logged at warn rather than
+     error so it never pollutes the signal that something is genuinely wrong. */
+  const REFUSALS: Array<{ match: string; message: string }> = [
+    {
+      match: "geo_build_not_permitted",
+      message:
+        "Blocking a country needs one more setup step on the phone system: rebuilding the firewall runs as root, which the Connect helper is not allowed to do yet. Nothing was changed — the countries you had blocked are still exactly as they were.",
+    },
+  ];
+
   const fail = (reply: any, e: any) => {
     const msg = e instanceof PanelStepError ? e.message : e?.message || "the phone system rejected the change";
+    const refusal = REFUSALS.find((r) => String(msg).includes(r.match));
+    if (refusal) {
+      log.warn({ err: msg, step: e?.step }, "[PBX_CONSOLE] refused");
+      return reply.status(409).send({ error: "pbx_console_refused", detail: refusal.message, reason: refusal.match });
+    }
     log.error({ err: e?.message, step: e?.step }, "[PBX_CONSOLE] write failed");
     return reply.status(e instanceof PanelStepError ? 422 : 500).send({ error: "pbx_console_write_failed", detail: msg });
   };
