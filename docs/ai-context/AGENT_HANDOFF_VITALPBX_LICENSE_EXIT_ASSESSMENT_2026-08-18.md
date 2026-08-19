@@ -745,3 +745,121 @@ try/catch). Fixed in `fd3d0a3c` — in the deploy queue.
 4. Tenant **create** in the console UI still routes nowhere — it's the mirror's
    job (§11–§14); wiring the "New tenant" button to `buildPbxTenant` is a follow-up.
 5. ⛔ Still open from earlier: **rotate the robot panel password**.
+
+## 17. THE LAST TWO CAPS ARE BEATEN: phone provisioning writes PROVEN on production; geo needs one more step (2026-08-19)
+
+§16 left two operations the unlicensed panel refuses — provisioning saves past
+20 phones, geo blocks past 1 country — as read-only. Both now have a real write
+path. **Commits `5a312205` (helper + installer) and `d0c435b9` (api + portal).**
+
+### ⛔⛔ THE FINDING THAT UNLOCKED IT: the cap is in the panel's SAVE controller, not in the renderer
+`Device::generateProvisioningFile()`, called from PHP CLI on the **unlicensed
+clone holding 55 phones against a free cap of 20**, regenerated an existing
+phone's config **byte-identical to the panel's own** (same sha256, 139,017
+bytes), and produced a working config for a brand-new **56th** phone that nginx
+then served with **200**. So the shape is the same as the tenant mirror: **write
+the rows ourselves, then let VitalPBX's OWN generator render them.** We never
+re-implement the 427-model config renderer.
+
+### ⛔ A phone config is a STATIC FILE — this is the trap to remember
+`/phoneprov/<tenant-hash>/<mac>.cfg` is served by a plain nginx `alias`. I first
+read `index.php` (which *does* generate on demand) and concluded configs were
+generated per request — **wrong**: that per-tenant location is not what serves
+the pretty URL, and with the cached file removed the fetch is a plain nginx 404.
+So **a row changed without a render leaves the handset on its old settings,
+silently, forever.** Every write in `console_writes.py` renders.
+
+### What shipped
+- **`scripts/pbx/mirror/console_writes.py`** — `save_phone` (devices + accounts
+  rows → cache-bust → render), `delete_phone`, `generate_config`, `geo_state`,
+  `set_geo_blocks`, `whitelist_state`.
+- **`scripts/pbx/mirror/render_phone.php`** — renders ONE validated MAC and
+  **cannot write a row**, so the privilege it needs can never become "run
+  arbitrary PHP".
+- **Helper `2026.08.19.3`** — `/console/phone-save`, `/console/phone-delete`,
+  `/console/phone-render`, `/console/geo-state`, `/console/geo-set`.
+- **api + portal** — phones are add/edit/delete/**Rebuild**/Resync from the page;
+  geo has Block/Unblock per country.
+
+### ⛔ Three production failures found while proving it — all worth carrying
+1. **`sudo` CANNOT be used from the helper.** The unit sets
+   `NoNewPrivileges=yes`, so sudo is refused outright ("the no new privileges
+   flag is set"). The render therefore runs **in-process as `asterisk`**, made
+   possible by two narrow grants the installer now applies: a **read ACL on
+   `/etc/vitalpbx/vitalpbx-maint.conf`** (one 128-char maintenance API token —
+   *not* database credentials) and **`/var/lib/vitalpbx/provisioning` in
+   `ReadWritePaths`** (`ProtectSystem=strict` otherwise makes it read-only).
+2. **A create whose render failed left a phone row with NO config** — the console
+   would list a phone that gets nothing. A failed **create** now rolls its row
+   back (an edit keeps its row, because that phone already has a working config);
+   proven on prod, the failed attempt left the count at baseline 55.
+3. **`geo_state` lied.** `/etc/firewalld` is root-only, so the enforceability
+   check returned "all 232 unenforceable". It now reports
+   `ipsetDirReadable: false` and makes **no** claim. Confidently wrong in the
+   most alarming direction is worse than obviously incomplete.
+
+### PROVEN ON PRODUCTION
+Create a phone on Loopcom Demo (T102): **185,209-byte config**, `account.1.user_name
+= T102_101`, **served 200** over HTTP like a handset → edit (rename) → re-render
+→ delete (rows + both cached files removed) → **devices back to baseline 55**.
+Installer suite **44/44**; api typecheck **75 = baseline**; portal **0**.
+
+### ⏳ GEO: the one step NOT taken, deliberately
+`set_geo_blocks` writes the flags and then calls VitalPBX's own
+`build_geo_firewall`, which needs **root** (it writes `/etc/firewalld` and
+reloads firewalld) — blocked by the same `NoNewPrivileges`. A sudoers line for
+that one script is installed, but **it cannot work until `NoNewPrivileges` is
+relaxed for the helper unit, or the build is triggered out-of-process** (a root
+path-unit watching a flag file is the clean design).
+⛔ **And the first real run of `build_geo_firewall` on the live box was NOT done
+during business hours**: it rewrites the firewall and reloads firewalld on a PBX
+carrying live calls. Do it in a quiet window, with `/etc/firewalld/direct.xml`
+backed up and the rule count (227) checked before and after.
+✅ Until then nothing is silently wrong: a geo change is **refused**, not
+half-applied, and the console says so.
+⛔ The clone cannot validate this — its container has no working firewall backend
+(0 geo rules even at baseline).
+
+### ⛔⛔ THE GEO CAPABILITY CHECK WAS ITSELF THE DANGEROUS THING (found + fixed 2026-08-19, `81ccf2fa`)
+Verifying the refusal on production caught two defects in the code whose entire
+job is to keep the firewall safe.
+
+1. **It probed by RUNNING the builder.** `geo_build_available()` executed
+   `sudo -n build_geo_firewall --connect-probe`. `build_geo_firewall` takes no
+   such flag, so the "probe" was a **full firewall rebuild and a firewalld
+   reload on a PBX carrying live calls** — performed merely to answer *"am I
+   allowed to do this?"*. The one thing §17 said must wait for a quiet window
+   was being done as a capability check.
+   ⛔ **A capability check must ASK, never DO.** It is now
+   `sudo -n -l <builder>` (list, do not execute), and a guard test asserts no
+   `subprocess.run` line names the builder without `-l`.
+2. **It read the refusal wrong, in the unsafe direction.** It looked for
+   `"password is required"` / `"not allowed"` in stderr; under the helper's
+   `NoNewPrivileges=yes` sudo actually says *"sudo: the no new privileges flag
+   is set, which prevents sudo from running as root"* — matching neither — so
+   it returned `["sudo"]`, i.e. **"the build is available"**. The caller would
+   then have written `blocked='yes'` rows it could not enforce: the console
+   saying *blocked* while the traffic arrives. It now trusts the **exit code**.
+3. **`len(None)` crashed the honest refusal into a 500.** `geo_state` reports
+   `enforceable`/`missingIpset` as `None` when `/etc/firewalld` is unreadable —
+   which is exactly the state a refusal is reported from — so the plain-English
+   message never reached the caller.
+
+**Verified live on prod after the fix:** `/console/geo-set` answers
+`geo_build_not_permitted: the firewall rebuild needs root ... so the block was
+NOT applied`; `/etc/firewalld/direct.xml` is **still stamped 2026-04-29** (never
+rewritten), firewalld shows **no reload in the journal**, and the DB still holds
+**232** blocked countries. Nothing was changed by any of the probing.
+⛔ **Correction to the rule-count note above:** the live figure is **258 runtime
+/ 253 permanent**, and the gap is **fail2ban's 7 live bans**, which come and go
+on their own — so a raw rule count is a *noisy* before/after check. The
+authoritative evidence that geo did nothing is **`direct.xml`'s mtime plus the
+absence of a firewalld reload**, not the rule count.
+Installer suite **45/45**.
+
+### ⛔ The guard-test trap, hit twice in this section
+Both times a negative source guard failed against **correct** code because it
+matched the string quoted in the **doc comment explaining the old defect**
+(`render_phone.php`, then `--connect-probe`). Strip comments — or assert only on
+executable lines — before any `!includes(...)` guard. This is the third
+recorded instance of that trap in this repo.
