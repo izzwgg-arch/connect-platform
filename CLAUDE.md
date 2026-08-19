@@ -115,15 +115,32 @@ the fuck out of it."*
 - ✅ **Also fixed:** `/api/metrics` was **public (200, Prometheus data)** → denied
   at nginx on both vhosts (monitoring untouched — Prometheus scrapes `api:3001`
   internally). `apps/realtime` verified WS tokens against `JWT_SECRET ||
-  "change-me"` → now fails closed. The **connectcomms Postgres password was
-  committed in plaintext** in 5 `scripts/*.sh` → scrubbed to require `PGPASSWORD`
-  from env. ⛔ **The scrub does NOT un-leak git history — the real fix is to
-  ROTATE that DB password** (outage-risk, multi-service; needs a window). Postgres
-  is loopback-only, so not remotely usable today.
-- ⛔ **STILL needs Izzy (the honest ledger):** rotate the DB password; the "built
-  but OFF" controls (Turnstile, per-tenant 2FA, MFA/TOTP, Cloudflare edge WAF,
-  DMARC quarantine — all 0/off); platform-wide session expiry (blocked on mobile
-  401 work); do NOT create an ADMIN-role user (arms 3 latent findings at once).
+  "change-me"` → now fails closed.
+- ✅✅ **THE LEAKED DB PASSWORD IS NOW ROTATED (deep pass, 2026-08-19 evening).**
+  The connectcomms Postgres password (leaked in git history) was rotated live and
+  the OLD one is **DEAD** (`FATAL: password authentication failed` from the docker
+  network). ⛔ It lived in THREE places, all moved together: the DB role, `.env.platform`
+  `DATABASE_URL`, and `infra/.env` `POSTGRES_PASSWORD`. Only **api/worker/agent**
+  connect (realtime/telephony carry the env var but never connect); the docker net
+  is **scram** (127.0.0.1/socket are `trust`, so a loopback verify falsely says the
+  old pw works); **`backup.sh` uses the local trust socket, so it was never
+  password-dependent**. `ALTER ROLE` does not drop live connections, so no outage.
+  Full recipe + rollback in the handoff §5b.
+- ✅✅ **DEEP PASS — every other actionable finding closed** (handoff §5b):
+  **telephony** `d21fd166` (ADMIN dropped from `/ws/telephony` global; diag +
+  call-control routes gated to internal/super-admin; fail-open guard closed; XFF
+  last-entry; JWT min 32 — **committed, deploy pending a 0-active-calls window**,
+  all latent); **api+billing** `1e6a1973` (⛔ **stored-XSS fence on CRM docs** — an
+  uploaded html/svg opened as a same-origin blob stole the JWT; simulate-webhook →
+  super-admin; xtoken redacted; pay-links can't overwrite a tenant's billing email);
+  **portal** `c5f50104` (`javascript:`/off-origin nav guard). ⛔ Payments CORE and
+  portal's big classes (open-redirect, XSS sinks, two-hostname, secrets, 401
+  machinery) were all CLEARED.
+- ⛔ **STILL needs Izzy (the honest ledger):** the "built but OFF" controls
+  (Turnstile, per-tenant 2FA, MFA/TOTP, Cloudflare edge WAF, DMARC quarantine —
+  all 0/off); platform-wide session expiry (blocked on the mobile-401 work, and
+  it also retires the portal's JWT-in-query-string exposure); do NOT create an
+  ADMIN-role user (arms 3 latent findings at once).
 
 ## ⛔⛔ AGENT HANDOFF — "I've passed this to the Connect team" reached NOBODY for two weeks, and a hold-music question ate eight others (2026-08-19) — READ FIRST before touching the escalation path, before using the agent's `role === "owner"` for anything, before adding a clarifying question the agent can ask, or for "the customer says they asked the assistant and nobody got back to them"
 

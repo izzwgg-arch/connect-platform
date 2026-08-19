@@ -184,6 +184,84 @@ Izzy can flip, and one coordinated op:
   `.env.example` comment.
 - ⏳ `apps/worker` internal audit was commissioned this pass — fold its result in.
 
+## 5b. DEEP PASS (round 2) — "close every single hole" (2026-08-19 evening)
+
+Izzy: *"close every single hole, and make it as secure as you can possibly make
+it. Everything, everything, everything."* Four more never-audited/low surfaces
+were audited (telephony, payments, portal client-side, worker) and every
+actionable finding fixed + deployed. **The leaked DB password was ROTATED.**
+
+Commits (all on `feat/ivr-migration-takeover`): `d21fd166` (telephony),
+`1e6a1973` (api+billing+integrations), `c5f50104` (portal). All deployed +
+container-verified except telephony (committed; pending an idle window — see
+below). DB password rotated live.
+
+- ✅ **THE LEAKED DB PASSWORD IS ROTATED AND THE OLD ONE IS DEAD.** The
+  connectcomms Postgres password (leaked in git history, §4) was rotated live.
+  The role password lives in THREE places and all three were moved together: the
+  DB role (`ALTER ROLE`), `.env.platform` `DATABASE_URL` (the apps), and
+  `infra/.env` `POSTGRES_PASSWORD` (the postgres container + the nightly
+  `backup.sh`). ⛔ **Only api/worker/agent actually connect to Postgres** (realtime
+  and telephony carry the env var but never connect — pg_stat_activity proved it),
+  and the docker network uses **scram-sha-256** (127.0.0.1 + local socket are
+  `trust`, which is why a loopback verify falsely says "old pw still works"). ⛔
+  **`backup.sh` connects via the LOCAL trust socket (no `-h`), so it is
+  password-agnostic — the nightly backup was never at risk.** Sequence: `ALTER
+  ROLE` (does NOT drop existing connections, so the platform kept serving) →
+  verify new pw over TCP + auto-rollback if it fails → update both env files →
+  recreate worker+agent (`docker compose up -d --force-recreate --no-deps`) →
+  api via the deploy queue (carries `1e6a1973` + new env). **Verified: 60 live
+  app connections on the new pw, 0 auth errors, and the OLD password is REJECTED
+  from the docker network (`FATAL: password authentication failed`).** Backups:
+  `/root/env-platform-backup-*-dbrotate.bak`, `/root/infra-env-backup-*-dbrotate.bak`.
+  Rollback = `ALTER ROLE ... PASSWORD '<old>'` + restore the two .bak files +
+  recreate the 3 containers.
+  ⛔ The rotation script is `db_rotate_phase1.sh` — the new password is generated
+  server-side and NEVER printed; it exists only in the two env files. ⛔ The 5
+  scrubbed `scripts/*.sh` diagnostic copies in the `_wt/sms-consent` worktree still
+  hold the old (now-dead) string — harmless, they just need `PGPASSWORD` set now.
+- ✅ **TELEPHONY (`d21fd166`, committed — deploy pending an idle window; all
+  findings LATENT):** `/ws/telephony` treated `ADMIN` as global → SUPER_ADMIN only
+  (0 ADMIN users, so behaviour-identical; closes the latent arming). The WS
+  per-IP DoS cap read the FIRST X-Forwarded-For (spoofable) → LAST. The internal
+  guard `isInternalRouteAuthorized` failed OPEN when the secret was unset → fails
+  closed. `/telephony/diag` + `/telephony/calls/{originate,:id/hangup,:id/transfer}`
+  had NO tenant/role check (any valid JWT could read the cross-tenant call store
+  or hang up any company's calls) — nothing in api/portal calls them; now gated to
+  internal-secret OR SUPER_ADMIN. JWT_SECRET min 8→32. Type-clean, routes 59/59.
+  ⛔ **Deploy in a 0-active-calls window** (telephony rebuilds CallStateStore).
+- ✅ **API + BILLING (`1e6a1973`, deployed + container-verified):**
+  - **Stored-XSS fence on CRM documents** (the one real latent XSS door): the
+    portal opens `/crm/documents/:id/open` as a SAME-ORIGIN blob, and
+    `contentTypeForCrmDoc` returned the stored/user MIME verbatim — an uploaded
+    `text/html`/`image/svg+xml` executed in the portal origin and stole the JWT.
+    Now any scriptable type is forced to `application/octet-stream` (downloads,
+    never renders); PDFs/images untouched. Tests added.
+  - `POST /billing/invoices/:id/simulate-webhook` was `requireAdmin` (every
+    TENANT_ADMIN could self-mark their own invoices PAID to evade dunning) →
+    `requireSuperAdmin`.
+  - `xtoken` (the reusable card-on-file token Cardknox echoes back) added to the
+    gateway `SENSITIVE_KEYS` — it could land unredacted in
+    `PaymentTransaction.rawResponseSafeJson` and be shown to same-tenant admins.
+  - The public/pay-link routes persisted a caller-supplied `billingEmail` into
+    `tenantBillingSettings` — an unauthenticated pay-link holder could redirect the
+    tenant's future invoice emails. No longer persisted.
+  - ⛔ **Payments core was CLEARED**: pay tokens are HMAC-signed + tenant+invoice
+    bound (no dev-secret fallback), the Cardknox webhook fails closed (403), the
+    simulate boot-guard genuinely refuses boot, cards are encrypted and never
+    returned, tenant scoping holds.
+- ✅ **PORTAL (`c5f50104`, deployed):** notification `route` strings were assigned
+  straight to `window.location.href` (a `javascript:` value would execute
+  in-origin). New `navigateToInternalRoute()` only follows a same-origin path.
+  ⛔ Portal audit CLEARED the big classes: open-redirect handling, XSS sinks,
+  two-hostname base resolution, secrets-in-bundle, the 401 dead-session machinery.
+  The published `imwog@gmail.com`/`LocalDev2026!` dev-cred string is **harmless —
+  no prod account has it** (verified). JWT-in-query-string × never-expiring tokens
+  (F1) is the one MEDIUM left, and it is the architectural item that retires with
+  server-side token expiry (the mobile-401 work).
+- ⏳ **worker audit** was commissioned and had not returned when this was written
+  — fold its result in.
+
 ## 6. Deploy / process notes worth keeping
 
 - The agent is a **manual rebuild** and builds the CLONE's working tree — reset
