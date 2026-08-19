@@ -4,6 +4,59 @@ Newest entries first.
 
 ---
 
+## PBX Console: creating a customer (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `3e914b4f` → `4faf2635`. Handoff
+`AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §18.
+
+```bash
+node --experimental-test-module-mocks --import tsx --test apps/api/src/pbxConsole/pbxConsole.test.ts
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/onboarding/*.test.ts
+cd apps/api && npx tsc --noEmit -p tsconfig.json
+cd apps/portal && npx tsc --noEmit -p tsconfig.json
+```
+
+**Result:** console suite **13 tests, 13 pass, 0 fail**; api typecheck **75 =
+the exact baseline** with **0 in `pbxConsole/`**; portal typecheck **0**.
+
+**Onboarding suite: 284 tests, 260 pass, 24 fail — and the 24 are NOT from this
+change.** Proven rather than assumed: the same suite was run with
+`pbxConsoleRoutes.ts` reverted to `HEAD` and returned the **identical**
+284/260/24. They are the documented pre-existing `setupOrchestrator.test.ts`
+failures from another session's `c2d9fdd9`.
+
+**Proven non-vacuous.** All four new guards were replayed against `HEAD`'s
+`pbxConsoleRoutes.ts` and **all four fail** there (9 pass / 4 fail), then pass
+on the fixed tree:
+- creating a tenant goes through the MIRROR, never the panel form
+- the create reuses onboarding's slug rule rather than inventing one
+- a duplicate customer is refused by name, before anything is written
+- the create does NOT re-render
+
+⛔ The last of those was **inverted after the production run**. It originally
+asserted a failed re-render could not fail the create; prod showed the
+re-render can never succeed at all (see below), so the guard now fails if
+anyone re-adds it.
+
+### Exercised against production, not just in tests
+Throwaway customer created and deleted through the deployed routes while the
+PBX carried **10 active calls**:
+- create **200** — tenant 119, **13 baseline files rendered**, 80 outbound
+  profiles offered by the picker
+- duplicate **409 `tenant_exists`**, naming the customer that already held it
+- delete **200** via the console's own route, doorway re-bake **3/3,
+  linesChanged 0**
+- **byte-back at baseline**: 27 tenants, 119 extensions, 554 tenant-settings
+  rows, 353 tenant conf files, 0 rows or files mentioning 119, doorways on
+  T2/T35/T105 still 0
+
+⛔ **The prod run found what the tests could not:** the mirror's *second*
+render fails `[Errno 13] Permission denied` because the first render hands each
+file to `www-data` with an ACL mask of `r--` while the helper runs as
+`asterisk`. Tests exercise the route, never the PBX's file ownership.
+
+---
+
 ## Worker deploy — round 3's other half, and how it was missed (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, worker at `95beef53`. No code change — a
