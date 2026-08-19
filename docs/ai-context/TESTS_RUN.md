@@ -40,6 +40,12 @@ PJSIP/+12053513327@loopcom-pbx` traced `s@trk-132-in → default-trunk → T102_
 INBOUND_ROUTE: SignalWire 2053513327 → Dial(PJSIP/T102_101&…)` ringing ext 101; doorway
 counts T2 1/0, T35 1/0, T105 2/0 unchanged across three applies (re-bake 0 lines each).
 
+**Outbound route swap (later):** panel edit of route 123 (trklist 127→132) + apply + re-bake
+(0 lines); `channel originate Local/2053513327@T102_cos-all` traced `Outbound Route: Loopcom
+Demo → OUTBOUND_CID "Loopcom Demo" <3479780090> → trk-132 → Dial(PJSIP/2053513327@loopcom-pbx)`
+→ hairpin → ext 101 ringing; far-end CID observed `+12053513327` (SignalWire `send_as`
+substitution — 347-978-0090 is not on the account).
+
 ---
 
 ## Tenant-isolation §6a–§6g scoping fixes (2026-08-18, night)

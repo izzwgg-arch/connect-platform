@@ -415,3 +415,27 @@ trunk 132 (panel) + apply; restore `extensions__60_custom.conf` from the `.bak.s
 copy + `dialplan reload`; then on SignalWire delete the phone route / endpoint `d70efe1e-…`
 (dashboard or `DELETE /api/fabric/resources/{id}`). Every apply → re-bake the Connect doorway
 (`rebakeConnectRoutesAfterRegen`) for T2/T35/T105.
+
+### 10.7 Outbound: Loopcom Demo's outbound route now uses ONLY the SignalWire trunk (2026-08-18, later)
+Izzy: *"Make it also the only trunk on the outbound route from Loopcom demo … Keep the caller ID
+the same as it is right now."* Route **123 "Loopcom Demo"** (the tenant's only outbound route;
+ARS 210 = T102's `outbound_profiles`) had one member, trunk 127 (VoIP.ms). Panel edit re-post
+of the `trunk_group` edit form with **only `trklist[]` changed 127 → 132** — the form was
+dry-read first and is clean (`intra_company` / `record` genuinely unchecked, every field
+carried, `cid_name`/`cid_number`/`overwrite_cid` unchanged) — then Apply in Main + doorway
+re-bake (0 lines changed; T2/T35/T105 1/0, 1/0, 2/0). Backup
+`/root/ombu_outbound_routes-backup-20260819T015146Z.sql` on the PBX. Rendered:
+`[trk-group-123] … Set(OUTBOUND_CID="Loopcom Demo" <3479780090>) … (dial-trk-132)
+Gosub(trk-132,…)`. Trunk 127 stays on the PBX, now unused by T102.
+**Proven** with `channel originate Local/2053513327@T102_cos-all …` — a call that starts
+inside T102's class of service, so it takes the tenant's real route selection:
+`Outbound Route: Loopcom Demo → OUTBOUND_CID "Loopcom Demo" <3479780090> → Gosub(trk-132) →
+Dial(PJSIP/2053513327@loopcom-pbx)` → SignalWire → hairpin → `s@trk-132-in` → ext 101 ringing.
+⛔ **The caller ID the far end RECEIVED was `+12053513327`, not 3479780090** — the PBX sent
+3479780090 unchanged (kept exactly as asked), and SignalWire replaced it with the endpoint's
+`send_as` because 347-978-0090 is not a number on the SignalWire account. This is the
+documented "no arbitrary outbound caller ID" rule (§3), now seen live. To present 3479780090
+from SignalWire it must be added as a **Verified Caller ID** on the Space (SignalWire calls or
+texts that number with a code — it is Loopcom Demo's VoIP.ms number, so someone at ext 101
+answers it) or the tenant's outbound CID changed to the 205 number. Izzy's call.
+⏳ Not proven: a human placing a call from ext 101 to an outside phone and being answered.

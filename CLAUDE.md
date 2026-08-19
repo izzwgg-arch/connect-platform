@@ -137,6 +137,15 @@ to see if this would be the ideal replacement … build this inside Loopcom."*
   re-bake (0 lines changed each time; T2/T35/T105 stayed 1/0, 1/0, 2/0). ⏳ Nobody has heard
   audio on it — acceptance is one real call to **(205) 351-3327**. ⛔ No outbound route/ARS
   points at trunk 132 yet, so no tenant dials OUT via SignalWire.
+- ✅ **OUTBOUND TOO (later the same evening): Loopcom Demo's outbound route 123 now has ONLY
+  trunk 132** (panel edit re-post, `trklist[]` 127 → 132, CID line byte-identical
+  `"Loopcom Demo" <3479780090>`; backup `/root/ombu_outbound_routes-backup-20260819T015146Z.sql`).
+  Proven from inside T102's class of service: `Outbound Route: Loopcom Demo → trk-132 →
+  Dial(PJSIP/2053513327@loopcom-pbx)` → SignalWire → back in → ext 101 ringing.
+  ⛔ **The far end received caller ID `+12053513327`, not 3479780090** — SignalWire swaps in
+  the endpoint's `send_as` because 347-978-0090 is not on the account (the "no arbitrary CID"
+  rule, seen live). Verify 3479780090 as a Verified Caller ID on the Space, or accept the 205
+  number — Izzy's call. Trunk 127 (VoIP.ms) is still on the PBX, unused by T102.
 - ⛔⛔ **THE TWO WAYS A SIGNALWIRE TRUNK IS NOT A VOIP.MS TRUNK, both proven live:**
   (1) **the registrar is the SIP PROFILE's domain** — `GET /api/relay/rest/sip_profile` →
   `loopcom-ef2ea3442802.sip.signalwire.com`, NOT `loopcom.sip.signalwire.com` (the console
