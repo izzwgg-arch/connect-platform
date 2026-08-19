@@ -266,3 +266,47 @@ would be the first Connect code allowed to, under its own file names.
   Starter EOL / subscription move: https://forums.vitalpbx.org/t/forced-subscription-policy-with-1-day-notice/5419
 - EULA (lapse → Community): https://vitalpbx.com/eula/
 - Press release, VitalPBX One (2026-07-14): https://www.einpresswire.com/article/926594555/
+
+## 9. Izzy's follow-up (2026-08-18): "replicate exactly what VitalPBX does, our own code, nothing changes" — the MIRROR-GENERATOR route (recommended over §4/§5's own-dialplan route)
+
+Everything VitalPBX produces is plain text on disk and readable even though its
+generator is ionCube: 546 conf files, 160 rendered phone configs under
+`/var/lib/vitalpbx/provisioning/provisioning_templates/<tenant-hash>/<mac>.cfg`,
+17,071 AstDB keys, and the `ombutel` / `provisioning` MySQL tables (passwords
+included; `provisioning.templates` has 53 rows). So the OUTPUT can be the spec, and
+the acceptance test is mechanical: **run our generator against the live DB, `diff`
+against every file on disk → 0.**
+
+The mirror route, one layer under today's panel replay:
+1. **Write the same `ombutel` rows the panel writes** (extensions, devices, tenants,
+   inbound routes, ring groups, queues, DIDs) straight into MySQL — the panel's
+   save-time cap never runs, and all 16 Connect readers, the helper, E911 billing,
+   the queue reports, `T<t>_` numbering, tenant hashes, voicemail contexts and spool
+   paths stay **untouched**.
+2. **Emit the same files** — `extensions__50-<t>-dialplan.conf`, `pjsip__50-<t>-*`,
+   `voicemail__50-<t>-main.conf`, `queues__`, `musiconhold__`, `res_parking__`,
+   `manager__`, `extensions__25-<t>-hints.conf` — plus the AstDB keys VitalPBX
+   seeds; same names, text, ownership (`www-data`, see the panel-lockout handoff).
+3. **Render the same provisioning files** (`<tenant-hash>/<mac>.cfg`); the free
+   "20 phones" cap is a panel-save cap, files we write are not counted; nginx
+   unchanged.
+4. Reload with `pjsip reload` / `dialplan reload` / `voicemail reload` /
+   `queue reload`; never Apply Changes for tenants again (ends the doorway-wipe class).
+5. **Do NOT rewrite the shared feature library** `extensions__20-baseplan.conf`
+   (3,305 lines) — it ships with the free Community edition we keep installed, and
+   every tenant dialplan just keeps calling into it. That is why no phone, app, or
+   Connect component changes.
+
+Limits, stated: we only know the output shapes the 27 tenants exercise (generate a
+sample of anything unseen on the CLONE with the free panel, then diff); two writers
+to one DB during migration (rule: tenants are ours, panel = Main/trunks only); the
+§2 lapse rehearsal on `/root/pbx-full-brain-20260609-063057/` still comes first;
+we pin to 4.5.3's schema/dialect (policy: no VitalPBX package updates without
+re-running the diff); EULA check for whoever advises Izzy (our per-tenant files are
+our config; the baseplan is part of the free edition we keep — not legal advice).
+
+**Size, revised: ~6–10 weeks** — per-extension path (ext + desk device + app device
++ voicemail + hints) byte-identical first (~2–3 wks; new sign-ups can move to it at
+that point and the cap stops mattering) → ring groups / queues / time conditions /
+IVRs / tenants + DIDs + inbound routes (~2–3) → provisioning (~1–2) → tenant-by-
+tenant cutover rehearsed on the clone (~1–2) → cancel LAST.

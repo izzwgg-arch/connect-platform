@@ -85,6 +85,14 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
 - ⛔ **Verified unused, so nothing to replace:** VitXi (0 hits today), VitalPBX
   Connect app, Sonata Switchboard/Stats/Billing/Dialer (Connect reads
   `asterisk.queues_log` directly), the SMS add-on, AI assistants.
+- ✅ **Izzy's follow-up "replicate EXACTLY what VitalPBX does, our own code, nothing
+  changes" is the RIGHT route and is smaller (§9 of the doc, ~6–10 weeks):** a
+  MIRROR generator that writes the same `ombutel` rows the panel writes (so the cap
+  never runs and every Connect reader stays untouched) and emits byte-identical
+  `extensions__50-<t>` / `pjsip__50-<t>` / `voicemail__50-<t>` / hints / AstDB /
+  `<tenant-hash>/<mac>.cfg` provisioning files — acceptance = `diff` against the
+  546 files on disk reads 0. ⛔ Do NOT rewrite `extensions__20-baseplan.conf` — it
+  ships with the free edition we keep and every tenant dialplan calls into it.
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
