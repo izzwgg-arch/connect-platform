@@ -710,6 +710,23 @@ test("⛔ mfaRoutes: only the challenge route reads a pre-auth token; every othe
   }
 });
 
+test("⛔ the Prisma store uses accessors that EXIST on the generated client (the `(db as any)` transposition trap, CLAUDE.md)", async () => {
+  // prismaMfaStore takes `client: any`, so a typo like `mfaUser` would typecheck
+  // green and crash on the first real call — exactly how `billingTenantSettings`
+  // shipped broken. Ask the generated client, not the source.
+  const { Prisma } = await import("@prisma/client");
+  assert.equal((Prisma.ModelName as any).UserMfa, "UserMfa");
+  assert.equal((Prisma.ModelName as any).UserMfaRecoveryCode, "UserMfaRecoveryCode");
+  const src = read("./mfaRoutes.ts").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const accessors = new Set([...src.matchAll(/client\.(\w+)\./g)].map((m) => m[1]));
+  accessors.delete("$transaction");
+  assert.deepEqual([...accessors].sort(), ["user", "userMfa", "userMfaRecoveryCode"]);
+  for (const a of accessors) {
+    const model = a.charAt(0).toUpperCase() + a.slice(1);
+    assert.equal((Prisma.ModelName as any)[model], model, `client.${a} must map to a real model`);
+  }
+});
+
 test("⛔ nothing in the MFA module logs a secret or a code", () => {
   for (const f of ["./mfaService.ts", "./mfaRoutes.ts", "./totp.ts", "./recoveryCodes.ts", "./preAuthToken.ts"]) {
     const src = read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
