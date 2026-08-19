@@ -266,30 +266,49 @@ capacity side.)
 
 ## 11. Corrections to earlier handoffs
 
-⛔ **"ALERT EMAILS ARE CURRENTLY OFF" is STALE — alerting is back ON.** The
-kill switch expired exactly as its own note predicted (~23:41 ET 2026-08-06) and
-nothing replaced it. `ps -eo pid,etime,cmd | grep "[a]lert-email-killswitch"`
-→ **not running**; the script is still on disk at
-`/root/alert-email-killswitch.sh`, inert. Izzy confirmed on 2026-08-12 that he
-is still receiving these emails. `ADMIN_ALERT` per day (ET), from `EmailJob`:
+### Alert emails — the state, and a correction to what THIS document first said
+
+⛔ **This section originally read "alerting is back ON" and claimed the
+2026-08-12 skips were the 40/day budget ceiling. Both were wrong.** The
+correction, verified live 2026-08-12 against the running container and the DB:
+
+**Alert emails are OFF, and this time it is code rather than an expiring
+script.** A send-door gate landed **2026-08-11 ~22:18 EDT** on Izzy's directive:
+`processEmailJobsBatch` (`apps/api/src/server.ts:1162`) marks every
+`EmailJob` of `type ADMIN_ALERT` as `SKIPPED` with
+`lastErrorCode "ALERTS_MUTED"` and never sends it. Only the Assistant's
+escalations (`type AGENT_ESCALATION`) still reach the alert inbox.
+
+`ADMIN_ALERT` per day (ET), from `EmailJob` — the five-day gap is real, the
+kill switch had expired and nothing replaced it until the gate:
 
 ```
 08-05  sent=187          08-09  sent=40
 08-06  sent=399 (+52)    08-10  sent=40
-08-07  sent=45           08-11  sent=40
-08-08  sent=40           08-12  sent=6  skipped=34   ← ceiling now skipping
+08-07  sent=45           08-11  sent=40    ← last full day of alerts
+08-08  sent=40           08-12  sent=6  skipped=34   ← the MUTE, not the ceiling
 ```
 
-The good news: the **40-per-rolling-24h ceiling** from `adminAlertBudget.ts`
-(`0197dd56`) **is holding** — four consecutive days pinned at exactly 40, down
-from 399, and on 08-12 the surplus is being `SKIPPED` rather than sent. The
-open item is unchanged and now measured: **40 alert emails a day still come out
-of the same 500/day mailbox that carries customer invoices and every voicemail
-notification.** A second sending mailbox remains the real fix.
+⛔ **The mistake to learn from: the ceiling and the mute produce
+similar-looking suppression, and I attributed the mute's skips to the ceiling.
+Tell them apart by `lastErrorCode` on the row** — `ALERTS_MUTED` is the gate;
+empty is the 40-per-rolling-24h ceiling in `adminAlertBudget.ts`, which still
+exists underneath and still works. **Never judge by `status` alone.**
 
-⛔ Do not use `pgrep -f` to check for the kill switch **or anything else** over
-ssh — it matches its own command line and reports the process as alive. Use
-`ps -eo pid,etime,cmd | grep "[a]lert-email-killswitch"`. This trap is already
+Last `ADMIN_ALERT` with a real `sentAt`: **2026-08-12T01:08Z**. Rows are still
+created on purpose — they are the audit trail, and reading them is now the only
+way to see what the platform tried to warn about. Full detail, including the
+proof that escalations work on both the SMS and email halves, is in the
+`ALERTS_MUTED` section at the top of CLAUDE.md.
+
+The underlying open item survives the mute: **customer invoices and every
+voicemail notification still share one 500/day mailbox.** A second sending
+mailbox remains the real fix — the mute just removed the biggest consumer.
+
+⛔ Do not use `pgrep -f` to check for a process over ssh — it matches its own
+command line and reports the process as alive. That is what made the expired
+kill switch read as still running. Use
+`ps -eo pid,etime,cmd | grep "[a]lert-email-killswitch"`. The trap is already
 documented three times in CLAUDE.md and it still cost a wrong reading here.
 
 ## 12. Still open
