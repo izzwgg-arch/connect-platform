@@ -125,6 +125,57 @@ a lifetime… how can we make this efficient?"* He was right; this is the answer
   ⛔ **The negative matters most:** no claim about a 9,999 mailbox, no claim that
   billing was never set up, and anything unbackable must appear under NOT CHECKED.
 
+## ⛔⛔ AGENT HANDOFF — the PBX CONSOLE replaces the VitalPBX panel from inside Connect: reads + one extension create PROVEN ON PROD (2026-08-19) — READ FIRST before touching `apps/api/src/pbxConsole/*`, `/admin/pbx-console`, before adding a console write, or before "wiring provisioning/geo writes"
+
+Full detail: **`docs/ai-context/AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §16**
+(`6378cb8b` backend + `fd3d0a3c` portal/fixes on `feat/ivr-migration-takeover`.
+**api DEPLOYED and container-verified at `6378cb8b`; the audit fix + portal are in
+the deploy queue.** One throwaway prod write: ext 155 on Loopcom Demo T102, verified
+then to be removed. One live DB grant: `SELECT ON provisioning.*` to `connect_read`,
+backup `/root/pbx-console-grants-20260819T060722Z/`.) Izzy, 2026-08-19: *"create a
+page for extensions and tenants that has all the options, just like the PBX … I give
+you full permission to wire it into the PBX, 100% in production. Be careful. Don't
+mess up any other tenants."*
+
+- ⛔⛔ **THE ARCHITECTURE, ONE RULE: reads are SELECTs through the read-only
+  `connect_read` user; writes REPLAY THE PANEL through a robot `PanelSession`,
+  exactly like onboarding.** The panel is ionCube-encrypted, so the only honest
+  description of a record is the FORM it renders — `pbxConsole/panelForm.ts` parses
+  that form and re-emits the exact pairs a browser posts, and a write applies the
+  changes on top. ⛔ **THE CHECKBOX RULE lives there and has burned this repo
+  repeatedly: an unticked checkbox is OMITTED, never sent as `=no` (which TICKS it).**
+- ⛔ **`applyAndRebake()` is the ONLY apply and ALWAYS re-bakes the Connect doorway
+  afterwards** — Apply Changes is whole-PBX and the VitalPBX regenerator cannot
+  render the doorway (2026-08-13 dead-air). Proven: the ext-155 apply left T2/T35/T105
+  at **0 cc-wipes**.
+- ⛔⛔ **THE FOUR UNLICENSED-PANEL CAPS decide what survives the lapse (mapped on the
+  clone):** **extension** create/edit/delete ✅ works unlicensed; **tenant edit/delete**
+  ✅ works; **tenant create** ⛔ blocked (the MIRROR already solves it, §11–§14);
+  **provisioning save** ⛔ refused over 20 phones; **geo block** ⛔ refused over 1
+  country. So Extensions + Tenant-edit go through the panel and survive cancel;
+  **Provisioning + Geo WRITES need a direct-DB path** (not built — reads + resync only).
+- ⛔ **Extension traps, each with a test (`pbxConsole.test.ts`), proven on the clone:**
+  desk phones post **rfc4733**, WebRTC **rfc2833** (the form has no rfc4733 option, so
+  the raw value flips DTMF); create is ALWAYS a desk CSV base row then reshaped (a
+  virtual base row fails import), and app-only/virtual-only extensions get the base
+  desk device unlinked; a device's TYPE can't be changed after creation (refused, not
+  applied); a general-only save is refused (it would re-post the raw device fields and
+  flip DTMF); blank password = keep current.
+- ⛔ **SUPER_ADMIN only, gated three ways:** `navConfig.isNavItemVisibleForUser` forces
+  it, `PermissionGate` wraps the page, and every route calls `requireOwner`; the
+  `/admin/pbx-console` prefix is in `PORTAL_API_PERMISSION_RULES`
+  (`can_manage_global_settings`). ⛔ **Audit is best-effort and can NEVER fail a PBX
+  write** — the console is platform-wide (no customer tenant), so it attributes to the
+  admin's tenant or skips, in try/catch. A prod create once returned 500 because the
+  old audit FK-failed on `tenantId:"platform"` AFTER the panel write already ran.
+- ✅ **PROVEN ON PROD (deployed `6378cb8b`):** all four reads (27 tenants, extension
+  devices, 55 phones + 427-model catalog, geo 232 blocked + 15 whitelist); one
+  extension CREATE (ext 155, desk+app+cell, both PJSIP endpoints loaded, 0 doorway
+  wipes). ⏳ **NOT DONE:** the prod delete round trip returning 200 (after the
+  `fd3d0a3c` redeploy); nobody has opened the page in a browser; Provisioning + Geo
+  writes; wiring the console "New tenant" button to the mirror (`buildPbxTenant`);
+  ⛔ rotate the robot panel password.
+
 ## ⛔ AGENT HANDOFF — dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenant" is wrong — the free tier caps EXTENSIONS at 12 (2026-08-18) — READ FIRST before answering "can we cancel VitalPBX?", before touching the license, or before sizing "our own multi-tenant"
 
 Full assessment: **`docs/ai-context/AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md`**
