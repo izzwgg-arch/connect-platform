@@ -399,3 +399,24 @@ test("embedded helper heredoc is byte-identical to vitalpbx-inbound-route-helper
     "the embedded helper copy has drifted from scripts/pbx/vitalpbx-inbound-route-helper.py — re-sync the heredoc",
   );
 });
+
+// ── drift guard 2 (2026-08-19): the embedded mirror_writes.py must BE the module ──
+test("embedded mirror_writes heredoc is byte-identical to scripts/pbx/mirror/mirror_writes.py", () => {
+  const marker = "cat >/opt/connect-pbx-helper/mirror_writes.py <<'PYMIRROR'\n";
+  const start = SCRIPT.indexOf(marker);
+  assert.ok(start !== -1, "installer must ship mirror_writes.py via the PYMIRROR heredoc");
+  const bodyStart = start + marker.length;
+  const end = SCRIPT.indexOf("\nPYMIRROR\n", bodyStart);
+  assert.ok(end !== -1, "PYMIRROR heredoc terminator must exist");
+  const embedded = SCRIPT.slice(bodyStart, end + 1).replace(/\r\n/g, "\n");
+  const mirror = readFileSync(join(__dirname, "mirror", "mirror_writes.py"), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(embedded, mirror, "the embedded mirror_writes.py has drifted from scripts/pbx/mirror/mirror_writes.py — re-sync the heredoc");
+});
+
+test("helper registers /mirror/tenant-create and defines mirror_tenant_create (installer + .py)", () => {
+  for (const src of [SCRIPT, HELPER]) {
+    assert.match(src, /"\/mirror\/tenant-create": mirror_tenant_create,/);
+    assert.match(src, /def mirror_tenant_create\(body\):/);
+    assert.match(src, /queue_base_modules=True/);
+  }
+});

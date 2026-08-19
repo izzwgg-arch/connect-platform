@@ -166,7 +166,8 @@ async function callHelper<T>(
     | "/voicemail/greeting/upload"
     | "/voicemail/greeting/get"
     | "/voicemail/greeting/reset"
-    | "/voicemail/greeting/record-call",
+    | "/voicemail/greeting/record-call"
+    | "/mirror/tenant-create",
   body: Record<string, unknown>,
   // 45s, not 15s: when the helper is busy (or catching up after a restart) a
   // healthy /inspect can exceed 15s, and that abort is what failed every
@@ -595,4 +596,36 @@ export function getPbxVoicemailGreetingRecordCallStatus(
 
 export function getPbxVoicemailGreetingDiag(cfg: PbxRouteHelperConfig): Promise<PbxVoicemailGreetingDiagResponse> {
   return getHelper<PbxVoicemailGreetingDiagResponse>(cfg, "/voicemail/greeting/diag", 22_000);
+}
+
+// ── The mirror: tenant creation WITHOUT the panel ─────────────────────────────
+// The unlicensed VitalPBX panel refuses only "create tenant"; the helper writes
+// the same ombutel rows the panel would (scripts/pbx/mirror/mirror_writes.py,
+// installed beside the helper) and queues the base modules so the very next
+// Apply Changes renders the tenant. Proven on the clone 2026-08-19.
+export type MirrorTenantCreateResponse = {
+  ok: true;
+  tenantId: number;
+  name: string;
+  path: string;
+  rows: Record<string, number>;
+  fs?: { created: string[]; chown_errors: string[] };
+};
+
+export function mirrorCreatePbxTenant(
+  cfg: PbxRouteHelperConfig,
+  args: { slug: string; label: string; dids: string[]; arsId: string; userId?: number },
+): Promise<MirrorTenantCreateResponse> {
+  return callHelper<MirrorTenantCreateResponse>(
+    cfg,
+    "/mirror/tenant-create",
+    {
+      name: args.slug,
+      description: args.label,
+      dids: args.dids,
+      outboundProfileIds: args.arsId ? [Number(args.arsId)] : [],
+      userId: args.userId ?? 45,
+    },
+    90_000,
+  );
 }

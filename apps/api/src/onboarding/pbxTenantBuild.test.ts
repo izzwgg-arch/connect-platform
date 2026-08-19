@@ -845,3 +845,81 @@ test("a hidden error dialog on the device save fails loudly instead of leaving a
     /device not found on extension 111/i,
   );
 });
+
+// ── The MIRROR tenant creator (2026-08-19): rows written by the PBX helper, panel form skipped ──
+// The unlicensed VitalPBX panel refuses ONLY "create tenant"; every other step of
+// the build keeps working. So tenant creation is pluggable: the helper writes the
+// panel's rows and Apply Changes renders them. See the license-exit handoff §11.
+
+test("mirror: with a tenantCreator the panel's tenants form is NEVER posted, Apply runs in the new tenant, build completes", async () => {
+  const fake = new FakePanel();
+  fake.hidePathsOnTenantsPage = true;
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const calls: any[] = [];
+  const creator = async (args: any) => {
+    calls.push(args);
+    // emulate the helper: the tenant now exists in the PBX (the REST resolver will see it)
+    fake.tenants.push({ path: "abcdef0123456789", slug: args.slug, description: args.label });
+    return { tenantId: 108, path: "abcdef0123456789" };
+  };
+  const resolver = async (slug: string) => fake.tenants.find((t) => t.slug === slug)?.path || null;
+  const result = await buildPbxTenant(s, MAIN, job(), () => {}, resolver, { tenantCreator: creator });
+  assert.equal(result.tenantPath, "abcdef0123456789");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].slug, slugify("Bobs Plumbing"));
+  assert.deepEqual(calls[0].dids, ["8455577726"]);
+  assert.match(String(calls[0].arsId), /^\d+$/);
+  assert.equal(fake.puts.filter((p) => p.cls === "tenants").length, 0, "the licence-gated tenants form must not be posted");
+  assert.equal(fake.inboundRoutes.length, 1, "the rest of the build ran inside the mirror-made tenant");
+  assert.ok(fake.applies >= 4, "Apply Changes still runs after the mirror create");
+});
+
+test("mirror: a failing creator falls back to the panel form and the build still completes (licence still active)", async () => {
+  const fake = new FakePanel();
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const logs: string[] = [];
+  const creator = async () => {
+    throw new Error("helper 404 not upgraded yet");
+  };
+  const result = await buildPbxTenant(s, MAIN, job(), (m) => logs.push(m), undefined, { tenantCreator: creator });
+  assert.match(result.tenantPath, /^[a-f0-9]{16}$/);
+  assert.equal(fake.puts.filter((p) => p.cls === "tenants").length, 1, "panel form used as the fallback");
+  assert.ok(logs.some((l) => /mirror tenant-create failed/.test(l)), "the fallback is logged loudly");
+});
+
+test("mirror: a creator answering without a 16-hex path fails the tenant step (never silently continues)", async () => {
+  const fake = new FakePanel();
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const creator = async () => ({ tenantId: 1, path: "nope" });
+  await assert.rejects(buildPbxTenant(s, MAIN, job(), () => {}, undefined, { tenantCreator: creator }), /no usable path/);
+});
+
+test("mirror: PBX_TENANT_CREATE_MODE=panel disables the creator; a configured helper enables it", async () => {
+  const { resolveMirrorTenantCreator } = await import("./setupOrchestrator");
+  const saved = { mode: process.env.PBX_TENANT_CREATE_MODE, base: process.env.PBX_ROUTE_HELPER_BASE_URL, secret: process.env.PBX_ROUTE_HELPER_SECRET };
+  try {
+    process.env.PBX_ROUTE_HELPER_BASE_URL = "http://helper.example:8757";
+    process.env.PBX_ROUTE_HELPER_SECRET = "s3cret";
+    delete process.env.PBX_TENANT_CREATE_MODE;
+    assert.ok(resolveMirrorTenantCreator(null), "helper configured → mirror creator");
+    process.env.PBX_TENANT_CREATE_MODE = "panel";
+    assert.equal(resolveMirrorTenantCreator(null), null, "explicit panel mode → no creator");
+    delete process.env.PBX_TENANT_CREATE_MODE;
+    delete process.env.PBX_ROUTE_HELPER_BASE_URL;
+    delete process.env.PBX_ROUTE_HELPER_SECRET;
+    assert.equal(resolveMirrorTenantCreator(null), null, "no helper → panel form is the only path");
+  } finally {
+    const restore: Array<[string, string | undefined]> = [
+      ["PBX_TENANT_CREATE_MODE", saved.mode],
+      ["PBX_ROUTE_HELPER_BASE_URL", saved.base],
+      ["PBX_ROUTE_HELPER_SECRET", saved.secret],
+    ];
+    for (const [k, v] of restore) {
+      if (v == null) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});

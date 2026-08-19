@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.18.1"
+VERSION = "2026.08.19.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2481,6 +2481,58 @@ MEDIA_SYNC_TRIGGER_PATH = Path(os.environ.get(
     "/var/lib/connect-pbx-helper/media-sync.trigger",
 ))
 
+# ---------------------------------------------------------------------------
+# The MIRROR: create a tenant WITHOUT the panel (2026-08-19).
+# The unlicensed VitalPBX panel refuses ONLY "create tenant"; every other panel
+# path Connect uses (Apply Changes, CSV import, devices, ring groups, forwards,
+# inbound routes, trunks) keeps working (clone rehearsal, handoff §11). So the
+# helper writes the exact rows the panel writes for a new tenant — see
+# mirror_writes.py::create_tenant beside this file, derived empirically from
+# panel-made tenants — queues the base modules, creates the tenant's static /
+# provisioning dirs, and lets the panel's own regenerator render the files at
+# the very next Apply Changes (which Connect runs right after this call).
+# ---------------------------------------------------------------------------
+def _load_mirror_writes():
+    import importlib
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return importlib.import_module("mirror_writes")
+
+
+def mirror_tenant_create(body):
+    mw = _load_mirror_writes()
+    description = str(body.get("description") or "").strip()
+    name = str(body.get("name") or "").strip() or None
+    if not description:
+        raise ValueError("description required")
+    if name and not re.fullmatch(r"[a-z0-9_]{1,255}", name):
+        raise ValueError("name must be a slug (lowercase, digits, underscore)")
+    dids = [re.sub(r"\D", "", str(d)) for d in (body.get("dids") or [])]
+    dids = [d for d in dids if d]
+    profiles = [int(x) for x in (body.get("outboundProfileIds") or []) if str(x).strip()]
+    user_id = int(body.get("userId") or 45)
+    conn = db_conn()
+    try:
+        plan = mw.create_tenant(conn, description, name=name, user_id=user_id, outbound_profile_ids=profiles,
+                                dids=dids, queue_base_modules=True)
+        ids = plan.execute(conn)  # ONE transaction; rollback on any failure
+        with conn.cursor() as cur:
+            cur.execute("SELECT tenant_id, name, path FROM ombu_tenants WHERE tenant_id=%s", (ids.get("tenant_id"),))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise RuntimeError("tenant row not found after insert")
+    fs = None
+    try:
+        fs = mw.apply_tenant_fs(row["path"])
+    except Exception as exc:  # the dirs are created lazily by the panel too; report, never fail the tenant
+        fs = {"error": str(exc)}
+    return {"ok": True, "tenantId": int(row["tenant_id"]), "name": row["name"], "path": row["path"],
+            "rows": plan.rows_by_table(), "ids": {k: int(v) for k, v in ids.items()}, "fs": fs}
+
+
 def media_sync_trigger(body):
     reason = str(body.get("reason") or "api")[:200]
     MEDIA_SYNC_TRIGGER_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -4006,6 +4058,7 @@ class Handler(BaseHTTPRequestHandler):
             "/route-rebake": rebake_route,
             "/doorway-repair": doorway_repair,
             "/media-sync": media_sync_trigger,
+            "/mirror/tenant-create": mirror_tenant_create,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
             "/voicemail/greeting/get": vm_greeting_status,

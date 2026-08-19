@@ -252,6 +252,19 @@ async function findTenantPath(
   return m ? m[1] : null;
 }
 
+/**
+ * The mirror: writes the SAME `ombutel` rows the panel writes for a new tenant
+ * (see scripts/pbx/mirror/mirror_writes.py::create_tenant, run by the PBX helper's
+ * `/mirror/tenant-create`) so the licence-gated panel save never has to run.
+ * The unlicensed (Community) panel refuses ONLY "create tenant" — proven on the
+ * clone 2026-08-19 (AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT §11); every
+ * other step of this build (Apply, CSV import, devices, inbound routes, trunks)
+ * keeps working, so this is the one step that gets its own code.
+ */
+export type MirrorTenantCreateArgs = { slug: string; label: string; dids: string[]; arsId: string };
+export type MirrorTenantCreator = (args: MirrorTenantCreateArgs) => Promise<{ tenantId: number; path: string }>;
+export type PbxBuildOptions = { tenantCreator?: MirrorTenantCreator | null };
+
 async function createTenant(
   s: PanelSession,
   label: string,
@@ -259,9 +272,43 @@ async function createTenant(
   dids: string[],
   arsId: string,
   resolve?: TenantPathResolver,
+  tenantCreator?: MirrorTenantCreator | null,
+  log?: (msg: string) => void,
 ): Promise<string> {
   const pre = await findTenantPath(s, label, slug, resolve);
   if (pre) return pre;
+  if (tenantCreator) {
+    // Rows first (one transaction on the PBX), then the panel's own regenerator
+    // renders the tenant's files from those rows — same Apply Changes as before,
+    // in the NEW tenant's context so its queued base modules are what it renders.
+    let made: { tenantId: number; path: string } | null = null;
+    try {
+      made = await tenantCreator({ slug, label, dids, arsId });
+    } catch (e: any) {
+      // ⛔ FALLBACK, deliberately loud: while the licence is still active the
+      // panel form works, so a helper that is down / not yet upgraded must not
+      // stall a paid sign-up. After the licence lapses the panel form refuses
+      // ("maximum number of free tenants") and this branch fails the build
+      // with THAT message — which is the correct, visible outcome.
+      log?.(`⛔ mirror tenant-create failed (${e?.message || e}) — falling back to the panel form`);
+      made = null;
+    }
+    if (made) {
+      if (!/^[0-9a-f]{16}$/.test(String(made.path || ""))) {
+        throw new PanelStepError("tenant", `mirror tenant-create returned no usable path (${JSON.stringify(made)})`);
+      }
+      s.setTenant(made.path);
+      await applyChanges(s, "tenant");
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        const tenantPath = await findTenantPath(s, label, slug, resolve);
+        if (tenantPath) return tenantPath;
+        await new Promise((r) => setTimeout(r, Number(process.env.ONBOARDING_RETRY_BASE_MS || 3000)));
+      }
+      // The rows are in and Apply ran; the directory lookup is the only thing that
+      // lagged — the path we were handed is authoritative.
+      return made.path;
+    }
+  }
   const csrf = await s.ensureCsrf("tenants");
   assertSaved(
     "tenant",
@@ -562,6 +609,7 @@ export async function buildPbxTenant(
   job: PbxBuildJob,
   log: (msg: string) => void = () => {},
   resolveTenantPath?: TenantPathResolver,
+  opts: PbxBuildOptions = {},
 ): Promise<PbxBuildResult> {
   const co = job.company;
   // Unique-per-submission identities (legacy resumes fall back to the old
@@ -589,8 +637,8 @@ export async function buildPbxTenant(
   log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""})`);
   const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
-  const tenantPath = await createTenant(s, label, slug, tenantDids, arsId, resolveTenantPath);
-  log(`tenant ok (path ${tenantPath})`);
+  const tenantPath = await createTenant(s, label, slug, tenantDids, arsId, resolveTenantPath, opts.tenantCreator, log);
+  log(`tenant ok (path ${tenantPath}${opts.tenantCreator ? ", via mirror" : ", via panel"})`);
 
   // Native emergency calling, so 911 works from day one AND survives the
   // overdue-account cutoff (the dialplan checks T<n>_emergency-calls before it
