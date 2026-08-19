@@ -993,6 +993,25 @@ before either fixing it or deleting the claim.
 
 ## 19. ⛔ WORK STOPPED HERE — read this before touching the PBX Console (2026-08-19, ~15:15 UTC)
 
+> ✅✅ **RESOLVED, 2026-08-19 evening (deploy catch-up session). Both halves are
+> live now; the rest of this section is history.**
+> - **The in-flight api deploy LANDED**: `app-api-1 /app/.build-commit` reads
+>   `20248b00`, the log ends `verify: container commit 20248b002f27 matches
+>   target` / `done 20248b00`, health 200. The three refinements are live.
+> - **The portal was deployed to the branch tip `f5887c02`**
+>   (`deploy-direct.sh portal --branch feat/ivr-migration-takeover`, log
+>   `/root/deploy-portal-catchup-20260819.log`, ~25 min) and verified exactly as
+>   this section prescribes: `.build-commit` = `f5887c02`, and the STRING
+>   `New customer on the phone system` greps in both
+>   `.next/server/app/(platform)/admin/pbx-console/page.js` and the shipped
+>   client chunk `page-01098b88d73d654f.js`. Portal 200 on both hostnames.
+>   **The New-customer button exists in the browser now** — though any tab or
+>   desktop window opened before the deploy keeps the old bundle until reloaded.
+> - Hazard #1 below (the stale staged blobs) was already cleared by the time of
+>   this session — the shared index was clean.
+> - Still open: nobody has clicked through `/admin/pbx-console` (needs Izzy's
+>   login), the geo build step, and the robot panel password rotation.
+
 Izzy stopped the session mid-way through shipping §18. **Nothing is broken and
 nothing is half-applied on the PBX**, but the two halves of the feature are at
 **different** deploy states, so read this before assuming what is live.
