@@ -397,3 +397,54 @@ clone shows the free panel refuses those edits (then Day 3–5: `teamBuilder` an
 5. Tests + docs + deploy api; helper install = PBX write (Run button); CLAUDE.md +
    TESTS_RUN.
 6. **Cancel only after Day 0's table is read** — the license stays until then.
+
+## 11. DAY 0 DONE (2026-08-18/19): the lapse rehearsal — the free panel refuses ONLY "create tenant"
+
+**Setup (all on loopcom, nothing on the live PBX but reads):** baseline fixture
+`/root/pbx-mirror-baseline-20260818/` (sha256 of all 665 `/etc/asterisk` files,
+`etc-asterisk.tgz`, `astdb.txt` 17,065 keys, `ombutel` + `provisioning` dumps,
+`/var/lib/vitalpbx` incl. static, custom sounds, dpkg list). Offline dev DB:
+docker `mirror-db` (MariaDB, 127.0.0.1:3307, root/mirror) with the prod dumps.
+**The clone:** docker `vpbx-clone` (privileged systemd Debian 12, panel on
+127.0.0.1:8443, `/root/pbx-clone/`): VitalPBX **4.5.3-8** from repo.vitalpbx.com
+(prod is 4.5.3-1 — version drift, see below) + the same add-on set + redis, then the
+prod `ombutel`/`provisioning` dumps imported over the fresh DB, prod `/etc/asterisk`
+and `/var/lib/vitalpbx` copied in, AstDB seeded from the dump, Asterisk started
+(162 endpoints). **`/var/lib/pbx-licenses/` is EMPTY = never licensed = Community.**
+`pbx-brain` snapshot turned out to be a knowledge bundle, not a restorable backup —
+this clone is built from the fresh dumps instead. Panel driven with Connect's REAL
+code (`PanelSession`, `addExtensionToTenant`, `createRingGroup`, `createForward`,
+`createInboundRoute`, `buildPbxTenant`) via `scripts/pbx/mirror/clone-rehearsal.ts`
+through an ssh tunnel (`-L 18443:127.0.0.1:8443`), robot creds read from loopcom.
+
+| Operation on the UNLICENSED clone (prod data, over-cap: 27 tenants / 120 ext) | Result |
+|---|---|
+| **Create a new tenant** (`class=tenants put/add`, and the tenant step of `buildPbxTenant`) | ⛔ **REFUSED**: *"You have reached maximum number of free tenants. Activate this add-on with a valid license to create unlimited tenants"* — proves the clone IS enforcing Community caps |
+| Edit an existing tenant (`put/edit`, added an inbound number) | ✅ OK |
+| DID Management assign (`class=did_management put/add`, part of the multi-tenant add-on) | ✅ OK |
+| Add extension to over-cap tenant T104 (CSV import `menu4`, Connect's path) | ✅ OK (ext 199 created, no `extensions.max_reached`) |
+| Add WebRTC `_1` device `vitxi_client=yes` (`extensions put/edit`) | ✅ OK |
+| Ring group create (`teamBuilder.createRingGroup`) | ✅ OK (needs `lastDestination` — form rule, not license) |
+| Forward = custom app + custom dest + Apply (`forwardBuilder.createForward`) | ✅ OK |
+| Inbound route create (`createInboundRoute`) | ✅ OK |
+| Trunk → outbound route → route selection in Main (`buildPbxTenant` steps) | ✅ OK (trunk 132 / route 129 / ARS 221) |
+| Apply Changes after the extension add | ✅ regenerated **only T104's 7 files**; all other files sha256-identical to prod |
+| `vitalpbx fully-gen-conf` (whole PBX) | ✅ all 27 tenants rendered ("Configuring Tenant: …"); 476 files re-dated, **56 with content diffs, ALL explained by 4.5.3-8 template drift** (`RG_DIAL_OPTIONS`/`AI_TRANSFER_ANNOUNCEMENT`, `include => T<t>_extension-hints`, `sub-toggle-tc-state(…,,no)`, TLS ciphers, `user_agent=VitalPBX`) **or by the same helper-patch reverts prod's Apply does today** (`moh3`→`default`, ring-group MOH). No license effect anywhere |
+| **Tenant created by INSERTING ROWS ONLY** (clone T106's rows → tenant 107 with a fresh 16-hex path: `ombu_tenants`, `ombu_tenants_users`(user 45), 21 `ombu_tenant_settings`, `ombu_classes_of_service`, `ombu_dial_profiles`, `ombu_emergency_number_categories`, `ombu_maintenance`, 14 `ombu_numbers`, `ombu_parking_lots`, own `ombu_ars` row) | ✅ **the panel treats it as a real tenant**: `addExtensionToTenant` on it worked (ext 101 + `_1` device), Apply rendered `T107` files, `pjsip show endpoint T107_101_1` exists, AstDB family 67 keys; dialplan **matches T106's after normalising ids** except the CoS/ARS ids (its own) and the DID/emergency blocks I left out. Queuing modules 99/11/8/48 in `ombu_queued_changes` + Apply rendered confbridge/moh/res_parking too |
+| NOT tested | extension form add (`mode=add`, Connect never uses it), provisioning add-phone (free cap 20), geo-firewall country count, VitalPBX-Connect device add, and whether an *expired* `.lic` behaves differently from *no* `.lic` (EULA says both = Community) |
+
+**Consequence for the plan — Day 1/2 shrink to ONE new capability:** everything
+Connect does today keeps working unlicensed through the existing panel path except
+**tenant creation**. So the mirror v1 = **`create_tenant` row-writer** (the table
+list above + `ombu_queued_changes` for modules 99/11/8/48/26 + the tenant's Default
+inbound route row + `ombu_tenant_dids` for the DID + `outbound_profiles` = the ARS
+id) run by the helper (Python on the PBX, MySQL user with INSERT on those tables),
+after which `pbxTenantBuild` continues exactly as now (Apply Changes renders the
+tenant, CSV import, devices, inbound route). The byte-identical renderer stays as
+the verification harness and the fallback, not the critical path.
+⚠️ Caveats that stand: clone panel is 4.5.3-8 vs prod 4.5.3-1 (a cap check could
+differ between builds — re-run the same rehearsal on prod's version if the repo
+still serves 4.5.3-1, or accept the small risk); "expired" vs "never licensed"
+untested; robot panel password landed in this session's transcript by a shell
+`eval` mistake — **rotate it** (panel user `lOOPCOMAGENT7548`, then update
+`/etc/connect-robot/credentials.env` on loopcom and the api env).
