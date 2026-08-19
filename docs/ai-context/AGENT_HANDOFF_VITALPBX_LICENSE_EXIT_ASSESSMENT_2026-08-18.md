@@ -1236,13 +1236,16 @@ or unreachable MySQL marks nothing; the confirm route 503s rather than proceed
 on REST alone. 19/19 tests incl. the exact failure shape; guards fail vs HEAD.
 
 ### ⏳ Open after §20 — needs Izzy
-- **Comfort control and LUZER are GENUINE pre-existing orphans**: their PBX
-  tenants (ids 10 and 26) do not exist in `ombu_tenants` under any name — they
-  were deleted on the PBX at some point before today. Both are restored to
-  exactly their pre-test state (visible, billed), but the underlying fact
-  stands: **LUZER is being invoiced $45/mo (2× FAILED since July) for a phone
-  system that is not on the PBX.** Whether to remove them properly (through the
-  now-hardened sweep) or rebuild their PBX side is a business decision.
+- ✅ **RESOLVED (2026-08-19 late evening, Izzy: "Erase those two tenants"):**
+  both went through the HARDENED path (MySQL confirmed ids 10/26 gone before
+  marking). **Comfort control** (no payments ever): marked → **permanently
+  erased**, row + its 1 user + 1 extension cascaded. **LUZER** (has PAID
+  invoices): marked → **ARCHIVED** — delisted everywhere, autopay off, link
+  unlinked, and the permanent erase was **refused by the money guard**
+  (`tenant_has_completed_payments`), which is the designed terminal state: a
+  customer who ever paid keeps their books forever. ⛔ Do not "finish" LUZER
+  with a direct DB delete — the refusal is the feature. Their two FAILED
+  $45 invoices remain on record, uncollectible by autopay.
 - ✅ The sweep fix is **DEPLOYED and container-verified** (2026-08-19 late
   evening): `app-api-1 /app/.build-commit` = `36043a3b`, `mysqlConfirmGoneVerifier`
   greps 3× in the shipped `server.ts` (import + both routes) and 1× in

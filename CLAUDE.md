@@ -648,9 +648,11 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
   `isPbxAnswerHealthy` can't see a full-length lie. **Both restored within the hour; fixed in
   `9068acca`**: marking now requires MySQL to confirm each PBX tenant id is gone (`ConfirmGone`
   / `mysqlConfirmGoneVerifier`); no verifier or unreachable MySQL marks NOTHING; the confirm
-  route 503s. ⛔ **The real standing fact for Izzy: Comfort control's and LUZER's PBX tenants
-  (ids 10, 26) genuinely do not exist** — pre-existing, LUZER still invoiced $45/mo (2× FAILED)
-  for a system not on the PBX; their fate is his call. **(3) The tenant cascade does NOT clean
+  route 503s. ✅ Their fate was Izzy's call and he made it (2026-08-19 late evening, "Erase
+  those two tenants"): **Comfort control ERASED** (no payments — row + user + extension
+  cascaded), **LUZER ARCHIVED** (has PAID invoices — delisted, autopay off, the erase REFUSED
+  by the money guard, books kept forever; ⛔ never "finish" it with a raw DB delete — the
+  refusal is the feature). **(3) The tenant cascade does NOT clean
   `ombu_settings`** — every mirror tenant leaves `T<n>_reload`/`T<n>_reload_dialplan` rows (65
   orphaned rows from §13/§14/§18/§20 all cleaned, guarded on tenant-gone); and ⛔ the teardown's
   reload flag lives in **`ombu_settings`**, NOT `ombu_tenant_settings` — the wrong table
