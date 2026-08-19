@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   MAX_AUTO_REMOVALS,
   findOrphanTenants,
   isPbxAnswerHealthy,
+  mysqlConfirmGoneVerifier,
   planOrphanSweep,
+  runOrphanSweepAfterSync,
 } from "./pbxOrphanTenantSweep";
 
 /* The safety rails are the whole point of this module: the sweep is driven by a
@@ -180,4 +184,93 @@ test("a single genuine deletion goes through unattended", async () => {
   assert.equal(plan.healthy, true);
   assert.equal(plan.orphans.length, 1);
   assert.equal(plan.needsConfirmation, false);
+});
+
+
+/* ── REST is not ground truth (2026-08-19) ─────────────────────────────────
+   VitalPBX's REST tenant list serves a cached snapshot — observed 40+ minutes
+   stale during the 20x10 mirror stress test, when a directory built from it
+   made exactly three tenants look orphaned (inside the auto cap) and the sweep
+   marked all three: one test leftover and TWO LIVE CUSTOMERS. These tests pin
+   the rule that earned: discovery may ride REST, but nothing is MARKED unless
+   ombutel MySQL confirms the PBX tenant is really gone. */
+
+function markableDb(opts: Parameters<typeof fakeDb>[0]) {
+  const db = fakeDb(opts);
+  db.tenant.update = async ({ where }: any) => ({ id: where.id });
+  db.tenantPbxLink.updateMany = async () => ({ count: 1 });
+  db.tenantBillingSettings = { updateMany: async () => ({ count: 1 }) };
+  return db;
+}
+
+const oneDead = () =>
+  markableDb({
+    links: [
+      { tenantId: "t-live", pbxTenantId: "5" },
+      { tenantId: "t-dead", pbxTenantId: "44" },
+    ],
+    directory: ["5"],
+    tenants: [
+      { id: "t-live", name: "Luxure Management" },
+      { id: "t-dead", name: "agent test" },
+    ],
+  });
+
+test("⛔ with no MySQL verifier, the sweep MARKS NOTHING — REST alone may not sentence a tenant", async () => {
+  const r = await runOrphanSweepAfterSync(oneDead(), "pbx-1", { seenCount: 27, knownCount: 28 });
+  assert.equal(r.healthy, true);
+  assert.equal(r.marked.length, 0);
+  assert.deepEqual(r.awaitingConfirmation.map((o) => o.name), ["agent test"]);
+});
+
+test("⛔ MySQL unreachable (verifier answers null) — nothing is marked", async () => {
+  const r = await runOrphanSweepAfterSync(oneDead(), "pbx-1", { seenCount: 27, knownCount: 28 }, undefined, async () => null);
+  assert.equal(r.marked.length, 0);
+  assert.deepEqual(r.awaitingConfirmation.map((o) => o.name), ["agent test"]);
+});
+
+test("⛔ THE 2026-08-19 SHAPE: REST says gone, MySQL says alive — the tenant is NOT marked", async () => {
+  // MySQL confirms NOTHING is gone: the "orphan" is a stale-cache artifact.
+  const r = await runOrphanSweepAfterSync(oneDead(), "pbx-1", { seenCount: 27, knownCount: 28 }, undefined, async () => new Set());
+  assert.equal(r.marked.length, 0);
+  assert.equal(r.awaitingConfirmation.length, 0, "a REST lie is dropped, not queued for a person to wrongly confirm");
+});
+
+test("a MySQL-confirmed deletion still goes through unattended", async () => {
+  const r = await runOrphanSweepAfterSync(oneDead(), "pbx-1", { seenCount: 27, knownCount: 28 }, undefined, async (ids) => new Set(ids));
+  assert.equal(r.marked.length, 1);
+  assert.equal(r.marked[0].name, "agent test");
+});
+
+test("the unattended cap applies to the CONFIRMED list", async () => {
+  const many = Array.from({ length: MAX_AUTO_REMOVALS + 1 }, (_, i) => ({ id: `t${i}`, name: `Test ${i}` }));
+  const db = markableDb({
+    links: many.map((t, i) => ({ tenantId: t.id, pbxTenantId: String(900 + i) })),
+    directory: ["5"],
+    tenants: many,
+  });
+  const r = await runOrphanSweepAfterSync(db, "pbx-1", { seenCount: 28, knownCount: 28 }, undefined, async (ids) => new Set(ids));
+  assert.equal(r.marked.length, 0);
+  assert.equal(r.awaitingConfirmation.length, MAX_AUTO_REMOVALS + 1);
+});
+
+test("the MySQL verifier refuses to guess about a non-numeric pbx tenant id", async () => {
+  // openReadConn is never reached: the id fails the shape check first, and the
+  // verifier answers null — which the sweep reads as "do not mark anything".
+  const verdict = await mysqlConfirmGoneVerifier(null)(["44", "not-a-number"]);
+  assert.equal(verdict, null);
+});
+
+test("server.ts wires the verifier into BOTH the sync sweep and the confirm route", () => {
+  // The defect was in the CALLER: the sweep function could be perfect and a
+  // route that skips the verifier still deletes live customers off stale REST.
+  const src = readFileSync(join(__dirname, "server.ts"), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(/runOrphanSweepAfterSync\([^)]*mysqlConfirmGoneVerifier\(instance\.ombuMysqlUrlEncrypted\)/s.test(src),
+    "the sync route must pass the MySQL verifier to the sweep");
+  const confirmAt = src.indexOf("/admin/pbx/removed-tenants/confirm");
+  const confirmBody = src.slice(confirmAt, confirmAt + 4000);
+  assert.ok(confirmBody.includes("mysqlConfirmGoneVerifier(instance.ombuMysqlUrlEncrypted)"),
+    "the confirm route must verify against MySQL before marking");
+  assert.ok(confirmBody.includes("pbx_database_unavailable"),
+    "an unreachable PBX database must refuse the confirm, not proceed on REST alone");
 });

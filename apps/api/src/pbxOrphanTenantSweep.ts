@@ -33,9 +33,55 @@
  */
 
 import type { PrismaClient } from "@connect/db";
+import { openReadConn } from "./pbxConsole/pbxConsoleReaders";
 
 /** More than this in one pass and the sweep refuses to act on its own. */
 export const MAX_AUTO_REMOVALS = 3;
+
+/**
+ * ⛔⛔ REST IS NOT GROUND TRUTH, AND IT MARKED TWO LIVE CUSTOMERS REMOVED
+ * (2026-08-19, during the 20x10 mirror stress test). VitalPBX's REST tenant
+ * list serves a CACHED snapshot that was observed 40+ minutes stale — it
+ * returned 31 rows while the database held 35, then 41 rows while the database
+ * held 27, and neither answer tripped isPbxAnswerHealthy (41 of 41 known reads
+ * as perfectly healthy). The directory built from that snapshot made exactly
+ * three tenants look orphaned — inside MAX_AUTO_REMOVALS — and the sweep
+ * auto-marked all three: one genuine test leftover and TWO REAL CUSTOMERS
+ * (Comfort control, LUZER), delisted with autopay switched off, silently.
+ *
+ * The rule this earned: DISCOVERY may ride REST; DESTRUCTION must be confirmed
+ * against the PBX's own database. A ConfirmGone verifier asks ombutel MySQL
+ * (through the console's read-only connection) which candidate PBX tenant ids
+ * genuinely do not exist. Marking is allowed only for ids MySQL confirms gone;
+ * when MySQL is unreachable — or no verifier is supplied — NOTHING is marked
+ * and the candidates are reported for a person instead. Fail safe, not silent.
+ */
+export type ConfirmGone = (pbxTenantIds: string[]) => Promise<Set<string> | null>;
+
+/** MySQL-backed ConfirmGone: the set of ids absent from ombutel.ombu_tenants, or null when MySQL cannot answer. */
+export function mysqlConfirmGoneVerifier(ombuMysqlUrlEncrypted: string | null | undefined): ConfirmGone {
+  return async (pbxTenantIds: string[]) => {
+    const ids = pbxTenantIds.map((s) => String(s)).filter((s) => /^\d+$/.test(s));
+    if (ids.length !== pbxTenantIds.length) return null; // a non-numeric id is not something to guess about
+    if (!ids.length) return new Set();
+    try {
+      const c = await openReadConn(ombuMysqlUrlEncrypted);
+      if (!c.ok) return null;
+      try {
+        const [rows] = (await (c.conn as any).query(
+          `SELECT tenant_id FROM ombutel.ombu_tenants WHERE tenant_id IN (${ids.map(() => "?").join(",")})`,
+          ids,
+        )) as [Array<{ tenant_id: unknown }>, unknown];
+        const alive = new Set(rows.map((r) => String(r.tenant_id)));
+        return new Set(ids.filter((id) => !alive.has(id)));
+      } finally {
+        await (c.conn as any).end().catch(() => {});
+      }
+    } catch {
+      return null;
+    }
+  };
+}
 
 export type OrphanTenant = {
   tenantId: string;
@@ -222,6 +268,7 @@ export async function runOrphanSweepAfterSync(
   pbxInstanceId: string,
   sync: { seenCount: number; knownCount: number },
   log?: { warn: (o: unknown, m: string) => void; info: (o: unknown, m: string) => void },
+  confirmGone?: ConfirmGone,
 ): Promise<{
   healthy: boolean;
   reason?: string;
@@ -239,25 +286,54 @@ export async function runOrphanSweepAfterSync(
   if (plan.orphans.length === 0) {
     return { healthy: true, found: 0, marked: [], awaitingConfirmation: [] };
   }
-  if (plan.needsConfirmation) {
+  // ⛔ REST discovered these candidates; only the PBX's own DATABASE may
+  // sentence them (see ConfirmGone above — REST's stale cache made two live
+  // customers look orphaned on 2026-08-19 and the sweep marked them). With no
+  // verifier, or MySQL unable to answer, nothing is marked automatically.
+  const verdicts = confirmGone ? await confirmGone(plan.orphans.map((o) => o.pbxTenantId)) : null;
+  if (verdicts === null) {
     log?.warn(
       {
-        event: "pbx_orphan_sweep_needs_confirmation",
+        event: "pbx_orphan_sweep_unverified",
         found: plan.orphans.length,
-        cap: MAX_AUTO_REMOVALS,
+        reason: confirmGone ? "mysql_unavailable" : "no_verifier",
         names: plan.orphans.map((o) => o.name),
       },
-      "pbx_orphan_sweep_needs_confirmation",
+      "pbx_orphan_sweep_unverified — REST alone may not sentence a tenant; nothing was marked",
     );
     return { healthy: true, found: plan.orphans.length, marked: [], awaitingConfirmation: plan.orphans };
   }
+  const disagreed = plan.orphans.filter((o) => !verdicts.has(String(o.pbxTenantId)));
+  if (disagreed.length) {
+    // The exact 2026-08-19 failure shape, caught: REST says gone, MySQL says alive.
+    log?.warn(
+      { event: "pbx_orphan_rest_disagrees_with_mysql", names: disagreed.map((o) => o.name) },
+      "pbx_orphan_rest_disagrees_with_mysql — the REST tenant list is stale; these are NOT orphans",
+    );
+  }
+  const confirmed = plan.orphans.filter((o) => verdicts.has(String(o.pbxTenantId)));
+  if (confirmed.length === 0) {
+    return { healthy: true, found: plan.orphans.length, marked: [], awaitingConfirmation: [] };
+  }
+  if (confirmed.length > MAX_AUTO_REMOVALS) {
+    log?.warn(
+      {
+        event: "pbx_orphan_sweep_needs_confirmation",
+        found: confirmed.length,
+        cap: MAX_AUTO_REMOVALS,
+        names: confirmed.map((o) => o.name),
+      },
+      "pbx_orphan_sweep_needs_confirmation",
+    );
+    return { healthy: true, found: confirmed.length, marked: [], awaitingConfirmation: confirmed };
+  }
 
   const marked: RemovalOutcome[] = [];
-  for (const orphan of plan.orphans) {
+  for (const orphan of confirmed) {
     marked.push(await markTenantRemoved(db, orphan));
   }
   log?.info({ event: "pbx_orphan_sweep_marked", marked }, "pbx_orphan_sweep_marked");
-  return { healthy: true, found: plan.orphans.length, marked, awaitingConfirmation: [] };
+  return { healthy: true, found: confirmed.length, marked, awaitingConfirmation: [] };
 }
 
 /**

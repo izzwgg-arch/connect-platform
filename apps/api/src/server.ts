@@ -208,6 +208,7 @@ import {
   eraseRemovedTenant,
   findOrphanTenants,
   markTenantRemoved,
+  mysqlConfirmGoneVerifier,
   runOrphanSweepAfterSync,
 } from "./pbxOrphanTenantSweep";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
@@ -17293,7 +17294,15 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
   );
   // A tenant deleted on the PBX used to leave its whole Connect company behind —
   // users, numbers, call history, billing — with the link still marked LINKED.
-  const sweep = await runOrphanSweepAfterSync(db, instance.id, syncResult, app.log).catch((e: any) => {
+  // ⛔ The MySQL verifier is mandatory here: REST's stale cache made two LIVE
+  // customers look orphaned on 2026-08-19 and this exact call marked them.
+  const sweep = await runOrphanSweepAfterSync(
+    db,
+    instance.id,
+    syncResult,
+    app.log,
+    mysqlConfirmGoneVerifier(instance.ombuMysqlUrlEncrypted),
+  ).catch((e: any) => {
     app.log.warn({ err: e?.message }, "pbx_orphan_sweep_failed");
     return null;
   });
@@ -17355,12 +17364,27 @@ app.post("/admin/pbx/removed-tenants/confirm", async (req, reply) => {
   // Re-derive from the PBX directory rather than trusting the ids we were sent —
   // the caller's page may be minutes stale, and this stops billing.
   const orphans = await findOrphanTenants(db as any, instance.id);
+  // ⛔ And the directory itself may be a lie: it is built from REST's tenant
+  // list, which serves a cached snapshot (observed 40+ min stale 2026-08-19,
+  // when it made two live customers look orphaned). Only ombutel MySQL may
+  // confirm a PBX tenant is really gone; if it cannot answer, refuse — a
+  // person clicking "confirm" on a stale page must not delist a customer.
+  const goneVerdicts = await mysqlConfirmGoneVerifier(instance.ombuMysqlUrlEncrypted)(
+    orphans.map((o) => o.pbxTenantId),
+  );
+  if (goneVerdicts === null) {
+    return reply.status(503).send({
+      error: "pbx_database_unavailable",
+      message:
+        "The phone system's database could not confirm these tenants are really gone, so nothing was removed. Try again when the PBX database is reachable.",
+    });
+  }
   const byId = new Map(orphans.map((o) => [o.tenantId, o]));
   const results: any[] = [];
   const skipped: string[] = [];
   for (const tenantId of body.tenantIds) {
     const orphan = byId.get(tenantId);
-    if (!orphan) {
+    if (!orphan || !goneVerdicts.has(String(orphan.pbxTenantId))) {
       skipped.push(tenantId);
       continue;
     }
