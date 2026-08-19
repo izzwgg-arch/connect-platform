@@ -269,9 +269,56 @@ mess up any other tenants."*
 - ✅ **PROVEN ON PROD (deployed `6378cb8b`):** all four reads (27 tenants, extension
   devices, 55 phones + 427-model catalog, geo 232 blocked + 15 whitelist); one
   extension CREATE (ext 155, desk+app+cell, both PJSIP endpoints loaded, 0 doorway
-  wipes). ⏳ **NOT DONE:** the prod delete round trip returning 200 (after the
-  `fd3d0a3c` redeploy); nobody has opened the page in a browser; Provisioning + Geo
-  writes; wiring the console "New tenant" button to the mirror (`buildPbxTenant`);
+  wipes) and its DELETE (200/200, PBX byte-back to 119 extensions, orphan endpoints
+  cleared with `module reload res_pjsip.so`).
+- ✅✅ **THE LAST TWO CAPS ARE BEATEN (handoff §17, `5a312205` + `d0c435b9`).**
+  ⛔⛔ **THE FINDING: the cap lives in the panel's SAVE controller, NOT in the
+  renderer.** `Device::generateProvisioningFile()` run from PHP CLI on the
+  **unlicensed 55-phone clone** (free cap 20) produced a config **byte-identical**
+  to the panel's, and a working one for a brand-new 56th phone. So provisioning =
+  **write the rows ourselves, then call VitalPBX's OWN generator** — we never
+  re-implement the 427-model renderer. **PROVEN ON PROD:** create (185,209-byte
+  config, `account.1.user_name = T102_101`, **served 200** like a handset) → edit →
+  re-render → delete → **baseline 55**.
+  ⛔ **A phone config is a STATIC FILE** — `/phoneprov/<hash>/<mac>.cfg` is a plain
+  nginx `alias`, so a row changed **without a render** leaves the handset on its old
+  settings forever. (I first read `index.php`, which *does* generate on demand, and
+  concluded wrongly; the live 404 corrected me.)
+  ⛔ **sudo CANNOT be used from the helper** — its unit sets `NoNewPrivileges=yes`.
+  The render runs **in-process as `asterisk`**, enabled by two narrow grants: a read
+  ACL on `/etc/vitalpbx/vitalpbx-maint.conf` and `/var/lib/vitalpbx/provisioning` in
+  `ReadWritePaths` (the unit is `ProtectSystem=strict`).
+  ⛔ **A create whose render fails ROLLS ITS ROW BACK** — otherwise the console
+  lists a phone that gets nothing (it happened on the first prod attempt).
+- ⛔⛔ **GEO IS STILL REFUSED, AND THE CAPABILITY CHECK ITSELF WAS THE DANGEROUS
+  PART (`81ccf2fa`).** `geo_build_available()` probed by **running**
+  `sudo -n build_geo_firewall --connect-probe` — a **full firewall rebuild and
+  firewalld reload on a PBX carrying live calls**, performed just to answer *"am I
+  allowed?"*. Worse, it read sudo's `NoNewPrivileges` refusal (*"the no new
+  privileges flag is set"*) as **success**, so the caller would have written
+  `blocked='yes'` rows nothing could enforce — the console saying *blocked* while
+  the traffic arrives. It now asks with **`sudo -n -l <builder>`, which never
+  executes**, and trusts the exit code; a guard test fails if any `subprocess.run`
+  line names the builder without `-l`. (`len(None)` also crashed the honest refusal
+  into a 500 — `geo_state` reports `enforceable`/`missingIpset` as `None` when
+  `/etc/firewalld` is root-only, which is exactly the state a refusal comes from.)
+  ✅ **Verified live: a geo write answers the plain-English refusal**,
+  `/etc/firewalld/direct.xml` is **still stamped 2026-04-29**, firewalld shows **no
+  reload**, and the DB still holds **232** blocked countries.
+  ⛔ **Do NOT judge this by rule count** — live reads **258 runtime / 253 permanent**
+  and the gap is **fail2ban's 7 bans**, which come and go. The evidence is
+  `direct.xml`'s mtime plus the absence of a reload.
+  ⏳ **To finish geo:** `build_geo_firewall` needs root, so either relax
+  `NoNewPrivileges` for the helper unit or trigger the build **out-of-process** (a
+  root path-unit watching a flag file is the clean design) — **and its first live
+  run must happen in a quiet window**, since it reloads the firewall on a PBX
+  carrying calls. Until then a geo change is **refused, never half-applied**.
+- ⛔ **Guard-test trap, hit twice here and three times in this repo:** a negative
+  source guard matched the string quoted in the **doc comment explaining the old
+  defect** and failed against correct code. **Strip comments, or assert only on
+  executable lines**, before any `!includes(...)` check.
+- ⏳ **NOT DONE:** nobody has opened the page in a browser; the geo build step above;
+  wiring the console "New tenant" button to the mirror (`buildPbxTenant`);
   ⛔ rotate the robot panel password.
 
 ## ⛔ AGENT HANDOFF — dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenant" is wrong — the free tier caps EXTENSIONS at 12 (2026-08-18) — READ FIRST before answering "can we cancel VitalPBX?", before touching the license, or before sizing "our own multi-tenant"
