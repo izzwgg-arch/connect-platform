@@ -424,6 +424,7 @@ test("helper registers /mirror/tenant-create and defines mirror_tenant_create (i
 for (const spec of [
   { file: "vitalpbx_mirror.py", marker: "cat >/opt/connect-pbx-helper/vitalpbx_mirror.py <<'PYMIRRORVM'\n", term: "\nPYMIRRORVM\n" },
   { file: "mirror_features.py", marker: "cat >/opt/connect-pbx-helper/mirror_features.py <<'PYMIRRORFEAT'\n", term: "\nPYMIRRORFEAT\n" },
+  { file: "console_writes.py", marker: "cat >/opt/connect-pbx-helper/console_writes.py <<'PYCONSOLE'\n", term: "\nPYCONSOLE\n" },
 ]) {
   test(`embedded ${spec.file} heredoc is byte-identical to scripts/pbx/mirror/${spec.file}`, () => {
     const start = SCRIPT.indexOf(spec.marker);
@@ -442,4 +443,60 @@ test("helper registers /mirror/tenant-render and renders the baseline at create 
     assert.match(src, /"\/mirror\/tenant-render": mirror_tenant_render,/);
     assert.match(src, /render_and_install_pbx\(_mirror_read_conn\(\), int\(row\["tenant_id"\]\)\)/);
   }
+});
+
+// ── PBX Console (2026-08-19): the two operations the unlicensed panel refuses ──
+// Phone provisioning stops at 20 devices and geo blocking at 1 country once the
+// licence lapses, so both write their rows directly and then render with
+// VitalPBX's OWN generator. If these endpoints or their grants go missing, the
+// console silently loses those two pages after the cancel.
+test("helper registers the console endpoints (installer + .py)", () => {
+  for (const src of [SCRIPT, HELPER]) {
+    for (const route of ["/console/phone-save", "/console/phone-delete", "/console/phone-render", "/console/geo-state", "/console/geo-set"]) {
+      assert.ok(src.includes(`"${route}"`), `${route} must be registered`);
+    }
+  }
+});
+
+test("the console's grants are the narrow ones — two provisioning tables and a column-level geo flag", () => {
+  assert.ok(SCRIPT.includes("GRANT SELECT, INSERT, UPDATE, DELETE ON provisioning.devices TO 'connect_route_helper'"));
+  assert.ok(SCRIPT.includes("GRANT SELECT, INSERT, UPDATE, DELETE ON provisioning.accounts TO 'connect_route_helper'"));
+  assert.ok(SCRIPT.includes("GRANT SELECT, UPDATE (blocked) ON ombutel.ombu_geo_firewall TO 'connect_route_helper'"));
+  assert.ok(!/GRANT ALL[^\n]*provisioning/i.test(SCRIPT), "never GRANT ALL on provisioning");
+  assert.ok(!/GRANT [^\n]*ON provisioning\.\* TO 'connect_route_helper'/.test(SCRIPT), "never a schema-wide provisioning write grant");
+});
+
+test("a phone config is rendered by VitalPBX's own generator, never re-implemented", () => {
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8");
+  assert.ok(CW.includes("generateProvisioningFile()"), "must call VitalPBX's own generator");
+  assert.ok(CW.includes("remove_config(conn, mac, tenant_id)"), "a save must bust the cached config first");
+  assert.ok(CW.includes("rendered = generate_config(mac)"), "a row write must always be followed by a render");
+});
+
+test("the phone renderer runs in-process, with the two narrow grants it needs", () => {
+  // ⛔ The generator reads /etc/vitalpbx/vitalpbx-maint.conf and writes into the
+  // provisioning tree. sudo CANNOT be the answer here: the unit sets
+  // NoNewPrivileges=yes, so sudo is refused outright (proven on production).
+  // The two narrow grants that make the in-process run work must both be shipped.
+  assert.ok(SCRIPT.includes("setfacl -m u:asterisk:r /etc/vitalpbx/vitalpbx-maint.conf"),
+    "the read ACL for the maintenance token must be applied");
+  assert.ok(SCRIPT.includes("ReadWritePaths=/var/lib/vitalpbx/provisioning"),
+    "ProtectSystem=strict makes the provisioning tree read-only without this drop-in");
+  assert.ok(!SCRIPT.includes("NOPASSWD: /usr/bin/php"), "never a sudo grant for php (it cannot work under NoNewPrivileges anyway)");
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8");
+  assert.ok(CW.includes("subprocess.run([PHP_BIN, RENDER_PHP, mac]"), "generate_config runs the renderer in-process");
+  // a create whose render fails must not leave a phone row with no config
+  assert.ok(CW.includes("DELETE FROM provisioning.devices WHERE id = %s"), "a failed create must roll its row back");
+});
+
+test("render_phone.php only renders — it can never write rows", () => {
+  const PHP = readFileSync(join(__dirname, "mirror", "render_phone.php"), "utf8");
+  assert.ok(PHP.includes("generateProvisioningFile()"));
+  // ⛔ Strip comments before a negative match — the doc block explains that this
+  // script deletes nothing, and a naive scan matches the word "deletes" in the
+  // prose and fails on correct code (this repo has been bitten by that before).
+  const code = PHP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*(\/\/|#).*$/gm, "");
+  assert.ok(!/INSERT|UPDATE|DELETE|->save\(|->delete\(/i.test(code),
+    "the sudo-run script must not be able to change data");
+  assert.ok(PHP.includes("preg_match('/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/'"), "it must validate the MAC before use");
 });

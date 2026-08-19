@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.19.2"
+VERSION = "2026.08.19.3"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2500,6 +2500,90 @@ def _load_mirror_writes():
     return importlib.import_module("mirror_writes")
 
 
+def _load_console_writes():
+    """The PBX Console's direct writes (phone provisioning + geo firewall).
+
+    ⛔ These two are the ONLY operations the unlicensed panel refuses outright
+    (20 phones / 1 country), so they write their rows here and then render with
+    VitalPBX's OWN generator — never a re-implementation. Everything else the
+    console does still goes through the panel. See console_writes.py."""
+    import importlib
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return importlib.import_module("console_writes")
+
+
+def _console_conn():
+    """Write connection for the console: the helper's own user, which the
+    installer grants INSERT/UPDATE/DELETE on exactly two provisioning tables and
+    UPDATE on ombu_geo_firewall — nothing wider."""
+    return db_conn()
+
+
+def console_phone_save(body):
+    """Create or update one provisioned phone and render its config."""
+    cw = _load_console_writes()
+    conn = _console_conn()
+    try:
+        return cw.save_phone(
+            conn,
+            phone_id=(int(body["phoneId"]) if body.get("phoneId") else None),
+            mac=body.get("mac"),
+            tenant_id=require_num("tenantId", body.get("tenantId")),
+            model_id=require_num("modelId", body.get("modelId")),
+            template_id=(int(body["templateId"]) if body.get("templateId") else None),
+            description=str(body.get("description") or ""),
+            accounts=body.get("accounts"),
+        )
+    finally:
+        conn.close()
+
+
+def console_phone_delete(body):
+    cw = _load_console_writes()
+    conn = _console_conn()
+    try:
+        return cw.delete_phone(conn, require_num("phoneId", body.get("phoneId")))
+    finally:
+        conn.close()
+
+
+def console_phone_render(body):
+    """Re-render one phone's config from its current rows (no row change).
+    ⛔ The config is a STATIC file — a row edited any other way leaves the
+    handset on stale settings until this runs."""
+    cw = _load_console_writes()
+    conn = _console_conn()
+    try:
+        mac = cw.norm_mac(body.get("mac"))
+        cw.remove_config(conn, mac, require_num("tenantId", body.get("tenantId")))
+        return {"ok": True, "mac": mac, "rendered": cw.generate_config(mac)}
+    finally:
+        conn.close()
+
+
+def console_geo_state(body):
+    cw = _load_console_writes()
+    conn = _console_conn()
+    try:
+        state = cw.geo_state(conn)
+        state["whitelist"] = cw.whitelist_state(conn)
+        return state
+    finally:
+        conn.close()
+
+
+def console_geo_set(body):
+    """Block/unblock whole countries, then rebuild the firewall."""
+    cw = _load_console_writes()
+    conn = _console_conn()
+    try:
+        return cw.set_geo_blocks(conn, block=body.get("block") or [], unblock=body.get("unblock") or [])
+    finally:
+        conn.close()
+
+
 def mirror_tenant_create(body):
     mw = _load_mirror_writes()
     description = str(body.get("description") or "").strip()
@@ -4099,6 +4183,11 @@ class Handler(BaseHTTPRequestHandler):
             "/route-rebake": rebake_route,
             "/doorway-repair": doorway_repair,
             "/media-sync": media_sync_trigger,
+            "/console/phone-save": console_phone_save,
+            "/console/phone-delete": console_phone_delete,
+            "/console/phone-render": console_phone_render,
+            "/console/geo-state": console_geo_state,
+            "/console/geo-set": console_geo_set,
             "/mirror/tenant-create": mirror_tenant_create,
             "/mirror/tenant-render": mirror_tenant_render,
             "/voicemail/spool/list": vm_spool_list_messages,
