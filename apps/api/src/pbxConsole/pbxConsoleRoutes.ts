@@ -128,11 +128,16 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     const admin = await requireOwner(req, reply); if (!admin) return;
     const instance = await resolveInstance((req.query || {}).instanceId);
     if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
-    const r = await withRead(instance, (c) => listConsoleTenants(c));
+    /* ⛔ ONE connection for both reads. `withRead` opens and closes a MySQL
+       connection per call, and this is the console's most-loaded route — asking
+       for the profile list separately would double the connection churn on
+       every page load for a list that only the create form uses. */
+    const r = await withRead(instance, async (c) => ({
+      tenants: await listConsoleTenants(c),
+      outboundProfiles: await listOutboundProfiles(c),
+    }));
     if (!r.ok) return reply.status(200).send({ available: false, reason: "pbx_unavailable", detail: r.reason });
-    // the create form needs the pickable profiles, and they come from the same read
-    const p = await withRead(instance, (c) => listOutboundProfiles(c));
-    return { available: true, instanceId: instance.id, tenants: r.data, outboundProfiles: p.ok ? p.data : [] };
+    return { available: true, instanceId: instance.id, tenants: r.data.tenants, outboundProfiles: r.data.outboundProfiles };
   });
 
   /**
