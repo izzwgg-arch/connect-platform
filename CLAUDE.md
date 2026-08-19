@@ -106,20 +106,29 @@ logged, 100 questions … make sure the agent can execute all of them."*
   way to LIST them, so "any pending request?" was answered from the conversation
   dossier (it recited two-week-old requests). ⛔ `FAILED` reads as **"still being
   sent to the team"**, not "failed" — the dispatcher retries those.
-- ⛔ **WHAT THE AGENT STILL CANNOT DO, and it is most of what Ezra asked** (§5 of
-  the handoff has the table). **Executes for real:** DND on/off/status (Q114/Q115
-  really ran), extension status, hold music, voicemail, call history, contacts
-  LIST, where-a-number-routes + restore, queue status/members/MOH/announcements,
-  IVR set/clear a key + swap the welcome greeting, screenshots, the password-gated
-  prepare_* provisioning tools. **NO DOOR EXISTS for:** ⛔ **creating an IVR menu**
-  (~15 questions, incl. a fully-specified spec that got the generic "I never
-  guess with call routing"), submenus, **IVR timeout / retries / invalid-key**
-  (⛔ *the API has accepted `timeoutSeconds` + `maxRetries` since 2026-08-09 —
-  this is the cheapest real win on the list*), **business hours** (14 questions),
-  **holidays** (10), generating a greeting from text, **ring-group create/membership**
-  (`POST /voice/teams` exists and nothing points at it), extension forwarding /
-  no-answer destination, adding a contact, and reading the CONTENTS of the page
-  the user is on.
+- ⛔⛔ **WHAT THE AGENT CAN DO — and the correction that matters most: MOST OF
+  WHAT EZRA ASKED FOR IS BUILT AND STRANDED, NOT MISSING.** An earlier pass of
+  this section said business hours and holidays had "no door at all". **Wrong**,
+  and it is this repo's most repeated mistake: searching for a ROUTE with the
+  feature's name in it, finding none, and declaring it unbuilt. ⛔ **Read
+  `apps/agent/src/pbx/ops/` and `modifyCatalog.ts` before calling any PBX
+  change impossible.** **pbx.M5** (greeting recording), **pbx.M6** (timeout /
+  invalid-key destination) and **pbx.M7** (**business hours, holidays, per-mode
+  menus**) each have a full executor with `snapshot()`/`verify()`/`revert()`,
+  are registered in `MODIFY_CATALOG`, and call an API door that is implemented
+  and publishes to the PBX — `set_schedule` really upserts `IvrScheduleConfig`
+  and validates every menu belongs to the tenant. **And the chat cannot reach any
+  of them**: `orchestrator.ts` can only produce `pbx.M1/M2/M3/M4/M10/M11`, and
+  `pbxCfgLlmExtract.ts` never emits their ops. **~35 of Ezra's 135 questions die
+  in the understanding layer on top of executors that work.** ✅ **Executes today:**
+  DND on/off/status (Q114/Q115 really ran), extension status, hold music,
+  voicemail, call history, contacts LIST, where-a-number-routes + restore, queue
+  status/members/MOH/announcements, IVR set/clear a key + welcome greeting,
+  screenshots, the password-gated `prepare_*` tools. ⛔ **GENUINELY not built:**
+  **creating the FIRST IVR menu** (the door has no create — the real hole, and why
+  an empty account hears "no IVR menus yet"), submenus, generating a greeting from
+  TEXT, ring-group create/membership (`POST /voice/teams` exists, nothing points
+  at it), adding a contact, and reading the CONTENTS of the page the user is on.
 - ⛔ **The session reads worse than it is, and re-testing needs a different
   tenant:** Ezra's account has **no IVR menu, no schedule, no holidays, no teams
   and one extension** — about 40 of the 135 questions are about objects that do
@@ -135,6 +144,29 @@ logged, 100 questions … make sure the agent can execute all of them."*
   (so Ezra's 7 conversations ≈ 7–9 texts, not 48) and the 40-SMS/24 h ceiling
   still applies. **A trainer session now costs real texts — say so before the
   next 100 questions.**
+- ✅✅ **THE DIAGNOSE → PROPOSE → APPROVE → WRITE LOOP: three of the four legs
+  already existed, and the missing one shipped today (`95beef53`).** Izzy,
+  2026-08-19: *"the assistant should be able to diagnose and come back to me with
+  a full fix, and I should be able to give him approval to fix it and actually
+  write to the server."* **(1) Diagnose** — ⛔ **the read-only investigation
+  workspace was ALREADY DEPLOYED and nothing called it** (the section below said
+  NOT DEPLOYED; it rode a later api deploy). Proven on production 2026-08-19: no
+  secret → **403**; Connect Postgres → **200** (52 tenants); PBX MySQL → **200**
+  (27 tenants); an `UPDATE` → **refused**. The agent-side tool now exists —
+  **ONE** tool, `investigate`, because diagnosis is generic; `minRole:
+  "internal"` (⛔ never customer — the door is deliberately NOT tenant-scoped),
+  tenant bound from the verified context, and a guard refusal comes back as DATA
+  so the model can adjust. **(2) Propose** — `EscalationService.research()`
+  already drafts ISSUE/FINDINGS/PROPOSED FIX/APPROVAL and runs `role: "internal"`
+  on the same tool list, so its reports can now be **measured rather than
+  reasoned**; a source guard pins that it keeps receiving `chatTools`.
+  **(3) Approve** — already built, password dialog + `FIX <code>` by text.
+  **(4) Write** — real for M1/M2/M3/M4/M10/M11, **stranded for M5/M6/M7**, absent
+  for creating a menu. ⛔ **So closing the loop is a WIRING job in the
+  understanding layer, not a capability build.** The fork is Izzy's: **(A)** widen
+  the extractor per capability (incremental, every executor already reverts) or
+  **(B)** a general "run this plan" door — *"the real cost and the real risk"*,
+  needing every admin route classified first. **A is the recommendation.**
 - ⏳ **NOT PROVEN: no escalation has been created by a real tenant admin since
   the fix, and no text has arrived.** Proven by 26 new tests, the corpus replay,
   and the symbols grepped inside the running container — not by a phone ringing.
@@ -145,8 +177,11 @@ logged, 100 questions … make sure the agent can execute all of them."*
 ## ⛔⛔ AGENT HANDOFF — the assistant has a READ-ONLY WORKSPACE on both servers now, and its findings must cite evidence (2026-08-18) — READ FIRST before adding another `prepare_*` capability, before believing an escalation report, or before giving the agent any write access
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_INVESTIGATION_WORKSPACE_2026-08-18.md`**
-(`0ab965be` on `feat/ivr-migration-takeover`, **pushed. ⛔ NOT DEPLOYED and
-NOTHING CALLS IT YET** — the agent-side tools are unbuilt, so the route is inert
+(`0ab965be` on `feat/ivr-migration-takeover`. ⛔⛔ **CORRECTED 2026-08-19: it IS
+DEPLOYED** — it rode a later api deploy, and the first real queries have now been
+run through it against BOTH live databases (403 without the secret, 52 Connect
+tenants, 27 PBX tenants, an `UPDATE` refused). **The agent-side tool shipped
+2026-08-19 (`95beef53`), so it is no longer true that nothing calls it** — the agent-side tools are unbuilt, so the route is inert
 in production. No migration, no PBX write, no env change.)
 Izzy, 2026-08-18: *"I don't have to trade every single scenario, that will take
 a lifetime… how can we make this efficient?"* He was right; this is the answer.

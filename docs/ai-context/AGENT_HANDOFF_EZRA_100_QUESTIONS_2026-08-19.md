@@ -185,21 +185,58 @@ are `/internal/agent/*`; the extractor that drives them is
 | Account setup info, phone-number search, prepare add-extension / enable-SMS / add-number (password-gated) | — |
 | Mark my chats read, cancel my requests, **list my requests** (new) | Q6/Q7 |
 
-### ⛔ CANNOT execute — no door exists. These need building.
+### ⛔⛔ CORRECTION (same day, after reading the executors): MOST OF THIS IS BUILT AND STRANDED, NOT MISSING
+
+An earlier draft of this section said business hours and holidays had "no door at
+all". **That was wrong**, and it is the exact mistake this repo keeps making —
+searching for a ROUTE with the feature's name in the path, finding nothing, and
+declaring it unbuilt. Read `apps/agent/src/pbx/ops/` and
+`apps/agent/src/pbx/modifyCatalog.ts` before saying any PBX change is impossible.
+
+**These capabilities are built end to end — executor with `snapshot()` /
+`verify()` / `revert()`, registered in `MODIFY_CATALOG`, calling an API door that
+is fully implemented and publishes to the PBX — and the chat CANNOT REACH THEM:**
+
+| capability | what it does | reachable from chat? |
+|---|---|---|
+| **pbx.M5** `m5IvrPrompt.ts` | change an IVR greeting / prompt recording | ⛔ **no** |
+| **pbx.M6** `m6IvrExit.ts` | the **timeout and invalid-key** destination | ⛔ **no** |
+| **pbx.M7** `m7IvrSchedule.ts` | **business hours, holidays, per-mode menus** | ⛔ **no** |
+
+The API side of M7 (`action: "set_schedule"`, `server.ts` ~25043) upserts the
+real `IvrScheduleConfig` — timezone, `businessHoursRules`, `holidayDates`,
+default/after-hours/holiday menus — validates that every referenced menu belongs
+to that tenant, and then publishes to the PBX. M6 (`set_exit`) is equally real.
+
+**The gap is one line each.** `orchestrator.ts` maps an understood request to a
+capability id, and the only ids it can produce are:
+
+```
+pbx.M1 / M2 (hold music) · M3 (routing) · M4 (menu keys) · M10 (queues) · M11 (DND)
+```
+
+There is no `capId = "pbx.M5" | "pbx.M6" | "pbx.M7"` anywhere, and
+`pbxCfgLlmExtract.ts` never emits their operations. So a customer saying "change
+Monday's opening time to 9:00 AM" has nowhere to land — **~35 of Ezra's 135
+questions** (every business-hours and holiday question, timeout, invalid-key,
+greetings) die in the understanding layer, on top of executors that work.
+
+⛔ **Wiring them is NOT "build business hours".** It is teaching the extractor to
+emit those ops and adding three capability ids. Each still goes through the
+password-gated confirmation, and each executor can already revert itself.
+
+### ⛔ Genuinely NOT built
 
 | what Ezra asked for | questions | what is missing |
 |---|---|---|
-| **Create an IVR menu** | ~15, incl. the fully-specified Q24 | the door has `set_entry`/`clear_entry`/`set_welcome` and **no create**. Q24 gave a complete spec (press 1 → Sales ext 101, 20 s, then voicemail; press 2 → Service; press 0 → operator; invalid → replay; no input → replay once then voicemail) and got the generic "I never guess with call routing" |
+| **Create the FIRST IVR menu** | ~15, incl. the fully-specified Q24 | the door has `set_option`/`set_prompt`/`set_exit`/`set_schedule` and **no create**. This is the real hole: with no menu, M4–M7 have nothing to point at, which is exactly why the account kept hearing "no IVR menus yet". Q24 gave a complete spec and got "I never guess with call routing" |
 | **Submenus / menu-to-menu links** | Q36, Q37 | — |
-| **IVR timeout / retries / invalid-key behaviour** | Q92–Q101 | ⛔ the **API has accepted `timeoutSeconds` (1–60) and `maxRetries` (1–10) since 2026-08-09** and the Studio has pickers — the agent simply has no operation for them. **Cheapest real win on this list.** |
-| **Business hours — read or write** | Q48–Q57 (14) | no door at all. `set_schedule` exists on the IVR door and the extractor never emits it |
-| **Holidays — read or write** | Q58–Q67 (10) | no door |
-| **Create a greeting / recording** | Q68–Q81 | `native_upload_recording` exists (bytes in); nothing generates one from text, though ElevenLabs + Polly are wired in the API |
-| **Ring groups — create, add/remove members** | Q102–Q108 | `POST /voice/teams` exists and creates queues + ring groups; the agent has no capability pointing at it |
-| **Extension forwarding / no-answer destination** | Q88–Q90, Q118–Q120 | no door |
-| **Add a contact** | Q12 | read-only today |
-| **Read the CONTENTS of the page the user is on** | Q8, Q14, Q22 | it knows the page NAME and path only. Q22 ("read the 'Explain it to me' section") is the clearest ask |
-| **Audit the call flow for loops / broken destinations** | Q133 | Q134/Q135 produced a genuinely good account audit; Q133 asked for a *routing* audit and got the route readout |
+| **Create a greeting from TEXT** | Q68–Q81 | `native_upload_recording` takes bytes; nothing generates audio from a sentence, though ElevenLabs + Polly are wired in the API |
+| **Ring groups — create, add/remove members** | Q102–Q108 | `POST /voice/teams` creates queues *and* ring groups; no agent capability points at it (M10 is queues only) |
+| **Extension forwarding / no-answer destination** | Q88–Q90, Q118–Q120 | ⚠️ M11 is named "DND / call-forward" — the forward half may already exist; **check `m11ExtFeature.ts` before assuming** |
+| **Add a contact** | Q12 | read-only today, deliberately (see `contactsTools.ts`) |
+| **Read the CONTENTS of the page the user is on** | Q8, Q14, Q22 | it knows the page NAME and path only |
+| **Audit the call flow for loops / broken destinations** | Q133 | Q134/Q135 produced a good account audit; Q133 asked for a *routing* audit and got the route readout |
 
 ⛔ **A note on how this session reads worse than it is:** Ezra's account has **no
 IVR menu, no schedule, no holidays, no teams and one extension (1101)**. Around
@@ -208,6 +245,27 @@ system doesn't have any IVR menus yet" is the *correct* answer. **Re-run the set
 against a tenant that actually has a menu before drawing conclusions about the
 IVR answers** — and note that the "no IVR" reply is itself a small defect when
 the user is plainly asking to *create* one.
+
+## 5b. The diagnose → propose → approve → write loop, and where it actually stands
+
+Izzy, 2026-08-19: *"the assistant should be able to diagnose and come back to me
+with a full fix, and I should be able to give him approval to fix it and actually
+write to the server."* Four legs. Three existed before today.
+
+| leg | state |
+|---|---|
+| **1. Diagnose** | ✅ **the read-only workspace was LIVE and nothing called it.** ⛔ CLAUDE.md said "NOT DEPLOYED" — wrong; it rode a later api deploy. Proven on production 2026-08-19: no secret → **403**; Connect Postgres → **200** (52 tenants); PBX MySQL → **200** (27 tenants); an `UPDATE` → **refused**, *"This workspace can look at data but never change it."* The agent-side tool shipped today (`95beef53`) |
+| **2. Propose a full fix** | ✅ already built — `EscalationService.research()` drafts ISSUE / FINDINGS / PROPOSED FIX / APPROVAL. It runs `role: "internal"` on the same tool list, so it **now has `investigate`** and its reports can be measured rather than reasoned. It had simply never run, because of the gate in §2 |
+| **3. Approve** | ✅ already built, two ways — the portal password dialog (`agentConfirmations.ts`) and `FIX <code>` by text |
+| **4. Write to the server** | ⚠️ real for **M1/M2/M3/M4/M10/M11**, stranded for **M5/M6/M7** (above), absent for creating a menu |
+
+⛔ **So the remaining work to close Izzy's loop is a WIRING job in the
+understanding layer, not a capability build.** The fork he has to choose:
+**(A)** widen the extractor per capability — incremental, each step testable,
+each executor already reverts; or **(B)** a general "run this plan" door, which
+CLAUDE.md already sizes as *"the real cost and the real risk"* and which needs
+every admin route classified read/write/destructive first. **A is the
+recommendation**; B is where an approved plan can do something nobody modelled.
 
 ## 6. Two smaller things worth knowing
 
@@ -285,7 +343,12 @@ docker compose -f docker-compose.app.yml -f docker-compose.agent.yml up -d --bui
   `AgentEscalation` and a text.** Ezra can do it in 30 seconds.
 - **Nobody has re-run the hold-music flow in a real chat.** The trap is proven by
   the eight verbatim questions in a unit test against the real orchestrator.
-- **The capability gaps in §5 are untouched.** Nothing there was built; the
-  agent still cannot create an IVR menu, set business hours or holidays, make a
-  greeting, or create a ring group. Those are Izzy's to prioritise — the
-  IVR timeout/retries pair is the cheapest, because the API side already exists.
+- **The `investigate` tool has never been used in a real conversation.** It is
+  proven as: the door answering on production against both databases (§5b), 12
+  tests, and the tool present + internal-only inside the running container. **The
+  acceptance test is one internal chat that asks something only the database can
+  answer, then an `investigation.query` row in `AgentAuditLog` carrying the
+  statement and the `purpose`.**
+- **The stranded capabilities in §5 are still stranded.** Nothing was wired to
+  M5/M6/M7 in this session — the finding is that they are BUILT, not that they
+  are reachable. That wiring is Izzy's call (§5b, options A/B).

@@ -4,6 +4,52 @@ Newest entries first.
 
 ---
 
+## The agent's read-only investigation workspace, wired up (2026-08-19)
+
+Branch `feat/ivr-migration-takeover`, `95beef53`. **apps/agent only** — no api,
+no portal, no migration. Handoff `AGENT_HANDOFF_EZRA_100_QUESTIONS_2026-08-19.md`
+§5b.
+
+```bash
+cd apps/agent && npm test
+cd apps/agent && npx tsc --noEmit -p tsconfig.json
+```
+
+**Result:** **655 tests, 653 pass, 2 fail** — the same two pre-existing failures
+(`corpus/archive.test.ts`, `transcription/everett.test.ts`), in files this change
+never touched. Typecheck **15 errors = the exact baseline**, none in a new file.
+
+**12 new tests** in `tools/investigationTools.test.ts`, picked up by the existing
+`src/**/*.test.ts` glob. The ones that matter:
+
+- a **customer** conversation cannot see the tool (`toolsForRole` → 0) **and**
+  cannot execute it by naming it directly — and nothing reaches the door;
+- the tenant is bound from the verified context: the model claiming
+  `tenantId: "someone-elses-tenant"` has it stripped by the registry *and*
+  overridden by the tool — two locks, both asserted;
+- a guard **refusal comes back as DATA, not a thrown error**, so the model reads
+  "you tried to write" and adjusts;
+- source guards on the wiring, incl. that `EscalationService` still receives
+  `chatTools` and still runs `role: "internal"` — otherwise the researcher
+  silently loses `investigate` and its reports go back to being reasoned.
+
+⛔ **Proven live against production before the tool was written** (read-only,
+`POST /internal/agent/investigate` on the running api):
+
+| probe | result |
+|---|---|
+| no secret | **403** `{"ok":false,"error":"forbidden"}` |
+| `select count(*) from "Tenant"` (connect) | **200** — 52 rows, 66 ms |
+| `select count(*) from ombu_tenants` (pbx) | **200** — 27 tenants, 376 ms |
+| `update "Tenant" set name = name` | **200 `ok:false`, refusedByGuard** — *"Only SELECT / WITH / SHOW / DESCRIBE / EXPLAIN queries are allowed here… This workspace can look at data but never change it."* |
+
+Container-verified after the rebuild: both new files in the image,
+`buildInvestigationTools` registered, `minRole: "customer"` **0 hits**,
+`AGENT_INTERNAL_SECRET` present (48 chars), agent healthy, **0 error-level log
+lines**.
+
+---
+
 ## Agent escalations reached nobody; the hold-music clarify trap (2026-08-19)
 
 Branch `feat/ivr-migration-takeover`, `ce9f2318`. **apps/agent only** — no api,
