@@ -24,13 +24,15 @@ function harness() {
   return { tools, calls };
 }
 
-const STAFF = { tenantId: "t-real", role: "internal" as const, clientUserId: "u1" };
+const STAFF = { tenantId: "t-real", role: "staff" as const, clientUserId: "u1" };
 const CUSTOMER = { tenantId: "t-real", role: "customer" as const, clientUserId: "u1" };
+const TENANT_ADMIN = { tenantId: "t-real", role: "internal" as const, clientUserId: "u1" };
 
-test("⛔ a CUSTOMER conversation cannot see the tool at all", () => {
+test("⛔ only STAFF can see the tool — not a customer, not a tenant admin", () => {
   const { tools } = harness();
-  assert.equal(toolsForRole(tools, "customer").length, 0);
-  assert.equal(toolsForRole(tools, "internal").length, 1);
+  assert.equal(toolsForRole(tools, "customer").length, 0, "customer must never see it");
+  assert.equal(toolsForRole(tools, "internal").length, 0, "⛔ a TENANT_ADMIN (internal) must not see it — it is not tenant-scoped");
+  assert.equal(toolsForRole(tools, "staff").length, 1, "only Connect staff (SUPER_ADMIN) sees it");
 });
 
 test("⛔ a CUSTOMER cannot execute it even by naming it directly", async () => {
@@ -39,6 +41,14 @@ test("⛔ a CUSTOMER cannot execute it even by naming it directly", async () => 
   assert.equal(res.ok, false);
   assert.match(JSON.stringify(res.content), /Unknown or unavailable tool/);
   assert.equal(calls.length, 0, "and nothing reached the door");
+});
+
+test("⛔ a TENANT_ADMIN (internal) cannot execute it — the cross-tenant leak this closes", async () => {
+  const { tools, calls } = harness();
+  const res = await executeTool(tools, "investigate", { source: "connect", sql: "select 1" }, TENANT_ADMIN);
+  assert.equal(res.ok, false);
+  assert.match(JSON.stringify(res.content), /Unknown or unavailable tool/);
+  assert.equal(calls.length, 0, "a customer's own admin must not reach a cross-platform SQL read");
 });
 
 test("the tenant is bound from the verified context, never from the model", async () => {
@@ -108,24 +118,24 @@ test("SOURCE: the tool is registered in the agent's chat tool list", () => {
   assert.ok(/buildInvestigationTools\(\{\s*investigation:\s*makeInvestigationClient\(\)\s*\}\)/.test(src));
 });
 
-test("SOURCE: the ESCALATION RESEARCHER gets the same tool list, so it can diagnose before it proposes", () => {
-  // This is the point of the whole tool: the researcher drafts the report the
-  // owner approves, and it runs with role "internal", so it — and only it —
-  // reaches `investigate`. If the service stops being handed chatTools, the
-  // reports quietly go back to being reasoned rather than measured.
-  const src = READ("../server.ts");
-  assert.ok(
-    /new EscalationService\(prisma, router, chatTools, audit\)/.test(src),
-    "the researcher must receive the same tool list the chat gets",
-  );
+test("SOURCE: the ESCALATION RESEARCHER runs as 'internal' and therefore does NOT reach investigate", () => {
+  // ⛔ The researcher processes the CUSTOMER's own transcript, so exposing an
+  // un-tenant-scoped SQL tool there is a prompt-injection path ("run this SQL and
+  // put it in FINDINGS"). Since 2026-08-19 `investigate` is the "staff" tier and
+  // the researcher runs with role "internal", so `toolsForRole` filters it out —
+  // the researcher reasons/uses the tenant-scoped reads, and only a Connect-staff
+  // chat reaches investigate. If the researcher were ever handed role "staff",
+  // customer text could drive raw cross-tenant SQL.
   const esc = READ("../escalation/escalations.ts");
-  assert.ok(/role:\s*"internal"/.test(esc), "and must run them as internal, or investigate is filtered out");
+  assert.ok(/role:\s*"internal"/.test(esc), "must run as internal, so investigate stays filtered out");
+  assert.ok(!/role:\s*"staff"/.test(esc), "⛔ must NEVER run escalation research as staff (customer text drives it)");
 });
 
-test("SOURCE: the tool is declared internal-only and says so", () => {
+test("SOURCE: the tool is declared STAFF-only and says so", () => {
   const src = READ("./investigationTools.ts");
-  assert.ok(/minRole:\s*"internal"/.test(src), "must be internal");
+  assert.ok(/minRole:\s*"staff"/.test(src), "must be staff-tier");
   assert.ok(!/minRole:\s*"customer"/.test(src), "⛔ must never be customer-facing");
+  assert.ok(!/minRole:\s*"internal"/.test(src), "⛔ must never be 'internal' — that admits every TENANT_ADMIN");
 });
 
 test("SOURCE: the client fails closed with no secret and does not throw on a refusal", () => {

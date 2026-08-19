@@ -1,26 +1,27 @@
 /**
- * Owner admin read APIs for the portal (Approvals queue, Activity feed).
- * Owner JWT required. Read-only aggregations over the agent tables.
+ * Connect-STAFF admin read APIs for the portal (Approvals queue, Activity feed,
+ * Incidents). Platform-wide aggregations over the agent tables — they show every
+ * tenant's data, so they are gated to SUPER_ADMIN (Connect staff) only.
+ *
+ * ⛔ NOT `requireOwner` (which admits TENANT_ADMIN): these feeds are cross-tenant
+ * by construction (no per-tenant filter, and AgentIncident has no tenantId to
+ * filter by), so admitting a customer's own admin leaked every other tenant's
+ * agent activity, pending approvals ("Give <email> permission…"), and incidents.
+ * `resolveStaffCaller` narrows to SUPER_ADMIN. A tenant admin gets 403.
  */
 import type { FastifyInstance } from "fastify";
-import { verifyPortalJwt } from "../auth";
-
-function requireOwner(req: any): boolean {
-  const auth = req.headers.authorization;
-  const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
-  return id?.role === "owner";
-}
+import { resolveStaffCaller } from "../adminAuth";
 
 export function registerAdminRoutes(app: FastifyInstance, prisma: any) {
   app.get("/agent/admin/approvals", async (req, reply) => {
-    if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+    if (!resolveStaffCaller(req)) return reply.code(403).send({ error: "forbidden" });
     const pending = await prisma.agentAction.findMany({ where: { status: "PENDING_APPROVAL" }, orderBy: { createdAt: "desc" }, take: 100 });
     const recent = await prisma.agentAction.findMany({ where: { status: { in: ["EXECUTED", "REVERTED", "DENIED", "FAILED", "EXPIRED"] } }, orderBy: { updatedAt: "desc" }, take: 50 });
     return { pending, recent };
   });
 
   app.get("/agent/admin/activity", async (req, reply) => {
-    if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+    if (!resolveStaffCaller(req)) return reply.code(403).send({ error: "forbidden" });
     const events = await prisma.agentAuditLog.findMany({ orderBy: { ts: "desc" }, take: 100 });
     const counts = {
       conversationsToday: await prisma.agentConversation.count({ where: { startedAt: { gte: startOfDay() } } }),
@@ -33,7 +34,7 @@ export function registerAdminRoutes(app: FastifyInstance, prisma: any) {
   });
 
   app.get("/agent/admin/incidents", async (req, reply) => {
-    if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+    if (!resolveStaffCaller(req)) return reply.code(403).send({ error: "forbidden" });
     const incidents = await prisma.agentIncident.findMany({ orderBy: { createdAt: "desc" }, take: 100 });
     return { incidents };
   });

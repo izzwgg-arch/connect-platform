@@ -8,24 +8,30 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { DiagnosticsEngine } from "./engine";
-import { verifyPortalJwt } from "../auth";
+import { resolveAdminCaller } from "../adminAuth";
 
 export function registerDiagRoutes(app: FastifyInstance, diag: DiagnosticsEngine) {
   app.post("/agent/diag/run", async (req, reply) => {
-    // Owner JWT or internal secret only.
+    // Admin JWT or internal secret only.
     let requestedBy = "internal";
-    const auth = req.headers.authorization;
     const secret = process.env.AGENT_INTERNAL_SECRET;
     const internal = secret && req.headers["x-agent-internal-secret"] === secret;
+    let caller = null as ReturnType<typeof resolveAdminCaller>;
     if (!internal) {
-      const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
-      if (!id || id.role !== "owner") return reply.code(403).send({ error: "forbidden" });
-      requestedBy = `owner:${id.clientUserId}`;
+      caller = resolveAdminCaller(req);
+      if (!caller) return reply.code(403).send({ error: "forbidden" });
+      requestedBy = `owner:${caller.clientUserId}`;
     }
     const body = z
       .object({ tenantId: z.string().min(1), extension: z.string().nullable().optional(), complaint: z.string().nullable().optional() })
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    // ⛔ A tenant admin may only diagnose THEIR OWN tenant. Diagnostics read that
+    // tenant's devices, calls and voicemail, so a body-supplied tenantId that is
+    // not the caller's own (and the caller is not staff / internal) is refused.
+    if (caller && !caller.isStaff && body.data.tenantId !== caller.tenantId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
     const report = await diag.run(body.data.tenantId, body.data.extension ?? null, body.data.complaint ?? null, requestedBy);
     return report;
   });

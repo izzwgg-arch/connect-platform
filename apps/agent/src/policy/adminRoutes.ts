@@ -6,13 +6,18 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { verifyPortalJwt } from "../auth";
+import { resolveAdminCaller, type AdminCaller } from "../adminAuth";
 import type { AuditLog } from "../audit/audit";
 
-function owner(req: any): { id: string } | null {
-  const auth = req.headers.authorization;
-  const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
-  return id?.role === "owner" ? { id: id.clientUserId ?? "owner" } : null;
+/**
+ * ⛔ Admin-mode caller (SUPER_ADMIN or TENANT_ADMIN). A TENANT_ADMIN may only
+ * see/edit THEIR OWN tenant's policy — the routes bind the tenant to
+ * `caller.tenantId` unless `caller.isStaff`. Before 2026-08-19 this used the
+ * agent's "owner" mode with a body-supplied tenantId, so a customer's own admin
+ * could read every tenant's policy and rewrite any tenant's capability grants.
+ */
+function owner(req: any): AdminCaller | null {
+  return resolveAdminCaller(req);
 }
 
 const GrantSchema = z.object({
@@ -31,13 +36,21 @@ const PolicyPatch = z.object({
 
 export function registerPolicyAdminRoutes(app: FastifyInstance, prisma: any, audit: AuditLog) {
   app.get("/agent/admin/policies", async (req, reply) => {
-    if (!owner(req)) return reply.code(403).send({ error: "forbidden" });
-    const policies = await prisma.agentPolicy.findMany({ orderBy: { updatedAt: "desc" }, take: 200 });
+    const o = owner(req);
+    if (!o) return reply.code(403).send({ error: "forbidden" });
+    // Staff see every tenant's policy; a tenant admin sees only their own.
+    const policies = await prisma.agentPolicy.findMany({
+      where: o.isStaff ? {} : { tenantId: o.tenantId },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+    });
     return { policies };
   });
 
   app.get<{ Params: { tenantId: string } }>("/agent/admin/policies/:tenantId", async (req, reply) => {
-    if (!owner(req)) return reply.code(403).send({ error: "forbidden" });
+    const o = owner(req);
+    if (!o) return reply.code(403).send({ error: "forbidden" });
+    if (!o.isStaff && req.params.tenantId !== o.tenantId) return reply.code(403).send({ error: "forbidden" });
     const p = await prisma.agentPolicy.findUnique({ where: { tenantId: req.params.tenantId } });
     return { policy: p };
   });
@@ -48,6 +61,8 @@ export function registerPolicyAdminRoutes(app: FastifyInstance, prisma: any, aud
     const body = PolicyPatch.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request", detail: body.error.issues });
     const { tenantId, ...patch } = body.data;
+    // ⛔ A tenant admin may only write their OWN tenant's policy.
+    if (!o.isStaff && tenantId !== o.tenantId) return reply.code(403).send({ error: "forbidden" });
 
     const before = await prisma.agentPolicy.findUnique({ where: { tenantId } });
     const nextVersion = (before?.version ?? 0) + 1;
@@ -55,7 +70,7 @@ export function registerPolicyAdminRoutes(app: FastifyInstance, prisma: any, aud
       historyVisible: patch.historyVisible ?? before?.historyVisible ?? false,
       channels: patch.channels ?? before?.channels ?? ["chat"],
       grants: (patch.grants ?? before?.grants ?? {}) as any,
-      updatedBy: `owner:${o.id}`,
+      updatedBy: `owner:${o.clientUserId ?? "owner"}`,
       version: nextVersion,
     };
     const after = await prisma.agentPolicy.upsert({

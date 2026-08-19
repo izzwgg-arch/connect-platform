@@ -55,6 +55,7 @@ import { KnowledgeBase } from "./knowledge/kb";
 import { loadStandingKnowledgeBlock } from "./knowledge/standingKnowledge";
 import { TrainerLessonService } from "./training/lessons";
 import { verifyPortalJwt } from "./auth";
+import { resolveStaffCaller } from "./adminAuth";
 import { buildProvisioningPlan } from "./pbx/provisioningPlan";
 import { DigestJobs } from "./jobs/digest";
 import { RateLimiter } from "./guards/limits";
@@ -351,18 +352,21 @@ async function main() {
     registerAdminRoutes(app, prisma);
     registerPolicyAdminRoutes(app, prisma, audit);
 
-    // ── AI Trainer (owner) + widget UI-event logging ──
+    // ── AI Trainer (STAFF) + widget UI-event logging ──
+    // ⛔ STAFF ONLY. listAll() and revoke(id) are cross-tenant (no tenant filter,
+    // lookup by id only), so `requireOwner` let a tenant admin read every tenant's
+    // trainer lessons and revoke any of them. The trainer is a Connect-staff tool
+    // (AGENT_TRAINER_USER_IDS gates who can train at all); gated to SUPER_ADMIN.
     app.get("/agent/admin/trainer/lessons", async (req, reply) => {
-      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      if (!resolveStaffCaller(req)) return reply.code(403).send({ error: "forbidden" });
       return { lessons: await trainerLessons.listAll() };
     });
     app.post("/agent/admin/trainer/lessons/revoke", async (req, reply) => {
-      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
-      const auth = (req.headers as any).authorization as string | undefined;
-      const who = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7))?.clientUserId ?? "owner" : "owner";
+      const caller = resolveStaffCaller(req);
+      if (!caller) return reply.code(403).send({ error: "forbidden" });
       const body = (req.body ?? {}) as any;
       if (typeof body.id !== "string" || !body.id) return reply.code(400).send({ error: "bad_request" });
-      const lesson = await trainerLessons.revoke(body.id, `owner:${who}`);
+      const lesson = await trainerLessons.revoke(body.id, `owner:${caller.clientUserId ?? "owner"}`);
       return lesson ? { ok: true, lesson } : reply.code(404).send({ error: "not_found_or_already_revoked" });
     });
     // Every widget button press, timestamped — part of the "log every little
@@ -507,10 +511,13 @@ async function main() {
       return voiceStudio.render({ voiceId: b.voiceId, text: b.text, language: b.language === "yi" ? "yi" : "en" });
     });
 
-    // Knowledge base — retrieval (owner) + approve (owner).
+    // Knowledge base — retrieval (STAFF) + approve.
+    // ⛔ STAFF ONLY. `kb.retrieve` takes a body-supplied tenantId, so `requireOwner`
+    // let a tenant admin read another tenant's knowledge-base articles. Gated to
+    // SUPER_ADMIN via resolveStaffCaller (2026-08-19).
     const kb = new KnowledgeBase(prisma, audit);
     app.post("/agent/kb/retrieve", async (req, reply) => {
-      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      if (!resolveStaffCaller(req)) return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
       return { results: await kb.retrieve(String(b.query ?? ""), b.tenantId ?? null) };
     });
@@ -796,14 +803,19 @@ async function main() {
     });
 
     // ── API-key settings (Assistant page). Write-only + encrypted at rest. ──
+    // ⛔ STAFF ONLY. These are the PLATFORM's provider keys and chat-model pick —
+    // one global row per key, no tenant. `requireOwner` admits every TENANT_ADMIN
+    // (admin mode), so a customer's own admin could overwrite the platform's
+    // anthropic/openai/elevenlabs keys (DoS the assistant for every tenant, or
+    // redirect all AI traffic onto an attacker's provider account). Gated to
+    // SUPER_ADMIN via resolveStaffCaller (2026-08-19).
     app.get("/agent/admin/secrets/status", async (req, reply) => {
-      if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });
+      if (!resolveStaffCaller(req)) return reply.code(403).send({ error: "forbidden" });
       return { masterKey: secCrypto.hasMasterKey(), secrets: await secrets.status() };
     });
     app.post("/agent/admin/secrets", async (req, reply) => {
-      const auth = req.headers.authorization;
-      const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;
-      if (id?.role !== "owner") return reply.code(403).send({ error: "forbidden" });
+      const caller = resolveStaffCaller(req);
+      if (!caller) return reply.code(403).send({ error: "forbidden" });
       const b = (req.body ?? {}) as any;
       const valid: SecretKey[] = ["anthropic_api_key", "openai_api_key", "yiddishlabs_api_key", "ivrit_api_key", "elevenlabs_api_key", "chat_model"];
       if (!valid.includes(b.key) || typeof b.value !== "string") return reply.code(400).send({ error: "bad_request" });
@@ -812,7 +824,7 @@ async function main() {
         return reply.code(400).send({ error: "bad_model_pick", hint: 'expected "openai:<model>" or "anthropic:<model>" (empty to reset)' });
       }
       try {
-        await secrets.set(b.key, b.value, `owner:${id.clientUserId}`);
+        await secrets.set(b.key, b.value, `owner:${caller.clientUserId}`);
       } catch (err) {
         return reply.code(400).send({ error: String(err) });
       }

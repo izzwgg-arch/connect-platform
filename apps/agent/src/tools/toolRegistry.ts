@@ -19,8 +19,22 @@
  */
 import type { ReadTools } from "./readTools";
 
-/** Who is on the other end. "customer" is the untrusted, tenant-locked case. */
-export type ToolRole = "customer" | "internal";
+/**
+ * Who is on the other end.
+ *   "customer" — the untrusted, tenant-locked end user (a plain USER).
+ *   "internal" — admin MODE for THIS tenant: SUPER_ADMIN *or* TENANT_ADMIN (the
+ *                customer's own administrator). Gets the tenant-scoped internal
+ *                tools (call_quality, the prepare_* provisioning/grant drafts).
+ *   "staff"    — Connect staff (SUPER_ADMIN) ONLY. Gets tools that are NOT
+ *                tenant-scoped and could read across the whole platform — today
+ *                that is `investigate`, which runs raw SQL against both
+ *                databases. ⛔ A TENANT_ADMIN is "internal", never "staff": the
+ *                agent maps TENANT_ADMIN → admin mode (2026-08-06), and treating
+ *                that as Connect-staff would hand 9 customer admins a cross-tenant
+ *                read of production. The two questions are separated by
+ *                `isPlatformStaff` (authRoles.ts).
+ */
+export type ToolRole = "customer" | "internal" | "staff";
 
 export interface ToolContext {
   /** SERVER-VERIFIED tenant. Never read from model output or chat text. */
@@ -40,7 +54,11 @@ export interface ToolSpec {
   name: string;
   description: string;
   parameters: JsonSchema;
-  /** "customer" = safe for an untrusted end user; "internal" = staff/diagnostics only. */
+  /**
+   * "customer" = safe for an untrusted end user; "internal" = admin mode for the
+   * caller's OWN tenant (tenant-scoped); "staff" = Connect staff only, for tools
+   * that are NOT tenant-scoped and could reach across the platform.
+   */
   minRole: ToolRole;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
@@ -170,9 +188,19 @@ export function buildTools(deps: BuildToolsDeps): ToolSpec[] {
   ];
 }
 
-/** Tools this role may see. Customers never learn an internal tool exists. */
+/**
+ * Tools this role may see. Customers never learn an internal tool exists, and a
+ * tenant admin ("internal") never learns a staff tool exists.
+ *   staff    → everything
+ *   internal → customer + internal tiers, but NOT staff-only tools
+ *   customer → customer tier only
+ * ⛔ The `internal` case must exclude `staff`: a TENANT_ADMIN is "internal", and
+ * `staff`-tier tools (e.g. `investigate`) are not tenant-scoped.
+ */
 export function toolsForRole(all: ToolSpec[], role: ToolRole): ToolSpec[] {
-  return role === "internal" ? all : all.filter((t) => t.minRole === "customer");
+  if (role === "staff") return all;
+  if (role === "internal") return all.filter((t) => t.minRole !== "staff");
+  return all.filter((t) => t.minRole === "customer");
 }
 
 export interface ToolExecutionResult {

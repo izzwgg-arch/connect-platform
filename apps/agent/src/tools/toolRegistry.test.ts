@@ -83,6 +83,30 @@ test("role gating: customers never see internal tools", () => {
   assert.ok(toolsForRole(all, "internal").map((t) => t.name).includes("call_quality"));
 });
 
+test("⛔ tier gating: a STAFF-only tool is hidden from internal (TENANT_ADMIN) and customer", () => {
+  const staffTool: ToolSpec[] = [{
+    name: "cross_tenant_read", description: "d", minRole: "staff",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    run: async () => ({}),
+  }];
+  assert.deepEqual(toolsForRole(staffTool, "customer").map((t) => t.name), [], "customer never sees a staff tool");
+  assert.deepEqual(toolsForRole(staffTool, "internal").map((t) => t.name), [], "⛔ a TENANT_ADMIN (internal) must NOT see a staff tool");
+  assert.deepEqual(toolsForRole(staffTool, "staff").map((t) => t.name), ["cross_tenant_read"], "only staff sees it");
+});
+
+test("⛔ RED TEAM: a TENANT_ADMIN (internal) naming a staff-only tool is refused, not executed", async () => {
+  const seen: string[] = [];
+  const staffTool: ToolSpec[] = [{
+    name: "cross_tenant_read", description: "d", minRole: "staff",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    run: async () => { seen.push("ran"); return {}; },
+  }];
+  const r = await executeTool(staffTool, "cross_tenant_read", {}, INTERNAL);
+  assert.equal(r.ok, false);
+  assert.match(String((r.content as any).error), /Unknown or unavailable tool/);
+  assert.equal(seen.length, 0, "the staff tool body must never run for a tenant admin");
+});
+
 test("⛔ RED TEAM: a customer calling an internal tool is refused, not executed", async () => {
   const { deps, seen } = spyDeps();
   const r = await executeTool(buildTools(deps), "call_quality", {}, CUSTOMER);

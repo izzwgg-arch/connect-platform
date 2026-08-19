@@ -10,11 +10,15 @@
  * scenario-specific, and repair lives behind the password-gated confirmation
  * flow, not here.
  *
- * ⛔ `minRole: "internal"` — NEVER "customer". The door is deliberately NOT
- * tenant-scoped: a query cannot be confined to one tenant without parsing SQL,
- * and "is this happening to anyone else?" is a question a diagnostician must be
- * able to ask. That is exactly why it is staff-side only. A customer-facing
- * conversation never learns this tool exists (`toolsForRole` filters it out).
+ * ⛔ `minRole: "staff"` — SUPER_ADMIN (Connect staff) ONLY, never "customer" and
+ * never "internal". The door is deliberately NOT tenant-scoped: a query cannot be
+ * confined to one tenant without parsing SQL, and "is this happening to anyone
+ * else?" is a question a diagnostician must be able to ask. That is exactly why
+ * it is staff-side only. ⛔ It was "internal" until 2026-08-19, but "internal"
+ * means admin MODE, which since 2026-08-06 includes every TENANT_ADMIN — so a
+ * customer's own admin could read across all tenants. It is now the "staff" tier
+ * (isPlatformStaff / SUPER_ADMIN). A customer OR a tenant admin never learns this
+ * tool exists (`toolsForRole` filters it out).
  *
  * ⛔ It CANNOT WRITE, and not because the model was told not to: the api runs
  * every statement in a Postgres READ ONLY transaction, the PBX credential holds
@@ -49,7 +53,12 @@ export function buildInvestigationTools(deps: InvestigationToolDeps): ToolSpec[]
           "",
           "⛔ EVIDENCE RULE: a finding may only be reported as a finding if a query you actually ran returned it. If you did not read it here, say you did not check — never present a plausible guess in the same voice as a measurement.",
         ].join("\n"),
-      minRole: "internal",
+      // ⛔ STAFF, not "internal". This tool is deliberately NOT tenant-scoped
+      // (it runs raw SQL across the whole platform), so it must reach ONLY
+      // Connect staff (SUPER_ADMIN). "internal" now includes every TENANT_ADMIN
+      // (admin mode, 2026-08-06); exposing an un-scoped cross-platform read to a
+      // customer's own admin is a cross-tenant leak. See toolRegistry ToolRole.
+      minRole: "staff",
       parameters: {
         type: "object",
         properties: {

@@ -15,6 +15,7 @@ import type { ToolSpec, ToolRole } from "../tools/toolRegistry";
 import type { AuditLog } from "../audit/audit";
 import { killSwitchEngaged } from "../config";
 import { isMemoryAdd, renderLessonsBlock, type TrainerLessonService } from "../training/lessons";
+import { isPlatformStaff } from "../authRoles";
 
 export const AUTO_CLOSE_HOURS = 12;
 
@@ -98,6 +99,15 @@ export interface ChatContext {
   tenantId: string;
   clientUserId: string | null;
   role: Role;
+  /**
+   * RAW platform role from the verified JWT ("SUPER_ADMIN" | "TENANT_ADMIN" |
+   * "USER" …). ⛔ Kept beside `role` because the two answer different questions:
+   * `role` is admin MODE (TENANT_ADMIN counts as "owner"), `platformRole` decides
+   * whether this is Connect STAFF (only SUPER_ADMIN, via isPlatformStaff). The
+   * staff-only tool tier (`investigate`, un-tenant-scoped) is gated on this, not
+   * on `role`. Conflating them handed 9 tenant admins a cross-tenant DB read.
+   */
+  platformRole?: string;
   channel?: string;
   /**
    * The language this person reads their screens in (User.uiLanguage). When
@@ -194,15 +204,29 @@ export class ConversationEngine {
   /**
    * Map the conversation role to a tool role.
    *
-   * ⛔ Safe because `Role` is derived server-side from the DATABASE user record
-   * (channels/identity.ts: SUPER_ADMIN ⇒ "owner", everyone else ⇒ "customer") —
-   * it is never taken from the request body or from chat text. If that ever
-   * changes, this mapping becomes a privilege-escalation path.
+   * ⛔ `role` and `platformRole` answer DIFFERENT questions, and conflating them
+   * is a privilege-escalation path this codebase has already been bitten by.
+   * `role` is the agent's admin MODE and is "owner" for SUPER_ADMIN *and* every
+   * TENANT_ADMIN (2026-08-06). `platformRole` is the RAW JWT role; `isPlatformStaff`
+   * is true only for SUPER_ADMIN — Connect staff.
    *
-   * Either way the tenant is bound separately from the verified context, so an
-   * "owner" still only ever sees their own tenant's data.
+   *   Connect staff (SUPER_ADMIN) → "staff"    — everything, incl. the un-tenant-
+   *                                              scoped `investigate` (raw SQL,
+   *                                              all tenants).
+   *   admin mode (TENANT_ADMIN)   → "internal" — this tenant's internal tools
+   *                                              only (call_quality, prepare_*),
+   *                                              which ARE tenant-scoped.
+   *   everyone else               → "customer"
+   *
+   * The tenant is bound separately from the verified context, so "internal" and
+   * "customer" only ever see their own tenant's data; "staff" is the one tier
+   * that can reach across tenants, which is why it is SUPER_ADMIN only.
+   *
+   * Both `role` and `platformRole` are derived server-side from the verified JWT
+   * (auth.ts / mapUserRole), never from the request body or chat text.
    */
-  private toolRoleFor(role: Role): ToolRole {
+  private toolRoleFor(role: Role, platformRole?: string): ToolRole {
+    if (isPlatformStaff(platformRole)) return "staff";
     return role === "owner" ? "internal" : "customer";
   }
 
@@ -536,7 +560,7 @@ export class ConversationEngine {
               "support_chat",
               msgs,
               this.tools,
-              { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role), clientUserId: ctx.clientUserId },
+              { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role, ctx.platformRole), clientUserId: ctx.clientUserId },
               { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id },
             )
           : await this.llm.complete("support_chat", msgs, { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id });
