@@ -5689,9 +5689,13 @@ inside `app-portal-1`'s `.next`, and re-verified still present after the later
 ## ⛔ AGENT HANDOFF — adding a card goes through the standard Sola payment page now (2026-08-20) — READ FIRST before touching the customer Payment Methods page, before adding ANY card-entry form, or before mounting `.billing-pay-page` inside the console shell
 
 (`a3b47816` on `feat/ivr-migration-takeover`, portal-only — no api change, no
-migration, no PBX write. Izzy, 2026-08-20: customers adding a card got "a
-different add card page, not the one we use all over the platform" — the
-standard one is the page with "powered by Sola" on it.)
+migration, no PBX write. **portal DEPLOYED and container-verified 2026-08-20**:
+queue job `bb39dfe1`, container `.build-commit` = `7f985399` ⊇ `a3b47816`; the
+add-card page chunk ships the STRING "Add a payment card" and **0** payments
+chunks still carry `cdn.cardknox.com/ifields`; both hostnames 200. Izzy,
+2026-08-20: customers adding a card got "a different add card page, not the one
+we use all over the platform" — the standard one is the page with "powered by
+Sola" on it.)
 Memory: [[add-card-goes-through-the-standard-sola-page]].
 
 - ⛔ **THE RULE: there is ONE card-entry surface on this platform —
