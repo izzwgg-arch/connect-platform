@@ -92,6 +92,10 @@ export const navItems: NavItem[] = [
   // reach the live PlatformRolePermissionSnapshot row), which is a follow-up
   // with Izzy. Same precedent as the Install link reusing the contacts key.
   { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_overview" },
+  // Conference rooms — right before Install, per Izzy (2026-08-20). Visible to
+  // whoever holds can_view_conferences (TENANT_ADMIN by default): the nav key
+  // rides that action key's expansion in @connect/shared.
+  { id: "workspace.conference", href: "/conference", label: "Conference", icon: "CN", lucide: UsersRound, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_conference" },
   // Stable alias (server keeps it pointing at the newest installer) so this
   // link never goes stale when a new version is published.
   { id: "workspace.install", href: "/desktop/Connect-Setup-latest.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },

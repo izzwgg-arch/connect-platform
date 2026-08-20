@@ -18,7 +18,9 @@ import {
  */
 
 const CONFERENCE_ACTION_KEYS = ["can_view_conferences", "can_manage_conferences"] as const;
-const CONFERENCE_NAV_KEY = "can_view_pbx_conference";
+// In WORKSPACE, not PBX — Izzy's placement (2026-08-20): "add the Conference
+// option in workspace right before install".
+const CONFERENCE_NAV_KEY = "can_view_workspace_conference";
 
 test("both conference action keys exist and are real permission keys", () => {
   for (const k of CONFERENCE_ACTION_KEYS) {
@@ -32,9 +34,9 @@ test("the Conference nav item is registered so it appears in the regular-role ed
   // /admin/permissions renders SIDEBAR_SECTIONS × SIDEBAR_ITEMS, so a missing
   // entry here means the built-in roles have no toggle at all.
   const item = SIDEBAR_ITEMS.find((i) => i.permission === CONFERENCE_NAV_KEY);
-  assert.ok(item, "no SIDEBAR_ITEMS entry grants can_view_pbx_conference");
+  assert.ok(item, "no SIDEBAR_ITEMS entry grants can_view_workspace_conference");
   assert.equal(item!.href, "/conference");
-  assert.equal(item!.section, "pbx");
+  assert.equal(item!.section, "workspace");
 });
 
 test("TENANT_ADMIN gets the Conference page and management; END_USER gets neither by default", () => {
@@ -64,7 +66,7 @@ test("the nav key rides can_view_conferences, so the two switch on together", ()
   // reachable only by typed URL for the default buckets.
   const tenantAdmin = new Set(DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN as readonly string[]);
   assert.ok(tenantAdmin.has(CONFERENCE_NAV_KEY), "TENANT_ADMIN should see the Conference nav item");
-  assert.ok(tenantAdmin.has("can_view_section_pbx"), "the PBX section must open for TENANT_ADMIN");
+  assert.ok(tenantAdmin.has("can_view_section_workspace"), "the Workspace section must open for TENANT_ADMIN");
 });
 
 test("SUPER_ADMIN holds every conference key without a migration", () => {

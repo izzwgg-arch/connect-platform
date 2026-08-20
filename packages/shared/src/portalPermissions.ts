@@ -29,6 +29,11 @@ export const SIDEBAR_ITEMS = [
   { id: "workspace.voicemail", section: "workspace", label: "Voicemail", href: "/voicemail", permission: "can_view_workspace_voicemail" },
   { id: "workspace.chat", section: "workspace", label: "Chat", href: "/chat", permission: "can_view_workspace_chat" },
   { id: "workspace.contacts", section: "workspace", label: "Contacts", href: "/contacts", permission: "can_view_workspace_contacts" },
+  // Conference rooms — dial-in meeting bridges on the tenant's own phone
+  // system. In WORKSPACE (right before Install in the sidebar), per Izzy
+  // 2026-08-20. The page gates on can_view_conferences; managing rooms needs
+  // can_manage_conferences (see the action keys below).
+  { id: "workspace.conference", section: "workspace", label: "Conference", href: "/conference", permission: "can_view_workspace_conference" },
 
   { id: "pbx.extensions", section: "pbx", label: "Extensions", href: "/pbx/extensions", permission: "can_view_pbx_extensions" },
   { id: "pbx.time_conditions", section: "pbx", label: "Time Conditions", href: "/pbx/time-conditions", permission: "can_view_pbx_time_conditions" },
@@ -48,10 +53,6 @@ export const SIDEBAR_ITEMS = [
   // display is reached from the page rather than the sidebar, since it is
   // meant for a TV and not for the person browsing the app.
   { id: "pbx.queues", section: "pbx", label: "Queues", href: "/queues", permission: "can_view_pbx_queues" },
-  // Conference rooms — dial-in meeting bridges on the tenant's own phone
-  // system. One nav entry; the page itself gates on can_view_conferences and
-  // managing rooms needs can_manage_conferences (see the action keys below).
-  { id: "pbx.conference", section: "pbx", label: "Conference", href: "/conference", permission: "can_view_pbx_conference" },
 
   { id: "crm.dashboard", section: "crm", label: "CRM Dashboard", href: "/crm/dashboard", permission: "can_view_crm_dashboard" },
   { id: "crm.contacts", section: "crm", label: "Contacts", href: "/crm/contacts", permission: "can_view_crm_contacts" },
@@ -350,7 +351,7 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   can_view_ivr_routing: [...PBX_SECTION, "can_view_pbx_ivr_routing"],
   // The Conference nav item switches on with the page's own view key, so nav
   // visibility and page access can never disagree (the queues lesson above).
-  can_view_conferences: [...PBX_SECTION, "can_view_pbx_conference"],
+  can_view_conferences: [...WORKSPACE_SECTION, "can_view_workspace_conference"],
   can_view_moh: [...PBX_SECTION, "can_view_pbx_moh_scheduling"],
   can_view_did_routing: [...PBX_SECTION, "can_view_pbx_did_routing"],
   // Delivery/order tracking — expands the umbrella capability to the section + all pages.

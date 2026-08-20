@@ -38570,3 +38570,85 @@ table tr:hover {
 /* Wide tables must scroll inside themselves — the page body never scrolls
    sideways. */
 .rs-history, .lp-page .card { overflow-x: auto; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Conference — room cards (.cf-*), the Workspace "Conference" page.
+   ⛔ Deliberately built ON the queue primitives (.qb-page/.qb-card/.qb-btn/
+   .qb-modal/.qb-notice and the --qb-ink-* status tokens): Izzy approved the
+   room-cards mockup as "the Queues look applied to rooms", so the two screens
+   share one visual system on purpose. Only room-specific pieces live here.
+   ⛔ Every colour aliases an app theme token or a --qb-ink-* token — no
+   section palette and NO prefers-color-scheme (the billing lesson).
+   ══════════════════════════════════════════════════════════════════════════ */
+.cf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.cf-card { display: flex; flex-direction: column; gap: 10px; }
+.cf-dial {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  margin-top: 4px;
+}
+.cf-dial-hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  margin-left: 6px;
+}
+.cf-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.cf-live-on { color: var(--qb-ink-ok); background: rgba(52, 194, 123, 0.14); }
+.cf-live-on::before { content: "●"; font-size: 9px; }
+.cf-live-idle { color: var(--text-dim); background: rgba(141, 162, 184, 0.12); }
+.cf-pins {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.cf-pins b { color: var(--text); font-weight: 600; letter-spacing: 0.06em; }
+.cf-eye {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--qb-ink-info);
+  cursor: pointer;
+}
+.cf-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.cf-chips { display: flex; flex-wrap: wrap; gap: 5px; list-style: none; margin: 0; padding: 0; }
+.cf-chip {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.cf-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.cf-btn-danger { color: var(--qb-ink-crit); border-color: var(--qb-ink-crit); }
+.cf-empty { text-align: center; padding: 40px 16px; }
+.cf-empty-t { font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.cf-empty .qb-btn { margin-top: 12px; }
+.cf-input-narrow { max-width: 120px; }
