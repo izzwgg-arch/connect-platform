@@ -101,6 +101,35 @@ Direct" is a working name.)
   until they verify — plus a per-company off switch). ⛔ Until he picks, nothing
   is authorized to build.
 
+## ⛔ AGENT HANDOFF — the role snapshot goes STALE by design, and a forward-merge now fixes it: BUILT, TESTED, ⏳ AWAITING IZZY'S SIGN-OFF (2026-08-20) — READ FIRST before adding ANY new default permission key, before touching `platformRolePermissions.ts`, or before assuming tenant admins have a key because `DEFAULT_ROLE_PERMISSIONS` grants it
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ROLE_SNAPSHOT_FORWARD_MERGE_2026-08-20.md`**
+(branch `claude/snapshot-forward-merge`, built on the `feat/ivr-migration-takeover` tip).
+
+- ⛔ The live `PlatformRolePermissionSnapshot` row was last SAVED 2026-07-06 and
+  is read LITERALLY for bucket roles — so every default key born since (Queues
+  2026-08-16, Conferences 2026-08-20, all of Tracking, `can_use_yiddish`) never
+  reached a real tenant admin. Shipping a feature's keys in
+  `DEFAULT_ROLE_PERMISSIONS` does NOT deliver them; only SUPER_ADMIN gets keys
+  automatically (force-add).
+- The fix (`apps/api/src/platformRolePermissions.ts`, tests
+  `platformRolePermissions.forwardMerge.test.ts`, 11/11): POST now stores
+  `knownKeys` (the key inventory at save time; older rows infer it from their
+  stored SUPER_ADMIN list, which POST has always force-written as the full
+  inventory of its day). On read, a default key OUTSIDE the inventory is
+  forward-merged (it post-dates the save, so it can't have been removed); a key
+  INSIDE it but absent stays removed. Sidebar-item keys also need their section
+  key granted — the July-06 save deliberately turned the PBX/Apps/Settings/Admin
+  sections OFF for TENANT_ADMIN, and that choice stands.
+- Dry-run vs the real row: END_USER +1 (`can_use_yiddish`), TENANT_ADMIN +23
+  (queues/conference/tracking/yiddish; the PBX nav keys correctly withheld),
+  nothing lost anywhere.
+- ⏳ NOT deployed. ⛔ Do not deploy or touch the live row without Izzy's live
+  in-chat go — it changes live permissions on restart. Also for Izzy to decide:
+  whether to re-open the PBX section (and tick Queues/Conference) for tenant
+  admins in Admin → Permissions; and the 4 custom-role tenant admins need their
+  roles edited separately (custom roles are authoritative).
+
 ## ⛔ AGENT HANDOFF — the Technical Support Console: MOCKUPS ONLY, awaiting Izzy's pick (2026-08-20) — READ FIRST before building any support/staff screen, an escalations list, a cross-tenant chat inbox, or assistant human-takeover
 
 Full handoff + the verified infrastructure inventory:
@@ -306,46 +335,62 @@ and make sure the email stays in one thread … one thread per phone number."*
   reply must arrive back as a text + an OUTBOUND bubble in the app. Greppable:
   `sms.emailed` / `sms.reply_sent` in the agent audit.
 
-## ⛔⛔ AGENT HANDOFF — CONFERENCE ROOMS: the backend is BUILT (reads from ombu_conferences, writes by panel replay); the page awaits Izzy's mockup pick (2026-08-20) — READ FIRST before touching /voice/conferences, before building the /conference page, or before creating the platform's FIRST conference room
+## ⛔⛔ AGENT HANDOFF — CONFERENCE ROOMS are LIVE end to end: backend + the Option-A page in Workspace, DEPLOYED and container-verified — but NO room has ever been created on the PBX (2026-08-20) — READ FIRST before touching /voice/conferences or /conference, or before creating the platform's FIRST conference room
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONFERENCE_ROOMS_2026-08-20.md`**
-(`c80a585b`, merge `4f886830` on `feat/ivr-migration-takeover`; api deploy = queue
-job `b78bc0eb`, see §8 of the handoff for the verified state. No migration, no PBX
-write, no tenant row touched — the panel form was captured READ-ONLY.)
-Izzy, 2026-08-20: *"a full-on voip conference module … a new page called
-Conference"* — and mid-build: *"If you are doing any UIs, I want to see
-[mockups] first."* Mockups: <https://claude.ai/code/artifact/203ce03b-3147-4036-9cd5-4ef919edb4d3>.
+(`c80a585b` backend + `a863ca3b` page on `feat/ivr-migration-takeover`.
+**api DEPLOYED `d3e4f911` + portal DEPLOYED `7f985399`, both container-verified**
+— page chunk + `.cf-` styles grep in the shipped `.next` (by STRING, never a
+function name), the re-homed permission catalog greps in `app-api-1`, live probe
+`GET /voice/conferences` → 200 `ombutel_mysql` / no token → 401. No migration,
+no PBX write, no tenant row touched — the panel form was captured READ-ONLY.)
+Izzy, 2026-08-20: *"a full-on voip conference module"*; picked **mockup A (room
+cards)**; placement: *"add the Conference option in workspace right before
+install. And the sidebar."*
 
 - ✅ **VitalPBX already carries conferencing** — Conferences module (module_id 8),
-  `ombu_conferences`, per-tenant ConfBridge profile/menu confs already rendered,
-  recording + DTMF menus (mute/lock/kick) in the baseplan. **Zero rooms existed
-  platform-wide** — nothing rendered, no captured panel contract.
+  `ombu_conferences`, per-tenant ConfBridge confs already rendered, recording +
+  in-call DTMF menus (mute/lock/kick) in the baseplan. **Zero rooms existed
+  platform-wide** — no rendered example, no captured panel contract.
 - ⛔⛔ **THE BUILDER HARDCODES NO FIELD LIST.** `pbx/conferenceBuilder.ts` loads
-  the panel's own rendered add/edit form and re-posts it with overrides (the
-  pbxConsole discipline), so THE CHECKBOX RULE holds automatically — and the
-  live capture proved **all 8 yes/no options are CHECKBOXES, tick value "1"**.
-  An option the form doesn't offer lands in `skippedFields`, never a blind post.
+  the panel's own rendered form and re-posts it with overrides (the pbxConsole
+  discipline), so THE CHECKBOX RULE holds automatically — the live capture
+  proved **all 8 yes/no options are CHECKBOXES, tick value "1"**. An option the
+  form doesn't offer lands in `skippedFields`, never a blind post.
 - **`/voice/conferences` GET/POST/PATCH/DELETE** (`pbx/conferenceRoutes.ts`):
-  own keys `can_view_conferences` / `can_manage_conferences` (TENANT_ADMIN
-  default on, END_USER off); row ids resolved server-side from the number;
-  every write **verified by re-reading ombu_conferences**; host PIN masked for
-  non-managers; refuses on unresolved tenant path (stricter than teamRoutes on
-  purpose). Numbers get the **700-series** (`nextConferenceNumber` — existing
-  rooms are a separate mandatory input, invisible to `UsedNumbers`).
+  own keys `can_view_conferences` / `can_manage_conferences`; row ids resolved
+  server-side; every write **verified by re-reading ombu_conferences**; host PIN
+  masked for non-managers; refuses on unresolved tenant path. **700-series**
+  numbering (`nextConferenceNumber` — existing rooms are a separate mandatory
+  input, invisible to `UsedNumbers`).
 - ⛔ **Apply: only a SUPER_ADMIN's explicit `applyNow`, only via
-  `applyAndRebake`** (whole-PBX apply must re-bake doorways). Everyone else gets
-  the honest "goes live at the next apply" message, like teams.
+  `applyAndRebake`.** Everyone else gets the honest "goes live at the next
+  apply" message, like teams.
+- ✅ **The page (`/conference`, Option A room cards)**: self-gates on the view
+  key; manage buttons follow the SERVER's `mayManage`; Join = the `crm:dial`
+  bus; "N on the call" is an APPROXIMATION off the existing live-calls feed
+  (never a second live source); `.cf-*` styles deliberately extend the queue
+  primitives. **Sidebar: `workspace.conference`, immediately before Install**
+  (a guard test pins the position). ⛔ The nav key was renamed
+  `can_view_pbx_conference` → `can_view_workspace_conference` the same day —
+  safe only because nothing had granted the hours-old key.
+- ⛔⛔ **FOUND IN PASSING (chip filed): the live `PlatformRolePermissionSnapshot`
+  (v2, read literally) never received `can_view_queues` either** — new action
+  keys do NOT reach TENANT_ADMIN without a snapshot refresh, so real tenant
+  admins have likely never seen Queues, and Conference inherits the gap.
+  SUPER_ADMIN is unaffected (force-add). Do not "fix" by editing the live row
+  without a forward-merge design + Izzy.
 - ⛔ **`apps/api` now runs `"src/pbx/*.test.ts"`** — the glob was missing, so
   `teamBuilder.queue.test.ts` + `applyRegenRebake.test.ts` had NEVER run (both
-  pass). 26 new tests; shared 374/374; api failures unchanged from baseline.
-- ⏳ **NOT DONE: the portal page** (blocked on the mockup pick — A/B/C), live
-  participant list / mute / kick from the page (needs telephony ConfBridge AMI,
-  phase 2), routing a DID or IVR key into a room, and ⛔ **no conference room
-  has EVER been created on this PBX** — the acceptance run (create with apply on
-  Loopcom Demo, dial in from two phones, delete, byte-back) needs Izzy live.
-- ⚠ A parallel session is building **video meetings** (LiveKit,
-  `apps/api/src/meetings/`, its own migration) in the same tree — a DIFFERENT
-  feature; do not merge the two by "simplification".
+  pass). 33 new tests across api/shared/portal; suites at their baselines.
+- ⏳ **NOT PROVEN: no conference room has EVER been created on this PBX, and
+  nobody has opened `/conference` in a browser.** Acceptance needs Izzy live
+  (the first `applyNow` create fires a real whole-PBX Apply): create on Loopcom
+  Demo → dial in from two phones → two-way audio → delete → byte-back. ⏳ Live
+  mute/kick from the page = phase 2 (telephony ConfBridge AMI); routing a DID
+  or IVR key INTO a room is not wired. ⚠ The same-day **video meetings**
+  feature (LiveKit, `/meetings`) is a DIFFERENT parallel build — never merge
+  the two by "simplification".
 
 ## ⛔⛔ AGENT HANDOFF — the AI agent treated every TENANT_ADMIN as Connect staff; fortification pass FIXED it and stress-tested the platform (2026-08-19) — READ FIRST before using the agent's `role === "owner"` to authorize anything platform-wide, before adding an `/agent-api/*` admin route, or before touching the tool tiers
 

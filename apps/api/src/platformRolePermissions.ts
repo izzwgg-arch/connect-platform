@@ -5,6 +5,8 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
   PORTAL_PERMISSION_KEYS,
   PROTECTED_PLATFORM_ADMIN_PERMISSIONS,
+  SIDEBAR_ITEMS,
+  SIDEBAR_SECTIONS,
   expandLegacyPortalPermissions,
   isPortalPermissionKey,
   type PortalPermissionKey,
@@ -48,29 +50,100 @@ function normalizePermissionList(input: unknown): PortalPermissionKey[] {
     .filter(isPortalPermissionKey);
 }
 
-function rolesPayload(raw: unknown): { version: number; roles: SnapshotRoles } {
-  if (!raw || typeof raw !== "object") return { version: 1, roles: {} };
-  const obj = raw as SnapshotPayload & { version?: unknown; roles?: unknown };
+function rolesPayload(raw: unknown): { version: number; roles: SnapshotRoles; knownKeys: string[] | null } {
+  if (!raw || typeof raw !== "object") return { version: 1, roles: {}, knownKeys: null };
+  const obj = raw as SnapshotPayload & { version?: unknown; roles?: unknown; knownKeys?: unknown };
   const version = typeof (obj as { version?: unknown }).version === "number"
     ? Number((obj as { version: number }).version)
     : 1;
   const roles = version >= SNAPSHOT_VERSION && obj.roles && typeof obj.roles === "object"
     ? obj.roles
     : (obj as SnapshotRoles);
-  return { version, roles: roles || {} };
+  const knownKeys = Array.isArray(obj.knownKeys)
+    ? obj.knownKeys.map((x) => String(x).trim()).filter(Boolean)
+    : null;
+  return { version, roles: roles || {}, knownKeys };
 }
 
-function normalizeStoredRoleList(rawRoles: SnapshotRoles, version: number, bucket: PortalRoleBucket): PortalPermissionKey[] {
+/**
+ * The set of permission keys that EXISTED the last time the snapshot was saved.
+ *
+ * Newer snapshots carry it explicitly as `knownKeys` (written by POST below).
+ * Older v2 snapshots don't — but POST has always force-stored SUPER_ADMIN as
+ * the complete key inventory of its day (see normalizeRolePermissionSet), so a
+ * legacy row's stored SUPER_ADMIN list doubles as its write-time inventory.
+ * Returns null when no inventory can be derived; callers must then treat the
+ * stored lists literally (no forward-merge), because "new since the save" and
+ * "removed by the admin" can no longer be told apart.
+ */
+function writeTimeKeyInventory(rawRoles: SnapshotRoles, knownKeys: string[] | null): Set<string> | null {
+  if (knownKeys && knownKeys.length > 0) return new Set(knownKeys);
+  const superList = Array.isArray(rawRoles.SUPER_ADMIN)
+    ? (rawRoles.SUPER_ADMIN as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+    : [];
+  return superList.length > 0 ? new Set(superList) : null;
+}
+
+const SECTION_PERMISSION_KEYS = new Set<string>(SIDEBAR_SECTIONS.map((s) => s.permission));
+const SECTION_PERMISSION_BY_ID = new Map<string, string>(SIDEBAR_SECTIONS.map((s) => [s.id, s.permission]));
+const ITEM_SECTION_PERMISSION = new Map<string, string>(
+  SIDEBAR_ITEMS.map((i) => [i.permission as string, SECTION_PERMISSION_BY_ID.get(i.section) || ""]),
+);
+
+/**
+ * Forward-merge: grant a bucket the DEFAULT keys that did not yet exist when
+ * the snapshot was last saved. The snapshot is otherwise read literally, so a
+ * feature shipped after the last save (Queues 2026-08-16, Conferences
+ * 2026-08-20, ...) would never reach real tenant admins until a super admin
+ * happened to re-save the permissions page. The inventory tells us which keys
+ * the editor has actually SEEN: a default key outside it cannot have been
+ * deliberately removed, so it is safe to add; a default key inside it but
+ * absent from the bucket's list WAS deliberately removed and stays removed.
+ *
+ * Sidebar-item keys additionally require their section key to be effectively
+ * granted — the same discipline as the can_view_admin_* back-merge below: if
+ * the admin switched a whole section off, a new page inside that section must
+ * not become reachable behind their back. New section keys merge first so a
+ * genuinely new section (e.g. Tracking) brings its own pages with it.
+ */
+function forwardMergeNewDefaultKeys(
+  set: Set<PortalPermissionKey>,
+  bucket: PortalRoleBucket,
+  inventory: Set<string> | null,
+): void {
+  if (!inventory || bucket === "SUPER_ADMIN") return;
+  const candidates = DEFAULT_ROLE_PERMISSIONS[bucket].filter(
+    (key) => !set.has(key) && !inventory.has(key as string),
+  );
+  for (const key of candidates) {
+    if (SECTION_PERMISSION_KEYS.has(key as string)) set.add(key);
+  }
+  for (const key of candidates) {
+    if (SECTION_PERMISSION_KEYS.has(key as string)) continue;
+    const sectionKey = ITEM_SECTION_PERMISSION.get(key as string);
+    if (sectionKey && !set.has(sectionKey as PortalPermissionKey)) continue;
+    set.add(key);
+  }
+}
+
+function normalizeStoredRoleList(
+  rawRoles: SnapshotRoles,
+  version: number,
+  bucket: PortalRoleBucket,
+  knownKeys: string[] | null = null,
+): PortalPermissionKey[] {
   if (Object.prototype.hasOwnProperty.call(rawRoles, bucket)) {
     const normalized = normalizePermissionList(rawRoles[bucket]);
     const base = version >= SNAPSHOT_VERSION ? normalized : expandLegacyPortalPermissions(normalized);
-    // For TENANT_ADMIN v2+ snapshots: merge any missing can_view_admin_* page keys from
-    // the current DEFAULT whose section gatekeeper is already granted. These keys are
-    // absent because they were added to the can_view_admin expansion AFTER the snapshot
-    // was last written — the admin could not have intentionally removed them.
-    if (version >= SNAPSHOT_VERSION && bucket === "TENANT_ADMIN") {
+    if (version >= SNAPSHOT_VERSION && bucket !== "SUPER_ADMIN") {
       const set = new Set(base);
-      if (set.has("can_view_section_admin" as PortalPermissionKey)) {
+      // Keys born after the snapshot's last save: grant them their default.
+      forwardMergeNewDefaultKeys(set, bucket, writeTimeKeyInventory(rawRoles, knownKeys));
+      // For TENANT_ADMIN: merge any missing can_view_admin_* page keys from
+      // the current DEFAULT whose section gatekeeper is already granted. These keys are
+      // absent because they were added to the can_view_admin expansion AFTER the snapshot
+      // was last written — the admin could not have intentionally removed them.
+      if (bucket === "TENANT_ADMIN" && set.has("can_view_section_admin" as PortalPermissionKey)) {
         for (const key of DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN) {
           if (!set.has(key) && (key as string).startsWith("can_view_admin_")) {
             set.add(key);
@@ -101,7 +174,7 @@ function normalizeRolePermissionSet(input: unknown, bucket: PortalRoleBucket): P
  * this, so it is memoized behind a short TTL — see permissionCache.ts. Writers
  * (POST /admin/role-permissions) must invalidate.
  */
-async function loadSnapshotRoles(): Promise<{ version: number; roles: SnapshotRoles } | null> {
+async function loadSnapshotRoles(): Promise<{ version: number; roles: SnapshotRoles; knownKeys: string[] | null } | null> {
   return withCachedRoleSnapshot(async () => {
     const row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
     if (!row || row.roles == null) return null;
@@ -112,7 +185,7 @@ async function loadSnapshotRoles(): Promise<{ version: number; roles: SnapshotRo
 export async function getEffectivePortalPermissionListForBucket(bucket: PortalRoleBucket): Promise<PortalPermissionKey[]> {
   const snapshot = await loadSnapshotRoles().catch(() => null);
   if (!snapshot) return [...DEFAULT_ROLE_PERMISSIONS[bucket]];
-  return normalizeStoredRoleList(snapshot.roles, snapshot.version, bucket);
+  return normalizeStoredRoleList(snapshot.roles, snapshot.version, bucket, snapshot.knownKeys);
 }
 
 export async function getEffectivePortalPermissionSetForJwtRole(
@@ -194,7 +267,7 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
       const permissions: Partial<Record<PortalRoleBucket, PortalPermissionKey[]>> = {};
       for (const key of PORTAL_ROLE_BUCKETS) {
         permissions[key] = snapshot
-          ? normalizeStoredRoleList(snapshot.roles, snapshot.version, key)
+          ? normalizeStoredRoleList(snapshot.roles, snapshot.version, key, snapshot.knownKeys)
           : [...DEFAULT_ROLE_PERMISSIONS[key]];
       }
       return { permissions, version: SNAPSHOT_VERSION, keys: PORTAL_PERMISSION_KEYS };
@@ -239,10 +312,14 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
     }
 
     try {
+      // knownKeys records which permission keys EXIST at save time. The reader's
+      // forward-merge uses it to tell "added after this save" (grant the
+      // default) from "deliberately removed by the admin" (stay removed).
+      const payload = { version: SNAPSHOT_VERSION, roles: normalized, knownKeys: [...PORTAL_PERMISSION_KEYS] };
       await db.platformRolePermissionSnapshot.upsert({
         where: { id: SNAPSHOT_ID },
-        create: { id: SNAPSHOT_ID, roles: { version: SNAPSHOT_VERSION, roles: normalized } },
-        update: { roles: { version: SNAPSHOT_VERSION, roles: normalized } },
+        create: { id: SNAPSHOT_ID, roles: payload },
+        update: { roles: payload },
       });
       // Global snapshot — this changes the answer for every user on the platform.
       invalidateAllPortalPermissions();
