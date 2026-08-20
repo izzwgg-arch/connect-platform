@@ -158,7 +158,15 @@ health/SIP unregressed; the WHOLE token chain proven live** — a real meeting w
 created through the real route, a guest joined through the public route, and
 LiveKit answered **200 on `/rtc/validate`** for the api-minted token on both
 hostnames; end → rejoin correctly answered **410 meeting_ended**. Probe row
-deleted. Portal deploy state: see the session log / deploy queue.)
+deleted. **portal DEPLOYED and bundle-verified** (`7f985399`, page chunks
+string-grepped in the shipped `.next`, `/meet` 200 on both hostnames) — and
+**walked in a real browser**: guest-joined over wss through nginx, chat
+delivered on the data channel, Leave rendered "You left the meeting.", zero
+console errors. ⛔ **One live finding, FIXED same day (`2fb24c0d`, container
+`0ec27813`): RoomService.DeleteRoom answers 401 to a roomAdmin-only token —
+the api's admin token needs `roomCreate` too, or End meeting never ejects the
+room.** Proven fixed (a fresh /end reads 404 not-found = authz passing);
+participant tokens still carry neither grant, asserted.)
 Izzy, 2026-08-20: *"somebody sends a link to somebody, they open the link, and
 they're in a meeting … sharing screens, picking up hands, chat, everything Zoom
 has"*, then *"let's do free open source"*, then, on the mockups

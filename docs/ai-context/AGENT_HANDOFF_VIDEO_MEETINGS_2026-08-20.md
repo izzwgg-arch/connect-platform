@@ -125,12 +125,36 @@ stored, meeting chat dies with the meeting, deliberately.
 
 ## §5 Deploy / verify state
 
-See the CLAUDE.md section for the live ledger (it moves; this file records the
-design). At handoff: LiveKit container **UP and verified through nginx on both
-hostnames** (`/meetws/` 200, `/meetws/rtc/validate?access_token=bogus` → 401 =
-LiveKit's own refusal through the whole path; SIP 101 and health 200 on both —
-no regression). api + portal deploys queued behind another session's running
-deploy.
+Final state, all container-verified 2026-08-20:
+
+- **LiveKit `app-livekit-1` UP** and reachable through nginx on both hostnames
+  (`/meetws/` 200; bogus token → LiveKit's own 401 through the whole path; SIP
+  101 and health 200 on both — no regression).
+- **api DEPLOYED** — first at `b688b175` (migration applied, read back from the
+  live DB), then at **`0ec27813`** carrying the roomCreate fix (§5a). The whole
+  token chain proven live: real create → guest join → **LiveKit answered 200 on
+  `/rtc/validate` for the api-minted token on both hostnames** → end → rejoin
+  **410 meeting_ended**. Probe rows deleted.
+- **portal DEPLOYED and bundle-verified** (`7f985399` ⊇ the feature; both page
+  chunks found by STRING grep in the shipped `.next`; `/meet/...` 200 on both
+  hostnames) — and **walked in a real browser**: opened
+  `app.loopcom.net/meet/<code>`, lobby rendered with the real meeting title,
+  guest-joined over wss through nginx, in-room screen rendered with running
+  timer + full control bar, a chat message delivered over the data channel,
+  Leave → "You left the meeting." — **zero console errors** (no CSP violation,
+  no ws failure).
+
+## §5a The one live finding, fixed same day (`2fb24c0d`)
+
+**RoomService.DeleteRoom answers `401 permissions denied` to a token carrying
+only `roomAdmin`** — seen in the live LiveKit log on the first real `/end`.
+roomAdmin covers in-room moderation (mute/remove/metadata); **DeleteRoom needs
+the `roomCreate` grant**. Without it, "End meeting" still worked at the DB
+level (rejoin 410) but never ejected people already in the room. The api's
+admin token now carries `roomAdmin + roomCreate`; participant tokens carry
+NEITHER (asserted in tests). Proven fixed live: a fresh `/end` produced
+`404 requested room does not exist` (nobody had connected, so no room to
+delete) — authorization passing, where the broken build said 401.
 
 ## §6 Known limits / decisions still open (Izzy's)
 
