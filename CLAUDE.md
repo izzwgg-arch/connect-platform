@@ -88,8 +88,24 @@ escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbenc
   runs maintenance right off the server** (Izzy, in-chat) — the "C+" full-size IDE mockup
   is in the artifact, and its guardrails ARE the contract: plan shown before running,
   deletes/restarts/deploys pause for a human click, code ships only via the deploy queue,
-  everything audited, **PBX read-only from this screen**. ⏳ Sub-question open: raw
-  human terminal too, or agent-mediated only (recommended).
+  everything audited, **PBX read-only from this screen**. **ALSO ANSWERED same day:
+  the terminal is the FULL SSH SANDBOX wired in** — a real root SSH session on loopcom
+  shared live by the support person and the agent, every session recorded. ⛔ No
+  product-side terminal exists today (the "existing sandbox" is the AI-session access:
+  keys + canonical method) — wiring it is a real build (portal terminal + PTY bridge +
+  staff gate + recording). ⛔ The PBX key stays OUT of it — read-only house rule.
+- ✅ **MORE CALLS, later 2026-08-20 (all in the handoff §3, all mockups-only):**
+  interaction = **plain English only, agent codes VISIBLY "like a movie"** (the artifact
+  now carries a looping animation of it — build implication: agent work streams as
+  events, never finished results); **every console feature gets its own permission key,
+  set per support agent** via the existing custom-roles machinery (`can_use_ssh_terminal`
+  defaults OFF for everyone; approve-fixes always also wants the password); a **Ground
+  Rules rulebook** (allowed / never / ask-first, Izzy-written, versioned — enforced by
+  HARD GATES as well as prompt text, never prose alone); a **Watchman** (re-reads MD rule
+  files before every job, watches server health + the PBX read-only, stops and reports
+  on anything off). **Engine recommendation given: the Claude Agent SDK** — the Claude
+  Code engine embedded in Connect, streaming edits/commands into our screens; ⛔ no
+  drop-in Anthropic IDE widget exists, the screens are ours; ⏳ awaiting Izzy's "use it".
 - ✅ **The inventory is done — don't re-derive it.** Escalation reports are FULLY STORED
   (`AgentEscalation.report`, already ISSUE/FINDINGS/PROPOSED FIX/APPROVAL) with **zero
   read routes and zero screens** — the biggest quick win. Fix machinery, task runners
