@@ -608,3 +608,89 @@ export async function editOutboundRoute(s: PanelSession, mainPath: string, route
   }
   assertSaved("route-save", await s.post(pairs));
 }
+
+/* ── ring groups & queues (2026-08-20) ─────────────────────────────────────
+   Izzy: "a copy of how we set it up in the PBX: every option… completely
+   wired." Creates reuse teamBuilder's captured-from-the-browser replay (ONE
+   implementation); these two edits are the console pattern — load the panel's
+   own edit form and re-post it with overrides, so EVERY option the form
+   carries rides along whether or not the console names it. ⛔ The queue
+   checkbox rule from the live create applies here too: autofill/autopause/
+   answerchannel are CHECKBOXES (present = ticked, whatever the value), while
+   joinempty/leavewhenempty are selects carrying literal yes/no — the caller
+   expresses checkboxes through `checks` and selects through `set`, and
+   applyOverrides enforces the omit-to-untick rule. */
+
+export type TeamEditInput = {
+  set?: Record<string, string>;
+  checks?: Record<string, boolean>;
+  /** Ring group: full ordered member list (ombu extension ids). Replaces list[]. */
+  rgMembers?: Array<number | string>;
+  /** Queue: full member list. Replaces the queue_members rows. */
+  queueMembers?: Array<{ extensionId: number | string; penalty?: number | null }>;
+};
+
+export async function editRingGroup(s: PanelSession, tenantPath: string, ringGroupId: number | string, input: TeamEditInput): Promise<void> {
+  s.setTenant(tenantPath);
+  const { form } = await loadParsedForm(s, "ring_group", "edit", ringGroupId);
+  if (String(form.values["ring_group_id"] || "") !== String(ringGroupId)) {
+    throw new PanelStepError("ring-group-load", `the phone system did not return the edit form for ring group #${ringGroupId}`);
+  }
+  if (input.rgMembers && input.rgMembers.length === 0) {
+    throw new PanelStepError("ring-group-save", "a ring group needs at least one member — refusing to save an empty list");
+  }
+  let pairs = applyOverrides(form, { set: input.set, checks: input.checks });
+  if (input.rgMembers) {
+    // ORDER MATTERS: the posted order IS the ring order for one_by_one.
+    pairs = pairs.filter(([k]) => k !== "list[]");
+    for (const id of input.rgMembers) pairs.push(["list[]", String(id)]);
+  }
+  for (const [k, v] of [["class", "ring_group"], ["method", "put"], ["mode", "edit"]] as Array<[string, string]>) {
+    const i = pairs.findIndex(([n]) => n === k); if (i >= 0) pairs[i] = [k, v]; else pairs.push([k, v]);
+  }
+  assertSaved("ring-group-save", await s.post(pairs));
+}
+
+export async function editQueue(s: PanelSession, tenantPath: string, queueId: number | string, input: TeamEditInput): Promise<void> {
+  s.setTenant(tenantPath);
+  const { form } = await loadParsedForm(s, "queues", "edit", queueId);
+  if (String(form.values["queue_id"] || "") !== String(queueId)) {
+    throw new PanelStepError("queue-load", `the phone system did not return the edit form for queue #${queueId}`);
+  }
+  if (input.queueMembers && input.queueMembers.length === 0) {
+    throw new PanelStepError("queue-save", "a queue needs at least one agent — refusing to save an empty list");
+  }
+  let pairs = applyOverrides(form, { set: input.set, checks: input.checks });
+  if (input.queueMembers) {
+    // Preserve each existing row's member_id when the same extension stays —
+    // the panel reads member_id "" as "new row", and re-inserting every member
+    // on every save would churn queue_member_id for agents that never moved.
+    const existing = new Map<string, string>();
+    for (let i = 0; ; i++) {
+      const ext = pairs.find(([k]) => k === `queue_members_${i}_extension_id`)?.[1];
+      if (ext == null) break;
+      const mid = pairs.find(([k]) => k === `queue_members[${i}][member_id]`)?.[1] || "";
+      if (ext) existing.set(String(ext), mid);
+    }
+    pairs = pairs.filter(([k]) => !/^queue_members\[/.test(k) && !/^queue_members_/.test(k));
+    // The browser sends a placeholder row alongside the real ones; the form
+    // expects it. The extension_id key uses UNDERSCORES while its siblings use
+    // brackets — the same real asymmetry the create replays.
+    const ph = "{{row-count-placeholder}}";
+    const first = input.queueMembers[0];
+    pairs.push([`queue_members[${ph}][member_id]`, ""]);
+    pairs.push([`queue_members_${ph}_extension_id`, String(first.extensionId)]);
+    pairs.push([`queue_members[${ph}][penalty]`, ""]);
+    pairs.push([`queue_members[${ph}][type]`, "dynamic"]);
+    input.queueMembers.forEach((m, i) => {
+      pairs.push([`queue_members[${i}][member_id]`, existing.get(String(m.extensionId)) || ""]);
+      pairs.push([`queue_members_${i}_extension_id`, String(m.extensionId)]);
+      pairs.push([`queue_members[${i}][penalty]`, m.penalty == null ? "" : String(m.penalty)]);
+      pairs.push([`queue_members[${i}][type]`, "static"]);
+    });
+  }
+  for (const [k, v] of [["class", "queues"], ["method", "put"], ["mode", "edit"]] as Array<[string, string]>) {
+    const i = pairs.findIndex(([n]) => n === k); if (i >= 0) pairs[i] = [k, v]; else pairs.push([k, v]);
+  }
+  assertSaved("queue-save", await s.post(pairs));
+}
