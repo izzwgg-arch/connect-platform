@@ -21,6 +21,7 @@ import { apiGet, apiPost } from "../../../../services/apiClient";
 import { parseEscalationReport, fixStatusLabel } from "../../../../lib/escalationReport";
 import SupportInbox from "./SupportInbox";
 import SupportConversations from "./SupportConversations";
+import SupportRules from "./SupportRules";
 import "./supportDesk.css";
 
 type EscalationRow = {
@@ -103,7 +104,7 @@ function errorText(e: unknown): string {
 }
 
 function SupportDesk() {
-  const [view, setView] = useState<"escalations" | "inbox" | "assistant">("escalations");
+  const [view, setView] = useState<"escalations" | "inbox" | "assistant" | "rules">("escalations");
   const [rows, setRows] = useState<EscalationRow[]>([]);
   const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [listError, setListError] = useState("");
@@ -241,13 +242,16 @@ function SupportDesk() {
               ? "Every company's text conversations in one place. Replies go out from the company's own number."
               : view === "assistant"
                 ? "Watch the assistant work — and take over when a person should talk."
-                : "Everything the assistant passed to the team — with its full report, and the fix one approval away."}
+                : view === "rules"
+                  ? "What the agent may do, may never do, and must ask you about first."
+                  : "Everything the assistant passed to the team — with its full report, and the fix one approval away."}
           </p>
         </div>
         <div className="sd-view-tabs" role="tablist">
           <button className={view === "escalations" ? "on" : ""} onClick={() => setView("escalations")}>Escalations</button>
           <button className={view === "inbox" ? "on" : ""} onClick={() => setView("inbox")}>Inbox</button>
           <button className={view === "assistant" ? "on" : ""} onClick={() => setView("assistant")}>Assistant</button>
+          <button className={view === "rules" ? "on" : ""} onClick={() => setView("rules")}>Ground rules</button>
         </div>
         {view === "escalations" ? (
         <div className="sd-tabs" role="tablist">
@@ -260,7 +264,7 @@ function SupportDesk() {
         ) : null}
       </header>
 
-      {view === "inbox" ? <SupportInbox /> : view === "assistant" ? <SupportConversations /> : (
+      {view === "inbox" ? <SupportInbox /> : view === "assistant" ? <SupportConversations /> : view === "rules" ? <SupportRules /> : (
       <>
 
       <div className={"sd-body" + (esc ? " sd-body-3" : "")}>

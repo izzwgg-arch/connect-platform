@@ -6710,6 +6710,27 @@ model AgentMemory {
 /// ⛔ `body` is what a CUSTOMER can be told. Staff-only material lives between
 /// `<!-- internal -->` markers inside the file and is stripped into
 /// `internalBody`, which only the escalation researcher ever sees.
+/// The support agent's ground rules — the owner's rulebook (Phase 5a, 2026-08-20).
+/// ⛔ APPEND-ONLY: every save writes a NEW version and nothing is ever updated
+/// in place, so the row history IS the audit trail Izzy asked for ("versioned,
+/// every change logged"). The CURRENT rulebook is simply the highest version.
+model SupportGroundRule {
+  id        String   @id @default(cuid())
+  version   Int      @unique
+  /// Three plain-English blocks, one rule per line, as the owner typed them.
+  allowed   String
+  never     String
+  askFirst  String
+  /// Why this change — optional, shown in the history.
+  note      String?
+  /// User.id of whoever saved it. Not a relation: the rulebook must outlive
+  /// the account of whoever wrote it (offboarding must never erase history).
+  updatedBy String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model AgentKnowledgeDoc {
   id       String  @id @default(cuid())
   /// "system" (platform-wide, tenantId null) or "tenant".

@@ -330,7 +330,10 @@ import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
-import { syncAgentKnowledgeDocs } from "./agentKnowledgeSync";
+import { syncAgentKnowledgeDocs, resolveAgentKnowledgeDir } from "./agentKnowledgeSync";
+// The Watchman's read-only PBX probe (Phase 5b) — the same connect_read door
+// the PBX Console reads through, never a second credential path.
+import { openReadConn } from "./pbxConsole/pbxConsoleReaders";
 import { sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
 import { registerServiceInterruptionRoutes, startServiceInterruptionSweep } from "./billing/serviceInterruption/serviceInterruptionBoot";
@@ -41674,6 +41677,75 @@ const port = Number(process.env.PORT || 3001);
     // sender's signature; the shapes agree at runtime and the tests pin it.)
     sendSms: (input) => sendConnectChatSmsMessage(input as Parameters<typeof sendConnectChatSmsMessage>[0]),
     smsQueue,
+    // The Watchman's three standing checks (Phase 5b). Each one THROWS on
+    // failure on purpose: runWatchman turns a throw into "unknown", which
+    // blocks work — a crashing probe must never read as a passing one.
+    watchmanProbes: {
+      rules: async () => {
+        const knowledgeDir = await resolveAgentKnowledgeDir();
+        const candidates: Array<{ label: string; path: string }> = [];
+        const repoRoot = knowledgeDir ? path.resolve(knowledgeDir, "..", "..") : null;
+        if (repoRoot) {
+          candidates.push({ label: "CLAUDE.md", path: path.join(repoRoot, "CLAUDE.md") });
+          candidates.push({ label: "agent knowledge", path: knowledgeDir! });
+        }
+        if (candidates.length === 0) return { found: 0, missing: ["the rule files (no docs directory found)"] };
+        const missing: string[] = [];
+        let found = 0;
+        for (const c of candidates) {
+          try {
+            await fs.promises.access(c.path, fs.constants.R_OK);
+            found++;
+          } catch {
+            missing.push(c.label);
+          }
+        }
+        return { found, missing };
+      },
+      server: async () => {
+        const targets: Array<{ label: string; url: string }> = [
+          { label: "api", url: `http://127.0.0.1:${port}/health` },
+          { label: "portal", url: `${(process.env.PORTAL_INTERNAL_URL || "http://portal:3000").replace(/\/+$/, "")}/` },
+        ];
+        const unhealthy: string[] = [];
+        let healthy = 0;
+        await Promise.all(
+          targets.map(async (t) => {
+            try {
+              const res = await fetch(t.url, { signal: AbortSignal.timeout(2500) });
+              if (res.ok) healthy++;
+              else unhealthy.push(`${t.label} (${res.status})`);
+            } catch {
+              unhealthy.push(t.label);
+            }
+          }),
+        );
+        return { healthy, unhealthy };
+      },
+      pbx: async () => {
+        const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+        if (!instance) return { reachable: false, readOnly: true, detail: "No phone system is configured." };
+        const c = await openReadConn(instance.ombuMysqlUrlEncrypted);
+        if (!c.ok) return { reachable: false, readOnly: true, detail: `Can't reach the phone system right now (${c.reason}).` };
+        try {
+          // ⛔ The read-only proof asks WHO WE ARE, never attempts a write.
+          // Testing a write guarantee by writing is how you break the thing you
+          // were checking. `connect_read` holds SELECT and nothing else.
+          const [rows]: any = await (c.conn as any).query("SELECT CURRENT_USER() AS u");
+          const who = String(rows?.[0]?.u ?? "");
+          const readOnly = /(^|[^a-z0-9_])connect_read([^a-z0-9_]|$)/i.test(who);
+          return {
+            reachable: true,
+            readOnly,
+            detail: readOnly
+              ? "Reachable, connected as the read-only user."
+              : `Connected as "${who}" — that is NOT the read-only user.`,
+          };
+        } finally {
+          await (c.conn as any).end().catch(() => {});
+        }
+      },
+    },
   });
   registerFeatureSuggestionRoutes(app);
   await registerCrmRoutes(app, { smsQueue });

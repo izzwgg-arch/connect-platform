@@ -34,6 +34,15 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { supportReportReference, resolvePersonDisplayName } from "@connect/shared";
+import {
+  DEFAULT_GROUND_RULES,
+  MAX_RULES_BLOCK_CHARS,
+  classifyAction,
+  normaliseRulesInput,
+  renderGroundRulesForAgent,
+  type GroundRulesText,
+} from "./supportGroundRules";
+import { runWatchman, type WatchmanProbes, type WatchmanVerdict } from "./supportWatchman";
 
 /**
  * Best-effort audit row with REAL tamper evidence — `AgentAuditLog.hash` is a
@@ -81,6 +90,9 @@ export interface SupportConsoleDeps {
     body: string;
   }) => Promise<{ ok: boolean; status?: number; error?: string; message?: any }>;
   smsQueue?: unknown;
+  /** Phase 5b: the Watchman's probes. Absent = the check reports "unknown",
+   *  which blocks work — never "fine". */
+  watchmanProbes?: WatchmanProbes;
 }
 
 const LIST_DEFAULT_TAKE = 50;
@@ -692,6 +704,112 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
       payload: { by: String(user.sub ?? ""), chars: body.data.body.length },
     });
     return { ok: true, id: msg.id };
+  });
+
+  // ─────────────── Phase 5a/5b: the ground rules + the Watchman ───────────────
+
+  /** The current rulebook — defaults until the owner has saved one. */
+  async function currentRules(): Promise<{ rules: GroundRulesText; version: number; isDefault: boolean }> {
+    const row = await db.supportGroundRule
+      .findFirst({ orderBy: { version: "desc" } })
+      .catch(() => null);
+    if (!row) return { rules: DEFAULT_GROUND_RULES, version: 0, isDefault: true };
+    return {
+      rules: { allowed: row.allowed, never: row.never, askFirst: row.askFirst },
+      version: row.version,
+      isDefault: false,
+    };
+  }
+
+  app.get("/admin/support/ground-rules", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const { rules, version, isDefault } = await currentRules();
+    const history = await db.supportGroundRule
+      .findMany({
+        orderBy: { version: "desc" },
+        take: 20,
+        select: { version: true, note: true, updatedBy: true, createdAt: true },
+      })
+      .catch(() => []);
+    return {
+      rules,
+      version,
+      isDefault,
+      maxBlockChars: MAX_RULES_BLOCK_CHARS,
+      history,
+      // Exactly what the agent will be told, so the owner can read it as the
+      // agent reads it — no guessing at how prose becomes a prompt.
+      renderedForAgent: renderGroundRulesForAgent(rules, version),
+    };
+  });
+
+  app.post("/admin/support/ground-rules", async (req, reply) => {
+    const user: any = await requireSuper(req, reply);
+    if (!user) return reply;
+    const body = z
+      .object({
+        allowed: z.string().max(MAX_RULES_BLOCK_CHARS * 2),
+        never: z.string().max(MAX_RULES_BLOCK_CHARS * 2),
+        askFirst: z.string().max(MAX_RULES_BLOCK_CHARS * 2),
+        note: z.string().max(300).optional(),
+      })
+      .safeParse(req.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "bad_body", message: "Those rules didn't save — check the three boxes and try again." });
+    }
+    const next = normaliseRulesInput(body.data);
+    // ⛔ An EMPTY "never" list is refused. A rulebook whose never-list is blank
+    // is not a permissive rulebook, it is an unguarded one — and the most
+    // likely way to get there is a UI bug or a mis-paste, not a decision.
+    if (!next.never.trim()) {
+      return reply.code(400).send({
+        error: "never_list_required",
+        message: "The 'never' list can't be empty — that's the list that protects payments, the phone system and customer data.",
+      });
+    }
+    const latest = await db.supportGroundRule.findFirst({ orderBy: { version: "desc" }, select: { version: true } }).catch(() => null);
+    const version = (latest?.version ?? 0) + 1;
+    const row = await db.supportGroundRule.create({
+      data: { ...next, note: body.data.note?.trim() || null, updatedBy: String(user.sub ?? ""), version },
+      select: { version: true, createdAt: true },
+    });
+    await supportAudit(db, {
+      actor: "support-desk",
+      event: "support.ground_rules_saved",
+      tenantId: String(user.tenantId ?? ""),
+      payload: { version: row.version, by: String(user.sub ?? ""), note: body.data.note ?? null },
+    });
+    return { ok: true, version: row.version, renderedForAgent: renderGroundRulesForAgent(next, row.version) };
+  });
+
+  /**
+   * "If the agent tried this, what would happen?" — the executable rulebook,
+   * exposed so the owner can test a rule before trusting it, and so the
+   * execution engine (Phase 5c) has exactly one classifier to call.
+   */
+  app.post("/admin/support/ground-rules/check", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const body = z.object({ action: z.string().min(1).max(500) }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_body", message: "Describe the action to check." });
+    const { rules, version } = await currentRules();
+    return { version, action: body.data.action, verdict: classifyAction(rules, body.data.action) };
+  });
+
+  app.get("/admin/support/watchman", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    // ⛔ No probes wired = every check is "unknown" = NOT safe to work. The
+    // honest answer, never an optimistic one.
+    const verdict: WatchmanVerdict = deps.watchmanProbes
+      ? await runWatchman(deps.watchmanProbes)
+      : await runWatchman({
+          rules: async () => { throw new Error("not wired"); },
+          server: async () => { throw new Error("not wired"); },
+          pbx: async () => { throw new Error("not wired"); },
+        });
+    return verdict;
   });
 
   app.post("/admin/support/threads/:id/reply", async (req, reply) => {
