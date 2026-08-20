@@ -1,0 +1,33 @@
+/* The add-card page IS the standard Sola payment surface (pay-invoice.css),
+   rendered inside the console shell. These rules only size it to the workspace
+   and style the back link — never restyle the payment card itself here, or the
+   in-app page drifts from the public pay pages. */
+
+.billing-pay-page.billing-payments-addcard {
+  min-height: 100%;
+  border-radius: 18px;
+}
+
+.billing-payments-addcard .billing-pay-shell {
+  padding: 2.2rem 1.25rem 3rem;
+}
+
+.billing-payments-addcard .billing-pay-back {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.15rem;
+}
+
+.billing-payments-addcard .billing-pay-back a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--pay-muted);
+  font-size: 0.85rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.billing-payments-addcard .billing-pay-back a:hover {
+  color: var(--pay-blue);
+}

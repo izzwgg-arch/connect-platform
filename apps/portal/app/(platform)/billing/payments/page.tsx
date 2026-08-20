@@ -1,7 +1,8 @@
 "use client";
 
 import "./paymentMethods.css";
-import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiDelete, apiGet, apiPost } from "../../../../services/apiClient";
 import { DetailCard } from "../../../../components/DetailCard";
@@ -12,117 +13,18 @@ import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { BillingPageChrome, billingErrorMessage } from "../../../../components/BillingActionToast";
 
-declare global {
-  interface Window {
-    setAccount?: (key: string, softwareName: string, softwareVersion: string) => void;
-    setIfieldStyle?: (fieldName: "card-number" | "cvv", style: Record<string, string>) => void;
-    getTokens?: (success: () => void, failure: () => void, timeoutMs: number) => void;
-  }
-}
-
-function cssVar(source: Element, name: string, fallback: string) {
-  return window.getComputedStyle(source).getPropertyValue(name).trim() || fallback;
-}
-
-function parseCssColor(color: string): [number, number, number, number] | null {
-  const rgbMatch = color.match(/rgba?\(([^)]+)\)/i);
-  if (rgbMatch) {
-    const parts = rgbMatch[1].split(",").map((part) => part.trim());
-    const [r, g, b] = parts.slice(0, 3).map((part) => Number.parseFloat(part));
-    const a = parts[3] == null ? 1 : Number.parseFloat(parts[3]);
-    return [r, g, b, Number.isFinite(a) ? a : 1];
-  }
-
-  const srgbMatch = color.match(/color\(srgb\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)(?:\s*\/\s*([0-9.]+))?\)/i);
-  if (srgbMatch) {
-    const [, r, g, b, a] = srgbMatch;
-    return [
-      Number.parseFloat(r) * 255,
-      Number.parseFloat(g) * 255,
-      Number.parseFloat(b) * 255,
-      a == null ? 1 : Number.parseFloat(a),
-    ];
-  }
-
-  return null;
-}
-
-function compositeColor(foreground: [number, number, number, number], background: [number, number, number]) {
-  const [r, g, b, a] = foreground;
-  return [
-    r * a + background[0] * (1 - a),
-    g * a + background[1] * (1 - a),
-    b * a + background[2] * (1 - a),
-  ] as [number, number, number];
-}
-
-function effectiveBackgroundColor(element: Element | null, fallback: string) {
-  if (!element) return fallback;
-  const chain: Element[] = [];
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    chain.unshift(node);
-  }
-
-  let resolved: [number, number, number] = [255, 255, 255];
-  for (const node of chain) {
-    const parsed = parseCssColor(window.getComputedStyle(node).backgroundColor);
-    if (!parsed || parsed[3] <= 0) continue;
-    resolved = compositeColor(parsed, resolved);
-  }
-
-  return `rgb(${resolved.map((part) => Math.round(part)).join(", ")})`;
-}
-
-function applySolaIFieldStyle() {
-  if (!window.setIfieldStyle) return;
-  const form = document.querySelector(".billing-payments-form");
-  if (!form) return;
-
-  const sampleInput = form.querySelector<HTMLInputElement>('input[name="cardholderName"]');
-  const sampleInputStyle = sampleInput ? window.getComputedStyle(sampleInput) : null;
-  const inputHeight = sampleInputStyle?.height || cssVar(form, "--billing-payments-input-height", "44px");
-  const inputBackground = effectiveBackgroundColor(sampleInput, cssVar(form, "--billing-payments-input-bg", "#111827"));
-  const placeholderStyle = sampleInput ? window.getComputedStyle(sampleInput, "::placeholder") : null;
-  const inputColor = placeholderStyle?.color || sampleInputStyle?.color || cssVar(form, "--billing-payments-input-text", "#e5eef8");
-  const inputFontFamily = sampleInputStyle?.fontFamily || cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif");
-  const inputFontSize = sampleInputStyle?.fontSize || cssVar(form, "--billing-payments-input-font-size", "13px");
-  const inputFontWeight = sampleInputStyle?.fontWeight || "600";
-  form.querySelectorAll<HTMLIFrameElement>(".sola-ifield-frame").forEach((frame) => {
-    frame.style.backgroundColor = inputBackground;
-  });
-  const fieldStyle = {
-    "box-sizing": "border-box",
-    display: "block",
-    width: "100%",
-    height: inputHeight,
-    border: "0",
-    "border-radius": "0",
-    margin: "0",
-    padding: "0",
-    background: inputBackground,
-    "background-color": inputBackground,
-    color: inputColor,
-    "font-family": inputFontFamily,
-    "font-size": inputFontSize,
-    "font-weight": inputFontWeight,
-    "line-height": inputHeight,
-    "text-align": "center",
-    outline: "0",
-  };
-
-  window.setIfieldStyle("card-number", fieldStyle);
-  window.setIfieldStyle("cvv", fieldStyle);
-}
+/* Card ENTRY does not happen on this page. Adding a card goes through
+   /billing/payments/add-card — the same Sola-branded payment surface used by
+   every pay page on the platform (CardknoxIFieldsForm + PaymentTrustBadge).
+   This page only lists saved cards and manages default/remove. Never bring a
+   second hand-rolled card form back here. */
 
 export default function BillingPaymentsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [busy, setBusy] = useState("");
-  const [cardMessage, setCardMessage] = useState("");
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
-  const [solaPublicConfig, setSolaPublicConfig] = useState<any>(null);
-  const [ifieldsReady, setIfieldsReady] = useState(false);
-  const submittedRef = useRef(false);
+  const [solaConfig, setSolaConfig] = useState<{ enabled?: boolean; ifieldsKey?: string | null } | null>(null);
 
   const methods = useAsyncResource(() => apiGet<any[]>("/billing/payment-methods"), [refreshKey]);
   const rows = methods.status === "success" ? methods.data : [];
@@ -139,46 +41,12 @@ export default function BillingPaymentsPage() {
   useEffect(() => {
     let active = true;
     apiGet<any>("/billing/sola/public-config")
-      .then((config) => { if (active) setSolaPublicConfig(config); })
-      .catch(() => { if (active) setSolaPublicConfig(null); });
+      .then((config) => { if (active) setSolaConfig(config); })
+      .catch(() => { if (active) setSolaConfig(null); });
     return () => { active = false; };
   }, []);
 
-  useEffect(() => {
-    if (!solaPublicConfig?.enabled || !solaPublicConfig?.ifieldsKey) return;
-    const version = solaPublicConfig.ifieldsVersion || "3.4.2602.2001";
-    const scriptId = `cardknox-ifields-${version}`;
-    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
-    const configure = () => {
-      if (window.setAccount) {
-        window.setAccount(solaPublicConfig.ifieldsKey, "ConnectComms", "1.0.0");
-        applySolaIFieldStyle();
-        window.setTimeout(applySolaIFieldStyle, 150);
-        window.setTimeout(applySolaIFieldStyle, 600);
-        window.setTimeout(applySolaIFieldStyle, 1400);
-        setIfieldsReady(true);
-      }
-    };
-    if (existing) { configure(); return; }
-    const script = document.createElement("script");
-    script.id = scriptId;
-    script.src = `https://cdn.cardknox.com/ifields/${version}/ifields.min.js`;
-    script.async = true;
-    script.onload = configure;
-    script.onerror = () => setCardMessage("Unable to load the secure card form. Please contact support.");
-    document.body.appendChild(script);
-  }, [solaPublicConfig]);
-
-  useEffect(() => {
-    if (!ifieldsReady) return;
-    applySolaIFieldStyle();
-    const applyOnThemeChange = () => window.requestAnimationFrame(applySolaIFieldStyle);
-    const observer = new MutationObserver(applyOnThemeChange);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class"] });
-    return () => observer.disconnect();
-  }, [ifieldsReady]);
-
-  const ifieldsVersion = solaPublicConfig?.ifieldsVersion || "3.4.2602.2001";
+  const cardEntryUnavailable = solaConfig != null && !(solaConfig.enabled && solaConfig.ifieldsKey);
 
   return (
     <PermissionGate permission="can_view_billing_payments" fallback={<div className="state-box">You do not have payment access.</div>}>
@@ -201,103 +69,17 @@ export default function BillingPaymentsPage() {
             </div>
           </section>
 
-          {/* Add a card */}
+          {/* Add a card — happens on the platform's standard secure payment page */}
           <DetailCard title="Add a card">
             <p className="muted" style={{ marginBottom: 12 }}>
-              Your card details are entered directly into a secure hosted form and never touch ConnectComms servers.
+              Cards are added on our secure payment page — the same one used for invoice payments. Card details never touch ConnectComms servers.
             </p>
-            {!solaPublicConfig?.enabled || !solaPublicConfig?.ifieldsKey ? (
+            {cardEntryUnavailable ? (
               <div className="billing-status-pill warn">
                 Online card entry is not yet configured for this account. Contact support to add a card.
               </div>
             ) : (
-              <form
-                className="billing-form billing-payments-form"
-                onSubmit={async (event) => {
-                  event.preventDefault();
-                  if (submittedRef.current) return;
-                  const form = event.currentTarget;
-                  setBusy("ifields");
-                  setCardMessage("");
-                  if (!window.getTokens) {
-                    setBusy("");
-                    setCardMessage("The secure card form is not ready yet. Please wait a moment and try again.");
-                    return;
-                  }
-                  window.getTokens(async () => {
-                    submittedRef.current = true;
-                    const formData = new FormData(form);
-                    const xSut = String(formData.get("xCardNum") || "");
-                    if (!xSut) {
-                      setBusy("");
-                      submittedRef.current = false;
-                      setCardMessage("The secure form did not return a card token. Verify the card number and try again.");
-                      return;
-                    }
-                    try {
-                      const xExp = `${String(formData.get("expMonth") || "").replace(/\D/g, "").padStart(2, "0").slice(-2)}${String(formData.get("expYear") || "").replace(/\D/g, "").slice(-2)}`;
-                      await apiPost("/billing/payment-methods/sola/save", {
-                        xSut,
-                        xExp,
-                        cardholderName: String(formData.get("cardholderName") || ""),
-                        billingZip: String(formData.get("billingZip") || ""),
-                        makeDefault: rows.length === 0,
-                      });
-                      showToast("ok", "Card saved successfully.");
-                      refresh();
-                    } catch (err: any) {
-                      setCardMessage(billingErrorMessage(err, "Unable to save this card."));
-                    } finally {
-                      setBusy("");
-                      submittedRef.current = false;
-                    }
-                  }, () => {
-                    setBusy("");
-                    setCardMessage("The secure form could not tokenize the card. Verify the card details and try again.");
-                  }, 30000);
-                }}
-              >
-                <label>Cardholder name <input name="cardholderName" autoComplete="cc-name" placeholder="Cardholder name" /></label>
-                <div className="billing-pay-row">
-                  <label>Exp. month <input name="expMonth" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" minLength={2} maxLength={2} required /></label>
-                  <label>Exp. year <input name="expYear" inputMode="numeric" autoComplete="cc-exp-year" placeholder="YY" minLength={2} maxLength={4} required /></label>
-                </div>
-                <label>Billing ZIP <input name="billingZip" autoComplete="postal-code" placeholder="Billing ZIP" /></label>
-                <label>
-                  Card number
-                  <iframe
-                    className="sola-ifield-frame"
-                    title="Secure card number"
-                    data-ifields-id="card-number"
-                    data-ifields-placeholder="Card Number"
-                    scrolling="no"
-                    onLoad={applySolaIFieldStyle}
-                    src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
-                  />
-                </label>
-                <label>
-                  CVV
-                  <iframe
-                    className="sola-ifield-frame"
-                    title="Secure CVV"
-                    data-ifields-id="cvv"
-                    data-ifields-placeholder="CVV"
-                    scrolling="no"
-                    onLoad={applySolaIFieldStyle}
-                    src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
-                  />
-                </label>
-                <input name="xCardNum" data-ifields-id="card-number-token" type="hidden" />
-                <input name="xCVV" data-ifields-id="cvv-token" type="hidden" />
-                {cardMessage ? <div className="billing-status-pill bad">{cardMessage}</div> : null}
-                <button
-                  className="btn primary"
-                  type="submit"
-                  disabled={busy === "ifields" || !ifieldsReady}
-                >
-                  {busy === "ifields" ? "Securing…" : ifieldsReady ? "Save card" : "Loading secure form…"}
-                </button>
-              </form>
+              <Link className="btn primary" href="/billing/payments/add-card">Add a card</Link>
             )}
           </DetailCard>
 
