@@ -91,6 +91,16 @@ export function filterChatModels(provider: ProviderName, ids: string[]): string[
     .sort();
 }
 
+/**
+ * Models the picker must ALWAYS offer, whether or not the provider's models
+ * API lists them for our key (Izzy, 2026-08-20: "do fabel as well"). Unioned
+ * into the live catalog before filtering — `filterChatModels` dedupes, so a
+ * model the API already returns costs nothing. ⛔ Only add ids that really
+ * answer a chat call; a dropdown entry that can't answer is worse than none
+ * (the gpt-5-chat-latest lesson above).
+ */
+export const KNOWN_ANTHROPIC_CHAT_MODELS = ["claude-fable-5"] as const;
+
 /** Parse a stored "provider:modelId" pick; null when malformed. */
 export function parseChatModelPick(v: string | null | undefined): { provider: ProviderName; model: string } | null {
   const m = String(v ?? "").trim().match(/^(openai|anthropic):(.+)$/);
@@ -225,8 +235,15 @@ export class ModelRouter {
     if (this.anthropic) {
       try {
         const res = await this.anthropic.models.list({ limit: 100 });
-        out.anthropic = filterChatModels("anthropic", res.data.map((m: any) => m.id));
-      } catch { /* ditto */ }
+        out.anthropic = filterChatModels("anthropic", [
+          ...res.data.map((m: any) => m.id),
+          ...KNOWN_ANTHROPIC_CHAT_MODELS,
+        ]);
+      } catch {
+        // Key invalid / network — but the curated models are still offerable:
+        // the picker validates by pinging, so a dead key fails loudly there.
+        out.anthropic = filterChatModels("anthropic", [...KNOWN_ANTHROPIC_CHAT_MODELS]);
+      }
     }
     return out;
   }

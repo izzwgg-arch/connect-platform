@@ -238,6 +238,7 @@ import {
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerSupportReportRoutes } from "./supportReport";
+import { registerSupportConsoleRoutes } from "./supportConsole";
 import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerDeliveryRoutes } from "./delivery/routes";
@@ -2907,6 +2908,10 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // PBX Console (2026-08-19) — platform-owner only; every handler also calls requireOwner.
   { prefix: "/admin/pbx-console", permission: "can_manage_global_settings" },
   { prefix: "/admin/apps/signalwire", permission: "can_manage_global_settings" },
+  // Support Console (2026-08-20) — SUPER_ADMIN only for now (Izzy's call);
+  // every handler ALSO calls requireSuperAdmin. Same pattern as pbx-console:
+  // reuse an owner-held key, no new grantable key until a feature honours it.
+  { prefix: "/admin/support", permission: "can_manage_global_settings" },
   { prefix: "/admin/numbers", permission: "can_view_admin_billing" },
   { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/sms", permission: "can_view_apps_sms_campaigns" },
@@ -41609,6 +41614,11 @@ const port = Number(process.env.PORT || 3001);
   // "Something not working?" in the assistant panel. Registered after the chat
   // routes because it files its customer-confirmation text through them.
   registerSupportReportRoutes(app, { smsQueue });
+  registerSupportConsoleRoutes({
+    app,
+    db,
+    requireSuper: (req, reply) => requireSuperAdmin(req, reply),
+  });
   registerFeatureSuggestionRoutes(app);
   await registerCrmRoutes(app, { smsQueue });
   await registerDeliveryRoutes(app);

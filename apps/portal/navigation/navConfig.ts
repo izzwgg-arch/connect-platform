@@ -36,6 +36,7 @@ import {
   Megaphone,
   MessageCircle,
   MessagesSquare,
+  LifeBuoy,
   Mic2,
   Music,
   Network,
@@ -143,6 +144,10 @@ export const navItems: NavItem[] = [
   // extensions / provisioning / geo once the licence lapses. SUPER_ADMIN only
   // (forced below), reuses the PBX-instances view key; no grantable key.
   { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
+  // Support Desk (2026-08-20) — SUPER_ADMIN-only in isNavItemVisibleForUser
+  // (the pbx-console pattern): it shows every company's escalations, so it
+  // shares an owner-held key and there is deliberately no grantable one yet.
+  { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
@@ -225,5 +230,9 @@ export function isNavItemVisibleForUser(
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The Support Desk shows every company's escalations and conversations.
+  // Izzy, 2026-08-20: "for now do just super admin" — the support-agent role
+  // comes later, with per-feature keys that actually gate.
+  if (item.id === "admin.support" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }
