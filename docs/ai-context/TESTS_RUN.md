@@ -4,6 +4,36 @@ Newest entries first.
 
 ---
 
+## PBX Console: Trunks & Routing module + the onboarding batch apply (2026-08-20)
+
+Branch `feat/ivr-migration-takeover`, `004c3e6c`. Handoff
+`AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT_2026-08-18.md` §22.
+
+```bash
+node --experimental-test-module-mocks --import tsx --test apps/api/src/pbxConsole/pbxConsole.test.ts
+node --experimental-test-module-mocks --import tsx --test apps/api/src/onboarding/pbxTenantBuild.test.ts
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/onboarding/*.test.ts
+cd apps/api && npx tsc --noEmit -p tsconfig.json
+cd apps/portal && npx tsc --noEmit -p tsconfig.json
+```
+
+**Results:** console **19/19** (6 new routing guards — routes + requireOwner,
+one-implementation-per-write, reference-guarded deletes ordered BEFORE
+panelDelete, setMembersEnabled reuse, the deliberate ABSENCE of a trunk edit,
+editOutboundRoute's refusals; **all replayed failing against `HEAD`**).
+pbxTenantBuild **40/40** — the full-build apply contract re-pinned tighter: no
+apply between extension imports, ONE batch apply before the inbound route,
+total 6 (was 8 with 3 people; N+4 generally). Onboarding **287 tests, 263
+pass, 24 fail — the 24 are the documented pre-existing `setupOrchestrator`
+set** (same names, same count as the §18 baseline run). api typecheck **75 =
+the exact baseline**; portal **0**.
+
+One pre-existing guard updated, not weakened: the "one slug rule" test matched
+the byte-exact import line, which widened when createTrunk et al. joined it —
+it now asserts slugify comes from pbxTenantBuild whatever else the line carries.
+
+---
+
 ## SMS↔email bridge Part 3 (reply-to-text-back) — 31 new tests, agent suite green (2026-08-20)
 
 Branch `feat/ivr-migration-takeover`, commit `d0d4f861`. Handoff
