@@ -2671,6 +2671,22 @@ Mockups Izzy chose from: <https://claude.ai/code/artifact/66ba46a5-01a1-4b88-b19
   his answer selected both "spark mark on the bubble" and "keep the robot", so
   nothing was touched. Options **B** (capability tiles) and **C** (quiet
   composer) are still drawn in the mockups if he wants to compare.
+- ✅✅ **"SUGGEST A FEATURE" SITS BESIDE "REPORT A PROBLEM" NOW (2026-08-20,
+  Izzy's ask — handoff §10).** The dashed help bar is a two-button `fa-help-row`
+  on every screen of the panel; the report button's label shortened to "Report a
+  problem" to match its own dialog. ⛔ **The two doors have DIFFERENT
+  destinations on purpose:** a problem still pages Izzy's phones via
+  `AgentEscalation`; a suggestion is an **EMAIL to `info@loopcom.net` and
+  nothing else** (`POST /support/feature-suggestion` →
+  `apps/api/src/featureSuggestion.ts` → `EmailJob` type **`FEATURE_SUGGESTION`**
+  — ⛔ never `ADMIN_ALERT`, which is muted; ⛔ NOT added to `supportReport.ts`,
+  whose guard test forbids it growing an `emailJob.create`). Recipient is
+  env-overridable (`FEATURE_SUGGESTION_EMAIL`); job + audit row land in one
+  transaction (the audit row IS the 5/user/day counter; 15/tenant/day guards the
+  shared mailbox's 500/day allowance). No migration — `EmailJob.type` is a plain
+  string. ⚠️ **Whether the `info@loopcom.net` MAILBOX exists in Google Workspace
+  is unverified** — the billing@ lesson; a missing user bounces. ⏳ **NOT
+  PROVEN:** no human has sent one and no email has been seen in that inbox.
 
 ## ⛔⛔ AGENT HANDOFF — the overdue-account cutoff is WIRED END TO END and ARMED (2026-08-18); 911 nearly got switched off building it — READ FIRST before touching the cutoff, `SERVICE_INTERRUPTION_CUTOVER_AT`, the doorway, or before deactivating ANY outbound route
 
