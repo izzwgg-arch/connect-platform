@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./phoneE164";
+export * from "./loopcomEmailShell";
 export * from "./voicemailIngest";
 export * from "./voicemailSyncFair";
 export * from "./portalPermissions";
