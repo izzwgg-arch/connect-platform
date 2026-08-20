@@ -4,6 +4,46 @@ Newest entries first.
 
 ---
 
+## Tenant-leak re-sweep: 8 defects closed, none live (2026-08-20)
+
+Branch `feat/ivr-migration-takeover`, `d889407c` + `50053cf9`, deployed and
+container-verified at `cbf1c672`. Handoff
+`AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md` §0f.
+
+```bash
+node --experimental-test-module-mocks --import tsx --test apps/api/src/tenantLeakSweep.test.ts
+node --experimental-test-module-mocks --import tsx --test apps/api/src/pbxConsole/pbxConsole.test.ts
+cd apps/portal && npx tsx --test navigation/consoleNavGuard.test.ts
+cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/*.test.ts"
+cd apps/api && npx tsc --noEmit -p tsconfig.json   # and portal
+```
+
+**Results:** leak-sweep guards **9/9** (all 7 source assertions replayed
+against `HEAD` — **all seven fail there**); console suite **24/24** with the
+requireOwner check upgraded from a count to per-route (**mutation-tested**:
+deleting one route's gate makes it fail); console nav guards **6/6** (fail on
+HEAD for all three items); portal suite **225 tests, 223 pass, 2 fail** — the
+documented pre-existing `campaignsIndexLayout` + `webrtcSdpDiagnostics` pair.
+Full api `src/*.test.ts`: **1084 tests, 1074 pass, 7 fail** — the documented
+pre-existing `pbxTenantDirectorySync` set, name for name. api typecheck **75 =
+the exact baseline**; portal **0**.
+
+**Proven on production, not inferred.** A real customer admin's validly-signed
+token (their own sub/tenantId, signed with the live JWT_SECRET) was fired at
+all 14 console doors and every suspect route: **every one 403**. Re-run after
+the fixes alongside a SUPER_ADMIN probe: **customers refused everywhere, owner
+200 everywhere** — the tightening locked nobody out. Containers verified by
+ancestry AND by grepping the fixes inside the running api; health 200 on both
+hostnames; the only error-level log line is the standing 24-hour
+`cdr_unattributed_calls_present` monitor.
+
+⛔ One process note: the guards read RAW source because comment-stripping
+`server.ts` opens a fake block comment at a regex literal and swallows the
+region — it cost one red test here before the rule was re-learned (4th
+recorded instance).
+
+---
+
 ## PBX Console: Trunks & Routing module + the onboarding batch apply (2026-08-20)
 
 Branch `feat/ivr-migration-takeover`, `004c3e6c`. Handoff
