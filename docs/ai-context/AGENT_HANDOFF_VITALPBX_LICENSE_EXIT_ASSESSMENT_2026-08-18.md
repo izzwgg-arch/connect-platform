@@ -1426,3 +1426,48 @@ module, and onboarding's per-extension Apply Changes collapses to ONE.
   create→toggle→delete cycle on a "CONSOLE TEST delete me" selection against
   Loopcom Demo 2's route; doorways 1/1/2 after. And the next real onboarding
   is the batch-apply timing proof.
+
+## 23. RING GROUPS & QUEUES IN THE CONSOLE — every option, proven on prod (2026-08-20)
+
+Izzy: "just a copy of how we set it up in the PBX: every option, everything
+that's in the PBX… on ring groups and queues, completely wired."
+**Commits `3bbae281` (merged `d0627e7c`) + the checkbox-read fix.**
+
+- **Module:** `GET /admin/pbx-console/teams` (both team types with EVERY option
+  column their tables carry, members with penalties, `referencedBy` from
+  `ombu_destinations` via category module 20/21); create/edit/delete routes for
+  each. Creates reuse **teamBuilder's browser-captured replay** (RingGroupSpec
+  gained musicGroupId/announcementId, previously pinned empty); edits load the
+  panel's OWN edit form and re-post with overrides, so **any option the UI does
+  not surface is preserved untouched, never dropped**; deletes reuse
+  `deleteTeam`'s two-step dance, are REFUSED while referenced, and re-list
+  afterwards (`delete_not_confirmed` if the row survives). Queue member rows
+  keep their `queue_member_id` when the same agent stays, and reproduce the
+  real underscore/bracket key asymmetry.
+- ✅ **PROVEN ON PROD (Loopcom Demo 2, T140):** ring group created at **800**
+  and queue at **900** (correct series, auto-allocated); every create option
+  verified landing in the rows (strategy/timers/penalties/service level/
+  wrap-up); **a ten-field queue edit + full member replacement all landed**
+  (rename, strategy flip, retry 7, wrap 20, SL 45, wait 240, maxlen 5,
+  joinempty no, leavewhenempty yes, announce position on @60 s, members
+  104→105 with 103's penalty moved to 2); ring group renamed, strategy
+  flipped, **members reordered**, skip_busy ticked; deletes 200/200 with
+  post-delete verification; counts byte-back 94/8; **doorways 1/1/2 with 0
+  cc-wipes through six whole-PBX applies**.
+- ⛔⛔ **THE CHECKBOX-VALUE FINDING, measured on the same queue: the panel
+  stores a ticked box as EITHER `yes` OR `1`** — `autofill` came back `"yes"`
+  while `autopause` came back `"1"`. A reader that recognises only `"yes"`
+  renders an ON box as unticked, and the next save then silently switches the
+  option off. The portal's editor reads both forms now. **Treat `yes|1` as
+  ticked anywhere ombu option columns are read as booleans.**
+- ⛔ **The acceptance had to run in a one-off `docker compose run` container.**
+  The first attempt ran via `docker exec` in `app-api-1` and died mid-run when
+  an auto-deploy recreated the container — the third in-container casualty of
+  the day. **Anything long-running against this api goes in a one-off
+  container, targeting `http://api:3001` by docker DNS** (which bypasses
+  blue/green — a call during the ~67 s cutover fails; rerun, don't diagnose).
+- Tests: console **24/24** (5 new guards, replayed failing vs HEAD),
+  teamBuilder **8/8**, api typecheck 75 = baseline, portal 0.
+- ⏳ Not proven: nobody has clicked the tab in a browser (the whole console
+  still awaits Izzy's first click-through), and no call has flowed through a
+  console-made team — the acceptance verified rows and renders, not audio.

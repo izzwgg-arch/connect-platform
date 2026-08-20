@@ -748,7 +748,11 @@ function TeamDialog({ kind, edit, tenants, push, onClose, onDone }: { kind: "rg"
   if (edit) {
     initialVals["description"] = edit.description;
     for (const f of FIELDS) if (f.k !== "description") initialVals[f.k] = edit.options[f.k] ?? "";
-    for (const c of CHECKS) initialChecks[c.k] = String(edit.options[c.k] ?? "") === "yes";
+    // ⛔ The panel stores a ticked box as EITHER "yes" or "1" (measured live
+    // 2026-08-20: autofill = "yes", autopause = "1" on the same queue). Reading
+    // only "yes" renders an ON box as unticked — and the next save would then
+    // silently switch the option off.
+    for (const c of CHECKS) initialChecks[c.k] = ["yes", "1"].includes(String(edit.options[c.k] ?? ""));
   } else {
     initialVals["description"] = "";
     for (const f of FIELDS) if (f.k !== "description") initialVals[f.k] = "";
