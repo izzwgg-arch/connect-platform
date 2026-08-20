@@ -908,7 +908,7 @@ not trusted right now). `connect-geo-build.path` is **disabled and stopped**
 console geo write **refuses in plain English** (`buildChannel: None` via
 `/console/geo-state`). Helper `2026.08.19.4` itself is unchanged and fine.
 
-**⛔ Re-arming requirements (do NOT re-enable the path unit without both):**
+**⛔ Re-arming requirements (do NOT re-enable the path unit without ALL):**
 1. The runner must **prove the config loads before any reload**: reconcile
    every `--match-set <name>` in `direct.xml` against `ipsets/<name>.xml`
    after the builder runs and BEFORE firewalld is touched; on mismatch,
@@ -918,6 +918,13 @@ console geo write **refuses in plain English** (`buildChannel: None` via
 2. Builder output must be logged to a **file** — journald on the PBX is
    volatile and the reboot erased both the geo-build and firewalld journals;
    the only surviving evidence was `result.json` + file mtimes.
+3. ⛔⛔ **Izzy's standing rule (2026-08-20): the US must ALWAYS be open,
+   everything else closed.** The helper must refuse any request that would
+   set `blocked='yes'` on `us` BEFORE writing flags, and the runner must
+   verify `us` is `blocked='no'` and `vpbx_white_list` still precedes
+   `geo_firewall` before any reload — rollback otherwise. (CA + IL are also
+   open today, long-standing; whether they close at re-arm time is Izzy's
+   explicit call, nobody else's.)
 
 **Escalation trail:** push notification + `AGENT_ESCALATION` email (the only
 unmuted type; plain `ADMIN_ALERT` is muted at the send door) with the recovery

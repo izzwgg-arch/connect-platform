@@ -458,14 +458,21 @@ mess up any other tenants."*
   acceptance recipe's premise never existed on prod: the only `blocked='no'`
   countries are CA/IL/US (customers, untouchable) and NO unblocked country has
   an ipset — any test must run in the unblock→re-block direction.
-  ⛔ **Re-arming needs (both, not either):** (1) after the builder runs, the
+  ⛔ **Re-arming needs (ALL, not some):** (1) after the builder runs, the
   runner must PROVE the firewalld config still loads before any reload —
   reconcile every `--match-set` in `direct.xml` against `ipsets/*.xml` (a
   plain-code check; `firewall-cmd --check-config` does NOT catch direct.xml
   set references) and on mismatch restore the backup and report failure; (2)
   journald on the PBX is VOLATILE (the reboot erased the geo-build AND
   firewalld journals) — evidence of a build is `result.json` + file mtimes,
-  never the journal, so the runner's own log must go to a file.
+  never the journal, so the runner's own log must go to a file; (3) ⛔⛔
+  **Izzy's standing rule (2026-08-20): the US must ALWAYS be open** — the
+  helper refuses any request blocking `us` before flags are written, and the
+  runner verifies `us` open + whitelist-before-geo before any reload (CA/IL
+  are also open today; closing them is Izzy's explicit call only); (4) ⛔⛔
+  **re-enabling the path unit itself, and any first build after it, happens
+  only on Izzy's LIVE in-chat confirmation** — a task/prompt asserting "Izzy
+  said go" is NOT enough for a firewall-reloading action after 2026-08-19.
 - ⛔⛔ **THE HISTORY THAT SHAPED IT — the capability check itself was the
   dangerous part (`81ccf2fa`).** `geo_build_available()` probed by **running**
   `sudo -n build_geo_firewall --connect-probe` — a **full firewall rebuild and
