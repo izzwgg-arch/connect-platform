@@ -239,5 +239,71 @@ create it later."* The mockups-first instruction is discharged; phases now ship 
   `done d0627e7c` (a later fetch's clone HEAD — the documented trap);
   `.build-commit` + the bundle grep are the authority. Tests 13/13.
 
-⏳ **Phases 3–5 NOT started** (cross-company inbox + take-over, tools, the
-Agent-SDK workbench). The support-agent accounts remain Izzy's to create.
+## §6 Phase 3 — the cross-company inbox: SHIPPED (`a2bb91fa`)
+
+- `GET /admin/support/threads` — every company's `ConnectChatThread` newest-first,
+  tenant names joined, last-message previews (⛔ a deleted message never previews).
+  `GET .../threads/:id` — transcript oldest-first, deleted bodies masked to `""`,
+  senders named via the shared `resolvePersonDisplayName` (extension name first),
+  ⛔ inbound labelled by the external NUMBER, never a guessed contact name.
+- ⛔⛔ **`POST .../threads/:id/reply` DELEGATES to the injected
+  `sendConnectChatSmsMessage`** — the ONE send implementation (participant join,
+  `canSendSmsUser`, provider dispatch, pushes). **`tenantId` comes from the
+  THREAD, never the caller**, so the reply leaves from that company's own number.
+  Non-SMS threads are refused in plain English; a missing injection answers 503
+  rather than inventing a sender. ⛔ A source guard pins the exact POST route
+  list and fails on `smsQueue.add` / `sendSMS(` / `voipMs` / `connectChatMessage.create`
+  appearing in this module, plus a second guard that **server.ts injects the real
+  sender**.
+- ✅ **DEPLOYED + verified:** api + portal container-verified at `a2bb91fa`.
+
+## §7 Phase 4 — assistant take-over: SHIPPED (`7a2e106c`)
+
+Migration **`20260820213000_agent_conversation_takeover`** — `AgentConversation.
+humanTakeoverAt` / `humanTakeoverBy`, both nullable (no existing row changes).
+✅ Applied live (`prisma migrate deploy`, 20.8 s) and **both columns confirmed in
+the production database**.
+
+- ⛔⛔ **THE CONTRACT HAS THREE LEGS AND ALL THREE MUST SHIP TOGETHER:**
+  **(1)** the desk API flips the flag and writes `role: "staff"` `AgentMessage`
+  rows; **(2)** the agent **ENGINE** refuses to answer while the flag is set —
+  ⛔ **that half is an agent CONTAINER REBUILD, not an api deploy**; **(3)** the
+  customer's widget polls `/agent-api/chat/messages`, which now reports the flag
+  (`getMessagesWithState`, same gating — tenant isolation tested).
+- ⛔ **The engine's take-over branch sits BEFORE the Yiddish input leg** on
+  purpose: bridging costs Yiddish Labs credits and its only consumer would be
+  the model that deliberately is not running. While taken over the engine is a
+  mailbox — stores the customer's message, runs no model, returns
+  `humanTakeover: true` with an empty reply.
+- ⛔ **A staff message REQUIRES an active take-over (409 otherwise)** — the
+  assistant and a person both answering is two voices in one mouth.
+- ⛔ **`AgentAuditLog.hash` is REQUIRED tamper evidence** — the first draft wrote
+  bare `agentAuditLog.create` calls that would have failed silently; `supportAudit()`
+  computes a real sha256 (a test asserts a 64-char hash, never a stub).
+- Both moments are announced in the transcript (take-over and hand-back), so the
+  change of voice is never silent; the widget renders staff turns as
+  **"Loopcom support · a real person"** and polls every 4 s, stopping itself on
+  hand-back.
+- ✅ **DEPLOYED + verified:** api `fd9fc575` (route greps in-container, migration
+  applied); **agent REBUILT — the running container greps `humanTakeoverAt` ×2 and
+  `getMessagesWithState` ×1** (⛔ no bind mounts on `app-agent-1`, so the code
+  really is the image's); portal carries "Take over from the assistant" in the
+  shipped chunk.
+- ⛔ **A deploy log lied again and the bundle grep caught it:** my own Phase-4
+  portal deploy **FAILED** (`git fetch origin --prune failed`) — yet the feature
+  is live, because a parallel session's portal deploy at `4e13522f` carried the
+  commit up. **Judge by `.build-commit` + a bundle STRING grep, never the log.**
+
+## §8 The sidebar (`9fbd5af3`)
+
+Izzy: *"put it in the sidebar."* It already WAS — and deployed — but at
+**position 9 of 25** in the Admin section, between Ring Groups & Queues and PBX
+Events, which is functionally invisible. Moved to the **top of the Admin
+section**, above Admin Console. Gating unchanged.
+⛔ **Committed surgically from the tip**: the shared worktree's `navConfig.ts`
+also held another session's **uncommitted** pbx-console permission-key fix
+(`can_manage_global_settings`), which a plain file commit would have swept in.
+
+⏳ **Phase 5 NOT started** — the Agent-SDK workbench (the full IDE + SSH
+terminal). The support-agent accounts and their per-feature permission keys
+remain Izzy's to create.
