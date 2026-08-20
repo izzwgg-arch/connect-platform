@@ -10,10 +10,19 @@ to that email, it would reply to it as a text message and make sure the email st
 in one thread. Each chat will be one thread per phone number."*
 
 State: **code complete + tested (31 new tests, agent suite 695/697 with only the
-2 pre-existing failures, typecheck at the exact 14-error agent baseline).**
-⏳ **NOT ARMED and NOT DEPLOYED** — it is gated off until the env below is set and
-the agent container is rebuilt, and the one thing only Izzy can supply is a Google
-**app password for sms@loopcom.net** (§4).
+2 pre-existing failures, typecheck at the exact 14-error agent baseline) — and as
+of 2026-08-20 ~11:38Z it is DEPLOYED AND ARMED LIVE.** Izzy supplied the app
+password in chat; the agent was rebuilt (container-verified: all five files +
+imapflow/mailparser in the image), the 8 env lines went live in `.env.platform`
+(backups `.env.platform.bak.*.smsbridge-stanza` / `.smsbridge-arm`), boot audit
+rows `sms.email_enabled` + `sms.reply_enabled` landed, and a live probe proved
+the loop end to end: **SMTP send as sms@loopcom.net (250 OK gsmtp) → Gmail
+plus-address delivery → IMAP read + parse (`threadId` extracted) → a FORGED
+signature refused** (`sms.reply_ignored reason=bad_signature`, emailId 6) —
+and Google's own "app password created" security alert was correctly ignored
+as `no_reply_address`. ⏳ What remains unproven is a REAL text riding the
+bridge (§5) — **0 users have the toggle on**, so nothing forwards until
+someone opts in, and opting in a customer's user is Izzy's call.
 
 ---
 
@@ -166,8 +175,10 @@ auto_generated / already_claimed).
 
 ## 7. Open / not proven
 
-- ⏳ **No email has ever been sent or read by the bridge** — SMTP/IMAP creds do
-  not exist yet. Everything is proven by tests + typecheck, not by a message.
+- ✅ **SUPERSEDED same day: the bridge IS armed and its transport IS proven** —
+  see the State block at the top (SMTP 250 OK, IMAP read, forged-signature
+  refusal all live). What is still unproven is a real inbound text forwarding
+  and a real reply landing as a text (§5) — no user has the toggle on yet.
 - ⏳ The Gmail-side threading (one conversation per number) is proven by the
   header design, not by a human looking at an inbox — step 3 above is the check.
 - ⏳ Quota: Gmail sends are capped (~500/day standard, 2,000 on Workspace). The
