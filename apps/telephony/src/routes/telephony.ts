@@ -16,6 +16,7 @@ import {
   decideFollowMeRingTime,
   DIAL_DISCOVERY_CLI,
 } from "./wakeDialPublish";
+import { decideStaleHangupTargets } from "./staleHangupScope";
 import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
 
 export function registerTelephonyRoutes(
@@ -513,40 +514,62 @@ export function registerTelephonyRoutes(
    * POST /telephony/calls/stale-hangup-for-extension
    *
    * Called by the portal ~10 s after the user presses hangup if the call still appears active
-   * in the telephony WebSocket. Finds any live call matching the extension (and optionally tenant)
-   * and force-evicts it from the store + sends AMI Hangup for each channel.
+   * in the telephony WebSocket. Force-evicts the orphaned call from the store + sends AMI
+   * Hangup for each of its channels.
    *
    * This is the portal's last-resort safeguard: if JsSIP sent BYE but the PBX never delivered
    * the AMI Hangup event, this clears the orphaned row.
+   *
+   * ⛔⛔ THIS ROUTE HANGS UP LIVE CALLS. It MUST be scoped to the caller's own SIP device.
+   *
+   * It used to match purely on the EXTENSION NUMBER, and an extension is shared by several
+   * devices: the desk phone registers as `T<t>_<ext>` and the portal/app as `T<t>_<ext>_1`.
+   * So when a portal user hung up their own call, this swept up and killed the DESK PHONE's
+   * live, answered, bridged call ten seconds later. Proven on Trust Bookkeepings ext 106
+   * (2026-08-20): every one of the 7 force-hangups in the log was a `PJSIP/T18_106-…` desk
+   * channel, never the portal's own `T18_106_1`. It also killed a user's OTHER concurrent
+   * calls, since every call on the extension matched.
+   *
+   * `sipUsername` (the caller's own PJSIP endpoint, e.g. `T18_106_1`) is therefore REQUIRED,
+   * and a call is only ever a candidate if that endpoint is still one of its LIVE channels
+   * (`call.channels` is pruned on Hangup, so a losing ring leg does not count).
+   *
+   * ⛔ Fails CLOSED, deliberately: a request without `sipUsername` is refused and evicts
+   * nothing. The worst case of not running is a stale row in the live-calls list, which is
+   * cosmetic; the worst case of running too broadly is cutting off a customer mid-call.
    */
   router.post(
     "/telephony/calls/stale-hangup-for-extension",
     async (req: Request, res: Response) => {
       const tenantId = getTenantId(res);
-      const { extension, hangupAt } = req.body as { extension?: unknown; hangupAt?: unknown };
+      const { extension, hangupAt, sipUsername } = req.body as {
+        extension?: unknown;
+        hangupAt?: unknown;
+        sipUsername?: unknown;
+      };
 
       if (typeof extension !== "string" || !extension) {
         res.status(400).json({ error: "extension is required" });
         return;
       }
 
-      const hangupTs = typeof hangupAt === "string" ? new Date(hangupAt).getTime() : 0;
+      // ⛔ Scoping lives in decideStaleHangupTargets — read its header before
+      // touching anything here. It fails closed without a sipUsername.
+      const decision = decideStaleHangupTargets(
+        { sipUsername, hangupAt, tenantId },
+        telephony.callStore.getActive(),
+      );
 
-      const activeCalls = telephony.callStore.getActive().filter((c) => {
-        if (tenantId && c.tenantId && c.tenantId !== tenantId) return false;
-        // Match if either `from` or `to` contains the extension
-        const matchesExt =
-          (c.from && (c.from === extension || c.from.endsWith(`/${extension}`))) ||
-          (c.to && (c.to === extension || c.to.endsWith(`/${extension}`)));
-        if (!matchesExt) return false;
-        // Only evict if the call started before or around the stated hangup time
-        if (hangupTs > 0 && c.startedAt) {
-          const startedMs = new Date(c.startedAt).getTime();
-          // Must have started at least 2 s before the hangup timestamp
-          if (startedMs > hangupTs - 2_000) return false;
-        }
-        return true;
-      });
+      if (!decision.evict) {
+        res.locals["log"]?.warn?.(
+          { extension, reason: decision.reason },
+          "stale-hangup: refused — request carried no sipUsername, so the caller's device cannot be identified (an extension is shared by the desk phone and the app)",
+        );
+        res.json({ cleared: 0, refused: decision.reason });
+        return;
+      }
+
+      const activeCalls = decision.targets;
 
       if (activeCalls.length === 0) {
         res.json({ cleared: 0, message: "No matching active calls found (already gone)" });

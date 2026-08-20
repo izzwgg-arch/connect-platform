@@ -763,6 +763,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     stopLocalRingback,
     resumeOutputAfterRingback,
     startRingtone,
+    startCallWaitingAlert,
+    stopCallWaitingAlert,
     playDtmfTone,
     playCallEndChime,
     stopAll: stopAllAudio,
@@ -1453,8 +1455,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
                 setRemoteParty(party);
                 startRingtone();
               } else {
+                // Call waiting: a quiet repeating beep, never the full ringtone —
+                // the person is mid-conversation (mirrors the mobile app).
                 bindSideSession(data.session, party, mcId);
-                startRingtone();
+                startCallWaitingAlert();
               }
             } else {
               registerSessionMeta(mcId, {
@@ -2089,9 +2093,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
                 // Call-waiting path — do NOT hijack the primary callState UI.
                 // Bind lightweight per-session listeners so multi-call meta is
                 // accurate; the softphone's MultiCallPanel renders the banner.
+                // Audio is a quiet repeating BEEP, never the full ringtone —
+                // the person is mid-conversation (mirrors the mobile app's
+                // startCallWaitingAlert; Trust Bookkeepings complaint 2026-08-20).
                 bindSideSession(data.session, party, mcId);
                 console.log(`[MULTICALL] web call_waiting incoming=${mcId} while active=${activeSessionIdRef.current}`);
-                startRingtone();
+                startCallWaitingAlert();
               }
             } else {
               // Outbound — bindSession sets the meta once the session binds.
@@ -2771,6 +2778,25 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
    * another session is already active. Only updates multi-call meta — does
    * NOT touch the primary callState / remoteParty / sessionRef.
    */
+  /**
+   * Any call-waiting session still ringing? (side sessions: ringing + not active)
+   * `excludeId` covers the just-declined session, whose meta is only removed
+   * asynchronously by its own "ended" handler — without it the beep would keep
+   * going for the length of the BYE round-trip after the user pressed Decline.
+   */
+  function anyRingingWaitingSession(excludeId?: string): boolean {
+    for (const meta of sessionMetaRef.current.values()) {
+      if (excludeId && meta.id === excludeId) continue;
+      if (meta.state === "ringing" && !meta.isActive) return true;
+    }
+    return false;
+  }
+
+  /** Stop the call-waiting beep once no waiting session is left ringing. */
+  function settleCallWaitingAlert(excludeId?: string) {
+    if (!anyRingingWaitingSession(excludeId)) stopCallWaitingAlert();
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function bindSideSession(session: any, party: string, mcId: string) {
     session.on("progress", () => {
@@ -2779,9 +2805,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     session.on("accepted", () => {
       // Answered via answerSession — promotion to active is handled there.
       patchSessionMeta(mcId, { state: "connected" });
+      settleCallWaitingAlert();
     });
     session.on("confirmed", () => {
       patchSessionMeta(mcId, { state: "connected" });
+      settleCallWaitingAlert();
     });
     session.on("hold", () => {
       patchSessionMeta(mcId, { onHold: true, state: "held", isActive: false });
@@ -2796,10 +2824,15 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       userInitiatedHangupRef.current = false;
       console.log(`[MULTICALL] web side_session_ended=${mcId}`);
       removeSessionMeta(mcId);
+      // The waiting caller gave up (or was declined): silence the beep unless
+      // another call is still waiting. Without this the alert repeated forever
+      // (the old full-ringtone version of this bug looped until the 120 s cap).
+      settleCallWaitingAlert();
     });
     session.on("failed", () => {
       console.log(`[MULTICALL] web side_session_failed=${mcId}`);
       removeSessionMeta(mcId);
+      settleCallWaitingAlert();
     });
   }
 
@@ -3060,8 +3093,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     playCallEndChime();
     console.log("[SIP] user hangup");
 
-    // Capture extension and hangup time before clearing state
+    // Capture extension, SIP identity and hangup time before clearing state.
+    // ⛔ sipUsername is what scopes the stale-hangup sweep to THIS device — see
+    // the guard below and the route's own header in apps/telephony.
     const extensionAtHangup = diagRef.current.extensionNumber;
+    const sipUsernameAtHangup = diagRef.current.sipUsername;
     const hangupIso = new Date().toISOString();
     hangupAtRef.current = hangupIso;
 
@@ -3101,15 +3137,31 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     oneWayAudioWarnedRef.current = false;
 
     // ── Post-hangup stale-call safeguard ──────────────────────────────────────
-    // 10 seconds after hangup, ask the telephony service if a call for this
-    // extension is still active. If so, force-evict it and hang up the PBX leg.
-    // This is the last-resort defence if the PBX never delivered an AMI Hangup event.
+    // 10 seconds after hangup, ask the telephony service if this DEVICE's call is
+    // still active. If so, force-evict it and hang up the PBX leg. Last-resort
+    // defence for when the PBX never delivered an AMI Hangup event.
+    //
+    // ⛔⛔ THIS ASKS THE SERVER TO HANG UP A LIVE CALL. Two guards, both required:
+    //  1. `sipUsername` scopes it to this device. An extension is shared with the
+    //     DESK PHONE (`T18_106` vs the portal's `T18_106_1`), and without this the
+    //     sweep killed desk-phone calls mid-conversation (Trust Bookkeepings
+    //     ext 106, 2026-08-20 — 7 desk calls cut off).
+    //  2. Skip entirely while this device still has other live sessions. The user
+    //     hung up ONE call; a sweep fired now can only be aimed at the calls they
+    //     are still on. The remaining call's own hangup schedules its own sweep.
     if (staleHangupTimerRef.current) clearTimeout(staleHangupTimerRef.current);
-    if (extensionAtHangup) {
+    if (extensionAtHangup && sipUsernameAtHangup && sessionMetaRef.current.size === 0) {
       staleHangupTimerRef.current = setTimeout(() => {
         staleHangupTimerRef.current = null;
+        // Re-check at fire time: a new call may have started during the 10 s wait,
+        // and sweeping then would hang up a conversation that is already underway.
+        if (sessionMetaRef.current.size > 0) {
+          console.log("[SIP] stale-hangup sweep skipped — a call is live again");
+          return;
+        }
         apiPost("/telephony/calls/stale-hangup-for-extension", {
           extension: extensionAtHangup,
+          sipUsername: sipUsernameAtHangup,
           hangupAt: hangupIso,
         })
           .then((res: unknown) => {
@@ -3565,6 +3617,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     userInitiatedHangupRef.current = true;
     playCallEndChime();
     try { s.terminate(); } catch { /* already ended */ }
+    // Silence the call-waiting beep now rather than waiting for the BYE to come
+    // back — declining must feel instant. Excludes this session because its meta
+    // is only removed later, by its own "ended" handler.
+    settleCallWaitingAlert(id);
     // removeSessionMeta will fire via session.on("ended") handler.
   }, [playCallEndChime]);
 

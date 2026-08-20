@@ -8,6 +8,9 @@
  *  - UK local ringback (400 + 450 Hz, 400/200/400/2000 ms cadence) until PBX remote ringback
  *  - US ringback tone  (440 + 480 Hz, 2s on / 4s off cadence) — legacy helper
  *  - Incoming ringtone (480 + 440 Hz double-ring, NANP cadence)
+ *  - Call-waiting alert (single bright 1400 Hz beep every 5 s — mirrors the
+ *    mobile app's telephonyAudio.startCallWaitingAlert; used INSTEAD of the
+ *    full ringtone when a second call arrives while another call is live)
  *  - DTMF keypad tones (standard ITU-T frequencies, 120 ms)
  *  - Call-end chime (short descending three-note disconnect cue)
  */
@@ -272,12 +275,21 @@ function playCallEndChimePattern(ctx: AudioContext, volume = 0.13): void {
 // window, so this only ever silences a ring whose call is already over.
 const RINGTONE_ABSOLUTE_CAP_MS = 120_000;
 
+// Call-waiting alert cadence — one short bright beep, repeating. Mirrors the
+// mobile app (apps/mobile/src/audio/telephonyAudio.ts: 1400 Hz dual tone,
+// ~180 ms, repeat every 5 s). Deliberately quiet and non-looping audio-wise:
+// the person is ON a call, so the cue must inform without drowning the caller.
+const CALL_WAITING_BEEP_FREQ_HZ = 1400;
+const CALL_WAITING_BEEP_MS = 180;
+const CALL_WAITING_REPEAT_MS = 5000;
+
 export function useTelephonyAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const ringbackRef = useRef<ToneHandle | null>(null);
   const ringtoneRef = useRef<ToneHandle | null>(null);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const ringtoneCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callWaitingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function ensureCtx(): AudioContext | null {
     if (!ctxRef.current || ctxRef.current.state === "closed") {
@@ -289,11 +301,23 @@ export function useTelephonyAudio() {
     return ctxRef.current;
   }
 
+  /** Stop the repeating call-waiting beep (idempotent). */
+  const stopCallWaitingAlert = useCallback(() => {
+    if (callWaitingTimerRef.current) {
+      clearInterval(callWaitingTimerRef.current);
+      callWaitingTimerRef.current = null;
+    }
+  }, []);
+
   /** Stop everything immediately. */
   const stopAll = useCallback(() => {
     if (ringtoneCapTimerRef.current) {
       clearTimeout(ringtoneCapTimerRef.current);
       ringtoneCapTimerRef.current = null;
+    }
+    if (callWaitingTimerRef.current) {
+      clearInterval(callWaitingTimerRef.current);
+      callWaitingTimerRef.current = null;
     }
     ringbackRef.current?.stop();
     ringbackRef.current = null;
@@ -423,6 +447,33 @@ export function useTelephonyAudio() {
     ringtoneRef.current = startIncomingRingtone(ctx, 0.18 * ringerVol);
   }, [stopAll]);
 
+  /**
+   * Call-waiting alert: a short bright beep now and every 5 s until stopped.
+   * Used INSTEAD of startRingtone when a second call arrives while another call
+   * is active — the full looping ringtone would blast over the live conversation
+   * (Trust Bookkeepings complaint, 2026-08-20). Mirrors the mobile app's
+   * startCallWaitingAlert. Idempotent: calling it while already beeping does
+   * nothing, so overlapping waiting calls never double the cadence.
+   */
+  const startCallWaitingAlert = useCallback(() => {
+    if (callWaitingTimerRef.current) return; // already alerting
+    if (!getWebRingerEnabled()) return;
+    const isDesktop =
+      typeof window !== "undefined" && Boolean((window as any).connectDesktop?.isDesktop);
+    const ringerVol = isDesktop ? getWebRingerVolume() : 1;
+    const ringerDeviceId = isDesktop ? getWebRingerOutputDeviceId() : "";
+    const beep = () => {
+      const ctx = ensureCtx();
+      if (!ctx) return;
+      if (ringerDeviceId && typeof (ctx as any).setSinkId === "function") {
+        void (ctx as any).setSinkId(ringerDeviceId).catch(() => undefined);
+      }
+      playToneBurst(ctx, CALL_WAITING_BEEP_FREQ_HZ, CALL_WAITING_BEEP_FREQ_HZ, CALL_WAITING_BEEP_MS, 0.2 * ringerVol);
+    };
+    beep();
+    callWaitingTimerRef.current = setInterval(beep, CALL_WAITING_REPEAT_MS);
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const onPreferenceChange = () => {
@@ -474,6 +525,8 @@ export function useTelephonyAudio() {
     stopLocalRingback,
     resumeOutputAfterRingback,
     startRingtone,
+    startCallWaitingAlert,
+    stopCallWaitingAlert,
     playDtmfTone,
     playCallEndChime,
     stopAll,
