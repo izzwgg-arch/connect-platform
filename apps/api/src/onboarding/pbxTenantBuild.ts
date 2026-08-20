@@ -177,13 +177,37 @@ async function createTrunk(s: PanelSession, label: string, vm: PbxBuildJob["voip
   return id;
 }
 
-async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkId: string): Promise<string> {
+/**
+ * The shared PRIMARY outbound trunk. ⛔ Izzy's rule (2026-08-20): every
+ * tenant's outbound route lists this trunk FIRST and the tenant's own VoIP.ms
+ * trunk SECOND — carriers are filtering VoIP.ms-originated calls (they were
+ * not reaching cell phones), so VoIP.ms is the BACKUP carrier, never the
+ * primary. Matched by exact trimmed NAME in the outbound-route form's trunk
+ * list, never by a pinned id (ids are per-PBX; the doorway taught us pinned
+ * ids go stale silently).
+ * ⛔ Emergency calling stays on the tenant's OWN VoIP.ms trunk — that is the
+ * account carrying the number's E911 registration; never add this trunk to
+ * `provisionTenantEmergency`'s trunkIds.
+ */
+export const SHARED_PRIMARY_TRUNK_NAME = "0001";
+
+async function findSharedPrimaryTrunkId(s: PanelSession): Promise<string | null> {
+  const h = await s.loadForm("trunk_group", "add");
+  return findOptionInSelect(h, TRUNK_SELECT, (t) => t.trim() === SHARED_PRIMARY_TRUNK_NAME);
+}
+
+async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkIds: string[]): Promise<string> {
   const pre = findOptionInSelect(await s.loadForm("ars", "add"), ROUTE_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("trunk_group");
   const p: Pairs = [
     ["class", "trunk_group"], ["method", "put"], ["mode", "add"], ["csfr_token", csrf],
-    ["description", label], ["trklist[]", trunkId], ["pin_list_id", ""], ["csv", ""],
+    ["description", label],
+    // ⛔ ORDER IS THE FEATURE: the panel assigns member `index` from posted
+    // order, and Asterisk dials trunks in that order — primary first, backup
+    // second. One pair per trunk, exactly as the browser posts a multi-select.
+    ...trunkIds.map((id): [string, string] => ["trklist[]", id]),
+    ["pin_list_id", ""], ["csv", ""],
     // cid_name is what callees SEE on outbound calls — keep it the clean
     // company name; only the description carries the submission tag.
     ["cid_name", cidName], ["cid_number", did], ["overwrite_cid", "if_not_provided"],
@@ -637,8 +661,18 @@ export async function buildPbxTenant(
   s.setTenant(mainTenant);
   const trunkId = await createTrunk(s, label, job.voipms);
   log(`trunk ok (id ${trunkId})`);
-  const routeId = await createOutboundRoute(s, label, co, outboundCid, trunkId);
-  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""})`);
+  // ⛔ The shared "0001" trunk goes FIRST on every outbound route; the
+  // tenant's VoIP.ms trunk is the backup (carriers filter VoIP.ms calls).
+  // Missing "0001" is NOT fatal — a build that dies here leaves a paid
+  // customer with no phone system at all, which is worse than backup-only
+  // outbound — but it is loud, and lands on the sign-up timeline.
+  const primaryTrunkId = await findSharedPrimaryTrunkId(s);
+  if (!primaryTrunkId) {
+    log(`⛔ shared primary trunk "${SHARED_PRIMARY_TRUNK_NAME}" not found on the PBX — outbound route carries ONLY the VoIP.ms trunk (carrier-filtered); add "${SHARED_PRIMARY_TRUNK_NAME}" to this route in the panel`);
+  }
+  const routeTrunkIds = primaryTrunkId && primaryTrunkId !== trunkId ? [primaryTrunkId, trunkId] : [trunkId];
+  const routeId = await createOutboundRoute(s, label, co, outboundCid, routeTrunkIds);
+  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""}${primaryTrunkId ? `, trunks ${SHARED_PRIMARY_TRUNK_NAME}→VoIP.ms` : ""})`);
   const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
   let mirrorTenantId = 0;

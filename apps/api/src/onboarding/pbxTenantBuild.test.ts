@@ -373,6 +373,45 @@ test("outbound route: 5 recorded dial patterns, 845 prepend on 7-digit, DID as C
   assert.equal(get(route.fields, "trklist[]"), fake.trunks[0].id);
 });
 
+// ── The shared primary trunk rule (Izzy, 2026-08-20) ─────────────────────────
+// Carriers filter VoIP.ms-originated calls (they were not reaching cell
+// phones), so the shared "0001" trunk is the PRIMARY on every outbound route
+// and the tenant's own VoIP.ms trunk is the backup.
+
+test('outbound route lists the shared "0001" trunk FIRST and the VoIP.ms trunk as backup', async () => {
+  const fake = new FakePanel();
+  fake.trunks.push({ id: "72", name: "0001" });
+  const result = await run(fake);
+  const route = fake.puts.find((p) => p.cls === "trunk_group")!;
+  // ⛔ ORDER is the feature: the panel assigns member index from posted order,
+  // and Asterisk dials trunks in that order. 0001 first, VoIP.ms second.
+  assert.deepEqual(getAll(route.fields, "trklist[]"), ["72", result.trunkId]);
+  assert.notEqual(result.trunkId, "72", "the tenant still gets its OWN VoIP.ms trunk");
+});
+
+test('the "0001" match is exact after trimming — a similarly-named trunk is never adopted as primary', async () => {
+  const fake = new FakePanel();
+  fake.trunks.push({ id: "90", name: "00012" }); // NOT the shared trunk
+  fake.trunks.push({ id: "72", name: " 0001 " }); // panel names carry stray spaces (live: "Kj Play Center ")
+  const result = await run(fake);
+  const route = fake.puts.find((p) => p.cls === "trunk_group")!;
+  assert.deepEqual(getAll(route.fields, "trklist[]"), ["72", result.trunkId]);
+});
+
+test('a PBX with no "0001" trunk still builds — VoIP.ms only, and the gap is SAID on the build log', async () => {
+  const fake = new FakePanel(); // no 0001 seeded
+  install(fake);
+  const s = await new PanelSession("https://panel.example", ACCOUNT).login();
+  const logs: string[] = [];
+  const result = await buildPbxTenant(s, MAIN, job(), (m) => logs.push(m));
+  const route = fake.puts.find((p) => p.cls === "trunk_group")!;
+  assert.deepEqual(getAll(route.fields, "trklist[]"), [result.trunkId]);
+  assert.ok(
+    logs.some((l) => l.includes("0001") && /not found/i.test(l)),
+    `build log must name the missing primary trunk; got: ${logs.join(" | ")}`,
+  );
+});
+
 test("tenant form: slug name, company description, DID inside the tenant, ARS profile", async () => {
   const fake = new FakePanel();
   await run(fake);

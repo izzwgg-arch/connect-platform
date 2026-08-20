@@ -101,6 +101,43 @@ escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbenc
   (`role === "owner"`) while its sibling approvals GET is staff-only — a tenant admin
   can approve/deny any action id they learn. Same class as the 2026-08-19 findings.
 
+## ⛔⛔ OUTBOUND ROUTES: the shared "0001" trunk is FIRST, VoIP.ms is the BACKUP (Izzy's standing rule, 2026-08-20) — READ FIRST before touching `createOutboundRoute`, any `trklist[]`, or an `ombu_outbound_route_members` row
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_OUTBOUND_0001_PRIMARY_2026-08-20.md`**
+(code + tests on `feat/ivr-migration-takeover`; **backfill DONE and verified in
+live Asterisk the same morning** — routes 122/125/126/128/161 all read
+`Gosub(trk-72` first; ONE Main Apply via `applyAndRebake`, doorways 0 lines
+changed. Rollback SQL `/root/outbound-route-0001-backfill-backup-20260820T105929Z.sql`
+on the PBX.) Memory: [[outbound-route-0001-primary-trunk]].
+
+- ⛔⛔ **THE RULE: every tenant's outbound route lists the shared "0001" trunk
+  (trunk_id 72, Telocall) FIRST and the tenant's own VoIP.ms trunk SECOND.**
+  Carriers filter VoIP.ms-originated calls — they were not reaching cell phones
+  — so VoIP.ms is only the backup. Onboarding had been building routes with the
+  VoIP.ms trunk alone; fixed in `pbxTenantBuild.ts` (`SHARED_PRIMARY_TRUNK_NAME`,
+  resolved by exact trimmed NAME, never a pinned id) and backfilled.
+- ⛔ **ORDER IS THE FEATURE**: posted `trklist[]` order becomes
+  `ombu_outbound_route_members.index` becomes dial order; failover to VoIP.ms
+  fires only on real trunk failure (causes 16/17/19 finish without it).
+- ⛔ **Emergency calling stays on the tenant's OWN VoIP.ms trunk** — that account
+  holds the E911 registration; never add 0001 to `provisionTenantEmergency`.
+- ⛔ **Route 123 "Loopcom Demo" stays SignalWire-only (trunk 132) on purpose** —
+  Izzy's SignalWire outbound test bed; never "backfill" it. Route 59 "iniimini"
+  and the other hand-era 0001-less routes (Kitchens of Usa, Silver Birch, Onveo,
+  …) are outside the mandate — Izzy's call.
+- ⛔ **A missing "0001" trunk does NOT fail a build** — it logs
+  `⛔ shared primary trunk "0001" not found…` onto the sign-up timeline and
+  builds VoIP.ms-only. A dead build helps nobody; the log line is the alarm.
+- Trunk 0001's REGISTRATION reads `Rejected` in `pjsip show registrations` —
+  that is its inbound leg only (`server_uri` says `:700`, likely a typo) and
+  outbound demonstrably works (live calls hours before the backfill). Don't
+  "fix" it as part of an outbound investigation.
+- ⏳ **NOT PROVEN:** no outbound call placed from the five backfilled tenants
+  since the change, and no new tenant built since the code change. Acceptance:
+  one call from Ezra's training tenant to a cell phone shows `Gosub(trk-72,…)`
+  first in the Asterisk log; the next sign-up's build log reads
+  `outbound route ok (… trunks 0001→VoIP.ms)`.
+
 ## ⛔⛔ AGENT HANDOFF — the AI agent treated every TENANT_ADMIN as Connect staff; fortification pass FIXED it and stress-tested the platform (2026-08-19) — READ FIRST before using the agent's `role === "owner"` to authorize anything platform-wide, before adding an `/agent-api/*` admin route, or before touching the tool tiers
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FORTIFICATION_PASS_2026-08-19.md`**
