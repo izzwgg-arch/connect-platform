@@ -350,6 +350,7 @@ import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerPbxConsoleRoutes } from "./pbxConsole/pbxConsoleRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
 import { registerForwardRoutes } from "./pbx/forwardRoutes";
+import { registerConferenceRoutes } from "./pbx/conferenceRoutes";
 import { registerDidSwitchScheduleRoutes, startDidSwitchScheduler, injectAsService as didInjectAsService } from "./didSwitchSchedule";
 import { startDidRouteReconciler, type ReconcilerMapping } from "./didRouteReconciler";
 import {
@@ -25496,6 +25497,26 @@ registerForwardRoutes({
   requireIvrManager: (req, reply) => requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing"),
   assertIvrTenantAccess,
   resolveConnectTenantIdFromScope,
+  readTeamDirectory,
+});
+
+// Conference rooms — reads from Ombutel, writes by panel replay, gated on the
+// conference feature's OWN keys (see the conference block in
+// packages/shared/src/portalPermissions.ts). The Conference page's buttons
+// check the identical keys, so a visible control can never 403.
+registerConferenceRoutes({
+  app,
+  db,
+  requireConferenceViewer: (req, reply) =>
+    requireRoleOrPortalPermission(req, reply, (u) => isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]), "can_view_conferences"),
+  requireConferenceManager: (req, reply) =>
+    requireRoleOrPortalPermission(req, reply, (u) => isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]), "can_manage_conferences"),
+  userMayManage: async (u) =>
+    isRole(u, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]) || (await userHasActionPermission(u, "can_manage_conferences")),
+  isSuperAdmin: (u) => isRole(u, ["SUPER_ADMIN"]),
+  assertIvrTenantAccess,
+  resolveConnectTenantIdFromScope,
+  resolvePbxTenantContext: resolveQueueTenantContext,
   readTeamDirectory,
 });
 

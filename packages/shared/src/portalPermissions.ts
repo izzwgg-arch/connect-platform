@@ -48,6 +48,10 @@ export const SIDEBAR_ITEMS = [
   // display is reached from the page rather than the sidebar, since it is
   // meant for a TV and not for the person browsing the app.
   { id: "pbx.queues", section: "pbx", label: "Queues", href: "/queues", permission: "can_view_pbx_queues" },
+  // Conference rooms — dial-in meeting bridges on the tenant's own phone
+  // system. One nav entry; the page itself gates on can_view_conferences and
+  // managing rooms needs can_manage_conferences (see the action keys below).
+  { id: "pbx.conference", section: "pbx", label: "Conference", href: "/conference", permission: "can_view_pbx_conference" },
 
   { id: "crm.dashboard", section: "crm", label: "CRM Dashboard", href: "/crm/dashboard", permission: "can_view_crm_dashboard" },
   { id: "crm.contacts", section: "crm", label: "Contacts", href: "/crm/contacts", permission: "can_view_crm_contacts" },
@@ -201,6 +205,18 @@ export const ACTION_PERMISSION_KEYS = [
   "can_view_queue_wallboard",
   "can_view_queue_reports",
   "can_create_queues",
+  // ── Conference rooms ──────────────────────────────────────────────────────
+  // Two keys, split the same way as the queue keys:
+  //   can_view_conferences   — see the Conference page: the tenant's rooms,
+  //                            their numbers and PINs, and who is on a call.
+  //   can_manage_conferences — create, change or delete a room. This is a PBX
+  //                            write (panel replay, like can_create_queues), so
+  //                            it is separable from merely knowing the dial-in
+  //                            details. ⛔ The /voice/conferences write routes
+  //                            accept exactly this key, and the page's buttons
+  //                            check the same one — never let the two drift.
+  "can_view_conferences",
+  "can_manage_conferences",
   // Lets a person switch the customer-facing screens into Yiddish. Separate
   // from the tenant-level switch: the tenant chooses at sign-up whether
   // Yiddish is offered at all, this decides who inside it may use it.
@@ -332,6 +348,9 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   can_view_sms: [...APPS_SECTION, "can_view_apps_sms_campaigns", "can_view_apps_whatsapp_inbox"],
   can_manage_voip_ms: [...APPS_SECTION, "can_view_apps_voip_ms"],
   can_view_ivr_routing: [...PBX_SECTION, "can_view_pbx_ivr_routing"],
+  // The Conference nav item switches on with the page's own view key, so nav
+  // visibility and page access can never disagree (the queues lesson above).
+  can_view_conferences: [...PBX_SECTION, "can_view_pbx_conference"],
   can_view_moh: [...PBX_SECTION, "can_view_pbx_moh_scheduling"],
   can_view_did_routing: [...PBX_SECTION, "can_view_pbx_did_routing"],
   // Delivery/order tracking — expands the umbrella capability to the section + all pages.
@@ -437,6 +456,10 @@ const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_view_queue_wallboard",
   "can_view_queue_reports",
   "can_create_queues",
+  // Conference rooms: on for a tenant admin, off for an ordinary user, each
+  // key individually revocable from a custom role.
+  "can_view_conferences",
+  "can_manage_conferences",
   "can_view_admin",
   "can_manage_integrations",
   "can_manage_voip_ms",

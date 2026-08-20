@@ -103,6 +103,53 @@ export function nextForwardExtension(used: UsedNumbers, existingForwards: string
   return null;
 }
 
+// ── Conference room numbers ──────────────────────────────────────────────────
+// Conference rooms get their own series so they read as "meeting rooms" in the
+// panel and never collide with ring groups (8xx) or queues (9xx): 700…709,
+// then 7000…7099, widening exactly like the team series. Same caveat as teams:
+// "free" means free across EVERYTHING in the tenant's dial plan, so callers
+// must merge the conference list (its own table, invisible to UsedNumbers)
+// via `existingConferences`.
+
+export const CONFERENCE_SERIES_DIGIT = "7";
+
+export function* candidateConferenceNumbers(maxWidth = 6): Generator<string> {
+  for (let width = 3; width <= maxWidth; width++) {
+    const tailLength = width - 2;
+    const count = 10 ** tailLength;
+    for (let i = 0; i < count; i++) {
+      yield `${CONFERENCE_SERIES_DIGIT}0${String(i).padStart(tailLength, "0")}`;
+    }
+  }
+}
+
+/**
+ * The number to give a new conference room. `existingConferences` carries the
+ * numbers already used by conference rooms — they live in their own table and
+ * are invisible to the extension/ring group/queue lists, so leaving them out
+ * would hand back a number that already answers a meeting.
+ */
+export function nextConferenceNumber(
+  used: UsedNumbers,
+  existingConferences: string[] = [],
+  maxWidth = 6,
+): string | null {
+  const taken = new Set<string>(
+    [
+      ...(used.extensions ?? []),
+      ...(used.ringGroups ?? []),
+      ...(used.queues ?? []),
+      ...existingConferences,
+    ]
+      .map((n) => String(n ?? "").trim())
+      .filter(Boolean),
+  );
+  for (const candidate of candidateConferenceNumbers(maxWidth)) {
+    if (!taken.has(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function explainChosenNumber(kind: TeamKind, chosen: string, used: UsedNumbers): string {
   const lead = TEAM_SERIES_DIGIT[kind];
   const first = `${lead}00`;
