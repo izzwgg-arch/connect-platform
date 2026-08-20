@@ -357,14 +357,47 @@ call): handlers call `requireSuperAdmin`, `/admin/support` rides
 `isNavItemVisibleForUser` — ⛔ deliberately NO new grantable key until a feature
 honours it. ✅ Proven live: self-signed SUPER_ADMIN probe → 200, the real
 4-escalation backlog. ⏳ Nobody has opened the page in a browser; no fix ever
-approved from it. ✅ **Phase 2 (customer panel) SHIPPED same evening,
-`8e192e5d`, api+portal container-verified + live-probed** — the desk's third
-column aggregates extensions/users/numbers/billing/calls/past escalations via
-`GET /admin/support/customers/:tenantId`, every block best-effort (⛔ field
-names verified: `autoBillingEnabled`, `extNumber`, `connectTenantId`,
-`startedAt`; ⛔ no `:has()` in its css, class-toggled instead). ⏳ Phases 3–5
-(cross-company inbox + take-over, tools, the Agent-SDK workbench) are
-DESIGNED ONLY.
+approved from it. ✅ **Phases 2–5b ALL SHIPPED the same evening, every stage
+container-verified and live-probed.** **P2 customer panel** (`8e192e5d`) —
+`GET /admin/support/customers/:tenantId` aggregates extensions/users/numbers/
+billing/calls/past-escalations, every block best-effort (⛔ verified field names:
+`autoBillingEnabled`, `extNumber`, `connectTenantId`, `startedAt`; ⛔ no
+`:has()` in its css). **P3 cross-company inbox** (`a2bb91fa`) —
+`/admin/support/threads` (+`/:id`, +`/reply`); ⛔ the reply DELEGATES to the
+injected `sendConnectChatSmsMessage` and takes tenantId from the THREAD, so it
+leaves from that company's own number; a source guard pins the POST list and
+forbids this module ever sending or writing messages itself. **P4 assistant
+take-over** (`7a2e106c`) — migration `20260820213000` (`humanTakeoverAt/By`,
+applied live); ⛔⛔ three legs that must ship together: desk API + the agent
+ENGINE's refusal-to-answer (**a CONTAINER REBUILD, not an api deploy**) + the
+widget's 4 s polling; the engine's branch sits BEFORE the Yiddish input leg (no
+wasted YL credits); a staff message REQUIRES an active take-over (409 — two
+voices in one mouth); ⛔ `AgentAuditLog.hash` is REQUIRED tamper evidence.
+**P5a/5b the GOVERNOR, built before the engine it governs** (`fe755157`) —
+**Ground rules**: three plain-English lists (allowed/never/ask-first) owned by
+Izzy, append-only so the history IS the audit trail; ⛔⛔ `classifyAction()` is
+the EXECUTABLE half, so "never" holds in code even when the model is talked into
+something (prompt text alone is decoration); ⛔ order is the safety property
+(NEVER > ASK > ALLOWED) and ⛔ no match ⇒ ASK, never ALLOW; ⛔ the matcher is
+VERB-AWARE so "Read the PBX" is allowed while "Write to the PBX" is never — a
+noun-only matcher refused both, and refused "delete the old deploy logs" over the
+word *deploy*; ⛔ never put a common word like "customer" in a subject-only never
+rule. **Watchman**: rule files readable / server healthy / PBX reachable AND
+read-only — the last proved by `SELECT CURRENT_USER()`, ⛔ NEVER by attempting a
+write; ⛔ fail-safe — a throwing probe is "unknown" and unknown BLOCKS work, while
+unreachable-but-read-only is only a warning. ✅ Proven live on production:
+safeToWork true on all three real checks, and the live classifier answering
+write-to-PBX → never, read-PBX → allowed. ✅ **Sidebar (`9fbd5af3`): Support Desk
+is FIRST in the Admin section** (it was buried at position 9 of 25).
+⛔ **Doc hazard hit here, worth carrying:** a MERGE silently resolved CLAUDE.md in
+favour of a stale copy and dropped the P3/P4 paragraph — the commit had it, the
+tip did not. **After any merge lands on this branch, grep CLAUDE.md for your own
+section before trusting it.**
+⏳ **Phase 5c (the Agent-SDK workbench: IDE + SSH terminal) NOT started** — needs
+the Anthropic API key, `claude-agent-sdk` as a NEW dependency (only
+`@anthropic-ai/sdk` exists today), a PTY bridge, and Izzy's own wording in the
+ground-rule lists, which bind the engine from its first command. Support-agent
+accounts + per-feature permission keys remain his to create.
 
 
 Full handoff + the verified infrastructure inventory:
