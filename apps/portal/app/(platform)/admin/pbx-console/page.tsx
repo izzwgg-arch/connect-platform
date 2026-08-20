@@ -57,8 +57,17 @@ function useToasts() {
   return { push, node };
 }
 
+const MODULES: Module[] = ["tenants", "extensions", "phones", "routing", "teams", "geo"];
+
 function PbxConsole() {
   const [mod, setMod] = useState<Module>("extensions");
+  // Deep links from the sidebar (?mod=routing / ?mod=teams). Read from
+  // window.location, not useSearchParams — the hook forces a Suspense
+  // boundary on the whole page for one read at mount.
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("mod");
+    if (m && (MODULES as string[]).includes(m)) setMod(m as Module);
+  }, []);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [outboundProfiles, setOutboundProfiles] = useState<Array<{ id: number; label: string; inUseBy: number }>>([]);
   const [newTenant, setNewTenant] = useState(false);

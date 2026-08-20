@@ -144,6 +144,15 @@ export const navItems: NavItem[] = [
   // extensions / provisioning / geo once the licence lapses. SUPER_ADMIN only
   // (forced below), reuses the PBX-instances view key; no grantable key.
   { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
+  // Trunks & Routing + Ring Groups & Queues (2026-08-20, Izzy: "add them all
+  // to the sidebar with permissions off for everybody but me") — direct doors
+  // into the console's routing and teams modules. SUPER_ADMIN only, forced in
+  // isNavItemVisibleForUser like admin.pbx_console; deliberately NO grantable
+  // key (the ivr_migration pattern): these screens carry every customer's
+  // trunks and dial plans, and a permission that could grant them would be one
+  // ticked box away from handing a tenant admin the whole platform's routing.
+  { id: "admin.pbx_routing", href: "/admin/pbx-console?mod=routing", label: "Trunks & Routing", icon: "TR", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
+  { id: "admin.pbx_teams", href: "/admin/pbx-console?mod=teams", label: "Ring Groups & Queues", icon: "RQ", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
   // Support Desk (2026-08-20) — SUPER_ADMIN-only in isNavItemVisibleForUser
   // (the pbx-console pattern): it shows every company's escalations, so it
   // shares an owner-held key and there is deliberately no grantable one yet.
@@ -230,6 +239,10 @@ export function isNavItemVisibleForUser(
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The routing/teams doors show and change every customer's trunks and dial
+  // plans — SUPER_ADMIN only, same as the console they open into.
+  if (item.id === "admin.pbx_routing" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.pbx_teams" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The Support Desk shows every company's escalations and conversations.
   // Izzy, 2026-08-20: "for now do just super admin" — the support-agent role
   // comes later, with per-feature keys that actually gate.
