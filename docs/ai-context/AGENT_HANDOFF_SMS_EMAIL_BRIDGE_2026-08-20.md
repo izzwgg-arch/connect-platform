@@ -20,9 +20,18 @@ the loop end to end: **SMTP send as sms@loopcom.net (250 OK gsmtp) → Gmail
 plus-address delivery → IMAP read + parse (`threadId` extracted) → a FORGED
 signature refused** (`sms.reply_ignored reason=bad_signature`, emailId 6) —
 and Google's own "app password created" security alert was correctly ignored
-as `no_reply_address`. ⏳ What remains unproven is a REAL text riding the
-bridge (§5) — **0 users have the toggle on**, so nothing forwards until
-someone opts in, and opting in a customer's user is Izzy's call.
+as `no_reply_address`.
+
+**ROLLED OUT the same morning** — Izzy: *"Turn it on for everybody but
+gesheft."* Bulk DB update: **79 of 85 users ON; Gesheft's 6 users OFF**
+(tenant `cmnlgnumu0001p9g6xyl1pbdd`). ⛔ Gesheft is excluded deliberately —
+the busiest inbound-SMS tenant (~174 texts/wk vs ~98/wk for the whole rest of
+the platform); do not "finish" the rollout by including them. Expected volume
+≈ 14 forward emails/day. ⛔ New users default OFF (schema default) — this was
+a backfill, not a default change. Because it was a bulk update, this wave has
+no per-user `SMS_TO_EMAIL_ENABLED` audit rows. ⏳ Still unproven: a REAL text
+riding the bridge end to end (§5) — the next inbound text to any non-Gesheft
+tenant is the acceptance test.
 
 ---
 
@@ -181,10 +190,11 @@ auto_generated / already_claimed).
   and a real reply landing as a text (§5) — no user has the toggle on yet.
 - ⏳ The Gmail-side threading (one conversation per number) is proven by the
   header design, not by a human looking at an inbox — step 3 above is the check.
-- ⏳ Quota: Gmail sends are capped (~500/day standard, 2,000 on Workspace). The
-  bridge only emails on inbound texts to OPTED-IN users, and today **0 users
-  have the toggle on** (it shipped 2026-07-26 dark), so growth is gradual — but
-  a busy tenant opting everyone in could meet the cap. Watch `sms.email_failed`.
+- ⏳ Quota: Gmail sends are capped (~500/day standard, 2,000 on Workspace).
+  With everybody-but-Gesheft on, measured volume is ≈ **14 forward emails/day**
+  — no risk. ⛔ The number that changes this calculus is GESHEFT (~25/day on
+  their own and growing): if they are ever included, re-measure first. Watch
+  `sms.email_failed` in the agent audit either way.
 - ⏳ MMS images forward as "📷 Photo" text in the email (the forward job's
   existing behavior); attachments-in-email and email-reply-with-image are not
   built.

@@ -168,12 +168,21 @@ and make sure the email stays in one thread … one thread per phone number."*
   agent suite **695/697** (the 2 pre-existing transcription failures), typecheck
   at the agent's exact 14-error baseline — **plus the live probe above** (SMTP,
   IMAP, parse and refuse all exercised against the real mailbox).
-- ⏳ **NOT PROVEN: no real text has ridden the bridge end to end.** **0 users
-  have the toggle on**, so it forwards nothing until someone opts in. The
-  acceptance test (handoff §5, ~10 min): toggle ON for one user on a tenant with
-  texting live, text the number twice (both emails must land in ONE Gmail
-  conversation), reply, watch the text arrive + the OUTBOUND bubble in the app.
-  ⛔ Opting a real customer's user in is Izzy's call, not an agent's.
+- ✅✅ **ROLLED OUT 2026-08-20 (Izzy: "Turn it on for everybody but gesheft"):
+  79 of 85 users have the toggle ON — every user EXCEPT Gesheft's 6**
+  (tenant `cmnlgnumu0001p9g6xyl1pbdd`, 0 on; bulk DB update, so no per-user
+  `SMS_TO_EMAIL_ENABLED` audit rows exist for this wave — the two pre-existing
+  ONs were Ezra's test accounts). ⛔ **Gesheft is excluded on purpose — never
+  "complete" the rollout by flipping them on**: they are the busiest inbound-SMS
+  tenant on the platform (~174 texts/wk vs ~98/wk for everyone else combined).
+  Volume for everyone else ≈ **14 emails/day** — nowhere near Gmail's cap.
+  ⛔ **A NEW user starts OFF** (schema default false) — "everybody" was a
+  one-time backfill, not a changed default; changing the default is Izzy's call.
+- ⏳ **NOT PROVEN: no real text has ridden the bridge end to end yet** — the
+  first inbound text to any non-Gesheft tenant is the acceptance test (handoff
+  §5): the email must land in ONE Gmail conversation per phone number, and a
+  reply must arrive back as a text + an OUTBOUND bubble in the app. Greppable:
+  `sms.emailed` / `sms.reply_sent` in the agent audit.
 
 ## ⛔⛔ AGENT HANDOFF — CONFERENCE ROOMS: the backend is BUILT (reads from ombu_conferences, writes by panel replay); the page awaits Izzy's mockup pick (2026-08-20) — READ FIRST before touching /voice/conferences, before building the /conference page, or before creating the platform's FIRST conference room
 
