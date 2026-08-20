@@ -101,6 +101,35 @@ Direct" is a working name.)
   until they verify — plus a per-company off switch). ⛔ Until he picks, nothing
   is authorized to build.
 
+## ⛔ AGENT HANDOFF — the role snapshot goes STALE by design, and a forward-merge now fixes it: BUILT, TESTED, ⏳ AWAITING IZZY'S SIGN-OFF (2026-08-20) — READ FIRST before adding ANY new default permission key, before touching `platformRolePermissions.ts`, or before assuming tenant admins have a key because `DEFAULT_ROLE_PERMISSIONS` grants it
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ROLE_SNAPSHOT_FORWARD_MERGE_2026-08-20.md`**
+(branch `claude/snapshot-forward-merge`, built on the `feat/ivr-migration-takeover` tip).
+
+- ⛔ The live `PlatformRolePermissionSnapshot` row was last SAVED 2026-07-06 and
+  is read LITERALLY for bucket roles — so every default key born since (Queues
+  2026-08-16, Conferences 2026-08-20, all of Tracking, `can_use_yiddish`) never
+  reached a real tenant admin. Shipping a feature's keys in
+  `DEFAULT_ROLE_PERMISSIONS` does NOT deliver them; only SUPER_ADMIN gets keys
+  automatically (force-add).
+- The fix (`apps/api/src/platformRolePermissions.ts`, tests
+  `platformRolePermissions.forwardMerge.test.ts`, 11/11): POST now stores
+  `knownKeys` (the key inventory at save time; older rows infer it from their
+  stored SUPER_ADMIN list, which POST has always force-written as the full
+  inventory of its day). On read, a default key OUTSIDE the inventory is
+  forward-merged (it post-dates the save, so it can't have been removed); a key
+  INSIDE it but absent stays removed. Sidebar-item keys also need their section
+  key granted — the July-06 save deliberately turned the PBX/Apps/Settings/Admin
+  sections OFF for TENANT_ADMIN, and that choice stands.
+- Dry-run vs the real row: END_USER +1 (`can_use_yiddish`), TENANT_ADMIN +23
+  (queues/conference/tracking/yiddish; the PBX nav keys correctly withheld),
+  nothing lost anywhere.
+- ⏳ NOT deployed. ⛔ Do not deploy or touch the live row without Izzy's live
+  in-chat go — it changes live permissions on restart. Also for Izzy to decide:
+  whether to re-open the PBX section (and tick Queues/Conference) for tenant
+  admins in Admin → Permissions; and the 4 custom-role tenant admins need their
+  roles edited separately (custom roles are authoritative).
+
 ## ⛔ AGENT HANDOFF — the Technical Support Console: MOCKUPS ONLY, awaiting Izzy's pick (2026-08-20) — READ FIRST before building any support/staff screen, an escalations list, a cross-tenant chat inbox, or assistant human-takeover
 
 Full handoff + the verified infrastructure inventory:
