@@ -4,6 +4,36 @@ Newest entries first.
 
 ---
 
+## SMS↔email bridge Part 3 (reply-to-text-back) — 31 new tests, agent suite green (2026-08-20)
+
+Branch `feat/ivr-migration-takeover`, commit `d0d4f861`. Handoff
+`AGENT_HANDOFF_SMS_EMAIL_BRIDGE_2026-08-20.md`.
+
+- `apps/agent` new: `src/notify/smsEmailReply.test.ts` (18 — mint/verify
+  round-trip incl. a pin that the shared mint is byte-identical to the
+  forward job's historical inline format; tampered sig/domain refused;
+  auto-reply detection; quote stripping for Gmail/Outlook/signatures/RTL;
+  4 wiring source guards, **all replayed against HEAD and failing there**)
+  and `src/notify/smsEmailReplyJob.test.ts` (13 — happy path proves the POST
+  goes to the real chat route with a real HS256 JWT for the replying user;
+  stranger/foreign-tenant silence; toggle-off/non-participant threaded
+  notices; forged-signature + auto-reply + empty-body refusals; claim-ledger
+  dedupe; api-refusal and api-unreachable notices with no auto-retry).
+- Runner: `node --experimental-test-module-mocks --import tsx --test` (the
+  agent's globbed `pnpm test` picks both up — no registration needed).
+- Full agent suite: **697 tests, 695 pass, 2 fail — the same 2 pre-existing
+  transcription/archive failures** (`export manifest yields (audio,text)
+  pairs`, `normalizeLanguage`). Zero regressions.
+- Typecheck: agent at its exact **14-error pre-existing baseline** (7 DOM-lib
+  `setInterval().unref()` + 7 packages/db moduleResolution), **none in an
+  edited file** — the two new intervals use a cast so they add nothing.
+- Found by the tests before it shipped: the attribution-join in
+  `extractSmsReplyText` originally joined across blank lines, so a reply
+  whose own words START with "On " ("On my way now.") was cut to nothing and
+  refused as empty. Fixed to join only consecutive non-empty lines.
+
+---
+
 ## First live geo firewall build — LOCKED OUT THE PBX; recovered; channel disarmed (2026-08-19 evening)
 
 Branch `feat/ivr-migration-takeover`. Handoff
