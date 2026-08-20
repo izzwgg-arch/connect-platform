@@ -212,6 +212,75 @@ probe).
 ⛔ The 17 texts that were never stamped in the **preceding** 24h all predate
 11:36Z — that is the 30-minute backlog guard doing its job, not a loss.
 
+### 5c. The email was the WRONG DESIGN, and the cause was structural
+
+Izzy, 2026-08-20: *"It's not sending the correct email. We made a different one
+that it should send."* Correct on both counts.
+
+`apps/agent/src/notify/smsEmail.ts` was created **2026-07-26 12:16 EDT** in
+commit `da904b84`, and that was the **only commit that ever touched it** — three
+weeks *before* the Loopcom rebrand. Its own header said it matched "the approved
+**Connect** SMS mockups"; it defaulted to `brand = "Connect"`, carried its own
+hand-rolled shell in Connect blue, and had **no logo**. When Part 3 shipped on
+2026-08-20 it rewrote the *sender* and never looked at the template, so every
+text email — all 10 that day — went out pre-rebrand. It was the last
+customer-facing email still doing so.
+
+**The design he meant** was `loopComShell`, created **2026-08-16** in
+`apps/api/src/userEmailTemplates.ts`, whose own comment states its job: *"one
+place decides what a Loopcom email looks like."* The new voicemail email
+(`voicemailEmailTemplate.ts`, 2026-08-17, *"Design settled with Izzy
+2026-08-16"*) was built on it the next day.
+
+⛔⛔ **WHY IT WAS MISSED, AND THE RULE IT EARNS: the shell lived in `apps/api`
+and the bridge lives in `apps/agent`, so the agent could not physically import
+it.** A look that one app cannot reach will drift silently and indefinitely —
+nothing fails, nothing warns, and the divergence is invisible until a human
+opens the email. **Design primitives shared by more than one app belong in
+`packages/shared`, not in whichever app happened to need them first.**
+
+**Fixed in `dc95a1d0`:**
+
+| | |
+|---|---|
+| `packages/shared/src/loopcomEmailShell.ts` | THE renderer — the only definition of the look |
+| `apps/api` `loopComShell()` | thin wrapper, supplies `brandLogoUrl()` |
+| `apps/agent` `loopcomShellForAgent()` | thin wrapper, supplies `agentBrandLogoUrl()` |
+
+⛔ **The logo is resolved at each app's boundary and never by a builder.** The
+shared renderer must take `logoUrl` as a parameter — a shared package cannot
+read an app's environment — but it stops at the wrapper. A guard test fails if
+any email builder grows a `logoUrl` input, because that is precisely the shape
+that lost the Android APK link from every self-service invite in August.
+
+✅ **The invite and voicemail emails are untouched, proven not assumed.** The
+pre-move implementation was kept temporarily and diffed against the shared one
+across three input shapes (plain, full escaping, absent subtitle):
+**byte-identical to the character.** Then the old copy was deleted.
+
+✅ **Right-to-left is now per message.** The old code sniffed only the newest
+message and then applied the verdict to nothing at all. A large share of these
+texts are Yiddish; the punctuation was landing on the wrong end.
+
+⛔ **A source guard was caught being DECORATIVE by the replay-against-HEAD run** —
+it asserted the absence of lowercase `<!doctype html>` while the old file opened
+with uppercase `<!DOCTYPE html>`, so it passed against both trees. Now
+case-insensitive and also checking `<html`/`<body`. **Third time in this repo.**
+
+**Verification (container, not build log):** agent rebuilt and healthy at
+22:49Z; `loopcomEmailShell.ts` and `loopcomShell.ts` present inside it;
+`smsEmail.ts` references the shell 3×; the old `prefers-color-scheme` and
+`<!DOCTYPE html>` markers read **0**; the email rendered **in-container** with
+the Loopcom card, logo URL, RTL bubble and **no** "New text message" banner; and
+the logo answers **200, 34,458 b, image/png on BOTH hostnames**.
+
+⛔ **The api half is committed but NOT deployed.** Its output is byte-identical,
+so the running image is correct either way; it rides the next api deploy.
+
+⏳ **NOT PROVEN: nobody has seen the new email in a real inbox.** The last old
+design went out at 22:28:47Z, the bridge re-armed at 22:49:12Z, so the next
+inbound text to a non-Gesheft tenant is the acceptance test.
+
 ### The reply half: 0 sent, but NOT proven broken
 
 ⛔ **`sms.reply_sent` is 0 for all time, and so are `sms.reply_claimed` and

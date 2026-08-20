@@ -553,6 +553,52 @@ and make sure the email stays in one thread … one thread per phone number."*
   which is only possible if the mail reached a real inbox and was read. No
   bounce has come back to sms@loopcom.net since (the reply job reads that
   mailbox and audits everything it sees).
+- ✅✅ **THE TEXT EMAIL IS A LOOPCOM EMAIL NOW — one shell, shared by api and
+  agent (`dc95a1d0`, agent container REBUILT and verified 2026-08-20 22:49Z).**
+  Izzy: *"It's not sending the correct email. We made a different one."* He was
+  right. `smsEmail.ts` was written **2026-07-26**, three weeks BEFORE the
+  rebrand, and was the ONLY commit that file ever had — so when Part 3 shipped
+  it rewrote the SENDER and left the template alone. Every text email, including
+  all 10 that day, went out in the old Connect-blue design with **no logo**. It
+  was the last customer-facing email still pre-rebrand.
+  ⛔⛔ **THE CAUSE WAS STRUCTURAL, NOT COSMETIC, AND IT IS THE REUSABLE LESSON:
+  `loopComShell` lived in `apps/api` and the bridge lives in `apps/agent`, so
+  the agent COULD NOT REACH the look the rebrand had settled on.** A design that
+  one app physically cannot import will drift, silently, forever. The renderer
+  now lives in **`packages/shared/src/loopcomEmailShell.ts`** and both apps use
+  it: api keeps `loopComShell()` as a thin wrapper, agent gains
+  `loopcomShellForAgent()`. ⛔ **Never copy the shell into an app** — that
+  recreates exactly this.
+  ⛔ **The logo stays resolved at each app's BOUNDARY, never as a builder
+  input.** The shared renderer takes `logoUrl` because a shared package cannot
+  read an app's env; each app supplies it in ONE wrapper. A guard test fails if
+  any email builder grows a `logoUrl` parameter — that shape is how the Android
+  APK link went missing from every self-service invite once already.
+  ✅ **The invite and voicemail emails are untouched, and that was PROVEN, not
+  assumed:** the pre-move implementation was kept temporarily and compared
+  against the shared one across three input shapes (escaping, absent subtitle) —
+  **byte-identical to the character** — then deleted.
+  ✅ **Also fixed: right-to-left is now decided PER MESSAGE.** The old code
+  sniffed only the newest message and then applied the result to nothing at all,
+  so Yiddish texts rendered with the punctuation on the wrong end.
+  ⛔ **A guard was caught being DECORATIVE by the HEAD replay** — it tested
+  lowercase `<!doctype html>` while the old file opened with uppercase
+  `<!DOCTYPE html>`, so it passed against both trees and guarded nothing. It is
+  case-insensitive now and also checks `<html`/`<body`. **Replay every source
+  guard against HEAD; this is the third time in this repo that caught a fake.**
+  **Proven:** 10 new shared tests (registered), all 6 guards non-vacuous,
+  shared 384/384, agent SMS suites 31/31, api voicemail-email 55/55, agent
+  typecheck at its exact 14-error baseline and api at its exact 75, none in an
+  edited file; then **inside the running container**: the email rendered with
+  the Loopcom card, the logo URL, the RTL bubble, and **zero** hits for the old
+  "New text message" banner — and the logo itself answers **200 (34,458 b,
+  image/png) on BOTH hostnames**.
+  ⛔ **The api half is committed but NOT deployed** — its output is
+  byte-identical, so the running image is correct either way; it rides the next
+  api deploy.
+  ⏳ **NOT PROVEN: no human has seen the new email in a real inbox.** The next
+  real inbound text to a non-Gesheft tenant is the acceptance test. The last old
+  design went out at 22:28:47Z; the bridge re-armed at 22:49:12Z.
 - ⛔⛔ **THE REPLY HALF HAS NEVER SENT ONE TEXT — `sms.reply_sent` is 0 FOR ALL
   TIME — but it is NOT PROVEN BROKEN: it has had exactly ONE real attempt in its
   life, and that attempt died at the LAST gate.** The whole audit trail is 5
