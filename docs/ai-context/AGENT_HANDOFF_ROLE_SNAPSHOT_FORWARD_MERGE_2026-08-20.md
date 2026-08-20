@@ -1,9 +1,10 @@
 # AGENT HANDOFF — the role snapshot forward-merge: new default keys now reach tenant admins (2026-08-20)
 
-**Branch `claude/snapshot-forward-merge` (worktree hopeful-pasteur), built on the
-`feat/ivr-migration-takeover` tip `b688b175`. ⏳ NOT MERGED, NOT DEPLOYED —
-awaiting Izzy's sign-off, because deploying it changes what live tenant admins
-can do the moment the api restarts.**
+**✅ DEPLOYED 2026-08-20 on Izzy's in-chat "Deploy it" — commit `b1f94452`
+(rebased onto the `feat/ivr-migration-takeover` tip and fast-forwarded onto that
+branch), api deploy queue job `86b00cbd`, container `app-api-1` verified healthy
+at that build commit AND behaviorally (the resolver executed in-container
+against the real DB — numbers in §4).**
 
 ## 1. The problem, measured on the live row
 
@@ -61,15 +62,21 @@ Everything is in `apps/api/src/platformRolePermissions.ts`:
   literal, exactly today's behavior. v1 snapshots keep the legacy-expansion
   path untouched.
 
-## 4. Dry-run against the REAL live row (what deploy will change)
+## 4. Verified live, in the deployed container (2026-08-20)
 
-- **END_USER: +1** — `can_use_yiddish`. Nothing lost.
-- **TENANT_ADMIN: +23, nothing lost** — the 4 queues action keys, both
-  conference action keys, `can_use_yiddish`, and all 16 tracking keys
-  (section + 9 page keys + 6 action keys). ⛔ **`can_view_pbx_queues` and
-  `can_view_pbx_conference` are correctly NOT added** — they are nav items
-  under `can_view_section_pbx`, which the 2026-07-06 save deliberately removed.
-- SUPER_ADMIN unchanged (already force-add).
+- **END_USER: 54 → 55** — gained `can_use_yiddish` only. Nothing lost.
+- **TENANT_ADMIN: 92 → 116, nothing lost** — the 4 queues action keys, both
+  conference action keys, **`can_view_workspace_conference`** (the shipped
+  Conference page put its nav item in the WORKSPACE section — commit
+  `a863ca3b` — which tenant admins hold, so they DO see the Conference page),
+  `can_use_yiddish`, and all tracking keys incl. `can_view_section_tracking`.
+  ⛔ **`can_view_pbx_queues` is correctly NOT added** — it is a nav item under
+  `can_view_section_pbx`, which the 2026-07-06 save deliberately removed, so
+  the Queues page stays invisible to tenant admins until Izzy re-opens that
+  section. Also verified still absent: `can_view_section_pbx`,
+  `can_view_billing_invoices`.
+- SUPER_ADMIN unchanged (already force-add). The DB row is untouched — the
+  merge is read-side only.
 
 ## 5. ⛔ What this does NOT fix — Izzy's July-06 section choices stand
 
@@ -80,12 +87,13 @@ carve-out [[custom-roles-are-authoritative]] already records). The section
 model existed since May, so these were real editor toggles, and this change
 treats them as law. Consequences to put in front of Izzy:
 
-- Bucket tenant admins get the queues/conference **capability** keys (API
-  routes open; the pages load if reached by URL, e.g. `/queues`), but **no nav
-  entry** — the PBX section is off. If Izzy wants Queues/Conference visible in
-  the sidebar for tenant admins, that is one deliberate act in
-  Admin → Permissions: switch the PBX section on for Tenant Admin and tick the
-  Queues/Conference items, then Save (which also bakes in `knownKeys`).
+- Bucket tenant admins get the queues **capability** keys (API routes open; the
+  page loads if reached by URL, `/queues`), but **no Queues nav entry** — the
+  PBX section is off. (Conference is NOT affected: its nav lives in Workspace
+  and is visible.) If Izzy wants Queues visible in the sidebar for tenant
+  admins, that is one deliberate act in Admin → Permissions: switch the PBX
+  section on for Tenant Admin and tick the Queues item, then Save (which also
+  bakes in `knownKeys`).
 - The 4 custom-role tenant admins (ezra@, sales@iniimini, golda@, lea@) see
   none of this — their roles are authoritative and need their own edit.
 
@@ -105,15 +113,25 @@ treats them as law. Consequences to put in front of Izzy:
   baseline, cf. the 75 of the earlier conference commit).
 - Dry-run in §4 executed against the actual production JSON (read-only pull).
 
-## 7. Deploy notes (AFTER sign-off)
+## 7. Deploy record (done 2026-08-20)
 
-- api-only; **no migration** (JSON payload gains an optional field old readers
-  ignore). The snapshot read is cached (`permissionCache.ts` TTL) and every
-  restart clears it — no invalidation step needed for deploy itself.
-- After deploy, verify: `GET /admin/role-permissions` as super admin shows
-  TENANT_ADMIN with the queues/conference/tracking/yiddish keys; a bucket
-  tenant-admin login can hit `GET /voice/queues`-family routes without 403.
+- Izzy's in-chat go received; rebased onto the ivr tip `e30210f1` (one
+  CLAUDE.md both-added conflict, kept both sections), tests re-run 11/11,
+  live-row dry-run re-run (+24 after the Conference-in-Workspace change),
+  pushed, deploy branch fast-forwarded `e30210f1..b1f94452`.
+- Pre-deploy checks per the ops memories: no stale enqueue waiters on loopcom;
+  deploy delta `0ec27813..b1f94452` = this change + docs only, **no
+  migrations**; waited out a running auto job before enqueueing.
+- api deploy queue job `86b00cbd` → success at `b1f94452`; container healthy;
+  `.build-commit` matches; behavioral verification ran the resolver
+  in-container against the real DB (§4 numbers). The api runs from TS source
+  (`tsx src/server.ts`) — there is no dist to grep.
 - The first post-deploy **Save** on Admin → Permissions writes `knownKeys` and
   bakes the forward-merged keys into the stored lists (GET seeds the editor
   with the merged lists) — after that the merge is a no-op until the next new
   feature ships keys.
+- ⚠ Session lesson while deploying: `git stash` state is SHARED across
+  worktrees — a `git stash pop` after a no-op `git stash` in a clean tree
+  popped ANOTHER session's stash (mobile edits) into this worktree. Recovered
+  with `git reset --hard` (the entry survived in the stack because the
+  conflicted pop keeps it). Never use stash/pop for baseline comparisons.

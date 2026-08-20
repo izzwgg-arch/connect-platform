@@ -101,7 +101,7 @@ Direct" is a working name.)
   until they verify — plus a per-company off switch). ⛔ Until he picks, nothing
   is authorized to build.
 
-## ⛔ AGENT HANDOFF — the role snapshot goes STALE by design, and a forward-merge now fixes it: BUILT, TESTED, ⏳ AWAITING IZZY'S SIGN-OFF (2026-08-20) — READ FIRST before adding ANY new default permission key, before touching `platformRolePermissions.ts`, or before assuming tenant admins have a key because `DEFAULT_ROLE_PERMISSIONS` grants it
+## ⛔ AGENT HANDOFF — the role snapshot goes STALE by design, and the forward-merge fix is DEPLOYED + CONTAINER-VERIFIED (Izzy's go, 2026-08-20) — READ FIRST before adding ANY new default permission key, before touching `platformRolePermissions.ts`, or before assuming tenant admins have a key because `DEFAULT_ROLE_PERMISSIONS` grants it
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ROLE_SNAPSHOT_FORWARD_MERGE_2026-08-20.md`**
 (branch `claude/snapshot-forward-merge`, built on the `feat/ivr-migration-takeover` tip).
@@ -121,14 +121,21 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ROLE_SNAPSHOT_FORWARD_MERGE_2026-
   INSIDE it but absent stays removed. Sidebar-item keys also need their section
   key granted — the July-06 save deliberately turned the PBX/Apps/Settings/Admin
   sections OFF for TENANT_ADMIN, and that choice stands.
-- Dry-run vs the real row: END_USER +1 (`can_use_yiddish`), TENANT_ADMIN +23
-  (queues/conference/tracking/yiddish; the PBX nav keys correctly withheld),
-  nothing lost anywhere.
-- ⏳ NOT deployed. ⛔ Do not deploy or touch the live row without Izzy's live
-  in-chat go — it changes live permissions on restart. Also for Izzy to decide:
-  whether to re-open the PBX section (and tick Queues/Conference) for tenant
-  admins in Admin → Permissions; and the 4 custom-role tenant admins need their
-  roles edited separately (custom roles are authoritative).
+- **DEPLOYED 2026-08-20 on Izzy's in-chat go** — api deploy job `86b00cbd` at
+  commit `b1f94452`, and the running container was behaviorally verified (the
+  resolver executed in-container against the real DB): END_USER 54→55
+  (`can_use_yiddish`), TENANT_ADMIN 92→116 — queues + conference action keys,
+  `can_view_workspace_conference` (the Conference nav moved to the Workspace
+  section, which tenant admins hold, so the page IS visible to them), all of
+  Tracking, yiddish. Deliberate removals held: `can_view_section_pbx`,
+  `can_view_pbx_queues` (so the **Queues page stays invisible** to tenant
+  admins until Izzy re-opens the PBX section in Admin → Permissions),
+  `can_view_billing_invoices` etc. The DB row itself is untouched (read-side
+  merge); the first post-deploy Save on Admin → Permissions bakes everything in
+  plus `knownKeys`.
+- Still open for Izzy: re-open the PBX section (and tick Queues) for tenant
+  admins if wanted; the 4 custom-role tenant admins need their roles edited
+  separately (custom roles are authoritative).
 
 ## ⛔ AGENT HANDOFF — the Technical Support Console: MOCKUPS ONLY, awaiting Izzy's pick (2026-08-20) — READ FIRST before building any support/staff screen, an escalations list, a cross-tenant chat inbox, or assistant human-takeover
 
