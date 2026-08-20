@@ -147,6 +147,90 @@ escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbenc
   (`role === "owner"`) while its sibling approvals GET is staff-only — a tenant admin
   can approve/deny any action id they learn. Same class as the 2026-08-19 findings.
 
+## ⛔⛔ AGENT HANDOFF — Loopcom Meetings: link-join VIDEO MEETINGS on self-hosted LiveKit, LIVE end to end (2026-08-20) — READ FIRST before touching `apps/api/src/meetings/*`, `/meet/[code]`, the `livekit` container, nginx `/meetws/`, or before answering "can Connect do video calls?"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VIDEO_MEETINGS_2026-08-20.md`**
+(`43b0ab7f` + `7b289e61` on `feat/ivr-migration-takeover`, pushed as `b688b175`.
+**api DEPLOYED and container-verified at `b688b175`; migration
+`20260820120000_video_meetings` applied and read back from the live DB; LiveKit
+`app-livekit-1` (v1.13.5) UP on loopcom; nginx `/meetws/` on BOTH vhosts,
+health/SIP unregressed; the WHOLE token chain proven live** — a real meeting was
+created through the real route, a guest joined through the public route, and
+LiveKit answered **200 on `/rtc/validate`** for the api-minted token on both
+hostnames; end → rejoin correctly answered **410 meeting_ended**. Probe row
+deleted. Portal deploy state: see the session log / deploy queue.)
+Izzy, 2026-08-20: *"somebody sends a link to somebody, they open the link, and
+they're in a meeting … sharing screens, picking up hands, chat, everything Zoom
+has"*, then *"let's do free open source"*, then, on the mockups
+(<https://claude.ai/code/artifact/f3a3a18c-1b23-4edd-bcfe-ca5d1fe46303>):
+*"Looks great, let's do it."* Memory: [[loopcom-meetings-built-on-livekit]].
+
+- ⛔⛔ **THE DIVISION OF LABOR: LiveKit is the media engine; Connect only decides
+  who gets in.** Video/audio/screen/chat/hands flow browser ↔ LiveKit and NEVER
+  touch the api (the remote-support division). The api mints LiveKit HS256
+  tokens **hand-rolled on `node:crypto`** (`meetings/livekit.ts`) — ⛔ **NO
+  LiveKit SDK dependency, on purpose** (the `undici` boot-kill class); the
+  moderation verbs go through LiveKit's RoomService as plain JSON-over-POST.
+- **The surface:** `POST/GET /meetings` (JWT), `/meetings/:code/join` (JWT;
+  host = creator or SUPER_ADMIN, enters even when locked, identity carries a
+  random suffix so two windows ≠ a DUPLICATE_IDENTITY kick),
+  `/meetings/public/:code/{info,join}` (**the only public routes**, on the JWT
+  bypass — the CODE is the credential, pay-link pattern; codes `xxx-xxxx-xxx`,
+  no-confusables alphabet, ~46 bits), host verbs `lock`/`end`/`host/mute`/
+  `host/remove`. ⛔ **Participant tokens NEVER carry roomAdmin, and a guest is
+  never a host whatever the body claims** — moderation exists only as api
+  routes so it is re-checked server-side per call. Unconfigured env → **503
+  `meetings_not_configured`**, boot unaffected (the Turnstile pattern).
+- **Where it runs:** container `app-livekit-1` via `docker-compose.livekit.yml`
+  (the agent overlay pattern); config **`/opt/connectcomms/env/livekit.yaml`**
+  (600 — the key/secret; template `infra/livekit/livekit.example.yaml`, ⛔ real
+  file never in git); `.env.platform` carries `LIVEKIT_URL=http://livekit:7880`
+  + key/secret (backup `.env.platform.bak.*.livekit`). Signal: nginx
+  **`location /meetws/` on BOTH vhosts** → 127.0.0.1:7880 (backups
+  `/root/nginx-connectcomms*-backup-*-meetws.conf`); the client's ws URL
+  derives from `window.location` (two-hostname rule). Media: **7881/tcp +
+  7882/udp public** (single-port UDP mux). ⛔ **Docker-published ports BYPASS
+  ufw** — which is exactly why 7880 is loopback-bound in the compose file.
+  sysctl `net.core.rmem_max=7500000` (`/etc/sysctl.d/98-livekit-udp.conf`).
+- **Portal:** public `/meet/[code]` (lobby → room: grid, speaking ring,
+  screen-share stage, chat + hands over LiveKit data messages —
+  `lib/meetings.ts` protocol, nothing stored, chat dies with the meeting) and
+  `/meetings` in the workspace sidebar. ⛔ `/meet/` is in
+  `sessionExpiry.PUBLIC_PATH_PREFIXES` or guests bounce to /login — guarded by
+  `lib/meetings.test.ts`. ⛔ The nav/page key **reuses
+  `can_view_workspace_overview` deliberately** — a dedicated meetings key needs
+  the LIVE `PlatformRolePermissionSnapshot` updated
+  ([[custom-roles-are-authoritative]]); Izzy's follow-up. New dep:
+  **`livekit-client`** (portal only). Late joiners can't see raised hands, so
+  every hand-up re-broadcasts on ParticipantConnected; `room.startAudio()`
+  rides the join click and a "Click to enable sound" banner covers autoplay
+  refusal.
+- ⛔ **The deploy trap this hit: an scp'd file in the server clone blocks the
+  next deploy.** `docker-compose.livekit.yml` was copied to
+  `/opt/connectcomms/app` before the commit landed on origin; the next
+  `git checkout -B` refused ("untracked working tree files would be
+  overwritten") and BOTH queued deploys failed in git-sync. Delete the scp'd
+  copy once the file ships via git — or never pre-copy a file that is about to
+  arrive by commit.
+- **Tests: 19** (11 api — token signature recomputed by hand, bypass anchoring,
+  full route matrix on a fake db whose `videoMeeting` accessor was verified
+  against the REAL generated client; 8 portal — protocol round-trip, wiring
+  guards), all registered. api typecheck 75 = the exact baseline; portal 0;
+  portal suite 210/212 (the two documented pre-existing failures).
+- ⛔ **STILL OPEN, Izzy's decisions:** (1) **the media server is in FRANCE** —
+  the approved plan is a **US VPS** (doubles as the July-pending US TURN relay);
+  moving is a config change, not a rebuild. (2) An office filtering BOTH UDP
+  and arbitrary TCP needs **TURN-over-TLS:443** — impossible on loopcom (nginx
+  owns 443), natural on the dedicated box; first suspect for "joins but no
+  video". (3) Recording, scheduling, waiting room, mobile-app join (app build),
+  PSTN dial-in (LiveKit has SIP — the phone-company differentiator) are all
+  deliberately NOT in v1.
+- ⏳ **NOT PROVEN: no two humans have held a video meeting.** Proven: the whole
+  signal chain by live probe (create → guest join → LiveKit accepts the token →
+  end → 410), 19 tests, container greps. **Acceptance is two people on two
+  machines** — video both ways, screen share, hand, chat, host mute/remove, End
+  ejects — then once more from a filtered-internet office.
+
 ## ⛔⛔ AGENT HANDOFF — the SMS↔email bridge is CODE-COMPLETE: texts email out from sms@loopcom.net and REPLYING to that email texts back, one email thread per phone number (2026-08-20) — READ FIRST before touching `apps/agent/src/notify/smsEmail*`, before pointing anything at the sms@loopcom.net mailbox, or for "I replied to the text email and nothing was sent"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SMS_EMAIL_BRIDGE_2026-08-20.md`**
