@@ -557,3 +557,54 @@ export async function rebootPhone(s: PanelSession, tenantPath: string, phoneId: 
 /* the CSV header VitalPBX's import expects — identical to pbxTenantBuild's */
 export const CSV_HEADER =
   "mode,extension,ext_name,language,class_of_service,technology,profile_name,device_user,device_password,device_description,devices_emergency_cid_name,devices_emergency_cid_number,virtual_number,ring_device,codecs,max_contacts,features_password,email,did_number,cid_number,call-limit,call_waiting,vm_enabled,vm_password,saycid,sayduration,envelope,attach,delete,ask_password,skip_instructions,outgoing_rec,incoming_rec,external_cid_name,external_cid_number,emergency_cid_name,emergency_cid_number,dial_profile,accountcode,followme_numbers,initial_ringtime,fw_ringtime,ring_strategy,followme-enabled,recname,enable_callee_prompt,internal_numbers_confirmation,dynamic_queues,static_queues,mobile_number,home_number,organization,job_title,send_welcome_email,vitxi_client,mobile_client,notify_missed_calls,callback_on_busy_transfer";
+
+/* ── outbound routes / route selection (2026-08-20) ────────────────────────
+   Izzy: "bring over controlling the outbound routes and trunks from inside
+   Connect's UI… keep the robot." Creates reuse onboarding's own proven
+   builders (ONE implementation — createTrunk / createOutboundRoute /
+   createRouteSelection in pbxTenantBuild.ts); deletes reuse panelDelete; the
+   ONLY new panel write is the outbound-route EDIT below, whose exact shape
+   (full-form re-post with trklist[] replaced) was proven live on 2026-08-19
+   when route 123 moved from trunk 127 to 132 with the CID line byte-identical.
+   ⛔ There is deliberately NO trunk edit. The trunk edit form is the
+   documented checkbox minefield: parseFormPairs reads the JS-ticked
+   outgoing[type]/[trunk]/[qualify] boxes as ABSENT, so a full re-post silently
+   unticks them and breaks registration. Rotate credentials by replacing the
+   trunk until that form is conquered on the clone. */
+
+export type OutboundRouteEditInput = {
+  /** Full member list in DIAL ORDER (primary first). Replaces trklist[]. */
+  trunkIds?: string[];
+  cidName?: string;
+  cidNumber?: string;
+  description?: string;
+};
+
+export async function editOutboundRoute(s: PanelSession, mainPath: string, routeId: number | string, input: OutboundRouteEditInput): Promise<void> {
+  s.setTenant(mainPath);
+  const { form } = await loadParsedForm(s, "trunk_group", "edit", routeId);
+  // ⛔ Refuse a form that did not load the row — this post is a full replace,
+  // and a blank add-form posted back would erase the route's every setting.
+  if (String(form.values["outbound_route_id"] || "") !== String(routeId)) {
+    throw new PanelStepError("route-load", `the phone system did not return the edit form for outbound route #${routeId}`);
+  }
+  if (input.trunkIds && input.trunkIds.length === 0) {
+    throw new PanelStepError("route-save", "an outbound route needs at least one trunk — refusing to save an empty trunk list");
+  }
+  const set: Record<string, string> = {};
+  if (input.cidName != null) set["cid_name"] = input.cidName;
+  if (input.cidNumber != null) set["cid_number"] = input.cidNumber.replace(/\D/g, "");
+  if (input.description != null) set["description"] = input.description;
+  const pairs = applyOverrides(form, {
+    set,
+    // applyOverrides preserves the given array order, and ORDER IS THE
+    // FEATURE: the panel assigns member `index` from posted order and
+    // Asterisk dials in that order (shared primary first, VoIP.ms backup
+    // second — Izzy's carrier-filtering rule, pbxTenantBuild.ts).
+    multi: input.trunkIds ? { "trklist[]": input.trunkIds.map(String) } : undefined,
+  });
+  for (const [k, v] of [["class", "trunk_group"], ["method", "put"], ["mode", "edit"]] as Array<[string, string]>) {
+    const i = pairs.findIndex(([n]) => n === k); if (i >= 0) pairs[i] = [k, v]; else pairs.push([k, v]);
+  }
+  assertSaved("route-save", await s.post(pairs));
+}

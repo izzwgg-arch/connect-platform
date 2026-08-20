@@ -135,7 +135,7 @@ const TRUNK_SELECT = "trklist[]"; // in trunk_group (outbound route) add form
 const ROUTE_SELECT = /^members\[\d+\]\[outbound_route_id\]$/; // in ars add form
 const ARS_SELECT = "outbound_profiles[]"; // in tenants add form
 
-async function createTrunk(s: PanelSession, label: string, vm: PbxBuildJob["voipms"]): Promise<string> {
+export async function createTrunk(s: PanelSession, label: string, vm: PbxBuildJob["voipms"]): Promise<string> {
   // Idempotent resume: if a previous (interrupted) run already created this
   // trunk, reuse it instead of failing on the panel's duplicate-name error.
   // Safe only because the label is unique per submission — matching on the
@@ -196,7 +196,7 @@ async function findSharedPrimaryTrunkId(s: PanelSession): Promise<string | null>
   return findOptionInSelect(h, TRUNK_SELECT, (t) => t.trim() === SHARED_PRIMARY_TRUNK_NAME);
 }
 
-async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkIds: string[]): Promise<string> {
+export async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkIds: string[]): Promise<string> {
   const pre = findOptionInSelect(await s.loadForm("ars", "add"), ROUTE_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("trunk_group");
@@ -227,7 +227,7 @@ async function createOutboundRoute(s: PanelSession, label: string, cidName: stri
   return id;
 }
 
-async function createRouteSelection(s: PanelSession, label: string, routeId: string): Promise<string> {
+export async function createRouteSelection(s: PanelSession, label: string, routeId: string): Promise<string> {
   const pre = findOptionInSelect(await s.loadForm("tenants", "add"), ARS_SELECT, (t) => t.toLowerCase() === label.toLowerCase());
   if (pre) return pre;
   const csrf = await s.ensureCsrf("ars");
@@ -611,6 +611,20 @@ export async function addExtensionToTenant(
   tenantPath: string,
   person: PbxPerson,
   log: (msg: string) => void = () => {},
+  o: {
+    /**
+     * Skip THIS extension's Apply Changes, because the caller will run ONE
+     * apply for the whole batch. ⛔ Only for batch builds that follow with
+     * their own apply: every extension's rows are already in the database, so
+     * one apply renders them all — but a caller that skips and never applies
+     * leaves lines that exist in the panel and NOT in Asterisk. Added
+     * 2026-08-20 (Izzy: onboarding "taking a little long"): a 10-extension
+     * build was paying 10 whole-PBX applies at ~15-20 s each where one covers
+     * everything, and every extra apply is another chance to flush someone
+     * else's pending changes.
+     */
+    skipApply?: boolean;
+  } = {},
 ): Promise<string> {
   s.setTenant(tenantPath);
   // Resume guard: skip the CSV import when the extension already resolves.
@@ -624,7 +638,7 @@ export async function addExtensionToTenant(
   }
   await addDevice(s, extId, person, "webrtc"); // always: PJSIP + WebRTC
   if (person.cellNumber && person.cellMode) await addDevice(s, extId, person, "cell");
-  await applyChanges(s, "extensions");
+  if (!o.skipApply) await applyChanges(s, "extensions");
   log(`extension ${person.ext} ${person.name} ok (id ${extId}${person.cellNumber ? `, cell ${person.cellMode}` : ""})`);
   return extId;
 }
@@ -716,9 +730,18 @@ export async function buildPbxTenant(
   for (const person of job.people) {
     // ⛔ ONE implementation, shared with the "a new person joined" path. Do not
     // re-inline this loop body — see addExtensionToTenant.
-    const extId = await addExtensionToTenant(s, tenantPath, person, log);
+    // ⛔ skipApply is the batch optimisation (2026-08-20): each extension's
+    // rows land in the database here, and the ONE apply below renders them
+    // all — N extensions used to cost N whole-PBX applies (~15-20 s each,
+    // each one a fresh chance to flush another tenant's pending changes).
+    const extId = await addExtensionToTenant(s, tenantPath, person, log, { skipApply: true });
     if (!firstExtId) firstExtId = extId;
   }
+  // The one apply the loop above deferred. ⛔ MUST stay between the extension
+  // loop and the inbound route: without it, a build whose later steps fail
+  // would leave every extension unrendered — the per-extension applies used to
+  // guarantee incremental progress, and this single apply is that guarantee now.
+  await applyChanges(s, "extensions-batch");
   await createInboundRoute(s, job.did, firstExtId as string);
   log(`inbound route ok`);
   if (portedDid) {

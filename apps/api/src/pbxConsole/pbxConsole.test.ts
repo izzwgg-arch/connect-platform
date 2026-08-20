@@ -170,7 +170,10 @@ test("source: the create route reuses onboarding's slug rule rather than inventi
   const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
   // the PBX name is matched elsewhere by slug OR display name, so a second
   // slug variant would create tenants those lookups cannot find
-  assert.match(src, /import \{ slugify \} from "\.\.\/onboarding\/pbxTenantBuild"/, "must import the one slug rule");
+  // the import widened 2026-08-20 when the routing module joined (createTrunk
+  // et al. ride the same line) — the rule is "slugify comes from
+  // pbxTenantBuild", not the exact byte shape of the import statement
+  assert.match(src, /import \{[^}]*\bslugify\b[^}]*\} from "\.\.\/onboarding\/pbxTenantBuild"/, "must import the one slug rule");
   assert.doesNotMatch(src, /function\s+normaliseTenantSlug|const\s+normaliseTenantSlug/, "must not define a second slug rule");
 });
 
@@ -199,4 +202,86 @@ test("source: the create does NOT re-render, because it cannot and need not", ()
    *    the file it just wrote. Proven on prod (tenant 119).
    */
   assert.doesNotMatch(body, /resolveMirrorTenantRenderer/, "the create must not re-render");
+});
+
+
+/* -- trunks / outbound routes / route selection (2026-08-20) ---------------
+   Izzy: "bring over controlling the outbound routes and trunks from inside
+   Connect's UI... keep the robot." These guards pin the four decisions that
+   keep the routing module safe: one implementation per write, reference-
+   guarded deletes, the ARS checkbox rule staying where it lives, and the
+   deliberate ABSENCE of a trunk edit. */
+
+test("routing: every routing route exists and opens with requireOwner", () => {
+  const src = norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8"));
+  for (const route of [
+    'app.get("/admin/pbx-console/routing"',
+    'app.post("/admin/pbx-console/trunks"',
+    'app.delete("/admin/pbx-console/trunks/:trunkId"',
+    'app.post("/admin/pbx-console/outbound-routes"',
+    'app.patch("/admin/pbx-console/outbound-routes/:routeId"',
+    'app.delete("/admin/pbx-console/outbound-routes/:routeId"',
+    'app.post("/admin/pbx-console/route-selections"',
+    'app.patch("/admin/pbx-console/route-selections/:arsId/members"',
+    'app.delete("/admin/pbx-console/route-selections/:arsId"',
+  ]) {
+    const at = src.indexOf(route);
+    assert.ok(at !== -1, route + " must be registered");
+    const head = src.slice(at, at + 300);
+    assert.ok(head.includes("requireOwner(req, reply)"), route + " must open with requireOwner");
+  }
+});
+
+test("routing: creates reuse onboarding's builders — ONE implementation per object", () => {
+  // The recurring defect shape in this repo is two implementations of the same
+  // panel write drifting apart. The console must IMPORT the builders onboarding
+  // has driven in production since July, never carry its own copies.
+  const src = norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8"));
+  assert.match(src, /import \{ createOutboundRoute, createRouteSelection, createTrunk, slugify \} from "\.\.\/onboarding\/pbxTenantBuild"/);
+  const writes = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleWrites.ts"), "utf8")));
+  assert.ok(!writes.includes('"trunk_mode"'), "pbxConsoleWrites must not grow its own trunk-create form post");
+  assert.ok(!writes.includes('"trkpattern['), "pbxConsoleWrites must not grow its own route-create form post");
+});
+
+test("routing: every delete is REFUSED while something references the object", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  const between = (a: string, b: string) => { const i = src.indexOf(a); const j = src.indexOf(b, i); return src.slice(i, j === -1 ? undefined : j); };
+  const trunkDel = between('app.delete("/admin/pbx-console/trunks/:trunkId"', 'app.post("/admin/pbx-console/outbound-routes"');
+  assert.ok(trunkDel.includes("trunk_in_use"), "a trunk inside an outbound route must not be deletable");
+  assert.ok(trunkDel.indexOf("trunk_in_use") < trunkDel.indexOf("panelDelete"), "the trunk reference check must run BEFORE the panel delete");
+  const routeDel = between('app.delete("/admin/pbx-console/outbound-routes/:routeId"', 'app.post("/admin/pbx-console/route-selections"');
+  assert.ok(routeDel.includes("route_in_use"), "a route inside a route selection must not be deletable");
+  assert.ok(routeDel.indexOf("route_in_use") < routeDel.indexOf("panelDelete"), "the route reference check must run BEFORE the panel delete");
+  const arsDel = src.slice(src.indexOf('app.delete("/admin/pbx-console/route-selections/:arsId"'));
+  assert.ok(arsDel.includes("route_selection_in_use"), "a selection a tenant points at must not be deletable");
+  assert.ok(arsDel.indexOf("route_selection_in_use") < arsDel.indexOf("panelDelete"), "the selection reference check must run BEFORE the panel delete");
+});
+
+test("routing: ARS member changes go through the cutoff's setMembersEnabled, never a reimplementation", () => {
+  // members[N][enabled] is a CHECKBOX: omitted = disabled, "=0" ENABLES. That
+  // rule and its full-replace guards live in arsMemberToggle.ts and nowhere
+  // else — a second implementation here is how the enabled=0 trap ships again.
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  assert.match(src, /import \{ setMembersEnabled \} from "\.\.\/billing\/serviceInterruption\/arsMemberToggle"/);
+  assert.ok(src.includes("setMembersEnabled(s, { mainTenantPath: mainPath, arsId"), "the members route must call setMembersEnabled");
+  assert.ok(!src.includes("members["), "the routes file must never build members[N] pairs itself");
+});
+
+test("routing: there is deliberately NO trunk edit route", () => {
+  // The trunk edit form's JS-ticked checkboxes (outgoing[type]/[trunk]/
+  // [qualify]) parse as ABSENT, so a full-form re-post silently unticks them
+  // and breaks registration (the SignalWire session measured this and never
+  // edited trunk 132). Until that form is conquered on the clone, credentials
+  // change by replacing the trunk.
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  assert.ok(!src.includes('app.patch("/admin/pbx-console/trunks'), "no trunk edit until the checkbox minefield is conquered on the clone");
+  assert.ok(!src.includes('app.put("/admin/pbx-console/trunks'), "no trunk edit until the checkbox minefield is conquered on the clone");
+});
+
+test("routing: editOutboundRoute refuses an unloaded form and an empty trunk list", () => {
+  const writes = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleWrites.ts"), "utf8")));
+  const fn = writes.slice(writes.indexOf("export async function editOutboundRoute"));
+  assert.ok(fn.includes('form.values["outbound_route_id"]'), "the edit must verify the form loaded ITS row (this post is a full replace)");
+  assert.ok(fn.includes("at least one trunk"), "an empty trunk list must be refused, not saved");
+  assert.ok(fn.indexOf("outbound_route_id") < fn.indexOf("applyOverrides"), "the row check must run before the post is built");
 });

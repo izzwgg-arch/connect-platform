@@ -10,7 +10,8 @@
  * ⛔ Nothing here is tenant-scoped by a customer — it is the platform console.
  */
 import { loadPanelConfig, PanelSession, PanelStepError, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
-import { slugify } from "../onboarding/pbxTenantBuild";
+import { createOutboundRoute, createRouteSelection, createTrunk, slugify } from "../onboarding/pbxTenantBuild";
+import { setMembersEnabled } from "../billing/serviceInterruption/arsMemberToggle";
 import { resolveMirrorTenantCreator } from "../onboarding/setupOrchestrator";
 import {
   consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
@@ -21,9 +22,9 @@ import { acquireAccount, releaseAccount } from "../onboarding/setupOrchestrator"
 import {
   findConsoleExtension, findConsoleTenant, extensionReferences, listConsoleExtensions, listConsolePhones,
   listConsoleTenants, listProvisioningCatalog, openReadConn, orphanMobileFlagDevices, readConsoleGeo,
-  type ConsoleExtensionRow, listOutboundProfiles,} from "./pbxConsoleReaders";
+  type ConsoleExtensionRow, listOutboundProfiles, listConsoleRouting,} from "./pbxConsoleReaders";
 import {
-  applyAndRebake, createExtension, deleteExtension, deleteTenant, rebootPhone,
+  applyAndRebake, createExtension, deleteExtension, deleteTenant, editOutboundRoute, panelDelete, rebootPhone,
   saveExtension, savePhone, saveTenant, unlinkDevice, MAIN_TENANT_PATH_DEFAULT,
   type DeviceSpec, type ExtensionCreateInput, type ExtensionSaveInput,
 } from "./pbxConsoleWrites";
@@ -461,6 +462,207 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     try {
       const out = await consoleRenderPhone(helperCfg(instance), { mac: phone.mac, tenantId: phone.tenantId });
       await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_PHONE_RENDERED", entityType: "PbxPhone", entityId: String(phoneId), metadata: { mac: phone.mac, bytes: out.rendered?.bytes } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /* -- trunks / outbound routes / route selection (2026-08-20) -------------
+     Izzy: "bring over controlling the outbound routes and trunks from inside
+     Connect's UI... keep the robot." Reads are connect_read SELECTs; every
+     write reuses a PROVEN implementation - onboarding's createTrunk /
+     createOutboundRoute / createRouteSelection, the console's panelDelete,
+     the cutoff's setMembersEnabled (the members[N][enabled] checkbox rule
+     lives THERE and nowhere else) - and every delete is REFUSED while
+     something still references the object, because the panel would cascade
+     or strand it (a shared destinations row once nearly killed a live
+     number). NO trunk edit, deliberately: the trunk edit form's JS-ticked
+     checkboxes read as absent and a re-post breaks registration. */
+
+  app.get("/admin/pbx-console/routing", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const r = await withRead(instance, (c) => listConsoleRouting(c));
+    if (!r.ok) return reply.status(200).send({ available: false, reason: "pbx_unavailable", detail: r.reason });
+    return { available: true, instanceId: instance.id, ...r.data };
+  });
+
+  /** Create a registration trunk (the onboarding shape: user/pass/server). */
+  app.post("/admin/pbx-console/trunks", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ description?: string; username?: string; password?: string; server?: string }>(req);
+    const description = String(b.description || "").trim();
+    const username = String(b.username || "").trim();
+    const password = String(b.password || "");
+    const server = String(b.server || "").trim();
+    if (!description || !username || !password || !server) {
+      return reply.status(400).send({ error: "missing_fields", detail: "a trunk needs a name, a username, a password and a server" });
+    }
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        s.setTenant(mainPath);
+        const trunkId = await createTrunk(s, description, { user: username, pass: password, server });
+        return { trunkId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_TRUNK_CREATED", entityType: "PbxTrunk", entityId: String(out.trunkId), metadata: { description, username, server } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.delete("/admin/pbx-console/trunks/:trunkId", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const trunkId = Number((req.params || {}).trunkId);
+    if (!Number.isFinite(trunkId)) return reply.status(400).send({ error: "bad_trunk_id" });
+    // Refuse while any outbound route still lists it - deleting a member
+    // trunk out from under a route leaves customers' calls with a dead leg.
+    const r = await withRead(instance, (c) => listConsoleRouting(c));
+    if (!r.ok) return reply.status(503).send({ error: "pbx_unavailable", detail: r.reason });
+    const trunk = r.data.trunks.find((t) => t.id === trunkId);
+    if (!trunk) return reply.status(404).send({ error: "trunk_not_found" });
+    if (trunk.usedByRoutes.length) {
+      return reply.status(409).send({ error: "trunk_in_use", detail: "This trunk is inside " + trunk.usedByRoutes.map((x) => '"' + x.description + '"').join(", ") + " - take it out of those outbound routes first. Nothing was deleted." });
+    }
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        s.setTenant(mainPath);
+        await panelDelete(s, "trunks", trunkId, "trunk " + trunk.description);
+        return { deleted: trunkId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_TRUNK_DELETED", entityType: "PbxTrunk", entityId: String(trunkId), metadata: { description: trunk.description } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /** Create an outbound route. trunkIds is the DIAL ORDER (primary first). */
+  app.post("/admin/pbx-console/outbound-routes", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ description?: string; cidName?: string; cidNumber?: string; trunkIds?: Array<string | number> }>(req);
+    const description = String(b.description || "").trim();
+    const cidNumber = String(b.cidNumber || "").replace(/\D/g, "");
+    const trunkIds = (b.trunkIds || []).map((x) => String(x)).filter(Boolean);
+    if (!description || !trunkIds.length) return reply.status(400).send({ error: "missing_fields", detail: "an outbound route needs a name and at least one trunk" });
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        s.setTenant(mainPath);
+        const routeId = await createOutboundRoute(s, description, String(b.cidName || description), cidNumber, trunkIds);
+        return { routeId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ROUTE_CREATED", entityType: "PbxOutboundRoute", entityId: String(out.routeId), metadata: { description, trunkIds } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.patch("/admin/pbx-console/outbound-routes/:routeId", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const routeId = Number((req.params || {}).routeId);
+    if (!Number.isFinite(routeId)) return reply.status(400).send({ error: "bad_route_id" });
+    const b = body<{ trunkIds?: Array<string | number>; cidName?: string; cidNumber?: string; description?: string }>(req);
+    const trunkIds = b.trunkIds ? b.trunkIds.map((x) => String(x)).filter(Boolean) : undefined;
+    if (trunkIds && !trunkIds.length) return reply.status(400).send({ error: "missing_fields", detail: "an outbound route needs at least one trunk" });
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        await editOutboundRoute(s, mainPath, routeId, { trunkIds, cidName: b.cidName, cidNumber: b.cidNumber, description: b.description });
+        return { routeId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ROUTE_UPDATED", entityType: "PbxOutboundRoute", entityId: String(routeId), metadata: { trunkIds, cidName: b.cidName, cidNumber: b.cidNumber } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.delete("/admin/pbx-console/outbound-routes/:routeId", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const routeId = Number((req.params || {}).routeId);
+    if (!Number.isFinite(routeId)) return reply.status(400).send({ error: "bad_route_id" });
+    const r = await withRead(instance, (c) => listConsoleRouting(c));
+    if (!r.ok) return reply.status(503).send({ error: "pbx_unavailable", detail: r.reason });
+    const route = r.data.routes.find((x) => x.id === routeId);
+    if (!route) return reply.status(404).send({ error: "route_not_found" });
+    if (route.usedByArs.length) {
+      return reply.status(409).send({ error: "route_in_use", detail: "This route is inside " + route.usedByArs.map((x) => '"' + x.description + '"').join(", ") + " - take it out of those route selections first. Nothing was deleted." });
+    }
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        s.setTenant(mainPath);
+        await panelDelete(s, "trunk_group", routeId, "outbound route " + route.description);
+        return { deleted: routeId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ROUTE_DELETED", entityType: "PbxOutboundRoute", entityId: String(routeId), metadata: { description: route.description } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /** Create a route selection pointing at one outbound route. */
+  app.post("/admin/pbx-console/route-selections", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ description?: string; outboundRouteId?: string | number }>(req);
+    const description = String(b.description || "").trim();
+    const routeId = String(b.outboundRouteId || "").trim();
+    if (!description || !routeId) return reply.status(400).send({ error: "missing_fields", detail: "a route selection needs a name and an outbound route" });
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        s.setTenant(mainPath);
+        const arsId = await createRouteSelection(s, description, routeId);
+        return { arsId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ARS_CREATED", entityType: "PbxRouteSelection", entityId: String(out.arsId), metadata: { description, routeId } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /** Enable/disable members of a route selection. Reuses the cutoff's
+      setMembersEnabled - the ONE place the members[N][enabled] checkbox rule
+      (omit to disable; "=0" ENABLES) is implemented, with its full-replace
+      guards. Never reimplement it here. */
+  app.patch("/admin/pbx-console/route-selections/:arsId/members", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const arsId = String((req.params || {}).arsId || "");
+    const b = body<{ outboundRouteIds?: Array<string | number>; enabled?: boolean }>(req);
+    const ids = (b.outboundRouteIds || []).map((x) => String(x)).filter(Boolean);
+    if (!ids.length || typeof b.enabled !== "boolean") return reply.status(400).send({ error: "missing_fields", detail: "pick the outbound routes and whether to enable or disable them" });
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        const changed = await setMembersEnabled(s, { mainTenantPath: mainPath, arsId, outboundRouteIds: ids, enabled: b.enabled! });
+        return { arsId, changed };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ARS_MEMBERS_UPDATED", entityType: "PbxRouteSelection", entityId: arsId, metadata: { outboundRouteIds: ids, enabled: b.enabled } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.delete("/admin/pbx-console/route-selections/:arsId", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const arsId = Number((req.params || {}).arsId);
+    if (!Number.isFinite(arsId)) return reply.status(400).send({ error: "bad_ars_id" });
+    const r = await withRead(instance, (c) => listConsoleRouting(c));
+    if (!r.ok) return reply.status(503).send({ error: "pbx_unavailable", detail: r.reason });
+    const row = r.data.ars.find((x) => x.id === arsId);
+    if (!row) return reply.status(404).send({ error: "route_selection_not_found" });
+    if (row.usedByTenants.length) {
+      return reply.status(409).send({ error: "route_selection_in_use", detail: row.usedByTenants.join(", ") + (row.usedByTenants.length === 1 ? " still points" : " still point") + " at this route selection - move " + (row.usedByTenants.length === 1 ? "it" : "them") + " to another one first. Nothing was deleted." });
+    }
+    try {
+      const out = await withPanel(instance, async (s, mainPath) => {
+        s.setTenant(mainPath);
+        await panelDelete(s, "ars", arsId, "route selection " + (row.description || ("#" + arsId)));
+        return { deleted: arsId };
+      });
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ARS_DELETED", entityType: "PbxRouteSelection", entityId: String(arsId), metadata: { description: row.description } });
       return out;
     } catch (e) { return fail(reply, e); }
   });

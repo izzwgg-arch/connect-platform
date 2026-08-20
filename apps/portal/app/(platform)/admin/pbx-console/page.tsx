@@ -18,7 +18,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, ApiError } from "../../../../serv
 import { PermissionGate } from "../../../../components/PermissionGate";
 import "./pbxConsole.css";
 
-type Module = "tenants" | "extensions" | "phones" | "geo";
+type Module = "tenants" | "extensions" | "phones" | "routing" | "geo";
 function errText(e: any, fallback: string): string {
   if (e instanceof ApiError) return (e.body as any)?.detail || (e.body as any)?.message || (e.body as any)?.error || e.message || fallback;
   return e?.message || fallback;
@@ -29,6 +29,10 @@ type Device = { deviceId: number; user: string; technology: string; profileId: n
 type Extension = { extensionId: number; extension: string; name: string; email: string; tenantId: number; tenantName: string; tenantDescription: string; tenantPath: string; classOfService: string | null; vmEnabled: boolean; outgoingRec: boolean; incomingRec: boolean; devices: Device[] };
 type Phone = { id: number; mac: string; brand: string | null; model: string | null; tenantId: number; tenantDescription: string; description: string; accounts: { user: string; extension: string; extName: string }[] };
 type Geo = { countries: { id: number; country: string; iso: string; blocked: boolean }[]; whitelist: { id: number; host: string; description: string; isDefault: boolean }[] };
+type RTrunk = { id: number; description: string; technology: string; username: string; host: string; disabled: boolean; usedByRoutes: { id: number; description: string }[] };
+type RRoute = { id: number; description: string; cidName: string; cidNumber: string; trunks: { id: number; description: string; index: number }[]; patterns: number; usedByArs: { id: number; description: string }[] };
+type RArs = { id: number; description: string; members: { outboundRouteId: number; routeDescription: string; enabled: boolean; sort: number }[]; usedByTenants: string[] };
+type Routing = { trunks: RTrunk[]; routes: RRoute[]; ars: RArs[] };
 
 type DeviceKind = "pjsip" | "webrtc" | "virtual" | "iax";
 type DeviceDraft = { deviceId: number | null; kind: DeviceKind; user: string; secret: string; description: string; number: string; ringDevice: boolean; dtmf: string; maxContacts: string };
@@ -59,6 +63,7 @@ function PbxConsole() {
   const [phones, setPhones] = useState<Phone[]>([]);
   const [catalog, setCatalog] = useState<{ brands: any[]; models: any[]; templates: any[] } | null>(null);
   const [geo, setGeo] = useState<Geo | null>(null);
+  const [routing, setRouting] = useState<Routing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scope, setScope] = useState<string>(""); // tenant slug filter, "" = all
@@ -83,6 +88,7 @@ function PbxConsole() {
       if (m === "extensions") { const r = await apiGet<{ extensions: Extension[] }>("/admin/pbx-console/extensions"); setExtensions(r.extensions || []); }
       else if (m === "phones") { const r = await apiGet<{ phones: Phone[]; catalog: any }>("/admin/pbx-console/phones"); setPhones(r.phones || []); setCatalog(r.catalog || null); }
       else if (m === "geo") { const r = await apiGet<Geo & { available: boolean }>("/admin/pbx-console/geo"); setGeo(r); }
+      else if (m === "routing") { const r = await apiGet<Routing & { available: boolean }>("/admin/pbx-console/routing"); setRouting(r); }
     } catch (e) { push(errText(e, "Could not load " + m + "."), "bad"); }
   }, [push]);
   useEffect(() => { if (mod !== "tenants") void loadModule(mod); }, [mod, loadModule]);
@@ -115,10 +121,10 @@ function PbxConsole() {
       </div>
 
       <div className="pc-modnav" role="tablist">
-        {(["tenants", "extensions", "phones", "geo"] as Module[]).map((m) => (
+        {(["tenants", "extensions", "phones", "routing", "geo"] as Module[]).map((m) => (
           <button key={m} role="tab" aria-selected={mod === m} onClick={() => changeMod(m)}>
-            {m === "tenants" ? "Tenants" : m === "extensions" ? "Extensions" : m === "phones" ? "Phone Provisioning" : "Geo Firewall"}
-            <span className="pc-cnt">{m === "tenants" ? tenants.filter((t) => inScope(t.name)).length : m === "extensions" ? extensions.filter((e) => inScope(tenantByName.get("")?.name || "") || inScope(tenantSlugOf(e, tenantByName))).length : m === "phones" ? phones.length : geo ? geo.countries.filter((c) => c.blocked).length : "—"}</span>
+            {m === "tenants" ? "Tenants" : m === "extensions" ? "Extensions" : m === "phones" ? "Phone Provisioning" : m === "routing" ? "Trunks & Routing" : "Geo Firewall"}
+            <span className="pc-cnt">{m === "tenants" ? tenants.filter((t) => inScope(t.name)).length : m === "extensions" ? extensions.filter((e) => inScope(tenantByName.get("")?.name || "") || inScope(tenantSlugOf(e, tenantByName))).length : m === "phones" ? phones.length : m === "routing" ? (routing ? routing.trunks.length : "—") : geo ? geo.countries.filter((c) => c.blocked).length : "—"}</span>
           </button>
         ))}
       </div>
@@ -132,6 +138,7 @@ function PbxConsole() {
             open={(e: Extension) => setEditor({ kind: "extensions", id: e.extensionId, draft: extDraft(e), base: extDraft(e) })}
             create={() => setEditor({ kind: "extensions", id: null, draft: extDraft(null, scope ? tenantByName.get(scope) : tenants.find((t) => !t.isMain)), base: null })} />
         : mod === "phones" ? <PhoneList rows={phones.filter((p) => inScope(slugForTenantId(p.tenantId, tenants)) && matches(p.mac + " " + p.description + " " + (p.model || "") + " " + p.tenantDescription))} push={push} reload={() => loadModule("phones")} />
+        : mod === "routing" ? <RoutingView routing={routing} push={push} reload={() => loadModule("routing")} />
         : <GeoView geo={geo} push={push} reload={() => loadModule("geo")} />}
 
       {newTenant ? (
@@ -407,6 +414,225 @@ function PhoneList({ rows, push, reload }: any) {
         )) : <tr><td colSpan={6} className="pc-empty">No phones.</td></tr>}</tbody>
       </table></div></div>
     </>
+  );
+}
+
+/*
+ * Trunks & Routing (2026-08-20, Izzy: "bring over controlling the outbound
+ * routes and trunks from inside Connect's UI... keep the robot"). Everything a
+ * tenant's outbound side needs, run from Connect; the server reuses
+ * onboarding's own proven builders under the hood. Deletes are refused by the
+ * server while anything still references the object - the buttons here just
+ * surface that sentence. There is deliberately NO trunk edit (the panel's
+ * trunk edit form silently unticks its JS-driven checkboxes on re-post and
+ * breaks registration); replace a trunk to change its credentials.
+ */
+function RoutingView({ routing, push, reload }: { routing: Routing | null; push: any; reload: any }) {
+  const [busy, setBusy] = useState(false);
+  const [dialog, setDialog] = useState<null | { kind: "trunk" } | { kind: "route"; edit?: RRoute } | { kind: "ars" }>(null);
+  if (!routing) return <div className="pc-state"><span className="pc-spin" /></div>;
+  const del = async (what: "trunks" | "outbound-routes" | "route-selections", id: number, label: string) => {
+    if (!window.confirm(`Delete ${label}? This can't be undone.`)) return;
+    setBusy(true);
+    try { await apiDelete(`/admin/pbx-console/${what}/${id}`); push(`Deleted ${label}.`); await reload(); }
+    catch (e) { push(errText(e, "Nothing was deleted."), "bad"); }
+    setBusy(false);
+  };
+  const toggleMember = async (ars: RArs, m: RArs["members"][number]) => {
+    setBusy(true);
+    try {
+      await apiPatch(`/admin/pbx-console/route-selections/${ars.id}/members`, { outboundRouteIds: [m.outboundRouteId], enabled: !m.enabled });
+      push(`${m.routeDescription} ${m.enabled ? "disabled" : "enabled"} in ${ars.description || `profile #${ars.id}`}.`);
+      await reload();
+    } catch (e) { push(errText(e, "The route selection was not changed."), "bad"); }
+    setBusy(false);
+  };
+  return (
+    <>
+      <div className="pc-note"><span className="pc-ico">✓</span><div><b>The outbound side, run from Connect.</b> A call leaves through a <b>route selection</b> → <b>outbound route</b> → <b>trunk</b>. Deleting anything that is still used somewhere is refused with the list of places using it. Trunk order inside a route is the dial order — the shared primary trunk first, the customer&apos;s own VoIP.ms trunk as backup.</div></div>
+
+      <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
+        <thead><tr><th>Trunk</th><th>Account</th><th>Server</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind: "trunk" })}>New trunk</button></th></tr></thead>
+        <tbody>{routing.trunks.length ? routing.trunks.map((t) => (
+          <tr key={t.id}>
+            <td><div className="pc-rowmain">{t.description || `#${t.id}`}{t.disabled ? <span className="pc-pill off" style={{ marginLeft: 8 }}>disabled</span> : null}</div><div className="pc-rowsub pc-mono">#{t.id} · {t.technology}</div></td>
+            <td className="pc-mono pc-rowsub">{t.username || "—"}</td>
+            <td className="pc-mono pc-rowsub">{t.host || "—"}</td>
+            <td className="pc-rowsub">{t.usedByRoutes.length ? t.usedByRoutes.map((r) => r.description).join(", ") : "—"}</td>
+            <td style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || t.usedByRoutes.length > 0} title={t.usedByRoutes.length ? "Still inside an outbound route" : ""} onClick={() => del("trunks", t.id, `trunk ${t.description}`)}>Delete</button></td>
+          </tr>
+        )) : <tr><td colSpan={5} className="pc-empty">No trunks.</td></tr>}</tbody>
+      </table></div></div>
+
+      <div style={{ height: 18 }} />
+      <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
+        <thead><tr><th>Outbound route</th><th>Caller ID</th><th>Trunks (dial order)</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind: "route" })}>New route</button></th></tr></thead>
+        <tbody>{routing.routes.length ? routing.routes.map((r) => (
+          <tr key={r.id}>
+            <td><div className="pc-rowmain">{r.description || `#${r.id}`}</div><div className="pc-rowsub pc-mono">#{r.id} · {r.patterns} patterns</div></td>
+            <td className="pc-rowsub">{r.cidName ? `"${r.cidName}" ` : ""}<span className="pc-mono">{r.cidNumber || "—"}</span></td>
+            <td className="pc-rowsub">{[...r.trunks].sort((a, b) => a.index - b.index).map((t) => t.description).join(" → ") || "—"}</td>
+            <td className="pc-rowsub">{r.usedByArs.length ? r.usedByArs.map((a) => a.description).join(", ") : "—"}</td>
+            <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+              <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => setDialog({ kind: "route", edit: r })}>Edit</button>{" "}
+              <button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || r.usedByArs.length > 0} title={r.usedByArs.length ? "Still inside a route selection" : ""} onClick={() => del("outbound-routes", r.id, `outbound route ${r.description}`)}>Delete</button>
+            </td>
+          </tr>
+        )) : <tr><td colSpan={5} className="pc-empty">No outbound routes.</td></tr>}</tbody>
+      </table></div></div>
+
+      <div style={{ height: 18 }} />
+      <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
+        <thead><tr><th>Route selection</th><th>Routes (top wins)</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind: "ars" })}>New selection</button></th></tr></thead>
+        <tbody>{routing.ars.length ? routing.ars.map((a) => (
+          <tr key={a.id}>
+            <td><div className="pc-rowmain">{a.description || `Profile #${a.id}`}</div><div className="pc-rowsub pc-mono">#{a.id}</div></td>
+            <td>{a.members.length ? a.members.map((m) => (
+              <div key={m.outboundRouteId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+                {m.enabled ? <span className="pc-pill ok">on</span> : <span className="pc-pill off">off</span>}
+                <span className={m.enabled ? "" : "pc-rowsub"}>{m.routeDescription}</span>
+                <button className="pc-btn pc-btn-sm pc-btn-ghost" disabled={busy} onClick={() => toggleMember(a, m)}>{m.enabled ? "Disable" : "Enable"}</button>
+              </div>
+            )) : <span className="pc-rowsub">—</span>}</td>
+            <td className="pc-rowsub">{a.usedByTenants.length ? a.usedByTenants.join(", ") : "—"}</td>
+            <td style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || a.usedByTenants.length > 0} title={a.usedByTenants.length ? "A customer still points at this selection" : ""} onClick={() => del("route-selections", a.id, `route selection ${a.description || `#${a.id}`}`)}>Delete</button></td>
+          </tr>
+        )) : <tr><td colSpan={4} className="pc-empty">No route selections.</td></tr>}</tbody>
+      </table></div></div>
+
+      {dialog?.kind === "trunk" ? <NewTrunkDialog push={push} onClose={() => setDialog(null)} onDone={reload} /> : null}
+      {dialog?.kind === "route" ? <RouteDialog push={push} onClose={() => setDialog(null)} onDone={reload} trunks={routing.trunks} edit={dialog.edit} /> : null}
+      {dialog?.kind === "ars" ? <NewArsDialog push={push} onClose={() => setDialog(null)} onDone={reload} routes={routing.routes} /> : null}
+    </>
+  );
+}
+
+function NewTrunkDialog({ push, onClose, onDone }: any) {
+  const [description, setDescription] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [server, setServer] = useState("newyork1.voip.ms");
+  const [busy, setBusy] = useState(false);
+  const ready = description.trim() && username.trim() && password && server.trim() && !busy;
+  const submit = async () => {
+    if (!ready) return;
+    setBusy(true);
+    try {
+      const r: any = await apiPost("/admin/pbx-console/trunks", { description: description.trim(), username: username.trim(), password, server: server.trim() });
+      push(`Trunk "${description.trim()}" created (#${r.trunkId}).`);
+      onClose(); await onDone();
+    } catch (e) { push(errText(e, "The trunk was not created."), "bad"); }
+    setBusy(false);
+  };
+  return (
+    <div className="pc-modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="pc-modal" role="dialog" aria-modal="true" aria-label="New trunk">
+        <h3>New trunk</h3>
+        <div className="pc-mbody">
+          <div className="pc-f"><label>Name</label><input className="pc-ctl" value={description} autoFocus onChange={(e) => setDescription(e.target.value)} placeholder="Acme Bakery" /><div className="pc-help">Shown in every route list. One trunk per carrier account.</div></div>
+          <div className="pc-f"><label>Username</label><input className="pc-ctl pc-mono" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="344022_acme" /></div>
+          <div className="pc-f"><label>Password</label><input className="pc-ctl pc-mono" type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+          <div className="pc-f"><label>Server</label><input className="pc-ctl pc-mono" value={server} onChange={(e) => setServer(e.target.value)} /><div className="pc-help">The registration shape onboarding uses (VoIP.ms subaccounts). SignalWire trunks need their SIP-profile domain here instead.</div></div>
+        </div>
+        <div className="pc-mfoot">
+          <button className="pc-btn pc-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="pc-btn" disabled={!ready} onClick={submit}>{busy ? "Creating…" : "Create trunk"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RouteDialog({ push, onClose, onDone, trunks, edit }: { push: any; onClose: any; onDone: any; trunks: RTrunk[]; edit?: RRoute }) {
+  const ordered = edit ? [...edit.trunks].sort((a, b) => a.index - b.index) : [];
+  const [description, setDescription] = useState(edit?.description || "");
+  const [cidName, setCidName] = useState(edit?.cidName || "");
+  const [cidNumber, setCidNumber] = useState(edit?.cidNumber || "");
+  const [primary, setPrimary] = useState(String(ordered[0]?.id || ""));
+  const [backup, setBackup] = useState(String(ordered[1]?.id || ""));
+  const [busy, setBusy] = useState(false);
+  const trunkIds = [primary, backup].filter(Boolean);
+  const ready = description.trim() && trunkIds.length > 0 && primary !== backup && !busy;
+  const submit = async () => {
+    if (!ready) return;
+    setBusy(true);
+    try {
+      if (edit) {
+        await apiPatch(`/admin/pbx-console/outbound-routes/${edit.id}`, { description: description.trim(), cidName, cidNumber, trunkIds });
+        push(`Outbound route "${description.trim()}" saved.`);
+      } else {
+        const r: any = await apiPost("/admin/pbx-console/outbound-routes", { description: description.trim(), cidName, cidNumber, trunkIds });
+        push(`Outbound route "${description.trim()}" created (#${r.routeId}).`);
+      }
+      onClose(); await onDone();
+    } catch (e) { push(errText(e, "The route was not saved."), "bad"); }
+    setBusy(false);
+  };
+  return (
+    <div className="pc-modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="pc-modal" role="dialog" aria-modal="true" aria-label={edit ? "Edit outbound route" : "New outbound route"}>
+        <h3>{edit ? `Edit "${edit.description}"` : "New outbound route"}</h3>
+        <div className="pc-mbody">
+          <div className="pc-f"><label>Name</label><input className="pc-ctl" value={description} autoFocus onChange={(e) => setDescription(e.target.value)} /></div>
+          <div className="pc-f"><label>Caller ID name</label><input className="pc-ctl" value={cidName} onChange={(e) => setCidName(e.target.value)} placeholder="Acme Bakery" /></div>
+          <div className="pc-f"><label>Caller ID number</label><input className="pc-ctl pc-mono" value={cidNumber} onChange={(e) => setCidNumber(e.target.value)} placeholder="8455551234" /></div>
+          <div className="pc-f"><label>Primary trunk</label>
+            <select className="pc-ctl" value={primary} onChange={(e) => setPrimary(e.target.value)}>
+              <option value="">— pick —</option>
+              {trunks.map((t) => <option key={t.id} value={String(t.id)}>{t.description || `#${t.id}`}</option>)}
+            </select>
+            <div className="pc-help">Dialed first. Platform rule: the shared primary trunk (&quot;0001&quot;) first, the customer&apos;s own VoIP.ms trunk as backup — carriers filter VoIP.ms-originated calls.</div>
+          </div>
+          <div className="pc-f"><label>Backup trunk</label>
+            <select className="pc-ctl" value={backup} onChange={(e) => setBackup(e.target.value)}>
+              <option value="">— none —</option>
+              {trunks.map((t) => <option key={t.id} value={String(t.id)}>{t.description || `#${t.id}`}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="pc-mfoot">
+          <button className="pc-btn pc-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="pc-btn" disabled={!ready} onClick={submit}>{busy ? "Saving…" : edit ? "Save route" : "Create route"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewArsDialog({ push, onClose, onDone, routes }: { push: any; onClose: any; onDone: any; routes: RRoute[] }) {
+  const [description, setDescription] = useState("");
+  const [routeId, setRouteId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ready = description.trim() && routeId && !busy;
+  const submit = async () => {
+    if (!ready) return;
+    setBusy(true);
+    try {
+      const r: any = await apiPost("/admin/pbx-console/route-selections", { description: description.trim(), outboundRouteId: routeId });
+      push(`Route selection "${description.trim()}" created (#${r.arsId}).`);
+      onClose(); await onDone();
+    } catch (e) { push(errText(e, "The route selection was not created."), "bad"); }
+    setBusy(false);
+  };
+  return (
+    <div className="pc-modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="pc-modal" role="dialog" aria-modal="true" aria-label="New route selection">
+        <h3>New route selection</h3>
+        <div className="pc-mbody">
+          <div className="pc-f"><label>Name</label><input className="pc-ctl" value={description} autoFocus onChange={(e) => setDescription(e.target.value)} /><div className="pc-help">This is what a tenant&apos;s outbound profile points at.</div></div>
+          <div className="pc-f"><label>Outbound route</label>
+            <select className="pc-ctl" value={routeId} onChange={(e) => setRouteId(e.target.value)}>
+              <option value="">— pick —</option>
+              {routes.map((r) => <option key={r.id} value={String(r.id)}>{r.description || `#${r.id}`}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="pc-mfoot">
+          <button className="pc-btn pc-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="pc-btn" disabled={!ready} onClick={submit}>{busy ? "Creating…" : "Create selection"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

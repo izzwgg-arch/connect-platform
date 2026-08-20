@@ -327,15 +327,29 @@ test("full build: step order, Apply after every step, all objects verified", asy
   const result = await run(fake);
 
   // Order: trunk→apply, route→apply, ars→apply, tenant→apply,
-  // then per person csv-import + devices + apply, finally inbound→apply.
+  // then per person csv-import + devices (NO apply each — the batch
+  // optimisation, 2026-08-20), ONE apply for the whole batch, finally
+  // inbound→apply.
   assert.deepEqual(fake.sequence.slice(0, 8), [
     "put:trunks", "apply", "put:trunk_group", "apply", "put:ars", "apply", "put:tenants", "apply",
   ]);
-  assert.equal(fake.sequence.filter((s) => s === "csv-import").length, 3);
+  const imports = fake.sequence.map((s, i) => (s === "csv-import" ? i : -1)).filter((i) => i >= 0);
+  assert.equal(imports.length, 3);
+  // ⛔ no apply BETWEEN the extension imports — N extensions used to cost N
+  // whole-PBX applies (~15-20 s each, each one another chance to flush some
+  // other tenant's pending changes); the rows are in the database either way
+  // and one apply renders them all
+  assert.ok(!fake.sequence.slice(imports[0], imports[imports.length - 1]).includes("apply"),
+    "the per-extension applies are gone — one batch apply covers the loop");
+  // ⛔ and the batch apply MUST land between the last extension and the
+  // inbound route — it is what guarantees a build that dies later still
+  // leaves every extension rendered
+  const between = fake.sequence.slice(imports[imports.length - 1], fake.sequence.indexOf("put:inbound_route"));
+  assert.ok(between.includes("apply"), "the batch apply must run before the inbound route");
   assert.equal(fake.sequence[fake.sequence.length - 2], "put:inbound_route");
   assert.equal(fake.sequence[fake.sequence.length - 1], "apply");
-  // 4 infra applies + 3 per-person applies + 1 inbound apply
-  assert.equal(fake.applies, 8);
+  // 4 infra applies + 1 extension-batch apply + 1 inbound apply
+  assert.equal(fake.applies, 6);
 
   assert.equal(result.company, "Bobs Plumbing");
   assert.equal(result.slug, "bobs_plumbing");

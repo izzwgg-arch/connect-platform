@@ -344,3 +344,124 @@ export async function listOutboundProfiles(conn: Conn): Promise<Array<{ id: numb
     return { id, description, label: named ? `${description} (#${id})` : `Profile #${id}`, inUseBy: uses.get(id) || 0 };
   });
 }
+
+/* ── trunks / outbound routes / route selection (2026-08-20) ───────────────
+   The routing layer, read for the console's Trunks & Routing module. All Main-
+   tenant objects (every trunk/route/ARS on this PBX lives under tenant_id 1 —
+   the emergency-calling investigation proved joining ombu_ars on a customer's
+   tenant_id concludes the whole fleet is broken). The "usedBy" fields exist so
+   the console can REFUSE deletes that would strand something: a trunk inside a
+   route, a route inside a selection, a selection some tenant points at. */
+
+export type ConsoleTrunkRow = {
+  id: number;
+  description: string;
+  technology: string;
+  /** The registration username (how you tell whose carrier account this is). */
+  username: string;
+  host: string;
+  disabled: boolean;
+  /** Outbound routes that list this trunk as a member. */
+  usedByRoutes: Array<{ id: number; description: string }>;
+};
+
+export type ConsoleOutboundRouteRow = {
+  id: number;
+  description: string;
+  cidName: string;
+  cidNumber: string;
+  /** Member trunks in DIAL ORDER (index asc — primary first). */
+  trunks: Array<{ id: number; description: string; index: number }>;
+  patterns: number;
+  /** Route selections that include this route. */
+  usedByArs: Array<{ id: number; description: string }>;
+};
+
+export type ConsoleArsRow = {
+  id: number;
+  description: string;
+  members: Array<{ outboundRouteId: number; routeDescription: string; enabled: boolean; sort: number }>;
+  /** Tenants whose outbound_profiles setting points at this selection. */
+  usedByTenants: string[];
+};
+
+export type ConsoleRouting = { trunks: ConsoleTrunkRow[]; routes: ConsoleOutboundRouteRow[]; ars: ConsoleArsRow[] };
+
+export async function listConsoleRouting(conn: Conn): Promise<ConsoleRouting> {
+  const [trunkRows, routeRows, memberRows, patternRows, arsRows, arsMemberRows, settings, tenants] = await Promise.all([
+    q(conn, `SELECT trunk_id, description, technology, outgoing_username, disable FROM ombutel.ombu_trunks ORDER BY trunk_id`),
+    q(conn, `SELECT outbound_route_id, description, cid_name, cid_number FROM ombutel.ombu_outbound_routes ORDER BY outbound_route_id`),
+    q(conn, "SELECT outbound_route_id, trunk_id, `index` FROM ombutel.ombu_outbound_route_members ORDER BY outbound_route_id, `index`"),
+    q(conn, `SELECT outbound_route_id, COUNT(*) AS c FROM ombutel.ombu_outbound_route_patterns GROUP BY outbound_route_id`),
+    q(conn, `SELECT ars_id, description FROM ombutel.ombu_ars ORDER BY ars_id`),
+    q(conn, `SELECT ars_id, outbound_route_id, enabled, sort FROM ombutel.ombu_ars_members ORDER BY ars_id, sort`),
+    q(conn, `SELECT tenant_id, value FROM ombutel.ombu_tenant_settings WHERE name = 'outbound_profiles'`),
+    q(conn, `SELECT tenant_id, description FROM ombutel.ombu_tenants`),
+  ]);
+  /* The trunk host lives in ombu_trunk_parameters for pjsip trunks; keep the
+     read cheap and take it from there only for the rows that have one. */
+  const hostRows = await q(conn, `SELECT trunk_id, value FROM ombutel.ombu_trunk_parameters WHERE param = 'host' AND type = 'outgoing'`).catch(() => [] as any[]);
+  const hostBy = new Map<number, string>(hostRows.map((r: any) => [Number(r.trunk_id), String(r.value ?? "")]));
+  const trunkDesc = new Map<number, string>(trunkRows.map((r) => [Number(r.trunk_id), String(r.description ?? "")]));
+  const routeDesc = new Map<number, string>(routeRows.map((r) => [Number(r.outbound_route_id), String(r.description ?? "")]));
+  const tenantDesc = new Map<number, string>(tenants.map((r) => [Number(r.tenant_id), String(r.description ?? "")]));
+
+  const routesByTrunk = new Map<number, Array<{ id: number; description: string }>>();
+  const trunksByRoute = new Map<number, Array<{ id: number; description: string; index: number }>>();
+  for (const m of memberRows) {
+    const rid = Number(m.outbound_route_id); const tid = Number(m.trunk_id); const idx = Number((m as any)["index"] ?? 0);
+    if (!routesByTrunk.has(tid)) routesByTrunk.set(tid, []);
+    routesByTrunk.get(tid)!.push({ id: rid, description: routeDesc.get(rid) || `route #${rid}` });
+    if (!trunksByRoute.has(rid)) trunksByRoute.set(rid, []);
+    trunksByRoute.get(rid)!.push({ id: tid, description: trunkDesc.get(tid) || `trunk #${tid}`, index: idx });
+  }
+  const patternsBy = new Map<number, number>(patternRows.map((r: any) => [Number(r.outbound_route_id), Number(r.c)]));
+  const arsByRoute = new Map<number, Array<{ id: number; description: string }>>();
+  const membersByArs = new Map<number, ConsoleArsRow["members"]>();
+  for (const m of arsMemberRows) {
+    const aid = Number(m.ars_id); const rid = Number(m.outbound_route_id);
+    if (!membersByArs.has(aid)) membersByArs.set(aid, []);
+    membersByArs.get(aid)!.push({ outboundRouteId: rid, routeDescription: routeDesc.get(rid) || `route #${rid}`, enabled: yes(m.enabled) || String(m.enabled) === "1", sort: Number(m.sort ?? 0) });
+    if (!arsByRoute.has(rid)) arsByRoute.set(rid, []);
+    arsByRoute.get(rid)!.push({ id: aid, description: "" });
+  }
+  const tenantsByArs = new Map<number, string[]>();
+  for (const s of settings) {
+    for (const raw of String(s.value ?? "").split(",")) {
+      const id = Number(raw.trim());
+      if (!Number.isFinite(id) || id <= 0) continue;
+      if (!tenantsByArs.has(id)) tenantsByArs.set(id, []);
+      tenantsByArs.get(id)!.push(tenantDesc.get(Number(s.tenant_id)) || `tenant #${s.tenant_id}`);
+    }
+  }
+  const ars: ConsoleArsRow[] = arsRows.map((r) => ({
+    id: Number(r.ars_id),
+    description: String(r.description ?? "").trim(),
+    members: membersByArs.get(Number(r.ars_id)) || [],
+    usedByTenants: tenantsByArs.get(Number(r.ars_id)) || [],
+  }));
+  const arsDesc = new Map<number, string>(ars.map((a) => [a.id, a.description || `Profile #${a.id}`]));
+  for (const list of arsByRoute.values()) for (const e of list) e.description = arsDesc.get(e.id) || `Profile #${e.id}`;
+
+  return {
+    trunks: trunkRows.map((r) => ({
+      id: Number(r.trunk_id),
+      description: String(r.description ?? "").trim(),
+      technology: String(r.technology ?? ""),
+      username: String(r.outgoing_username ?? ""),
+      host: hostBy.get(Number(r.trunk_id)) || "",
+      disabled: yes(r.disable),
+      usedByRoutes: routesByTrunk.get(Number(r.trunk_id)) || [],
+    })),
+    routes: routeRows.map((r) => ({
+      id: Number(r.outbound_route_id),
+      description: String(r.description ?? "").trim(),
+      cidName: String(r.cid_name ?? ""),
+      cidNumber: String(r.cid_number ?? ""),
+      trunks: trunksByRoute.get(Number(r.outbound_route_id)) || [],
+      patterns: patternsBy.get(Number(r.outbound_route_id)) || 0,
+      usedByArs: arsByRoute.get(Number(r.outbound_route_id)) || [],
+    })),
+    ars,
+  };
+}
