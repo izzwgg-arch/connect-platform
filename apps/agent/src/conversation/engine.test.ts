@@ -148,3 +148,44 @@ test("auto-close stale conversations after idle window", async () => {
   const conv = await store.getConversation(a.conversationId);
   assert.equal(conv?.status, "CLOSED");
 });
+
+// ── Support-desk take-over (2026-08-20) ──────────────────────────────────────
+
+test("take-over: the engine is a mailbox — message stored, NO reply, no model, flag reported", async () => {
+  const first = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "hello");
+  const conv = await store.getConversation(first.conversationId);
+  (conv as any).humanTakeoverAt = new Date();
+  (conv as any).humanTakeoverBy = "staff-user";
+  const before = store.msgs.length;
+  const res = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "are you there?");
+  assert.equal(res.humanTakeover, true);
+  assert.equal(res.reply, "");
+  assert.equal(res.model, "human");
+  // Exactly ONE new message (the customer's) — no assistant turn was written.
+  assert.equal(store.msgs.length, before + 1);
+  assert.equal(store.msgs.at(-1)?.role, "user");
+  assert.equal(store.msgs.at(-1)?.content, "are you there?");
+});
+
+test("take-over cleared: the assistant answers again", async () => {
+  const first = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "hello");
+  const conv = await store.getConversation(first.conversationId);
+  (conv as any).humanTakeoverAt = new Date();
+  const during = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "ping");
+  assert.equal(during.humanTakeover, true);
+  (conv as any).humanTakeoverAt = null;
+  const after = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "ping again");
+  assert.ok(!after.humanTakeover);
+  assert.ok(after.reply.length > 0); // the kill-switch/degraded reply — a reply either way
+});
+
+test("getMessagesWithState reports the flag with the same gating as getMessages", async () => {
+  const first = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer" }, "hello");
+  const conv = await store.getConversation(first.conversationId);
+  (conv as any).humanTakeoverAt = new Date();
+  const mine = await engine.getMessagesWithState({ tenantId: "t1", clientUserId: "u1", role: "customer" }, first.conversationId);
+  assert.equal(mine?.humanTakeover, true);
+  assert.ok((mine?.messages.length ?? 0) > 0);
+  const foreign = await engine.getMessagesWithState({ tenantId: "t2", clientUserId: "u1", role: "customer" }, first.conversationId);
+  assert.equal(foreign, null); // tenant isolation — absolute
+});

@@ -32,7 +32,31 @@
  * and a test asserts the string "fixCodeHash" appears in no response.
  */
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { supportReportReference, resolvePersonDisplayName } from "@connect/shared";
+
+/**
+ * Best-effort audit row with REAL tamper evidence — `AgentAuditLog.hash` is a
+ * required sha256 of the row body (same convention as investigationRoute.ts;
+ * a stubbed hash silently turns an audit trail into a log). Never throws:
+ * losing an audit row must not fail a support action, but the create must be
+ * SHAPED correctly or every row is lost silently.
+ */
+async function supportAudit(
+  db: any,
+  row: { actor: string; event: string; tenantId: string; conversationId?: string; payload?: Record<string, unknown> },
+): Promise<void> {
+  try {
+    await db.agentAuditLog.create({
+      data: {
+        ...row,
+        hash: createHash("sha256").update(JSON.stringify(row)).digest("hex"),
+      },
+    });
+  } catch {
+    /* best-effort */
+  }
+}
 
 type Gate = (req: any, reply: any) => Promise<unknown | null>;
 
@@ -463,6 +487,211 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
         deliveryError: m.deliveryError ?? null,
       })),
     };
+  });
+
+  // ─────────────────── Phase 4: assistant conversations + take-over ───────────────────
+  //
+  // ⛔ The take-over contract, all three legs: (1) these routes flip
+  // AgentConversation.humanTakeoverAt/By and write staff messages (role
+  // "staff") straight into AgentMessage — same database the agent reads;
+  // (2) the agent ENGINE refuses to answer while the flag is set
+  // (engine.handleMessage's take-over branch — deployed as an agent REBUILD,
+  // not an api deploy); (3) the customer's widget polls /agent-api/chat/
+  // messages, which reports the flag, so staff replies appear live. A staff
+  // message REQUIRES an active take-over — a person talking while the
+  // assistant also answers is two voices in one mouth.
+
+  app.get("/admin/support/conversations", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const q = z
+      .object({ take: z.coerce.number().int().min(1).max(THREADS_MAX_TAKE).optional() })
+      .safeParse(req.query ?? {});
+    if (!q.success) return reply.code(400).send({ error: "bad_query" });
+    const convs = await db.agentConversation.findMany({
+      orderBy: { startedAt: "desc" },
+      take: q.data.take ?? THREADS_DEFAULT_TAKE,
+      select: {
+        id: true,
+        tenantId: true,
+        clientUserId: true,
+        role: true,
+        status: true,
+        language: true,
+        startedAt: true,
+        humanTakeoverAt: true,
+        humanTakeoverBy: true,
+      },
+    });
+    const tenantIds = [...new Set(convs.map((c: any) => c.tenantId))];
+    const userIds = [...new Set(convs.map((c: any) => c.clientUserId).filter(Boolean))] as string[];
+    const [tenants, users, lasts] = await Promise.all([
+      tenantIds.length
+        ? db.tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } }).catch(() => [])
+        : [],
+      userIds.length
+        ? db.user
+            .findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true, email: true } })
+            .catch(() => [])
+        : [],
+      Promise.all(
+        convs.map((c: any) =>
+          db.agentMessage
+            .findFirst({
+              where: { conversationId: c.id },
+              orderBy: { createdAt: "desc" },
+              select: { role: true, content: true, createdAt: true },
+            })
+            .catch(() => null),
+        ),
+      ),
+    ]);
+    const tenantName = new Map<string, string>(tenants.map((t: any) => [t.id, t.name]));
+    const userName = new Map<string, string>(
+      users.map((u: any) => [u.id, resolvePersonDisplayName({ firstName: u.firstName, lastName: u.lastName, email: u.email })]),
+    );
+    return {
+      conversations: convs.map((c: any, i: number) => ({
+        id: c.id,
+        tenantId: c.tenantId,
+        tenantName: tenantName.get(c.tenantId) ?? c.tenantId,
+        userName: c.clientUserId ? userName.get(c.clientUserId) ?? null : null,
+        status: c.status,
+        language: c.language ?? null,
+        startedAt: c.startedAt,
+        takenOver: !!c.humanTakeoverAt,
+        last: lasts[i]
+          ? { role: lasts[i].role, preview: String(lasts[i].content ?? "").slice(0, 120), at: lasts[i].createdAt }
+          : null,
+      })),
+    };
+  });
+
+  app.get("/admin/support/conversations/:id", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const params = z.object({ id: z.string().min(1).max(64) }).safeParse(req.params);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    const conv = await db.agentConversation.findUnique({
+      where: { id: params.data.id },
+      select: {
+        id: true,
+        tenantId: true,
+        clientUserId: true,
+        status: true,
+        language: true,
+        startedAt: true,
+        humanTakeoverAt: true,
+        humanTakeoverBy: true,
+      },
+    });
+    if (!conv) return reply.code(404).send({ error: "not_found" });
+    const [tenant, clientUser, messages] = await Promise.all([
+      db.tenant.findUnique({ where: { id: conv.tenantId }, select: { name: true } }).catch(() => null),
+      conv.clientUserId
+        ? db.user
+            .findUnique({ where: { id: conv.clientUserId }, select: { firstName: true, lastName: true, email: true } })
+            .catch(() => null)
+        : null,
+      db.agentMessage
+        .findMany({
+          where: { conversationId: conv.id },
+          orderBy: { createdAt: "asc" },
+          take: 120,
+          select: { id: true, role: true, content: true, contentEn: true, createdAt: true, model: true },
+        })
+        .catch(() => []),
+    ]);
+    return {
+      conversation: {
+        id: conv.id,
+        tenantId: conv.tenantId,
+        tenantName: tenant?.name ?? conv.tenantId,
+        userName: clientUser ? resolvePersonDisplayName(clientUser) : null,
+        status: conv.status,
+        language: conv.language ?? null,
+        startedAt: conv.startedAt,
+        takenOver: !!conv.humanTakeoverAt,
+        takenOverAt: conv.humanTakeoverAt ?? null,
+      },
+      messages,
+    };
+  });
+
+  app.post("/admin/support/conversations/:id/takeover", async (req, reply) => {
+    const user: any = await requireSuper(req, reply);
+    if (!user) return reply;
+    const params = z.object({ id: z.string().min(1).max(64) }).safeParse(req.params);
+    const body = z.object({ on: z.boolean() }).safeParse(req.body);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    if (!body.success) return reply.code(400).send({ error: "bad_body" });
+    const conv = await db.agentConversation.findUnique({
+      where: { id: params.data.id },
+      select: { id: true, tenantId: true, humanTakeoverAt: true },
+    });
+    if (!conv) return reply.code(404).send({ error: "not_found" });
+    await db.agentConversation.update({
+      where: { id: conv.id },
+      data: body.data.on
+        ? { humanTakeoverAt: new Date(), humanTakeoverBy: String(user.sub ?? "") }
+        : { humanTakeoverAt: null, humanTakeoverBy: null },
+    });
+    // The moment matters either way — tell the customer in the transcript, so
+    // the change of voice is never silent.
+    await db.agentMessage
+      .create({
+        data: {
+          conversationId: conv.id,
+          role: "staff",
+          content: body.data.on
+            ? "You're now talking with a person from Loopcom support."
+            : "The assistant is back — a person from Loopcom support has stepped out.",
+          model: "takeover",
+        },
+      })
+      .catch(() => null);
+    await supportAudit(db, {
+      actor: "support-desk",
+      event: body.data.on ? "support.takeover_on" : "support.takeover_off",
+      tenantId: conv.tenantId,
+      conversationId: conv.id,
+      payload: { by: String(user.sub ?? "") },
+    });
+    return { ok: true, takenOver: body.data.on };
+  });
+
+  app.post("/admin/support/conversations/:id/message", async (req, reply) => {
+    const user: any = await requireSuper(req, reply);
+    if (!user) return reply;
+    const params = z.object({ id: z.string().min(1).max(64) }).safeParse(req.params);
+    const body = z.object({ body: z.string().min(1).max(2000) }).safeParse(req.body);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    if (!body.success) {
+      return reply.code(400).send({ error: "bad_body", message: "Write a message first — up to 2,000 characters." });
+    }
+    const conv = await db.agentConversation.findUnique({
+      where: { id: params.data.id },
+      select: { id: true, tenantId: true, humanTakeoverAt: true },
+    });
+    if (!conv) return reply.code(404).send({ error: "not_found" });
+    if (!conv.humanTakeoverAt) {
+      return reply.code(409).send({
+        error: "not_taken_over",
+        message: "Take the conversation over first — otherwise the assistant and a person would both be answering.",
+      });
+    }
+    const msg = await db.agentMessage.create({
+      data: { conversationId: conv.id, role: "staff", content: body.data.body, model: "human" },
+      select: { id: true, createdAt: true },
+    });
+    await supportAudit(db, {
+      actor: "support-desk",
+      event: "support.staff_message",
+      tenantId: conv.tenantId,
+      conversationId: conv.id,
+      payload: { by: String(user.sub ?? ""), chars: body.data.body.length },
+    });
+    return { ok: true, id: msg.id };
   });
 
   app.post("/admin/support/threads/:id/reply", async (req, reply) => {

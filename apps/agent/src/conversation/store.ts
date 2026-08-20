@@ -15,6 +15,10 @@ export interface ConversationRow {
   status: "OPEN" | "CLOSED";
   startedAt: Date;
   closedAt: Date | null;
+  /** Support-desk take-over: set while a PERSON holds the conversation.
+   *  Optional so in-memory fakes without the columns stay valid. */
+  humanTakeoverAt?: Date | null;
+  humanTakeoverBy?: string | null;
 }
 
 export interface MessageRow {

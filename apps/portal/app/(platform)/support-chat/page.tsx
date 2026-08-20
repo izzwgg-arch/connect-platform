@@ -40,7 +40,30 @@ export default function SupportChatPage() {
   const [history, setHistory] = useState<Conv[] | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Support-desk take-over: a person is answering — poll for their replies.
+  const [takenOver, setTakenOver] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!takenOver || !conversationId) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const out = await agentPost<{ messages: Msg[]; humanTakeover?: boolean }>("messages", { conversationId });
+        if (stop) return;
+        setMessages(out.messages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "staff"));
+        if (out.humanTakeover === false) setTakenOver(false);
+      } catch {
+        /* transient — next tick retries */
+      }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 4000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [takenOver, conversationId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -72,9 +95,15 @@ export default function SupportChatPage() {
     const ack = isYiddish(text) ? ACK_YI : ACK_EN;
     setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: text }, { id: ackId, role: "assistant", content: ack, pending: true }]);
     try {
-      const res = await agentPost<{ conversationId: string; reply: string }>("message", { text, channel: "chat" });
+      const res = await agentPost<{ conversationId: string; reply: string; humanTakeover?: boolean }>("message", { text, channel: "chat" });
       setConversationId(res.conversationId);
-      typeOut(ackId, res.reply); // replace the pending ack with the real reply
+      if (res.humanTakeover) {
+        // A person holds this conversation — no assistant reply is coming.
+        setMessages((m) => m.filter((msg) => msg.id !== ackId));
+        setTakenOver(true);
+      } else {
+        typeOut(ackId, res.reply); // replace the pending ack with the real reply
+      }
     } catch {
       setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "", pending: false } : msg)));
       setError("Couldn't reach the support assistant. Please try again, or contact us directly.");
@@ -162,6 +191,7 @@ export default function SupportChatPage() {
             key={m.id}
             style={{
               alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+              ...(m.role === "staff" ? { border: "1px solid var(--success, #34c27b)", boxShadow: "inset 3px 0 0 var(--success, #34c27b)" } : {}),
               maxWidth: "80%",
               padding: "8px 12px",
               borderRadius: 12,

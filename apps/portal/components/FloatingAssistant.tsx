@@ -41,7 +41,7 @@ import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
 
-type Msg = { id: string; role: "user" | "assistant"; content: string; pending?: boolean };
+type Msg = { id: string; role: "user" | "assistant" | "staff"; content: string; pending?: boolean };
 
 /** Which screen the panel is showing. The report is a place, not a dialog: it
  *  replaces the panel's body so the customer is never typing into a form that
@@ -181,6 +181,9 @@ export function FloatingAssistant() {
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // Support-desk take-over: while true, a PERSON is answering — the widget
+  // polls for their replies instead of expecting one from the send response.
+  const [takenOver, setTakenOver] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -244,6 +247,38 @@ export function FloatingAssistant() {
     return () => clearTimeout(t);
   }, []);
 
+  // Support-desk take-over: while a person holds the conversation, poll for
+  // their replies. The messages endpoint reports the flag, so the loop also
+  // notices the hand-back and stops itself. Only while the panel is open —
+  // a closed widget polls nothing.
+  useEffect(() => {
+    if (!takenOver || !conversationId || !open) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const out = await agentPost<{ messages: Array<{ id: string; role: string; content: string }>; humanTakeover?: boolean }>(
+          "messages",
+          { conversationId },
+        );
+        if (stop) return;
+        setMessages(
+          out.messages
+            .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "staff")
+            .map((m) => ({ id: m.id, role: m.role as Msg["role"], content: m.content })),
+        );
+        if (out.humanTakeover === false) setTakenOver(false);
+      } catch {
+        /* transient — next tick retries */
+      }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 4000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [takenOver, conversationId, open]);
+
   const typeOut = useCallback((id: string, full: string) => {
     const step = Math.max(2, Math.round(full.length / 60));
     let i = 0;
@@ -273,14 +308,21 @@ export function FloatingAssistant() {
       const shownText = ready.length ? `${text}\n📎 ${ready.map((f) => f.name).join(", ")}` : text;
       setMessages((m) => [...m, { id: `u-${Date.now()}`, role: "user", content: shownText }, { id: ackId, role: "assistant", content: ack, pending: true }]);
       try {
-        const res = await agentPost<{ conversationId: string; reply: string }>("message", {
+        const res = await agentPost<{ conversationId: string; reply: string; humanTakeover?: boolean }>("message", {
           text,
           channel: "chat",
           context: { page: label, path: pathname },
           ...(ready.length ? { attachments: ready.map((f) => f.attachmentId) } : {}),
         });
         setConversationId(res.conversationId);
-        typeOut(ackId, res.reply);
+        if (res.humanTakeover) {
+          // A person is handling this — no assistant reply is coming. Drop the
+          // waiting bubble; the person's answer arrives via the polling loop.
+          setMessages((m) => m.filter((msg) => msg.id !== ackId));
+          setTakenOver(true);
+        } else {
+          typeOut(ackId, res.reply);
+        }
         // If that turn prepared a permission change, the confirmation is now
         // waiting on the API. Ask — the assistant is not trusted to say so.
         void refreshGrant();
@@ -741,12 +783,19 @@ export function FloatingAssistant() {
             )}
             {messages.map((m) => {
               const yi = isYiddish(m.content);
+              const staff = m.role === "staff";
               return (
                 <div
                   key={m.id}
                   className={`fa-m ${m.role === "user" ? "fa-user" : "fa-bot"}${yi ? " fa-yi" : ""}${m.pending ? " fa-pending" : ""}`}
                   dir={yi ? "rtl" : "ltr"}
+                  style={staff ? { borderColor: "var(--success)", boxShadow: "inset 3px 0 0 var(--success)" } : undefined}
                 >
+                  {staff ? (
+                    <span style={{ display: "block", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--success)", marginBottom: 3 }}>
+                      Loopcom support · a real person
+                    </span>
+                  ) : null}
                   {m.content}
                   {m.pending && <span className="fa-caret">▍</span>}
                 </div>
