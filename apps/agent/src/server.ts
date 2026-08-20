@@ -1097,21 +1097,71 @@ async function main() {
     // conversation who have "SMS to Email" on, threaded one-per-number.
     // Master switch: AGENT_SMS_EMAIL=1. A hard fresh-window guard means the
     // existing inbound-SMS backlog can never be back-emailed. Polls every 30s.
+    //
+    // ⛔ The bridge has its OWN mail identity (AGENT_SMS_SMTP_* — sms@loopcom.net),
+    // falling back to the agent's general SMTP. Deliberate: arming the SMS bridge
+    // must not arm digests/incident mail on the shared notifier, and the bridge
+    // must send AS the mailbox that also RECEIVES the replies, or reply threading
+    // and DKIM alignment both break.
     if (process.env.AGENT_SMS_EMAIL === "1") {
       const { SmsEmailForwardJob } = await import("./notify/smsEmailForwardJob");
+      const smsSmtp = {
+        host: process.env.AGENT_SMS_SMTP_HOST || cfg.smtp.host,
+        port: Number(process.env.AGENT_SMS_SMTP_PORT ?? cfg.smtp.port),
+        user: process.env.AGENT_SMS_SMTP_USER || cfg.smtp.user,
+        pass: process.env.AGENT_SMS_SMTP_PASS || cfg.smtp.pass,
+        from: process.env.AGENT_SMS_SMTP_FROM || cfg.smtp.from,
+      };
+      const smsNotifier = new Notifier({ ...cfg, smtp: smsSmtp }, audit);
+      const smsMessageIdDomain = () => process.env.AGENT_SMS_EMAIL_DOMAIN || "sms.connectcomunications.com";
+      const smsReplyDomain = () => process.env.AGENT_SMS_EMAIL_REPLY_DOMAIN || null;
       const smsEmailJob = new SmsEmailForwardJob({
         prisma,
         audit,
-        notifier,
-        messageIdDomain: () => process.env.AGENT_SMS_EMAIL_DOMAIN || "sms.connectcomunications.com",
-        replyDomain: () => process.env.AGENT_SMS_EMAIL_REPLY_DOMAIN || null,
+        notifier: smsNotifier,
+        messageIdDomain: smsMessageIdDomain,
+        replyDomain: smsReplyDomain,
         replySecret: () => process.env.JWT_SECRET || null,
-        brandName: "Connect",
+        brandName: "Loopcom",
       });
-      setInterval(() => {
+      const smsEmailTimer = setInterval(() => {
         smsEmailJob.runOnce().catch((err) => app.log.error({ err }, "sms email pass failed"));
-      }, 30 * 1000).unref();
+      }, 30 * 1000) as unknown as { unref?: () => void };
+      smsEmailTimer.unref?.();
       await audit.record({ actor: "system", event: "sms.email_enabled", payload: { intervalSec: 30 } });
+
+      // Part 3 — reply-to-text-back. Reads the bridge mailbox over IMAP and turns
+      // each verified reply into a text through the real portal send route. Only
+      // runs when the reply domain AND mailbox credentials are configured; the
+      // IMAP login defaults to the same account the bridge sends as.
+      const imapUser = process.env.AGENT_SMS_IMAP_USER || smsSmtp.user;
+      const imapPass = process.env.AGENT_SMS_IMAP_PASS || smsSmtp.pass;
+      if (smsReplyDomain() && imapUser && imapPass) {
+        const { SmsEmailReplyJob } = await import("./notify/smsEmailReplyJob");
+        const { createSmsImapSource } = await import("./notify/smsImapSource");
+        const smsReplyJob = new SmsEmailReplyJob({
+          prisma,
+          audit,
+          notifier: smsNotifier,
+          source: createSmsImapSource({
+            host: process.env.AGENT_SMS_IMAP_HOST || "imap.gmail.com",
+            port: Number(process.env.AGENT_SMS_IMAP_PORT ?? 993),
+            user: imapUser,
+            pass: imapPass,
+          }),
+          replyDomain: smsReplyDomain,
+          replySecret: () => process.env.JWT_SECRET || null,
+          jwtSecret: () => process.env.JWT_SECRET || null,
+          apiBaseUrl: () => process.env.AGENT_API_BASE_URL || "http://api:3001",
+          messageIdDomain: smsMessageIdDomain,
+          brandName: "Loopcom",
+        });
+        const smsReplyTimer = setInterval(() => {
+          smsReplyJob.runOnce().catch((err) => app.log.error({ err }, "sms reply pass failed"));
+        }, 45 * 1000) as unknown as { unref?: () => void };
+        smsReplyTimer.unref?.();
+        await audit.record({ actor: "system", event: "sms.reply_enabled", payload: { intervalSec: 45 } });
+      }
     }
 
     // 24/7 continuous drain — small batches every 2 min so it never floods the

@@ -101,42 +101,57 @@ escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbenc
   (`role === "owner"`) while its sibling approvals GET is staff-only — a tenant admin
   can approve/deny any action id they learn. Same class as the 2026-08-19 findings.
 
-## ⛔⛔ OUTBOUND ROUTES: the shared "0001" trunk is FIRST, VoIP.ms is the BACKUP (Izzy's standing rule, 2026-08-20) — READ FIRST before touching `createOutboundRoute`, any `trklist[]`, or an `ombu_outbound_route_members` row
+## ⛔⛔ AGENT HANDOFF — the SMS↔email bridge is CODE-COMPLETE: texts email out from sms@loopcom.net and REPLYING to that email texts back, one email thread per phone number (2026-08-20) — READ FIRST before touching `apps/agent/src/notify/smsEmail*`, before pointing anything at the sms@loopcom.net mailbox, or for "I replied to the text email and nothing was sent"
 
-Full handoff: **`docs/ai-context/AGENT_HANDOFF_OUTBOUND_0001_PRIMARY_2026-08-20.md`**
-(code + tests on `feat/ivr-migration-takeover`; **backfill DONE and verified in
-live Asterisk the same morning** — routes 122/125/126/128/161 all read
-`Gosub(trk-72` first; ONE Main Apply via `applyAndRebake`, doorways 0 lines
-changed. Rollback SQL `/root/outbound-route-0001-backfill-backup-20260820T105929Z.sql`
-on the PBX.) Memory: [[outbound-route-0001-primary-trunk]].
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SMS_EMAIL_BRIDGE_2026-08-20.md`**
+(on `feat/ivr-migration-takeover`. **agent code only — no migration, no PBX write,
+no api/portal change, no env change yet. ⏳ NOT ARMED, NOT DEPLOYED: gated on env
+that does not exist until Izzy mints a Google APP PASSWORD for sms@loopcom.net.**)
+Izzy, 2026-08-20: *"every time they get an SMS, the system will send it to them via
+email … When somebody replies to that email, it would reply to it as a text message
+and make sure the email stays in one thread … one thread per phone number."*
 
-- ⛔⛔ **THE RULE: every tenant's outbound route lists the shared "0001" trunk
-  (trunk_id 72, Telocall) FIRST and the tenant's own VoIP.ms trunk SECOND.**
-  Carriers filter VoIP.ms-originated calls — they were not reaching cell phones
-  — so VoIP.ms is only the backup. Onboarding had been building routes with the
-  VoIP.ms trunk alone; fixed in `pbxTenantBuild.ts` (`SHARED_PRIMARY_TRUNK_NAME`,
-  resolved by exact trimmed NAME, never a pinned id) and backfilled.
-- ⛔ **ORDER IS THE FEATURE**: posted `trklist[]` order becomes
-  `ombu_outbound_route_members.index` becomes dial order; failover to VoIP.ms
-  fires only on real trunk failure (causes 16/17/19 finish without it).
-- ⛔ **Emergency calling stays on the tenant's OWN VoIP.ms trunk** — that account
-  holds the E911 registration; never add 0001 to `provisionTenantEmergency`.
-- ⛔ **Route 123 "Loopcom Demo" stays SignalWire-only (trunk 132) on purpose** —
-  Izzy's SignalWire outbound test bed; never "backfill" it. Route 59 "iniimini"
-  and the other hand-era 0001-less routes (Kitchens of Usa, Silver Birch, Onveo,
-  …) are outside the mandate — Izzy's call.
-- ⛔ **A missing "0001" trunk does NOT fail a build** — it logs
-  `⛔ shared primary trunk "0001" not found…` onto the sign-up timeline and
-  builds VoIP.ms-only. A dead build helps nobody; the log line is the alarm.
-- Trunk 0001's REGISTRATION reads `Rejected` in `pjsip show registrations` —
-  that is its inbound leg only (`server_uri` says `:700`, likely a typo) and
-  outbound demonstrably works (live calls hours before the backfill). Don't
-  "fix" it as part of an outbound investigation.
-- ⏳ **NOT PROVEN:** no outbound call placed from the five backfilled tenants
-  since the change, and no new tenant built since the code change. Acceptance:
-  one call from Ezra's training tenant to a cell phone shows `Gosub(trk-72,…)`
-  first in the Asterisk log; the next sign-up's build log reads
-  `outbound route ok (… trunks 0001→VoIP.ms)`.
+- ⛔⛔ **MOST OF IT ALREADY EXISTED, DORMANT SINCE 2026-07-26 — check before
+  rebuilding any half.** The per-user switch (`User.smsEmailForwardEnabled`, the
+  Quick Controls "SMS to Email" toggle), the forward job
+  (`smsEmailForwardJob.ts`, fresh-window + `emailForwardedAt` stamps so the SMS
+  backlog can never be blast-emailed), the one-thread-per-number design (stable
+  subject `Text with <name>` + `References` pinned to
+  `<sms-thread-<threadId>@domain>` — the subject stability is HALF the threading,
+  never "improve" it), and the signed reply address
+  `sms+<threadId>.<sig>@<domain>` were all built. **What was missing was Part 3
+  only**: nothing read the mailbox, verified the address, or sent the SMS.
+- ✅ **Part 3 is built now**: `smsEmailReply.ts` (shared mint/verify — the forward
+  job now mints through the SAME helper so mint/verify can never drift; quoted-
+  reply stripping; auto-reply detection), `smsEmailReplyJob.ts` (decision layer),
+  `smsImapSource.ts` (IMAP via imapflow/mailparser — new agent deps). A verified
+  reply is sent by minting a **2-minute JWT for the REPLYING USER** and driving
+  the REAL `POST /chat/threads/:id/messages` route — ⛔ never a parallel send
+  path: participant checks, `can_send_sms`, segmenting, MMS fallback and
+  delivery tracking all stay in the one implementation, and the app attributes
+  the reply to the person.
+- ⛔ **The bridge has its OWN mail identity** (`AGENT_SMS_SMTP_*` → its own
+  Notifier instance) — configuring it must NOT arm the shared agent notifier
+  (digests/incidents), and it must send AS the mailbox that receives replies or
+  DKIM alignment and reply routing both break. Brand on this surface is
+  **"Loopcom"**.
+- ⛔ **Failure directions are the feature**: a STRANGER's reply gets silence (no
+  oracle, no backscatter); a KNOWN user whose text can't go out gets a THREADED
+  notice email (they believe they just texted a customer — silence is a lie);
+  a send is CLAIMED in `AgentAuditLog` before the POST and **never auto-retried**
+  (duplicate text > failed text); OOO/auto-generated mail is never texted;
+  ⛔ the reply-text extractor's attribution join spans only CONSECUTIVE NON-EMPTY
+  lines — joining across a blank line ate a real message starting "On my way".
+- **Proven as**: 31 new tests (all 5 source guards fail replayed against HEAD),
+  agent suite **695/697** (the 2 pre-existing transcription failures), typecheck
+  at the agent's exact 14-error baseline. ⏳ **NOT proven: no email has ever been
+  sent or read** — no credentials exist.
+- ⏳ **To arm (recipe + acceptance test in the handoff §4–§5):** Izzy creates a
+  Google app password for sms@loopcom.net (2SV first) → 8 env lines in
+  `.env.platform` (`AGENT_SMS_EMAIL=1`, reply domain `loopcom.net`, SMTP creds)
+  → agent rebuild (⛔ reset the server clone first) → check boot audit rows
+  `sms.email_enabled` + `sms.reply_enabled`. **0 users have the toggle on today**,
+  so arming it changes nothing until people opt in.
 
 ## ⛔⛔ AGENT HANDOFF — the AI agent treated every TENANT_ADMIN as Connect staff; fortification pass FIXED it and stress-tested the platform (2026-08-19) — READ FIRST before using the agent's `role === "owner"` to authorize anything platform-wide, before adding an `/agent-api/*` admin route, or before touching the tool tiers
 

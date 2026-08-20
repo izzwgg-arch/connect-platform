@@ -17,10 +17,10 @@
  * Reply-to-text-back (Part 3) activates only when a reply domain is configured;
  * until then the email still arrives and the callout says replies are coming.
  */
-import { createHmac } from "node:crypto";
 import type { AuditLog } from "../audit/audit";
 import type { Notifier } from "./notifier";
 import { buildSmsEmail, formatSmsPhone, type SmsEmailMessage } from "./smsEmail";
+import { mintSmsReplyAddress } from "./smsEmailReply";
 
 export interface SmsEmailForwardJobDeps {
   prisma: any;
@@ -34,8 +34,6 @@ export interface SmsEmailForwardJobDeps {
   replySecret: () => string | null;
   brandName?: string;
 }
-
-const b64url = (b: Buffer) => b.toString("base64").replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 
 const MAX_BATCH = 8;
 const FRESH_WINDOW_MIN = Number(process.env.AGENT_SMS_EMAIL_FRESH_WINDOW_MIN || 30) || 30;
@@ -90,13 +88,16 @@ export class SmsEmailForwardJob {
       .catch(() => {});
   }
 
-  /** Signed reply token so Part 3 can route an email reply back to this thread. */
+  /**
+   * Signed reply address so Part 3 (smsEmailReplyJob.ts) can route an email
+   * reply back to this thread. ⛔ Minted by the SHARED helper — the reply job
+   * verifies with the same one, so the two can never drift apart.
+   */
   private replyTo(threadId: string): string | null {
     const domain = this.deps.replyDomain();
     const secret = this.deps.replySecret();
     if (!domain || !secret) return null;
-    const sig = b64url(createHmac("sha256", secret).update(threadId).digest()).slice(0, 24);
-    return `sms+${threadId}.${sig}@${domain}`;
+    return mintSmsReplyAddress(threadId, secret, domain);
   }
 
   private async resolveContactName(tenantId: string, phoneE164: string | null): Promise<string | null> {
