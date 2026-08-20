@@ -3953,3 +3953,15 @@ export function useSipPhone(): SipPhoneState & SipPhoneActions {
   if (!ctx) throw new Error("useSipPhone must be used inside SipPhoneProvider");
   return ctx;
 }
+
+/**
+ * The phone if a provider is mounted, else null — NEVER throws.
+ *
+ * For chrome that must survive being rendered outside the provider (the reload
+ * notice, mounted in providers.tsx alongside it). ⛔ Use `useSipPhone` for
+ * anything that genuinely needs the phone; a silent null there hides a real
+ * wiring bug.
+ */
+export function useOptionalSipPhone(): (SipPhoneState & SipPhoneActions) | null {
+  return useContext(SipPhoneContext);
+}

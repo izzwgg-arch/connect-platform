@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
+import { MiniDialerReloadBar } from "./DesktopUpdateNotice";
 import { useTelephonySocket } from "../hooks/useTelephonySocket";
 import { apiGet, apiPatch, apiPost, getPortalApiBaseUrl } from "../services/apiClient";
 import { loadContacts, loadSmsThreads, type ContactRow, type SmsThread } from "../services/platformData";
@@ -1392,6 +1393,11 @@ export function DesktopMiniDialer() {
 
         {tab === "team" && <MiniTeam onCall={callTarget} onMessage={() => setTab("messages")} tenantId={tenant?.id ?? null} />}
       </section>
+
+      {/* Portal-deploy notice. ⛔ Above the tab bar, not below it — the tabs keep
+          their place at the window edge, and as a flex child this covers nothing
+          (a fixed overlay would sit on the dialpad). */}
+      <MiniDialerReloadBar />
 
       <nav className="mini-tabs">
         {([["dialer", Phone, "Dialer"], ["calls", Clock3, "Recents"], ["messages", MessageSquare, "Chat"], ["voicemail", Voicemail, "Voicemail"], ["team", Users, "Team"]] as const).map(([key, Icon, label]) => (
