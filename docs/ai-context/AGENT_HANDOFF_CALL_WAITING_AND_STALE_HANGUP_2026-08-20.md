@@ -191,6 +191,98 @@ source (comments stripped) and fails if any of the three old shapes returns.
 
 ---
 
+## 4b. What the sweep actually cost, and why it could never tell stale from real
+
+**⛔⛔ IT NEVER CHECKED. There was no staleness test anywhere in the path.**
+
+It ran on `callStore.getActive()` — and read what that returns
+(`CallStateStore.ts:326`): `state === "up" || "held"`, not hungup, **and
+`hasValidBridgedParticipants(c)`**. That is the definition of a *healthy* call.
+The sweep was reaching into the list of known-good calls and hanging them up.
+`forceEvictZombie`'s own docstring says it evicts *"regardless of channel
+state"* — the word "zombie" is aspirational; nothing verified it.
+
+"Stale" was an **inference made by the client and taken on faith by the
+server**: *"I hung up 10 s ago, therefore anything still live on my extension is
+my leftover."* Both premises true, conclusion false — "my extension" is not "my
+device".
+
+**THE COST, measured over 14 days of nginx logs (the api proxies this route, so
+nginx sees every call; the response byte-size separates a no-op from an action):**
+
+- **303 sweeps**, a flat 13–43/day since at least 7 Aug — ⛔ **this was never
+  new**; the telephony container had only been up 26 h when first investigated,
+  which is why the first pass appeared to show it starting on 8/19.
+- **242 answered "already gone"** — the normal AMI Hangup path and
+  `reconcileLiveChannels` had beaten it to the ghost.
+- **9 "cleared" something — and all nine ended a REAL, answered, talking call:**
+
+| When | Customer | Talk cut off |
+|---|---|---|
+| Aug 7 | Fixup Group | 103 s |
+| Aug 17 | Trust Bookkeepings | **551 s** |
+| Aug 19 | Gesheft | 10 s, 98 s |
+| Aug 19 | Trust Bookkeepings | 15 s, 140 s, 78 s |
+| Aug 20 | Trust Bookkeepings | 180 s, 147 s, 117 s, 100 s, 35 s |
+
+**13 conversations across THREE customers. Zero genuine ghosts, ever.**
+⛔ Not just Trust — Fixup Group and Gesheft were hit too and never reported it,
+because from the inside it is indistinguishable from a dropped call.
+⛔ And 4 of the 9 killed the **app's own** `_1` leg, so device scoping alone
+would not have saved them — the portal's "skip while other sessions are live"
+guard is what covers those.
+
+**Why the burst on 19–20 Aug:** the sweep rate was flat, so what changed was the
+chance of a collision. Trust's ext 106 calls where the **desk phone was involved
+and the app was not** went 0–3/day for two weeks, then **8 on Aug 19 and 13 on
+Aug 20** — more independent desk use, more collisions. Nothing in our code
+changed; their working pattern did.
+
+## 4c. The fix that makes it safe to keep: ask Asterisk
+
+`CallStateStore.reconcileLiveChannels` already had the right rule *and* the scar
+tissue for it — its comment records **"265 evictions on Aug 3; a Gesheft call
+was killed 40 s into a talk even with strikes+grace."** Same class of bug, fought
+once already, and the hardened rule is: **a call is dead only when NONE of its
+channels exist in ARI's raw `/channels` snapshot.**
+
+The route now applies the same rule (`isCallLiveInAsterisk` in
+`staleHangupScope.ts`), and the key realisation is that this collapses the whole
+problem:
+
+- **Asterisk HAS the call** → it is real. Leave it completely alone.
+- **Asterisk does NOT** → the row is a ghost. Evict the row — and **there is
+  nothing to hang up**, because the channel is already gone.
+
+⛔⛔ **So the route sends NO AMI Hangup, ever. `hangupChannel` is gone from that
+path entirely** (a guard test pins it). A call Asterisk no longer has cannot be
+hung up, so the only thing a Hangup there could ever reach is a call that is
+still real — which is precisely how the 13 were lost. It is store cleanup only.
+Killing a genuinely stuck leg remains a staff action via
+`DELETE /telephony/calls/:channelId/hangup`.
+
+⛔ `isCallLiveInAsterisk` **fails toward "live"**: it matches on uniqueid OR
+channel name OR a Local channel's `;1`/`;2` half, and an unreachable ARI refuses
+the whole request (`503 ari_unavailable`) rather than guessing.
+
+## 4d. Is the client-triggered sweep even needed? (measured: no)
+
+**`reconcileLiveChannels` is alive and does this job properly.** Verified live,
+not assumed: `ariBridgedPoller.start()` is unconditional (`telephony/index.ts:300`),
+its `update` handler feeds `reconcileLiveChannels(result.rawChannelIds)`, and the
+Redis snapshot it publishes advanced **23:32:31.628 → 23:32:36.627 with
+`pollIntervalMs: 5000`** — a real 5-second tick reading real channels.
+
+With `RECONCILE_ABSENT_STRIKES_REQUIRED = 2`, a genuine ghost is cleared in
+**~10–15 s** — the same latency the portal's 10 s timer was buying, but from
+ground truth and without trusting any client.
+
+**Conclusion: the client path is redundant.** In 14 days it found zero genuine
+ghosts. It is now also harmless (ARI-verified, evict-only), so it is **kept as a
+verified-redundant fast path** rather than deleted — deleting it is more churn
+for no safety gain, and the portal already tolerates a 404 from it. ⛔ But do not
+mistake it for the safety net: **`reconcileLiveChannels` is the safety net.**
+
 ## 5. Where the SIP identity comes from
 
 `resolveWebrtcSipIdentity` (`apps/api/src/voiceProvisioningBundle.ts`) prefers
@@ -246,6 +338,7 @@ failures are pre-existing and identical with my changes stashed — ⛔ they and
 |---|---|
 | **portal** (the beep + sends `sipUsername` + skips the sweep while other calls are live) | ✅ **DEPLOYED + container-verified** `2da67ab3` — `.build-commit` matches, and the strings `stale-hangup sweep skipped`, `sipUsername`, `call_waiting incoming` all grep inside the shipped `.next` chunks |
 | **telephony** (the half that stops the desk-phone call drops) | ✅ **DEPLOYED + container-verified** at branch tip `4e13522f`, queue job `0a0c65ab`, 2026-08-20 ~17:17 EDT |
+| **telephony layer 2** (ARI verification + no hangup at all, §4b–§4d) | ✅ **DEPLOYED + container-verified** `14036cfe`, queue job `ef7bc715`, 2026-08-20 19:35 EDT, in a **0-active-call** window. `isCallLiveInAsterisk` / `ari_confirmed_gone` / `ari_unavailable` / `uniqueIdsForCall` all grep in the running container; **`hangupChannel` greps 0 times inside the stale-hangup handler**. 0 restarts, 0 error-level lines, AMI + ARI reconnected, poller still ticking at 5000 ms. ⛔ The container runs from **`src` via tsx** (`pnpm --filter @connect/telephony dev`) — there is **no `dist/`**, so grep `src`, not `dist`. |
 
 **Telephony was deployed in a measured 0-active-call window** (polled the PBX
 until `core show channels count` read 0 — it was 2–9 calls for eight minutes

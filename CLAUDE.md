@@ -149,6 +149,33 @@ and they are TWO defects.
 - ⚠️ **Noticed, NOT fixed:** `MultiCallPanel` is mounted only on the full softphone
   page, so `FloatingDialer` and `crm/live-call` now beep but show no call-waiting
   UI at all (product decision).
+- ✅✅ **LAYER 2 (`14036cfe`, DEPLOYED + container-verified): THE ROUTE ASKS
+  ASTERISK NOW, AND CAN NO LONGER HANG UP ANYTHING.** ⛔⛔ **It never checked
+  staleness at all** — it ran on `callStore.getActive()`, whose own filter
+  requires `state === "up"` and `hasValidBridgedParticipants`, i.e. the list of
+  KNOWN-HEALTHY calls, and hung them up on the client's word.
+  ⛔⛔ **THE COST, measured over 14 days of nginx logs: 303 sweeps, 242 answered
+  "already gone", and ALL 9 that cleared something ended a REAL answered call —
+  13 conversations across THREE customers (Fixup Group, Gesheft, Trust), one of
+  them 551 s in. Zero genuine ghosts, ever.** ⛔ **It was NOT new** — a flat
+  13–43 sweeps/day since at least 7 Aug; the first pass only looked new because
+  the telephony container had been up 26 h. The 19–20 Aug burst was Trust's own
+  desk-only call count going 0–3/day → **8 then 13**, i.e. more collisions, not a
+  code change. ✅ **FIX:** `isCallLiveInAsterisk` applies
+  `reconcileLiveChannels`' proven rule (a call is dead only when NONE of its
+  channels are in ARI's raw `/channels`) — **Asterisk HAS it → leave it alone;
+  Asterisk does NOT → evict the row.** ⛔⛔ **No AMI Hangup on that path ever
+  again (`hangupChannel` is gone from it, guard-tested): a call Asterisk no
+  longer has cannot be hung up, so the only thing a Hangup there can reach is a
+  REAL call.** Store cleanup only; a genuinely stuck leg is a staff action via
+  `DELETE /telephony/calls/:channelId/hangup`. Fails closed everywhere (no
+  `sipUsername` → refuse; ARI unreachable → 503; liveness match fails toward
+  "live"). ⛔ **The client path is REDUNDANT and now merely harmless** —
+  `reconcileLiveChannels` is verified alive (Redis snapshot advanced
+  23:32:31.628→23:32:36.627, `pollIntervalMs: 5000`) and clears a real ghost in
+  ~10–15 s from ground truth. **That is the safety net; this route is not.**
+  ⛔ The telephony container runs from **`src` via tsx — there is no `dist/`**,
+  so verify by grepping `src`.
 - ✅ **SAME COMMIT (`4e13522f`) — the update notice stopped nagging and the mini
   dialer got its own strip** (handoff §7b). Izzy: *"it keeps showing up again and
   again"*, and *"all they have open is the mini dialer"*. ⛔ **The repeat bug was a
