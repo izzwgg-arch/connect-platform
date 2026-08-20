@@ -71,6 +71,31 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — the Technical Support Console: MOCKUPS ONLY, awaiting Izzy's pick (2026-08-20) — READ FIRST before building any support/staff screen, an escalations list, a cross-tenant chat inbox, or assistant human-takeover
+
+Full handoff + the verified infrastructure inventory:
+**`docs/ai-context/AGENT_HANDOFF_SUPPORT_CONSOLE_MOCKUPS_2026-08-20.md`**
+(**Mockups-only — no code, no deploy, no data change.** Izzy, 2026-08-20: *"I want to
+see mock-ups before you build anything."* Mockups he is choosing from:
+<https://claude.ai/code/artifact/042ff488-ae78-4e7f-b4cf-6ca8194b671a> — A "The Desk"
+escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbench" IDE.)
+
+- ⛔ **NOTHING IS APPROVED OR BUILT.** Four open decisions gate it (§3 of the handoff):
+  direction; **who counts as support staff** (today `isPlatformStaff` = SUPER_ADMIN and
+  exactly ONE account holds it — a support team needs a new platform-support role);
+  IDE power level (read-only recommended); wiring `claude-fable-5` into the router
+  (it appears nowhere in the repo today).
+- ✅ **The inventory is done — don't re-derive it.** Escalation reports are FULLY STORED
+  (`AgentEscalation.report`, already ISSUE/FINDINGS/PROPOSED FIX/APPROVAL) with **zero
+  read routes and zero screens** — the biggest quick win. Fix machinery, task runners
+  (diag / approvals / deploy queue), `investigate`, the chat-model picker and the
+  pbx-console admin-page pattern all EXIST to reuse. **MISSING outright:** human takeover
+  of assistant conversations, a cross-tenant chat list, any IDE/editor/terminal.
+- ⛔ **Noticed in passing, unfixed:** `POST /agent/actions/decide`
+  (`apps/agent/src/actions/routes.ts:22`) still admits every TENANT_ADMIN
+  (`role === "owner"`) while its sibling approvals GET is staff-only — a tenant admin
+  can approve/deny any action id they learn. Same class as the 2026-08-19 findings.
+
 ## ⛔⛔ AGENT HANDOFF — the AI agent treated every TENANT_ADMIN as Connect staff; fortification pass FIXED it and stress-tested the platform (2026-08-19) — READ FIRST before using the agent's `role === "owner"` to authorize anything platform-wide, before adding an `/agent-api/*` admin route, or before touching the tool tiers
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FORTIFICATION_PASS_2026-08-19.md`**
