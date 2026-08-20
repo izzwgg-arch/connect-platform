@@ -67,3 +67,27 @@ test("retries are jittered so parallel windows desynchronise", () => {
 test("a successful credential fetch resets the slow ladder", () => {
   assert.ok(/initRetryDelayMs = 5_000;[^\n]*\n\s*setupRetryDelayMs = 60_000;/.test(src), "both ladders reset on success");
 });
+
+// ── Sign-in wake-up (2026-08-20, the other half of "reload to register") ──
+// The login page signs in via router.replace — a client-side navigation with
+// NO page reload — so a provider that mounted on the signed-out login screen
+// never remounts. Every token-gated effect that bails on !hasBrowserAuthToken()
+// must therefore re-run when the token appears, or the phone engine (and the
+// outbound-routes / extra-accounts fetches) stay dead until a manual reload.
+// Proven live 2026-08-20 03:52 CEST: a real sign-in loaded the whole dashboard
+// while the engine made ZERO credential fetches and opened no telephony WS.
+
+test("the hook tracks token presence with a storage listener AND a same-window poll", () => {
+  assert.ok(/const \[authTokenPresent, setAuthTokenPresent\] = useState/.test(src), "authTokenPresent state exists");
+  assert.ok(/window\.addEventListener\("storage", check\)/.test(src), "cross-window storage listener");
+  assert.ok(/setInterval\(check, 2_000\)/.test(src), "same-window poll (storage does not fire for own writes)");
+});
+
+test("the SIP engine effect re-runs when the token appears", () => {
+  assert.ok(/\}, \[reinitSeq, authTokenPresent\]\);/.test(src), "engine effect keyed on reinitSeq AND authTokenPresent");
+});
+
+test("the outbound-routes and extra-accounts effects re-run when the token appears", () => {
+  const keyed = src.match(/\}, \[authTokenPresent\]\);/g) || [];
+  assert.equal(keyed.length, 2, "both token-gated fetch effects keyed on authTokenPresent");
+});

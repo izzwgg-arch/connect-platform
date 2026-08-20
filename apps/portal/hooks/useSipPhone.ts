@@ -701,6 +701,28 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   // Bumping this rebuilds the SIP engine from scratch (fresh JsSIP UA + registration),
   // exactly like a page reload — used to auto-recover a stuck "Connecting" state.
   const [reinitSeq, setReinitSeq] = useState(0);
+  // Whether a session token exists in browser storage RIGHT NOW. Load-bearing
+  // (2026-08-20): the login page's success path is router.replace() — a
+  // client-side navigation with NO page reload — so a provider that mounted on
+  // the signed-out login screen never remounts. Every token-gated effect below
+  // that used to bail with a bare `return` therefore stayed dead until the
+  // human manually reloaded the window ("I have to reload it a few times for
+  // it to register"). This state flips the moment the token lands (same-window
+  // sign-in via a cheap localStorage poll, cross-window via the storage event)
+  // and re-runs those effects. It costs zero network while signed out.
+  const [authTokenPresent, setAuthTokenPresent] = useState<boolean>(
+    () => typeof window !== "undefined" && hasBrowserAuthToken(),
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const check = () => setAuthTokenPresent(hasBrowserAuthToken());
+    // storage fires only for OTHER windows' writes; the 2s poll covers a
+    // sign-in completed in THIS window. React bails on same-value setState,
+    // so the poll re-renders nothing while the flag is unchanged.
+    window.addEventListener("storage", check);
+    const timer = setInterval(check, 2_000);
+    return () => { window.removeEventListener("storage", check); clearInterval(timer); };
+  }, []);
   const [callState, setCallState] = useState<SipCallState>("idle");
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [callDirection, setCallDirection] = useState<"outbound" | "inbound" | null>(null);
@@ -1245,7 +1267,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         }
       });
     return () => { cancelled = true; };
-  }, []);
+    // authTokenPresent: a client-side sign-in (router.replace, no reload) must
+    // re-run this — the signed-out mount bailed above and nothing else retries.
+  }, [authTokenPresent]);
 
   useEffect(() => {
     if (callState === "idle" || callState === "ended") setSelectedOutboundRouteId("");
@@ -1285,7 +1309,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     // session the api just refused) means every call here is a guaranteed 401.
     if (hasBrowserAuthToken()) fetchAccounts(0);
     return () => { cancelled = true; };
-  }, []);
+    // authTokenPresent: re-run after a client-side sign-in (no page reload).
+  }, [authTokenPresent]);
 
   // ── Extra SIP accounts: registration engines ──────────────────────────────
   // One additional JsSIP UA per READY account. Deliberately simpler than the
@@ -1529,7 +1554,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // Signed out (public wizard, pay page, login screen): the phone engine
       // has nobody to register. Do not call authenticated endpoints at all —
       // those guaranteed 401s are what got a customer's office IP auto-banned
-      // mid-sign-up. A login navigates/reloads, which re-runs this effect.
+      // mid-sign-up. A sign-in re-runs this effect via authTokenPresent (the
+      // login page uses router.replace, so there is NO page reload to rely on).
       if (!hasBrowserAuthToken()) return;
 
       // Off-screen audio element for remote media — display:none can block playback
@@ -2157,9 +2183,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       }
     };
     // Re-runs (tearing down + rebuilding the SIP engine) whenever reinitSeq bumps —
-    // the auto-recovery for a wedged registration. Other inputs are read via refs.
+    // the auto-recovery for a wedged registration — and when a session token
+    // appears or disappears: the login page signs in via router.replace (no page
+    // reload), so without authTokenPresent here the engine that mounted on the
+    // signed-out login screen stayed dead until a manual reload. Sign-OUT
+    // (token gone) tears the UA down through the same cleanup, which is correct.
+    // Other inputs are read via refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reinitSeq]);
+  }, [reinitSeq, authTokenPresent]);
 
   // ── Session lifecycle ───────────────────────────────────────────────────
 
