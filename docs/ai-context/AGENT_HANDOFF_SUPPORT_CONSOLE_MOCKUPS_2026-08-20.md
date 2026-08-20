@@ -85,8 +85,17 @@ This is the load-bearing research — verified with file:line refs, do not re-de
    ONE such account (Izzy's). A support team = new staff accounts seeing every tenant's chats,
    calls and billing → needs a deliberate "platform support" staff role, distinct from
    TENANT_ADMIN (the exact class of confusion the fortification pass just cleaned up).
-3. **IDE power level:** (1) read-only (SQL console + logs; fixes only via the approval gate) —
-   recommended start; (2) guarded writes via the deploy queue; (3) free shell — advised against.
+3. **IDE power level — ANSWERED by Izzy, 2026-08-20** (in-chat, same day as the mockups):
+   *"it should look like the real IDE with all features that an IDE needs, so the agent can
+   run maintenance right off the server."* So the Workbench IDE is a FULL IDE (explorer, diff
+   editor, integrated terminal) and the agent runs maintenance on the live server. The "C+"
+   full-size IDE mockup was added to the artifact same day. ⛔ Design constraints drawn into
+   the mockup and to be treated as the contract: the agent shows its PLAN before running;
+   deletes/restarts/deploys PAUSE for a human click; code changes ship ONLY through the
+   deploy queue (never straight onto the server); every command audited; **the PBX stays
+   read-only from this screen — the standing house rule, enforced not promised**.
+   ⏳ One sub-question still open: whether support staff also get a RAW human-typed terminal
+   at the server, or everything on-server runs agent-mediated (recommended: agent-mediated).
 4. **Wire claude-fable-5 into the router?** Independent small job.
 
 ⏳ **NOT STARTED: everything.** No phase has been approved; nothing may be built until Izzy picks

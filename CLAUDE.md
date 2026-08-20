@@ -80,11 +80,16 @@ see mock-ups before you build anything."* Mockups he is choosing from:
 <https://claude.ai/code/artifact/042ff488-ae78-4e7f-b4cf-6ca8194b671a> — A "The Desk"
 escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbench" IDE.)
 
-- ⛔ **NOTHING IS APPROVED OR BUILT.** Four open decisions gate it (§3 of the handoff):
-  direction; **who counts as support staff** (today `isPlatformStaff` = SUPER_ADMIN and
-  exactly ONE account holds it — a support team needs a new platform-support role);
-  IDE power level (read-only recommended); wiring `claude-fable-5` into the router
-  (it appears nowhere in the repo today).
+- ⛔ **NOTHING IS APPROVED OR BUILT.** Decisions state (§3 of the handoff): still open —
+  direction (A/B/C) and **who counts as support staff** (today `isPlatformStaff` =
+  SUPER_ADMIN and exactly ONE account holds it — a support team needs a new
+  platform-support role) and wiring `claude-fable-5` into the router (it appears nowhere
+  in the repo today). **ANSWERED 2026-08-20: the IDE is the FULL real thing and the agent
+  runs maintenance right off the server** (Izzy, in-chat) — the "C+" full-size IDE mockup
+  is in the artifact, and its guardrails ARE the contract: plan shown before running,
+  deletes/restarts/deploys pause for a human click, code ships only via the deploy queue,
+  everything audited, **PBX read-only from this screen**. ⏳ Sub-question open: raw
+  human terminal too, or agent-mediated only (recommended).
 - ✅ **The inventory is done — don't re-derive it.** Escalation reports are FULLY STORED
   (`AgentEscalation.report`, already ISSUE/FINDINGS/PROPOSED FIX/APPROVAL) with **zero
   read routes and zero screens** — the biggest quick win. Fix machinery, task runners
