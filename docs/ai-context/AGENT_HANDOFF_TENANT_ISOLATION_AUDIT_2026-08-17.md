@@ -1157,3 +1157,93 @@ bad fix here is worse than a known finding.** ⛔ **Several are config-only
 (`.env.platform`) and therefore have NO deploy path of their own — an env change
 cannot trigger an api rebuild; it must ride a real `apps/api/` commit. See
 CLAUDE.md's SIP-hostname section.**
+
+## §0f. FULL RE-SWEEP (2026-08-20, Izzy: "take a run again on tenant leaking and make sure there could never be any tenant leaking ever")
+
+**Eight defects found, all eight fixed, NONE of them live — and "not live" was
+PROVEN, not argued.** Commits `d889407c` (console gates) + `50053cf9` (the six
+api findings), deployed and container-verified at **`cbf1c672`** (api + portal).
+
+### The proof method, which is the reusable part
+A real customer admin's **validly-signed** token was minted inside `app-api-1`
+(their own `sub`/`tenantId`, signed with the live `JWT_SECRET` — byte-identical
+to what their browser sends) and fired at every suspect route on production.
+Every one answered **403**. Then the same probe was re-run **after** the fixes
+alongside a SUPER_ADMIN probe, to prove the tightening did not lock the owner
+out: **customers refused everywhere, owner 200 everywhere.**
+⛔ This is the cheapest high-confidence isolation test in this repo. Use it.
+
+### What was found in THIS session's own work (the console)
+The PBX Console, both new sidebar doors and the console page's `PermissionGate`
+were keyed on **`can_view_admin_pbx_instances` — which the LIVE snapshot gives
+to TENANT_ADMIN (10 active customer admins).** Nothing leaked: the api gate is
+genuinely SUPER_ADMIN (`requireOwner → requireSuperAdmin → requirePermission(
+canAccessAdminSbc) → isRole(["SUPER_ADMIN"])`, traced to its last line, not its
+name) and the `/admin/pbx-console` prefix rule demands
+`can_manage_global_settings`. But the gates **disagreed with each other**, the
+page's own header claimed three layers when one did not gate, and a single
+force-line was all that kept a platform-wide console out of ten customers'
+sidebars. All four now use the key the server itself enforces.
+
+### The six in the wider api (1,117 route registrations swept)
+| # | Route | Defect | Fix |
+|---|---|---|---|
+| 1 | `GET /admin/sms/provider-health` | every tenant's id **and name** + per-provider failure counts + raw platform `AuditLog`, behind `requireAdmin` | **restricted** to SUPER_ADMIN (no per-tenant answer exists) |
+| 2 | `POST /admin/ten-dlc/submissions/:id/status` | **cross-tenant WRITE** — `update({where:{id}})`, one customer could APPROVE/REJECT another's carrier registration; its audit line already logged `updated.tenantId` | **restricted** to SUPER_ADMIN (⛔ scoping is wrong: approving your own registration defeats the control) |
+| 3 | `GET /admin/ten-dlc/submissions/:id` | bare `findUnique` — legal name, DBA, encrypted EIN, address, support contacts | **scoped**; foreign id → **404, never 403** (a 403 is an existence oracle) |
+| 4 | `GET /admin/ten-dlc/submissions` | `where: undefined` = **no filter** in Prisma | **scoped** via `ownTenantIdScopeWhere` (fails closed to `{in:[]}`, SUPER_ADMIN keeps the platform view) |
+| 5 | `GET /voice/moh/pbx-classes` | the `403` guarded only the plain-cuid branch, so `?tenantId=vpbx:<other-slug>` walked past it | the **super-admin pin every sibling already had**, placed before the scope resolves |
+| 6 | `PATCH /admin/apps/voip-ms/numbers/:id` | the ROW was ownership-checked but `assignedUserId`/`assignedExtensionId`/`assignedUserIds[]` were written unvalidated — puts an outsider inside the number's SMS inbox scope | all three checked against the number's tenant, **before** the write, for SUPER_ADMIN too |
+| + | `recordingAccessDecision` (latent twin) | short-circuited on `rec.tenantId &&` and fell through to `allowed: true` — an unattributed recording (**4,316 of 126,052 CDRs**) skipped the check entirely | **fails closed**, like its voicemail sibling; the live streaming path was hardened in August, this exported twin never was |
+
+⛔ **Why fix what is not reachable:** every one of these was held shut by a
+SECOND gate — the `can_view_admin_ops_center` prefix key TENANT_ADMIN lacks, or
+`canManageMoh` / chat's `isTenantAdmin`, which admit only SUPER_ADMIN and ADMIN
+while the platform has **zero ADMIN users**. That is the identical "latent,
+armed by one ADMIN user" shape this file already records three times (§6h and
+the ADMIN-role findings) — every one of which had to be fixed in the end anyway.
+
+### What was verified CLEAN (so nobody re-audits it)
+- **Pattern "role from the request body": NONE.** The only body `role` is
+  `crm/inboundCallerMatchRoutes.ts`, kept for telephony wire compatibility and
+  provably discarded — the resolver re-reads the role from the `User` table and
+  a test asserts `viewer.role` appears zero times in it.
+- **Signed URLs:** all keyed HMAC + `exp` + `timingSafeEqual`. Chat attachment
+  URLs bind the OBJECT, not the tenant, and are JWT-bypassed by design (MMS
+  media must work without a token) — replayable until `exp` if forwarded, which
+  is the accepted trade recorded in §0a.
+- **`src/pbxConsole/`:** all 34 routes reach `requireOwner`, verified per route
+  (not by count), and the platform-wide readers are reachable from nothing else.
+- All `/internal/*` doors verify their secret fail-closed before anything else.
+
+### Guards, because every one of these was a caller-side omission
+- **`apps/api/src/tenantLeakSweep.test.ts`** (9 tests) — one per finding, plus
+  behavioural tests that `recordingAccessDecision` denies a null tenant. **All 7
+  source assertions replayed against `HEAD`: all seven FAIL there.**
+- **`apps/portal/navigation/consoleNavGuard.test.ts`** (6 tests, registered) —
+  binds nav keys ↔ page gate ↔ the api's prefix rule, and forbids any
+  TENANT_ADMIN-held key on a console item. Fails on HEAD for all three items.
+- **The console's own route guard went from a COUNT to PER-ROUTE** (a count is
+  satisfied by one route gating twice and another not at all — the shape a
+  copy-pasted route arrives in). **Mutation-tested:** deleting one gate fails it.
+- ⛔ **These guards read RAW source deliberately.** Comment-stripping `server.ts`
+  opens a fake block comment at a **regex literal** and swallows the region —
+  it cost this very file one red test before the rule was re-learned. This is
+  the 4th recorded instance of that trap.
+
+### Numbers, measured live
+0 ADMIN users · 1 SUPER_ADMIN · 10 TENANT_ADMIN · 66 USER · 0 active custom
+roles · snapshot v2 (SUPER_ADMIN 121 keys, TENANT_ADMIN 92, END_USER 54) ·
+TENANT_ADMIN holds `can_view_admin_pbx_instances` and `can_view_admin_tenants`
+but **not** `can_view_admin_ops_center`, `can_view_section_admin` or
+`can_manage_global_settings`. api typecheck **75 = the exact baseline**; full
+`src/*.test.ts` **1084 tests, 1074 pass, 7 fail** — the documented pre-existing
+`pbxTenantDirectorySync` set, name for name.
+
+### ⏳ Still open
+- **§6i/§6j-era leftovers are closed; what remains is the accepted trade above**
+  (chat attachment URLs) and the standing latent `ADMIN`-role findings elsewhere
+  in this file — all of which now fail closed for the roles that actually exist.
+- ⛔ **The one rule that keeps this true: do not create an `ADMIN`-role user.**
+  Several findings across this document are gated only by the fact that none
+  exists. If one is ever needed, re-read §6h, §0c and this section first.
