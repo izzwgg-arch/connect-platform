@@ -71,6 +71,46 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing row ON PURPOSE (2026-08-20) — READ FIRST before touching tenant `cmt1qoxrq0004o8myjoq13m21`, before "fixing" its missing billing, or before re-running onboarding into a stale REST tenant list
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_HANNA_FREE_TENANT_2026-08-20.md`**
+(All live on prod 2026-08-20; no deploy, no code change, no migration. PBX
+writes rode the sanctioned onboarding build.) Izzy: *"Do not create a bill for
+her. I'm not charging her."*
+
+- ✅ **Built through the REAL onboarding path** (submission
+  `cmt1qcpsk0000o83x8meneh5c`, `paidAt` null on purpose): PBX tenant **141**
+  `hanna_eneh5c` via the mirror, ext **101 "Hanna Weber"** (desk + WebRTC, SIP
+  synced), trunk 166 / outbound route 162 / inbound `_8455577194 →
+  T141_cos-all,101`; spare-stock DID **845-557-7194** routed to subaccount
+  `344022_Hannaeneh5c`; user **chaniweb16@gmail.com** = TENANT_ADMIN, INVITED,
+  invite email **SENT**; `TenantSmsNumber` assigned (ext 101, tenant default)
+  and **proven in the worker poll**; 443 SIP route (`sipDomain` corrected to
+  the hostname — new tenants get the raw PBX IP stamped there, same fault the
+  2026-08-10 handoff fixes).
+- ⛔⛔ **THE FREE-ACCOUNT MECHANISM: she has NO `TenantBillingSettings` row —
+  the orchestrator's billing stamp was deliberately skipped, so the invoice
+  engine structurally cannot bill her. Never "repair" it.** 0 invoices,
+  verified.
+- ⛔ **The orchestrator failed at `pbx_tenant_not_in_directory` because the
+  VitalPBX REST tenant LIST is a stale cache (28 vs MySQL's 29)** — and
+  `findPbxDirectoryEntry`'s own re-sync DELETES a hand-seeded directory row, so
+  re-running can't work while stale. **The per-tenant REST reads are NOT
+  stale** — the recipe that worked (`/root/hanna-continue.ts` on loopcom):
+  seed `PbxTenantDirectory` from `ombu_tenants` (MySQL truth), then replay the
+  orchestrator's remaining steps verbatim, skipping the billing stamp.
+  ⏳ Follow-up not done: give `findPbxDirectoryEntry` a MySQL fallback — this
+  bites any sign-up that lands during a stale window.
+- ⛔ **(845) 557-7194 has NO E911** (no address given — registration skipped,
+  loudly, on the timeline). 911 does not work from this account until Izzy
+  supplies her address. Also the known duplicate-voicemail-email gap applies
+  (her email is on the PBX extension AND in Connect).
+- ⏳ **TestFlight: added to "Loopcom Testers" (Hanna Weber, build 52) and
+  `/v1/betaTesterInvitations` answered 201 TWICE, but the tester still read
+  `NOT_INVITED`** — confirm the email reached her; re-run
+  `node /root/.appstoreconnect/asc-invite-hanna.mjs` if not.
+- ⏳ **Not proven:** no call, no text, no login, no TestFlight install yet.
+
 ## ⛔ AGENT HANDOFF — GOOGLE PLAY STORE: the app is BUILD-READY (signed AAB `loopcom-play-vc100.aab`), the developer account is NOT created yet (2026-08-20) — READ FIRST before any Play Console work, before touching Android signing/versioning, or before publishing the next sideload APK
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
