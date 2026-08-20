@@ -105,6 +105,32 @@ test("source: every console write route is SUPER_ADMIN-gated (requireOwner) and 
   const handlers = (routes.match(/app\.(get|post|patch|delete)\(/g) || []).length;
   const owners = (routes.match(/const admin = await requireOwner\(req, reply\); if \(!admin\) return;/g) || []).length;
   assert.ok(owners + delegating >= handlers, `every route must gate with requireOwner (${owners} inline + ${delegating} delegated for ${handlers} routes)`);
+
+  /*
+   * ⛔ AND PER ROUTE, not just in total (2026-08-20 tenant-leak sweep). The
+   * count above is satisfied by a file where one handler gates twice and
+   * another not at all — which is exactly the shape a copy-pasted new route
+   * arrives in. This console is platform-wide: every one of its reads returns
+   * EVERY customer's trunks, extensions and dial plans, so a single ungated
+   * handler is a total cross-tenant leak, not a partial one. Slice the file at
+   * each route declaration and require the gate inside that route's own body.
+   */
+  const decl = /app\.(get|post|patch|delete|put)\(\s*["'`]([^"'`]+)["'`]/g;
+  const found: Array<{ method: string; path: string; at: number }> = [];
+  for (let m = decl.exec(routes); m; m = decl.exec(routes)) {
+    found.push({ method: m[1].toUpperCase(), path: m[2], at: m.index });
+  }
+  assert.ok(found.length >= handlers, "every route declaration must be parseable");
+  const ungated = found.filter((r, i) => {
+    const body = routes.slice(r.at, i + 1 < found.length ? found[i + 1].at : routes.length);
+    return !/const admin = await requireOwner\(req, reply\); if \(!admin\) return;/.test(body)
+      && !/handleDeleteExtension\(req, reply/.test(body);
+  });
+  assert.deepEqual(
+    ungated.map((r) => `${r.method} ${r.path}`),
+    [],
+    "every console route must gate with requireOwner inside its OWN handler",
+  );
   assert.match(routes, /const handleDeleteExtension = async \(req: any, reply: any, force: boolean\) => \{\s*const admin = await requireOwner/, "the shared delete handler must gate");
   // writes go through withPanel, which applies + re-bakes
   assert.match(routes, /applyAndRebake\(s, applyTenantPath/, "withPanel must apply + re-bake after a write");

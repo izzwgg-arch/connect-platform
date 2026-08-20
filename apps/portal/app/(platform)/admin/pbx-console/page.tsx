@@ -1095,5 +1095,12 @@ function ExtensionForm({ draft, set, errors, tenants, isNew }: any) {
 }
 
 export default function PbxConsolePage() {
-  return <PermissionGate permission={"can_view_admin_pbx_instances" as never} fallback={<div className="pc-state">This page is for the platform owner.</div>}><PbxConsole /></PermissionGate>;
+  // ⛔ can_manage_global_settings, NOT can_view_admin_pbx_instances — the live
+  // snapshot gives that second key to TENANT_ADMIN (10 active customer admins),
+  // so this gate was passing for customers and the header's "SUPER_ADMIN only
+  // (forced in navConfig + PermissionGate + the api requireOwner)" was true of
+  // only two of those three. Nothing leaked (every api call 403s and the
+  // /admin/pbx-console prefix rule demands this same key), but a customer could
+  // render the console's frame. Found in the 2026-08-20 tenant-leak sweep.
+  return <PermissionGate permission={"can_manage_global_settings" as never} fallback={<div className="pc-state">This page is for the platform owner.</div>}><PbxConsole /></PermissionGate>;
 }
