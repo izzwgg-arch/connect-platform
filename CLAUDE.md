@@ -137,7 +137,23 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ROLE_SNAPSHOT_FORWARD_MERGE_2026-
   admins if wanted; the 4 custom-role tenant admins need their roles edited
   separately (custom roles are authoritative).
 
-## ⛔ AGENT HANDOFF — the Technical Support Console: MOCKUPS ONLY, awaiting Izzy's pick (2026-08-20) — READ FIRST before building any support/staff screen, an escalations list, a cross-tenant chat inbox, or assistant human-takeover
+## ⛔ AGENT HANDOFF — the Technical Support Console: Phase 1 (escalation desk) + Fable are BUILT AND DEPLOYED; the rest is designed, not built (2026-08-20) — READ FIRST before touching /admin/support, apps/api/src/supportConsole.ts, the escalation desk, or before building phases 2–5
+
+**BUILD STATE (evening 2026-08-20, commit `d61c98b9` — full detail handoff §4):**
+✅ **api + portal DEPLOYED and container-verified; agent REBUILT** (Fable in the
+picker via `KNOWN_ANTHROPIC_CHAT_MODELS` in `llm/router.ts`). `/admin/support`
+(Support Desk) lists escalations + renders the stored report; "Approve the fix"
+posts the DRAFT action id to the EXISTING `/admin/agent-confirmations/:id/apply`
+password gate — ⛔ never add a second apply path (a source test pins it), and
+⛔ `fixCodeHash` never leaves the server (tested). SUPER_ADMIN only (Izzy's
+call): handlers call `requireSuperAdmin`, `/admin/support` rides
+`can_manage_global_settings` in PORTAL_API_PERMISSION_RULES, nav forced in
+`isNavItemVisibleForUser` — ⛔ deliberately NO new grantable key until a feature
+honours it. ✅ Proven live: self-signed SUPER_ADMIN probe → 200, the real
+4-escalation backlog. ⏳ Nobody has opened the page in a browser; no fix ever
+approved from it. ⏳ Phases 2–5 (customer panel, cross-company inbox +
+take-over, tools, the Agent-SDK workbench) are DESIGNED ONLY.
+
 
 Full handoff + the verified infrastructure inventory:
 **`docs/ai-context/AGENT_HANDOFF_SUPPORT_CONSOLE_MOCKUPS_2026-08-20.md`**

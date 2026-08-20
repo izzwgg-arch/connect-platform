@@ -160,5 +160,63 @@ This is the load-bearing research — verified with file:line refs, do not re-de
    account. **UI style: Cursor-like** — editor center, agent chat docked right, changes
    as inline diffs (the C+ mockup already matches).
 
-⏳ **NOT STARTED: everything.** No phase has been approved; nothing may be built until Izzy picks
-a direction and answers §3. Per his explicit instruction, mockups first.
+## §4 BUILD STARTED — Phase 1 (the escalation desk) + Fable SHIPPED (2026-08-20, commit `d61c98b9`)
+
+Izzy, same day: *"build it, do fabel as well, and for now do just super admin, and I will
+create it later."* The mockups-first instruction is discharged; phases now ship in order.
+
+- **API:** `apps/api/src/supportConsole.ts` — `GET /admin/support/escalations` (filters:
+  status/tenantId/take/before-cursor; `counts.fixReady`) and `GET .../:id` (full stored
+  report, conversation tail via `agentMessage`, the linked DRAFT `agentAction`).
+  ⛔ Field-by-field responses, `fixCodeHash` NEVER leaves the server (tested).
+  ⛔ SUPER_ADMIN two ways: every handler calls `requireSuperAdmin` AND
+  `{ prefix: "/admin/support", permission: "can_manage_global_settings" }` in
+  PORTAL_API_PERMISSION_RULES. ⛔ NO new grantable key yet, deliberately — a key a
+  non-super could tick while handlers refuse them is a visible door that doesn't open;
+  per-feature keys ship with the support-agent phase.
+- ⛔ **Approve-fix is the EXISTING gate:** the portal posts the DRAFT action id to
+  `POST /admin/agent-confirmations/:actionId/apply` (password, bcrypt). No new apply
+  path — a source test pins that supportConsole.ts registers no POST and never touches
+  `applyConfirmedAction`. Cross-tenant works because `applyConfirmedAction` feeds the
+  ACTION's own tenantId into `resolveTargetTenantId`, which for SUPER_ADMIN resolves to
+  that tenant (agentConfirmations.ts:218) — verified in source before building.
+- **Portal:** `/admin/support` (Support Desk) — queue left (All / Fix ready / Needs a
+  look), report center (sections via `lib/escalationReport.ts` parser — a deliberate
+  mirror of the agent's `parseReportSections`, forgiving, `hasSections:false` renders
+  raw so degraded reports still show), conversation tail, password dialog. Nav item
+  `admin.support` forced SUPER_ADMIN in `isNavItemVisibleForUser` (pbx-console pattern).
+  ⛔ `PermissionGate` uses `can_manage_global_settings`; errors read `e.body` (never
+  `.payload`). Test registered in the portal package.json EXPLICIT list.
+- **Fable:** `KNOWN_ANTHROPIC_CHAT_MODELS = ["claude-fable-5"]` in
+  `apps/agent/src/llm/router.ts`, unioned into `listModels`' Anthropic catalog (and
+  offered even when the provider's list call fails — the picker's ping validates).
+  ⛔ The agent is a MANUAL rebuild: reset the server clone to origin first.
+- **Tests:** 9 api (wiring guards proven failing against pre-change server.ts) +
+  6 portal parser + 3 agent (incl. a listModels source guard). Typechecks: portal 0,
+  api 75 = the exact baseline, agent adds 0 (its 14 are other sessions' WIP). Portal
+  suite 223 pass / 2 = the documented pre-existing failures.
+- ✅ **DEPLOYED AND CONTAINER-VERIFIED, ALL THREE, 2026-08-20 evening:**
+  **api** `deploy-direct.sh api` → `verify: container commit d61c98b978a7 matches
+  target`, module greps in the container, unauth GET → 401, health 200;
+  **portal** (19 min build) → `.build-commit d61c98b9`, the page chunk
+  `.next/static/chunks/app/(platform)/admin/support/page-*.js` greps the STRING
+  "Approve the fix", both hostnames 200; **agent** manually rebuilt after the
+  deploy's clone reset → healthy, `KNOWN_ANTHROPIC_CHAT_MODELS`/`claude-fable-5`
+  grep in the running container, 0 error-level log lines.
+- ✅ **PROVEN LIVE WITH REAL DATA:** a 60-second self-signed SUPER_ADMIN token
+  against `127.0.0.1:3001/admin/support/escalations?take=5` answered
+  **200, 4 escalations** (the platform's entire real backlog — ⛔ the 93 dropped
+  "promises" from before the 2026-08-19 escalation fix were never written as rows,
+  which is precisely what that bug was; only post-fix rows exist), first row
+  Connect Communications Ref 8Z7C4Q. The whole chain ran: JWT hook → permission
+  rule → requireSuperAdmin → data.
+- ⏳ **NOT PROVEN until a human looks:** nobody has opened `/admin/support` in a
+  browser, and no fix has ever been approved from it (fixReady is 0 today, so the
+  approve path awaits the next escalation that carries a draft). Acceptance
+  (2 min, Izzy's login): open the page → 4 rows list → open one → the report
+  renders in sections → the negative: a TENANT_ADMIN must not see the nav item,
+  and the API must 403 them. ⛔ An already-open portal tab keeps the OLD bundle
+  until reloaded.
+
+⏳ **Phases 2–5 NOT started** (customer panel, cross-company inbox + take-over, tools,
+the Agent-SDK workbench). The support-agent accounts remain Izzy's to create.
