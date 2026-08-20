@@ -212,6 +212,47 @@ probe).
 ⛔ The 17 texts that were never stamped in the **preceding** 24h all predate
 11:36Z — that is the 30-minute backlog guard doing its job, not a loss.
 
+### The reply half: 0 sent, but NOT proven broken
+
+⛔ **`sms.reply_sent` is 0 for all time, and so are `sms.reply_claimed` and
+`sms.reply_failed` — nothing has ever reached the send stage.** But the reason
+is not that the machinery is broken: **it has had exactly ONE real attempt in
+its life.** The entire `sms.reply_*` audit trail is:
+
+| | |
+|---|---|
+| `sms.reply_enabled` (agent boots) | 3 |
+| `sms.reply_ignored / no_reply_address` | 5 — Google security-alert mail sitting in the mailbox, **not replies** |
+| `sms.reply_ignored / bad_signature` | 1 — the deliberate forged probe from arming |
+| `sms.reply_refused / unknown_sender` | **1 — the only human reply ever** |
+
+⛔ **Do not "fix" the send path on this evidence — it has never been
+exercised.** And that single attempt proved a great deal of the chain *works*:
+the signed `sms+<threadId>.<sig>@` address survived the round trip through
+Gmail, `verifySmsReplySignature` passed, and the thread resolved. It failed
+only on **who sent it**.
+
+**The gate ladder (`smsEmailReplyJob.ts`), in order — all six must pass:**
+
+1. a signed reply address is parseable from the To/Delivered-To
+2. the signature verifies against the shared secret
+3. not auto-generated / out-of-office
+4. the thread exists and is type SMS
+5. **the From is an ACTIVE `User` whose `tenantId` == the thread's tenant** ← *the one attempt died here*
+6. that user has the toggle on, is still a participant, and the body is non-empty after quote-stripping
+
+⛔ Step 5 is not merely a trust check. The job mints a **2-minute JWT for that
+user** and drives the real `POST /chat/threads/:id/messages` **as them**, so the
+outgoing text is attributed to a person, respects `can_send_sms`, and lands in
+the CRM timeline under their name. There is no anonymous send path — an
+unrecognised sender is *structurally* unsendable, not merely distrusted.
+
+⚠️ One more silent-drop shape to know about: a mail client that replies to the
+**From** (`sms@loopcom.net`) instead of the **Reply-To** loses the signed token
+and is dropped at gate 1 as `no_reply_address` — indistinguishable from the junk
+mail in the box. Most clients honour Reply-To (the one real attempt did), so
+this has not bitten yet.
+
 ### The live failure: a customer's reply died in silence
 
 **15:33:43Z — `sms.reply_refused reason=unknown_sender`, from

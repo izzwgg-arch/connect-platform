@@ -523,7 +523,26 @@ and make sure the email stays in one thread … one thread per phone number."*
   bounce has come back to sms@loopcom.net since (the reply job reads that
   mailbox and audits everything it sees).
 - ⛔⛔ **THE REPLY HALF HAS NEVER SENT ONE TEXT — `sms.reply_sent` is 0 FOR ALL
-  TIME — and it silently ate a real customer's reply TODAY.** At **15:33:43Z**
+  TIME — but it is NOT PROVEN BROKEN: it has had exactly ONE real attempt in its
+  life, and that attempt died at the LAST gate.** The whole audit trail is 5
+  Google notification emails sitting in the mailbox (`no_reply_address` — not
+  replies at all), 1 deliberate forged-signature probe from the arming session,
+  and **one human reply**. `sms.reply_claimed` / `sms.reply_failed` are both **0**,
+  so nothing has ever reached the send stage. ⛔ **Do not "fix" the send
+  machinery on this evidence — it has never been exercised.** What the one
+  attempt DID prove is that everything upstream works: the signed
+  `sms+<threadId>.<sig>@` address survived the round trip through Gmail, the
+  signature verified, and the thread resolved. It failed only on **who** sent it.
+- ⛔ **The gate ladder in `smsEmailReplyJob.ts`, in order — a reply must pass all
+  six:** (1) a signed reply address is present → (2) signature verifies → (3) not
+  auto-generated → (4) thread exists and is SMS → (5) **From is an ACTIVE
+  `User` whose `tenantId` matches the thread's** → (6) toggle on, still a
+  participant, body non-empty. **The one real attempt reached 5 and stopped.**
+  ⛔ Step 5 is not merely a security check: the job mints a **2-minute JWT for
+  that user** and drives the real `POST /chat/threads/:id/messages` **as them**,
+  so the text goes out attributed to a person. There is no anonymous send —
+  an unrecognised sender is structurally unsendable, not just untrusted.
+- ⛔⛔ **It silently ate a real customer's reply TODAY.** At **15:33:43Z**
   `cgreenfeld@trustbookkeepingny.com` replied to one of those emails and was
   dropped `sms.reply_refused reason=unknown_sender`, **with no notice to them**,
   because **no Connect user holds that address**. Trust Bookkeepings' five users
