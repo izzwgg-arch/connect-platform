@@ -1,8 +1,20 @@
 # AGENT HANDOFF — "I have to reload a few times for it to register" (2026-08-20)
 
-**Commit `a70dc721` on `feat/ivr-migration-takeover` — portal-only.** Nothing
-touching the api, call routing, the PBX, or any rate limit. Deploy state is at
-the bottom of this doc.
+**Commits `a70dc721` (budget starvation) + `b409bfc8` (sign-in wake-up) on
+`feat/ivr-migration-takeover` — portal-only.** Nothing touching the api, call
+routing, the PBX, or any rate limit. Deploy state is at the bottom of this doc.
+
+⛔⛔ **THE PRIMARY MECHANISM WAS FOUND SECOND (§3c, `b409bfc8`): the login page
+signs in via `router.replace` — a CLIENT-SIDE navigation with NO page reload —
+so the SIP provider that mounted on the signed-out login screen never
+remounted, and its `init()` bail-out (`if (!hasBrowserAuthToken()) return`)
+was final.** After every ordinary sign-in the phone engine simply was not
+running: proven live at 03:52 CEST when Izzy's real sign-in loaded the entire
+dashboard while the engine made ZERO credential fetches and opened no
+telephony WS. The `window.location.assign` in the login page is only a 400 ms
+fallback for embedded browsers — do not read it as "login reloads the page."
+The first reload after sign-in was therefore GUARANTEED; the budget starvation
+below is why one reload often wasn't enough.
 
 Read this before diagnosing any "the softphone doesn't register until I
 reload", before touching the init retry ladders in
@@ -66,6 +78,16 @@ window doubles it. Once saturated, a **fresh page load on an account that
 COULD register draws 429 on its first fetch**, the client backs off 60 s, and
 the human reloads — sometimes winning a freed slot, sometimes not. That
 lottery IS "I have to reload a few times."
+
+**(c) THE ENGINE NEVER STARTED AFTER A SIGN-IN (`b409bfc8`).** See the box at
+the top. Fixed with an `authTokenPresent` state in `useLocalSipPhone`: a
+`storage` listener (cross-window sign-ins) plus a 2 s localStorage poll
+(same-window — `storage` never fires for a window's own writes), zero network
+while signed out. It keys the engine effect (`[reinitSeq, authTokenPresent]`)
+AND the outbound-routes and extra-accounts effects (`[authTokenPresent]`),
+which had the same signed-out bail-out and the same never-retry. Token
+cleared → the same dependency tears the UA down, which is the correct
+sign-out behavior. Three additional source guards pin all of it.
 
 **(b) THE ACCOUNT: Izzy's SUPER_ADMIN login has no phone to register.**
 izzywgg@gmail.com lives in the synthetic admin tenant, which has no PBX link
