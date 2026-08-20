@@ -64,6 +64,17 @@ type FixAction = {
 
 type ChatMessage = { role: string; content: string; contentEn: string | null; createdAt: string; model: string | null };
 
+type CustomerPanel = {
+  tenant: { id: string; name: string; createdAt: string; pbxRemovedAt: string | null };
+  counts: { extensions: number | null; users: number | null; numbers: number | null; smsNumbers: number | null };
+  numbers: string[];
+  smsNumbers: Array<{ phoneE164: string; isTenantDefault: boolean }>;
+  extensions: Array<{ extNumber: string; displayName: string; status: string }>;
+  billing: { autopay: boolean; billingDayOfMonth: number | null; invoicesNeedingAttention: number | null; openInvoices: number | null } | null;
+  recentCalls: Array<{ direction: string; fromNumber: string | null; toNumber: string | null; disposition: string; talkSec: number; startedAt: string }>;
+  pastEscalations: Array<{ id: string; reference: string; requestSummary: string; createdAt: string; status: string; fixStatus: string | null }>;
+};
+
 type Tab = "all" | "fixready" | "trouble";
 
 function timeAgo(iso: string): string {
@@ -102,6 +113,9 @@ function SupportDesk() {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState("");
   const [applyDone, setApplyDone] = useState("");
+  const [customer, setCustomer] = useState<CustomerPanel | null>(null);
+  const [customerState, setCustomerState] = useState<"idle" | "loading" | "error">("idle");
+  const customerCache = useRef(new Map<string, CustomerPanel>());
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
 
@@ -145,6 +159,40 @@ function SupportDesk() {
     setApplyError("");
     void loadDetail(selectedId);
   }, [selectedId, loadDetail]);
+
+  // The customer panel follows whatever escalation is open. Cached per tenant
+  // for the session — the queue often holds several rows from one company.
+  const detailTenantId = detail?.escalation?.tenantId ?? null;
+  useEffect(() => {
+    if (!detailTenantId) {
+      setCustomer(null);
+      setCustomerState("idle");
+      return;
+    }
+    const cached = customerCache.current.get(detailTenantId);
+    if (cached) {
+      setCustomer(cached);
+      setCustomerState("idle");
+      return;
+    }
+    let cancelled = false;
+    setCustomerState("loading");
+    apiGet<CustomerPanel>(`/admin/support/customers/${encodeURIComponent(detailTenantId)}`)
+      .then((out) => {
+        if (cancelled) return;
+        customerCache.current.set(detailTenantId, out);
+        setCustomer(out);
+        setCustomerState("idle");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCustomer(null);
+        setCustomerState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailTenantId]);
 
   const visible = rows.filter((r) => {
     if (tab === "fixready") return r.fixStatus === "offered" || (r.hasFixAction && !r.fixStatus);
@@ -196,7 +244,7 @@ function SupportDesk() {
         </div>
       </header>
 
-      <div className="sd-body">
+      <div className={"sd-body" + (esc ? " sd-body-3" : "")}>
         <aside className="sd-queue">
           {listState === "loading" ? <div className="sd-state">Loading escalations…</div> : null}
           {listState === "error" ? <div className="sd-state sd-state-bad">Couldn&apos;t load the queue. {listError}</div> : null}
@@ -293,6 +341,80 @@ function SupportDesk() {
             </>
           ) : null}
         </main>
+
+        {esc ? (
+          <aside className="sd-cust">
+            {customerState === "loading" ? <div className="sd-state">Loading the customer…</div> : null}
+            {customerState === "error" ? <div className="sd-state sd-state-bad">Couldn&apos;t load the customer panel.</div> : null}
+            {customer ? (
+              <>
+                <div className="sd-card">
+                  <h6>{customer.tenant.name}</h6>
+                  <div className="sd-kv"><span>Extensions</span><b>{customer.counts.extensions ?? "—"}</b></div>
+                  <div className="sd-kv"><span>People</span><b>{customer.counts.users ?? "—"}</b></div>
+                  <div className="sd-kv"><span>Numbers</span><b>{customer.counts.numbers ?? "—"}</b></div>
+                  <div className="sd-kv"><span>Texting numbers</span><b>{customer.counts.smsNumbers ?? "—"}</b></div>
+                  {customer.billing ? (
+                    <>
+                      <div className="sd-kv"><span>Autopay</span><b className={customer.billing.autopay ? "sd-ok" : "sd-warn"}>{customer.billing.autopay ? "On" : "Off"}</b></div>
+                      <div className="sd-kv"><span>Invoices needing attention</span><b className={customer.billing.invoicesNeedingAttention ? "sd-bad" : ""}>{customer.billing.invoicesNeedingAttention ?? "—"}</b></div>
+                    </>
+                  ) : (
+                    <div className="sd-kv"><span>Billing</span><b>not set up</b></div>
+                  )}
+                  {customer.tenant.pbxRemovedAt ? <div className="sd-kv"><span className="sd-bad">Removed from the phone system</span></div> : null}
+                </div>
+
+                {customer.numbers.length ? (
+                  <div className="sd-card">
+                    <h6>Numbers</h6>
+                    {customer.numbers.map((n) => (
+                      <div className="sd-kv" key={n}><span>{n}</span></div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {customer.extensions.length ? (
+                  <div className="sd-card">
+                    <h6>Extensions</h6>
+                    {customer.extensions.map((e) => (
+                      <div className="sd-kv" key={e.extNumber}><span>{e.extNumber} · {e.displayName}</span></div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {customer.recentCalls.length ? (
+                  <div className="sd-card">
+                    <h6>Last calls</h6>
+                    {customer.recentCalls.map((c, i) => (
+                      <div className="sd-kv" key={i}>
+                        <span>{c.direction === "incoming" ? "In" : c.direction === "outgoing" ? "Out" : c.direction} · {c.direction === "incoming" ? c.fromNumber : c.toNumber}</span>
+                        <b className={c.disposition === "answered" ? "sd-ok" : "sd-bad"}>{c.disposition}{c.talkSec ? ` · ${Math.round(c.talkSec / 60)}m` : ""}</b>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {customer.pastEscalations.length > 1 ? (
+                  <div className="sd-card">
+                    <h6>Past escalations</h6>
+                    {customer.pastEscalations.filter((p) => p.id !== esc.id).map((p) => (
+                      <button
+                        key={p.id}
+                        className="sd-kv sd-kv-link"
+                        onClick={() => (rows.some((r) => r.id === p.id) ? setSelectedId(p.id) : null)}
+                        title={p.requestSummary}
+                      >
+                        <span>{p.requestSummary.slice(0, 34)}{p.requestSummary.length > 34 ? "…" : ""}</span>
+                        <b>{timeAgo(p.createdAt)}</b>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </aside>
+        ) : null}
       </div>
 
       {approveOpen && detail?.fixAction ? (

@@ -79,6 +79,18 @@ const listQuerySchema = z.object({
   before: z.string().datetime({ offset: true }).optional(),
 });
 
+/**
+ * Phase 2 (same day): the customer panel. One aggregate answer per tenant —
+ * numbers, extensions, billing posture, recent calls, past escalations.
+ * ⛔ Every block is BEST-EFFORT: one failing source renders as an empty card,
+ * never a 500 — a support person mid-incident needs the blocks that still
+ * answer. ⛔ Field names verified against schema.prisma before writing
+ * (`extNumber`/`displayName`, `autoBillingEnabled` NOT "autopayEnabled",
+ * `ConnectCdr.startedAt/talkSec`, `PbxTenantInboundDid.connectTenantId`) —
+ * guessed accessors are this repo's documented trap.
+ */
+const UNPAID_ATTENTION_STATUSES = ["FAILED", "OVERDUE"] as const;
+
 export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
   const { app, db, requireSuper } = deps;
 
@@ -168,6 +180,95 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
       },
       fixAction,
       messages,
+    };
+  });
+
+  app.get("/admin/support/customers/:tenantId", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const params = z.object({ tenantId: z.string().min(1).max(64) }).safeParse(req.params);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    const tenantId = params.data.tenantId;
+    const tenant = await db.tenant
+      .findUnique({ where: { id: tenantId }, select: { id: true, name: true, createdAt: true, pbxRemovedAt: true } })
+      .catch(() => null);
+    if (!tenant) return reply.code(404).send({ error: "not_found" });
+
+    const [extensions, userCount, dids, smsNumbers, billing, invoiceAttention, invoiceOpen, recentCalls, pastEscalations] =
+      await Promise.all([
+        db.extension
+          .findMany({
+            where: { tenantId },
+            orderBy: { extNumber: "asc" },
+            select: { extNumber: true, displayName: true, status: true },
+          })
+          .catch(() => null),
+        db.user.count({ where: { tenantId } }).catch(() => null),
+        db.pbxTenantInboundDid
+          .findMany({ where: { connectTenantId: tenantId, active: true }, select: { e164: true }, take: 20 })
+          .catch(() => null),
+        db.tenantSmsNumber
+          .findMany({
+            where: { tenantId, active: true },
+            select: { phoneE164: true, isTenantDefault: true },
+            take: 10,
+          })
+          .catch(() => null),
+        db.tenantBillingSettings
+          .findUnique({ where: { tenantId }, select: { autoBillingEnabled: true, billingDayOfMonth: true } })
+          .catch(() => null),
+        db.billingInvoice
+          .count({ where: { tenantId, status: { in: [...UNPAID_ATTENTION_STATUSES] } } })
+          .catch(() => null),
+        db.billingInvoice.count({ where: { tenantId, status: "OPEN" } }).catch(() => null),
+        db.connectCdr
+          .findMany({
+            where: { tenantId },
+            orderBy: { startedAt: "desc" },
+            take: 5,
+            select: { direction: true, fromNumber: true, toNumber: true, disposition: true, talkSec: true, startedAt: true },
+          })
+          .catch(() => null),
+        db.agentEscalation
+          .findMany({
+            where: { tenantId },
+            orderBy: { createdAt: "desc" },
+            take: 5,
+            select: { id: true, requestSummary: true, createdAt: true, status: true, fixStatus: true },
+          })
+          .catch(() => null),
+      ]);
+
+    const activeExtensions = (extensions ?? []).filter((e: any) => e.status === "ACTIVE");
+    return {
+      tenant,
+      counts: {
+        extensions: extensions === null ? null : activeExtensions.length,
+        users: userCount,
+        numbers: dids === null ? null : dids.length,
+        smsNumbers: smsNumbers === null ? null : smsNumbers.length,
+      },
+      numbers: (dids ?? []).map((d: any) => d.e164).slice(0, 10),
+      smsNumbers: smsNumbers ?? [],
+      extensions: activeExtensions.slice(0, 12),
+      billing:
+        billing === null
+          ? null
+          : {
+              autopay: !!billing.autoBillingEnabled,
+              billingDayOfMonth: billing.billingDayOfMonth ?? null,
+              invoicesNeedingAttention: invoiceAttention,
+              openInvoices: invoiceOpen,
+            },
+      recentCalls: recentCalls ?? [],
+      pastEscalations: (pastEscalations ?? []).map((e: any) => ({
+        id: e.id,
+        reference: supportReportReference(e.id),
+        requestSummary: e.requestSummary,
+        createdAt: e.createdAt,
+        status: e.status,
+        fixStatus: e.fixStatus ?? null,
+      })),
     };
   });
 }

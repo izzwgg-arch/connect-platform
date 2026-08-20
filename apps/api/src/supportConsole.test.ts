@@ -115,9 +115,43 @@ function fakeDb(rows: any[], opts: { action?: any; messages?: any[] } = {}) {
   };
 }
 
-function register(rows: any[], opts: { allow?: boolean; action?: any; messages?: any[] } = {}) {
+function customerDb(overrides: Record<string, any> = {}) {
+  return {
+    tenant: {
+      async findUnique(args: any) {
+        return args?.where?.id === "t1"
+          ? { id: "t1", name: "Gesheft", createdAt: NOW, pbxRemovedAt: null }
+          : null;
+      },
+    },
+    extension: {
+      async findMany() {
+        return [
+          { extNumber: "101", displayName: "Front Desk", status: "ACTIVE" },
+          { extNumber: "112", displayName: "Orders", status: "ACTIVE" },
+          { extNumber: "199", displayName: "Old line", status: "REMOVED" },
+        ];
+      },
+    },
+    user: { async count() { return 7; } },
+    pbxTenantInboundDid: { async findMany() { return [{ e164: "8455551234" }]; } },
+    tenantSmsNumber: { async findMany() { return [{ phoneE164: "+18455551234", isTenantDefault: true }]; } },
+    tenantBillingSettings: {
+      async findUnique() { return { autoBillingEnabled: true, billingDayOfMonth: 3 }; },
+    },
+    billingInvoice: { async count(args: any) { return args?.where?.status === "OPEN" ? 1 : 2; } },
+    connectCdr: {
+      async findMany() {
+        return [{ direction: "incoming", fromNumber: "9175550100", toNumber: "8455551234", disposition: "answered", talkSec: 62, startedAt: NOW }];
+      },
+    },
+    ...overrides,
+  };
+}
+
+function register(rows: any[], opts: { allow?: boolean; action?: any; messages?: any[]; customer?: Record<string, any> } = {}) {
   const app = fakeApp();
-  const db = fakeDb(rows, opts);
+  const db = { ...customerDb(opts.customer ?? {}), ...fakeDb(rows, opts) };
   registerSupportConsoleRoutes({
     app,
     db,
@@ -203,6 +237,50 @@ test("gate refused → no database read happens", async () => {
   await call(app, "/admin/support/escalations", { query: {} });
   await call(app, "/admin/support/escalations/:id", { params: { id: "x" } });
   assert.equal(db.calls.length, 0);
+});
+
+// ---------------------------------------------------------------- customer panel
+
+test("customer panel: aggregates counts, numbers, billing, calls and past escalations", async () => {
+  const past = esc({ id: "esc_p", tenantId: "t1", createdAt: NOW });
+  const { app } = register([past]);
+  const { out } = await call(app, "/admin/support/customers/:tenantId", { params: { tenantId: "t1" } });
+  assert.equal(out.tenant.name, "Gesheft");
+  assert.equal(out.counts.extensions, 2); // REMOVED extension not counted
+  assert.equal(out.counts.users, 7);
+  assert.equal(out.numbers[0], "8455551234");
+  assert.equal(out.billing.autopay, true);
+  assert.equal(out.billing.invoicesNeedingAttention, 2);
+  assert.equal(out.billing.openInvoices, 1);
+  assert.equal(out.recentCalls[0].disposition, "answered");
+  assert.equal(out.pastEscalations[0].reference, supportReportReference("esc_p"));
+  assert.ok(!JSON.stringify(out).includes("fixCodeHash"));
+});
+
+test("customer panel: unknown tenant is a clean 404", async () => {
+  const { app } = register([]);
+  const { reply } = await call(app, "/admin/support/customers/:tenantId", { params: { tenantId: "nope" } });
+  assert.equal(reply.statusCode, 404);
+});
+
+test("⛔ customer panel: one failing source empties its card, never a 500", async () => {
+  const { app } = register([], {
+    customer: {
+      connectCdr: { async findMany() { throw new Error("cdr db down"); } },
+      tenantBillingSettings: { async findUnique() { throw new Error("billing down"); } },
+    },
+  });
+  const { reply, out } = await call(app, "/admin/support/customers/:tenantId", { params: { tenantId: "t1" } });
+  assert.equal(reply.statusCode, 200);
+  assert.deepEqual(out.recentCalls, []);
+  assert.equal(out.billing, null);
+  assert.equal(out.counts.users, 7); // the healthy sources still answered
+});
+
+test("customer panel: gate refused → nothing touched", async () => {
+  const { app } = register([], { allow: false });
+  const { reply } = await call(app, "/admin/support/customers/:tenantId", { params: { tenantId: "t1" } });
+  assert.equal(reply.statusCode, 403);
 });
 
 // ---------------------------------------------------------------- wiring guards
