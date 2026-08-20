@@ -55,6 +55,7 @@ import {
   UserCog,
   Users,
   UsersRound,
+  Video,
   Voicemail,
   Wallet,
   Zap,
@@ -85,6 +86,12 @@ export const navItems: NavItem[] = [
   { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail", badgeKey: "voicemail" },
   { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat", badgeKey: "chat" },
   { id: "workspace.contacts", href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts" },
+  // Loopcom Meetings (2026-08-20). Reuses the overview key on purpose — a
+  // dedicated can_view_workspace_meetings key needs the live permission
+  // snapshot updated (custom-roles-are-authoritative: code defaults do NOT
+  // reach the live PlatformRolePermissionSnapshot row), which is a follow-up
+  // with Izzy. Same precedent as the Install link reusing the contacts key.
+  { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_overview" },
   // Stable alias (server keeps it pointing at the newest installer) so this
   // link never goes stale when a new version is published.
   { id: "workspace.install", href: "/desktop/Connect-Setup-latest.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },

@@ -99,6 +99,14 @@ export function shouldSkipJwtVerification(path: string): boolean {
     // by the PBX connect-media-sync helper, which has no JWT.
     || path.startsWith("/voice/moh/download/")
     || path.includes("/voice/moh/download/");
+  // Loopcom Meetings (2026-08-20): the public /meet/<code> page's two calls —
+  // meeting info and guest join. The meeting CODE is the credential
+  // (unguessable, per-meeting, validated against the VideoMeeting table
+  // in-handler — the pay-link pattern). ⛔ ONLY /meetings/public/* is open:
+  // creating, listing, ending and every host control live under /meetings/*
+  // and stay JWT-gated. Anchored to the path start, never a substring match.
+  const isPublicMeetingPath =
+    path.startsWith("/meetings/public/") || path.startsWith("/api/meetings/public/");
   const isOnboardingPublicPath = path.startsWith("/onboarding/");
   const isPublicCrmFormPath = pathWithoutApiPrefix.startsWith("/public/forms/");
   // Public customer delivery-tracking page: token-authenticated inside the handler
@@ -144,6 +152,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalAgentInvestigatePath
     || isIvrPromptSyncPath
     || isMohSyncPath
+    || isPublicMeetingPath
     || isOnboardingPublicPath
     || isPublicCrmFormPath
     || isPublicTrackingPath

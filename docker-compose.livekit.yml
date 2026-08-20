@@ -1,0 +1,31 @@
+# ── Loopcom Meetings — LiveKit media server (2026-08-20) ─────────────────────
+# Standalone overlay so the shared docker-compose.app.yml stays untouched
+# (the agent pattern). Usage on loopcom, /opt/connectcomms/app:
+#   docker compose -f docker-compose.app.yml -f docker-compose.livekit.yml up -d livekit
+#
+# ⛔ The config file (API key/secret inside) lives at
+# /opt/connectcomms/env/livekit.yaml (mode 600) — NEVER in this repo; the
+# committed template is infra/livekit/livekit.example.yaml. No `environment:`
+# entries for secrets (compose environment: OVERRIDES env_file — the
+# CDR_INGEST_SECRET lesson).
+#
+# Ports: 7880 is the signal/admin API — loopback only; the public path to it is
+# nginx `location /meetws/` on BOTH app vhosts. 7881/tcp + 7882/udp are WebRTC
+# media and MUST be public. ⛔ docker-published ports bypass ufw (iptables
+# DOCKER chain), which is exactly why 7880 binds 127.0.0.1 here.
+#
+# The api reaches LiveKit as http://livekit:7880 (LIVEKIT_URL in .env.platform)
+# over the shared compose default network — that is why this service joins it.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.5
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - /opt/connectcomms/env/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    networks:
+      - default

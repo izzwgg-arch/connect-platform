@@ -76,6 +76,10 @@ export const PUBLIC_PATH_PREFIXES: readonly string[] = [
   "/auth/",
   "/p/",
   "/pay/",
+  // Loopcom Meetings guest join (2026-08-20): a guest with a meeting link has
+  // no session and must never be bounced to /login. The Meetings SCREEN
+  // (/meetings) stays authenticated — only the join page is public.
+  "/meet/",
   "/onboarding/",
   "/track/",
   "/forms/",

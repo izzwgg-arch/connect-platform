@@ -1,0 +1,26 @@
+# Template for /opt/connectcomms/env/livekit.yaml (mode 600, root) on loopcom.
+# The real file carries the actual API key/secret and is NEVER committed.
+# The same key/secret pair goes into .env.platform as LIVEKIT_API_KEY /
+# LIVEKIT_API_SECRET (plus LIVEKIT_URL=http://livekit:7880) so the api can mint
+# join tokens for it.
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+rtc:
+  # Single-port UDP mux + one TCP fallback — two firewall holes total, instead
+  # of a 10k-port range. TCP 7881 is what carries media for people behind
+  # UDP-filtering internet (the norm for this customer base).
+  tcp_port: 7881
+  udp_port: 7882
+  # STUN-discover the host's public IP from inside the bridge network so the
+  # advertised ICE candidates are 45.14.194.179, not 172.x.
+  use_external_ip: true
+room:
+  # Close an abandoned room after 5 minutes; a departed-participant slot after 20s.
+  empty_timeout: 300
+  departure_timeout: 20
+keys:
+  # <LIVEKIT_API_KEY>: <LIVEKIT_API_SECRET>
+  LKEXAMPLE: replace-with-a-long-random-secret
+logging:
+  level: info

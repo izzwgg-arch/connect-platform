@@ -965,6 +965,7 @@ model Tenant {
   lanDiscoveryRuns                LanDiscoveryRun[]
   lanDiscoveredPhones             LanDiscoveredPhone[]
   voicemailEmailRecipients VoicemailEmailRecipient[]
+  videoMeetings            VideoMeeting[]
 }
 
 model User {
@@ -1153,6 +1154,28 @@ model TrustedLoginDevice {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+}
+
+/// Loopcom Meetings (2026-08-20): one row per meeting link. The `code` is the
+/// whole credential a guest presents — unguessable, per-meeting, never expires
+/// on a clock (pay-link precedent). The LiveKit room name is derived from `id`,
+/// so a code can never collide with a room that outlived its row.
+/// `createdByUserId` is a plain column on purpose (no FK): deleting a user must
+/// never take a tenant's meeting history down with it, and the tenant relation
+/// below already cascades the rows away when the COMPANY goes.
+model VideoMeeting {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  tenantId        String
+  createdByUserId String
+  title           String
+  locked          Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  endedAt         DateTime?
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([createdByUserId, createdAt])
 }
 
 enum UserRole {

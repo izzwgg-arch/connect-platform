@@ -347,6 +347,7 @@ import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
+import { registerMeetingRoutes } from "./meetings/meetingRoutes";
 import { registerPbxConsoleRoutes } from "./pbxConsole/pbxConsoleRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
 import { registerForwardRoutes } from "./pbx/forwardRoutes";
@@ -23677,6 +23678,14 @@ registerPollyRoutes({
 // worker or the PBX. Platform owner only — it spends real money against the
 // platform's own account. The two /webhooks/signalwire/* paths it registers
 // are PUBLIC (JWT bypass) and signature-verified, fail closed.
+// ── Loopcom Meetings (2026-08-20) ──────────────────────────────────────────
+// Video meetings on the self-hosted LiveKit server. Media never touches the
+// api — these routes only mint LiveKit join tokens and carry the host's
+// moderation verbs. /meetings/public/* (guest info + join) is on the JWT
+// bypass list; everything else is ordinary JWT. Answers 503
+// meetings_not_configured until LIVEKIT_URL / _API_KEY / _API_SECRET are set.
+registerMeetingRoutes(app);
+
 registerSignalWireRoutes({
   app,
   db,
