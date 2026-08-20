@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { parseEscalationReport, fixStatusLabel } from "../../../../lib/escalationReport";
+import SupportInbox from "./SupportInbox";
 import "./supportDesk.css";
 
 type EscalationRow = {
@@ -101,6 +102,7 @@ function errorText(e: unknown): string {
 }
 
 function SupportDesk() {
+  const [view, setView] = useState<"escalations" | "inbox">("escalations");
   const [rows, setRows] = useState<EscalationRow[]>([]);
   const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [listError, setListError] = useState("");
@@ -233,8 +235,17 @@ function SupportDesk() {
       <header className="sd-head">
         <div>
           <h1>Support Desk</h1>
-          <p>Everything the assistant passed to the team — with its full report, and the fix one approval away.</p>
+          <p>
+            {view === "inbox"
+              ? "Every company's conversations in one place. Replies go out from the company's own number."
+              : "Everything the assistant passed to the team — with its full report, and the fix one approval away."}
+          </p>
         </div>
+        <div className="sd-view-tabs" role="tablist">
+          <button className={view === "escalations" ? "on" : ""} onClick={() => setView("escalations")}>Escalations</button>
+          <button className={view === "inbox" ? "on" : ""} onClick={() => setView("inbox")}>Inbox</button>
+        </div>
+        {view === "escalations" ? (
         <div className="sd-tabs" role="tablist">
           <button className={tab === "all" ? "on" : ""} onClick={() => setTab("all")}>All</button>
           <button className={tab === "fixready" ? "on" : ""} onClick={() => setTab("fixready")}>
@@ -242,7 +253,11 @@ function SupportDesk() {
           </button>
           <button className={tab === "trouble" ? "on" : ""} onClick={() => setTab("trouble")}>Needs a look</button>
         </div>
+        ) : null}
       </header>
+
+      {view === "inbox" ? <SupportInbox /> : (
+      <>
 
       <div className={"sd-body" + (esc ? " sd-body-3" : "")}>
         <aside className="sd-queue">
@@ -416,6 +431,8 @@ function SupportDesk() {
           </aside>
         ) : null}
       </div>
+      </>
+      )}
 
       {approveOpen && detail?.fixAction ? (
         <div className="sd-modal-back" onClick={() => (applying ? null : setApproveOpen(false))}>
