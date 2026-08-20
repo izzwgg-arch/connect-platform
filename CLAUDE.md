@@ -441,11 +441,49 @@ and make sure the email stays in one thread … one thread per phone number."*
   Volume for everyone else ≈ **14 emails/day** — nowhere near Gmail's cap.
   ⛔ **A NEW user starts OFF** (schema default false) — "everybody" was a
   one-time backfill, not a changed default; changing the default is Izzy's call.
-- ⏳ **NOT PROVEN: no real text has ridden the bridge end to end yet** — the
-  first inbound text to any non-Gesheft tenant is the acceptance test (handoff
-  §5): the email must land in ONE Gmail conversation per phone number, and a
-  reply must arrive back as a text + an OUTBOUND bubble in the app. Greppable:
-  `sms.emailed` / `sms.reply_sent` in the agent audit.
+- ✅✅ **THE FORWARD HALF IS PROVEN IN PRODUCTION (2026-08-20 evening, measured
+  read-only) — the acceptance test PASSED and a human answered one.** Since the
+  bridge armed at **11:36Z**, **27 inbound texts arrived and 0 were unhandled**:
+  **10 emailed**, 17 correctly skipped `no_opted_in_recipients` (all Gesheft, by
+  design). Real recipients: `sales@iniimini.com`,
+  `cspilman@trustbookkeepingny.com`, `senderweiss@gmail.com`,
+  `ezra@connectcomunications.com`. ⛔ **Delivery is proven, not inferred:** a
+  human at Trust Bookkeepings **hit reply 3 minutes after** the 15:30Z emails —
+  which is only possible if the mail reached a real inbox and was read. No
+  bounce has come back to sms@loopcom.net since (the reply job reads that
+  mailbox and audits everything it sees).
+- ⛔⛔ **THE REPLY HALF HAS NEVER SENT ONE TEXT — `sms.reply_sent` is 0 FOR ALL
+  TIME — and it silently ate a real customer's reply TODAY.** At **15:33:43Z**
+  `cgreenfeld@trustbookkeepingny.com` replied to one of those emails and was
+  dropped `sms.reply_refused reason=unknown_sender`, **with no notice to them**,
+  because **no Connect user holds that address**. Trust Bookkeepings' five users
+  are cspilman / fhalpert / lschwartz / spollak / vigdor — and the email had
+  been sent to **cspilman@**. So the person read it at one address and replied
+  from another (a forward, an alias, or the same person under a changed
+  surname — note both are "c…@trustbookkeepingny.com").
+  ⛔ **This is the design working as written and failing the customer anyway.**
+  `smsEmailReplyJob.ts:133` matches the From by **exact equality against
+  `User.email`**, and anything unmatched is treated as a STRANGER — silence, no
+  backscatter, deliberately (a leaked reply address must not become an oracle).
+  Only a matched user gets the threaded "your text did not go out" notice. **So
+  every reply from a second address, a forward, or a shared mailbox is
+  indistinguishable from an attacker and dies in silence, while the sender
+  believes they just texted a customer.**
+  ⏳ **NOT FIXED — Izzy's call, and the options are not equivalent:** (a) add the
+  alternate address to that user's Connect account (one customer, no code, no
+  new exposure); (b) match the reply against the tenant's own verified mail
+  domain rather than one address (fixes the whole class, widens who may text as
+  that tenant); (c) leave it and accept silent drops. ⛔ Do NOT "fix" it by
+  notifying unmatched senders — that reinstates exactly the oracle the silence
+  exists to prevent.
+- ⛔ **"I didn't get any SMS emails" is usually NOT a bridge fault — check
+  whether the person is a PARTICIPANT on a thread that received a text.** Izzy
+  reported this on 2026-08-20 and the bridge was healthy: his SUPER_ADMIN and
+  Landau Home accounts both have the toggle ON, but the **newest inbound on any
+  thread he is on was 1.9 days old**, so there was nothing to send him. The
+  emails go to the thread's participants — not to admins, and not to the
+  platform owner. Greppable: `sms.emailed` / `sms.reply_sent` in the agent
+  audit; the per-message verdict is `ConnectChatMessage.emailForwardError`.
 
 ## ⛔⛔ AGENT HANDOFF — CONFERENCE ROOMS are LIVE end to end: backend + the Option-A page in Workspace, DEPLOYED and container-verified — but NO room has ever been created on the PBX (2026-08-20) — READ FIRST before touching /voice/conferences or /conference, or before creating the platform's FIRST conference room
 

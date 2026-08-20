@@ -182,12 +182,82 @@ empty_body / too_long / thread_gone) · `sms.reply_failed` (api_refused /
 api_unreachable) · `sms.reply_ignored` (no_reply_address / bad_signature /
 auto_generated / already_claimed).
 
+## 5b. FIRST-DAY RESULT — measured read-only, 2026-08-20 ~18:00Z
+
+**Steps 1–3 of §5 PASSED in production on real customer traffic. Step 4 has
+never once succeeded, and it failed on a real customer the same afternoon.**
+
+Measured against the live database (no writes, no sends):
+
+| | |
+|---|---|
+| Inbound TEXT/IMAGE since the bridge armed (11:36Z) | **27** |
+| Unhandled / never stamped | **0** |
+| Emailed (`sms.emailed`) | **10** |
+| Skipped `no_opted_in_recipients` (all Gesheft, by design) | **17** |
+| `sms.email_failed` | **0** |
+| `sms.reply_sent`, all time | **0** |
+
+Recipients that really received mail: `sales@iniimini.com`,
+`cspilman@trustbookkeepingny.com`, `senderweiss@gmail.com`,
+`ezra@connectcomunications.com`.
+
+⛔ **Delivery is proven, not inferred.** A human replied **3 minutes after** the
+15:30:41/44/45Z emails to cspilman@ — impossible unless the mail reached a real
+inbox and was read. No bounce has arrived at sms@loopcom.net since (the reply
+job reads that mailbox and audits everything it sees; the only `reply_ignored`
+rows are the 11:37Z Google security alerts and the deliberate forged-signature
+probe).
+
+⛔ The 17 texts that were never stamped in the **preceding** 24h all predate
+11:36Z — that is the 30-minute backlog guard doing its job, not a loss.
+
+### The live failure: a customer's reply died in silence
+
+**15:33:43Z — `sms.reply_refused reason=unknown_sender`, from
+`cgreenfeld@trustbookkeepingny.com`, thread `cmosuzgpg000lqf215asiv9o8`.**
+No Connect user holds that address. The tenant's five users are cspilman,
+fhalpert, lschwartz, spollak, vigdor — and the email went to **cspilman@**. The
+person read it at one address and replied from another (forward, alias, or the
+same human under a changed surname — both are `c…@trustbookkeepingny.com`).
+
+`smsEmailReplyJob.ts:133` matches the From by **exact equality against
+`User.email`**; anything unmatched is a STRANGER and gets silence by design
+(§3 — a leaked reply address must never become an oracle). Only a *matched*
+user gets the threaded "your text did not go out" notice. **So every reply from
+a second address, a forward or a shared mailbox is indistinguishable from an
+attacker and dies quietly, while the sender believes they just texted a
+customer.** That is the design working exactly as written and failing the
+customer anyway.
+
+**Options, Izzy's call — they are not equivalent:**
+- **(a)** Add the alternate address to that user's Connect account. One
+  customer, no code, no new exposure. Narrowest fix.
+- **(b)** Match the reply against the tenant's own verified mail domain instead
+  of one address. Fixes the whole class; widens who may text as that tenant, so
+  it needs a domain-verification story first.
+- **(c)** Leave it. Replies from any unknown address keep dying silently.
+
+⛔ Do **NOT** "fix" it by notifying unmatched senders — that reinstates exactly
+the oracle the silence exists to prevent.
+
+⏳ Also still true: **no reply has EVER been delivered as a text.** Step 4 of §5
+remains the outstanding acceptance test, and it must be run from the address
+Connect actually knows for that user.
+
 ## 7. Open / not proven
 
-- ✅ **SUPERSEDED same day: the bridge IS armed and its transport IS proven** —
-  see the State block at the top (SMTP 250 OK, IMAP read, forged-signature
-  refusal all live). What is still unproven is a real inbound text forwarding
-  and a real reply landing as a text (§5) — no user has the toggle on yet.
+- ✅ **SUPERSEDED TWICE: the transport was proven at arming, and the FORWARD
+  HALF is now proven on real customer traffic — see §5b.** 10 real texts
+  emailed, 0 unhandled, delivery confirmed by a human replying within 3
+  minutes. ⛔ **The REPLY half is still 0-for-all-time** and has a live
+  customer-facing silent-drop, documented in §5b.
+- ⛔ **"I didn't get any SMS emails" is usually not a bridge fault.** Izzy
+  reported exactly this on 2026-08-20 while the bridge was healthy: he has the
+  toggle ON on both accounts, but the newest inbound text on any thread he is a
+  **participant** of was 1.9 days old, so there was nothing to send him. Emails
+  go to the thread's participants — never to admins or the platform owner by
+  virtue of their role. Check participation before debugging the job.
 - ⏳ The Gmail-side threading (one conversation per number) is proven by the
   header design, not by a human looking at an inbox — step 3 above is the check.
 - ⏳ Quota: Gmail sends are capped (~500/day standard, 2,000 on Workspace).
