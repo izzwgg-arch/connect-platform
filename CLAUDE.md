@@ -157,6 +157,47 @@ and make sure the email stays in one thread … one thread per phone number."*
   `sms.email_enabled` + `sms.reply_enabled`. **0 users have the toggle on today**,
   so arming it changes nothing until people opt in.
 
+## ⛔⛔ AGENT HANDOFF — CONFERENCE ROOMS: the backend is BUILT (reads from ombu_conferences, writes by panel replay); the page awaits Izzy's mockup pick (2026-08-20) — READ FIRST before touching /voice/conferences, before building the /conference page, or before creating the platform's FIRST conference room
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONFERENCE_ROOMS_2026-08-20.md`**
+(`c80a585b`, merge `4f886830` on `feat/ivr-migration-takeover`; api deploy = queue
+job `b78bc0eb`, see §8 of the handoff for the verified state. No migration, no PBX
+write, no tenant row touched — the panel form was captured READ-ONLY.)
+Izzy, 2026-08-20: *"a full-on voip conference module … a new page called
+Conference"* — and mid-build: *"If you are doing any UIs, I want to see
+[mockups] first."* Mockups: <https://claude.ai/code/artifact/203ce03b-3147-4036-9cd5-4ef919edb4d3>.
+
+- ✅ **VitalPBX already carries conferencing** — Conferences module (module_id 8),
+  `ombu_conferences`, per-tenant ConfBridge profile/menu confs already rendered,
+  recording + DTMF menus (mute/lock/kick) in the baseplan. **Zero rooms existed
+  platform-wide** — nothing rendered, no captured panel contract.
+- ⛔⛔ **THE BUILDER HARDCODES NO FIELD LIST.** `pbx/conferenceBuilder.ts` loads
+  the panel's own rendered add/edit form and re-posts it with overrides (the
+  pbxConsole discipline), so THE CHECKBOX RULE holds automatically — and the
+  live capture proved **all 8 yes/no options are CHECKBOXES, tick value "1"**.
+  An option the form doesn't offer lands in `skippedFields`, never a blind post.
+- **`/voice/conferences` GET/POST/PATCH/DELETE** (`pbx/conferenceRoutes.ts`):
+  own keys `can_view_conferences` / `can_manage_conferences` (TENANT_ADMIN
+  default on, END_USER off); row ids resolved server-side from the number;
+  every write **verified by re-reading ombu_conferences**; host PIN masked for
+  non-managers; refuses on unresolved tenant path (stricter than teamRoutes on
+  purpose). Numbers get the **700-series** (`nextConferenceNumber` — existing
+  rooms are a separate mandatory input, invisible to `UsedNumbers`).
+- ⛔ **Apply: only a SUPER_ADMIN's explicit `applyNow`, only via
+  `applyAndRebake`** (whole-PBX apply must re-bake doorways). Everyone else gets
+  the honest "goes live at the next apply" message, like teams.
+- ⛔ **`apps/api` now runs `"src/pbx/*.test.ts"`** — the glob was missing, so
+  `teamBuilder.queue.test.ts` + `applyRegenRebake.test.ts` had NEVER run (both
+  pass). 26 new tests; shared 374/374; api failures unchanged from baseline.
+- ⏳ **NOT DONE: the portal page** (blocked on the mockup pick — A/B/C), live
+  participant list / mute / kick from the page (needs telephony ConfBridge AMI,
+  phase 2), routing a DID or IVR key into a room, and ⛔ **no conference room
+  has EVER been created on this PBX** — the acceptance run (create with apply on
+  Loopcom Demo, dial in from two phones, delete, byte-back) needs Izzy live.
+- ⚠ A parallel session is building **video meetings** (LiveKit,
+  `apps/api/src/meetings/`, its own migration) in the same tree — a DIFFERENT
+  feature; do not merge the two by "simplification".
+
 ## ⛔⛔ AGENT HANDOFF — the AI agent treated every TENANT_ADMIN as Connect staff; fortification pass FIXED it and stress-tested the platform (2026-08-19) — READ FIRST before using the agent's `role === "owner"` to authorize anything platform-wide, before adding an `/agent-api/*` admin route, or before touching the tool tiers
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FORTIFICATION_PASS_2026-08-19.md`**
