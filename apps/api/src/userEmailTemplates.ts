@@ -1,3 +1,4 @@
+import { loopcomEmailShell } from "@connect/shared";
 import { canonicalPortalOrigin } from "./publicOrigins";
 // ─── Email template helpers ──────────────────────────────────────────────────
 // All templates return { subject, html, text }.
@@ -133,90 +134,14 @@ export function loopComShell(opts: {
   headerSubtitle?: string;
   body: string;
 }): string {
-  const year = new Date().getFullYear();
-  const font = `-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
-  return `<!doctype html>
-<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-  <meta name="x-apple-disable-message-reformatting">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
-  <title>${esc(opts.headerTitle)}</title>
-  <!--[if mso]>
-  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
-  <![endif]-->
-  <style>
-    @media only screen and (max-width:620px) {
-      .lc-card { width:100% !important; }
-      .lc-pad { padding-left:22px !important; padding-right:22px !important; }
-      .lc-h1 { font-size:22px !important; }
-      .lc-logo { width:142px !important; height:auto !important; }
-      .lc-btn a { display:block !important; text-align:center !important; }
-    }
-  </style>
-</head>
-<body style="margin:0;padding:0;background:#f1f4f8;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
-${opts.preheaderText ? preheader(opts.preheaderText) : ""}
-<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#f1f4f8" style="background:#f1f4f8;">
-  <tr>
-    <td align="center" style="padding:34px 14px 42px;">
-
-      <!--[if mso]><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600"><tr><td><![endif]-->
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" class="lc-card" bgcolor="#ffffff" style="max-width:600px;width:100%;background:#ffffff;border-radius:18px;">
-
-        <!-- Logo, on the card. One asset, no dark plate, no tagline. -->
-        <tr>
-          <td align="center" class="lc-pad" style="padding:32px 44px 20px;">
-            <img src="${esc(brandLogoUrl())}" alt="Loopcom" width="168" height="30" class="lc-logo"
-                 style="display:block;border:0;outline:none;text-decoration:none;width:168px;height:30px;color:#0f172a;font-family:${font};font-size:19px;font-weight:700;letter-spacing:-.02em;">
-          </td>
-        </tr>
-
-        <!-- Accent rule -->
-        <tr>
-          <td class="lc-pad" style="padding:0 44px;">
-            <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-              <tr><td height="2" bgcolor="#22a8ff" style="height:2px;line-height:2px;font-size:0;background:#22a8ff;background-image:linear-gradient(90deg,#22a8ff,#4f7bff);">&nbsp;</td></tr>
-            </table>
-          </td>
-        </tr>
-
-        <!-- Title -->
-        <tr>
-          <td class="lc-pad" style="padding:26px 44px 0;">
-            <h1 class="lc-h1" style="margin:0;font-size:26px;line-height:1.25;color:#0f172a;font-weight:800;font-family:${font};mso-line-height-rule:exactly;">${esc(opts.headerTitle)}</h1>
-            ${opts.headerSubtitle ? `<p style="margin:8px 0 0;font-size:15px;color:#64748b;font-family:${font};">${esc(opts.headerSubtitle)}</p>` : ""}
-          </td>
-        </tr>
-
-        <!-- Body -->
-        <tr>
-          <td class="lc-pad" style="padding:22px 44px 30px;color:#374151;font-size:15px;line-height:1.75;font-family:${font};mso-line-height-rule:exactly;">
-            ${opts.body}
-          </td>
-        </tr>
-
-        <!-- Footer -->
-        <tr>
-          <td class="lc-pad" bgcolor="#f8fafc" style="padding:18px 44px 24px;background:#f8fafc;border-top:1px solid #e5e7eb;">
-            <p style="margin:0;font-size:11.5px;color:#9ca3af;line-height:1.6;font-family:${font};">
-              &copy; ${year} Loopcom &middot; All rights reserved.<br>
-              This email was sent on behalf of your organization.
-            </p>
-          </td>
-        </tr>
-
-      </table>
-      <!--[if mso]></td></tr></table><![endif]-->
-
-    </td>
-  </tr>
-</table>
-</body>
-</html>`;
+  // ⛔ THE LOOK ITSELF NOW LIVES IN `@connect/shared` so apps/agent renders the
+  // SAME email instead of carrying a second copy — the SMS bridge shipped on a
+  // pre-rebrand template for weeks precisely because it could not reach this
+  // function. This wrapper exists to keep `brandLogoUrl()` resolution HERE, at
+  // the app boundary, so no email builder ever passes the logo in (see the note
+  // on brandLogoUrl above — that is how the APK link went missing once already).
+  // Output is byte-identical to the pre-move version; a test pins that.
+  return loopcomEmailShell({ ...opts, logoUrl: brandLogoUrl() });
 }
 
 /** Brand-blue CTA. Gradient over a solid bgcolor so Outlook degrades to flat. */
