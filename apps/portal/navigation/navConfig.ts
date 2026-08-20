@@ -136,6 +136,13 @@ export const navItems: NavItem[] = [
   { id: "settings.billing", href: "/billing/settings", label: "Billing Settings", icon: "BS", lucide: CreditCard, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_billing" },
   { id: "settings.messaging", href: "/settings/messaging", label: "Messaging Settings", icon: "MS", lucide: Send, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_messaging" },
 
+  // Support Desk (2026-08-20) — FIRST in the Admin section, per Izzy: it is the
+  // daily-driver screen (escalations + every company's chats + the assistant
+  // take-over), and it was unfindable at position 9 of 25.
+  // ⛔ SUPER_ADMIN-only in isNavItemVisibleForUser (the pbx-console pattern):
+  // it shows every company's escalations, so it shares an owner-held key and
+  // there is deliberately no grantable one yet.
+  { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
   { id: "admin.console", href: "/admin", label: "Admin Console", icon: "AD", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_console" },
   { id: "admin.users", href: "/admin/users", label: "Users", icon: "US", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_users" },
   { id: "admin.tenants", href: "/admin/tenants", label: "Tenants", icon: "TN", lucide: Building, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_tenants" },
@@ -153,10 +160,6 @@ export const navItems: NavItem[] = [
   // ticked box away from handing a tenant admin the whole platform's routing.
   { id: "admin.pbx_routing", href: "/admin/pbx-console?mod=routing", label: "Trunks & Routing", icon: "TR", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
   { id: "admin.pbx_teams", href: "/admin/pbx-console?mod=teams", label: "Ring Groups & Queues", icon: "RQ", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
-  // Support Desk (2026-08-20) — SUPER_ADMIN-only in isNavItemVisibleForUser
-  // (the pbx-console pattern): it shows every company's escalations, so it
-  // shares an owner-held key and there is deliberately no grantable one yet.
-  { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
