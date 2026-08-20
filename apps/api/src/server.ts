@@ -41618,6 +41618,11 @@ const port = Number(process.env.PORT || 3001);
     app,
     db,
     requireSuper: (req, reply) => requireSuperAdmin(req, reply),
+    // Desk replies ride the ONE chat send implementation — never a second path.
+    // (The cast narrows the console's deliberately-loose dep type to the real
+    // sender's signature; the shapes agree at runtime and the tests pin it.)
+    sendSms: (input) => sendConnectChatSmsMessage(input as Parameters<typeof sendConnectChatSmsMessage>[0]),
+    smsQueue,
   });
   registerFeatureSuggestionRoutes(app);
   await registerCrmRoutes(app, { smsQueue });

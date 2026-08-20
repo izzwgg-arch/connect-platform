@@ -32,16 +32,31 @@
  * and a test asserts the string "fixCodeHash" appears in no response.
  */
 import { z } from "zod";
-import { supportReportReference } from "@connect/shared";
+import { supportReportReference, resolvePersonDisplayName } from "@connect/shared";
 
 type Gate = (req: any, reply: any) => Promise<unknown | null>;
 
 export interface SupportConsoleDeps {
   app: {
     get: (path: string, handler: (req: any, reply: any) => Promise<unknown>) => unknown;
+    post: (path: string, handler: (req: any, reply: any) => Promise<unknown>) => unknown;
   };
   db: any;
   requireSuper: Gate;
+  /**
+   * Phase 3: replying from the desk. ⛔ This is deliberately the INJECTED
+   * `sendConnectChatSmsMessage` from connectChatRoutes.ts — the ONE send
+   * implementation (participant join, canSendSmsUser, provider dispatch,
+   * pushes). This module never grows its own sender; a source test pins it.
+   */
+  sendSms?: (input: {
+    deps: { smsQueue: unknown };
+    user: any;
+    tenantId: string;
+    threadId: string;
+    body: string;
+  }) => Promise<{ ok: boolean; status?: number; error?: string; message?: any }>;
+  smsQueue?: unknown;
 }
 
 const LIST_DEFAULT_TAKE = 50;
@@ -90,6 +105,18 @@ const listQuerySchema = z.object({
  * guessed accessors are this repo's documented trap.
  */
 const UNPAID_ATTENTION_STATUSES = ["FAILED", "OVERDUE"] as const;
+
+/**
+ * Phase 3 (same day): the cross-company inbox. Every company's chat/SMS
+ * threads in one list, a read-only transcript, and reply-by-the-company's-own-
+ * number for SMS threads. ⛔ Sender names go through the shared
+ * `resolvePersonDisplayName` (extension name first — the platform naming rule);
+ * inbound messages are labelled by the thread's external number, never a
+ * guessed contact name.
+ */
+const THREADS_DEFAULT_TAKE = 30;
+const THREADS_MAX_TAKE = 100;
+const TRANSCRIPT_TAKE = 60;
 
 export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
   const { app, db, requireSuper } = deps;
@@ -270,5 +297,210 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
         fixStatus: e.fixStatus ?? null,
       })),
     };
+  });
+
+  // ───────────────────────── Phase 3: the inbox ─────────────────────────
+
+  app.get("/admin/support/threads", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const q = z
+      .object({
+        type: z.enum(["all", "sms", "dm", "group", "tenant_group"]).optional(),
+        take: z.coerce.number().int().min(1).max(THREADS_MAX_TAKE).optional(),
+      })
+      .safeParse(req.query ?? {});
+    if (!q.success) return reply.code(400).send({ error: "bad_query" });
+    const where: Record<string, unknown> = { active: true };
+    if (q.data.type && q.data.type !== "all") where.type = q.data.type.toUpperCase();
+    const threads = await db.connectChatThread.findMany({
+      where,
+      orderBy: { lastMessageAt: "desc" },
+      take: q.data.take ?? THREADS_DEFAULT_TAKE,
+      select: {
+        id: true,
+        tenantId: true,
+        type: true,
+        title: true,
+        tenantSmsE164: true,
+        externalSmsE164: true,
+        smsInboxOwnerUserId: true,
+        lastMessageAt: true,
+      },
+    });
+    const tenantIds = [...new Set(threads.map((t: any) => t.tenantId))];
+    const tenants = await db.tenant
+      .findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } })
+      .catch(() => []);
+    const tenantName = new Map(tenants.map((t: any) => [t.id, t.name]));
+    // One findFirst per thread — bounded by the take cap, and honest ordering
+    // beats a clever unsupported group-by.
+    const lasts = await Promise.all(
+      threads.map((t: any) =>
+        db.connectChatMessage
+          .findFirst({
+            where: { threadId: t.id, deletedForEveryoneAt: null },
+            orderBy: { createdAt: "desc" },
+            select: { direction: true, type: true, body: true, createdAt: true },
+          })
+          .catch(() => null),
+      ),
+    );
+    return {
+      threads: threads.map((t: any, i: number) => ({
+        id: t.id,
+        tenantId: t.tenantId,
+        tenantName: tenantName.get(t.tenantId) ?? t.tenantId,
+        type: t.type,
+        title: t.title ?? null,
+        tenantSmsE164: t.tenantSmsE164 ?? null,
+        externalSmsE164: t.externalSmsE164 ?? null,
+        sharedInbox: t.smsInboxOwnerUserId === "",
+        lastMessageAt: t.lastMessageAt,
+        last: lasts[i]
+          ? {
+              direction: lasts[i].direction,
+              type: lasts[i].type,
+              preview: String(lasts[i].body ?? "").slice(0, 120),
+              at: lasts[i].createdAt,
+            }
+          : null,
+      })),
+    };
+  });
+
+  app.get("/admin/support/threads/:id", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const params = z.object({ id: z.string().min(1).max(64) }).safeParse(req.params);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    const thread = await db.connectChatThread.findUnique({
+      where: { id: params.data.id },
+      select: {
+        id: true,
+        tenantId: true,
+        type: true,
+        title: true,
+        tenantSmsE164: true,
+        externalSmsE164: true,
+        smsInboxOwnerUserId: true,
+        lastMessageAt: true,
+      },
+    });
+    if (!thread) return reply.code(404).send({ error: "not_found" });
+    const tenant = await db.tenant
+      .findUnique({ where: { id: thread.tenantId }, select: { name: true } })
+      .catch(() => null);
+    const tail = await db.connectChatMessage.findMany({
+      where: { threadId: thread.id },
+      orderBy: { createdAt: "desc" },
+      take: TRANSCRIPT_TAKE,
+      select: {
+        id: true,
+        direction: true,
+        type: true,
+        body: true,
+        senderUserId: true,
+        createdAt: true,
+        deliveryStatus: true,
+        deliveryError: true,
+        deletedForEveryoneAt: true,
+      },
+    });
+    const messages = tail.reverse();
+    // Sender names by the platform rule: extension name first.
+    const senderIds = [...new Set(messages.map((m: any) => m.senderUserId).filter(Boolean))] as string[];
+    const [senders, senderExts] = await Promise.all([
+      senderIds.length
+        ? db.user
+            .findMany({
+              where: { id: { in: senderIds } },
+              select: { id: true, firstName: true, lastName: true, email: true },
+            })
+            .catch(() => [])
+        : [],
+      senderIds.length
+        ? db.extension
+            .findMany({
+              where: { ownerUserId: { in: senderIds } },
+              select: { ownerUserId: true, displayName: true },
+            })
+            .catch(() => [])
+        : [],
+    ]);
+    const extName = new Map<string, string>(senderExts.map((e: any) => [e.ownerUserId, e.displayName]));
+    const senderName = new Map<string, string>(
+      senders.map((u: any) => [
+        u.id,
+        resolvePersonDisplayName({
+          extensionDisplayName: extName.get(u.id) ?? null,
+          firstName: u.firstName,
+          lastName: u.lastName,
+          email: u.email,
+        }),
+      ]),
+    );
+    return {
+      thread: {
+        id: thread.id,
+        tenantId: thread.tenantId,
+        tenantName: tenant?.name ?? thread.tenantId,
+        type: thread.type,
+        title: thread.title ?? null,
+        tenantSmsE164: thread.tenantSmsE164 ?? null,
+        externalSmsE164: thread.externalSmsE164 ?? null,
+        sharedInbox: thread.smsInboxOwnerUserId === "",
+      },
+      messages: messages.map((m: any) => ({
+        id: m.id,
+        direction: m.direction,
+        type: m.type,
+        body: m.deletedForEveryoneAt ? "" : String(m.body ?? ""),
+        deleted: !!m.deletedForEveryoneAt,
+        senderName: m.senderUserId ? senderName.get(m.senderUserId) ?? null : null,
+        createdAt: m.createdAt,
+        deliveryStatus: m.deliveryStatus ?? null,
+        deliveryError: m.deliveryError ?? null,
+      })),
+    };
+  });
+
+  app.post("/admin/support/threads/:id/reply", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    if (!deps.sendSms) {
+      return reply.code(503).send({ error: "reply_unavailable", message: "Replying is not wired up on this server." });
+    }
+    const params = z.object({ id: z.string().min(1).max(64) }).safeParse(req.params);
+    const body = z.object({ body: z.string().min(1).max(1000) }).safeParse(req.body);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    if (!body.success) {
+      return reply.code(400).send({ error: "bad_body", message: "Write a message first — up to 1,000 characters." });
+    }
+    const thread = await db.connectChatThread.findUnique({
+      where: { id: params.data.id },
+      select: { id: true, tenantId: true, type: true },
+    });
+    if (!thread) return reply.code(404).send({ error: "not_found" });
+    if (thread.type !== "SMS") {
+      return reply
+        .code(400)
+        .send({ error: "not_sms_thread", message: "Only SMS threads can be replied to from the desk today." });
+    }
+    // ⛔ tenantId comes from the THREAD, never the caller — the reply goes out
+    // from that company's own number, whichever company it is.
+    const out = await deps.sendSms({
+      deps: { smsQueue: deps.smsQueue },
+      user,
+      tenantId: thread.tenantId,
+      threadId: thread.id,
+      body: body.data.body,
+    });
+    if (!out.ok) {
+      return reply
+        .code(out.status ?? 500)
+        .send({ error: out.error ?? "send_failed", message: "The reply didn't send. " + (out.error ?? "") });
+    }
+    return { ok: true, message: out.message ?? null };
   });
 }

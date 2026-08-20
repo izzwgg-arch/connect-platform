@@ -151,8 +151,14 @@ call): handlers call `requireSuperAdmin`, `/admin/support` rides
 `isNavItemVisibleForUser` — ⛔ deliberately NO new grantable key until a feature
 honours it. ✅ Proven live: self-signed SUPER_ADMIN probe → 200, the real
 4-escalation backlog. ⏳ Nobody has opened the page in a browser; no fix ever
-approved from it. ⏳ Phases 2–5 (customer panel, cross-company inbox +
-take-over, tools, the Agent-SDK workbench) are DESIGNED ONLY.
+approved from it. ✅ **Phase 2 (customer panel) SHIPPED same evening,
+`8e192e5d`, api+portal container-verified + live-probed** — the desk's third
+column aggregates extensions/users/numbers/billing/calls/past escalations via
+`GET /admin/support/customers/:tenantId`, every block best-effort (⛔ field
+names verified: `autoBillingEnabled`, `extNumber`, `connectTenantId`,
+`startedAt`; ⛔ no `:has()` in its css, class-toggled instead). ⏳ Phases 3–5
+(cross-company inbox + take-over, tools, the Agent-SDK workbench) are
+DESIGNED ONLY.
 
 
 Full handoff + the verified infrastructure inventory:

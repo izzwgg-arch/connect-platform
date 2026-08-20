@@ -25,6 +25,9 @@ function fakeApp() {
     get(p: string, h: Handler) {
       routes.set(p, h);
     },
+    post(p: string, h: Handler) {
+      routes.set("POST " + p, h);
+    },
     routes,
   };
 }
@@ -123,6 +126,14 @@ function customerDb(overrides: Record<string, any> = {}) {
           ? { id: "t1", name: "Gesheft", createdAt: NOW, pbxRemovedAt: null }
           : null;
       },
+      async findMany(args: any) {
+        const all = [
+          { id: "t1", name: "Gesheft" },
+          { id: "t2", name: "Trust Bookkeepings" },
+        ];
+        const ids: string[] = args?.where?.id?.in ?? [];
+        return all.filter((t) => ids.includes(t.id));
+      },
     },
     extension: {
       async findMany() {
@@ -149,9 +160,84 @@ function customerDb(overrides: Record<string, any> = {}) {
   };
 }
 
-function register(rows: any[], opts: { allow?: boolean; action?: any; messages?: any[]; customer?: Record<string, any> } = {}) {
+function inboxDb(overrides: Record<string, any> = {}) {
+  const threads = [
+    {
+      id: "th_sms",
+      tenantId: "t1",
+      type: "SMS",
+      title: null,
+      tenantSmsE164: "+18455551234",
+      externalSmsE164: "+19175550100",
+      smsInboxOwnerUserId: "",
+      lastMessageAt: new Date("2026-08-20T14:00:00Z"),
+      active: true,
+    },
+    {
+      id: "th_dm",
+      tenantId: "t2",
+      type: "DM",
+      title: "Office chat",
+      tenantSmsE164: null,
+      externalSmsE164: null,
+      smsInboxOwnerUserId: "u9",
+      lastMessageAt: new Date("2026-08-20T13:00:00Z"),
+      active: true,
+    },
+  ];
+  const messages = [
+    { id: "m1", threadId: "th_sms", direction: "INBOUND", type: "TEXT", body: "hello there", senderUserId: null, createdAt: new Date("2026-08-20T13:59:00Z"), deliveryStatus: null, deliveryError: null, deletedForEveryoneAt: null },
+    { id: "m2", threadId: "th_sms", direction: "OUTBOUND", type: "TEXT", body: "hi!", senderUserId: "u1", createdAt: new Date("2026-08-20T14:00:00Z"), deliveryStatus: "SENT", deliveryError: null, deletedForEveryoneAt: null },
+    { id: "m3", threadId: "th_sms", direction: "OUTBOUND", type: "TEXT", body: "oops", senderUserId: "u1", createdAt: new Date("2026-08-20T14:01:00Z"), deliveryStatus: null, deliveryError: null, deletedForEveryoneAt: new Date() },
+  ];
+  return {
+    connectChatThread: {
+      async findMany(args: any) {
+        let out = threads.filter((t) => t.active);
+        if (args?.where?.type) out = out.filter((t) => t.type === args.where.type);
+        out.sort((a, b) => +b.lastMessageAt - +a.lastMessageAt);
+        return out.slice(0, args?.take ?? out.length);
+      },
+      async findUnique(args: any) {
+        return threads.find((t) => t.id === args?.where?.id) ?? null;
+      },
+    },
+    connectChatMessage: {
+      async findFirst(args: any) {
+        const forThread = messages
+          .filter((m) => m.threadId === args?.where?.threadId && (!("deletedForEveryoneAt" in (args?.where ?? {})) || m.deletedForEveryoneAt === null))
+          .sort((a, b) => +b.createdAt - +a.createdAt);
+        return forThread[0] ?? null;
+      },
+      async findMany(args: any) {
+        return messages
+          .filter((m) => m.threadId === args?.where?.threadId)
+          .sort((a, b) => +b.createdAt - +a.createdAt)
+          .slice(0, args?.take ?? messages.length);
+      },
+    },
+    ...overrides,
+  };
+}
+
+function register(
+  rows: any[],
+  opts: { allow?: boolean; action?: any; messages?: any[]; customer?: Record<string, any>; sendSms?: any; inbox?: Record<string, any> } = {},
+) {
   const app = fakeApp();
-  const db = { ...customerDb(opts.customer ?? {}), ...fakeDb(rows, opts) };
+  const db = {
+    ...customerDb(opts.customer ?? {}),
+    ...inboxDb(opts.inbox ?? {}),
+    user: {
+      async count() {
+        return 7;
+      },
+      async findMany() {
+        return [{ id: "u1", firstName: null, lastName: null, email: "shloime@loopcom.net" }];
+      },
+    },
+    ...fakeDb(rows, opts),
+  };
   registerSupportConsoleRoutes({
     app,
     db,
@@ -162,6 +248,8 @@ function register(rows: any[], opts: { allow?: boolean; action?: any; messages?:
       }
       return { sub: "super", role: "SUPER_ADMIN", tenantId: "admin" };
     },
+    sendSms: opts.sendSms,
+    smsQueue: { fake: true },
   });
   return { app, db };
 }
@@ -283,6 +371,78 @@ test("customer panel: gate refused → nothing touched", async () => {
   assert.equal(reply.statusCode, 403);
 });
 
+// ---------------------------------------------------------------- inbox (Phase 3)
+
+test("inbox: threads across companies, newest activity first, tenant names joined", async () => {
+  const { app } = register([]);
+  const { out } = await call(app, "/admin/support/threads", { query: {} });
+  assert.equal(out.threads.length, 2);
+  assert.equal(out.threads[0].id, "th_sms");
+  assert.equal(out.threads[0].tenantName, "Gesheft"); // t1 joined via tenant table
+  assert.equal(out.threads[0].sharedInbox, true);
+  assert.equal(out.threads[0].last.preview, "hi!"); // deleted m3 is not the preview
+  assert.equal(out.threads[1].type, "DM");
+});
+
+test("inbox: transcript is oldest-first, deleted messages masked, sender named by the shared rule", async () => {
+  const { app } = register([]);
+  const { out } = await call(app, "/admin/support/threads/:id", { params: { id: "th_sms" } });
+  assert.equal(out.thread.tenantName, "Gesheft");
+  assert.equal(out.messages[0].body, "hello there");
+  assert.equal(out.messages[0].senderName, null); // inbound: the customer, never a guessed name
+  assert.equal(out.messages[1].senderName, "Shloime"); // email local part, capitalised
+  const deleted = out.messages.find((m: any) => m.deleted);
+  assert.equal(deleted.body, ""); // a deleted message's text never ships
+});
+
+test("inbox reply: delegates to the ONE injected sender with the THREAD's tenant", async () => {
+  const calls: any[] = [];
+  const { app } = register([], {
+    sendSms: async (input: any) => {
+      calls.push(input);
+      return { ok: true, message: { id: "new" } };
+    },
+  });
+  const { out } = await call(app, "POST /admin/support/threads/:id/reply", {
+    params: { id: "th_sms" },
+    body: { body: "On it — fixing now." },
+  });
+  assert.equal(out.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tenantId, "t1"); // the thread's tenant, never the caller's
+  assert.equal(calls[0].threadId, "th_sms");
+});
+
+test("inbox reply: a non-SMS thread is refused in plain English, sender never called", async () => {
+  const calls: any[] = [];
+  const { app } = register([], { sendSms: async (i: any) => (calls.push(i), { ok: true }) });
+  const { reply } = await call(app, "POST /admin/support/threads/:id/reply", {
+    params: { id: "th_dm" },
+    body: { body: "hello" },
+  });
+  assert.equal(reply.statusCode, 400);
+  assert.equal(reply.body.error, "not_sms_thread");
+  assert.equal(calls.length, 0);
+});
+
+test("inbox reply: a failed send maps the helper's status and error through", async () => {
+  const { app } = register([], { sendSms: async () => ({ ok: false, status: 403, error: "FORBIDDEN" }) });
+  const { reply } = await call(app, "POST /admin/support/threads/:id/reply", {
+    params: { id: "th_sms" },
+    body: { body: "hello" },
+  });
+  assert.equal(reply.statusCode, 403);
+});
+
+test("inbox reply: without the injected sender it answers 503, never invents its own", async () => {
+  const { app } = register([], { sendSms: undefined });
+  const { reply } = await call(app, "POST /admin/support/threads/:id/reply", {
+    params: { id: "th_sms" },
+    body: { body: "hello" },
+  });
+  assert.equal(reply.statusCode, 503);
+});
+
 // ---------------------------------------------------------------- wiring guards
 
 function readSource(rel: string): string {
@@ -303,9 +463,22 @@ test("the /admin/support prefix is inside the global permission gate (the /admin
   );
 });
 
-test("⛔ this module registers no write route — approving a fix stays on the ONE existing apply path", () => {
+test("⛔ the module's ONLY write is the reply, and it only DELEGATES — no second apply path, no second sender", () => {
   const src = readSource("supportConsole.ts");
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  assert.ok(!code.includes("app.post"), "supportConsole.ts grew a POST — fixes must go through /admin/agent-confirmations/:id/apply");
+  const posts = code.match(/app\.post\(/g) ?? [];
+  assert.equal(posts.length, 1, "supportConsole.ts must have exactly one POST (the SMS reply)");
   assert.ok(!code.includes("applyConfirmedAction"), "supportConsole.ts must not grow its own apply path");
+  assert.ok(code.includes("deps.sendSms("), "the reply must delegate to the injected sendConnectChatSmsMessage");
+  for (const forbidden of ["smsQueue.add", "sendSMS(", "voipMs", "connectChatMessage.create"]) {
+    assert.ok(!code.includes(forbidden), `supportConsole.ts must never send or write messages itself (found ${forbidden})`);
+  }
+});
+
+test("server.ts injects the real sendConnectChatSmsMessage (source guard on the caller)", () => {
+  const src = readSource("server.ts");
+  const reg = src.slice(src.indexOf("registerSupportConsoleRoutes({"));
+  const block = reg.slice(0, reg.indexOf("});") + 3);
+  assert.ok(block.includes("sendConnectChatSmsMessage"), "the desk reply is not wired to the one real chat sender");
+  assert.ok(block.includes("smsQueue"), "the sender's queue dependency is not passed");
 });
