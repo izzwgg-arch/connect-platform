@@ -337,3 +337,78 @@ inbound text to a mailbox — and the mailbox here is Izzy's personal Gmail, set
 long before Connect had an inbox. It is untouched. **Read `sms_email` on every
 future activation**: a customer's texts arriving in a personal mailbox is a
 privacy question to raise, not a config detail to skim past.
+
+---
+
+## 8. Worked example — B Visible, 2026-08-20: the first SHARED-INBOX activation through this runbook
+
+Requested by Izzy as *"activate SMS for visibility and make it a shared inbox
+for everybody."* Third customer through the runbook, and the first one on the
+**neither-assigned** shape — no `assignedExtensionId`, no `assignedUserId`, so
+every user on the tenant sees the texts (the Gesheft/Fixup/Loopcom Demo shape
+from §1's table).
+
+| | |
+|---|---|
+| Tenant | `cmnlgryp8001lp9pajhatv3t9` ("B Visible", PBX tenant **T9** `b_visible`) |
+| Number | **+1 845-238-0478** — their MAIN number (`invoiceSupportPhone` on the billing row; MONROE, NY) |
+| SMS number row | `cmogdrtg2007lpk5eeo1cunpw` (unclaimed until now) |
+| Pointed at | **nobody — shared company inbox on purpose** (5 active users: lt@, sales@, printing@, artwork@bvisible.us + nechamyaweiss@gmail.com) |
+| Tenant default | **yes** — first and only claimed SMS number |
+| Billing | ⏳ **NOT enabled — needs Izzy** (see §8.3) |
+| VoIP.ms | `sms_enabled: "1"` **already**, routing `account:344022_bvb2` |
+
+### 8.1 What was actually done — one write, same as Create A Box
+
+```
+PATCH /admin/apps/voip-ms/numbers/cmogdrtg2007lpk5eeo1cunpw
+{ "tenantId": "cmnlgryp8001lp9pajhatv3t9",
+  "assignedExtensionId": null, "assignedUserId": null,
+  "isTenantDefault": true, "active": true }
+→ 200 {"ok":true}
+```
+
+Driven through the real admin route from inside `app-api-1` on
+`127.0.0.1:3001` with a 60-second self-signed SUPER_ADMIN token (the §7.1
+recipe verbatim). No deploy, no PBX write, no carrier write, no code change.
+Step 4 was a no-op again — `getDIDsInfo` already read `sms_enabled: "1"` /
+`sms_available: 1` / `mms_available: 1`. **Read the live state before
+writing** holds for the third customer in a row.
+
+### 8.2 Proof — real traffic on the very next poll cycle
+
+```
+[voipms-inbound] +18452380478: fetched=5
+```
+
+Five inbound messages became five `ConnectChatThread` rows, **every one with
+`smsInboxOwnerUserId` empty — the shared-inbox scope working exactly as §1's
+table promises** (vendor shipping notices, a Home Depot text from shortcode
+`53747` — the 2026-08-16 shortcode fix earning its keep, a Toolstoday promo).
+⏳ **NOT proven: nothing has been sent OUT from this number and no human has
+opened the inbox.** Per §5 the complete proof is a text out with
+`carrier_status: "Message delivered to handset."` plus a reply.
+
+### 8.3 ⛔ Left alone deliberately — both need Izzy
+
+**⛔ Billing is OFF pending Izzy's word.** B Visible is on a negotiated
+**flat rate** (`billingFlatRate: {enabled:true, appliesTo:"extensions",
+amountCents:10500}`) — and per [[flat-rate-inverts-the-extension-billing-rule]]
+the flat rate covers extensions ONLY, so flipping `smsBillingEnabled` would ADD
+a $10 `SMS_PACKAGE` line on top. Create A Box asked this exact question on
+2026-08-18 and the answer was "free"; the same question is now open for
+B Visible. ⛔ The switch gates nothing — the five inbound texts above landed
+with it false. ⛔ The `portLanding.ts:336` latent consequence applies here too:
+if 845-238-0478 is ever ported with billing off and no claimed temp row, the
+texting move is skipped silently.
+
+**⛔ `sms_email` is LIVE on this number and forwards every inbound text to
+`sales@bvisible.us`** (`sms_email_enabled: "1"`). Unlike Create A Box (where it
+was Izzy's personal Gmail), this is the customer's own mailbox — less of a
+privacy question, but every text now lands in BOTH the Connect shared inbox and
+that mailbox. Left untouched; switching it off is Izzy's call.
+
+**Also untouched:** their other two numbers — **866-579-7575** (toll-free;
+texting on a toll-free needs its own carrier-side verification story) and
+**845-776-1311** — both still `tenantId: null` in `TenantSmsNumber`. Only the
+main number was activated, per the request.

@@ -7278,6 +7278,23 @@ Changes.
   correlates with nothing, this one demonstrably delivers. **Read `sms_email` on
   every activation** — a customer's texts landing in someone's personal mailbox is
   a privacy question, not a config detail, and switching it off is Izzy's call.
+- ✅ **DONE for B Visible 2026-08-20 — SHARED company inbox on (845) 238-0478,
+  inbound PROVEN with real texts** (runbook §8). One write again:
+  `TenantSmsNumber cmogdrtg2007lpk5eeo1cunpw` → tenant
+  `cmnlgryp8001lp9pajhatv3t9`, **assignedExtensionId AND assignedUserId both
+  null = shared inbox** (all 5 users see it), tenant default, through the real
+  PATCH route. Carrier already read `sms_enabled: "1"` (routing
+  `account:344022_bvb2`) — no carrier write, third customer in a row where
+  step 4 was a no-op. Next poll cycle: `[voipms-inbound] +18452380478:
+  fetched=5` → five threads, **every one `smsInboxOwnerUserId` empty** (the
+  shared shape), incl. a Home Depot text from shortcode `53747`. ⛔ **Billing
+  NOT enabled — needs Izzy**: B Visible is on the flat $105 (extensions only,
+  [[flat-rate-inverts-the-extension-billing-rule]]), so `smsBillingEnabled`
+  would ADD a $10 `SMS_PACKAGE` line — the same question Create A Box got;
+  left false pending his word. ⛔ `sms_email` forwards every inbound text to
+  **sales@bvisible.us** (their OWN mailbox this time) — left alone, so texts
+  land in BOTH places. Their other two numbers (866-579-7575 toll-free,
+  845-776-1311) stay unclaimed on purpose. ⏳ Not proven: no outbound text yet.
 - ⛔⛔ **CREATE A BOX TEXTS FOR FREE, BY IZZY'S DECISION (2026-08-18) —
   `smsBillingEnabled` is `false` ON PURPOSE and must not be "fixed".** Asked
   whether to bill the $10, his answer was *"turn it on without charging"*: they
