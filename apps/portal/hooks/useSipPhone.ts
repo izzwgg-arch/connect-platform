@@ -1487,10 +1487,30 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     // built. Capped at 60 s: one request a minute is far under the nginx auto-ban
     // threshold and self-heals the moment the cause clears.
     let initRetryDelayMs = 5_000;
-    const scheduleInitRetry = (why: string) => {
+    // Setup-class failures (PBX_NOT_LINKED, EXTENSION_NOT_ASSIGNED/NOT_PROVISIONED,
+    // FORBIDDEN, WebRTC disabled, missing wsUrl/domain/username) are things only an
+    // administrator can fix — nothing this client does will change the answer. They
+    // get their own MUCH slower recheck ladder. This is load-bearing, measured live
+    // 2026-08-20: the old fixed 60s loop, times one loop per open window (the desktop
+    // app runs more than one), consumed the ENTIRE per-user /voice/me/extension budget
+    // (60/hour) — so the one window that COULD register drew 429 on its first load and
+    // the customer had to "reload a few times for it to register". A slow recheck still
+    // brings the phone to life on its own once an admin fixes the setting.
+    let setupRetryDelayMs = 60_000;
+    const SETUP_RETRY_MAX_MS = 15 * 60_000;
+    const scheduleInitRetry = (why: string, opts?: { setupClass?: boolean }) => {
       if (cancelled) return;
-      const delay = initRetryDelayMs;
-      initRetryDelayMs = Math.min(60_000, Math.round(initRetryDelayMs * 1.8));
+      let delay: number;
+      if (opts?.setupClass) {
+        delay = setupRetryDelayMs;
+        setupRetryDelayMs = Math.min(SETUP_RETRY_MAX_MS, setupRetryDelayMs * 2);
+      } else {
+        delay = initRetryDelayMs;
+        initRetryDelayMs = Math.min(60_000, Math.round(initRetryDelayMs * 1.8));
+      }
+      // ±15% jitter: several windows of the same login share one server-side budget,
+      // and without jitter their retry ladders march in lockstep against it.
+      delay = Math.round(delay * (0.85 + Math.random() * 0.3));
       logConn("init-failed", undefined, `${why} — retrying in ${Math.round(delay / 1000)}s`);
       if (initRetryTimerRef.current) clearTimeout(initRetryTimerRef.current);
       initRetryTimerRef.current = setTimeout(() => {
@@ -1499,6 +1519,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         try { init(); } catch { /* ignore — the next failure reschedules */ }
       }, delay);
     };
+    // 400/403/404 from the credential endpoints = the account is not set up for a
+    // softphone; 401 (token race) and 429 (budget) are transient and stay on the
+    // fast ladder. Anything non-HTTP (network) is transient too.
+    const isSetupClassError = (e: unknown): boolean =>
+      e instanceof ApiError && (e.status === 400 || e.status === 403 || e.status === 404);
 
     async function init() {
       // Signed out (public wizard, pay page, login screen): the phone engine
@@ -1573,7 +1598,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         // A 429 here is self-inflicted (we asked too often) — wait out the window
         // rather than adding to it.
         if (e instanceof ApiError && e.status === 429) initRetryDelayMs = 60_000;
-        scheduleInitRetry("extension-fetch");
+        scheduleInitRetry("extension-fetch", { setupClass: isSetupClassError(e) });
         return;
       }
       if (cancelled) return;
@@ -1612,8 +1637,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setRegState("failed");
         setError(configProblem);
         patchDiag({ lastRegError: configProblem });
-        initRetryDelayMs = 60_000; // nothing this client does will fix it — check gently
-        scheduleInitRetry("config");
+        scheduleInitRetry("config", { setupClass: true }); // only an admin fixes it — check gently
         return;
       }
 
@@ -1656,7 +1680,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           if ((e instanceof ApiError && e.status === 429) || raw.includes("RATE_LIMITED")) {
             initRetryDelayMs = 60_000;
           }
-          scheduleInitRetry("credential-fetch");
+          scheduleInitRetry("credential-fetch", { setupClass: isSetupClassError(e) });
           return;
         }
       }
@@ -1668,12 +1692,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setError(msg);
         patchDiag({ lastRegError: msg });
         sipCredsRef.current = null;
-        initRetryDelayMs = 60_000;
-        scheduleInitRetry("empty-credential");
+        scheduleInitRetry("empty-credential", { setupClass: true }); // admin must set the password
         return;
       }
       sipCredsRef.current = { ext, sipPassword, at: Date.now() };
-      initRetryDelayMs = 5_000; // setup got this far — reset the backoff ladder
+      initRetryDelayMs = 5_000; // setup got this far — reset both backoff ladders
+      setupRetryDelayMs = 60_000;
 
       try {
         const JsSIP = await loadJsSIP();
