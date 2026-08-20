@@ -54,7 +54,11 @@ const appVersion = '1.0.0';
 const runtimeVersion = process.env.SHIP_BUILD_ID ? `${appVersion}+${process.env.SHIP_BUILD_ID}` : appVersion;
 
 const config: ExpoConfig = {
-  name: 'Connect',
+  // Owner decision 2026-08-20 (matching the iOS rename of 2026-07-30): the app
+  // is named "Loopcom" everywhere — Play Store listing and Android launcher
+  // label included. The slug/package id stay unchanged (the package id is
+  // permanent once uploaded to Play).
+  name: 'Loopcom',
   slug: 'connect-mobile',
   owner: 'izz8457s-organization',
   version: appVersion,

@@ -159,10 +159,34 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Ship script sets SHIP_VERSION_CODE / SHIP_BUILD_ID so adb install -r always picks up new APKs.
+        // Play builds (scripts/android-play-bundle.ps1) set PLAY_VERSION_CODE / PLAY_VERSION_NAME instead:
+        // small monotonic codes (100, 101, ...) so the Play track never inherits the timestamp scheme,
+        // which would exhaust the 2.1e9 versionCode ceiling around 2036.
+        def playVc = System.getenv("PLAY_VERSION_CODE")
+        def playVn = System.getenv("PLAY_VERSION_NAME")
         def shipVc = System.getenv("SHIP_VERSION_CODE")
         def shipId = System.getenv("SHIP_BUILD_ID")
-        versionCode ((shipVc != null && !shipVc.isEmpty()) ? shipVc.toInteger() : 1)
-        versionName ((shipId != null && !shipId.isEmpty()) ? ("1.0.0+" + shipId) : "1.0.0")
+        if (playVc != null && !playVc.isEmpty()) {
+            versionCode playVc.toInteger()
+            versionName ((playVn != null && !playVn.isEmpty()) ? playVn : "1.0.0")
+        } else {
+            versionCode ((shipVc != null && !shipVc.isEmpty()) ? shipVc.toInteger() : 1)
+            versionName ((shipId != null && !shipId.isEmpty()) ? ("1.0.0+" + shipId) : "1.0.0")
+        }
+    }
+    // Play Store signing: scripts/android-play-bundle.ps1 sets CONNECT_PLAY_SIGNING=1 and the
+    // credentials live in the gitignored android/keystore.properties. Sideload builds (the
+    // download-page APKs) DELIBERATELY keep the historical debug signing — every installed
+    // customer APK carries that signature, and switching it would break `adb install -r` /
+    // in-place updates for the whole fleet. Only the Play AAB uses the upload key.
+    def playSigningRequested = System.getenv("CONNECT_PLAY_SIGNING") == "1"
+    def keystorePropsFile = rootProject.file("keystore.properties")
+    def keystoreProps = new Properties()
+    if (playSigningRequested) {
+        if (!keystorePropsFile.exists()) {
+            throw new GradleException("CONNECT_PLAY_SIGNING=1 but android/keystore.properties is missing — refusing to fall back to debug signing for a Play build.")
+        }
+        keystorePropsFile.withInputStream { keystoreProps.load(it) }
     }
     signingConfigs {
         debug {
@@ -171,15 +195,23 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (playSigningRequested) {
+            playUpload {
+                storeFile file(keystoreProps.getProperty('storeFile'))
+                storePassword keystoreProps.getProperty('storePassword')
+                keyAlias keystoreProps.getProperty('keyAlias')
+                keyPassword keystoreProps.getProperty('keyPassword')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Debug-signed on purpose for sideload builds (see the note above);
+            // Play builds must go through scripts/android-play-bundle.ps1.
+            signingConfig (playSigningRequested ? signingConfigs.playUpload : signingConfigs.debug)
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
