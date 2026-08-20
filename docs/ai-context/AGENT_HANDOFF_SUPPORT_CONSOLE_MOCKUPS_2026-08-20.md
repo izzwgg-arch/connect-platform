@@ -151,7 +151,14 @@ This is the load-bearing research — verified with file:line refs, do not re-de
    edit + command = the movie feed; its permission callbacks map 1:1 onto the three rule
    buckets; reads CLAUDE.md-style rule files natively). ⛔ There is NO drop-in Anthropic
    IDE widget/iframe — the screens are still ours to build; the agent is not. Billed as
-   API usage. Recommended as the foundation; ⏳ awaiting Izzy's explicit "use it".
+   API usage. ✅ **DECIDED later the same day** — Izzy: *"the SDK is already inside
+   Loopcom, so just wire that into our IDE UI and keep it like cursor style."*
+   ⛔ **Premise verified and corrected in-chat before accepting:** `apps/agent` carries
+   only **`@anthropic-ai/sdk` ^0.60.0** — the plain API client (so the key + billing ARE
+   already wired) — and `claude-agent-sdk` appears **nowhere** in the repo. Wiring it =
+   one NEW dependency in a new small service beside the existing agent, same key, no new
+   account. **UI style: Cursor-like** — editor center, agent chat docked right, changes
+   as inline diffs (the C+ mockup already matches).
 
 ⏳ **NOT STARTED: everything.** No phase has been approved; nothing may be built until Izzy picks
 a direction and answers §3. Per his explicit instruction, mockups first.

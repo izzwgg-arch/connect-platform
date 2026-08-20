@@ -171,7 +171,12 @@ escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbenc
   files before every job, watches server health + the PBX read-only, stops and reports
   on anything off). **Engine recommendation given: the Claude Agent SDK** — the Claude
   Code engine embedded in Connect, streaming edits/commands into our screens; ⛔ no
-  drop-in Anthropic IDE widget exists, the screens are ours; ⏳ awaiting Izzy's "use it".
+  drop-in Anthropic IDE widget exists, the screens are ours. ✅ **ENGINE DECIDED same
+  day** — Izzy: *"the SDK is already inside Loopcom, so just wire that into our IDE UI
+  and keep it like cursor style."* ⛔ Premise verified + corrected: `apps/agent` carries
+  only `@anthropic-ai/sdk` ^0.60.0 (plain API client — key + billing already wired);
+  `claude-agent-sdk` appears NOWHERE — a NEW dependency in a new small service, same
+  key. UI style: Cursor-like (editor center, agent chat docked right, inline diffs).
 - ✅ **The inventory is done — don't re-derive it.** Escalation reports are FULLY STORED
   (`AgentEscalation.report`, already ISSUE/FINDINGS/PROPOSED FIX/APPROVAL) with **zero
   read routes and zero screens** — the biggest quick win. Fix machinery, task runners
