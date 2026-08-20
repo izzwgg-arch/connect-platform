@@ -71,6 +71,44 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — GOOGLE PLAY STORE: the app is BUILD-READY (signed AAB `loopcom-play-vc100.aab`), the developer account is NOT created yet (2026-08-20) — READ FIRST before any Play Console work, before touching Android signing/versioning, or before publishing the next sideload APK
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
+(`b338064d`, pushed as merge `c0e0fa55`. No deploy, no migration, no PBX
+touch; one live edit to the static `/opt/connectcomms/legal/privacy.html`
+on loopcom, backed up.)
+
+- ✅ **The app side is DONE**: Play upload keystore (gitignored,
+  `apps/mobile/android/keystore.properties` + `app/play-upload.keystore` —
+  ⛔ workstation-only, back them up); `scripts/android-play-bundle.ps1` is the
+  ONE Play build (AAB, armeabi-v7a+arm64, `CONNECT_PLAY_SIGNING=1`, small
+  monotonic `PLAY_VERSION_CODE` starting at 100); first artifact
+  `apps/mobile/dist/loopcom-play-vc100.aab` built + signature-verified.
+- ⛔⛔ **Sideload builds KEEP the debug signature ON PURPOSE** — the installed
+  fleet carries it; changing it breaks every customer's in-place update. Only
+  the Play AAB uses the upload key. Never "fix" `signingConfigs.debug` on the
+  release buildType without reading the handoff.
+- ✅ **Android is renamed Loopcom** (launcher label + full icon set at all
+  densities + `assets/icon.png`), matching iOS. ⛔ The fleet sees the new
+  name/icon at its next sideload update — tell Izzy before shipping it.
+- ✅ **The privacy policy was NEVER missing** — `https://app.loopcom.net/privacy`
+  is a STATIC nginx file (`/opt/connectcomms/legal/privacy.html`, both
+  vhosts), updated 2026-08-20 for Play (Google FCM + mic/camera wording).
+  ⛔ Curl the live URL before declaring a page missing off the portal tree.
+- ✅ Store assets + paste-ready listing copy + every permission-declaration
+  answer: `docs/brand/loopcom/play/` (`PLAY_LISTING.md` is the cheat sheet).
+- ⛔ **BLOCKED at handoff**: Izzy chose an ORGANIZATION account owned by
+  **sms@loopcom.net**, but Google refuses that login for Play Console
+  ("contact your domain admin") — the Workspace **additional service must be
+  enabled at admin.google.com** first; then 2-step verification ON, the $25
+  fee, and a **D-U-N-S number** for Connect Communications LLC. All Izzy-side.
+- ⏳ **TODO after the account exists**: create the app, upload the AAB to
+  Internal testing, screenshots (⛔ from the Loopcom Demo tenant ONLY — a real
+  customer's data in a store screenshot is a leak), reviewer demo login (no
+  self-signup in the app), Data safety + content rating + foreground-service
+  declarations. ⛔ A sideloaded phone can never in-place-update to the Play
+  version (different signature) — migrating the fleet is Izzy's call.
+
 ## ⛔ AGENT HANDOFF — "Loopcom Direct": cross-company chat by number + app-to-app video calls — PLAN AND MOCKUPS ONLY, awaiting Izzy's picks (2026-08-20) — READ FIRST before building any cross-tenant chat, phone-number user directory, or mobile video calling
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_DIRECT_MOCKUPS_2026-08-20.md`**
