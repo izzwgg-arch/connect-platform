@@ -1334,3 +1334,47 @@ on REST alone. 19/19 tests incl. the exact failure shape; guards fail vs HEAD.
   `done 36043a3b … success`.
 - Artefacts: loopcom `/root/stress20.log` (run 1), `/root/stress20b.log`
   (resume), `/root/stress20-manifest.json`; PBX `/root/stress-teardown-summary.json`.
+
+## 21. LOOPCOM DEMO 2 (2026-08-20): a REAL mirror tenant with a REAL number — and an external call reached it
+
+Izzy: "Create me a new tenant outside the license called Loopcom Demo 2 with
+five extensions. Attach a real in-stack phone number. I want to test it."
+Built by `scripts/pbx/mirror/real-tenant-build.ts` (a keeper, unlike stress20).
+
+- **PBX tenant 140 `loopcom_demo_2` (path `4fd8cb634e95f795`), created VIA THE
+  MIRROR**, 5 extensions 101–105 ("Demo 101"…"Demo 105", desk + WebRTC each),
+  trunk 165 on real subaccount **`344022_lcdemo2`** (Registered at
+  newyork1.voip.ms), outbound route 161 (CID 8453050012), ARS 286, inbound
+  route. **Number: (845) 305-0012** — a spare from the master pool, re-routed
+  at the carrier to the subaccount and verified by re-read.
+- ✅ **PROVEN WITH AN EXTERNAL CALL**: T102 → SignalWire trunk 132 → PSTN →
+  VoIP.ms → subaccount → `trk-165-in` → `default-trunk` → `T140_cos-all`
+  "Dialing 101 from 2053513327". The number is live end to end; no device is
+  registered yet, so callers ride to ring-timeout — Izzy's own test is next.
+- ⛔ **THREE TRAPS THIS BUILD FOUND, all now guarded in the script:**
+  1. **"Spare at the carrier" is NOT "safe to hand out."** The pool's first
+     845 spare was inii mini's retired temp 8452605692, which still has an
+     inbound route on T105 (sharing a destinations row with their LIVE
+     number). The script now refuses any spare with a PBX reference
+     (`ombu_inbound_routes` + `ombu_tenant_dids`), which also catches
+     Matamim's 7244198226.
+  2. ⛔⛔ **A DID's POP must match the trunk's server.** 8453050012 sat on
+     POP 82 (newyork2) while every subaccount trunk registers/identifies
+     against newyork1 (POP 35 — Matamim's working DID confirms). Inbound
+     INVITEs then arrive from a server nothing matches and die in auth
+     challenges — the call "never arrives" with nothing in the verbose log.
+     Fix: `setDIDPOP {did, pop:"35"}`. Onboarding never hits this because
+     `orderDID` pins purchases to the NY pop; SPARES ordered by hand predate
+     that. **Check `pop` on any spare before wiring it.**
+  3. VoIP.ms answers a subaccount's call to its OWN DID with BUSY (loop
+     prevention) — a same-trunk loopback probe proves nothing; probe from a
+     different carrier (T102 via SignalWire is the bench for that). Also:
+     subaccount passwords REQUIRE a digit (`invalid_password_missing_number`),
+     and a killed run may have LANDED its createSubAccount — check
+     `getSubAccounts` before rerunning (a lost password means delSubAccount +
+     recreate; setSubAccount is a full update).
+- ⏳ **Open on this tenant:** no E911 on (845) 305-0012 (no service address —
+  register one before any real use); no Connect users yet (the PBX→Connect
+  sync creates the tenant row when VoIP.ms's stale REST list catches up; add
+  users/logins from Admin as needed); subaccount password is in the trunk
+  config and `/root/lcdemo2-build.log` (600, root-only) on loopcom.
