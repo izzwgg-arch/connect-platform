@@ -329,3 +329,66 @@ re-checking that HEAD has not moved. Verified afterwards: the commit's
 - The mockups also offered Options **B** (capability tiles) and **C** (quiet
   composer); A is what shipped and the other two are still drawn if he wants to
   compare against the real thing.
+
+---
+
+## 10. "Suggest a feature" beside "Report a problem" (2026-08-20)
+
+Izzy, 2026-08-20: *"Right when you open it up, right next to where it says
+'Report a problem', there should be 'Suggest a feature'. When they suggest a
+feature, it goes to … actually, it should go to info@loopcom.net."*
+
+**What shipped.** The single dashed help bar became a `fa-help-row` with two
+side-by-side dashed buttons — **Report a problem** (the existing escalation
+flow, wording shortened from "Something not working?" to match its own dialog
+title and fit half-width) and **Suggest a feature** (new). Both stay rendered on
+every screen of the panel, outside the `messages.length === 0` branch, exactly
+like the report button always was. The suggestion opens its own full-panel form
+(one textarea + send) and a thank-you screen, mirroring the report views.
+
+**⛔ The two doors deliberately have different destinations.** A problem pages
+the owner's phone through the `AgentEscalation` dispatcher; a suggestion is an
+**EMAIL to info@loopcom.net and nothing else** — nobody's phone rings at 2am
+for an idea.
+
+**The route: `POST /support/feature-suggestion`** in its own module
+`apps/api/src/featureSuggestion.ts` — ⛔ NOT in `supportReport.ts`, because
+`supportReport.test.ts` pins that the report module never grows an
+`emailJob.create`; merging them would break that contract. Authenticated (not
+in the JWT bypass, test-pinned), identity from the token never the body,
+`safeParse` with plain-English refusals.
+
+- **Email type `FEATURE_SUGGESTION`** — a new string on the plain-string
+  `EmailJob.type` column, so **no migration**. ⛔ Never `ADMIN_ALERT` (muted at
+  the send door); same rule as `PORT_COMPLETE`, and a comment-stripped source
+  guard asserts the muted type appears nowhere in executable code.
+- **Recipient: `FEATURE_SUGGESTION_EMAIL` env, default `info@loopcom.net`** —
+  a literal on purpose: it is a mail RECIPIENT, not a platform link, so it must
+  not follow `PLATFORM_MAIL_DOMAIN` (which still defaults to the old domain).
+  ⚠️ **Whether the `info@loopcom.net` MAILBOX exists in Google Workspace is
+  unverified** — the domain being verified proves nothing (the billing@ lesson);
+  a send to a non-existent user bounces. Check before trusting delivery.
+- **The email job and its audit row (`FEATURE_SUGGESTION_SENT`) are created in
+  ONE transaction** — the audit row is what the per-user rate limit counts
+  (`EmailJob` has no user column), so it must never over- or under-count.
+  Limits: 5/user/day + 15/tenant/day (env-overridable), protecting the shared
+  mailbox's 500/day allowance; the 429 is friendly, never bare.
+- **The builder is pure and shared** (`packages/shared/src/featureSuggestion.ts`):
+  subject carries the first 60 chars of the idea, the body carries the company,
+  the person (with reply-to line when we have their email), the page they were
+  on, and the suggestion **verbatim, HTML-escaped, never model-summarised**.
+
+**Tests:** 12 api (`src/featureSuggestion.test.ts`, picked up by the existing
+glob — registration guard, ADMIN_ALERT guard with comments stripped, recipient
+default, bypass-list absence, token-not-body, transaction, limits, builder
+units incl. escaping) + 2 portal added to the already-registered
+`floatingAssistantOpening.test.ts` (both doors in the row outside the opening
+branch; the send posts to the API and reads errors from `.body`). All existing
+guards in both files still pass; api typecheck 75 = the exact baseline, portal
+and shared 0.
+
+**⏳ NOT PROVEN:** no suggestion has been sent by a human, and no email has
+arrived at info@loopcom.net — including whether that mailbox exists at all.
+Acceptance: open the panel, tap Suggest a feature, send one, then check
+`select * from "EmailJob" where type = 'FEATURE_SUGGESTION'` reads SENT and the
+mail is in the info@ inbox.

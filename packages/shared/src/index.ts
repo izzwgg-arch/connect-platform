@@ -79,4 +79,5 @@ export type SmsCampaign = z.infer<typeof SmsCampaignSchema>;
 export type PhoneNumber = z.infer<typeof PhoneNumberSchema>;
 export * from "./personDisplayName";
 export * from "./supportReport";
+export * from "./featureSuggestion";
 export * from "./assistantGreeting";

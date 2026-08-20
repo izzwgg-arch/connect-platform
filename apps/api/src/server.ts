@@ -238,6 +238,7 @@ import {
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerSupportReportRoutes } from "./supportReport";
+import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerDeliveryRoutes } from "./delivery/routes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
@@ -41578,6 +41579,7 @@ const port = Number(process.env.PORT || 3001);
   // "Something not working?" in the assistant panel. Registered after the chat
   // routes because it files its customer-confirmation text through them.
   registerSupportReportRoutes(app, { smsQueue });
+  registerFeatureSuggestionRoutes(app);
   await registerCrmRoutes(app, { smsQueue });
   await registerDeliveryRoutes(app);
   await app.listen({ host: "0.0.0.0", port });
