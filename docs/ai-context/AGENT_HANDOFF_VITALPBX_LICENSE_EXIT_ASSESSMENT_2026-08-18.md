@@ -1378,3 +1378,51 @@ Built by `scripts/pbx/mirror/real-tenant-build.ts` (a keeper, unlike stress20).
   sync creates the tenant row when VoIP.ms's stale REST list catches up; add
   users/logins from Admin as needed); subaccount password is in the trunk
   config and `/root/lcdemo2-build.log` (600, root-only) on loopcom.
+
+## 22. TRUNKS & ROUTING IN THE CONSOLE + THE BATCH APPLY (2026-08-20, Izzy: "bring over controlling the outbound routes and trunks from inside Connect's UI… keep the robot, it's just taking a little long")
+
+**Commit `004c3e6c`.** Two halves: the console grows a **Trunks & Routing**
+module, and onboarding's per-extension Apply Changes collapses to ONE.
+
+- **The module:** `GET /admin/pbx-console/routing` (trunks with carrier
+  account + used-by routes; outbound routes with member trunks in DIAL ORDER,
+  CID, used-by selections; route selections with per-member enabled state +
+  which tenants' outbound_profiles point at them). Writes: trunk create/delete,
+  route create/edit/delete, selection create/member-toggle/delete — all
+  SUPER_ADMIN `requireOwner`, all through `withPanel` (robot) + `applyAndRebake`.
+- ⛔ **ONE implementation per write, enforced by guards:** creates import
+  onboarding's own `createTrunk` / `createOutboundRoute` /
+  `createRouteSelection` (now exported from `pbxTenantBuild.ts`); ARS member
+  toggles call the cutoff's **`setMembersEnabled`** (the `members[N][enabled]`
+  checkbox rule + full-replace guards live THERE); deletes ride `panelDelete`.
+  The one new panel write is **`editOutboundRoute`** — full-form re-post with
+  `trklist[]` replaced in order (the exact shape proven live 2026-08-19 on
+  route 123), refusing an unloaded form and an empty trunk list.
+- ⛔ **Every delete is REFUSED while referenced** (trunk ← route members,
+  route ← ARS members, selection ← tenant outbound_profiles), each with the
+  list of places using it in plain English. The UI disables the buttons too.
+- ⛔⛔ **There is deliberately NO trunk edit.** The trunk edit form's JS-ticked
+  `outgoing[type]/[trunk]/[qualify]` checkboxes parse as ABSENT, so a full
+  re-post silently unticks them and breaks registration (measured in the
+  SignalWire session; trunk 132 was never edited for this reason). A guard
+  test pins the absence. Credentials change by replacing the trunk.
+- ⛔ **Route trunk order is the dial order and the UI teaches the platform
+  rule:** shared primary trunk ("0001") first, the customer's own VoIP.ms
+  trunk as backup (carriers filter VoIP.ms-originated calls — the 2026-08-20
+  rule recorded in `pbxTenantBuild.ts`).
+- **The batch apply:** `addExtensionToTenant` gained `{ skipApply }`;
+  `buildPbxTenant`'s loop passes it and runs ONE `applyChanges("extensions-
+  batch")` after the loop, BEFORE the inbound route (so a build that dies later
+  still leaves every extension rendered). A 10-extension build drops from 13
+  whole-PBX applies to 4 — each removed apply was ~15-20 s and one more chance
+  to flush another tenant's pending changes. The standalone "a new person
+  joined" path still applies per call (no caller change).
+- Tests: console 19/19 (6 new guards, all replayed failing vs HEAD);
+  pbxTenantBuild 40/40 with the apply contract re-pinned (no apply between
+  imports; batch apply before inbound; total 6); onboarding 287/263/24 — the
+  24 are the documented pre-existing setupOrchestrator set. api typecheck 75 =
+  baseline; portal 0.
+- ⏳ Acceptance after deploy: GET routing on prod; a throwaway
+  create→toggle→delete cycle on a "CONSOLE TEST delete me" selection against
+  Loopcom Demo 2's route; doorways 1/1/2 after. And the next real onboarding
+  is the batch-apply timing proof.
