@@ -1909,17 +1909,28 @@ export class CallStateStore extends EventEmitter {
    * Returns the call's channel strings so the caller can issue AMI Hangup for each.
    * Safe to call even if the call is already gone.
    */
+  /**
+   * The uniqueids currently indexed to this call — read-only, no side effects.
+   *
+   * These are what ARI's raw `/channels` snapshot reports as channel `id`, so
+   * they are the authoritative way to ask Asterisk "does this call still
+   * exist?" (`reconcileLiveChannels` compares the same values). Exposed so a
+   * caller can verify liveness BEFORE deciding to touch a call.
+   */
+  uniqueIdsForCall(callId: string): string[] {
+    const uniqueIds: string[] = [];
+    for (const [uid, lid] of this.channelIndex) {
+      if (lid === callId) uniqueIds.push(uid);
+    }
+    return uniqueIds;
+  }
+
   forceEvictZombie(callId: string, reason: string): { channels: string[]; uniqueIds: string[] } {
     const call = this.calls.get(callId);
     if (!call) return { channels: [], uniqueIds: [] };
 
     const channels = [...call.channels];
-
-    // Collect uniqueIds that map to this call (for AMI Hangup by uniqueid)
-    const uniqueIds: string[] = [];
-    for (const [uid, lid] of this.channelIndex) {
-      if (lid === callId) uniqueIds.push(uid);
-    }
+    const uniqueIds = this.uniqueIdsForCall(callId);
 
     call.state = "hungup";
     call.endedAt = new Date().toISOString();

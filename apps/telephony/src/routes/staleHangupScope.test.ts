@@ -17,10 +17,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   decideStaleHangupTargets,
+  isCallLiveInAsterisk,
   isChannelForEndpoint,
   STALE_HANGUP_MIN_AGE_MS,
+  type AsteriskLiveSnapshot,
   type StaleHangupCandidate,
 } from "./staleHangupScope.js";
+
+const snapshot = (ids: string[], names: string[]): AsteriskLiveSnapshot => ({
+  ids: new Set(ids),
+  names: new Set(names),
+});
 
 const T0 = Date.parse("2026-08-20T17:34:03.000Z");
 const iso = (offsetMs: number) => new Date(T0 + offsetMs).toISOString();
@@ -174,6 +181,54 @@ test("another tenant's call is never touched", () => {
   if (d.evict) assert.deepEqual(d.targets, []);
 });
 
+// ── Layer 2: Asterisk liveness ──────────────────────────────────────────────
+
+test("a call Asterisk still has is LIVE — by uniqueid", () => {
+  const call = { channels: ["PJSIP/T18_106_1-00000939"] };
+  assert.equal(
+    isCallLiveInAsterisk(call, ["1787247042.4593"], snapshot(["1787247042.4593"], [])),
+    true,
+  );
+});
+
+test("a call Asterisk still has is LIVE — by channel name, even with no uniqueids", () => {
+  // The store's channelIndex can be empty for a call it still tracks; the name
+  // must independently save it. Failing to match here ends a real call.
+  const call = { channels: ["PJSIP/T18_106-0000093b"] };
+  assert.equal(
+    isCallLiveInAsterisk(call, [], snapshot([], ["PJSIP/T18_106-0000093b"])),
+    true,
+  );
+});
+
+test("a Local channel's ;1/;2 halves still count as live", () => {
+  const call = { channels: ["Local/106@T18_ivr-only-extensions-000003ef"] };
+  assert.equal(
+    isCallLiveInAsterisk(call, [], snapshot([], ["Local/106@T18_ivr-only-extensions-000003ef;2"])),
+    true,
+  );
+});
+
+test("only a call Asterisk has NO trace of is considered gone", () => {
+  const call = { channels: ["PJSIP/T18_106_1-00000939"] };
+  assert.equal(
+    isCallLiveInAsterisk(call, ["1787247042.4593"], snapshot(["9999.1"], ["PJSIP/T18_101-0000aaaa"])),
+    false,
+  );
+});
+
+test("REGRESSION: the 13 severed calls are all protected by the liveness check", () => {
+  // Every one of them was up and bridged in Asterisk at the moment of the sweep.
+  for (const c of trustBookkeepingsLiveCalls()) {
+    const live = snapshot([], c.channels); // Asterisk still had them
+    assert.equal(
+      isCallLiveInAsterisk(c, [], live),
+      true,
+      `${c.channels[0]} must be recognised as a real call`,
+    );
+  }
+});
+
 // ── Source guards ───────────────────────────────────────────────────────────
 // The defect was in the CALLER: the route selected by extension number. A unit
 // test of the decision function passes straight through that, so assert on the
@@ -218,6 +273,31 @@ test("GUARD: the route never re-adds an extension-number match", () => {
   assert.ok(
     !/endsWith\(`\/\$\{extension\}`\)/.test(handler),
     "matching a call by extension suffix is the desk-phone-killing bug",
+  );
+});
+
+test("GUARD: the route CANNOT hang up a call — no AMI hangup on this path", () => {
+  // This is the structural guarantee. 13 live conversations were ended by the
+  // hangupChannel call that used to live here; the route is store cleanup only.
+  const handler = staleHangupHandlerSource();
+  assert.ok(
+    !/hangupChannel/.test(handler),
+    "the stale-hangup path must never call hangupChannel — a call Asterisk no " +
+      "longer has cannot be hung up, so the only thing a Hangup can reach is a REAL call",
+  );
+});
+
+test("GUARD: the route verifies liveness against ARI before evicting", () => {
+  const handler = staleHangupHandlerSource();
+  assert.ok(/getChannels\(\)/.test(handler), "must fetch ARI's live channel snapshot");
+  assert.ok(/isCallLiveInAsterisk/.test(handler), "must consult the liveness check");
+});
+
+test("GUARD: an unreachable ARI refuses instead of guessing", () => {
+  const handler = staleHangupHandlerSource();
+  assert.ok(
+    /ari_unavailable/.test(handler),
+    "if liveness cannot be verified the route must refuse, never fall through to evicting",
   );
 });
 

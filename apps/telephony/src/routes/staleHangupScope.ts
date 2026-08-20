@@ -111,3 +111,54 @@ export function decideStaleHangupTargets(
 
   return { evict: true, targets };
 }
+
+// ── Layer 2: Asterisk is the only authority on whether a call is real ───────
+//
+// ⛔⛔ THE LESSON THIS ENCODES, measured over 14 days of nginx logs:
+// the client-triggered sweep ran 303 times and "cleared" something 9 times —
+// and ALL NINE ended a real, answered, talking call (103 s, 551 s, 180 s, …;
+// 13 conversations across Fixup Group, Gesheft and Trust Bookkeepings). It
+// never once cleaned up a genuine ghost, because 242 of the other sweeps
+// answered "already gone" — the normal AMI Hangup path and the ARI reconciler
+// had beaten it to every real ghost.
+//
+// The reason it could do that is that NOTHING in the path ever checked whether
+// the call was stale. It ran on `callStore.getActive()`, which by definition
+// returns calls that are UP and properly bridged with live participants, and
+// hung them up on the client's word alone.
+//
+// `CallStateStore.reconcileLiveChannels` already had the right answer and the
+// scar tissue to prove it ("265 evictions on Aug 3; a Gesheft call was killed
+// 40 s into a talk"): a call is dead ONLY when none of its channels exist in
+// ARI's raw /channels snapshot. This applies the same rule here.
+
+/** ARI's raw `/channels` snapshot, reduced to what the liveness check needs. */
+export type AsteriskLiveSnapshot = {
+  /** Channel `id` values — i.e. Asterisk uniqueids. */
+  ids: Set<string>;
+  /** Channel `name` values, e.g. "PJSIP/T18_106-0000093b". */
+  names: Set<string>;
+};
+
+/**
+ * Does Asterisk still have this call?
+ *
+ * ⛔ Fails toward "YES, it is live" — an unknown answer must never license a
+ * teardown. A call is only considered gone when NOT ONE of its uniqueids and
+ * NOT ONE of its channel names appears in the snapshot.
+ */
+export function isCallLiveInAsterisk(
+  call: { channels: string[] },
+  uniqueIds: string[],
+  live: AsteriskLiveSnapshot,
+): boolean {
+  if (uniqueIds.some((uid) => live.ids.has(uid))) return true;
+  for (const name of call.channels) {
+    if (live.names.has(name)) return true;
+    // Local channels appear as "…;1"/"…;2" halves of the recorded name.
+    for (const liveName of live.names) {
+      if (liveName.startsWith(`${name};`)) return true;
+    }
+  }
+  return false;
+}

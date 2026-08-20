@@ -16,7 +16,11 @@ import {
   decideFollowMeRingTime,
   DIAL_DISCOVERY_CLI,
 } from "./wakeDialPublish";
-import { decideStaleHangupTargets } from "./staleHangupScope";
+import {
+  decideStaleHangupTargets,
+  isCallLiveInAsterisk,
+  type AsteriskLiveSnapshot,
+} from "./staleHangupScope";
 import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
 
 export function registerTelephonyRoutes(
@@ -534,9 +538,26 @@ export function registerTelephonyRoutes(
    * and a call is only ever a candidate if that endpoint is still one of its LIVE channels
    * (`call.channels` is pruned on Hangup, so a losing ring leg does not count).
    *
-   * ⛔ Fails CLOSED, deliberately: a request without `sipUsername` is refused and evicts
-   * nothing. The worst case of not running is a stale row in the live-calls list, which is
-   * cosmetic; the worst case of running too broadly is cutting off a customer mid-call.
+   * ⛔⛔ AND THIS ROUTE NO LONGER HANGS ANYTHING UP AT ALL. It is store cleanup only.
+   *
+   * Measured over 14 days: it ran 303 times, "cleared" something 9 times, and ALL NINE
+   * ended a real answered conversation (551 s, 180 s, 147 s, …) across three customers.
+   * Zero genuine ghosts — 242 of the other sweeps answered "already gone", because the
+   * normal AMI Hangup path and `reconcileLiveChannels` had already cleaned up every real
+   * one. The client's belief that a call is stale is an INFERENCE ("I hung up, so anything
+   * still live must be mine"), never evidence, and nothing here ever checked it.
+   *
+   * So: ARI is asked whether Asterisk still has the call.
+   *   • Asterisk HAS it  → it is real. Leave it completely alone.
+   *   • Asterisk does NOT → the row is a ghost. Evict the row; there is nothing to hang up.
+   * Either way no Hangup is ever sent, which makes it structurally impossible for this
+   * route to end a call. If a genuinely stuck leg ever needs killing, that is a
+   * staff-only action via DELETE /telephony/calls/:channelId/hangup.
+   *
+   * ⛔ Fails CLOSED at every gate: no `sipUsername` → refuse; ARI unreachable → refuse.
+   * The worst case of not running is a stale row in the live-calls list, which is cosmetic
+   * and which the ARI reconciler clears within ~2 polls anyway; the worst case of running
+   * wrongly is cutting a customer off mid-sentence, which is not recoverable.
    */
   router.post(
     "/telephony/calls/stale-hangup-for-extension",
@@ -576,30 +597,59 @@ export function registerTelephonyRoutes(
         return;
       }
 
-      const results: Array<{ callId: string; channels: string[]; hangupSent: boolean }> = [];
-
-      for (const call of activeCalls) {
-        const evicted = telephony.callStore.forceEvictZombie(
-          call.id,
-          `stale-report from portal extension=${extension}`,
+      // ── Layer 2: ask ASTERISK whether these calls are real ────────────────
+      // ⛔⛔ Fails CLOSED. If ARI cannot be reached we do not know whether the
+      // call is live, and an unknown answer must never license a teardown.
+      let live: AsteriskLiveSnapshot;
+      try {
+        const channels = await telephony.ariActions.getChannels();
+        live = {
+          ids: new Set(channels.map((c) => String(c.id ?? "")).filter(Boolean)),
+          names: new Set(channels.map((c) => String(c.name ?? "")).filter(Boolean)),
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.locals["log"]?.warn?.(
+          { extension, err: msg },
+          "stale-hangup: refused — ARI unreachable, so call liveness cannot be verified",
         );
-
-        let hangupSent = false;
-        const targets = evicted.uniqueIds.length > 0 ? evicted.uniqueIds : evicted.channels;
-        for (const target of targets) {
-          try {
-            await telephony.telephonyService.hangupChannel(target);
-            hangupSent = true;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            res.locals["log"]?.warn?.({ callId: call.id, target, err: msg }, "stale-hangup: AMI error");
-          }
-        }
-
-        results.push({ callId: call.id, channels: evicted.channels, hangupSent });
+        res.status(503).json({ cleared: 0, refused: "ari_unavailable" });
+        return;
       }
 
-      res.json({ cleared: results.length, calls: results });
+      const evictedCalls: Array<{ callId: string; channels: string[] }> = [];
+      const stillLive: Array<{ callId: string; channels: string[] }> = [];
+
+      for (const call of activeCalls) {
+        const uniqueIds = telephony.callStore.uniqueIdsForCall(call.id);
+        if (isCallLiveInAsterisk(call, uniqueIds, live)) {
+          // ⛔ THE WHOLE POINT. Asterisk still has this call, so it is REAL —
+          // whatever the client believes. Leave it completely alone.
+          stillLive.push({ callId: call.id, channels: [...call.channels] });
+          res.locals["log"]?.warn?.(
+            { callId: call.id, channels: call.channels, extension },
+            "stale-hangup: NOT stale — Asterisk still has this call, leaving it alone",
+          );
+          continue;
+        }
+
+        // Asterisk has no channel for this call: the store row is a genuine
+        // ghost. ⛔ Evict the row ONLY. There is deliberately NO AMI Hangup on
+        // this path — a call Asterisk no longer has cannot be hung up, so the
+        // only thing a Hangup here could ever reach is a call that is still
+        // real. That is exactly how 13 live conversations were cut off.
+        const evicted = telephony.callStore.forceEvictZombie(
+          call.id,
+          `stale-report from portal extension=${extension} (ari_confirmed_gone)`,
+        );
+        evictedCalls.push({ callId: call.id, channels: evicted.channels });
+      }
+
+      res.json({
+        cleared: evictedCalls.length,
+        calls: evictedCalls,
+        ...(stillLive.length > 0 ? { skippedStillLive: stillLive } : {}),
+      });
     },
   );
 
