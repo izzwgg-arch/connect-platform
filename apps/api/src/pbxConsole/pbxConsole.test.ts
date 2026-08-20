@@ -285,3 +285,71 @@ test("routing: editOutboundRoute refuses an unloaded form and an empty trunk lis
   assert.ok(fn.includes("at least one trunk"), "an empty trunk list must be refused, not saved");
   assert.ok(fn.indexOf("outbound_route_id") < fn.indexOf("applyOverrides"), "the row check must run before the post is built");
 });
+
+
+/* -- ring groups & queues (2026-08-20) -------------------------------------
+   "Every option, everything that's in the PBX" — pinned by four rules: reuse
+   teamBuilder (the browser-captured replay), full-form edits that verify they
+   loaded THEIR row, reference-guarded deletes with post-delete verification,
+   and the queue checkbox rule staying inside applyOverrides. */
+
+test("teams: every team route exists and opens with requireOwner", () => {
+  const src = norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8"));
+  for (const route of [
+    'app.get("/admin/pbx-console/teams"',
+    'app.post("/admin/pbx-console/ring-groups"',
+    'app.patch("/admin/pbx-console/ring-groups/:id"',
+    'app.delete("/admin/pbx-console/ring-groups/:id"',
+    'app.post("/admin/pbx-console/queues"',
+    'app.patch("/admin/pbx-console/queues/:id"',
+    'app.delete("/admin/pbx-console/queues/:id"',
+  ]) {
+    const at = src.indexOf(route);
+    assert.ok(at !== -1, route + " must be registered");
+    assert.ok(src.slice(at, at + 300).includes("requireOwner(req, reply)"), route + " must open with requireOwner");
+  }
+});
+
+test("teams: creates reuse teamBuilder's captured replay — never a console re-post", () => {
+  const src = norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8"));
+  assert.match(src, /import \{ createQueue, createRingGroup, deleteTeam[^}]*\} from "\.\.\/pbx\/teamBuilder"/);
+  const writes = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleWrites.ts"), "utf8")));
+  assert.ok(!writes.includes('"mode", "add"], ["csfr_token"'), "console writes must not grow their own team-create form post");
+});
+
+test("teams: a queue create with no last destination is refused up front", () => {
+  // the panel refuses it at the very end of the form (proven on a real create,
+  // 2c7657f3) — the console refuses BEFORE any panel work starts
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  const create = src.slice(src.indexOf('app.post("/admin/pbx-console/queues"'), src.indexOf('app.patch("/admin/pbx-console/queues/:id"'));
+  assert.ok(create.includes("lastDestination?.categoryId"), "the last-destination check must exist");
+  assert.ok(create.indexOf("lastDestination?.categoryId") < create.indexOf("withPanel"), "and it must run before the panel is touched");
+});
+
+test("teams: deletes are reference-guarded AND verified gone afterwards", () => {
+  const src = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleRoutes.ts"), "utf8")));
+  for (const [route, err] of [
+    ['app.delete("/admin/pbx-console/ring-groups/:id"', "ring_group_in_use"],
+    ['app.delete("/admin/pbx-console/queues/:id"', "queue_in_use"],
+  ] as Array<[string, string]>) {
+    const at = src.indexOf(route);
+    const body = src.slice(at, at + 2600);
+    assert.ok(body.includes(err), route + " must refuse while referenced (destination rows cascade away with the team)");
+    assert.ok(body.indexOf(err) < body.indexOf("deleteTeam"), "the reference check must run BEFORE the delete");
+    assert.ok(body.includes("delete_not_confirmed"), "a success notification alone is not proof — the delete must re-list");
+  }
+});
+
+test("teams: the edits verify they loaded THEIR row and refuse an empty member list", () => {
+  const writes = stripComments(norm(readFileSync(join(__dirname, "pbxConsoleWrites.ts"), "utf8")));
+  const rg = writes.slice(writes.indexOf("export async function editRingGroup"), writes.indexOf("export async function editQueue"));
+  const qu = writes.slice(writes.indexOf("export async function editQueue"));
+  assert.ok(rg.includes('form.values["ring_group_id"]'), "ring group edit must verify the form loaded its row");
+  assert.ok(qu.includes('form.values["queue_id"]'), "queue edit must verify the form loaded its row");
+  assert.ok(rg.includes("at least one member"), "an empty ring group member list must be refused");
+  assert.ok(qu.includes("at least one agent"), "an empty queue member list must be refused");
+  // the queue member rows keep their member_id when the same extension stays,
+  // and the underscore/bracket key asymmetry is reproduced exactly
+  assert.ok(qu.includes("queue_members_${i}_extension_id") || qu.includes("queue_members_" ), "the underscore extension_id key must be reproduced");
+  assert.ok(qu.includes("existing.get(String(m.extensionId))"), "existing member_ids must be preserved for unchanged agents");
+});

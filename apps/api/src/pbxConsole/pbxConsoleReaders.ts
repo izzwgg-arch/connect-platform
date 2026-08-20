@@ -465,3 +465,100 @@ export async function listConsoleRouting(conn: Conn): Promise<ConsoleRouting> {
     ars,
   };
 }
+
+/* ── ring groups & queues (2026-08-20) ─────────────────────────────────────
+   Izzy: "just a copy of how we set it up in the PBX: every option, everything
+   that's in the PBX… on ring groups and queues, completely wired." Every
+   option column both tables carry is read out verbatim, so the console's
+   editor can show the panel's whole form, not a curated subset. The
+   `referencedBy` list is the delete guard's evidence: an IVR key or inbound
+   route pointing at a team lives in ombu_destinations (category → target
+   module 20/21, `index` = the team's own id), and deleting the team cascades
+   that row — the shared-destinations-row trap that nearly killed a live
+   number once. */
+
+export type ConsoleTeamMember = { extensionId: number; extension: string; name: string; penalty?: number | null; type?: string };
+export type ConsoleRingGroupRow = {
+  id: number; tenantId: number; tenantDescription: string; tenantPath: string;
+  extension: string; description: string;
+  options: Record<string, string | null>;
+  members: ConsoleTeamMember[];
+  referencedBy: string[];
+};
+export type ConsoleQueueRow = ConsoleRingGroupRow;
+export type ConsoleTeams = {
+  ringGroups: ConsoleRingGroupRow[];
+  queues: ConsoleQueueRow[];
+  /** Per tenant: pickers + free-number allocation. */
+  tenants: Array<{ tenantId: number; description: string; path: string; extensions: Array<{ id: number; number: string; name: string }>; usedNumbers: { extensions: string[]; ringGroups: string[]; queues: string[] } }>;
+};
+
+const RG_OPTION_COLS = ["strategy", "ringtime", "music_group_id", "prefix", "class_of_service_id", "external_numbers", "answered_elsewhere", "allow_diversions", "answerchannel", "skip_busy", "no_release", "destination_id", "announ_id"] as const;
+const QUEUE_OPTION_COLS = ["strategy", "prefix", "direction", "dial_mode", "destination_id", "hangup_destination_id", "music_group_id", "weight", "autofill", "maxlen", "announcement_id", "periodic_announcement_id", "join_announcement_id", "record", "servicelevel", "wrapuptime", "announce_frequency", "min_announce_frequency", "periodic_announce_frequency", "announce_round_seconds", "announce_to_first_user", "announce_position", "announce_position_limit", "relative_periodic_announce", "announce_holdtime", "penaltymemberslimit", "autopause", "alertinfo", "ringinuse", "ring_unavailable", "memberdelay", "timeoutrestart", "joinempty", "timeout", "queue_timeout", "leavewhenempty", "retry", "answerchannel", "force_moh", "queue_vip_list_id", "ivr_id", "queue_callback_id", "cron_profile_id"] as const;
+
+export async function listConsoleTeams(conn: Conn): Promise<ConsoleTeams> {
+  const [tenants, exts, rgs, rgMembers, queues, qMembers, refs] = await Promise.all([
+    q(conn, `SELECT tenant_id, description, path FROM ombutel.ombu_tenants ORDER BY tenant_id`),
+    q(conn, `SELECT extension_id, extension, name, tenant_id FROM ombutel.ombu_extensions ORDER BY tenant_id, extension`),
+    q(conn, `SELECT * FROM ombutel.ombu_ring_groups ORDER BY tenant_id, extension`),
+    q(conn, `SELECT ring_group_id, extension_id FROM ombutel.ombu_ring_group_members`),
+    q(conn, `SELECT * FROM ombutel.ombu_queues ORDER BY tenant_id, extension`),
+    q(conn, `SELECT queue_member_id, queue_id, extension_id, penalty, type FROM ombutel.ombu_queue_members ORDER BY queue_member_id`),
+    q(conn, `SELECT d.id, d.index AS target, c.module_id AS target_module, m.name AS owner
+             FROM ombutel.ombu_destinations d
+             JOIN ombutel.ombu_destinations_category c ON c.id = d.category_id
+             JOIN ombutel.ombu_modules m ON m.module_id = d.module_id
+             WHERE c.module_id IN (20, 21)`).catch(() => [] as any[]),
+  ]);
+  const extById = new Map<number, { extension: string; name: string }>(exts.map((e) => [Number(e.extension_id), { extension: String(e.extension), name: String(e.name ?? "") }]));
+  const tenantById = new Map<number, { description: string; path: string }>(tenants.map((t) => [Number(t.tenant_id), { description: String(t.description ?? ""), path: String(t.path ?? "") }]));
+  const refsBy = (module: number, id: number) => refs.filter((r: any) => Number(r.target_module) === module && Number(r.target) === id).map((r: any) => `used as a destination by ${String(r.owner).replace(/_/g, " ")}`);
+  const rgMembersBy = new Map<number, ConsoleTeamMember[]>();
+  for (const m of rgMembers) {
+    const id = Number(m.ring_group_id);
+    const e = extById.get(Number(m.extension_id));
+    if (!rgMembersBy.has(id)) rgMembersBy.set(id, []);
+    rgMembersBy.get(id)!.push({ extensionId: Number(m.extension_id), extension: e?.extension || "?", name: e?.name || "" });
+  }
+  const qMembersBy = new Map<number, ConsoleTeamMember[]>();
+  for (const m of qMembers) {
+    const id = Number(m.queue_id);
+    const e = extById.get(Number(m.extension_id));
+    if (!qMembersBy.has(id)) qMembersBy.set(id, []);
+    qMembersBy.get(id)!.push({ extensionId: Number(m.extension_id), extension: e?.extension || "?", name: e?.name || "", penalty: m.penalty == null || m.penalty === "" ? null : Number(m.penalty), type: String(m.type ?? "static") });
+  }
+  const pick = (row: Row, cols: readonly string[]) => {
+    const o: Record<string, string | null> = {};
+    for (const c of cols) o[c] = row[c] == null ? null : String(row[c]);
+    return o;
+  };
+  const ringGroups: ConsoleRingGroupRow[] = rgs.map((r) => ({
+    id: Number(r.ring_group_id), tenantId: Number(r.tenant_id),
+    tenantDescription: tenantById.get(Number(r.tenant_id))?.description || "", tenantPath: tenantById.get(Number(r.tenant_id))?.path || "",
+    extension: String(r.extension), description: String(r.description ?? ""),
+    options: pick(r, RG_OPTION_COLS), members: rgMembersBy.get(Number(r.ring_group_id)) || [],
+    referencedBy: refsBy(20, Number(r.ring_group_id)),
+  }));
+  const queueRows: ConsoleQueueRow[] = queues.map((r) => ({
+    id: Number(r.queue_id), tenantId: Number(r.tenant_id),
+    tenantDescription: tenantById.get(Number(r.tenant_id))?.description || "", tenantPath: tenantById.get(Number(r.tenant_id))?.path || "",
+    extension: String(r.extension), description: String(r.description ?? ""),
+    options: pick(r, QUEUE_OPTION_COLS), members: qMembersBy.get(Number(r.queue_id)) || [],
+    referencedBy: refsBy(21, Number(r.queue_id)),
+  }));
+  return {
+    ringGroups, queues: queueRows,
+    tenants: tenants.map((t) => {
+      const tid = Number(t.tenant_id);
+      return {
+        tenantId: tid, description: String(t.description ?? ""), path: String(t.path ?? ""),
+        extensions: exts.filter((e) => Number(e.tenant_id) === tid).map((e) => ({ id: Number(e.extension_id), number: String(e.extension), name: String(e.name ?? "") })),
+        usedNumbers: {
+          extensions: exts.filter((e) => Number(e.tenant_id) === tid).map((e) => String(e.extension)),
+          ringGroups: ringGroups.filter((r) => r.tenantId === tid).map((r) => r.extension),
+          queues: queueRows.filter((r) => r.tenantId === tid).map((r) => r.extension),
+        },
+      };
+    }),
+  };
+}

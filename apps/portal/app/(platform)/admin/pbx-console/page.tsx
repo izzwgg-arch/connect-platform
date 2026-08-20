@@ -18,7 +18,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, ApiError } from "../../../../serv
 import { PermissionGate } from "../../../../components/PermissionGate";
 import "./pbxConsole.css";
 
-type Module = "tenants" | "extensions" | "phones" | "routing" | "geo";
+type Module = "tenants" | "extensions" | "phones" | "routing" | "teams" | "geo";
 function errText(e: any, fallback: string): string {
   if (e instanceof ApiError) return (e.body as any)?.detail || (e.body as any)?.message || (e.body as any)?.error || e.message || fallback;
   return e?.message || fallback;
@@ -33,6 +33,9 @@ type RTrunk = { id: number; description: string; technology: string; username: s
 type RRoute = { id: number; description: string; cidName: string; cidNumber: string; trunks: { id: number; description: string; index: number }[]; patterns: number; usedByArs: { id: number; description: string }[] };
 type RArs = { id: number; description: string; members: { outboundRouteId: number; routeDescription: string; enabled: boolean; sort: number }[]; usedByTenants: string[] };
 type Routing = { trunks: RTrunk[]; routes: RRoute[]; ars: RArs[] };
+type TeamMemberRow = { extensionId: number; extension: string; name: string; penalty?: number | null; type?: string };
+type TeamRow = { id: number; tenantId: number; tenantDescription: string; tenantPath: string; extension: string; description: string; options: Record<string, string | null>; members: TeamMemberRow[]; referencedBy: string[] };
+type TeamsData = { ringGroups: TeamRow[]; queues: TeamRow[]; tenants: Array<{ tenantId: number; description: string; path: string; extensions: Array<{ id: number; number: string; name: string }> }> };
 
 type DeviceKind = "pjsip" | "webrtc" | "virtual" | "iax";
 type DeviceDraft = { deviceId: number | null; kind: DeviceKind; user: string; secret: string; description: string; number: string; ringDevice: boolean; dtmf: string; maxContacts: string };
@@ -64,6 +67,7 @@ function PbxConsole() {
   const [catalog, setCatalog] = useState<{ brands: any[]; models: any[]; templates: any[] } | null>(null);
   const [geo, setGeo] = useState<Geo | null>(null);
   const [routing, setRouting] = useState<Routing | null>(null);
+  const [teams, setTeams] = useState<TeamsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scope, setScope] = useState<string>(""); // tenant slug filter, "" = all
@@ -89,6 +93,7 @@ function PbxConsole() {
       else if (m === "phones") { const r = await apiGet<{ phones: Phone[]; catalog: any }>("/admin/pbx-console/phones"); setPhones(r.phones || []); setCatalog(r.catalog || null); }
       else if (m === "geo") { const r = await apiGet<Geo & { available: boolean }>("/admin/pbx-console/geo"); setGeo(r); }
       else if (m === "routing") { const r = await apiGet<Routing & { available: boolean }>("/admin/pbx-console/routing"); setRouting(r); }
+      else if (m === "teams") { const r = await apiGet<TeamsData & { available: boolean }>("/admin/pbx-console/teams"); setTeams(r); }
     } catch (e) { push(errText(e, "Could not load " + m + "."), "bad"); }
   }, [push]);
   useEffect(() => { if (mod !== "tenants") void loadModule(mod); }, [mod, loadModule]);
@@ -121,10 +126,10 @@ function PbxConsole() {
       </div>
 
       <div className="pc-modnav" role="tablist">
-        {(["tenants", "extensions", "phones", "routing", "geo"] as Module[]).map((m) => (
+        {(["tenants", "extensions", "phones", "routing", "teams", "geo"] as Module[]).map((m) => (
           <button key={m} role="tab" aria-selected={mod === m} onClick={() => changeMod(m)}>
-            {m === "tenants" ? "Tenants" : m === "extensions" ? "Extensions" : m === "phones" ? "Phone Provisioning" : m === "routing" ? "Trunks & Routing" : "Geo Firewall"}
-            <span className="pc-cnt">{m === "tenants" ? tenants.filter((t) => inScope(t.name)).length : m === "extensions" ? extensions.filter((e) => inScope(tenantByName.get("")?.name || "") || inScope(tenantSlugOf(e, tenantByName))).length : m === "phones" ? phones.length : m === "routing" ? (routing ? routing.trunks.length : "—") : geo ? geo.countries.filter((c) => c.blocked).length : "—"}</span>
+            {m === "tenants" ? "Tenants" : m === "extensions" ? "Extensions" : m === "phones" ? "Phone Provisioning" : m === "routing" ? "Trunks & Routing" : m === "teams" ? "Ring Groups & Queues" : "Geo Firewall"}
+            <span className="pc-cnt">{m === "tenants" ? tenants.filter((t) => inScope(t.name)).length : m === "extensions" ? extensions.filter((e) => inScope(tenantByName.get("")?.name || "") || inScope(tenantSlugOf(e, tenantByName))).length : m === "phones" ? phones.length : m === "routing" ? (routing ? routing.trunks.length : "—") : m === "teams" ? (teams ? teams.ringGroups.length + teams.queues.length : "—") : geo ? geo.countries.filter((c) => c.blocked).length : "—"}</span>
           </button>
         ))}
       </div>
@@ -139,6 +144,7 @@ function PbxConsole() {
             create={() => setEditor({ kind: "extensions", id: null, draft: extDraft(null, scope ? tenantByName.get(scope) : tenants.find((t) => !t.isMain)), base: null })} />
         : mod === "phones" ? <PhoneList rows={phones.filter((p) => inScope(slugForTenantId(p.tenantId, tenants)) && matches(p.mac + " " + p.description + " " + (p.model || "") + " " + p.tenantDescription))} push={push} reload={() => loadModule("phones")} />
         : mod === "routing" ? <RoutingView routing={routing} push={push} reload={() => loadModule("routing")} />
+        : mod === "teams" ? <TeamsView teams={teams} scope={scope} push={push} reload={() => loadModule("teams")} />
         : <GeoView geo={geo} push={push} reload={() => loadModule("geo")} />}
 
       {newTenant ? (
@@ -630,6 +636,247 @@ function NewArsDialog({ push, onClose, onDone, routes }: { push: any; onClose: a
         <div className="pc-mfoot">
           <button className="pc-btn pc-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
           <button className="pc-btn" disabled={!ready} onClick={submit}>{busy ? "Creating…" : "Create selection"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * Ring Groups & Queues (2026-08-20, Izzy: "a copy of how we set it up in the
+ * PBX: every option, everything that's in the PBX... completely wired").
+ * Creates drive teamBuilder's browser-captured replay; edits re-post the
+ * panel's OWN form with overrides, so any option this UI doesn't surface is
+ * preserved untouched, never dropped. Deletes are refused by the server while
+ * an IVR key or inbound route still points at the team.
+ */
+type TeamField = { k: string; label: string; type: "text" | "num" | "sel"; opts?: Array<[string, string]>; help?: string };
+const YESNO: Array<[string, string]> = [["yes", "Yes"], ["no", "No"]];
+const RG_FIELDS: TeamField[] = [
+  { k: "description", label: "Name", type: "text" },
+  { k: "strategy", label: "Ring strategy", type: "sel", opts: [["ringall", "Ring everyone at once"], ["one_by_one", "One by one, in order"]] },
+  { k: "ringtime", label: "Ring time (seconds, 0 = default)", type: "num" },
+  { k: "prefix", label: "Caller ID prefix", type: "text", help: "Prepended to caller ID so staff see which line rang." },
+  { k: "external_numbers", label: "Also ring these outside numbers", type: "text", help: "Comma-separated phone numbers rung alongside the members." },
+];
+const RG_CHECKS: Array<{ k: string; label: string }> = [
+  { k: "answerchannel", label: "Answer the channel before ringing" },
+  { k: "no_release", label: "Keep ringing when a member declines" },
+  { k: "skip_busy", label: "Skip members already on a call" },
+  { k: "allow_diversions", label: "Follow members' forwarding rules" },
+];
+const QUEUE_FIELDS: TeamField[] = [
+  { k: "description", label: "Name", type: "text" },
+  { k: "strategy", label: "Strategy", type: "sel", opts: [["ringall", "Ring everyone"], ["linear", "In order"], ["leastrecent", "Least recently called"], ["fewestcalls", "Fewest calls"], ["random", "Random"], ["rrmemory", "Round robin (remembers)"], ["rrordered", "Round robin (in order)"], ["wrandom", "Weighted random"]] },
+  { k: "timeout", label: "Ring each agent for (seconds)", type: "num" },
+  { k: "retry", label: "Wait between rounds (seconds)", type: "num" },
+  { k: "queue_timeout", label: "Longest total wait (seconds, 0 = unlimited)", type: "num" },
+  { k: "maxlen", label: "Most callers allowed to wait (0 = unlimited)", type: "num" },
+  { k: "prefix", label: "Caller ID prefix", type: "text" },
+  { k: "servicelevel", label: "Service level target (seconds)", type: "num", help: "The answered-within-N-seconds target reports judge this queue against." },
+  { k: "wrapuptime", label: "Wrap-up time (seconds)", type: "num", help: "How long an agent is left alone after a call." },
+  { k: "joinempty", label: "Let callers in when no agent is on", type: "sel", opts: YESNO },
+  { k: "leavewhenempty", label: "Throw callers out if all agents leave", type: "sel", opts: YESNO },
+  { k: "memberdelay", label: "Member delay (seconds)", type: "num" },
+  { k: "weight", label: "Queue weight", type: "num" },
+  { k: "penaltymemberslimit", label: "Penalty members limit", type: "num" },
+  { k: "announce_position", label: "Announce position", type: "sel", opts: YESNO },
+  { k: "announce_frequency", label: "Announce every (seconds)", type: "num" },
+  { k: "min_announce_frequency", label: "Never announce more often than (seconds)", type: "num" },
+  { k: "announce_position_limit", label: "Stop announcing past position", type: "num" },
+  { k: "announce_round_seconds", label: "Round hold time to (seconds)", type: "num" },
+  { k: "periodic_announce_frequency", label: "Periodic announcement every (seconds)", type: "num" },
+  { k: "relative_periodic_announce", label: "Restart timer after message finishes", type: "sel", opts: YESNO },
+  { k: "announce_holdtime", label: "Announce hold time", type: "sel", opts: YESNO },
+  { k: "ringinuse", label: "Ring agents already on a call", type: "sel", opts: YESNO },
+  { k: "timeoutrestart", label: "Restart timer on decline", type: "sel", opts: YESNO },
+  { k: "record", label: "Record calls", type: "sel", opts: YESNO },
+  { k: "alertinfo", label: "SIP Alert-Info", type: "text", help: "Lets handsets ring differently for this queue." },
+];
+const QUEUE_CHECKS: Array<{ k: string; label: string }> = [
+  { k: "autofill", label: "Feed callers to agents as they free up" },
+  { k: "autopause", label: "Auto-pause an agent who doesn't answer" },
+  { k: "answerchannel", label: "Answer the channel before queueing" },
+];
+
+function TeamsView({ teams, scope, push, reload }: { teams: TeamsData | null; scope: string; push: any; reload: any }) {
+  const [busy, setBusy] = useState(false);
+  const [dialog, setDialog] = useState<null | { kind: "rg" | "queue"; edit?: TeamRow }>(null);
+  if (!teams) return <div className="pc-state"><span className="pc-spin" /></div>;
+  const del = async (what: "ring-groups" | "queues", row: TeamRow) => {
+    if (!window.confirm(`Delete ${row.description || row.extension} (${row.extension})? This can't be undone.`)) return;
+    setBusy(true);
+    try { await apiDelete(`/admin/pbx-console/${what}/${row.id}`); push(`Deleted ${row.description || row.extension}.`); await reload(); }
+    catch (e) { push(errText(e, "Nothing was deleted."), "bad"); }
+    setBusy(false);
+  };
+  const table = (kind: "rg" | "queue", rows: TeamRow[]) => (
+    <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
+      <thead><tr><th>{kind === "rg" ? "Ring group" : "Queue"}</th><th>Customer</th><th>Members</th><th>Strategy</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind })}>{kind === "rg" ? "New ring group" : "New queue"}</button></th></tr></thead>
+      <tbody>{rows.length ? rows.map((r) => (
+        <tr key={r.id}>
+          <td><div className="pc-rowmain">{r.description || `#${r.id}`}</div><div className="pc-rowsub pc-mono">{r.extension}</div></td>
+          <td className="pc-rowsub">{r.tenantDescription}</td>
+          <td className="pc-rowsub">{r.members.length ? r.members.map((m) => m.extension + (m.penalty != null && kind === "queue" ? ` (p${m.penalty})` : "")).join(", ") : "—"}</td>
+          <td className="pc-rowsub pc-mono">{r.options.strategy || "—"}</td>
+          <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+            <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => setDialog({ kind, edit: r })}>Edit</button>{" "}
+            <button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || r.referencedBy.length > 0} title={r.referencedBy.join("; ")} onClick={() => del(kind === "rg" ? "ring-groups" : "queues", r)}>Delete</button>
+          </td>
+        </tr>
+      )) : <tr><td colSpan={5} className="pc-empty">{kind === "rg" ? "No ring groups." : "No queues."}</td></tr>}</tbody>
+    </table></div></div>
+  );
+  return (
+    <>
+      <div className="pc-note"><span className="pc-ico">✓</span><div><b>The panel&apos;s ring group and queue screens, from Connect.</b> Every option is here or preserved: what this screen doesn&apos;t show is carried through a save untouched, never dropped. Deleting a team an IVR key or inbound route still points at is refused with the reason.</div></div>
+      {table("rg", teams.ringGroups)}
+      <div style={{ height: 18 }} />
+      {table("queue", teams.queues)}
+      {dialog ? <TeamDialog kind={dialog.kind} edit={dialog.edit} tenants={teams.tenants} push={push} onClose={() => setDialog(null)} onDone={reload} /> : null}
+    </>
+  );
+}
+
+function TeamDialog({ kind, edit, tenants, push, onClose, onDone }: { kind: "rg" | "queue"; edit?: TeamRow; tenants: TeamsData["tenants"]; push: any; onClose: any; onDone: any }) {
+  const FIELDS = kind === "rg" ? RG_FIELDS : QUEUE_FIELDS;
+  const CHECKS = kind === "rg" ? RG_CHECKS : QUEUE_CHECKS;
+  const [tenantId, setTenantId] = useState<string>(edit ? String(edit.tenantId) : "");
+  const tenant = tenants.find((t) => String(t.tenantId) === tenantId);
+  const initialVals: Record<string, string> = {};
+  const initialChecks: Record<string, boolean> = {};
+  if (edit) {
+    initialVals["description"] = edit.description;
+    for (const f of FIELDS) if (f.k !== "description") initialVals[f.k] = edit.options[f.k] ?? "";
+    for (const c of CHECKS) initialChecks[c.k] = String(edit.options[c.k] ?? "") === "yes";
+  } else {
+    initialVals["description"] = "";
+    for (const f of FIELDS) if (f.k !== "description") initialVals[f.k] = "";
+    // the create defaults teamBuilder ships: everyone-at-once, sane checkboxes
+    initialVals["strategy"] = "ringall";
+    initialChecks["answerchannel"] = true;
+    if (kind === "rg") initialChecks["no_release"] = true;
+    if (kind === "queue") { initialChecks["autofill"] = true; initialVals["joinempty"] = "yes"; initialVals["leavewhenempty"] = "no"; initialVals["timeout"] = "15"; initialVals["retry"] = "5"; }
+  }
+  const [vals, setVals] = useState<Record<string, string>>(initialVals);
+  const [checks, setChecks] = useState<Record<string, boolean>>(initialChecks);
+  const [members, setMembers] = useState<Array<{ extensionId: string; penalty: string }>>(
+    edit ? edit.members.map((m) => ({ extensionId: String(m.extensionId), penalty: m.penalty == null ? "" : String(m.penalty) })) : [{ extensionId: "", penalty: "" }],
+  );
+  const [destExt, setDestExt] = useState("");
+  const [destKind, setDestKind] = useState<"extension" | "voicemail">("extension");
+  const [busy, setBusy] = useState(false);
+  const memberOpts = (edit ? tenants.find((t) => t.tenantId === edit.tenantId) : tenant)?.extensions || [];
+  const chosen = members.filter((m) => m.extensionId);
+  const ready = !busy && vals["description"].trim() && chosen.length > 0 && (edit || tenantId) && (edit || kind === "rg" || destExt);
+  const submit = async () => {
+    if (!ready) return;
+    setBusy(true);
+    try {
+      if (edit) {
+        const setBody: Record<string, string> = {};
+        for (const f of FIELDS) setBody[f.k] = vals[f.k] ?? "";
+        const checksBody: Record<string, boolean> = {};
+        for (const c of CHECKS) checksBody[c.k] = !!checks[c.k];
+        const bodyOut: any = { set: setBody, checks: checksBody };
+        if (kind === "rg") bodyOut.rgMembers = chosen.map((m) => m.extensionId);
+        else bodyOut.queueMembers = chosen.map((m) => ({ extensionId: m.extensionId, penalty: m.penalty === "" ? null : Number(m.penalty) }));
+        await apiPatch(`/admin/pbx-console/${kind === "rg" ? "ring-groups" : "queues"}/${edit.id}`, bodyOut);
+        push(`${vals["description"].trim()} saved.`);
+      } else {
+        const spec: any = { name: vals["description"].trim(), strategy: vals["strategy"] || "ringall", members: chosen.map((m) => ({ extensionId: m.extensionId, penalty: m.penalty === "" ? undefined : Number(m.penalty) })) };
+        if (kind === "rg") {
+          if (vals["ringtime"]) spec.ringTime = Number(vals["ringtime"]);
+          if (vals["prefix"]) spec.prefix = vals["prefix"];
+          if (destExt) spec.lastDestination = { categoryId: destKind === "voicemail" ? "25" : "1", targetId: destExt };
+          await apiPost("/admin/pbx-console/ring-groups", { pbxTenantId: Number(tenantId), spec });
+        } else {
+          if (vals["timeout"]) spec.ringTime = Number(vals["timeout"]);
+          if (vals["retry"]) spec.retry = Number(vals["retry"]);
+          if (vals["queue_timeout"]) spec.maxWaitSeconds = Number(vals["queue_timeout"]);
+          if (vals["maxlen"]) spec.maxCallers = Number(vals["maxlen"]);
+          if (vals["servicelevel"]) spec.serviceLevelSeconds = Number(vals["servicelevel"]);
+          if (vals["wrapuptime"]) spec.wrapUpSeconds = Number(vals["wrapuptime"]);
+          if (vals["prefix"]) spec.prefix = vals["prefix"];
+          spec.joinWhenEmpty = vals["joinempty"] !== "no";
+          spec.leaveWhenEmpty = vals["leavewhenempty"] === "yes";
+          spec.autofill = !!checks["autofill"];
+          spec.autoPause = !!checks["autopause"];
+          spec.lastDestination = { categoryId: destKind === "voicemail" ? "25" : "1", targetId: destExt };
+          await apiPost("/admin/pbx-console/queues", { pbxTenantId: Number(tenantId), spec });
+        }
+        push(`${vals["description"].trim()} created — it is live now (the console applies for you).`);
+      }
+      onClose(); await onDone();
+    } catch (e) { push(errText(e, "Nothing was saved."), "bad"); }
+    setBusy(false);
+  };
+  const setVal = (k: string, v: string) => setVals((s) => ({ ...s, [k]: v }));
+  return (
+    <div className="pc-modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="pc-modal" role="dialog" aria-modal="true" style={{ maxWidth: 720 }}>
+        <h3>{edit ? `Edit ${edit.description || edit.extension}` : kind === "rg" ? "New ring group" : "New queue"}</h3>
+        <div className="pc-mbody" style={{ maxHeight: "62vh", overflowY: "auto" }}>
+          {!edit ? (
+            <div className="pc-f"><label>Customer</label>
+              <select className="pc-ctl" value={tenantId} onChange={(e) => { setTenantId(e.target.value); setMembers([{ extensionId: "", penalty: "" }]); setDestExt(""); }}>
+                <option value="">— pick —</option>
+                {tenants.filter((t) => t.extensions.length).map((t) => <option key={t.tenantId} value={String(t.tenantId)}>{t.description}</option>)}
+              </select>
+            </div>
+          ) : null}
+          {FIELDS.slice(0, edit ? FIELDS.length : kind === "rg" ? 4 : 8).map((f) => (
+            <div className="pc-f" key={f.k}>
+              <label>{f.label}</label>
+              {f.type === "sel" ? (
+                <select className="pc-ctl" value={vals[f.k] ?? ""} onChange={(e) => setVal(f.k, e.target.value)}>
+                  {(vals[f.k] ?? "") === "" ? <option value="">—</option> : null}
+                  {(f.opts || []).map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                </select>
+              ) : (
+                <input className="pc-ctl" value={vals[f.k] ?? ""} onChange={(e) => setVal(f.k, e.target.value)} inputMode={f.type === "num" ? "numeric" : undefined} />
+              )}
+              {f.help ? <div className="pc-help">{f.help}</div> : null}
+            </div>
+          ))}
+          {edit ? CHECKS.map((c) => (
+            <div className="pc-f" key={c.k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="checkbox" id={`tc-${c.k}`} checked={!!checks[c.k]} onChange={(e) => setChecks((s) => ({ ...s, [c.k]: e.target.checked }))} />
+              <label htmlFor={`tc-${c.k}`} style={{ margin: 0 }}>{c.label}</label>
+            </div>
+          )) : null}
+          <div className="pc-f"><label>{kind === "rg" ? "Members (ring order)" : "Agents"}</label>
+            {members.map((m, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <select className="pc-ctl" style={{ flex: 1 }} value={m.extensionId} onChange={(e) => setMembers((s) => s.map((x, j) => j === i ? { ...x, extensionId: e.target.value } : x))}>
+                  <option value="">— pick an extension —</option>
+                  {memberOpts.map((x) => <option key={x.id} value={String(x.id)}>{x.number} — {x.name}</option>)}
+                </select>
+                {kind === "queue" ? <input className="pc-ctl" style={{ width: 110 }} placeholder="penalty" value={m.penalty} onChange={(e) => setMembers((s) => s.map((x, j) => j === i ? { ...x, penalty: e.target.value } : x))} /> : null}
+                <button className="pc-btn pc-btn-sm pc-btn-ghost" onClick={() => setMembers((s) => s.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <button className="pc-btn pc-btn-sm" onClick={() => setMembers((s) => [...s, { extensionId: "", penalty: "" }])}>Add member</button>
+            {kind === "queue" ? <div className="pc-help">Lower penalty rings first; equal penalties share a tier.</div> : null}
+          </div>
+          {!edit ? (
+            <div className="pc-f"><label>{kind === "rg" ? "If nobody answers" : "Last destination (required)"}</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <select className="pc-ctl" value={destKind} onChange={(e) => setDestKind(e.target.value as any)}>
+                  <option value="extension">Ring an extension</option>
+                  <option value="voicemail">Voicemail of</option>
+                </select>
+                <select className="pc-ctl" style={{ flex: 1 }} value={destExt} onChange={(e) => setDestExt(e.target.value)}>
+                  <option value="">— pick —</option>
+                  {memberOpts.map((x) => <option key={x.id} value={String(x.id)}>{x.number} — {x.name}</option>)}
+                </select>
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <div className="pc-mfoot">
+          <button className="pc-btn pc-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="pc-btn" disabled={!ready} onClick={submit}>{busy ? "Saving…" : edit ? "Save" : "Create"}</button>
         </div>
       </div>
     </div>

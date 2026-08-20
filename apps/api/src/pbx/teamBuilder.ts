@@ -56,6 +56,10 @@ export interface RingGroupSpec {
   lastDestination?: { categoryId: string; targetId: string };
   /** Omit to have one allocated from the 800s. */
   number?: string;
+  /** Hold-music class group; empty string = tenant default. */
+  musicGroupId?: string;
+  /** Announcement played to the CALLER before ringing; empty = none. */
+  announcementId?: string;
 }
 
 /**
@@ -267,8 +271,8 @@ export async function createRingGroup(
     ["ringtime", String(spec.ringTime ?? 0)],
     ["prefix", spec.prefix ?? spec.name],
     ["class_of_service_id", "1"],
-    ["music_group_id", ""],
-    ["announ_id", ""],
+    ["music_group_id", spec.musicGroupId ?? ""],
+    ["announ_id", spec.announcementId ?? ""],
     // Captured as checked on the real save.
     ...checkbox("answerchannel", true),
     ...checkbox("no_release", true),

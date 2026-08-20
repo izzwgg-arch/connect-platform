@@ -12,6 +12,7 @@
 import { loadPanelConfig, PanelSession, PanelStepError, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
 import { createOutboundRoute, createRouteSelection, createTrunk, slugify } from "../onboarding/pbxTenantBuild";
 import { setMembersEnabled } from "../billing/serviceInterruption/arsMemberToggle";
+import { createQueue, createRingGroup, deleteTeam, type QueueSpec, type RingGroupSpec } from "../pbx/teamBuilder";
 import { resolveMirrorTenantCreator } from "../onboarding/setupOrchestrator";
 import {
   consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
@@ -22,10 +23,11 @@ import { acquireAccount, releaseAccount } from "../onboarding/setupOrchestrator"
 import {
   findConsoleExtension, findConsoleTenant, extensionReferences, listConsoleExtensions, listConsolePhones,
   listConsoleTenants, listProvisioningCatalog, openReadConn, orphanMobileFlagDevices, readConsoleGeo,
-  type ConsoleExtensionRow, listOutboundProfiles, listConsoleRouting,} from "./pbxConsoleReaders";
+  type ConsoleExtensionRow, listOutboundProfiles, listConsoleRouting, listConsoleTeams,} from "./pbxConsoleReaders";
 import {
-  applyAndRebake, createExtension, deleteExtension, deleteTenant, editOutboundRoute, panelDelete, rebootPhone,
+  applyAndRebake, createExtension, deleteExtension, deleteTenant, editOutboundRoute, editQueue, editRingGroup, panelDelete, rebootPhone,
   saveExtension, savePhone, saveTenant, unlinkDevice, MAIN_TENANT_PATH_DEFAULT,
+  type TeamEditInput,
   type DeviceSpec, type ExtensionCreateInput, type ExtensionSaveInput,
 } from "./pbxConsoleWrites";
 
@@ -663,6 +665,185 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
         return { deleted: arsId };
       });
       await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_ARS_DELETED", entityType: "PbxRouteSelection", entityId: String(arsId), metadata: { description: row.description } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /* -- ring groups & queues (2026-08-20) ------------------------------------
+     Izzy: "a copy of how we set it up in the PBX: every option... completely
+     wired." Creates reuse teamBuilder's browser-captured replay (the same code
+     the /queues page and the IVR Studio already drive); edits load the panel's
+     own form and re-post it, so EVERY option rides along; deletes reuse
+     deleteTeam's two-step dance and are REFUSED while anything points at the
+     team through ombu_destinations (an IVR key or inbound route whose
+     destination row would cascade away with it). Unlike the Studio flow
+     (where Apply is Izzy's click), the console IS the panel replacement, so
+     every write here applies + re-bakes, same as its other modules. */
+
+  const findTeam = async (instance: Instance, kind: "ringGroups" | "queues", id: number) => {
+    const r = await withRead(instance, (c) => listConsoleTeams(c));
+    if (!r.ok) return { err: { status: 503, body: { error: "pbx_unavailable", detail: r.reason } } as const };
+    const row = r.data[kind].find((x) => x.id === id);
+    if (!row) return { err: { status: 404, body: { error: kind === "queues" ? "queue_not_found" : "ring_group_not_found" } } as const };
+    return { row, data: r.data };
+  };
+
+  app.get("/admin/pbx-console/teams", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const r = await withRead(instance, (c) => listConsoleTeams(c));
+    if (!r.ok) return reply.status(200).send({ available: false, reason: "pbx_unavailable", detail: r.reason });
+    return { available: true, instanceId: instance.id, ...r.data };
+  });
+
+  app.post("/admin/pbx-console/ring-groups", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ pbxTenantId?: number; spec?: Partial<RingGroupSpec> & { members?: Array<{ extensionId: string | number }> } }>(req);
+    const tenantId = Number(b.pbxTenantId);
+    const spec = b.spec || {};
+    if (!Number.isFinite(tenantId) || !String(spec.name || "").trim() || !(spec.members || []).length) {
+      return reply.status(400).send({ error: "missing_fields", detail: "a ring group needs a customer, a name and at least one member" });
+    }
+    const teams = await withRead(instance, (c) => listConsoleTeams(c));
+    if (!teams.ok) return reply.status(503).send({ error: "pbx_unavailable", detail: teams.reason });
+    const tenant = teams.data.tenants.find((t) => t.tenantId === tenantId);
+    if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+    try {
+      const out = await withPanel(instance, async (s) => {
+        s.setTenant(tenant.path);
+        return await createRingGroup(s, {
+          name: String(spec.name).trim(), prefix: spec.prefix, strategy: (spec.strategy as any) || "ringall",
+          members: (spec.members || []).map((m: any) => ({ extensionId: String(m.extensionId) })),
+          ringTime: spec.ringTime, number: spec.number, musicGroupId: spec.musicGroupId, announcementId: spec.announcementId,
+          lastDestination: spec.lastDestination,
+        }, tenant.usedNumbers);
+      }, tenant.path);
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_RING_GROUP_CREATED", entityType: "PbxRingGroup", entityId: String(out.number), metadata: { tenantId, name: spec.name } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.patch("/admin/pbx-console/ring-groups/:id", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const id = Number((req.params || {}).id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "bad_id" });
+    const found = await findTeam(instance, "ringGroups", id);
+    if ("err" in found && found.err) return reply.status(found.err.status).send(found.err.body);
+    const b = body<TeamEditInput>(req);
+    try {
+      const out = await withPanel(instance, async (s) => {
+        await editRingGroup(s, found.row!.tenantPath, id, { set: b.set, checks: b.checks, rgMembers: b.rgMembers });
+        return { ringGroupId: id };
+      }, found.row!.tenantPath);
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_RING_GROUP_UPDATED", entityType: "PbxRingGroup", entityId: String(id), metadata: { set: b.set, checks: b.checks, members: b.rgMembers } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.delete("/admin/pbx-console/ring-groups/:id", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const id = Number((req.params || {}).id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "bad_id" });
+    const found = await findTeam(instance, "ringGroups", id);
+    if ("err" in found && found.err) return reply.status(found.err.status).send(found.err.body);
+    if (found.row!.referencedBy.length) {
+      return reply.status(409).send({ error: "ring_group_in_use", detail: `Ring group ${found.row!.extension} is ${found.row!.referencedBy.join("; ")} - point those somewhere else first. Nothing was deleted.` });
+    }
+    try {
+      const out = await withPanel(instance, async (s) => {
+        s.setTenant(found.row!.tenantPath);
+        await deleteTeam(s, "ring_group", String(id));
+        return { deleted: id };
+      }, found.row!.tenantPath);
+      const still = await withRead(instance, (c) => listConsoleTeams(c));
+      if (still.ok && still.data.ringGroups.some((x) => x.id === id)) {
+        return reply.status(500).send({ error: "delete_not_confirmed", detail: "the phone system still lists this ring group after the delete" });
+      }
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_RING_GROUP_DELETED", entityType: "PbxRingGroup", entityId: String(id), metadata: { extension: found.row!.extension, name: found.row!.description } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.post("/admin/pbx-console/queues", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<{ pbxTenantId?: number; spec?: Partial<QueueSpec> & { members?: Array<{ extensionId: string | number; penalty?: number }> } }>(req);
+    const tenantId = Number(b.pbxTenantId);
+    const spec = b.spec || {};
+    if (!Number.isFinite(tenantId) || !String(spec.name || "").trim() || !(spec.members || []).length) {
+      return reply.status(400).send({ error: "missing_fields", detail: "a queue needs a customer, a name and at least one agent" });
+    }
+    if (!spec.lastDestination?.categoryId || !spec.lastDestination?.targetId) {
+      // the panel refuses a queue with no last destination at the very end of
+      // the form - refuse up front instead (proven on a real create, 2c7657f3)
+      return reply.status(400).send({ error: "missing_fields", detail: "a queue needs a last destination - where callers go when the queue gives up" });
+    }
+    const teams = await withRead(instance, (c) => listConsoleTeams(c));
+    if (!teams.ok) return reply.status(503).send({ error: "pbx_unavailable", detail: teams.reason });
+    const tenant = teams.data.tenants.find((t) => t.tenantId === tenantId);
+    if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+    try {
+      const out = await withPanel(instance, async (s) => {
+        s.setTenant(tenant.path);
+        return await createQueue(s, {
+          ...spec, name: String(spec.name).trim(),
+          members: (spec.members || []).map((m: any) => ({ extensionId: String(m.extensionId), penalty: m.penalty })),
+        } as QueueSpec, tenant.usedNumbers);
+      }, tenant.path);
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_QUEUE_CREATED", entityType: "PbxQueue", entityId: String(out.number), metadata: { tenantId, name: spec.name } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.patch("/admin/pbx-console/queues/:id", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const id = Number((req.params || {}).id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "bad_id" });
+    const found = await findTeam(instance, "queues", id);
+    if ("err" in found && found.err) return reply.status(found.err.status).send(found.err.body);
+    const b = body<TeamEditInput>(req);
+    try {
+      const out = await withPanel(instance, async (s) => {
+        await editQueue(s, found.row!.tenantPath, id, { set: b.set, checks: b.checks, queueMembers: b.queueMembers });
+        return { queueId: id };
+      }, found.row!.tenantPath);
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_QUEUE_UPDATED", entityType: "PbxQueue", entityId: String(id), metadata: { set: b.set, checks: b.checks, members: b.queueMembers } });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  app.delete("/admin/pbx-console/queues/:id", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const id = Number((req.params || {}).id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "bad_id" });
+    const found = await findTeam(instance, "queues", id);
+    if ("err" in found && found.err) return reply.status(found.err.status).send(found.err.body);
+    if (found.row!.referencedBy.length) {
+      return reply.status(409).send({ error: "queue_in_use", detail: `Queue ${found.row!.extension} is ${found.row!.referencedBy.join("; ")} - point those somewhere else first. Nothing was deleted.` });
+    }
+    try {
+      const out = await withPanel(instance, async (s) => {
+        s.setTenant(found.row!.tenantPath);
+        await deleteTeam(s, "queue", String(id));
+        return { deleted: id };
+      }, found.row!.tenantPath);
+      const still = await withRead(instance, (c) => listConsoleTeams(c));
+      if (still.ok && still.data.queues.some((x) => x.id === id)) {
+        return reply.status(500).send({ error: "delete_not_confirmed", detail: "the phone system still lists this queue after the delete" });
+      }
+      await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_QUEUE_DELETED", entityType: "PbxQueue", entityId: String(id), metadata: { extension: found.row!.extension, name: found.row!.description } });
       return out;
     } catch (e) { return fail(reply, e); }
   });
