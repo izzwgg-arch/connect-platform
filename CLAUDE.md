@@ -88,8 +88,12 @@ escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbenc
   runs maintenance right off the server** (Izzy, in-chat) — the "C+" full-size IDE mockup
   is in the artifact, and its guardrails ARE the contract: plan shown before running,
   deletes/restarts/deploys pause for a human click, code ships only via the deploy queue,
-  everything audited, **PBX read-only from this screen**. ⏳ Sub-question open: raw
-  human terminal too, or agent-mediated only (recommended).
+  everything audited, **PBX read-only from this screen**. **ALSO ANSWERED same day:
+  the terminal is the FULL SSH SANDBOX wired in** — a real root SSH session on loopcom
+  shared live by the support person and the agent, every session recorded. ⛔ No
+  product-side terminal exists today (the "existing sandbox" is the AI-session access:
+  keys + canonical method) — wiring it is a real build (portal terminal + PTY bridge +
+  staff gate + recording). ⛔ The PBX key stays OUT of it — read-only house rule.
 - ✅ **The inventory is done — don't re-derive it.** Escalation reports are FULLY STORED
   (`AgentEscalation.report`, already ISSUE/FINDINGS/PROPOSED FIX/APPROVAL) with **zero
   read routes and zero screens** — the biggest quick win. Fix machinery, task runners

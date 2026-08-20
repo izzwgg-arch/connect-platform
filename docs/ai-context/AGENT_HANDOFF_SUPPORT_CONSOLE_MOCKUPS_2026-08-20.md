@@ -94,8 +94,18 @@ This is the load-bearing research — verified with file:line refs, do not re-de
    deletes/restarts/deploys PAUSE for a human click; code changes ship ONLY through the
    deploy queue (never straight onto the server); every command audited; **the PBX stays
    read-only from this screen — the standing house rule, enforced not promised**.
-   ⏳ One sub-question still open: whether support staff also get a RAW human-typed terminal
-   at the server, or everything on-server runs agent-mediated (recommended: agent-mediated).
+   **Sub-question ANSWERED same day** — Izzy: *"with the full SSH Sandbox which already
+   exists, just wire it in."* So the Workbench terminal is a REAL root SSH session on
+   loopcom, shared live between the support person and the agent (agent types, human can
+   take the keyboard). ⛔ **Honest scope note, surfaced to Izzy in-chat: no product-side
+   SSH terminal exists today.** What exists is the ACCESS — the server, the
+   `.connect-ssh/` keys, and the canonical sandbox method Claude sessions use. "Wiring it
+   in" = building a portal terminal (new dep, e.g. xterm.js), a session/PTY bridge service
+   on loopcom, the staff gate, and keystroke recording. Defaults committed to in the
+   mockup unless Izzy overrides: every session recorded; destructive agent steps pause
+   for a human click; app code ships only via the deploy queue; ⛔ **the PBX key is NOT
+   wired in — that box stays read-only (standing house rule)** — and nothing in this
+   surface may touch payments.
 4. **Wire claude-fable-5 into the router?** Independent small job.
 
 ⏳ **NOT STARTED: everything.** No phase has been approved; nothing may be built until Izzy picks
