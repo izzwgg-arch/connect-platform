@@ -19,6 +19,7 @@ import {
   getLiveKitConfig,
   isValidMeetingCode,
   liveKitRoomForMeeting,
+  roomServiceRequest,
   sanitizeDisplayName,
 } from "./livekit";
 import { registerMeetingRoutes, MEETINGS_PUBLIC_WS_PATH } from "./meetingRoutes";
@@ -100,6 +101,17 @@ test("JWT bypass: only /meetings/public/* is open", () => {
   assert.equal(shouldSkipJwtVerification("/x/meetings/public/abc/info"), false, "anchored to the path start");
 });
 
+test("RoomService admin token carries roomAdmin AND roomCreate (DeleteRoom 401s without roomCreate — seen live)", async () => {
+  let auth = "";
+  await roomServiceRequest(CFG as any, "DeleteRoom", { room: "meet-x" }, (async (_url: any, init: any) => {
+    auth = init.headers.authorization;
+    return { ok: true, status: 200, text: async () => "{}" };
+  }) as any);
+  const { payload } = decodeJwt(auth.replace("Bearer ", ""));
+  assert.equal(payload.video.roomAdmin, true);
+  assert.equal(payload.video.roomCreate, true, "DeleteRoom requires the roomCreate grant");
+});
+
 // ── Route tests against a fake db ──────────────────────────────────────────
 
 function fakeDb() {
@@ -166,6 +178,7 @@ test("create → guest join round trip; guest is never host", async () => {
   assert.equal(body.wsPath, MEETINGS_PUBLIC_WS_PATH);
   const { payload } = decodeJwt(body.token);
   assert.equal(payload.video.roomAdmin, undefined, "guest token must not carry roomAdmin");
+  assert.equal(payload.video.roomCreate, undefined, "guest token must not carry roomCreate");
   assert.equal(payload.video.room, liveKitRoomForMeeting(meeting.id));
   assert.equal(payload.name, "Ezra L.");
   await app.close();

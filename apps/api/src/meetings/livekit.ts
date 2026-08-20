@@ -45,6 +45,10 @@ export type LiveKitVideoGrant = {
    *  tokens never carry it — moderation goes through our host routes so it is
    *  permission-checked and auditable server-side). */
   roomAdmin?: boolean;
+  /** ⛔ Required for RoomService.DeleteRoom — roomAdmin alone answers
+   *  401 "permissions denied" there (seen live 2026-08-20). Only the api's own
+   *  admin token ever carries it. */
+  roomCreate?: boolean;
 };
 
 function b64url(input: Buffer | string): string {
@@ -144,7 +148,7 @@ export async function roomServiceRequest(
     config,
     identity: "connect-api",
     ttlSeconds: 120,
-    grant: { room, roomJoin: false, canPublish: false, canSubscribe: false, canPublishData: false, roomAdmin: true },
+    grant: { room, roomJoin: false, canPublish: false, canSubscribe: false, canPublishData: false, roomAdmin: true, roomCreate: true },
   });
   const res = await fetchImpl(`${config.url}/twirp/livekit.RoomService/${method}`, {
     method: "POST",
