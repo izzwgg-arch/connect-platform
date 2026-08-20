@@ -218,5 +218,26 @@ create it later."* The mockups-first instruction is discharged; phases now ship 
   and the API must 403 them. ⛔ An already-open portal tab keeps the OLD bundle
   until reloaded.
 
-⏳ **Phases 2–5 NOT started** (customer panel, cross-company inbox + take-over, tools,
-the Agent-SDK workbench). The support-agent accounts remain Izzy's to create.
+## §5 Phase 2 — the customer panel: SHIPPED same evening (commit `8e192e5d`)
+
+- `GET /admin/support/customers/:tenantId` aggregates: ACTIVE extensions
+  (`extNumber`/`displayName`), user count, numbers (`PbxTenantInboundDid` by
+  **`connectTenantId`** + active), texting numbers, billing posture
+  (**`autoBillingEnabled`** — ⛔ not "autopayEnabled" — + FAILED/OVERDUE and OPEN
+  invoice counts), last 5 calls (`ConnectCdr` `startedAt`/`talkSec`), last 5
+  escalations. ⛔ **Every block is best-effort** — a failing source empties its
+  card, never a 500 (tested). Portal renders it as the desk's third column,
+  cached per tenant, past escalations clickable.
+- ⛔ **No `:has()` in supportDesk.css, on purpose** — the 3-column state is a
+  class the component toggles (`sd-body-3`), per the 70ms-per-DOM-mutation
+  finding. Keep it that way.
+- ✅ **DEPLOYED + verified:** api container `8e192e5d`, live probe of the
+  endpoint → 200 with Connect Communications' real aggregate (1 ext / 1 user /
+  1 number / autopay off / 5 calls). Portal container `.build-commit 8e192e5d`,
+  the support page chunk greps "Invoices needing attention", css carries
+  `sd-cust`, both hostnames 200. ⛔ The portal deploy log's last line read
+  `done d0627e7c` (a later fetch's clone HEAD — the documented trap);
+  `.build-commit` + the bundle grep are the authority. Tests 13/13.
+
+⏳ **Phases 3–5 NOT started** (cross-company inbox + take-over, tools, the
+Agent-SDK workbench). The support-agent accounts remain Izzy's to create.
