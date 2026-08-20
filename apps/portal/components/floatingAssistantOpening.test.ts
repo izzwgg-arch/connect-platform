@@ -65,6 +65,32 @@ test("the areas come from one shared list", () => {
   assert.doesNotMatch(src, /"Voicemail", "Texting"/);
 });
 
+test("Suggest a feature sits right beside Report a problem, on every screen", () => {
+  // Izzy's ask (2026-08-20): the two doors side by side. Both live in the
+  // fa-help-row OUTSIDE the opening branch, so they survive once a
+  // conversation starts — same rule as the report button above.
+  const rowAt = src.indexOf('className="fa-help-row"');
+  assert.ok(rowAt > 0, "the help row is gone");
+  const row = src.slice(rowAt, src.indexOf("{pendingFiles.length > 0"));
+  assert.match(row, /Report a problem/);
+  assert.match(row, /Suggest a feature/);
+  const openingBranch = src.slice(src.indexOf("{messages.length === 0 && ("), src.indexOf('<div ref={bottomRef} />'));
+  assert.ok(!openingBranch.includes("fa-help-row"), "the two doors must survive once a conversation starts");
+});
+
+test("a suggestion posts to the API, never through the assistant", () => {
+  // An idea must not depend on a model choosing to pass it along — the API
+  // emails it to the product inbox itself.
+  assert.match(src, /apiPost<[^>]*>\(\s*"\/support\/feature-suggestion"/);
+  const start = src.indexOf("const sendSuggestion");
+  assert.ok(start > 0, "the send handler is gone");
+  const fn = src.slice(start, src.indexOf("[suggesting, suggestion, label]);", start));
+  assert.ok(!fn.includes("agentPost"), "a suggestion must not travel through the agent");
+  // and a failed one shows the server's sentence, read from .body (the
+  // .payload trap is already pinned file-wide by the doesNotMatch above)
+  assert.match(fn, /e\.body as \{ message\?: string \}/);
+});
+
 test("the chat widget's stale support language is gone", () => {
   assert.doesNotMatch(src, /Online — here to help/, "reads like a website widget waiting for a live agent");
   assert.doesNotMatch(src, /Viewing with you:/, "the page context moved into the header line");

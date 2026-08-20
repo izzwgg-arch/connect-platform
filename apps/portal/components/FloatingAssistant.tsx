@@ -34,8 +34,9 @@ import {
   LayoutPanelTop,
   Languages,
   AlertTriangle,
+  Lightbulb,
 } from "lucide-react";
-import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, assistantGreetingLine } from "@connect/shared";
+import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, FEATURE_SUGGESTION_MIN, assistantGreetingLine } from "@connect/shared";
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
@@ -44,8 +45,9 @@ type Msg = { id: string; role: "user" | "assistant"; content: string; pending?: 
 
 /** Which screen the panel is showing. The report is a place, not a dialog: it
  *  replaces the panel's body so the customer is never typing into a form that
- *  is floating over the conversation they were just having. */
-type PanelView = "chat" | "report" | "sent";
+ *  is floating over the conversation they were just having. The feature
+ *  suggestion gets the same treatment for the same reason. */
+type PanelView = "chat" | "report" | "sent" | "suggest" | "suggestSent";
 
 type PendingFile = {
   localId: string;
@@ -173,6 +175,10 @@ export function FloatingAssistant() {
   const [filing, setFiling] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [sent, setSent] = useState<{ reference: string; callbackPhone: string; confirmationTexted: boolean } | null>(null);
+  // ── Suggest a feature ────────────────────────────────────────────────────
+  const [suggestion, setSuggestion] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -350,9 +356,16 @@ export function FloatingAssistant() {
     setView("report");
   }, []);
 
+  const openSuggest = useCallback(() => {
+    uiEvent("open suggest a feature");
+    setSuggestError(null);
+    setView("suggest");
+  }, []);
+
   const backToChat = useCallback(() => {
     setView("chat");
     setReportError(null);
+    setSuggestError(null);
   }, []);
 
   /**
@@ -398,6 +411,35 @@ export function FloatingAssistant() {
       setFiling(false);
     }
   }, [filing, problem, callback, area, urgent, label]);
+
+  /**
+   * Send the suggestion. ⛔ Straight to the API, never through the assistant —
+   * an idea must not depend on a model choosing to pass it along. The API
+   * emails it to the Loopcom product inbox; nobody's phone rings for this.
+   */
+  const sendSuggestion = useCallback(async () => {
+    if (suggesting) return;
+    const text = suggestion.trim();
+    if (text.length < FEATURE_SUGGESTION_MIN) {
+      setSuggestError("Please tell us a little more about the feature you'd like.");
+      return;
+    }
+    setSuggesting(true);
+    setSuggestError(null);
+    uiEvent("send feature suggestion");
+    try {
+      await apiPost<{ ok: boolean }>("/support/feature-suggestion", { suggestion: text, page: label });
+      setSuggestion("");
+      setView("suggestSent");
+    } catch (e: unknown) {
+      // ⛔ `.body`, never `.payload` — same trap as the report form: `.payload`
+      // has never existed on ApiError and silently drops the server's sentence.
+      const body = e instanceof ApiError ? (e.body as { message?: string } | undefined) : undefined;
+      setSuggestError(body?.message || "We couldn't send that just now. Please try again in a minute.");
+    } finally {
+      setSuggesting(false);
+    }
+  }, [suggesting, suggestion, label]);
 
   // Voice input: record a short clip in the browser (MediaRecorder), then send
   // it to the server to be transcribed by Yiddish Labs (accurate for American
@@ -580,6 +622,65 @@ export function FloatingAssistant() {
         </div>
       )}
 
+      {open && view === "suggest" && (
+        <div className="fa-panel" role="dialog" aria-label="Suggest a feature">
+          <div className="fa-head">
+            <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
+            <div className="fa-title"><b>Suggest a feature</b></div>
+            <div className="fa-head-actions">
+              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+            </div>
+          </div>
+
+          <div className="fa-body custom-scrollbar">
+            <p className="fa-lead">Tell us what you wish Loopcom could do — this goes straight to our team, not to the assistant.</p>
+
+            <div className="fa-form">
+              <div>
+                <label className="fa-lbl" htmlFor="fa-suggestion">What should we build?</label>
+                <textarea
+                  id="fa-suggestion"
+                  className="fa-box fa-box-tall"
+                  value={suggestion}
+                  onChange={(e) => setSuggestion(e.target.value)}
+                  placeholder="It would be great if I could…"
+                  maxLength={2000}
+                />
+              </div>
+
+              {suggestError && <div className="fa-err" role="alert">{suggestError}</div>}
+            </div>
+
+            <div className="fa-cta">
+              <button className="fa-btn" onClick={() => void sendSuggestion()} disabled={suggesting}>
+                {suggesting ? "Sending…" : "Send to Loopcom"}
+              </button>
+              <small>Every suggestion is read by a person.</small>
+            </div>
+          </div>
+          <div className="fa-foot">A person from Loopcom is always behind this</div>
+        </div>
+      )}
+
+      {open && view === "suggestSent" && (
+        <div className="fa-panel" role="dialog" aria-label="Suggestion sent">
+          <div className="fa-head">
+            <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
+            <div className="fa-title"><b>Suggest a feature</b></div>
+            <div className="fa-head-actions">
+              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+            </div>
+          </div>
+          <div className="fa-done">
+            <span className="fa-ring"><Check size={26} /></span>
+            <h3>Thank you.</h3>
+            <p>Your suggestion is on its way to the Loopcom team. The best ideas come from the people using this every day.</p>
+            <button className="fa-ghost" onClick={backToChat}>Back to the assistant</button>
+          </div>
+          <div className="fa-foot">A person from Loopcom is always behind this</div>
+        </div>
+      )}
+
       {open && view === "chat" && (
         <div className="fa-panel" role="dialog" aria-label="Assistant">
           <div className="fa-head">
@@ -658,15 +759,23 @@ export function FloatingAssistant() {
               has been going back and forth with the assistant for five minutes
               without getting anywhere is exactly who needs a person. Kept
               visually apart from the assistant's own suggestions so nobody
-              mistakes it for another thing to ask the AI. */}
-          <button className="fa-help" onClick={openReport}>
-            <span className="fa-ico fa-ico-quiet"><LifeBuoy size={15} /></span>
-            <span className="fa-row-txt">
-              <b>Something not working?</b>
-              <small>Report it — a person at Loopcom answers</small>
-            </span>
-            <ChevronRight size={15} className="fa-chev" />
-          </button>
+              mistakes them for more things to ask the AI. Two doors, two
+              destinations: a problem pages a person, a suggestion emails the
+              product inbox — neither travels through the model. */}
+          <div className="fa-help-row">
+            <button className="fa-help" onClick={openReport}>
+              <span className="fa-ico fa-ico-quiet"><LifeBuoy size={15} /></span>
+              <span className="fa-row-txt">
+                <b>Report a problem</b>
+              </span>
+            </button>
+            <button className="fa-help" onClick={openSuggest}>
+              <span className="fa-ico fa-ico-quiet"><Lightbulb size={15} /></span>
+              <span className="fa-row-txt">
+                <b>Suggest a feature</b>
+              </span>
+            </button>
+          </div>
 
           {pendingFiles.length > 0 && (
             <div className="fa-files">
@@ -820,15 +929,16 @@ const faCss = `
 .fa-row-rtl b { font-size: 15px; }
 .fa-chev { color: var(--text-dim, #8b9ab2); flex: 0 0 auto; }
 
-/* ── report a problem ───────────────────────────────────────────────────── */
+/* ── report a problem / suggest a feature ───────────────────────────────── */
+.fa-help-row { display: flex; gap: 7px; margin: 0 12px 10px; }
 .fa-help {
-  display: flex; align-items: center; gap: 10px; width: calc(100% - 24px);
-  margin: 0 12px 10px; padding: 9px 11px; border-radius: 11px; cursor: pointer;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px; border-radius: 11px; cursor: pointer;
   border: 1px dashed color-mix(in srgb, var(--text-dim, #8b9ab2) 45%, transparent);
   background: transparent; color: var(--text, #e8ecf3); font: inherit; text-align: left;
 }
 .fa-help:hover { border-color: var(--text-dim, #8b9ab2); background: color-mix(in srgb, var(--text-dim, #8b9ab2) 8%, transparent); }
-.fa-help .fa-row-txt b { font-size: 12.5px; }
+.fa-help .fa-row-txt b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fa-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px 12px; display: flex; flex-direction: column; }
 .fa-lead { margin: 0 0 14px; font-size: 12.5px; color: var(--text-dim, #8b9ab2); line-height: 1.5; }
 .fa-form { display: flex; flex-direction: column; gap: 12px; }
