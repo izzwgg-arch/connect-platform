@@ -2079,6 +2079,44 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       }
     }
 
+    /*
+     * ⛔ EVERY ASSIGNEE MUST BELONG TO THE NUMBER'S TENANT (2026-08-20
+     * tenant-leak sweep). The ROW's ownership was already checked above
+     * (canModifySmsNumberRow), but assignedUserId / assignedExtensionId /
+     * assignedUserIds[] were written straight from the body with no check at
+     * all — so a number could be pointed at a user or extension belonging to a
+     * DIFFERENT company, which puts that outsider inside this number's SMS
+     * inbox scope (resolveSmsInboxScope / smsInboxParticipants). That is a leak
+     * outward: the actor's own texts, delivered to someone else's staff.
+     * ⛔ Validated for SUPER_ADMIN too — attaching a foreign person to a
+     * customer's number is wrong no matter who asks for it.
+     */
+    const targetTenantId = body.tenantId !== undefined ? body.tenantId : row.tenantId;
+    const assigneeUserIds = [
+      ...(body.assignedUserId ? [String(body.assignedUserId)] : []),
+      ...(Array.isArray(body.assignedUserIds) ? body.assignedUserIds.map((x: any) => String(x)) : []),
+    ].filter(Boolean);
+    if (assigneeUserIds.length) {
+      if (!targetTenantId) {
+        return reply.status(400).send({ error: "ASSIGNEE_WITHOUT_TENANT", message: "Give the number a company before assigning people to it." });
+      }
+      const ok = await db.user.findMany({ where: { id: { in: assigneeUserIds }, tenantId: targetTenantId }, select: { id: true } });
+      const okIds = new Set(ok.map((u) => u.id));
+      const foreign = assigneeUserIds.filter((uid) => !okIds.has(uid));
+      if (foreign.length) {
+        return reply.status(400).send({ error: "ASSIGNEE_NOT_IN_TENANT", message: "One of the people you picked is not in this company — nothing was changed." });
+      }
+    }
+    if (body.assignedExtensionId) {
+      if (!targetTenantId) {
+        return reply.status(400).send({ error: "ASSIGNEE_WITHOUT_TENANT", message: "Give the number a company before assigning an extension to it." });
+      }
+      const ext = await db.extension.findFirst({ where: { id: String(body.assignedExtensionId), tenantId: targetTenantId }, select: { id: true } });
+      if (!ext) {
+        return reply.status(400).send({ error: "EXTENSION_NOT_IN_TENANT", message: "That extension is not in this company — nothing was changed." });
+      }
+    }
+
     if (body.isTenantDefault && body.tenantId) {
       await db.tenantSmsNumber.updateMany({
         where: { tenantId: body.tenantId, isTenantDefault: true },

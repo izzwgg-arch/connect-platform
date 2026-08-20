@@ -89,7 +89,18 @@ export async function recordingAccessDecision(
   user: JwtUserLite,
 ): Promise<{ allowed: boolean; mode: DecisionMode; ownedExtensions?: string[] }> {
   if (isSuper(user)) return { allowed: true, mode: "super-admin" };
-  if (rec.tenantId && user.tenantId && rec.tenantId !== user.tenantId) return { allowed: false, mode: "contained-owned" };
+  /*
+   * ⛔ FAIL CLOSED on a missing tenant (2026-08-20 tenant-leak sweep). This was
+   * `rec.tenantId && user.tenantId && rec.tenantId !== user.tenantId`, so an
+   * unattributed recording (4,316 of 126,052 CDRs are unattributed) or a user
+   * with no tenant SKIPPED the check entirely and fell through to the
+   * `allowed: true` at the end. The live streaming path (streamCallRecording)
+   * was hardened against exactly this in the 2026-08-18 round; this exported
+   * twin was not, and wiring any route to it would have re-opened §6d.
+   * The sibling voicemailAccessDecisionForRow already denies on null.
+   */
+  if (!rec.tenantId || !user.tenantId) return { allowed: false, mode: "contained-owned" };
+  if (rec.tenantId !== user.tenantId) return { allowed: false, mode: "contained-owned" };
 
   let allowTenantWide = false;
   try {

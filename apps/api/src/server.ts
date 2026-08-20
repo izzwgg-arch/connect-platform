@@ -8999,18 +8999,51 @@ app.get("/admin/ten-dlc/submissions", async (req, reply) => {
   const user = await requireAdmin(req, reply);
   if (!user) return;
   const query = z.object({ status: z.enum(["DRAFT", "SUBMITTED", "NEEDS_INFO", "APPROVED", "REJECTED"]).optional() }).parse(req.query || {});
-  return db.tenDlcSubmission.findMany({ where: query.status ? { status: query.status } : undefined, orderBy: { createdAt: "desc" } });
+  /*
+   * ⛔ SCOPED (2026-08-20 tenant-leak sweep). `where: undefined` is "no filter"
+   * in Prisma — every tenant's 10DLC filings in one list. ownTenantIdScopeWhere
+   * returns undefined for SUPER_ADMIN (platform view kept) and FAILS CLOSED to
+   * `{ tenantId: { in: [] } }` for an unusable tenant id, never to no-filter.
+   */
+  const scope = ownTenantIdScopeWhere(user);
+  return db.tenDlcSubmission.findMany({
+    where: { ...(query.status ? { status: query.status } : {}), ...(scope || {}) },
+    orderBy: { createdAt: "desc" },
+  });
 });
 
 app.get("/admin/ten-dlc/submissions/:id", async (req, reply) => {
   const user = await requireAdmin(req, reply);
   if (!user) return;
   const { id } = req.params as { id: string };
-  return db.tenDlcSubmission.findUnique({ where: { id } });
+  /*
+   * ⛔ SCOPED (2026-08-20 tenant-leak sweep). This was a bare findUnique by id:
+   * a 10DLC filing carries the customer's legal name, DBA, encrypted EIN, full
+   * business address, support contacts and message samples. requireAdmin
+   * admits TENANT_ADMIN, so only the ops-center prefix key stood between a
+   * customer admin and every other company's registration paperwork.
+   * ⛔ A foreign id must read like a MISSING one, never a 403 — a 403 is an
+   * existence oracle.
+   */
+  const scope = ownTenantIdScopeWhere(user);
+  const row = await db.tenDlcSubmission.findFirst({ where: { id, ...(scope || {}) } });
+  if (!row) return reply.status(404).send({ error: "not_found" });
+  return row;
 });
 
 app.post("/admin/ten-dlc/submissions/:id/status", async (req, reply) => {
-  const user = await requireAdmin(req, reply);
+  /*
+   * ⛔ SUPER_ADMIN, not requireAdmin (2026-08-20 tenant-leak sweep). This was a
+   * cross-tenant WRITE: `update({ where: { id } })` with no tenant filter,
+   * reachable by requireAdmin, letting one customer APPROVE/REJECT another
+   * company's 10DLC registration and overwrite its internal notes. The audit
+   * line below even records `updated.tenantId` — the code knew the row could
+   * belong to someone else and wrote it anyway.
+   * ⛔ Scoping is the WRONG fix here, exactly as in §0c: a customer approving
+   * their OWN carrier registration defeats the control's entire purpose. This
+   * is platform staff's decision, so it is restricted, not scoped.
+   */
+  const user = await requireSuperAdmin(req, reply);
   if (!user) return;
   const { id } = req.params as { id: string };
   const input = z.object({ status: z.enum(["NEEDS_INFO", "APPROVED", "REJECTED"]), note: z.string().min(2) }).parse(req.body);
@@ -9255,7 +9288,17 @@ app.get("/admin/tenant-options", async (req, reply) => {
 });
 
 app.get("/admin/sms/provider-health", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  /*
+   * ⛔ SUPER_ADMIN, not requireAdmin (2026-08-20 tenant-leak sweep). Everything
+   * below is a PLATFORM aggregate — `topFailingTenants` and `circuitsOpen`
+   * carry tenantId AND tenantName for every customer, and `recentLocks` is a
+   * raw unscoped AuditLog read. There is no sensible per-tenant answer to
+   * "which tenants are failing", so this is the §0c "restrict, don't scope"
+   * case. requireAdmin admits TENANT_ADMIN (10 live customer admins); only the
+   * can_view_admin_ops_center prefix rule was keeping them out, which is one
+   * granted key away from a platform-wide leak.
+   */
+  const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
 
   const since = new Date(Date.now() - 15 * 60 * 1000);
@@ -30124,6 +30167,14 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
   let pbxClassWhere: Record<string, unknown> = {};
   if (!wantAll && rawScope) {
     if (rawScope.startsWith("vpbx:")) {
+      /*
+       * ⛔ The super-admin pin every sibling has, missing only here until the
+       * 2026-08-20 tenant-leak sweep. The `403` in the else-branch below guards
+       * the plain-cuid form only, so `?tenantId=vpbx:<other-slug>` walked
+       * straight past it into another tenant's PbxMohClass rows. Same wording
+       * as /voice/ivr/prompts and /voice/pbx/ring-groups.
+       */
+      if (!isSA) return reply.code(403).send({ error: "super_admin_required_for_vpbx_override" });
       const slug = rawScope.slice(5).toLowerCase();
       const resolved = await resolveConnectTenantIdFromScope(rawScope);
       pbxClassWhere = resolved
