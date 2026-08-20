@@ -6418,6 +6418,11 @@ model AgentConversation {
   /// X2: when this closed conversation's summary landed in the user's dossier.
   /// Null on CLOSED rows = pending sweep (idempotent, crash-safe).
   dossierRecordedAt DateTime?
+  /// Support-desk take-over (2026-08-20): while set, the engine stores the
+  /// customer's messages but never answers — a person is talking. Cleared by
+  /// "hand back to assistant" on the desk. humanTakeoverBy = the staff User.id.
+  humanTakeoverAt   DateTime?
+  humanTakeoverBy   String?
   messages          AgentMessage[]
 
   @@index([tenantId, startedAt])

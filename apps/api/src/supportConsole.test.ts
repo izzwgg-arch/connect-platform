@@ -226,7 +226,7 @@ function register(
 ) {
   const app = fakeApp();
   const db = {
-    ...customerDb(opts.customer ?? {}),
+    ...customerDb({}),
     ...inboxDb(opts.inbox ?? {}),
     user: {
       async count() {
@@ -237,6 +237,8 @@ function register(
       },
     },
     ...fakeDb(rows, opts),
+    // Test-specific overrides win over every default fake.
+    ...(opts.customer ?? {}),
   };
   registerSupportConsoleRoutes({
     app,
@@ -443,6 +445,99 @@ test("inbox reply: without the injected sender it answers 503, never invents its
   assert.equal(reply.statusCode, 503);
 });
 
+// ---------------------------------------------------------------- take-over (Phase 4)
+
+function takeoverDb() {
+  const conv = {
+    id: "conv1",
+    tenantId: "t1",
+    clientUserId: "cu1",
+    role: "customer",
+    status: "OPEN",
+    language: "en",
+    startedAt: NOW,
+    humanTakeoverAt: null as Date | null,
+    humanTakeoverBy: null as string | null,
+  };
+  const created: any[] = [];
+  const audits: any[] = [];
+  return {
+    conv,
+    created,
+    audits,
+    agentConversation: {
+      async findMany() {
+        return [conv];
+      },
+      async findUnique(args: any) {
+        return args?.where?.id === conv.id ? { ...conv } : null;
+      },
+      async update(args: any) {
+        Object.assign(conv, args.data);
+        return { ...conv };
+      },
+    },
+    agentMessage: {
+      async findFirst() {
+        return { role: "user", content: "hold music is wrong", createdAt: NOW };
+      },
+      async findMany() {
+        return [];
+      },
+      async create(args: any) {
+        created.push(args.data);
+        return { id: "sm1", createdAt: NOW, ...args.data };
+      },
+    },
+    agentAuditLog: {
+      async create(args: any) {
+        audits.push(args.data);
+        return args.data;
+      },
+    },
+  };
+}
+
+test("take-over: flips the flag, notes it in the transcript, audits with a real hash", async () => {
+  const tdb = takeoverDb();
+  const { app } = register([], { inbox: {}, customer: { agentConversation: tdb.agentConversation, agentMessage: tdb.agentMessage, agentAuditLog: tdb.agentAuditLog } });
+  const on = await call(app, "POST /admin/support/conversations/:id/takeover", { params: { id: "conv1" }, body: { on: true } });
+  assert.equal(on.out.takenOver, true);
+  assert.ok(tdb.conv.humanTakeoverAt instanceof Date);
+  assert.equal(tdb.conv.humanTakeoverBy, "super");
+  assert.equal(tdb.created[0].role, "staff"); // the transcript note
+  assert.equal(tdb.audits[0].event, "support.takeover_on");
+  assert.equal(typeof tdb.audits[0].hash, "string");
+  assert.equal(tdb.audits[0].hash.length, 64); // real sha256, never a stub
+  const off = await call(app, "POST /admin/support/conversations/:id/takeover", { params: { id: "conv1" }, body: { on: false } });
+  assert.equal(off.out.takenOver, false);
+  assert.equal(tdb.conv.humanTakeoverAt, null);
+});
+
+test("⛔ a staff message REQUIRES an active take-over — two voices in one mouth is refused", async () => {
+  const tdb = takeoverDb();
+  const { app } = register([], { customer: { agentConversation: tdb.agentConversation, agentMessage: tdb.agentMessage, agentAuditLog: tdb.agentAuditLog } });
+  const refused = await call(app, "POST /admin/support/conversations/:id/message", { params: { id: "conv1" }, body: { body: "hello" } });
+  assert.equal(refused.reply.statusCode, 409);
+  assert.equal(tdb.created.length, 0);
+  tdb.conv.humanTakeoverAt = new Date();
+  const ok = await call(app, "POST /admin/support/conversations/:id/message", { params: { id: "conv1" }, body: { body: "Hi Baila — real person here." } });
+  assert.equal(ok.out.ok, true);
+  assert.equal(tdb.created[0].role, "staff");
+  assert.equal(tdb.audits.at(-1).event, "support.staff_message");
+});
+
+test("conversations list: cross-tenant rows with names and the takeover chip", async () => {
+  const tdb = takeoverDb();
+  tdb.conv.humanTakeoverAt = new Date();
+  const { app } = register([], { customer: { agentConversation: tdb.agentConversation, agentMessage: tdb.agentMessage, agentAuditLog: tdb.agentAuditLog } });
+  const { out } = await call(app, "/admin/support/conversations", { query: {} });
+  assert.equal(out.conversations.length, 1);
+  assert.equal(out.conversations[0].tenantName, "Gesheft");
+  assert.equal(out.conversations[0].takenOver, true);
+  assert.equal(out.conversations[0].last.preview, "hold music is wrong");
+});
+
 // ---------------------------------------------------------------- wiring guards
 
 function readSource(rel: string): string {
@@ -463,15 +558,23 @@ test("the /admin/support prefix is inside the global permission gate (the /admin
   );
 });
 
-test("⛔ the module's ONLY write is the reply, and it only DELEGATES — no second apply path, no second sender", () => {
+test("⛔ the module's writes are exactly reply/takeover/staff-message, and SMS only ever DELEGATES", () => {
   const src = readSource("supportConsole.ts");
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const posts = code.match(/app\.post\(/g) ?? [];
-  assert.equal(posts.length, 1, "supportConsole.ts must have exactly one POST (the SMS reply)");
+  const posts = code.match(/app\.post\("([^"]+)"/g) ?? [];
+  assert.deepEqual(
+    posts.map((p) => p.replace(/app\.post\("/, "").replace(/"$/, "")).sort(),
+    [
+      "/admin/support/conversations/:id/message",
+      "/admin/support/conversations/:id/takeover",
+      "/admin/support/threads/:id/reply",
+    ],
+    "supportConsole.ts grew an unexpected write route",
+  );
   assert.ok(!code.includes("applyConfirmedAction"), "supportConsole.ts must not grow its own apply path");
-  assert.ok(code.includes("deps.sendSms("), "the reply must delegate to the injected sendConnectChatSmsMessage");
+  assert.ok(code.includes("deps.sendSms("), "the SMS reply must delegate to the injected sendConnectChatSmsMessage");
   for (const forbidden of ["smsQueue.add", "sendSMS(", "voipMs", "connectChatMessage.create"]) {
-    assert.ok(!code.includes(forbidden), `supportConsole.ts must never send or write messages itself (found ${forbidden})`);
+    assert.ok(!code.includes(forbidden), `supportConsole.ts must never send or write chat/SMS messages itself (found ${forbidden})`);
   }
 });
 

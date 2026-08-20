@@ -7,7 +7,7 @@
  *   (owner sees everything through the admin surface, separately).
  * - Language auto-detect: Hebrew-script text → Yiddish ("yi"), else English.
  */
-import type { ConversationStore, ConversationRow, Role } from "./store";
+import type { ConversationStore, ConversationRow, MessageRow, Role } from "./store";
 import type { ModelRouter, ChatMessage, ChatContentPart } from "../llm/router";
 import { CHAT_MAX_TOKENS } from "../llm/router";
 import fs from "node:fs";
@@ -143,6 +143,13 @@ export interface ChatResult {
   language: "en" | "yi";
   model?: string;
   degraded: boolean;
+  /**
+   * Support-desk take-over (2026-08-20): true means a PERSON is handling this
+   * conversation — the customer's message was stored, no model ran, and
+   * `reply` is empty. The widget switches to polling `/agent/chat/messages`
+   * (which reports the same flag) so the person's replies appear live.
+   */
+  humanTakeover?: boolean;
 }
 
 /** Minimal triage interface the engine calls (avoids a hard import cycle). */
@@ -299,6 +306,31 @@ export class ConversationEngine {
 
     const conv = await this.getOrOpenConversation(ctx);
     if (!conv.language) await this.store.setLanguage(conv.id, language);
+
+    // ── SUPPORT-DESK TAKE-OVER ── While a person holds this conversation, the
+    // engine is a mailbox: store the customer's message, run NO model, spend NO
+    // translation credits, and answer nothing — the person's reply arrives via
+    // the widget's polling. ⛔ The check sits BEFORE the Yiddish input leg on
+    // purpose: bridging costs Yiddish Labs credits and its only consumer here
+    // would be the model that deliberately isn't running.
+    if ((conv as { humanTakeoverAt?: Date | null }).humanTakeoverAt) {
+      const note = attachments.length
+        ? `[Attached: ${attachments.map((a) => a.filename).join(", ")}]`
+        : "";
+      await this.store.addMessage({
+        conversationId: conv.id,
+        role: "user",
+        content: note ? `${text}\n${note}` : text,
+      });
+      await this.audit.record({
+        actor: ctx.role,
+        event: "chat.user_message_during_takeover",
+        tenantId: ctx.tenantId,
+        conversationId: conv.id,
+        payload: { chars: text.length, language },
+      });
+      return { conversationId: conv.id, reply: "", language, model: "human", degraded: false, humanTakeover: true };
+    }
 
     // ── INPUT LEG ── Yiddish → English via Yiddish Labs, so the LLM reasons in
     // English. The original Yiddish is stored as the user's message; the English
@@ -630,6 +662,22 @@ export class ConversationEngine {
     if (!conv || conv.tenantId !== ctx.tenantId) return null;
     if (ctx.role !== "owner" && conv.clientUserId !== ctx.clientUserId) return null;
     return this.store.listMessages(conversationId);
+  }
+
+  /**
+   * getMessages plus the take-over flag, for the widget's live-refresh loop.
+   * Same gating as getMessages — a separate method so existing callers and
+   * tests of getMessages keep their shape.
+   */
+  async getMessagesWithState(
+    ctx: ChatContext,
+    conversationId: string,
+  ): Promise<{ messages: MessageRow[]; humanTakeover: boolean } | null> {
+    const conv = await this.store.getConversation(conversationId);
+    if (!conv || conv.tenantId !== ctx.tenantId) return null;
+    if (ctx.role !== "owner" && conv.clientUserId !== ctx.clientUserId) return null;
+    const messages = await this.store.listMessages(conversationId);
+    return { messages, humanTakeover: !!(conv as { humanTakeoverAt?: Date | null }).humanTakeoverAt };
   }
 }
 

@@ -191,7 +191,9 @@ export function registerChatRoutes(
     if (!identity) return reply.code(403).send({ error: "forbidden" });
     const body = z.object({ conversationId: z.string() }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
-    const msgs = await engine.getMessages(identity, body.data.conversationId);
-    return msgs === null ? reply.code(404).send({ error: "not_found" }) : { messages: msgs };
+    const out = await engine.getMessagesWithState(identity, body.data.conversationId);
+    return out === null
+      ? reply.code(404).send({ error: "not_found" })
+      : { messages: out.messages, humanTakeover: out.humanTakeover };
   });
 }
