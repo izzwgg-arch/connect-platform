@@ -150,7 +150,17 @@ export const navItems: NavItem[] = [
   // PBX Console (2026-08-19) — replaces the VitalPBX panel for tenants /
   // extensions / provisioning / geo once the licence lapses. SUPER_ADMIN only
   // (forced below), reuses the PBX-instances view key; no grantable key.
-  { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
+  // ⛔ These three carry `can_manage_global_settings`, NOT the PBX-instances
+  // key, and the difference is the whole point (2026-08-20 tenant-leak sweep):
+  // the live snapshot gives TENANT_ADMIN `can_view_admin_pbx_instances` (10
+  // active tenant admins hold it), so keying the console off it made the
+  // SUPER_ADMIN force line below the ONLY thing hiding a platform-wide console
+  // from customers — one refactor away from advertising every company's trunks
+  // and dial plans in a customer's sidebar. `can_manage_global_settings` is
+  // held by SUPER_ADMIN alone and is exactly what the api's
+  // PORTAL_API_PERMISSION_RULES entry for /admin/pbx-console already demands,
+  // so the nav key and the server gate now say the same thing.
+  { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
   // Trunks & Routing + Ring Groups & Queues (2026-08-20, Izzy: "add them all
   // to the sidebar with permissions off for everybody but me") — direct doors
   // into the console's routing and teams modules. SUPER_ADMIN only, forced in
@@ -158,8 +168,8 @@ export const navItems: NavItem[] = [
   // key (the ivr_migration pattern): these screens carry every customer's
   // trunks and dial plans, and a permission that could grant them would be one
   // ticked box away from handing a tenant admin the whole platform's routing.
-  { id: "admin.pbx_routing", href: "/admin/pbx-console?mod=routing", label: "Trunks & Routing", icon: "TR", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
-  { id: "admin.pbx_teams", href: "/admin/pbx-console?mod=teams", label: "Ring Groups & Queues", icon: "RQ", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_instances" },
+  { id: "admin.pbx_routing", href: "/admin/pbx-console?mod=routing", label: "Trunks & Routing", icon: "TR", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.pbx_teams", href: "/admin/pbx-console?mod=teams", label: "Ring Groups & Queues", icon: "RQ", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },

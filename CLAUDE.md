@@ -330,25 +330,14 @@ call): handlers call `requireSuperAdmin`, `/admin/support` rides
 `isNavItemVisibleForUser` — ⛔ deliberately NO new grantable key until a feature
 honours it. ✅ Proven live: self-signed SUPER_ADMIN probe → 200, the real
 4-escalation backlog. ⏳ Nobody has opened the page in a browser; no fix ever
-approved from it. ✅ **Phases 2, 3 and 4 SHIPPED the same evening, all
-api+portal container-verified (agent rebuilt for Phase 4):** **P2** customer
-panel — `GET /admin/support/customers/:tenantId` aggregates extensions/users/
-numbers/billing/calls/past-escalations, every block best-effort (⛔ verified
-field names: `autoBillingEnabled`, `extNumber`, `connectTenantId`,
-`startedAt`; ⛔ no `:has()` in its css). **P3** cross-company inbox —
-`/admin/support/threads` (+`/:id`, +`/reply`); ⛔ **the reply DELEGATES to
-the injected `sendConnectChatSmsMessage` and takes tenantId from the THREAD**,
-so it leaves from that company's own number; a source guard pins the POST list
-and forbids this module ever sending or writing messages itself. **P4**
-assistant take-over — migration `20260820213000` (`humanTakeoverAt/By`,
-applied live), and ⛔⛔ **three legs that must ship together: desk API + the
-agent ENGINE's refusal-to-answer (a CONTAINER REBUILD, not an api deploy) + the
-widget's polling**. The engine's branch sits BEFORE the Yiddish input leg (no
-wasted YL credits); a staff message REQUIRES an active take-over (409 — two
-voices in one mouth); ⛔ `AgentAuditLog.hash` is REQUIRED tamper evidence, so
-`supportAudit()` computes a real sha256. ✅ **Sidebar (`9fbd5af3`): Support
-Desk is now FIRST in the Admin section** — it was buried at position 9 of 25.
-⏳ Phase 5 (the Agent-SDK workbench / IDE + SSH terminal) is DESIGNED ONLY.
+approved from it. ✅ **Phase 2 (customer panel) SHIPPED same evening,
+`8e192e5d`, api+portal container-verified + live-probed** — the desk's third
+column aggregates extensions/users/numbers/billing/calls/past escalations via
+`GET /admin/support/customers/:tenantId`, every block best-effort (⛔ field
+names verified: `autoBillingEnabled`, `extNumber`, `connectTenantId`,
+`startedAt`; ⛔ no `:has()` in its css, class-toggled instead). ⏳ Phases 3–5
+(cross-company inbox + take-over, tools, the Agent-SDK workbench) are
+DESIGNED ONLY.
 
 
 Full handoff + the verified infrastructure inventory:
