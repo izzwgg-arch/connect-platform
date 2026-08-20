@@ -74,9 +74,11 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 ## ⛔⛔ AGENT HANDOFF — the app's own "cleanup" was HANGING UP THE DESK PHONE's live calls, and call waiting rang instead of beeping (2026-08-20) — READ FIRST for ANY "the call just dropped" report, before touching `stale-hangup-for-extension`, `useSipPhone.ts` or `useTelephonyAudio.ts`, and before scoping ANY hangup by extension number
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CALL_WAITING_AND_STALE_HANGUP_2026-08-20.md`**
-(`2da67ab3` on `feat/ivr-migration-takeover`. No migration, no PBX write, no env
-change, no tenant row touched. **portal DEPLOYED; ⛔ telephony COMMITTED and NOT
-DEPLOYED — it is the half that stops the call drops and needs a quiet window.**)
+(`2da67ab3` + `4e13522f` on `feat/ivr-migration-takeover`. No migration, no PBX
+write, no env change, no tenant row touched. ✅ **BOTH HALVES DEPLOYED and
+container-verified** — portal `2da67ab3`, telephony `4e13522f` (queue job
+`0a0c65ab`), the latter in a **measured 0-active-call window**, AMI + ARI
+reconnected, 0 restarts.)
 Memory: [[stale-hangup-sweep-killed-desk-phone-calls]], [[call-waiting-must-beep-not-ring]].
 Izzy relayed three complaints from Trust Bookkeepings ext 106; all three are real
 and they are TWO defects.
@@ -128,18 +130,47 @@ and they are TWO defects.
   ⛔ The 3 `smarthome` telephony failures are pre-existing (identical with my
   changes stashed) and are a local-shell artifact — `src/config/env.ts` demands a
   32-char `JWT_SECRET`.
-- ✅ **Either deploy order is safe** (checked, not assumed): portal-first leaves the
+- ✅✅ **PROVEN LIVE ON PRODUCTION AFTER THE TELEPHONY DEPLOY, not just by test** —
+  the route probed on the docker network: **no `sipUsername` → `{"cleared":0,
+  "refused":"sip_username_required"}`**; correctly scoped → the route still works
+  (`"No matching active calls found"`). ⛔⛔ **The refusal is the important half:
+  every portal window still running the OLD bundle sends no `sipUsername`, so the
+  desk-phone killing stopped platform-wide the moment telephony restarted — it did
+  NOT wait for anyone to reload.** The BEEP, by contrast, reaches a window only
+  after that window reloads.
+- ✅ **Either deploy order was safe** (checked, not assumed): portal-first leaves the
   old telephony ignoring the unknown `sipUsername` field — the beep is fixed, the
   desk-phone drop is not, until telephony ships. Telephony-first makes the route
-  refuse everything (old portal sends no `sipUsername`), which by itself stops the
-  drops.
-- ⏳ **NOT PROVEN: nobody has heard the beep, and no desk-phone call has been saved
-  yet** (telephony undeployed). Acceptance in §8 of the handoff — and ⛔ **the
-  negative that matters most: the route must still clear a genuine phantom**, or
-  the fix has simply broken the safeguard.
+  refuse everything, which by itself stops the drops.
+- ⏳ **NOT PROVEN: nobody has heard the beep**, and no human has been on a
+  desk-phone call while someone hung up in the app since the deploy. Acceptance in
+  §8 of the handoff — and ⛔ **the negative that matters most: the route must still
+  clear a genuine phantom**, or the fix has simply broken the safeguard.
 - ⚠️ **Noticed, NOT fixed:** `MultiCallPanel` is mounted only on the full softphone
   page, so `FloatingDialer` and `crm/live-call` now beep but show no call-waiting
   UI at all (product decision).
+- ✅ **SAME COMMIT (`4e13522f`) — the update notice stopped nagging and the mini
+  dialer got its own strip** (handoff §7b). Izzy: *"it keeps showing up again and
+  again"*, and *"all they have open is the mini dialer"*. ⛔ **The repeat bug was a
+  one-line omission: only the ✕ was recorded in `localStorage`; clicking Reload
+  recorded NOTHING** — so a reload that failed to land the new bundle re-showed the
+  notice every 5 minutes forever, with the button visibly not working. The build is
+  acknowledged **BEFORE** the reload runs, and read **during render**, so it shows
+  **at most once per deploy per profile**. ✅ New **`MiniDialerReloadBar`** — a 28px
+  strip rendered **inside `.mini-shell` above the tab bar**; ⛔ **a flex child, never
+  `position: fixed`** (a floating bar would sit on the dialpad and the call
+  buttons), and the floating card stands down in the mini dialer so the two never
+  both appear. ✅ **One click reloads every window** via the cross-window `storage`
+  event (already relied on by `AuthGate.tsx:80-88`), so ⛔ **no desktop shell change
+  and no installer release**. ⛔⛔ **A reload tears down the SIP softphone, so a
+  window only auto-reloads itself when IDLE** — one on a call (incl. a proxy window
+  mirroring the engine's call) ignores the broadcast and keeps its own notice; a
+  window already on the new build ignores it too, so there is **no reload loop**.
+  New `useOptionalSipPhone()` (chrome must never crash the app over a missing
+  provider). 8 tests, registered; all 7 replayed against `HEAD` fail there.
+  ⏳ **NOT PROVEN — and the strip cannot appear until a window has reloaded ONCE
+  into this build**; an open window shows the OLD card for this deploy and the new
+  strip only from the next one onward.
 
 ## ⛔ AGENT HANDOFF — "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing row ON PURPOSE (2026-08-20) — READ FIRST before touching tenant `cmt1qoxrq0004o8myjoq13m21`, before "fixing" its missing billing, or before re-running onboarding into a stale REST tenant list
 

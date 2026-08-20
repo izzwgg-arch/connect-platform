@@ -240,28 +240,97 @@ failures are pre-existing and identical with my changes stashed — ⛔ they and
 
 ---
 
-## 7. Deploy state ⏳
+## 7. Deploy state ✅ BOTH HALVES ARE LIVE
 
 | Half | State |
 |---|---|
-| **portal** (the beep + sends `sipUsername` + skips the sweep while other calls are live) | deploy started 2026-08-20 ~14:0x EDT, log `/root/deploy-portal-callwaiting-20260820.log` |
-| **telephony** (⛔ the half that actually stops the desk-phone call drops) | **COMMITTED, NOT DEPLOYED — needs Izzy's quiet window** |
+| **portal** (the beep + sends `sipUsername` + skips the sweep while other calls are live) | ✅ **DEPLOYED + container-verified** `2da67ab3` — `.build-commit` matches, and the strings `stale-hangup sweep skipped`, `sipUsername`, `call_waiting incoming` all grep inside the shipped `.next` chunks |
+| **telephony** (the half that stops the desk-phone call drops) | ✅ **DEPLOYED + container-verified** at branch tip `4e13522f`, queue job `0a0c65ab`, 2026-08-20 ~17:17 EDT |
 
-⛔ **Why telephony is waiting:** a telephony restart rebuilds `CallStateStore`
-from zero, and at the time of writing the PBX had **10 active calls, 4 of them
-Trust Bookkeepings'**, at 2 PM on a business day. The same rule was applied to
-the 2026-08-19 fortification commit (`d21fd166`).
+**Telephony was deployed in a measured 0-active-call window** (polled the PBX
+until `core show channels count` read 0 — it was 2–9 calls for eight minutes
+before a gap opened at 17:15). AMI reconnected, ARI `pbx_reconnect_success`,
+`AMI connected — telephony service active`, **0 restarts**.
+⚠️ One `cdr-retry-queue: drain error` at boot+30 s (Redis not writable yet) —
+**one occurrence, pre-existing, did not recur**.
 
-✅ **Either deploy order is safe** — check before assuming otherwise:
-- *portal first* (what happened): the old telephony ignores the unknown
-  `sipUsername` field and still matches by extension. The **beep is fixed
-  immediately**; the desk-phone drop is **not** fixed until telephony ships.
-- *telephony first*: the old portal sends no `sipUsername`, so the route refuses
-  everything and the sweep goes dormant — which by itself stops the desk-phone
-  drops.
+✅✅ **PROVEN LIVE ON PRODUCTION, not just by test** — the route probed on the
+docker network after deploy:
+
+```
+A) no sipUsername  → {"cleared":0,"refused":"sip_username_required"}   [200]
+B) sipUsername T18_106_1 → {"cleared":0,"message":"No matching active calls found"} [200]
+```
+
+⛔⛔ **(A) is the important one: every portal window still running the OLD bundle
+sends no `sipUsername`, so it is now refused.** The desk-phone killing stopped
+platform-wide the moment telephony restarted — it did NOT wait for anyone to
+reload. (B) proves the route still functions for a correctly-scoped caller.
+
+✅ **Either deploy order was safe** — checked, not assumed:
+- *portal first* (what happened): old telephony ignores the unknown
+  `sipUsername` field and still matched by extension, so the beep was fixed
+  immediately and the desk-phone drop was not, until telephony shipped ~3 h later.
+- *telephony first*: the old portal sends no `sipUsername` → the route refuses
+  everything → the sweep goes dormant, which by itself stops the drops.
 
 ⛔ **An already-open portal tab or desktop window keeps the OLD bundle until it
-is reloaded** (full close + reopen for the desktop app).
+is reloaded** (full close + reopen for the desktop app) — so the BEEP reaches a
+given window only after it reloads. The **call-drop fix needs no client reload**,
+because it is enforced server-side.
+
+---
+
+## 7b. The update notice — it stopped nagging, and the mini dialer got its own strip
+
+Commit `4e13522f`, portal-only. Izzy, 2026-08-20: *"put a thin, small 'Reload
+Connect was updated' banner"* on the mini dialer, because *"sometimes they have
+the app closed all the time. All they have open is the mini dialer"* — and
+*"I saw in the app that it keeps showing up again and again."*
+
+- ⛔ **THE REPEAT BUG, and it is a one-line omission:** only the **✕** wrote to
+  `localStorage`. Clicking **Reload** recorded **nothing**. So if a reload failed
+  to land the new bundle for any reason, the next 5-minute poll re-showed the
+  notice — forever — with the Reload button visibly not working. The build id is
+  now acknowledged **BEFORE** `window.location.reload()` runs, so the notice
+  appears **at most once per deploy per profile** whatever the reload does. The
+  acknowledgement is also read **during render**, not only in an effect, so an
+  already-handled build cannot flash for a frame.
+- ✅ **`MiniDialerReloadBar`** — a **28 px** strip ("Connect was updated" +
+  Reload + ✕) rendered **inside `.mini-shell`, immediately ABOVE the tab bar**.
+  ⛔ **A flex child, never `position: fixed`.** The pop-out is a small fixed-size
+  window; a floating bar would sit on top of the dialpad and the call buttons.
+  Above the tabs (not below) so the tab bar keeps its place at the window edge.
+  The floating card **stands down** in the mini dialer (`if (!update || isMini)
+  return null`) so the two surfaces never both appear.
+- ✅ **One click reloads every Connect window.** The desktop app runs the mini
+  dialer, the full window and the phone engine as separate BrowserWindows.
+  Reload writes `cc-portal-reload-broadcast` to `localStorage`; the other windows
+  hear the cross-window `storage` event and reload themselves. ⛔ **No desktop
+  shell change, so no installer release** — verified the mechanism is already
+  relied on in `AuthGate.tsx:80-88` ("the `storage` event crosses windows") and
+  by the DND flag in `useSipPhone.ts`.
+- ⛔⛔ **A RELOAD TEARS DOWN THE SIP SOFTPHONE, so a window only ever
+  auto-reloads itself when IDLE.** A window on a call — including a *proxy*
+  window mirroring the phone-engine's call — ignores the broadcast and keeps its
+  own notice, so the person finishes the call and reloads when they choose. The
+  window where the button was actually pressed is the user's explicit choice and
+  is not second-guessed. A window already on the new build ignores the broadcast
+  too (`pendingRef.current` is null), so **there is no reload loop**, and a stale
+  broadcast key older than 60 s is ignored.
+- New **`useOptionalSipPhone()`** in `useSipPhone.ts` — the notice is chrome and
+  must never crash the app over a missing provider. ⛔ Use `useSipPhone` for
+  anything that genuinely needs the phone; a silent null there hides a wiring bug.
+- Both surfaces share **one `usePortalUpdate()` hook**, so there is still exactly
+  one `/version` poller per window.
+- **Tests: 8** in `apps/portal/lib/portalReloadNotice.test.ts`, ⛔ **registered in
+  `package.json`** (the portal names every test file). All 7 replayed against
+  `HEAD` fail there. Portal typecheck **0**, suite **237/239** (the two
+  documented pre-existing failures).
+- ⏳ **NOT PROVEN: nobody has seen the strip.** ⛔ And it cannot appear until a
+  window has reloaded ONCE into this build — an open window is still running the
+  old bundle, so it will show the OLD card for this deploy. The strip is what
+  they see from the *next* deploy onward.
 
 ---
 
@@ -269,7 +338,10 @@ is reloaded** (full close + reopen for the desktop app).
 
 - **Nobody has heard the beep.** It is proven as 17 tests and a clean typecheck,
   not by a human being on a call when a second one arrives.
-- **No desk-phone call has been saved yet** — the telephony half is undeployed.
+- **Nobody has seen the mini dialer's reload strip** (§7b).
+- **No desk-phone call has been *observed* being saved.** The mechanism is proven
+  live (the route now refuses an unscoped request — §7), but no human has been on
+  a desk-phone call while someone hung up in the app since the deploy.
 - **The acceptance test** (needs two lines, ~3 minutes):
   1. Take a call in the Windows app. Have a second call come in →
      **a short beep every 5 s, no ringtone**, and the call-waiting banner shows.
