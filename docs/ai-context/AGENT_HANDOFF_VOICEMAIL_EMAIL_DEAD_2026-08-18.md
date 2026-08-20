@@ -273,6 +273,16 @@ the MFA session's uncommitted work).
   will get PBX + Connect duplicates until that path sends `""` and writes the
   address into `VoicemailEmailRecipient` instead. Not done.
 - The 5 already-blind mailboxes above (Trimpro 102/104, A plus 108).
+  **UPDATE 2026-08-20: Trimpro ext 102 is no longer blind** — on Izzy's
+  instruction, `ap@trimprony.com` was added as a `VoicemailEmailRecipient`
+  (row `cmt1q3zrb0001o8w01kfwxfin`, extension `cmnmd7ms4000hp9b095z9g323`
+  "Mrs. Schwarts", tenant `cmnlgryjk0003p9pabtu1z1oj`; live DB write, no
+  deploy). It is the FIRST and only address on that mailbox — "add as an
+  additional" turned out to be "add the first". New voicemails to 102 email
+  from the next sweep. ⛔ The two pre-existing `no_recipient` stamps on 102
+  were deliberately NOT released — releasing them would email days-old
+  voicemails; stamps are final by design. Still blind: Trimpro 104,
+  A plus 108.
 - No human has opened one of today's Connect voicemail emails and pressed
   play on the attachment; proven as SENT by the outbox, not by an inbox.
 
