@@ -146,6 +146,7 @@ import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
 import { warnIfOnboardingStorageEphemeral } from "./onboarding/storage";
 import {
   VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS,
+  VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS,
   VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS,
   loadVoicemailAudioAttachment,
   runVoicemailEmailSweep,
@@ -330,6 +331,7 @@ import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
+import { startTurnHealthWatch } from "./turnHealthWatch";
 import { syncAgentKnowledgeDocs, resolveAgentKnowledgeDir } from "./agentKnowledgeSync";
 // The Watchman's read-only PBX probe (Phase 5b) — the same connect_read door
 // the PBX Console reads through, never a second credential path.
@@ -5467,6 +5469,11 @@ registerShutdownTimer(setInterval(() => { void runWakeHealthSweep(); }, 24 * 360
 // cast rather than add three more errors to the baseline.
 registerShutdownTimer(setTimeout(() => { void runVoicemailEmailSweep(app.log); }, 45_000) as unknown as NodeJS.Timeout);
 registerShutdownTimer(setInterval(() => { void runVoicemailEmailSweep(app.log); }, VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS) as unknown as NodeJS.Timeout);
+// ⛔⛔ The watchdog MUST keep its boot kick as well as its interval. A bare
+// setInterval restarts from zero on every deploy, and on 2026-08-21 five api
+// rollouts inside 50 minutes starved it for 67 minutes and paged the owner about
+// a pipeline that was perfectly healthy. See VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS.
+registerShutdownTimer(setTimeout(() => { void runVoicemailEmailWatchdog(app.log); }, VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS) as unknown as NodeJS.Timeout);
 registerShutdownTimer(setInterval(() => { void runVoicemailEmailWatchdog(app.log); }, VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS) as unknown as NodeJS.Timeout);
 // ⛔ The guardrails (2026-08-18): heartbeat liveness for the two timers above,
 // recipient-coverage drop detection, and outbox health for EVERY email type.
@@ -39096,6 +39103,11 @@ agentEscalationTimer.unref();
 // see yiddishLabsCreditWatch.ts for why it must not be an ADMIN_ALERT and why
 // an account in daily use costs nothing to monitor.
 const yiddishCreditTimer = startYiddishLabsCreditWatch(app.log);
+// TURN health (2026-08-21, Izzy: "when there's ever an issue or the turn server
+// is ever down, I should get a text message"). Probes the SAME turn:/turns: urls
+// the api hands clients, and raises an AgentEscalation — the only channel that
+// reaches a phone. Boot line: TURN_HEALTH_WATCH_ARMED.
+const turnHealthTimer = startTurnHealthWatch(app.log);
 if (yiddishCreditTimer) registerShutdownTimer(yiddishCreditTimer);
 
 // "Fix it!" — the owner's reply to an escalation text. Inbound SMS arrives by
