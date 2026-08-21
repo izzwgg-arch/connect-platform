@@ -188,3 +188,181 @@ MAC after the address changes · 9 generate a settings profile for an unknown mo
 - Neither live fault in §3 is fixed.
 - Firmware update/recovery is deliberately out of phase one.
 - Vendors other than Yealink are adapter stubs only.
+
+---
+
+# PART 2 — BUILT (2026-08-21, same day)
+
+Izzy approved the mockups with one change ("number seven: make it better, fix the
+pictures") and one standing instruction: **"make everything exactly 100% on the dot
+like the mock-ups"**, and **"don't stop between phases, keep going until your stress
+test is done completely."** Both done.
+
+⛔ **STATE: CODE COMPLETE, COMMITTED AND PUSHED. NOTHING DEPLOYED, MIGRATION NOT
+APPLIED, NO PBX WRITE, AND NOBODY HAS OPENED THE SCREEN.** See §10 for the honest list.
+
+Mockups (redrawn depictions): <https://claude.ai/code/artifact/7a561ef4-9624-4afa-ad19-d59ad9ae4252>
+Mockup-vs-built proof: <https://claude.ai/code/artifact/93ca11e8-9c27-40c7-827f-21d648a9d8cc>
+
+Commits on `feat/ivr-migration-takeover`: `ccf8e2cc` (investigation doc) ·
+`761d1055` (desktop) · `3908b89e` (api) · `2ade3422` (server wiring) ·
+`115dd60b` (portal) · `58104ae6` (photo base) · `1d16d2db` (stress test), plus the
+shared core commit immediately before the desktop one.
+
+## 1. What was built, in four layers
+
+| Layer | Where | What |
+|---|---|---|
+| Rules (pure) | `packages/shared/src/deskPhoneSetup/` | standards · button layout · state machine · device identity · escalation ladder |
+| Hands | `apps/desktop/src/phoneSetup/` | lifted scanner · Yealink adapter · operation allowlist · IPC wiring |
+| Head | `apps/api/src/deskPhoneSetup/` | 10 routes, 2 tables, 2 permission keys |
+| Screen | `apps/portal/components/deskPhones/` + `app/(platform)/settings/desk-phones/` | the wizard, ported from the mockup |
+
+## 2. ⛔⛔ The security boundary, stated once
+
+**The desktop app cannot express anything except five named operations** —
+`discover`, `fingerprint`, `test_credentials`, `reboot`, `trigger_autop` — each against
+a **private IPv4 address it re-validates itself**. There is no URL parameter, no host
+parameter, no command. **Factory reset is deliberately NOT a local capability**: the
+reset that matters goes over SIP from the PBX, and the local path gets its own door
+with its own authorisation record.
+
+⛔ **Credentials are handed over by REFERENCE.** The renderer calls
+`rememberCredential(ref, user, pass)` once; everything after that names the ref. The
+password is resolved in the main process behind Electron's `safeStorage` and **never
+crosses the IPC boundary in either direction**. A guard test asserts the preload bridge
+cannot express a url, host, fetch, exec or command.
+
+⛔ **Rate limits live on the customer's machine, not only on the server** — because the
+server is the thing that might be compromised. 30 actions/min, 5 s between anything that
+changes a given phone, 15 s between scans.
+
+## 3. ⛔⛔ Never wiping a phone twice
+
+`decideReset()` in `packages/shared/src/deskPhoneSetup/states.ts` is the one function
+that must not be wrong. It is pure, it reads the **stored row** rather than anything in
+memory, and it fails closed on all five branches: terminal · attempts exhausted ·
+already reset · not authorised · allowed.
+
+The route checks it **again** immediately before issuing, because the row is the thing
+that survives a crash. Proven in the stress test: **twenty concurrent `advance` calls on
+one authorised phone reset it exactly once**, and a brand-new Fastify process (the app
+closed, Windows restarted) refuses a second reset.
+
+⛔ **Authorisation is recorded on the RUN, by a person in that office, naming the exact
+phones.** A partial list is refused with 400 — an approval covers exactly what the
+person was shown. **An admin who sent the setup request cannot supply it.**
+
+## 4. The house standards, and the two live faults they fix
+
+`LOOPCOM_PHONE_STANDARDS`: **America/New_York · 12-hour · automatic DST · backlight
+always on · voicemail `*97`**. Applied, never offered.
+
+⛔ Every value was **read off our own working phones**, not a vendor doc:
+`timezone = -5|United States-Eastern Time`, `time_format = 0`, `summer_time = 2`.
+
+`templateStandardsDrift()` finds the phones that are wrong today — including
+`provisioning.templates` id 21 "BV 106" at `-12|Eniwetok,Kwajalein` and id 3 on manual
+DST. ⏳ **Neither has been corrected on the PBX; that is a write and needs a mandate.**
+
+⛔ **The BLF bug IS fixed** (`console_writes.py::save_phone`): the UPDATE branch can now
+write the button columns, and only writes the ones the caller supplied — writing them
+unconditionally would blank a layout on any unrelated edit, which is the same bug wearing
+a different hat. Both guards fail against HEAD. The installer's embedded copy was
+re-synced and the 33-case drift guard passes.
+
+## 5. The escalation ladder
+
+Eleven rungs, least destructive first, in `escalation.ts`. **Order is the safety
+property** — the already-working check is first, the on-a-call check is second, and the
+two stopping conditions are checked **before** anything that would touch the phone again.
+
+⛔ **Two attempts, then halt.** A manufacturer redirect and a customer's own router are
+told apart from what the phone comes back holding, and each gets a different, plain
+message. Neither is ever retried: a loop is not persistence.
+
+## 6. What proves a phone is Ready
+
+**Only Asterisk.** `deps.isRegistered` is asked, and a throw (PBX unreachable) resolves
+to `false` — unknown is never optimistic. Accepting settings is not working.
+
+## 7. The screen
+
+Ported from the mockup: same steps, same order, same words, same values, all classes
+prefixed `dps-` and scoped under `.dps-root` so nothing can collide with the portal's
+14,000-line stylesheet. Colours come from the portal's own theme tokens, so the wizard
+follows the in-app toggle rather than the OS.
+
+⛔ **The card disappears.** It renders on `showSetupCard`, which is false once nothing is
+left to do — the customer never permanently sees provisioning terminology.
+
+⛔ **Handset photos are PROXIED** through `/desk-phones/photo/:model`. The portal CSP is
+`default-src 'self'`, so an image pointed at the PBX is blocked as a silent console
+violation. Verified reachable at the PBX's `provisioning_resources/images/<brand>/<MODEL>.png`
+path (200, 51,415 bytes, image/png).
+
+## 8. Test results
+
+| Suite | Result |
+|---|---|
+| `packages/shared` | **513 / 513** |
+| `apps/desktop` | **61 / 61** |
+| `apps/api` desk phones | **59 / 59** (27 routes + 32 stress) |
+| `apps/portal` | **299 / 301** (the two documented pre-existing) |
+| Typecheck | shared 0 · desktop 0 · portal 0 · **api: 0 errors in any file I touched** |
+
+⛔ The api's total is 76 rather than the documented 75 baseline. All three server.ts
+errors (lines 23770, 41879, 41881) are pre-existing or another session's
+`registerMeetingRoutes` line — **none is in my ranges** (289, 2884–2889, 41844–41859).
+
+## 9. Traps paid for while building this
+
+- ⛔ **Backslash escapes do not survive this shell's heredocs.** `‮`, `\r\n` and
+  `\n` were all silently turned into real characters four separate times, producing
+  unterminated regexes and string literals. Use python **raw strings**, or build the
+  value with `String.fromCharCode`.
+- ⛔ **The comment-stripping trap, again** — a negative guard matched the word
+  "Ethernet" in its own explanatory comment and failed against correct code. Sixth time
+  in this repo.
+- ⛔ **`git stash` correctly refused** in this shared tree, as CLAUDE.md warns.
+- ⛔ **A button does not inherit `color`** — the choice tiles would have been invisible
+  in dark mode. Caught by measuring, not by looking.
+- ⛔ **A contrast probe must composite alpha AND handle `color(srgb …)` floats.**
+  Chrome returns `color-mix()` in that form; a naive parser reads 0.89 as an 8-bit
+  channel and reports near-black. Two rounds of false failures.
+- ⛔ **`server.ts` and `packages/shared/src/index.ts` were contested throughout.** Two
+  commits went in with the **private-index technique**; a pathspec commit would have
+  swept another session's meetings work.
+
+## 10. ⏳ NOT DONE — the honest list
+
+- **Nothing is deployed.** api, portal and desktop are all committed and unshipped.
+- **The migration has NOT been applied.** Two new tables; purely additive; generated by
+  `prisma migrate diff`, never hand-written.
+- **No PBX write has been made.** The two live faults in §4 are found and unfixed.
+- **Nobody has opened the wizard in a browser**, and no phone has ever been discovered,
+  fingerprinted, redirected or reset by this code. Every proof is a test or a
+  measurement.
+- **The `templates.provision` path is designed and unexercised.** Generating a settings
+  profile for an unknown model writes the full config body into that column; verifying it
+  needs one throwaway phone row on production and a render — a PBX write.
+- **`reset_over_sip` has no executor yet.** The ladder chooses it and the PBX side
+  (`pjsip send notify yealink-reset`) is documented and unwired.
+- **Speed-dial key type 13 is from Yealink documentation, not observed on our own
+  phones.** Confirm on the first real one; a wrong value cannot affect a phone with no
+  speed dials.
+- **`apps/desktop-support` still exists.** Retiring it is a deliberate deletion and was
+  left for Izzy.
+- Firmware update and recovery are out of phase one, by design.
+
+## 11. Acceptance test, when it is deployed
+
+1. Grant yourself `can_setup_desk_phones` and `can_authorize_phone_reset`.
+2. Settings → Devices → **Set Up My Phones** in the **desktop app** (a browser cannot see
+   the office network, and the wizard says so).
+3. Walk to the search step. It should find the desk phones on that network and show each
+   one's real product photo.
+4. Assign one phone to a person and finish.
+5. ⛔ **The negatives matter more:** a phone still on another provider must ask before
+   anything is erased; a customer without the reset key must get a plain refusal; and a
+   second browser signed into a different customer must get **404**, not 403, on the run.

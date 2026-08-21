@@ -71,6 +71,123 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the desk-phone setup wizard is BUILT END TO END and DEPLOYED NOWHERE; there was never a local agent, and the LAN scanner was in an app nobody has (2026-08-21) — READ FIRST before believing the Windows app can reach a customer's network, before writing a second Electron app or Windows service, before touching `provisioning.devices.keys`, or before quoting a phone's timezone
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md`**
+(**Investigation + mockups only — no code, no deploy, no migration, no PBX write, no env
+change, no tenant row.** Every PBX touch was a read-only SELECT or a file copy. Mockups Izzy
+is approving: <https://claude.ai/code/artifact/7a561ef4-9624-4afa-ad19-d59ad9ae4252>.)
+Izzy, 2026-08-21: *"Install Connect and press Set Up My Phones"* — and *"the agent always has
+to do everything in his power to get every single phone connected."*
+
+- ⛔⛔ **THE PREMISE THAT IS FALSE, AND THE WHOLE DESIGN RESTS ON IT: `apps/desktop` HAS NO
+  LOCAL AGENT.** `preload.ts` exposes exactly four namespaces — `window`, `phone` (the SIP
+  engine), `notifications`, `updates` — and `main.ts` registers 12 `ipcMain` handlers, all
+  window/update/phone. **There is no command channel, no LAN access, no shell.** ⛔ And
+  "the agent" in this repo is **`apps/agent`, the AI container on loopcom in France**, which
+  has no route into a customer's office. Do not plan around a local agent that exists.
+- ⛔⛔ **A WORKING LAN SCANNER EXISTS IN AN APP THAT HAS NEVER BEEN SHIPPED.**
+  `apps/desktop-support` is a **SECOND Electron app** (`@connect/desktop-support`, appId
+  `com.connectcommunications.supporttools`, productName "Loopcom Support") holding
+  `remoteSupport/lanScan.ts` (sweep the local /24 on 80/443, then parse Windows `arp -a`),
+  `inputInjector.ts` and `mainWiring.ts`. **The code is good and it is in the wrong app** —
+  the plan is to LIFT it into `apps/desktop` and retire the support app, never to ship a
+  second installer or a Windows service.
+- ⛔ **`/lan-phones/*` is live and has NEVER been called.** The api routes and the
+  `/admin/lan-phones` screen both exist; `LanDiscoveryRun` has **zero rows**, because the
+  client that was meant to call them was never shipped.
+- ✅ **What must NOT be rebuilt:** the provisioning writer (`consoleSavePhone` → helper →
+  **VitalPBX's own PHP generator**, proven on production and past the 20-phone licence cap);
+  **379 handset photos** on the PBX at `provisioning/public/images/<brand>/<MODEL>.png`
+  (**81 Yealink** — the filename IS `phone_models.model` uppercased, so a discovered model
+  maps straight to its picture with no lookup table); **427 models**; **82 Yealink vendor
+  templates**; `POST /internal/pbx/contact-status` (**the only thing that may turn a phone
+  green**); the shipped `yealink-check-cfg` NOTIFY; and remote support's polled
+  `/pending` pattern for admin→customer commands (**no new socket, no new push channel**).
+- ⛔⛔ **THE ARCHITECTURAL WIN: a phone ALREADY REGISTERED TO US can be reset, rebooted and
+  re-provisioned ENTIRELY FROM THE PBX over SIP** — `sip.notify_reset.enable = 1` in the
+  template plus `pjsip send notify yealink-reset endpoint <ep>` (`Event: reset`, firmware
+  ≥ 81). **No office access, no admin password, nothing installed.** The LAN path is needed
+  only for a phone that still belongs to the previous provider and has never spoken to us.
+- ⛔ **Yealink RPS is out of bounds.** A reset phone asks Yealink's redirection service and
+  goes to whoever claims that MAC; release is a request the losing provider or Yealink
+  processes. **Detect it, stop after 2 attempts, hand to support — never try to defeat it,
+  and never reset a phone in a loop.** (The old RPS was discontinued 2025-10-01.)
+- ⛔⛔ **TWO LIVE FAULTS FOUND, NEITHER FIXED.** (1) **A customer's phone is set to the
+  Marshall Islands** — `provisioning.templates` id **21 "BV 106"** reads
+  `timezone = -12|Eniwetok,Kwajalein` while every other template is Eastern, so that handset
+  has shown a time **17 hours out** and nobody reported it. ⛔ The fleet holds **five**
+  distinct timezone values and four `time_format` values. Izzy's standing instruction now:
+  **New York and 12-hour on every phone, always**, with `summer_time = 2` (Yealink's
+  automatic DST), backlight always on, voicemail `*97`. (2) **Editing a phone silently
+  erases every BLF on it** — `scripts/pbx/mirror/console_writes.py::save_phone` writes
+  `` `keys` `` **only in the INSERT branch**, and `pbxConsoleRoutes.ts` never passes `keys`
+  at all, so an edit blanks the button layout at the next render with no error anywhere.
+- ⛔ **BLF/speed dials live in `provisioning.devices.keys` as JSON** —
+  `{"dss_keys":{"1":{"type":"16","description":"Leah Fulop","value":"101","extension":"101","line":"1"}}}`
+  (**type 16 = BLF, 15 = Line**, `tpl_override:"1"` beats the template). Izzy's rule: **a BLF
+  for every extension EXCEPT the phone's own**, remaining keys free for customer speed dials.
+  ⛔ Key counts are per model (T54W 1–27, T42S 1–15, T23G 1–3) — trim and say so.
+- ⛔ **A model with no `provisioning.templates` row is the normal case** (53 rows vs 427
+  models). Izzy: the agent **writes the profile itself** from the vendor `template.cfg`
+  already on the PBX, applies the house standards, renders, and verifies before any handset
+  is pointed at it.
+- ⛔ **Verifying a mockup's contrast: composite alpha AND handle `color(srgb …)` floats.**
+  Chrome returns `color-mix()` as `color(srgb 0.89 0.92 0.98)`; a naive `match(/[\d.]+/g)`
+  reads 0.89 as an 8-bit channel and reports near-black. That produced two rounds of false
+  failures. ✅ Once fixed: **1,145 text elements swept in BOTH themes, all pass AA** — and it
+  caught three real defects, incl. that **a `<button>` does not inherit `color`**, so the
+  choice-tile text fell back to the UA default and would have been invisible in dark mode.
+- ✅✅ **APPROVED AND BUILT THE SAME DAY (Izzy: "other than that, you're good to go").**
+  Four layers: the rules in **`packages/shared/src/deskPhoneSetup/`** (standards, button
+  layout, state machine, device identity, escalation ladder — all pure); the hands in
+  **`apps/desktop/src/phoneSetup/`**; the head in **`apps/api/src/deskPhoneSetup/`**; the
+  screen in **`apps/portal/components/deskPhones/`** at **Settings → Devices → Desk Phones**.
+  Commits `761d1055` → `1d16d2db` on `feat/ivr-migration-takeover`.
+  Mockup-vs-built proof: <https://claude.ai/code/artifact/93ca11e8-9c27-40c7-827f-21d648a9d8cc>
+- ⛔⛔ **THE SECURITY BOUNDARY, IN ONE SENTENCE: the desktop app can express exactly FIVE
+  named operations** — `discover`, `fingerprint`, `test_credentials`, `reboot`,
+  `trigger_autop` — **each against a private office address it re-validates itself.**
+  There is no URL parameter, no host parameter and no command, and **factory reset is
+  deliberately NOT a local capability**. Credentials are passed **by reference** and
+  resolved behind the OS keystore, so a password never crosses the IPC boundary in either
+  direction. ⛔ Rate limits sit on the CUSTOMER's machine as well as the server, because
+  the server is the thing that might be compromised.
+- ⛔⛔ **`decideReset()` IS THE ONE FUNCTION THAT MUST NOT BE WRONG.** Pure, reads the
+  STORED row rather than anything in memory, fails closed on all five branches, and is
+  re-checked by the route immediately before a reset is issued. **Proven: twenty
+  concurrent advance calls on one authorised phone reset it exactly once**, and a fresh
+  process (app closed, Windows restarted) refuses a second reset. Authorisation lives on
+  the RUN, names the exact phones, and **an admin who SENT the request cannot supply it**.
+- ⛔ **Ready is only ever claimed because Asterisk said so** — and a PBX throw resolves to
+  false, so unknown is never optimistic. Accepting settings is not working.
+- ✅ **The BLF bug from the investigation IS FIXED** (`console_writes.py::save_phone` can
+  now write the button columns on an edit, and writes only the ones the caller supplied —
+  writing them unconditionally is the same bug wearing a different hat). Installer copy
+  re-synced; both guards fail against `HEAD`.
+- ✅ **Proven as: shared 513/513 · desktop 61/61 · api desk-phones 59/59 (27 route + 32
+  stress) · portal 299/301 (the two documented pre-existing).** Typecheck: shared, desktop
+  and portal 0; **api adds 0 errors in any file touched** (its total reads 76 vs the
+  75 baseline because of another session's in-flight `server.ts` work, verified line by
+  line). ⛔ The stress test covers every scenario Izzy listed, incl. a phone that changes
+  address after a reset, an RPS redirect, a router override, 20 phones with one broken,
+  15 identical handsets, a forged tenant, a cross-customer read and a device trying to
+  inject control characters into a diagnostics line.
+- ⛔⛔ **NOTHING IS DEPLOYED, THE MIGRATION IS NOT APPLIED, AND NOBODY HAS OPENED THE
+  SCREEN.** Every proof above is a test or a measurement, never a person clicking. Two
+  new tables (purely additive, generated by `prisma migrate diff`). ⛔ **No PBX write was
+  made, so the Marshall Islands template and the manual-DST template are still wrong on
+  production.** ⏳ Also unbuilt on purpose: the `reset_over_sip` executor, the
+  `templates.provision` generation path (designed, unexercised — verifying it needs a
+  throwaway phone row on prod), and firmware update/recovery.
+- ⛔ **Backslash escapes do NOT survive this shell's heredocs** — `
+`, `
+` and `‮`
+  were each silently turned into real characters while writing these tests, producing
+  unterminated regexes and string literals four separate times. Use python **raw strings**
+  or `String.fromCharCode`. And a contrast probe must composite alpha **and** parse
+  `color(srgb …)` floats, or `color-mix()` reads as near-black and invents failures.
+
 ## ⛔⛔ AGENT HANDOFF — HIPAA readiness: Loopcom is NOT compliant, and MEETINGS is the cleanest part of the platform (2026-08-21) — READ FIRST before answering ANY "can we take a medical customer", before promising a BAA, before adding meeting recording, and before assuming `AuditLog` satisfies audit controls
 
 Full assessment: **`docs/ai-context/AGENT_HANDOFF_HIPAA_READINESS_2026-08-21.md`**
