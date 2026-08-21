@@ -337,5 +337,122 @@ customer kept paying $3/month for a number they no longer owned.**
 - Retired temp numbers leave their PBX inbound route behind (+$3/mo E911
   until panel cleanup): inii mini's "Main" 8452605692 route on tenant 105 is
   the first one.
-- The watchdog could use `getLNPList` (one call for all orders) instead of
-  per-portid `getLNPStatus`; with ports this rare it doesn't matter yet.
+- ✅ **DONE 2026-08-21 — the watchdog now reads `getLNPList` once per sweep**
+  and falls back to per-portid `getLNPStatus` only for an order the list did
+  not name. It turned out to matter for a reason that had nothing to do with
+  call volume: **the FOC date exists ONLY on the list**, and that date is the
+  one thing a customer actually asks for. See §7.
+
+## 7. The customer can ASK now — `port_status` in the assistant (2026-08-21)
+
+Izzy: *"The agent assistant on LoopCom should be able to check phone number
+port statuses."* He was right that it could not: until this commit there was
+**no route, no screen and no tool** anywhere in the product that answered
+"where is my number transfer up to?". The only record was the sign-up timeline
+(`OnboardingEvent`), which nobody outside admin can read.
+
+⛔ **So the question was being ESCALATED.** The assistant's catch-all is
+*"EVERYTHING ELSE … warmly say the request has been passed to the human team"*,
+and since 2026-08-19 that phrasing writes an `AgentEscalation` and **texts
+Izzy's two phones**. Every customer asking about their own port — the most
+anxious, most repeated question in a sign-up — paged a human for an answer
+already sitting in our own database.
+
+### 7a. What shipped
+
+**`apps/agent/src/tools/portStatusTools.ts`** — one read tool, `port_status`,
+`minRole: "customer"`, no parameters. It reads **Connect's own Postgres
+mirror** (`OnboardingSubmission.answers.provisioning`), scoped by
+`createdTenantId` = the verified `ctx.tenantId`.
+
+⛔ **It never touches the carrier, on purpose, and a guard test enforces it**
+(the file's own source is read and refused if it ever mentions `voip.ms`,
+`getLNPStatus`, `getLNPList`, `loadMasterCreds` or `fetch(`). Three reasons:
+the agent holds no VoIP.ms credentials and must not start; VoIP.ms's READ path
+degrades independently of its write path (§10 of the automation lesson,
+2026-08-05), so a chat question must never be able to hang on it; and a
+customer asking three times in a minute must not become three carrier calls.
+The cost is up to ~15 minutes of staleness, which is why every answer carries
+`asOf`.
+
+The pure summariser `summarisePort()` maps a row to a `stage` and ONE
+plain-English sentence the model can say almost verbatim:
+`filed` → `scheduled` → `overdue` → `moving` → `live`, plus `stopped`.
+
+### 7b. The three things the wording is built to prevent
+
+1. ⛔ **"You have no transfer in progress" — the confident falsehood.** Connect
+   can only see ports filed through the sign-up wizard: that is the only filing
+   path, and the watchdog sweeps `OnboardingSubmission`. **A port arranged by
+   hand for an EXISTING customer is structurally invisible** — the carrier
+   account carries 30+ such historical orders (read live 2026-08-21:
+   8457761765, 8452441708, 8453647474 …). So an empty result reports *"Connect
+   has no number transfer on record for this account … one arranged directly
+   with the Connect team may not show up"* and offers to fetch a person.
+   Telling someone whose number really is moving that nothing is happening is
+   the worst answer this tool could give.
+2. ⛔ **A promised date.** The FOC date belongs to the LOSING carrier and slips.
+   Every sentence says so; the tool description and the system prompt both say
+   *NEVER promise a date*.
+3. ⛔ **A carrier order id in a customer's hands.** `portId` is our VoIP.ms
+   relationship, not their reference — `carrierOrderRef` is emitted only when
+   `ctx.role !== "customer"`.
+
+Also: `classifyCarrierStatus()` matches **only tokens proven against the live
+API** (`completed`, `cancelled` seen 2026-08-21; `foc_received` from §2B) and
+otherwise falls through to VoIP.ms's own `port_status_description`. Inventing a
+mapping for an unseen status is how a rejected transfer gets reported as fine.
+
+### 7c. ⛔ The FOC date was recorded NOWHERE — the watchdog change
+
+Probed read-only against the live API, 2026-08-21:
+
+```
+getLNPStatus {portid} → {"status":"success","post_status":"completed",
+                         "post_status_description":"Completed"}
+getLNPList {}         → {"status":"success","list":[
+    {"portid":"217946","numbers":"9293598299","foc_date":"2026-08-17",
+     "port_status":"completed","port_status_description":"Completed"}, …]}
+```
+
+**The per-order endpoint the watchdog was using does not return a date at
+all.** So the mirror could not answer the customer's actual question. The sweep
+now reads `getLNPList` **once** (it already only runs when open ports exist),
+indexes by `portid`, and falls back to `getLNPStatus` for any order the list
+did not name — ⛔ that fallback is load-bearing: without it, a truncated list
+would mean a completed port is never detected and the temporary number never
+retires.
+
+New keys on `answers.provisioning`, alongside the untouched `lastPortStatus`:
+`portFocDate`, `portStatus`, `portStatusText`, `portStatusCheckedAt`.
+⛔ **A blank never overwrites a known `portFocDate`** — the fallback carries no
+date, so a sweep that misses the list must not erase what the last list read
+told us. ⛔ `portStatusCheckedAt` is stamped on **every** successful read, not
+only on a change: "as of" is a promise to the customer, and a status unchanged
+for a week is not the same as one we stopped checking. The timeline still gets
+exactly one line per real change.
+
+### 7d. Proven / not proven
+
+✅ 18 agent tests + 3 watchdog tests, all registered. **All 5 source guards
+fail when replayed against `HEAD`** (server wiring ×2, prompt ×3). agent
+typecheck **14 = its exact baseline**, api **75 = its exact baseline**, none in
+an edited file. agent suite **719/721** (the 2 pre-existing transcription
+failures); api onboarding **266/290** (the 24 pre-existing
+`setupOrchestrator` failures from `c2d9fdd9`).
+✅ **The tenant link is proven against LIVE data, not just fixtures**: the
+tool's exact query run read-only in `app-api-1` resolves Matamim
+(`cmsgdq0zi1998td13u964b88l` → 9293598299, completed) and inii mini
+(`cmsgkl4y95grttd13yqhyf1gd` → 6469846023, completed), and a tenant with no
+sign-up port (Gesheft) returns zero rows → the honest "nothing on record"
+answer. The summariser is unit-tested against those two real row shapes.
+
+⏳ **NOT PROVEN: nobody has asked the assistant about a port.** And there is
+**no open port on the account right now** — both real ports completed in
+August — so `portFocDate` will stay null on every existing row (the sweep drops
+completed ports). Every stage is written to work with a null date; the first
+port filed after this deploy is what proves the date half.
+**Acceptance:** ask the assistant "when does my number transfer?" from a
+tenant with a filed port. ⛔ **The negative matters most: ask from a tenant
+with NO port and confirm it says Connect has none ON RECORD and offers a
+person — not "you have no transfer".**

@@ -22,6 +22,7 @@ import { makeAccountSetupInfoClient, makePhoneNumberSearchClient } from "./pbx/a
 import { buildContactsTools } from "./tools/contactsTools";
 import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
 import { buildSelfServiceTools } from "./tools/selfServiceTools";
+import { buildPortStatusTools } from "./tools/portStatusTools";
 import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
 import { DiagnosticsEngine } from "./diag/engine";
@@ -267,6 +268,10 @@ async function main() {
       // "Mark my chats read" / "cancel my requests" — the only self-scoped
       // writes in the tool surface; see the file's header for the fence.
       ...buildSelfServiceTools({ prisma }),
+      // "When does my number transfer?" — read-only, tenant-locked, answered
+      // from Connect's own mirror of the port watchdog's polling. NEVER from
+      // the carrier directly; see portStatusTools.ts.
+      ...buildPortStatusTools({ prisma }),
       // The read-only investigation workspace on BOTH production databases.
       // ⛔ minRole "internal", so `toolsForRole` keeps it out of every
       // customer-facing conversation — the door is deliberately not

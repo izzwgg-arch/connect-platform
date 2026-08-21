@@ -1,0 +1,242 @@
+/**
+ * port_status — "where is my number transfer up to?"
+ *
+ * Moving a phone number from another company (a "port") is the most anxious
+ * part of a sign-up: the customer's whole business runs on that number, the
+ * date is set by the LOSING carrier, and until 2026-08-21 Connect had no way at
+ * all to answer the question. There was no route, no screen and no tool — the
+ * only record was the sign-up timeline, which nobody outside admin can read. So
+ * a customer asking "when does my number move?" got the assistant's catch-all
+ * "I've passed this to the Connect team", which (since 2026-08-19) texts the
+ * owner. A question already answered in our own database was paging a human.
+ *
+ * ⛔ THIS READS CONNECT'S OWN MIRROR, NEVER THE CARRIER. The port watchdog
+ * (apps/api/src/onboarding/portWatchdog.ts) polls VoIP.ms every 15 minutes and
+ * writes what it learns onto the submission; this tool reads that. Reasons, in
+ * order: the agent holds no carrier credentials and must not start; VoIP.ms's
+ * read path degrades independently of its write path (2026-08-05), so a chat
+ * question must never be able to hang on it; and a customer asking three times
+ * in a minute must not become three carrier calls. The cost is up to ~15
+ * minutes of staleness, which is why every answer carries `asOf`.
+ *
+ * ⛔ AND THE HONEST NEGATIVE MATTERS MORE THAN THE POSITIVE. Connect can only
+ * see ports filed through the sign-up wizard: that is the only filing path, and
+ * the watchdog sweeps `OnboardingSubmission`. A port arranged by hand for an
+ * EXISTING customer is structurally invisible here (the carrier account carries
+ * 30+ such historical orders). So "nothing on record" is reported as exactly
+ * that — NOT as "you have no transfer in progress", which would be a confident
+ * false statement to someone whose number really is moving.
+ */
+import type { ToolContext, ToolSpec } from "./toolRegistry";
+
+export interface PortStep {
+  step: string;
+  done: boolean;
+}
+
+export interface PortStatusView {
+  /** The number being moved TO Connect, formatted for speech. */
+  number: string | null;
+  stage: "filed" | "scheduled" | "overdue" | "moving" | "live" | "stopped" | "unknown";
+  /** One plain-English sentence the model can say almost verbatim. */
+  summary: string;
+  /** The carrier's own words for the order's state, when we have them. */
+  carrierSays: string | null;
+  /** Firm Order Commitment: the date the OTHER carrier agreed to release it. */
+  scheduledDate: string | null;
+  /** True once the number is answering on Connect. */
+  live: boolean;
+  /** True when paperwork or a stuck transfer needs a human — offer to escalate. */
+  needsPerson: boolean;
+  /** The temporary number carrying their calls until the real one lands. */
+  temporaryNumber: string | null;
+  temporaryNumberStillInUse: boolean;
+  steps: PortStep[];
+  /** When Connect last heard from the carrier about this order. */
+  asOf: string | null;
+  /** Carrier order reference — staff/admin only, never shown to a plain user. */
+  carrierOrderRef?: string;
+}
+
+function tenDigits(v: unknown): string {
+  return String(v ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+}
+
+/** "8452605692" → "(845) 260-5692" so the model never recites bare digits. */
+export function prettyNumber(v: unknown): string | null {
+  const d = tenDigits(v);
+  if (d.length !== 10) return null;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+/** Calendar day in UTC. FOC dates are calendar dates, not instants. */
+function utcDay(at: Date): string {
+  return at.toISOString().slice(0, 10);
+}
+
+/**
+ * Classify the carrier's own status token.
+ *
+ * ⛔ Only tokens PROVEN against the live API are matched by name; anything else
+ * falls through to the carrier's own description text. Inventing a mapping for a
+ * status nobody has seen is how a customer gets told their transfer is fine when
+ * it has been rejected. Proven live 2026-08-21: `completed`, `cancelled`;
+ * `foc_received` is recorded in the port-automation handoff.
+ */
+export function classifyCarrierStatus(token: string | null | undefined): "done" | "stopped" | "progressing" | "unknown" {
+  const s = String(token ?? "").trim().toLowerCase();
+  if (!s) return "unknown";
+  if (/complet/.test(s)) return "done";
+  if (/reject|cancel|declin|fail/.test(s)) return "stopped";
+  if (/foc|submit|pend|process|progress|new|receiv|confirm/.test(s)) return "progressing";
+  return "unknown";
+}
+
+export interface SubmissionLike {
+  companyName?: string | null;
+  provisionedDid?: string | null;
+  answers?: any;
+}
+
+/**
+ * Pure: turn one sign-up row into what a customer should be told. Kept free of
+ * Prisma so the wording is testable directly — the wording IS the feature here.
+ */
+export function summarisePort(
+  row: SubmissionLike,
+  opts: { includeCarrierRef: boolean; now?: Date },
+): PortStatusView {
+  const now = opts.now ?? new Date();
+  const prov: any = (row.answers || {}).provisioning || {};
+  const landing: any = prov.portLanding || {};
+  const number = prettyNumber((row.answers || {}).phone?.details?.numbers);
+  const carrierToken: string | null = prov.portStatus ?? prov.lastPortStatus ?? null;
+  const carrierSays: string | null = prov.portStatusText || carrierToken || null;
+  const scheduledDate: string | null = prov.portFocDate || null;
+  const kind = classifyCarrierStatus(carrierToken);
+
+  const tempNumber = prettyNumber(prov.tempDid || row.provisionedDid);
+  const tempRetired = !!landing.tempRetiredAt;
+
+  // The transfer is "moving" the moment the number reaches our carrier account —
+  // that is when routing, texting and menus get wired across, which can be days
+  // before the order itself reads completed.
+  const arrived = !!landing.routedAt;
+  const complete = !!landing.completedAt;
+
+  const steps: PortStep[] = [
+    { step: "Transfer requested with your current provider", done: !!prov.portFiled },
+    { step: "Release date agreed by your current provider", done: !!scheduledDate },
+    { step: "Number handed over to Connect", done: arrived },
+    { step: "Calls, texts and menus moved onto it", done: !!landing.publishedAt || !!landing.destCopiedAt || !!landing.smsAt },
+    { step: "Temporary number retired", done: tempRetired },
+  ];
+
+  // A landing that keeps failing, and paperwork the other carrier refused, are
+  // the two states where "sit tight" is the wrong advice.
+  const stuck = Number(landing.failures || 0) >= 3 || !!landing.lastError || !!landing.lastSwitchFailure;
+
+  let stage: PortStatusView["stage"];
+  let summary: string;
+  let needsPerson = false;
+
+  if (kind === "stopped") {
+    stage = "stopped";
+    needsPerson = true;
+    summary = `The transfer of ${number ?? "your number"} was stopped by the other provider${carrierSays ? ` (they reported: ${carrierSays})` : ""}. That almost always means a detail on the paperwork — the account number, PIN or service address — did not match their records, and a person has to correct it.`;
+  } else if (complete || (kind === "done" && arrived)) {
+    stage = "live";
+    summary = `${number ?? "Your number"} has finished transferring and is live on Connect${tempRetired && tempNumber ? `; the temporary number ${tempNumber} has been retired` : ""}.`;
+  } else if (stuck && arrived) {
+    stage = "moving";
+    needsPerson = true;
+    summary = `${number ?? "Your number"} has been handed over to Connect, but moving your calls onto it has hit a problem and is being retried. Someone should look at this.`;
+  } else if (arrived) {
+    stage = "moving";
+    summary = `${number ?? "Your number"} has been handed over to Connect and is being switched across now. Nothing is needed from you.`;
+  } else if (scheduledDate) {
+    // ⛔ One day of slack before calling a transfer late: the release date is a
+    // US calendar date and this clock is UTC, so a same-day comparison would
+    // tell a customer their transfer is overdue while it is still due.
+    const overdue = scheduledDate < utcDay(new Date(now.getTime() - 24 * 3600 * 1000));
+    stage = overdue ? "overdue" : "scheduled";
+    needsPerson = overdue;
+    summary = overdue
+      ? `${number ?? "Your number"} was due to transfer on ${scheduledDate} and has not come across yet. Transfers do slip, and Connect is still watching for it, but if it matters today a person should chase the other provider.`
+      : `${number ?? "Your number"} is scheduled to transfer on ${scheduledDate}. That date is set by your current provider, so it can still move.`;
+  } else if (prov.portFiled) {
+    stage = "filed";
+    summary = `The request to transfer ${number ?? "your number"} is with your current provider and they have not given a release date yet${carrierSays ? ` (they currently report: ${carrierSays})` : ""}. That date is theirs to set.`;
+  } else {
+    stage = "unknown";
+    needsPerson = true;
+    summary = `A transfer of ${number ?? "a number"} is on this account's sign-up, but it has not been submitted to the other provider yet.`;
+  }
+
+  if (!complete && tempNumber && !tempRetired) {
+    summary += ` In the meantime your calls come in on ${tempNumber}.`;
+  }
+
+  const view: PortStatusView = {
+    number,
+    stage,
+    summary,
+    carrierSays,
+    scheduledDate,
+    live: stage === "live",
+    needsPerson,
+    temporaryNumber: tempNumber,
+    temporaryNumberStillInUse: !!tempNumber && !tempRetired && !complete,
+    steps,
+    asOf: prov.portStatusCheckedAt || landing.completedAt || null,
+  };
+  // ⛔ The VoIP.ms order id is OUR carrier relationship, not the customer's
+  // reference. Staff and the account's own admin get it (they may be on the
+  // phone to support quoting it); a plain user never sees it.
+  if (opts.includeCarrierRef && prov.portId) view.carrierOrderRef = String(prov.portId);
+  return view;
+}
+
+export interface PortStatusToolDeps {
+  prisma: any;
+}
+
+export function buildPortStatusTools(deps: PortStatusToolDeps): ToolSpec[] {
+  return [
+    {
+      name: "port_status",
+      description:
+        "Where this account's phone-number transfer (\"port\") from another provider has got to: whether it has been requested, the release date the old provider agreed, whether the number has come across yet, which temporary number is carrying calls meanwhile, and whether it was rejected. Use for any 'when does my number transfer', 'is my number moved over yet', 'what is happening with the port' question — check this BEFORE saying anything about a transfer. Read-only. Give the release date as a date the OTHER provider set, which can still move; never promise it. If it reports nothing on record, say exactly that — Connect only tracks transfers arranged through sign-up, so one arranged directly may not appear — and offer to have a person check.",
+      minRole: "customer",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      run: async (_args: Record<string, unknown>, ctx: ToolContext) => {
+        const rows = await deps.prisma.onboardingSubmission.findMany({
+          // ⛔ Tenant comes from the verified context only. `createdTenantId` is
+          // the sole link between a company and its sign-up.
+          where: { createdTenantId: ctx.tenantId },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: { id: true, companyName: true, provisionedDid: true, answers: true, createdAt: true },
+        });
+        const ports = rows
+          .filter((r: any) => {
+            const prov: any = (r.answers || {}).provisioning || {};
+            const choice = String((r.answers || {}).phone?.choice || "");
+            return !!prov.portFiled || !!prov.portId || choice === "port";
+          })
+          .map((r: any) => summarisePort(r, { includeCarrierRef: ctx.role !== "customer" }));
+
+        if (!ports.length) {
+          return {
+            ok: true,
+            found: false,
+            // Deliberately not "you have no transfer in progress" — see the header.
+            message:
+              "Connect has no number transfer on record for this account. Transfers arranged through sign-up are tracked here; one arranged directly with the Connect team may not show up. If they believe a number is being transferred, offer to pass it to the team to check.",
+          };
+        }
+        return { ok: true, found: true, ports };
+      },
+    },
+  ];
+}

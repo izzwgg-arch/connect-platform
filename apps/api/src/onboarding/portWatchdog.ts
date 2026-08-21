@@ -120,6 +120,26 @@ export async function sweepOpenPorts(deps: PortWatchdogDeps = defaultPortWatchdo
     const creds = await deps.loadCreds();
     if (!creds) return summary; // master account unconfigured — nothing to poll
 
+    // ── One list read for the whole sweep ────────────────────────────────────
+    // ⛔ `getLNPStatus {portid}` returns ONLY {post_status,
+    // post_status_description} — it does NOT carry the FOC date. `getLNPList`
+    // returns every order on the account WITH `foc_date`, in one call (both
+    // shapes probed read-only against the live API 2026-08-21). The FOC date is
+    // the one fact a customer actually asks for — "when does my number move?" —
+    // so without this the port_status tool has nothing to tell them.
+    // Best-effort by design: if the list call fails, every row below falls back
+    // to the per-order status endpoint and behaves exactly as it did before.
+    const orders = new Map<string, { port_status?: string; port_status_description?: string; foc_date?: string }>();
+    try {
+      const listed = await deps.vms(creds, "getLNPList", {});
+      for (const o of Array.isArray(listed?.list) ? listed.list : []) {
+        const id = String(o?.portid ?? "").trim();
+        if (id) orders.set(id, o);
+      }
+    } catch {
+      /* carrier hiccup — per-order fallback below still runs */
+    }
+
     for (const row of rows) {
       const prov: any = (row.answers || {}).provisioning || {};
       const portedDid = tenDigits(row.answers?.phone?.details?.numbers);
@@ -129,12 +149,35 @@ export async function sweepOpenPorts(deps: PortWatchdogDeps = defaultPortWatchdo
       let portCompleted = false;
       if (prov.portId) {
         try {
-          const r = await deps.vms(creds, "getLNPStatus", { portid: String(prov.portId) });
-          const statusStr = String(r?.post_status || r?.post_status_description || "").trim() || "unknown";
+          const listed = orders.get(String(prov.portId));
+          let statusStr: string;
+          let statusText = "";
+          let focDate = "";
+          if (listed) {
+            statusStr = String(listed.port_status || listed.port_status_description || "").trim() || "unknown";
+            statusText = String(listed.port_status_description || "").trim();
+            focDate = String(listed.foc_date || "").trim();
+          } else {
+            const r = await deps.vms(creds, "getLNPStatus", { portid: String(prov.portId) });
+            statusStr = String(r?.post_status || r?.post_status_description || "").trim() || "unknown";
+            statusText = String(r?.post_status_description || "").trim();
+          }
           portCompleted = /complete/i.test(statusStr);
+          // Stamped on EVERY successful read, not only on a change: the chat
+          // tool tells the customer "as of <when>", and a status that has sat
+          // unchanged for a week is not the same as one we stopped checking.
+          // ⛔ Never clear a known FOC date with a blank — the per-order
+          // fallback carries no date, so a sweep that misses the list must not
+          // erase what the last list read told us.
+          const always: Record<string, any> = {
+            portStatus: statusStr,
+            portStatusCheckedAt: new Date().toISOString(),
+            ...(statusText ? { portStatusText: statusText } : {}),
+            ...(focDate ? { portFocDate: focDate } : {}),
+          };
           if (statusStr !== String(prov.lastPortStatus || "")) {
-            await mergeProvisioning(db, row, { lastPortStatus: statusStr });
-            await logEvent(db, row.id, `Port order ${prov.portId} status: ${statusStr}.`);
+            await mergeProvisioning(db, row, { ...always, lastPortStatus: statusStr });
+            await logEvent(db, row.id, `Port order ${prov.portId} status: ${statusStr}${focDate ? ` (transfer date ${focDate})` : ""}.`);
             if (/reject|cancel/i.test(statusStr)) {
               await queueAlert(db, `[Connect] Port needs attention: ${row.companyName || row.id} — ${statusStr}`, [
                 `The port of ${portedDid} for ${row.companyName || "a customer"} now reads "${statusStr}" at VoIP.ms (order ${prov.portId}).`,
@@ -142,6 +185,11 @@ export async function sweepOpenPorts(deps: PortWatchdogDeps = defaultPortWatchdo
                 "Rejections always need a human — usually the account number, PIN, or service address doesn't match the losing carrier's records. Open the VoIP.ms porting ticket, fix the paperwork, and the watchdog picks it back up on its own.",
               ]);
             }
+          } else {
+            // Unchanged status still refreshes when we last checked and the
+            // transfer date — a date can be agreed (or moved) without the
+            // status token changing at all.
+            await mergeProvisioning(db, row, always);
           }
         } catch {
           /* status endpoint hiccup — the arrival check below still runs */

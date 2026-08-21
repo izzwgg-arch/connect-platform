@@ -6726,6 +6726,75 @@ deploy, no regeneration, no reload. Read-only everywhere else.)
   or a branch rollback.** Verify with `--is-ancestor` / `ls-tree`, never by
   eyeballing the log.
 
+## ⛔⛔ AGENT HANDOFF — the assistant can ANSWER "when does my number transfer?" now, and the question used to text Izzy instead (2026-08-21) — READ FIRST before touching `port_status`, before letting the agent call a carrier, or for "a customer asked about their port"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_PORT_AUTOMATION_2026-08-12.md` §7**
+(`apps/agent` + one `apps/api` watchdog change. No migration, no PBX write, no
+env change, no tenant row, no carrier write — the only live carrier contact was
+a read-only probe of `getLNPStatus`/`getLNPList`.)
+Izzy, 2026-08-21: *"The agent assistant on LoopCom should be able to check phone
+number port statuses."*
+
+- ⛔⛔ **THE QUESTION WAS BEING ESCALATED, NOT ANSWERED.** There was **no route,
+  no screen and no tool** for port status anywhere in the product — the only
+  record was the sign-up timeline, which nobody outside admin can read. So the
+  most anxious, most repeated question in a sign-up fell to the assistant's
+  catch-all *"passed to the human team"*, which since 2026-08-19 writes an
+  `AgentEscalation` and **texts Izzy's two phones**. An answer already sitting in
+  our own database was paging a person.
+- ✅ **`port_status`** (`apps/agent/src/tools/portStatusTools.ts`), `minRole:
+  "customer"`, no parameters, tenant bound from the verified context via
+  `createdTenantId`. Stages `filed → scheduled → overdue → moving → live`, plus
+  `stopped`, each with ONE plain-English sentence the model can say verbatim.
+- ⛔ **IT NEVER TOUCHES THE CARRIER, and a guard test reads its own source to
+  enforce that** (refuses `voip.ms`, `getLNPStatus`, `getLNPList`,
+  `loadMasterCreds`, `fetch(`). The agent holds no VoIP.ms credentials and must
+  not start; VoIP.ms's READ path degrades independently of its write path; and a
+  customer asking three times in a minute must not become three carrier calls.
+  It reads the port watchdog's mirror instead — hence `asOf` on every answer.
+- ⛔⛔ **THE FOC DATE — the thing customers actually ask for — WAS RECORDED
+  NOWHERE.** Probed read-only 2026-08-21: `getLNPStatus {portid}` returns
+  **only** `{post_status, post_status_description}`; **`getLNPList` returns every
+  order WITH `foc_date`** in one call. The watchdog now reads the list once per
+  sweep and falls back to `getLNPStatus` for any order the list did not name —
+  ⛔ that fallback is load-bearing, or a truncated list means a completed port is
+  never detected and the temporary number never retires. New keys:
+  `portFocDate`, `portStatus`, `portStatusText`, `portStatusCheckedAt`
+  (`lastPortStatus` untouched). ⛔ **A blank never overwrites a known
+  `portFocDate`** (the fallback carries no date); `portStatusCheckedAt` stamps on
+  every successful read, because "as of" is a promise.
+- ⛔⛔ **THE HONEST NEGATIVE IS THE POINT: Connect can only see ports filed
+  through the SIGN-UP WIZARD.** That is the only filing path, and the watchdog
+  sweeps `OnboardingSubmission` — so **a port arranged by hand for an EXISTING
+  customer is structurally invisible** (the carrier account carries 30+ such
+  historical orders). An empty result therefore says *"Connect has no number
+  transfer ON RECORD … one arranged directly may not show up"* and offers a
+  person. ⛔ **Never let this become "you have no transfer in progress"** — to
+  someone whose number really is moving that is a confident falsehood.
+- ⛔ **Never promise the date** (it belongs to the losing carrier and slips — the
+  tool description and the system prompt both say so), **never show a customer
+  `portId`** (`carrierOrderRef` is emitted only when `role !== "customer"`), and
+  **never invent a status mapping**: `classifyCarrierStatus` matches only tokens
+  proven live (`completed`, `cancelled`, `foc_received`) and otherwise falls
+  through to VoIP.ms's own description text.
+- ⛔ **The system prompt needed a line, or the tool would not have been used** —
+  its catch-all actively tells the model it cannot help. A new `WHAT YOU CAN LOOK
+  UP YOURSELF` block names `port_status`. Adding a read tool to this agent is not
+  finished until the prompt stops contradicting it.
+- ✅ **Proven:** 18 agent + 3 watchdog tests, registered; **all 5 source guards
+  fail replayed against `HEAD`**; agent typecheck **14 = its exact baseline**, api
+  **75 = its exact baseline**, none in an edited file; agent suite 719/721 (the 2
+  pre-existing transcription failures), api onboarding 266/290 (the 24
+  pre-existing `setupOrchestrator` failures). **The tenant link is proven on LIVE
+  data**: the tool's exact query resolves Matamim and inii mini, and a tenant with
+  no sign-up port returns zero rows.
+- ⏳ **NOT PROVEN: nobody has asked the assistant about a port**, and **there is
+  no open port on the account today** (both real ports completed in August), so
+  `portFocDate` stays null on every existing row — every stage is written to work
+  without it, and the first port filed after this deploy proves the date half.
+  ⛔ **The acceptance test that matters most is the negative: ask from a tenant
+  with NO port and confirm it says Connect has none ON RECORD.**
+
 ## ⛔ AGENT HANDOFF — number ports land themselves now (2026-08-12) — READ FIRST for ANY port-in work, "the port completed and nothing happened", the port watchdog, or before touching portLanding/portWatchdog
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_PORT_AUTOMATION_2026-08-12.md`**

@@ -449,6 +449,85 @@ test("sweep: repeated landing failures alert exactly once, at the threshold", as
   assert.equal(stuck.length, 1);
 });
 
+// ── The transfer date the customer actually asks about ───────────────────────
+// The chat assistant answers "when does my number move?" from Connect's own
+// mirror, so the sweep has to WRITE the FOC date. It only exists on
+// getLNPList — getLNPStatus returns status text and nothing else (both shapes
+// probed read-only against the live API, 2026-08-21).
+
+test("sweep: the order list supplies the transfer date, and the per-order status call is not made", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const handlers = {
+    ...ROUTED_OK,
+    getLNPList: () => ({
+      status: "success",
+      list: [
+        { portid: "999999", numbers: "5551234567", foc_date: "2026-01-01", port_status: "completed" },
+        { portid: "217760", numbers: "6469846023", foc_date: "2026-09-04", port_status: "foc_received", port_status_description: "FOC Received" },
+      ],
+    }),
+    getLNPStatus: () => {
+      throw new Error("must not be called when the list already names this order");
+    },
+    getDIDsInfo: () => ({ status: "error" }), // not on the account yet
+  };
+
+  await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  const prov = row.answers.provisioning;
+  assert.equal(prov.portFocDate, "2026-09-04");
+  assert.equal(prov.portStatus, "foc_received");
+  assert.equal(prov.portStatusText, "FOC Received");
+  assert.ok(prov.portStatusCheckedAt, "the customer is told 'as of' — so it must be stamped");
+  assert.equal(calls.filter((c) => c.method === "getLNPStatus").length, 0);
+  assert.equal(calls.filter((c) => c.method === "getLNPList").length, 1, "one list read serves the whole sweep");
+  assert.ok(s.events.find((e) => /transfer date 2026-09-04/.test(e.message)));
+});
+
+test("sweep: an order missing from the list falls back to the status call, and a known transfer date is NOT erased", async () => {
+  const s = makeState();
+  const row = submission(s);
+  row.answers.provisioning.portFocDate = "2026-09-04";
+  row.answers.provisioning.lastPortStatus = "foc_received";
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const handlers = {
+    ...ROUTED_OK,
+    getLNPList: () => ({ status: "error" }), // carrier hiccup on the list read
+    getLNPStatus: () => ({ status: "success", post_status: "In Progress" }),
+    getDIDsInfo: () => ({ status: "error" }),
+  };
+
+  await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  assert.equal(calls.filter((c) => c.method === "getLNPStatus").length, 1, "falls back so completion is never missed");
+  assert.equal(row.answers.provisioning.portStatus, "In Progress");
+  // ⛔ The fallback carries no date. Blanking it here would tell the customer
+  // we no longer know when their number moves, having once known.
+  assert.equal(row.answers.provisioning.portFocDate, "2026-09-04");
+});
+
+test("sweep: an unchanged status still refreshes when we last checked", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const handlers = {
+    ...ROUTED_OK,
+    getLNPList: () => ({ status: "success", list: [{ portid: "217760", foc_date: "2026-09-04", port_status: "foc_received" }] }),
+    getDIDsInfo: () => ({ status: "error" }),
+  };
+
+  await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  const first = row.answers.provisioning.portStatusCheckedAt;
+  await new Promise((r) => setTimeout(r, 5));
+  await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  assert.notEqual(row.answers.provisioning.portStatusCheckedAt, first);
+  // One status change, one timeline line — a re-check is not news.
+  assert.equal(s.events.filter((e) => /Port order 217760 status/.test(e.message)).length, 1);
+});
+
 // ── Pointing the ported number + the re-publish ───────────────────────────────
 
 test("PBX world: the ported route copies the temp route's destination, then routing is re-published", async () => {
