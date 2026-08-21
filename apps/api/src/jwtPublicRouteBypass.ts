@@ -35,6 +35,12 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.endsWith("/internal/telephony/user-extensions")
     || path === "/internal/telephony/inbound-crm-match"
     || path.endsWith("/internal/telephony/inbound-crm-match");
+  // SMS-bridge shared-inbox reply door. In-handler shared-secret auth via
+  // guardInternalSecret (fail-closed). ⛔ A missing entry here makes the
+  // route answer 401 before its own secret check ever runs - 403 means you
+  // reached the handler, 401 means you did not.
+  const isInternalChatSystemReplyPath =
+    path === "/internal/chat/sms-system-reply" || path.endsWith("/internal/chat/sms-system-reply");
   const isInternalVoicemailNotifyPath =
     path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
   // M1 (AI agent): agent-service MOH override door. Authenticates in-handler via
@@ -140,6 +146,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalPbxWakePath
     || isInternalPbxContactStatusPath
     || isInternalTelephonyPath
+    || isInternalChatSystemReplyPath
     || isInternalVoicemailNotifyPath
     || isInternalAgentMohPath
     || isInternalAgentRoutePath

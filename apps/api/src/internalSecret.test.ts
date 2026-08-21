@@ -69,6 +69,7 @@ const GUARDED_ENDPOINTS = [
   "/internal/pbx/wake-extension",
   "/internal/telephony/pbx-tenant-map",
   "/internal/pbx/contact-status",
+  "/internal/chat/sms-system-reply",
 ];
 
 test("every /internal/* door routes through the shared guard", () => {

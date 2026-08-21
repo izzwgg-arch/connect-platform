@@ -67,6 +67,11 @@ export interface SmsEmailReplyJobDeps {
   /** Same JWT_SECRET the portal api verifies with. */
   jwtSecret: () => string | null;
   apiBaseUrl: () => string;
+  /**
+   * CDR_INGEST_SECRET - the lock on /internal/*. Used ONLY for the shared-inbox
+   * system-send door; a personal send goes out as that person's own JWT.
+   */
+  internalSecret?: () => string | null;
   /** Domain for threading Message-IDs — must match the forward job's. */
   messageIdDomain: () => string;
   fetchImpl?: typeof fetch;
@@ -195,37 +200,49 @@ export class SmsEmailReplyJob {
         sender = { id: matched.id, email: matched.email, role: matched.role, tenantId: matched.tenantId };
       }
     }
-    if (!sender) {
-      // Nobody to send as: a shared inbox replied to from an address we do not
-      // know. Audited, never silently dropped, and no notice goes anywhere —
-      // we have no verified address to send one to.
-      await audit("sms.reply_refused", { reason: "shared_inbox_unidentified_sender", from: fromEmail, threadId: thread.id });
-      return "dropped";
-    }
+    // A shared inbox replied to from an address we do not recognise still goes
+    // out - with NO NAME attached, through the system door. senderUserId null is
+    // the schema's normal shape, and attributing a shared inbox's text to one of
+    // its several people would itself be wrong.
     const routedSender = sender;
+    const isSystemSend = routedSender === null;
 
     // A refusal is explained ONLY to the inbox owner, at the address WE hold in
     // our own database. ⛔ Never reply to the email's From: whoever holds a
     // leaked reply address must not be able to learn anything back from it - a
     // reply is a WRITE into one thread and nothing more.
     const refuse = async (reason: string, humanText: string) => {
-      await audit("sms.reply_refused", { reason, from: fromEmail, sentAs: routedSender.email, threadId: thread.id });
-      await this.sendFailureNotice(routedSender.email, thread, humanText).catch(() => {});
+      await audit("sms.reply_refused", { reason, from: fromEmail, sentAs: routedSender?.email ?? null, threadId: thread.id });
+      // ⛔ A notice goes ONLY to an address WE hold. On a system send there is
+      //    none, so nothing is sent - replying to the From would hand whoever
+      //    holds a leaked address a way to learn something back.
+      if (routedSender) await this.sendFailureNotice(routedSender.email, thread, humanText).catch(() => {});
       return "dropped" as const;
     };
 
     // A leaked address must not become a way to flood a customer. Counts real
     // sends on THIS thread in the last hour from the audit trail, so it survives
     // a restart - never a module variable.
+    // ⛔ The column is `ts`, NOT `createdAt` (AgentAuditLog in schema.prisma).
+    //    It was written as `createdAt` first: Prisma threw, the catch below
+    //    swallowed it, sentLastHour was always 0 and this cap never fired -
+    //    silently, with a green test suite. A swallowed catch on a query that
+    //    DECIDES something is how a guard becomes decoration.
     const sentLastHour = await this.deps.prisma.agentAuditLog
       .count({
         where: {
           event: "sms.reply_sent",
-          createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
+          ts: { gte: new Date(Date.now() - 60 * 60 * 1000) },
           payload: { path: ["threadId"], equals: thread.id },
         },
       })
-      .catch(() => 0);
+      .catch(async (err: any) => {
+        // Fails OPEN on purpose: the signed address is the primary control and
+        // a transient database error must not refuse a legitimate reply. But it
+        // is never silent - a cap that stops working has to be greppable.
+        await audit("sms.reply_rate_check_failed", { threadId: thread.id, error: String(err?.message ?? err).slice(0, 200) });
+        return 0;
+      });
     if (sentLastHour >= MAX_REPLIES_PER_THREAD_PER_HOUR) {
       return refuse(
         "rate_limited",
@@ -256,7 +273,7 @@ export class SmsEmailReplyJob {
     await this.deps.audit.record({
       actor: "system",
       event: "sms.reply_claimed",
-      payload: { dedupeId, threadId: thread.id, userId: routedSender.id, sentAs: routedSender.email, receivedFrom: fromEmail, chars: body.length },
+      payload: { dedupeId, threadId: thread.id, userId: routedSender?.id ?? null, sentAs: routedSender?.email ?? "(shared inbox — no name)", receivedFrom: fromEmail, chars: body.length },
     });
 
     // 6) Send through the REAL route as the inbox owner. ⛔ Never a parallel
@@ -268,17 +285,24 @@ export class SmsEmailReplyJob {
     const base = this.deps.apiBaseUrl().replace(/\/$/, "");
     let res: Response;
     try {
-      res = await doFetch(`${base}/chat/threads/${encodeURIComponent(thread.id)}/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${this.mintUserToken(routedSender)}` },
-        body: JSON.stringify({ body }),
-        signal: AbortSignal.timeout(30_000),
-      });
+      res = routedSender
+        ? await doFetch(`${base}/chat/threads/${encodeURIComponent(thread.id)}/messages`, {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${this.mintUserToken(routedSender)}` },
+            body: JSON.stringify({ body }),
+            signal: AbortSignal.timeout(30_000),
+          })
+        : await doFetch(`${base}/internal/chat/sms-system-reply`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-cdr-secret": this.deps.internalSecret?.() ?? "" },
+            body: JSON.stringify({ threadId: thread.id, body }),
+            signal: AbortSignal.timeout(30_000),
+          });
     } catch (err) {
       // Unreachable api. The claim stands, so this is NEVER retried — the person
       // is told immediately instead of maybe-texted twice later.
-      await audit("sms.reply_failed", { reason: "api_unreachable", error: String(err).slice(0, 200), threadId: thread.id, sentAs: routedSender.email });
-      await this.sendFailureNotice(routedSender.email, thread, "Something went wrong on our side and your reply was not sent as a text. Please try again in a minute, or send it from the app.").catch(() => {});
+      await audit("sms.reply_failed", { reason: "api_unreachable", error: String(err).slice(0, 200), threadId: thread.id, sentAs: routedSender?.email ?? null, systemSend: isSystemSend });
+      if (routedSender) await this.sendFailureNotice(routedSender.email, thread, "Something went wrong on our side and your reply was not sent as a text. Please try again in a minute, or send it from the app.").catch(() => {});
       return "dropped";
     }
     if (!res.ok) {
@@ -287,8 +311,8 @@ export class SmsEmailReplyJob {
         const bodyJson: any = await res.json();
         detail = String(bodyJson?.message || bodyJson?.error || "");
       } catch { /* body unreadable — the status alone will do */ }
-      await audit("sms.reply_failed", { reason: "api_refused", status: res.status, detail: detail.slice(0, 200), threadId: thread.id, sentAs: routedSender.email });
-      await this.sendFailureNotice(
+      await audit("sms.reply_failed", { reason: "api_refused", status: res.status, detail: detail.slice(0, 200), threadId: thread.id, sentAs: routedSender?.email ?? null, systemSend: isSystemSend });
+      if (routedSender) await this.sendFailureNotice(
         routedSender.email,
         thread,
         detail && /[a-z] [a-z]/i.test(detail)
@@ -298,7 +322,7 @@ export class SmsEmailReplyJob {
       return "dropped";
     }
 
-    await audit("sms.reply_sent", { threadId: thread.id, userId: routedSender.id, sentAs: routedSender.email, receivedFrom: fromEmail, chars: body.length, dedupeId });
+    await audit("sms.reply_sent", { threadId: thread.id, userId: routedSender?.id ?? null, sentAs: routedSender?.email ?? "(shared inbox — no name)", receivedFrom: fromEmail, systemSend: isSystemSend, chars: body.length, dedupeId });
     return "sent";
   }
 

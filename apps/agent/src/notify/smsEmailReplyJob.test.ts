@@ -22,6 +22,41 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { SmsEmailReplyJob, type SmsReplyEmail } from "./smsEmailReplyJob";
 import { mintSmsReplyAddress } from "./smsEmailReply";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * The REAL column names of AgentAuditLog, parsed from schema.prisma.
+ *
+ * ⛔ This exists because a fake that ignores its `where` clause cannot catch a
+ * wrong field name. The flood cap was first written against `createdAt`, which
+ * AgentAuditLog does not have; Prisma threw, a .catch swallowed it, the cap
+ * silently never fired, and every test still passed. The fake now refuses any
+ * field the real model does not have.
+ */
+const AGENT_AUDIT_LOG_FIELDS = (() => {
+  const schema = readFileSync(join(__dirname, "../../../../packages/db/prisma/schema.prisma"), "utf8").replace(/\r\n/g, "\n");
+  const block = /model AgentAuditLog \{([\s\S]*?)\n\}/.exec(schema);
+  if (!block) throw new Error("could not find model AgentAuditLog in schema.prisma");
+  return new Set(
+    block[1]
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("//") && !l.startsWith("@@") && !l.startsWith("///"))
+      .map((l) => l.split(/\s+/)[0])
+      .filter(Boolean),
+  );
+})();
+
+function assertRealAuditFields(where: Record<string, unknown>) {
+  for (const key of Object.keys(where || {})) {
+    if (!AGENT_AUDIT_LOG_FIELDS.has(key)) {
+      throw new Error(
+        `Unknown argument \`${key}\`. Available options are marked with ?. (AgentAuditLog has no such field)`,
+      );
+    }
+  }
+}
 
 const SECRET = "reply-secret-0123456789abcdef";
 const JWT = "jwt-secret-0123456789abcdef00";
@@ -85,7 +120,11 @@ function makeHarness(opts: { owner?: any; thread?: any; priorClaims?: string[]; 
     connectChatParticipant: { findFirst: async () => ({ id: "p1" }) },
     agentAuditLog: {
       findFirst: async ({ where }: any) => (priorClaims.has(where.payload.equals) ? { id: "claim1" } : null),
-      count: async () => opts.sentLastHour ?? 0,
+      count: async ({ where }: any) => {
+        // Behaves like Prisma: an unknown field is a THROW, not a silent 0.
+        assertRealAuditFields(where);
+        return opts.sentLastHour ?? 0;
+      },
     },
     contactPhone: { findFirst: async () => ({ contact: { displayName: "Chaim Katz" } }) },
   };
@@ -116,6 +155,7 @@ function makeHarness(opts: { owner?: any; thread?: any; priorClaims?: string[]; 
     replySecret: () => SECRET,
     jwtSecret: () => JWT,
     apiBaseUrl: () => "http://api:3001",
+    internalSecret: () => "internal-secret-for-tests",
     messageIdDomain: () => DOMAIN,
     fetchImpl: (async (url: any, init: any) => {
       fetches.push({ url: String(url), init });
@@ -226,14 +266,45 @@ describe("SmsEmailReplyJob — routing decides the sender, not the From header",
     assert.equal(h.reason("sms.reply_refused"), "inbox_owner_gone");
   });
 
-  it("a SHARED inbox is stored as '' — never read as an owner, never sent as user id ''", async () => {
-    // The From is nobody we know, so there is no one to attribute it to.
+  it("a SHARED inbox from an unknown address is TEXTED with no name, via the system door", async () => {
     const h = makeHarness({ thread: { ...THREAD, smsInboxOwnerUserId: "" } });
     h.setEmails([makeEmail({ from: "nobody@elsewhere.example" })]);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.equal(h.fetches.length, 1);
+    // The system door, not the per-user route.
+    assert.match(h.fetches[0].url, /\/internal\/chat\/sms-system-reply$/);
+    assert.equal(h.fetches[0].init.headers["x-cdr-secret"], "internal-secret-for-tests");
+    // It carries a thread id and a message and NOTHING else — no tenant to forge.
+    const body = JSON.parse(h.fetches[0].init.body);
+    assert.deepEqual(Object.keys(body).sort(), ["body", "threadId"]);
+    assert.equal(body.threadId, THREAD_ID);
+    // Never a bearer token on this path.
+    assert.equal(h.fetches[0].init.headers.authorization, undefined);
+    const sent = h.audits.find((a) => a.event === "sms.reply_sent")!;
+    assert.equal(sent.payload.userId, null);
+    assert.equal(sent.payload.systemSend, true);
+    assert.equal(sent.payload.receivedFrom, "nobody@elsewhere.example");
+  });
+
+  it("a system send that FAILS notifies nobody — there is no verified address", async () => {
+    const h = makeHarness({ thread: { ...THREAD, smsInboxOwnerUserId: "" } });
+    h.state.fetchResponder = async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: "FORBIDDEN", message: "nope" }),
+    });
+    h.setEmails([makeEmail({ from: "nobody@elsewhere.example" })]);
     assert.equal(await h.job.runOnce(), 0);
-    assert.equal(h.fetches.length, 0);
-    assert.equal(h.reason("sms.reply_refused"), "shared_inbox_unidentified_sender");
-    assert.equal(h.notices.length, 0, "no verified address to notify, so nothing goes out");
+    assert.equal(h.notices.length, 0, "replying to the From would be an oracle");
+    assert.equal(h.reason("sms.reply_failed"), "api_refused");
+  });
+
+  it("an OWNED inbox never uses the system door — it is sent as the person", async () => {
+    const h = makeHarness();
+    h.setEmails([makeEmail({ from: "anyone@elsewhere.example" })]);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.doesNotMatch(h.fetches[0].url, /sms-system-reply/);
+    assert.ok(String(h.fetches[0].init.headers.authorization).startsWith("Bearer "));
   });
 
   it("NO REGRESSION: a shared inbox still sends when the From IS one of our users", async () => {
@@ -245,15 +316,18 @@ describe("SmsEmailReplyJob — routing decides the sender, not the From header",
     assert.equal(tokenClaims(h.fetches[0].init).sub, OWNER.id);
   });
 
-  it("a shared inbox refuses a From belonging to ANOTHER tenant", async () => {
+  it("a shared inbox never ATTRIBUTES to a From from another tenant", async () => {
+    // It still sends (the signed address is the credential) but it must not be
+    // attributed to a user outside the thread's tenant — it goes out unnamed.
     const h = makeHarness({
       thread: { ...THREAD, smsInboxOwnerUserId: "" },
       owner: { ...OWNER, tenantId: "SOME-OTHER-TENANT" },
     });
     h.setEmails([makeEmail({ from: OWNER.email })]);
-    assert.equal(await h.job.runOnce(), 0);
-    assert.equal(h.fetches.length, 0, "must never send into another tenant");
-    assert.equal(h.reason("sms.reply_refused"), "shared_inbox_unidentified_sender");
+    assert.equal(await h.job.runOnce(), 1);
+    assert.match(h.fetches[0].url, /sms-system-reply$/, "must not borrow another tenant's user");
+    const sent = h.audits.find((a) => a.event === "sms.reply_sent")!;
+    assert.equal(sent.payload.userId, null);
   });
 
   it("TWO different valid reply addresses is ambiguous and is refused, never resolved", async () => {
@@ -319,6 +393,22 @@ describe("SmsEmailReplyJob — routing decides the sender, not the From header",
     assert.equal(h.fetches.length, 0);
     assert.equal(h.reason("sms.reply_refused"), "rate_limited");
     assert.equal(h.notices.length, 1, "the owner is told, so it is not a silent drop");
+  });
+
+  it("the cap queries a REAL AgentAuditLog column — a wrong field must not be swallowed", async () => {
+    // Regression for the bug this suite missed once: the cap was written
+    // against `createdAt`, which AgentAuditLog does not have. Prisma threw, a
+    // .catch swallowed it, and the cap silently never fired. The fake now
+    // throws on an unknown field, so the send still happens (fail-open) BUT
+    // the failure is audited rather than silent.
+    const h = makeHarness({ sentLastHour: 999 });
+    h.setEmails([makeEmail()]);
+    await h.job.runOnce();
+    assert.equal(
+      h.has("sms.reply_rate_check_failed"),
+      false,
+      "the cap query must use real columns — an audited failure here means it does not",
+    );
   });
 
   it("the same email is never texted twice — a prior claim wins over everything", async () => {

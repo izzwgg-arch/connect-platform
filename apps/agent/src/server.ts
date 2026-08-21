@@ -1158,6 +1158,7 @@ async function main() {
           replySecret: () => process.env.JWT_SECRET || null,
           jwtSecret: () => process.env.JWT_SECRET || null,
           apiBaseUrl: () => process.env.AGENT_API_BASE_URL || "http://api:3001",
+          internalSecret: () => process.env.CDR_INGEST_SECRET || null,
           messageIdDomain: smsMessageIdDomain,
           brandName: "Loopcom",
         });

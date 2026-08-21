@@ -627,7 +627,24 @@ export async function findOrCreateConnectChatSmsThread(input: {
 
 export async function sendConnectChatSmsMessage(input: {
   deps: Pick<ConnectChatRoutesDeps, "smsQueue">;
-  user: JwtUser;
+  /**
+   * The staff member sending. Omit ONLY for a system send (see systemSender).
+   * When present, behaviour is byte-identical to before 2026-08-21.
+   */
+  user?: JwtUser;
+  /**
+   * A send with NO person behind it - the message is stored with
+   * senderUserId: null, which is the schema's normal shape (the column is
+   * nullable and is set to NULL whenever a rep is offboarded).
+   *
+   * ⛔ The participant and can_send_sms checks DO NOT APPLY here, because
+   * there is no person to check them against. That is only safe because the
+   * ONLY caller is a shared-inbox SMS thread reply whose thread id came from
+   * an HMAC-signed reply address, and because the tenant is derived from the
+   * THREAD - never from the request. Do not add a caller that takes a tenant
+   * or a thread id from user input.
+   */
+  systemSender?: { reason: string };
   tenantId: string;
   threadId: string;
   body: string;
@@ -636,22 +653,35 @@ export async function sendConnectChatSmsMessage(input: {
   location?: { lat: number; lng: number; label?: string; address?: string };
   attachments?: ChatAttachmentInput[];
 }): Promise<ConnectChatSmsSendResult> {
+  const systemReason = String(input.systemSender?.reason ?? "").trim();
+  if (!input.user && !systemReason) {
+    return { ok: false, status: 400, error: "NO_SENDER", message: "A sender is required." };
+  }
+  if (input.user && systemReason) {
+    return { ok: false, status: 400, error: "AMBIGUOUS_SENDER", message: "Pass a user or a system sender, never both." };
+  }
   const thread = await db.connectChatThread.findFirst({
     where: { id: input.threadId, tenantId: input.tenantId },
     select: { id: true, type: true, smsInboxOwnerUserId: true, tenantSmsE164: true, externalSmsE164: true },
   });
   if (!thread) return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
 
-  let part = await db.connectChatParticipant.findFirst({
-    where: { threadId: input.threadId, userId: input.user.sub, leftAt: null, thread: { tenantId: input.tenantId } },
-  });
-  if (!part) {
-    const access = await ensureSmsThreadParticipantForSend({ user: input.user, tenantId: input.tenantId, thread });
-    if (!access.ok) return access;
-    part = await db.connectChatParticipant.findFirst({
-      where: { threadId: input.threadId, userId: input.user.sub, leftAt: null, thread: { tenantId: input.tenantId } },
+  // Participation is a fact about a PERSON. A system send has none, so there
+  // is nothing here to check - see the systemSender doc above for why that is
+  // safe for its one caller.
+  const sendingUser = input.user;
+  if (sendingUser) {
+    let part = await db.connectChatParticipant.findFirst({
+      where: { threadId: input.threadId, userId: sendingUser.sub, leftAt: null, thread: { tenantId: input.tenantId } },
     });
-    if (!part) return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
+    if (!part) {
+      const access = await ensureSmsThreadParticipantForSend({ user: sendingUser, tenantId: input.tenantId, thread });
+      if (!access.ok) return access;
+      part = await db.connectChatParticipant.findFirst({
+        where: { threadId: input.threadId, userId: sendingUser.sub, leftAt: null, thread: { tenantId: input.tenantId } },
+      });
+      if (!part) return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
+    }
   }
 
   if (input.replyToMessageId) {
@@ -663,7 +693,7 @@ export async function sendConnectChatSmsMessage(input: {
   }
 
   if (thread.type !== "SMS") return { ok: false, status: 400, error: "NOT_SMS_THREAD" };
-  if (!(await canSendSmsUser(input.user))) return { ok: false, status: 403, error: "FORBIDDEN" };
+  if (sendingUser && !(await canSendSmsUser(sendingUser))) return { ok: false, status: 403, error: "FORBIDDEN" };
   const ext = thread.externalSmsE164;
   const tenantDid = thread.tenantSmsE164;
   if (!ext || !tenantDid) return { ok: false, status: 400, error: "SMS_THREAD_INCOMPLETE" };
@@ -701,16 +731,27 @@ export async function sendConnectChatSmsMessage(input: {
   const msgType =
     smsLinkFallback ? "TEXT" : atts.length > 0 ? inferAttachmentMessageType(atts) : ((input.type as any) || "TEXT");
 
+  // Same shape as before for a person; `undefined` (not {}) when there is
+  // nothing to record, so existing rows are unchanged.
+  const metaObj: Record<string, unknown> = {
+    ...(input.location ? { location: input.location } : {}),
+    ...(smsLinkFallback ? { smsLinkFallback: true } : {}),
+    ...(systemReason ? { systemSender: systemReason } : {}),
+  };
+  // Cast is for Prisma's Json input type only - these are VALUES in a blob, never
+  // field names, so it cannot hide a mistyped column.
+  const metaForCreate = (Object.keys(metaObj).length ? metaObj : undefined) as Prisma.InputJsonValue | undefined;
+
   const msg = await db.connectChatMessage.create({
     data: {
       tenantId: input.tenantId,
       threadId: input.threadId,
-      senderUserId: input.user.sub,
+      senderUserId: sendingUser ? sendingUser.sub : null,
       direction: "OUTBOUND",
       type: msgType,
       body: outboundBody,
       replyToMessageId: input.replyToMessageId,
-      metadata: input.location ? { location: input.location } : smsLinkFallback ? { smsLinkFallback: true } : undefined,
+      metadata: metaForCreate,
       deliveryStatus: "queued",
       deliveryError: null,
     },
@@ -738,7 +779,7 @@ export async function sendConnectChatSmsMessage(input: {
       where: { id: msg.id },
       data: {
         body: fallbackBody,
-        metadata: { ...(input.location ? { location: input.location } : {}), smsLinkFallback: true, smsMediaLinks: links },
+        metadata: { ...metaObj, smsLinkFallback: true, smsMediaLinks: links },
       },
     });
   }

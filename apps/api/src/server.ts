@@ -34341,6 +34341,55 @@ app.post("/internal/pbx/contact-status", async (req, reply) => {
 // Internal endpoint: the telephony service POSTs completed call data here.
 // No user auth required — secured by a shared CDR_INGEST_SECRET header.
 // Performs an upsert by linkedId to prevent duplicate rows.
+/**
+ * SMS-bridge reply into a SHARED inbox - the ONE system-send door.
+ *
+ * A text emailed out carries an HMAC-signed reply address naming its thread.
+ * When that thread routes to a PERSON the agent sends as that person over the
+ * ordinary authenticated route. When it is a SHARED inbox there is no person to
+ * attribute to, so the text goes out with no name attached (senderUserId null,
+ * the schema's normal shape) and this door is how.
+ *
+ * ⛔ THE TENANT IS DERIVED FROM THE THREAD AND IS NEVER TAKEN FROM THE REQUEST.
+ *   This body carries a thread id and a message and nothing else - there is no
+ *   tenant to forge. That is the lesson `inbound-crm-match` taught the hard way
+ *   (it read the caller's claimed role out of the request body).
+ *
+ * ⛔ It refuses a thread that HAS an owner: that one must be sent as the owner,
+ *   so this door can never be used to strip attribution off an owned inbox.
+ */
+app.post("/internal/chat/sms-system-reply", async (req, reply) => {
+  if (!guardInternalSecret(req, reply, "/internal/chat/sms-system-reply")) return;
+  const parsed = z
+    .object({ threadId: z.string().min(1).max(64), body: z.string().min(1).max(4000) })
+    .safeParse(req.body || {});
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "validation_error", message: "threadId and body are required." });
+  }
+
+  const thread = await db.connectChatThread.findUnique({
+    where: { id: parsed.data.threadId },
+    select: { id: true, type: true, tenantId: true, smsInboxOwnerUserId: true },
+  });
+  if (!thread || thread.type !== "SMS") {
+    return reply.code(404).send({ error: "thread_not_found" });
+  }
+  if (String(thread.smsInboxOwnerUserId || "").trim()) {
+    return reply
+      .code(409)
+      .send({ error: "thread_has_owner", message: "This inbox routes to a person - send as them, not as the system." });
+  }
+
+  const sent = await sendConnectChatSmsMessage({
+    deps: { smsQueue },
+    tenantId: thread.tenantId,
+    threadId: thread.id,
+    body: parsed.data.body,
+    systemSender: { reason: "sms_email_reply_shared_inbox" },
+  });
+  if (!sent.ok) return reply.code(sent.status).send({ error: sent.error, message: sent.message });
+  return { ok: true, messageId: sent.messageId, deliveryStatus: sent.deliveryStatus };
+});
 app.post("/internal/cdr-ingest", async (req, reply) => {
   if (!guardInternalSecret(req, reply, "/internal/cdr-ingest")) return reply;
 
