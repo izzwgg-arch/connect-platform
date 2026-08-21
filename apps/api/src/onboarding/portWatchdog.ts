@@ -30,6 +30,18 @@ function recipient(): string {
   return (process.env.ADMIN_ALERT_EMAIL || "tod10950@gmail.com").trim();
 }
 
+/**
+ * ⛔ Bound anything the carrier says BEFORE it enters our database. These values
+ * are free text from an upstream porting vendor, they are rewritten onto the
+ * submission on every sweep (96×/day while a port is open), and they are read
+ * back out by the assistant's `port_status` tool. The tool sanitises on read as
+ * well — this is the other end of the same fence, so a hostile or buggy carrier
+ * response cannot quietly grow a JSON column all week.
+ */
+function carrierField(v: unknown, max = 200): string {
+  return String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
 function tenDigits(v: unknown): string {
   return String(v ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
 }
@@ -164,13 +176,13 @@ export async function sweepOpenPorts(deps: PortWatchdogDeps = defaultPortWatchdo
           let statusText = "";
           let focDate = "";
           if (listed) {
-            statusStr = String(listed.port_status || listed.port_status_description || "").trim() || "unknown";
-            statusText = String(listed.port_status_description || "").trim();
-            focDate = String(listed.foc_date || "").trim();
+            statusStr = carrierField(listed.port_status || listed.port_status_description) || "unknown";
+            statusText = carrierField(listed.port_status_description);
+            focDate = carrierField(listed.foc_date, 32);
           } else {
             const r = await deps.vms(creds, "getLNPStatus", { portid: String(prov.portId) });
-            statusStr = String(r?.post_status || r?.post_status_description || "").trim() || "unknown";
-            statusText = String(r?.post_status_description || "").trim();
+            statusStr = carrierField(r?.post_status || r?.post_status_description) || "unknown";
+            statusText = carrierField(r?.post_status_description);
           }
           portCompleted = /complete/i.test(statusStr);
           // Stamped on EVERY successful read, not only on a change: the chat

@@ -600,6 +600,32 @@ test("sweep: a hostile order list cannot crash the sweep or mis-key an order", a
   assert.ok(row.answers.provisioning.portStatusCheckedAt);
 });
 
+test("sweep: a carrier value is bounded BEFORE it enters the database", async () => {
+  // ⛔ These are rewritten onto the submission on every sweep (96×/day while a
+  // port is open). An unbounded carrier string would grow a JSON column all
+  // week — and the assistant reads these values back out to a customer.
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const handlers = {
+    ...ROUTED_OK,
+    getLNPList: () => ({
+      status: "success",
+      list: [{ portid: "217760", port_status: "x".repeat(50000), port_status_description: "y".repeat(50000), foc_date: "z".repeat(5000) }],
+    }),
+    getDIDsInfo: () => ({ status: "error" }),
+  };
+
+  await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  const prov = row.answers.provisioning;
+  assert.ok(prov.portStatus.length <= 200, `stored status must be bounded, got ${prov.portStatus.length}`);
+  assert.ok(prov.portStatusText.length <= 200);
+  assert.ok(prov.portFocDate.length <= 32);
+  const stored = JSON.stringify(row.answers).length;
+  assert.ok(stored < 5000, `the whole answers blob must stay small, got ${stored}`);
+});
+
 test("sweep: a carrier list that throws leaves every existing behaviour intact", async () => {
   const s = makeState();
   const row = submission(s);
