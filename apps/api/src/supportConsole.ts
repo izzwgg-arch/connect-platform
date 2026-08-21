@@ -47,6 +47,8 @@ import {
   ALLOWED_BINARIES,
   COMMAND_TIMEOUT_MS,
   decideCommandRun,
+  gitBranch,
+  gitStatusMap,
   listWorkspaceDir,
   readWorkspaceFile,
   runCheckedCommand,
@@ -853,8 +855,15 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
     const q = z.object({ path: z.string().max(400).optional() }).safeParse(req.query ?? {});
     if (!q.success) return reply.code(400).send({ error: "bad_query" });
     try {
-      const entries = await listWorkspaceDir(root, q.data.path ?? "");
-      return { path: q.data.path ?? "", entries };
+      const [entries, git] = await Promise.all([
+        listWorkspaceDir(root, q.data.path ?? ""),
+        // Best-effort: no git, no letters — never a failed tree.
+        gitStatusMap(root),
+      ]);
+      return {
+        path: q.data.path ?? "",
+        entries: entries.map((e) => ({ ...e, git: git[e.path] ?? null })),
+      };
     } catch (e: any) {
       return reply.code(400).send({ error: "cannot_list", message: String(e?.message ?? "That folder can't be opened.") });
     }
@@ -950,8 +959,12 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
   app.get("/admin/support/workbench/capabilities", async (req, reply) => {
     const user = await requireSuper(req, reply);
     if (!user) return reply;
+    const root = String(deps.workspaceRoot ?? "").trim();
     return {
-      available: !!String(deps.workspaceRoot ?? "").trim(),
+      available: !!root,
+      // Real values for the status bar — never invented.
+      branch: root ? await gitBranch(root) : null,
+      workspaceName: root ? root.split(/[\\/]/).filter(Boolean).pop() ?? "workspace" : null,
       allowedBinaries: [...ALLOWED_BINARIES],
       timeoutMs: COMMAND_TIMEOUT_MS,
       // ⛔ Stated on screen on purpose: an IDE that looks like a shell but is
