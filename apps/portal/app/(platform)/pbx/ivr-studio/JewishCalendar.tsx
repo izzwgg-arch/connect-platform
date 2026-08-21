@@ -5,8 +5,12 @@
  *
  * Ported from the approved mockups
  * (https://claude.ai/code/artifact/65ed6be1-6589-41c9-a4e3-9dc9007bac18) —
- * Option A is the face of the card, Option B opens from its third preset, and
- * Option C is the month view behind "See the calendar".
+ * Option A is the face of the card, Option B (the per-holiday list) is ALWAYS
+ * shown beneath it, and Option C is the month view behind the header button.
+ *
+ * ⛔ Both of those were originally hidden — the list behind a preset a fresh
+ * calendar never matches, the calendar behind a footer button next to Save — and
+ * Izzy could not find either. A feature that has to be discovered is not built.
  *
  * ⛔⛔ THE ONE UI RULE IZZY WAS EXPLICIT ABOUT: in Yiddish, the WORD changes and
  * the PAGE DOES NOT. A Yiddish holiday name renders in its own `dir="rtl"` span
@@ -112,7 +116,7 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
-  const [showHolidays, setShowHolidays] = useState(false);
+
   const [lang, setLang] = useState<Lang>("en");
 
   useEffect(() => {
@@ -132,7 +136,7 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
       setData(r);
       setDraft(r.calendar);
       setSaved(JSON.stringify(r.calendar));
-      setShowHolidays(presetOf(r.calendar) === "custom");
+
     } catch (e: any) {
       setErr(e?.body?.detail || e?.message || "Could not load the Jewish calendar.");
     }
@@ -146,7 +150,6 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
   const applyPreset = (p: "standard" | "yomtov" | "custom") => {
     if (p === "standard") setDraft((d) => d && ({ ...d, closeForShabbos: true, closeForYomTov: true, earlyCloseMinutesBeforeCandles: d.earlyCloseMinutesBeforeCandles || 60, cholHamoed: "open", holidayOverrides: {} }));
     else if (p === "yomtov") setDraft((d) => d && ({ ...d, closeForShabbos: false, closeForYomTov: true, holidayOverrides: {} }));
-    setShowHolidays(p === "custom");
   };
 
   async function save() {
@@ -187,6 +190,13 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
           </div>
         </div>
         <div className="jc-headright">
+          {/* ⛔ This button lives in the HEADER on purpose. It was in the footer
+              next to Save, where it read as an afterthought and Izzy did not
+              find it — he asked for "a button where people can see the calendar
+              month by month", so it has to look like one. */}
+          <button type="button" className="btn primary jc-calbtn" onClick={() => setShowCalendar(true)}>
+            📅 See the calendar
+          </button>
           <div className="jc-seg" role="group" aria-label="Holiday name language">
             <button type="button" className={"jc-segbtn" + (lang === "en" ? " on" : "")} onClick={() => pickLang("en")}>English</button>
             <button type="button" className={"jc-segbtn jc-segyi" + (lang === "yi" ? " on" : "")} onClick={() => pickLang("yi")} lang="yi" dir="rtl">אידיש</button>
@@ -318,7 +328,10 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
           </div>
         </div>
 
-        {showHolidays && (
+        {/* ⛔ ALWAYS rendered. This was gated on the "choose holiday by holiday"
+            preset, which a fresh calendar never matches — so the per-holiday
+            schedule, the thing that was actually asked for, was invisible. */}
+        {(
           <HolidayList tenantId={tenantId} lang={lang} disabled={disabled} tz={tz}
             overrides={draft.holidayOverrides}
             onChange={(key, t) => setDraft((d) => {
@@ -331,7 +344,6 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
 
         <div className="foot">
           {changed && <span className="pill" style={{ marginRight: "auto" }}>Not saved yet</span>}
-          <button className="btn" disabled={disabled} onClick={() => setShowCalendar(true)}>See the calendar</button>
           <button className="btn primary" disabled={disabled || busy || !changed} onClick={() => void save()}>
             {busy ? "Saving…" : "Save calendar"}
           </button>
@@ -382,7 +394,7 @@ function HolidayList({ tenantId, lang, disabled, tz, overrides, onChange }: {
 
   return (
     <div className="jc-sub">
-      <h3>Holiday by holiday</h3>
+      <h3>A schedule for each holiday</h3>
       <p className="dimtxt jc-hint">
         Set against the holiday, not the date — it applies every year and the dates move on their own.
       </p>

@@ -2702,6 +2702,7 @@ function StudioStyles() {
          that mirrors the page, which Izzy explicitly ruled out. */
       .ivrs .jc-he{font-family:"Frank Ruhl Libre","Times New Roman",serif;direction:rtl;unicode-bidi:isolate}
 
+      .ivrs .jc-calbtn{white-space:nowrap;font-weight:600}
       .ivrs .jc-headright{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
       .ivrs .jc-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
       .ivrs .jc-segbtn{background:var(--bg-soft);border:none;color:var(--dim);font:inherit;font-size:12px;
