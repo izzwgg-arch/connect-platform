@@ -265,11 +265,45 @@ on loopcom, backed up.)
   ⛔ Curl the live URL before declaring a page missing off the portal tree.
 - ✅ Store assets + paste-ready listing copy + every permission-declaration
   answer: `docs/brand/loopcom/play/` (`PLAY_LISTING.md` is the cheat sheet).
-- ⛔ **BLOCKED at handoff**: Izzy chose an ORGANIZATION account owned by
-  **sms@loopcom.net**, but Google refuses that login for Play Console
-  ("contact your domain admin") — the Workspace **additional service must be
-  enabled at admin.google.com** first; then 2-step verification ON, the $25
-  fee, and a **D-U-N-S number** for Connect Communications LLC. All Izzy-side.
+- ⛔⛔ **THE LEGAL ENTITY IS `Loopcom LLC`, NOT Connect Communications LLC**
+  (Izzy, 2026-08-21). The upload keystore was regenerated as `O=Loopcom LLC`
+  and the AAB rebuilt — free to fix then because nothing had been uploaded;
+  after the first Play upload that key is locked and needs a Google support
+  reset. ⛔ Owner account changed **sms@ → izzy@loopcom.net** once sms@ turned
+  out to be the automated SMS↔email bridge mailbox.
+- ✅ **The Google prerequisites are CLEARED** (verified in the Admin console
+  2026-08-21): **loopcom.net is a SECONDARY DOMAIN** of the
+  connectcomunications.com Workspace, **Play Console reads "ON for everyone"**
+  org-wide, and 2-step verification is on. ⛔ Admin console URLs need the
+  `/u/3/` account index or Chrome falls back to a personal account.
+- ⏳⏳ **THE WHOLE THING NOW WAITS ON ONE D-U-N-S NUMBER — submitted
+  2026-08-21, case `DFC-656595`, "(Company pending)".** ⛔ **One D-U-N-S serves
+  BOTH stores** (it is a universal business identifier) — Izzy also wants the
+  **Apple account converted personal → organization**, which is **NOT
+  self-service**: it is a request at
+  `developer.apple.com/contact/request/migrate-individual-account`, needs
+  founder + Account Holder + the D-U-N-S, and **migrates the existing account**
+  so app `6796392950` and TestFlight survive.
+- ⛔⛔ **`33 NY-17M` IS REJECTED BY ADDRESS AUTOCOMPLETES AND IT IS NOT A BAD
+  ADDRESS** — type **`33 Route 17M`**. The hyphenated route shorthand matches
+  no postal index and the error reads like the address does not exist.
+  Harriman **10926** is correct (matches the FCC/USAC HQ); Monroe 10950 is not.
+  SIC filed is **4813 / 48130000 "Telephone communication, except radio"** —
+  ⛔ never the `481302xx` sub-codes, which are ISP categories and contradict
+  the FCC interconnected-VoIP posture.
+- ⛔ **Do NOT quote D&B's 30-business-day SLA as the estimate** — that is the
+  outer bound; clean auto-verified cases land in 48–72 h, manual review is
+  2–4 weeks. ⏳ **The live risk is the NAME: three spellings are in
+  circulation** — USAC says **"LoopCom, LLC"**, the FCC FRN says
+  **"loopcom llc."**, the brand is **"Loopcom"** — and "multiple trade names"
+  is a documented manual-review trigger while Apple and Google both verify
+  their org name against the D-U-N-S record. Nobody has checked which spelling
+  is on the actual LLC filing.
+- ⚠️ **Customer-facing docs still name the OLD entity and reviewers compare
+  them against the developer account**: the live privacy policy says
+  *"operated by Connect Communications"* and `billing/pdf.ts` prints
+  *"Connect Communications, LLC"* on invoices. ⛔ Deliberately NOT rewritten —
+  legal/financial documents, Izzy's call.
 - ⏳ **TODO after the account exists**: create the app, upload the AAB to
   Internal testing, screenshots (⛔ from the Loopcom Demo tenant ONLY — a real
   customer's data in a store screenshot is a leak), reviewer demo login (no

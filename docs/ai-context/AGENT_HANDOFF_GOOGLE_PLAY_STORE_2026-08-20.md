@@ -99,22 +99,84 @@ Decisions made by Izzy in-chat (do not re-litigate):
   bumped. Backup: `/opt/connectcomms/legal/privacy.html.bak.20260820-playstore`.
   Verified live on both hostnames after the edit.
 
-## 2. What is BLOCKED ON GOOGLE/IZZY (the browser half)
+## 2. THE GOOGLE PREREQUISITES ARE CLEARED — the gate is now the D-U-N-S
 
-1. **sms@loopcom.net cannot sign in to Play Console** — Google answers
-   *"Couldn't sign you in — contact your domain admin"*. The Play Console is a
-   Workspace "additional Google service" and is disabled for the domain. Fix:
-   admin.google.com (Izzy's Workspace admin login) → Apps → Additional Google
-   services → enable **Google Play Console** (or allow unlisted additional
-   services) for sms@loopcom.net's OU. ⛔ At handoff Izzy had not yet signed
-   in to the Admin console — the Chrome tab sits on the account chooser.
-2. **2-step verification must be ON** for sms@loopcom.net before Google allows
-   developer-account creation (Google prompts for it in the signup flow).
-3. **Organization signup needs**: a **D-U-N-S number** for Connect
-   Communications LLC (look up free at dnb.com; requesting a new one takes
-   days), the $25 one-time fee (Izzy pays), an official org website + org
-   email, and identity verification (can take days). Izzy enters payment and
-   identity data himself — never the agent.
+**Resolved 2026-08-21, all verified in the Admin console:**
+- ⛔ **loopcom.net is a SECONDARY DOMAIN of the connectcomunications.com
+  Workspace** — not a separate tenant. Every loopcom.net account is managed
+  from that one Admin console. (Admin console URLs need the `/u/3/` account
+  index or Chrome silently falls back to a personal account.)
+- ✅ **Google Play Console reads "ON for everyone"** org-wide (Apps →
+  Additional Google services). The earlier *"Couldn't sign you in — contact
+  your domain admin"* wall for sms@loopcom.net is **gone**; do not go hunting
+  for a disabled service.
+- ✅ **2-step verification** — sms@ already had it ON; **izzy@loopcom.net had
+  it OFF and it has since been turned on**. ⛔ Only the user can enable 2SV;
+  a Workspace admin cannot do it for them.
+- ⏳ Still Izzy-side at handoff: the **$25 one-time fee** and Google's
+  organization identity verification (can take days). ⛔ Izzy enters all
+  payment and identity data himself — never the agent.
+
+## 2a. THE D-U-N-S APPLICATION IS SUBMITTED (2026-08-21)
+
+**Submitted through D&B's own free flow — case `DFC-656595`** (`dfc.dnb.com`,
+`flow=GAD`). my.dnb.com now shows the company as **"(Company pending)"** and
+the app tile reads **"Pending – Product Terms Acceptance"**.
+⛔ **Apple's faster sponsored route could not be used: developer.apple.com was
+in scheduled maintenance** ("We'll be back soon") for the whole session. Apple's
+route (~5 business days) is still the better one if a future D-U-N-S is ever
+needed; D&B's own is the 30-business-day SLA.
+
+**Exactly what was filed** (so nobody re-derives it, and so a correction can be
+matched against it):
+
+| Field | Value |
+|---|---|
+| Address | **33 Route 17M, Harriman NY 10926** |
+| Business phone | +1 (845) 723-1213 |
+| Business email | izzy@loopcom.net |
+| Website | https://loopcom.net |
+| SIC | **48130000 — "Telephone communication, except radio"** (SIC **4813**) |
+| Employees / start year | 1 / 2026 |
+
+- ⛔⛔ **THE ADDRESS FIELD REJECTS `33 NY-17M` AND IT IS NOT A BAD ADDRESS.**
+  That field is a typeahead against a commercial postal index; the hyphenated
+  route shorthand matches nothing and it answers *"No results found / You must
+  select a value from the dropdown"*, which reads exactly like "your address
+  does not exist". **Type `33 Route 17M`** and it resolves instantly. Expect
+  the same trap on any form that autocompletes this address.
+- ✅ **Harriman 10926 is CORRECT** and matches the HQ on the FCC/USAC filings
+  (`33 NY-17M, Suite C, Harriman, NY 10926` —
+  [[loopcom-fcc-frn-and-federal-registrations]]). ⛔ An earlier answer in-chat
+  said Monroe 10950; the autocomplete corrected it. **Always reconcile an
+  address against the federal filings, not against chat.**
+- ⛔ **SIC 4813 was chosen deliberately over the sub-codes.** The dropdown
+  offers `48130200 Online service providers` and `48130201 Internet
+  connectivity services` — **those are ISP categories and are WRONG for
+  Loopcom**, which is registered federally as an *interconnected VoIP
+  provider* (i.e. a phone company). Classifying as an ISP would contradict the
+  FCC posture.
+- ⏳ **UNVERIFIED at handoff: whether "Suite C" made it into the
+  Suite/Apartment field, and whether a document was attached.** D&B accepts an
+  EIN/TIN confirmation letter, Articles of Organization or a Secretary-of-State
+  registration, and attaching one is the single biggest accelerator.
+
+**How long it really takes — do NOT quote the 30-day SLA as the estimate.**
+30 business days is the outer bound. A clean auto-verifiable application
+commonly lands in **48–72 hours**; anything that trips **manual review** runs
+**2–4 weeks**. The named manual-review triggers are mismatched addresses,
+**multiple trade names**, and missing documents.
+- ✅ Working in Loopcom's favour: US single-location LLC, a verifiable business
+  phone, a live website, an EIN, and — unusually strong corroboration — the
+  **public FCC record already tying Loopcom LLC to FRN 0038803722 and the EIN**.
+- ⛔⛔ **THE ONE REAL RISK IS THE NAME, AND IT IS UNRESOLVED: three spellings
+  are in circulation.** USAC Form 499-A says **"LoopCom, LLC"** (capital C,
+  comma), the FCC FRN says **"loopcom llc."**, and the brand/store name is
+  **"Loopcom"**. "Multiple trade names" is a documented manual-review trigger,
+  **and Apple + Google both verify their organization name against the D-U-N-S
+  record.** If the case is still pending after ~2 weeks, this is the first
+  thing to check. ⏳ Nobody has confirmed which spelling is on the actual LLC
+  filing — that is the authoritative one.
 
 ## 2b. APPLE IS IN SCOPE TOO — ONE D-U-N-S SERVES BOTH (2026-08-21)
 

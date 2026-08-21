@@ -11,6 +11,14 @@ connect-release.keystore
 credentials.json
 # Play Store upload key credentials (android/keystore.properties + android/app/play-upload.keystore)
 keystore.properties
+# ⛔ ...and any RENAMED or backup copy of them. A suffix such as
+# "play-upload.keystore.superseded-connectcomms" slips straight past both
+# `*.keystore` and `keystore.properties` — two such files were sitting
+# untracked and unignored on 2026-08-21, one `git add -A` away from
+# publishing the Play upload key and its password.
+*.keystore.*
+*.jks.*
+keystore.properties.*
 # NOTE: google-services.json is intentionally tracked so EAS Build can embed
 # it into the APK during the build. The API key in this file is a low-risk
 # Android client key — the actual security is enforced by Firebase Security Rules.
