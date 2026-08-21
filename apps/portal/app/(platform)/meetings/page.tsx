@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Copy, Plus, Video } from "lucide-react";
-import { PermissionGate } from "../../../components/PermissionGate";
+import { useAppContext } from "../../../hooks/useAppContext";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { meetingLink, type MeetingSummary } from "../../../lib/meetings";
@@ -173,9 +173,20 @@ function MeetingsPageInner() {
 }
 
 export default function MeetingsPage() {
-  return (
-    <PermissionGate permission="can_view_workspace_overview">
-      <MeetingsPageInner />
-    </PermissionGate>
-  );
+  // ⛔ Izzy only (2026-08-21: "Permissions off for everybody but me"). Hiding
+  // the sidebar entry is presentation, not access — someone can still type the
+  // URL, so the page refuses to render too, and POST/GET /meetings refuse
+  // server-side. All three must name the same rule or one of them is a lie.
+  // ⛔ This restricts STARTING a meeting only. Joining by link is deliberately
+  // open — guests have no account at all, and that is the whole feature.
+  const { backendJwtRole } = useAppContext();
+  if (backendJwtRole !== "SUPER_ADMIN") {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim, #64748b)" }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Not available</h2>
+        <p style={{ fontSize: 14 }}>Meetings is restricted to platform administrators.</p>
+      </div>
+    );
+  }
+  return <MeetingsPageInner />;
 }

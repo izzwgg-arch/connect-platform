@@ -81,6 +81,29 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
     return meeting.createdByUserId === user.sub || String(user.role) === "SUPER_ADMIN";
   }
 
+  /**
+   * Who may START a meeting. Izzy's instruction 2026-08-21: "Permissions off
+   * for everybody but me" — SUPER_ADMIN only.
+   *
+   * ⛔ This gates CREATE and LIST only, never JOIN. A guest has no account at
+   * all and an ordinary signed-in colleague must still be able to open a link;
+   * gating the join routes would make the feature pointless. Host powers are
+   * separately limited to the creator (isMeetingHost), so a joiner still cannot
+   * mute, remove, lock or end.
+   *
+   * ⛔ The portal hides the nav item and refuses to render /meetings for the
+   * same rule. Those are presentation; THIS is the enforcement — a typed URL or
+   * a raw curl lands here.
+   */
+  function requireMeetingCreator(req: FastifyRequest, reply: FastifyReply): boolean {
+    if (String(getUser(req).role) === "SUPER_ADMIN") return true;
+    reply.code(403).send({
+      error: "forbidden",
+      message: "Only a platform administrator can start a meeting.",
+    });
+    return false;
+  }
+
   function mintJoinToken(params: {
     cfg: LiveKitConfig;
     meeting: { id: string; title: string };
@@ -111,6 +134,7 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
 
   // ── Create ────────────────────────────────────────────────────────────────
   app.post("/meetings", async (req, reply) => {
+    if (!requireMeetingCreator(req, reply)) return reply;
     if (!config()) return notConfigured(reply);
     const user = getUser(req);
     const parsed = z.object({ title: z.string().max(120).optional() }).safeParse(req.body ?? {});
@@ -147,7 +171,8 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
 
   // ── My meetings (creator-scoped on purpose — a meeting link is private to
   //    whoever made it until they share it) ─────────────────────────────────
-  app.get("/meetings", async (req) => {
+  app.get("/meetings", async (req, reply) => {
+    if (!requireMeetingCreator(req, reply)) return reply;
     const user = getUser(req);
     const rows = await db.videoMeeting.findMany({
       where: { tenantId: user.tenantId, createdByUserId: user.sub },

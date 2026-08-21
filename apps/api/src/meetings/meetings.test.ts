@@ -145,7 +145,7 @@ async function buildApp(opts: { user?: any; configured?: boolean; roomCalls?: an
   const app = Fastify();
   const db = fakeDb();
   app.addHook("preHandler", async (req) => {
-    (req as any).user = opts.user ?? { sub: "u1", tenantId: "t1", email: "a@b.c", role: "USER" };
+    (req as any).user = opts.user ?? { sub: "u1", tenantId: "t1", email: "a@b.c", role: "SUPER_ADMIN" };
   });
   registerMeetingRoutes(app, {
     db,
@@ -209,7 +209,7 @@ test("guest join: nameless 400, unknown code 404, locked 403, ended 410", async 
 });
 
 test("signed-in join: creator is host and enters even when locked; others are refused when locked", async () => {
-  const creator = { sub: "u1", tenantId: "t1", email: "a@b.c", role: "USER" };
+  const creator = { sub: "u1", tenantId: "t1", email: "a@b.c", role: "SUPER_ADMIN" };
   const { app, db } = await buildApp({ user: creator });
   const meeting = (await app.inject({ method: "POST", url: "/meetings", payload: {} })).json();
   db.rows[0].locked = true;
@@ -264,8 +264,55 @@ test("host controls: non-creator 403; end calls DeleteRoom; mute forwards track"
   await app.close();
 });
 
+test("only SUPER_ADMIN may start or list meetings (Izzy-only, 2026-08-21)", async () => {
+  const { app } = await buildApp({ user: { sub: "u9", tenantId: "t1", email: "staff@x.c", role: "TENANT_ADMIN" } });
+  const create = await app.inject({ method: "POST", url: "/meetings", payload: { title: "nope" } });
+  assert.equal(create.statusCode, 403);
+  assert.equal(create.json().error, "forbidden");
+  assert.ok(!/_/.test(create.json().message), "refusal must be plain English, not a slug");
+  const list = await app.inject({ method: "GET", url: "/meetings" });
+  assert.equal(list.statusCode, 403);
+  await app.close();
+
+  const admin = await buildApp({ user: { sub: "izzy", tenantId: "t1", email: "i@x.c", role: "SUPER_ADMIN" } });
+  const ok = await admin.app.inject({ method: "POST", url: "/meetings", payload: { title: "yes" } });
+  assert.equal(ok.statusCode, 200);
+  await admin.app.close();
+});
+
+// ⛔ The negative that matters MOST: restricting who may START a meeting must
+// never restrict who may JOIN one. A guest has no account, and an ordinary
+// colleague opening a link must get in — gating these would make the whole
+// feature pointless.
+test("restricting creation does NOT restrict joining — guests and ordinary users still get in", async () => {
+  const admin = await buildApp({ user: { sub: "izzy", tenantId: "t1", email: "i@x.c", role: "SUPER_ADMIN" } });
+  const meeting = (await admin.app.inject({ method: "POST", url: "/meetings", payload: {} })).json();
+
+  const guest = await admin.app.inject({
+    method: "POST",
+    url: `/meetings/public/${meeting.code}/join`,
+    payload: { displayName: "Guest" },
+  });
+  assert.equal(guest.statusCode, 200, "a guest with the link must still join");
+  assert.equal(guest.json().isHost, false);
+
+  const info = await admin.app.inject({ method: "GET", url: `/meetings/public/${meeting.code}/info` });
+  assert.equal(info.statusCode, 200, "the public info route stays open");
+  await admin.app.close();
+
+  const staff = Fastify();
+  staff.addHook("preHandler", async (req) => {
+    (req as any).user = { sub: "u9", tenantId: "t1", email: "staff@x.c", role: "USER" };
+  });
+  registerMeetingRoutes(staff, { db: admin.db, config: () => CFG as any });
+  const joined = await staff.inject({ method: "POST", url: `/meetings/${meeting.code}/join`, payload: { displayName: "Colleague" } });
+  assert.equal(joined.statusCode, 200, "an ordinary signed-in user must still join by link");
+  assert.equal(joined.json().isHost, false, "but never as host");
+  await staff.close();
+});
+
 test("unconfigured server: joins and creation answer 503 in plain English; info still works", async () => {
-  const { app, db } = await buildApp({ configured: false });
+  const { app, db } = await buildApp({ configured: false, user: { sub: "izzy", tenantId: "t1", email: "i@x.c", role: "SUPER_ADMIN" } });
   const create = await app.inject({ method: "POST", url: "/meetings", payload: {} });
   assert.equal(create.statusCode, 503);
   assert.equal(create.json().error, "meetings_not_configured");

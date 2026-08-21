@@ -252,6 +252,13 @@ export function isNavItemVisibleForUser(
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // Meetings: Izzy only, by his instruction 2026-08-21 ("Permissions off for
+  // everybody but me"). Only STARTING a meeting is restricted — anyone with a
+  // link still joins, which is the whole point of the feature.
+  // ⛔ Hiding the nav item is presentation, NOT access: the /meetings page
+  // refuses to render for anyone else, and the create/list routes refuse
+  // server-side. All three must agree.
+  if (item.id === "workspace.meetings" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The routing/teams doors show and change every customer's trunks and dial
   // plans — SUPER_ADMIN only, same as the console they open into.
   if (item.id === "admin.pbx_routing" && backendJwtRole !== "SUPER_ADMIN") return false;
