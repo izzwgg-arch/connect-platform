@@ -402,3 +402,127 @@ Everything recomputed on 72 minutes. Rosh Hashanah now ends **8:21pm** (was
 Pesach VIII **9:03pm**, Shavuos **9:41pm**. The Rosh Hashanah stretch is
 **49½ hours**. Handoff §5 decision 4 is now **answered**; the setting stays
 per-customer because a Chabad business on the same street wants 8.5°.
+
+---
+
+## 9. BUILT (2026-08-21) — the calendar drives the IVR *and* the hold music
+
+Izzy: *"go ahead and build it end to end. Put it in the IVR Studio and wire the
+IVR, and make it so they can set hold music as well. Add in also sphera and the
+three weeks, nine days … The music should change automatically to non-music …
+it's basically cappella music."*
+
+⛔ **Everything below is CODE COMPLETE and TESTED, and NOTHING IS DEPLOYED yet.**
+No migration has been applied to production, no tenant has the calendar switched
+on, and nobody has opened the screen.
+
+### The shape
+
+| Piece | Where |
+|---|---|
+| Holiday table (generated data, 2,870 rows / 117 KB, 2026–2081) | `packages/shared/src/jewishCalendar/holidayTable.json` |
+| The generator (offline, the ONLY hebcal user) | `scripts/jewish-calendar/generate-table.mjs` |
+| Sunset / nightfall (hand-rolled NOAA) | `packages/shared/src/jewishCalendar/zmanim.ts` |
+| The resolver — intervals, closures, music periods | `packages/shared/src/jewishCalendar/jewishCalendar.ts` |
+| Approved Yiddish/English names | `packages/shared/src/jewishCalendar/holidayNames.ts` |
+| Community list (diaspora only) | `packages/shared/src/jewishCalendar/communities.ts` |
+| Month grid + holiday list builders | `packages/shared/src/jewishCalendar/calendarView.ts` |
+| Row → settings, and the loader | `apps/api/src/jewishCalendarSettings.ts` |
+| IVR decision | `apps/api/src/ivrModeSelection.ts` — `computeCurrentMode(…, jewish)` |
+| Routes | `GET`/`PUT /voice/jewish-calendar`, `GET …/month`, `GET …/holidays` |
+| Hold music | `apps/worker/src/main.ts` — `workerComputeHoldProfile(…, jewishHold)` |
+| The screen | `apps/portal/app/(platform)/pbx/ivr-studio/JewishCalendar.tsx` |
+| Schema | `TenantJewishCalendar`, migration `20260821140000_tenant_jewish_calendar` |
+
+### ⛔ ONE ROW, TWO CONSUMERS — that is the design
+
+`TenantJewishCalendar` is read by BOTH `apps/api` (which menu callers hear) and
+`apps/worker` (which hold-music class plays). A tenant sets its city and its
+minhag **once**. Two mappers exist (`toJewishCalendarSettings` in api,
+`workerJewishSettings` in the worker) only because the worker cannot import from
+apps/api — ⛔ **their defaults must stay identical or the menu and the music
+disagree about what day it is.** A guard test pins the worker's nightfall
+fallback to Satmar.
+
+### ⛔ THE IVR SIDE REUSES THE EXISTING HOLIDAY MACHINERY
+
+`computeCurrentMode` returns **`"holiday"`** when the calendar says closed, so
+everything downstream — `ivrFindActiveProfile`, `resolveDidmapProfileId`, the
+existing `holidayProfileId` — already works. **No new publish path, no new
+dialplan, no PBX change.** The 60-second `sweepIvrModeBoundaries` flips the live
+menu at the boundary, which is why sunset-accurate closures need nothing new.
+
+⛔ **All five `computeCurrentMode` call sites were wired, and a test reads
+server.ts's SOURCE to prove it.** Every defect of this shape in this repo has
+been a caller that was missed — the two IVR publish paths, the two SMS ingest
+paths, the two invite paths. A unit test passes straight through that.
+
+### ⛔ THE A CAPPELLA SWITCH, AND WHY THE ORDER IS THE FEATURE
+
+In `workerComputeHoldProfile` the precedence is now:
+
+1. **manual override** — a person choosing right now; they can see what day it is
+2. **a cappella** — Sefirah / Three Weeks / Nine Days
+3. one-time rule → holiday → weekly → after-hours → default
+
+⛔ **A cappella sits ABOVE the schedule deliberately.** Below it, a one-time
+"play the Chanukah playlist" rule would put instrumental music on the line during
+the Nine Days, which is the exact thing this exists to prevent.
+
+⛔ **With no a cappella profile chosen, the music is LEFT ALONE** — not silenced.
+A customer who has not picked one has not asked for anything, and dead air on
+hold is worse than the wrong music. The branch requires the calendar enabled AND
+a profile chosen; a guard test pins both.
+
+⛔ **The Nine Days are nested inside the Three Weeks**, so a customer who keeps
+only the Nine Days still gets them with the Three Weeks switched off. Sefirah has
+three minhagim (`early` to Lag BaOmer, `late` from Rosh Chodesh Iyar, `whole`).
+
+### ⛔ FAILS OPEN EVERYWHERE
+
+Disabled, past the end of the table, unusable coordinates, a database error, a
+missing table, a thrown resolver — every one of them yields "not closed" and the
+ordinary weekly hours decide. **A calendar that cannot answer must never shut a
+working business's phone**, and a calendar fault must never change what is
+already playing on hold.
+
+### Two bugs found while building, both worth carrying
+
+1. ⛔ **The generator dropped Purim, Chanukah and Lag BaOmer entirely.** hebcal
+   flags them `MINOR_HOLIDAY`, and the first cut only looked at
+   chag/chol-hamoed/erev/fast. Plenty of these businesses close for Purim, and a
+   customer cannot override a day the table never mentions. Fixed; the table now
+   carries a `minor` kind, open by default and overridable.
+2. ⛔⛔ **A BACKTICK INSIDE A `<style jsx global>{\`…\`}` BLOCK TERMINATES THE
+   TEMPLATE LITERAL.** Ten of them, in a CSS *comment*, broke `page.tsx` with 29
+   parse errors that pointed at lines 200 further down. Comments are not exempt.
+
+### Proven as
+
+- **shared 442/442**, **worker 109/109**, **portal 259/261** (the two documented
+  pre-existing failures), api suite at its baseline.
+- **api typecheck 75 errors — the exact baseline**, none in an edited file.
+  **portal typecheck 0.**
+- **11 source guards, ALL replayed against `HEAD` and ALL failing there.**
+- Migration DDL generated by `prisma migrate diff`, not hand-written; the
+  `tenantJewishCalendar` accessor verified against the REAL generated client.
+
+### ⏳ NOT DONE / NOT PROVEN
+
+- ⛔ **Nothing is deployed and the migration has NOT been applied.** No tenant has
+  `enabled: true`, so applying it changes nothing for anybody until someone
+  switches it on.
+- **Nobody has opened the screen in a browser**, and no caller has heard a
+  calendar-driven menu.
+- **The a cappella profile has to be created on the existing hold-music screens**
+  — this card only picks from profiles that already exist. There is no upload
+  flow here.
+- **The holiday-name language is per-browser (`localStorage`), not per-user in the
+  database.** A cross-device setting needs a `User` column; flagged rather than
+  built, because the existing `uiLanguage` flips the whole page.
+- **Israel is deliberately unavailable.** The table is `il: false` only; an
+  Israeli tenant needs its own generated table before a city can be offered.
+- ⏳ **Acceptance, when it deploys:** switch it on for one tenant, set the
+  community, and check the calendar view says *Closed — yom tov* on **Sun 27 Sep
+  2026** and **Sun 4 Oct 2026**. Then the negative that matters most: a tenant
+  with the calendar **off** must behave byte-identically to today.

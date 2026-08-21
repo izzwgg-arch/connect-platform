@@ -69,6 +69,9 @@ import {
   type MohAstDbKey,
   decideAdminAlert,
   ADMIN_ALERT_DAILY_WINDOW_MS,
+  evaluateJewishCalendar,
+  DEFAULT_JEWISH_CALENDAR,
+  type JewishCalendarSettings,
 } from "@connect/shared";
 import {
   isApnsVoipConfigured,
@@ -2816,28 +2819,79 @@ async function workerHasSyncedMohRuntimeClass(tenantId: string, value: string): 
   return !!row;
 }
 
+/**
+ * A TenantJewishCalendar row → the settings the shared resolver takes.
+ *
+ * ⛔ Mirrors toJewishCalendarSettings() in apps/api/src/jewishCalendarSettings.ts.
+ * The worker cannot import from apps/api, and only the MUSIC fields matter here,
+ * so this is deliberately the narrow half — but the defaults must stay identical
+ * or the hold music and the IVR menu would disagree about what day it is.
+ */
+function workerJewishSettings(row: any, timezone: string): JewishCalendarSettings {
+  const d = DEFAULT_JEWISH_CALENDAR;
+  const pick = <T,>(v: unknown, allowed: readonly T[], fallback: T): T =>
+    (allowed as readonly unknown[]).includes(v) ? (v as T) : fallback;
+  const num = (v: unknown, f: number) => (typeof v === "number" && Number.isFinite(v) ? v : f);
+  const bool = (v: unknown, f: boolean) => (typeof v === "boolean" ? v : f);
+  return {
+    ...d,
+    enabled: bool(row?.enabled, false),
+    latitude: num(row?.latitude, d.latitude),
+    longitude: num(row?.longitude, d.longitude),
+    timezone: timezone || d.timezone,
+    nightfallShita: pick(row?.nightfallShita, ["satmar", "chabad", "rmoshe", "medium"] as const, d.nightfallShita),
+    candleLightingMinutes: num(row?.candleLightingMinutes, d.candleLightingMinutes),
+    sefirah: pick(row?.sefirah, ["none", "early", "late", "whole"] as const, d.sefirah),
+    threeWeeksNoMusic: bool(row?.threeWeeksNoMusic, d.threeWeeksNoMusic),
+    nineDaysNoMusic: bool(row?.nineDaysNoMusic, d.nineDaysNoMusic),
+  };
+}
+
 function workerComputeHoldProfile(
   config: { timezone: string; defaultProfileId: string | null; afterHoursProfileId: string | null; holidayProfileId: string | null },
   rules: Array<{ ruleType: string; weekday: number | null; startTime: string | null; endTime: string | null; startAt: Date | null; endAt: Date | null; priority: number; isActive: boolean; profileId: string }>,
   override: { isActive: boolean; expiresAt: Date | null; profileId: string | null } | null,
   profileMap: Map<string, WorkerHoldProfile>,
   now: Date = new Date(),
+  jewish?: { settings: JewishCalendarSettings; acappellaProfileId: string | null } | null,
 ): { profile: WorkerHoldProfile | null; mode: string } {
-  // 1. Manual override
+  // 1. Manual override — a person choosing right now beats everything, including
+  //    the calendar. They can see what day it is.
   if (override?.isActive && override.profileId && (!override.expiresAt || new Date(override.expiresAt) > now)) {
     const p = profileMap.get(override.profileId);
     if (p) return { profile: p, mode: "override" };
   }
+
+  // 2. Sefirah / the Three Weeks / the Nine Days — instrumental music off.
+  //
+  //    ⛔ THIS OUTRANKS THE SCHEDULE ON PURPOSE. A one-time "play the Chanukah
+  //    playlist" rule must not put instrumental music on the line during the
+  //    Nine Days — that is the entire reason this exists. Only a live manual
+  //    override, above, beats it.
+  //
+  //    ⛔ With no a cappella profile chosen we leave the music ALONE rather than
+  //    falling through to silence. A customer who has not picked one has not
+  //    asked for anything, and dead air on hold is worse than the wrong music.
+  if (jewish?.settings?.enabled && jewish.acappellaProfileId) {
+    try {
+      if (evaluateJewishCalendar(jewish.settings, now).noMusic) {
+        const p = profileMap.get(jewish.acappellaProfileId);
+        if (p) return { profile: p, mode: "acappella" };
+      }
+    } catch {
+      // A calendar fault must never change what is already playing.
+    }
+  }
   const tz = config.timezone || "UTC";
   const active = rules.filter((r) => r.isActive);
-  // 2. One-time
+  // 3. One-time
   const oneTime = active.filter((r) => r.ruleType === "one_time" && r.startAt && r.endAt && new Date(r.startAt) <= now && new Date(r.endAt) > now).sort((a, b) => b.priority - a.priority);
   if (oneTime.length > 0) { const p = profileMap.get(oneTime[0].profileId); if (p) return { profile: p, mode: "one_time" }; }
-  // 3. Holiday
+  // 4. Holiday
   const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
   const holiday = active.filter((r) => r.ruleType === "holiday" && r.startTime === localDate).sort((a, b) => b.priority - a.priority);
   if (holiday.length > 0) { const p = profileMap.get(holiday[0].profileId); if (p) return { profile: p, mode: "holiday" }; }
-  // 4. Weekly
+  // 5. Weekly
   const dtParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
   const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const dow = DOW[dtParts.find((p) => p.type === "weekday")?.value ?? ""] ?? now.getDay();
@@ -2847,9 +2901,9 @@ function workerComputeHoldProfile(
   const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return (h ?? 0) * 60 + (m ?? 0); };
   const weekly = active.filter((r) => r.ruleType === "weekly" && r.weekday === dow && r.startTime && r.endTime && mofDay >= toMin(r.startTime) && mofDay < toMin(r.endTime)).sort((a, b) => b.priority - a.priority);
   if (weekly.length > 0) { const p = profileMap.get(weekly[0].profileId); if (p) return { profile: p, mode: "weekly" }; }
-  // 5. After-hours fallback
+  // 6. After-hours fallback
   if (config.afterHoursProfileId) { const p = profileMap.get(config.afterHoursProfileId); if (p) return { profile: p, mode: "afterhours" }; }
-  // 6. Default
+  // 7. Default
   if (config.defaultProfileId) { const p = profileMap.get(config.defaultProfileId); if (p) return { profile: p, mode: "default" }; }
   return { profile: null, mode: "none" };
 }
@@ -2951,6 +3005,19 @@ async function runMohScheduleCycle(): Promise<void> {
           (db as any).mohPublishRecord.findFirst({ where: { tenantId, status: "success" }, orderBy: { publishedAt: "desc" }, select: { keysWritten: true } }),
         ]);
 
+        // The tenant's Jewish calendar, for the a cappella switch. Read defensively:
+        // a missing table or a bad row must leave the hold music exactly as it is.
+        let jewishHold: { settings: JewishCalendarSettings; acappellaProfileId: string | null } | null = null;
+        try {
+          const jrow: any = await (db as any).tenantJewishCalendar?.findUnique?.({ where: { tenantId } });
+          if (jrow?.enabled && jrow.acappellaMohProfileId) {
+            jewishHold = {
+              acappellaProfileId: String(jrow.acappellaMohProfileId),
+              settings: workerJewishSettings(jrow, sched.timezone || "UTC"),
+            };
+          }
+        } catch { jewishHold = null; }
+
         // Timed override expiry ("play Classic for 30 minutes"): once expiresAt
         // passes, retire the row so the DB/UI reflect reality — compute below
         // already ignores expired overrides, this keeps state honest.
@@ -2972,7 +3039,7 @@ async function runMohScheduleCycle(): Promise<void> {
           }]),
         );
 
-        const { profile, mode } = workerComputeHoldProfile(sched, rules, override, profileMap, now);
+        const { profile, mode } = workerComputeHoldProfile(sched, rules, override, profileMap, now, jewishHold);
         if (!profile) continue;
         const runtimeClass = normalizeWorkerMohRuntimeClass(profile.vitalPbxMohClassName);
         if (!(await workerHasSyncedMohRuntimeClass(tenantId, runtimeClass))) {

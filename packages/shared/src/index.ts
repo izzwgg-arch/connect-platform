@@ -84,3 +84,6 @@ export * from "./featureSuggestion";
 export * from "./assistantGreeting";
 export * from "./jewishCalendar/zmanim";
 export * from "./jewishCalendar/jewishCalendar";
+export * from "./jewishCalendar/communities";
+export * from "./jewishCalendar/holidayNames";
+export * from "./jewishCalendar/calendarView";

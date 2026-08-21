@@ -6,6 +6,9 @@
  * ids) — it must never again live somewhere tests can't reach.
  */
 
+import type { JewishCalendarSettings } from "@connect/shared";
+import { evaluateJewishCalendar } from "@connect/shared";
+
 export type IvrMode = "business" | "afterhours" | "holiday" | "override";
 
 export interface IvrScheduleSelection {
@@ -19,18 +22,40 @@ export function computeCurrentMode(
   config: { timezone: string; businessHoursRules: any; holidayDates: any },
   override: { isActive: boolean; expiresAt: Date | null } | null,
   now: Date = new Date(),
+  jewish?: JewishCalendarSettings | null,
 ): IvrMode {
   // 1. Manual override (check expiry)
   if (override?.isActive && (!override.expiresAt || override.expiresAt > now)) return "override";
 
-  // 2. Holiday check — compare "YYYY-MM-DD" in tenant timezone
+  // 2. The Jewish calendar, if the tenant has one.
+  //
+  //    ⛔ THIS RUNS BEFORE THE holidayDates LIST AND IT IS AN INTERVAL, NOT A
+  //    DATE. Yom tov begins at candle lighting the evening before and ends at
+  //    nightfall — Rosh Hashanah on Shabbos is one 49½-hour closure across
+  //    three Gregorian dates. A whole-day match leaves Friday evening
+  //    answering normally, which is the bug this whole feature exists to end.
+  //
+  //    ⛔ It fails OPEN: switched off, past the end of the generated table, or
+  //    with unusable coordinates it returns "not closed" and the ordinary
+  //    weekly hours below decide. A calendar that cannot answer must never shut
+  //    a working business's phone.
+  if (jewish?.enabled) {
+    try {
+      if (evaluateJewishCalendar(jewish, now).closed) return "holiday";
+    } catch {
+      // Never let a calendar fault decide what callers hear.
+    }
+  }
+
+  // 3. Hand-typed holiday dates — the pre-calendar mechanism, still honoured
+  //    verbatim so tenants already using it are untouched.
   const tz = config.timezone || "UTC";
   const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })
     .format(now); // "YYYY-MM-DD"
   const holidays: string[] = Array.isArray(config.holidayDates) ? config.holidayDates : [];
   if (holidays.includes(localDate)) return "holiday";
 
-  // 3. Weekly business hours — numeric day-of-week (0=Sun…6=Sat) in tenant tz
+  // 4. Weekly business hours — numeric day-of-week (0=Sun…6=Sat) in tenant tz
   const rules: Array<{ day: number; open: string; close: string }> =
     Array.isArray(config.businessHoursRules) ? config.businessHoursRules : [];
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);

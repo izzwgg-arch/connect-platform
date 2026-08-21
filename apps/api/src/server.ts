@@ -21627,6 +21627,12 @@ const IVR_OPTION_DIGITS = [
 type IvrOptionDigit = (typeof IVR_OPTION_DIGITS)[number];
 
 import { computeCurrentMode, ivrModeToProfileType, ivrFindActiveProfile, resolveDidmapProfileId } from "./ivrModeSelection";
+import { loadJewishCalendar, toJewishCalendarSettings } from "./jewishCalendarSettings";
+import {
+  JEWISH_COMMUNITIES, NIGHTFALL_SHITOS, TABLE_RANGE, DEFAULT_JEWISH_CALENDAR,
+  findCommunity, daysOfTableRemaining, localYmd, evaluateJewishCalendar,
+  buildMonthView, buildHolidaySpans, nextChange,
+} from "@connect/shared";
 import { rewriteMenuNavRef } from "./ivrMenuNav";
 
 /** Shape of the data buildIvrKeys needs from the active profile's options. */
@@ -24390,6 +24396,188 @@ app.put("/voice/ivr/schedule", async (req, reply) => {
   return reply.send({ schedule });
 });
 
+// ── Jewish calendar ──────────────────────────────────────────────────────────
+// One row per tenant, read by BOTH the IVR (which menu callers hear) and the
+// hold music (which class plays). The DATES are never stored — they come from a
+// generated table in @connect/shared; only what differs between customers lives
+// in the row: where they are, whose nightfall they keep, what the phone does.
+//
+// ⛔ Gated on the SAME permissions as the IVR schedule, deliberately. Izzy's
+// call: nearly every customer on this platform needs this, and a switch that is
+// off by default protects nobody here.
+async function resolveJewishCalendarTenant(req: any, reply: any, user: any): Promise<string | null> {
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const raw = isSuperAdmin ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!raw) { reply.code(400).send({ error: "tenantId required" }); return null; }
+  const tid = raw.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(raw) : raw;
+  if (!tid) { reply.code(400).send({ error: "tenant_not_linked", detail: "This PBX tenant has no Connect tenant link yet." }); return null; }
+  return tid;
+}
+
+/** The timezone the calendar reckons in — the tenant's, from its IVR schedule. */
+async function jewishCalendarTimezone(tenantId: string): Promise<string> {
+  try {
+    const sched = await (db as any).ivrScheduleConfig.findUnique({ where: { tenantId }, select: { timezone: true } });
+    return sched?.timezone || "America/New_York";
+  } catch { return "America/New_York"; }
+}
+
+app.get("/voice/jewish-calendar", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const tid = await resolveJewishCalendarTenant(req, reply, user);
+  if (!tid) return;
+  const tz = await jewishCalendarTimezone(tid);
+  const row = await (db as any).tenantJewishCalendar.findUnique({ where: { tenantId: tid } }).catch(() => null);
+  const settings = toJewishCalendarSettings(row ?? null, tz);
+  const mohProfiles = await (db as any).mohProfile
+    .findMany({ where: { tenantId: tid, isActive: true }, select: { id: true, name: true, type: true } })
+    .catch(() => []);
+  const next = nextChange(settings);
+  return reply.send({
+    calendar: {
+      ...settings,
+      communityId: row?.communityId ?? null,
+      acappellaMohProfileId: row?.acappellaMohProfileId ?? null,
+    },
+    // Everything the screen needs to render its pickers, so it hardcodes none of it.
+    communities: JEWISH_COMMUNITIES,
+    nightfallShitos: NIGHTFALL_SHITOS,
+    mohProfiles,
+    tableCoverage: { range: TABLE_RANGE, daysRemaining: daysOfTableRemaining(localYmd(new Date(), tz)) },
+    rightNow: (() => {
+      const v = evaluateJewishCalendar(settings);
+      return { closed: v.closed, reason: v.reason, noMusic: v.noMusic, noMusicReason: v.noMusicReason,
+               nextChangeAt: next ? next.at.toISOString() : null, nextChangeWhat: next ? next.what : null };
+    })(),
+  });
+});
+
+app.put("/voice/jewish-calendar", async (req, reply) => {
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_manage_ivr_routing");
+  if (!user) return;
+  const parsed = z.object({
+    tenantId: z.string(),
+    enabled: z.boolean().default(false),
+    communityId: z.string().nullable().optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+    nightfallShita: z.enum(["satmar", "chabad", "rmoshe", "medium"]).default("satmar"),
+    candleLightingMinutes: z.number().int().min(0).max(120).default(18),
+    closeForShabbos: z.boolean().default(true),
+    closeForYomTov: z.boolean().default(true),
+    earlyCloseMinutesBeforeCandles: z.number().int().min(0).max(600).default(60),
+    reopenMinutesAfterNightfall: z.number().int().min(0).max(600).default(0),
+    reopenNextMorning: z.boolean().default(true),
+    cholHamoed: z.enum(["open", "early", "closed"]).default("open"),
+    fastDays: z.enum(["open", "early", "closed"]).default("open"),
+    holidayOverrides: z.record(z.enum(["open", "early", "closed"])).default({}),
+    sefirah: z.enum(["none", "early", "late", "whole"]).default("early"),
+    threeWeeksNoMusic: z.boolean().default(true),
+    nineDaysNoMusic: z.boolean().default(true),
+    acappellaMohProfileId: z.string().nullable().optional(),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
+  const d = parsed.data;
+
+  const tid = d.tenantId.startsWith("vpbx:") ? await resolveConnectTenantIdFromScope(d.tenantId) : d.tenantId;
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked", detail: "This PBX tenant has no Connect tenant link yet." });
+  assertIvrTenantAccess(user, tid);
+
+  // ⛔ The community picker is the source of the coordinates. Trusting a
+  // client-supplied lat/long would let a bad payload move a customer's candle
+  // lighting; the id is validated against the shared list instead.
+  const community = findCommunity(d.communityId ?? null);
+  const latitude = community ? community.latitude : (d.latitude ?? DEFAULT_JEWISH_CALENDAR.latitude);
+  const longitude = community ? community.longitude : (d.longitude ?? DEFAULT_JEWISH_CALENDAR.longitude);
+
+  // ⛔ Tenant isolation: the a cappella hold-music profile must be this tenant's.
+  let acappella: string | null = d.acappellaMohProfileId ?? null;
+  if (acappella) {
+    const owned = await (db as any).mohProfile.findFirst({ where: { id: acappella, tenantId: tid }, select: { id: true } });
+    if (!owned) return reply.code(400).send({ error: "moh_profile_not_found", detail: "That hold-music profile does not belong to this customer." });
+  }
+
+  const data = {
+    enabled: d.enabled,
+    communityId: d.communityId ?? null,
+    latitude, longitude,
+    nightfallShita: d.nightfallShita,
+    candleLightingMinutes: d.candleLightingMinutes,
+    closeForShabbos: d.closeForShabbos,
+    closeForYomTov: d.closeForYomTov,
+    earlyCloseMinutesBeforeCandles: d.earlyCloseMinutesBeforeCandles,
+    reopenMinutesAfterNightfall: d.reopenMinutesAfterNightfall,
+    reopenNextMorning: d.reopenNextMorning,
+    cholHamoed: d.cholHamoed,
+    fastDays: d.fastDays,
+    holidayOverrides: d.holidayOverrides,
+    sefirah: d.sefirah,
+    threeWeeksNoMusic: d.threeWeeksNoMusic,
+    nineDaysNoMusic: d.nineDaysNoMusic,
+    acappellaMohProfileId: acappella,
+    updatedBy: user.sub ?? null,
+  };
+  const row = await (db as any).tenantJewishCalendar.upsert({
+    where: { tenantId: tid }, create: { tenantId: tid, ...data }, update: data,
+  });
+  // Best-effort: an audit failure must never fail the save.
+  await db.auditLog.create({ data: { tenantId: tid, actorUserId: user.sub, action: "JEWISH_CALENDAR_UPDATED", entityType: "Tenant", entityId: tid } }).catch(() => {});
+  return reply.send({ calendar: row });
+});
+
+// The month grid. Read-only; the same resolver that decides what callers hear.
+app.get("/voice/jewish-calendar/month", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const tid = await resolveJewishCalendarTenant(req, reply, user);
+  if (!tid) return;
+  const q = z.object({
+    year: z.coerce.number().int().min(2026).max(2081).optional(),
+    month: z.coerce.number().int().min(1).max(12).optional(),
+    lang: z.enum(["en", "yi"]).default("en"),
+  }).safeParse(req.query || {});
+  if (!q.success) return reply.code(400).send({ error: "invalid_query", issues: q.error.issues });
+
+  const tz = await jewishCalendarTimezone(tid);
+  const row = await (db as any).tenantJewishCalendar.findUnique({ where: { tenantId: tid } }).catch(() => null);
+  // ⛔ Preview the calendar even when it is switched off, or a customer setting
+  // it up for the first time sees an empty month and cannot tell whether it
+  // works. `enabled: true` here affects THIS RESPONSE only, never the row.
+  const settings = { ...toJewishCalendarSettings(row ?? null, tz), enabled: true };
+  const today = localYmd(new Date(), tz);
+  const year = q.data.year ?? Number(today.slice(0, 4));
+  const month = q.data.month ?? Number(today.slice(5, 7));
+  return reply.send({
+    year, month, timezone: tz, today,
+    previewOnly: !(row?.enabled),
+    days: buildMonthView(year, month, settings, { lang: q.data.lang, today }),
+  });
+});
+
+// The holiday list — one row per holiday, consecutive days merged.
+app.get("/voice/jewish-calendar/holidays", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const tid = await resolveJewishCalendarTenant(req, reply, user);
+  if (!tid) return;
+  const q = z.object({
+    lang: z.enum(["en", "yi"]).default("en"),
+    months: z.coerce.number().int().min(1).max(24).default(12),
+  }).safeParse(req.query || {});
+  if (!q.success) return reply.code(400).send({ error: "invalid_query", issues: q.error.issues });
+
+  const tz = await jewishCalendarTimezone(tid);
+  const row = await (db as any).tenantJewishCalendar.findUnique({ where: { tenantId: tid } }).catch(() => null);
+  const settings = { ...toJewishCalendarSettings(row ?? null, tz), enabled: true };
+  const from = localYmd(new Date(), tz);
+  return reply.send({
+    from, months: q.data.months,
+    holidays: buildHolidaySpans(from, settings, { months: q.data.months, lang: q.data.lang }),
+  });
+});
+
 // ── GET /voice/ivr/override ───────────────────────────────────────────────────
 app.get("/voice/ivr/override", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
@@ -24505,7 +24693,8 @@ app.get("/voice/ivr/preview", async (req, reply) => {
     return reply.send({ mode: "business", reason: "no_schedule_configured", activeProfile: null, override: null, at: new Date().toISOString() });
   }
   const atTime = q.at ? new Date(q.at) : new Date();
-  const mode = computeCurrentMode(schedule, override, atTime);
+  const jewish = await loadJewishCalendar(db, tid, schedule.timezone);
+  const mode = computeCurrentMode(schedule, override, atTime, jewish);
 
   // Mirrors the selection logic in buildIvrKeys so preview and the actual
   // published state can never diverge.
@@ -24624,7 +24813,8 @@ app.post("/voice/ivr/publish", async (req, reply) => {
     (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true } }),
   ]);
 
-  const mode = schedule ? computeCurrentMode(schedule, override) : "business";
+  const jewish = schedule ? await loadJewishCalendar(db, tenantId, schedule.timezone) : null;
+  const mode = schedule ? computeCurrentMode(schedule, override, new Date(), jewish) : "business";
   // Load the active profile's option routes so the Connect-owned IVR dialplan
   // gets per-digit destinations alongside the legacy single-dest keys. We only
   // load options for the ONE active profile — other profiles' options are
@@ -24817,7 +25007,8 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
     (db as any).ivrOverrideState.findUnique({ where: { tenantId } }),
     (db as any).ivrRouteProfile.findMany({ where: { tenantId, isActive: true } }),
   ]);
-  const mode = schedule ? computeCurrentMode(schedule, override) : "business";
+  const jewishPub = schedule ? await loadJewishCalendar(db, tenantId, schedule.timezone) : null;
+  const mode = schedule ? computeCurrentMode(schedule, override, new Date(), jewishPub) : "business";
   const activeProfile = ivrFindActiveProfile(mode, profiles as any[], schedule);
   // Same empty-menu guard as /voice/ivr/publish (see the comment there).
   if (!activeProfile && (profiles as any[]).length > 0) {
@@ -25004,7 +25195,8 @@ async function sweepIvrModeBoundaries(): Promise<void> {
       });
       if (!last) continue;
       const override = await (db as any).ivrOverrideState.findUnique({ where: { tenantId: sched.tenantId } });
-      const mode = computeCurrentMode(sched, override);
+      const jewishSweep = await loadJewishCalendar(db, sched.tenantId, sched.timezone);
+      const mode = computeCurrentMode(sched, override, new Date(), jewishSweep);
       if (mode === last.mode) continue;
       const r = await publishIvrForTenant(sched.tenantId, `mode-scheduler:${last.mode}->${mode}`);
       if (r.ok) {
@@ -26676,7 +26868,8 @@ async function didBuildPublishValues(
       const sched = await (db as any).ivrScheduleConfig.findUnique({ where: { tenantId: mapping.tenantId } });
       if (sched?.isActive) {
         const override = await (db as any).ivrOverrideState.findUnique({ where: { tenantId: mapping.tenantId } });
-        const mode = computeCurrentMode(sched, override);
+        const jewishDid = await loadJewishCalendar(db, mapping.tenantId, sched.timezone);
+        const mode = computeCurrentMode(sched, override, new Date(), jewishDid);
         if (mode !== "business") {
           const profiles = await (db as any).ivrRouteProfile.findMany({
             where: { tenantId: mapping.tenantId },

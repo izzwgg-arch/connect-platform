@@ -43,6 +43,7 @@ import { ConvertRecording } from "./ConvertRecording";
 import { MakeTeam } from "./MakeTeam";
 import { NumberStep, fmtUs, type TenantNumber, type NumberPlan, type AnnouncementPlan } from "./NumberStep";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
+import { JewishCalendarCard } from "./JewishCalendar";
 
 interface RouteProfile {
   id: string; tenantId: string; name: string; type: string;
@@ -1674,6 +1675,15 @@ export default function IvrStudioPage() {
               onSave={saveSchedule}
               onCreateAfterHours={() => setNamingFor({ mode: "create", forDigit: null })}
             />
+
+            {/* The Jewish calendar sits directly under the weekly hours, because
+                that is what it takes over: yom tov and Shabbos stop being rows
+                the customer types and become dates the system already knows. */}
+            <JewishCalendarCard
+              tenantId={tenantId}
+              disabled={!canManage || saving}
+              onSaved={() => { void loadAll(); }}
+            />
           </div>
 
           {/* ── side: the script + recordings ── */}
@@ -2681,6 +2691,118 @@ function StudioStyles() {
       @media (max-width:620px){.ivrs .fb{grid-template-columns:1fr}}
       .ivrs .fbx{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:13px}
       .ivrs .fbx h3{margin:0 0 9px;font-size:13.5px;font-weight:650}
+      /* ── Jewish calendar ────────────────────────────────────────────────
+         Ported from the approved mockup rather than re-derived, and built on
+         the Studio's own tokens so it belongs to this screen.
+
+         ⛔ THE RULE: a Yiddish holiday name is an RTL island INSIDE an LTR
+         layout. .jc-he is the only place direction is touched, and
+         unicode-bidi: isolate is what keeps the punctuation and digits next
+         to it in place. Never put dir or direction on a row or a card —
+         that mirrors the page, which Izzy explicitly ruled out. */
+      .ivrs .jc-he{font-family:"Frank Ruhl Libre","Times New Roman",serif;direction:rtl;unicode-bidi:isolate}
+
+      .ivrs .jc-headright{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+      .ivrs .jc-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+      .ivrs .jc-segbtn{background:var(--bg-soft);border:none;color:var(--dim);font:inherit;font-size:12px;
+        font-weight:600;padding:5px 12px;cursor:pointer}
+      .ivrs .jc-segbtn + .jc-segbtn{border-left:1px solid var(--line)}
+      .ivrs .jc-segbtn.on{background:var(--accent);color:#04121d}
+      .ivrs .jc-segyi{font-family:"Frank Ruhl Libre","Times New Roman",serif;font-size:14px;direction:rtl;unicode-bidi:isolate}
+      .ivrs .jc-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--dim);cursor:pointer}
+
+      .ivrs .jc-strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg-soft);
+        border:1px solid var(--line);border-radius:10px;padding:10px 13px;margin-bottom:16px;font-size:12.5px}
+      .ivrs .jc-pill-music{background:var(--menu);color:#1b1030;border-color:var(--menu)}
+      .ivrs .jc-err{background:rgba(226,96,106,.12);border:1px solid var(--stop);color:var(--text);
+        border-radius:9px;padding:10px 13px;margin-bottom:14px;font-size:13px}
+      .ivrs .jc-hint{margin-top:5px;font-size:12px;line-height:1.45}
+      .ivrs .jc-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+      .ivrs .jc-row > .field{flex:1 1 210px;margin-bottom:0}
+
+      .ivrs .jc-opts{display:flex;flex-direction:column;gap:8px}
+      .ivrs .jc-opt{display:flex;gap:10px;align-items:flex-start;text-align:left;width:100%;
+        padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-soft);
+        color:inherit;font:inherit;cursor:pointer}
+      .ivrs .jc-opt.on{border-color:var(--accent-line);background:var(--accent-soft)}
+      .ivrs .jc-opt:disabled{opacity:.55;cursor:default}
+      .ivrs .jc-dot{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--faint);
+        flex:0 0 auto;margin-top:3px;position:relative}
+      .ivrs .jc-opt.on .jc-dot{border-color:var(--accent)}
+      .ivrs .jc-opt.on .jc-dot::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent)}
+      .ivrs .jc-opttext b{display:block;font-size:13px;font-weight:600}
+      .ivrs .jc-opttext span{display:block;font-size:12px;color:var(--dim);margin-top:2px;line-height:1.45}
+
+      .ivrs .jc-sub{border-top:1px solid var(--line-soft);margin-top:18px;padding-top:16px}
+      .ivrs .jc-sub h3{margin:0 0 4px;font-size:13.5px;font-weight:600}
+      .ivrs .jc-checks{display:flex;gap:18px;flex-wrap:wrap;margin-top:4px}
+      .ivrs .jc-check{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer}
+
+      /* the holiday list */
+      .ivrs .jc-hlist{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}
+      .ivrs .jc-hrow{display:grid;grid-template-columns:1.3fr 1.5fr 1fr auto;gap:10px;align-items:center;
+        padding:9px 12px;border-bottom:1px solid var(--line);border-left:3px solid var(--line);background:var(--panel)}
+      .ivrs .jc-hrow:last-child{border-bottom:none}
+      .ivrs .jc-stripe-yt{border-left-color:var(--menu)}
+      .ivrs .jc-stripe-chm{border-left-color:var(--ok)}
+      .ivrs .jc-stripe-no{border-left-color:var(--line)}
+      .ivrs .jc-hname{font-size:13px;font-weight:600}
+      .ivrs .jc-hname em{display:block;font-style:normal;font-size:11.5px;color:var(--faint);font-weight:400;margin-top:1px}
+      .ivrs .jc-hwhen{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+      .ivrs .jc-auto{font-size:11.5px}
+      @media(max-width:760px){
+        .ivrs .jc-hrow{grid-template-columns:1fr 1fr}
+        .ivrs .jc-hwhen{grid-column:1/-1}
+      }
+
+      /* the month view */
+      .ivrs .jc-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:18px}
+      .ivrs .jc-backdrop{position:absolute;inset:0;background:rgba(4,10,16,.62)}
+      .ivrs .jc-sheet{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+        box-shadow:var(--shadow);max-width:1000px;width:100%;max-height:92vh;display:flex;flex-direction:column}
+      .ivrs .jc-sheeth{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
+        padding:15px 18px 13px;border-bottom:1px solid var(--line)}
+      .ivrs .jc-sheeth h3{margin:0 0 2px;font-size:15px;font-weight:600}
+      .ivrs .jc-sheetb{padding:16px 18px 20px;overflow-y:auto;min-height:0}
+      .ivrs .jc-preview{background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:9px;
+        padding:9px 12px;margin-bottom:13px;font-size:12.5px}
+      .ivrs .jc-calbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+      .ivrs .jc-mo{font-size:16px;font-weight:600}
+      .ivrs .jc-spacer{flex:1}
+      .ivrs .jc-scrollx{overflow-x:auto}
+      .ivrs .jc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;min-width:640px}
+      .ivrs .jc-dow{font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+        color:var(--faint);text-align:center;padding-bottom:3px}
+      .ivrs .jc-cell{background:var(--bg-soft);border:1px solid var(--line);border-left-width:3px;
+        border-radius:9px;padding:6px 7px;min-height:84px;display:flex;flex-direction:column;gap:2px;
+        cursor:pointer;text-align:left;font:inherit;color:inherit}
+      .ivrs .jc-cell:hover{border-color:var(--accent-line)}
+      .ivrs .jc-blank{background:transparent;border-color:transparent;cursor:default;min-height:0}
+      .ivrs .jc-sel{outline:2px solid var(--accent);outline-offset:1px}
+      .ivrs .jc-today{box-shadow:inset 0 0 0 1px var(--accent-line)}
+      .ivrs .jc-gd{font-size:13.5px;font-weight:600;line-height:1.1}
+      .ivrs .jc-lb{font-size:11px;font-weight:600;line-height:1.25}
+      .ivrs .jc-music{font-size:11px;color:var(--menu)}
+      .ivrs .jc-tm{font-size:10.5px;color:var(--faint);margin-top:auto;font-variant-numeric:tabular-nums}
+      .ivrs .jc-yt{border-left-color:var(--menu);background:rgba(169,143,224,.09)}
+      .ivrs .jc-yt .jc-lb{color:var(--menu)}
+      .ivrs .jc-sh{border-left-color:var(--team);background:rgba(59,160,242,.07)}
+      .ivrs .jc-sh .jc-lb{color:var(--team)}
+      .ivrs .jc-er{border-left-color:var(--vm)}
+      .ivrs .jc-er .jc-lb{color:var(--vm)}
+      .ivrs .jc-chm{border-left-color:var(--ok)}
+      .ivrs .jc-chm .jc-lb{color:var(--ok)}
+      .ivrs .jc-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--dim)}
+      .ivrs .jc-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+      .ivrs .jc-sw-yt{background:var(--menu)}
+      .ivrs .jc-sw-sh{background:var(--team)}
+      .ivrs .jc-sw-er{background:var(--vm)}
+      .ivrs .jc-sw-chm{background:var(--ok)}
+      .ivrs .jc-sw-no{background:var(--line)}
+      .ivrs .jc-day{margin-top:14px;background:var(--bg-soft);border:1px solid var(--line);
+        border-radius:10px;padding:13px 15px}
+      .ivrs .jc-day h4{margin:0 0 2px;font-size:14px;font-weight:600}
+      .ivrs .jc-verdict{font-size:13px;font-weight:600;margin:7px 0 5px}
       .ivrs .holidays{display:flex;flex-wrap:wrap;gap:7px;align-items:center;min-height:22px}
       .ivrs .hchip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--bg-soft);border:1px solid var(--line);border-radius:999px;padding:4px 6px 4px 11px}
       .ivrs .hchip button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:15px;line-height:1;padding:0 4px}

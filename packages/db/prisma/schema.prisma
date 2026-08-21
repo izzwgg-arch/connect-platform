@@ -879,6 +879,7 @@ model Tenant {
   pbxPrompts                      TenantPbxPrompt[]
   ivrScheduleConfig               IvrScheduleConfig?
   ivrOverrideState                IvrOverrideState?
+  jewishCalendar                  TenantJewishCalendar?
   ivrPublishRecords               IvrPublishRecord[]
   /// "connect" (Connect-managed MOH, default) | "pbx" (native VitalPBX control —
   /// the worker reconcile never republishes Connect keys for these tenants).
@@ -3632,6 +3633,59 @@ model IvrOptionRoute {
 /// Weekly business hours + holiday rules for a tenant.
 /// businessHoursRules JSON: [{ day: 0, open: "09:00", close: "17:00" }, ...]
 /// holidayDates JSON:       ["2026-12-25", "2026-01-01", ...]
+/// The Jewish calendar for one tenant. ONE row per tenant, read by BOTH the IVR
+/// (which menu callers hear) and the hold music (which class plays), so the two
+/// can never disagree about whether it is yom tov.
+///
+/// The DATES are not stored — they come from a generated table in
+/// packages/shared/src/jewishCalendar. What lives here is only what differs
+/// between customers: where they are, whose nightfall they keep, and what they
+/// want the phone to do.
+model TenantJewishCalendar {
+  id       String  @id @default(cuid())
+  tenantId String  @unique
+  enabled  Boolean @default(false)
+
+  /// Curated community key ("monsey", "kiryas-joel"…) — the lat/long below is
+  /// what actually gets used; this only remembers what they picked.
+  communityId String?
+  latitude    Float   @default(41.1112)
+  longitude   Float   @default(-74.0687)
+
+  /// Whose nightfall: "satmar" (72 min, default) | "chabad" (8.5°) | "rmoshe" (50) | "medium" (42).
+  /// ⛔ A halachic choice. The product exposes it and never decides it.
+  nightfallShita        String @default("satmar")
+  candleLightingMinutes Int    @default(18)
+
+  closeForShabbos                Boolean @default(true)
+  closeForYomTov                 Boolean @default(true)
+  earlyCloseMinutesBeforeCandles Int     @default(60)
+  reopenMinutesAfterNightfall    Int     @default(0)
+  reopenNextMorning              Boolean @default(true)
+  /// "open" | "early" | "closed"
+  cholHamoed String @default("open")
+  fastDays   String @default("open")
+  /// { "Purim": "closed", "Chanukah": "open" } keyed by the table's holiday name.
+  holidayOverrides Json @default("{}")
+
+  /// Music mourning — drives the a cappella switch, never the phone menu.
+  /// "none" | "early" (to Lag BaOmer) | "late" (R"Ch Iyar on) | "whole"
+  sefirah           String  @default("early")
+  threeWeeksNoMusic Boolean @default(true)
+  nineDaysNoMusic   Boolean @default(true)
+  /// The MohProfile to play while instrumental music is off. Null = leave the
+  /// hold music alone, which is the honest default: silence would be worse.
+  acappellaMohProfileId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  acappellaMoh    MohProfile? @relation("JewishCalendarAcappellaMoh", fields: [acappellaMohProfileId], references: [id], onDelete: SetNull)
+}
+
+
 model IvrScheduleConfig {
   id                  String   @id @default(cuid())
   tenantId            String   @unique
@@ -3813,6 +3867,7 @@ model MohProfile {
   didRouteMappings   DidRouteMapping[]
   extensionOverrides MohExtensionOverride[]
   sourcePolicies     MohSourcePolicy[]
+  jewishAcappellaFor TenantJewishCalendar[] @relation("JewishCalendarAcappellaMoh")
 
   @@index([tenantId])
   @@index([tenantId, type])
