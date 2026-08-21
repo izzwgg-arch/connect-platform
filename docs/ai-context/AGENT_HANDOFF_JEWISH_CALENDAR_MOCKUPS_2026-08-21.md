@@ -559,3 +559,81 @@ A hit means the table is shipping to browsers. The fix is then either
 `"sideEffects": false` on the shared package (correct for a pure utility package,
 and it would shrink every other consumer too) or moving the calendar exports off
 the shared ROOT index onto a subpath. **Measure before and after either way.**
+
+---
+
+## 10. DEPLOYED (2026-08-21) — and the two bugs only a live probe found
+
+### What is live, and how each was proven
+
+| Piece | Proof |
+|---|---|
+| Migration | `_prisma_migrations` row `finished_at` **13:09:24Z**, `rolled_back_at` null, **23 columns**, defaults `enabled=false` / `satmar` / `18` / `early`, **0 rows** |
+| api | container `.build-commit` `a9faa821`; `loadJewishCalendar` ×6, `jewishSweep` ×2, `voice/jewish-calendar` ×4 grepped **inside the running container** |
+| Routes | all three answer **200 on production** via a 60-second self-signed SUPER_ADMIN token against `127.0.0.1:3001` |
+| portal | four of the screen's own **strings** grepped in the shipped `.next` |
+| worker | `jewishHold` ×4, `workerJewishSettings` ×2, `acappella` ×7; **precedence read line-by-line out of the running container**: override 2862 → **acappella 2879** → one_time 2889 → holiday 2893 → weekly 2903; 0 restarts, 0 error-level lines |
+
+Live month view for Loopcom Demo, September 2026:
+```
+2026-09-11  Closing early at 5:54pm before Rosh Hashana
+2026-09-12  Closed
+2026-09-13  Closed          <- the two-day closure, both dates
+2026-09-27  Closed          <- Sukkos II, one of the five days Israel gets wrong
+holidays (lang=yi): ראש השנה · צום גדליה · יום כיפור · סוכות
+```
+
+### ⛔⛔ BUG 1 — the verdict spoke the RAW hebcal name
+
+The live route returned a cell labelled **Succos** with the verdict beside it
+reading **"Closed — Sukkot"**. The resolver works in the table's raw keys and the
+verdict was built straight from `v.reason`, so it never passed through the
+approved Yiddish Labs names. **Every unit test passed** — they asserted the label,
+never that the verdict agreed with it.
+
+Fixed with a `localise()` in `buildMonthView`, and a guard that fails if a raw
+name reaches the screen. ⛔ It correctly broke an earlier assertion of mine that
+`en[i].verdict === yi[i].verdict` — that assertion was **wrong**: the verdict
+carries the holiday name, so it must change with the language. The real invariant
+is that the FACTS match, and the test now asserts date, times, treatment and music
+are identical while letting the names differ.
+
+### ⛔⛔ BUG 2 — 117 KB of holiday table was shipping to every browser
+
+Suspected earlier, then **measured**: `sefirahEarly` and `Chag HaBanot` both
+appear in `/app/apps/portal/.next/static/chunks/6879-*.js`, a **168 KB** shared
+chunk. `packages/shared` declared no `sideEffects`, so webpack had to assume every
+module in it might have import-time side effects and could not tree-shake the
+JSON out — even though **no portal file imports the calendar at all**.
+
+Checked before annotating rather than assuming: no module-scope calls, no globals,
+no timers anywhere in the package (the single `console.error` is inside a function
+body). `"sideEffects": false` added, which is the correct annotation for a pure
+utility package and shrinks every other consumer too.
+
+⛔ **The rule both of these earn: a green unit suite tells you the parts work, not
+that the deployed thing is right. Probe the live route and grep the shipped
+bundle.** Neither bug was findable from the source.
+
+### ⛔ Deploy notes worth carrying
+
+- **Two sessions ran api deploys within a minute of each other on the same branch.**
+  Mine won the migrate stage and then lost the build lock
+  (`HEAVY JOB ALREADY RUNNING`); theirs built the tip, which contained my commits.
+  No harm, because it was the same branch — but **check `ps` for a running
+  `deploy-direct.sh` before starting one.**
+- ⛔⛔ **Two of my own watchers stalled in the `pgrep` self-match trap this file
+  already documents** — an `until ! pgrep -f "deploy-direct.sh"` loop matches its
+  OWN command line and can never exit. Both had to be killed by PID. **The fix is
+  to split the literal so the waiter's command line does not contain it:**
+  `PAT="deploy-""worker.sh"; until ! pgrep -f "$PAT"; do sleep 20; done`.
+- A portal deploy reporting `skip=unrelated_paths` is **not** necessarily wrong —
+  an earlier build may already have picked the commit up. ⛔ **Judge it by grepping
+  the container for one of your own STRINGS**, never by the log line.
+- ⛔ `deploy-direct.sh` cannot deploy the worker. It is
+  `DEPLOY_BRANCH=… DEPLOY_FORCE_RESTART=1 bash scripts/deploy-worker.sh`, and the
+  worker has **no `/app/.build-commit`** — grep a marker string instead.
+- ⛔ An in-container probe script must sit under a package that can resolve its
+  imports. `/tmp` and `/app` both fail `MODULE_NOT_FOUND`; `jsonwebtoken` is not
+  in apps/api's deps either — hand-roll the HS256 token with `node:crypto`, or
+  pull the ids from psql and use a plain `fetch` with no imports at all.
