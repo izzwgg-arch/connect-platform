@@ -79,10 +79,11 @@ export function buildActionRequest(
   creds: YealinkCredentials | null,
   opts: { https?: boolean } = {},
 ): HttpRequest {
-  assertPrivateIpv4(ip);
+  const host = canonicalPrivateIpv4(ip);
+  if (!host) throw new Error("refused: not a private office address");
   const scheme = opts.https ? "https" : "http";
   return {
-    url: `${scheme}://${ip}/servlet?key=${ACTION_KEYS[action]}`,
+    url: `${scheme}://${host}/servlet?key=${ACTION_KEYS[action]}`,
     method: "GET",
     headers: creds ? { Authorization: basicAuth(creds) } : {},
     timeoutMs: PHONE_HTTP_TIMEOUT_MS,
@@ -106,15 +107,42 @@ export function assertPrivateIpv4(ip: string): void {
 }
 
 export function isPrivateIpv4(ip: unknown): boolean {
-  const parts = String(ip ?? "").split(".");
-  if (parts.length !== 4) return false;
-  const n = parts.map((p) => (/^\d{1,3}$/.test(p) ? Number(p) : NaN));
-  if (n.some((v) => !Number.isInteger(v) || v < 0 || v > 255)) return false;
+  return canonicalPrivateIpv4(ip) !== null;
+}
+
+/**
+ * Parse an address and hand back its ONE canonical dotted form, or null.
+ *
+ * ⛔⛔ A LEADING ZERO IS REFUSED, AND THAT IS NOT PEDANTRY — IT WAS A REAL BYPASS.
+ * `010.0.0.1` reads as decimal ten to a naive check, so it looks like the private
+ * 10.0.0.0/8 range and is waved through. But `inet_addr` and the resolvers built on
+ * it read a leading-zero octet as OCTAL, so the request actually goes to 8.0.0.1 —
+ * a public address. Found by fuzzing this function on 2026-08-21; it let
+ * `010.0.0.1` and `192.168.001.001` straight past.
+ *
+ * ⛔ Callers must build their URL from the value this RETURNS, never from the string
+ * they were given. Validating one spelling and then sending another is the whole
+ * class of bug.
+ */
+export function canonicalPrivateIpv4(ip: unknown): string | null {
+  const raw = String(ip ?? "");
+  const parts = raw.split(".");
+  if (parts.length !== 4) return null;
+  const n: number[] = [];
+  for (const part of parts) {
+    // exactly 1-3 ASCII digits, and no leading zero unless the octet IS zero
+    if (!/^\d{1,3}$/.test(part)) return null;
+    if (part.length > 1 && part[0] === "0") return null;
+    const v = Number(part);
+    if (!Number.isInteger(v) || v < 0 || v > 255) return null;
+    n.push(v);
+  }
   const [a, b] = n;
-  if (a === 10) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  return false;
+  const isPrivate = a === 10
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168);
+  if (!isPrivate) return null;
+  return n.join(".");
 }
 
 export type AuthResult =
@@ -149,9 +177,10 @@ export async function testCredentials(
 }
 
 export function buildStatusRequest(ip: string, creds: YealinkCredentials | null): HttpRequest {
-  assertPrivateIpv4(ip);
+  const host = canonicalPrivateIpv4(ip);
+  if (!host) throw new Error("refused: not a private office address");
   return {
-    url: `http://${ip}/`,
+    url: `http://${host}/`,
     method: "GET",
     headers: creds ? { Authorization: basicAuth(creds) } : {},
     timeoutMs: PHONE_HTTP_TIMEOUT_MS,
