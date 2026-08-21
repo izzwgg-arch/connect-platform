@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -29,7 +29,7 @@ const COMPOSE = read("docker-compose.app.yml");
 const DOCKERFILE = read("apps/portal/Dockerfile");
 const LOGIN_PAGE = read("apps/portal/app/login/page.tsx");
 const WIDGET = read("apps/portal/components/TurnstileWidget.tsx");
-const LOGIN_LAYOUT = read("apps/portal/app/login/layout.tsx");
+const MIDDLEWARE = read("apps/portal/middleware.ts");
 const SCRIPT_MODULE = read("apps/portal/lib/turnstileScript.ts");
 
 const ARG = "NEXT_PUBLIC_TURNSTILE_SITE_KEY";
@@ -148,25 +148,44 @@ test("the widget reads the key from the public build env and nothing else", () =
  * preload moves the network work in front of React instead of behind it.
  */
 
-test("the login layout preconnects and preloads Cloudflare's script", () => {
-  assert.ok(LOGIN_LAYOUT.includes('rel="preconnect"'), "lost the preconnect — DNS+TLS goes back on the critical path");
-  assert.ok(LOGIN_LAYOUT.includes('rel="preload"'), "lost the preload — the script download waits for React again");
-  assert.ok(LOGIN_LAYOUT.includes('as="script"'), "a preload without as=script is ignored by the browser");
+test("the sign-in page sends preconnect + preload as a Link HEADER", () => {
+  const code = stripComments(MIDDLEWARE);
+  assert.ok(code.includes('"Link"'), "the Link header is gone — the hints go back behind the bundle");
+  assert.ok(code.includes("rel=preconnect"), "lost the preconnect: DNS+TLS goes back on the critical path");
+  assert.ok(code.includes("rel=preload"), "lost the preload: the script download waits for React again");
+  assert.ok(code.includes("as=script"), "a preload without as=script is ignored by the browser");
 });
 
-test("the login layout is a SERVER component — that is the whole point", () => {
-  // A client component's markup is not in the served HTML (the /login shell is
-  // ~4.9 KB with zero login elements), so hints rendered there would arrive
-  // after the bundle and buy nothing.
-  assert.ok(!LOGIN_LAYOUT.includes('"use client"'), "the login layout must stay a server component or its preload never reaches the HTML");
+test("⛔ the hints are a HEADER, not JSX — JSX does not work on this page", () => {
+  // Tried the other way first: a server layout rendering <link rel="preconnect">
+  // is serialised into the RSC flight payload rather than emitted as real tags,
+  // because /login bails to client-side rendering. The preload scanner never
+  // sees it and the links only exist after hydration, which is far too late.
+  // Verified by curling /login and finding the hints inside a __next_f.push
+  // string instead of among the <link> tags.
+  assert.ok(
+    !existsSync(join(REPO_ROOT, "apps/portal/app/login/layout.tsx")),
+    "a login layout is back — JSX hints there are inert; the Link header in middleware.ts is the mechanism that works",
+  );
+});
+
+test("the middleware is scoped to /login and does nothing else", () => {
+  const code = stripComments(MIDDLEWARE);
+  assert.match(code, /matcher:\s*\["\/login"\]/, "the matcher must stay pinned to /login — a hint on every page is waste");
+  assert.ok(code.includes("NextResponse.next()"), "middleware must pass the request straight through");
+  // It runs in front of the sign-in page: a fault here means nobody can log in.
+  assert.ok(
+    !/redirect|rewrite|cookies|fetch\(/.test(code),
+    "this middleware must stay trivial — no redirects, rewrites, cookies or fetches in front of sign-in",
+  );
 });
 
 test("the preload and the widget resolve to the SAME url", () => {
   // Byte-identical or the browser fetches twice and logs "preloaded but not used".
   assert.ok(SCRIPT_MODULE.includes("TURNSTILE_SCRIPT_SRC"), "the shared script module lost its URL export");
-  assert.ok(LOGIN_LAYOUT.includes("TURNSTILE_SCRIPT_SRC"), "the layout hardcodes a URL instead of using the shared constant");
+  assert.ok(MIDDLEWARE.includes("TURNSTILE_SCRIPT_SRC"), "the layout hardcodes a URL instead of using the shared constant");
   assert.ok(WIDGET.includes("TURNSTILE_SCRIPT_SRC"), "the widget hardcodes a URL instead of using the shared constant");
-  for (const [name, src] of [["layout", LOGIN_LAYOUT], ["widget", WIDGET]] as const) {
+  for (const [name, src] of [["layout", MIDDLEWARE], ["widget", WIDGET]] as const) {
     assert.ok(
       !stripComments(src).includes("challenges.cloudflare.com/turnstile"),
       name + " hardcodes the script URL again — the two can now drift apart",
@@ -192,7 +211,7 @@ test("the hints carry no crossOrigin", () => {
   // CORS-mode hint does not match that request, so it opens a SECOND connection
   // and warms nothing.
   assert.ok(
-    !stripComments(LOGIN_LAYOUT).includes("crossOrigin"),
+    !stripComments(MIDDLEWARE).includes("crossOrigin"),
     "a crossOrigin hint does not match the widget's plain script fetch",
   );
 });
