@@ -12,6 +12,7 @@ import {
   type WebRingtoneId,
 } from "../../../hooks/telephonyAudioPreferences";
 import { QRPairingModal } from "../../../components/QRPairingModal";
+import { PermissionGate } from "../../../components/PermissionGate";
 import { apiGet, apiPatch, apiPost } from "../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -204,6 +205,25 @@ function GeneralTab() {
           </div>
         </div>
       </section>
+
+      {/* Devices — desk phones. ⛔ Wrapped in the gate rather than always shown:
+          a visible control that refuses on click reads as a broken product, not as
+          a permission. The key is in no default bucket, so only people who have
+          been given it see this at all. */}
+      <PermissionGate permission={"can_setup_desk_phones" as any} fallback={null}>
+        <section>
+          <h3 style={{ fontSize: 14, fontWeight: 650, marginBottom: 14, color: "var(--text-dim)", letterSpacing: "0.5px", textTransform: "uppercase" }}>Devices</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>Desk phones</div>
+              <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 3 }}>
+                Find the desk phones in your office and connect them to Loopcom.
+              </div>
+            </div>
+            <a className="btn" href="/settings/desk-phones" style={{ textDecoration: "none" }}>Set Up My Phones</a>
+          </div>
+        </section>
+      </PermissionGate>
 
       {/* Account Details */}
       <section>

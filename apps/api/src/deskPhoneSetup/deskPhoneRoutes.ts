@@ -35,6 +35,8 @@ export type DeskPhoneDeps = {
   ourProvisioningHosts: () => string[];
   /** Ask Asterisk whether an endpoint is genuinely registered. */
   isRegistered?: (tenantId: string, extNumber: string) => Promise<boolean>;
+  /** Where the PBX serves its installed handset photos, or null when unknown. */
+  phoneImageBase?: () => string | null;
 };
 
 /**
@@ -536,8 +538,67 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       keysJson: serializeButtonLayout(layout),
     });
   });
+
+  /* ── what the wizard needs to draw itself ───────────────────────── */
+
+  /** The people a phone can be assigned to. ⛔ This customer's own, and only theirs. */
+  app.get("/desk-phones/extensions", async (req: any, reply: any) => {
+    const user = await mayRunSetup(req, reply); if (!user) return;
+    const rows = await db.extension.findMany({
+      where: { tenantId: user.tenantId, status: "ACTIVE" },
+      orderBy: { extNumber: "asc" },
+    });
+    return reply.send({
+      ok: true,
+      extensions: rows.map((e: any) => ({
+        id: e.id, extNumber: e.extNumber, displayName: e.displayName || e.extNumber,
+      })),
+    });
+  });
+
+  /**
+   * A handset's product photo.
+   *
+   * ⛔⛔ PROXIED, NEVER LINKED. The portal's CSP is `default-src 'self'`, so an
+   * <img> pointed straight at the PBX is blocked by the browser as a silent console
+   * violation - the picture simply never appears, with no failed request to find.
+   * The same trap has already cost this repo an afternoon on voice samples.
+   *
+   * ⛔ The model is the ONLY input and it is reduced to A-Z0-9 before use, so this
+   * cannot be turned into a way to fetch arbitrary paths off the PBX.
+   */
+  app.get("/desk-phones/photo/:model", async (req: any, reply: any) => {
+    const user = await mayRunSetup(req, reply); if (!user) return;
+    const model = String(req.params.model || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+    if (!model) return reply.status(404).send({ error: "not_found" });
+    const base = deps.phoneImageBase?.();
+    if (!base) return reply.status(404).send({ error: "not_configured" });
+
+    for (const brand of PHOTO_BRANDS) {
+      try {
+        const res = await fetch(`${base}/images/${brand}/${model}.png`, {
+          signal: AbortSignal.timeout(4000),
+        } as any);
+        if (!res.ok) continue;
+        const buf = Buffer.from(await res.arrayBuffer());
+        // ⛔ Forced to image/png rather than echoed. A CDN once served us MP3 audio
+        // labelled text/plain and the browser silently declined to decode it.
+        reply.header("Content-Type", "image/png");
+        reply.header("Cache-Control", "public, max-age=86400, immutable");
+        return reply.send(buf);
+      } catch { /* try the next brand */ }
+    }
+    // ⛔ An honest 404: the screen falls back to a drawn phone rather than a broken
+    // image icon, which reads as a broken product.
+    return reply.status(404).send({ error: "not_found" });
+  });
 }
 
+/** Brands whose product photos are installed on the PBX, most likely first. */
+const PHOTO_BRANDS = [
+  "yealink", "polycom", "grandstream", "fanvil", "snom", "cisco", "sangoma",
+  "htek", "vtech", "atcom", "alcatel-lucent", "aastra-mitel", "gigaset",
+];
 function classifyOurs(url: string | null | undefined, hosts: string[]): boolean {
   const raw = String(url ?? "").trim();
   if (!raw) return false;
