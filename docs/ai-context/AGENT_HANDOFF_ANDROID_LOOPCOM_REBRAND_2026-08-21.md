@@ -186,10 +186,16 @@ next in-place update renames the app and swaps the icon underneath them. Tell
 them before it ships, or "my app disappeared" becomes a support call. The
 announcement and the publish want to happen together, and both are Izzy's call.
 
-⛔ The build script stamps `expo_runtime_version` into `strings.xml`. This
-session built the APK only to prove the resources and bundle compile, and
-**reverted that stamp** — the repo still records the published build
-(`1.0.0+20260812-215020`), which is the truth until someone publishes.
+⛔ **`android-ship.ps1` dirties TWO TRACKED FILES on every run** — it stamps
+`expo_runtime_version` into `android/app/src/main/res/values/strings.xml` and
+rewrites `apps/mobile/ship-proof.json`. Both record the **published** build, so
+a verification-only build must revert them (this session did). Committing them
+without publishing makes the repo claim a build that no customer has. Same class
+as the tracked `apps/portal/tsconfig.tsbuildinfo`.
+
+For the record, the verification build measured the APK at **142,381,803 bytes
+vs 147,508,699** for the last published one — **4.9 MB smaller**, which is the
+dead Connect splash artwork coming out.
 
 ⛔ **iOS is untouched and already correct** — renamed Loopcom on 2026-07-30.
 Some of the swept strings are shared, so iOS gets the corrected wording at its

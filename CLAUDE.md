@@ -151,10 +151,13 @@ Memory: [[android-app-rebranded-but-not-published]].
   **mean channel diff of 1.35**; every string replacement asserted to match
   exactly once before writing; and a full `assembleRelease`, which is what
   actually validates the PNGs through `aapt` and the new `require()` — a
-  typecheck sees neither. ⛔ The ship script stamps `expo_runtime_version` into
-  `strings.xml`; that stamp was **reverted**, so the repo still records the
-  published build (`1.0.0+20260812-215020`), which is the truth until someone
-  publishes.
+  typecheck sees neither. ⛔ **`android-ship.ps1` dirties TWO TRACKED FILES every run** —
+  `res/values/strings.xml` (`expo_runtime_version`) and
+  `apps/mobile/ship-proof.json`. Both record the PUBLISHED build, so a
+  verification-only build must revert them, or the repo claims a build no
+  customer has. Both were reverted here. The APK measured **142,381,803 bytes
+  vs 147,508,699** published — 4.9 MB smaller, which is the dead splash coming
+  out.
 - ⏳ **NOT PROVEN: nobody has looked at the app.** No home screen shows the icon,
   no human has watched the splash animate. **Acceptance is one install** — the
   launcher shows the infinity mark labelled *Loopcom* with the glow clear of the
