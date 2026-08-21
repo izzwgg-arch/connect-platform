@@ -175,10 +175,25 @@ def save_phone(conn, *, phone_id=None, mac, tenant_id, model_id, template_id=Non
         if clash and (phone_id is None or int(clash["id"]) != int(phone_id)):
             raise ValueError("mac_already_used")
         if phone_id:
-            cur.execute(
-                "UPDATE provisioning.devices SET mac=%s, model_id=%s, template_id=%s, tenant=%s, description=%s "
-                "WHERE id=%s",
-                (mac, model_id, template_id, tenant_id, description or "", int(phone_id)))
+            # ⛔⛔ THE BUTTON COLUMNS MUST BE UPDATABLE, AND MUST NOT BE BLANKED BY
+            # AN EDIT THAT DID NOT MENTION THEM. Until 2026-08-21 this UPDATE listed
+            # five columns and never `keys`, while the INSERT below did -- so a phone
+            # created with BLFs lost every one of them the next time anything about it
+            # was edited, at the next render, with no error anywhere. Nobody would see
+            # it until the lights on the handset stopped working.
+            #
+            # ⛔ The fix is NOT "always write keys": passing None then would blank a
+            # layout on any edit that simply did not care about buttons. Only columns
+            # the caller actually supplied are written.
+            sets = ["mac=%s", "model_id=%s", "template_id=%s", "tenant=%s", "description=%s"]
+            args = [mac, model_id, template_id, tenant_id, description or ""]
+            for column, value in (("`keys`", keys), ("phonebook", phonebook),
+                                  ("expansion_module_keys", expansion)):
+                if value is not None:
+                    sets.append(column + "=%s")
+                    args.append(value)
+            args.append(int(phone_id))
+            cur.execute("UPDATE provisioning.devices SET " + ", ".join(sets) + " WHERE id=%s", tuple(args))
             new_id = int(phone_id)
         else:
             cur.execute(

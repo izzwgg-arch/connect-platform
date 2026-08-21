@@ -575,3 +575,31 @@ test("geo: set_geo_blocks reads the after-state AFTER the build", () => {
   assert.ok(buildAt !== -1 && afterAt !== -1 && buildAt < afterAt,
     "the enforceability after-view must be read after the build, not before it");
 });
+
+// ── button layouts must survive an edit (2026-08-21) ───────────────────────
+// save_phone wrote `keys` in its INSERT branch and never in its UPDATE branch, so a
+// phone created with BLFs lost every one of them the next time anything about it was
+// edited -- at the next render, with no error anywhere. Nobody would notice until the
+// lights on the handset stopped working.
+test("save_phone persists the button layout on an EDIT, not only on create", () => {
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8").split(String.fromCharCode(13)).join("");
+  const fn = CW.slice(CW.indexOf("def save_phone"), CW.indexOf("def delete_phone"));
+  const update = fn.slice(fn.indexOf("if phone_id:"), fn.indexOf("else:"));
+  assert.match(update, /`keys`/, "the UPDATE branch must be able to write the button layout");
+  assert.match(update, /expansion_module_keys/, "expansion module keys are buttons too");
+});
+
+// ⛔ The other half: an edit that says nothing about buttons must LEAVE THEM ALONE.
+// "always write keys" would blank a layout on any unrelated edit, which is the same
+// bug wearing a different hat.
+test("save_phone only writes the button columns the caller actually supplied", () => {
+  const CW = readFileSync(join(__dirname, "mirror", "console_writes.py"), "utf8").split(String.fromCharCode(13)).join("");
+  const fn = CW.slice(CW.indexOf("def save_phone"), CW.indexOf("def delete_phone"));
+  const update = fn.slice(fn.indexOf("if phone_id:"), fn.indexOf("else:"));
+  assert.match(update, /if value is not None:/, "a None value must not blank a stored layout");
+  assert.doesNotMatch(
+    update,
+    /SET mac=%s, model_id=%s, template_id=%s, tenant=%s, description=%s, `keys`=%s/,
+    "an unconditional keys= in the SET list blanks buttons on every unrelated edit",
+  );
+});
