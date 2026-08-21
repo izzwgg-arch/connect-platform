@@ -41851,6 +41851,11 @@ const port = Number(process.env.PORT || 3001);
       "connectcomunications.com",
       "loopcom.net",
     ],
+    // ⛔ Proxied rather than linked: the portal CSP is `default-src 'self'`, so an
+    // <img> pointed at the PBX is blocked as a silent console violation and the
+    // picture simply never appears. Verified reachable 2026-08-21.
+    phoneImageBase: () => process.env.PBX_PHONE_IMAGE_BASE
+      || (process.env.PBX_WEB_BASE_URL ? `${process.env.PBX_WEB_BASE_URL.replace(/\/+$/, "")}/provisioning_resources` : null),
   });
   // Multi-factor authentication (Phase 11, 2026-08-18): enrol / challenge /
   // disable / recovery codes. `/auth/mfa/challenge` is the ONLY public route in
