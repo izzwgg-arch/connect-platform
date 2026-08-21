@@ -234,6 +234,29 @@ schedule', the system will always know when that holiday is this year"*, plus
 - ⛔ **Nothing in this repo has ever touched a Hebrew date** — grepping
   `hebcal|hebrew|shabbos|zmanim|candle` returns only Yiddish *transcription*
   files. Greenfield.
+- ✅✅ **WHOSE TIMES: SATMAR, 72 MINUTES (Izzy, 2026-08-21 — asked for Chabad, then
+  *"if you can find Satmar even better"*). Handoff §8.**
+  ⛔⛔ **"Use the Satmar calendar" is NOT a different calendar — it is ONE NUMBER.**
+  The **dates are identical on every calendar** (Rosh Hashanah 5787 is 12–13 Sept
+  on a Satmar luach, a Chabad calendar and hebcal alike) — the Hebrew calendar is
+  arithmetic, not opinion. **Do not go hunting for a Satmar feed; there is no
+  public one and none is needed.** What differs is **nightfall**, i.e. when the
+  phone REOPENS, and hebcal exposes it as `havdalahMins` / `havdalahDeg`.
+  **Measured for Monsey (KJ and Williamsburg within a minute or two):
+  Satmar/Kiryas Joel = fixed 72 min after sunset (Rabbeinu Tam), publicly
+  emphasised by the Satmar Rebbe → 5:40pm on 4 Dec 2026, 9:45pm on 25 Jun 2027.
+  Chabad = 8.5° below horizon, 21–27 min EARLIER. 50 min = 22 min earlier.
+  42 min = 30 min earlier.** Candle lighting is **18 min before sunset on all
+  four** and is not disputed. ⛔ **Chabad ≈ the 50 min the first draft already
+  used, so "use Chabad" would have changed almost nothing — Satmar is the change
+  that matters, and it is +22 minutes every single week.**
+  ⛔ **72 is the right DEFAULT because it fails in the safe direction:** too late
+  and the phone stays closed a few extra minutes on a Saturday night and nobody
+  notices; too early and **the phone tells callers the business is open while they
+  are still keeping Shabbos.** Earlier opinions are opt-in, per customer.
+  ⛔ **It is a halachic setting, not an engineering one** — expose it, never decide
+  it. All mockup times recomputed on 72: Rosh Hashanah ends **8:21pm** (was 7:59),
+  Yom Kippur **8:07pm**, Simchas Torah **7:45pm**; the RH stretch is **49½ hours**.
 - ⛔ **`Tenant` has NO address column, only `timezone`** — so candle-lighting
   times have no lat/long to work from today. The E911 address lives in onboarding
   `answers` and not for every customer. A community/zip picker is the proposed

@@ -340,3 +340,65 @@ NOT touched**. His call, separately from this feature.
   so a restart costs one batch, not the run. ~10 s per call, so ~20 s per name —
   batch 6 at a time and keep each exec under the tool timeout.
 - Cost: **~4 credits per name** for both passes (1–3 per call, longer names cost more).
+
+---
+
+## 8. Whose times — SATMAR, 72 minutes (Izzy, 2026-08-21)
+
+Izzy: *"use Chabad calendar USA"* then, moments later, *"if you can find Satmar
+even better."* Satmar it is, and it resolved decision §5.4.
+
+### ⛔⛔ "Use the Satmar calendar" is NOT a different calendar — it is one number
+
+**The dates are identical on every calendar.** Rosh Hashanah 5787 is 12–13
+September 2026 on a Satmar luach, a Chabad calendar, an Artscroll luach and
+hebcal alike. The Hebrew calendar is arithmetic, not opinion; nobody publishes a
+different version of it. ⛔ **So do not go looking for a Satmar data source —
+there is no public Satmar API or feed, and none is needed.**
+
+What genuinely differs is **nightfall** — when Shabbos and yom tov end, i.e. when
+the phone reopens. hebcal exposes exactly that as `havdalahMins` /
+`havdalahDeg`, so the whole question is a per-customer setting.
+
+### The measured difference — 22 minutes, every week
+
+Computed for Monsey (Kiryas Joel and Williamsburg land within a minute or two):
+
+| Whose | Reckoning | Fri 4 Dec 2026 | Fri 25 Jun 2027 | vs Satmar |
+|---|---|---|---|---|
+| **Satmar / Kiryas Joel** | **fixed 72 min after sunset (Rabbeinu Tam)** | **5:40pm** | **9:45pm** | — |
+| Chabad | 8.5° below horizon | 5:13pm | 9:24pm | 21–27 min earlier |
+| R' Moshe / common US | 50 min | 5:18pm | 9:23pm | 22 min earlier |
+| Three medium stars | 42 min | 5:10pm | 9:15pm | 30 min earlier |
+
+**Candle lighting is 18 minutes before sunset on all four** — that part is not in
+dispute, and no evidence was found that Satmar differs on it.
+
+⛔ **Chabad ≈ what the first draft already had.** Chabad's 8.5° lands within about
+five minutes of 50 minutes, so "use Chabad" would have changed almost nothing.
+**Satmar is the change that matters.**
+
+Sources for the Satmar practice (searched, not assumed): Satmar/Kiryas Joel keep
+a **fixed 72 minutes**, publicly emphasised by the Satmar Rebbe; 72 min is
+documented as standard Chasidic/Charedi practice. Chabad publishes 8.5° as its
+own method.
+
+### ⛔ Why 72 is the right DEFAULT regardless of who the customer is
+
+**It fails in the safe direction.** Set nightfall later than a customer actually
+holds and the phone stays closed a few extra minutes on a Saturday night — nobody
+notices. Set it earlier and **the phone tells callers the business is open while
+they are still keeping Shabbos.** For this customer base only one of those is
+acceptable. So 72 is the default and the earlier opinions are opt-in.
+
+⛔ **This is a halachic setting, not an engineering one.** The numbers above are
+measured and the sources are cited, but which opinion a given business holds is
+theirs (and their rav's) to state — the product must expose it, never decide it.
+
+### What changed in the mockups
+
+Everything recomputed on 72 minutes. Rosh Hashanah now ends **8:21pm** (was
+7:59pm), Yom Kippur **8:07pm**, Sukkos **7:57pm**, Simchas Torah **7:45pm**,
+Pesach VIII **9:03pm**, Shavuos **9:41pm**. The Rosh Hashanah stretch is
+**49½ hours**. Handoff §5 decision 4 is now **answered**; the setting stays
+per-customer because a Chabad business on the same street wants 8.5°.
