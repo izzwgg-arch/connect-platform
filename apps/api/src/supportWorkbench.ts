@@ -288,6 +288,49 @@ export async function listWorkspaceDir(root: string, rel: string): Promise<TreeE
   return out;
 }
 
+/**
+ * Git status for the explorer's M / U letters, parsed from `git status
+ * --porcelain`. ⛔ Read-only and best-effort: a repo that will not answer just
+ * means the tree renders without letters, never that the tree fails.
+ */
+export function parseGitPorcelain(out: string): Record<string, "M" | "U" | "D" | "A"> {
+  const map: Record<string, "M" | "U" | "D" | "A"> = {};
+  for (const raw of String(out ?? "").split(/\r?\n/)) {
+    if (raw.length < 4) continue;
+    const code = raw.slice(0, 2);
+    // Porcelain quotes paths containing odd characters; take the last field of
+    // a rename ("R  old -> new") because the new name is what the tree shows.
+    let file = raw.slice(3).trim();
+    if (file.includes(" -> ")) file = file.split(" -> ").pop()!.trim();
+    file = file.replace(/^"(.*)"$/, "$1");
+    if (!file) continue;
+    const letter = code.includes("?") ? "U" : code.includes("D") ? "D" : code.includes("A") ? "A" : "M";
+    map[file.split(/[\\/]/).join("/")] = letter;
+  }
+  return map;
+}
+
+export async function gitStatusMap(root: string): Promise<Record<string, "M" | "U" | "D" | "A">> {
+  try {
+    const out = await runCheckedCommand("git status --porcelain", root);
+    if (out.exitCode !== 0) return {};
+    return parseGitPorcelain(out.stdout);
+  } catch {
+    return {};
+  }
+}
+
+/** The current branch, for the status bar. Best-effort. */
+export async function gitBranch(root: string): Promise<string | null> {
+  try {
+    const out = await runCheckedCommand("git rev-parse --abbrev-ref HEAD", root);
+    const name = out.stdout.trim();
+    return out.exitCode === 0 && name ? name : null;
+  } catch {
+    return null;
+  }
+}
+
 export const MAX_FILE_BYTES = 400_000;
 
 export async function readWorkspaceFile(root: string, rel: string): Promise<{ path: string; text: string; truncated: boolean; bytes: number }> {
