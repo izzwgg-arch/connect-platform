@@ -15,9 +15,9 @@ Loopcom puts your company's phone system in your pocket. Make and take calls on
 your business number, text customers, hear your voicemail, and reach your
 team — from anywhere, on any network.
 
-Loopcom is for businesses using the Loopcom phone platform by Connect
-Communications. You sign in with the account your company gives you — there is
-no self-service signup in the app.
+Loopcom is for businesses using the Loopcom phone platform. You sign in with
+the account your company gives you — there is no self-service signup in the
+app.
 
 WHAT YOU CAN DO
 
@@ -53,8 +53,7 @@ https://app.loopcom.net/privacy
 NEED HELP?
 
 Your company's Loopcom administrator is the fastest path for account
-questions. You can also reach Connect Communications support from inside
-the app.
+questions. You can also reach Loopcom support from inside the app.
 
 ## Category
 Business (secondary consideration: Communication — pick Business)

@@ -7,7 +7,24 @@ for me... Also, get the app ready."*
 Decisions made by Izzy in-chat (do not re-litigate):
 - **Organization account** (not personal — avoids the 12-tester/14-day closed
   test rule for new personal accounts, and shows the business name).
-- **Owner account: sms@loopcom.net** (Google Workspace user on loopcom.net).
+- ⛔⛔ **THE LEGAL ENTITY IS `Loopcom LLC`, NOT Connect Communications LLC**
+  (Izzy, 2026-08-21: *"it's not Connect Communications. It's LoopCom"*). This
+  is the name that goes on the D-U-N-S record, the Play organization account
+  and the Apple organization enrollment — all three are verified against
+  official business records and must match exactly. Spelling is **Loopcom**,
+  lowercase c, per the standing brand rule.
+- ⚠️ **Still inconsistent, needs Izzy's decision:** the live privacy policy
+  says *"Loopcom is the business phone app operated by Connect Communications"*
+  and `billing/pdf.ts` still prints **"Connect Communications, LLC"** on
+  invoice PDFs. A Play/Apple reviewer comparing the developer account name
+  against the privacy policy operator can flag the mismatch. Do NOT silently
+  rewrite either — they are legal/financial documents.
+- ⛔ **Owner account: `izzy@loopcom.net`** — changed 2026-08-21 from
+  sms@loopcom.net once it emerged that sms@ is the **automated SMS↔email
+  bridge mailbox** (it holds the app-specific password named `loopcom` that
+  the bridge polls with). Play developer ownership is effectively permanent,
+  so a service mailbox is the wrong owner. ⏳ izzy@loopcom.net needed 2-step
+  verification enabling before Google would allow developer signup.
 - **The app is named "Loopcom"** on Play AND on the Android launcher — matches
   the iOS rename of 2026-07-30. The package id stays
   `com.connectcommunications.mobile` (permanent once uploaded).
@@ -16,8 +33,14 @@ Decisions made by Izzy in-chat (do not re-litigate):
 
 ### The app builds a Play-compliant signed AAB now
 - **New upload keystore**: `apps/mobile/android/app/play-upload.keystore`
-  (PKCS12, RSA-4096, alias `loopcom-upload`, CN=Loopcom, O=Connect
-  Communications LLC, valid 10,000 days). Credentials in the gitignored
+  (PKCS12, RSA-4096, alias `loopcom-upload`, **CN=Loopcom, O=Loopcom LLC**,
+  valid 10,000 days). ⛔ **Regenerated 2026-08-21** — the first key said
+  `O=Connect Communications LLC` and Izzy corrected the legal entity to
+  **Loopcom LLC**; the superseded key is parked beside it as
+  `play-upload.keystore.superseded-connectcomms` and must NEVER be used (it
+  was never uploaded to Google, so replacing it was free — after the first
+  Play upload the upload key is locked and only a Google support reset can
+  change it). Credentials in the gitignored
   `apps/mobile/android/keystore.properties`. Both files exist ONLY on Izzy's
   workstation — ⛔ **back them up**; with Play App Signing the upload key is
   resettable via Google support, so loss is recoverable but painful.
