@@ -392,12 +392,20 @@ mockups (<https://claude.ai/code/artifact/5060e8a7-2aac-410c-9cc2-fb891c9e5a04>)
 *"Option A for both, and use Loopcom."*
 Memory: [[android-app-rebranded-but-not-published]].
 
-- ⛔⛔ **NOTHING HAS REACHED A PHONE. The fleet still shows "Connect" with the blue
-  icon** — no APK has been published since 2026-08-04, and `apps/mobile` is in no
-  deploy queue (`deploy-direct.sh` takes `api|portal` only). **The publish is the
-  moment every customer's home screen renames itself and the icon changes
-  underneath them** — an in-place update on the sideload signature, so there is no
-  opt-in. Warn the fleet in the same breath. Izzy's call, both halves.
+- ✅✅ **PUBLISHED 2026-08-21 on Izzy's explicit instruction** — `connectcomms-latest.apk`
+  is **`1.0.0+20260821-064521`, 142,381,803 bytes**, live and smoke-tested 200 on
+  both hostnames; `/api/mobile/android/latest` reports it with
+  `publishedAt 2026-08-21T11:49:41Z`. The prior published build was
+  `1.0.0+20260812-215020` (147,508,699 b) — **the size drop IS the check** that
+  the new one really went out.
+  ⛔⛔ **SO EVERY CUSTOMER'S HOME SCREEN RENAMES ITSELF FROM "Connect" TO
+  "Loopcom", WITH A NEW ICON, THE MOMENT THEY TAKE THIS UPDATE** — it is an
+  in-place update on the sideload signature, so there is no opt-in and no
+  staged rollout. ⏳ **At the time of writing NOBODY HAS BEEN TOLD.** If a
+  customer rings saying their app vanished, this is why: tell them to look for
+  the blue infinity mark. ⛔ Nothing pushes it — a phone only changes when its
+  user installs from the download page or an invite link, so the fleet turns
+  over gradually, not at once.
 - ⛔⛔ **THE FINDING THAT OUTRANKS THE REBRAND: `drawable-*/splashscreen_image.png`
   IS DEAD — five identical 1.2 MB files, 6.0 MB of the APK, referenced by
   nothing.** `expo-splash-screen` is in **neither `pnpm-lock.yaml` nor

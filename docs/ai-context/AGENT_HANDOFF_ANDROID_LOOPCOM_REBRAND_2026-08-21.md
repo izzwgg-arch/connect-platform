@@ -172,8 +172,21 @@ off-machine** (§1 of the Play handoff already says so).
 
 ## 7 · What reaches a phone, and what does not
 
-⛔ **Nothing, yet.** `apps/mobile` is in no deploy queue and `deploy-direct.sh`
-takes `api|portal` only. A rebranded APK has to be built and published:
+✅ **PUBLISHED 2026-08-21**, on Izzy's explicit in-chat instruction
+(*"publish it to the connect download page"*). `connectcomms-latest.apk` is now
+**`1.0.0+20260821-064521`, 142,381,803 bytes**, HEAD 200 on both hostnames, and
+`/api/mobile/android/latest` reports it with `publishedAt 2026-08-21T11:49:41Z`.
+The previous published build was `1.0.0+20260812-215020` at 147,508,699 bytes —
+⛔ **that size difference is the honest check that a publish really happened**;
+the download page's own date is served from the manifest and is easy to misread.
+
+⛔⛔ **Every customer's home screen renames itself the moment they take this
+update**, and **nobody had been told at the time of publishing.** Nothing pushes
+it, so the fleet turns over gradually as people install from the download page
+or an invite link.
+
+⛔ `apps/mobile` is in no deploy queue and `deploy-direct.sh` takes `api|portal`
+only. The two commands are:
 
 ```
 powershell -File scripts/android-ship.ps1 -SkipJunction
