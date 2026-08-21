@@ -249,6 +249,89 @@ schedule', the system will always know when that holiday is this year"*, plus
   is in §6 of the handoff, and the negative that matters most is that a tenant
   with the Jewish calendar **off** behaves byte-identically to today.
 
+## ⛔⛔ AGENT HANDOFF — the Cloudflare bot check is ON the login page and now ARMED in OBSERVE mode; the site key had never had a path into the build (2026-08-21) — READ FIRST before touching `TURNSTILE_*`, before adding ANY `NEXT_PUBLIC_*` build arg, before flipping `TURNSTILE_ENFORCE=1`, or for "is there a robot check before the login page?"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §14**
+(`b6ea3ff4` on `feat/ivr-migration-takeover`. **api DEPLOYED and
+container-verified; one env edit to `.env.platform` (backup
+`.bak.20260821T112630Z.turnstile`); one Turnstile widget created at Cloudflare.**
+No migration, no PBX write, no DNS change, no proxy toggle, no tenant row.)
+Izzy, 2026-08-21: *"Do we have the Cloudflare check for robots and stuff before
+getting to the login page, or on the login page?"* then *"Do one, two, and three."*
+
+- ⛔ **THE ANSWER, for every future asking: it is ON the login page** — a widget
+  inside the sign-in card, verified server-side in `POST /auth/login` **after the
+  throttle and before any DB read**. There is **no gate in front of the page**;
+  that would be the Cloudflare edge, and `app.` is still **DNS-only**, so every
+  staged WAF/bot rule remains inert. Two different controls — do not conflate them.
+- ⛔⛔ **THE FINDING, and it is the reusable one: the site key had NO WAY TO REACH
+  THE BUILD, so the widget had rendered NOTHING in every portal build ever made.**
+  `NEXT_PUBLIC_TURNSTILE_SITE_KEY` appeared in **neither `apps/portal/Dockerfile`
+  (no `ARG`, absent from the build `RUN` env) nor either compose build-args
+  block**, while `TurnstileWidget` returns `null` on an empty key by design.
+  **Setting the secret alone would have produced an observe log reading
+  `observed_missing` forever, indistinguishable from "no bots are trying."**
+  ⛔ **A `NEXT_PUBLIC_*` variable is a BUILD ARG, not runtime env** — putting it in
+  `environment:` changes nothing, because Next inlines it at build time.
+- ⛔ **Wired into BOTH `portal` AND `portal_candidate`** (the blue/green pair):
+  wiring one tests perfectly and loses the value at the next cutover — the CRM
+  storage-dir trap, third occurrence in this repo.
+- ⛔ **The site key is a LITERAL DEFAULT, never a bare `${VAR:-}`, on purpose.**
+  `deploy-direct.sh` sources only `.env.deploy-queue`, so an unset variable
+  resolves to empty and silently bakes an **unkeyed** portal — the exact mechanism
+  that left `CDR_INGEST_SECRET` blank for the platform's life. The key is public
+  (it ships in the bundle to every visitor), so a literal costs nothing.
+  **Site key `0x4AAAAAAEXikCDGv1Pl_SuX`; it lives in git in two places
+  (Dockerfile + compose) and `turnstileWiring.test.ts` fails if they drift.**
+- ⛔⛔ **THE SECRET IS THE OPPOSITE: `.env.platform` only, and it must NEVER become
+  a `NEXT_PUBLIC_*` anything** — that would inline it into the bundle. A guard test
+  asserts no Turnstile secret reaches any portal build input. Live secret is 35
+  chars, `600 root:root`, fingerprint `sha256[0:12] = 9b0141c4e114`.
+- ⛔⛔ **IN OBSERVE MODE A WRONG SECRET IS INVISIBLE — it logs `observed_invalid`
+  and ALLOWS, exactly like a healthy day.** So prove the secret BEFORE relying on
+  it, by asking Cloudflare to refuse it: `POST
+  challenges.cloudflare.com/turnstile/v0/siteverify` with a dummy token answers
+  **`invalid-input-secret`** for a wrong key and **`invalid-input-response`** for a
+  right one. Run it **from inside `app-api-1`**, because the same call also proves
+  the container's egress to Cloudflare — without which observe would log
+  `observed_unavailable` forever. House rule in another costume: *let the provider
+  refuse, then read WHICH refusal.*
+- ⛔ **`loopcom.net` IS NOT A CLOUDFLARE ZONE AND THAT DOES NOT MATTER HERE.** Its
+  DNS is at **Squarespace** by Izzy's own 2026-08-19 decision (*"I have other plans
+  for loopcom.net"*), so there is **one** zone, not two — stop looking for a second
+  one. Turnstile hostnames are just a list: Cloudflare offered *"Add
+  app.loopcom.net as a custom hostname"* and took it. Its own screen says
+  *"Turnstile can be embedded into any website without sending traffic through
+  Cloudflare."* Widget **"Loopcom portal sign-in"**, account
+  `c52b8cceadcd2b113e74350b72365765`, mode **Managed**, pre-clearance **off**
+  (it only works on proxied sites anyway), both `app.` hostnames, 2 of 10.
+- ✅ **PROVEN LIVE, not by unit test:** the secret is in the running container with
+  `TURNSTILE_ENFORCE` empty (= observe); a browser-shaped login
+  (`Origin: https://app.connectcomunications.com`, no token) answered the ordinary
+  **`401 invalid_credentials`** and logged
+  `{"note":"observed_missing","msg":"turnstile_observed"}` — **the gate executing
+  and deliberately allowing**; `/api/health` 200 on both hostnames.
+  Tests: 7 in `apps/portal/lib/turnstileWiring.test.ts` (registered), **all 4
+  wiring assertions fail replayed against `HEAD`**; portal typecheck 0, suite
+  250/252 (the two documented pre-existing failures).
+- ⛔ **Deploy order api → portal** (either is safe; api-first only avoids a window
+  where the verifier exists and no widget does). ⛔ The portal deploy queued behind
+  another session's heavy build — `HEAVY JOB ALREADY RUNNING` is a lock collision,
+  **not broken code**; wait on `ps -eo cmd | grep -c "[r]un-heavy.sh"` reaching 0.
+- ⏳ **NOT PROVEN: nobody has seen the widget in a browser.** It is proven as a
+  keyed bundle and a firing server-side gate, never by a human watching a checkbox
+  render. ⛔ An already-open portal tab or desktop window keeps the OLD bundle until
+  reloaded. **Acceptance: open `/login` on BOTH hostnames, sign in normally, then
+  confirm the api log reads `note:"verified"` instead of `observed_missing`.**
+- ⏳ **ENFORCE IS NOT ON AND MUST NOT BE FLIPPED YET.** `TURNSTILE_ENFORCE=1` is an
+  env edit + api restart (no rebuild). ⛔ **Every `observed_missing` you see today
+  becomes a REFUSED LOGIN the moment you enforce** — wait until real browser logins
+  read `verified`, and re-confirm the mobile app (which sends no `Origin`) is still
+  never challenged. ⚠️ Known and accepted: Turnstile is bypassed by simply omitting
+  `Origin`, so it defends against **browser-driven** credential stuffing only; the
+  defence against scripted attacks is the login throttle plus the 480/min global
+  rate limiter. Do NOT "fix" it by challenging Origin-less callers.
+
 ## ⛔⛔ AGENT HANDOFF — the Android app is Loopcom now (icon spacing, splash, 31 strings) and it is on NO PHONE (2026-08-21) — READ FIRST before touching the mobile launcher icon or splash, before renaming ANY notification channel id, before publishing an APK, or for "the native splash didn't change"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANDROID_LOOPCOM_REBRAND_2026-08-21.md`**
@@ -2296,12 +2379,12 @@ as well."*
   answers `401 invalid_credentials`; a TOTP-enrolled admin on an OTP tenant sees the
   authenticator step only.
 - ⏳ **Open, needs Izzy:** which tenants get it; the mobile OTP step (APK + TestFlight);
-  the Turnstile site keys; whether `TENANT_ADMIN` should be allowed to flip its own
+  the Turnstile site keys (DONE 2026-08-21 — observe mode, see the Turnstile section); whether `TENANT_ADMIN` should be allowed to flip its own
   tenant (today SUPER_ADMIN only — a customer turning it OFF for themselves defeats
   the control).
 - ⛔⛔ **"ARE WE 100% SECURE?" — THE HONEST LEDGER IS §13 of the security handoff,
   and the short answer is NO, because the two headline controls are BUILT AND
-  SWITCHED OFF.** Read live, 2026-08-19: `TURNSTILE_SECRET_KEY` **unset**,
+  SWITCHED OFF.** Read live, 2026-08-19: `TURNSTILE_SECRET_KEY` **unset** (CORRECTED 2026-08-21: Turnstile is now ARMED in OBSERVE mode — it verifies and logs, and still refuses nobody; enforce is NOT on),
   **0 tenants** with 2FA on, **0 codes** ever sent, **0 users** MFA-enrolled,
   `PUBLIC_PORTAL_URL` **unset** (so every emailed link still says the OLD domain),
   **`m.loopcom.net` does not resolve**, and `app.` is still **DNS-only** at
@@ -6802,9 +6885,12 @@ deploy, no regeneration, no reload. Read-only everywhere else.)
 ## ⛔⛔ AGENT HANDOFF — the assistant can ANSWER "when does my number transfer?" now, and the question used to text Izzy instead (2026-08-21) — READ FIRST before touching `port_status`, before letting the agent call a carrier, or for "a customer asked about their port"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_PORT_AUTOMATION_2026-08-12.md` §7**
-(`apps/agent` + one `apps/api` watchdog change. No migration, no PBX write, no
-env change, no tenant row, no carrier write — the only live carrier contact was
-a read-only probe of `getLNPStatus`/`getLNPList`.)
+(`a850e7cc` + `d3891d64` on `feat/ivr-migration-takeover`. **api DEPLOYED and
+container-verified** (`.build-commit` = `a850e7cc`, `verify: container commit
+a850e7ccc973 matches target`, health 200 on both hostnames); **agent REBUILT and
+container-verified** at `d3891d64` (healthy, 0 restarts, 0 error-level lines).
+No migration, no PBX write, no env change, no tenant row, no carrier write — the
+only live carrier contact was a read-only probe of `getLNPStatus`/`getLNPList`.)
 Izzy, 2026-08-21: *"The agent assistant on LoopCom should be able to check phone
 number port statuses."*
 
@@ -6860,7 +6946,14 @@ number port statuses."*
   pre-existing transcription failures), api onboarding 266/290 (the 24
   pre-existing `setupOrchestrator` failures). **The tenant link is proven on LIVE
   data**: the tool's exact query resolves Matamim and inii mini, and a tenant with
-  no sign-up port returns zero rows.
+  no sign-up port returns zero rows. ✅ **And the REAL tool was driven inside the
+  running agent container** against production: Matamim answers *"(929) 359-8299
+  has finished transferring and is live on Connect; the temporary number (724)
+  419-8226 has been retired"*, a forged `tenantId` in the args is **dropped**, and
+  a tenant with no port gets the "no record" answer. ⛔ That probe is also what
+  caught the only defect of the build — a completed transfer rendering an
+  un-ticked step (`d3891d64`), invisible to every fixture. **Drive a new tool
+  against real data before calling it done.**
 - ⏳ **NOT PROVEN: nobody has asked the assistant about a port**, and **there is
   no open port on the account today** (both real ports completed in August), so
   `portFocDate` stays null on every existing row — every stage is written to work

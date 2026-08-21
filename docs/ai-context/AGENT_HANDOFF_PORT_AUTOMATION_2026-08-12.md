@@ -434,6 +434,23 @@ exactly one line per real change.
 
 ### 7d. Proven / not proven
 
+**Deploy state: api DEPLOYED and container-verified at `a850e7cc`** (`verify:
+container commit a850e7ccc973 matches target`, health 200 on both hostnames, no
+migration); **agent REBUILT and container-verified at `d3891d64`** (⛔ the agent
+is in no deploy queue — `git fetch` + `git reset --hard origin/<branch>` in
+`/opt/connectcomms/app` first, then
+`docker compose -f docker-compose.app.yml -f docker-compose.agent.yml build agent && … up -d agent`;
+healthy, 0 restarts, 0 error-level lines).
+
+⛔ **Driving the REAL tool inside the running agent container is what caught the
+only defect of this build**, and no fixture could have: Matamim's completed port
+answered "live on Connect" while two of its five steps read *not done* — ports
+that completed before the watchdog recorded `foc_date` carry none, and that row's
+landing stamps predate some per-stage keys. Fixed in `d3891d64` (`completedAt` is
+stamped only after the whole landing ran, so once set every earlier step really
+did happen). **Drive a new tool against real data before calling it done.**
+
+
 ✅ 19 agent tests + 3 watchdog tests, all registered. **All 5 source guards
 fail when replayed against `HEAD`** (server wiring ×2, prompt ×3). agent
 typecheck **14 = its exact baseline**, api **75 = its exact baseline**, none in
