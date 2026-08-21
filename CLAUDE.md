@@ -653,17 +653,47 @@ schedule', the system will always know when that holiday is this year"*, plus
   deps. Hand-roll the HS256 token with `node:crypto`, or pull ids from psql and use
   a plain `fetch` with no imports at all.
 
-- ⏳ **STILL NOT PROVEN BY A HUMAN: nobody has opened the screen in a browser,
-  no caller has heard a calendar-driven menu, and no hold music has actually
-  switched.** Everything above is proven by live route probes, container greps and
-  tests. **No tenant has `enabled: true`.** ⛔ The a cappella track must be created
-  on the existing hold-music screens — this card only PICKS from profiles that
-  already exist. The holiday-name language is per-browser `localStorage`, not a
-  `User` column. ⛔ **Israel is deliberately unavailable** — the table is
-  `il: false` only. ⛔ `reopenNextMorning` is stored and never read (the behaviour
-  it names already happens for free); do not wire it without deciding what it
-  should do.
+- ⛔⛔ **THE SCREEN SHIPPED WITH BOTH HALVES HIDDEN, AND EVERY CHECK PASSED
+  (2026-08-21, handoff §11).** Izzy opened it: *"I don't see anywhere where I can
+  set schedules per holiday, and I don't see a calendar."* **Both were there.
+  Both were hidden by the BUILD, not the design.** (1) The per-holiday list
+  rendered only when `showHolidays` was true, which needed a non-empty
+  `holidayOverrides` or a click on the third preset — a fresh calendar has
+  neither, so `presetOf()` returned `"standard"` and **the one thing actually
+  asked for was invisible on every new calendar**. (2) The month view sat behind a
+  plain secondary button in the `foot`, beside Save, when the ask was literally
+  *"a button where people can see the calendar view month by month"*.
+  ✅ Fixed: the list is **always rendered**, headed **"A schedule for each
+  holiday"** (named with the words someone would search for); the calendar is a
+  **primary button in the card header**. Commit `05936a00`.
+  ⛔⛔ **THE RULE: A FEATURE THAT HAS TO BE DISCOVERED IS NOT BUILT.** Typecheck,
+  unit tests, container greps and live route probes ALL passed — every one of them
+  confirms the code EXISTS, and not one asks whether a person can find it. ⛔ And
+  neither bug was in a function: one was a render condition, one was layout. That
+  is why the guards in `apps/portal/lib/jewishCalendarVisibility.test.ts` read the
+  component's SOURCE and assert **position** — the button sits between
+  `jc-headright` and `card-b`, the footer does not contain it, no toggle gates the
+  list. All five fail against the version he could not use.
+- ⛔⛔ **THE DEPLOY-WAITER SELF-MATCH TRAP BIT A THIRD TIME AND DEFEATED THE
+  OBVIOUS WORKAROUND.** Splitting the literal (`PAT="deploy-""direct.sh"`) does
+  **NOT** work when the same command line later carries the real
+  `bash scripts/deploy-direct.sh …` invocation — pgrep matches THAT and the waiter
+  hangs forever (three stuck waiters killed by PID this session, one after 40
+  minutes). ✅ **The reliable fix: put the deploy in a FILE and poll the LOG for a
+  marker** — `setsid nohup /root/x-deploy.sh > /root/x.log &` then
+  `until grep -q "MY_DEPLOY_EXIT=" /root/x.log; do sleep 20; done`. **A waiter that
+  greps a file can never match itself.**
 
+- ⏳ **WHAT IS STILL UNPROVEN, HONESTLY: Izzy HAS opened the screen and saved
+  (Kiryas Joel, Satmar 72 min, 21 Aug 14:17 — 3× GET 200 + 1× PUT 200 from his own
+  IP), so the screen, the community picker, the save, tenant scoping and the audit
+  row are all proven by a real person.** ⛔ **NOBODY HAS SWITCHED IT ON** —
+  `enabled` is still false on the one row, so it drives nothing; no caller has
+  heard a calendar-driven menu and no hold music has switched. ⛔ The a cappella
+  track must be created on the existing hold-music screens — this card only PICKS
+  from profiles that already exist. The holiday-name language is per-browser
+  `localStorage`, not a `User` column. ⛔ **Israel is deliberately unavailable** —
+  the table is `il: false` only. ⛔ `reopenNextMorning` is stored and never read.
 - ⛔ **(SUPERSEDED by the BUILT section above — kept for the decision history.) NOTHING IS APPROVED AND NOTHING IS BUILT.** When it is: ⛔ the existing
   flat `holidayDates: string[]` must keep working untouched for tenants already
   using it, and ⛔ **publish the mockup-vs-built comparison** before claiming the

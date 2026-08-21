@@ -637,3 +637,58 @@ bundle.** Neither bug was findable from the source.
   imports. `/tmp` and `/app` both fail `MODULE_NOT_FOUND`; `jsonwebtoken` is not
   in apps/api's deps either — hand-roll the HS256 token with `node:crypto`, or
   pull the ids from psql and use a plain `fetch` with no imports at all.
+
+---
+
+## 11. ⛔⛔ THE SCREEN SHIPPED WITH BOTH HALVES HIDDEN (2026-08-21)
+
+Izzy opened the built screen and said: *"I don't see anywhere where I can set
+schedules per holiday, and I don't see a calendar."*
+
+**Both were there. Both were hidden, and both by the build rather than the
+design.**
+
+1. **The per-holiday list rendered only when `showHolidays` was true**, and that
+   needed either a non-empty `holidayOverrides` or a click on the third preset.
+   A fresh calendar has neither, so `presetOf()` returned `"standard"` and the
+   list never appeared. **The single thing that was actually asked for — set it
+   against the HOLIDAY and let the dates move themselves — was invisible on every
+   new calendar.**
+2. **The month view was behind a plain secondary button in the `foot`**, beside
+   Save, where it reads as an afterthought. The ask was literally *"a button
+   where people can see the calendar view month by month"*.
+
+✅ **Fixed:** the list is **always rendered**, headed **"A schedule for each
+holiday"** (named with the words someone would search for), and the calendar is a
+**primary button in the card header**.
+
+⛔ **THE RULE: a feature that has to be discovered is not built.** Both mockups
+drew these as prominent sections; the build buried them and every check I ran —
+typecheck, unit tests, container greps, live route probes — passed, because all
+of them confirm the code EXISTS. None of them asks whether a person can find it.
+
+⛔ **Neither bug was in a function.** One was a render condition, one was layout.
+That is why the five guards in `apps/portal/lib/jewishCalendarVisibility.test.ts`
+read the component's SOURCE and assert *position* — that the button sits between
+`jc-headright` and `card-b`, that the footer does not contain it, that no toggle
+gates the list. All five fail against the version Izzy could not use.
+
+⛔ **And the deploy waiter trap bit a THIRD time, defeating my own workaround.**
+Splitting the literal (`PAT="deploy-""direct.sh"`) does **not** work when the same
+command line later contains the real `bash scripts/deploy-direct.sh …`
+invocation — pgrep matches that instead, and the waiter hangs forever. ✅ **The
+reliable fix is to put the deploy in a FILE and poll the LOG for a marker:**
+
+```
+cat > /root/x-deploy.sh <<"SH"
+#!/usr/bin/env bash
+cd /opt/connectcomms/app || exit 1
+bash scripts/deploy-direct.sh portal --branch <branch>
+echo "MY_DEPLOY_EXIT=$?"
+SH
+chmod +x /root/x-deploy.sh
+setsid nohup /root/x-deploy.sh > /root/x.log 2>&1 < /dev/null & disown
+# then: until grep -q "MY_DEPLOY_EXIT=" /root/x.log; do sleep 20; done
+```
+
+A waiter that greps a **file** can never match itself.
