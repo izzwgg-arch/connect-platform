@@ -116,6 +116,41 @@ Decisions made by Izzy in-chat (do not re-litigate):
    email, and identity verification (can take days). Izzy enters payment and
    identity data himself — never the agent.
 
+## 2b. APPLE IS IN SCOPE TOO — ONE D-U-N-S SERVES BOTH (2026-08-21)
+
+Izzy: *"I'm gonna want to use this DUNS number for Apple as well, so both"* and
+*"I want to change my Apple account from personal to an organization as well."*
+
+- ⛔ **A D-U-N-S number is a universal business identifier, NOT vendor-scoped.**
+  One registration for **Loopcom LLC** satisfies Google Play organization
+  verification AND Apple organization enrollment. Do not request two.
+- ✅ **Request it through APPLE's route, not the generic D&B one** —
+  `https://developer.apple.com/enroll/duns-lookup/` (Apple ID sign-in
+  required). Apple's sponsored path turns a new D-U-N-S around in about
+  **5 business days**; D&B's own free request is advertised at **up to 30
+  business days**. Same resulting number.
+  ⏳ **BLOCKED 2026-08-21: developer.apple.com was in scheduled maintenance**
+  ("We'll be back soon") when we tried. Retry; nothing is wrong on our side.
+  ⛔ Izzy already searched the D&B lookup for Loopcom and **no existing
+  D-U-N-S was found**, so a new one must be requested.
+- ⛔⛔ **CONVERTING THE APPLE ACCOUNT IS NOT SELF-SERVICE — there is no button
+  in App Store Connect.** Verified against Apple's own docs
+  (`developer.apple.com/help/account/membership/updating-your-account-information/`):
+  you submit a request at
+  **`https://developer.apple.com/contact/request/migrate-individual-account`**.
+  Requirements: you must be the **founder/cofounder**, hold the **Account
+  Holder** role, supply the **D-U-N-S**, and you may be asked for business
+  documents.
+- ✅ **Good news: it MIGRATES the existing account rather than creating a new
+  one**, so app `6796392950`, the TestFlight builds and the existing tester
+  group are not orphaned and no App Transfer is needed.
+- ⛔ **Apple does NOT accept a DBA, a fictitious name or a sole
+  proprietorship** for an organization account — it must be the legally
+  recognized entity, i.e. exactly **Loopcom LLC**.
+- **Order matters: D-U-N-S first, then both enrollments in parallel.** Neither
+  the Apple migration request nor the Play organization signup can be
+  completed without the number in hand.
+
 ## 3. What is still TODO after the account exists
 
 - **Create the app** in Play Console (name Loopcom, English US, App, Free) →
