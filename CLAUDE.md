@@ -610,6 +610,58 @@ getting to the login page, or on the login page?"* then *"Do one, two, and three
   `Origin`, so it defends against **browser-driven** credential stuffing only; the
   defence against scripted attacks is the login throttle plus the 480/min global
   rate limiter. Do NOT "fix" it by challenging Origin-less callers.
+- ⛔⛔ **THE WIDGET WAS DOING ITS NETWORK WORK LAST, AND THE FIX IS A `Link:`
+  HEADER, NOT JSX (2026-08-21, `8a256c9a`).** Izzy: *"it shows up a little bit
+  lazy and it freezes a little bit"* — *"the Cloudflare thing was lazy to show
+  up, and then the spinner was kind of freezing for a while."* Both symptoms,
+  one cause: **`/login` ships NO markup** (the served HTML is a ~5 KB shell with
+  zero login elements — the page is a client component that is not
+  server-rendered), so the whole chain was serial — shell → bundle → React boots
+  → form renders → `useEffect` fires → **only THEN** DNS, TLS and the download to
+  `challenges.cloudflare.com` → parse → `render()` → the challenge's own round
+  trips. The widget could not appear until all of that finished, and the
+  challenge only **started** at the end of it.
+- ⛔⛔ **THE TRAP, and it cost a whole deploy: RENDERING `<link rel="preconnect">`
+  FROM A SERVER LAYOUT LOOKS RIGHT AND DOES ALMOST NOTHING HERE.** Because
+  `/login` bails to client-side rendering, React **serialises those elements into
+  the RSC flight payload** (`["$","link",null,{"rel":"preconnect",…}]`) instead of
+  emitting real tags — so the browser's preload scanner never sees them and the
+  links only become DOM nodes **during hydration**, by which time the bundle has
+  already loaded and nothing is saved. ⛔ **Found only by curling the DEPLOYED
+  HTML** and noticing the hints sat inside a `self.__next_f.push` string while the
+  real `<link>` tags were just the stylesheet and Next's own webpack preload.
+  **Judge a resource hint by `curl -sI` / the `<link>` tags in the served HTML,
+  never by the fact that you rendered one.**
+- ✅ **What works: a `Link:` response header from `apps/portal/middleware.ts`**,
+  matcher pinned to `["/login"]` — acted on **before a single byte of HTML is
+  parsed**, the earliest moment there is. ⛔ Scoped on purpose: a hint on every
+  page opens a Cloudflare connection for the overwhelming majority of requests,
+  which come from signed-in users who will never see a login form. ⛔ **No
+  `crossorigin` on either hint** — the widget appends a plain `<script src>`, and
+  a CORS-mode hint does not match that request, so it would open a SECOND
+  connection and warm the wrong one. ⛔ The header and the script URL come from
+  **`lib/turnstileScript.ts`** because they must be **byte-identical** or the
+  browser fetches twice and logs *"preloaded but not used"*; it is a full literal,
+  not a template, because this repo verifies bundles by **grepping for strings**.
+- ⛔ **The middleware is deliberately trivial — `NextResponse.next()` plus one
+  header — and a guard test forbids redirects, rewrites, cookies or fetches in
+  it.** It runs in front of the sign-in page: a fault there means nobody can log
+  in. `app/login/layout.tsx` is **deleted** so there is exactly one mechanism, and
+  a test fails if a login layout ever returns.
+- ✅ **PROVEN, and the throttled tab made the proof CLEANER, not worse.** In a
+  hidden (background-throttled) tab where React hydration is deferred to ~33 s,
+  the Turnstile script request now starts at **818 ms**; on the previous build, in
+  the identical hidden-tab conditions, it started at **33,473 ms** — i.e. it used
+  to wait for React and now does not wait for it at all. Token still mints (752
+  chars). Header verified live on **both** hostnames and **absent** from `/` (0
+  hits), so the scoping works. ⛔ **A hidden tab is useless for absolute timings**
+  (Chrome throttles it) **but is a good isolator for "does this still depend on
+  React?"**.
+- ⚠️ **What this does NOT fix, stated plainly: how long Cloudflare's challenge
+  itself takes.** This removes OUR delay from in front of it; the round trips
+  after `render()` are theirs. If the spinner is still slow on a filtered office
+  line, the remaining lever is the widget MODE (Managed → non-interactive or
+  invisible, a Cloudflare dashboard setting), not our code.
 
 ## ⛔⛔ AGENT HANDOFF — the Android app is Loopcom now (icon spacing, splash, 31 strings) and it is on NO PHONE (2026-08-21) — READ FIRST before touching the mobile launcher icon or splash, before renaming ANY notification channel id, before publishing an APK, or for "the native splash didn't change"
 
@@ -739,8 +791,7 @@ portal `done 502da3de` through the full blue/green rollout on the new code. Cont
   down"** — the platform answered 200 on both hostnames the entire time.
 - ⛔⛔ **THE FLAG IS IN NO FILE. It lives ONLY in the pm2 process environment of
   `connect-deploy-worker`** — not in `.env.deploy-queue`, not in systemd, and nothing in the repo
-  sets it. Read it with `tr ' ' '
-' < /proc/<pid>/environ | grep RESOLVE`.
+  sets it. Read it with `tr '\0' '\n' < /proc/<pid>/environ | grep RESOLVE`.
   ⛔ **That is why the bug looked intermittent and why two paths disagreed:** `deploy-direct.sh`
   sources `.env.deploy-queue` (no flag → `0` → passed) while a QUEUE job inherited `=1` from pm2
   (→ failed). Same commit, same minute, opposite outcomes.

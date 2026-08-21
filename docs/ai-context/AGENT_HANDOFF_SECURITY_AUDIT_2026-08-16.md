@@ -1033,3 +1033,80 @@ sign-in still works; then confirm the api log shows `note:"verified"` instead of
 ⛔ Do not enforce until `observed_missing` has fallen to ~zero for real browser
 logins — every one of those becomes a **refused login** the moment you enforce,
 and the mobile app (which sends no `Origin`) must be confirmed still exempt.
+
+### 14.7 The widget was doing its network work LAST — and the fix is a header, not JSX (2026-08-21)
+
+Izzy, after seeing it live: *"it shows up a little bit lazy and it freezes a
+little bit"*, clarified as *"the Cloudflare thing was lazy to show up, and then
+the spinner was kind of freezing for a while"* — and *"the rest of the page is
+good."* So: not a page problem, and not two problems.
+
+**One cause.** `/login` ships **no markup** — the served HTML is a ~5 KB shell
+with zero login elements, because the page is a client component that is not
+server-rendered. The chain was therefore entirely serial:
+
+```
+shell -> bundle -> React boots -> form renders -> useEffect fires
+      -> ONLY THEN dns + tls + download challenges.cloudflare.com
+      -> parse -> turnstile.render() -> the challenge's own round trips
+```
+
+The widget could not appear until all of that finished, and the challenge only
+**started** at the very end. Late appearance and a long spinner are the same
+fact seen twice.
+
+**⛔ The trap — a whole deploy was spent on it.** The obvious fix is a server
+layout rendering `<link rel="preconnect">` / `<link rel="preload">`. It looks
+right and does almost nothing here: because `/login` bails to client-side
+rendering, React **serialises those elements into the RSC flight payload** —
+
+```
+["$","link",null,{"rel":"preconnect","href":"https://challenges.cloudflare.com"}]
+```
+
+— rather than emitting real tags. The browser's preload scanner never sees them;
+they become DOM nodes only during hydration, long after the bundle has loaded.
+Caught by curling the **deployed** HTML and finding the hints inside a
+`self.__next_f.push` string while the actual `<link>` tags were only the
+stylesheet and Next's own webpack preload.
+
+⛔ **Judge a resource hint by `curl -sI` or by the `<link>` tags in the served
+HTML — never by the fact that you rendered one.**
+
+**✅ What works: a `Link:` response header** from `apps/portal/middleware.ts`,
+matcher pinned to `["/login"]`. A header is acted on before a single byte of
+HTML is parsed. Verified live on both hostnames:
+
+```
+link: <https://challenges.cloudflare.com>; rel=preconnect,
+      <https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit>; rel=preload; as=script
+```
+
+and **absent** from `/` (0 hits), so the scoping holds.
+
+Design notes worth keeping:
+- **No `crossorigin`** on either hint. The widget appends a plain `<script src>`
+  with no crossorigin attribute; a CORS-mode hint does not match that request and
+  would open a SECOND connection instead of warming the one that gets used.
+- The header URL and the script URL both come from `lib/turnstileScript.ts`
+  because they must be **byte-identical** or the browser fetches twice and logs
+  *"preloaded but not used"*. It is a full literal, not a template, because this
+  repo verifies bundles by grepping for strings.
+- The middleware is **deliberately trivial** — `NextResponse.next()` plus one
+  header — and a guard test forbids redirects, rewrites, cookies and fetches in
+  it. It runs in front of the sign-in page, where a fault means nobody can log in.
+- `app/login/layout.tsx` is **deleted**, so there is exactly one mechanism, and a
+  test fails if a login layout ever comes back.
+
+**✅ Proven — and the throttled tab made the proof cleaner.** In a hidden,
+background-throttled tab where React hydration is deferred to ~33 s, the
+Turnstile script request now starts at **818 ms**; on the previous build under
+identical hidden-tab conditions it started at **33,473 ms**. It used to wait for
+React; it no longer waits for React at all. The widget still mints a token (752
+chars). ⛔ A hidden tab is worthless for absolute timings — Chrome throttles it —
+but it is an excellent isolator for *"does this still depend on React?"*.
+
+**⚠️ What this does NOT fix.** How long Cloudflare's challenge itself takes after
+`render()` is theirs, not ours. If the spinner is still slow from a filtered
+office line, the remaining lever is the widget **mode** (Managed → non-interactive
+or invisible, a dashboard setting), not our code.
