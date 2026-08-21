@@ -242,6 +242,56 @@ schedule', the system will always know when that holiday is this year"*, plus
   **single** id, so Pesach and Yom Kippur necessarily share a greeting); which
   nightfall minhag (42/50/72 — the mockups use 50); whether it needs its own
   permission key; and whether Chol Hamoed defaults to open, closed or reduced.
+- ✅✅ **THE HOLIDAY NAMES ARE DONE AND THEY ARE ASHKENAZI NOW (2026-08-21, Izzy's
+  ask): 37 names run through Yiddish Labs English→Yiddish→English, 150 credits.**
+  hebcal ships **Israeli** transliterations; the round trip brings them back
+  **Ashkenazi**, which is what this customer base reads — Sukkot→**Succos**,
+  Shavuot→**Shavuos**, Simchat Torah→**Simchas Torah**, Shmini Atzeret→**Shemini
+  Atzeres**, Shabbat→**Shabbos**, Ta'anit Esther→**Taanis Esther**. **28 of 37
+  adopted as-is.** Table + verdicts in handoff §7; working data in the scratchpad.
+  ⛔⛔ **THE RULE IT EARNED: a machine cannot tell a better spelling from a
+  destroyed meaning.** **`Yom Tov` → `יום טוב` → `"Good day"`** — a literally
+  correct translation and a completely wrong NAME. My automatic classifier passed
+  it, because from the outside it is identical to `Simchat Torah → Simchas
+  Torah`: both are just "the string changed". **Adopting a round trip blind would
+  have printed "Good day" on the calendar.** 2 rejected (Yom Tov, Nightfall→"At
+  dusk"), 7 need review (`Chol Hamoed Pesach`→"The days of…", `Tzom Tammuz`→"The
+  Fast of the…", `Erev Shabbat`→"…Kodesh", `Tu BiShvat`→"Chamishah Asar B'Shevat",
+  `Ta'anit Bechorot`→תענית **בכורים** where the name is **בכורות**, `Leil
+  Selichot`, `Fast day`) — suggestions recorded, **none applied silently**.
+  ⛔ **Two mechanical YL artefacts, safe to strip:** it wraps anything it
+  transliterated in **markdown underscores** (`_Simchas Torah_` — names it left
+  alone come back bare, so the underscores are a reliable "I changed this"
+  signal) and sometimes **appends the Hebrew in brackets**. ⛔ **Short proper
+  nouns round-trip perfectly; longer/compound names come back as SENTENCES**
+  (`די טעג פון…`, `דער תענית…`, `א תענית טאג`) — keep the input to bare names.
+- ⛔⛔ **THE DISPLAY SETTING: THE WORD CHANGES, THE PAGE DOES NOT** (Izzy, explicit).
+  A per-person setting **on the calendar screen — NOT the platform-wide language
+  toggle**. The Yiddish name still renders RTL *inside itself*; confine that to
+  the word: `<span dir="rtl">שמחת תורה</span>` +
+  **`unicode-bidi: isolate`**. ⛔ **`isolate` is load-bearing** — without it the
+  bidi algorithm lets the Hebrew reorder its neighbours, so `Succos — 3 days`
+  renders with the dash and number in the wrong place. ⛔ **No `dir` attribute on
+  ANY ancestor** — one `dir="rtl"` on a parent mirrors the whole page. A name with
+  no Yiddish shows **English**, matching `useUiLanguage`'s never-guess rule.
+- ⛔⛔ **FOUND IN PASSING AND NOT FIXED: the platform-wide Yiddish toggle ALREADY
+  flips the page.** `apps/portal/hooks/useUiLanguage.tsx:127` wraps every child in
+  `<div dir={lang === "yi" ? "rtl" : "ltr"}>`, so switching the portal to Yiddish
+  today mirrors **billing, workspace, IVR Studio, IVR routing and music-on-hold**
+  entirely — exactly what Izzy ruled out. **Deliberately NOT changed: one line,
+  five live screens, his call.**
+- ⛔ **Driving Yiddish Labs, practical:** **liveness is FREE and CURRENT from
+  `AgentAuditLog` where `event = 'yiddishlabs.credit_check'`** (hourly,
+  `{"state":"ok"}`) — ⛔ **a better check than the `max("createdAt")` from
+  `AgentTranslation`** this file recommends elsewhere, which read "3 days ago"
+  while the account was perfectly healthy (nobody had translated anything new;
+  absence of translations is not absence of credits). `/agent/ui/translate` is
+  **en→yi only** and cache-first — the reverse needs
+  `YiddishLabsClient.translate(text, "en")` directly. ⛔ A script must live under
+  **`/app/apps/agent/`** to resolve `@connect/security` (`/tmp` and `/app` both
+  fail `MODULE_NOT_FOUND`), and ⛔ **`app-agent-1` gets recreated without warning**
+  — feed script + input **via stdin per batch** so a restart costs one batch, not
+  the run. ~20 s per name, ~4 credits per name for both passes.
 - ⏳ **NOTHING IS APPROVED AND NOTHING IS BUILT.** When it is: ⛔ the existing
   flat `holidayDates: string[]` must keep working untouched for tenants already
   using it, and ⛔ **publish the mockup-vs-built comparison** before claiming the

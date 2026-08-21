@@ -1,0 +1,352 @@
+{
+  "_README": "Holiday names run through Yiddish Labs English->Yiddish->English on 2026-08-21 at Izzy's request (150 credits). NOTHING IS BUILT — this is the raw result plus a per-row verdict, kept so the credits never have to be spent again. See docs/ai-context/AGENT_HANDOFF_JEWISH_CALENDAR_MOCKUPS_2026-08-21.md section 7.",
+  "_RULES": [
+    "source = the English name hebcal ships (Israeli transliteration).",
+    "yiddish / englishBack = exactly what Yiddish Labs returned, after stripping ONLY markdown underscores and a trailing Hebrew gloss in brackets. Nothing that changes a word was stripped.",
+    "verdict adopt = use englishBack. review/reject = use suggestEn/suggestYi, which are JUDGEMENT CALLS awaiting Izzy.",
+    "Yom Tov came back as \"Good day\" — a machine cannot tell that apart from a better spelling. Every row needs a human verdict."
+  ],
+  "generatedAt": "2026-08-21",
+  "engine": "Yiddish Labs /process/text translate-yiddish + translate-english",
+  "counts": {
+    "adopt": 28,
+    "review": 7,
+    "reject": 2
+  },
+  "creditsSpent": 150,
+  "names": [
+    {
+      "source": "Rosh Hashana",
+      "yiddish": "ראש השנה",
+      "englishBack": "Rosh Hashanah",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Erev Rosh Hashana",
+      "yiddish": "ערב ראש השנה",
+      "englishBack": "Erev Rosh Hashanah",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Tzom Gedaliah",
+      "yiddish": "צום גדליה",
+      "englishBack": "Tzom Gedaliah",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Yom Kippur",
+      "yiddish": "יום כיפור",
+      "englishBack": "Yom Kippur",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Erev Yom Kippur",
+      "yiddish": "ערב יום כיפור",
+      "englishBack": "Erev Yom Kippur",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Sukkot",
+      "yiddish": "סוכות",
+      "englishBack": "Succos",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Erev Sukkot",
+      "yiddish": "ערב סוכות",
+      "englishBack": "Erev Succos",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Chol Hamoed Sukkot",
+      "yiddish": "חול המועד סוכות",
+      "englishBack": "Chol HaMoed Succos",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Hoshana Rabbah",
+      "yiddish": "הושענא רבה",
+      "englishBack": "Hoshana Rabba",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Shmini Atzeret",
+      "yiddish": "שמיני עצרת",
+      "englishBack": "Shemini Atzeres",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Simchat Torah",
+      "yiddish": "שמחת תורה",
+      "englishBack": "Simchas Torah",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Chanukah",
+      "yiddish": "חנוכה",
+      "englishBack": "Chanukah",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Asara B’Tevet",
+      "yiddish": "עשרה בטבת",
+      "englishBack": "Asara B’Teves",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Tu BiShvat",
+      "yiddish": "חמשה עשר בשבט",
+      "englishBack": "Chamishah Asar B’Shevat",
+      "verdict": "review",
+      "note": "The full form is correct but nobody says it — Tu B'Shvat is universal.",
+      "suggestEn": "Tu B’Shvat",
+      "suggestYi": "ט\"ו בשבט"
+    },
+    {
+      "source": "Ta’anit Esther",
+      "yiddish": "תענית אסתר",
+      "englishBack": "Taanis Esther",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Purim",
+      "yiddish": "פורים",
+      "englishBack": "Purim",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Shushan Purim",
+      "yiddish": "שושן פורים",
+      "englishBack": "Shushan Purim",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Pesach",
+      "yiddish": "פסח",
+      "englishBack": "Pesach",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Erev Pesach",
+      "yiddish": "ערב פסח",
+      "englishBack": "Erev Pesach",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Ta’anit Bechorot",
+      "yiddish": "תענית בכורים",
+      "englishBack": "Taanis Bechoros",
+      "verdict": "review",
+      "note": "YL wrote בכורים (bikkurim, first fruits) where the name is בכורות. The English came back right.",
+      "suggestEn": null,
+      "suggestYi": "תענית בכורות"
+    },
+    {
+      "source": "Chol Hamoed Pesach",
+      "yiddish": "די טעג פון חול המועד פסח",
+      "englishBack": "The days of Chol HaMoed Pesach",
+      "verdict": "review",
+      "note": "YL turned the name into a sentence on both sides — די טעג פון = 'the days of'.",
+      "suggestEn": "Chol HaMoed Pesach",
+      "suggestYi": "חול המועד פסח"
+    },
+    {
+      "source": "Lag BaOmer",
+      "yiddish": "ל\"ג בעומר",
+      "englishBack": "Lag Ba’omer",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Shavuot",
+      "yiddish": "שבועות",
+      "englishBack": "Shavuos",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Erev Shavuot",
+      "yiddish": "ערב שבועות",
+      "englishBack": "Erev Shavuos",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Tzom Tammuz",
+      "yiddish": "דער תענית שבעה עשר בתמוז",
+      "englishBack": "The Fast of the Shiva Asar B’Tammuz",
+      "verdict": "review",
+      "note": "Expanded into a sentence, but the name it landed on is the one people actually use.",
+      "suggestEn": "Shiva Asar B’Tammuz",
+      "suggestYi": "שבעה עשר בתמוז"
+    },
+    {
+      "source": "Tish’a B’Av",
+      "yiddish": "תשעה באב",
+      "englishBack": "Tisha B’Av",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Shabbat",
+      "yiddish": "שבת",
+      "englishBack": "Shabbos",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Erev Shabbat",
+      "yiddish": "ערב שבת קודש",
+      "englishBack": "Erev Shabbos Kodesh",
+      "verdict": "review",
+      "note": "YL added 'Kodesh'. Correct, but longer than what people say.",
+      "suggestEn": "Erev Shabbos",
+      "suggestYi": "ערב שבת"
+    },
+    {
+      "source": "Shabbat Shuva",
+      "yiddish": "שבת שובה",
+      "englishBack": "Shabbos Shuvah",
+      "verdict": "adopt",
+      "note": "transliteration changed",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Yom Tov",
+      "yiddish": "יום טוב",
+      "englishBack": "Good day",
+      "verdict": "reject",
+      "note": "'Yom Tov' means 'good day', so YL translated it literally on the way back. Keep the name.",
+      "suggestEn": "Yom Tov",
+      "suggestYi": null
+    },
+    {
+      "source": "Chol Hamoed",
+      "yiddish": "חול המועד",
+      "englishBack": "Chol HaMoed",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Rosh Chodesh",
+      "yiddish": "ראש חודש",
+      "englishBack": "Rosh Chodesh",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Candle lighting",
+      "yiddish": "ליכט צינדן",
+      "englishBack": "Candle lighting",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Havdalah",
+      "yiddish": "הבדלה",
+      "englishBack": "Havdalah",
+      "verdict": "adopt",
+      "note": "unchanged",
+      "suggestEn": null,
+      "suggestYi": null
+    },
+    {
+      "source": "Nightfall",
+      "yiddish": "פארנאכטס",
+      "englishBack": "At dusk",
+      "verdict": "reject",
+      "note": "'At dusk' is not the halachic nightfall, and פארנאכטס means 'toward evening' rather than tzeis hakochavim.",
+      "suggestEn": "Nightfall",
+      "suggestYi": "צאת הכוכבים"
+    },
+    {
+      "source": "Fast day",
+      "yiddish": "א תענית טאג",
+      "englishBack": "A fast day (taanis day)",
+      "verdict": "review",
+      "note": "Picked up an indefinite article and a gloss.",
+      "suggestEn": "Fast day",
+      "suggestYi": "תענית"
+    },
+    {
+      "source": "Leil Selichot",
+      "yiddish": "די סליחות נאכט",
+      "englishBack": "The night of Selichos",
+      "verdict": "review",
+      "note": "Another phrase expansion — YL wrapped the name in a sentence.",
+      "suggestEn": "Leil Selichos",
+      "suggestYi": "ליל סליחות"
+    }
+  ]
+}

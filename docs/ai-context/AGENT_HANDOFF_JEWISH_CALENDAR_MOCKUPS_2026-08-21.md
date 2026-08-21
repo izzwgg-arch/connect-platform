@@ -224,3 +224,119 @@ wrong this autumn), and that a real call on erev Shabbos hits the closed menu at
 candle lighting minus the configured offset — **not** at a fixed clock time.
 ⛔ The negative that matters most: a tenant with the Jewish calendar **off** must
 behave byte-identically to today.
+
+---
+
+## 7. The holiday NAMES — run through Yiddish Labs both ways (2026-08-21, same day)
+
+Izzy: *"Take all the holidays and, inside Connect, run it through Yiddish Labs to
+translate them to Yiddish. Take the Yiddish version and run it again through
+Yiddish Labs and translate from Yiddish to English. Take both versions … and use
+those as the holiday names. Make it a setting that the person can set if it says
+in Yiddish or English, but even if it says in Yiddish, don't flip around the whole
+page to go from right to left. Just the actual word should change."*
+
+**Done: 37 names, both passes, against the live account. 150 credits.** Raw
+output and verdicts are in the mockups artifact; the working files are in the
+session scratchpad (`names-final.json`, `namemap.json`).
+
+### ✅ Why the round trip is a genuinely good idea
+
+hebcal ships **Israeli** transliterations. Sending them out to Yiddish and back
+returns **Ashkenazi** ones, which is what this customer base reads:
+
+| hebcal | → Yiddish | → English again |
+|---|---|---|
+| Sukkot | סוכות | **Succos** |
+| Shavuot | שבועות | **Shavuos** |
+| Simchat Torah | שמחת תורה | **Simchas Torah** |
+| Shmini Atzeret | שמיני עצרת | **Shemini Atzeres** |
+| Shabbat | שבת | **Shabbos** |
+| Ta'anit Esther | תענית אסתר | **Taanis Esther** |
+| Asara B'Tevet | עשרה בטבת | **Asara B'Teves** |
+
+**28 of 37 came back clean and are adopted as-is.**
+
+### ⛔⛔ THE RULE THIS EARNED: a machine cannot tell a better spelling from a destroyed meaning
+
+**`Yom Tov` → `יום טוב` → `"Good day"`.** A literal, correct translation and a
+completely wrong *name*. Adopting the round trip blind would have printed
+**"Good day"** on the calendar. My automatic classifier passed it — from the
+outside it is indistinguishable from `Simchat Torah → Simchas Torah`: both are
+just "the string changed". **Every round-tripped name needs a human verdict; the
+cleanup that can be automated is only the cosmetic kind.**
+
+**2 rejected, 7 need review** (suggestions recorded, none applied silently):
+
+| Name | YL gave | Use instead | Why |
+|---|---|---|---|
+| Yom Tov | Good day | **Yom Tov** | ⛔ meaning translated away |
+| Nightfall | At dusk / פארנאכטס | **Nightfall** / צאת הכוכבים | ⛔ פארנאכטס is "toward evening", not tzeis |
+| Chol Hamoed Pesach | The days of Chol HaMoed Pesach | Chol HaMoed Pesach | די טעג פון = "the days of" |
+| Tzom Tammuz | The Fast of the Shiva Asar B'Tammuz | Shiva Asar B'Tammuz | expanded, but landed on the better name |
+| Erev Shabbat | Erev Shabbos Kodesh | Erev Shabbos | YL added "Kodesh" |
+| Tu BiShvat | Chamishah Asar B'Shevat | Tu B'Shvat | correct but nobody says it |
+| Ta'anit Bechorot | תענית **בכורים** | תענית **בכורות** | bikkurim ≠ bechoros; English came back right |
+| Leil Selichot | The night of Selichos | Leil Selichos | phrase expansion |
+
+### ⛔ Two mechanical artefacts of the YL text API, safe to strip
+
+1. It wraps anything it transliterated in **markdown underscores** — `_Simchas Torah_`.
+   Names it left alone come back bare (`Chanukah`, `Purim`), so the underscores
+   are a reliable "I changed this" signal, not noise.
+2. It sometimes **appends the Hebrew in brackets** — `Chol HaMoed (חול המועד)`.
+
+Both are cosmetic and stripped in code. ⛔ Nothing that changes a **word** is
+stripped automatically.
+
+### ⛔ Longer / compound names get turned into sentences
+
+Short proper nouns round-trip perfectly. Anything longer tends to come back as
+prose (`די טעג פון…`, `דער תענית…`, `א תענית טאג`). **Keep the input to bare
+names**, and expect compound ones to need review.
+
+### The display setting, and the no-flip rule
+
+- **Its own per-person setting on the calendar screen** — NOT the platform-wide
+  language toggle, because that one changes everything else too.
+- The Yiddish name still renders right-to-left **inside itself**; the rule is to
+  confine that to the word:
+  ```html
+  <span class="hol-name" dir="rtl">שמחת תורה</span>
+  .hol-name { direction: rtl; unicode-bidi: isolate; }
+  ```
+- ⛔ **`unicode-bidi: isolate` is load-bearing.** Without it the bidi algorithm
+  lets the Hebrew reorder its neighbours, so `Succos — 3 days` renders with the
+  dash and number in the wrong place.
+- ⛔ **No `dir` attribute on any ancestor.** One `dir="rtl"` on a parent mirrors
+  the whole page — exactly what Izzy ruled out. The published mockup has **zero**
+  `dir=` on any container, asserted.
+- A name with no Yiddish shows **English**, matching the existing rule in
+  `useUiLanguage`: never a guess.
+
+### ⛔⛔ FOUND IN PASSING: the platform-wide Yiddish toggle ALREADY flips the page
+
+`apps/portal/hooks/useUiLanguage.tsx:127` wraps every child in
+`<div dir={lang === "yi" ? "rtl" : "ltr"} …>`. So switching the portal to Yiddish
+today mirrors **billing, workspace, IVR Studio, IVR routing and music-on-hold**
+entirely. That is the behaviour Izzy just said he does not want — but changing
+that one line changes five screens customers already use, so it was **deliberately
+NOT touched**. His call, separately from this feature.
+
+### ⛔ Practical notes for the next person who drives Yiddish Labs
+
+- **Liveness, free and current: read `AgentAuditLog` where
+  `event = 'yiddishlabs.credit_check'`.** It runs hourly and records
+  `{"state":"ok"}`. ⛔ This is a **better check than the `max("createdAt")` from
+  `AgentTranslation`** that this file recommends elsewhere — that read "3 days
+  ago" while the account was perfectly healthy, because nobody had translated
+  anything new. Absence of translations is not absence of credits.
+- `/agent/ui/translate` is **en → yi only** and cache-first. The reverse
+  direction needs `YiddishLabsClient.translate(text, "en")` directly.
+- ⛔ **A script must live under `/app/apps/agent/`** to resolve `@connect/security`
+  and `@prisma/client` — `/tmp` and `/app` both fail `MODULE_NOT_FOUND`.
+- ⛔ **`app-agent-1` was recreated mid-run**, wiping a `docker cp`'d script. Feed
+  the script and its input **via stdin per batch** (`docker exec -i … 'cat > f && tsx f'`)
+  so a restart costs one batch, not the run. ~10 s per call, so ~20 s per name —
+  batch 6 at a time and keep each exec under the tool timeout.
+- Cost: **~4 credits per name** for both passes (1–3 per call, longer names cost more).
