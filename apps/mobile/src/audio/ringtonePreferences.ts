@@ -6,7 +6,7 @@ export const MOBILE_RINGTONE_STORAGE_KEY = "connect_mobile_incoming_ringtone";
 /**
  * Push the ringtone choice down to the native Android service so the FCM ring
  * path (which fires before any JS runs) plays the correct ringtone:
- *   • "connect-default" → bundled Connect ringtone
+ *   • "connect-default" → bundled Loopcom ringtone
  *   • "classic"         → the phone's own default ringtone
  * No-op on iOS / when the bridge is unavailable.
  */
@@ -45,7 +45,7 @@ export async function syncMobileIncomingRingtoneToNative(): Promise<void> {
 }
 
 export const MOBILE_RINGTONE_OPTIONS = [
-  { id: "connect-default", label: "Connect Default" },
+  { id: "connect-default", label: "Loopcom Default" },
   { id: "classic", label: "Classic Ring" },
 ] as const;
 
@@ -73,5 +73,5 @@ export async function setMobileIncomingRingtone(next: MobileRingtoneId): Promise
 }
 
 export function getMobileIncomingRingtoneLabel(id: MobileRingtoneId): string {
-  return MOBILE_RINGTONE_OPTIONS.find((option) => option.id === id)?.label ?? "Connect Default";
+  return MOBILE_RINGTONE_OPTIONS.find((option) => option.id === id)?.label ?? "Loopcom Default";
 }

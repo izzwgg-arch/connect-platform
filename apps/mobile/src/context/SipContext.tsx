@@ -1571,7 +1571,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           const result = await PermissionsAndroid.request(postNotif, {
             title: 'Allow notifications',
             message:
-              'Connect needs notification permission to ring and show incoming calls. Calls will not alert you without it.',
+              'Loopcom needs notification permission to ring and show incoming calls. Calls will not alert you without it.',
             buttonPositive: 'Allow',
             buttonNegative: 'Not now',
           });
@@ -1837,7 +1837,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       console.log('[BATT_OPT] not_exempt — prompting user');
       showAppAlert(
         "Turn off battery optimization",
-        "Battery optimization is ON for Connect. Incoming calls may not ring reliably until you disable it. Tap Enable and choose \"Don't optimize\".",
+        "Battery optimization is ON for Loopcom. Incoming calls may not ring reliably until you disable it. Tap Enable and choose \"Don't optimize\".",
         [
           {
             text: "Not now",

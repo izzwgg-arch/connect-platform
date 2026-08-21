@@ -322,14 +322,14 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => 
       const RNCallKeep = require('react-native-callkeep').default;
 
       // iOS ONLY (this branch only runs after the android early-return
-      // above): mute CallKit's own ring for "Connect Default" so it doesn't
+      // above): mute CallKit's own ring for "Loopcom Default" so it doesn't
       // double up with the JS ringtone — see src/sip/callkeep.ts for the
       // full explanation and plugins/withIosSilentRingtone.js for the asset.
       const ringtonePreference = await getMobileIncomingRingtone().catch(() => 'connect-default' as const);
       const ringtoneSound = ringtonePreference === 'connect-default' ? 'connect-silent-ringtone.wav' : undefined;
 
       await RNCallKeep.setup({
-        ios: { appName: 'Connect Communications', supportsVideo: false, ringtoneSound },
+        ios: { appName: 'Loopcom', supportsVideo: false, ringtoneSound },
         android: {
           alertTitle: 'Phone account permission',
           alertDescription: 'This app needs phone account access to show incoming call UI.',

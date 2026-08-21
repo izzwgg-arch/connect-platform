@@ -7,7 +7,7 @@
  *   4. Importing... progress
  *   5. Result summary
  *
- * Designed to fit the existing dark/glass Connect aesthetic.
+ * Designed to fit the existing dark/glass Loopcom aesthetic.
  */
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -139,7 +139,7 @@ export function ImportPhoneContactsModal({
       } else if (msg.startsWith('contacts_read_failed:')) {
         const detail = msg.replace(/^contacts_read_failed:/, '').trim() || 'Unknown error';
         setErrorMessage(
-          `Could not read device contacts (${detail}). If you denied permission, open Settings and allow Contacts for Connect, then try again.`,
+          `Could not read device contacts (${detail}). If you denied permission, open Settings and allow Contacts for Loopcom, then try again.`,
         );
         setStep('error');
       } else {
@@ -289,7 +289,7 @@ export function ImportPhoneContactsModal({
               <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 2 }]}>
                 {step === 'preview' && preview
                   ? `${preview.totalFound} found · ${preview.newCount} new · ${preview.alreadyExistsCount} already in app`
-                  : 'Bring your device contacts into Connect'}
+                  : 'Bring your device contacts into Loopcom'}
               </Text>
             </View>
             <TouchableOpacity
@@ -512,7 +512,7 @@ const PermissionView = memo(function PermissionView({
         Allow access to your contacts
       </Text>
       <Text style={[typography.body, { color: colors.textSecondary, marginTop: 8, textAlign: 'center', lineHeight: 21 }]}>
-        Connect will read your phone contacts only when you tap "Continue". Nothing is uploaded
+        Loopcom will read your phone contacts only when you tap "Continue". Nothing is uploaded
         until you select which ones to import.
       </Text>
       <TouchableOpacity
@@ -546,7 +546,7 @@ const PermissionDeniedView = memo(function PermissionDeniedView({
         Contacts access is blocked
       </Text>
       <Text style={[typography.body, { color: colors.textSecondary, marginTop: 8, textAlign: 'center', lineHeight: 21 }]}>
-        Open Settings and turn on the Contacts permission for Connect, then come back here to
+        Open Settings and turn on the Contacts permission for Loopcom, then come back here to
         continue.
       </Text>
       <TouchableOpacity

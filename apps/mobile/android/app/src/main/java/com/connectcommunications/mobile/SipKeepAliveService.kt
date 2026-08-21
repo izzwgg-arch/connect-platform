@@ -72,7 +72,7 @@ class SipKeepAliveService : Service() {
     // the user editing channel settings by hand. NOTE: this is a notification-only
     // change — the foreground service / keep-alive logic is untouched.
     private const val CHANNEL_ID = "connect_bg_keepalive_v2"
-    private const val CHANNEL_NAME = "Connect background service"
+    private const val CHANNEL_NAME = "Loopcom background service"
     /** Pre-v2 channel id — deleted on channel setup so its stale, higher-importance
      *  "Ready to receive calls" notification disappears after upgrade. */
     private const val LEGACY_CHANNEL_ID = "connect_sip_keepalive"
@@ -1078,11 +1078,11 @@ class SipKeepAliveService : Service() {
       // present in the shade while showing NOTHING in the status bar. Samsung
       // One UI forces foreground-service icons to stay visible even on an
       // IMPORTANCE_MIN channel, so this is the only reliable way to hide just
-      // this one icon. Every other Connect notification (calls, SMS, voicemail)
+      // this one icon. Every other Loopcom notification (calls, SMS, voicemail)
       // keeps R.drawable.notification_icon — see buildInCallNotification + the
       // push notifications, which are unaffected.
       .setSmallIcon(R.drawable.ic_keepalive_silent)
-      .setContentTitle("Connect")
+      .setContentTitle("Loopcom")
       .setOngoing(true)
       .setPriority(NotificationCompat.PRIORITY_MIN)
       .setCategory(NotificationCompat.CATEGORY_SERVICE)

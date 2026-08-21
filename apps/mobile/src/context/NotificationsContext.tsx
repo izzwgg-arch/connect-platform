@@ -174,7 +174,7 @@ Notifications.setNotificationHandler({
     // When IncomingCallFirebaseService consumes the FCM payload before expo-
     // notifications sees it, the JS notification arrives with empty data.type.
     // Detect this by looking for telltale call-invite keys on the raw payload
-    // and suppress the empty "Connect" banner that otherwise renders on top
+    // and suppress the empty "Loopcom" banner that otherwise renders on top
     // of the IncomingCallScreen when the app is foreground.
     const hasCallShapedKeys =
       !!(data?.inviteId || data?.callId || data?.pbxCallId || data?.sipCallTarget);
@@ -914,7 +914,7 @@ async function openBatteryOptimizationSettings(): Promise<void> {
   const pkg = "com.connectcommunications.mobile";
 
   // Step 1: Android standard Doze exemption dialog.
-  // This shows "Allow Connect to always run in background?" — accepting is the action.
+  // This shows "Allow Loopcom to always run in background?" — accepting is the action.
   // Do NOT return early on success; fall through to Samsung step.
   let androidDialogShown = false;
   try {
@@ -995,8 +995,8 @@ async function openBatteryOptimizationSettings(): Promise<void> {
     "One More Step (Samsung)",
     "To ensure calls ring when the app is closed:\n\n" +
     "1. Open Settings → Battery → Background usage limits\n" +
-    "2. Remove Connect from the \"Sleeping apps\" list\n\n" +
-    "Also go to Settings → Apps → Connect → Battery → set to Unrestricted",
+    "2. Remove Loopcom from the \"Sleeping apps\" list\n\n" +
+    "Also go to Settings → Apps → Loopcom → Battery → set to Unrestricted",
     [{ text: "OK" }],
   );
 }
@@ -1754,7 +1754,7 @@ export function NotificationsProvider({
     if (!granted) {
       showAppAlert(
         "Notifications required",
-        "Connect needs notification permission to show incoming call alerts.\n\nPlease enable it in Android Settings → Apps → Connect → Notifications.",
+        "Loopcom needs notification permission to show incoming call alerts.\n\nPlease enable it in Android Settings → Apps → Loopcom → Notifications.",
         [{ text: "OK" }],
       );
     }
@@ -1830,7 +1830,7 @@ export function NotificationsProvider({
         {
           title: "Microphone access",
           message:
-            "Connect needs microphone access so you can be heard on calls.",
+            "Loopcom needs microphone access so you can be heard on calls.",
           buttonPositive: "Allow",
         },
       );
@@ -1839,7 +1839,7 @@ export function NotificationsProvider({
         // longer appear, so send them to the app's settings page instead.
         showAppAlert(
           "Microphone access needed",
-          "Microphone permission is blocked. Enable it in Android Settings → Apps → Connect → Permissions → Microphone.",
+          "Microphone permission is blocked. Enable it in Android Settings → Apps → Loopcom → Permissions → Microphone.",
           [{ text: "OK" }],
         );
       }
@@ -5191,7 +5191,7 @@ export function NotificationsProvider({
       await ensureCallChannel();
 
       // Mirror the saved incoming-ringtone choice to the native ring path so
-      // it honours "Classic Ring" (phone ringtone) vs "Connect Default" even
+      // it honours "Classic Ring" (phone ringtone) vs "Loopcom Default" even
       // on the very first FCM ring after launch.
       void syncMobileIncomingRingtoneToNative();
 
@@ -5217,7 +5217,7 @@ export function NotificationsProvider({
             ).catch(() => {});
             showAppAlert(
               "Allow notifications for incoming calls",
-              'Connect needs notification permission to ring when you receive a call.\n\nGo to Settings → Apps → Connect → Notifications and enable them.',
+              'Loopcom needs notification permission to ring when you receive a call.\n\nGo to Settings → Apps → Loopcom → Notifications and enable them.',
               [{ text: "OK" }],
             );
           }

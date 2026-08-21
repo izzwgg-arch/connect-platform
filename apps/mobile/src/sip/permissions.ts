@@ -32,7 +32,7 @@ export async function ensureMicPermission(): Promise<MicPermissionResult> {
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
         {
           title: 'Microphone Permission',
-          message: 'Connect needs microphone access to make calls.',
+          message: 'Loopcom needs microphone access to make calls.',
           buttonPositive: 'Allow',
         },
       );
@@ -67,12 +67,12 @@ export async function ensureMicPermission(): Promise<MicPermissionResult> {
     } catch (e: any) {
       // iOS throws "Permission denied" when the user tapped Don't Allow,
       // or "NotFoundError"/"NotAllowedError" in other denial cases. All
-      // of these map to "user needs to open Settings → Connect → Microphone".
+      // of these map to "user needs to open Settings → Loopcom → Microphone".
       const msg = typeof e?.message === 'string' ? e.message : String(e);
       console.warn('[mic-perm] iOS getUserMedia denied:', msg);
       return {
         granted: false,
-        message: 'Microphone access is needed to make calls. Enable it in iOS Settings → Connect → Microphone.',
+        message: 'Microphone access is needed to make calls. Enable it in iOS Settings → Loopcom → Microphone.',
       };
     }
   }

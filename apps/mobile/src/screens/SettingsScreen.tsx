@@ -269,7 +269,7 @@ export function SettingsScreen() {
       >
         {/* Profile */}
         <View style={[styles.profileCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          {/* Blank, not "Connect User", until the real name is known — the
+          {/* Blank, not "Loopcom User", until the real name is known — the
               placeholder flashing for a frame on every visit read as a bug.
               Avatar renders a neutral person icon for an empty name. */}
           <Avatar name={voice?.displayName || ''} size="xl" />
@@ -363,7 +363,7 @@ export function SettingsScreen() {
           <SettingRow
             icon="musical-notes-outline"
             label="Incoming Ringtone"
-            subtitle="Default is your Connect ringtone. Tap to switch."
+            subtitle="Default is your Loopcom ringtone. Tap to switch."
             value={getMobileIncomingRingtoneLabel(incomingRingtone)}
             onPress={handleCycleIncomingRingtone}
           />
@@ -508,7 +508,7 @@ export function SettingsScreen() {
                   ? 'Allowed — calls ring even in the background'
                   : isOptimized
                     ? 'Optimized — tap to allow background running'
-                    : 'Tap to allow Connect to run in the background';
+                    : 'Tap to allow Loopcom to run in the background';
                 const statusColor = isExempt
                   ? colors.success
                   : isOptimized

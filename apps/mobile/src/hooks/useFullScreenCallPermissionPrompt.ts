@@ -55,7 +55,7 @@ export function useFullScreenCallPermissionPrompt(enabled: boolean): void {
           if (cancelled) return;
           showAppAlert(
             'Allow full-screen calls',
-            'So incoming calls can take over your screen — even when your phone is locked — Connect needs the "full-screen notifications" permission. Tap Enable, then turn it on for Connect.',
+            'So incoming calls can take over your screen — even when your phone is locked — Loopcom needs the "full-screen notifications" permission. Tap Enable, then turn it on for Loopcom.',
             [
               { text: 'Not now', style: 'cancel' },
               {

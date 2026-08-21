@@ -108,7 +108,7 @@ const config: ExpoConfig = {
       NSCameraUsageDescription: 'Camera access is required to scan PBX provisioning QR codes.',
       NSMicrophoneUsageDescription: 'Microphone access is required for voice calls.',
       NSContactsUsageDescription:
-        'Connect needs access to your phone contacts so you can import them into the app and call them quickly.',
+        'Loopcom needs access to your phone contacts so you can import them into the app and call them quickly.',
       UIBackgroundModes: ['voip', 'remote-notification', 'audio'],
       // App Store compliance: encryption export declaration. The app uses only
       // standard HTTPS/TLS and OS-provided crypto (exempt), so this is false and
@@ -157,7 +157,11 @@ const config: ExpoConfig = {
     // This gives proper Android 8+ adaptive icon behaviour (circle, squircle, etc).
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
-      backgroundColor: '#1d4ed8',
+      // ⛔ Must stay in step with @color/iconBackground in
+      // android/app/src/main/res/values/colors.xml. This read #1d4ed8 (the old
+      // Connect blue) until 2026-08-21 while the native res already said
+      // #0C1218 — a prebuild would have silently regressed the launcher icon.
+      backgroundColor: '#0C1218',
     },
     minSdkVersion: 24,
       permissions: [
@@ -211,10 +215,10 @@ const config: ExpoConfig = {
     // and post-prebuild checklist (Apple VoIP cert, worker APNs VoIP path).
     './plugins/withIosVoipPush',
     // iOS-only: bundles a silent WAV CallKit can use as its own ringtoneSound
-    // so "Connect Default" ringtone preference doesn't double up with
+    // so the "Loopcom Default" ringtone preference doesn't double up with
     // CallKit's native ring. See plugins/withIosSilentRingtone.js.
     './plugins/withIosSilentRingtone',
-    // iOS-only: bundles the REAL Connect ringtone (.caf) so CallKit itself
+    // iOS-only: bundles the REAL Loopcom ringtone (.caf) so CallKit itself
     // plays it in the background/killed case (JS not running). RNCallKeep
     // persists it to NSUserDefaults so cold launches read it. See
     // plugins/withIosConnectRingtone.js.
@@ -288,14 +292,14 @@ const config: ExpoConfig = {
     [
       'expo-camera',
       {
-        cameraPermission: 'Allow Connect to scan provisioning QR codes.',
+        cameraPermission: 'Allow Loopcom to scan provisioning QR codes.',
       },
     ],
     [
       'expo-contacts',
       {
         contactsPermission:
-          'Allow Connect to access your phone contacts so you can import them into the app and call them quickly.',
+          'Allow Loopcom to access your phone contacts so you can import them into the app and call them quickly.',
       },
     ],
     [

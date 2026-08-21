@@ -64,7 +64,7 @@ export function QrProvisionScreen() {
       const payload: QrPayload = JSON.parse(data);
 
       if (payload.type !== 'MOBILE_PROVISIONING') {
-        throw new Error('QR code is not a Connect provisioning QR. Try again.');
+        throw new Error('QR code is not a Loopcom provisioning QR. Try again.');
       }
 
       let sipPassword: string;

@@ -656,7 +656,7 @@ export function KeypadTab() {
     : registered
     ? 'Ready'
     : 'Not registered';
-  // Empty (not "Connect User") until the real name is known — a wrong name that
+  // Empty (not "Loopcom User") until the real name is known — a wrong name that
   // corrects itself a second later reads as a glitch; blank space does not.
   const userLabel = voice?.displayName?.trim() || '';
 

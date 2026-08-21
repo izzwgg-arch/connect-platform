@@ -29,7 +29,7 @@ export function LoginScreen() {
 
   return (
     <View style={ui.screen}>
-      <HeaderBar title="Connect Communications" />
+      <HeaderBar title="Loopcom" />
       <View style={ui.content}>
         <View style={ui.card}>
           <Text style={ui.title}>Sign In</Text>

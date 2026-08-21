@@ -1,11 +1,16 @@
 /**
  * SplashScreen — branded launch / identity screen.
  *
- * Design system: option #7
  * - Dark premium navy-black gradient background
- * - Centered ConnectIcon
- * - "Connect" wordmark + elegant subtitle
+ * - Centered Loopcom mark
+ * - "Loopcom" wordmark + the brand's own tagline
  * - NO buttons · NO "Get Started" · NO CTAs
+ *
+ * ⛔ Keep this in step with assets/splash.png, which is the same composition
+ * rendered as a static image. Both are produced from one set of numbers —
+ * SPLASH_* in scripts/mobile-loopcom-android-assets.py — so a change to the
+ * mark size, the gaps or the wording belongs in BOTH places or the launch
+ * image and the screen that replaces it will not line up.
  *
  * Lifecycle:
  *   Shows for a minimum of MIN_SHOW_MS (2 400 ms).
@@ -19,12 +24,16 @@ import {
   StyleSheet,
   Animated,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ConnectIcon } from '../components/ConnectIcon';
+import { LoopcomMark } from '../components/LoopcomMark';
 
 /** Minimum time the splash is visible regardless of how fast auth resolves. */
 const MIN_SHOW_MS = 2_400;
+
+/** Mark width as a fraction of screen width — mirrors SPLASH_MARK_INK_W. */
+const MARK_WIDTH_FRACTION = 0.27;
 
 interface Props {
   /** Set to true once auth state is resolved. The splash will then finish on its own schedule. */
@@ -34,6 +43,8 @@ interface Props {
 }
 
 export function SplashScreen({ authReady, onReady }: Props) {
+  const { width } = useWindowDimensions();
+
   // ── Entrance animations ────────────────────────────────────────────────────
   const screenFade  = useRef(new Animated.Value(1)).current;
   const iconFade    = useRef(new Animated.Value(0)).current;
@@ -128,7 +139,7 @@ export function SplashScreen({ authReady, onReady }: Props) {
           ...styles.iconShadow,
         }}
       >
-        <ConnectIcon size={100} />
+        <LoopcomMark width={Math.round(width * MARK_WIDTH_FRACTION)} />
       </Animated.View>
 
       {/* ── Wordmark + tagline ── */}
@@ -141,8 +152,8 @@ export function SplashScreen({ authReady, onReady }: Props) {
           },
         ]}
       >
-        <Text style={styles.appName}>Connect</Text>
-        <Text style={styles.tagline}>Business communication, redefined</Text>
+        <Text style={styles.appName}>Loopcom</Text>
+        <Text style={styles.tagline}>The AI communications platform</Text>
       </Animated.View>
     </Animated.View>
   );
@@ -158,17 +169,20 @@ const styles = StyleSheet.create({
   iconShadow: {
     ...Platform.select({
       ios: {
-        shadowColor: '#2563eb',
+        shadowColor: '#22A8FF',
         shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 0.7,
         shadowRadius: 28,
       },
-      android: { elevation: 18 },
+      // No Android elevation: the artwork carries its own glow, and an
+      // elevation on a transparent view draws a rectangular shadow on some OEMs.
+      android: {},
     }),
   },
 
   textBlock: {
-    marginTop: 40,
+    // == SPLASH_GAP_DP in scripts/mobile-loopcom-android-assets.py
+    marginTop: 34,
     alignItems: 'center',
   },
 
@@ -183,7 +197,7 @@ const styles = StyleSheet.create({
   tagline: {
     fontSize: 13,
     fontWeight: '400',
-    color: '#93c5fd',
+    color: '#8FC0F5',
     letterSpacing: 0.4,
     opacity: 0.82,
   },

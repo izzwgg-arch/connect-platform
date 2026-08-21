@@ -201,7 +201,7 @@ export async function setupNativeCalling() {
   const preference = await getMobileIncomingRingtone().catch(() => "connect-default" as MobileRingtoneId);
   const options: any = {
     ios: {
-      appName: "Connect Communications",
+      appName: "Loopcom",
       supportsVideo: false,
       ringtoneSound: iosRingtoneSoundFor(preference),
     },
@@ -233,7 +233,7 @@ export async function applyIosRingtonePreference(preference: MobileRingtoneId): 
   try {
     await RNCallKeep.setup({
       ios: {
-        appName: "Connect Communications",
+        appName: "Loopcom",
         supportsVideo: false,
         ringtoneSound: iosRingtoneSoundFor(preference),
       },
