@@ -1328,6 +1328,30 @@ branch; the palette and terminal hide what this container cannot run.
 ⛔ **The general rule: offer only what the box can actually do** — a control that
 answers "not found" teaches people to distrust the tool.
 
+✅ **THE ANSWER CAN BE PLAYED OUT LOUD (`d401645b`, ElevenLabs · Kristen)** —
+a ▶ on every agent reply in the dock; `POST /admin/support/speak` returns mp3.
+⛔⛔ **`synthesiseNarration` is a SIBLING of `synthesiseSpeech`, never a flag on
+it** — that one feeds Asterisk and asks for **`pcm_8000`**, and every decision in
+it is wrong for a laptop; a branch there puts the LIVE IVR greeting path one edit
+from a narration change. No format fallback ladder here on purpose.
+⛔⛔ **BILLED PER CHARACTER, so the cost controls ARE the feature**
+(`supportNarration.ts`, pure + tested): fenced code is **dropped, not read**
+(including an **unterminated** fence from a streamed answer); a **code-only
+answer costs nothing**; links are read as their label, never the URL; capped at
+3,000 chars **cut on a sentence boundary** with the client told; a **replay is
+cached**; concurrency gate of 2; and **exactly ONE POST, never retried** — a
+retry bills the same words twice (source guard counts the call sites).
+⛔ **It stores NOTHING** — no catalog row, no PBX push, nothing on disk.
+⛔ **The voice id was READ OFF THE ACCOUNT, not guessed:**
+`CvD6hF1BJzAFN428j1cO` = *Kristen — Warm, Corporate and Steady*; the other
+Kristen (`dfeOmy6Uay63tNhyO99j`) is the upbeat advertisement read. A test pins
+it — a wrong voice id fails at the provider with an unhelpful 400.
+⛔ Browser side re-earns the three media traps: rebuild the Blob with an explicit
+**`audio/mpeg`**, **CSP `media-src blob:`** is what makes it play at all, and
+**`play()` can reject** — surface the reason, never a silent no-op. Use the new
+**`apiPostBlob`**, never a bare `fetch` (a bare fetch skips the global 401
+handler and a signed-out tab retries itself into the nginx auto-ban).
+
 ⏳ **NOT PROVEN: nobody has opened any of these screens in a browser.** Proven
 by 51 api tests, portal typecheck 0, the shipped-bundle string greps
 (`ide-root`, `ide-menubar`, `ide-minimap`, `ide-sshpill`, `ide-palette`,

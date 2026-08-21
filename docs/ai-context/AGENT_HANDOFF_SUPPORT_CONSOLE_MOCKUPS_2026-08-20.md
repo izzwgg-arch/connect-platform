@@ -538,3 +538,60 @@ and `flex:none` on the composer) — bounding the root is the whole fix.
 **all 4 assertions fail replayed against the shipped stylesheet.** A source guard
 is the only shape that works here — the defect is a MISSING rule, so nothing
 throws and no component test can see it.
+
+### §12 Reading the answer out loud — ElevenLabs, Kristen (2026-08-21, `d401645b`)
+Izzy: *"Can you make it so that I can play the output as audio? You can use 11
+labs. Use Kristen as a voice."* A ▶ on every agent reply in the Workbench dock;
+`POST /admin/support/speak` returns mp3 the browser plays. SUPER_ADMIN only,
+through the same injected `requireSuper` as every other route in the module.
+
+- ⛔⛔ **`synthesiseNarration` is a SIBLING of `synthesiseSpeech`, never a flag
+  on it.** That function exists to feed Asterisk: it asks for **`pcm_8000`**
+  first and falls back to `pcm_16000`, because 8 kHz is what the phone network
+  carries. **Every one of those decisions is wrong for a laptop**, and an
+  `outputFormat` branch there would put the LIVE IVR greeting path one edit away
+  from a narration change. The new one asks for **`mp3_44100_128`** and has
+  **no fallback ladder** — that format exists on every tier, so a failure means
+  something real and a second POST would bill the same words twice.
+- ⛔⛔ **BILLED PER CHARACTER, so the cost controls ARE the feature**
+  (`supportNarration.ts`, pure and tested): fenced code is **dropped, not read**
+  (a fence read aloud is a minute of gibberish at full price — and an
+  **unterminated** fence, i.e. a streamed answer cut mid-block, is dropped too);
+  a **code-only answer costs nothing at all** and the route says so in plain
+  English; markdown is spoken as words, and a link is read as its label, never
+  its URL; the text is capped at **3,000 chars cut on a SENTENCE boundary**, with
+  the client told it was shortened; a **replay is served from cache** (the common
+  case — you listen twice); a concurrency gate of 2; and **exactly ONE POST to
+  the provider, never retried** (a source guard counts the call sites).
+- ⛔ **It stores NOTHING** — not the IVR prompt path: no catalog row, no PBX
+  push, nothing on disk. A source guard forbids `writeFile`, `tenantPbxPrompt`,
+  `uploadPrompt`, `publishIvr` and `generatedPromptStore` appearing in the route.
+- ⛔ **The voice was READ OFF THE ACCOUNT, not guessed.** Two Kristens exist:
+  **`CvD6hF1BJzAFN428j1cO` "Warm, Corporate and Steady"** (middle_aged,
+  informative_educational) — chosen, because reading back a diagnosis is
+  informative — and `dfeOmy6Uay63tNhyO99j` "Natural, Upbeat and Focused" (young,
+  advertisement). Swapping is one line in `supportNarration.ts`; a test pins the
+  id so a guess cannot creep in (a wrong voice id fails at the provider with an
+  unhelpful 400).
+- ⛔ **The browser half (`hooks/useSpeakText.ts`) re-earns three documented
+  traps, all of which present as "the button does nothing":** the Blob is
+  rebuilt with an explicit **`audio/mpeg`** (ElevenLabs' own CDN has served
+  audio as `text/plain`); **CSP `media-src 'self' blob:`** is what makes an
+  object URL play at all — if playback dies portal-wide, check the nginx
+  security headers before reading the hook; and **`play()` returns a promise
+  that can reject**, so the reason is surfaced instead of a silent no-op.
+  Object URLs are revoked on stop, on replace and on unmount.
+- ⛔ **New `apiPostBlob` in `services/apiClient.ts`, not a bare `fetch`.** A
+  hand-rolled fetch skips `noteUnauthorizedResponse`, which is what clears a
+  dead session and sends the window to /login — missing it is how a signed-out
+  tab retries itself into the nginx auto-ban.
+- ⛔ **The write-surface guard in `supportConsole.test.ts` correctly went red**
+  and was updated deliberately: `speak` is a POST because it carries a body, not
+  because it mutates. **That guard doing its job is the point** — a new write
+  route on this module must be a conscious decision.
+- ✅ 12 narration tests; support suite **91/91**; api typecheck **75 = the exact
+  baseline**; portal typecheck **0**; the voice suite **unmoved at 125/125**.
+- ⏳ **NOT PROVEN: nobody has pressed play.** Everything above is tests plus a
+  live route probe; no human has heard Kristen read an answer. ⏳ Deliberately
+  NOT added to the Escalations view (the same hook and route would cover it) —
+  the ask was the dock.
