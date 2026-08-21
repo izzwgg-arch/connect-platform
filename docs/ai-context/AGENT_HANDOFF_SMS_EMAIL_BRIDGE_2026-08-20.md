@@ -380,3 +380,147 @@ Connect actually knows for that user.
   built.
 - ⛔ The mailbox will accumulate processed (\Seen) mail forever; harmless. If it
   ever needs cleanup, that is a Gmail filter/retention setting, not code.
+
+---
+
+## §9 — The reply half WORKS: routed by the thread, proven with two live round trips (2026-08-21)
+
+Commits `2000c817` (owner-routed) + `f31f990a` (shared inboxes + the system door).
+**agent REBUILT and container-verified; api DEPLOYED and container-verified
+(inside `4a84de0a`). No migration. One reversible data write on Izzy's own admin
+tenant, restored (see §9.6).**
+
+Izzy, 2026-08-21, after being shown the six-gate ladder: *"once he already knows
+which thread it belongs to, he already knows where to send it to… Where do this
+phone number's text messages go? All goes there. That's it."* He was right, and
+§8's design was over-built.
+
+### §9.1 What was actually wrong
+
+The signature was never the problem. On the 2026-08-20 drop it **verified, and it
+resolved the thread** — the refusal row even carries `threadId`. It died at the
+gate *after* that: the From address (`cgreenfeld@trustbookkeepingny.com`) matched
+no `User.email`, so the job had nobody to attribute the text to.
+
+Meanwhile the thread row itself recorded exactly where that number routes:
+
+```
+cmosuzgpg000lqf215asiv9o8 | +18452441708 | owner = cspilman@trustbookkeepingny.com
+```
+
+**The system had the answer stored and threw the message away over the envelope.**
+
+### §9.2 The rule now
+
+**The sender comes from the thread's own SMS routing. The From header decides
+nothing.** `ConnectChatThread.smsInboxOwnerUserId` → send as that person. No
+owner → send with no name at all.
+
+⛔ **`smsInboxOwnerUserId` is `''` (EMPTY STRING), not NULL, on a shared inbox.**
+Measured: **301 owner-routed, 315 shared, of 616 live SMS threads.** An
+`is not null` test reads all 315 as owned — it produced a wrong count in this
+session before the join was redone. Truthiness is the correct test.
+
+### §9.3 The guard rails (Izzy: *"as close to impossible as possible that there can never be any tenant leakage"*)
+
+| Guard | Where | Measured today |
+|---|---|---|
+| Sender must be **ACTIVE** and in the **thread's own tenant** | `smsEmailReplyJob.ts` gate 3 | 0 cross-tenant, 0 inactive of 616 |
+| Two different signed addresses ⇒ **refused, never resolved** | `findAllSmsReplyAddresses` | — |
+| Failure notice only to **an address we hold**, never the From | `refuse()` | no oracle |
+| **20 sends per thread per hour**, from the audit trail | gate 3 | survives restart |
+| Every send records routed sender **and** the address that replied | `sms.reply_sent` | — |
+| Nothing bypasses the real send path | route unchanged | participant + `can_send_sms` still server-side |
+
+⛔ A reply is a **WRITE into one thread and nothing more.** Nothing about the
+thread ever travels back to whoever replied.
+
+### §9.4 The one new door, built as narrowly as possible
+
+`POST /internal/chat/sms-system-reply` — **only** for shared inboxes.
+
+- Takes **a thread id and a message and nothing else**. ⛔ **The tenant is derived
+  FROM THE THREAD**; there is no tenant in the request to forge. That is the
+  `inbound-crm-match` lesson (which read the caller's claimed role out of the body).
+- **Refuses a thread that HAS an owner (409)** — it can never be used to strip
+  attribution off an owned inbox.
+- Registered in `jwtPublicRouteBypass.ts` **and** `internalSecret.test.ts`'s
+  guarded list. ⛔ A missing bypass entry answers **401** and the door's own secret
+  check never runs (403 = you reached the handler; 401 = you did not).
+
+`sendConnectChatSmsMessage` gained `systemSender` beside `user`. ⛔ **Existing
+callers are byte-identical**: participant + `can_send_sms` still run for a person,
+and metadata still resolves to `undefined` when empty. Exactly one of
+user/systemSender is required, checked up front.
+
+**Proven live, all four directions:** outside → **403** at nginx; no secret →
+**401**; wrong secret → **403**; owned thread → **409 with no send**.
+
+### §9.5 The proofs — two complete round trips through the real carrier
+
+Run on a thread between **two of our own numbers** (Connect Communications,
+`+18455577768` ↔ `+18457231213`). **No customer was texted.** Both replies were
+emailed in from `sms@loopcom.net`, which is **not a Connect user** — the exact
+shape that was silently dropped the day before.
+
+```
+PROOF A  owner-routed        OUT 11:48:23.516  →  IN 11:48:34.078   (11s)  VoIP.ms 110175261
+PROOF B  shared, NO NAME     OUT 12:16:26.722  →  IN 12:16:44.210   (18s)  VoIP.ms 110176076
+```
+
+Proof B's row carries `senderUserId NULL` and
+`metadata.systemSender = sms_email_reply_shared_inbox`.
+
+`sms.reply_sent` had been **0 for the platform's entire history** before 11:48:23.
+
+### §9.6 The live data write, and its restore
+
+To prove the owner path, thread `cmspgyxhswgz8n0214ga2aq52` (Izzy's own admin
+tenant) had `smsInboxOwnerUserId` set from `''` to his SUPER_ADMIN id, then
+**restored to `''`** (verified `len 0`). Nothing else was written.
+
+### §9.7 A bug this found in its own first commit
+
+The flood cap queried **`createdAt`; `AgentAuditLog` has `ts`.** Prisma threw, a
+`.catch(() => 0)` swallowed it, `sentLastHour` was always 0, and the cap never
+fired — **with a green suite, because the fake `count` ignored its where clause.**
+
+Fixed, and the fake now parses AgentAuditLog's real columns out of
+`schema.prisma` and throws on an unknown one; reintroducing `createdAt` fails the
+suite. The catch audits `sms.reply_rate_check_failed` instead of being silent, and
+still fails **open** (the signed address is the primary control; a transient DB
+error must not refuse a legitimate reply).
+
+⛔ **A swallowed catch on a query that DECIDES something is how a guard becomes
+decoration.**
+
+### §9.8 Two testing traps this session walked into
+
+1. ⛔ **The job marks a mail `\Seen` AFTER handling it.** A message you find
+   already-seen was most likely **processed**, not skipped. This was misread as
+   "Gmail auto-reads self-sent mail", the mail was re-fed, and the exactly-once
+   claim correctly refused it (`already_claimed`, still exactly 1 outbound row) —
+   which is itself the best available proof that guard works.
+2. ⛔ **Do not wait on `event like 'sms.reply%'`** — it matches the pre-existing
+   `sms.reply_enabled` row and returns instantly, so the wait exits before
+   anything has happened and reads as "it did nothing".
+
+### §9.9 Deploy notes
+
+- The agent's first recreate failed on a stale renamed container
+  (`4ec805373982_app-agent-1`), leaving the agent **Dead for ~50 seconds**. Remove
+  the conflicting container and `up -d --force-recreate`.
+- An api deploy failed `HEAVY JOB ALREADY RUNNING: deploy-queue:portal:...` — the
+  heavy build lock is separate from the queue (`runningCount: 0` means nothing).
+- ⛔ **A wait-loop that greps for `deploy-direct.sh` matches OTHER sessions' stuck
+  waiters too**, not just its own command line. PID 53587 has sat on loopcom for
+  an hour with `deploy-direct.sh portal` in its command line, blocking any new
+  waiter written the obvious way. Wait on `[r]un-heavy` only, from a script FILE.
+
+### §9.10 Not proven
+
+- **No real customer has replied from their own mail client since the fix.** Both
+  proofs were driven from the bridge mailbox.
+- Gesheft remains excluded from the forward half by design.
+- The only remaining silent drop is a mail whose signature does not verify — which
+  is correct: that is a stranger, and answering would build an oracle.

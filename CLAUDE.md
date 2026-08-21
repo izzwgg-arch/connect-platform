@@ -1477,49 +1477,71 @@ and make sure the email stays in one thread … one thread per phone number."*
   ⏳ **NOT PROVEN: no human has seen the new email in a real inbox.** The next
   real inbound text to a non-Gesheft tenant is the acceptance test. The last old
   design went out at 22:28:47Z; the bridge re-armed at 22:49:12Z.
-- ⛔⛔ **THE REPLY HALF HAS NEVER SENT ONE TEXT — `sms.reply_sent` is 0 FOR ALL
-  TIME — but it is NOT PROVEN BROKEN: it has had exactly ONE real attempt in its
-  life, and that attempt died at the LAST gate.** The whole audit trail is 5
-  Google notification emails sitting in the mailbox (`no_reply_address` — not
-  replies at all), 1 deliberate forged-signature probe from the arming session,
-  and **one human reply**. `sms.reply_claimed` / `sms.reply_failed` are both **0**,
-  so nothing has ever reached the send stage. ⛔ **Do not "fix" the send
-  machinery on this evidence — it has never been exercised.** What the one
-  attempt DID prove is that everything upstream works: the signed
-  `sms+<threadId>.<sig>@` address survived the round trip through Gmail, the
-  signature verified, and the thread resolved. It failed only on **who** sent it.
-- ⛔ **The gate ladder in `smsEmailReplyJob.ts`, in order — a reply must pass all
-  six:** (1) a signed reply address is present → (2) signature verifies → (3) not
-  auto-generated → (4) thread exists and is SMS → (5) **From is an ACTIVE
-  `User` whose `tenantId` matches the thread's** → (6) toggle on, still a
-  participant, body non-empty. **The one real attempt reached 5 and stopped.**
-  ⛔ Step 5 is not merely a security check: the job mints a **2-minute JWT for
-  that user** and drives the real `POST /chat/threads/:id/messages` **as them**,
-  so the text goes out attributed to a person. There is no anonymous send —
-  an unrecognised sender is structurally unsendable, not just untrusted.
-- ⛔⛔ **It silently ate a real customer's reply TODAY.** At **15:33:43Z**
-  `cgreenfeld@trustbookkeepingny.com` replied to one of those emails and was
-  dropped `sms.reply_refused reason=unknown_sender`, **with no notice to them**,
-  because **no Connect user holds that address**. Trust Bookkeepings' five users
-  are cspilman / fhalpert / lschwartz / spollak / vigdor — and the email had
-  been sent to **cspilman@**. So the person read it at one address and replied
-  from another (a forward, an alias, or the same person under a changed
-  surname — note both are "c…@trustbookkeepingny.com").
-  ⛔ **This is the design working as written and failing the customer anyway.**
-  `smsEmailReplyJob.ts:133` matches the From by **exact equality against
-  `User.email`**, and anything unmatched is treated as a STRANGER — silence, no
-  backscatter, deliberately (a leaked reply address must not become an oracle).
-  Only a matched user gets the threaded "your text did not go out" notice. **So
-  every reply from a second address, a forward, or a shared mailbox is
-  indistinguishable from an attacker and dies in silence, while the sender
-  believes they just texted a customer.**
-  ⏳ **NOT FIXED — Izzy's call, and the options are not equivalent:** (a) add the
-  alternate address to that user's Connect account (one customer, no code, no
-  new exposure); (b) match the reply against the tenant's own verified mail
-  domain rather than one address (fixes the whole class, widens who may text as
-  that tenant); (c) leave it and accept silent drops. ⛔ Do NOT "fix" it by
-  notifying unmatched senders — that reinstates exactly the oracle the silence
-  exists to prevent.
+- ✅✅ **THE REPLY HALF WORKS, AND IT IS PROVEN WITH TWO LIVE ROUND TRIPS
+  (2026-08-21, `2000c817` + `f31f990a`; agent REBUILT, api DEPLOYED and
+  container-verified).** ⛔ Everything the older bullets here said about
+  `sms.reply_sent` being 0 for all time, and about a six-gate ladder ending in a
+  From-address match, is HISTORY — read this bullet, not them.
+  **What changed: a reply is routed by the THREAD, never by who the email came
+  from.** The signature already pinned WHICH conversation; a conversation knows
+  its phone number, and that number's SMS routing knows the inbox it lands in. So
+  the sender comes from `ConnectChatThread.smsInboxOwnerUserId` and the From
+  header decides nothing — a reply now works from a forward, a phone, or a
+  personal account. **Proven on a thread between two of OUR OWN numbers**
+  (Connect Communications, +18455577768 ↔ +18457231213 — no customer touched):
+  **owner-routed** OUT 11:48:23.516 → **IN 11:48:34.078** (VoIP.ms id 110175261);
+  **shared inbox, sent with NO NAME** OUT 12:16:26.722 → **IN 12:16:44.210**
+  (id 110176076). Both were emailed in from `sms@loopcom.net`, which is **not a
+  Connect user** — the exact shape that was silently dropped the day before.
+- ⛔⛔ **THE TENANT-LEAK LOCK IS THE LOAD-BEARING PART: the resolved sender MUST be
+  ACTIVE and MUST be in the THREAD'S OWN tenant.** Measured 2026-08-21 across all
+  616 live SMS threads: **0 owners in another tenant, 0 inactive, 0 threads
+  missing a number.** The check exists to keep that 0 when somebody is moved,
+  disabled or offboarded — **never delete it because it currently refuses
+  nothing.**
+  ⛔ **`smsInboxOwnerUserId` is `''` (EMPTY STRING), not NULL, on a shared inbox —
+  315 of 616 live threads.** `is not null` reads every one of those as owned (it
+  produced a wrong count in this very session); truthiness is the correct test.
+- ⛔ **A reply can only ever WRITE into one thread, and learns nothing back.**
+  Failure notices go ONLY to the address WE hold in our own database, never to the
+  email's From — so a leaked reply address cannot become an oracle. A shared-inbox
+  send has no verified address, so it notifies nobody at all. Other guards: a mail
+  carrying TWO different signed addresses is **refused, never resolved**; **20
+  sends per thread per hour**; and every send records the routed sender AND the
+  address that actually replied.
+- ⛔ **Shared inboxes go out with NO NAME (`senderUserId: null`)** — the schema's
+  normal shape (that column is nullable and goes NULL whenever a rep is
+  offboarded). Attributing a shared inbox's text to one of its several people
+  would itself be wrong. That is the ONLY reason the new door exists:
+  **`POST /internal/chat/sms-system-reply`** takes a thread id and a message and
+  **nothing else — ⛔ the tenant is derived FROM THE THREAD, so there is none in
+  the request to forge** (the `inbound-crm-match` lesson), and it **refuses a
+  thread that HAS an owner with 409**, so it can never strip attribution off an
+  owned inbox. ⛔ It is on the JWT bypass list AND in `internalSecret.test.ts`'s
+  guarded list — a missing bypass entry answers 401 and the door's own secret
+  check never runs. **Proven live: outside → 403 at nginx, no secret → 401, wrong
+  secret → 403, an owned thread → 409 with no send.**
+- ⛔⛔ **A BUG THIS WORK FOUND IN ITS OWN FIRST COMMIT, and the rule it re-earns:
+  the flood cap queried `createdAt`, and `AgentAuditLog` has `ts`.** Prisma threw,
+  a `.catch(() => 0)` swallowed it, `sentLastHour` was always 0 and the cap never
+  fired — **with a green suite, because the fake `count` ignored its where
+  clause.** The fake now parses AgentAuditLog's real columns out of
+  `schema.prisma` and throws on an unknown one (reintroducing `createdAt` fails
+  the suite), and the catch audits `sms.reply_rate_check_failed` rather than being
+  silent. **A swallowed catch on a query that DECIDES something is how a guard
+  becomes decoration.**
+- ⛔ **Testing this by emailing the bridge FROM `sms@loopcom.net` works — but read
+  the mail flags correctly.** The job marks a message `\Seen` AFTER it handles it,
+  so a mail you find already-seen was most likely PROCESSED, not skipped. This
+  session misread that as "Gmail auto-reads self-sent mail", re-fed an
+  already-handled message, and the exactly-once claim correctly refused it
+  (`already_claimed`, still exactly 1 outbound row) — which is itself the best
+  proof that guard works. ⛔ And do not wait on `event like 'sms.reply%'`: it
+  matches the pre-existing `sms.reply_enabled` row and returns instantly.
+- ⏳ **Still open, deliberately:** the old `unknown_sender` refusal is gone, so the
+  only remaining silent drop is a mail whose signature does not verify (correct —
+  that is a stranger). Nobody has yet replied from a real customer's own mail
+  client, and Gesheft is still excluded from the forward half by design.
 - ⛔ **"I didn't get any SMS emails" is usually NOT a bridge fault — check
   whether the person is a PARTICIPANT on a thread that received a text.** Izzy
   reported this on 2026-08-20 and the bridge was healthy: his SUPER_ADMIN and
