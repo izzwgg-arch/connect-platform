@@ -149,7 +149,17 @@ export async function sweepOpenPorts(deps: PortWatchdogDeps = defaultPortWatchdo
       let portCompleted = false;
       if (prov.portId) {
         try {
-          const listed = orders.get(String(prov.portId));
+          const candidate = orders.get(String(prov.portId));
+          // ⛔ Use the list entry ONLY when it actually carries a status. An
+          // entry that exists but whose status is blank/missing would otherwise
+          // SHADOW the per-order call and resolve to "unknown" forever — and
+          // "unknown" is never "completed", so the temporary number would never
+          // retire and the customer would sit on it indefinitely. A malformed
+          // list must degrade to the old behaviour, never suppress it.
+          const listed =
+            candidate && String(candidate.port_status || candidate.port_status_description || "").trim()
+              ? candidate
+              : undefined;
           let statusStr: string;
           let statusText = "";
           let focDate = "";

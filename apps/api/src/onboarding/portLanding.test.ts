@@ -528,6 +528,98 @@ test("sweep: an unchanged status still refreshes when we last checked", async ()
   assert.equal(s.events.filter((e) => /Port order 217760 status/.test(e.message)).length, 1);
 });
 
+// ── Hostile / malformed carrier list (stress) ────────────────────────────────
+// The list is a third party's JSON. None of these shapes may stop a port
+// landing, and none may stop a COMPLETED port from being detected — that gate
+// is what retires the customer's temporary number.
+
+for (const [label, body] of [
+  ["null body", null],
+  ["string body", "nope"],
+  ["no list key", { status: "success" }],
+  ["list is an object", { status: "success", list: { portid: "217760" } }],
+  ["list of nulls", { status: "success", list: [null, undefined] }],
+  ["entry with no portid", { status: "success", list: [{ foc_date: "2026-09-04", port_status: "completed" }] }],
+  ["entry with a BLANK status", { status: "success", list: [{ portid: "217760", port_status: "", port_status_description: "" }] }],
+  ["entry with no status key at all", { status: "success", list: [{ portid: "217760", foc_date: "2026-09-04" }] }],
+] as Array<[string, any]>) {
+  test(`sweep: a malformed order list (${label}) degrades to the per-order call, and completion is still detected`, async () => {
+    const s = makeState();
+    const row = submission(s);
+    seedTempState(s);
+    // Temp number never lived on Connect, so a detected completion retires it
+    // in the same sweep — which makes `tempRetiredAt` a direct proof that the
+    // completion gate really fired, not just that a status string was stored.
+    s.mappings.find((m) => m.e164 === "+8452605692")!.routingMode = "pbx";
+    const calls: VmsCall[] = [];
+    const handlers = {
+      ...ROUTED_OK,
+      getLNPList: () => body,
+      getLNPStatus: () => ({ status: "success", post_status: "completed" }),
+    };
+
+    const sum = await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+    assert.equal(sum.failed, 0, "a malformed list must never fail the sweep");
+    assert.ok(
+      calls.some((c) => c.method === "getLNPStatus"),
+      "the per-order call must still run — otherwise a completed port is never detected and the temp number never retires",
+    );
+    assert.equal(row.answers.provisioning.lastPortStatus, "completed");
+    assert.ok(row.answers.provisioning.portLanding.tempRetiredAt, "completion must still retire the temporary number");
+  });
+}
+
+test("sweep: a hostile order list cannot crash the sweep or mis-key an order", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const handlers = {
+    ...ROUTED_OK,
+    getLNPList: () => ({
+      status: "success",
+      list: [
+        // numeric portid — must still match the stored string id
+        { portid: 217760, foc_date: "2026-09-04", port_status: "foc_received" },
+        // a duplicate, and a 5,000-entry tail, and junk entries
+        { portid: " 217760 ", foc_date: "2026-09-05", port_status: "foc_received" },
+        ...Array.from({ length: 5000 }, (_, i) => ({ portid: String(900000 + i), port_status: "completed" })),
+        { portid: "217760", port_status: 12345 },
+        42,
+        "junk",
+      ],
+    }),
+    getDIDsInfo: () => ({ status: "error" }),
+  };
+
+  const sum = await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  assert.equal(sum.failed, 0);
+  // Whitespace is trimmed on the way into the index, so " 217760 " is the same
+  // order — last entry wins, and it must be one of OUR order's entries.
+  assert.equal(row.answers.provisioning.portStatus, "12345");
+  assert.ok(row.answers.provisioning.portStatusCheckedAt);
+});
+
+test("sweep: a carrier list that throws leaves every existing behaviour intact", async () => {
+  const s = makeState();
+  const row = submission(s);
+  seedTempState(s);
+  const calls: VmsCall[] = [];
+  const handlers = {
+    ...ROUTED_OK,
+    getLNPList: () => {
+      throw new Error("carrier down");
+    },
+    getLNPStatus: () => ({ status: "success", post_status: "In Progress" }),
+    getDIDsInfo: () => ({ status: "error" }),
+  };
+
+  const sum = await watchdog.sweepOpenPorts(watchdogDeps(s, handlers, calls));
+  assert.equal(sum.scanned, 1);
+  assert.equal(sum.failed, 0);
+  assert.equal(row.answers.provisioning.portStatus, "In Progress");
+});
+
 // ── Pointing the ported number + the re-publish ───────────────────────────────
 
 test("PBX world: the ported route copies the temp route's destination, then routing is re-published", async () => {
