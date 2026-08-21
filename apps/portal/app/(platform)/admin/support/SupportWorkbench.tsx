@@ -15,6 +15,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost } from "../../../../services/apiClient";
+import { useSpeakText } from "../../../../hooks/useSpeakText";
+
+/** Shown in the play button's tooltip so it is obvious which voice is used. */
+const SPEAK_VOICE = "Kristen";
 import "./workbenchIde.css";
 
 type Entry = { name: string; path: string; kind: "dir" | "file"; size?: number; git?: "M" | "U" | "D" | "A" | null };
@@ -202,6 +206,7 @@ export default function SupportWorkbench() {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const history = useRef<string[]>([]);
   const histIdx = useRef(-1);
+  const speech = useSpeakText();
 
   /* ── load ── */
   useEffect(() => {
@@ -657,12 +662,32 @@ export default function SupportWorkbench() {
                 >
                   <span className="who">
                     {m.role === "you" ? "You · plain English" : m.role === "error" ? "Problem" : `Agent${m.model ? ` · ${m.model}` : ""}`}
+                    {/* Read it out. Agent answers only — there is nothing to
+                        gain from hearing your own question back, and each play
+                        is billed per character. */}
+                    {m.role !== "you" && m.role !== "error" && !m.pending && m.text.trim() ? (
+                      <button
+                        type="button"
+                        className={"ide-speak" + (speech.playingId === m.id ? " on" : "")}
+                        disabled={speech.loadingId === m.id}
+                        aria-label={speech.playingId === m.id ? "Stop reading" : "Read this out loud"}
+                        title={speech.playingId === m.id ? "Stop" : `Read out loud (${SPEAK_VOICE})`}
+                        onClick={() => void speech.speak(m.id, m.text)}
+                      >
+                        {speech.loadingId === m.id ? "…" : speech.playingId === m.id ? "■" : "▶"}
+                      </button>
+                    ) : null}
                   </span>
                   {m.pending ? <span className="ide-think"><i /><i /><i /></span> : m.text}
                 </div>
               ),
             )}
           </div>
+
+          {speech.error ? <div className="ide-speakmsg bad">{speech.error}</div> : null}
+          {speech.truncated && !speech.error ? (
+            <div className="ide-speakmsg note">That answer was long — you heard the first part of it.</div>
+          ) : null}
 
           <div className="ide-composer">
             {file ? (

@@ -751,6 +751,10 @@ test("⛔ the module's writes are exactly reply/takeover/staff-message, and SMS 
       "/admin/support/conversations/:id/takeover",
       "/admin/support/ground-rules",
       "/admin/support/ground-rules/check",
+      // ⛔ `speak` is a POST because it carries a body, NOT because it mutates
+      // anything: it returns mp3 bytes and stores nothing at all. Its own
+      // guards live in supportNarration.test.ts (no retry, no storage, no PBX).
+      "/admin/support/speak",
       "/admin/support/threads/:id/reply",
       "/admin/support/workbench/run",
     ],

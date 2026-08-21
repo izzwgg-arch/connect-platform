@@ -248,3 +248,24 @@
 .ide-palrow kbd { margin-left:auto; font:10px var(--mono); border:1px solid var(--line2); border-radius:3px; padding:1px 5px; color:var(--faint); }
 
 .ide-empty { padding:26px; text-align:center; color:var(--faint); font-size:12px; }
+
+/* ---------- read aloud (ElevenLabs · Kristen) ---------- */
+/* Sits on the message's own byline so it never reflows the text, and only
+   appears on agent answers. Reserved width in both states so the row does not
+   twitch when ▶ becomes ■. */
+.ide-speak {
+  margin-left:6px; width:16px; height:14px; display:inline-flex; align-items:center; justify-content:center;
+  border-radius:4px; color:var(--faint); font-size:8px; line-height:1; vertical-align:baseline;
+  border:1px solid transparent; transition:color .12s, background .12s, border-color .12s;
+}
+.ide-msg:hover .ide-speak { color:var(--dim); }
+.ide-speak:hover { color:var(--acc); background:rgba(34,168,255,.1); border-color:rgba(34,168,255,.35); }
+.ide-speak:disabled { color:var(--faint); background:transparent; border-color:transparent; cursor:default; }
+.ide-speak.on { color:var(--acc); background:rgba(34,168,255,.14); border-color:rgba(34,168,255,.45); }
+.ide-speak.on:hover { color:var(--bad); background:rgba(248,81,73,.12); border-color:rgba(248,81,73,.4); }
+
+/* A failure has to say so IN the dock — a play button that silently does
+   nothing is the exact symptom this repo has chased three times. */
+.ide-speakmsg { margin:0 12px; padding:6px 9px; border-radius:7px; font-size:10.5px; line-height:1.5; }
+.ide-speakmsg.bad { border:1px solid rgba(248,81,73,.35); background:rgba(248,81,73,.08); color:#f0a8a4; }
+.ide-speakmsg.note { border:1px solid var(--line2); background:var(--bar); color:var(--faint); }

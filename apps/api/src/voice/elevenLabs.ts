@@ -493,6 +493,89 @@ export async function synthesiseSpeech(
 }
 
 /**
+ * Narration — text to speech for a BROWSER to play, not for a phone line.
+ *
+ * ⛔⛔ THIS IS A SIBLING OF `synthesiseSpeech`, NOT A FLAG ON IT, AND THAT IS
+ * DELIBERATE. That function exists to feed Asterisk: it asks for `pcm_8000`
+ * first and falls back to `pcm_16000`, because 8 kHz is what the phone network
+ * actually carries and resampling later only ever sounds worse. Every one of
+ * those decisions is wrong for a person listening on a laptop. Adding an
+ * `outputFormat` branch there would put the IVR greeting path — which is live
+ * for real customers — one edit away from a narration change.
+ *
+ * So: mp3 at 44.1 kHz, ready to hand straight to an <audio> element. No PCM,
+ * no WAV header, no ffmpeg, nothing stored anywhere.
+ *
+ * ⛔ NO FORMAT FALLBACK LADDER. `synthesiseSpeech` retries at a higher sample
+ * rate because a plan may not expose pcm_8000; mp3_44100_128 is available on
+ * every tier, so a failure here means something real and a second POST would
+ * only bill twice for the same words.
+ *
+ * ⛔ BILLED PER CHARACTER. The caller MUST bound the text — see
+ * MAX_NARRATION_CHARS. Nothing about a failure is retryable.
+ */
+export const MAX_NARRATION_CHARS = 3_000;
+
+/** The mp3 profile every ElevenLabs tier exposes. */
+const NARRATION_FORMAT = "mp3_44100_128";
+
+/**
+ * Tuning for reading a written answer aloud.
+ *
+ * Higher stability than the IVR voice because this is prose, not a greeting —
+ * an expressive read of a technical paragraph is harder to follow, not easier.
+ * Style stays at 0 for the same reason.
+ */
+export const NARRATION_VOICE_TUNING: VoiceTuning = {
+  stability: 0.55,
+  similarityBoost: 0.75,
+  style: 0,
+  useSpeakerBoost: true,
+  speed: 1,
+};
+
+export async function synthesiseNarration(
+  apiKey: string,
+  input: { voiceId: string; text: string; model?: TtsModelId; tuning?: Partial<VoiceTuning> },
+): Promise<{ mp3: Buffer; model: TtsModelId }> {
+  const text = String(input.text ?? "").trim();
+  if (!text) throw new ElevenLabsError("empty_text", 400, "There's nothing to read out.");
+  if (text.length > MAX_NARRATION_CHARS) {
+    throw new ElevenLabsError(
+      "text_too_long",
+      400,
+      `That's longer than this reads aloud (max ${MAX_NARRATION_CHARS} characters).`,
+    );
+  }
+  if (!input.voiceId) throw new ElevenLabsError("no_voice", 400, "No voice was chosen.");
+
+  const model: TtsModelId = isTtsModelId(input.model) ? input.model : "eleven_flash_v2_5";
+  const t = { ...NARRATION_VOICE_TUNING, ...(input.tuning ?? {}) };
+
+  const res = await call(apiKey, `/text-to-speech/${encodeURIComponent(input.voiceId)}?output_format=${NARRATION_FORMAT}`, {
+    method: "POST",
+    accept: "audio/*",
+    body: {
+      text,
+      model_id: model,
+      voice_settings: {
+        stability: clamp01(t.stability),
+        similarity_boost: clamp01(t.similarityBoost),
+        style: clamp01(t.style),
+        use_speaker_boost: Boolean(t.useSpeakerBoost),
+        speed: Math.min(1.2, Math.max(0.7, Number(t.speed) || 1)),
+      },
+    },
+  });
+
+  const mp3 = Buffer.from(await res.arrayBuffer());
+  if (mp3.length === 0) {
+    throw new ElevenLabsError("empty_audio", 502, "ElevenLabs returned no audio.", "", "No audio came back.", true);
+  }
+  return { mp3, model };
+}
+
+/**
  * Voice changer (ElevenLabs calls it "speech to speech").
  *
  * ⛔⛔ THIS IS NOT TRANSCRIPTION AND MUST NEVER BECOME IT. Audio goes in, audio

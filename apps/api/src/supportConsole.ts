@@ -55,6 +55,13 @@ import {
   readWorkspaceFile,
   runCheckedCommand,
 } from "./supportWorkbench";
+import {
+  SUPPORT_NARRATION_VOICE_ID,
+  narratableText,
+  narrationCacheGet,
+  narrationCacheSet,
+  takeSpeakSlot,
+} from "./supportNarration";
 
 /**
  * Best-effort audit row with REAL tamper evidence — `AgentAuditLog.hash` is a
@@ -1020,5 +1027,90 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
         .send({ error: out.error ?? "send_failed", message: "The reply didn't send. " + (out.error ?? "") });
     }
     return { ok: true, message: out.message ?? null };
+  });
+
+  // ── POST /admin/support/speak ─────────────────────────────────────────────
+  // Read an answer out loud. Izzy, 2026-08-21: "make it so that I can play the
+  // output as audio… use Kristen as a voice."
+  //
+  // ⛔⛔ THIS IS BILLED PER CHARACTER AND NOTHING HERE IS RETRYABLE. Every
+  // guard below exists because a support person can click a play button as
+  // many times as they like:
+  //   • the reply CACHE is the real cost control — replaying a message costs
+  //     nothing, which is the common case (you listen to the same answer twice)
+  //   • one POST to ElevenLabs, ever. A retry would bill the same words twice
+  //     and the second failure buries the first, useful message.
+  //   • a hard character cap, applied HERE and not left to the caller.
+  //
+  // ⛔ It stores nothing. This is not the IVR prompt path — no catalog row, no
+  // PBX push, nothing on disk. It hands back mp3 bytes and forgets.
+  app.post("/admin/support/speak", async (req: any, reply: any) => {
+    const user: any = await requireSuper(req, reply);
+    if (!user) return;
+
+    const body = z.object({ text: z.string().min(1) }).safeParse(req.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_body", message: "Nothing to read out." });
+    }
+
+    const spoken = narratableText(body.data.text);
+    if (!spoken.text) {
+      return reply.code(400).send({ error: "nothing_to_say", message: "There are no words in that message to read out." });
+    }
+
+    const { resolveElevenLabsKey } = await import("./voice/elevenLabsKey");
+    const key = await resolveElevenLabsKey(db);
+    if (!key) {
+      return reply.code(503).send({
+        error: "elevenlabs_not_configured",
+        message: "No ElevenLabs key is set yet. Add one on the ElevenLabs settings page.",
+      });
+    }
+
+    const cacheKey = createHash("sha256").update(`${SUPPORT_NARRATION_VOICE_ID}\n${spoken.text}`).digest("hex");
+    const cached = narrationCacheGet(cacheKey);
+    if (cached) {
+      reply.header("Content-Type", "audio/mpeg");
+      reply.header("Content-Length", String(cached.byteLength));
+      reply.header("Cache-Control", "no-store");
+      reply.header("X-Speak-Truncated", spoken.truncated ? "1" : "0");
+      reply.header("X-Speak-Cached", "1");
+      return reply.send(cached);
+    }
+
+    const slot = takeSpeakSlot();
+    if (!slot) {
+      return reply
+        .code(429)
+        .send({ error: "too_many_at_once", message: "Too many things being read out at once — try again in a moment." });
+    }
+
+    const { synthesiseNarration, ElevenLabsError } = await import("./voice/elevenLabs");
+    try {
+      const out = await synthesiseNarration(key, { voiceId: SUPPORT_NARRATION_VOICE_ID, text: spoken.text });
+      narrationCacheSet(cacheKey, out.mp3);
+      await supportAudit(db, {
+        actor: String(user.email ?? user.sub ?? "support"),
+        event: "support.spoke",
+        tenantId: String(user.tenantId ?? "platform"),
+        payload: { chars: spoken.text.length, truncated: spoken.truncated, voiceId: SUPPORT_NARRATION_VOICE_ID },
+      });
+      reply.header("Content-Type", "audio/mpeg");
+      reply.header("Content-Length", String(out.mp3.byteLength));
+      reply.header("Cache-Control", "no-store");
+      reply.header("X-Speak-Truncated", spoken.truncated ? "1" : "0");
+      reply.header("X-Speak-Cached", "0");
+      return reply.send(out.mp3);
+    } catch (err: any) {
+      // ⛔ Never retry — see the header of this route.
+      if (err instanceof ElevenLabsError) {
+        return reply
+          .code(err.httpStatus === 400 || err.httpStatus === 401 ? 400 : 502)
+          .send({ error: "elevenlabs_failed", message: err.userMessage || err.message });
+      }
+      return reply.code(500).send({ error: "speak_failed", message: "Couldn't read that out." });
+    } finally {
+      slot();
+    }
   });
 }

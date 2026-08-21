@@ -289,6 +289,64 @@ export async function apiFetchBlob(absoluteUrl: string, timeoutMs = 60_000): Pro
   }
 }
 
+/**
+ * POST a JSON body and get BINARY back, still funnelled through the global 401
+ * handler.
+ *
+ * ⛔ Use this rather than a hand-rolled `fetch` for any authenticated binary
+ * POST. A bare fetch skips `noteUnauthorizedResponse`, which is what clears a
+ * dead session and sends the window to /login — miss it and a signed-out tab
+ * sits there retrying, which is exactly how an office IP gets auto-banned at
+ * nginx (2026-08-17).
+ *
+ * Returns the response headers alongside the blob, because a binary response
+ * has nowhere else to put a flag (e.g. "this was shortened").
+ */
+export async function apiPostBlob(
+  path: string,
+  body?: Record<string, unknown>,
+  timeoutMs = 60_000,
+): Promise<{ blob: Blob; headers: Headers }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const token = browserToken();
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (token) headers["authorization"] = `Bearer ${token}`;
+    const tenantCtx = browserTenantContext();
+    if (tenantCtx) headers["x-tenant-context"] = tenantCtx;
+
+    const res = await fetch(`${getPortalApiBaseUrl()}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body ?? {}),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      let errCode = `http_${res.status}`;
+      let message = "";
+      let json: unknown = null;
+      try {
+        json = await res.json();
+        errCode = (json as { error?: string } | null)?.error ?? errCode;
+        message = (json as { message?: string } | null)?.message ?? "";
+      } catch { /* non-JSON error body */ }
+      noteUnauthorizedResponse(res.status, json, token);
+      throw new ApiError(message || errCode, res.status, json ?? undefined);
+    }
+    return { blob: await res.blob(), headers: res.headers };
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new ApiError(`Timed out after ${Math.round(timeoutMs / 1000)}s`, 408);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function apiUploadCrmVoicemailDrop(
   input: {
     name: string;
