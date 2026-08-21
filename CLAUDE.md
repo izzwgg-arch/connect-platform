@@ -1404,9 +1404,21 @@ on loopcom, backed up.)
 ## ⛔⛔ AGENT HANDOFF — Loopcom Direct is BUILT: cross-company chat by phone number + the video call that starts from it (2026-08-21) — READ FIRST before touching `apps/api/src/loopcomDirect/*`, `/direct` routes, the `LoopcomDirect*` models, or before adding ANY tenant filter to a Direct query
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_DIRECT_BUILD_2026-08-21.md`**
-(`d0e98b96` on `feat/ivr-migration-takeover`, pushed. **⛔ NOT DEPLOYED, migration
-NOT applied, nobody has opened the screen.** No PBX write, no env change, no
-tenant row touched.) Built screens rendered with the SHIPPED stylesheet, light
+(`d0e98b96` + `c1f8caa5` + `59f5671e` on `feat/ivr-migration-takeover`.
+✅✅ **api + portal DEPLOYED and PROVEN LIVE 2026-08-21** — both containers at
+`8d033759` (all three commits confirmed ancestors), migration applied **15:35:35Z**
+with all 6 `LoopcomDirect*` tables present, **0 identity rows so the feature is
+inert**, health 200 on both hostnames, and all four read routes probed live with a
+self-signed SUPER_ADMIN token: `/direct/me` → `200 identity:null`,
+`/direct/threads` → `200` empty, a junk number → the plain-English refusal, an
+unknown number → `not_on_loopcom`. The SUPER_ADMIN nav gate is grepped in the
+shipped bundle, so customers cannot see it. No PBX write, no env change, no
+tenant row touched.)
+⛔⛔ **AND IT COST A REAL 40-MINUTE EXPOSURE WINDOW, which is the lesson: the
+first portal build was pinned to `d0e98b96` — the commit BEFORE the nav gate —
+because another session's pipeline deploys the BRANCH TIP whenever it likes. A
+new customer-facing nav item and its visibility gate must land in the SAME
+commit, never as a follow-up.** Built screens rendered with the SHIPPED stylesheet, light
 and dark: <https://claude.ai/code/artifact/ee5e08d9-0bab-40fb-89b1-2ddedb2a537a>.
 Izzy: *"Build it like this … make everything exactly like the mock-ups. 100%
 light mode and dark mode"*, and *"build it on that server first"* (the US media

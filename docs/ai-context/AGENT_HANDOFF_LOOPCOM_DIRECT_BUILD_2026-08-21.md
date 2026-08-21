@@ -12,7 +12,27 @@ Commit **`d0e98b96`** on `feat/ivr-migration-takeover`, pushed.
 Built screens rendered with the SHIPPED stylesheet, light and dark:
 <https://claude.ai/code/artifact/ee5e08d9-0bab-40fb-89b1-2ddedb2a537a>
 
-⛔⛔ **NOT DEPLOYED. Migration NOT applied. Nobody has opened the screen.**
+✅✅ **DEPLOYED AND VERIFIED ON PRODUCTION 2026-08-21.** api + portal both at
+`8d033759` (all three of my commits confirmed ancestors); migration
+`20260821180000_loopcom_direct` applied **15:35:35Z**, all 6 `LoopcomDirect*`
+tables present, `Tenant.loopcomDirectEnabled` default `true`;
+**0 identity rows — nobody has opted in, so the feature is inert exactly as
+designed**; health 200 on both hostnames.
+**Live route probe** (60-second self-signed SUPER_ADMIN token → `127.0.0.1:3001`):
+`/direct/me` → `200 {"companyEnabled":true,"identity":null,"blocked":[]}`,
+`/direct/threads` → `200 {"threads":[],"requests":[]}`, `/direct/lookup?phone=abc`
+→ the plain-English refusal, `/direct/lookup` on an unknown number →
+`{"result":"not_on_loopcom"}`. The SUPER_ADMIN nav gate is in the shipped bundle
+(`workspace.direct"!==e.id||"SUPER_ADMIN"===i`), so **customers cannot see it**.
+
+⛔ **STILL NOT PROVEN: nobody has opened the screen in a browser, no message has
+been sent between two people, and no verification code has been texted.**
+⚠️ **There was a real exposure window**: the portal build that went out first was
+pinned to `d0e98b96` — the commit BEFORE the nav gate — so for roughly 40 minutes
+any customer with chat access could see a "Direct" sidebar item leading to a
+screen whose api did not exist yet. The next portal deploy closed it. **The
+lesson: push the gate in the SAME commit as the nav item, not as a follow-up —
+another session's pipeline deploys the branch tip whenever it likes.**
 
 ## §1 What it is, and why it is inert on the day it ships
 
