@@ -1,0 +1,87 @@
+# Windows packaging for the Loopcom desktop app.
+#
+# ⛔ THIS LIVES IN A YAML FILE, NOT package.json's "build" KEY, FOR ONE REASON:
+# electron-builder validates its config against a strict schema and REJECTS any
+# unknown key, so a `"//note": "..."` comment fails the build. The settings below
+# are ones people have flipped before without knowing what they cost, so the
+# warnings have to sit on the settings themselves. Moving this back into
+# package.json silently deletes every one of them.
+#
+# ⛔ electron-builder refuses to start if BOTH this file and a `build` key in
+# package.json exist. There is deliberately no `build` key there any more.
+
+# ⛔ NEVER CHANGE appId. NSIS keys the uninstall registry entry off it, and
+# Windows resolves an app's taskbar identity, its pinned entry and the
+# attribution of its notifications off the matching AppUserModelID (set in
+# src/main.ts — the two MUST stay identical). Change it and the next update
+# installs SIDE BY SIDE with the old one instead of upgrading it: two tray
+# icons, two SIP phones, a double ring on every call. The Connect -> Loopcom
+# rebrand changed the DISPLAY name and deliberately left this identifier alone.
+appId: com.connectcommunications.desktop
+
+# The display name. Drives the .exe filename, the window's taskbar name and the
+# NSIS shortcut, so this is what a person sees everywhere in Windows.
+productName: Loopcom
+
+# Shown in the .exe's file properties and Windows Task Manager. CompanyName comes
+# from package.json "author"; without it Electron leaves its own default, and the
+# app reads "GitHub, Inc." to anyone who looks. The legal entity is Loopcom LLC
+# (not Connect Communications LLC) - see the Google Play handoff.
+copyright: Copyright (c) 2026 Loopcom LLC
+
+directories:
+  output: release
+
+files:
+  - dist/**
+  - assets/**
+  - package.json
+
+win:
+  target: nsis
+  icon: assets/icon.ico
+
+  # ⛔⛔ MUST STAY TRUE. `false` skips rcedit, and rcedit is the ONLY thing that
+  # embeds assets/icon.ico (and the version strings) INTO the .exe. With it
+  # false, every installer this app ever shipped carried ELECTRON'S DEFAULT ATOM
+  # ICON inside Connect.exe — proven on the installed 0.1.6 build by extracting
+  # the exe's icon and putting it beside the repo's.
+  #
+  # That is the whole mechanism behind "the icon is there for a few minutes and
+  # then it disappears": `new BrowserWindow({ icon })` paints the taskbar button
+  # while a window exists, but Windows re-resolves the app's identity from the
+  # EXECUTABLE whenever the button is regrouped, the window hides to the tray, or
+  # the icon cache is re-read — and fell back to the atom. No amount of
+  # renderer-side or main-process code can fix that; the bytes must be in the exe.
+  #
+  # `pnpm dist` runs scripts/verify-built-icon.ts afterwards, which reads the
+  # built artifact's RT_ICON resources and FAILS THE BUILD if they are not ours.
+  # If rcedit ever fails (antivirus locking the exe is the usual cause), retry
+  # the build — do not turn this off to make the build pass.
+  signAndEditExecutable: true
+
+nsis:
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerHeaderIcon: assets/icon.ico
+
+  # ⛔ THIS IS WHAT A WINDOWS NOTIFICATION IS ATTRIBUTED TO. A toast carries no
+  # app name of its own — Windows looks up the Start Menu shortcut carrying the
+  # app's AppUserModelID and prints THAT shortcut's name in the toast header.
+  # So this string is the "Loopcom" a customer reads above every voicemail
+  # notification, and it only changes for them once they have installed a build
+  # whose installer rewrote the shortcut.
+  shortcutName: Loopcom
+  uninstallDisplayName: Loopcom
+
+publish:
+  provider: generic
+  url: https://app.connectcomunications.com/desktop/
+  channel: latest
+
+# ⛔ Deliberately still Connect-Setup-*. The portal sidebar's Install link points
+# at the stable /desktop/Connect-Setup-latest.exe alias and
+# apps/portal/lib/loopcomParity.test.ts pins that exact string. Renaming it is a
+# PORTAL change (one line, one test line, and a second server-side alias so old
+# links keep working), and this rebrand was scoped to leave the portal alone.
+artifactName: Connect-Setup-${version}.${ext}

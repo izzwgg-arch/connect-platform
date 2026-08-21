@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMoni
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
+import { buildWindowsToastXml, type DesktopNotificationPayload } from "./notificationToast";
+import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 
 // Chromium blocks media playback in windows the user has never interacted with.
@@ -24,7 +26,14 @@ const DEFAULT_SETTINGS: DesktopSettings = {
 
 const portalUrl = (process.env.CONNECT_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
 const preloadPath = path.join(__dirname, "preload.js");
-const iconPath = path.join(__dirname, "..", "assets", "icon.png");
+const assetPath = (file: string) => path.join(__dirname, "..", "assets", file);
+
+// ⛔ ON WINDOWS THIS MUST BE THE .ico, NOT THE .png. A single-resolution PNG
+// forces Windows to downscale one 512px image for the 16px taskbar and the 32px
+// title bar, and the Loopcom mark is thin glowing strokes — it turns to a smudge.
+// The .ico carries a separately-rendered, luminance-hinted frame per size
+// (scripts/desktop-loopcom-windows-assets.py). macOS/Linux take the PNG.
+const iconPath = process.platform === "win32" ? assetPath("icon.ico") : assetPath("icon.png");
 
 let fullWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -214,7 +223,36 @@ function webPreferences(windowKind: string) {
 
 function createAppIcon(size?: number) {
   const icon = nativeImage.createFromPath(iconPath);
+  // An unreadable/missing icon file yields an EMPTY nativeImage, and Electron
+  // silently falls back to its own atom for an empty one — the exact outcome this
+  // whole pass exists to end. Say so loudly instead of shipping a blank icon.
+  if (icon.isEmpty()) diag("icon", `icon asset is empty or missing: ${iconPath}`);
+  // Resizing an .ico picks the closest embedded frame, so the 16px tray icon comes
+  // from the 16px render rather than a downscaled 256.
   return size ? icon.resize({ width: size, height: size }) : icon;
+}
+
+/**
+ * ⛔ THE RUNTIME HALF OF THE "the icon keeps disappearing" FIX.
+ *
+ * The real fix is in the build: `signAndEditExecutable: true` embeds the icon into
+ * the .exe, so Windows resolves the right icon even when no window exists (see
+ * scripts/verify-built-icon.ts). This is belt to that braces. Windows re-reads a
+ * window's icon when the button is recreated — after a restore from the tray, a
+ * DPI change, or an explorer.exe restart — and an Electron window that was created
+ * with an icon it could not load keeps the empty one forever. Re-asserting on every
+ * show/restore costs nothing and cannot be defeated by a stale cache.
+ */
+function pinWindowIcon(win: BrowserWindow): void {
+  const apply = () => {
+    if (win.isDestroyed()) return;
+    const icon = createAppIcon();
+    if (!icon.isEmpty()) win.setIcon(icon);
+  };
+  apply();
+  win.on("show", apply);
+  win.on("restore", apply);
+  win.on("focus", apply);
 }
 
 function createFullWindow(show = true): BrowserWindow {
@@ -232,12 +270,13 @@ function createFullWindow(show = true): BrowserWindow {
     minWidth: 980,
     minHeight: 640,
     show,
-    title: "Connect",
+    title: "Loopcom",
     backgroundColor: "#07111f",
     icon: iconPath,
     webPreferences: webPreferences("full"),
   });
 
+  pinWindowIcon(fullWindow);
   attachConsoleCapture(fullWindow, "full");
   attachEditContextMenu(fullWindow);
 
@@ -273,7 +312,7 @@ function createMiniWindow(show = true): BrowserWindow {
     minWidth: 320,
     minHeight: 560,
     show: false,
-    title: "Connect Mini Dialer",
+    title: "Loopcom Mini Dialer",
     frame: false,
     resizable: true,
     alwaysOnTop: settings.alwaysOnTop,
@@ -281,6 +320,8 @@ function createMiniWindow(show = true): BrowserWindow {
     icon: iconPath,
     webPreferences: webPreferences("mini"),
   });
+
+  pinWindowIcon(miniWindow);
 
   miniWindow.once("ready-to-show", () => {
     if (!show || !miniWindow || miniWindow.isDestroyed()) return;
@@ -331,12 +372,13 @@ function createPhoneEngineWindow(): BrowserWindow {
     width: 420,
     height: 620,
     show: false,
-    title: "Connect Phone Engine",
+    title: "Loopcom Phone Engine",
     backgroundColor: "#07111f",
     icon: iconPath,
     webPreferences: webPreferences("phone-engine"),
   });
 
+  pinWindowIcon(phoneEngineWindow);
   attachConsoleCapture(phoneEngineWindow, "phone-engine");
   loadPortal(phoneEngineWindow, "/desktop/phone-engine");
   return phoneEngineWindow;
@@ -358,11 +400,11 @@ function showMiniForIncomingCall(): void {
 function rebuildTray(): void {
   if (!tray) {
     tray = new Tray(createAppIcon(16));
-    tray.setToolTip("Connect");
+    tray.setToolTip("Loopcom");
   }
 
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Open Connect", click: () => createFullWindow(true) },
+    { label: "Open Loopcom", click: () => createFullWindow(true) },
     { label: "Open Mini Dialer", click: () => createMiniWindow(true) },
     {
       label: settings.alwaysOnTop ? "Turn Off Always On Top" : "Keep Mini Dialer On Top",
@@ -372,7 +414,7 @@ function rebuildTray(): void {
     { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
     { type: "separator" },
     {
-      label: "Quit Connect",
+      label: "Quit Loopcom",
       click: () => {
         isQuitting = true;
         app.quit();
@@ -395,6 +437,51 @@ function sendPhoneEventToRenderers(envelope: PhoneEngineEnvelope): void {
   for (const win of [fullWindow, miniWindow]) {
     if (!win || win.isDestroyed()) continue;
     win.webContents.send("phone:engine-event", envelope);
+  }
+}
+
+function showDesktopNotification(payload: DesktopNotificationPayload): boolean {
+  if (!Notification.isSupported()) return false;
+
+  const onClick = () => {
+    if (payload.kind === "incoming-call") {
+      showMiniForIncomingCall();
+      return;
+    }
+    const win = createFullWindow(true);
+    if (payload.route) loadPortal(win, payload.route);
+  };
+
+  // No `icon`: on Windows that is what draws the oversized inline image, and with
+  // none Windows uses the app's own registered icon small at the top-left, which
+  // is the layout we want anyway. This is also the win32 fallback below.
+  const showPlain = () => {
+    const note = new Notification({ title: payload.title, body: payload.body || "" });
+    note.on("click", onClick);
+    note.show();
+  };
+
+  if (process.platform !== "win32") {
+    showPlain();
+    return true;
+  }
+
+  try {
+    const note = new Notification({ toastXml: buildWindowsToastXml(payload) });
+    note.on("click", onClick);
+    // A toast whose XML Windows refuses never appears at all, and a customer would
+    // simply stop being told about voicemail with nothing in any log. Fall back to
+    // the plain notification so the message always lands.
+    note.on("failed", (_event, error) => {
+      diag("notification", `toast failed (${payload.kind}): ${String(error)} — falling back to plain`);
+      showPlain();
+    });
+    note.show();
+    return true;
+  } catch (err) {
+    diag("notification", `toast threw (${payload.kind}): ${String(err)} — falling back to plain`);
+    showPlain();
+    return true;
   }
 }
 
@@ -436,16 +523,7 @@ function registerIpc(): void {
     rebuildTray();
     return settings;
   });
-  ipcMain.handle("desktop:notification", (_event, payload: { kind: string; title: string; body?: string; route?: string }) => {
-    if (!Notification.isSupported()) return false;
-    const note = new Notification({ title: payload.title, body: payload.body || "", icon: iconPath });
-    note.on("click", () => {
-      if (payload.kind === "incoming-call") showMiniForIncomingCall();
-      else if (payload.route) createFullWindow(true) && loadPortal(createFullWindow(true), payload.route);
-    });
-    note.show();
-    return true;
-  });
+  ipcMain.handle("desktop:notification", (_event, payload: DesktopNotificationPayload) => showDesktopNotification(payload));
 
   ipcMain.on("phone:engine-event", (_event, envelope: PhoneEngineEnvelope) => {
     if (envelope.type === "state") {
@@ -578,7 +656,24 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(async () => {
   initLogging();
+  // ⛔ THIS STRING MUST KEEP MATCHING `build.appId` IN package.json, AND MUST NOT
+  // BE REBRANDED. Windows uses the AppUserModelID to decide which taskbar button
+  // a window belongs to, which pinned entry it maps to, and which Start Menu
+  // shortcut a toast notification is attributed to. electron-builder stamps the
+  // appId onto the shortcut it creates; if this drifts from that, Windows cannot
+  // resolve the app's identity and falls back to generic chrome — the taskbar
+  // ungroups, pinning breaks, and notifications lose their name and icon. The
+  // Connect->Loopcom rebrand changed the DISPLAY name (productName, shortcutName)
+  // and deliberately left this identifier alone.
   app.setAppUserModelId("com.connectcommunications.desktop");
+  // Before ANY window is created, or the first load goes out announcing Electron.
+  try {
+    const branded = brandedUserAgent(app.userAgentFallback, app.getVersion());
+    app.userAgentFallback = branded;
+    diag("main", `user agent: ${branded}`);
+  } catch (err) {
+    diag("main", `could not brand the user agent: ${String(err)}`);
+  }
   settings = readSettings();
   applyLoginSettings();
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {

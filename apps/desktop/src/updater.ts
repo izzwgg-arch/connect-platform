@@ -96,9 +96,9 @@ export function initAutoUpdater(logger: Diag): void {
       interactiveCheck = false;
       void dialog.showMessageBox({
         type: "info",
-        title: "Connect",
+        title: "Loopcom",
         message: "You're up to date",
-        detail: `Connect ${app.getVersion()} is the latest version.`,
+        detail: `Loopcom ${app.getVersion()} is the latest version.`,
         buttons: ["OK"],
       });
     }
@@ -116,7 +116,7 @@ export function initAutoUpdater(logger: Diag): void {
       interactiveCheck = false;
       void dialog.showMessageBox({
         type: "error",
-        title: "Connect",
+        title: "Loopcom",
         message: "Couldn't check for updates",
         detail: String(err),
         buttons: ["OK"],
@@ -134,9 +134,9 @@ export function initAutoUpdater(logger: Diag): void {
     const opts = {
       type: "info" as const,
       title: "Update ready",
-      message: `Connect ${info?.version} is ready to install`,
+      message: `Loopcom ${info?.version} is ready to install`,
       detail:
-        "The update has been downloaded. Restart Connect to apply it now — or it'll be applied automatically next time you quit.",
+        "The update has been downloaded. Restart Loopcom to apply it now — or it'll be applied automatically next time you quit.",
       buttons: ["Restart now", "Later"],
       defaultId: 0,
       cancelId: 1,
@@ -176,7 +176,7 @@ export function checkForUpdatesInteractive(): void {
   if (!app.isPackaged) {
     void dialog.showMessageBox({
       type: "info",
-      title: "Connect",
+      title: "Loopcom",
       message: "Updates are disabled in development builds.",
       buttons: ["OK"],
     });
