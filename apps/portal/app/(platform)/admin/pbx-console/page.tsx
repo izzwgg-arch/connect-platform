@@ -16,7 +16,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost, ApiError } from "../../../../services/apiClient";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { PanelForm, type PanelFormData, type PanelEdit } from "./PanelForm";
 import "./pbxConsole.css";
+
+/** Which panel module each screen edits, and whether it belongs to a customer. */
+type PanelTarget = { module: string; id: string | null; tenantPath?: string };
 
 type Module = "tenants" | "extensions" | "phones" | "routing" | "teams" | "geo";
 function errText(e: any, fallback: string): string {
@@ -117,11 +121,57 @@ function PbxConsole() {
 
   const closeEditor = () => { if (dirty && !window.confirm("Leave without saving your changes?")) return; setEditor(null); };
 
+  /* ── the phone system's own form ────────────────────────────────────────
+     Every module's Edit and New open the panel's complete form — every tab,
+     every field, every option — rather than a short list somebody chose. */
+  const [panel, setPanel] = useState<PanelTarget | null>(null);
+  const [panelData, setPanelData] = useState<PanelFormData | null>(null);
+  const [panelBusy, setPanelBusy] = useState(false);
+  const [panelErr, setPanelErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!panel) { setPanelData(null); setPanelErr(null); return; }
+    let live = true;
+    setPanelBusy(true); setPanelErr(null); setPanelData(null);
+    const qs = new URLSearchParams();
+    if (panel.id) qs.set("id", panel.id);
+    if (panel.tenantPath) qs.set("tenantPath", panel.tenantPath);
+    apiGet<PanelFormData>(`/admin/pbx-console/panel/${panel.module}/form?${qs.toString()}`)
+      .then((d) => { if (live) setPanelData(d); })
+      .catch((e) => { if (live) setPanelErr(errText(e, "The phone system did not return that form.")); })
+      .finally(() => { if (live) setPanelBusy(false); });
+    return () => { live = false; };
+  }, [panel]);
+
+  const savePanel = async (edit: PanelEdit) => {
+    if (!panel) return;
+    setPanelBusy(true); setPanelErr(null);
+    try {
+      await apiPost(`/admin/pbx-console/panel/${panel.module}/save`, {
+        id: panel.id, tenantPath: panel.tenantPath, ...edit,
+      });
+      push("ok", panel.id ? "Saved to the phone system." : "Created on the phone system.");
+      setPanel(null);
+      await loadAll();
+      await loadModule(mod);
+    } catch (e) {
+      setPanelErr(errText(e, "The phone system refused the change."));
+    } finally {
+      setPanelBusy(false);
+    }
+  };
+
+  const openPanel = (module: string, id: string | number | null, tenantPath?: string) => {
+    if (dirty && !window.confirm("Leave without saving?")) return;
+    setEditor(null);
+    setPanel({ module, id: id == null ? null : String(id), tenantPath });
+  };
+
   // ────────────────────────────────────────────────────────────────────────
   const inScope = (slug: string) => !scope || slug === scope;
   const matches = (hay: string) => !search || hay.toLowerCase().includes(search.toLowerCase());
 
-  const changeMod = (m: Module) => { if (dirty && !window.confirm("Leave without saving?")) return; setEditor(null); setMod(m); setSearch(""); setFilter("all"); };
+  const changeMod = (m: Module) => { if (dirty && !window.confirm("Leave without saving?")) return; setEditor(null); setPanel(null); setMod(m); setSearch(""); setFilter("all"); };
 
   return (
     <div className="pc">
@@ -145,15 +195,24 @@ function PbxConsole() {
 
       {loading ? <div className="pc-state"><span className="pc-spin" /> Loading the phone system…</div>
         : error ? <div className="pc-note warn"><span className="pc-ico">!</span><div>{error} <button className="pc-btn pc-btn-sm" onClick={() => void loadAll()}>Retry</button></div></div>
+        : panel ? (
+            panelData
+              ? <PanelForm data={panelData} busy={panelBusy} error={panelErr} onCancel={() => setPanel(null)} onSave={savePanel} />
+              : panelErr
+                ? <div className="pc-note warn"><span className="pc-ico">!</span><div>{panelErr}{" "}
+                    <button className="pc-btn pc-btn-sm" onClick={() => setPanel({ ...panel })}>Retry</button>{" "}
+                    <button className="pc-btn pc-btn-sm pc-btn-ghost" onClick={() => setPanel(null)}>Back</button></div></div>
+                : <div className="pc-state"><span className="pc-spin" /> Reading the form from the phone system…</div>
+          )
         : editor ? <Editor editor={editor} setEditor={setEditor} tenants={tenants} tenantName={tenantName} saving={saving} setSaving={setSaving} dirty={!!dirty} close={closeEditor} push={push}
             afterSave={async () => { await loadAll(); await loadModule(mod); }} catalog={catalog} />
-        : mod === "tenants" ? <TenantList rows={tenants.filter((t) => inScope(t.name) && matches(t.description + " " + t.name + " " + t.dids.join(" ")))} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} all={tenants} open={(t: Tenant) => setEditor({ kind: "tenants", id: t.tenantId, draft: tenantDraft(t), base: tenantDraft(t) })} create={() => setNewTenant(true)} />
+        : mod === "tenants" ? <TenantList rows={tenants.filter((t) => inScope(t.name) && matches(t.description + " " + t.name + " " + t.dids.join(" ")))} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} all={tenants} open={(t: Tenant) => openPanel("tenants", t.tenantId)} create={() => setNewTenant(true)} />
         : mod === "extensions" ? <ExtensionList rows={extensions.filter((e) => inScope(tenantSlugOf(e, tenantByName)) && matches(e.extension + " " + e.name + " " + e.tenantDescription))} all={extensions} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch}
-            open={(e: Extension) => setEditor({ kind: "extensions", id: e.extensionId, draft: extDraft(e), base: extDraft(e) })}
+            open={(e: Extension) => openPanel("extensions", e.extensionId, e.tenantPath)}
             create={() => setEditor({ kind: "extensions", id: null, draft: extDraft(null, scope ? tenantByName.get(scope) : tenants.find((t) => !t.isMain)), base: null })} />
         : mod === "phones" ? <PhoneList rows={phones.filter((p) => inScope(slugForTenantId(p.tenantId, tenants)) && matches(p.mac + " " + p.description + " " + (p.model || "") + " " + p.tenantDescription))} push={push} reload={() => loadModule("phones")} />
-        : mod === "routing" ? <RoutingView routing={routing} push={push} reload={() => loadModule("routing")} />
-        : mod === "teams" ? <TeamsView teams={teams} scope={scope} push={push} reload={() => loadModule("teams")} />
+        : mod === "routing" ? <RoutingView routing={routing} push={push} reload={() => loadModule("routing")} openPanel={openPanel} />
+        : mod === "teams" ? <TeamsView teams={teams} scope={scope} push={push} reload={() => loadModule("teams")} openPanel={openPanel} />
         : <GeoView geo={geo} push={push} reload={() => loadModule("geo")} />}
 
       {newTenant ? (
@@ -442,7 +501,7 @@ function PhoneList({ rows, push, reload }: any) {
  * trunk edit form silently unticks its JS-driven checkboxes on re-post and
  * breaks registration); replace a trunk to change its credentials.
  */
-function RoutingView({ routing, push, reload }: { routing: Routing | null; push: any; reload: any }) {
+function RoutingView({ routing, push, reload, openPanel }: { routing: Routing | null; push: any; reload: any; openPanel: (m: string, id: string | number | null, tenantPath?: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<null | { kind: "trunk" } | { kind: "route"; edit?: RRoute } | { kind: "ars" }>(null);
   if (!routing) return <div className="pc-state"><span className="pc-spin" /></div>;
@@ -467,21 +526,24 @@ function RoutingView({ routing, push, reload }: { routing: Routing | null; push:
       <div className="pc-note"><span className="pc-ico">✓</span><div><b>The outbound side, run from Connect.</b> A call leaves through a <b>route selection</b> → <b>outbound route</b> → <b>trunk</b>. Deleting anything that is still used somewhere is refused with the list of places using it. Trunk order inside a route is the dial order — the shared primary trunk first, the customer&apos;s own VoIP.ms trunk as backup.</div></div>
 
       <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
-        <thead><tr><th>Trunk</th><th>Account</th><th>Server</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind: "trunk" })}>New trunk</button></th></tr></thead>
+        <thead><tr><th>Trunk</th><th>Account</th><th>Server</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => openPanel("trunks", null)}>New trunk</button></th></tr></thead>
         <tbody>{routing.trunks.length ? routing.trunks.map((t) => (
           <tr key={t.id}>
             <td><div className="pc-rowmain">{t.description || `#${t.id}`}{t.disabled ? <span className="pc-pill off" style={{ marginLeft: 8 }}>disabled</span> : null}</div><div className="pc-rowsub pc-mono">#{t.id} · {t.technology}</div></td>
             <td className="pc-mono pc-rowsub">{t.username || "—"}</td>
             <td className="pc-mono pc-rowsub">{t.host || "—"}</td>
             <td className="pc-rowsub">{t.usedByRoutes.length ? t.usedByRoutes.map((r) => r.description).join(", ") : "—"}</td>
-            <td style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || t.usedByRoutes.length > 0} title={t.usedByRoutes.length ? "Still inside an outbound route" : ""} onClick={() => del("trunks", t.id, `trunk ${t.description}`)}>Delete</button></td>
+            <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+              <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => openPanel("trunks", t.id)}>Edit</button>{" "}
+              <button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || t.usedByRoutes.length > 0} title={t.usedByRoutes.length ? "Still inside an outbound route" : ""} onClick={() => del("trunks", t.id, `trunk ${t.description}`)}>Delete</button>
+            </td>
           </tr>
         )) : <tr><td colSpan={5} className="pc-empty">No trunks.</td></tr>}</tbody>
       </table></div></div>
 
       <div style={{ height: 18 }} />
       <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
-        <thead><tr><th>Outbound route</th><th>Caller ID</th><th>Trunks (dial order)</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind: "route" })}>New route</button></th></tr></thead>
+        <thead><tr><th>Outbound route</th><th>Caller ID</th><th>Trunks (dial order)</th><th>Used by</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => openPanel("outbound-routes", null)}>New route</button></th></tr></thead>
         <tbody>{routing.routes.length ? routing.routes.map((r) => (
           <tr key={r.id}>
             <td><div className="pc-rowmain">{r.description || `#${r.id}`}</div><div className="pc-rowsub pc-mono">#{r.id} · {r.patterns} patterns</div></td>
@@ -489,7 +551,7 @@ function RoutingView({ routing, push, reload }: { routing: Routing | null; push:
             <td className="pc-rowsub">{[...r.trunks].sort((a, b) => a.index - b.index).map((t) => t.description).join(" → ") || "—"}</td>
             <td className="pc-rowsub">{r.usedByArs.length ? r.usedByArs.map((a) => a.description).join(", ") : "—"}</td>
             <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-              <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => setDialog({ kind: "route", edit: r })}>Edit</button>{" "}
+              <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => openPanel("outbound-routes", r.id)}>Edit</button>{" "}
               <button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || r.usedByArs.length > 0} title={r.usedByArs.length ? "Still inside a route selection" : ""} onClick={() => del("outbound-routes", r.id, `outbound route ${r.description}`)}>Delete</button>
             </td>
           </tr>
@@ -708,7 +770,7 @@ const QUEUE_CHECKS: Array<{ k: string; label: string }> = [
   { k: "answerchannel", label: "Answer the channel before queueing" },
 ];
 
-function TeamsView({ teams, scope, push, reload }: { teams: TeamsData | null; scope: string; push: any; reload: any }) {
+function TeamsView({ teams, scope, push, reload, openPanel }: { teams: TeamsData | null; scope: string; push: any; reload: any; openPanel: (m: string, id: string | number | null, tenantPath?: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<null | { kind: "rg" | "queue"; edit?: TeamRow }>(null);
   if (!teams) return <div className="pc-state"><span className="pc-spin" /></div>;
@@ -719,9 +781,20 @@ function TeamsView({ teams, scope, push, reload }: { teams: TeamsData | null; sc
     catch (e) { push(errText(e, "Nothing was deleted."), "bad"); }
     setBusy(false);
   };
+  /* A new ring group or queue belongs to a customer, so one must be picked.
+     The tenant switcher decides which; with no scope chosen we fall back to the
+     first customer that already has teams, and the form refuses if neither. */
+  const scopeTenantPath = (() => {
+    const list = teams?.tenants || [];
+    if (scope) {
+      const hit = list.find((t) => t.description.toLowerCase().replace(/[^a-z0-9]+/g, "_") === scope);
+      if (hit) return hit.path;
+    }
+    return list[0]?.path;
+  })();
   const table = (kind: "rg" | "queue", rows: TeamRow[]) => (
     <div className="pc-tablewrap"><div className="pc-tscroll"><table className="pc-table">
-      <thead><tr><th>{kind === "rg" ? "Ring group" : "Queue"}</th><th>Customer</th><th>Members</th><th>Strategy</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => setDialog({ kind })}>{kind === "rg" ? "New ring group" : "New queue"}</button></th></tr></thead>
+      <thead><tr><th>{kind === "rg" ? "Ring group" : "Queue"}</th><th>Customer</th><th>Members</th><th>Strategy</th><th style={{ textAlign: "right" }}><button className="pc-btn pc-btn-sm" onClick={() => openPanel(kind === "rg" ? "ring-groups" : "queues", null, scopeTenantPath)}>{kind === "rg" ? "New ring group" : "New queue"}</button></th></tr></thead>
       <tbody>{rows.length ? rows.map((r) => (
         <tr key={r.id}>
           <td><div className="pc-rowmain">{r.description || `#${r.id}`}</div><div className="pc-rowsub pc-mono">{r.extension}</div></td>
@@ -729,7 +802,7 @@ function TeamsView({ teams, scope, push, reload }: { teams: TeamsData | null; sc
           <td className="pc-rowsub">{r.members.length ? r.members.map((m) => m.extension + (m.penalty != null && kind === "queue" ? ` (p${m.penalty})` : "")).join(", ") : "—"}</td>
           <td className="pc-rowsub pc-mono">{r.options.strategy || "—"}</td>
           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-            <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => setDialog({ kind, edit: r })}>Edit</button>{" "}
+            <button className="pc-btn pc-btn-sm" disabled={busy} onClick={() => openPanel(kind === "rg" ? "ring-groups" : "queues", r.id, r.tenantPath)}>Edit</button>{" "}
             <button className="pc-btn pc-btn-sm pc-btn-ghost pc-btn-danger" disabled={busy || r.referencedBy.length > 0} title={r.referencedBy.join("; ")} onClick={() => del(kind === "rg" ? "ring-groups" : "queues", r)}>Delete</button>
           </td>
         </tr>

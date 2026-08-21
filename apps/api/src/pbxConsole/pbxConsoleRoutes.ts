@@ -9,7 +9,13 @@
  * `PORTAL_API_PERMISSION_RULES` entry AND `requireOwner` in each handler.
  * ⛔ Nothing here is tenant-scoped by a customer — it is the platform console.
  */
-import { loadPanelConfig, PanelSession, PanelStepError, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
+import { loadPanelConfig, PanelSession, PanelStepError, assertSaved, type PanelConfig, type RobotAccount } from "../onboarding/panelClient";
+import { loadParsedForm, accessDeniedReason } from "./panelForm";
+import { describeForm, parseSchema } from "./panelSchema";
+import {
+  PANEL_MODULES, isPanelModule, buildPanelEditPairs, summariseEdit, PanelEditError,
+  type PanelModuleKey, type PanelEditInput,
+} from "./panelFormWrite";
 import { createOutboundRoute, createRouteSelection, createTrunk, slugify } from "../onboarding/pbxTenantBuild";
 import { setMembersEnabled } from "../billing/serviceInterruption/arsMemberToggle";
 import { createQueue, createRingGroup, deleteTeam, type QueueSpec, type RingGroupSpec } from "../pbx/teamBuilder";
@@ -124,6 +130,119 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     if (!cfg) throw new PanelStepError("helper", "the PBX helper is not configured for this phone system, so phones and the geo firewall cannot be changed from here");
     return cfg;
   };
+
+  /* ── the panel form, whole ─────────────────────────────────────────────────
+     Every field the phone system's own form offers, for any of the seven
+     modules, drawn and saved without this file naming a single one of them.
+     A VitalPBX upgrade that adds or renames a field shows up in Connect the
+     same day. See panelSchema.ts for why that rule matters. */
+
+  /**
+   * ⛔ A READ MUST NOT APPLY. `withPanel` ends in `applyAndRebake`, which is a
+   * whole-PBX Apply Changes — merely OPENING a form would regenerate every
+   * tenant with pending changes and re-bake the Connect doorway. Opening a
+   * form is a GET in the panel and must stay one here.
+   */
+  const withPanelRead = async <T>(work: (s: PanelSession) => Promise<T>): Promise<T> => {
+    const cfg = panelConfig();
+    const account: RobotAccount = await acquireAccount(cfg);
+    const s = new PanelSession(cfg.baseUrl, account);
+    try {
+      await s.login();
+      return await work(s);
+    } finally {
+      releaseAccount(account);
+    }
+  };
+
+  /** Point the session at the right tenant for this module. */
+  const scopeSession = (s: PanelSession, mod: PanelModuleKey, tenantPath: string | undefined, mainPath: string): string => {
+    const scope = PANEL_MODULES[mod].scope;
+    if (scope === "tenant") {
+      if (!tenantPath) throw new PanelStepError("scope", `${PANEL_MODULES[mod].label} belong to a customer — pick one first`);
+      s.setTenant(tenantPath);
+      return tenantPath;
+    }
+    s.setTenant(mainPath);
+    return mainPath;
+  };
+
+  /** Draw a record: every tab, every field, every option, as the panel has it. */
+  app.get("/admin/pbx-console/panel/:module/form", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const mod = String((req.params || {}).module || "");
+    if (!isPanelModule(mod)) return reply.status(404).send({ error: "unknown_module" });
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const q = req.query || {};
+    const id = q.id != null && String(q.id) !== "" ? String(q.id) : null;
+    const tenantPath = q.tenantPath ? String(q.tenantPath) : undefined;
+    try {
+      const cfg = panelConfig();
+      const out = await withPanelRead(async (s) => {
+        scopeSession(s, mod, tenantPath, cfg.mainTenant || MAIN_TENANT_PATH_DEFAULT);
+        const { html } = await loadParsedForm(s, PANEL_MODULES[mod].cls, id ? "edit" : "add", id);
+        const denied = accessDeniedReason(html);
+        if (denied) throw new PanelStepError("panel-access", denied);
+        const schema = describeForm(html);
+        return {
+          module: mod,
+          label: PANEL_MODULES[mod].label,
+          panelClass: PANEL_MODULES[mod].cls,
+          scope: PANEL_MODULES[mod].scope,
+          id,
+          tabs: schema.tabs,
+          values: schema.form.values,
+          checks: schema.form.checks,
+          multi: schema.form.multi,
+        };
+      });
+      return out;
+    } catch (e) { return fail(reply, e); }
+  });
+
+  /** Save a record by re-posting the panel's own form with the changes applied. */
+  app.post("/admin/pbx-console/panel/:module/save", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply); if (!admin) return;
+    const mod = String((req.params || {}).module || "");
+    if (!isPanelModule(mod)) return reply.status(404).send({ error: "unknown_module" });
+    const instance = await resolveInstance((req.query || {}).instanceId);
+    if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+    const b = body<PanelEditInput & { id?: string | number | null; tenantPath?: string }>(req);
+    const id = b.id != null && String(b.id) !== "" ? String(b.id) : null;
+    const tenantPath = b.tenantPath ? String(b.tenantPath) : undefined;
+    try {
+      const cfg = panelConfig();
+      const mainPath = cfg.mainTenant || MAIN_TENANT_PATH_DEFAULT;
+      /* The apply runs in the tenant whose config actually changed. Applying
+         in the robot's own tenant returns success and regenerates nothing. */
+      const applyPath = PANEL_MODULES[mod].scope === "tenant" ? tenantPath : mainPath;
+      const out = await withPanel(instance, async (s) => {
+        scopeSession(s, mod, tenantPath, mainPath);
+        const cls = PANEL_MODULES[mod].cls;
+        const { html, form } = await loadParsedForm(s, cls, id ? "edit" : "add", id);
+        const denied = accessDeniedReason(html);
+        if (denied) throw new PanelStepError("panel-access", denied);
+        const tabs = parseSchema(html);
+        const pairs = buildPanelEditPairs(form, tabs, b);
+        /* `class`/`method`/`mode`/`csfr_token` come from the form we just
+           loaded, never from the request — the schema refuses them by name. */
+        assertSaved(`${mod} save`, await s.post(pairs));
+        return { module: mod, id, saved: true };
+      }, applyPath);
+      await audit({
+        actorUserId: admin.sub,
+        action: id ? "PBX_CONSOLE_PANEL_UPDATED" : "PBX_CONSOLE_PANEL_CREATED",
+        entityType: "PbxPanelRecord",
+        entityId: `${mod}:${id ?? "new"}`,
+        metadata: { module: mod, tenantPath, ...summariseEdit(b) },
+      });
+      return out;
+    } catch (e) {
+      if (e instanceof PanelEditError) return reply.status(400).send({ error: e.code, detail: e.message });
+      return fail(reply, e);
+    }
+  });
 
   /* ── tenants ───────────────────────────────────────────────────────────── */
 
