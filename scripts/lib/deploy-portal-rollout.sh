@@ -54,29 +54,66 @@ deploy_portal_rollout_nginx_test_reload() {
   return 0
 }
 
+# Ordered list of curl "--resolve" specs to try for one probe URL, best first.
+# An EMPTY entry means "no --resolve at all", i.e. ordinary DNS.
+#
+# DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 maps the hostname to 127.0.0.1 so the probe does not
+# hairpin via the server's own public IP (some origins answer 403 to their own address).
+#
+# ⛔ THAT ONLY WORKS WHEN NGINX ACTUALLY LISTENS ON 127.0.0.1:443, and on 2026-08-21 it did not:
+# every rollout burned its whole probe budget on a connection that could never be made and then
+# ROLLED A PERFECTLY HEALTHY DEPLOY BACK. So the loopback path is PREFERRED, never MANDATORY: when
+# it cannot connect we fall through to ordinary DNS inside the same attempt, and only fail when
+# BOTH paths fail. See scripts/lib/deploy-api-rollout.sh for the same rule on the api side.
+deploy_portal_rollout_probe_resolve_specs() {
+  local url="$1"
+  if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]] && [[ "$url" =~ ^https://([^/:?#]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}:443:127.0.0.1" ""
+  else
+    printf '%s\n' ""
+  fi
+}
+
 deploy_portal_rollout_wait_ready() {
   local url="$1"
   local attempts="${2:-120}"
   local delay="${3:-2}"
   local n=0
   local curl_tls=()
-  local curl_resolve=()
   if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE:-0}" == "1" ]] && [[ "$url" =~ ^https:// ]]; then
     curl_tls=(-k)
   fi
-  # Avoid hairpin probes: curl https://public-host/ from the app server may hit nginx deny rules
-  # when the client address is the server's own public IP. Mapping the hostname to 127.0.0.1 keeps
-  # the client as loopback while still exercising TLS + nginx + upstream (SNI unchanged).
-  if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]] && [[ "$url" =~ ^https://([^/:?#]+) ]]; then
-    curl_resolve=(--resolve "${BASH_REMATCH[1]}:443:127.0.0.1")
-  fi
+  local specs=()
+  while IFS= read -r _spec; do specs+=("$_spec"); done < <(deploy_portal_rollout_probe_resolve_specs "$url")
+
+  local spec curl_resolve
   while [[ "$n" -lt "$attempts" ]]; do
-    if curl "${curl_tls[@]}" "${curl_resolve[@]}" -fsS --connect-timeout 2 --max-time 15 "$url" >/dev/null 2>&1; then
-      return 0
-    fi
+    for spec in "${specs[@]}"; do
+      curl_resolve=()
+      [[ -n "$spec" ]] && curl_resolve=(--resolve "$spec")
+      if curl "${curl_tls[@]}" "${curl_resolve[@]}" -fsS --connect-timeout 2 --max-time 15 "$url" >/dev/null 2>&1; then
+        if [[ "${#specs[@]}" -gt 1 ]]; then
+          deploy_common_log "[deploy-portal-rollout] public verify ok via ${spec:-dns} url=${url}"
+        fi
+        return 0
+      fi
+    done
     n=$((n + 1))
     sleep "$delay"
   done
+  # The api side has logged this since it shipped; the portal side used to fail SILENTLY, so a
+  # rolled-back portal deploy said only "not ready after cutover" with no code to read.
+  if [[ "$url" =~ ^https:// ]]; then
+    local codes="" http_code=""
+    for spec in "${specs[@]}"; do
+      curl_resolve=()
+      [[ -n "$spec" ]] && curl_resolve=(--resolve "$spec")
+      http_code="$(curl "${curl_tls[@]}" "${curl_resolve[@]}" -o /dev/null -sS -w '%{http_code}' --connect-timeout 2 --max-time 15 "$url" 2>/dev/null || true)"
+      [[ -z "$http_code" ]] && http_code="000"
+      codes+=" ${spec:-dns}=${http_code}"
+    done
+    deploy_common_log "[deploy-portal-rollout] public verify probe failed: url=${url}${codes} resolve_local=${DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL:-0} tls_insecure=${DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE:-0} (http_code=000 is a CONNECTION failure, not a bad HTTP status)"
+  fi
   return 1
 }
 
@@ -157,7 +194,7 @@ deploy_portal_rollout_run() {
   local verify_url="${DEPLOY_PORTAL_PUBLIC_VERIFY_URL:-}"
   if [[ -n "$verify_url" ]]; then
     if [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL:-0}" == "1" ]]; then
-      deploy_common_log "[deploy-portal-rollout] public verify via loopback SNI (DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 curl --resolve host:443:127.0.0.1)"
+      deploy_common_log "[deploy-portal-rollout] public verify prefers loopback SNI (DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 curl --resolve host:443:127.0.0.1); falls back to ordinary DNS if nothing listens on 127.0.0.1:443"
     fi
     if ! deploy_portal_rollout_wait_ready "${verify_url}" 30 2; then
       echo "[deploy-portal] FAIL: DEPLOY_PORTAL_PUBLIC_VERIFY_URL not ready after cutover: ${verify_url}" >&2
@@ -217,7 +254,9 @@ Blue/green portal deploy (when DEPLOY_PORTAL_BLUEGREEN=1 and upstream include ex
   3. wait http://127.0.0.1:3005/ready (lightweight Route Handler JSON)
   4. write DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE -> server 127.0.0.1:3005;
   5. nginx -t && nginx -s reload
-  6. (optional) DEPLOY_PORTAL_PUBLIC_VERIFY_URL — HTTPS after cutover; set DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 on origin hosts where hairpin public URL gets nginx 403
+  6. (optional) DEPLOY_PORTAL_PUBLIC_VERIFY_URL — HTTPS after cutover; DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=1 PREFERS
+     curl --resolve host:443:127.0.0.1 (origins where the hairpin public URL gets nginx 403) and FALLS BACK to ordinary DNS
+     when nothing listens on 127.0.0.1:443. Proof: bash scripts/lib/deploy-rollout-probe.test.sh
   7. docker compose up -d --no-deps --force-recreate portal -> 127.0.0.1:3000
   8. wait http://127.0.0.1:3000/ready
   9. write upstream -> server 127.0.0.1:3000; nginx -t && reload

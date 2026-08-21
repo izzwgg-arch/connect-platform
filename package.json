@@ -33,6 +33,7 @@
     "desktop:dev": "pnpm --filter @connect/desktop dev",
     "desktop:build": "pnpm --filter @connect/desktop dist",
     "build:changed": "bash scripts/build-changed.sh",
+    "test:deploy-rollout": "bash scripts/lib/deploy-rollout-probe.test.sh",
     "smoke:fast": "bash scripts/smoke-fast.sh"
   },
   "devDependencies": {
