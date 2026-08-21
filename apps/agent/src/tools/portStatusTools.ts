@@ -126,11 +126,20 @@ export function summarisePort(
 
   const steps: PortStep[] = [
     { step: "Transfer requested with your current provider", done: !!prov.portFiled },
-    { step: "Release date agreed by your current provider", done: !!scheduledDate },
+    // ⛔ A number that has come across obviously passed its release date, even
+    // when we never recorded one: ports that completed before the watchdog
+    // started storing `portFocDate` carry none.
+    { step: "Release date agreed by your current provider", done: !!scheduledDate || arrived },
     { step: "Number handed over to Connect", done: arrived },
     { step: "Calls, texts and menus moved onto it", done: !!landing.publishedAt || !!landing.destCopiedAt || !!landing.smsAt },
     { step: "Temporary number retired", done: tempRetired },
   ];
+  // ⛔ Progress must not read backwards. `completedAt` is stamped only after the
+  // whole landing ran, so once it is set every earlier step really did happen —
+  // and a finished transfer showing an un-ticked step reads as a broken screen,
+  // which is exactly how this was caught (driving the tool against production,
+  // not against a fixture).
+  if (complete) for (const s of steps) s.done = true;
 
   // A landing that keeps failing, and paperwork the other carrier refused, are
   // the two states where "sit tight" is the wrong advice.

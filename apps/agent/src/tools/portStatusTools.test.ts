@@ -122,6 +122,22 @@ test("live: says so, mentions the retired temporary number, and stops offering i
   assert.doesNotMatch(v.summary, /In the meantime/);
 });
 
+test("a finished transfer never shows an un-ticked 'release date agreed' step", () => {
+  // Ports that completed before the watchdog started recording the FOC date
+  // carry none — but a number that has come across obviously passed its
+  // release date, and a live transfer with an un-ticked step reads as broken.
+  // Caught by driving the real tool against production data, not by a fixture.
+  const v = summarisePort(
+    row({ portFiled: true, portStatus: "completed", portLanding: { routedAt: "2026-08-13T00:00:00.000Z", completedAt: "2026-08-17T18:24:41.859Z", tempRetiredAt: "2026-08-17T18:24:41.816Z" } }),
+    { includeCarrierRef: false, now: NOW },
+  );
+  assert.equal(v.scheduledDate, null);
+  assert.deepEqual(v.steps.map((s) => s.done), [true, true, true, true, true]);
+  // Still honest before the number arrives: no date recorded, step not ticked.
+  const waiting = summarisePort(row({ portFiled: true }), { includeCarrierRef: false, now: NOW });
+  assert.equal(waiting.steps[1].done, false);
+});
+
 test("rejected: named as needing a person, with the usual cause, and never as 'in progress'", () => {
   const v = summarisePort(
     row({ portFiled: true, portStatus: "Rejected - account number mismatch", portStatusText: "Rejected - account number mismatch", portFocDate: "2026-09-14" }),

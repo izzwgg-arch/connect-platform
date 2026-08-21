@@ -434,7 +434,7 @@ exactly one line per real change.
 
 ### 7d. Proven / not proven
 
-✅ 18 agent tests + 3 watchdog tests, all registered. **All 5 source guards
+✅ 19 agent tests + 3 watchdog tests, all registered. **All 5 source guards
 fail when replayed against `HEAD`** (server wiring ×2, prompt ×3). agent
 typecheck **14 = its exact baseline**, api **75 = its exact baseline**, none in
 an edited file. agent suite **719/721** (the 2 pre-existing transcription
