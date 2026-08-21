@@ -568,6 +568,30 @@ has"*, then *"let's do free open source"*, then, on the mockups
   TCP/UDP = Spectrum, Enterprise), so proxying breaks the very thing the IP was
   bought for — and buys nothing anyway, since the PRIMARY IP is published in DNS
   for every hostname. ✅ coturn is already installed on the box. Handoff §6.
+- ⚠️⚠️ **TURN-ON-443 IS BUILT AND ADVERTISED BUT THE RELAY PATH DOES NOT CARRY
+  MEDIA YET (2026-08-21).** `turn.loopcom.net` → 169.58.213.204 (Squarespace),
+  Let's Encrypt cert (exp 2026-11-19, auto-renew), LiveKit's built-in TURN on
+  TLS 443 of that IP. ✅ **Clients really are handed
+  `turns:turn.loopcom.net:443?transport=tcp`** with per-participant credentials
+  — captured live off the real RTCPeerConnection. ⛔ **Read it with
+  `getConfiguration()` AFTER joining**: livekit-client builds the PC first and
+  calls `setConfiguration()` when the join response lands, so reading the
+  constructor argument reports an empty list and is WRONG.
+  ⛔⛔ **Forcing `iceTransportPolicy:'relay'` — the actual filtered-office case
+  — FAILS**: `requestsSent: 8, responsesReceived: 0`. Cause 1 (FIXED): relay
+  ports were unpublished; range narrowed 30000-40000 → **30000-30049** and
+  published, because ⛔ **userland-proxy is ENABLED here, so docker spawns one
+  process PER published port** (27 → 77). Cause 2 (**NOT FIXED**): **docker NAT
+  hairpin** — LiveKit inside the container cannot reach its own published relay
+  port via the host's public IP. **The fix is almost certainly
+  `network_mode: host` for livekit** (LiveKit's own recommendation), which is
+  NOT a drop-in: `LIVEKIT_URL=http://livekit:7880` is compose DNS and would
+  break, and `bind_addresses: 0.0.0.0` would put the admin API on the public
+  interface. ✅ **Nothing is broken meanwhile** — a normal join was re-verified
+  in a real browser after every change; ICE just fails the relay and uses the
+  direct path. ⏳ **And nobody has yet opened a meeting from a filtered office,
+  which decides whether the relay is needed at all** — the direct TCP fallback
+  on 7881 may already cover them. Handoff §7.
 - ⛔ **STILL OPEN, Izzy's decisions:** (1) **the media server is in FRANCE** —
   the approved plan is a **US VPS** (doubles as the July-pending US TURN relay);
   moving is a config change, not a rebuild. (2) An office filtering BOTH UDP

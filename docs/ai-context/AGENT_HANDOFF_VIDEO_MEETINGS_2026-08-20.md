@@ -270,3 +270,63 @@ they register straight to the PBX, not through loopcom.
    IP, and advertise it in livekit.yaml.
 4. ⛔ **Remove the ufw deny on 443 for that IP** — it is a holding measure and
    will block TURN.
+
+## §7 TURN on 443 (2026-08-21) — built, advertised, and the relay path does NOT work yet
+
+Izzy bought the second IP and said *"Do what you gotta do to secure it."* What
+shipped: `turn.loopcom.net` → `169.58.213.204` (Squarespace DNS, added through
+his browser), a Let's Encrypt cert for it (expires 2026-11-19, auto-renew armed),
+and LiveKit's **built-in** TURN on TLS 443 of that IP (`docker-compose.livekit.yml`
+publishes `169.58.213.204:443:443`; coturn was NOT used — LiveKit's own TURN
+mints per-participant credentials and needs no separate credential plumbing).
+
+- ✅ **PROVEN: clients really are handed the TURN server.** Captured live in a
+  browser off the real `RTCPeerConnection`:
+  `turns:turn.loopcom.net:443?transport=tcp` with per-participant
+  username/credential, alongside the STUN list. TLS from outside presents
+  `CN=turn.loopcom.net`.
+  ⛔ **A first reading said `iceServers: []` and was WRONG** — livekit-client
+  creates the PeerConnection FIRST and calls `setConfiguration()` once the join
+  response lands. **Hook the instance and read `getConfiguration()` after
+  joining; reading the constructor argument measures nothing.**
+- ⛔⛔ **BUT THE RELAY PATH IS DEAD, and only forcing it revealed that.** With
+  `iceTransportPolicy: 'relay'` (which simulates an office where everything
+  except 443 is blocked — the exact case this was built for) the join FAILS.
+  LiveKit's own candidate-pair stats are unambiguous:
+  `state: failed, local 45.14.194.179:7882 (host), remote <ip>:30044 (relay),
+  requestsSent: 8, responsesReceived: 0`.
+- ⛔ **First cause, FIXED: the relay ports were not published at all.** A relay
+  allocation lands in `turn.relay_range_*` (default **30000–40000**) and docker
+  published none of it. Narrowed to **30000–30049** in livekit.yaml and published
+  (`45.14.194.179:30000-30049:30000-30049/udp`). ⛔ The narrowing is mandatory,
+  not tidiness: **userland-proxy is ENABLED on this host** (no
+  `"userland-proxy": false` in `/etc/docker/daemon.json`), so docker spawns one
+  `docker-proxy` process PER PUBLISHED PORT — the 10,001-port default is
+  unusable. After the change: 56 published ports, docker-proxy 27 → 77,
+  container recreate 31 s.
+- ⛔⛔ **Second cause, NOT FIXED — this is where it stands: docker NAT hairpin.**
+  Relay allocations now correctly land in 30000–30049, but LiveKit's ICE agent
+  (inside the container, 172.19.0.10) still gets **0 responses** when it sends
+  STUN to `45.14.194.179:<relay port>` — its own published port via the host's
+  public IP. Container → host-public-IP → back into the container is exactly the
+  hairpin case docker's DNAT does not handle.
+  **The fix is almost certainly `network_mode: host` for the livekit container**,
+  which is LiveKit's own recommended production deployment for this reason. ⛔ It
+  is NOT a drop-in: `LIVEKIT_URL=http://livekit:7880` resolves by compose DNS and
+  would break, `bind_addresses` must stop being `0.0.0.0` or the admin API goes
+  public, and nginx `/meetws/` → 127.0.0.1:7880 would then be direct. That is a
+  considered change, deliberately not made hastily on a live platform.
+- ✅ **NOTHING IS BROKEN BY THIS.** Verified in a real browser AFTER every change:
+  a normal join works (in the room, timer running). ICE simply tries the relay,
+  fails, and uses the direct path — so the only cost of the dead relay is a
+  slightly slower failover for clients that would not have connected anyway.
+  Platform health after all of it: both app hostnames 200, both SIP hostnames
+  101, `/meetws` 401 (LiveKit's own refusal), livekit up.
+- ⛔ **Publishing 443 on that IP put it on scanners within minutes** — the
+  LiveKit log already carries `TLS handshake failed` from `165.22.38.38`. That is
+  a TURN server correctly refusing junk, not a fault.
+- ⏳ **AND THE QUESTION THAT DECIDES WHETHER ANY OF THIS MATTERS IS STILL
+  UNANSWERED: nobody has opened a meeting from a filtered office.** LiveKit's
+  direct TCP fallback on 7881 may already carry those offices, in which case the
+  relay never gets used. **That two-minute test should happen before anyone
+  spends more time on hairpin NAT.**
