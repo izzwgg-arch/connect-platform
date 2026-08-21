@@ -188,7 +188,7 @@ export default function SupportWorkbench() {
             <b>Terminal</b>
             <span className="sd-dim">{caps?.note ?? "Read-only commands only."}</span>
           </div>
-          <div className="sd-wb-out" ref={termRef}>
+          <div className="sd-wb-screen" ref={termRef}>
             {lines.map((l, i) => (
               <div key={i} className={"sd-wb-l sd-wb-" + l.kind}>
                 {l.kind === "cmd" ? <span className="sd-wb-prompt">$ </span> : null}
