@@ -34,5 +34,10 @@ turn:
   cert_file: /etc/letsencrypt/live/turn.example.net/fullchain.pem
   key_file: /etc/letsencrypt/live/turn.example.net/privkey.pem
   tls_port: 443
+  # ⛔ Narrowed from the 10,001-port default: every port here must be published
+  # by docker, and with userland-proxy enabled that is one process per port.
+  # These MUST be published or TURN is advertised but cannot carry media.
+  relay_range_start: 30000
+  relay_range_end: 30049
 logging:
   level: info

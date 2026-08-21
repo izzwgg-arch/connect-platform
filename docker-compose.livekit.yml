@@ -40,5 +40,15 @@ services:
       # collide with the entire portal. ⛔ Docker-published ports BYPASS ufw,
       # so this is reachable the moment the container starts.
       - "169.58.213.204:443:443"
+      # ⛔⛔ TURN RELAY PORTS — WITHOUT THESE, TURN IS ADVERTISED BUT DEAD.
+      # A relay allocation gets a port in this range; LiveKit's own ICE agent
+      # then sends STUN to <node IP>:<relay port>. With no mapping those packets
+      # are dropped and every relayed candidate fails (proven live: 8 requests
+      # sent, 0 responses). ⛔ The range is NARROWED to 50 ports in
+      # livekit.yaml on purpose: userland-proxy is ENABLED on this host, so
+      # docker spawns one docker-proxy process PER PORT — the 10,001-port
+      # default would be unusable. Published on the PRIMARY IP because that is
+      # the node IP LiveKit puts in relay candidates.
+      - "45.14.194.179:30000-30049:30000-30049/udp"
     networks:
       - default
