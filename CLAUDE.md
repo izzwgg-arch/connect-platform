@@ -558,7 +558,7 @@ has"*, then *"let's do free open source"*, then, on the mockups
   binds `0.0.0.0:443` — proven live (`/api/health` → `{"ok":true}` on the raw IP,
   serving the app cert). **Masked at the FIREWALL** (ufw rules 1–2 deny 80+443 to
   that IP; both answer HTTP 000 from outside now) with zero disruption — all 71
-  live SIP WebSockets survived. ⏳ The four vhosts ARE pinned to
+  live SIP WebSockets survived. ✅ **DONE 2026-08-21** — the four vhosts are pinned to
   `listen 45.14.194.179:443` in config, but **a reload cannot rebind the socket**:
   old workers "shutting down" (some 2 d 8 h old) hold the pre-reload wildcard
   because their SIP WebSockets never close — **only a full `systemctl restart

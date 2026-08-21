@@ -217,7 +217,7 @@ primary 45.14.194.179/24, so not a same-subnet alias).
   of the five enabled vhosts ARE symlinks — a naive grep finds only one file and
   you pin one of four. Resolve with `readlink -f`. IPv6 `listen [::]:443` lines
   were left alone (`ipv6only` defaults on, so they never held the v4 address).
-- ⏳⛔ **THE PIN IS IN THE CONFIG BUT NOT IN EFFECT, and a reload cannot fix it.**
+- ✅ **DONE 2026-08-21 — THE PIN IS IN EFFECT.** Izzy: *"Do what you gotta do. Nobody's using it now."* ⛔ **A RELOAD COULD NOT DO IT, only a full `systemctl restart nginx`.**
   `nginx -t` passed and `systemctl reload nginx` succeeded, but the master still
   holds `0.0.0.0:443`: old workers stuck in "shutting down" — some **2 days 8
   hours old** — keep the pre-reload socket alive because they hold long-lived SIP
@@ -250,3 +250,23 @@ primary 45.14.194.179/24, so not a same-subnet alias).
   filtered office.** LiveKit already offers TCP fallback on 7881; if those
   filters pass it, the 443 work is unnecessary. **One person at a locked-down
   office opening a meeting link settles whether any of this is needed.**
+
+**Restart outcome (2026-08-21), measured:** wildcard `0.0.0.0:443` **gone** —
+sockets now read `45.14.194.179:443` + `[::]:443`; **0 lingering workers**;
+nothing bound to `169.58.213.204`, so **443 there is free for TURN**. Both app
+hostnames 200/200, both SIP hostnames 101, `/meetws` 401 (LiveKit's own
+refusal). ⛔ **Every client reconnected by itself within ~10 s** — established
+443 connections went 70 → 70/71, `journalctl -u nginx` clean, and the PBX
+(read-only) shows **138 contacts Avail** with Gesheft's app endpoints
+`T8_101_1` re-registered via 45.14.194.179. Desk phones were never in scope —
+they register straight to the PBX, not through loopcom.
+
+**What still gates TURN-on-443 (nothing here is blocked by code):**
+1. A hostname → `169.58.213.204` (⛔ loopcom.net DNS is at Squarespace and the
+   WRITE needs Izzy's Google re-auth click; connectcomunications.com is at
+   Cloudflare and no CF credential exists on the server).
+2. A certificate for it (certbot, once DNS resolves).
+3. Point coturn (already installed) or LiveKit's built-in TURN at 443 on that
+   IP, and advertise it in livekit.yaml.
+4. ⛔ **Remove the ufw deny on 443 for that IP** — it is a holding measure and
+   will block TURN.
