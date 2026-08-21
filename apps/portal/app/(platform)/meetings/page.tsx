@@ -6,11 +6,12 @@
  * exact same screen the host does.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Copy, Plus, Video } from "lucide-react";
+import { CalendarClock, Copy, Plus, Video, Zap } from "lucide-react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { meetingLink, type MeetingSummary } from "../../../lib/meetings";
+import ScheduleMeeting from "./ScheduleMeeting";
 import "./meetings.css";
 
 /** ⛔ Byte-exact — matched literally against what the screen renders for Yiddish. */
@@ -23,6 +24,16 @@ const PHRASES = [
   "Loading your meetings…", "Locked",
   "Could not load your meetings.", "Could not create the meeting. Try again.",
   "Video meetings are not set up on this server yet.",
+  "Start now", "Schedule for later", "Meeting name", "Weekly production sync",
+  "Date", "Start time", "Length", "minutes", "hour", "hours",
+  "Times are in", "the invitation says so too.", "Invite by email",
+  "Paste or type addresses — commas, semicolons and new lines all work",
+  "Remove", "Could not read:", "Message (optional)",
+  "Anything they should know before joining.",
+  "Schedule & send invites", "Sending…", "1 person", "people",
+  "Pick a date and a start time.", "Add at least one email address to invite.",
+  "Could not schedule the meeting. Try again.", "Scheduled", "Invitations sent to",
+  "Start a meeting now, or schedule one and email the invitations.",
 ] as string[];
 
 function fmtWhen(iso: string): string {
@@ -41,6 +52,8 @@ function MeetingsPageInner() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [mode, setMode] = useState<"now" | "later">("now");
+  const [scheduledNote, setScheduledNote] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -108,28 +121,64 @@ function MeetingsPageInner() {
       <header className="mtg-head">
         <div>
           <h1>{t("Meetings")}</h1>
-          <p>{t("Start a video meeting and share the link — anyone can join from their browser, no account needed.")}</p>
+          <p>{t("Start a meeting now, or schedule one and email the invitations.")}</p>
         </div>
       </header>
 
-      <section className="mtg-new">
-        <Video size={20} className="mtg-new-icon" />
-        <input
-          className="mtg-input"
-          placeholder={t("Meeting name (optional)")}
-          value={title}
-          maxLength={80}
-          onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void create();
+      <div className="mtg-modes" role="tablist">
+        <button
+          role="tab"
+          aria-selected={mode === "now"}
+          className={`mtg-mode ${mode === "now" ? "on" : ""}`}
+          onClick={() => setMode("now")}
+        >
+          <Zap size={14} />
+          {t("Start now")}
+        </button>
+        <button
+          role="tab"
+          aria-selected={mode === "later"}
+          className={`mtg-mode ${mode === "later" ? "on" : ""}`}
+          onClick={() => setMode("later")}
+        >
+          <CalendarClock size={14} />
+          {t("Schedule for later")}
+        </button>
+      </div>
+
+      {mode === "now" ? (
+        <>
+          <section className="mtg-new">
+            <Video size={20} className="mtg-new-icon" />
+            <input
+              className="mtg-input"
+              placeholder={t("Meeting name (optional)")}
+              value={title}
+              maxLength={80}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void create();
+              }}
+            />
+            <button className="mtg-primary" disabled={creating} onClick={() => void create()}>
+              <Plus size={16} />
+              {creating ? t("Starting…") : t("Start meeting")}
+            </button>
+          </section>
+          {createError && <div className="mtg-error">{createError}</div>}
+        </>
+      ) : (
+        <ScheduleMeeting
+          t={t}
+          onScheduled={(m, sent) => {
+            // ⛔ Say who it went to, in words. "Scheduled" alone leaves the host
+            // wondering whether the invitations actually left.
+            setScheduledNote(`${t("Scheduled")} — ${t("Invitations sent to")} ${sent}.`);
+            void reload();
           }}
         />
-        <button className="mtg-primary" disabled={creating} onClick={() => void create()}>
-          <Plus size={16} />
-          {creating ? t("Starting…") : t("Start meeting")}
-        </button>
-      </section>
-      {createError && <div className="mtg-error">{createError}</div>}
+      )}
+      {scheduledNote && <div className="mtg-ok">{scheduledNote}</div>}
 
       <section className="mtg-list-wrap">
         <h2>{t("Your recent meetings")}</h2>
@@ -143,7 +192,17 @@ function MeetingsPageInner() {
                 <div className="mtg-row-main">
                   <span className="mtg-row-title">{m.title}</span>
                   <span className="mtg-row-meta">
-                    {fmtWhen(m.createdAt)}
+                    {m.when ? (
+                      <>
+                        <CalendarClock size={12} className="mtg-row-cal" />
+                        {m.when.dateLine} · {m.when.timeLine} · {m.when.zoneLine}
+                      </>
+                    ) : (
+                      fmtWhen(m.createdAt)
+                    )}
+                    {m.invites && m.invites.length > 0
+                      ? ` · ${m.invites.length} ${m.invites.length === 1 ? t("1 person") : t("people")}`
+                      : ""}
                     {m.locked && !m.endedAt ? ` · ${t("Locked")}` : ""}
                     {m.endedAt ? ` · ${t("Ended")}` : ""}
                   </span>

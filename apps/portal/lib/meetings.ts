@@ -89,6 +89,8 @@ export type MeetingJoinGrant = {
   title: string;
 };
 
+export type MeetingInviteSummary = { email: string; emailedAt: string | null };
+
 export type MeetingSummary = {
   id: string;
   code: string;
@@ -97,6 +99,17 @@ export type MeetingSummary = {
   createdAt: string;
   endedAt: string | null;
   joinPath: string;
+  /** Absolute link, built server-side from the canonical origin so it matches
+   *  the one in the invite email exactly. */
+  joinUrl?: string;
+  scheduledStartAt?: string | null;
+  durationMinutes?: number | null;
+  timezone?: string | null;
+  inviteMessage?: string | null;
+  /** Rendered by the SAME code the invite email uses, so the screen and the
+   *  email can never describe one meeting two different ways. */
+  when?: { dateLine: string; timeLine: string; zoneLine: string } | null;
+  invites?: MeetingInviteSummary[];
 };
 
 /**

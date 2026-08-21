@@ -1181,10 +1181,39 @@ model VideoMeeting {
   locked          Boolean   @default(false)
   createdAt       DateTime  @default(now())
   endedAt         DateTime?
+  /// Scheduled meetings (2026-08-21). NULL = an instant meeting, started and
+  /// joined right now — the original behaviour, deliberately still supported.
+  /// ⛔ The link works BEFORE this time on purpose: people join early, and a
+  /// "not open yet" page causes more support calls than it prevents.
+  scheduledStartAt DateTime?
+  durationMinutes  Int?
+  /// IANA zone the invite email renders the time in, e.g. "America/New_York".
+  /// Stored because the recipients are elsewhere and "2:00 PM" alone is a
+  /// support call — the email always names the zone.
+  timezone         String?
+  /// The optional note the host typed; shown in the invite email.
+  inviteMessage    String?
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invites         VideoMeetingInvite[]
 
   @@index([tenantId, createdAt])
   @@index([createdByUserId, createdAt])
+  @@index([scheduledStartAt])
+}
+
+/// One row per address a meeting invite was sent to. Kept so the screen can
+/// show who was invited and so re-sending cannot silently double-mail anyone.
+model VideoMeetingInvite {
+  id         String       @id @default(cuid())
+  meetingId  String
+  email      String
+  createdAt  DateTime     @default(now())
+  /// Set when the EmailJob was queued; null means it was never sent.
+  emailedAt  DateTime?
+  meeting    VideoMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, email])
+  @@index([meetingId])
 }
 
 enum UserRole {

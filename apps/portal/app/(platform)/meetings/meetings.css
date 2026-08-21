@@ -92,3 +92,123 @@
 }
 .mtg-btn.accent { border-color: var(--accent); color: var(--accent); }
 .mtg-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ── Scheduling (2026-08-21) ───────────────────────────────────────────────
+ * Same rule as the rest of this file: Connect's own theme tokens only, never
+ * a local palette. The one literal is the button ink, which the instant-meeting
+ * button above already uses. */
+
+.mtg-modes {
+  display: flex;
+  gap: 6px;
+  margin-top: 22px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  width: fit-content;
+}
+.mtg-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mtg-mode.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+
+.mtg-sched {
+  margin-top: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+.mtg-sched-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.mtg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mtg-field > span { font-size: 12px; font-weight: 700; color: var(--text-dim); letter-spacing: 0.02em; }
+.mtg-field-wide { grid-column: 1 / -1; margin-top: 14px; }
+.mtg-sched .mtg-field-wide:first-child { margin-top: 0; }
+.mtg-textarea { resize: vertical; font-family: inherit; line-height: 1.5; }
+
+.mtg-sched-zone { font-size: 12px; color: var(--text-dim); margin: 12px 0 0; }
+.mtg-sched-warn { font-size: 12px; color: var(--warning); margin: 8px 0 0; }
+
+/* The chip box reads as one input; the real input is the last child of it. */
+.mtg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  min-height: 42px;
+  cursor: text;
+}
+.mtg-chips:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mtg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  font-size: 12.5px;
+  color: var(--text);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.mtg-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 50%;
+}
+.mtg-chip button:hover { color: var(--danger); }
+.mtg-chip-input {
+  flex: 1;
+  min-width: 160px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 14px;
+  padding: 2px 0;
+}
+
+.mtg-sched-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+.mtg-sched-count { font-size: 12.5px; color: var(--text-dim); }
+
+.mtg-ok {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--success);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 13px;
+}
+
+.mtg-row-cal { vertical-align: -2px; margin-right: 4px; color: var(--text-dim); }
+
+@media (max-width: 640px) {
+  .mtg-sched-grid { grid-template-columns: 1fr; }
+}

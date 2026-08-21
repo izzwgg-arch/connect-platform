@@ -186,8 +186,14 @@ function infoBox(rows: string, opts: { paintForOutlook?: boolean } = {}): string
 </table>`;
 }
 
-/** Primary CTA button. */
-function ctaButton(href: string, label: string, color = "#22a8ff"): string {
+/** Primary CTA button.
+ *
+ *  ⛔ EXPORTED on purpose (2026-08-21) so a new customer email REUSES this
+ *  rather than copying it. The VML `roundrect` below is the only thing that
+ *  paints a button in Outlook; a copied button loses that hardening silently
+ *  and nobody notices until an Outlook recipient sees bare blue text.
+ *  Same reasoning as `loopcomEmailShell` living in packages/shared. */
+export function ctaButton(href: string, label: string, color = "#22a8ff"): string {
   const safeHref = escapeHtml(href);
   const safeLabel = escapeHtml(label);
   return `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;margin:24px 0 14px;">

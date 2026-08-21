@@ -32,6 +32,14 @@ import {
   sanitizeDisplayName,
   type LiveKitConfig,
 } from "./livekit";
+import {
+  MAX_DURATION_MINUTES,
+  MAX_INVITES_PER_MEETING,
+  MIN_DURATION_MINUTES,
+  isUsableTimeZone,
+  parseInviteEmails,
+} from "./meetingSchedule";
+import { meetingJoinUrl, meetingWhen, sendMeetingInvites } from "./meetingInviteSend";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -51,6 +59,36 @@ const PARTICIPANT_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 export const MEETINGS_PUBLIC_WS_PATH = "/meetws";
 
 const getUser = (req: FastifyRequest): JwtUser => (req as any).user as JwtUser;
+
+/** Default when the host does not name a zone. The tenant's own zone if it has
+ *  one — a New York business scheduling "2 PM" means Eastern. */
+const FALLBACK_TIME_ZONE = "America/New_York";
+
+/** One shape for a meeting on the wire, so the create response, the list and
+ *  the invite response can never disagree about what a meeting looks like. */
+function presentMeeting(m: any) {
+  const when = meetingWhen(m);
+  return {
+    id: m.id,
+    code: m.code,
+    title: m.title,
+    locked: m.locked,
+    createdAt: m.createdAt,
+    endedAt: m.endedAt ?? null,
+    scheduledStartAt: m.scheduledStartAt ?? null,
+    durationMinutes: m.durationMinutes ?? null,
+    timezone: m.timezone ?? null,
+    inviteMessage: m.inviteMessage ?? null,
+    /** Pre-rendered exactly as the invite email states it, so the screen and
+     *  the email can never describe the same meeting differently. */
+    when: when ? { dateLine: when.dateLine, timeLine: when.timeLine, zoneLine: when.zoneLine } : null,
+    joinPath: `/meet/${m.code}`,
+    joinUrl: meetingJoinUrl(m.code),
+    invites: Array.isArray(m.invites)
+      ? m.invites.map((i: any) => ({ email: i.email, emailedAt: i.emailedAt ?? null }))
+      : undefined,
+  };
+}
 
 function notConfigured(reply: FastifyReply) {
   return reply.code(503).send({
@@ -132,16 +170,98 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
     };
   }
 
-  // ── Create ────────────────────────────────────────────────────────────────
+  /** Shared schedule validation for create and, later, any edit path.
+   *  Returns a plain-English refusal rather than a slug — this is the screen a
+   *  host uses under time pressure. */
+  async function resolveScheduleInput(
+    raw: { scheduledStartAt?: string; durationMinutes?: number; timezone?: string },
+    tenantId: string,
+  ): Promise<
+    | { ok: true; scheduledStartAt: Date | null; durationMinutes: number | null; timezone: string | null }
+    | { ok: false; message: string }
+  > {
+    if (!raw.scheduledStartAt) {
+      // An instant meeting — start it and share the link now. The original
+      // behaviour, still the default.
+      return { ok: true, scheduledStartAt: null, durationMinutes: null, timezone: null };
+    }
+    const startAt = new Date(raw.scheduledStartAt);
+    if (Number.isNaN(startAt.getTime())) {
+      return { ok: false, message: "That start date and time could not be read." };
+    }
+    // Bound it so an obvious typo (a wrong year) cannot invite people to a
+    // meeting in 2035 — without policing a host who wants a past record.
+    const now = Date.now();
+    if (startAt.getTime() > now + 2 * 365 * 24 * 3600_000) {
+      return { ok: false, message: "That start date is more than two years away — check the year." };
+    }
+    if (startAt.getTime() < now - 30 * 24 * 3600_000) {
+      return { ok: false, message: "That start date is more than a month in the past — check the date." };
+    }
+
+    const duration = Math.round(raw.durationMinutes ?? 30);
+    if (duration < MIN_DURATION_MINUTES || duration > MAX_DURATION_MINUTES) {
+      return {
+        ok: false,
+        message: `A meeting has to be between ${MIN_DURATION_MINUTES} minutes and ${MAX_DURATION_MINUTES / 60} hours long.`,
+      };
+    }
+
+    let timezone = String(raw.timezone || "").trim();
+    if (!timezone) {
+      // Fall back to the tenant's own zone before the platform default.
+      try {
+        const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+        timezone = String(tenant?.timezone || "").trim();
+      } catch {
+        timezone = "";
+      }
+      if (!isUsableTimeZone(timezone)) timezone = FALLBACK_TIME_ZONE;
+    }
+    // ⛔ An unusable zone is REFUSED, never quietly swapped for UTC — the
+    // email always names the zone, and a wrong one is a missed meeting.
+    if (!isUsableTimeZone(timezone)) {
+      return { ok: false, message: "That time zone was not recognised." };
+    }
+    return { ok: true, scheduledStartAt: startAt, durationMinutes: duration, timezone };
+  }
+
+  // ── Create (instant, or scheduled with invites) ───────────────────────
   app.post("/meetings", async (req, reply) => {
     if (!requireMeetingCreator(req, reply)) return reply;
     if (!config()) return notConfigured(reply);
     const user = getUser(req);
-    const parsed = z.object({ title: z.string().max(120).optional() }).safeParse(req.body ?? {});
+    const parsed = z
+      .object({
+        title: z.string().max(120).optional(),
+        scheduledStartAt: z.string().max(64).optional(),
+        durationMinutes: z.number().int().optional(),
+        timezone: z.string().max(64).optional(),
+        message: z.string().max(1000).optional(),
+        invites: z.union([z.string().max(8000), z.array(z.string().max(320))]).optional(),
+      })
+      .safeParse(req.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({ error: "validation_error", message: "That meeting name is too long." });
+      return reply.code(400).send({
+        error: "validation_error",
+        message: "Some of those meeting details could not be read. Check the name, the time and the invite list.",
+      });
     }
     const title = sanitizeDisplayName(parsed.data.title)?.slice(0, 80) || "Video meeting";
+
+    const schedule = await resolveScheduleInput(parsed.data, user.tenantId);
+    if (!schedule.ok) return reply.code(400).send({ error: "validation_error", message: schedule.message });
+
+    const invited = parseInviteEmails(parsed.data.invites ?? "");
+    if (!invited.emails.length && invited.invalid.length) {
+      return reply.code(400).send({
+        error: "validation_error",
+        message: `None of those look like email addresses: ${invited.invalid.slice(0, 5).join(", ")}`,
+      });
+    }
+
+    const message = String(parsed.data.message ?? "").trim().slice(0, 1000) || null;
+
     // The unique index on code makes a collision a retry, never a corruption.
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -151,22 +271,96 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
             tenantId: user.tenantId,
             createdByUserId: user.sub,
             title,
+            scheduledStartAt: schedule.scheduledStartAt,
+            durationMinutes: schedule.durationMinutes,
+            timezone: schedule.timezone,
+            inviteMessage: message,
           },
         });
+
+        // ⛔ Invites are queued AFTER the meeting exists and can never fail the
+        // create: a meeting with a working link and no invites is recoverable
+        // from the screen; a failed create with invites already sent is not.
+        let sendResult = { sent: [] as string[], alreadyInvited: [] as string[], failed: [] as string[] };
+        if (invited.emails.length) {
+          sendResult = await sendMeetingInvites(db, {
+            meeting,
+            emails: invited.emails,
+            skipAlreadyInvited: false,
+            log: (m) => app.log.warn(m),
+          });
+        }
+
         return {
-          id: meeting.id,
-          code: meeting.code,
-          title: meeting.title,
-          locked: meeting.locked,
-          createdAt: meeting.createdAt,
-          joinPath: `/meet/${meeting.code}`,
+          ...presentMeeting(meeting),
+          invites: invited.emails.map((email) => ({
+            email,
+            emailedAt: sendResult.sent.includes(email) ? new Date() : null,
+          })),
+          invitesSent: sendResult.sent.length,
+          invitesFailed: sendResult.failed,
+          invalidAddresses: invited.invalid,
+          truncatedInvites: invited.truncated,
         };
       } catch (e: any) {
-        if (e?.code === "P2002") continue; // code collision — new code, try again
+        if (e?.code === "P2002" && String(e?.meta?.target ?? "").includes("code")) continue;
         throw e;
       }
     }
     return reply.code(500).send({ error: "meeting_create_failed", message: "Could not create the meeting. Try again." });
+  });
+
+  // ── Invite more people to an existing meeting ─────────────────────────
+  app.post("/meetings/:code/invite", async (req, reply) => {
+    if (!requireMeetingCreator(req, reply)) return reply;
+    const user = getUser(req);
+    const meeting = await findMeetingByCode((req.params as any).code);
+    if (!meeting) return badCode(reply);
+    if (!isMeetingHost(meeting, user)) {
+      return reply.code(403).send({ error: "forbidden", message: "Only the meeting's host can invite people." });
+    }
+    if (meeting.endedAt) {
+      return reply.code(409).send({ error: "meeting_ended", message: "This meeting has already ended." });
+    }
+    const parsed = z
+      .object({ invites: z.union([z.string().max(8000), z.array(z.string().max(320))]) })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "validation_error", message: "That invite list could not be read." });
+    }
+    const invited = parseInviteEmails(parsed.data.invites);
+    if (!invited.emails.length) {
+      return reply.code(400).send({
+        error: "validation_error",
+        message: invited.invalid.length
+          ? `None of those look like email addresses: ${invited.invalid.slice(0, 5).join(", ")}`
+          : "Add at least one email address.",
+      });
+    }
+    const existingCount = await db.videoMeetingInvite.count({ where: { meetingId: meeting.id } });
+    if (existingCount + invited.emails.length > MAX_INVITES_PER_MEETING) {
+      return reply.code(400).send({
+        error: "too_many_invites",
+        message: `A meeting can have at most ${MAX_INVITES_PER_MEETING} invitations.`,
+      });
+    }
+
+    // ⛔ skipAlreadyInvited: adding two more people must not re-mail the six
+    // who already have the invite sitting in their inbox.
+    const sendResult = await sendMeetingInvites(db, {
+      meeting,
+      emails: invited.emails,
+      skipAlreadyInvited: true,
+      log: (m) => app.log.warn(m),
+    });
+    return {
+      invitesSent: sendResult.sent.length,
+      sent: sendResult.sent,
+      alreadyInvited: sendResult.alreadyInvited,
+      invitesFailed: sendResult.failed,
+      invalidAddresses: invited.invalid,
+      truncatedInvites: invited.truncated,
+    };
   });
 
   // ── My meetings (creator-scoped on purpose — a meeting link is private to
@@ -178,18 +372,9 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
       where: { tenantId: user.tenantId, createdByUserId: user.sub },
       orderBy: { createdAt: "desc" },
       take: 20,
+      include: { invites: { orderBy: { createdAt: "asc" } } },
     });
-    return {
-      meetings: rows.map((m: any) => ({
-        id: m.id,
-        code: m.code,
-        title: m.title,
-        locked: m.locked,
-        createdAt: m.createdAt,
-        endedAt: m.endedAt,
-        joinPath: `/meet/${m.code}`,
-      })),
-    };
+    return { meetings: rows.map(presentMeeting) };
   });
 
   // ── Signed-in join ────────────────────────────────────────────────────────
