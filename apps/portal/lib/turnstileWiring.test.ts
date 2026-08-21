@@ -29,8 +29,21 @@ const COMPOSE = read("docker-compose.app.yml");
 const DOCKERFILE = read("apps/portal/Dockerfile");
 const LOGIN_PAGE = read("apps/portal/app/login/page.tsx");
 const WIDGET = read("apps/portal/components/TurnstileWidget.tsx");
+const LOGIN_LAYOUT = read("apps/portal/app/login/layout.tsx");
+const SCRIPT_MODULE = read("apps/portal/lib/turnstileScript.ts");
 
 const ARG = "NEXT_PUBLIC_TURNSTILE_SITE_KEY";
+
+/**
+ * ⛔ Negative assertions MUST run on executable lines only. Every one of these
+ * files carries a doc comment that NAMES the thing being forbidden — the
+ * comment explaining "no crossOrigin, because..." contains the word crossOrigin
+ * — so a naive `!includes(...)` fails against correct code. This repo has been
+ * caught by that three times; strip first, then assert.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
 
 function composeBlock(service: string): string {
   const start = COMPOSE.indexOf("\n  " + service + ":\n");
@@ -123,4 +136,63 @@ test("the login page renders the widget only when a site key was baked in", () =
 
 test("the widget reads the key from the public build env and nothing else", () => {
   assert.ok(WIDGET.includes("process.env." + ARG), "widget no longer reads the build-time site key");
+});
+
+/**
+ * The rest of this file guards the LATENCY fix, added after Izzy reported the
+ * widget "showed up lazy and then the spinner froze for a while".
+ *
+ * /login ships no markup, so without these hints the entire chain is serial:
+ * bundle -> React boots -> form renders -> effect fires -> only THEN DNS, TLS
+ * and the script download start, and only then does the challenge begin. The
+ * preload moves the network work in front of React instead of behind it.
+ */
+
+test("the login layout preconnects and preloads Cloudflare's script", () => {
+  assert.ok(LOGIN_LAYOUT.includes('rel="preconnect"'), "lost the preconnect — DNS+TLS goes back on the critical path");
+  assert.ok(LOGIN_LAYOUT.includes('rel="preload"'), "lost the preload — the script download waits for React again");
+  assert.ok(LOGIN_LAYOUT.includes('as="script"'), "a preload without as=script is ignored by the browser");
+});
+
+test("the login layout is a SERVER component — that is the whole point", () => {
+  // A client component's markup is not in the served HTML (the /login shell is
+  // ~4.9 KB with zero login elements), so hints rendered there would arrive
+  // after the bundle and buy nothing.
+  assert.ok(!LOGIN_LAYOUT.includes('"use client"'), "the login layout must stay a server component or its preload never reaches the HTML");
+});
+
+test("the preload and the widget resolve to the SAME url", () => {
+  // Byte-identical or the browser fetches twice and logs "preloaded but not used".
+  assert.ok(SCRIPT_MODULE.includes("TURNSTILE_SCRIPT_SRC"), "the shared script module lost its URL export");
+  assert.ok(LOGIN_LAYOUT.includes("TURNSTILE_SCRIPT_SRC"), "the layout hardcodes a URL instead of using the shared constant");
+  assert.ok(WIDGET.includes("TURNSTILE_SCRIPT_SRC"), "the widget hardcodes a URL instead of using the shared constant");
+  for (const [name, src] of [["layout", LOGIN_LAYOUT], ["widget", WIDGET]] as const) {
+    assert.ok(
+      !stripComments(src).includes("challenges.cloudflare.com/turnstile"),
+      name + " hardcodes the script URL again — the two can now drift apart",
+    );
+  }
+});
+
+test("the shared script URL is spelled out in full and matches its origin", () => {
+  // Full literal so a grep for the URL finds it; consistency asserted here
+  // because the two are now written out separately.
+  assert.ok(
+    SCRIPT_MODULE.includes('"https://challenges.cloudflare.com/turnstile/v0/api.js"'),
+    "the script URL must stay a full literal — this repo greps bundles and source by string",
+  );
+  const origin = SCRIPT_MODULE.match(/TURNSTILE_ORIGIN = "([^"]+)"/)?.[1];
+  const base = SCRIPT_MODULE.match(/TURNSTILE_SCRIPT_BASE = "([^"]+)"/)?.[1];
+  assert.ok(origin && base, "origin or base is no longer a plain literal");
+  assert.ok(String(base).startsWith(String(origin)), "the preconnect origin and the script URL have drifted apart");
+});
+
+test("the hints carry no crossOrigin", () => {
+  // The widget appends a plain <script src> with no crossorigin attribute. A
+  // CORS-mode hint does not match that request, so it opens a SECOND connection
+  // and warms nothing.
+  assert.ok(
+    !stripComments(LOGIN_LAYOUT).includes("crossOrigin"),
+    "a crossOrigin hint does not match the widget's plain script fetch",
+  );
 });

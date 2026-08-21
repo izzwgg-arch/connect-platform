@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { TURNSTILE_SCRIPT_BASE, TURNSTILE_SCRIPT_SRC } from "../lib/turnstileScript";
 
 /**
  * Cloudflare Turnstile on the sign-in form. Renders NOTHING when
@@ -22,8 +23,9 @@ declare global {
 }
 
 export const TURNSTILE_SITE_KEY: string = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
-const SCRIPT_BASE = "https://challenges.cloudflare.com/turnstile/v0/api.js";
-const SCRIPT_SRC = `${SCRIPT_BASE}?render=explicit`;
+// Both come from ONE place so app/login/layout.tsx can preload byte-identically.
+const SCRIPT_BASE = TURNSTILE_SCRIPT_BASE;
+const SCRIPT_SRC = TURNSTILE_SCRIPT_SRC;
 
 export function TurnstileWidget({ onToken, resetKey }: { onToken: (token: string) => void; resetKey?: number }) {
   const holder = useRef<HTMLDivElement | null>(null);

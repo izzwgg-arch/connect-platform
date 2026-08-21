@@ -188,7 +188,12 @@ test("⛔ trustedDevice + TurnstileWidget: expiry is honoured locally; the widge
   assert.match(td, /localStorage\.removeItem\(KEY\)/);
   const tw = read("../components/TurnstileWidget.tsx");
   assert.match(tw, /if \(!TURNSTILE_SITE_KEY\) return null;/);
-  assert.match(tw, /https:\/\/challenges\.cloudflare\.com\/turnstile\/v0\/api\.js/);
+  // The URL moved into lib/turnstileScript.ts so app/login/layout.tsx can
+  // preload the byte-identical string. The property this guards is unchanged —
+  // the widget must load Cloudflare's script and nothing else — so follow it
+  // one hop rather than dropping the assertion.
+  assert.match(tw, /from "\.\.\/lib\/turnstileScript"/, "the widget must take its script URL from the shared module");
+  assert.match(read("./turnstileScript.ts"), /https:\/\/challenges\.cloudflare\.com\/turnstile\/v0\/api\.js/);
   assert.doesNotMatch(tw, /TURNSTILE_SECRET/, "the secret never reaches the browser");
   assert.match(tw, /"expired-callback": \(\) => onToken\(""\)/, "an expired token is cleared, not resent");
 });
