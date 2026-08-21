@@ -1473,10 +1473,13 @@ box is DEFERRED, not cancelled).
   identity, **opt-in by verification**. ⛔ `Tenant.loopcomDirectEnabled` defaults
   **true** on purpose — verification is the real lock, and defaulting it off would
   mean Izzy cannot try the feature without a DB write.
-- ⚠️ **`resolveBillingSmsSender` returns `testMode: true` unless
-  `SMS_PROVIDER_TEST_MODE` is explicitly `"false"`.** The verify screen says so
-  honestly instead of claiming a text was sent — **check that env value before the
-  first real verification.**
+- ✅ **VERIFICATION TEXTS REALLY SEND — checked live, not assumed.**
+  `resolveBillingSmsSender` returns `testMode: true` unless
+  `SMS_PROVIDER_TEST_MODE` is explicitly `"false"`, and in `app-api-1` it **is**
+  `false`, with `BILLING_SMS_FROM_NUMBER=8457231213`. So the first verification
+  costs a real SMS from **(845) 723-1213**, Connect's own number — the same
+  sender as billing pay-links. The verify screen still reports test mode honestly
+  if that ever changes, rather than claiming a text was sent.
 - ✅ **Proven:** 42 api tests (23 policy + 19 routes through a real Fastify) + 14
   portal, all registered; **both positive source guards fail replayed against
   `HEAD`**; api typecheck **0 errors in any new file**; portal typecheck 0, suite

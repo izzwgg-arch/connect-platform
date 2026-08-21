@@ -181,10 +181,13 @@ explicit `fallback` — a blank page reads as a broken app.
   frames in the comparison artifact prove the stylesheet and markup, not a live
   round trip.
 - ⏳ **No message has ever been sent between two real people**, and no code has
-  been texted to a real phone. ⚠️ **`resolveBillingSmsSender` returns
-  `testMode: true` unless `SMS_PROVIDER_TEST_MODE` is explicitly `"false"`** — the
-  verify screen says so honestly instead of claiming a text went out, but
-  **check that env value on the box before the first real verification.**
+  been texted to a real phone.
+  ✅ **But the texting path IS armed — checked live 2026-08-21, not assumed:**
+  `SMS_PROVIDER_TEST_MODE=false` in `app-api-1` (the only value that actually
+  sends — anything else, including unset, is test mode) and
+  `BILLING_SMS_FROM_NUMBER=8457231213`. **So the first verification costs a real
+  SMS from (845) 723-1213**, the same sender as billing pay-links. The verify
+  screen still reports test mode honestly if that ever changes.
 - ⏳ **Mobile app: nothing.** Phase 2 (joining a meeting from the app) and Phase 3
   (ringing) both need an app build, which is Izzy's call. The portal is complete.
 - ⏳ **Phase 1 (US media server) deferred by Izzy** — video runs from France until
