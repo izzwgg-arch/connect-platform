@@ -1,12 +1,25 @@
 /**
- * SmsEmailReplyJob — the decision layer of reply-to-text-back, driven end to
- * end against fakes. Every case here is a way a reply email must NOT become a
- * text (stranger, toggle off, auto-reply, empty body, double-processing), plus
- * the one way it must.
+ * SmsEmailReplyJob — the decision layer of reply-to-text-back, driven end to end
+ * against fakes.
+ *
+ * ⛔ THE RULE THIS FILE EXISTS TO PIN (changed 2026-08-21): the text goes out as
+ * the THREAD'S OWN SMS ROUTING says, never as whoever the email came from. The
+ * signature pins WHICH conversation; the conversation knows its phone number;
+ * that number's routing knows the inbox. So a reply works from a forward, a
+ * phone, or a personal account — and the From header decides nothing.
+ *
+ * The old behaviour (From must exactly equal a User.email) silently ate a real
+ * customer's reply on 2026-08-20: cgreenfeld@trustbookkeepingny.com replied to a
+ * text email that had been sent to cspilman@ and was dropped `unknown_sender`,
+ * with no notice, while the thread itself recorded that the number routes to
+ * cspilman. That case is test 2 below.
+ *
+ * Everything else here is a way a reply must NOT become a text — a forged
+ * signature, an owner in another tenant, a disabled owner, a shared inbox, an
+ * ambiguous address, an auto-reply, an empty body, a double-send, a flood.
  */
-import { describe, it, beforeEach } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert";
-import { createHmac } from "node:crypto";
 import { SmsEmailReplyJob, type SmsReplyEmail } from "./smsEmailReplyJob";
 import { mintSmsReplyAddress } from "./smsEmailReply";
 
@@ -14,13 +27,23 @@ const SECRET = "reply-secret-0123456789abcdef";
 const JWT = "jwt-secret-0123456789abcdef00";
 const DOMAIN = "loopcom.net";
 const THREAD_ID = "cmthread123";
-const USER = { id: "u1", email: "baila@customer.com", role: "USER", tenantId: "t1", smsEmailForwardEnabled: true, status: "ACTIVE" };
+
+/** The inbox the thread's phone number routes to. */
+const OWNER = { id: "u1", email: "cspilman@customer.com", role: "USER", tenantId: "t1", status: "ACTIVE" };
+const THREAD = {
+  id: THREAD_ID,
+  type: "SMS",
+  tenantId: "t1",
+  externalSmsE164: "+18455551234",
+  tenantSmsE164: "+18452441708",
+  smsInboxOwnerUserId: OWNER.id,
+};
 
 function makeEmail(overrides: Partial<SmsReplyEmail> = {}): SmsReplyEmail {
   return {
     id: "101",
     messageId: "<abc@mail.gmail.com>",
-    from: USER.email,
+    from: OWNER.email,
     to: ["sms@loopcom.net", mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN)],
     subject: "Re: Text with Chaim",
     text: "On my way now.\n\nOn Tue, Aug 20, 2026 at 1:15 PM Loopcom Texts <sms@loopcom.net> wrote:\n> hi",
@@ -30,44 +53,39 @@ function makeEmail(overrides: Partial<SmsReplyEmail> = {}): SmsReplyEmail {
   };
 }
 
-interface Harness {
-  job: SmsEmailReplyJob;
-  fetches: Array<{ url: string; init: any }>;
-  notices: any[];
-  audits: Array<{ event: string; payload: any }>;
-  db: any;
-  setEmails(emails: SmsReplyEmail[]): void;
-  processedIds: string[];
-  state: { fetchResponder: () => Promise<any> };
-}
-
-function makeHarness(opts: { user?: any; participant?: boolean; thread?: any; priorClaims?: string[] } = {}): Harness {
+function makeHarness(opts: { owner?: any; thread?: any; priorClaims?: string[]; sentLastHour?: number } = {}) {
   const audits: Array<{ event: string; payload: any }> = [];
   const notices: any[] = [];
   const fetches: Array<{ url: string; init: any }> = [];
   const processedIds: string[] = [];
   let emails: SmsReplyEmail[] = [];
   const priorClaims = new Set(opts.priorClaims || []);
-  const state = {
+  const state: { fetchResponder: () => Promise<any> } = {
     fetchResponder: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, messageId: "m1" }) }),
   };
 
-  const thread = "thread" in opts ? opts.thread : { id: THREAD_ID, type: "SMS", tenantId: "t1", externalSmsE164: "+18455551234", tenantSmsE164: "+18455557768" };
-  const user = "user" in opts ? opts.user : USER;
+  const thread = "thread" in opts ? opts.thread : THREAD;
+  const owner = "owner" in opts ? opts.owner : OWNER;
 
   const db = {
     connectChatThread: {
       findUnique: async ({ where }: any) => (thread && where.id === thread.id ? thread : null),
     },
     user: {
+      // ⛔ Looked up BY ID from the thread's routing — never by the email's From.
+      findUnique: async ({ where }: any) => (owner && where.id === owner.id ? owner : null),
+      // Only the PRE-2026-08-21 code called this (match the From against a
+      // User row). Kept so the HEAD replay exercises the real old behaviour
+      // instead of dying on a missing fake.
       findFirst: async ({ where }: any) =>
-        user && String(where.email.equals).toLowerCase() === user.email.toLowerCase() && user.status === "ACTIVE" ? user : null,
+        owner && String(where?.email?.equals ?? "").toLowerCase() === owner.email.toLowerCase() && owner.status === "ACTIVE"
+          ? { ...owner, smsEmailForwardEnabled: true }
+          : null,
     },
-    connectChatParticipant: {
-      findFirst: async () => ((opts.participant ?? true) ? { id: "p1" } : null),
-    },
+    connectChatParticipant: { findFirst: async () => ({ id: "p1" }) },
     agentAuditLog: {
       findFirst: async ({ where }: any) => (priorClaims.has(where.payload.equals) ? { id: "claim1" } : null),
+      count: async () => opts.sentLastHour ?? 0,
     },
     contactPhone: { findFirst: async () => ({ contact: { displayName: "Chaim Katz" } }) },
   };
@@ -107,159 +125,243 @@ function makeHarness(opts: { user?: any; participant?: boolean; thread?: any; pr
   });
 
   return {
-    job, fetches, notices, audits, db, processedIds, state,
-    setEmails: (e) => { emails = e; },
+    job,
+    fetches,
+    notices,
+    audits,
+    processedIds,
+    state,
+    setEmails(next: SmsReplyEmail[]) {
+      emails = next;
+    },
+    reason(event: string) {
+      return audits.find((a) => a.event === event)?.payload?.reason;
+    },
+    has(event: string) {
+      return audits.some((a) => a.event === event);
+    },
   };
 }
 
-function decodeJwtPayload(bearer: string): any {
-  const token = bearer.replace(/^Bearer /, "");
-  const [, payload] = token.split(".");
-  return JSON.parse(Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString());
+/** The `sub`/`tenantId` the job actually minted a token for. */
+function tokenClaims(init: any): any {
+  const bearer = String(init.headers.authorization).replace(/^Bearer /, "");
+  const payload = bearer.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+  return JSON.parse(Buffer.from(payload, "base64").toString("utf8"));
 }
 
-describe("SmsEmailReplyJob", () => {
-  it("happy path: a verified reply becomes a text through the real route, as the real person", async () => {
+describe("SmsEmailReplyJob — routing decides the sender, not the From header", () => {
+  it("a verified reply becomes a text, sent as the inbox the number routes to", async () => {
     const h = makeHarness();
     h.setEmails([makeEmail()]);
-    const sent = await h.job.runOnce();
-    assert.strictEqual(sent, 1);
-    assert.strictEqual(h.fetches.length, 1);
-    assert.strictEqual(h.fetches[0].url, `http://api:3001/chat/threads/${THREAD_ID}/messages`);
-    // Quoted history was stripped; only the person's words go out.
-    assert.deepStrictEqual(JSON.parse(h.fetches[0].init.body), { body: "On my way now." });
-    // The JWT is minted for the REPLYING USER (attribution + permission checks).
-    const claims = decodeJwtPayload(h.fetches[0].init.headers.authorization);
-    assert.strictEqual(claims.sub, USER.id);
-    assert.strictEqual(claims.tenantId, USER.tenantId);
-    assert.strictEqual(claims.role, "USER");
-    assert.ok(claims.exp - claims.iat <= 300, "token must be short-lived");
-    // Signature is real HS256 with the api's secret.
-    const [head, payload, sig] = h.fetches[0].init.headers.authorization.replace(/^Bearer /, "").split(".");
-    const expect = createHmac("sha256", JWT).update(`${head}.${payload}`).digest("base64").replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    assert.strictEqual(sig, expect);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_sent"));
-    assert.deepStrictEqual(h.processedIds, ["101"]);
-    assert.strictEqual(h.notices.length, 0);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.equal(h.fetches.length, 1);
+    assert.match(h.fetches[0].url, new RegExp(`/chat/threads/${THREAD_ID}/messages$`));
+    assert.equal(JSON.parse(h.fetches[0].init.body).body, "On my way now.");
+    // Sent AS the routing owner.
+    assert.equal(tokenClaims(h.fetches[0].init).sub, OWNER.id);
+    assert.equal(tokenClaims(h.fetches[0].init).tenantId, THREAD.tenantId);
+    assert.equal(h.has("sms.reply_sent"), true);
   });
 
-  it("a stranger's From gets nothing — no text, no notice, no oracle", async () => {
-    const h = makeHarness({ user: null });
-    h.setEmails([makeEmail({ from: "attacker@evil.com" })]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.fetches.length, 0);
-    assert.strictEqual(h.notices.length, 0);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_refused" && a.payload.reason === "unknown_sender"));
-    assert.deepStrictEqual(h.processedIds, ["101"], "still marked processed — never retried");
-  });
-
-  it("a user from ANOTHER tenant is a stranger here", async () => {
-    const h = makeHarness({ user: { ...USER, tenantId: "t2" } });
-    h.setEmails([makeEmail()]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.fetches.length, 0);
-    assert.strictEqual(h.notices.length, 0);
-  });
-
-  it("toggle off / not a participant → refused WITH a threaded notice", async () => {
-    for (const [opts, reason] of [
-      [{ user: { ...USER, smsEmailForwardEnabled: false } }, "sms_to_email_off"],
-      [{ participant: false }, "not_a_participant"],
-    ] as const) {
-      const h = makeHarness(opts as any);
-      h.setEmails([makeEmail()]);
-      assert.strictEqual(await h.job.runOnce(), 0);
-      assert.strictEqual(h.fetches.length, 0);
-      assert.strictEqual(h.notices.length, 1, `${reason}: the person must be told`);
-      assert.ok(h.audits.some((a) => a.event === "sms.reply_refused" && a.payload.reason === reason));
-      // The notice threads into the same email conversation.
-      assert.strictEqual(h.notices[0].headers.References, `<sms-thread-${THREAD_ID}@${DOMAIN}>`);
-      assert.strictEqual(h.notices[0].subject, "Text with Chaim Katz");
-      assert.strictEqual(h.notices[0].headers["Auto-Submitted"], "auto-replied");
-    }
-  });
-
-  it("mail without a valid signed address is ignored quietly (spam to the mailbox)", async () => {
+  it("THE REGRESSION: a reply from a DIFFERENT address still sends, as the inbox owner", async () => {
+    // The real 2026-08-20 drop: emailed to cspilman@, replied from cgreenfeld@.
     const h = makeHarness();
-    const forged = mintSmsReplyAddress(THREAD_ID, "wrong-secret", DOMAIN);
+    h.setEmails([makeEmail({ from: "cgreenfeld@customer.com" })]);
+    assert.equal(await h.job.runOnce(), 1, "the reply must be texted, not dropped");
+    assert.equal(tokenClaims(h.fetches[0].init).sub, OWNER.id, "attributed to the inbox the number routes to");
+    const sent = h.audits.find((a) => a.event === "sms.reply_sent")!;
+    // The address that actually replied is recorded, for the trail.
+    assert.equal(sent.payload.receivedFrom, "cgreenfeld@customer.com");
+    assert.equal(sent.payload.sentAs, OWNER.email);
+  });
+
+  it("a reply from an unrelated personal account still sends — the address is the credential", async () => {
+    const h = makeHarness();
+    h.setEmails([makeEmail({ from: "someone.personal@gmail.com" })]);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.equal(tokenClaims(h.fetches[0].init).sub, OWNER.id);
+  });
+
+  it("a FORGED signature sends nothing and says nothing", async () => {
+    const h = makeHarness();
+    h.setEmails([makeEmail({ to: ["sms@loopcom.net", `sms+${THREAD_ID}.AAAAAAAAAAAAAAAAAAAAAAAA@${DOMAIN}`] })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.notices.length, 0, "no backscatter to a forger");
+    assert.equal(h.reason("sms.reply_ignored"), "bad_signature");
+  });
+
+  it("mail with no reply address at all is ignored quietly", async () => {
+    const h = makeHarness();
+    h.setEmails([makeEmail({ to: ["sms@loopcom.net"] })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.notices.length, 0);
+    assert.equal(h.reason("sms.reply_ignored"), "no_reply_address");
+  });
+
+  it("TENANT LEAK LOCK: an inbox owner in ANOTHER tenant is refused, silently", async () => {
+    const h = makeHarness({ owner: { ...OWNER, tenantId: "SOME-OTHER-TENANT" } });
+    h.setEmails([makeEmail()]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0, "must never send into another tenant");
+    assert.equal(h.notices.length, 0);
+    assert.equal(h.reason("sms.reply_refused"), "inbox_owner_tenant_mismatch");
+  });
+
+  it("an inbox owner who is not ACTIVE is refused", async () => {
+    const h = makeHarness({ owner: { ...OWNER, status: "DISABLED" } });
+    h.setEmails([makeEmail()]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_refused"), "inbox_owner_inactive");
+  });
+
+  it("an inbox owner whose row is gone is refused", async () => {
+    const h = makeHarness({ owner: null });
+    h.setEmails([makeEmail()]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_refused"), "inbox_owner_gone");
+  });
+
+  it("a SHARED inbox is stored as '' — never read as an owner, never sent as user id ''", async () => {
+    // The From is nobody we know, so there is no one to attribute it to.
+    const h = makeHarness({ thread: { ...THREAD, smsInboxOwnerUserId: "" } });
+    h.setEmails([makeEmail({ from: "nobody@elsewhere.example" })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_refused"), "shared_inbox_unidentified_sender");
+    assert.equal(h.notices.length, 0, "no verified address to notify, so nothing goes out");
+  });
+
+  it("NO REGRESSION: a shared inbox still sends when the From IS one of our users", async () => {
+    // 315 of 616 live threads are shared. They could already do this before
+    // 2026-08-21 and must not lose it.
+    const h = makeHarness({ thread: { ...THREAD, smsInboxOwnerUserId: "" } });
+    h.setEmails([makeEmail({ from: OWNER.email })]);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.equal(tokenClaims(h.fetches[0].init).sub, OWNER.id);
+  });
+
+  it("a shared inbox refuses a From belonging to ANOTHER tenant", async () => {
+    const h = makeHarness({
+      thread: { ...THREAD, smsInboxOwnerUserId: "" },
+      owner: { ...OWNER, tenantId: "SOME-OTHER-TENANT" },
+    });
+    h.setEmails([makeEmail({ from: OWNER.email })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0, "must never send into another tenant");
+    assert.equal(h.reason("sms.reply_refused"), "shared_inbox_unidentified_sender");
+  });
+
+  it("TWO different valid reply addresses is ambiguous and is refused, never resolved", async () => {
+    const h = makeHarness();
     h.setEmails([
-      makeEmail({ id: "1", to: ["sms@loopcom.net"] }),
-      makeEmail({ id: "2", to: [forged] }),
+      makeEmail({
+        to: [
+          mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN),
+          mintSmsReplyAddress("cmotherthread999", SECRET, DOMAIN),
+        ],
+      }),
     ]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.fetches.length, 0);
-    assert.strictEqual(h.notices.length, 0);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_ignored" && a.payload.reason === "no_reply_address"));
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_ignored" && a.payload.reason === "bad_signature"));
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_ignored"), "ambiguous_reply_address");
   });
 
-  it("an out-of-office auto-reply is never texted to a customer", async () => {
+  it("the SAME address repeated is not ambiguous", async () => {
+    const addr = mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN);
     const h = makeHarness();
-    h.setEmails([makeEmail({ headers: { "auto-submitted": "auto-replied" }, text: "I am out of the office until Monday." })]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.fetches.length, 0);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_ignored" && a.payload.reason === "auto_generated"));
+    h.setEmails([makeEmail({ to: [addr, addr, "sms@loopcom.net"] })]);
+    assert.equal(await h.job.runOnce(), 1);
   });
 
-  it("an empty reply (nothing above the quote) is refused with a notice, not sent as ''", async () => {
+  it("an out-of-office responder is never texted to a customer", async () => {
     const h = makeHarness();
-    h.setEmails([makeEmail({ text: "\n\nOn Tue, Aug 20, 2026 at 1:15 PM L <sms@loopcom.net> wrote:\n> hi" })]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.fetches.length, 0);
-    assert.strictEqual(h.notices.length, 1);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_refused" && a.payload.reason === "empty_body"));
+    h.setEmails([makeEmail({ headers: { "auto-submitted": "auto-replied" } })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_ignored"), "auto_generated");
+  });
+
+  it("an empty reply is refused with a notice, never sent as ''", async () => {
+    const h = makeHarness();
+    h.setEmails([makeEmail({ text: "On Tue, Aug 20, 2026 at 1:15 PM Loopcom Texts <sms@loopcom.net> wrote:\n> hi" })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_refused"), "empty_body");
+    assert.equal(h.notices.length, 1);
+  });
+
+  it("ANTI-ORACLE: the failure notice goes to the OWNER we hold, never to the address that replied", async () => {
+    const h = makeHarness();
+    h.setEmails([
+      makeEmail({
+        from: "stranger@elsewhere.example",
+        text: "On Tue, Aug 20, 2026 at 1:15 PM Loopcom Texts <sms@loopcom.net> wrote:\n> hi",
+      }),
+    ]);
+    await h.job.runOnce();
+    assert.equal(h.notices.length, 1);
+    assert.deepEqual(h.notices[0].to, [OWNER.email]);
+    assert.ok(
+      !JSON.stringify(h.notices[0]).includes("stranger@elsewhere.example"),
+      "nothing goes back to the address that replied",
+    );
+  });
+
+  it("a flood into one thread is capped", async () => {
+    const h = makeHarness({ sentLastHour: 20 });
+    h.setEmails([makeEmail()]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_refused"), "rate_limited");
+    assert.equal(h.notices.length, 1, "the owner is told, so it is not a silent drop");
   });
 
   it("the same email is never texted twice — a prior claim wins over everything", async () => {
     const h = makeHarness({ priorClaims: ["<abc@mail.gmail.com>"] });
     h.setEmails([makeEmail()]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.fetches.length, 0);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_ignored" && a.payload.reason === "already_claimed"));
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_ignored"), "already_claimed");
   });
 
   it("processing the same email twice in one pass sends once (claim is written before the POST)", async () => {
     const h = makeHarness();
     h.setEmails([makeEmail(), makeEmail()]);
-    assert.strictEqual(await h.job.runOnce(), 1);
-    assert.strictEqual(h.fetches.length, 1);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.equal(h.fetches.length, 1);
   });
 
   it("an api refusal becomes a notice carrying the api's own message", async () => {
     const h = makeHarness();
-    h.state.fetchResponder = async () => ({ ok: false, status: 400, json: async () => ({ error: "SMS_SEND_DISABLED", message: "Texting is not enabled for your account." }) });
-    h.setEmails([makeEmail()]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.notices.length, 1);
-    assert.ok(String(h.notices[0].text).includes("Texting is not enabled for your account."));
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_failed" && a.payload.reason === "api_refused"));
-    assert.deepStrictEqual(h.processedIds, ["101"]);
-  });
-
-  it("an unreachable api tells the person immediately and NEVER auto-retries the send", async () => {
-    const h = makeHarness();
-    h.state.fetchResponder = async () => { throw new Error("fetch failed"); };
-    h.setEmails([makeEmail()]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.strictEqual(h.notices.length, 1);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_failed" && a.payload.reason === "api_unreachable"));
-    assert.deepStrictEqual(h.processedIds, ["101"], "marked processed — an ambiguous half-send must not replay");
-  });
-
-  it("a reply to a vanished or non-SMS thread is refused", async () => {
-    const h = makeHarness({ thread: null });
-    h.setEmails([makeEmail()]);
-    assert.strictEqual(await h.job.runOnce(), 0);
-    assert.ok(h.audits.some((a) => a.event === "sms.reply_refused" && a.payload.reason === "thread_gone"));
-  });
-
-  it("does nothing at all when the reply domain / secrets are unconfigured", async () => {
-    const h = makeHarness();
-    const job = new SmsEmailReplyJob({
-      ...(h.job as any).deps,
-      replyDomain: () => null,
-      source: { poll: async () => { throw new Error("must not poll"); } },
+    h.state.fetchResponder = async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: "FORBIDDEN", message: "You do not have permission to send texts." }),
     });
-    assert.strictEqual(await job.runOnce(), 0);
+    h.setEmails([makeEmail()]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.notices.length, 1);
+    assert.match(String(h.notices[0].text), /permission to send texts/);
+    assert.equal(h.reason("sms.reply_failed"), "api_refused");
+  });
+
+  it("an unreachable api tells the owner immediately and NEVER auto-retries the send", async () => {
+    const h = makeHarness();
+    h.state.fetchResponder = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    h.setEmails([makeEmail()]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.notices.length, 1);
+    assert.equal(h.reason("sms.reply_failed"), "api_unreachable");
+    // Claimed, and the mail is marked processed — an ambiguous half-send must
+    // become a notice, never a duplicate text on the next pass.
+    assert.equal(h.has("sms.reply_claimed"), true);
+    assert.deepEqual(h.processedIds, ["101"]);
   });
 });

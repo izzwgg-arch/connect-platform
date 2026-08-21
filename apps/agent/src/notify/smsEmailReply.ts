@@ -64,6 +64,30 @@ export function findSmsReplyAddress(candidates: string[], replyDomain: string): 
   return null;
 }
 
+/**
+ * EVERY distinct reply address on our domain that a mail carried.
+ *
+ * ⛔ Ambiguity is REFUSED by the caller, never resolved. A mail naming two
+ * different threads has no single correct destination, and silently picking one
+ * would hand whoever crafted it a way to steer a reply into a thread of their
+ * choosing. One address or nothing.
+ */
+export function findAllSmsReplyAddresses(candidates: string[], replyDomain: string): ParsedSmsReplyAddress[] {
+  const want = String(replyDomain || "").trim().toLowerCase();
+  if (!want) return [];
+  const out: ParsedSmsReplyAddress[] = [];
+  const seen = new Set<string>();
+  for (const c of candidates || []) {
+    const parsed = parseSmsReplyAddress(c);
+    if (!parsed || parsed.domain !== want) continue;
+    const key = `${parsed.threadId}.${parsed.sig}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(parsed);
+  }
+  return out;
+}
+
 /** Timing-safe signature check. */
 export function verifySmsReplySignature(threadId: string, sig: string, secret: string): boolean {
   if (!threadId || !sig || !secret) return false;
