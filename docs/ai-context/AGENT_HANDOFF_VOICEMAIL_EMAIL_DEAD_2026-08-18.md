@@ -454,3 +454,43 @@ commit. **Acceptance is one api deploy: a `voicemail_email.watchdog_heartbeat`
 row roughly 90 seconds after the new container starts, instead of 15 minutes.**
 ⏳ And the negative that matters: the next busy deploy day must NOT produce
 another "watchdog has stopped" text.
+
+### 8.6 ⛔⛔ FOUND IN PASSING, NOT FIXED — a delivered guardrail alarm can NEVER fire again
+
+`raiseGuardrailEscalation` de-dupes on `status: { in: ["QUEUED", "SENT"] }`
+**with no time bound**, and `AgentEscalationStatus` has **no RESOLVED value** —
+it is `QUEUED | SENT | FAILED | CANCELLED`, and a successfully delivered alarm
+ends at **SENT and stays there forever**. Nothing in the codebase moves a
+guardrail escalation out of that state (`cancel_my_requests` is a customer tool
+scoped to the customer's own tenant; these rows are on `connect-admin-tenant-v1`).
+
+⛔ **So each of the six alarm keys is a ONE-SHOT for the life of the platform.**
+§7 says "resolving the escalation row re-arms it" — true, but **there is no
+resolve action**, so in practice nothing ever re-arms.
+
+**Live state after today: 1 of the 6 keys is burned.**
+
+| Alarm key | State |
+|---|---|
+| `Voicemail email watchdog has stopped` | 🔴 **BURNED** — row `cmt2wpqlz030jln12zxw1lhpw`, SENT 2026-08-21 12:09 |
+| `Voicemail email sweep has stopped` | armed |
+| `Voicemail email watchdog is failing` | armed |
+| `Voicemail email addresses disappeared` | armed |
+| `Email outbox is not sending` | armed |
+| `Emails are failing to send` | armed |
+
+⛔ **Not acute, and that is why it was left for Izzy rather than changed
+unilaterally:** the boot kick makes the burned condition far less likely, and
+the five alarms that watch the email pipeline itself are all still armed. But it
+IS a hole in a net Izzy asked for by name.
+
+⏳ **Three options, his call — it decides how often his phone rings:**
+1. **Bound the de-dupe by time** (recommended): de-dupe only against an open
+   escalation **created in the last N hours** (6 h suggested). This restores the
+   stated intent — *"a persistent fault texts once, not every tick"* — rather
+   than changing policy; today's reading is "texts once, ever". Cost: an
+   unfixed persistent fault texts every N hours.
+2. **Mark the burned row CANCELLED** to re-arm just this key. One row, no code,
+   reversible — but it slightly misuses the enum (it was not withdrawn by a
+   requester) and fixes only this one occurrence.
+3. **Leave it.** Each alarm is then a once-ever warning.

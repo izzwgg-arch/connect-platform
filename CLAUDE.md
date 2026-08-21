@@ -3304,6 +3304,19 @@ Full detail: `docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md` 
   is one api deploy — a `watchdog_heartbeat` row ~90 s after the container
   starts instead of 15 min; then the negative, that the next busy deploy day
   raises no "watchdog has stopped" text.
+  ⛔⛔ **AND IT EXPOSED A ONE-SHOT ALARM — NOT FIXED, IZZY’S CALL (handoff §8.6).**
+  `raiseGuardrailEscalation` de-dupes on `status in (QUEUED, SENT)` **with no
+  time bound**, and `AgentEscalationStatus` has **no RESOLVED value** — a
+  delivered alarm ends at SENT and nothing ever moves it. **So each of the six
+  alarm keys can fire ONCE, ever.** ⛔ The §7 line "resolving the escalation row
+  re-arms it" is true and unreachable — there is no resolve action.
+  **1 of 6 keys is now burned** (`Voicemail email watchdog has stopped`, row
+  `cmt2wpqlz030jln12zxw1lhpw`); the other five are armed. Not acute — the boot
+  kick makes that condition unlikely and the five that watch the email pipeline
+  still work — but it is a hole in the net. **Recommended: bound the de-dupe to
+  the last ~6 h**, which restores the stated intent ("a persistent fault texts
+  once, not every tick") rather than changing policy. ⛔ Deliberately NOT changed
+  here: it decides how often Izzy’s phone rings.
   ⏳ Still open from the outage: onboarding writes the email onto the PBX
   extension (new sign-ups get duplicates); and **3 mailboxes still email nobody**
   — A plus center 108 (6 voicemails in 7 days), Trimpro 102 (3), Trimpro 104 (1),
