@@ -1,6 +1,8 @@
 {
   "name": "@connect/shared",
   "version": "0.1.0",
+  "//sideEffects": "Every module here is pure functions and constants — verified: no module-scope calls, no globals, no timers. Without this webpack must assume side effects and cannot tree-shake, which shipped the 117 KB Jewish holiday table into a portal client chunk that never uses it.",
+  "sideEffects": false,
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

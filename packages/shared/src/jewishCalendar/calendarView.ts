@@ -57,10 +57,21 @@ export function buildMonthView(
     const noonUtc = new Date(`${date}T12:00:00Z`);
     const v = evaluateJewishCalendar(s, noonUtc);
 
+    // ⛔ The verdict has to speak the SAME name as the cell label. The resolver
+    // works in the table's raw hebcal keys ("Sukkot"), so a verdict built
+    // straight from v.reason reads "Closed — Sukkot" right next to a label that
+    // says "Succos". Caught by probing the live route, not by a unit test.
+    const localise = (text: string): string => {
+      const key = v.holidayName ?? hol?.name ?? null;
+      if (!text || !key) return text;
+      const shown = holidayDisplayName(key, lang);
+      return shown === key ? text : text.split(key).join(shown);
+    };
+
     let verdict: string;
-    if (v.closed) verdict = `Closed — ${v.reason}`;
-    else if (t.treatment === "early") verdict = `Reduced hours — ${t.label}`;
-    else if (v.kind === "erev" && v.closesAt) verdict = v.reason;
+    if (v.closed) verdict = localise(`Closed — ${v.reason}`);
+    else if (t.treatment === "early") verdict = localise(`Reduced hours — ${t.label}`);
+    else if (v.kind === "erev" && v.closesAt) verdict = localise(v.reason);
     else verdict = "Normal hours";
 
     const key = hol ? hol.name : null;

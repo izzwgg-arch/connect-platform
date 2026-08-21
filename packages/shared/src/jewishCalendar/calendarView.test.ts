@@ -71,10 +71,13 @@ test("the grid follows the language without changing anything else", () => {
   const yi = buildMonthView(2026, 10, on(), { lang: "yi" });
   assert.equal(en.length, yi.length);
   for (let i = 0; i < en.length; i++) {
-    // Only the label may differ — dates, verdicts and times are identical.
+    // ⛔ The LABEL and the VERDICT both carry the holiday name, so both change
+    // language. Everything factual — the date, the times — must not.
     assert.equal(en[i].date, yi[i].date);
-    assert.equal(en[i].verdict, yi[i].verdict);
     assert.equal(en[i].candleLighting, yi[i].candleLighting);
+    assert.equal(en[i].nightfall, yi[i].nightfall);
+    assert.equal(en[i].treatment, yi[i].treatment);
+    assert.equal(en[i].noMusic, yi[i].noMusic);
   }
   const st = yi.find((d) => d.date === "2026-10-04")!;
   assert.match(st.label!, /[֐-׿]/);
@@ -142,4 +145,23 @@ test("the next change is the early close, then the reopening", () => {
 
 test("with the calendar off there is nothing to report", () => {
   assert.equal(nextChange(on({ enabled: false }), new Date("2026-09-11T14:00:00Z")), null);
+});
+
+test("the verdict speaks the same name as the label", () => {
+  // ⛔ Caught by probing the live route: the cell said "Succos" while the verdict
+  // beside it said "Closed — Sukkot", because the resolver works in the table's
+  // raw hebcal keys and the verdict was built straight from them.
+  const byDate = Object.fromEntries(buildMonthView(2026, 9, on()).map((d) => [d.date, d]));
+  const sukkos = byDate["2026-09-27"];
+  assert.equal(sukkos.label, "Succos");
+  assert.match(sukkos.verdict, /Succos/, `verdict should say Succos: ${sukkos.verdict}`);
+  assert.doesNotMatch(sukkos.verdict, /Sukkot/, "the raw hebcal name must not reach the screen");
+
+  const erev = byDate["2026-09-11"];
+  assert.match(erev.verdict, /Rosh Hashanah/, `erev verdict: ${erev.verdict}`);
+});
+
+test("in Yiddish the verdict carries the Yiddish name too", () => {
+  const byDate = Object.fromEntries(buildMonthView(2026, 9, on(), { lang: "yi" }).map((d) => [d.date, d]));
+  assert.match(byDate["2026-09-27"].verdict, /[֐-׿]/, "the verdict should carry Hebrew script");
 });
