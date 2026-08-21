@@ -53,6 +53,17 @@ const desktopApi = {
     },
   },
 
+  // Desk phone setup. ⛔ There is deliberately no way to name a URL, a host or a
+  // command here: `run` takes an operation from a fixed allowlist that the main
+  // process validates again on arrival. A password is handed over ONCE by reference
+  // and is never readable back.
+  phoneSetup: {
+    run: (request: unknown) => ipcRenderer.invoke("phoneSetup:run", request),
+    rememberCredential: (ref: string, username: string, password: string) =>
+      ipcRenderer.invoke("phoneSetup:store-credential", { ref, username, password }),
+    forgetCredentials: () => ipcRenderer.invoke("phoneSetup:forget-credentials"),
+  },
+
   notifications: {
     show: (payload: { kind: string; title: string; body?: string; route?: string }) =>
       ipcRenderer.invoke("desktop:notification", payload),

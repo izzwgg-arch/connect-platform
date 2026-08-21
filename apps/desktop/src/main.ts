@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, session, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
 import { buildWindowsToastXml, type DesktopNotificationPayload } from "./notificationToast";
 import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
+import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -524,6 +525,12 @@ function registerIpc(): void {
     return settings;
   });
   ipcMain.handle("desktop:notification", (_event, payload: DesktopNotificationPayload) => showDesktopNotification(payload));
+
+  // Desk phone setup. ⛔ ONE channel, one allowlisted operation shape - the renderer
+  // loads the hosted portal, so anything it can express is something a compromised
+  // server could express too. Credentials live behind a reference in the OS keystore
+  // and never cross this boundary.
+  registerPhoneSetup({ ipcMain, safeStorage });
 
   ipcMain.on("phone:engine-event", (_event, envelope: PhoneEngineEnvelope) => {
     if (envelope.type === "state") {
