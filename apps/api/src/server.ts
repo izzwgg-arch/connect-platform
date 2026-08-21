@@ -286,6 +286,7 @@ import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { registerRemoteSupportRoutes } from "./remoteSupportRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
+import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
 import { registerMfaRoutes, buildMfaDeps } from "./mfa/mfaRoutes";
 import { decideLoginMfa } from "./mfa/mfaService";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
@@ -2880,6 +2881,12 @@ type PortalApiPermissionRule = {
 };
 
 const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
+  // ⛔⛔ Without an entry here the global permission preHandler matches NO rule for
+  // the prefix and never runs -- the /admin/wake-health class. Desk phone setup
+  // reads a customer network and points their handsets somewhere, so it gets its
+  // own key, which is in neither default bucket.
+  { prefix: "/desk-phones", permission: "can_setup_desk_phones" },
+  { prefix: "/admin/desk-phones", permission: "can_manage_global_settings" },
   { prefix: "/admin/role-permissions", permission: "can_view_admin_permissions" },
   { prefix: "/admin/custom-roles", permission: "can_view_admin_roles" },
   { prefix: "/admin/users", permission: "can_view_admin_users" },
@@ -41834,6 +41841,17 @@ const port = Number(process.env.PORT || 3001);
   // named person's screen".
   await registerRemoteSupportRoutes(app, { audit });
   await registerLanPhoneRoutes(app, { audit });
+  // ⛔ Desk phone setup. The office machine discovers and performs; every decision
+  // -- may this phone be touched, may it be wiped, what is the customer told -- is
+  // made here, where the customer, the permissions and the audit trail live.
+  await registerDeskPhoneSetupRoutes(app, {
+    audit,
+    ourProvisioningHosts: () => [
+      "m.connectcomunications.com",
+      "connectcomunications.com",
+      "loopcom.net",
+    ],
+  });
   // Multi-factor authentication (Phase 11, 2026-08-18): enrol / challenge /
   // disable / recovery codes. `/auth/mfa/challenge` is the ONLY public route in
   // it (bypass list) and verifies its own pre-auth token; everything else is an
