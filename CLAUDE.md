@@ -393,11 +393,34 @@ is FIRST in the Admin section** (it was buried at position 9 of 25).
 favour of a stale copy and dropped the P3/P4 paragraph — the commit had it, the
 tip did not. **After any merge lands on this branch, grep CLAUDE.md for your own
 section before trusting it.**
-⏳ **Phase 5c (the Agent-SDK workbench: IDE + SSH terminal) NOT started** — needs
-the Anthropic API key, `claude-agent-sdk` as a NEW dependency (only
-`@anthropic-ai/sdk` exists today), a PTY bridge, and Izzy's own wording in the
-ground-rule lists, which bind the engine from its first command. Support-agent
-accounts + per-feature permission keys remain his to create.
+✅ **Phase 5c THE WORKBENCH SHIPPED (`9e824f19`, api container-verified, gates
+driven live on production).** ⛔⛔ **It needed NO new SDK and NO new API key —
+this file previously said it did.** The platform already had the engine
+(`completeWithTools` = a working agentic loop with a staff tool tier) and both
+provider keys are live in `app-agent-1`; **check what the platform already has
+before adding a dependency.** Three doors (file tree / file read / run command),
+⛔⛔ **four gates in this order: WATCHMAN → SHAPE+ALLOWLIST → SECRETS →
+RULEBOOK** — the allowlist runs before the rulebook so the read-only guarantee
+is established first. ⛔ `ALLOWED_BINARIES` is READ-ONLY TOOLS ONLY (a test
+asserts rm/mv/chmod/bash/npm/tee/dd are absent), mutating sub-commands are
+blocked (`git push`, `docker restart/exec`, `systemctl restart`, `sed -i`,
+`find -delete`), chaining/substitution/redirect/sudo refused, and EVERY pipe
+segment allowlisted. ⛔⛔ **A hole found while building: `cat` is legitimately
+read-only, so the door would have served `.env.platform` and every key on the
+box** — `commandTouchesSecrets()` refuses secret paths mechanically. ⛔ **One
+deliberate asymmetry:** an UNMATCHED command proceeds (the allowlist already
+proved it read-only; prompting for `ls` trains people to click through the
+confirmations that matter), while a real ask-first RULE still stops it and
+`never` refuses even when confirmed. ⛔ **NO PTY/interactive shell on purpose** —
+a shell makes every gate decoration. Refusals are audited exactly like runs;
+unset workspace root ⇒ OFF (503), never a cwd fallback. ✅ **Proven live: all
+five attacks bounced** — `cat …/.env.platform` → 403 refused_secrets,
+`ls; rm -rf` → 400, `bash -c` → 400, `docker restart` → 400, `../../etc/passwd`
+→ 400. ⏳ **Next:** the agent DRIVING the workbench (tools `read_file`/
+`list_files`/`run_command` at `minRole: "staff"` calling these doors exactly as
+`investigate` does — wiring, not a capability build), edits as reviewable diffs
+through the deploy queue, and ⛔ nobody has opened the Workbench tab in a
+browser. Support-agent accounts + per-feature permission keys remain his to create.
 
 
 Full handoff + the verified infrastructure inventory:

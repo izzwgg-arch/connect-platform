@@ -356,10 +356,61 @@ while **"read the PBX extension list" → allowed**.
 
 Tests: 29 console + 13 rules + 9 watchman. Portal typecheck 0; api 75 = baseline.
 
-⏳ **Phase 5c NOT started — the Agent-SDK workbench (IDE + SSH terminal).** It
-now has something to obey. ⛔ Before arming live execution it needs: the
-Anthropic API key for the SDK (`claude-agent-sdk` is a NEW dependency — only
-`@anthropic-ai/sdk` exists today), a PTY/terminal bridge, and Izzy setting the
-ground-rule lists in his own words, since those bind the engine from its first
-command. The support-agent accounts and per-feature permission keys remain his
-to create.
+## §10 Phase 5c — the Workbench: SHIPPED (`9e824f19`)
+
+⛔⛔ **THE HEADLINE, AND IT CORRECTS THIS DOC'S OWN EARLIER ADVICE: no new SDK
+and no new API key were needed.** §9 said 5c was blocked on installing
+`claude-agent-sdk` plus a key. **Checked before building: the platform already
+has the engine** — `completeWithTools` in `apps/agent/src/llm/router.ts` is a
+working agentic loop with a `staff` tool tier, and **both `ANTHROPIC_API_KEY`
+and `OPENAI_API_KEY` are already SET in `app-agent-1`**. So the workbench was
+built on proven in-house infrastructure with **zero new dependencies**.
+**Check what the platform already has before adding a dependency** — the
+"missing" engine was the same one `investigate` already rides.
+
+**`apps/api/src/supportWorkbench.ts` — three doors, four gates.**
+- ⛔⛔ **GATE ORDER IS THE SAFETY PROPERTY: WATCHMAN → SHAPE+ALLOWLIST →
+  SECRETS → RULEBOOK.** The allowlist runs before the rulebook so the read-only
+  guarantee is established before the verdict is interpreted.
+- ⛔ **`ALLOWED_BINARIES` is READ-ONLY TOOLS ONLY** — a test asserts `rm`, `mv`,
+  `chmod`, `bash`, `sh`, `npm`, `tee`, `dd`… are absent. `FORBIDDEN_SUBCOMMANDS`
+  blocks the dangerous halves of safe binaries (`git push/reset`, `docker
+  restart/exec`, `systemctl restart`, `sed -i`, `find -delete`), and chaining,
+  substitution, redirects and `sudo` are refused so one approved command cannot
+  smuggle a second. **Every segment of a pipe** is allowlisted, not just the first.
+- ⛔⛔ **A HOLE FOUND WHILE BUILDING: `cat` is legitimately read-only, so the
+  door would have served `.env.platform` and every private key on the box.**
+  `commandTouchesSecrets()` refuses secret PATHS mechanically. The rulebook says
+  never read credentials; this is that rule made enforceable, because "don't
+  look" is not a control.
+- ⛔ **ONE DELIBERATE ASYMMETRY, documented in the code:** `classifyAction`
+  defaults an unrecognised action to ASK, but `decideCommandRun` PROCEEDS on an
+  unmatched command — the allowlist has already proven it read-only, and
+  prompting for `ls` teaches a support person to click through the confirmation
+  that matters. **A real ask-first RULE still stops it** (`verdict.matchedRule`
+  is what separates the two cases); `never` refuses even when confirmed.
+- ⛔ **NO PTY / interactive shell, on purpose** — a shell makes every gate above
+  decoration the moment someone types `bash`. If Izzy ever wants a true
+  terminal it is its own engagement with its own decision.
+- ⛔ Refusals are audited exactly like runs (`workbench.command_refused` /
+  `workbench.command_ran`) — a door that records only its successes is not an
+  audit trail. ⛔ **Unset workspace root ⇒ the workbench is OFF (503)**, never a
+  fallback to cwd. Path traversal and credential files are refused by the file
+  reader too; `node_modules`/`.git`/dotfiles are never listed.
+
+✅ **DEPLOYED (api container `9e824f19`) AND THE GATES DRIVEN LIVE ON
+PRODUCTION** — the explorer listed the real repo (`apps`, `docs`, `infra`,
+`ops`, `packages`), a real `git status | head` ran (exit 0), and **all five
+attacks bounced**: `cat …/.env.platform` → **403 refused_secrets**;
+`ls; rm -rf /tmp/x` → 400; `bash -c whoami` → 400; `docker restart app-api-1`
+→ 400; `../../etc/passwd` → 400.
+
+Tests: 18 workbench (every refusal path) + 32 console. Portal typecheck 0; api 75.
+
+⏳ **NOT DONE / next:** the agent DRIVING the workbench (its tools would be
+`read_file` / `list_files` / `run_command` at `minRole: "staff"` in
+`apps/agent/src/tools/`, calling these doors exactly as `investigate` does — the
+loop and the keys already exist, so this is wiring, not a capability build);
+proposing an edit as a reviewable diff and shipping it through the deploy queue;
+and ⛔ **nobody has opened the Workbench tab in a browser.** The support-agent
+accounts and per-feature permission keys remain Izzy's to create.
