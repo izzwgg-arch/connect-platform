@@ -149,3 +149,37 @@
 .sd-rule-test h5, .sd-rule-history h5 { margin: 0 0 9px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
 .sd-rule-test .sd-composer { border-top: 0; padding-top: 0; }
 .sd-verdict { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ---------- the workbench (Phase 5c) ---------- */
+.sd-wb { display: grid; grid-template-columns: 250px 1fr; gap: 14px; align-items: start; }
+@media (max-width: 980px) { .sd-wb { grid-template-columns: 1fr; } .sd-wb-explorer { display: none; } }
+
+.sd-wb-explorer { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; max-height: calc(100vh - 210px); display: flex; flex-direction: column; }
+.sd-wb-crumbs { display: flex; flex-wrap: wrap; gap: 2px; padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+.sd-crumb { border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 11.5px; cursor: pointer; padding: 0; }
+.sd-crumb:hover { color: var(--accent); }
+.sd-wb-tree { overflow-y: auto; padding: 5px 0; }
+.sd-wb-item { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 12.5px; padding: 4px 12px; cursor: pointer; }
+.sd-wb-item:hover { background: var(--panel-2); color: var(--text); }
+.sd-wb-item.on { background: var(--panel-2); color: var(--accent); }
+.sd-wb-ic { color: var(--text-dim); width: 10px; flex: none; }
+
+.sd-wb-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sd-wb-editor { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); min-height: 220px; max-height: 46vh; overflow: auto; }
+.sd-wb-filehead { position: sticky; top: 0; display: flex; align-items: baseline; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2); font-size: 12.5px; }
+.sd-wb-code { margin: 0; padding: 10px 0; font-family: ui-monospace, "IBM Plex Mono", Consolas, monospace; font-size: 12px; line-height: 1.65; }
+.sd-wb-line { display: block; white-space: pre; padding: 0 14px; }
+.sd-wb-no { display: inline-block; width: 42px; margin-right: 12px; text-align: right; color: var(--text-dim); opacity: 0.6; user-select: none; }
+
+.sd-wb-term { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); display: flex; flex-direction: column; overflow: hidden; }
+.sd-wb-termhead { display: flex; align-items: baseline; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2); font-size: 12.5px; }
+.sd-wb-out { flex: 1; min-height: 150px; max-height: 34vh; overflow: auto; padding: 10px 14px; font-family: ui-monospace, "IBM Plex Mono", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.sd-wb-l { white-space: pre-wrap; word-break: break-word; }
+.sd-wb-cmd { color: var(--text); }
+.sd-wb-out .sd-wb-out { color: var(--text-dim); }
+.sd-wb-err { color: var(--danger); }
+.sd-wb-note { color: var(--text-dim); font-style: italic; }
+.sd-wb-prompt { color: var(--accent); }
+.sd-wb-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 14px; border-top: 1px solid color-mix(in srgb, var(--warning) 45%, transparent); background: color-mix(in srgb, var(--warning) 9%, transparent); color: var(--warning); font-size: 12.5px; }
+.sd-wb-term .sd-composer { border-top: 1px solid var(--border); padding: 10px 12px; }
+.sd-wb-term .sd-composer input { font-family: ui-monospace, "IBM Plex Mono", Consolas, monospace; }

@@ -43,6 +43,14 @@ import {
   type GroundRulesText,
 } from "./supportGroundRules";
 import { runWatchman, type WatchmanProbes, type WatchmanVerdict } from "./supportWatchman";
+import {
+  ALLOWED_BINARIES,
+  COMMAND_TIMEOUT_MS,
+  decideCommandRun,
+  listWorkspaceDir,
+  readWorkspaceFile,
+  runCheckedCommand,
+} from "./supportWorkbench";
 
 /**
  * Best-effort audit row with REAL tamper evidence — `AgentAuditLog.hash` is a
@@ -93,6 +101,9 @@ export interface SupportConsoleDeps {
   /** Phase 5b: the Watchman's probes. Absent = the check reports "unknown",
    *  which blocks work — never "fine". */
   watchmanProbes?: WatchmanProbes;
+  /** Phase 5c: the workbench's workspace root. ⛔ Absent = the workbench is
+   *  OFF (503) — an unconfigured root must never fall back to "/" or cwd. */
+  workspaceRoot?: string;
 }
 
 const LIST_DEFAULT_TAKE = 50;
@@ -810,6 +821,143 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
           pbx: async () => { throw new Error("not wired"); },
         });
     return verdict;
+  });
+
+  // ─────────────────────── Phase 5c: the workbench ───────────────────────
+
+  async function watchmanNow(): Promise<WatchmanVerdict> {
+    return deps.watchmanProbes
+      ? await runWatchman(deps.watchmanProbes)
+      : await runWatchman({
+          rules: async () => { throw new Error("not wired"); },
+          server: async () => { throw new Error("not wired"); },
+          pbx: async () => { throw new Error("not wired"); },
+        });
+  }
+
+  /** ⛔ No configured root ⇒ the workbench is OFF. Never fall back to cwd. */
+  function workspaceRootOr503(reply: any): string | null {
+    const root = String(deps.workspaceRoot ?? "").trim();
+    if (!root) {
+      reply.code(503).send({ error: "workbench_unavailable", message: "The workbench isn't set up on this server." });
+      return null;
+    }
+    return root;
+  }
+
+  app.get("/admin/support/workbench/files", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const root = workspaceRootOr503(reply);
+    if (!root) return reply;
+    const q = z.object({ path: z.string().max(400).optional() }).safeParse(req.query ?? {});
+    if (!q.success) return reply.code(400).send({ error: "bad_query" });
+    try {
+      const entries = await listWorkspaceDir(root, q.data.path ?? "");
+      return { path: q.data.path ?? "", entries };
+    } catch (e: any) {
+      return reply.code(400).send({ error: "cannot_list", message: String(e?.message ?? "That folder can't be opened.") });
+    }
+  });
+
+  app.get("/admin/support/workbench/file", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    const root = workspaceRootOr503(reply);
+    if (!root) return reply;
+    const q = z.object({ path: z.string().min(1).max(400) }).safeParse(req.query ?? {});
+    if (!q.success) return reply.code(400).send({ error: "bad_query" });
+    try {
+      return await readWorkspaceFile(root, q.data.path);
+    } catch (e: any) {
+      return reply.code(400).send({ error: "cannot_read", message: String(e?.message ?? "That file can't be opened.") });
+    }
+  });
+
+  /**
+   * Run a command. ⛔ Every gate lives in `decideCommandRun` (Watchman →
+   * allowlist → secrets → rulebook); this handler only carries the answer and
+   * writes the audit row. A refusal is audited exactly like a run — a door that
+   * only records its successes is not an audit trail.
+   */
+  app.post("/admin/support/workbench/run", async (req, reply) => {
+    const user: any = await requireSuper(req, reply);
+    if (!user) return reply;
+    const root = workspaceRootOr503(reply);
+    if (!root) return reply;
+    const body = z
+      .object({ command: z.string().min(1).max(600), confirmed: z.boolean().optional() })
+      .safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_body", message: "Type a command to run." });
+
+    const { rules, version } = await currentRules();
+    const watchman = await watchmanNow();
+    const decision = decideCommandRun({
+      command: body.data.command,
+      rules,
+      watchman,
+      confirmed: !!body.data.confirmed,
+    });
+
+    if (!decision.run) {
+      await supportAudit(db, {
+        actor: "support-desk",
+        event: "workbench.command_refused",
+        tenantId: String(user.tenantId ?? ""),
+        payload: {
+          by: String(user.sub ?? ""),
+          command: body.data.command,
+          reason: decision.error,
+          rulesVersion: version,
+          matchedRule: decision.verdict?.matchedRule ?? null,
+        },
+      });
+      return reply.code(decision.status).send({
+        error: decision.error,
+        message: decision.message,
+        needsConfirm: !!decision.needsConfirm,
+        verdict: decision.verdict ?? null,
+      });
+    }
+
+    const result = await runCheckedCommand(body.data.command, root);
+    await supportAudit(db, {
+      actor: "support-desk",
+      event: "workbench.command_ran",
+      tenantId: String(user.tenantId ?? ""),
+      payload: {
+        by: String(user.sub ?? ""),
+        command: body.data.command,
+        exitCode: result.exitCode,
+        ms: result.ms,
+        confirmed: !!body.data.confirmed,
+        rulesVersion: version,
+      },
+    });
+    return {
+      ok: true,
+      command: body.data.command,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      truncated: result.truncated,
+      ms: result.ms,
+      verdict: decision.verdict,
+    };
+  });
+
+  /** What the workbench can do, so the screen never offers what the server refuses. */
+  app.get("/admin/support/workbench/capabilities", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    return {
+      available: !!String(deps.workspaceRoot ?? "").trim(),
+      allowedBinaries: [...ALLOWED_BINARIES],
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      // ⛔ Stated on screen on purpose: an IDE that looks like a shell but is
+      // not one must say so, or the first `rm` reads as a broken product.
+      note: "Read-only commands only. Changes go through the normal approval and deploy flow.",
+    };
   });
 
   app.post("/admin/support/threads/:id/reply", async (req, reply) => {

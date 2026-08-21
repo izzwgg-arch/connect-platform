@@ -646,6 +646,58 @@ test("watchman reports the injected probes", async () => {
   assert.equal(out.safeToWork, true);
 });
 
+// ---------------------------------------------------------------- workbench (Phase 5c)
+
+test("⛔ with no workspace root the workbench is OFF (503) — never a fallback to cwd", async () => {
+  const { app } = register([]);
+  for (const route of ["/admin/support/workbench/files", "/admin/support/workbench/file"]) {
+    const { reply } = await call(app, route, { query: { path: "x" } });
+    assert.equal(reply.statusCode, 503, route);
+  }
+  const run = await call(app, "POST /admin/support/workbench/run", { body: { command: "ls" } });
+  assert.equal(run.reply.statusCode, 503);
+});
+
+test("⛔ the workbench refuses to run while the Watchman says stop, and audits the refusal", async () => {
+  const rdb = rulesDb();
+  const app = fakeApp();
+  registerSupportConsoleRoutes({
+    app,
+    db: { ...customerDb({}), ...inboxDb({}), ...fakeDb([], {}), supportGroundRule: rdb.supportGroundRule, agentAuditLog: rdb.agentAuditLog },
+    requireSuper: async () => ({ sub: "super", role: "SUPER_ADMIN", tenantId: "admin" }),
+    workspaceRoot: "/tmp",
+    watchmanProbes: {
+      rules: async () => { throw new Error("cannot read rules"); },
+      server: async () => ({ healthy: 2, unhealthy: [] }),
+      pbx: async () => ({ reachable: true, readOnly: true }),
+    },
+  });
+  const { reply } = await call(app, "POST /admin/support/workbench/run", { body: { command: "git status" } });
+  assert.equal(reply.statusCode, 409);
+  assert.equal(reply.body.error, "not_safe_to_work");
+  assert.equal(rdb.audits.at(-1).event, "workbench.command_refused", "a refusal must be audited too");
+  assert.equal(rdb.audits.at(-1).hash.length, 64);
+});
+
+test("capabilities says what the workbench may run, and admits when it is off", async () => {
+  const off = register([]);
+  const a = await call(off.app, "/admin/support/workbench/capabilities", {});
+  assert.equal(a.out.available, false);
+
+  const app = fakeApp();
+  registerSupportConsoleRoutes({
+    app,
+    db: { ...customerDb({}), ...inboxDb({}), ...fakeDb([], {}) },
+    requireSuper: async () => ({ sub: "super", role: "SUPER_ADMIN", tenantId: "admin" }),
+    workspaceRoot: "/tmp",
+  });
+  const b = await call(app, "/admin/support/workbench/capabilities", {});
+  assert.equal(b.out.available, true);
+  assert.ok(b.out.allowedBinaries.includes("git"));
+  assert.ok(!b.out.allowedBinaries.includes("rm"));
+  assert.match(b.out.note, /Read-only/);
+});
+
 // ---------------------------------------------------------------- wiring guards
 
 function readSource(rel: string): string {
@@ -678,6 +730,7 @@ test("⛔ the module's writes are exactly reply/takeover/staff-message, and SMS 
       "/admin/support/ground-rules",
       "/admin/support/ground-rules/check",
       "/admin/support/threads/:id/reply",
+      "/admin/support/workbench/run",
     ],
     "supportConsole.ts grew an unexpected write route",
   );

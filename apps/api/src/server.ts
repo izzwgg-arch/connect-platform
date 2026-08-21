@@ -41677,6 +41677,13 @@ const port = Number(process.env.PORT || 3001);
     // sender's signature; the shapes agree at runtime and the tests pin it.)
     sendSms: (input) => sendConnectChatSmsMessage(input as Parameters<typeof sendConnectChatSmsMessage>[0]),
     smsQueue,
+    // The workbench reads the app's own source tree inside the container.
+    // ⛔ Resolved from the knowledge dir (docs/agent-knowledge → repo root) so
+    // it is the real checkout and never cwd; unset = the workbench is OFF.
+    workspaceRoot: await (async () => {
+      const dir = await resolveAgentKnowledgeDir().catch(() => null);
+      return dir ? path.resolve(dir, "..", "..") : undefined;
+    })(),
     // The Watchman's three standing checks (Phase 5b). Each one THROWS on
     // failure on purpose: runWatchman turns a throw into "unknown", which
     // blocks work — a crashing probe must never read as a passing one.
