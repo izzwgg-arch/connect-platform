@@ -22,5 +22,17 @@ room:
 keys:
   # <LIVEKIT_API_KEY>: <LIVEKIT_API_SECRET>
   LKEXAMPLE: replace-with-a-long-random-secret
+# TURN over TLS — the fallback that gets media through offices filtering both
+# UDP and unusual TCP ports, because it looks exactly like HTTPS on 443.
+# Requires: a hostname pointing at the TURN IP, a certificate for it, and the
+# compose overlay publishing that IP's 443. LiveKit hands clients
+# `turns:<domain>:443` in its ICE list automatically.
+# ⛔ Bind 443 of the SECOND IP only — nginx owns 443 on the primary.
+turn:
+  enabled: true
+  domain: turn.example.net
+  cert_file: /etc/letsencrypt/live/turn.example.net/fullchain.pem
+  key_file: /etc/letsencrypt/live/turn.example.net/privkey.pem
+  tls_port: 443
 logging:
   level: info

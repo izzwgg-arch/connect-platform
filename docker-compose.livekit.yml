@@ -23,9 +23,22 @@ services:
     command: --config /etc/livekit.yaml
     volumes:
       - /opt/connectcomms/env/livekit.yaml:/etc/livekit.yaml:ro
+      # Read-only Let's Encrypt mount for the TURN certificate
+      # (turn.loopcom.net). ⛔ The WHOLE /etc/letsencrypt tree is mounted, not
+      # just live/ — those are symlinks into archive/ and would not resolve.
+      # ⛔ LiveKit reads the cert at START, so a renewal needs a container
+      # restart to take effect (renewal hook: infra/livekit/README).
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     ports:
       - "127.0.0.1:7880:7880"
       - "7881:7881"
       - "7882:7882/udp"
+      # TURN over TLS on 443 of the SECOND IP — the whole reason that IP was
+      # bought. It gets media through offices that filter both UDP and unusual
+      # TCP ports, by looking exactly like HTTPS. ⛔ Bound to 169.58.213.204
+      # ONLY: nginx owns 443 on the primary IP, so a wildcard bind here would
+      # collide with the entire portal. ⛔ Docker-published ports BYPASS ufw,
+      # so this is reachable the moment the container starts.
+      - "169.58.213.204:443:443"
     networks:
       - default
