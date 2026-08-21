@@ -1946,7 +1946,13 @@ has"*, then *"let's do free open source"*, then, on the mockups
   `20260821150000_meeting_schedule_invites` (all columns NULLABLE, so every
   existing instant meeting is untouched); `POST /meetings` gained a schedule + an
   invite list; new `POST /meetings/:code/invite`; new screen
-  `ScheduleMeeting.tsx`. Comparison against the approved drawing:
+  `ScheduleMeeting.tsx`. ✅ **api + portal DEPLOYED and container-verified at
+  `8d033759`; migration applied 15:35:33Z (3 existing meetings, 0 scheduled,
+  0 invite rows — nothing that existed moved); every route probed live incl. a
+  REAL TENANT_ADMIN getting 403 on create, list AND invite — and the probe sent
+  ZERO emails.** ⛔ A 400 on `/end` during that probe was the PROBE's fault (a
+  JSON content-type with no body trips Fastify); `apiClient` omits it, and the
+  real path answers 200. Comparison against the approved drawing:
   <https://claude.ai/code/artifact/e50da26c-b3f3-4332-9b89-cf120aacba0e>.
 - ⛔⛔ **THE INVITE EMAIL IS BUILT FROM `emailShell` + `ctaButton` IN
   `billing/emailTemplates.ts`, NEVER FROM NEW HTML.** Those carry the Outlook

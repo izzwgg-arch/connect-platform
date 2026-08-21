@@ -532,3 +532,44 @@ needed" line — comes from the shell and is byte-for-byte the approved design.
   own design.
 - The shared mailbox's **500/day** allowance still covers alerts, invoices,
   voicemail and now invites; the per-meeting cap is 50.
+
+### §9.10 ✅ DEPLOYED AND VERIFIED 2026-08-21
+
+api and portal both at **`8d033759`** (`deploy-direct.sh`, api first so the
+migration ran before the screen existed). Migration
+`20260821150000_meeting_schedule_invites` applied **15:35:33Z** — all four
+`VideoMeeting` columns present, `VideoMeetingInvite` + its three indexes
+created. ⛔ **3 existing meetings, 0 of them scheduled, 0 invite rows: nothing
+that already existed moved**, which is the whole point of making every column
+nullable.
+
+**Code verified inside the containers**, not inferred from the deploy log: the
+three new api modules present, the invite route wired, `export function
+ctaButton` in `emailTemplates.ts`, the shared parser present; and in the shipped
+portal `.next`, the STRINGS "Schedule & send invites", "Schedule for later" and
+the chip placeholder (⛔ grep by string — minification renames functions and a
+0-hit grep on a name reads exactly like a failed deploy).
+
+**Probed live on production with a 60-second self-signed SUPER_ADMIN token
+against `127.0.0.1:3001` — and it sent ZERO emails** (every call either carried
+no invites or carried addresses the parser must refuse):
+
+| Probe | Result |
+|---|---|
+| `GET /meetings` | **200**, 3 meetings, new presenter renders |
+| `POST /meetings` scheduled, no invites | **200** — `Monday, August 24 · 12:09 – 12:39 PM · Eastern Daylight Time`, `joinUrl https://app.connectcomunications.com/meet/…` |
+| bad time zone | **400** "That time zone was not recognised." |
+| mistyped year | **400** "That start date is more than two years away — check the year." |
+| junk invite list | **400** "None of those look like email addresses: nope@@, alsobad@" |
+| **a REAL TENANT_ADMIN** (`ezra@connectcomunications.com`) | **403** on create, list AND invite |
+
+⛔ **A 400 on `POST /meetings/:code/end` during the probe was the PROBE's fault,
+not a bug** — it sent `content-type: application/json` with no body, which trips
+Fastify's empty-JSON-body guard. `apiClient.ts:178` **omits** the content-type
+on a bodyless POST, so the portal's End button is fine: re-probed the way the
+portal actually sends it and it answers **200 `{"ok":true}`**. Worth knowing
+before writing any bodyless-POST probe against this api.
+
+Health after: `/api/health`, `/` and `/meetings` all **200 on both hostnames**,
+bad login still **401**, both containers **0 restarts**, **0 error-level lines**.
+All probe rows deleted; platform back to 3 meetings / 0 invites.
