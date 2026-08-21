@@ -258,3 +258,32 @@ test("SOURCE: the extension sync calls preserveBlankedPbxEmail BEFORE the extens
 test("SOURCE: server.ts starts the guardrail timers", () => {
   assert.match(serverSrc, /startEmailGuardrails\(app\.log\)/);
 });
+
+// ⛔⛔ 2026-08-21: the watchdog was armed with a bare setInterval(15 min) and no
+// boot run, so every api restart reset its clock. Five rollouts inside 50 minutes
+// (ten container boots, longest quiet stretch ~12 min) starved it for 67 minutes
+// and paged the owner while the pipeline was healthy. The sweep survived the exact
+// same churn because it has a 45 s boot kick. This guard keeps the watchdog’s.
+test("SOURCE: the watchdog is kicked at boot as well as on its interval", async () => {
+  const { VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS, VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS } = await import("./voicemailEmailRuntime");
+  assert.match(
+    serverSrc,
+    /setTimeout\(\(\) => \{ void runVoicemailEmailWatchdog\(app\.log\); \}, VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS\)/,
+    "the watchdog must run once shortly after boot, or a restart cadence under its interval starves it forever",
+  );
+  assert.match(
+    serverSrc,
+    /setInterval\(\(\) => \{ void runVoicemailEmailWatchdog\(app\.log\); \}, VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS\)/,
+    "the interval must remain — the boot kick is an addition, never a replacement",
+  );
+  // The boot kick must land AFTER the sweep’s, so the sweep gets first refusal
+  // on fresh voicemail and the watchdog’s rescue path stays the exception.
+  assert.ok(
+    VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS > 45_000,
+    "the watchdog boot kick must come after the sweep’s 45 s kick",
+  );
+  assert.ok(
+    VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS < VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS,
+    "a boot kick no earlier than the interval is not a boot kick",
+  );
+});

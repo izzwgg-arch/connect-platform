@@ -339,3 +339,118 @@ That 55 is the baseline the hourly drop check now compares against.
 
 ⏳ **NOT PROVEN: no guardrail has fired for real.** The acceptance test is the
 first real fault or a deliberate one (which texts both phones — ask first).
+
+---
+
+## 8. ✅ THE FIRST GUARDRAIL EVER TO FIRE — and it caught a defect in ITSELF, not in the pipeline (2026-08-21)
+
+§7 ended "NOT PROVEN: no guardrail has fired for real." **It has now.** At
+**12:09:38 UTC on 2026-08-21** the liveness check raised escalation
+`cmt2wpqlz030jln12zxw1lhpw` — *"Voicemail email watchdog has stopped — last
+heartbeat 67 min ago"* — and the SMS reached Izzy 20 s later
+(`smsSentAt 12:09:58`, `emailQueuedAt 12:09:58`, status SENT). Izzy asked for
+both halves to be checked: the voicemail emails, and the watchdog.
+
+### 8.1 The voicemail emails were, and are, HEALTHY — the alarm was not about them
+
+Measured read-only before touching anything:
+
+| Check | Reading |
+|---|---|
+| Sweep heartbeat | 26 s old (threshold 10 min) — **1,506 in 24 h, not one minute missed** |
+| Watchdog heartbeat | 4 min old at the time of checking (threshold 45 min) |
+| `VOICEMAIL_NOTIFICATION` jobs, 48 h | **21 SENT, 0 FAILED** |
+| Every email type, 24 h | **0 FAILED, 0 stuck QUEUED** (40 `ADMIN_ALERT` SKIPPED = the platform mute, correct) |
+| Recipient coverage | **55 of 107**, `dropped: false`, `previous: 55` — flat across every hourly run |
+| Unstamped voicemail, 7-day window | **186 rows, ALL Gesheft** — the excluded tenant, never stamped by design |
+
+⛔ **That last row is the one that reads alarming and is correct.** An excluded
+tenant's voicemail is deliberately never stamped, so it accumulates forever;
+since `6961ea9e` the sweep excludes it **in the query**, so it can no longer
+head-of-line block anything. **Zero non-Gesheft voicemail was unstamped.**
+
+### 8.2 The real finding: the watchdog had no boot run, so deploy churn starved it
+
+`server.ts` armed the watchdog with a bare `setInterval(15 min)` and nothing
+else. **Every api restart puts that clock back to zero.** The sweep beside it
+has a `setTimeout(45 s)` boot kick and therefore survives restarts; the watchdog
+did not, and no other guardrail check lacked one either (coverage kicks at
+3 min, outbox at 2 min, liveness at grace + 1 min). **The watchdog was the only
+timer in the file with no boot run.**
+
+⛔⛔ **The witness that proves it, and it is reusable: the recipient-coverage
+check kicks 3 minutes after boot, so every coverage row that is NOT on the
+hourly metronome marks an api process boot 3 minutes earlier.** Reading them for
+2026-08-21 gives the boot times directly:
+
+```
+coverage at  10:16:34 10:18:59 10:35:16 11:10:03 11:11:59 11:16:03 11:18:08
+             11:28:36 11:31:24 11:40:16 11:42:13 11:54:26 11:57:38
+  ⇒ api boots ~10:13 10:15 10:32 11:07 11:08 11:13 11:15 11:25 11:28 11:37 11:39 11:51 11:54
+```
+
+**Ten container boots between 11:07 and 11:54** — five api rollouts from other
+sessions that day (`deploy-api-portstatus`, `deploy-api-turnstile`,
+`deploy-api-hard2`, plus the IDE deploy), each recreating **both** `app-api-1`
+and `app-api-candidate-1`. **The longest quiet stretch was ~12 minutes**, under
+the watchdog's 15. So it did not run **once** between `11:02:16` and `12:09:38`
+— a **67-minute** gap against a 45-minute threshold, and the alarm fired
+correctly at the first liveness tick that could see it.
+
+⛔ The escalation landed **12 ms after** the watchdog's own resumed heartbeat
+(`12:09:38.795` heartbeat, `12:09:38.807` escalation) — the liveness check read
+the old value microseconds before the new one was written. Not a bug; the two
+run on independent timers.
+
+⛔ **Nothing was at risk during the 67 minutes.** The sweep never missed a
+minute, and the last voicemail of the day had arrived at **05:10 UTC** — there
+was nothing for the watchdog to have rescued. **The alarm was TRUE and the
+pipeline was HEALTHY, which is the worst kind of page:** a guard that cries wolf
+on every busy deploy day is a guard people learn to click past, and the next
+one — the real one — goes with it.
+
+### 8.3 The fix — one boot kick, and a guard so it cannot be dropped again
+
+`VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS = 90_000` in `voicemailEmailRuntime.ts`,
+wired in `server.ts` as a `setTimeout` beside the existing `setInterval`.
+
+⛔ **90 s, deliberately AFTER the sweep's 45 s kick**, so the sweep gets first
+refusal on anything fresh and the watchdog's rescue path stays the exception it
+is meant to be instead of racing the sweep on every boot.
+⛔ **The interval is unchanged — the boot kick is an addition, never a
+replacement**, and the source guard asserts both.
+
+**Proven:** `voicemailEmailGuardrails.test.ts` **16/16** and
+`voicemailEmailRuntime.test.ts` **6/6**; the new source guard is
+**non-vacuous — `VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS` appears 0 times in
+`HEAD`'s `server.ts` and `voicemailEmailRuntime.ts`**, so `assert.match` fails
+there. apps/api typecheck: **11 errors, every one pre-existing and none on an
+edited line** (the seven `Argument of type 'number' is not assignable to
+parameter of type 'Timeout'` errors are the documented tsconfig quirk on
+neighbouring `registerShutdownTimer` calls that carry no cast — the two lines
+added here carry the `as unknown as NodeJS.Timeout` cast and do not appear).
+
+### 8.4 ⏳ Found in passing, NOT fixed — 3 mailboxes still email nobody
+
+The watchdog's steady `{"gaps": 10, "rescued": 0, "eligible": 149}` is **10
+`no_recipient` voicemails**, which `gapsWorthAlerting` deliberately never
+escalates (a standing condition, not an incident). They are:
+
+| Company | Extension | Voicemails in 7 days | Newest |
+|---|---|---|---|
+| A plus center | 108 | 6 | 2026-08-20 18:54 |
+| Trimpro | 102 | 3 | 2026-08-20 14:43 |
+| Trimpro | 104 | 1 | 2026-08-17 21:44 |
+
+Ten messages in a week that produced no email for anyone, because those
+extensions carry no `pbxUserEmail` **and** no `VoicemailEmailRecipient` row —
+they were blind on the PBX before the cutover too. **The fix is one address each
+in Settings → it is a data decision, Izzy's, not an engineering one.**
+
+### 8.5 What is still unproven
+
+⏳ The boot kick has **never run on a real container** — it ships with this
+commit. **Acceptance is one api deploy: a `voicemail_email.watchdog_heartbeat`
+row roughly 90 seconds after the new container starts, instead of 15 minutes.**
+⏳ And the negative that matters: the next busy deploy day must NOT produce
+another "watchdog has stopped" text.

@@ -77,6 +77,27 @@ export function buildVoicemailSweepWhere(input: { since: Date; excludedTenantIds
 export const VOICEMAIL_EMAIL_SWEEP_INTERVAL_MS = 60_000;
 export const VOICEMAIL_EMAIL_WATCHDOG_INTERVAL_MS = 15 * 60_000;
 
+/**
+ * ⛔⛔ THE WATCHDOG NEEDS A BOOT RUN, AND THIS CONSTANT IS THE WHOLE FIX
+ * (2026-08-21). It was armed with a bare `setInterval(15 min)` and nothing else,
+ * so every api restart put its clock back to zero. On a busy deploy day that
+ * starves it completely: five api deploys between 11:07 and 11:54 UTC recreated
+ * the container TEN times (stable + candidate per rollout), the longest quiet
+ * stretch was ~12 minutes, and the watchdog therefore did not run ONCE for
+ * 67 minutes — until the liveness guard correctly texted the owner
+ * "Voicemail email watchdog has stopped".
+ *
+ * ⛔ Nothing was actually at risk: the sweep survives restarts because it kicks
+ * at 45 s and repeats every 60 s, and it never missed a minute. The alarm was
+ * TRUE and the pipeline was HEALTHY — which is the worst kind of page, because a
+ * guard that cries wolf on every deploy day is a guard people learn to ignore.
+ *
+ * ⛔ 90 s, deliberately AFTER the sweep’s 45 s kick: the sweep gets first refusal
+ * on anything fresh, so the watchdog’s rescue path stays the exception it is
+ * meant to be rather than racing the sweep on every boot.
+ */
+export const VOICEMAIL_EMAIL_WATCHDOG_BOOT_DELAY_MS = 90_000;
+
 /** Attachment for a queued voicemail email. Null = do not send yet. */
 export async function loadVoicemailAudioAttachment(job: {
   type: string;
