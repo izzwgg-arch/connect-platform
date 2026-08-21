@@ -25,7 +25,7 @@
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { promises as fsp } from "node:fs";
+import { promises as fsp, constants as fsConstants } from "node:fs";
 import { classifyAction, type ActionVerdict, type GroundRulesText } from "./supportGroundRules";
 import type { WatchmanVerdict } from "./supportWatchman";
 
@@ -329,6 +329,59 @@ export async function gitBranch(root: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The commit this container was built from, written by the deploy into
+ * `.build-commit`.
+ *
+ * ⛔ THIS IS THE STATUS BAR'S TRUTH, NOT A BRANCH NAME. The api image COPIES
+ * the source; it is not a clone, so there is no `.git` and no branch inside the
+ * container. Mounting the server's deploy clone would produce a branch — and
+ * would also expose the live `.env` files that clone contains, guarded only by
+ * a filename regex. A deployed container's uncommitted-change letters would be
+ * empty anyway (deploys hard-reset), so the trade is real exposure for cosmetic
+ * git chrome. The deployed commit is both safer and more useful to a support
+ * person: it says exactly what code is running.
+ */
+export async function deployedCommit(root: string): Promise<string | null> {
+  for (const p of [path.join(root, ".build-commit"), "/app/.build-commit"]) {
+    try {
+      const txt = await fsp.readFile(p, "utf8");
+      const short = txt.trim().slice(0, 12);
+      if (short) return short;
+    } catch {
+      /* try the next */
+    }
+  }
+  return null;
+}
+
+/**
+ * Which allowlisted commands this container can actually run.
+ *
+ * ⛔ Offering a command the box does not have is how a tool teaches people not
+ * to trust it — `git` is allowlisted but absent from the api image, so the
+ * screen must not present git actions here. Checked once at call time against
+ * PATH; a missing binary is simply not offered.
+ */
+export async function availableBinaries(): Promise<string[]> {
+  const found: string[] = [];
+  const dirs = String(process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  await Promise.all(
+    ALLOWED_BINARIES.map(async (bin) => {
+      for (const d of dirs) {
+        try {
+          await fsp.access(path.join(d, bin), fsConstants.X_OK);
+          found.push(bin);
+          return;
+        } catch {
+          /* keep looking */
+        }
+      }
+    }),
+  );
+  return found.sort();
 }
 
 export const MAX_FILE_BYTES = 400_000;

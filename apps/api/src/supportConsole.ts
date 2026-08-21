@@ -46,7 +46,9 @@ import { runWatchman, type WatchmanProbes, type WatchmanVerdict } from "./suppor
 import {
   ALLOWED_BINARIES,
   COMMAND_TIMEOUT_MS,
+  availableBinaries,
   decideCommandRun,
+  deployedCommit,
   gitBranch,
   gitStatusMap,
   listWorkspaceDir,
@@ -960,12 +962,20 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
     const user = await requireSuper(req, reply);
     if (!user) return reply;
     const root = String(deps.workspaceRoot ?? "").trim();
+    // ⛔ `available` lists what this container can ACTUALLY run, not what the
+    // allowlist permits — offering a command the box lacks (git, here) teaches
+    // people the tool is broken. The screen hides what is not offered.
+    const [branch, commit, usable] = root
+      ? await Promise.all([gitBranch(root), deployedCommit(root), availableBinaries()])
+      : [null, null, [] as string[]];
     return {
       available: !!root,
       // Real values for the status bar — never invented.
-      branch: root ? await gitBranch(root) : null,
+      branch,
+      deployedCommit: commit,
       workspaceName: root ? root.split(/[\\/]/).filter(Boolean).pop() ?? "workspace" : null,
-      allowedBinaries: [...ALLOWED_BINARIES],
+      allowedBinaries: usable,
+      permittedBinaries: [...ALLOWED_BINARIES],
       timeoutMs: COMMAND_TIMEOUT_MS,
       // ⛔ Stated on screen on purpose: an IDE that looks like a shell but is
       // not one must say so, or the first `rm` reads as a broken product.

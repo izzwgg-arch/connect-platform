@@ -693,9 +693,31 @@ test("capabilities says what the workbench may run, and admits when it is off", 
   });
   const b = await call(app, "/admin/support/workbench/capabilities", {});
   assert.equal(b.out.available, true);
-  assert.ok(b.out.allowedBinaries.includes("git"));
-  assert.ok(!b.out.allowedBinaries.includes("rm"));
+  // ⛔ TWO lists with different meanings: `permitted` is the policy (what the
+  // allowlist admits), `allowed` is reality (what this container can actually
+  // run). Offering a command the box lacks is how a tool teaches people not to
+  // trust it — the api image has no git, so it must not appear in `allowed`.
+  assert.ok(b.out.permittedBinaries.includes("git"), "git is permitted by policy");
+  assert.ok(!b.out.permittedBinaries.includes("rm"), "rm must never be permitted");
+  assert.ok(Array.isArray(b.out.allowedBinaries));
+  for (const bin of b.out.allowedBinaries) {
+    assert.ok(b.out.permittedBinaries.includes(bin), `${bin} is offered but not permitted`);
+  }
   assert.match(b.out.note, /Read-only/);
+});
+
+test("⛔ the deployed commit stands in for a branch — the api image is a copy, not a clone", async () => {
+  const app = fakeApp();
+  registerSupportConsoleRoutes({
+    app,
+    db: { ...customerDb({}), ...inboxDb({}), ...fakeDb([], {}) },
+    requireSuper: async () => ({ sub: "super", role: "SUPER_ADMIN", tenantId: "admin" }),
+    workspaceRoot: "/tmp",
+  });
+  const { out } = await call(app, "/admin/support/workbench/capabilities", {});
+  // Either a real branch or a commit — but the field must EXIST, so the status
+  // bar never invents one.
+  assert.ok("branch" in out && "deployedCommit" in out);
 });
 
 // ---------------------------------------------------------------- wiring guards
