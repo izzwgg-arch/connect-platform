@@ -1927,6 +1927,61 @@ has"*, then *"let's do free open source"*, then, on the mockups
   end → 410), 19 tests, container greps. **Acceptance is two people on two
   machines** — video both ways, screen share, hand, chat, host mute/remove, End
   ejects — then once more from a filtered-internet office.
+- ✅✅ **A MEETING CAN BE SCHEDULED AND THE INVITATION IS A LOOPCOM EMAIL
+  (2026-08-21, `18328aa1`) — handoff §9.** Izzy: *"I should be able to schedule
+  meetings and then send out a nice email … I can add as many email addresses as
+  I want"*, then on the mockup *"that is perfect! Build it!"* Migration
+  `20260821150000_meeting_schedule_invites` (all columns NULLABLE, so every
+  existing instant meeting is untouched); `POST /meetings` gained a schedule + an
+  invite list; new `POST /meetings/:code/invite`; new screen
+  `ScheduleMeeting.tsx`. Comparison against the approved drawing:
+  <https://claude.ai/code/artifact/e50da26c-b3f3-4332-9b89-cf120aacba0e>.
+- ⛔⛔ **THE INVITE EMAIL IS BUILT FROM `emailShell` + `ctaButton` IN
+  `billing/emailTemplates.ts`, NEVER FROM NEW HTML.** Those carry the Outlook
+  hardening — the fixed 600px `[if mso]` wrapper and the **VML `roundrect`, the
+  only thing that paints a button in Word's renderer**. A hand-rolled invite
+  looks perfect in Gmail and arrives in Outlook as bare blue text, and nobody
+  finds out for weeks. **`ctaButton` was EXPORTED for this** (it was
+  module-private); the nine existing billing emails are proven **byte-identical**
+  afterwards. ⛔ Type is **`MEETING_INVITE`, never `ADMIN_ALERT`** (muted at the
+  send door — it would build clean, log clean and reach nobody). ⛔ The join link
+  comes from **`canonicalPortalOrigin()`**, not the request host: an emailed link
+  has to survive a hostname change months later. All three are guard-tested.
+- ⛔⛔ **THE PARSER BUGS THIS FOUND, AND THE RULE THEY EARNED: a green suite
+  proves the parts work, not that the thing is right.** `parseInviteEmails` was
+  unit-tested green, then run once on realistic input: **every `.co.uk` address
+  was refused** (the domain pattern demanded exactly one dot — the fixture used
+  `@x.com`, which is why it passed), and **`Sara Klein <sara@x.com>` was
+  shredded into three tokens, reporting the person's first and last name back to
+  the host as bad addresses**. An ordinary Outlook paste would have produced a
+  wall of nonsense complaints. **Drive it on what a person will actually paste.**
+- ⛔ **The parser lives in `packages/shared/src/inviteEmailList.ts` so the
+  portal's chip input and the API's validator are ONE rule** — two would drift,
+  and the drift reads as a chip the host can see being silently refused.
+  ⛔ `packages/shared` names its test files explicitly; it had to be registered.
+- ⛔ **The email ALWAYS names the time zone, rendered for the MEETING's own
+  date** (*Eastern Daylight Time* in September, *Standard* in January).
+  Recipients are elsewhere; a time with no zone is a missed meeting. An unusable
+  zone is **REFUSED at the route**, never swapped for UTC. ⛔ **An address is
+  recorded as invited only AFTER its email job exists**, so a crash leaves it
+  re-sendable — a duplicate invite is an annoyance, a missing one is somebody who
+  does not know about the meeting.
+- ⛔ **FOUND IN PASSING, NOT CHANGED: the billing shell still serves the 560px
+  logo.** `getDefaultLogoUrl()` points at `loopcom-wordmark-560.png` — **81 KB
+  into a 156×28 slot** — because the 2026-08-17 optimisation landed on
+  `packages/shared/src/loopcomEmailShell.ts` and the billing one was never
+  switched. So invoices, receipts, pay links, E911 and now this invite all pay
+  81 KB per open instead of 34 KB. **One line, but it moves the bytes of nine
+  live customer emails that are asserted byte-for-byte — Izzy's call.**
+- ⏳ **NOT PROVEN: nobody has received an invitation and nobody has opened the
+  schedule screen.** Proven as 48 api + 6 shared tests, all 7 source guards
+  failing against `HEAD`, portal typecheck 0, billing templates 25/25
+  byte-identical. **Acceptance: schedule one meeting, invite ONLY Izzy's own
+  address, check it in a real inbox, then click through into the meeting.**
+  ⛔ **The negatives that matter: a TENANT_ADMIN still gets 403 on `/meetings`,
+  and inviting one more person afterwards sends ONE email, not the whole list
+  again.** ⏳ Deliberately not built: add-to-calendar (.ics), a reminder email,
+  and rescheduling (which needs its own "the time changed" email).
 
 ## ⛔⛔ AGENT HANDOFF — the SMS↔email bridge is CODE-COMPLETE: texts email out from sms@loopcom.net and REPLYING to that email texts back, one email thread per phone number (2026-08-20) — READ FIRST before touching `apps/agent/src/notify/smsEmail*`, before pointing anything at the sms@loopcom.net mailbox, or for "I replied to the text email and nothing was sent"
 

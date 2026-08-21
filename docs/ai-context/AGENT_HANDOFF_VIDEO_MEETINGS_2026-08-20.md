@@ -380,3 +380,155 @@ Izzy: *"Put meetings in the sidebar. Permissions off for everybody but me."*
   bracket trick avoids the self-match that has hung waiters here before), and
   ⛔ **always enqueue the BRANCH, never your own commit hash** — several
   sessions push minutes apart and pinning a hash rolls their work back.
+
+## §9 Scheduling + the invite email (2026-08-21) — BUILT, and the parser bugs it found
+
+Izzy: *"I should be able to schedule meetings and then send out a nice email.
+Make me a mock-up of the email before you build it … I can add as many email
+addresses as I want to send it to."* Then, on the mockup: **"that is perfect!
+Build it!"**
+
+Commit `18328aa1` on `feat/ivr-migration-takeover`, 16 files.
+Comparison against the approved mockup:
+<https://claude.ai/code/artifact/e50da26c-b3f3-4332-9b89-cf120aacba0e>
+
+### §9.1 What shipped
+
+| Piece | Where |
+|---|---|
+| Scheduled fields + the invite list | migration `20260821150000_meeting_schedule_invites` — `VideoMeeting.scheduledStartAt / durationMinutes / timezone / inviteMessage`, new `VideoMeetingInvite` |
+| Reading a pasted address list | `packages/shared/src/inviteEmailList.ts` |
+| Day / time range / zone wording | `apps/api/src/meetings/meetingSchedule.ts` |
+| The email itself | `apps/api/src/meetings/meetingInviteEmail.ts` |
+| Queueing it | `apps/api/src/meetings/meetingInviteSend.ts` |
+| Routes | `POST /meetings` (extended), `POST /meetings/:code/invite` (new) |
+| The screen | `apps/portal/app/(platform)/meetings/ScheduleMeeting.tsx` |
+
+### §9.2 ⛔ The rules this earned
+
+- **The email is built from `emailShell` + `ctaButton` in
+  `billing/emailTemplates.ts`, never from new HTML.** Those carry the Outlook
+  hardening — the fixed 600px `[if mso]` wrapper and the **VML `roundrect`,
+  which is the only thing that paints a button in Word's renderer**. A
+  hand-rolled invite looks right in Gmail and arrives in Outlook as bare blue
+  text, and nobody finds out for weeks. **`ctaButton` was EXPORTED for this**
+  (it was module-private); the nine existing billing emails are proven
+  **byte-identical** afterwards (`billingEmailTemplates.test.ts` 25/25).
+- ⛔ **Type is `MEETING_INVITE`. Never `ADMIN_ALERT`** — muted at the send door
+  platform-wide, so it would build clean, log clean and reach nobody. Guarded.
+- ⛔ **The join link comes from `canonicalPortalOrigin()`, NOT
+  `portalOriginForRequest()`.** This is the durable-link case: somebody opens
+  the email a month later, and one env flip (`PUBLIC_PORTAL_URL`) has to be able
+  to move the whole platform. A guard test forbids the request-host helpers.
+- ⛔ **The email ALWAYS names the time zone**, and the zone is rendered **for the
+  meeting's own date**, so it says *Eastern Daylight Time* in September and
+  *Eastern Standard Time* in January. Recipients are elsewhere; "2:00 PM" with
+  no zone is a missed meeting. An unusable zone is **REFUSED at the route**, not
+  quietly swapped for UTC.
+- ⛔ **An address is recorded as invited only AFTER its email job exists.** A
+  crash in between therefore leaves it unsent and re-sendable. Deliberate: a
+  duplicate invite is an annoyance, a missing one is somebody who does not know
+  about the meeting. Same trade as the SMS bridge. Guard test pins the order.
+- ⛔ **`POST /meetings/:code/invite` skips anyone already emailed.** Adding two
+  more people must not re-mail the six who already have it.
+- **Scheduling is SUPER_ADMIN only** (`requireMeetingCreator`, unchanged) and
+  the invite route additionally requires `isMeetingHost`. **Joining is
+  untouched** and still open to anyone with the link.
+
+### §9.3 ⛔⛔ Two real parser bugs, found by DRIVING it, not by a fixture
+
+`parseInviteEmails` was written, unit-tested green, and then run once against
+realistic input. Both bugs would have reached a host:
+
+1. **Every `.co.uk` address was refused.** The domain pattern used a dot-free
+   character class for the label before the TLD, so it demanded exactly one dot.
+   `moshe@y.co.uk` came back as *invalid*. **The fixture used `@x.com`, which is
+   why the tests were green.**
+2. **`Sara Klein <sara@x.com>` was shredded.** Splitting on whitespace first
+   produced three tokens, and the person's **first and last name were reported
+   back to the host as bad addresses**. An ordinary Outlook paste would have
+   produced a wall of nonsense complaints.
+
+Fixes: angle-bracket addresses are lifted out **before** splitting, a fragment
+with no `@` is silently ignored (it is a display name, not a failed address),
+and the domain side allows multiple labels. Both are regression tests now.
+
+⛔ **The lesson: a green suite proves the parts work, not that the thing is
+right. Drive it on input that looks like what a person will actually paste.**
+
+### §9.4 ⛔ Why the parser lives in `packages/shared`
+
+The portal's chip input and the API's validator are **literally the same
+function**. Two implementations would drift, and the drift shows up as a chip
+the host can see being silently refused by the server. It is pure and
+browser-safe, so it sits on the root export. ⛔ `packages/shared` names its test
+files **explicitly** — `inviteEmailList.test.ts` had to be registered in
+`package.json` or it would never have run.
+
+### §9.5 ⛔ Found in passing, NOT changed: the billing shell still serves the 560px logo
+
+`getDefaultLogoUrl()` in `billing/emailTemplates.ts` points at
+`loopcom-wordmark-560.png` — **81 KB rendered into a 156×28 slot**. The
+2026-08-17 optimisation (`49799cb7`) that created the 34 KB
+`loopcom-wordmark-email-336.png` landed on the OTHER shell
+(`packages/shared/src/loopcomEmailShell.ts`), and the billing one was never
+switched. So invoices, receipts, payment links, the E911 email and now this
+invite all pay 81 KB per open.
+
+⛔ **Deliberately not fixed here.** It is one line, but it changes the bytes of
+**nine live customer emails** whose output `billingEmailTemplates.test.ts`
+asserts byte-for-byte. That is Izzy's call, not something to slip into a
+meetings build.
+
+### §9.6 Differences from the approved mockup (all deliberate)
+
+| What | The drawing | What it sends | Why |
+|---|---|---|---|
+| Weekday | Thursday, September 4 | **Friday, September 4** | 4 Sep 2026 *is* a Friday. The drawing's weekday was hand-typed; the built one computes it. |
+| Zone label | Eastern Time (US & Canada) | **Eastern Daylight Time** | Derived from the meeting's date, so it is correct in winter too. No hand-maintained label table. |
+| Logo asset | — | the 560px wordmark | §9.5 — pre-existing, flagged, not changed. |
+
+Everything else — the 5px `#22a8ff` bar, the left-aligned wordmark at 156×28,
+the eyebrow, the 26px/750 heading, the `border-left: 4px` When panel, the solid
+blue button with white text, the plain link, the "no account or download
+needed" line — comes from the shell and is byte-for-byte the approved design.
+
+### §9.7 Proven
+
+- **48 api tests** (`src/meetings/*.test.ts`, glob already registered) and
+  **6 shared tests**. ✅ **All 7 source guards fail when replayed against
+  `HEAD`** — none is decorative.
+- Portal typecheck **0**. api typecheck **76, none in any file this build
+  created or edited** — the tree carries another session's in-flight
+  `server.ts` (37 of the 76 are there) plus their untracked `loopcomDirect/`,
+  so the 1-over-baseline is not attributable to this change.
+- Shared suite **450/450**; portal suite **279/281** (the two documented
+  pre-existing failures); billing templates **25/25 byte-identical**.
+- **The `videoMeetingInvite` accessor was verified against the REAL generated
+  client**, not assumed — the transposition trap.
+- The migration adds only NULLABLE columns, so every existing instant meeting
+  stays valid and behaves exactly as before.
+
+### §9.8 ⏳ NOT PROVEN
+
+- **Nobody has received an invitation.** No email has been sent by anything but
+  a test.
+- **Nobody has opened the schedule screen in a browser.**
+- **Outlook is unverified by rendering** — no browser reproduces Word's engine.
+  It is structurally hardened because it reuses the billing shell.
+- **Acceptance:** schedule one meeting, invite **only Izzy's own address**,
+  confirm the email arrives and looks right in a real inbox, then click the
+  button and land in the meeting. ⛔ **The negatives that matter:** a
+  TENANT_ADMIN still gets **403** on `/meetings`, and inviting one extra person
+  afterwards sends **one** email, not the whole list again.
+
+### §9.9 Deliberately not built (Izzy's calls, offered in the mockup)
+
+- **Add to calendar (.ics)** — offered and left out because the approved mockup
+  did not show it; it is an additive change to the email and the route.
+- **A reminder email** before the meeting.
+- **Editing a scheduled meeting** — a meeting can be created and invited to,
+  not rescheduled. Rescheduling needs a "the time changed" email, which is its
+  own design.
+- The shared mailbox's **500/day** allowance still covers alerts, invoices,
+  voicemail and now invites; the per-meeting cap is 50.
