@@ -31,6 +31,11 @@ ARG NEXT_PUBLIC_API_URL=""
 ARG NEXT_PUBLIC_TELEPHONY_WS_URL="wss://app.connectcomunications.com/ws/telephony"
 ARG NEXT_PUBLIC_FORCE_ICE_RELAY=""
 ARG NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED=""
+# Cloudflare Turnstile site key for the sign-in widget. PUBLIC by design.
+# Kept as a real default (not "") so a bare `docker build` cannot silently ship an
+# UNKEYED portal, which would drop the sign-in check with nothing failing loudly.
+# On rotation this and docker-compose.app.yml must move together — turnstileWiring.test.ts fails if they drift.
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY="0x4AAAAAAEXikCDGv1Pl_SuX"
 COPY apps/portal ./apps/portal
 COPY packages/shared ./packages/shared
 # ⛔⛔ THE CACHE ID MUST NOT CONTAIN ${BUILD_COMMIT}.
@@ -48,6 +53,7 @@ RUN --mount=type=cache,id=connect-next-cache,sharing=locked,target=/app/apps/por
   NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL}" \
   NEXT_PUBLIC_TELEPHONY_WS_URL="${NEXT_PUBLIC_TELEPHONY_WS_URL}" \
   NEXT_PUBLIC_FORCE_ICE_RELAY="${NEXT_PUBLIC_FORCE_ICE_RELAY}" \
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY="${NEXT_PUBLIC_TURNSTILE_SITE_KEY}" \
   NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED="${NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED}" \
   pnpm --filter @connect/portal build
 

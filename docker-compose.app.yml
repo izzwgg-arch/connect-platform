@@ -383,6 +383,12 @@ services:
         NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-}
         NEXT_PUBLIC_FORCE_ICE_RELAY: ${NEXT_PUBLIC_FORCE_ICE_RELAY:-}
         NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED: ${NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED:-true}
+        # Cloudflare Turnstile site key for the sign-in form. PUBLIC by design (it ships
+        # in the bundle); the SECRET lives in .env.platform and never leaves the api.
+        # The literal is the DEFAULT on purpose: deploy-direct.sh sources only
+        # .env.deploy-queue, so a bare ${VAR:-} would silently bake an UNKEYED portal
+        # and the login page would lose its check with nothing failing loudly.
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-0x4AAAAAAEXikCDGv1Pl_SuX}
     environment:
       # Empty = browser uses same-origin `/api` (works for every hostname nginx serves; avoids
       # hard-coding one domain when users open an alternate spelling/alias host).
@@ -412,6 +418,12 @@ services:
         NEXT_PUBLIC_TELEPHONY_WS_URL: ${NEXT_PUBLIC_TELEPHONY_WS_URL:-}
         NEXT_PUBLIC_FORCE_ICE_RELAY: ${NEXT_PUBLIC_FORCE_ICE_RELAY:-}
         NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED: ${NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED:-true}
+        # Cloudflare Turnstile site key for the sign-in form. PUBLIC by design (it ships
+        # in the bundle); the SECRET lives in .env.platform and never leaves the api.
+        # The literal is the DEFAULT on purpose: deploy-direct.sh sources only
+        # .env.deploy-queue, so a bare ${VAR:-} would silently bake an UNKEYED portal
+        # and the login page would lose its check with nothing failing loudly.
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-0x4AAAAAAEXikCDGv1Pl_SuX}
     environment:
       NEXT_PUBLIC_API_URL: ""
       PORTAL_API_INTERNAL_URL: http://api:3001
