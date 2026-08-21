@@ -82,3 +82,5 @@ export * from "./personDisplayName";
 export * from "./supportReport";
 export * from "./featureSuggestion";
 export * from "./assistantGreeting";
+export * from "./jewishCalendar/zmanim";
+export * from "./jewishCalendar/jewishCalendar";
