@@ -130,3 +130,48 @@ test("normaliseRulesInput trims and caps each block", () => {
   assert.equal(out.never.length, MAX_RULES_BLOCK_CHARS);
   assert.equal(out.askFirst, "x");
 });
+
+/**
+ * ⛔⛔ THE LIVE-DRIVING REGRESSION, 2026-08-21. None of these came from
+ * imagining inputs — they came from driving the deployed screen and watching
+ * the rulebook refuse ordinary work. "Passwords, card details or API keys"
+ * contributed the bare token "api", so the workbench refused
+ * `wc -l apps/api/src/...` as NEVER, and "restart the api container" matched
+ * the SECRETS line instead of its own ask-first line.
+ *
+ * An over-broad safety layer is the one people learn to ignore, so these are
+ * as load-bearing as the refusals below them.
+ */
+test("a file path under apps/api is not a secret", () => {
+  const v = classifyAction(DEFAULT_GROUND_RULES, "wc -l apps/api/src/supportWorkbench.ts");
+  assert.notEqual(v.decision, "never");
+  assert.equal(v.matchedRule, null);
+});
+
+test("restarting a container asks first — it does not hit the secrets rule", () => {
+  const v = classifyAction(DEFAULT_GROUND_RULES, "restart the api container");
+  assert.equal(v.decision, "ask_first");
+  assert.match(String(v.matchedRule), /Restart any container/i);
+});
+
+test("a real credential read is still NEVER", () => {
+  for (const action of ["cat the api keys file", "show me the passwords", "read the card details"]) {
+    assert.equal(classifyAction(DEFAULT_GROUND_RULES, action).decision, "never", action);
+  }
+});
+
+test("reading a log singular matches the plural rule", () => {
+  assert.equal(classifyAction(DEFAULT_GROUND_RULES, "read the deploy log").decision, "allowed");
+});
+
+test("one shared word is not a match — every word of an item must be present", () => {
+  const rules = { allowed: "", never: "Delete customer data", askFirst: "" };
+  // "customer" alone must not trip a rule that says "customer data".
+  assert.notEqual(classifyAction(rules, "delete the customer's old chat thread").decision, "never");
+  assert.equal(classifyAction(rules, "delete the customer data export").decision, "never");
+});
+
+test("the PBX read/write split survives the item split", () => {
+  assert.equal(classifyAction(DEFAULT_GROUND_RULES, "read the PBX extension list").decision, "allowed");
+  assert.equal(classifyAction(DEFAULT_GROUND_RULES, "write a new inbound route to the PBX").decision, "never");
+});

@@ -101,6 +101,10 @@ const STOPWORDS = new Set([
   "anything", "something", "everything", "them", "their", "then", "than", "but", "if",
   "you", "your", "he", "she", "they", "we", "i", "me", "my", "as", "by", "into", "out",
   "up", "down", "over", "under", "again", "only", "just", "also", "even", "so",
+  // Filler prepositions. They carry no subject, and since every word of a rule
+  // item must now be present in the action, leaving them in would make
+  // "Anything about docker" fail to match "docker ps".
+  "about", "regarding", "concerning", "via", "upon", "onto", "toward", "towards",
 ]);
 
 /**
@@ -139,7 +143,10 @@ function keywords(text: string): string[] {
     // Crude singularisation so "containers" matches "container" and
     // "payments" matches "payment". Deliberately not a real stemmer — a
     // surprising stem would make the NEVER list match the wrong things.
-    .map((w) => (w.length > 4 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w))
+    // ⛔ The threshold is >3, not >4: "logs"/"keys"/"apps" are four letters and
+    // a rule about "logs" must match an action about a "log". Three-letter
+    // words are left alone so "sms", "did" and "dns" survive intact.
+    .map((w) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w))
     // "touching" → "touch", "writing" → "write": enough to catch the common
     // gerund without pretending to be a morphology engine.
     .map((w) => {
@@ -167,6 +174,34 @@ function overlaps(a: Set<string>, b: Set<string>): boolean {
   return false;
 }
 
+function containsAll(haystack: Set<string>, needles: Set<string>): boolean {
+  for (const v of needles) if (!haystack.has(v)) return false;
+  return true;
+}
+
+/**
+ * A rule line is a LIST, and each item is a phrase.
+ *
+ * ⛔⛔ THIS SPLIT IS WHY THE RULEBOOK STOPPED CRYING WOLF, AND IT WAS FOUND BY
+ * DRIVING THE REAL SCREEN, NOT BY A TEST. "Passwords, card details or API keys"
+ * used to contribute the bare word "api" as a subject of its own, so
+ * `wc -l apps/api/src/supportWorkbench.ts` was refused as NEVER — and
+ * "restart the api container" hit the SECRETS rule instead of its own
+ * ask-first line, which would have taught a support person that the rulebook
+ * is noise. Splitting on the list separators keeps "API keys" one phrase, and
+ * requiring EVERY word of one item means "api" alone can never trip it.
+ *
+ * ⛔ Do not "simplify" this back to a bag of words. Same defect class as the
+ * substring matcher that refused "delete the old deploy logs" because the word
+ * "deploy" appeared: an over-broad safety layer is the one that gets ignored.
+ */
+function ruleItems(rule: string): string[] {
+  return String(rule ?? "")
+    .split(/,|;|\/| or | and | plus /i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /**
  * Does this action hit this rule?
  *
@@ -178,14 +213,20 @@ function overlaps(a: Set<string>, b: Set<string>): boolean {
  *     "Read the PBX" from tripping it.
  */
 function ruleMatches(rule: string, action: string): boolean {
-  const r = split(rule);
   const a = split(action);
-  const hasVerbs = r.verbs.size > 0;
-  const hasSubjects = r.subjects.size > 0;
-  if (!hasVerbs && !hasSubjects) return false;
-  if (hasVerbs && hasSubjects) return overlaps(r.verbs, a.verbs) && overlaps(r.subjects, a.subjects);
-  if (hasVerbs) return overlaps(r.verbs, a.verbs);
-  return overlaps(r.subjects, a.subjects);
+  // A verb stated anywhere on the line governs every item on it — that is how
+  // English reads "Read files, logs and code on the Connect server".
+  const ruleVerbs = split(rule).verbs;
+  const items = ruleItems(rule)
+    .map((item) => split(item).subjects)
+    .filter((s) => s.size > 0);
+
+  if (ruleVerbs.size === 0 && items.length === 0) return false;
+  if (ruleVerbs.size > 0 && !overlaps(ruleVerbs, a.verbs)) return false;
+  // Verb-only rule ("Delete anything") — the verb is the whole test.
+  if (items.length === 0) return true;
+  // ⛔ EVERY word of ONE item must be present. One shared word is not a match.
+  return items.some((subjects) => containsAll(a.subjects, subjects));
 }
 
 /**
