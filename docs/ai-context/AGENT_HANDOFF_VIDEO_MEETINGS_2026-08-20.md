@@ -184,3 +184,69 @@ meeting, text the link to a phone or second laptop, guest joins with camera —
 other side, chat delivers, host mute actually mutes, host remove actually
 removes, End meeting ejects everyone. Then once more from a filtered-internet
 office (the real test of TCP fallback).
+
+## §6 The second IP (2026-08-21) — bought, wired, and firewalled shut
+
+Izzy bought a Contabo additional IP for loopcom to free port 443 for TURN:
+**169.58.213.204** (gateway 169.58.128.1, /17 — a DIFFERENT subnet from the
+primary 45.14.194.179/24, so not a same-subnet alias).
+
+- ✅ **Added and persistent.** `ip addr add` first (reversible, never touches the
+  default route), verified reachable from OUTSIDE (ping 161 ms, HTTPS 200), then
+  persisted in `/etc/netplan/50-cloud-init.yaml` (backup
+  `/root/netplan-backup-*.yaml`), validated with `netplan generate` — ⛔ **NOT
+  `netplan apply`**: the address was already live and correct, so applying risks
+  an interface blip for zero gain. Contabo routes the IP to the VPS, so no
+  gateway/route config was needed; `rp_filter` is **2 (loose)**, which is why the
+  asymmetric return path is not dropped.
+- ⛔⛔ **cloud-init WOULD HAVE WIPED IT AT THE NEXT REBOOT.** cloud-init is
+  enabled (25.3) with no disable flag, and it owns `50-cloud-init.yaml`. Created
+  `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`
+  (`network: {config: disabled}`). **Any static IP added to this box needs that
+  file, or it survives only until the next boot.**
+- ⛔⛔ **THE EXPOSURE THIS CREATED, and it is the reusable lesson: nginx binds
+  `0.0.0.0:443`, so the moment the IP existed it served the ENTIRE portal + API
+  on an unadvertised second address**, presenting the
+  `app.connectcomunications.com` cert. Verified live: `/api/health` returned
+  `{"ok":true}` on the raw IP. **Adding an IP to a box running a wildcard-bound
+  web server silently publishes everything on it.**
+- ✅ **nginx pinned to the primary IP** — all four vhosts carrying `listen 443`
+  (`connectcomms`, `connectcomms-loopcom`, `connectcomms-sip`,
+  `connectcomms-sip-loopcom`) now read `listen 45.14.194.179:443`. Backups
+  `/root/nginx-backup-*-pin443/`. ⛔ `grep -r` does NOT follow symlinks and four
+  of the five enabled vhosts ARE symlinks — a naive grep finds only one file and
+  you pin one of four. Resolve with `readlink -f`. IPv6 `listen [::]:443` lines
+  were left alone (`ipv6only` defaults on, so they never held the v4 address).
+- ⏳⛔ **THE PIN IS IN THE CONFIG BUT NOT IN EFFECT, and a reload cannot fix it.**
+  `nginx -t` passed and `systemctl reload nginx` succeeded, but the master still
+  holds `0.0.0.0:443`: old workers stuck in "shutting down" — some **2 days 8
+  hours old** — keep the pre-reload socket alive because they hold long-lived SIP
+  WebSockets that never close. **Only a full `systemctl restart nginx` rebinds
+  the listening sockets, and that drops every live connection (71 established on
+  443 at the time of writing, mostly softphones).** Deliberately NOT done —
+  it must ride a chosen quiet window, and it is REQUIRED before anything can bind
+  443 on the new IP.
+- ✅ **Masked at the firewall instead — immediate, zero disruption.** ufw rules 1
+  and 2: `DENY IN` tcp to `169.58.213.204` ports 80 and 443 (backup
+  `/root/ufw-backup-*.txt`). Proven from outside: both ports answer **HTTP 000
+  (no response)** while the primary IP, both app hostnames, both SIP hostnames
+  (101) and `/meetws` are unchanged, and all 71 live connections survived.
+  ⛔ **These two rules must be removed when TURN is put on 443 there** — they are
+  a holding measure, not the end state.
+- ⛔⛔ **CLOUDFLARE CANNOT MASK THIS IP, AND PROXYING IT WOULD BREAK THE FEATURE
+  IT WAS BOUGHT FOR.** The orange cloud carries **HTTP/HTTPS only**; TURN is not
+  HTTP, and arbitrary TCP/UDP proxying is **Cloudflare Spectrum (Enterprise)**.
+  It is the same family as the reason `app.` is still DNS-only today (Cloudflare
+  idles WebSockets out at ~100 s, which would kill SIP). **And it would buy
+  nothing anyway: the primary IP 45.14.194.179 is published in public DNS for
+  `app.`/`sip.` on both domains, all DNS-only — the origin is already public, so
+  hiding the second address while the first is in DNS is not masking.**
+- ✅ **Useful find for the next step: coturn is ALREADY on this box** (ufw rules
+  for TURN 3478 tcp/udp, TURNS TLS 5349, relay 49152–65535, from the July
+  TURN-relay work). So putting TURN on 443 of the new IP may need no new
+  software — but it still needs a hostname + certificate, and the nginx restart
+  above.
+- ⏳ **NOT PROVEN and the cheapest next step: nobody has tried a meeting from a
+  filtered office.** LiveKit already offers TCP fallback on 7881; if those
+  filters pass it, the 443 work is unnecessary. **One person at a locked-down
+  office opening a meeting link settles whether any of this is needed.**

@@ -494,6 +494,24 @@ has"*, then *"let's do free open source"*, then, on the mockups
   against the REAL generated client; 8 portal — protocol round-trip, wiring
   guards), all registered. api typecheck 75 = the exact baseline; portal 0;
   portal suite 210/212 (the two documented pre-existing failures).
+- ✅✅ **A SECOND IP EXISTS ON LOOPCOM NOW (2026-08-21): `169.58.213.204`**,
+  bought to free port 443 for TURN. Added + persisted in netplan (⛔ and
+  `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` created — cloud-init owns
+  that file and WOULD have wiped the IP at the next reboot). ⛔⛔ **Adding it
+  silently published the WHOLE portal + api on a second address**, because nginx
+  binds `0.0.0.0:443` — proven live (`/api/health` → `{"ok":true}` on the raw IP,
+  serving the app cert). **Masked at the FIREWALL** (ufw rules 1–2 deny 80+443 to
+  that IP; both answer HTTP 000 from outside now) with zero disruption — all 71
+  live SIP WebSockets survived. ⏳ The four vhosts ARE pinned to
+  `listen 45.14.194.179:443` in config, but **a reload cannot rebind the socket**:
+  old workers "shutting down" (some 2 d 8 h old) hold the pre-reload wildcard
+  because their SIP WebSockets never close — **only a full `systemctl restart
+  nginx` frees it, and that drops all 71 connections**, so it must ride a chosen
+  quiet window and is REQUIRED before anything binds 443 there. ⛔⛔ **CLOUDFLARE
+  CANNOT MASK IT:** the proxy is HTTP/HTTPS only and TURN is not HTTP (arbitrary
+  TCP/UDP = Spectrum, Enterprise), so proxying breaks the very thing the IP was
+  bought for — and buys nothing anyway, since the PRIMARY IP is published in DNS
+  for every hostname. ✅ coturn is already installed on the box. Handoff §6.
 - ⛔ **STILL OPEN, Izzy's decisions:** (1) **the media server is in FRANCE** —
   the approved plan is a **US VPS** (doubles as the July-pending US TURN relay);
   moving is a config change, not a rebuild. (2) An office filtering BOTH UDP
