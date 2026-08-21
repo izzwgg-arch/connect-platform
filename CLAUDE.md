@@ -492,6 +492,22 @@ the safety property.**
    an UNMATCHED command proceeds** (the allowlist already proved it read-only;
    prompting for `ls` teaches people to click through), but a matched **ask-first**
    rule stops it and a **never** rule refuses even when confirmed.
+⛔⛔ **AND DRIVING IT LIVE CAUGHT THE OPPOSITE FAILURE — IT REFUSED ORDINARY
+WORK.** `wc -l apps/api/src/supportWorkbench.ts` came back **NEVER**, and
+*"restart the api container"* matched **"Passwords, card details or API keys"**
+instead of its own ask-first line, because that rule contributed the bare token
+`api` — a substring of every path under `apps/api`. **79 unit tests were green
+through it.** ✅ Fixed (`00a5c8a0`): **a rule LINE is a LIST**, split on
+`, ; / or and`, and a match needs **every word of ONE item** (so "API keys" is
+one phrase); a verb stated anywhere on the line still governs every item on it;
+singularisation drops to **>3 chars** so a rule about "logs" matches an action
+about a "log" while `sms`/`did`/`dns` survive intact.
+⛔ **The rule: an over-broad safety layer is the one that gets ignored** — a
+refusal a support person knows is wrong teaches them the rulebook is noise, and
+the next refusal, the real one, gets clicked through. **Judge a guard by what it
+LETS THROUGH as well as what it stops, and drive it on real inputs** — unit
+tests written by the matcher's own author share its blind spot.
+
 ✅ **Proven on production, not by unit test:** `rm -rf /` refused
 `command_not_allowed`; `git push` refused `subcommand_not_allowed`;
 `cat .env` refused `secret_path`; `ls; whoami` refused `shell_metacharacter`;

@@ -486,3 +486,27 @@ accept/reject diff the mockup shows, and a real interactive SSH PTY (the
 terminal is the guarded read-only runner; the SSH pill reflects that the box IS
 loopcom, not a shell). Support-agent accounts and per-feature permission keys
 remain Izzy's to create.
+
+### §11b The rulebook refused ordinary work, and only the live run found it
+⛔⛔ **`wc -l apps/api/src/supportWorkbench.ts` came back refused as NEVER**, and
+*"restart the api container"* matched **"Passwords, card details or API keys"**
+instead of its own ask-first line. The cause: that rule contributed the bare
+token **`api`**, which is a substring of every path under `apps/api`. **79 unit
+tests were green through this.** It is the third time in this repo that a
+plain-word matcher over-blocked (after "deploy" in *"delete the old deploy
+logs"*, and a subject-only rule containing "customer" refusing half of support).
+✅ **Fixed (`00a5c8a0`): a rule LINE is a LIST.** `ruleItems()` splits on
+`, ; / or and`, and a match needs **every word of ONE item** — so "API keys" is
+one phrase and `api` alone can never trip it — while a verb stated anywhere on
+the line still governs every item on it ("Read files, logs and code…").
+Singularisation drops to **>3 characters** so a rule about "logs" matches an
+action about a "log", with three-letter words (`sms`, `did`, `dns`) left intact;
+filler prepositions joined the stopwords so "Anything about docker" still
+matches `docker ps`. Six regressions added, **every one taken from what the live
+run actually did**; suite 79/79, api typecheck 75 = the exact baseline.
+⛔ **The rule this earns: an over-broad safety layer is the one that gets
+ignored.** A refusal a support person knows is wrong teaches them the rulebook
+is noise, and the next refusal — the real one — gets clicked through. Judge a
+guard by what it lets through as well as by what it stops, and **drive it on
+real inputs**: unit tests written by the same person who wrote the matcher share
+its blind spot.
