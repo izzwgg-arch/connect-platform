@@ -19,6 +19,7 @@
  * which is a different process on a different IP, port and relay range. Do not
  * merge the two — a fault in one says nothing about the other.
  */
+import { createHash } from "node:crypto";
 import dgram from "node:dgram";
 import net from "node:net";
 import tls from "node:tls";
@@ -402,20 +403,35 @@ export async function runTurnHealthCheck(deps: TurnWatchDeps = {}, log?: any): P
   // ⛔ Always record, including healthy checks: the heartbeat is what proves
   // the monitor itself is alive, and the streak/alerted flags must survive the
   // next restart.
-  await database.agentAuditLog.create({
-    data: {
-      tenantId: ADMIN_ALERT_TENANT_ID,
-      event: AUDIT_EVENT,
-      payload: {
-        state,
-        streak,
-        alerted,
-        host: host,
-        certDaysLeft: probe.certDaysLeft,
-        results: [...probe.udp, ...probe.tcp, ...probe.tls].map((r) => ({ t: r.target, ok: r.ok, d: r.detail })),
+  const payload = {
+    state,
+    streak,
+    alerted,
+    host,
+    certDaysLeft: probe.certDaysLeft,
+    results: [...probe.udp, ...probe.tcp, ...probe.tls].map((r) => ({ t: r.target, ok: r.ok, d: r.detail })),
+  };
+  // ⛔⛔ `actor` and `hash` are REQUIRED on AgentAuditLog. Omitting them made
+  // Prisma reject EVERY write while a `.catch(() => {})` swallowed the error —
+  // so the monitor ran, logged "ok", and remembered nothing. With no stored
+  // streak it could never have reached the alert threshold: an alarm that was
+  // silently blind. Caught only because the heartbeat row was checked in prod.
+  // ⛔ THEREFORE THIS FAILURE IS LOUD. This row is not bookkeeping, it IS the
+  // state — losing it disables the alarm, so it must never be swallowed.
+  try {
+    const body = { actor: "system", event: AUDIT_EVENT, payload };
+    await database.agentAuditLog.create({
+      data: {
+        actor: "system",
+        event: AUDIT_EVENT,
+        tenantId: ADMIN_ALERT_TENANT_ID,
+        payload,
+        hash: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
       },
-    },
-  }).catch(() => { /* the check must never fail on its own bookkeeping */ });
+    });
+  } catch (err: any) {
+    log?.error?.({ err: err?.message }, "[TURN_HEALTH] could not record state — the alarm is BLIND until this is fixed");
+  }
 
   // Certificate expiry — its own alarm, warned while there is still time.
   if (probe.certDaysLeft !== null && probe.certDaysLeft <= TURN_CERT_WARN_DAYS) {

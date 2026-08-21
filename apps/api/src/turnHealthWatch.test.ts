@@ -110,7 +110,15 @@ function fakeDb(lastPayload: any = null) {
     audits,
     agentAuditLog: {
       findFirst: async () => (lastPayload ? { payload: lastPayload } : null),
-      create: async ({ data }: any) => { audits.push(data); return data; },
+      // ⛔ Validates the REQUIRED columns exactly as Prisma does. A fake db that
+      // accepts anything is why the real write failed silently in production
+      // while every test stayed green.
+      create: async ({ data }: any) => {
+        for (const f of ["actor", "event", "hash"]) {
+          if (!data?.[f]) throw new Error(`Argument \`${f}\` is missing (AgentAuditLog)`);
+        }
+        audits.push(data); return data;
+      },
     },
     agentEscalation: {
       findFirst: async ({ where }: any) =>
@@ -183,6 +191,16 @@ test("runner: no configured target monitors nothing and says so", async () => {
 });
 
 // ── Source guards ──────────────────────────────────────────────────────────
+
+test("⛔ the state row carries the columns AgentAuditLog actually requires", async () => {
+  const db = fakeDb(null);
+  await runTurnHealthCheck({ db, env: ENV, probe: async () => probeOf([true], [true]) });
+  assert.equal(db.audits.length, 1, "the heartbeat must actually be written");
+  const row = db.audits[0];
+  assert.equal(row.actor, "system");
+  assert.equal(row.event, "turn_health.check");
+  assert.ok(/^[0-9a-f]{64}$/.test(row.hash), "hash must be a sha256 hex digest");
+});
 
 test("⛔ the watcher NEVER uses ADMIN_ALERT (muted at the send door — would reach nobody)", () => {
   const src = read(path.join(__dirname, "turnHealthWatch.ts"));
