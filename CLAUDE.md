@@ -265,6 +265,20 @@ schedule', the system will always know when that holiday is this year"*, plus
   signal) and sometimes **appends the Hebrew in brackets**. ⛔ **Short proper
   nouns round-trip perfectly; longer/compound names come back as SENTENCES**
   (`די טעג פון…`, `דער תענית…`, `א תענית טאג`) — keep the input to bare names.
+- ✅✅ **THE NAMES ARE APPROVED (Izzy, 2026-08-21): *"it looks great … it's
+  perfect"*.** Settled as they stand — **Yiddish Labs verbatim on the 28 adopt
+  rows, the 9 overrides on the review/reject rows** — and stamped into
+  `docs/ai-context/jewish-holiday-names-yiddishlabs-2026-08-21.json` under
+  `approval` + a per-row **`final.english` / `final.yiddish`**. ⛔ **Read
+  `final.*`; the other fields are the audit trail of how it was reached.**
+  ⛔ **A t→s spelling correction was raised and WITHDRAWN — do not re-apply it.**
+  It came from reading the table's **first column** (the English that went IN,
+  which still says Sukkot / Shavuot / Shabbat because it is the INPUT and the
+  lookup key) as though it were the output. **The lesson is about the table, not
+  the names: label a before/after column pair by what the reader will SEE, never
+  by where the data came from.** The mockup's headers now read "Before — what
+  hebcal calls it" and "Yiddish Labs → English — *this is what the screen will
+  say*", with the before column greyed and the after column bold.
 - ⛔⛔ **THE DISPLAY SETTING: THE WORD CHANGES, THE PAGE DOES NOT** (Izzy, explicit).
   A per-person setting **on the calendar screen — NOT the platform-wide language
   toggle**. The Yiddish name still renders RTL *inside itself*; confine that to
