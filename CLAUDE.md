@@ -307,130 +307,131 @@ Direct" is a working name.)
   until they verify — plus a per-company off switch). ⛔ Until he picks, nothing
   is authorized to build.
 
-## ⛔ AGENT HANDOFF — the role snapshot goes STALE by design, and the forward-merge fix is DEPLOYED + CONTAINER-VERIFIED (Izzy's go, 2026-08-20) — READ FIRST before adding ANY new default permission key, before touching `platformRolePermissions.ts`, or before assuming tenant admins have a key because `DEFAULT_ROLE_PERMISSIONS` grants it
+## ⛔⛔ AGENT HANDOFF — the Technical Support Console is BUILT END TO END: escalation CHATS, cross-company inbox, human take-over, the Ground Rules rulebook, the Watchman, and a full IDE with a guarded server terminal (2026-08-21) — READ FIRST before touching /admin/support, `apps/api/src/support*.ts`, `workbenchIde.css`, or before letting anything run a command on the server
 
-Full handoff: **`docs/ai-context/AGENT_HANDOFF_ROLE_SNAPSHOT_FORWARD_MERGE_2026-08-20.md`**
-(branch `claude/snapshot-forward-merge`, built on the `feat/ivr-migration-takeover` tip).
-
-- ⛔ The live `PlatformRolePermissionSnapshot` row was last SAVED 2026-07-06 and
-  is read LITERALLY for bucket roles — so every default key born since (Queues
-  2026-08-16, Conferences 2026-08-20, all of Tracking, `can_use_yiddish`) never
-  reached a real tenant admin. Shipping a feature's keys in
-  `DEFAULT_ROLE_PERMISSIONS` does NOT deliver them; only SUPER_ADMIN gets keys
-  automatically (force-add).
-- The fix (`apps/api/src/platformRolePermissions.ts`, tests
-  `platformRolePermissions.forwardMerge.test.ts`, 11/11): POST now stores
-  `knownKeys` (the key inventory at save time; older rows infer it from their
-  stored SUPER_ADMIN list, which POST has always force-written as the full
-  inventory of its day). On read, a default key OUTSIDE the inventory is
-  forward-merged (it post-dates the save, so it can't have been removed); a key
-  INSIDE it but absent stays removed. Sidebar-item keys also need their section
-  key granted — the July-06 save deliberately turned the PBX/Apps/Settings/Admin
-  sections OFF for TENANT_ADMIN, and that choice stands.
-- **DEPLOYED 2026-08-20 on Izzy's in-chat go** — api deploy job `86b00cbd` at
-  commit `b1f94452`, and the running container was behaviorally verified (the
-  resolver executed in-container against the real DB): END_USER 54→55
-  (`can_use_yiddish`), TENANT_ADMIN 92→116 — queues + conference action keys,
-  `can_view_workspace_conference` (the Conference nav moved to the Workspace
-  section, which tenant admins hold, so the page IS visible to them), all of
-  Tracking, yiddish. Deliberate removals held: `can_view_section_pbx`,
-  `can_view_pbx_queues` (so the **Queues page stays invisible** to tenant
-  admins until Izzy re-opens the PBX section in Admin → Permissions),
-  `can_view_billing_invoices` etc. The DB row itself is untouched (read-side
-  merge); the first post-deploy Save on Admin → Permissions bakes everything in
-  plus `knownKeys`.
-- Still open for Izzy: re-open the PBX section (and tick Queues) for tenant
-  admins if wanted; the 4 custom-role tenant admins need their roles edited
-  separately (custom roles are authoritative).
-
-## ⛔ AGENT HANDOFF — the Technical Support Console: Phase 1 (escalation desk) + Fable are BUILT AND DEPLOYED; the rest is designed, not built (2026-08-20) — READ FIRST before touching /admin/support, apps/api/src/supportConsole.ts, the escalation desk, or before building phases 2–5
-
-**BUILD STATE (evening 2026-08-20, commit `d61c98b9` — full detail handoff §4):**
-✅ **api + portal DEPLOYED and container-verified; agent REBUILT** (Fable in the
-picker via `KNOWN_ANTHROPIC_CHAT_MODELS` in `llm/router.ts`). `/admin/support`
-(Support Desk) lists escalations + renders the stored report; "Approve the fix"
-posts the DRAFT action id to the EXISTING `/admin/agent-confirmations/:id/apply`
-password gate — ⛔ never add a second apply path (a source test pins it), and
-⛔ `fixCodeHash` never leaves the server (tested). SUPER_ADMIN only (Izzy's
-call): handlers call `requireSuperAdmin`, `/admin/support` rides
-`can_manage_global_settings` in PORTAL_API_PERMISSION_RULES, nav forced in
+**BUILD STATE (2026-08-21, `0ba63443` — full detail handoff §4–§11):**
+✅ **api + portal DEPLOYED and container-verified; agent REBUILT.** Five views on
+`/admin/support`: **Escalations (as chats)**, **Inbox** (cross-company SMS),
+**Conversations** (assistant chats + human take-over), **Rules** (the Ground
+Rules rulebook + Watchman), **Workbench** (the IDE). SUPER_ADMIN only, Izzy's
+call: every handler takes an injected `requireSuper`, `/admin/support` rides
+`can_manage_global_settings` in `PORTAL_API_PERMISSION_RULES`, nav forced in
 `isNavItemVisibleForUser` — ⛔ deliberately NO new grantable key until a feature
-honours it. ✅ Proven live: self-signed SUPER_ADMIN probe → 200, the real
-4-escalation backlog. ⏳ Nobody has opened the page in a browser; no fix ever
-approved from it. ✅ **Phases 2–5b ALL SHIPPED the same evening, every stage
-container-verified and live-probed.** **P2 customer panel** (`8e192e5d`) —
-`GET /admin/support/customers/:tenantId` aggregates extensions/users/numbers/
-billing/calls/past-escalations, every block best-effort (⛔ verified field names:
-`autoBillingEnabled`, `extNumber`, `connectTenantId`, `startedAt`; ⛔ no
-`:has()` in its css). **P3 cross-company inbox** (`a2bb91fa`) —
-`/admin/support/threads` (+`/:id`, +`/reply`); ⛔ the reply DELEGATES to the
-injected `sendConnectChatSmsMessage` and takes tenantId from the THREAD, so it
-leaves from that company's own number; a source guard pins the POST list and
-forbids this module ever sending or writing messages itself. **P4 assistant
-take-over** (`7a2e106c`) — migration `20260820213000` (`humanTakeoverAt/By`,
-applied live); ⛔⛔ three legs that must ship together: desk API + the agent
-ENGINE's refusal-to-answer (**a CONTAINER REBUILD, not an api deploy**) + the
-widget's 4 s polling; the engine's branch sits BEFORE the Yiddish input leg (no
-wasted YL credits); a staff message REQUIRES an active take-over (409 — two
-voices in one mouth); ⛔ `AgentAuditLog.hash` is REQUIRED tamper evidence.
-**P5a/5b the GOVERNOR, built before the engine it governs** (`fe755157`) —
-**Ground rules**: three plain-English lists (allowed/never/ask-first) owned by
-Izzy, append-only so the history IS the audit trail; ⛔⛔ `classifyAction()` is
-the EXECUTABLE half, so "never" holds in code even when the model is talked into
-something (prompt text alone is decoration); ⛔ order is the safety property
-(NEVER > ASK > ALLOWED) and ⛔ no match ⇒ ASK, never ALLOW; ⛔ the matcher is
-VERB-AWARE so "Read the PBX" is allowed while "Write to the PBX" is never — a
-noun-only matcher refused both, and refused "delete the old deploy logs" over the
-word *deploy*; ⛔ never put a common word like "customer" in a subject-only never
-rule. **Watchman**: rule files readable / server healthy / PBX reachable AND
-read-only — the last proved by `SELECT CURRENT_USER()`, ⛔ NEVER by attempting a
-write; ⛔ fail-safe — a throwing probe is "unknown" and unknown BLOCKS work, while
-unreachable-but-read-only is only a warning. ✅ Proven live on production:
-safeToWork true on all three real checks, and the live classifier answering
-write-to-PBX → never, read-PBX → allowed. ✅ **Sidebar (`9fbd5af3`): Support Desk
-is FIRST in the Admin section** (it was buried at position 9 of 25).
-⛔ **Doc hazard hit here, worth carrying:** a MERGE silently resolved CLAUDE.md in
-favour of a stale copy and dropped the P3/P4 paragraph — the commit had it, the
-tip did not. **After any merge lands on this branch, grep CLAUDE.md for your own
-section before trusting it.**
-✅ **Phase 5c THE WORKBENCH SHIPPED (`9e824f19`, api container-verified, gates
-driven live on production).** ⛔⛔ **It needed NO new SDK and NO new API key —
-this file previously said it did.** The platform already had the engine
-(`completeWithTools` = a working agentic loop with a staff tool tier) and both
-provider keys are live in `app-agent-1`; **check what the platform already has
-before adding a dependency.** Three doors (file tree / file read / run command),
-⛔⛔ **four gates in this order: WATCHMAN → SHAPE+ALLOWLIST → SECRETS →
-RULEBOOK** — the allowlist runs before the rulebook so the read-only guarantee
-is established first. ⛔ `ALLOWED_BINARIES` is READ-ONLY TOOLS ONLY (a test
-asserts rm/mv/chmod/bash/npm/tee/dd are absent), mutating sub-commands are
-blocked (`git push`, `docker restart/exec`, `systemctl restart`, `sed -i`,
-`find -delete`), chaining/substitution/redirect/sudo refused, and EVERY pipe
-segment allowlisted. ⛔⛔ **A hole found while building: `cat` is legitimately
-read-only, so the door would have served `.env.platform` and every key on the
-box** — `commandTouchesSecrets()` refuses secret paths mechanically. ⛔ **One
-deliberate asymmetry:** an UNMATCHED command proceeds (the allowlist already
-proved it read-only; prompting for `ls` trains people to click through the
-confirmations that matter), while a real ask-first RULE still stops it and
-`never` refuses even when confirmed. ⛔ **NO PTY/interactive shell on purpose** —
-a shell makes every gate decoration. Refusals are audited exactly like runs;
-unset workspace root ⇒ OFF (503), never a cwd fallback. ✅ **Proven live: all
-five attacks bounced** — `cat …/.env.platform` → 403 refused_secrets,
-`ls; rm -rf` → 400, `bash -c` → 400, `docker restart` → 400, `../../etc/passwd`
-→ 400. ⏳ **Next:** the agent DRIVING the workbench (tools `read_file`/
-`list_files`/`run_command` at `minRole: "staff"` calling these doors exactly as
-`investigate` does — wiring, not a capability build), edits as reviewable diffs
-through the deploy queue, and ⛔ nobody has opened the Workbench tab in a
-browser. Support-agent accounts + per-feature permission keys remain his to create.
+honours it. Support-agent accounts + per-feature keys are Izzy's to create.
+- ⛔⛔ **ESCALATIONS ARE CHATS, NOT A TICKET LIST** (Izzy said it several times
+  before it landed). The escalation IS the conversation: the list is people, the
+  middle is their thread, the agent's ISSUE/FINDINGS/PROPOSED FIX report is a
+  card **inside** it, the customer panel is on the right. **The old
+  report-list view is DELETED, not dead-coded** — `page.tsx` is a lean shell
+  holding no screen logic, so a change to one view cannot break another.
+- ⛔ **"Approve the fix" posts the DRAFT action id to the EXISTING
+  `/admin/agent-confirmations/:id/apply` password gate — never add a second
+  apply path** (a source test pins it), and ⛔ `fixCodeHash` never leaves the
+  server (tested; responses are built field-by-field, never `...row`).
+- ⛔ **Take-over runs BEFORE the Yiddish input leg in `engine.ts`** — a
+  taken-over conversation must not spend Yiddish Labs credits translating for
+  a model that will not answer.
 
+**⛔⛔ THE THREE SAFETY LAYERS — they are CODE, not prompt text, and the order is
+the safety property.**
+1. **`supportGroundRules.ts` — the rulebook Izzy writes, enforced by a matcher.**
+   `classifyAction()` is **NEVER > ASK > ALLOWED**, and ⛔ **no match ⇒ ASK,
+   never ALLOW.** Matching is **verb-aware** (`VERB_FAMILIES`: read/write/delete/
+   restart/deploy/send/run/touch) so *"Read the PBX"* can be allowed while
+   *"Write to the PBX"* is never — a plain substring matcher refused *"delete the
+   old deploy logs"* because the word "deploy" appeared, and a subject-only rule
+   containing "customer" refused half of all support work. Rules are
+   **append-only versions** (migration `20260820234500_support_ground_rules`).
+2. **`supportWatchman.ts` — three standing checks** (MD rule files / server /
+   PBX read-only), re-read before every job. ⛔ **A throwing probe becomes
+   "unknown", and unknown BLOCKS work** — a health check that fails open is
+   decoration. Unreachable-but-read-only PBX is a warning; **not read-only is a
+   stop-everything**. ⛔ The PBX probe proves read-only with
+   `SELECT CURRENT_USER()`, **never by attempting a write**.
+3. **`supportWorkbench.ts` — the IDE's hands.** Gate order
+   **WATCHMAN → SHAPE+ALLOWLIST → SECRETS → RULEBOOK**. `ALLOWED_BINARIES` is a
+   read-only allowlist with `FORBIDDEN_SUBCOMMANDS` (no `git push/commit/reset`,
+   no `docker rm/exec/restart/compose`, no `systemctl start/stop`, no `sed -i`,
+   no `find -delete/-exec`), no shell metacharacters, and a secret-path regex
+   (`.env`, `.ssh`, `id_rsa`, `*.pem`, `credentials.json`, `authorized_keys`,
+   `.connect-ssh`). ⛔ **The asymmetry is deliberate and documented in the file:
+   an UNMATCHED command proceeds** (the allowlist already proved it read-only;
+   prompting for `ls` teaches people to click through), but a matched **ask-first**
+   rule stops it and a **never** rule refuses even when confirmed.
+✅ **Proven on production, not by unit test:** `rm -rf /` refused
+`command_not_allowed`; `git push` refused `subcommand_not_allowed`;
+`cat .env` refused `secret_path`; `ls; whoami` refused `shell_metacharacter`;
+a `docker restart` phrased in English classified **ask-first**.
+
+**⛔ THE IDE, and the process lesson that outranks it.** Izzy: *"What is the
+point of making mockups if you never make it look like the mockups?"* He was
+right — the first build had the mockups' structure and generic portal styling,
+and my status reports claimed "matches the mockups" **without ever putting them
+side by side.** Two rules now: **port the mockup, do not re-derive it**
+(`workbenchIde.css` carries the mockup's own values verbatim;
+`SupportWorkbench.tsx` is the mockup's markup wired to real data), and ⛔ **never
+claim a screen matches a mockup without publishing the comparison** — desk
+<https://claude.ai/code/artifact/90e6e2f7-fabc-466c-8555-47e3e6830b05>, IDE
+<https://claude.ai/code/artifact/20aeef9d-c32d-4b6c-a9ba-59fb99c7e48b>, each
+rendering the BUILT screen with the real shipped stylesheet beside the drawing.
+Approved mockup: <https://claude.ai/code/artifact/cf13e7b7-ebbf-414e-a1a6-f22dee7a2eaa>.
+The IDE has the menu bar, activity bar with a git-change badge, explorer with
+git letters, editor tabs, breadcrumbs, a local syntax highlighter (⛔ **no new
+dependency** — a tokeniser inside the component), minimap, Terminal/Problems/
+Output panel, the SSH pill, the guarded terminal, a status bar and a ⌘K palette.
+The agent dock talks to the real assistant; the model switcher writes the real
+`chat_model` (Opus 5 / Sonnet 5 / **Fable 5** / GPT-5 — Fable via
+`KNOWN_ANTHROPIC_CHAT_MODELS` in `llm/router.ts`).
+⛔ **`workbenchIde.css` is the ONE place in the portal with its own palette, and
+its header says why** — an IDE is its own visual world (VS Code inside a light
+app is still dark), so the values are FIXED, never `prefers-color-scheme`, and
+scoped under `.ide-root` so nothing leaks. That is a deliberate exception to
+[[billing-must-use-connect-theme-tokens]], not a violation of it.
+⛔ **A class collision cost an afternoon:** the terminal container and a stdout
+LINE both resolved to `.sd-wb-out`, so every output line inherited the
+container's padding and background. **Audit class names across a ported
+stylesheet before wiring it.**
+
+**⛔⛔ WHAT DRIVING IT LIVE FOUND — AND THE MOUNT I REFUSED.** The api container
+has **no `git` binary and no `.git`** (the image COPIES source; it is not a
+clone), so the branch and the explorer's M/U letters came back silently empty
+and the palette offered git actions that answer "git: not found".
+⛔ **Deliberately NOT fixed by mounting `/opt/connectcomms/app` into the
+container: that clone holds live `.env` files, and trading real credential
+exposure — guarded only by a filename regex — for cosmetic git chrome is the
+wrong bargain.** A deployed container's uncommitted-change letters would be
+empty anyway (deploys hard-reset). ✅ Fixed by **reporting the truth**:
+capabilities returns `permittedBinaries` (the policy) AND `allowedBinaries`
+(what is really on PATH), plus `deployedCommit` read from `.build-commit`; the
+status bar shows the running commit when there is no repo and never invents a
+branch; the palette and terminal hide what this container cannot run.
+⛔ **The general rule: offer only what the box can actually do** — a control that
+answers "not found" teaches people to distrust the tool.
+
+⏳ **NOT PROVEN: nobody has opened any of these screens in a browser.** Proven
+by 51 api tests, portal typecheck 0, the shipped-bundle string greps
+(`ide-root`, `ide-menubar`, `ide-minimap`, `ide-sshpill`, `ide-palette`,
+"Ask anything, in plain English", "Claude Fable 5"), and live SUPER_ADMIN
+probes of every route on production.
+⏳ **Deliberately NOT built:** the agent DRIVING the workbench (tools
+`read_file` / `list_files` / `run_command` at `minRole: "staff"` calling these
+doors exactly as `investigate` does — the agentic loop and both API keys already
+exist, so ⛔ **no `claude-agent-sdk` dependency and no new key are needed**, a
+correction to my own earlier advice); the inline accept/reject diff the mockup
+draws; per-task model picking (only the chat model is switchable); a real
+interactive SSH PTY (the terminal is the guarded read-only runner, and the SSH
+pill reflects that the box IS loopcom, not a shell).
 
 Full handoff + the verified infrastructure inventory:
 **`docs/ai-context/AGENT_HANDOFF_SUPPORT_CONSOLE_MOCKUPS_2026-08-20.md`**
-(**Mockups-only — no code, no deploy, no data change.** Izzy, 2026-08-20: *"I want to
+(⛔ **The sections below are the ORIGINAL mockups-only handoff and are kept for the
+decision history — the BUILD STATE above supersedes every "not built" claim in them.**
+Izzy, 2026-08-20: *"I want to
 see mock-ups before you build anything."* Mockups he is choosing from:
 <https://claude.ai/code/artifact/042ff488-ae78-4e7f-b4cf-6ca8194b671a> — A "The Desk"
 escalation-first, B "Mission Control" unified inbox + take-over, C "The Workbench" IDE.)
 
-- ⛔ **NOTHING IS APPROVED OR BUILT.** Decisions state (§3 of the handoff): still open —
+- ⛔ **(HISTORICAL — this said "NOTHING IS APPROVED OR BUILT"; it is all built now.)** Decisions state (§3 of the handoff): still open —
   direction (A/B/C) and **who counts as support staff** (today `isPlatformStaff` =
   SUPER_ADMIN and exactly ONE account holds it — a support team needs a new
   platform-support role) and wiring `claude-fable-5` into the router (it appears nowhere

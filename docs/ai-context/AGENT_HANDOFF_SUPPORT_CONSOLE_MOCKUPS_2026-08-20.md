@@ -414,3 +414,75 @@ loop and the keys already exist, so this is wiring, not a capability build);
 proposing an edit as a reviewable diff and shipping it through the deploy queue;
 and ⛔ **nobody has opened the Workbench tab in a browser.** The support-agent
 accounts and per-feature permission keys remain Izzy's to create.
+
+## §11 The IDE, built to the mockup (2026-08-21, `8b690d52` + `0ba63443`)
+
+⛔⛔ **THE PROCESS LESSON, AND IT IS THE MOST IMPORTANT LINE IN THIS FILE.**
+Izzy, repeating himself and furious: *"What is the point of making mockups if you
+never make it look like the mockups?"* He was right. The first build had the
+mockups' STRUCTURE and generic portal styling, and every status report claimed
+"matches the mockups" **without ever putting them side by side.** Two rules now:
+1. **Port the mockup, do not re-derive it.** `workbenchIde.css` carries the
+   mockup's own values verbatim and `SupportWorkbench.tsx` is the mockup's
+   markup wired to real data. There is no interpretation step to drift through.
+2. ⛔ **Never claim a screen matches a mockup without publishing the
+   comparison.** Proof pages — the desk
+   <https://claude.ai/code/artifact/90e6e2f7-fabc-466c-8555-47e3e6830b05> and the
+   IDE <https://claude.ai/code/artifact/20aeef9d-c32d-4b6c-a9ba-59fb99c7e48b> —
+   render the BUILT screen with the real shipped stylesheet beside the drawing,
+   so the claim is checkable without opening the app.
+
+Approved mockup: <https://claude.ai/code/artifact/cf13e7b7-ebbf-414e-a1a6-f22dee7a2eaa>
+
+**The IDE** (`/admin/support` → Workbench): menu bar, activity bar with a
+git-change badge, explorer with git letters + open editors, editor tabs with
+close, breadcrumbs, a local syntax highlighter (⛔ no new dependency — a
+tokeniser inside the component), minimap, Terminal/Problems/Output panel, the
+SSH pill with its recording dot, the shell strip, the guarded terminal with
+history and confirm-to-run, a status bar, and a ⌘K command palette. The agent
+dock talks to the real assistant; the model switcher writes the real
+`chat_model` (Opus 5 / Sonnet 5 / Fable 5 / GPT-5).
+
+⛔ **`workbenchIde.css` is the ONE place in the portal carrying its own palette,
+and its header says why.** The house rule exists because billing keyed off the
+OS preference and disagreed with the app's own theme switch. An IDE is a
+different case — its own visual world, VS Code inside a light app is still dark
+— so the values are FIXED, never `prefers-color-scheme`, and scoped under
+`.ide-root` so nothing leaks.
+
+⛔⛔ **ESCALATIONS ARE CHATS** (Izzy, repeatedly — he had to say it several
+times before it landed). The escalation IS the conversation: the list is people,
+the middle is their thread, and the agent's report is a card INSIDE it.
+Take-over and reply reuse the Phase-4 routes; the customer panel stays right.
+**The old report-list view is DELETED, not dead-coded** — with it went ~180
+lines of state that made `page.tsx` unreasonable; the shell now holds no screen
+logic at all, so a change to one view cannot quietly break another.
+
+### §11a What driving it live found — and the mount I refused
+⛔⛔ **The api container has NO `git` binary and NO `.git`** — the image COPIES
+source, it is not a clone. So the branch and the explorer's M/U letters came
+back silently empty and the palette offered git actions that answer
+"git: not found".
+⛔ **Deliberately NOT fixed by mounting `/opt/connectcomms/app`**: that clone
+holds **live `.env` files**, and trading real credential exposure — guarded only
+by a filename regex — for cosmetic git chrome is the wrong bargain. A deployed
+container's uncommitted-change letters would be empty anyway (deploys
+hard-reset), so the benefit was near zero.
+✅ **Fixed by reporting the truth instead:** capabilities returns
+`permittedBinaries` (the policy) AND `allowedBinaries` (what is really on PATH),
+plus `deployedCommit` read from `.build-commit`. The status bar shows a branch
+when there is a repo and otherwise **the running commit** — which is what a
+support person actually needs — and never invents one. The palette, the
+source-control icon and the terminal placeholder hide what this container cannot
+run; Output lists permitted-but-absent so the gap is visible rather than
+puzzling.
+⛔ **The general rule: offer only what the box can actually do.** A control that
+answers "not found" is how a tool teaches people to distrust it.
+
+⏳ **Still not built:** the agent DRIVING the workbench (tools `read_file` /
+`list_files` / `run_command` at `minRole: "staff"` calling these doors exactly
+as `investigate` does — the loop and keys exist, so it is wiring), the inline
+accept/reject diff the mockup shows, and a real interactive SSH PTY (the
+terminal is the guarded read-only runner; the SSH pill reflects that the box IS
+loopcom, not a shell). Support-agent accounts and per-feature permission keys
+remain Izzy's to create.
