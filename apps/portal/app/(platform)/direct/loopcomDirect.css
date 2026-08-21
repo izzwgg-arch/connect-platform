@@ -1,0 +1,663 @@
+/*
+ * Loopcom Direct — cross-company chat by phone number.
+ *
+ * ⛔⛔ LIGHT AND DARK ARE BOTH FIRST-CLASS HERE (Izzy, 2026-08-21: "100% light
+ * mode and dark mode"). Two rules make that true rather than aspirational:
+ *
+ * 1. EVERY surface, border and text colour comes from the app's own theme
+ *    tokens (--panel, --panel-2, --text, --text-dim, --border, --accent). Those
+ *    are redefined by `:root[data-theme="light"]` in globals.css, so both modes
+ *    follow the IN-APP theme switch — never `prefers-color-scheme`, which is
+ *    the OS setting and disagrees with the app's own toggle.
+ *    ⛔ Bare `:root` in this codebase is DARK; light is the opt-in override.
+ *
+ * 2. INK vs FILL. `--success` / `--warning` / `--danger` / `--accent` are
+ *    DISPLAY colours: measured as TEXT on the light panel they come out at
+ *    2.28 / 2.15 / 3.76 / 3.68 : 1 — success and warning are effectively
+ *    unreadable — against 7.31 / 7.76 / 4.43 / 4.53 on dark. So text uses the
+ *    `--lcd-ink-*` tokens below, which are darkened for light only, while
+ *    fills, borders and dots keep the display colour. This is the exact split
+ *    the queue wallboard had to learn; do not collapse it back.
+ */
+
+:root,
+:root[data-theme="dark"] {
+  --lcd-ink-ok: var(--success);
+  --lcd-ink-warn: var(--warning);
+  --lcd-ink-danger: var(--danger);
+  --lcd-ink-accent: var(--accent);
+  --lcd-bubble-them: var(--panel-2);
+  --lcd-bubble-me: #1466a8;
+  --lcd-bubble-me-text: #eaf5ff;
+  --lcd-ring: rgba(34, 168, 255, 0.16);
+}
+
+:root[data-theme="light"] {
+  /* Contrast-checked against #ffffff, the light panel colour. */
+  --lcd-ink-ok: #0f7a4a; /* 5.38:1 */
+  --lcd-ink-warn: #8a5a00; /* 5.93:1 */
+  --lcd-ink-danger: #c0293a; /* 5.80:1 */
+  --lcd-ink-accent: #1a63c4; /* 5.79:1 */
+  /* An outgoing bubble keeps a strong fill in both modes so "mine" is never
+     ambiguous, and its text is pinned to white — the one place a fixed colour
+     is correct, because the fill it sits on is fixed too. */
+  --lcd-bubble-them: #eef3f8;
+  --lcd-bubble-me: #1a63c4;
+  --lcd-bubble-me-text: #ffffff;
+  --lcd-ring: rgba(26, 99, 196, 0.14);
+}
+
+/* ------------------------------------------------------------------ shell */
+
+.lcd-shell {
+  /* This screen is on the full-height list in globals.css, so it owns its own
+     scrolling. ⛔ height, not max-height: only a definite height makes the
+     panes scroll instead of stretch (the Team Directory lesson). */
+  display: flex;
+  height: calc(100vh - 214px);
+  min-height: 0;
+  overflow: hidden;
+  gap: 16px;
+}
+.lcd-shell > * {
+  min-height: 0;
+}
+
+.lcd-list {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.lcd-list-head {
+  flex-shrink: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lcd-list-head h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0;
+  flex: 1;
+}
+.lcd-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lcd-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .lcd-shell {
+    height: auto;
+    min-height: calc(100vh - 214px);
+    flex-direction: column;
+    overflow: visible;
+  }
+  .lcd-list {
+    width: 100%;
+    max-height: 320px;
+  }
+  .lcd-shell.lcd-shell--thread-open .lcd-list {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------- requests */
+
+/* ⛔ The tray is rendered ONLY when something is waiting — it must never nag. */
+.lcd-requests-card {
+  border: 1px solid var(--accent);
+  background: var(--lcd-ring);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.lcd-requests-card:hover {
+  border-color: var(--accent-2);
+}
+.lcd-requests-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.lcd-requests-card .lcd-rq-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.lcd-requests-card .lcd-rq-sub {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.lcd-count {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--panel);
+  font-size: 0.72rem;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+}
+:root[data-theme="light"] .lcd-count {
+  color: #ffffff;
+}
+
+/* ------------------------------------------------------------- row/card */
+
+.lcd-row {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.lcd-row:hover {
+  background: var(--panel-2);
+}
+.lcd-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.lcd-row.is-active {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+.lcd-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.lcd-row-name {
+  font-weight: 700;
+  font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lcd-row-sub {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lcd-row.is-unread .lcd-row-sub {
+  color: var(--text);
+  font-weight: 600;
+}
+.lcd-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.lcd-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 0.88rem;
+  flex-shrink: 0;
+  /* ⛔ Fixed dark ink on a bright fill in BOTH themes: the avatar colours are
+     saturated brand colours, so a token-based text colour would go white on
+     yellow in light mode. */
+  color: #04121d;
+}
+.lcd-avatar.c1 { background: #22a8ff; }
+.lcd-avatar.c2 { background: #34c27b; }
+.lcd-avatar.c3 { background: #f0b655; }
+.lcd-avatar.c4 { background: #b98cff; }
+.lcd-avatar.c5 { background: #ff8f6b; }
+.lcd-avatar.unknown {
+  background: var(--panel-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.lcd-pill {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.lcd-pill.on {
+  color: var(--lcd-ink-ok);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.lcd-pill.off {
+  color: var(--text-dim);
+  background: var(--panel-2);
+}
+
+/* ------------------------------------------------------------- thread */
+
+.lcd-thread-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.lcd-thread-head .lcd-th-name {
+  font-weight: 700;
+  font-size: 0.98rem;
+}
+.lcd-thread-head .lcd-th-sub {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.lcd-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--lcd-ink-accent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.lcd-icon-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.lcd-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.lcd-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lcd-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lcd-bubble {
+  max-width: min(78%, 560px);
+  border-radius: 16px;
+  padding: 9px 13px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lcd-bubble.them {
+  background: var(--lcd-bubble-them);
+  color: var(--text);
+  align-self: flex-start;
+  border-bottom-left-radius: 6px;
+}
+.lcd-bubble.me {
+  background: var(--lcd-bubble-me);
+  color: var(--lcd-bubble-me-text);
+  align-self: flex-end;
+  border-bottom-right-radius: 6px;
+}
+.lcd-stamp {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  align-self: flex-end;
+  margin-bottom: 6px;
+}
+.lcd-stamp.l {
+  align-self: flex-start;
+}
+
+/* A finished call, and the system notes — centred, quiet, never a bubble. */
+.lcd-sysline {
+  align-self: center;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 14px;
+  margin: 6px 0;
+  text-align: center;
+  max-width: 90%;
+}
+.lcd-sysline a {
+  color: var(--lcd-ink-accent);
+  font-weight: 700;
+}
+
+.lcd-composer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 9px;
+  align-items: flex-end;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+.lcd-composer textarea {
+  flex: 1;
+  resize: none;
+  min-height: 42px;
+  max-height: 140px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 11px 14px;
+  font: inherit;
+  font-size: 0.9rem;
+}
+.lcd-composer textarea::placeholder {
+  color: var(--text-dim);
+}
+.lcd-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--lcd-ring);
+}
+
+/* ----------------------------------------------------------- buttons */
+
+.lcd-btn {
+  border-radius: 11px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.87rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: var(--accent);
+  /* ⛔ Measured: #04121d on the accent fill reads 5.15:1 in light and 7.31:1 in
+     dark — better than white on both, so it is fixed rather than tokenised. */
+  color: #04121d;
+}
+.lcd-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.lcd-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.lcd-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.lcd-btn.ghost {
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--border);
+}
+.lcd-btn.quiet {
+  background: transparent;
+  color: var(--text-dim);
+  border-color: transparent;
+  font-weight: 600;
+}
+.lcd-btn.quiet:hover {
+  color: var(--text);
+}
+.lcd-btn.danger {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--lcd-ink-danger);
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+}
+.lcd-btnrow {
+  display: flex;
+  gap: 8px;
+}
+.lcd-btnrow .lcd-btn {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------- cards */
+
+.lcd-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.lcd-card.accent {
+  border-color: var(--accent);
+  background: var(--lcd-ring);
+}
+.lcd-note {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.lcd-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-dim);
+}
+.lcd-empty h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+.lcd-empty p {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/* ------------------------------------------------------------ dialog */
+
+.lcd-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 9, 14, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  z-index: 60;
+}
+:root[data-theme="light"] .lcd-modal-backdrop {
+  background: rgba(15, 23, 42, 0.34);
+}
+.lcd-modal {
+  width: min(460px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.lcd-modal h3 {
+  margin: 0;
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+.lcd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lcd-field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.lcd-field input,
+.lcd-field textarea {
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 11px 14px;
+  font: inherit;
+  font-size: 0.92rem;
+}
+.lcd-field input::placeholder,
+.lcd-field textarea::placeholder {
+  color: var(--text-dim);
+}
+.lcd-field input:focus,
+.lcd-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--lcd-ring);
+}
+.lcd-field input.code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 1.3rem;
+  letter-spacing: 0.34em;
+  text-align: center;
+}
+
+.lcd-error {
+  font-size: 0.84rem;
+  color: var(--lcd-ink-danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+.lcd-ok {
+  font-size: 0.84rem;
+  color: var(--lcd-ink-ok);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+
+/* ---------------------------------------------------------- settings */
+
+.lcd-setrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 13px 15px;
+}
+.lcd-setrow .lcd-set-label {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.lcd-setrow .lcd-set-sub {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-top: 3px;
+}
+
+/* The switch reads as on/off by POSITION as well as colour, so it still works
+   for someone who cannot separate the two hues. */
+.lcd-toggle {
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.lcd-toggle::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--text-dim);
+  transition: transform 130ms ease, background 130ms ease;
+}
+.lcd-toggle[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.lcd-toggle[aria-checked="true"]::after {
+  transform: translateX(18px);
+  background: #04121d;
+}
+.lcd-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lcd-toggle::after {
+    transition: none;
+  }
+}
+
+.lcd-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow-y: auto;
+  min-height: 0;
+}

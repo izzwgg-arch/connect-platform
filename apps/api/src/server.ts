@@ -354,6 +354,7 @@ import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerMeetingRoutes } from "./meetings/meetingRoutes";
+import { registerLoopcomDirectRoutes } from "./loopcomDirect/directRoutes";
 import { registerPbxConsoleRoutes } from "./pbxConsole/pbxConsoleRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
 import { registerForwardRoutes } from "./pbx/forwardRoutes";
@@ -2933,6 +2934,16 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/voicemail", permission: "can_view_workspace_voicemail" },
   { prefix: "/voice/voicemail", permission: "can_view_workspace_voicemail" },
   { prefix: "/chat", permission: "can_view_workspace_chat" },
+  // Loopcom Direct (cross-company chat by phone number) rides the SAME key as
+  // the rest of chat on purpose: anybody allowed to use Workspace chat may use
+  // it. ⛔ A new grantable key would NOT reach TENANT_ADMIN without a live
+  // PlatformRolePermissionSnapshot refresh (see [[custom-roles-are-authoritative]]),
+  // so it would ship denying everybody. The real gate for this feature is not a
+  // permission at all — it is that a person has verified their own mobile
+  // number; with no verified identity every route answers "not on Loopcom".
+  // ⛔ WITHOUT THIS LINE THE PREFIX HAS NO PERMISSION GATE AT ALL — the
+  // /admin/wake-health bug. Any new /direct/* route inherits it automatically.
+  { prefix: "/direct", permission: "can_view_workspace_chat" },
   { prefix: "/contacts", permission: "can_view_workspace_contacts" },
 
   { prefix: "/pbx/extensions", permission: "can_view_pbx_extensions" },
@@ -23749,6 +23760,7 @@ registerPollyRoutes({
 // bypass list; everything else is ordinary JWT. Answers 503
 // meetings_not_configured until LIVEKIT_URL / _API_KEY / _API_SECRET are set.
 registerMeetingRoutes(app);
+registerLoopcomDirectRoutes(app, { sendPushToUserDevices });
 
 registerSignalWireRoutes({
   app,

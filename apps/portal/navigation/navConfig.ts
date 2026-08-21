@@ -35,6 +35,7 @@ import {
   ListOrdered,
   Megaphone,
   MessageCircle,
+  AtSign,
   MessagesSquare,
   LifeBuoy,
   Mic2,
@@ -87,6 +88,13 @@ export const navItems: NavItem[] = [
   { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail", badgeKey: "voicemail" },
   { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat", badgeKey: "chat" },
   { id: "workspace.contacts", href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts" },
+  // Loopcom Direct (2026-08-21) — cross-company chat by phone number. Rides the
+  // SAME key as Chat: anybody who may use Workspace chat may use Direct, and the
+  // real gate is that a person has verified their own mobile number (with no
+  // verified identity every screen shows the "verify to get started" state).
+  // ⛔ A dedicated key would not reach TENANT_ADMIN without a live permission
+  // snapshot refresh — see the Meetings note below.
+  { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat" },
   // Loopcom Meetings (2026-08-20). Reuses the overview key on purpose — a
   // dedicated can_view_workspace_meetings key needs the live permission
   // snapshot updated (custom-roles-are-authoritative: code defaults do NOT
