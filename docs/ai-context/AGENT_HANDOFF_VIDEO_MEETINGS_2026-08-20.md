@@ -330,3 +330,53 @@ mints per-participant credentials and needs no separate credential plumbing).
   direct TCP fallback on 7881 may already carry those offices, in which case the
   relay never gets used. **That two-minute test should happen before anyone
   spends more time on hairpin NAT.**
+
+## §8 Starting a meeting is SUPER_ADMIN only (2026-08-21) — and the nginx pin broke every deploy on the box
+
+Izzy: *"Put meetings in the sidebar. Permissions off for everybody but me."*
+
+- ✅ **Gated in THREE places, because two of them are only presentation.** The
+  sidebar entry is forced SUPER_ADMIN in `isNavItemVisibleForUser` (the
+  `pbx.ivr_migration` pattern); the `/meetings` page refuses to render on
+  `backendJwtRole !== "SUPER_ADMIN"`; and **`requireMeetingCreator` in
+  `meetingRoutes.ts` refuses POST/GET `/meetings` server-side** with a
+  plain-English 403. ⛔ Only the last one is enforcement — a typed URL or a curl
+  lands there.
+- ⛔⛔ **CREATE AND LIST ONLY — NEVER JOIN.** A guest has no account at all and an
+  ordinary signed-in colleague must still open a link, or the feature is
+  pointless. Host powers stay creator-only (`isMeetingHost`), so a joiner still
+  cannot mute, remove, lock or end. Two tests pin exactly this, including the
+  negative.
+- ✅ **PROVEN LIVE through nginx with a REAL customer admin's token**
+  (`ezra@connectcomunications.com`, an actual TENANT_ADMIN — not a synthetic
+  role string): POST `/meetings` **403**, GET `/meetings` **403**, SUPER_ADMIN
+  POST **200**, **guest with no token joins 200**, TENANT_ADMIN joins by link
+  **200 with `isHost: false`**. Probe meeting deleted. api at `d3891d64`,
+  `requireMeetingCreator` greps 3 in the running container.
+- ⛔⛔⛔ **THE EXPENSIVE LESSON: PINNING NGINX OFF THE WILDCARD SILENTLY REMOVED
+  LOOPBACK, AND EVERY DEPLOY ON THIS BOX FAILED FOR ~80 MINUTES — MINE AND OTHER
+  SESSIONS'.** The blue/green rollouts verify their own cutover with
+  `curl --resolve <host>:443:127.0.0.1` (`DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=1`).
+  With nginx bound only to `45.14.194.179:443`, that probe got `http_code=000`,
+  so **api and portal rollouts failed at the `restart` stage and rolled
+  themselves back** — logs read `public verify probe failed` / `FAIL: ... not
+  ready after cutover`. ✅ **No customer impact: the rollback is correct and the
+  platform stayed on 200s throughout** (upstreams returned to stable 3001/3000).
+  ✅ **FIX: every vhost now carries BOTH `listen 45.14.194.179:443` AND
+  `listen 127.0.0.1:443`**, which keeps `169.58.213.204:443` free for TURN.
+  Backups `/root/nginx-backup-*-loopback443/`. Verified: all three probe URLs
+  (both app hosts + portal `/ready`) answer **200 via 127.0.0.1** again.
+  ⛔ **THE RULE: on this box, loopback 443 is load-bearing for deploys. Any
+  future change that narrows what nginx listens on must keep `127.0.0.1:443`,
+  and must be proven with the `--resolve ...:127.0.0.1` probe BEFORE the next
+  deploy, not after it fails.** ⛔ Another session independently worked around
+  this by setting `DEPLOY_PORTAL_PUBLIC_VERIFY_RESOLVE_LOCAL=0` — that override
+  is now unnecessary and should not be made permanent; it disables a real check.
+- ⛔ Deploy-queue reality on a busy day, worth knowing: two of these deploys
+  first failed with **`HEAVY JOB ALREADY RUNNING`** while the queue itself read
+  `runningCount: 0` — the heavy-build lock is SEPARATE from the queue, and
+  another session's `deploy-direct.sh` held it. Wait on
+  `ps -eo cmd | grep -cE "[d]eploy-direct.sh|[r]un-heavy.sh"` reaching 0 (the
+  bracket trick avoids the self-match that has hung waiters here before), and
+  ⛔ **always enqueue the BRANCH, never your own commit hash** — several
+  sessions push minutes apart and pinning a hash rolls their work back.

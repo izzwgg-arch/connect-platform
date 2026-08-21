@@ -1172,6 +1172,32 @@ has"*, then *"let's do free open source"*, then, on the mockups
   TCP/UDP = Spectrum, Enterprise), so proxying breaks the very thing the IP was
   bought for — and buys nothing anyway, since the PRIMARY IP is published in DNS
   for every hostname. ✅ coturn is already installed on the box. Handoff §6.
+- ✅✅ **STARTING A MEETING IS SUPER_ADMIN ONLY (2026-08-21, Izzy: "Permissions
+  off for everybody but me") — api DEPLOYED (`d3891d64`) and PROVEN LIVE with a
+  REAL customer admin's token.** Gated in THREE places because two are only
+  presentation: the sidebar entry is forced SUPER_ADMIN in
+  `isNavItemVisibleForUser`, the `/meetings` page refuses to render, and
+  **`requireMeetingCreator` refuses POST/GET `/meetings` server-side** — the
+  only one a typed URL or a curl actually hits. ⛔⛔ **CREATE AND LIST ONLY,
+  NEVER JOIN**: a guest has no account and a colleague must still open a link,
+  or the feature is pointless; host powers stay creator-only. Measured through
+  nginx as `ezra@connectcomunications.com` (a real TENANT_ADMIN): create **403**,
+  list **403**, SUPER_ADMIN create **200**, **guest joins 200**, TENANT_ADMIN
+  joins **200 with isHost:false**.
+- ⛔⛔⛔ **AND THE PIN THAT FREED 443 BROKE EVERY DEPLOY ON THE BOX FOR ~80
+  MINUTES — MINE AND OTHER SESSIONS'. Binding nginx to `45.14.194.179:443`
+  silently removed LOOPBACK, and the blue/green rollouts verify their own
+  cutover with `curl --resolve <host>:443:127.0.0.1`** — that probe returned
+  `http_code=000`, so api and portal deploys failed at the `restart` stage.
+  ✅ **No customer impact — the rollback is correct and the platform stayed on
+  200s** (upstreams back to stable 3001/3000). ✅ Fixed: every vhost now carries
+  **BOTH `listen 45.14.194.179:443` AND `listen 127.0.0.1:443`**, leaving
+  `169.58.213.204:443` free for TURN (backups `/root/nginx-backup-*-loopback443/`).
+  ⛔ **On this box loopback 443 is LOAD-BEARING FOR DEPLOYS: any change that
+  narrows what nginx listens on must keep `127.0.0.1:443` and must be proven
+  with the `--resolve ...:127.0.0.1` probe BEFORE the next deploy.** ⛔ Do not
+  make another session's `DEPLOY_*_PUBLIC_VERIFY_RESOLVE_LOCAL=0` workaround
+  permanent — it disables a real check. Handoff §8.
 - ⚠️⚠️ **TURN-ON-443 IS BUILT AND ADVERTISED BUT THE RELAY PATH DOES NOT CARRY
   MEDIA YET (2026-08-21).** `turn.loopcom.net` → 169.58.213.204 (Squarespace),
   Let's Encrypt cert (exp 2026-11-19, auto-renew), LiveKit's built-in TURN on
