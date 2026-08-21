@@ -27,7 +27,25 @@
   font-family:var(--uif); font-size:12px; line-height:1.6;
   box-shadow:0 30px 80px rgba(0,0,0,.45);
   display:flex; flex-direction:column;
+
+  /* ⛔⛔ THE IDE MUST BE TOLD ITS HEIGHT, AND FORGETTING THIS IS WHAT MADE THE
+     SCREEN "GIGANTIC" ON DAY ONE. In the mockup it sat inside a fixed-height
+     frame; ported into ordinary page flow it had NO height, so every `flex:1`
+     and `min-height:0` below resolved against CONTENT height — the tree drew
+     all 222 entries, the editor the whole file, the terminal under that, and
+     nothing scrolled internally. The result is a page thousands of pixels
+     tall, which is the opposite of an IDE.
+     The cap is the same one every sibling view on this screen already uses
+     (`max-height: calc(100vh - 214px)` in supportDesk.css) — matched here on
+     purpose so the five views feel like one screen.
+     ⛔ It is `height`, not `max-height`: an IDE FILLS its space, and only a
+     definite height makes the inner panes scroll instead of stretch. */
+  height:calc(100vh - 214px); min-height:520px;
 }
+/* Grid and flex children default to min-height:auto, which lets a long child
+   push past a bounded parent. This is the line that actually makes the panes
+   scroll rather than overflow. */
+.ide-root .ide-body > * { min-height:0; }
 .ide-root *, .ide-root *::before, .ide-root *::after { box-sizing:border-box; letter-spacing:0; }
 .ide-root button { font:inherit; color:inherit; background:transparent; border:0; cursor:pointer; }
 
