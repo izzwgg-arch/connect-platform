@@ -239,5 +239,178 @@ create it later."* The mockups-first instruction is discharged; phases now ship 
   `done d0627e7c` (a later fetch's clone HEAD — the documented trap);
   `.build-commit` + the bundle grep are the authority. Tests 13/13.
 
-⏳ **Phases 3–5 NOT started** (cross-company inbox + take-over, tools, the
-Agent-SDK workbench). The support-agent accounts remain Izzy's to create.
+## §6 Phase 3 — the cross-company inbox: SHIPPED (`a2bb91fa`)
+
+- `GET /admin/support/threads` — every company's `ConnectChatThread` newest-first,
+  tenant names joined, last-message previews (⛔ a deleted message never previews).
+  `GET .../threads/:id` — transcript oldest-first, deleted bodies masked to `""`,
+  senders named via the shared `resolvePersonDisplayName` (extension name first),
+  ⛔ inbound labelled by the external NUMBER, never a guessed contact name.
+- ⛔⛔ **`POST .../threads/:id/reply` DELEGATES to the injected
+  `sendConnectChatSmsMessage`** — the ONE send implementation (participant join,
+  `canSendSmsUser`, provider dispatch, pushes). **`tenantId` comes from the
+  THREAD, never the caller**, so the reply leaves from that company's own number.
+  Non-SMS threads are refused in plain English; a missing injection answers 503
+  rather than inventing a sender. ⛔ A source guard pins the exact POST route
+  list and fails on `smsQueue.add` / `sendSMS(` / `voipMs` / `connectChatMessage.create`
+  appearing in this module, plus a second guard that **server.ts injects the real
+  sender**.
+- ✅ **DEPLOYED + verified:** api + portal container-verified at `a2bb91fa`.
+
+## §7 Phase 4 — assistant take-over: SHIPPED (`7a2e106c`)
+
+Migration **`20260820213000_agent_conversation_takeover`** — `AgentConversation.
+humanTakeoverAt` / `humanTakeoverBy`, both nullable (no existing row changes).
+✅ Applied live (`prisma migrate deploy`, 20.8 s) and **both columns confirmed in
+the production database**.
+
+- ⛔⛔ **THE CONTRACT HAS THREE LEGS AND ALL THREE MUST SHIP TOGETHER:**
+  **(1)** the desk API flips the flag and writes `role: "staff"` `AgentMessage`
+  rows; **(2)** the agent **ENGINE** refuses to answer while the flag is set —
+  ⛔ **that half is an agent CONTAINER REBUILD, not an api deploy**; **(3)** the
+  customer's widget polls `/agent-api/chat/messages`, which now reports the flag
+  (`getMessagesWithState`, same gating — tenant isolation tested).
+- ⛔ **The engine's take-over branch sits BEFORE the Yiddish input leg** on
+  purpose: bridging costs Yiddish Labs credits and its only consumer would be
+  the model that deliberately is not running. While taken over the engine is a
+  mailbox — stores the customer's message, runs no model, returns
+  `humanTakeover: true` with an empty reply.
+- ⛔ **A staff message REQUIRES an active take-over (409 otherwise)** — the
+  assistant and a person both answering is two voices in one mouth.
+- ⛔ **`AgentAuditLog.hash` is REQUIRED tamper evidence** — the first draft wrote
+  bare `agentAuditLog.create` calls that would have failed silently; `supportAudit()`
+  computes a real sha256 (a test asserts a 64-char hash, never a stub).
+- Both moments are announced in the transcript (take-over and hand-back), so the
+  change of voice is never silent; the widget renders staff turns as
+  **"Loopcom support · a real person"** and polls every 4 s, stopping itself on
+  hand-back.
+- ✅ **DEPLOYED + verified:** api `fd9fc575` (route greps in-container, migration
+  applied); **agent REBUILT — the running container greps `humanTakeoverAt` ×2 and
+  `getMessagesWithState` ×1** (⛔ no bind mounts on `app-agent-1`, so the code
+  really is the image's); portal carries "Take over from the assistant" in the
+  shipped chunk.
+- ⛔ **A deploy log lied again and the bundle grep caught it:** my own Phase-4
+  portal deploy **FAILED** (`git fetch origin --prune failed`) — yet the feature
+  is live, because a parallel session's portal deploy at `4e13522f` carried the
+  commit up. **Judge by `.build-commit` + a bundle STRING grep, never the log.**
+
+## §8 The sidebar (`9fbd5af3`)
+
+Izzy: *"put it in the sidebar."* It already WAS — and deployed — but at
+**position 9 of 25** in the Admin section, between Ring Groups & Queues and PBX
+Events, which is functionally invisible. Moved to the **top of the Admin
+section**, above Admin Console. Gating unchanged.
+⛔ **Committed surgically from the tip**: the shared worktree's `navConfig.ts`
+also held another session's **uncommitted** pbx-console permission-key fix
+(`can_manage_global_settings`), which a plain file commit would have swept in.
+
+## §9 Phase 5a/5b — the Ground Rules and the Watchman: SHIPPED (`fe755157`)
+
+⛔⛔ **BUILD ORDER IS THE POINT: the governor shipped BEFORE the engine it
+governs.** An execution surface that can run commands on production needs its
+rules to exist first; bolting guardrails on afterwards is how they end up not
+quite fitting. Phase 5c (the IDE + SDK + terminal) is deliberately still unbuilt.
+
+**Ground rules** (`apps/api/src/supportGroundRules.ts`, migration
+`20260820234500_support_ground_rules`, applied live):
+- Three plain-English lists owned by Izzy. **Append-only** — every save writes a
+  NEW version and nothing is updated in place, so the row history IS the audit
+  trail he asked for.
+- ⛔⛔ **`classifyAction()` is the EXECUTABLE half.** The rendered text going
+  into the model's context is the braces; this is the belt. Phase 5c MUST call
+  it and obey the verdict, so "never" holds even when the model is wrong or
+  talked into something. A rulebook that lives only in a prompt is decoration —
+  this repo already shipped an assistant that "passed it to the team" for two
+  weeks with nothing behind the words.
+- ⛔ **Order is the safety property: NEVER > ASK > ALLOWED**, and ⛔ **no match
+  ⇒ ASK, never ALLOW.**
+- ⛔ **The matcher is VERB-AWARE, and that is not decoration.** A noun-only
+  matcher sees "PBX" in both "Read the PBX" (allowed) and "Write to the PBX"
+  (never) and refuses the read the rules permit; it also refused "delete the old
+  deploy logs" because the word *deploy* appeared. Rule shapes: subject-only
+  ("Payments, billing or pension") matches ANY mention; verb-only ("Delete
+  anything") matches that kind of action; verb+subject needs both.
+  ⛔ **Do NOT put a common word like "customer" in a subject-only never rule** —
+  it refuses half of all support work (caught in test, fixed before shipping).
+- ⛔ An **empty never-list is refused** (400) — that is a mis-paste or a UI bug,
+  not a decision.
+
+**The Watchman** (`apps/api/src/supportWatchman.ts`) — Izzy: *"constantly be
+checking the MD files, the server, and the PBX."*
+- Three checks: rule files readable → server healthy → PBX reachable **and
+  read-only**. ⛔ **Read-only is proved by asking `SELECT CURRENT_USER()` and
+  confirming `connect_read`, NEVER by attempting a write** — testing a write
+  guarantee by writing is how you break the thing you were checking.
+- ⛔⛔ **FAIL SAFE: a probe that THROWS becomes "unknown", and unknown BLOCKS
+  work.** An unreachable-but-read-only PBX is only a WARNING (nothing can be
+  harmed); a PBX that is NOT read-only is a stop-everything.
+- Probes are injected, so the whole verdict layer is unit-testable with no
+  server, database or PBX.
+
+✅ **DEPLOYED + PROVEN LIVE on production** (api container `fe755157`, migration
+9.8 s): the Watchman answered **safeToWork: true** with all three real checks —
+`rules: 2 rule files read`, `server: 2 services healthy`, **`pbx: Reachable, and
+read-only`** (a real MySQL connection to the live PBX confirming the credential)
+— and the live classifier answered **"write a new extension to the PBX" → never**
+while **"read the PBX extension list" → allowed**.
+
+Tests: 29 console + 13 rules + 9 watchman. Portal typecheck 0; api 75 = baseline.
+
+## §10 Phase 5c — the Workbench: SHIPPED (`9e824f19`)
+
+⛔⛔ **THE HEADLINE, AND IT CORRECTS THIS DOC'S OWN EARLIER ADVICE: no new SDK
+and no new API key were needed.** §9 said 5c was blocked on installing
+`claude-agent-sdk` plus a key. **Checked before building: the platform already
+has the engine** — `completeWithTools` in `apps/agent/src/llm/router.ts` is a
+working agentic loop with a `staff` tool tier, and **both `ANTHROPIC_API_KEY`
+and `OPENAI_API_KEY` are already SET in `app-agent-1`**. So the workbench was
+built on proven in-house infrastructure with **zero new dependencies**.
+**Check what the platform already has before adding a dependency** — the
+"missing" engine was the same one `investigate` already rides.
+
+**`apps/api/src/supportWorkbench.ts` — three doors, four gates.**
+- ⛔⛔ **GATE ORDER IS THE SAFETY PROPERTY: WATCHMAN → SHAPE+ALLOWLIST →
+  SECRETS → RULEBOOK.** The allowlist runs before the rulebook so the read-only
+  guarantee is established before the verdict is interpreted.
+- ⛔ **`ALLOWED_BINARIES` is READ-ONLY TOOLS ONLY** — a test asserts `rm`, `mv`,
+  `chmod`, `bash`, `sh`, `npm`, `tee`, `dd`… are absent. `FORBIDDEN_SUBCOMMANDS`
+  blocks the dangerous halves of safe binaries (`git push/reset`, `docker
+  restart/exec`, `systemctl restart`, `sed -i`, `find -delete`), and chaining,
+  substitution, redirects and `sudo` are refused so one approved command cannot
+  smuggle a second. **Every segment of a pipe** is allowlisted, not just the first.
+- ⛔⛔ **A HOLE FOUND WHILE BUILDING: `cat` is legitimately read-only, so the
+  door would have served `.env.platform` and every private key on the box.**
+  `commandTouchesSecrets()` refuses secret PATHS mechanically. The rulebook says
+  never read credentials; this is that rule made enforceable, because "don't
+  look" is not a control.
+- ⛔ **ONE DELIBERATE ASYMMETRY, documented in the code:** `classifyAction`
+  defaults an unrecognised action to ASK, but `decideCommandRun` PROCEEDS on an
+  unmatched command — the allowlist has already proven it read-only, and
+  prompting for `ls` teaches a support person to click through the confirmation
+  that matters. **A real ask-first RULE still stops it** (`verdict.matchedRule`
+  is what separates the two cases); `never` refuses even when confirmed.
+- ⛔ **NO PTY / interactive shell, on purpose** — a shell makes every gate above
+  decoration the moment someone types `bash`. If Izzy ever wants a true
+  terminal it is its own engagement with its own decision.
+- ⛔ Refusals are audited exactly like runs (`workbench.command_refused` /
+  `workbench.command_ran`) — a door that records only its successes is not an
+  audit trail. ⛔ **Unset workspace root ⇒ the workbench is OFF (503)**, never a
+  fallback to cwd. Path traversal and credential files are refused by the file
+  reader too; `node_modules`/`.git`/dotfiles are never listed.
+
+✅ **DEPLOYED (api container `9e824f19`) AND THE GATES DRIVEN LIVE ON
+PRODUCTION** — the explorer listed the real repo (`apps`, `docs`, `infra`,
+`ops`, `packages`), a real `git status | head` ran (exit 0), and **all five
+attacks bounced**: `cat …/.env.platform` → **403 refused_secrets**;
+`ls; rm -rf /tmp/x` → 400; `bash -c whoami` → 400; `docker restart app-api-1`
+→ 400; `../../etc/passwd` → 400.
+
+Tests: 18 workbench (every refusal path) + 32 console. Portal typecheck 0; api 75.
+
+⏳ **NOT DONE / next:** the agent DRIVING the workbench (its tools would be
+`read_file` / `list_files` / `run_command` at `minRole: "staff"` in
+`apps/agent/src/tools/`, calling these doors exactly as `investigate` does — the
+loop and the keys already exist, so this is wiring, not a capability build);
+proposing an edit as a reviewable diff and shipping it through the deploy queue;
+and ⛔ **nobody has opened the Workbench tab in a browser.** The support-agent
+accounts and per-feature permission keys remain Izzy's to create.

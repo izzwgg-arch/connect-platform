@@ -357,14 +357,70 @@ call): handlers call `requireSuperAdmin`, `/admin/support` rides
 `isNavItemVisibleForUser` — ⛔ deliberately NO new grantable key until a feature
 honours it. ✅ Proven live: self-signed SUPER_ADMIN probe → 200, the real
 4-escalation backlog. ⏳ Nobody has opened the page in a browser; no fix ever
-approved from it. ✅ **Phase 2 (customer panel) SHIPPED same evening,
-`8e192e5d`, api+portal container-verified + live-probed** — the desk's third
-column aggregates extensions/users/numbers/billing/calls/past escalations via
-`GET /admin/support/customers/:tenantId`, every block best-effort (⛔ field
-names verified: `autoBillingEnabled`, `extNumber`, `connectTenantId`,
-`startedAt`; ⛔ no `:has()` in its css, class-toggled instead). ⏳ Phases 3–5
-(cross-company inbox + take-over, tools, the Agent-SDK workbench) are
-DESIGNED ONLY.
+approved from it. ✅ **Phases 2–5b ALL SHIPPED the same evening, every stage
+container-verified and live-probed.** **P2 customer panel** (`8e192e5d`) —
+`GET /admin/support/customers/:tenantId` aggregates extensions/users/numbers/
+billing/calls/past-escalations, every block best-effort (⛔ verified field names:
+`autoBillingEnabled`, `extNumber`, `connectTenantId`, `startedAt`; ⛔ no
+`:has()` in its css). **P3 cross-company inbox** (`a2bb91fa`) —
+`/admin/support/threads` (+`/:id`, +`/reply`); ⛔ the reply DELEGATES to the
+injected `sendConnectChatSmsMessage` and takes tenantId from the THREAD, so it
+leaves from that company's own number; a source guard pins the POST list and
+forbids this module ever sending or writing messages itself. **P4 assistant
+take-over** (`7a2e106c`) — migration `20260820213000` (`humanTakeoverAt/By`,
+applied live); ⛔⛔ three legs that must ship together: desk API + the agent
+ENGINE's refusal-to-answer (**a CONTAINER REBUILD, not an api deploy**) + the
+widget's 4 s polling; the engine's branch sits BEFORE the Yiddish input leg (no
+wasted YL credits); a staff message REQUIRES an active take-over (409 — two
+voices in one mouth); ⛔ `AgentAuditLog.hash` is REQUIRED tamper evidence.
+**P5a/5b the GOVERNOR, built before the engine it governs** (`fe755157`) —
+**Ground rules**: three plain-English lists (allowed/never/ask-first) owned by
+Izzy, append-only so the history IS the audit trail; ⛔⛔ `classifyAction()` is
+the EXECUTABLE half, so "never" holds in code even when the model is talked into
+something (prompt text alone is decoration); ⛔ order is the safety property
+(NEVER > ASK > ALLOWED) and ⛔ no match ⇒ ASK, never ALLOW; ⛔ the matcher is
+VERB-AWARE so "Read the PBX" is allowed while "Write to the PBX" is never — a
+noun-only matcher refused both, and refused "delete the old deploy logs" over the
+word *deploy*; ⛔ never put a common word like "customer" in a subject-only never
+rule. **Watchman**: rule files readable / server healthy / PBX reachable AND
+read-only — the last proved by `SELECT CURRENT_USER()`, ⛔ NEVER by attempting a
+write; ⛔ fail-safe — a throwing probe is "unknown" and unknown BLOCKS work, while
+unreachable-but-read-only is only a warning. ✅ Proven live on production:
+safeToWork true on all three real checks, and the live classifier answering
+write-to-PBX → never, read-PBX → allowed. ✅ **Sidebar (`9fbd5af3`): Support Desk
+is FIRST in the Admin section** (it was buried at position 9 of 25).
+⛔ **Doc hazard hit here, worth carrying:** a MERGE silently resolved CLAUDE.md in
+favour of a stale copy and dropped the P3/P4 paragraph — the commit had it, the
+tip did not. **After any merge lands on this branch, grep CLAUDE.md for your own
+section before trusting it.**
+✅ **Phase 5c THE WORKBENCH SHIPPED (`9e824f19`, api container-verified, gates
+driven live on production).** ⛔⛔ **It needed NO new SDK and NO new API key —
+this file previously said it did.** The platform already had the engine
+(`completeWithTools` = a working agentic loop with a staff tool tier) and both
+provider keys are live in `app-agent-1`; **check what the platform already has
+before adding a dependency.** Three doors (file tree / file read / run command),
+⛔⛔ **four gates in this order: WATCHMAN → SHAPE+ALLOWLIST → SECRETS →
+RULEBOOK** — the allowlist runs before the rulebook so the read-only guarantee
+is established first. ⛔ `ALLOWED_BINARIES` is READ-ONLY TOOLS ONLY (a test
+asserts rm/mv/chmod/bash/npm/tee/dd are absent), mutating sub-commands are
+blocked (`git push`, `docker restart/exec`, `systemctl restart`, `sed -i`,
+`find -delete`), chaining/substitution/redirect/sudo refused, and EVERY pipe
+segment allowlisted. ⛔⛔ **A hole found while building: `cat` is legitimately
+read-only, so the door would have served `.env.platform` and every key on the
+box** — `commandTouchesSecrets()` refuses secret paths mechanically. ⛔ **One
+deliberate asymmetry:** an UNMATCHED command proceeds (the allowlist already
+proved it read-only; prompting for `ls` trains people to click through the
+confirmations that matter), while a real ask-first RULE still stops it and
+`never` refuses even when confirmed. ⛔ **NO PTY/interactive shell on purpose** —
+a shell makes every gate decoration. Refusals are audited exactly like runs;
+unset workspace root ⇒ OFF (503), never a cwd fallback. ✅ **Proven live: all
+five attacks bounced** — `cat …/.env.platform` → 403 refused_secrets,
+`ls; rm -rf` → 400, `bash -c` → 400, `docker restart` → 400, `../../etc/passwd`
+→ 400. ⏳ **Next:** the agent DRIVING the workbench (tools `read_file`/
+`list_files`/`run_command` at `minRole: "staff"` calling these doors exactly as
+`investigate` does — wiring, not a capability build), edits as reviewable diffs
+through the deploy queue, and ⛔ nobody has opened the Workbench tab in a
+browser. Support-agent accounts + per-feature permission keys remain his to create.
 
 
 Full handoff + the verified infrastructure inventory:

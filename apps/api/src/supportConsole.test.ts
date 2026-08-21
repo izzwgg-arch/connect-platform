@@ -538,6 +538,166 @@ test("conversations list: cross-tenant rows with names and the takeover chip", a
   assert.equal(out.conversations[0].last.preview, "hold music is wrong");
 });
 
+// ---------------------------------------------------------------- ground rules + watchman (Phase 5a/5b)
+
+function rulesDb() {
+  const rows: any[] = [];
+  const audits: any[] = [];
+  return {
+    rows,
+    audits,
+    supportGroundRule: {
+      async findFirst() {
+        return [...rows].sort((a, b) => b.version - a.version)[0] ?? null;
+      },
+      async findMany(args: any) {
+        return [...rows].sort((a, b) => b.version - a.version).slice(0, args?.take ?? rows.length);
+      },
+      async create(args: any) {
+        const row = { id: "r" + rows.length, createdAt: NOW, ...args.data };
+        rows.push(row);
+        return row;
+      },
+    },
+    agentAuditLog: {
+      async create(args: any) {
+        audits.push(args.data);
+        return args.data;
+      },
+    },
+  };
+}
+
+test("ground rules: falls back to the safe defaults until the owner saves one", async () => {
+  const rdb = rulesDb();
+  const { app } = register([], { customer: { supportGroundRule: rdb.supportGroundRule, agentAuditLog: rdb.agentAuditLog } });
+  const { out } = await call(app, "/admin/support/ground-rules", {});
+  assert.equal(out.isDefault, true);
+  assert.equal(out.version, 0);
+  assert.match(out.rules.never, /Payments/);
+  assert.match(out.renderedForAgent, /enforced in code/);
+});
+
+test("ground rules: every save is a NEW version — the history is the audit trail", async () => {
+  const rdb = rulesDb();
+  const { app } = register([], { customer: { supportGroundRule: rdb.supportGroundRule, agentAuditLog: rdb.agentAuditLog } });
+  const first = await call(app, "POST /admin/support/ground-rules", {
+    body: { allowed: "Read files", never: "Payments", askFirst: "Delete anything", note: "first" },
+  });
+  assert.equal(first.out.version, 1);
+  const second = await call(app, "POST /admin/support/ground-rules", {
+    body: { allowed: "Read files and logs", never: "Payments", askFirst: "Delete anything" },
+  });
+  assert.equal(second.out.version, 2);
+  assert.equal(rdb.rows.length, 2, "the earlier version must still exist");
+  assert.equal(rdb.rows[0].allowed, "Read files", "history is never rewritten");
+  assert.equal(rdb.audits.at(-1).event, "support.ground_rules_saved");
+  assert.equal(rdb.audits.at(-1).hash.length, 64);
+  const now = await call(app, "/admin/support/ground-rules", {});
+  assert.equal(now.out.version, 2);
+  assert.equal(now.out.isDefault, false);
+});
+
+test("⛔ an EMPTY never-list is refused — an unguarded rulebook is a bug, not a choice", async () => {
+  const rdb = rulesDb();
+  const { app } = register([], { customer: { supportGroundRule: rdb.supportGroundRule, agentAuditLog: rdb.agentAuditLog } });
+  const { reply } = await call(app, "POST /admin/support/ground-rules", {
+    body: { allowed: "Read files", never: "   ", askFirst: "Delete anything" },
+  });
+  assert.equal(reply.statusCode, 400);
+  assert.equal(reply.body.error, "never_list_required");
+  assert.equal(rdb.rows.length, 0);
+});
+
+test("ground-rules check answers what would happen, against the saved rulebook", async () => {
+  const rdb = rulesDb();
+  const { app } = register([], { customer: { supportGroundRule: rdb.supportGroundRule, agentAuditLog: rdb.agentAuditLog } });
+  await call(app, "POST /admin/support/ground-rules", {
+    body: { allowed: "Read files", never: "Write to the PBX", askFirst: "Restart any container" },
+  });
+  const never = await call(app, "POST /admin/support/ground-rules/check", { body: { action: "write a new extension to the PBX" } });
+  assert.equal(never.out.verdict.decision, "never");
+  assert.equal(never.out.version, 1);
+  const ask = await call(app, "POST /admin/support/ground-rules/check", { body: { action: "restart the api container" } });
+  assert.equal(ask.out.verdict.decision, "ask_first");
+});
+
+test("⛔ watchman with NO probes wired reports unknown and refuses to say it is safe", async () => {
+  const { app } = register([]);
+  const { out } = await call(app, "/admin/support/watchman", {});
+  assert.equal(out.safeToWork, false);
+  assert.equal(out.checks.length, 3);
+  assert.ok(out.checks.every((c: any) => c.status === "unknown"));
+});
+
+test("watchman reports the injected probes", async () => {
+  const app = fakeApp();
+  registerSupportConsoleRoutes({
+    app,
+    db: { ...customerDb({}), ...inboxDb({}), ...fakeDb([], {}) },
+    requireSuper: async () => ({ sub: "super", role: "SUPER_ADMIN", tenantId: "admin" }),
+    watchmanProbes: {
+      rules: async () => ({ found: 2, missing: [] }),
+      server: async () => ({ healthy: 2, unhealthy: [] }),
+      pbx: async () => ({ reachable: true, readOnly: true }),
+    },
+  });
+  const { out } = await call(app, "/admin/support/watchman", {});
+  assert.equal(out.safeToWork, true);
+});
+
+// ---------------------------------------------------------------- workbench (Phase 5c)
+
+test("⛔ with no workspace root the workbench is OFF (503) — never a fallback to cwd", async () => {
+  const { app } = register([]);
+  for (const route of ["/admin/support/workbench/files", "/admin/support/workbench/file"]) {
+    const { reply } = await call(app, route, { query: { path: "x" } });
+    assert.equal(reply.statusCode, 503, route);
+  }
+  const run = await call(app, "POST /admin/support/workbench/run", { body: { command: "ls" } });
+  assert.equal(run.reply.statusCode, 503);
+});
+
+test("⛔ the workbench refuses to run while the Watchman says stop, and audits the refusal", async () => {
+  const rdb = rulesDb();
+  const app = fakeApp();
+  registerSupportConsoleRoutes({
+    app,
+    db: { ...customerDb({}), ...inboxDb({}), ...fakeDb([], {}), supportGroundRule: rdb.supportGroundRule, agentAuditLog: rdb.agentAuditLog },
+    requireSuper: async () => ({ sub: "super", role: "SUPER_ADMIN", tenantId: "admin" }),
+    workspaceRoot: "/tmp",
+    watchmanProbes: {
+      rules: async () => { throw new Error("cannot read rules"); },
+      server: async () => ({ healthy: 2, unhealthy: [] }),
+      pbx: async () => ({ reachable: true, readOnly: true }),
+    },
+  });
+  const { reply } = await call(app, "POST /admin/support/workbench/run", { body: { command: "git status" } });
+  assert.equal(reply.statusCode, 409);
+  assert.equal(reply.body.error, "not_safe_to_work");
+  assert.equal(rdb.audits.at(-1).event, "workbench.command_refused", "a refusal must be audited too");
+  assert.equal(rdb.audits.at(-1).hash.length, 64);
+});
+
+test("capabilities says what the workbench may run, and admits when it is off", async () => {
+  const off = register([]);
+  const a = await call(off.app, "/admin/support/workbench/capabilities", {});
+  assert.equal(a.out.available, false);
+
+  const app = fakeApp();
+  registerSupportConsoleRoutes({
+    app,
+    db: { ...customerDb({}), ...inboxDb({}), ...fakeDb([], {}) },
+    requireSuper: async () => ({ sub: "super", role: "SUPER_ADMIN", tenantId: "admin" }),
+    workspaceRoot: "/tmp",
+  });
+  const b = await call(app, "/admin/support/workbench/capabilities", {});
+  assert.equal(b.out.available, true);
+  assert.ok(b.out.allowedBinaries.includes("git"));
+  assert.ok(!b.out.allowedBinaries.includes("rm"));
+  assert.match(b.out.note, /Read-only/);
+});
+
 // ---------------------------------------------------------------- wiring guards
 
 function readSource(rel: string): string {
@@ -567,7 +727,10 @@ test("⛔ the module's writes are exactly reply/takeover/staff-message, and SMS 
     [
       "/admin/support/conversations/:id/message",
       "/admin/support/conversations/:id/takeover",
+      "/admin/support/ground-rules",
+      "/admin/support/ground-rules/check",
       "/admin/support/threads/:id/reply",
+      "/admin/support/workbench/run",
     ],
     "supportConsole.ts grew an unexpected write route",
   );
