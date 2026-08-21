@@ -526,3 +526,36 @@ already playing on hold.
   community, and check the calendar view says *Closed — yom tov* on **Sun 27 Sep
   2026** and **Sun 4 Oct 2026**. Then the negative that matters most: a tenant
   with the calendar **off** must behave byte-identically to today.
+
+### ⚠️ Two loose ends recorded rather than quietly left
+
+**1. `reopenNextMorning` is stored and NOT read.** It is on the model, in the
+settings type and in the zod schema, and nothing consults it — because the
+behaviour it describes already happens for free. Once the closure ends at
+nightfall the calendar says "not closed" and the tenant's ordinary weekly hours
+take over, which at 8:21pm means the after-hours menu until morning anyway. The
+field would only matter if we wanted the HOLIDAY menu to keep playing until the
+next morning instead of the after-hours one — a real distinction, but nobody
+asked for it. ⛔ Left in place rather than dropped, because removing a column
+costs a second migration for no behavioural gain; **do not wire it without
+deciding what it should actually do.**
+
+**2. The 117 KB holiday table may be reaching the browser bundle.**
+`packages/shared/package.json` does **not** declare `"sideEffects": false`, so
+webpack must assume every module in the package has import-time side effects and
+will not tree-shake `holidayTable.json` out of any portal chunk that imports
+`@connect/shared`. The Studio's own `JewishCalendar.tsx` does **not** import
+shared — it only calls the API — but several other portal pages do.
+
+⛔ **Not fixed, because it cannot be verified without a build, and an unmeasured
+bundler change is exactly the kind that bites.** The decisive check costs one
+command after a portal deploy:
+
+```
+docker exec app-portal-1 sh -lc 'grep -rl "sefirahEarly" /app/apps/portal/.next/static 2>/dev/null | head'
+```
+
+A hit means the table is shipping to browsers. The fix is then either
+`"sideEffects": false` on the shared package (correct for a pure utility package,
+and it would shrink every other consumer too) or moving the calendar exports off
+the shared ROOT index onto a subpath. **Measure before and after either way.**
