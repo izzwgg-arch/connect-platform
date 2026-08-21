@@ -267,6 +267,14 @@ export function isNavItemVisibleForUser(
   // refuses to render for anyone else, and the create/list routes refuse
   // server-side. All three must agree.
   if (item.id === "workspace.meetings" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // Loopcom Direct: SUPER_ADMIN only for now, the same precedent as Meetings —
+  // Izzy looks at a new customer-facing feature before it appears in every
+  // customer's sidebar. ⛔ This is the ONLY thing standing between the built
+  // feature and every user seeing it, so removing this line IS the launch.
+  // ⛔ It is presentation only: the API gates on can_view_workspace_chat and the
+  // real protection is that nobody has a verified number, so lifting this alone
+  // exposes nothing that was not already refused.
+  if (item.id === "workspace.direct" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The routing/teams doors show and change every customer's trunks and dial
   // plans — SUPER_ADMIN only, same as the console they open into.
   if (item.id === "admin.pbx_routing" && backendJwtRole !== "SUPER_ADMIN") return false;

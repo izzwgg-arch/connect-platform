@@ -143,6 +143,15 @@ test("⛔ Direct is in the sidebar and reuses the chat permission key", () => {
   );
 });
 
+test("⛔ Direct is SUPER_ADMIN-only in the sidebar until Izzy launches it", () => {
+  const nav = readFileSync(path.join(__dirname, "..", "navigation", "navConfig.ts"), "utf8").replace(/\r\n/g, "\n");
+  assert.match(
+    nav,
+    /item\.id === "workspace\.direct" && backendJwtRole !== "SUPER_ADMIN"/,
+    "removing this line is the launch — it must be a deliberate act, not a side effect",
+  );
+});
+
 test("⛔ the page gates itself as well as the sidebar", () => {
   const page = readFileSync(
     path.join(__dirname, "..", "app", "(platform)", "direct", "page.tsx"),
