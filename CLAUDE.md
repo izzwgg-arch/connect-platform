@@ -71,6 +71,111 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the PBX Console draws the panel's WHOLE form now (289 fields, nothing hardcoded), and the licence proof found that EXTENSIONS are the one module the free panel refuses (2026-08-21) — READ FIRST before adding a field to any console screen, before believing "extension edit works unlicensed", or before trusting a panel save that timed out
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_PBX_CONSOLE_WHOLE_PANEL_FORM_2026-08-21.md`**
+(`e5ea8692` + `39902d81` on `feat/ivr-migration-takeover`. **No PBX write on
+production** — every write went to the unlicensed clone; live-panel form reads
+are GETs. Deploy state in §7 of the handoff — ⛔ verify the containers, the
+pipeline was failing when this was written, see the last bullet.)
+Izzy: *"every single option that exists in the PBX right now… should be in the
+Connect UI, same layout as the PBX, just with Connect theme"*, then *"every
+single field, option, toggle, and button should be wired end to end, working
+with proof outside the license."*
+
+- ⛔⛔ **THE RULE: the console must not contain a field list.** It renders whatever
+  the panel renders — the panel's tabs, section headings, labels, hover help,
+  required markers, control types and **complete** option lists, in the panel's
+  own order. **289 fields, 1,411 options, 7 row tables, 26 section headings, 19
+  tabs, 7 modules.** A VitalPBX upgrade that adds or renames a field shows up in
+  Connect the same day. ⛔ **The moment somebody types a panel field name into
+  `panelSchema.ts` or the portal, the two can drift — silently, because a missing
+  field looks exactly like a field that never existed.** Same discipline
+  `conferenceBuilder` already uses.
+- **Where:** `pbxConsole/panelSchema.ts` (form → what to SHOW),
+  `panelFormWrite.ts` (edits → what to POST, pure), routes
+  `GET|POST /admin/pbx-console/panel/:module/{form,save}` (both `requireOwner`),
+  portal `PanelForm.tsx`. Every module's Edit and New open it.
+  ⛔ **The GET deliberately does NOT use `withPanel`** — that ends in
+  `applyAndRebake`, a whole-PBX Apply; merely OPENING a form would regenerate
+  every tenant with pending changes and re-bake the doorway.
+- ⛔ **The panel class names are not the screen names, and two mislead:** an
+  outbound route is **`trunk_group`**, route selection is **`ars`**.
+- ⛔⛔ **PROVEN OUTSIDE THE LICENCE on the Community-edition clone (`vpbx-clone`,
+  `/var/lib/pbx-licenses` empty), driving the SHIPPED code, read → write → read
+  back → restore: tenants, trunks, outbound routes, route selections, ring groups
+  and QUEUES all pass.** Queues had never been tested unlicensed before (§11 of
+  the licence-exit assessment lists it under "NOT tested"). Harness:
+  `scripts/pbx/mirror/unlicensed-console-proof.ts` (refuses to run against a live
+  host).
+- ⛔⛔ **AND IT CORRECTS A RECORDED FACT: EXTENSIONS DO NOT.** The licence-exit
+  assessment says *"extension create/edit/delete ✅ works unlicensed"*. Over the
+  free tier's 12-extension cap the panel refuses an extension SAVE **both ways
+  round**: carry the rendered device fields and it answers *"You've reached the
+  maximum number of allowed extensions"* (it reads the save as a device ADD);
+  drop them and its own validator crashes with **`Undefined array key "user" at
+  modules/extensions/Validations.php`**. There is no third shape —
+  `pbxConsoleWrites.ts` already documents that the save ALWAYS carries a device
+  sub-form. What the assessment actually proved was `addExtensionToTenant`, which
+  **creates** via CSV import, and one device *add* — different controllers.
+  ⛔ **So editing an extension is the ONE console operation that stops working the
+  day the licence lapses.** `mirror_writes.py` has `add_extension` and **no edit
+  writer**; that is the gap to close. The cap now surfaces as a plain-English 409
+  instead of a 500 that reads like Connect broke.
+- ⛔ **The extension save's one accepted shape:** the generic route hands
+  extensions to `saveExtension`, which posts general fields plus each device's
+  fields from **that device's own form** (`method=getDevice`) with the dtmf from
+  the database. Never re-post the RENDERED device fields — this repo already
+  records that flipping a desk phone from rfc4733 to rfc2833.
+- ⛔⛔ **A PANEL SAVE THAT TIMES OUT HAS STILL LANDED.** The first proof run
+  reported `FAIL tenants: aborted due to timeout` (the 30 s cap in
+  `panelClient.ts:107`) — **the write had gone through**, so the restore never ran
+  and the clone kept a polluted description until it was put back by hand. Same
+  lesson as the VoIP.ms rotation: a timeout is "I stopped listening", never "it
+  did not happen". Any retry must re-read before re-writing.
+- ⛔ **Four parser traps, each now a test** (synthetic fixture — the real forms
+  carry 69 customers' names and a live CSRF token): scanning controls must be an
+  **alternation**, never an optional group (greedy swallows fields to the next
+  `</select>`; lazy `??` returns zero options — both hit for real); a `form-group`
+  block runs to the NEXT one so the control belongs to a label only if it is the
+  **first** in the block; bare controls under **`<div class="legend">`** (not a
+  `<legend>` tag) have no wrapper and are the destination of every ring group and
+  queue; and a **radio button-group is a real field** — skipping radios dropped
+  `technology` (PJSIP/IAX2/VIRTUAL/TENANT) from both the extension and trunk forms.
+- ⛔ **`/etc/connect-robot/credentials.env` CANNOT BE `source`d** — the robot
+  password contains `(`, `*`, `#`, `>` and `;`, so the shell dies **and prints the
+  password**. Read it with a parser. ⏳ **It leaked into a session transcript that
+  way on 2026-08-21; rotating the robot panel password was already an open TODO
+  and is now overdue.**
+- ⛔ **Do not scp into `/opt/connectcomms/app`** — an untracked file blocks the
+  next deploy's `git checkout -B`. The proof harness runs from
+  `/root/console-proof/`; `panelClient.ts` has **no imports at all**, so it needs
+  5 files and no packages.
+- ⛔⛔ **DEPLOYS WERE FAILING PLATFORM-WIDE while this shipped, and it is NOT a
+  code fault: nginx listens on `45.14.194.179:443`, NOT on loopback**, while the
+  deploy queue sets `DEPLOY_{API,PORTAL}_PUBLIC_VERIFY_RESOLVE_LOCAL=1`, which
+  curls `--resolve host:443:127.0.0.1`. That can never connect, so every rollout
+  dies at "public verify probe failed … http_code=000" and correctly rolls back.
+  **The platform is healthy throughout** — resolving to the public IP answers
+  **200**. Three separate jobs (two api, one portal, on three different commits)
+  died this way. ⛔ **`http_code=000` is a CONNECTION failure, not a bad status —
+  never read it as "the app is down"; check the public IP before believing an
+  outage.** Workaround for a single run:
+  `DEPLOY_API_PUBLIC_VERIFY_RESOLVE_LOCAL=0`.
+  ⏳ **The real fix is somebody's call: either point the probe at the public IP or
+  give nginx a loopback listener.** The flag exists to dodge a hairpin 403 that is
+  not currently occurring.
+- ⏳ **NOT PROVEN: nobody has opened the new form in a browser and no write has
+  been made from it against PRODUCTION.** Proven as 50 tests, portal typecheck 0,
+  api typecheck at its exact 75 baseline, and 6 of 7 modules written and read back
+  unlicensed. **Acceptance: Trunks → Edit on Loopcom Demo 2, change the
+  description, save, reopen** — then the negative that matters, **Extensions →
+  Edit still saves on production** (the licence is live, so the cap does not fire).
+  ⏳ File uploads (outbound-route CSV, extension photo) are deliberately not wired
+  and say so; creating an extension from the generic form is refused on purpose.
+  Mockup, generated by the SAME parser the api runs:
+  <https://claude.ai/code/artifact/66bb5c11-700c-43b7-a4b2-d2d36404fff3>
+
 ## ⛔⛔ AGENT HANDOFF — the Android app is Loopcom now (icon spacing, splash, 31 strings) and it is on NO PHONE (2026-08-21) — READ FIRST before touching the mobile launcher icon or splash, before renaming ANY notification channel id, before publishing an APK, or for "the native splash didn't change"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANDROID_LOOPCOM_REBRAND_2026-08-21.md`**
