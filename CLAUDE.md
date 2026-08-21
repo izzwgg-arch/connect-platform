@@ -405,11 +405,21 @@ getting to the login page, or on the login page?"* then *"Do one, two, and three
   where the verifier exists and no widget does). ⛔ The portal deploy queued behind
   another session's heavy build — `HEAVY JOB ALREADY RUNNING` is a lock collision,
   **not broken code**; wait on `ps -eo cmd | grep -c "[r]un-heavy.sh"` reaching 0.
-- ⏳ **NOT PROVEN: nobody has seen the widget in a browser.** It is proven as a
-  keyed bundle and a firing server-side gate, never by a human watching a checkbox
-  render. ⛔ An already-open portal tab or desktop window keeps the OLD bundle until
-  reloaded. **Acceptance: open `/login` on BOTH hostnames, sign in normally, then
-  confirm the api log reads `note:"verified"` instead of `observed_missing`.**
+- ✅✅ **THE WIDGET RENDERS AND PASSES ON BOTH HOSTNAMES — verified in a real
+  browser 2026-08-21, not inferred.** The Cloudflare box draws between Password and
+  Sign in, the Managed challenge completes on its own, and `cf-turnstile-response`
+  holds a real **773-character token** on `app.loopcom.net` **and**
+  `app.connectcomunications.com`. That single check proves the CSP allows
+  `challenges.cloudflare.com`, the script loads, the baked site key is valid, and
+  **both** hostname registrations work — including the one whose domain is not a
+  Cloudflare zone. ⛔ Judge this in a REAL browser: `/login` renders client-side, so
+  `curl | grep` returns a cached 4.8 KB shell and proves nothing either way.
+- ⏳ **STILL NOT PROVEN: no human has completed a real sign-in through it**, so the
+  api has only ever logged `observed_missing` (from the token-less probe) and never
+  `note:"verified"`. **That flips on the next real sign-in — the one-line
+  acceptance check is `docker logs app-api-1 | grep turnstile_observed | tail -1`
+  reading `verified`.** ⛔ An already-open portal tab or desktop window keeps the
+  OLD bundle until reloaded — the desktop app needs a full close and reopen.
 - ⏳ **ENFORCE IS NOT ON AND MUST NOT BE FLIPPED YET.** `TURNSTILE_ENFORCE=1` is an
   env edit + api restart (no rebuild). ⛔ **Every `observed_missing` you see today
   becomes a REFUSED LOGIN the moment you enforce** — wait until real browser logins

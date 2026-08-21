@@ -1010,8 +1010,18 @@ is simply mode `off`. api-first only avoids a window where every login logs
 
 ### 14.6 ⏳ NOT PROVEN, and the roll-out to enforce
 
-**Nobody has seen the widget in a browser.** It is proven as a keyed bundle and
-a firing server-side gate, not by a human watching a checkbox render.
+**The widget renders and passes on BOTH hostnames** — verified in a real browser
+2026-08-21: the Cloudflare box draws between Password and Sign in, the Managed
+challenge completes on its own, and `cf-turnstile-response` holds a real
+**773-character token** on `app.loopcom.net` AND `app.connectcomunications.com`.
+That proves the CSP, the script, the baked site key and both hostname
+registrations in one check. Judge it in a REAL browser: `/login` renders
+client-side, so `curl | grep` returns a cached shell and proves nothing.
+
+**What is still NOT proven: no human has completed a real sign-in through it**, so
+the api has only ever logged `observed_missing` (the token-less probe) and never
+`note:"verified"`. One-line check after the next sign-in:
+`docker logs app-api-1 | grep turnstile_observed | tail -1`.
 ⛔ An already-open portal tab or desktop window keeps the OLD bundle until it is
 reloaded — the desktop app needs a full close and reopen.
 
