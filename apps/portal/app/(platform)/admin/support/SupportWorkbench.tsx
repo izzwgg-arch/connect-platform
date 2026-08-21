@@ -22,8 +22,13 @@ type FileOut = { path: string; text: string; truncated: boolean; bytes: number }
 type Caps = {
   available: boolean;
   branch: string | null;
+  /** What the container was built from — the honest stand-in for a branch,
+   *  because the api image copies source rather than cloning it. */
+  deployedCommit: string | null;
   workspaceName: string | null;
+  /** What this container can ACTUALLY run. ⛔ Never offer what is not here. */
   allowedBinaries: string[];
+  permittedBinaries: string[];
   timeoutMs: number;
   note: string;
 };
@@ -364,17 +369,22 @@ export default function SupportWorkbench() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // ⛔ Only offer commands this container can actually run. A palette entry that
+  // answers "git: not found" teaches people the tool is broken.
+  const has = useCallback((bin: string) => !!caps?.allowedBinaries.includes(bin), [caps]);
   const paletteItems = useMemo(
-    () => [
-      { ic: "✦", label: "Agent: switch model…", kbd: "⌘M", run: () => setModelOpen(true) },
-      { ic: "✦", label: "Agent: clear conversation", kbd: "⌘L", run: () => setChat([]) },
-      { ic: "⌸", label: "View: focus terminal", kbd: "⌃`", run: () => setPanelTab("terminal") },
-      { ic: "⚠", label: "View: problems", kbd: "", run: () => setPanelTab("problems") },
-      { ic: "⎇", label: "Git: show working tree changes", kbd: "", run: () => void runCommand("git status --short", false) },
-      { ic: "▷", label: "Run: services health", kbd: "", run: () => void runCommand("docker ps --format '{{.Names}} {{.Status}}'", false) },
-      { ic: "🗂", label: "Explorer: go to workspace root", kbd: "", run: () => void openDir("") },
-    ],
-    [runCommand, openDir],
+    () =>
+      [
+        { ic: "✦", label: "Agent: switch model…", kbd: "⌘M", need: "", run: () => setModelOpen(true) },
+        { ic: "✦", label: "Agent: clear conversation", kbd: "⌘L", need: "", run: () => setChat([]) },
+        { ic: "⌸", label: "View: focus terminal", kbd: "⌃`", need: "", run: () => setPanelTab("terminal") },
+        { ic: "⚠", label: "View: problems", kbd: "", need: "", run: () => setPanelTab("problems") },
+        { ic: "⎇", label: "Git: show working tree changes", kbd: "", need: "git", run: () => void runCommand("git status --short", false) },
+        { ic: "▷", label: "Run: services health", kbd: "", need: "docker", run: () => void runCommand("docker ps --format '{{.Names}} {{.Status}}'", false) },
+        { ic: "⌸", label: "Run: disk space", kbd: "", need: "df", run: () => void runCommand("df -h", false) },
+        { ic: "🗂", label: "Explorer: go to workspace root", kbd: "", need: "", run: () => void openDir("") },
+      ].filter((i) => !i.need || has(i.need)),
+    [runCommand, openDir, has],
   );
   const palFiltered = paletteItems.filter((i) => i.label.toLowerCase().includes(palQuery.toLowerCase()));
 
@@ -404,9 +414,12 @@ export default function SupportWorkbench() {
         <div className="ide-activity">
           <button className="ide-ai on" title="Explorer">🗂</button>
           <button className="ide-ai" title="Search" onClick={() => setPalette(true)}>🔍</button>
-          <button className="ide-ai" title="Source control" onClick={() => void runCommand("git status --short", false)}>
-            ⎇{entries.some((e) => e.git) ? <span className="ide-badge">{entries.filter((e) => e.git).length}</span> : null}
-          </button>
+          {/* Source control only when this container actually has git. */}
+          {has("git") ? (
+            <button className="ide-ai" title="Source control" onClick={() => void runCommand("git status --short", false)}>
+              ⎇{entries.some((e) => e.git) ? <span className="ide-badge">{entries.filter((e) => e.git).length}</span> : null}
+            </button>
+          ) : null}
           <button className="ide-ai" title="Run" onClick={() => setPanelTab("terminal")}>▷</button>
           <button className="ide-ai" title="Problems" onClick={() => setPanelTab("problems")}>⬚</button>
           <button className="ide-ai" title="Agent">✦</button>
@@ -534,7 +547,12 @@ export default function SupportWorkbench() {
                   <span className="ide-shnote">read-only commands · every one checked against your ground rules and recorded</span>
                 </div>
                 <div className="ide-term" ref={termRef}>
-                  {lines.length === 0 ? <div className="dim">Type a command below — try <span className="pa">git status --short</span>.</div> : null}
+                  {lines.length === 0 ? (
+                    <div className="dim">
+                      Type a command below — try{" "}
+                      <span className="pa">{has("docker") ? "docker ps" : has("ls") ? "ls -la" : caps?.allowedBinaries[0] ?? "ls"}</span>.
+                    </div>
+                  ) : null}
                   {lines.map((l, i) => (
                     <div key={i} className={"ln2 " + (l.kind === "err" ? "errl" : l.kind === "note" ? "dim" : "")}>
                       {l.kind === "cmd" ? <><span className="pr">root@loopcom</span>:<span className="pa">/app</span># </> : null}
@@ -554,7 +572,7 @@ export default function SupportWorkbench() {
                   <span className="pr">$</span>
                   <input
                     value={command}
-                    placeholder={running ? "running…" : "git status --short"}
+                    placeholder={running ? "running…" : has("docker") ? "docker ps" : "ls -la"}
                     disabled={running}
                     onChange={(e) => setCommand(e.target.value)}
                     onKeyDown={(e) => {
@@ -588,8 +606,15 @@ export default function SupportWorkbench() {
             {panelTab === "output" ? (
               <div className="ide-term">
                 <div className="dim">Workbench · {caps?.note}</div>
-                <div className="dim">Commands allowed: {caps?.allowedBinaries.join(" ")}</div>
+                <div className="dim">Available here: {caps?.allowedBinaries.join(" ") || "—"}</div>
+                {caps && caps.permittedBinaries.length > caps.allowedBinaries.length ? (
+                  <div className="dim">
+                    Permitted but not installed in this container:{" "}
+                    {caps.permittedBinaries.filter((b) => !caps.allowedBinaries.includes(b)).join(" ")}
+                  </div>
+                ) : null}
                 <div className="dim">Timeout: {Math.round((caps?.timeoutMs ?? 0) / 1000)}s</div>
+                {caps?.deployedCommit ? <div className="dim">Running commit: {caps.deployedCommit}</div> : null}
               </div>
             ) : null}
           </div>
@@ -660,7 +685,12 @@ export default function SupportWorkbench() {
       {/* ── status bar ── */}
       <div className="ide-status">
         <span className="ide-si remote">⇄ SSH: loopcom</span>
-        <span className="ide-si">⎇ {caps?.branch ?? "—"}</span>
+        {/* ⛔ A branch when there is a repo; otherwise the deployed commit —
+            which is what a support person actually needs to know. Never a
+            made-up branch name. */}
+        <span className="ide-si">
+          {caps?.branch ? `⎇ ${caps.branch}` : caps?.deployedCommit ? `⌗ ${caps.deployedCommit}` : "⌗ —"}
+        </span>
         <span className="ide-si dim">⊗ {problems.filter((p) => p.sev === "e").length}  ⚠ {problems.filter((p) => p.sev === "w").length}</span>
         <span className="sp" />
         <span className="ide-si dim">Ln {activeLine}</span>
