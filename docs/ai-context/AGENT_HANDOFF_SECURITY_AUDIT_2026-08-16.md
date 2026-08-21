@@ -869,7 +869,7 @@ The `/internal/*` doors, the forgeable signed URLs, the tenant-scoping findings
 
 | control | state on 2026-08-19 |
 |---|---|
-| Cloudflare Turnstile on login | `TURNSTILE_SECRET_KEY` **unset** → mode `off`, challenges nobody |
+| Cloudflare Turnstile on login | **SUPERSEDED 2026-08-21 — see §14: now ON in OBSERVE mode** (was: secret unset, mode `off`) |
 | Per-tenant sign-in code (2FA) | **0 of 31** live tenants switched on; **0** codes ever sent |
 | MFA / TOTP | **0** users enrolled — including the SUPER_ADMIN; `MFA_ENFORCEMENT` unset (grace) |
 | Cloudflare edge (WAF, rate rules) | `app.` is **DNS-only**; every staged rule is inert |
@@ -908,3 +908,118 @@ hostname — DNS + cert, a PBX write); the Google OAuth redirect URIs for
 Google**; `support@`/`billing@loopcom.net` are unconfirmed as real mailboxes; and
 there is no Loopcom-branded mobile or desktop build. The portal and API surfaces
 themselves are at full parity — those five items are the whole remaining gap.
+
+## 14. Turnstile is ON in OBSERVE mode — and the site key had no path into the build (2026-08-21)
+
+Izzy, 2026-08-21: *"Do we have the Cloudflare check for robots and stuff before
+getting to the login page, or on the login page?"* — then, on hearing it was
+built and switched off: *"Do one, two, and three."*
+
+**Answer to the question, for the record: it is ON the login page**, a widget
+inside the sign-in card, verified server-side inside `POST /auth/login` after
+the throttle and before any DB read. It is **not** a gate in front of the page;
+that would be the Cloudflare edge, and `app.` is still DNS-only (§13.2).
+
+### 14.1 What was done
+
+| step | result |
+|---|---|
+| Turnstile widget created | name **"Loopcom portal sign-in"**, account `c52b8cceadcd2b113e74350b72365765`, mode **Managed**, pre-clearance **off** |
+| Hostnames | `app.connectcomunications.com` **and** `app.loopcom.net` (2 of 10) |
+| Site key | `0x4AAAAAAEXikCDGv1Pl_SuX` — **public by design**, lives in git |
+| Secret | `.env.platform` only, `600 root:root`, backup `.env.platform.bak.20260821T112630Z.turnstile`, fingerprint `sha256[0:12] = 9b0141c4e114` |
+| Mode | `TURNSTILE_ENFORCE` **absent** → **observe**: verifies and logs, refuses nobody |
+| Deployed | api `b6ea3ff4` (container-verified), portal same commit |
+
+⛔ **`loopcom.net` is NOT a Cloudflare zone — its DNS is at Squarespace — and
+that is irrelevant here.** Turnstile hostnames are just a list; Cloudflare
+offered *"Add app.loopcom.net as a custom hostname"* and took it. Cloudflare's
+own subtitle on that screen says it: *"Turnstile can be embedded into any
+website without sending traffic through Cloudflare."* Do not go looking for a
+second zone — there has only ever been one.
+
+### 14.2 ⛔⛔ THE FINDING: the site key had NO WAY TO REACH THE BUILD
+
+`NEXT_PUBLIC_TURNSTILE_SITE_KEY` appeared in **neither `apps/portal/Dockerfile`
+(no `ARG`, not in the build `RUN` env) nor either compose build-args block**.
+`TurnstileWidget` reads `process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY` at build
+time and renders `null` when it is empty — **so the widget has rendered nothing
+in every portal build ever made**, and setting the secret alone would have
+produced an observe log reading `observed_missing` forever with no way to tell
+that from "no bots are trying".
+
+Fixed in `b6ea3ff4`: the ARG in the Dockerfile, the build-arg in **both**
+`portal` **and** `portal_candidate` (the blue/green pair — wiring one tests
+perfectly and loses the value at the next cutover, the CRM storage-dir trap).
+
+⛔ **The site key is a LITERAL DEFAULT, not a bare `${VAR:-}` substitution, and
+that is deliberate.** `deploy-direct.sh` sources only `.env.deploy-queue`, so an
+unset variable resolves to empty — the exact mechanism that left
+`CDR_INGEST_SECRET` blank for the platform's life. An empty substitution here
+bakes an unkeyed portal and the login page silently loses its check. The key is
+public (it ships in the bundle), so a literal costs nothing.
+
+`apps/portal/lib/turnstileWiring.test.ts` (7 tests, registered) reads all four
+files, because the defect class is a **caller** dropping the arg — a unit test
+of the widget passes straight through it. It also asserts the two hardcoded
+keys agree (so a rotation cannot move one and not the other) and that no
+Turnstile **secret** ever reaches a portal build input, since anything named
+`NEXT_PUBLIC_*` is inlined into the bundle and served to every visitor.
+✅ **All 4 wiring assertions fail when replayed against `HEAD`.**
+
+### 14.3 ⛔ How the secret was proven correct BEFORE anything relied on it
+
+**In observe mode a WRONG secret is invisible** — it logs `observed_invalid` and
+allows the login, exactly like a healthy day with no tokens. So the secret was
+validated first, from **inside `app-api-1`**, by asking Cloudflare to refuse it:
+
+```
+POST https://challenges.cloudflare.com/turnstile/v0/siteverify
+  secret=<the secret>&response=dummy-token-for-validation
+```
+
+- wrong secret → `{"error-codes":["invalid-input-secret"]}`
+- right secret → `{"error-codes":["invalid-input-response"]}` ← what we got
+
+That single call proves the secret **and** that the api container has egress to
+Cloudflare (without which observe would log `observed_unavailable` forever).
+It is the house rule in another costume: *let the provider refuse, then read
+WHICH refusal.*
+
+The secret was moved from the browser to the server **via the clipboard piped
+straight into ssh**, so it was never transcribed by hand; the file write is
+verified by `sha256[0:12]` rather than by echoing the value.
+
+### 14.4 Deploy order, and why
+
+**api first, portal second.** Either order is safe — an old api ignores an
+unknown `turnstileToken` field, and a keyed portal talking to a secret-less api
+is simply mode `off`. api-first only avoids a window where every login logs
+`observed_missing` because the verifier exists but no widget does.
+
+### 14.5 Proven live
+
+- Secret in the running container: 35 chars, fingerprint `9b0141c4e114`,
+  `TURNSTILE_ENFORCE` empty → **observe**.
+- A browser-shaped login (`Origin: https://app.connectcomunications.com`, no
+  token) answered **`401 invalid_credentials`** — the ordinary refusal, not a
+  human-check one — and logged
+  `{"note":"observed_missing","msg":"turnstile_observed"}`.
+  **That is the gate executing and deliberately allowing.**
+- `/api/health` **200** on both hostnames after the deploy.
+
+### 14.6 ⏳ NOT PROVEN, and the roll-out to enforce
+
+**Nobody has seen the widget in a browser.** It is proven as a keyed bundle and
+a firing server-side gate, not by a human watching a checkbox render.
+⛔ An already-open portal tab or desktop window keeps the OLD bundle until it is
+reloaded — the desktop app needs a full close and reopen.
+
+Acceptance: open `/login` on **both** hostnames, confirm the widget renders and
+sign-in still works; then confirm the api log shows `note:"verified"` instead of
+`observed_missing`.
+
+**Only then** consider `TURNSTILE_ENFORCE=1` (api restart, no rebuild).
+⛔ Do not enforce until `observed_missing` has fallen to ~zero for real browser
+logins — every one of those becomes a **refused login** the moment you enforce,
+and the mobile app (which sends no `Origin`) must be confirmed still exempt.
