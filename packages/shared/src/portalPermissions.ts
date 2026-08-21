@@ -273,6 +273,18 @@ export const ACTION_PERMISSION_KEYS = [
   // inventory is not the same as watching somebody work, and the people who
   // provision phones are not necessarily the people who do support calls.
   "can_view_lan_phones",
+  // Desk phone setup (2026-08-21). TWO keys, and the split is the whole point:
+  // running the wizard is reading a network and pointing phones at us, while
+  // authorising a reset ERASES a customer device. Plenty of people should be able
+  // to do the first and never the second.
+  //
+  // ⛔ Both are absent from BOTH default buckets, TENANT_ADMIN included, exactly
+  // like can_use_amazon_polly and the remote-support pair. SUPER_ADMIN still gets
+  // them via the force-add bucket, so no snapshot migration is needed - and a key
+  // that quietly reached every tenant admin would mean anybody who can log in can
+  // wipe the phones on their desk.
+  "can_setup_desk_phones",
+  "can_authorize_phone_reset",
   // Delivery/order tracking (supermarket delivery feature)
   "can_view_tracking",
   "can_manage_tracking",

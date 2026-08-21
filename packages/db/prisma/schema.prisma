@@ -965,6 +965,8 @@ model Tenant {
   remoteSupportSessions           RemoteSupportSession[]
   lanDiscoveryRuns                LanDiscoveryRun[]
   lanDiscoveredPhones             LanDiscoveredPhone[]
+  deskPhoneSetupRuns              DeskPhoneSetupRun[]
+  deskPhoneSetupPhones            DeskPhoneSetupPhone[]
   voicemailEmailRecipients        VoicemailEmailRecipient[]
   videoMeetings                   VideoMeeting[]
   /// Loopcom Direct — the per-company off switch. See LoopcomDirectIdentity:
@@ -7749,4 +7751,114 @@ model LoopcomDirectBlock {
 
   @@unique([blockerUserId, blockedUserId])
   @@index([blockedUserId])
+}
+
+// ---------------------------------------------------------------------------
+// Desk phone setup (2026-08-21)
+//
+// ⛔⛔ THE STATE LIVES HERE AND NOT IN THE DESKTOP APP, AND THAT IS THE WHOLE
+// REASON THESE MODELS EXIST. A factory reset erases a customer's device and is
+// not idempotent, so the record of "this phone has already been reset once" has
+// to outlive the app closing, Windows restarting, the network dropping and the
+// phone coming back on a different address. Losing our place must never turn
+// into wiping somebody's phone a second time.
+// ---------------------------------------------------------------------------
+
+model DeskPhoneSetupRun {
+  id       String @id @default(cuid())
+  tenantId String
+
+  /// Who is doing it, and from which machine.
+  startedByUserId String
+  deviceLabel     String?
+  /// The office network that was searched, e.g. "192.168.1.0/24". Shown to the
+  /// customer so a short list reads as "here is where we looked" rather than
+  /// "this office has three phones".
+  subnet          String?
+
+  /// "customer" when somebody pressed the button, "admin" when Loopcom sent it.
+  /// Both entry points drive the SAME run; this only records where it came from.
+  origin          String  @default("customer")
+  /// Set when a Loopcom technician sent the request, for the audit trail.
+  requestedByUserId String?
+
+  /// "running" | "done" | "abandoned".
+  status     String    @default("running")
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  /// ⛔ Reset authorisation is recorded on the RUN, by a person in that office,
+  /// with the exact phones it covered. An admin who sent the setup request
+  /// cannot supply it — sending is not consenting.
+  resetAuthorizedAt     DateTime?
+  resetAuthorizedByUserId String?
+  /// The phone ids the customer actually saw and approved. A phone that was not
+  /// on that list is not covered by that approval.
+  resetAuthorizedPhoneIds String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phones DeskPhoneSetupPhone[]
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, status])
+}
+
+model DeskPhoneSetupPhone {
+  id       String @id @default(cuid())
+  tenantId String
+  runId    String
+
+  /// ⛔ THE IDENTITY. Normalised lowercase hex, no separators. Never the address:
+  /// a reset drops the DHCP lease, so the phone comes back wherever the router
+  /// puts it, and anything tracking by address believes one phone vanished and a
+  /// different one appeared.
+  macAddress String
+  ipAddress  String?
+  /// Recorded when it moves, because "came back at a new address" is the normal
+  /// case and a technician should read it stated rather than infer it.
+  previousIp String?
+
+  vendor   String?
+  model    String?
+  firmware String?
+  /// Where the phone says it currently gets its settings. The field that explains
+  /// a phone which is still being pulled back by somebody else.
+  provisioningUrl String?
+
+  /// Who sits here. Null until the customer says.
+  extensionId String?
+  extNumber   String?
+  displayName String?
+
+  /// One of the sixteen internal states. The customer only ever sees six words.
+  state          String   @default("DISCOVERED")
+  /// Plain-English, already translated. Never a status code.
+  customerNote   String?
+  /// For a technician: the real reason, sanitised.
+  technicalNote  String?
+
+  /// ⛔ Counters, stored rather than derived. These are what make "never reset
+  /// twice" survive a crash.
+  attempts   Int @default(0)
+  resetCount Int @default(0)
+
+  resetRequestedAt DateTime?
+  registeredAt     DateTime?
+
+  /// Set when the ladder stopped and why, so nothing retries it in a loop.
+  haltedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  run    DeskPhoneSetupRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  /// One row per physical phone per run.
+  @@unique([runId, macAddress])
+  @@index([tenantId, state])
+  @@index([runId, state])
 }

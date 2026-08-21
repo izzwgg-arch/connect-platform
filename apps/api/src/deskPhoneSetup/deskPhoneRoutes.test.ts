@@ -1,0 +1,488 @@
+/**
+ * Desk phone setup, end to end through the real Fastify routes against a faked
+ * database — including every way a phone must NOT get wiped, and every way one
+ * customer must not be able to reach another's run.
+ *
+ * Run with: node --experimental-test-module-mocks --import tsx --test
+ */
+import { test, mock } from "node:test";
+import assert from "node:assert/strict";
+import Fastify from "fastify";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// ─── fake db ─────────────────────────────────────────────────────────────────
+
+const state: any = { runs: [], phones: [], extensions: [], tenants: [], audits: [] };
+let seq = 0;
+const nextId = (p: string) => `${p}_${++seq}`;
+
+const matches = (row: any, where: any): boolean =>
+  Object.entries(where ?? {}).every(([k, v]: [string, any]) => {
+    if (v && typeof v === "object" && !(v instanceof Date)) {
+      if ("in" in v) return (v as any).in.includes(row[k]);
+      if ("not" in v) return row[k] !== (v as any).not;
+      return true;
+    }
+    return row[k] === v;
+  });
+
+function table(bucket: string, defaults: () => any) {
+  return {
+    findFirst: async ({ where }: any = {}) => state[bucket].find((r: any) => matches(r, where)) ?? null,
+    findMany: async ({ where }: any = {}) => state[bucket].filter((r: any) => matches(r, where)),
+    create: async ({ data }: any) => { const row = { ...defaults(), ...data }; state[bucket].push(row); return row; },
+    update: async ({ where, data }: any) => {
+      const row = state[bucket].find((r: any) => r.id === where.id);
+      Object.assign(row, data); return row;
+    },
+  };
+}
+
+mock.module("@connect/db", {
+  namedExports: {
+    db: {
+      deskPhoneSetupRun: table("runs", () => ({
+        id: nextId("run"), status: "running", origin: "customer", startedAt: new Date(),
+        subnet: null, resetAuthorizedAt: null, resetAuthorizedByUserId: null, resetAuthorizedPhoneIds: null,
+      })),
+      deskPhoneSetupPhone: table("phones", () => ({
+        id: nextId("ph"), state: "DISCOVERED", attempts: 0, resetCount: 0, createdAt: new Date(),
+        ipAddress: null, previousIp: null, vendor: null, model: null, firmware: null,
+        provisioningUrl: null, extensionId: null, extNumber: null, displayName: null,
+        customerNote: null, technicalNote: null, resetRequestedAt: null, registeredAt: null, haltedReason: null,
+      })),
+      extension: table("extensions", () => ({ id: nextId("ext"), status: "ACTIVE" })),
+      tenant: table("tenants", () => ({ id: nextId("t") })),
+    },
+  },
+});
+
+// The permission gate, faked so each test can say who the person is.
+let allowSetup = true;
+let allowReset = true;
+mock.module("../permissionGates", {
+  namedExports: {
+    userHasActionPermission: async (_u: any, key: string) =>
+      key === "can_setup_desk_phones" ? allowSetup : key === "can_authorize_phone_reset" ? allowReset : false,
+  },
+});
+
+// ⛔ Loaded lazily, AFTER the mocks above: apps/api compiles to CommonJS, so a
+// top-level await is a build error and an eager import would bind the real db.
+let routesModule: any = null;
+function routes() {
+  if (!routesModule) routesModule = require("./deskPhoneRoutes");
+  return routesModule.registerDeskPhoneSetupRoutes;
+}
+
+// ─── harness ─────────────────────────────────────────────────────────────────
+
+let registered = new Set<string>();
+
+async function makeApp(user: any) {
+  const app = Fastify();
+  app.addHook("preHandler", async (req: any) => { req.user = user; });
+  await routes()(app as any, {
+    audit: async (p: any) => { state.audits.push(p); },
+    ourProvisioningHosts: () => ["loopcom.net", "m.connectcomunications.com"],
+    isRegistered: async (_t: string, ext: string) => registered.has(ext),
+  });
+  return app;
+}
+
+const CUSTOMER = { sub: "u_1", tenantId: "t_abc", email: "dina@abc.example", role: "TENANT_ADMIN" };
+const OTHER = { sub: "u_9", tenantId: "t_other", email: "someone@other.example", role: "TENANT_ADMIN" };
+const STAFF = { sub: "u_s", tenantId: "t_loopcom", email: "izzy@loopcom.net", role: "SUPER_ADMIN" };
+
+function reset() {
+  state.runs.length = 0; state.phones.length = 0; state.extensions.length = 0;
+  state.tenants.length = 0; state.audits.length = 0;
+  allowSetup = true; allowReset = true; registered = new Set();
+  state.tenants.push({ id: "t_abc", name: "ABC Company" });
+  state.extensions.push({ id: "e1", tenantId: "t_abc", extNumber: "101", displayName: "Reception", status: "ACTIVE" });
+  state.extensions.push({ id: "e2", tenantId: "t_abc", extNumber: "102", displayName: "David Klein", status: "ACTIVE" });
+  state.extensions.push({ id: "e_other", tenantId: "t_other", extNumber: "900", displayName: "Nope", status: "ACTIVE" });
+}
+
+const body = (r: any) => JSON.parse(r.body);
+
+async function startRun(app: any) {
+  const r = await app.inject({ method: "POST", url: "/desk-phones/runs", payload: {} });
+  return body(r).run.id;
+}
+
+async function discover(app: any, runId: string, phones: any[]) {
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/discovered`,
+    payload: { subnet: "192.168.1.0/24", phones },
+  });
+  return body(r);
+}
+
+/* ── permission ──────────────────────────────────────────────────────────── */
+
+test("somebody without the key cannot start a run", async () => {
+  reset(); allowSetup = false;
+  const app = await makeApp(CUSTOMER);
+  const r = await app.inject({ method: "POST", url: "/desk-phones/runs", payload: {} });
+  assert.equal(r.statusCode, 403);
+});
+
+test("running the wizard does not carry permission to wipe a phone", async () => {
+  reset(); allowReset = false;
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  const phoneId = state.phones[0].id;
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] },
+  });
+  assert.equal(r.statusCode, 403, "setting phones up and erasing them are two different grants");
+  assert.match(body(r).message, /not allowed to clear a phone/i);
+});
+
+/* ── tenant isolation ────────────────────────────────────────────────────── */
+
+test("another customer's run is indistinguishable from one that does not exist", async () => {
+  reset();
+  const mine = await makeApp(CUSTOMER);
+  const runId = await startRun(mine);
+  const theirs = await makeApp(OTHER);
+  for (const url of [
+    `/desk-phones/runs/${runId}`,
+    `/desk-phones/runs/${runId}/discovered`,
+  ]) {
+    const r = await theirs.inject({ method: url.endsWith("discovered") ? "POST" : "GET", url, payload: { phones: [] } });
+    // ⛔ 404 and not 403: a 403 confirms the run exists, which is an oracle.
+    assert.equal(r.statusCode, 404, url);
+  }
+});
+
+test("a phone cannot be pointed at another company's extension", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  const phoneId = state.phones[0].id;
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/assign`,
+    payload: { extensionId: "e_other" },
+  });
+  assert.equal(r.statusCode, 404);
+  assert.equal(state.phones[0].extensionId, null);
+});
+
+/* ── discovery ───────────────────────────────────────────────────────────── */
+
+test("a phone with an unreadable hardware id is counted, never stored", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [
+    { mac: "80:5E:0C:BD:13:5A" },
+    { mac: "not-a-mac" },
+    { mac: "01:00:5e:00:00:fb" },
+  ]);
+  assert.equal(out.stored, 1);
+  assert.equal(out.dropped, 2, "a row that can never match a PBX record would look broken forever");
+  assert.equal(state.phones.length, 1);
+});
+
+test("the customer's view carries no hardware id, address or firmware", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [
+    { mac: "80:5E:0C:BD:13:5A", ip: "192.168.1.41", model: "T54W", firmware: "96.86.0.15",
+      provisioningUrl: "https://prov.oldprovider.net/x" },
+  ]);
+  const shown = JSON.stringify(out.phones);
+  for (const leak of ["805e0c", "192.168", "96.86", "oldprovider"]) {
+    assert.ok(!shown.includes(leak), `${leak} leaked to the customer's screen`);
+  }
+});
+
+test("the network that was searched is always returned", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  // so a short list reads as "here is where we looked", never "you have one phone"
+  assert.equal(out.subnet, "192.168.1.0/24");
+});
+
+test("a phone that comes back at a new address is the same phone", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", ip: "192.168.1.41" }]);
+  await discover(app, runId, [{ mac: "80-5e-0c-bd-13-5a", ip: "192.168.1.87" }]);
+  assert.equal(state.phones.length, 1, "a reset drops the lease; the address is not the identity");
+  assert.equal(state.phones[0].ipAddress, "192.168.1.87");
+  assert.equal(state.phones[0].previousIp, "192.168.1.41", "the move is recorded, not inferred");
+});
+
+/* ── the reset gate, which is the one that must not be wrong ─────────────── */
+
+test("no reset happens without a person approving it", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  });
+  assert.equal(body(r).action, "request_reset_authorization");
+  assert.equal(state.phones[0].resetCount, 0);
+});
+
+test("an approved reset is issued once and then refused", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
+
+  const first = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  }));
+  assert.equal(first.action, "reset_over_lan");
+  assert.equal(state.phones[0].resetCount, 1);
+
+  const second = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  }));
+  assert.equal(second.action, "halt");
+  assert.equal(state.phones[0].resetCount, 1, "losing our place must never wipe a phone twice");
+});
+
+test("an approval covers exactly the phones the person was shown", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`,
+    payload: { phoneIds: [state.phones[0].id, "ph_does_not_exist"] },
+  });
+  assert.equal(r.statusCode, 400);
+  assert.equal(state.runs[0].resetAuthorizedAt, null, "a partial list is not consent");
+});
+
+test("approving a reset is written down with who, when and which phones", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [state.phones[0].id] },
+  });
+  const row = state.audits.find((a: any) => a.action === "DESK_PHONE_RESET_AUTHORIZED");
+  assert.ok(row);
+  assert.equal(row.actorUserId, "u_1");
+  assert.deepEqual(row.metadata.macs, ["805e0cbd135a"]);
+});
+
+/* ── ready means the PBX said so ─────────────────────────────────────────── */
+
+test("a phone is only ever Ready because Asterisk says it is registered", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://pbx.loopcom.net/phoneprov/a/" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/assign`, payload: { extensionId: "e2" },
+  });
+
+  // pointed at us, but the PBX has never seen it
+  const before = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  }));
+  assert.notEqual(before.phone.status, "Ready", "accepting settings is not the same as working");
+
+  registered.add("102");
+  const after = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  }));
+  assert.equal(after.phone.status, "Ready");
+  assert.ok(state.phones[0].registeredAt);
+});
+
+test("a lookalike provisioning host is not ours", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://loopcom.net.evil.example/x" }]);
+  const phoneId = state.phones[0].id;
+  const out = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  }));
+  // treating it as ours would mark the phone connected and skip it entirely
+  assert.notEqual(out.action, "do_nothing");
+});
+
+/* ── the two unfixable problems ──────────────────────────────────────────── */
+
+test("a manufacturer redirect halts and hands off, rather than retrying", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {} });
+
+  const out = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
+  }));
+  assert.equal(out.halted, true);
+  assert.equal(out.handOff, "previous_provider");
+  assert.equal(state.phones[0].state, "NEEDS_ATTENTION");
+});
+
+test("a router still advertising the old provider is a different answer", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {} });
+
+  const out = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`,
+    payload: { networkSuppliesOldProvisioning: true },
+  }));
+  assert.equal(out.handOff, "customer_network");
+  assert.match(out.customerMessage, /will not change your router/i);
+});
+
+/* ── progress and the disappearing card ──────────────────────────────────── */
+
+test("seven of eight is reported as seven working, never one failed", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, Array.from({ length: 8 }, (_, i) => ({ mac: `80:5E:0C:BD:13:${(10 + i).toString(16).padStart(2, "0")}` })));
+  state.phones.forEach((p: any, i: number) => { p.state = i === 7 ? "NEEDS_ATTENTION" : "REGISTERED"; });
+  const out = body(await app.inject({ method: "GET", url: `/desk-phones/runs/${runId}` }));
+  assert.equal(out.summary.headline, "7 of your 8 phones are ready");
+  assert.ok(!/fail/i.test(JSON.stringify(out.summary)));
+});
+
+test("the setup card disappears once nothing is left to do", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  let s = body(await app.inject({ method: "GET", url: "/desk-phones/state" }));
+  assert.equal(s.showSetupCard, true);
+  state.phones[0].state = "REGISTERED";
+  s = body(await app.inject({ method: "GET", url: "/desk-phones/state" }));
+  assert.equal(s.showSetupCard, false, "the customer must never permanently see provisioning terminology");
+});
+
+test("diagnostics show everything the customer's view hides", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", ip: "192.168.1.41", firmware: "96.86.0.15" }]);
+  const out = body(await app.inject({ method: "GET", url: `/desk-phones/runs/${runId}?view=diagnostics` }));
+  assert.equal(out.phones[0].mac, "805e0cbd135a");
+  assert.equal(out.phones[0].ip, "192.168.1.41");
+  assert.equal(out.phones[0].firmware, "96.86.0.15");
+});
+
+/* ── one run per office ──────────────────────────────────────────────────── */
+
+test("two wizards cannot race on the same office", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const first = await startRun(app);
+  const second = body(await app.inject({ method: "POST", url: "/desk-phones/runs", payload: {} }));
+  assert.equal(second.run.id, first);
+  assert.equal(second.run.resumed, true, "two runs would each believe they owned the reset counters");
+});
+
+/* ── the Loopcom side ────────────────────────────────────────────────────── */
+
+test("only Loopcom staff can send a setup request into somebody's office", async () => {
+  reset();
+  const customer = await makeApp(CUSTOMER);
+  const r = await customer.inject({
+    method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" },
+  });
+  assert.equal(r.statusCode, 403);
+});
+
+test("sending a request is an invitation and never an approval to wipe", async () => {
+  reset();
+  const staff = await makeApp(STAFF);
+  const out = body(await staff.inject({
+    method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" },
+  }));
+  const run = state.runs.find((r: any) => r.id === out.run.id);
+  assert.equal(run.origin, "admin");
+  assert.equal(run.resetAuthorizedAt, null, "sending is not consenting");
+  assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_SETUP_SENT"));
+});
+
+test("the customer is told the request came from Loopcom", async () => {
+  reset();
+  const staff = await makeApp(STAFF);
+  await staff.inject({ method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" } });
+  const customer = await makeApp(CUSTOMER);
+  const s = body(await customer.inject({ method: "GET", url: "/desk-phones/state" }));
+  assert.equal(s.invitedByLoopcom, true);
+});
+
+/* ── buttons ─────────────────────────────────────────────────────────────── */
+
+test("the buttons are everybody except the phone's own extension", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", model: "T54W" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/assign`, payload: { extensionId: "e2" },
+  });
+  const out = body(await app.inject({ method: "GET", url: `/desk-phones/runs/${runId}/phones/${phoneId}/buttons` }));
+  assert.deepEqual(out.colleagues.map((c: any) => c.extension), ["101"]);
+  assert.ok(!JSON.stringify(out.colleagues).includes('"102"'), "nobody needs a key to call themselves");
+  assert.ok(out.free > 0);
+});
+
+/* ── the wiring, where this class of defect actually lives ───────────────── */
+
+const SERVER_SRC = readFileSync(join(__dirname, "..", "server.ts"), "utf8");
+
+test("the routes are actually registered", () => {
+  assert.match(SERVER_SRC, /registerDeskPhoneSetupRoutes\(app,/);
+  assert.match(SERVER_SRC, /from "\.\/deskPhoneSetup\/deskPhoneRoutes"/);
+});
+
+test("the prefix has a permission rule, or the global gate never runs for it", () => {
+  // ⛔ The /admin/wake-health class: a prefix matching no rule is a prefix with no
+  // permission check at all.
+  assert.match(
+    SERVER_SRC,
+    /\{ prefix: "\/desk-phones", permission: "can_setup_desk_phones" \}/,
+    "no rule means the global permission preHandler silently skips the whole feature",
+  );
+  assert.match(SERVER_SRC, /\{ prefix: "\/admin\/desk-phones", permission: "can_manage_global_settings" \}/);
+});
+
+test("the route module never reads a tenant from a request body", () => {
+  const SRC = readFileSync(join(__dirname, "deskPhoneRoutes.ts"), "utf8");
+  const executable = SRC.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.doesNotMatch(executable, /req\.body[^\n]*tenantId/,
+    "a tenant that arrives in a request is a claim, not a fact");
+  // the one exception is the staff route, which takes a tenantId by design and is
+  // role-gated; it reads it through a parsed schema rather than off req.body.
+  assert.match(executable, /isSuper\(user\)/);
+});
