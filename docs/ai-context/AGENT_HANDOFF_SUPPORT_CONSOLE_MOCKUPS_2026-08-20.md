@@ -510,3 +510,31 @@ is noise, and the next refusal — the real one — gets clicked through. Judge 
 guard by what it lets through as well as by what it stops, and **drive it on
 real inputs**: unit tests written by the same person who wrote the matcher share
 its blind spot.
+
+### §11c "It's gigantic" — a ported component needs its FRAME too (2026-08-21)
+Izzy opened the Workbench in the Windows app within minutes of the deploy:
+*"It's gigantic… I have to scroll down all the way for five minutes every time
+I want to put something in the chat."*
+⛔⛔ **`.ide-root` had NO height.** In the mockup it sat inside a fixed-height
+frame; §11's rule was *port the mockup, do not re-derive it* — and I ported the
+COMPONENT's CSS while leaving the frame behind, which is the same drift in a new
+costume. In ordinary page flow every `flex:1` and `min-height:0` inside then
+resolves against **content** height: the tree drew all 222 entries, the editor
+the whole file, the terminal under that, and **no pane scrolled internally**, so
+the chat composer sat at the bottom of a page thousands of pixels tall.
+⛔ **It reads as a zoom problem and is not one** — the type scale is 12px and
+correct; the screenshot's sidebar is normal size. **When a screen "looks zoomed",
+check whether something is UNBOUNDED before you touch a font size.**
+✅ Fixed (`5e952aa3`): `height: calc(100vh - 214px); min-height: 520px` — the
+**same cap every sibling view on the screen already used** (`supportDesk.css`),
+so the five views feel like one screen — plus `.ide-body > * { min-height: 0 }`,
+which is what actually stops a long child pushing past the bound.
+⛔ **`height`, not `max-height`:** an IDE fills its space, and only a DEFINITE
+height makes the inner panes scroll instead of stretch.
+✅ Every inner chain was already right (`.ide-side`/`.ide-edcol`/`.ide-agent` are
+flex columns with `flex:1; min-height:0; overflow:auto` on the scrolling child
+and `flex:none` on the composer) — bounding the root is the whole fix.
+⛔ Guarded by `apps/portal/lib/supportWorkbenchLayout.test.ts` (registered):
+**all 4 assertions fail replayed against the shipped stylesheet.** A source guard
+is the only shape that works here — the defect is a MISSING rule, so nothing
+throws and no component test can see it.

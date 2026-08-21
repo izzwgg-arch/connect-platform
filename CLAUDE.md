@@ -1117,6 +1117,20 @@ scoped under `.ide-root` so nothing leaks. That is a deliberate exception to
 LINE both resolved to `.sd-wb-out`, so every output line inherited the
 container's padding and background. **Audit class names across a ported
 stylesheet before wiring it.**
+⛔⛔ **AND A PORTED COMPONENT NEEDS ITS FRAME TOO — the screen shipped
+"gigantic".** `.ide-root` had **no height**: in the mockup it sat in a
+fixed-height frame, and porting the component's CSS without that frame left
+every `flex:1`/`min-height:0` inside resolving against **content** height — the
+tree drew all 222 entries, the editor the whole file, nothing scrolled in its
+own pane, and the chat composer ended up at the bottom of a page thousands of
+pixels tall. ⛔ **It reads as a zoom problem and is not one** (the type scale is
+12px and correct) — **when a screen "looks zoomed", check for something
+UNBOUNDED before touching a font size.** Fixed `5e952aa3` with
+`height: calc(100vh - 214px)` — ⛔ **`height`, not `max-height`**: only a
+definite height makes the panes scroll instead of stretch — the same cap the
+sibling views already used, plus `.ide-body > * { min-height: 0 }`. Guarded by
+`supportWorkbenchLayout.test.ts`; **all 4 assertions fail against the shipped
+stylesheet**, which is the only test shape that can see a MISSING rule.
 
 **⛔⛔ WHAT DRIVING IT LIVE FOUND — AND THE MOUNT I REFUSED.** The api container
 has **no `git` binary and no `.git`** (the image COPIES source; it is not a
