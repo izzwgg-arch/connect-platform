@@ -17,7 +17,7 @@
  * against anything that looks like the live PBX.
  */
 import { PanelSession, assertSaved, dialogErrors } from "../../../apps/api/src/onboarding/panelClient";
-import { loadParsedForm } from "../../../apps/api/src/pbxConsole/panelForm";
+import { loadParsedForm, parseForm, DEVICE_FIELDS } from "../../../apps/api/src/pbxConsole/panelForm";
 import { describeForm } from "../../../apps/api/src/pbxConsole/panelSchema";
 import { buildPanelEditPairs, PANEL_MODULES, type PanelModuleKey } from "../../../apps/api/src/pbxConsole/panelFormWrite";
 
@@ -54,6 +54,45 @@ const CASES: Case[] = [
 
 const line = (s: string) => process.stdout.write(s + "\n");
 
+/**
+ * ⛔ AN EXTENSION SAVE MUST CARRY A DEVICE, and the phone system says so in two
+ * different voices depending on what you send:
+ *   • re-post the rendered device fields with the general save and an
+ *     unlicensed panel answers "You've reached the maximum number of allowed
+ *     extensions" — it reads the save as a device ADD;
+ *   • drop them and its own validator crashes: `Undefined array key "user" at
+ *     modules/extensions/Validations.php`.
+ * Both were seen here, on the Community-edition clone.
+ *
+ * The way through is the contract `saveExtension` already follows in the api:
+ * general fields, plus each device's fields taken from THAT DEVICE'S OWN form
+ * (`method=getDevice`), which carries `user`, `device_id` and the real dtmf.
+ * This is not a second implementation — the shipped route hands extensions to
+ * `saveExtension`; this reproduces the same contract so the proof can run
+ * without dragging the api's database layer onto the clone.
+ */
+async function withExtensionDevices(
+  s: PanelSession,
+  extId: string,
+  generalPairs: Array<[string, string]>,
+  form: { options: Record<string, Array<{ v: string; t: string }>> },
+): Promise<Array<[string, string]>> {
+  const devices = (form.options["device_id"] || []).filter((o) => /^\d+$/.test(o.v));
+  if (!devices.length) throw new Error("this extension has no device to carry");
+  const r = await s.post([
+    ["class", "extensions"], ["method", "getDevice"], ["mode", "edit"],
+    ["data[device_id]", devices[0].v], ["data[extension_id]", String(extId)],
+  ]);
+  const devForm = parseForm(String(r.json?.html ?? r.text ?? ""));
+  const devicePairs = devForm.pairs.filter(([k]) => DEVICE_FIELDS.has(k));
+  const out: Array<[string, string]> = [...generalPairs, ...devicePairs];
+  for (const [k, v] of [["class", "extensions"], ["method", "put"], ["mode", "edit"]] as Array<[string, string]>) {
+    const i = out.findIndex(([n]) => n === k);
+    if (i >= 0) out[i] = [k, v]; else out.push([k, v]);
+  }
+  return out;
+}
+
 async function main() {
   const s = new PanelSession(BASE, { id: "robot", user: USER, pass: PASS });
   await s.login();
@@ -89,11 +128,27 @@ async function main() {
     if (before === undefined) { line(`     no "${c.field}" on this form — skipping the write`); continue; }
     const probe = `${before} zz`.slice(0, 60);
     try {
-      const pairs = buildPanelEditPairs(schema.form, schema.tabs, { set: { [c.field]: probe } });
+      const pairs = c.mod === "extensions"
+        ? await withExtensionDevices(s, c.id, buildPanelEditPairs(schema.form, schema.tabs, { set: { [c.field]: probe } }, { module: c.mod }), schema.form)
+        : buildPanelEditPairs(schema.form, schema.tabs, { set: { [c.field]: probe } }, { module: c.mod });
       const res = await s.post(pairs);
+      const dlg = dialogErrors(res);
+      if (dlg) {
+        line(`     panel said: ${String(dlg).replace(/\s+/g, " ").slice(0, 300)}`);
+        /* The generic "error dialog" line hides WHICH field the panel is
+           unhappy about; the raw body carries the per-field messages. */
+        const raw = String(res.text || "").replace(/\s+/g, " ");
+        const bits = Array.from(raw.matchAll(/"(?:text|message|title)"\s*:\s*"([^"]{3,200})"/g)).map((m) => m[1]);
+        if (bits.length) line(`     detail: ${bits.slice(0, 8).join(" | ").slice(0, 500)}`);
+        else {
+          const body = raw.replace(/<[^>]+>/g, " ").replace(/\[rnt]/g, " ").replace(/\s+/g, " ");
+          const at = body.search(/exception|error|fatal|undefined|SQLSTATE|Call to/i);
+          line(`     raw: ${(at >= 0 ? body.slice(Math.max(0, at - 80), at + 520) : body.slice(0, 500))}`);
+        }
+      }
       assertSaved(`${c.mod} save`, res);
     } catch (e: any) {
-      line(`FAIL ${c.mod.padEnd(17)} SAVE REFUSED: ${e?.message || e}`);
+      line(`FAIL ${c.mod.padEnd(17)} SAVE REFUSED: ${String(e?.message || e).replace(/\s+/g, " ").slice(0, 800)}`);
       failed++; continue;
     }
 
@@ -106,7 +161,8 @@ async function main() {
     }
 
     // ── 4. PUT IT BACK ───────────────────────────────────────────────────
-    const restore = buildPanelEditPairs(again.form, again.tabs, { set: { [c.field]: before } });
+    const restoreBase = buildPanelEditPairs(again.form, again.tabs, { set: { [c.field]: before } }, { module: c.mod });
+    const restore = c.mod === "extensions" ? await withExtensionDevices(s, c.id, restoreBase, again.form) : restoreBase;
     const back = await s.post(restore);
     const err = dialogErrors(back);
     const final = describeForm((await loadParsedForm(s, m.cls, "edit", c.id)).html).form.values[c.field];

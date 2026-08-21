@@ -101,6 +101,21 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
         "The phone system already has a customer filed under that system name. Pick a different name, or edit the existing one.",
     },
     {
+      /* ⛔ PROVEN ON THE COMMUNITY-EDITION CLONE, 2026-08-21, and it corrects a
+         claim this repo had recorded as settled ("extension create/edit/delete
+         works unlicensed"). Over the free tier's 12-extension cap the panel
+         refuses an extension SAVE both ways round: carry the device fields and
+         it answers this, because it reads the save as a device add; drop them
+         and its own validator crashes on `Undefined array key "user"`. Every
+         other console module — tenants, trunks, outbound routes, route
+         selections, ring groups, queues — saves cleanly unlicensed.
+         Until an extension writer exists in the mirror, this is the honest
+         answer rather than a 500 that reads like Connect broke. */
+      match: "maximum number of al",
+      message:
+        "The phone system's free edition will not save an extension while it is over its own 12-extension limit — this is the phone system refusing, not Connect. Nothing was changed. Extensions can still be edited from the VitalPBX panel while the licence is active.",
+    },
+    {
       match: "geo_build_not_permitted",
       message:
         "Blocking a country needs one more setup step on the phone system: rebuilding the firewall runs as root, which the Connect helper is not allowed to do yet. Nothing was changed — the countries you had blocked are still exactly as they were.",
@@ -217,6 +232,36 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
       /* The apply runs in the tenant whose config actually changed. Applying
          in the robot's own tenant returns success and regenerates nothing. */
       const applyPath = PANEL_MODULES[mod].scope === "tenant" ? tenantPath : mainPath;
+
+      /* ⛔ EXTENSIONS ARE THE ONE MODULE THAT CANNOT TAKE A GENERIC POST, and
+         the phone system says so in two different voices depending on what you
+         send. Re-post the rendered device fields with the general save and an
+         unlicensed panel answers "You've reached the maximum number of allowed
+         extensions" (it reads the save as a device ADD); drop them and its own
+         validator crashes with `Undefined array key "user"`. Both were seen on
+         the Community-edition clone. The save must carry each device's fields
+         from THAT DEVICE'S OWN form — which `saveExtension` already does, with
+         the dtmf carried from the database so a desk phone is not silently
+         flipped to rfc2833. It is proven on production; the generic path hands
+         over to it rather than growing a second implementation. */
+      if (mod === "extensions") {
+        if (!id) return reply.status(400).send({ error: "unsupported", detail: "Creating an extension goes through the Extensions screen, which builds its devices too." });
+        const info = await withRead(instance, (c) => findConsoleExtension(c, Number(id)));
+        const ext = info.ok ? info.data : null;
+        if (!ext) return reply.status(404).send({ error: "extension_not_found" });
+        const out = await withPanel(instance, async (s) => {
+          const r = await saveExtension(s, ext.tenantPath, Number(id), {
+            set: b.set as any, checks: b.checks, multi: b.multi, devices: extToDeviceSpecs(ext),
+          });
+          return { module: mod, id, saved: true, ...r };
+        }, ext.tenantPath);
+        await audit({
+          actorUserId: admin.sub, action: "PBX_CONSOLE_PANEL_UPDATED", entityType: "PbxPanelRecord",
+          entityId: `${mod}:${id}`, metadata: { module: mod, tenantPath: ext.tenantPath, ...summariseEdit(b) },
+        });
+        await syncConnectExtensions(instance, ext.tenantId).catch(() => {});
+        return out;
+      }
       const out = await withPanel(instance, async (s) => {
         scopeSession(s, mod, tenantPath, mainPath);
         const cls = PANEL_MODULES[mod].cls;
@@ -224,7 +269,7 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
         const denied = accessDeniedReason(html);
         if (denied) throw new PanelStepError("panel-access", denied);
         const tabs = parseSchema(html);
-        const pairs = buildPanelEditPairs(form, tabs, b);
+        const pairs = buildPanelEditPairs(form, tabs, b, { module: mod });
         /* `class`/`method`/`mode`/`csfr_token` come from the form we just
            loaded, never from the request — the schema refuses them by name. */
         assertSaved(`${mod} save`, await s.post(pairs));

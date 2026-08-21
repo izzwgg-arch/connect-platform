@@ -144,11 +144,9 @@ export type ExtensionSaveInput = {
 };
 
 /** The device sub-form's field names (everything else on the form is general). */
-export const DEVICE_FIELDS = new Set([
-  "technology", "device_id", "number", "user", "secret", "dev_description", "profile_id", "max_contacts", "codecs[]", "nat",
-  "dtmfmode", "devices_emergency_cid_name", "devices_emergency_cid_number", "dispatchable_location_id", "deny[]", "permit[]",
-  "ring_device", "mobile_client", "vitxi_client",
-]);
+/** Re-exported from panelForm.ts, which is where the rule now lives. */
+import { DEVICE_FIELDS } from "./panelForm";
+export { DEVICE_FIELDS };
 
 /** Device options as the edit form lists them. */
 export function deviceOptionsOf(form: ParsedForm): Array<{ id: string; label: string }> {

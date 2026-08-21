@@ -18,6 +18,26 @@
  */
 import { decodeEntities, type PanelSession } from "../onboarding/panelClient";
 
+/**
+ * The fields on an extension's edit form that belong to a DEVICE, not to the
+ * extension itself.
+ *
+ * ⛔ They must never ride the general save. Re-posting them makes the panel
+ * treat the save as a device add: on a licensed PBX that silently flips DTMF,
+ * and on an unlicensed one it is refused outright with "You've reached the
+ * maximum number of allowed extensions" — proven on the Community-edition
+ * clone, where the identical save passes once these are dropped. Devices are
+ * saved one at a time against their own form.
+ *
+ * Lives here, beside the form parser, because both the extension writer and
+ * the generic panel-form writer need it and this module has no other imports.
+ */
+export const DEVICE_FIELDS = new Set([
+  "technology", "device_id", "number", "user", "secret", "dev_description", "profile_id", "max_contacts", "codecs[]", "nat",
+  "dtmfmode", "devices_emergency_cid_name", "devices_emergency_cid_number", "dispatchable_location_id", "deny[]", "permit[]",
+  "ring_device", "mobile_client", "vitxi_client",
+]);
+
 export type FormOption = { v: string; t: string };
 
 export type ParsedForm = {

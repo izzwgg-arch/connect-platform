@@ -133,6 +133,29 @@ test("the panel's own plumbing can never be overwritten from the screen", () => 
   assert.throws(() => buildPanelEditPairs(form, tabs, { set: { csfr_token: "x" } }), /no field called/);
 });
 
+test("⛔ an extension's general save never carries device fields", () => {
+  // Proven on the Community-edition clone 2026-08-21: re-post the rendered
+  // device fields and an unlicensed panel answers "You've reached the maximum
+  // number of allowed extensions" — it reads the save as a device ADD. Devices
+  // are saved against their own form, by saveExtension.
+  const f = describeForm(`
+    <div role="tabpanel" id="t">
+      <div class="form-group"><label class="control-label">Name</label>
+        <input type="text" name="name" value="Front"></div>
+      <div class="form-group"><label class="control-label">Username</label>
+        <input type="text" name="user" value="T2_101"></div>
+      <div class="form-group"><label class="control-label">DTMF</label>
+        <select name="dtmfmode"><option value="rfc4733" selected>rfc4733</option></select></div>
+    </div>`);
+  const withDevices = buildPanelEditPairs(f.form, f.tabs, { set: { name: "Back" } });
+  assert.ok(withDevices.some(([k]) => k === "user"), "other modules keep every pair");
+
+  const general = buildPanelEditPairs(f.form, f.tabs, { set: { name: "Back" } }, { module: "extensions" });
+  assert.deepEqual(general.filter(([k]) => k === "user"), [], "user is a device field");
+  assert.deepEqual(general.filter(([k]) => k === "dtmfmode"), [], "and so is dtmf — re-posting it flips a desk phone");
+  assert.ok(general.some(([k, v]) => k === "name" && v === "Back"), "the general field still goes");
+});
+
 test("the audit summary counts what changed and names it, but never carries a value", () => {
   const s = summariseEdit({ set: { description: "x", sip_password: "hunter2" }, checks: { record: false }, rows: { queue_members: [{}, {}] } });
   assert.equal(s.fields, 2);

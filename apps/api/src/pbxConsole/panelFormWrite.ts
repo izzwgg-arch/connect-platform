@@ -11,8 +11,25 @@
  * fields, and `expandRows` below owns it for checkboxes INSIDE repeat rows,
  * which `applyOverrides` never sees.
  */
-import { applyOverrides, type ParsedForm } from "./panelForm";
+import { applyOverrides, DEVICE_FIELDS, type ParsedForm } from "./panelForm";
 import { schemaFieldNames, type PanelTab } from "./panelSchema";
+
+/**
+ * ⛔ AN EXTENSION'S DEVICE FIELDS ARE NOT PART OF ITS GENERAL SAVE, AND POSTING
+ * THEM IS REFUSED BY AN UNLICENSED PANEL.
+ *
+ * The extension edit form carries one device's fields inline. Re-posting them
+ * with the general save makes the panel treat the save as a device add: on a
+ * licensed PBX that silently flips DTMF (this repo already records it), and on
+ * an unlicensed one it is refused outright with "You've reached the maximum
+ * number of allowed extensions" — proven on the Community-edition clone, where
+ * the identical save passes once these are dropped.
+ *
+ * Devices are saved one at a time through `saveExtension`, against each
+ * device's own form. The general save must leave them alone.
+ */
+export const generalOnlyPairs = (pairs: Array<[string, string]>): Array<[string, string]> =>
+  pairs.filter(([k]) => !DEVICE_FIELDS.has(k));
 
 /** The panel modules the console exposes, and how each is addressed. */
 export const PANEL_MODULES = {
@@ -91,6 +108,7 @@ export function buildPanelEditPairs(
   form: ParsedForm,
   tabs: PanelTab[],
   input: PanelEditInput,
+  opts: { module?: PanelModuleKey } = {},
 ): Array<[string, string]> {
   const known = schemaFieldNames(tabs);
 
@@ -130,7 +148,7 @@ export function buildPanelEditPairs(
     });
   }
 
-  return pairs;
+  return opts.module === "extensions" ? generalOnlyPairs(pairs) : pairs;
 }
 
 /** A one-line summary of an edit, for the audit row. */
