@@ -509,3 +509,44 @@ session's in-flight `server.ts`, `ops/` and `delivery/` work — checked file by
 - `reset_over_sip` has no executor; the `templates.provision` generation path for an
   unknown model is designed and unexercised; firmware update and recovery are out of
   phase one by design.
+
+## 7. ⛔ The ordering fix, PROVEN LIVE on production (read-only)
+
+Driven against `127.0.0.1:3001` inside `app-api-1` with a 60-second self-signed token,
+every call aimed at a run id that does not exist — so each one answers before it writes
+anything, and nothing was created:
+
+```
+404  authorize-reset, EMPTY body        (was 400)
+404  authorize-reset, phoneIds: []      (was 400)
+404  authorize-reset, phoneIds: 5       (was 400)
+404  authorize-reset, valid shape
+404  advance / assign / discovered, junk bodies
+404  GET run · GET run?view=diagnostics · GET buttons
+404  hostile ids (traversal, quote-injection, 300 chars)
+200  GET /desk-phones/state  ->  hasActiveRun: false
+```
+
+⛔ **The last line is the one that matters most: `hasActiveRun: false` is the live
+confirmation that the feature is inert.** Deployed, reachable, and doing nothing to
+anybody until a person opens the wizard.
+
+### ⛔⛔ A nuance the probe exposed, worth knowing before reading a 403 here
+
+There are **two** gates, and the outer one fires first. A real `TENANT_ADMIN` probing the
+same eleven paths got **403 on every one**, from the global
+`PORTAL_API_PERMISSION_RULES` entry `{ prefix: "/desk-phones", permission:
+"can_setup_desk_phones" }` — which runs as a preHandler, **before the route body
+executes at all**.
+
+So the honest statement of the property is:
+
+- a caller who **cannot** reach the handler sees a **uniform 403 for every run id**,
+  existing or not — which reveals nothing about any run, and is not an oracle;
+- a caller who **can** reach the handler sees **404** for a run that is not theirs,
+  ahead of the reset permission and ahead of body validation — which is what §3 fixed.
+
+⛔ **Do not read the outer 403 as the in-handler order being wrong**, and do not "fix" it
+by moving the prefix gate — that gate is what stops an unprivileged caller reaching this
+surface at all, and it is uniform, so it leaks nothing. The two gates answer different
+questions: *may you be here at all* and *is this yours*.

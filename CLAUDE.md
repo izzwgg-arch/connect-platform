@@ -215,6 +215,18 @@ to do everything in his power to get every single phone connected."*
   ⛔ **`deskPhoneRouteOrder.test.ts` reads the route file's SOURCE**, because a line
   ORDER is invisible to a behavioural test of any one call and inexpressible as a type;
   **4 of its 7 tests fail replayed against `HEAD`**.
+- ✅ **THE ORDERING FIX IS PROVEN LIVE ON PRODUCTION, not just by test** — a read-only
+  probe against the running container, every call aimed at a run id that does not exist:
+  **all eleven answer 404**, including the three that used to answer 400, and hostile ids
+  (traversal, quote-injection, 300 chars) too; `GET /desk-phones/state` answers
+  **200 `hasActiveRun: false`**, which is the live confirmation that the feature is inert.
+  ⛔⛔ **A nuance to know before reading a 403 here: there are TWO gates and the outer one
+  fires first.** A real TENANT_ADMIN gets **403 on every one of those paths** from the
+  global `PORTAL_API_PERMISSION_RULES` prefix entry, before the route body runs at all.
+  That is **uniform for every run id, so it is not an oracle** — and it answers a different
+  question from the in-handler order. *May you be here at all* (the prefix gate, 403) and
+  *is this yours* (`ownRun`, 404). ⛔ **Do not "fix" that 403 by moving the prefix gate**
+  — it is what keeps an unprivileged caller off this surface entirely.
 - ⛔ **No PBX write was made, so the Marshall Islands template (id 21, 17 hours out) and
   the manual-DST template (id 3) are still wrong on production** — that needs Izzy's
   mandate. ⏳ Also unbuilt on purpose: the `reset_over_sip` executor, the
