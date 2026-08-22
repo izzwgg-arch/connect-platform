@@ -366,3 +366,146 @@ errors (lines 23770, 41879, 41881) are pre-existing or another session's
 5. ⛔ **The negatives matter more:** a phone still on another provider must ask before
    anything is erased; a customer without the reset key must get a plain refusal; and a
    second browser signed into a different customer must get **404**, not 403, on the run.
+
+---
+
+# PART 3 — DEPLOYED, AND WHAT STRESS-TESTING FOUND (2026-08-21, same day)
+
+## 1. Deploy state, verified rather than reported
+
+| What | Evidence |
+|---|---|
+| Migration `20260821200000_desk_phone_setup` | `finished_at 2026-08-21 23:51:16.400589+00` in `_prisma_migrations` |
+| `DeskPhoneSetupRun` | present, **15 columns**, **0 rows** |
+| `DeskPhoneSetupPhone` | present, **23 columns**, **0 rows** |
+| api container | `.build-commit` grepped; routes, the `PORTAL_API_PERMISSION_RULES` entry and the shared rules all found **inside** `app-api-1` |
+| portal container | `.next` grepped for `dps-root`, `dps-wz`, `Set up desk phones`, "Do you know what kind of phone you have" — all present |
+| Live | `/settings/desk-phones` **200 on both hostnames**; `/api/health` 200 on both; **0 restarts** on either container |
+
+⛔ **0 rows is the important number.** No run exists, so the feature is inert: nothing
+changed for any customer on deploy, and it stays that way until somebody opens the wizard.
+
+⛔ **The deploy's exit line is never the proof.** Both halves were judged by grepping the
+running container for a real string — the portal by its own CSS class names and copy,
+never by a function name (minification renames those and a 0-hit grep reads exactly like a
+failed deploy).
+
+## 2. ⛔⛔ FINDING ONE — an SSRF bypass in the address fence
+
+`isPrivateIpv4()` parsed each octet with `Number()`. **`Number("010")` is 10**, while the
+OS resolver — and `inet_addr`, which is what the platform actually uses — reads a
+leading-zero octet as **octal**, so `010` is **8**.
+
+So `010.0.0.1` passed our fence as *"10.0.0.1, private, allowed"* and the request was then
+sent to **8.0.0.1 — a public address on the internet.**
+
+Measured by replaying the fuzz corpus against `HEAD`: **4 of 5 hostile addresses got
+through**.
+
+✅ **The fix is not a better regex.** Two parts, and the second is the one that matters:
+
+1. `canonicalPrivateIpv4()` refuses **any** octet with a leading zero outright, refuses
+   anything that is not 1–3 plain digits, and re-checks the range.
+2. **The request is rebuilt from the canonical parsed form**, so the string that was
+   validated is byte-for-byte the string that is dialled. A fence that validates one
+   string and dials another is the whole bug class; closing the parser without closing
+   that gap leaves the next variant live.
+
+⛔ **This was found by fuzzing, not by reading.** The original code looked correct, was
+reviewed, and passed every hand-written test — because every hand-written address was
+written the way a person writes an address.
+
+## 3. ⛔⛔ FINDING TWO — ownership was not the first check
+
+`POST /desk-phones/runs/:id/authorize-reset` answered:
+
+- **400** when the body was empty — because zod validation ran first;
+- **403** when the caller lacked `can_authorize_phone_reset` — because the permission ran
+  first;
+
+both **ahead of** the **404** that another customer's run is supposed to produce.
+
+Neither is exploitable on its own: a run id that does not exist answers exactly the same.
+But *"another customer's run is indistinguishable from one that never existed"* is the
+property that is simple to state, simple to test and simple to keep true for years — and
+it only holds if **ownership dominates everything**.
+
+✅ Every run-scoped route is now **`ownRun()` → permission → body**. `ownRun()` resolves
+the run scoped to the caller's own tenant and answers 404, so no later check can leak
+anything about a run that was never theirs.
+
+⛔ **`mayAuthorizeReset()` was deleted, not left unused.** It resolved the caller and
+checked the reset permission in one step, which forces 403 ahead of 404 *by construction*
+— and a dead helper with a security-shaped name is an invitation to put the bug straight
+back. The comment left in its place says so.
+
+⛔ **The `/admin/` routes are deliberately cross-tenant** — Loopcom support looking at a
+customer's setup is the entire point of them — so `ownRun()`, which scopes to the
+*caller's* tenant, would be exactly wrong there. They are held to the stricter rule
+instead: **staff-gated before they read anything at all**, which the guard now asserts.
+
+## 4. ⛔⛔ The rule both findings earned
+
+**A green suite proves the cases somebody thought of. Randomised and exhaustive driving
+proves the ones nobody did.**
+
+Neither defect was findable by reading the code, and neither was findable by any
+hand-written test — because the same person writes the code and the test, and shares its
+blind spot. What found them was driving the real thing with inputs nobody would choose.
+
+Three suites now do that permanently:
+
+| Suite | What it drives | Scale |
+|---|---|---|
+| `deskPhoneInvariants.test.ts` (shared) | the pure decision functions | **all 8,192 phone conditions × 384 records** — 3.1M+ decisions |
+| `deskPhoneChaos.test.ts` (api) | the **real Fastify routes** in random order | 300 seeded runs × 40 steps + a 500-step run; 12,000+ operations |
+| `phoneSetupAdversarial.test.ts` (desktop) | the address fence and the capability layer | the fuzz corpus that found the SSRF |
+
+What the invariant suites assert, after **every single step**:
+
+- no phone is ever reset without an authorisation recorded on its run;
+- no phone is ever reset twice, under any interleaving or any concurrency;
+- nothing disruptive happens to a phone that is on a call;
+- nothing happens past the attempt cap;
+- every action is inside the closed list of 13;
+- **no customer-facing string ever contains jargon** (HTTP, a status code, SIP, DHCP,
+  MAC, subnet, firmware, provisioning …) and every customer status is one of the six
+  permitted words;
+- the customer view never carries `mac`, `ip` or `provisioningUrl`;
+- a phone never escapes its customer, and there is never more than one live run.
+
+⛔ **The chaos generator is seeded (xorshift32) and prints its seed with any failure**, so
+a chaos failure is reproducible rather than a ghost.
+
+⛔ **`deskPhoneRouteOrder.test.ts` reads the route file's SOURCE.** A line ORDER cannot be
+seen by a behavioural test of any single call and cannot be expressed as a type. **4 of
+its 7 tests fail when replayed against `HEAD`**, which is what makes it a guard rather
+than decoration. The 3 that pass there are properties the code already had — recorded
+honestly rather than inflated.
+
+## 5. Test totals after the hardening
+
+| Package | Before | After |
+|---|---|---|
+| `packages/shared` | 513 | **537** |
+| `apps/desktop` | 61 | **77** |
+| `apps/api` desk-phones | 59 | **72** |
+
+All green. Typecheck: shared, desktop and portal **0**; **apps/api adds 0 errors in any
+file touched** (its total reads 76 against the 75 baseline entirely because of another
+session's in-flight `server.ts`, `ops/` and `delivery/` work — checked file by file).
+
+## 6. ⏳ Still not proven, stated plainly
+
+- **Nobody has opened the screen and no phone has been set up.** Everything above is a
+  test, a measurement or a container grep — never a person clicking.
+- **The desktop app is not built or published.** That renames and re-signs the app for
+  every customer, so it is Izzy's call. Until it ships the wizard can be opened but the
+  office machine cannot scan, so the acceptance test is still **one real phone on one
+  real desk**.
+- **The two live PBX faults are still live** — template id 21 on the Marshall Islands
+  (17 hours out) and template id 3 on manual DST. Correcting them is a PBX write and
+  needs Izzy's mandate.
+- `reset_over_sip` has no executor; the `templates.provision` generation path for an
+  unknown model is designed and unexercised; firmware update and recovery are out of
+  phase one by design.
