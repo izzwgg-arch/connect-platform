@@ -53,17 +53,51 @@ async function mayRunSetup(req: any, reply: any): Promise<JwtUser | null> {
   return user;
 }
 
-async function mayAuthorizeReset(req: any, reply: any): Promise<JwtUser | null> {
-  const user = await mayRunSetup(req, reply);
-  if (!user) return null;
+// mayAuthorizeReset() was deleted deliberately. It resolved the caller and checked
+// the reset permission in one step, which forced every caller to answer 403 before
+// it could answer 404. Use ownRun() then allowedToReset(); do not reintroduce a
+// helper that checks a permission before ownership.
+
+/**
+ * OWNERSHIP IS CHECKED BEFORE ANYTHING ELSE, AND THAT ORDER IS THE SECURITY
+ * PROPERTY. A run that belongs to another customer must be indistinguishable from
+ * one that never existed - for EVERY caller, whatever permissions they hold and
+ * whatever they put in the body. Checking the permission first answers 403, and
+ * validating the body first answers 400; either one tells a stranger their request
+ * reached a real endpoint and got further than it should have. Resolve the run
+ * scoped to the caller's own tenant, answer 404, and there is nothing to read.
+ *
+ * Found by the chaos suite, which drove the routes in random orders and caught the
+ * 400 and the 403 that used to escape ahead of the 404.
+ */
+async function ownRun(req: any, reply: any): Promise<{ user: JwtUser; run: any } | null> {
+  const user = getUser(req);
+  if (!user?.tenantId) { reply.status(401).send({ error: "unauthorized" }); return null; }
+  const run = await db.deskPhoneSetupRun.findFirst({
+    where: { id: String(req.params.id), tenantId: user.tenantId },
+  });
+  if (!run) { reply.status(404).send({ error: "not_found" }); return null; }
+  return { user, run };
+}
+
+/** Permission, asked AFTER ownership. Returns false having already replied. */
+async function allowedToSetUp(user: JwtUser, reply: any): Promise<boolean> {
+  if (!(await userHasActionPermission(user, "can_setup_desk_phones"))) {
+    reply.status(403).send({ error: "forbidden" }); return false;
+  }
+  return true;
+}
+
+async function allowedToReset(user: JwtUser, reply: any): Promise<boolean> {
+  if (!(await allowedToSetUp(user, reply))) return false;
   if (!(await userHasActionPermission(user, "can_authorize_phone_reset"))) {
     reply.status(403).send({
       error: "forbidden",
       message: "You are not allowed to clear a phone. Ask somebody who is.",
     });
-    return null;
+    return false;
   }
-  return user;
+  return true;
 }
 
 const isSuper = (user: JwtUser) => String(user?.role || "").toUpperCase() === "SUPER_ADMIN";
@@ -153,13 +187,12 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
   /* ── what the office machine found ─────────────────────────────────────── */
 
   app.post("/desk-phones/runs/:id/discovered", async (req: any, reply: any) => {
-    const user = await mayRunSetup(req, reply); if (!user) return;
+    // Ownership first - see ownRun(). 404 before any 403 or 400.
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
     const parsed = discoveredBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
-
-    const run = await db.deskPhoneSetupRun.findFirst({
-      where: { id: String(req.params.id), tenantId: user.tenantId },
-    });
     // ⛔ 404, not 403: a run belonging to another customer must be indistinguishable
     // from one that does not exist.
     if (!run) return reply.status(404).send({ error: "not_found" });
@@ -214,12 +247,14 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
   /* ── who sits where ────────────────────────────────────────────────────── */
 
   app.post("/desk-phones/runs/:id/phones/:phoneId/assign", async (req: any, reply: any) => {
-    const user = await mayRunSetup(req, reply); if (!user) return;
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
     const body = z.object({ extensionId: z.string().min(1).nullable() }).safeParse(req.body ?? {});
     if (!body.success) return reply.status(400).send({ error: "invalid_request" });
 
     const phone = await db.deskPhoneSetupPhone.findFirst({
-      where: { id: String(req.params.phoneId), runId: String(req.params.id), tenantId: user.tenantId },
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
     });
     if (!phone) return reply.status(404).send({ error: "not_found" });
 
@@ -252,14 +287,16 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
   /* ── permission to wipe ────────────────────────────────────────────────── */
 
   app.post("/desk-phones/runs/:id/authorize-reset", async (req: any, reply: any) => {
-    const user = await mayAuthorizeReset(req, reply); if (!user) return;
+    // 404 BEFORE the reset permission and before the body. This is the route that
+    // erases a customer's device; a stranger must not learn that their run id
+    // guessed right, and must not be told "you lack the permission" for a run that
+    // was never theirs.
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (run.status !== "running") return reply.status(404).send({ error: "not_found" });
+    if (!(await allowedToReset(user, reply))) return;
     const body = z.object({ phoneIds: z.array(z.string().min(1)).min(1).max(500) }).safeParse(req.body ?? {});
     if (!body.success) return reply.status(400).send({ error: "invalid_request" });
-
-    const run = await db.deskPhoneSetupRun.findFirst({
-      where: { id: String(req.params.id), tenantId: user.tenantId, status: "running" },
-    });
-    if (!run) return reply.status(404).send({ error: "not_found" });
 
     const phones = await db.deskPhoneSetupPhone.findMany({
       where: { runId: run.id, tenantId: user.tenantId, id: { in: body.data.phoneIds } },
@@ -293,7 +330,9 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
   /* ── the brain: what should happen to this phone next ──────────────────── */
 
   app.post("/desk-phones/runs/:id/phones/:phoneId/advance", async (req: any, reply: any) => {
-    const user = await mayRunSetup(req, reply); if (!user) return;
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
     const observed = z.object({
       reachableOnLan: z.boolean().optional(),
       locked: z.boolean().optional(),
@@ -305,10 +344,6 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     }).safeParse(req.body ?? {});
     if (!observed.success) return reply.status(400).send({ error: "invalid_request" });
 
-    const run = await db.deskPhoneSetupRun.findFirst({
-      where: { id: String(req.params.id), tenantId: user.tenantId },
-    });
-    if (!run) return reply.status(404).send({ error: "not_found" });
     const phone = await db.deskPhoneSetupPhone.findFirst({
       where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
     });
@@ -409,11 +444,9 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
   /* ── progress ──────────────────────────────────────────────────────────── */
 
   app.get("/desk-phones/runs/:id", async (req: any, reply: any) => {
-    const user = await mayRunSetup(req, reply); if (!user) return;
-    const run = await db.deskPhoneSetupRun.findFirst({
-      where: { id: String(req.params.id), tenantId: user.tenantId },
-    });
-    if (!run) return reply.status(404).send({ error: "not_found" });
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
     const phones = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } });
     const wantsDiagnostics = String((req.query || {}).view || "") === "diagnostics";
     const summary = summarizeRun(phones.map((p: any) => p.state as PhoneState));
@@ -512,9 +545,11 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
    * and writing to the PBX is a separate, audited operation.
    */
   app.get("/desk-phones/runs/:id/phones/:phoneId/buttons", async (req: any, reply: any) => {
-    const user = await mayRunSetup(req, reply); if (!user) return;
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
     const phone = await db.deskPhoneSetupPhone.findFirst({
-      where: { id: String(req.params.phoneId), runId: String(req.params.id), tenantId: user.tenantId },
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
     });
     if (!phone) return reply.status(404).send({ error: "not_found" });
 
