@@ -853,3 +853,19 @@ Izzy pressed Find My Phones on the first updated install — his own home — an
 - ⏳ Also surfaced: his SUPER_ADMIN login's tenant has **no extensions**, so that
   login can find phones but has nobody to assign them to. A full end-to-end run
   needs a login on a real tenant that holds `can_setup_desk_phones`.
+
+## 5. Desktop 0.1.10 — the designer's own Windows frames (2026-08-23, PUBLISHED)
+
+Izzy saw the tile build on his taskbar: *"the icon is not showing up here … I just made
+two new ones to be made for Windows"* — two zips, one per variant, each holding
+hand-tuned `loopcom-win-16/32/48/64/256.png` with rounded corners and REAL
+transparency. The generator now ships those five frames **verbatim** (proven diff 0
+byte-for-byte) and synthesises only 24 and 128, one LANCZOS step each, **no
+sharpening** — processing a hand-tuned frame is a redesign wearing a helpful hat.
+`icon.png` is the designer 256 as-is (a 512 upscale is blur). Variant stays blue-2b;
+navy-2a's Windows set is pinned beside it. verify:icon passed on the built exe;
+`latest.yml` answers **0.1.10** on both hostnames.
+
+⛔ **The lesson: when the designer delivers per-size frames, USE THEM PER SIZE** — the
+first Windows build downsampled the 1024 iOS tile algorithmically, and no unsharp pass
+makes a 16px downsample compete with a frame drawn at 16px.

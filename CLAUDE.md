@@ -301,10 +301,13 @@ to do everything in his power to get every single phone connected."*
   with the shipped stylesheet:
   <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>. Totals after:
   shared **549** · desktop **77** · api desk-phones **72** · portal **316/318**.
-- ✅✅ **DESKTOP 0.1.8 IS BUILT AND PUBLISHED (2026-08-22, Izzy: "publish it as an
-  update")** — the wizard's hands (phoneSetup IPC + capability fence, verified inside
-  the packed asar) and the chosen **blue-2b refinement icon** (generator now renders
-  the pinned 1024 tile verbatim; 256/48 frames diff 0.00; ≤32px get one unsharp pass).
+- ✅✅ **DESKTOP 0.1.10 IS THE PUBLISHED BUILD (2026-08-23)** — the wizard's hands
+  (phoneSetup IPC + capability fence, verified inside the packed asar), the /22
+  scanner fix, and **the designer's own per-size Windows frames** (Izzy's second kit,
+  2026-08-23: loopcom-win-16/32/48/64/256 with rounded corners and real transparency,
+  shipped VERBATIM, diff 0; only 24/128 synthesised, no sharpening — ⛔ when a designer
+  delivers per-size frames, use them per size; no downsample of a 1024 tile competes
+  with a frame drawn at 16px).
   `verify:icon` read the BUILT exe: **7 RT_ICONs byte-identical to icon.ico, nothing
   else embedded**. `latest.yml` answers 0.1.8 on both hostnames; installs ≥0.1.4
   auto-update within ~3h — ⛔ **each update renames Connect → Loopcom with the new
