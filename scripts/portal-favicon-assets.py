@@ -101,9 +101,33 @@ MARGIN = 0.0
 EXPECT_BLUE_FILL_PCT = 12.22          # blue showing between the ticks
 EXPECT_EYE_PCT = 1.31                 # each eye, and they must match each other
 
-# How far the ink's vertical centroid may sit from the middle of the icon box.
-# 0.06px is a hair over the rounding floor of source-resolution padding and far
-# under anything an eye can see; the bug this catches was 0.55px at 16.
+# The mark is dropped BELOW the geometric middle of the icon box on purpose, so
+# that it reads level with the tab TITLE rather than with the box.
+#
+# Chrome's tab title on Windows is Segoe UI 12px, whose fontBoundingBox is
+# ascent 13 / descent 3 - exactly a 16px line box, so the baseline lands at
+# y=13 and the ink of a lowercase string runs rows 4..16. Its optical centre
+# measures y=10.0 three independent ways (ink bbox, x-height band, and mass
+# centroid of the rendered string). A mark centred at y=8 therefore sits 2px
+# HIGH against the word, and this mark is only ~7px tall, so it is a thin band
+# floating in the upper half of the text's ink instead of straddling it.
+# Izzy reported it twice; 10.0/16 = 0.625, i.e. drop it by 2/16 of the box.
+#
+# The offset is a FRACTION so every frame agrees - Chrome picks the 32px frame
+# on a HiDPI display, and the tab must look right at any device pixel ratio.
+# COST, stated plainly: a surface that shows the icon with NO text beside it -
+# a pinned tab, or a Windows pinned-site shortcut, which reads this same .ico -
+# will show the mark sitting low in its box. That is the deliberate trade:
+# the favicon's job is overwhelmingly tab strip and bookmarks bar, both of
+# which pair it with text. The desktop app has its OWN icon set
+# (scripts/desktop-loopcom-windows-assets.py) and is not affected, and
+# apple-icon.png is generated from a different source and is untouched.
+OPTICAL_DROP_FRAC = 2.0 / 16.0
+
+# How far the ink's vertical centroid may sit from its TARGET (the box middle
+# plus OPTICAL_DROP_FRAC). 0.06px is a hair over the rounding floor of
+# source-resolution padding and far under anything an eye can see; the bug this
+# catches was 0.55px at 16.
 MAX_CENTRE_OFFSET_PX = 0.06
 
 _problems: list[str] = []
@@ -198,9 +222,14 @@ def render(side: int, src, band, box) -> Image.Image:
     a = band[box[1]:box[3], box[0]:box[2]]
     pm = rgb * a[..., None]
 
-    # Square canvas in SOURCE units, with the mark centred inside it.
+    # Square canvas in SOURCE units, with the mark centred inside it and then
+    # dropped by OPTICAL_DROP_FRAC so it reads level with the tab title rather
+    # than with the box. Doing the drop HERE, at 794px, keeps it subpixel-exact.
     span = int(round(max(bw, bh) / (1 - 2 * MARGIN)))
-    ox, oy = (span - bw) // 2, (span - bh) // 2
+    ox = (span - bw) // 2
+    oy = (span - bh) // 2 + int(round(OPTICAL_DROP_FRAC * span))
+    if oy + bh > span:                      # never let the drop clip the mark
+        raise SystemExit("OPTICAL_DROP_FRAC is too large - the mark would clip")
     pm_sq = np.zeros((span, span, 3), dtype=np.float64)
     a_sq = np.zeros((span, span), dtype=np.float64)
     pm_sq[oy:oy + bh, ox:ox + bw] = pm
@@ -277,11 +306,11 @@ def check(frames: dict[int, Image.Image]) -> None:
                     continue
                 rows = np.arange(size) + 0.5
                 centroid = float((alpha.sum(axis=1) * rows).sum() / alpha.sum())
-                off = centroid - size / 2.0
+                off = centroid - size * (0.5 + OPTICAL_DROP_FRAC)
                 if abs(off) > MAX_CENTRE_OFFSET_PX:
                     _problems.append(
-                        "{}: the {}px frame sits {:+.2f}px off centre ({:+.1f}% of the "
-                        "icon) - it will not look level with the tab title"
+                        "{}: the {}px frame sits {:+.2f}px off its target ({:+.1f}% of "
+                        "the icon) - it will not look level with the tab title"
                         .format(ICO_PATH.relative_to(REPO), size, off, off / size * 100))
 
     if not APPLE_PATH.exists():
