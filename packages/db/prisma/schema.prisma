@@ -3092,6 +3092,11 @@ model ConnectCdr {
   /// set it. Rows carrying it are excluded from recordingAvailable, which is
   /// what removes the dead play/download buttons.
   recordingMissingAt     DateTime?
+  /// PBX-side per-call RTP samples (RtpStatsSampler 2026-08-23): array of
+  /// per-channel {codec, rx*, tx*, rttSec} — rx = the remote party's uplink,
+  /// the loss no client-side report can see. Null = not sampled (pre-rollout
+  /// rows, sampler off, or a call shorter than one 10s tick).
+  rtpStats           Json?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 

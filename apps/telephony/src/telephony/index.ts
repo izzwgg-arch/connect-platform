@@ -16,6 +16,7 @@ import { SnapshotService } from "./services/SnapshotService";
 import { TelephonySocketServer } from "./websocket/TelephonySocketServer";
 import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
 import { CdrNotifier } from "./services/CdrNotifier";
+import { RtpStatsSampler, setRtpStatsSampler } from "./services/RtpStatsSampler";
 import { CrmInboundCallerEnricher } from "./services/CrmInboundCallerEnricher";
 import { MobilePushNotifier } from "./services/MobilePushNotifier";
 import { ConnectWakeConsumer } from "./services/ConnectWakeConsumer";
@@ -105,6 +106,12 @@ export function createTelephonyModule(server: http.Server) {
 
   // CDR notifier: listens for completed calls and POSTs to the API for DB persistence.
   // REDIS_URL enables the durable retry queue — failed posts survive API deploys.
+  // PBX-side per-call RTP sampling (Izzy 2026-08-23 "data, data, data") —
+  // read-only AMI Command polling, active-calls-only, samples attached to the
+  // CDR at hangup. Kill switch: RTP_STATS_SAMPLER_DISABLED=1.
+  const rtpStatsSampler = new RtpStatsSampler(ami, callStore);
+  setRtpStatsSampler(rtpStatsSampler);
+  rtpStatsSampler.start();
   const cdrNotifier = new CdrNotifier({ redisUrl: env.REDIS_URL });
   // Mobile push notifier: fires an Expo push when an inbound call rings at an extension.
   const mobilePushNotifier = new MobilePushNotifier();

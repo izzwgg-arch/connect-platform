@@ -2,6 +2,7 @@ import Redis from "ioredis";
 import { childLogger } from "../../logging/logger";
 import { env } from "../../config/env";
 import type { NormalizedCall } from "../types";
+import { getRtpStatsForChannels } from "./RtpStatsSampler";
 import { isLocalOnlyCall, hasValidChannel } from "../normalizers/normalizeCallEvent";
 
 const log = childLogger("CdrNotifier");
@@ -188,6 +189,11 @@ export type CdrPayload = {
   // Example: /var/spool/asterisk/monitor/<tenant_hash>/YYYY/MM/DD/<name>.wav
   // Null when the call was not recorded (no MIXMONITOR_FILENAME VarSet).
   recordingAbsPath: string | null;
+  // Final PBX-side RTP samples for this call's channels (both directions —
+  // rx = the remote party's uplink the app can never measure). Collected by
+  // RtpStatsSampler while the call was live; empty when sampling was off or
+  // the call was shorter than one sampling tick.
+  rtpStats?: import("./RtpStatsSampler").RtpChannelStatSample[];
 };
 
 export class CdrNotifier {
@@ -428,6 +434,7 @@ export class CdrNotifier {
       pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
       pbxTenantCode: (call.metadata?.pbxTenantCode as string | undefined) ?? null,
       recordingAbsPath: (call.metadata?.recordingAbsPath as string | undefined) ?? null,
+      rtpStats: getRtpStatsForChannels((call.metadata?.seenChannels as string[] | undefined) ?? call.channels),
     };
 
     if (env.ENABLE_TELEPHONY_DEBUG) {

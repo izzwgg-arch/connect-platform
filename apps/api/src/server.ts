@@ -34636,6 +34636,19 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     pbxVitalTenantId: z.string().nullable().optional(),
     pbxTenantCode: z.string().nullable().optional(),
     recordingAbsPath: z.string().nullable().optional(),
+    // PBX-side per-call RTP samples (RtpStatsSampler, 2026-08-23) — rx = the
+    // remote party's uplink, the direction no client can measure (Hanna's app
+    // said 1.7% while her uplink lost 39%). Bounded + typed; optional so an
+    // older telephony build keeps posting untouched.
+    rtpStats: z.array(z.object({
+      channel: z.string().max(120),
+      codec: z.string().max(24),
+      rxCount: z.number(), rxLost: z.number(), rxLossPct: z.number(), rxJitter: z.number(),
+      txCount: z.number(), txLost: z.number(), txLossPct: z.number(), txJitter: z.number(),
+      rttSec: z.number(),
+      uptime: z.string().max(16),
+      sampledAt: z.string().max(40),
+    })).max(12).optional(),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -34785,9 +34798,13 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         channelsSeen: mergedCh,
         isForwarded: isForwardedLeg,
         recordingPath,
+        rtpStats: d.rtpStats && d.rtpStats.length > 0 ? (d.rtpStats as any) : undefined,
         rawLegCount: 1,
       },
       update: {
+        // Later leg posts may carry the samples the first post missed — only
+        // ever write when non-empty, never blank an earlier sample set.
+        rtpStats: d.rtpStats && d.rtpStats.length > 0 ? (d.rtpStats as any) : undefined,
         tenantId:    tenantPack.tenantId != null ? tenantPack.tenantId : undefined,
         pbxVitalTenantId: tenantPack.pbxVitalTenantId != null ? tenantPack.pbxVitalTenantId : undefined,
         pbxTenantCode: tenantPack.pbxTenantCode != null ? tenantPack.pbxTenantCode : undefined,
