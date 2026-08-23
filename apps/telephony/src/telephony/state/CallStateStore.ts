@@ -1005,6 +1005,14 @@ export class CallStateStore extends EventEmitter {
 
     const prevState = call.state;
     if (parseInt(params.bridgeNumChannels, 10) >= 2) {
+      // Two or more parties are now in a bridge — somebody is really talking to
+      // the caller. This is the ONLY honest "bridged to an answering party"
+      // signal; `bridgeIds` is already non-empty one event earlier (a single
+      // channel entering a bridge for MOH/parking/announcement). See
+      // NormalizedCall.multiPartyBridgeAt for the Hanna incident this fixes.
+      if (!call.multiPartyBridgeAt) {
+        call.multiPartyBridgeAt = new Date().toISOString();
+      }
       if (call.state !== "up") {
         call.state = "up";
         call.answeredAt = new Date().toISOString();

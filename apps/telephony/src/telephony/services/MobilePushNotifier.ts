@@ -289,9 +289,25 @@ export class MobilePushNotifier {
     //     as dialplan apps WITHOUT a bridge, so menus don't false-trigger.
     // The API cancels PENDING invites + pushes INVITE_CANCELED
     // (reason answered_elsewhere) and records NO missed call.
+    // ⛔⛔ `bridgeIds.length > 0` USED TO BE THE SECOND TEST HERE AND IT WAS WRONG.
+    // `bridgeIds` is pushed on every BridgeEnter, including the FIRST channel
+    // entering a bridge alone (MOH / parking / announcement) — before anyone has
+    // answered. That made this one-shot stop-ring fire an event too early, while
+    // `extensionAnsweredChannel` was still null, so `answeredEndpoint` below went
+    // out blank; the api could not tell the answerer was the invited app and
+    // cancelled the invite + pushed INVITE_CANCELED at the phone that had just
+    // answered. Hanna's dropped answer (2026-08-21) — still reproducing on
+    // 2026-08-23 with the answeredEndpoint fix deployed, because the field was
+    // always blank. `multiPartyBridgeAt` is set in the same handler that resolves
+    // the answering channel and BEFORE its emit, so the endpoint is always
+    // populated by the time we read it here.
+    //
+    // ⛔ Both arms are still needed. The extension arm covers a desk/app answer;
+    // the bridge arm covers the follow-me / virtual-extension case where the
+    // customer answers on their CARRIER phone and no tenant extension leg ever
+    // answers — that must still stop the app ringing (2026-07-29 complaint).
     const answeredByAnyParty =
-      call.extensionAnsweredAt != null ||
-      (Array.isArray(call.bridgeIds) && call.bridgeIds.length > 0);
+      call.extensionAnsweredAt != null || call.multiPartyBridgeAt != null;
     if (
       this.pushed.has(call.linkedId) &&
       !this.answeredStopSent.has(call.linkedId) &&

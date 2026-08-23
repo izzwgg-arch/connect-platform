@@ -82,6 +82,28 @@ export interface NormalizedCall {
    * it unset.
    */
   extensionAnsweredChannel?: string | null;
+  /**
+   * Set the moment a bridge on this call first holds TWO OR MORE parties, i.e.
+   * somebody is genuinely talking to the caller.
+   *
+   * ⛔⛔ WHY THIS EXISTS AND WHY `bridgeIds.length > 0` MUST NOT BE USED FOR IT.
+   * `bridgeIds` is pushed on EVERY BridgeEnter — including the first channel
+   * entering a bridge alone (music-on-hold, parking, an announcement), which
+   * happens BEFORE anyone answers. MobilePushNotifier read it as "the caller got
+   * bridged to an answering party" and therefore fired its one-shot
+   * `answered_elsewhere` stop-ring one event too early — while
+   * {@link extensionAnsweredChannel} was still null. The api could then not tell
+   * that the answerer was the invited app, so it cancelled the invite and pushed
+   * INVITE_CANCELED at the very phone that had just answered. That is Hanna's
+   * dropped answer (2026-08-21), and it was still happening on 2026-08-23 with
+   * the answeredEndpoint fix deployed — the field was simply always blank.
+   *
+   * This marker is set INSIDE the `bridgeNumChannels >= 2` branch of
+   * onBridgeEnter, in the same handler that sets `extensionAnsweredChannel` and
+   * BEFORE its `callUpsert` emit — so any consumer reading it is guaranteed to
+   * see the answering endpoint too.
+   */
+  multiPartyBridgeAt?: string | null;
   endedAt: string | null;
   durationSec: number;
   billableSec: number;
