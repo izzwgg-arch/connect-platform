@@ -212,6 +212,30 @@ android {
             // Debug-signed on purpose for sideload builds (see the note above);
             // Play builds must go through scripts/android-play-bundle.ps1.
             signingConfig (playSigningRequested ? signingConfigs.playUpload : signingConfigs.debug)
+            // ⛔ PACKAGE ONLY THE ABIs THIS BUILD ASKED FOR.
+            // `reactNativeArchitectures` controls only what RN and the
+            // build-from-source modules COMPILE; it does nothing about the
+            // prebuilt .so files inside AAR dependencies (libjingle, hermes,
+            // ML Kit's barhopper, fresco...). Without this filter those ship
+            // for EVERY architecture they were published with, so the
+            // 2026-08-23 fleet APK carried 30.9 MB of x86 and 30.7 MB of
+            // x86_64 — 43% of the download — for emulator CPUs no handset can
+            // run, plus a 17.9 MB armeabi-v7a slice that was MISSING
+            // libexpo-modules-core/libexpo-av/librnscreens (they build from
+            // source, arm64 only) and so could not have launched anyway.
+            // ⛔ Derive it from the property rather than hardcoding: the
+            // sideload APK takes arm64-v8a from gradle.properties, while
+            // scripts/android-play-bundle.ps1 passes
+            // -PreactNativeArchitectures=armeabi-v7a,arm64-v8a and must keep
+            // its 32-bit coverage. Hardcoding here would silently narrow the
+            // Play AAB.
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(
+                    (findProperty('reactNativeArchitectures') ?: 'arm64-v8a')
+                        .toString().split(',').collect { it.trim() }.findAll { it }
+                )
+            }
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
