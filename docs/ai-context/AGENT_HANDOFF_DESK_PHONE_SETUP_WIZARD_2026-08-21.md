@@ -827,3 +827,29 @@ hostnames, installer serving 206 on both, 0 restarts. Portal 319/321.
 - The kit's mobile icons (android/ios/notification `ic_stat_*`) are pinned in the brand
   folder for the NEXT mobile build — mobile assets were another session's in-flight
   work and were not touched.
+
+## 4. ⛔⛔ THE FIRST LIVE RUN FAILED — the /22 lesson (2026-08-23, fixed, 0.1.9 published)
+
+Izzy pressed Find My Phones on the first updated install — his own home — and got
+"we found 0 phones". Traced from both ends (his machine + the server):
+
+- **His LAN is a /22** (192.168.6.102, mask 255.255.252.0 — an eero-class home-mesh
+  default). The scanner accepted only /24 → nothing to sweep. Now: /22–/24, aligned
+  to the true base (his .6.x machine yields **192.168.4.0/22**, where his router
+  really sits at 192.168.4.1); wider is refused in BOTH `localScannableSubnets` and
+  `hostsInSubnet`; the ARP filter is a range test now (`ipInSubnet`) — `startsWith`
+  can only express a /24.
+- ⛔⛔ **The wizard showed the FAILED scan as an empty office.** `scanLan` returned
+  `outcome:"failed"` + a plain-words note; the wizard checked only `!scan.ok`,
+  dropped the note, submitted an empty list, and rendered "we found 0 desk phones" —
+  "you have no phones" when the truth was "we never looked". The wizard now surfaces
+  the scanner's own note and returns to the network step. Guard fails against HEAD.
+- **Diagnosis recipe** (reusable): `DeskPhoneSetupRun` rows → nginx for the
+  `POST …/discovered` **byte size** (73 bytes = empty list, so the bridge ran and
+  submitted nothing) → `ipconfig` + `arp -a` on the reporting machine.
+- Shipped: desktop **0.1.9** published (latest.yml on both hostnames), portal at
+  `b5272867` with the honesty strings grepped in the bundle. desktop 81/81,
+  portal 320/322.
+- ⏳ Also surfaced: his SUPER_ADMIN login's tenant has **no extensions**, so that
+  login can find phones but has nobody to assign them to. A full end-to-end run
+  needs a login on a real tenant that holds `can_setup_desk_phones`.

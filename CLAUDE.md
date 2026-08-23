@@ -322,6 +322,24 @@ to do everything in his power to get every single phone connected."*
 - ⏳ **NOT PROVEN: nobody has opened the screen and no phone has been set up** — but
   the desktop blocker is gone, so **the acceptance test is now runnable: one real
   device on one real desk** in the updated app.
+- ⛔⛔ **THE FIRST LIVE RUN FAILED (2026-08-23, Izzy's own home) AND TAUGHT TWO
+  LESSONS — fixed in `b5272867`, desktop 0.1.9 PUBLISHED, portal deployed.**
+  (1) **His LAN is a /22** (192.168.6.x, mask 255.255.252.0 — what eero-class home
+  mesh routers hand out BY DEFAULT), and the scanner accepted only /24, so there was
+  nothing to sweep. `localScannableSubnets` now takes /22–/24 aligned to the true
+  network base (his .6.x machine correctly yields 192.168.4.0/22 — where his router
+  actually sits); anything wider is refused in BOTH the chooser and `hostsInSubnet`;
+  the ARP filter became a range test (`ipInSubnet`) because startsWith can only
+  express a /24. (2) ⛔⛔ **The wizard showed the failed scan as "we found 0 phones".**
+  `scanLan` did its half — `outcome:"failed"` plus a plain-words note — and the wizard
+  dropped both and submitted an empty list. **A failed scan must never read as an
+  empty office**: the wizard now shows the scanner's own note and lands back on the
+  network step; a guard fails against the pre-fix tree. ⛔ Diagnosis recipe that
+  found it: `DeskPhoneSetupRun` rows + the `POST …/discovered` byte size in nginx
+  (73 bytes = empty list) + `ipconfig`/`arp -a` on the reporting machine.
+  ⛔ Also learned: his SUPER_ADMIN login's tenant (connect-admin-tenant-v1) has NO
+  extensions, so on that login the wizard can find phones but has nobody to assign —
+  a true end-to-end run needs a login on a real tenant holding the permission.
 - ⛔ **Backslash escapes do NOT survive this shell's heredocs** — `
 `, `
 ` and `‮`
