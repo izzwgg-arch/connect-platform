@@ -168,6 +168,74 @@ email to Izzy@loopcom.net, same every time there is a declined transaction."*
   negatives that matter are **exactly one row per transaction** and a combined
   pay link producing **one** alert rather than one per invoice.
 
+## ⛔ AGENT HANDOFF — the door bells can have their own caller ID, and it is ONE live-read field (2026-08-23) — READ FIRST for any "show a different caller ID for X", before touching `external_cid`, or before assuming a caller-ID NAME reaches a mobile
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_APLUS_DOOR_CALLER_ID_2026-08-23.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**
+Every fact traced from the live PBX and from real calls in `/var/log/asterisk/full`
+on 2026-08-23.) Izzy: *"when the call goes out to the cell phone number, it should
+display a different caller ID … so the person knows that it's not a call, it's the
+front door."*
+
+- ⛔⛔ **THE MECHANISM, and it generalises to every "different caller ID" request:
+  the outbound route only stamps its number when the caller ID is EMPTY.**
+  `trk-group-N`'s line is
+  `Set(CALLERID(all)=${IF($["X${CALLERID(num)}X"="XX"]?${OUTBOUND_CID}:${CALLERID(all)})})`
+  — an already-set CID is **passed straight through**. The reason a tenant's main
+  number appears is that `sub-construct-cid,s-external` priority 12 **BLANKS** the CID
+  first when the extension's `external_cid` is empty (`ExecIf("1?Set(CALLERID(all)=)")`
+  — ODBCSTATUS is SUCCESS because the row exists, the column is just empty). Fill
+  `external_cid` and the route leaves it alone. **Proven from a live call, not read
+  off the config.**
+- ⛔⛔ **IT IS A LIVE SQL READ — no Apply Changes, no regen, no reload, instant
+  rollback.** `func_odbc__00-general.conf:47` `[EXTENSION-SETTING]` does
+  `SELECT <col> FROM ombu_extensions WHERE extension=... AND tenant_id=...` **at call
+  time**. So this class of change never needs the whole-PBX Apply that wipes the
+  Connect doorway (the 2026-08-16 dead-air class). Blanking the field reverts it.
+- ⛔⛔ **THE GOVERNING EXTENSION IS THE ORIGINATOR, NOT THE DESTINATION.**
+  `EXTENSION_NUMBER` resolves to `CALL_SOURCE` — the extension the call STARTED at —
+  and survives onto the Local leg that dials out. Live read: a door press at ext 510
+  → ring group 900 → virtual ext 109 (`Local/8454226997@T2_cos-all`) → out, with
+  **`EXTENSION_NUMBER=510`**. So set it on the DOOR (affects only door calls); setting
+  it on the cell-forward extension would change the CID for anything that ever rings
+  that cell.
+- ⛔⛔ **A CALLER-ID NAME DOES NOT REACH A US MOBILE — this kills the obvious
+  answer.** Mobile carriers do their own CNAM dip keyed on the NUMBER and discard the
+  display name we send. Evidence on this very tenant: inbound rows from that cell
+  arrive stamped `"WIRELESS CALLER" <8454226997>`, a CNAM string. **So "make it say
+  Front Door" must be a different NUMBER**, which the person saves as a contact.
+  Setting the name too costs nothing, but never promise it.
+- ⛔ **A Plus Center (PBX tenant 2) has TWO door stations, not one, and BOTH ring the
+  group and BOTH reach the cell** — 509 and 510, measured 5 and 6 presses on
+  2026-08-23. ⛔⛔ **Their extension NAMES and caller-ID NAMES are SWAPPED**: 509 is
+  named "Inside Door" but announces "Front Door"; 510 is the reverse. **A human at the
+  building must settle which is which before either is labelled** — a door labelled
+  with the wrong name is worse than no label.
+- ⛔ **The number the cell sees is 845-782-6775** (their main line), not "702-6775".
+  ⛔ **Never present a number the customer does not own** — that is the caller-ID
+  spoofing the Robocall Mitigation Plan forbids. They own 5 numbers; four are live
+  business lines. **845-637-2330 ("TEST 2") is a dead leftover** — its inbound rule
+  exists but it is absent from `ombu_tenant_dids`, so absent from `default-trunk`, so
+  **no inbound call can reach it** (`dialplan show default-trunk | grep -c` → 0).
+  ⛔ Its row in `PbxTenantInboundDid` proves a route row exists, **not** carrier
+  ownership — confirm at VoIP.ms before reusing it. 55 spare DIDs are also in stock.
+- ⛔ **The one unknown, stated rather than guessed: these calls leave on trunk 0001
+  (Telocall), not VoIP.ms**, and whether Telocall passes a CID for a number it does
+  not know is unproven. Telocall already carries many per-tenant caller IDs, so it
+  accepts varied CIDs — but **one test call settles it**, and the failure is visible
+  immediately (old number shown, or call does not complete). Nothing breaks silently.
+- ⚠️ **911 exposure, honestly:** `T2_emergency-calls` **does not exist** (only
+  T104/T105 have emergency contexts), so 911 from any A Plus Center extension rides
+  the ordinary outbound route and would present the new CID. The doors are
+  single-purpose intercoms that have only ever dialled 900 — **confirm neither has a
+  keypad before proceeding**, and register the chosen number's E911 to that address.
+- ⏳ **NOT DONE: nothing was changed.** This is a decision for Izzy — which number,
+  one or two, and the PBX write itself needs his mandate.
+- ⚠️ **Noticed, NOT touched:** A Plus Center's billing looks unconfigured —
+  `taxEnabled: false` (so no per-number E911 fee is billed to them at all),
+  `billingDayOfMonth: 1`, `billingFlatRate.amountCents: 1`, and their two most recent
+  invoices are **$1.00 and $0.01**.
+
 ## ⛔⛔ AGENT HANDOFF — two customers could not receive a voicemail for MONTHS and nobody knew (2026-08-23) — READ FIRST for any "we never get voicemails", before creating an extension by hand in the panel, or before trusting that a mailbox exists
 
 (`31e97d0b` mirror fix + installer re-sync, `00c7f50e` the audit, on
