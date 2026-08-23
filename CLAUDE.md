@@ -284,8 +284,16 @@ refinement options. There is a favicon there to put in the browser on top."*
   band floating in the upper half of the text's ink instead of straddling it.
   A conventional favicon fills its 16px box (rows 0..15), brackets the text's
   ink, and reads level, which is why the whole web is not visibly misaligned.
-  ✅ **`OPTICAL_DROP_FRAC = 2/16`**, applied at source resolution; all three
-  frames land on the text's optical centre within **0.01px**. It is a
+  ✅ **`OPTICAL_DROP_FRAC = 1.5/16`**, applied at source resolution.
+  ⛔⛔ **A FULL 2/16 puts the centroid exactly on the measured 10.0 AND IZZY
+  CALLED IT "a tiny bit too much" — measured-centre and LOOKS-centred are not
+  the same thing here.** The eye compares the mark against the x-height BODIES
+  of the word, and a form reads as centred sitting a touch ABOVE the arithmetic
+  middle. Picked by rendering **1.0 / 1.25 / 1.5 / 1.75 / 2.0** against text
+  rasterised by Chrome itself and looking: 1.75 and 2.0 hang low, 1.0 reads
+  high, **1.5 sits level**. Sharpness is flat across all five (hard-edge pixels
+  50-53%), so a fractional position costs nothing.
+  ⛔ **Do not "correct" it back to 2/16 to match the measurement.** It is a
   FRACTION so every frame agrees — **Chrome uses the 32px frame on a HiDPI
   display**, so a pixel count would only be right at one DPR.
   ⛔ **COST, stated plainly: any surface showing the icon with NO text beside
