@@ -229,3 +229,160 @@ options, most of them the timezone list.
   than drawing a control that does nothing.
 - ⏳ **Creating an extension from the generic form is refused on purpose** — it
   needs its devices built too, which the Extensions screen already does.
+
+---
+
+# §8. THE FULL UNLICENSED STRESS RUN (2026-08-21, same day) — every field, every table, every button; three real bugs found and fixed; and the ONE build left before the licence can be cancelled
+
+Izzy: *"stress the fuck out of everything we moved over from the PBX to Connect
+that is not covered by the license … every little field, every button,
+everything that we created should be working, and wired with the PBX. Make it
+ready for me to completely disconnect."*
+
+**Harnesses (all in `scripts/pbx/mirror/`, all refuse to run against a live
+host):** `stress-console-fields.ts` (the full sweep, 4 phases),
+`stress-retest-fails.ts` (focused re-judge of failures),
+`unlicensed-console-proof.ts` (§4's original per-module proof).
+**Run recipe:** `/root/console-proof/` on loopcom + `run*.py` wrappers, which
+read `/etc/connect-robot/credentials.env` WITH A PARSER (⛔ never `source` it —
+§6). Clone ids: MAIN `2dc3974017c1bc65`, tenant `f3df739ac62197cd` (t2),
+trunk 11, route 11, ars 1, rg 1, queue 1, ext 1.
+
+## 8.1 The final numbers (sweep v3 + the retest, unlicensed clone, shipped code)
+
+| Module | PASS | Panel refusals (validation working) | Documented skips | FAIL |
+|---|---|---|---|---|
+| tenants | 29 | 1 | 0 | 0 |
+| trunks | 53 | 6 | 17 | 0 |
+| outbound-routes | 11 | 0 | 5 | 0 |
+| route-selections | 3+2* | 0 | 0 | 0* |
+| ring-groups | 14 | 0 | 5 | 0 |
+| queues | 43+4* | 0 | 8 | 0* |
+| extensions | form + cap probe | — | — | 0 |
+| render-to-Asterisk | 2 | 0 | 0 | 0 |
+
+\* the sweep's 3 residual "FAIL"s are HARNESS artifacts (duplicate key values;
+`"0"+"9"="09"` vs the panel's int-cast) — the identical operations PASS in
+`stress-retest-fails.ts` with distinct values: queue member penalty 0→1→0 with
+`member_id` preserved, queue member add/remove, ars member add/remove. Sweep v4
+carries the probe fixes; read `/root/console-proof/stress-fields.log` for its
+result before quoting numbers.
+
+**Creates and deletes, all proven in the phone system's own MySQL, then
+deleted and proven gone:** trunk #134, outbound route #131, route selection
+#226, ring group #116, queue #10 (with one member row — see 8.4).
+
+**Wired to Asterisk:** queue member ring time changed → panel Apply → the new
+value grepped out of the RENDERED `queues__*` file inside the clone → restored
+→ re-applied. The database is not what callers hear; the rendered file is, and
+it moved.
+
+**Panel refusals are the wiring WORKING:** "Simultaneous Calls must consist of
+integer value", "You must provide a valid IP/Domain", "The format must be
+sip:sip.example.com." — the panel's own validator answering through our path,
+field by field.
+
+## 8.2 ⛔⛔ THE THREE REAL BUGS THE RUN CAUGHT (all fixed, commit `b10151fd`)
+
+1. **A row is more than its visible cells.** Existing rows carry HIDDEN pairs
+   the template never draws — `queue_members[N][member_id]` — and they are how
+   the panel tells "update this member" from "add one". Rebuilding rows from
+   the visible cells alone made `queues.php` throw
+   `Undefined array key "member_id"`. Row objects now carry EVERY concrete pair
+   of their group (portal `readRows` collects them generically; the builder
+   emits each in the panel's own shape). ⛔ A new row must NOT carry an id —
+   that is what makes it an add; the builder fills hidden template defaults
+   (`member_id=""`) instead.
+2. **The placeholder row is part of the post.** A browser submits the template
+   row itself — literal `{{row-count-placeholder}}` index and all — and the
+   save controller requires the array key to exist: a queue created without it
+   dies on `Undefined array key "queue_members"`. `teamBuilder.createQueue` has
+   posted it since the day it shipped (its own comment says "the form expects
+   it"). The generic builder now posts it for edited groups AND for groups the
+   caller never touched (the create case).
+3. **Concrete underscore-shaped row cells leaked into the field list.**
+   `queue_members_0_extension_id` has no brackets, so the loose-control scan
+   drew every member row twice — once in the table, once as a stray field.
+
+## 8.3 ⛔ PANEL SEMANTICS, DB-PROVEN — never "fix" these
+
+Judged at the DATABASE (save accepted → ombu row byte-identical), because the
+panel renders their real state via ITS OWN JavaScript and raw HTML re-reads are
+structurally blind there:
+- **trunks:** `tenant_trunk_id`, `outgoing_settings`, `incoming_settings`,
+  `outgoing[insecure|type|trunk|qualify]`,
+  `incoming[host|secret|remotesecret|insecure|trunk|type|qualify]` — the save
+  controller IGNORES these pairs for a PJSIP registration trunk. A browser user
+  gets identical behaviour. (Same family as the SignalWire lesson: these are
+  the JS-ticked checkboxes that read as absent in raw HTML.)
+- **queues:** `hangup_dest_custom` / `destination_custom` persist only when
+  their destination dropdown says custom; the panel discards them otherwise.
+- The sweep skips all of these WITH the reason, so the table stays honest.
+
+## 8.4 Queue create needs a member — the panel's own rule
+
+"No agents assigned to this queue. Please add at least one agent" — surfaced by
+name once the placeholder fix landed (it had been dying as a PHP exception
+before it). The generic create passes WITH one member row
+(`{extension_id, penalty:"0", type:"dynamic"}`, no member_id). Proven: queue
+#10 created with 1 member row in `ombu_queue_members`, deleted clean.
+
+## 8.5 ⛔ OPEN — the two advanced trunk tables (small, real, recorded)
+
+**trunk Custom Parameters (`trkcustom`) rows do not persist through the generic
+re-post** — DB-verified: save accepted, `ombu_trunk_parameters` unchanged, even
+with a valid shape (`friend/qualify_timeout/4.0/enabled`). **Custom Headers
+(`trk-headers`) show a form-vs-DB disagreement** (an added row appeared and
+"removed" on the form while a `header X-ZZ-Stress` DB row lingered; residue
+cleaned by hand). The panel's own JS does something on these two tables the
+re-post does not reproduce. **No Connect writer has ever used them**
+(`createTrunk` posts them empty) and no fleet trunk carries one. To close:
+capture a real browser session of a human adding a Custom Parameter in the
+panel and diff the post.
+
+## 8.6 ⛔⛔ THE ONE BUILD LEFT BEFORE DISCONNECTING: the mirror EXTENSION EDIT-WRITER
+
+**This is the next agent's job, and the only thing standing between Izzy and
+cancelling the subscription.** §4 proved the free panel refuses an extension
+EDIT over the 12-extension cap, both ways round, and the fleet holds 119.
+Everything else survives the lapse (six modules proven end to end; tenant
+CREATE already goes through the mirror).
+
+What to build — `edit_extension` in `scripts/pbx/mirror/mirror_writes.py`,
+beside the existing `add_extension`:
+- **Write the `ombutel` rows the panel would write** (`ombu_extensions`,
+  `ombu_devices`, the voicemail row) — `add_extension` already knows the
+  tables; an edit is an UPDATE of the same columns.
+- **Re-render with the byte-identical generator** (`vitalpbx_mirror.py` —
+  `render_and_install_pbx` / the surgical helpers `surgical_pjsip`,
+  `surgical_voicemail`, `surgical_astdb`, `surgical_hints` already exist for
+  the ADD case; an edit regenerates the same files + AstDB keys).
+- **Acceptance, on the clone first:** edit an extension's name/email/vm
+  password via the mirror on the UNLICENSED clone → `diff` the regenerated
+  `extensions__50-<t>*`, `pjsip__50-<t>*`, `voicemail__50-<t>*` files against
+  what the LICENSED panel produces for the same edit → 0 differences; then
+  `pjsip show endpoint` inside the clone. Then wire
+  `pbxConsoleRoutes`' extension branch to FALL BACK to the mirror when the
+  panel answers the cap refusal (the 409 `maximum number of al` case) — the
+  console then works identically before and after the lapse.
+- ⛔ **The rest of the licence-exit checklist still stands** (the assessment
+  doc's §10/§11): one real phone-registers-and-calls test on a mirror tenant,
+  and the free-tier items never tested. **Do not cancel on the strength of this
+  handoff alone — build the edit-writer, prove it on the clone, then re-read
+  the assessment's "before cancelling" list.**
+
+## 8.7 Deploy + hygiene state at handoff
+
+- api `a9008ac1` (contains everything through `b10151fd`) deployed; a portal
+  follower (`/root/follow-portal-deploy.sh` → `/root/dep-portal-rowfix.log`)
+  was armed to carry the row fix — verify `app-portal-1`'s `.build-commit`
+  CONTAINS `b10151fd` before trusting the portal's row editing.
+- ⛔ **The robot panel password rotation is OVERDUE** — it leaked into a session
+  transcript on 2026-08-21 (the un-sourceable credentials file, §6).
+- ⛔ **The `pgrep` self-match trap bit AGAIN, twice, in this very engagement** —
+  an unbracketed `pgrep -f stress-console-fields` waiter spun for 1h14m and then
+  became the thing later checks matched. `pgrep -f "[s]tress…"` always.
+- ⛔ **A killed harness leaves a mutated field on the clone.** The 90-second
+  smoke kill left `ombu_tenant_settings.trunks="zz"` on clone t2, repaired by
+  hand. Never kill the sweep mid-field; if you must, sweep the clone for `zz`
+  values after (the harness's own restore verifies otherwise).

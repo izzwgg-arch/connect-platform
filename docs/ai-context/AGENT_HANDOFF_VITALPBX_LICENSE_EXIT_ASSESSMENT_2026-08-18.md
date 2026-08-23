@@ -423,6 +423,7 @@ through an ssh tunnel (`-L 18443:127.0.0.1:8443`), robot creds read from loopcom
 | Edit an existing tenant (`put/edit`, added an inbound number) | ✅ OK |
 | DID Management assign (`class=did_management put/add`, part of the multi-tenant add-on) | ✅ OK |
 | Add extension to over-cap tenant T104 (CSV import `menu4`, Connect's path) | ✅ OK (ext 199 created, no `extensions.max_reached`) |
+| ⛔⛔ **CORRECTION 2026-08-21: extension EDIT does NOT work unlicensed over the cap.** The CSV-import CREATE above is a different controller. An extension edit-SAVE is refused both ways round: with the device fields it answers "You've reached the maximum number of allowed extensions" (read as a device ADD); without them the validator crashes on `Undefined array key "user"`. Proven on this clone driving the shipped console path. **The mirror needs an `edit_extension` writer before cancelling** — spec in `AGENT_HANDOFF_PBX_CONSOLE_WHOLE_PANEL_FORM_2026-08-21.md` §8.6 | ⛔ |
 | Add WebRTC `_1` device `vitxi_client=yes` (`extensions put/edit`) | ✅ OK |
 | Ring group create (`teamBuilder.createRingGroup`) | ✅ OK (needs `lastDestination` — form rule, not license) |
 | Forward = custom app + custom dest + Apply (`forwardBuilder.createForward`) | ✅ OK |

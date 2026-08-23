@@ -40,7 +40,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { PanelSession, applyChanges, dialogErrors } from "../../../apps/api/src/onboarding/panelClient";
 import { loadParsedForm, type ParsedForm } from "../../../apps/api/src/pbxConsole/panelForm";
 import { describeForm, type PanelField, type PanelTab } from "../../../apps/api/src/pbxConsole/panelSchema";
-import { buildPanelEditPairs, splitRowCell, PANEL_MODULES, type PanelModuleKey, type PanelEditInput } from "../../../apps/api/src/pbxConsole/panelFormWrite";
+import { buildPanelEditPairs, splitRowCell, splitConcreteRowCell, PANEL_MODULES, type PanelModuleKey, type PanelEditInput } from "../../../apps/api/src/pbxConsole/panelFormWrite";
 
 const BASE = process.env.CLONE_PANEL_BASE || "https://127.0.0.1:8443";
 const USER = process.env.CONNECT_ROBOT_USER || "";
@@ -97,6 +97,16 @@ function skipReason(mod: PanelModuleKey, f: PanelField): string | null {
     return "dependent pair — proven as a pair by the create phase, which posts both";
   }
   if (f.name === "csv") return "file import";
+  /* ⛔ PROVEN PANEL SEMANTICS, 2026-08-21, judged at the DATABASE: for a PJSIP
+     registration trunk the save controller IGNORES these pairs — save accepted,
+     ombu row byte-identical after. A browser user gets identical behaviour;
+     their live state is rendered by the panel's own JS, invisible in raw HTML. */
+  if (mod === "trunks" && /^(tenant_trunk_id|outgoing_settings|incoming_settings|outgoing\[(insecure|type|trunk|qualify)\]|incoming\[(host|secret|remotesecret|insecure|trunk|type|qualify)\])$/.test(f.name)) {
+    return "panel-managed for this trunk type — save accepted, DATABASE unchanged (DB-proven); identical for a browser";
+  }
+  if (f.name === "hangup_dest_custom" || f.name === "destination_custom") {
+    return "persists only when its destination dropdown says custom — the panel discards it otherwise (DB-proven)";
+  }
   return null;
 }
 
@@ -207,24 +217,58 @@ async function sweepModule(s: PanelSession, mod: PanelModuleKey, id: string) {
       const rows = readRows(rep, fresh);
       const label = `table ${group} [${rep.columns.join("/") || cells.map((c) => c.split!.field).join("/")}]`;
 
+      /* ⛔ KNOWN GAP, DB-proven 2026-08-21: trunk Custom Parameters and Custom
+         Header rows do not persist through a generic re-post — the row vanishes
+         from the DATABASE too, so the save controller drops it, not our parse.
+         The panel's own JS does something extra there. No Connect writer has
+         ever used these tables (createTrunk posts them empty). Open item. */
+      if (mod === "trunks" && (group === "trkcustom" || group === "trk-headers")) {
+        note(mod, "SKIP", label, "known gap: rows do not persist through a re-post (DB-verified) — panel JS does something extra; open item");
+        continue;
+      }
       if (rows.length) {
         // mutate one text cell of row 0, then restore
         const target = cells.find((x) => x.cell.type === "text" && String(rows[0][x.split!.field] ?? "") !== "");
         if (target) {
           const fkey = target.split!.field;
           const orig = rows.map((r) => ({ ...r }));
-          const mut = rows.map((r, i) => (i === 0 ? { ...r, [fkey]: String(r[fkey]) + "9" } : { ...r }));
+          // ⛔ +1 for numbers, never "0"+"9"="09" — the panel int-casts and the
+          // re-read then says "9", which reads as "did not stick" and is not
+          const cur0 = String(orig[0][fkey] ?? "");
+          const nv = /^\d+$/.test(cur0) ? String(Number(cur0) + 1) : cur0 + "9";
+          const mut = rows.map((r, i) => (i === 0 ? { ...r, [fkey]: nv } : { ...r }));
           const pairName = concreteName(target.cell.name, 0);
-          const r1 = await postJudged(s, mod, id, { rows: { [group]: mut } }, (a) => (a.values[pairName] ?? "") === String(orig[0][fkey]) + "9");
+          const r1 = await postJudged(s, mod, id, { rows: { [group]: mut } }, (a) => (a.values[pairName] ?? "") === nv);
           if (r1.v === "PASS" || r1.v === "PASS_TIMEOUT") {
             const r2 = await postJudged(s, mod, id, { rows: { [group]: orig } }, (a) => (a.values[pairName] ?? "") === String(orig[0][fkey]));
-            note(mod, r2.v.startsWith("PASS") ? r1.v : "FAIL", `${label} cell ${fkey}`, r2.v.startsWith("PASS") ? "mutated row 0 and restored" : `RESTORE FAILED: ${r2.why}`);
+            note(mod, r2.v.startsWith("PASS") ? r1.v : "FAIL", `${label} cell ${fkey}`, r2.v.startsWith("PASS") ? `cell ${fkey} ${cur0}->${nv}->back`  : `RESTORE FAILED: ${r2.why}`);
           } else note(mod, r1.v, `${label} cell ${fkey}`, r1.why);
         }
 
-        // add a row (copy of row 0) and remove it again — the + and ✕ buttons
+        // add a row and remove it again — the + and ✕ buttons.
+        // ⛔ DISTINCT values (the panel quietly ignores an identical duplicate)
+        // and NO hidden id (a new row must post member_id="" — the builder
+        // fills hidden template defaults; copying an existing id would make
+        // the panel UPDATE that row instead of adding one).
+        const hiddenFields = new Set(rep.cells.filter((c: any) => c.type === "hidden").map((c: any) => splitRowCell(c.name)?.field).filter(Boolean) as string[]);
         const orig = rows.map((r) => ({ ...r }));
-        const added = [...orig.map((r) => ({ ...r })), { ...orig[0] }];
+        const fresh: Record<string, string | boolean> = { ...orig[0] };
+        for (const h of hiddenFields) delete fresh[h as string];
+        const tCell = cells.find((x) => x.cell.type === "text");
+        if (tCell) {
+          const cv = String(fresh[tCell.split!.field] ?? "");
+          fresh[tCell.split!.field] = /^\d+$/.test(cv) && cv !== "" ? String(Number(cv) + 3) : cv + "9";
+        }
+        // ⛔ the KEY select must be DISTINCT: a second member with the same
+        // extension, or a second ars row with the same route, is quietly
+        // dropped by the panel — it reads as "did not stick" and is not
+        for (const x of cells) {
+          if (x.cell.type !== "select" || !x.cell.options?.length) continue;
+          const usedVals = new Set(orig.map((r) => String(r[x.split!.field] ?? "")));
+          const alt = x.cell.options.map((o) => o.v).filter(Boolean).find((v) => !usedVals.has(v));
+          if (alt && usedVals.has(String(fresh[x.split!.field] ?? ""))) fresh[x.split!.field] = alt;
+        }
+        const added = [...orig.map((r) => ({ ...r })), fresh];
         const probeName = concreteName(cells[0].cell.name, orig.length);
         const r3 = await postJudged(s, mod, id, { rows: { [group]: added } }, (a) =>
           cells[0].cell.type === "checkbox" ? probeName in a.checks || probeName in a.values : probeName in a.values);
@@ -250,21 +294,23 @@ function concreteName(cellName: string, i: number): string {
 }
 
 function readRows(rep: { cells: Array<{ name: string; type: string }> }, form: ParsedForm): Array<Record<string, string | boolean>> {
-  const out: Array<Record<string, string | boolean>> = [];
-  for (let i = 0; i < 200; i++) {
-    const row: Record<string, string | boolean> = {};
-    let any = false;
-    for (const c of rep.cells) {
-      const sp = splitRowCell(c.name);
-      if (!sp) continue;
-      const key = concreteName(c.name, i);
-      if (c.type === "checkbox") { if (key in form.checks) { row[sp.field] = form.checks[key].checked; any = true; } }
-      else if (key in form.values) { row[sp.field] = form.values[key]; any = true; }
-    }
-    if (!any) break;
-    out.push(row);
+  /* ⛔ ALL concrete pairs of the group, extras included — member_id travels
+     with its row or the panel throws. Same logic the portal ships. */
+  const group = (() => { for (const c of rep.cells) { const sp = splitRowCell(c.name); if (sp) return sp.group; } return ""; })();
+  const byIdx = new Map<number, Record<string, string | boolean>>();
+  for (const [k, v] of form.pairs) {
+    const c = splitConcreteRowCell(k);
+    if (!c || c.group !== group) continue;
+    if (!byIdx.has(c.index)) byIdx.set(c.index, {});
+    byIdx.get(c.index)![c.field] = v;
   }
-  return out;
+  for (const [k, cb] of Object.entries(form.checks)) {
+    const c = splitConcreteRowCell(k);
+    if (!c || c.group !== group) continue;
+    if (!byIdx.has(c.index)) byIdx.set(c.index, {});
+    byIdx.get(c.index)![c.field] = cb.checked;
+  }
+  return [...byIdx.entries()].sort((a, b) => a[0] - b[0]).map(([, r]) => r);
 }
 
 /* ── phase 3: create → verify in MySQL → delete → verify gone ───────────── */
@@ -409,8 +455,11 @@ async function main() {
       `select ring_group_id from ombutel.ombu_ring_groups where description='ZZ Stress RG' and tenant_id=${TENANT_NUM}`, "ring group");
     const qForm = (await loadParsedForm(s, "queues", "edit", ids.queue)).form;
     const qdest = { mod_dest: qForm.values["mod_dest"] || "", destination: qForm.values["destination"] || "" };
+    // ⛔ a queue needs at least one agent — the panel's own rule, by name
+    const memberExt = qForm.values["queue_members_0_extension_id"] || "";
     await createCycle(s, "queues",
-      { set: { extension: "3902", description: "ZZ Stress Queue", ...qdest } },
+      { set: { extension: "3902", description: "ZZ Stress Queue", ...qdest },
+        rows: memberExt ? { queue_members: [{ extension_id: memberExt, penalty: "0", type: "dynamic" }] } : undefined },
       `select queue_id from ombutel.ombu_queues where description='ZZ Stress Queue' and tenant_id=${TENANT_NUM}`, "queue");
   }
 

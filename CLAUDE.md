@@ -511,6 +511,45 @@ with proof outside the license."*
   DNS (`9af55418`), and a parallel session gave nginx a `127.0.0.1:443` listener.
   ⛔ The paragraph above is OUTAGE HISTORY, not the live state — re-verify before
   acting on it.
+- ⛔⛔ **STRESS-TESTED OUTSIDE THE LICENCE, EVERY FIELD (2026-08-21, handoff §8):
+  157 field-saves PASS on the unlicensed clone** — each one mutate → save →
+  re-read from the panel → verify → restore → verify — plus every row table
+  (mutate a cell, add a DISTINCT row, remove it), CREATE→verify-in-MySQL→DELETE
+  for trunk/route/ars/ring group/queue, and a queue timing change grepped out of
+  the RENDERED Asterisk file after Apply. 7 refusals are the panel's own
+  validation speaking through our path; 35 skips are documented (identity
+  fields, passwords, DB-proven panel-managed fields). Harnesses:
+  `scripts/pbx/mirror/stress-console-fields.ts` + `stress-retest-fails.ts`.
+- ⛔⛔ **THE STRESS RUN CAUGHT THREE REAL ROW BUGS, all fixed (`b10151fd`):**
+  (1) **hidden per-row pairs must travel with their row** —
+  `queue_members[N][member_id]` is how the panel tells update from add;
+  rebuilding rows from visible cells alone made queues.php throw, and a NEW row
+  must NOT carry an id (the builder fills `member_id=""` from the template);
+  (2) **the placeholder row is part of the post** — a browser submits the
+  literal `{{row-count-placeholder}}` template row and the save controller
+  requires the array key (queue create dies on `Undefined array key
+  "queue_members"` without it; teamBuilder always posted it);
+  (3) underscore-shaped concrete row cells (`queue_members_0_extension_id`)
+  leaked into the field list and drew every member row twice.
+- ⛔ **DB-PROVEN PANEL SEMANTICS — never "fix" these:** ~14 trunk fields
+  (`tenant_trunk_id`, `outgoing_settings`/`incoming_settings`, the
+  `outgoing[…]`/`incoming[…]` type/trunk/qualify/insecure family) are IGNORED by
+  the save controller for a PJSIP registration trunk — save accepted, ombu row
+  byte-identical; their live state is JS-rendered and invisible in raw HTML.
+  `hangup_dest_custom` persists only when the destination IS custom. A queue
+  CREATE requires ≥1 member ("No agents assigned" — the panel's own rule).
+- ⛔ **OPEN, small, DB-proven:** trunk **Custom Parameters rows do not persist**
+  through a generic re-post and Custom Headers show a form-vs-DB disagreement —
+  the panel's JS does something extra on those two tables; no Connect writer has
+  ever used them. Close it by capturing a real browser session of a panel-side
+  Custom Parameter add.
+- ⛔⛔ **THE ONE BUILD LEFT BEFORE THE LICENCE CAN BE CANCELLED: the mirror
+  EXTENSION EDIT-WRITER** (`edit_extension` in `mirror_writes.py` beside
+  `add_extension`, byte-identical re-render via `vitalpbx_mirror.py`, proven by
+  diff on the clone, then wired as the console's fallback when the panel answers
+  the cap refusal). Full spec in handoff §8.6. **Everything else survives the
+  lapse; do not cancel before this exists and the assessment doc's
+  "before cancelling" list is re-read.**
 - ⏳ **NOT PROVEN: nobody has opened the new form in a browser and no write has
   been made from it against PRODUCTION.** Proven as 50 tests, portal typecheck 0,
   api typecheck at its exact 75 baseline, and 6 of 7 modules written and read back
