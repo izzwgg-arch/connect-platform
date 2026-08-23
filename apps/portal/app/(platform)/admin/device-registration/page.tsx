@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { RoleGate } from "../../../../components/RoleGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -189,17 +190,18 @@ function DeviceRegistrationInner() {
           <input type="checkbox" checked={webrtcOnly} onChange={(e) => setWebrtcOnly(e.target.checked)} />
           WebRTC/mobile only
         </label>
-        <select
+        <ConnectSelect
+          size="sm"
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as "" | RegStatus)}
-          style={{ padding: "4px 8px" }}
-        >
-          <option value="">All statuses</option>
-          <option value="REGISTERED">Registered</option>
-          <option value="UNREACHABLE">Unreachable</option>
-          <option value="UNREGISTERED">Unregistered</option>
-          <option value="UNKNOWN">Unknown</option>
-        </select>
+          onChange={(v) => setStatusFilter(v as "" | RegStatus)}
+          options={[
+            { value: "", label: "All statuses" },
+            { value: "REGISTERED", label: "Registered" },
+            { value: "UNREACHABLE", label: "Unreachable" },
+            { value: "UNREGISTERED", label: "Unregistered" },
+            { value: "UNKNOWN", label: "Unknown" },
+          ]}
+        />
         <button onClick={() => void load()} disabled={loading} style={{ padding: "4px 12px" }}>
           {loading ? "Loading…" : "Refresh"}
         </button>

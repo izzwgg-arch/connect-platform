@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
@@ -397,6 +398,25 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
   const taxProviderId = String((meta as Record<string, unknown>).taxProviderId || "tax_profile_v1");
   const pricingMode = parseStoredPricingMode(settings.metadata);
   const catalogLocked = pricingMode === "catalog";
+  // Same identity string the card's `key` used — the old uncontrolled selects
+  // re-applied their defaultValue on that remount, so the controlled mirrors
+  // re-sync on the same signal. ConnectSelect's hidden inputs keep the
+  // FormData reads in onSubmit working.
+  const cardKey = `mp-${detail.tenant.id}-${pricingMode}-${String(settings.updatedAt ?? "")}`;
+  const [taxProfileChoice, setTaxProfileChoice] = useState(() => String(settings.taxProfileId || ""));
+  const [taxProviderChoice, setTaxProviderChoice] = useState(taxProviderId);
+  useEffect(() => {
+    setTaxProfileChoice(String(detail.settings?.taxProfileId || ""));
+    setTaxProviderChoice(
+      String(
+        ((detail.settings?.metadata && typeof detail.settings.metadata === "object" && !Array.isArray(detail.settings.metadata)
+          ? (detail.settings.metadata as Record<string, unknown>)
+          : {}
+        ).taxProviderId as unknown) || "tax_profile_v1",
+      ),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardKey]);
   const pr = detail.preview?.pricingResolution;
   const displayExtension = catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents;
   const displayPhone = catalogLocked && pr ? pr.additionalPhoneNumberPriceCents : settings.additionalPhoneNumberPriceCents;
@@ -404,7 +424,7 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
   const displayFirstFree = catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false;
 
   return (
-    <DetailCard title="Monthly Pricing" key={`mp-${detail.tenant.id}-${pricingMode}-${String(settings.updatedAt ?? "")}`}>
+    <DetailCard title="Monthly Pricing" key={cardKey}>
       {catalogLocked ? (
         <div style={{ fontSize: 13, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
           <strong>Following billing plan:</strong> unit rates below mirror the active plan for the preview month (read-only here). Taxes, autopay, and credits can still be saved from this form.
@@ -489,21 +509,27 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
         </label>
         <label>
           Tax profile
-          <select name="taxProfileId" defaultValue={settings.taxProfileId || ""}>
-            <option value="">No tax profile</option>
-            {detail.taxProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
+          <ConnectSelect
+            name="taxProfileId"
+            value={taxProfileChoice}
+            onChange={setTaxProfileChoice}
+            options={[
+              { value: "", label: "No tax profile" },
+              ...detail.taxProfiles.map((profile) => ({ value: String(profile.id), label: String(profile.name) })),
+            ]}
+          />
         </label>
         <label>
           Tax calculation provider
-          <select name="taxProviderId" defaultValue={taxProviderId}>
-            <option value="tax_profile_v1">Tax profile (configurable rates in Connect)</option>
-            <option value="external_telecom_stub">External telecom stub (no tax lines — placeholder)</option>
-          </select>
+          <ConnectSelect
+            name="taxProviderId"
+            value={taxProviderChoice}
+            onChange={setTaxProviderChoice}
+            options={[
+              { value: "tax_profile_v1", label: "Tax profile (configurable rates in Connect)" },
+              { value: "external_telecom_stub", label: "External telecom stub (no tax lines — placeholder)" },
+            ]}
+          />
         </label>
         <div className="billing-check-grid">
           <label>
@@ -595,6 +621,9 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const config = detail.sola.config;
   const webhookUrl = detail.sola.webhookUrl || config?.webhookUrl || null;
+  // Controlled mirror of the old uncontrolled `name="mode"` select — the
+  // hidden input ConnectSelect renders keeps the FormData read in onSubmit working.
+  const [modeChoice, setModeChoice] = useState<string>(String(config?.mode || "sandbox"));
 
   async function copyWebhookUrl() {
     if (!webhookUrl) return;
@@ -658,10 +687,15 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
         </div>
         <label>
           Mode (environment)
-          <select name="mode" defaultValue={config?.mode || "sandbox"}>
-            <option value="sandbox">Sandbox</option>
-            <option value="prod">Production</option>
-          </select>
+          <ConnectSelect
+            name="mode"
+            value={modeChoice}
+            onChange={setModeChoice}
+            options={[
+              { value: "sandbox", label: "Sandbox" },
+              { value: "prod", label: "Production" },
+            ]}
+          />
         </label>
         <p className="muted" style={{ fontSize: "0.85rem", marginTop: -6 }}>
           Production requires a saved webhook PIN and disables simulated gateway responses.
@@ -1021,18 +1055,14 @@ export function AdminCurrentBillingPlanAssignCard({
             <div data-testid="billing-admin-assign-plan-dialog" style={{ maxHeight: "min(70vh, 640px)", overflowY: "auto" }}>
             <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
               Catalog plan
-              <select
+              <ConnectSelect
                 value={selectedPlanId}
-                onChange={(e) => setSelectedPlanId(e.target.value)}
-                style={{ fontSize: 13 }}
-              >
-                {plans.length === 0 ? <option value="">No active plans</option> : null}
-                {plans.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.code})
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedPlanId}
+                options={[
+                  ...(plans.length === 0 ? [{ value: "", label: "No active plans" }] : []),
+                  ...plans.map((p) => ({ value: p.id, label: `${p.name} (${p.code})` })),
+                ]}
+              />
             </label>
 
             <div style={{ fontSize: 13, marginBottom: 12 }}>

@@ -887,16 +887,15 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
             {form.holdAnnouncementEnabled && (
               <>
                 <label style={labelStyle}>Announcement Prompt <span style={{ color: "#64748b", fontWeight: 400 }}>(tenant recording)</span></label>
-                <select
-                  style={inputStyle}
+                <ConnectSelect
+                  style={{ width: "100%", marginBottom: 12 }}
                   value={form.holdAnnouncementRef}
-                  onChange={(e) => setForm((f) => ({ ...f, holdAnnouncementRef: e.target.value }))}
-                >
-                  <option value="">— Select a prompt —</option>
-                  {prompts.map((p) => (
-                    <option key={p.id} value={p.promptRef}>{p.displayName || p.promptRef} ({p.promptRef})</option>
-                  ))}
-                </select>
+                  onChange={(v) => setForm((f) => ({ ...f, holdAnnouncementRef: v }))}
+                  options={[
+                    { value: "", label: "— Select a prompt —" },
+                    ...prompts.map((p) => ({ value: p.promptRef, label: `${p.displayName || p.promptRef} (${p.promptRef})` })),
+                  ]}
+                />
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 12 }}>
                   Played on a loop while the caller is on hold via <code>[connect-hold-announce]</code>. Uses AstDB keys <code>hold_announce</code> + <code>hold_repeat</code>.
                 </div>
@@ -907,16 +906,15 @@ function ProfilesTab({ profiles, tenantId, canManage, onRefresh, isSuperAdmin }:
             )}
 
             <label style={labelStyle}>Intro Prompt <span style={{ color: "#64748b", fontWeight: 400 }}>(optional — played once on hold entry)</span></label>
-            <select
-              style={inputStyle}
+            <ConnectSelect
+              style={{ width: "100%", marginBottom: 12 }}
               value={form.introAnnouncementRef}
-              onChange={(e) => setForm((f) => ({ ...f, introAnnouncementRef: e.target.value }))}
-            >
-              <option value="">— None —</option>
-              {prompts.map((p) => (
-                <option key={p.id} value={p.promptRef}>{p.displayName || p.promptRef} ({p.promptRef})</option>
-              ))}
-            </select>
+              onChange={(v) => setForm((f) => ({ ...f, introAnnouncementRef: v }))}
+              options={[
+                { value: "", label: "— None —" },
+                ...prompts.map((p) => ({ value: p.promptRef, label: `${p.displayName || p.promptRef} (${p.promptRef})` })),
+              ]}
+            />
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
               <button onClick={() => setShowForm(false)} style={btnSmall("#334155")}>Cancel</button>

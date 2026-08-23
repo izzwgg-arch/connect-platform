@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiGet, apiPut } from "../../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../../components/ConnectSelect";
 import { BillingNav } from "../../_new/ui";
 import "../customerBilling.css";
 import { ServiceInterruptionCard } from "./ServiceInterruptionCard";
@@ -388,16 +389,14 @@ export default function CustomerBillingPage() {
                   <span className="h">The starting point. Anything you change below overrides it for this customer only.</span>
                 </div>
                 <div className="cbill-controls">
-                  <select
-                    className="cbill-select"
+                  <ConnectSelect
                     value={form.billingPlanId || ""}
-                    onChange={(e) => set("billingPlanId", e.target.value || null)}
-                  >
-                    <option value="">No plan</option>
-                    {plans.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                    onChange={(v) => set("billingPlanId", v || null)}
+                    options={[
+                      { value: "", label: "No plan" },
+                      ...plans.map((p) => ({ value: p.id, label: p.name })),
+                    ]}
+                  />
                 </div>
               </div>
 
@@ -563,20 +562,22 @@ export default function CustomerBillingPage() {
                   <span className="h">Every month. Short months use the last day.</span>
                 </div>
                 <div className="cbill-controls">
-                  <select
-                    className="cbill-select"
-                    value={form.billingDayOfMonth}
-                    onChange={(e) => set("billingDayOfMonth", Number(e.target.value))}
-                  >
-                    {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </select>
-                  <select className="cbill-select" value={timeZone} onChange={(e) => { setTimeZone(e.target.value); setSavedAt(""); }}>
-                    {TIME_ZONES.map((tz) => (
-                      <option key={tz} value={tz}>{tz.replace("America/", "").replace("_", " ")}</option>
-                    ))}
-                  </select>
+                  <ConnectSelect
+                    value={String(form.billingDayOfMonth)}
+                    onChange={(v) => set("billingDayOfMonth", Number(v))}
+                    options={Array.from({ length: 28 }, (_, i) => i + 1).map((d) => ({
+                      value: String(d),
+                      label: String(d),
+                    }))}
+                  />
+                  <ConnectSelect
+                    value={timeZone}
+                    onChange={(v) => { setTimeZone(v); setSavedAt(""); }}
+                    options={TIME_ZONES.map((tz) => ({
+                      value: tz,
+                      label: tz.replace("America/", "").replace("_", " "),
+                    }))}
+                  />
                 </div>
               </div>
 
@@ -642,17 +643,15 @@ export default function CustomerBillingPage() {
                     aria-label="Charge sales tax"
                     onClick={() => set("taxEnabled", !form.taxEnabled)}
                   />
-                  <select
-                    className="cbill-select"
+                  <ConnectSelect
                     value={form.taxProfileId || ""}
-                    onChange={(e) => set("taxProfileId", e.target.value || null)}
+                    onChange={(v) => set("taxProfileId", v || null)}
                     disabled={!form.taxEnabled}
-                  >
-                    <option value="">No profile</option>
-                    {taxProfiles.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: "", label: "No profile" },
+                      ...taxProfiles.map((t) => ({ value: t.id, label: t.name })),
+                    ]}
+                  />
                 </div>
               </div>
 

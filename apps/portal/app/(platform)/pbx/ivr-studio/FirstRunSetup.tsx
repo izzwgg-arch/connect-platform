@@ -22,6 +22,7 @@
 
 import { useMemo, useState } from "react";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { KIND_LABEL, type MenuChoiceKind, type TenantDirectory } from "@connect/shared";
 
 /** Registered up front so the whole walkthrough arrives translated at once,
@@ -307,10 +308,12 @@ function Picker({ label, onlyLabel, options, value, onChange }: {
   return (
     <div className="fr-picker">
       <label>{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose…</option>
-        {options.map((o) => <option key={o.id} value={o.id}>{o.name} · {o.meta}</option>)}
-      </select>
+      <ConnectSelect value={value} onChange={onChange}
+        style={{ width: "100%" }}
+        options={[
+          { value: "", label: "Choose…" },
+          ...options.map((o) => ({ value: o.id, label: `${o.name} · ${o.meta}` })),
+        ]} />
     </div>
   );
 }

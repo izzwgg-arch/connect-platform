@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentGrantConfirmDialog, usePendingGrant } from "../../../components/AgentGrantConfirmDialog";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 
 function token() { return typeof window === "undefined" ? "" : (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || ""); }
 async function get<T>(p: string): Promise<T> { const r = await fetch(`/agent-api${p}`, { headers: { Authorization: `Bearer ${token()}` } }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }
@@ -257,14 +258,22 @@ export default function AssistantPage() {
           <span style={{ ...pill, background: "#12233f", color: "#60a5fa" }}>
             {status?.activeChatModel ? `${status.activeChatModel.provider}:${status.activeChatModel.model}` : "…"}
           </span>
-          <select value={modelSel} onChange={(e) => setModelSel(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13, minWidth: 260 }}>
-            {!models && <option value="">loading models…</option>}
-            {models && Object.entries(models.providers).map(([prov, ids]) => ids.length > 0 && (
-              <optgroup key={prov} label={prov === "openai" ? "OpenAI" : "Anthropic (Claude)"}>
-                {ids.map((id) => <option key={`${prov}:${id}`} value={`${prov}:${id}`} style={{ color: "#000" }}>{id}</option>)}
-              </optgroup>
-            ))}
-          </select>
+          <ConnectSelect
+            value={modelSel}
+            onChange={(v) => setModelSel(v)}
+            style={{ minWidth: 260 }}
+            options={!models ? [{ value: "", label: "loading models…" }] : undefined}
+            groups={
+              models
+                ? Object.entries(models.providers)
+                    .filter(([, ids]) => ids.length > 0)
+                    .map(([prov, ids]) => ({
+                      label: prov === "openai" ? "OpenAI" : "Anthropic (Claude)",
+                      options: ids.map((id) => ({ value: `${prov}:${id}`, label: id })),
+                    }))
+                : undefined
+            }
+          />
           <button style={btn} onClick={testModel} disabled={!modelSel}>Test selected</button>
           <button style={btnBlue} onClick={() => applyModel(modelSel)} disabled={!modelSel || !masterKey}>Use this model</button>
           <button style={btn} onClick={() => { setModelSel(""); applyModel(""); }}>Reset to default</button>
@@ -296,9 +305,13 @@ export default function AssistantPage() {
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button title="Hold to speak (Yiddish or English)" onClick={recording ? stopMic : startMic} style={{ ...btn, background: recording ? "#ef4444" : "transparent", color: recording ? "#fff" : "inherit", border: recording ? "none" : "1px solid rgba(128,128,128,.4)", width: 40, padding: 0, height: 34 }}>{recording ? "■" : "🎤"}</button>
-            <select value={micEngine} onChange={(e) => setMicEngine(e.target.value)} title="Transcription engine for the 🎤 — swap to compare" style={{ padding: "7px 8px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 12 }}>
-              {MIC_ENGINES.map((e) => <option key={e.id} value={e.id} style={{ color: "#000" }}>🎤 {e.label}</option>)}
-            </select>
+            <ConnectSelect
+              size="sm"
+              value={micEngine}
+              onChange={(v) => setMicEngine(v)}
+              title="Transcription engine for the 🎤 — swap to compare"
+              options={MIC_ENGINES.map((e) => ({ value: e.id, label: `🎤 ${e.label}` }))}
+            />
             <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Type, or tap 🎤 to speak…" style={{ flex: 1, padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13 }} />
             <button style={btnBlue} onClick={send}>Send</button>
           </div>

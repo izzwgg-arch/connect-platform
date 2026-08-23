@@ -9,6 +9,7 @@ import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 
 export default function AdminTenantsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -101,18 +102,18 @@ export default function AdminTenantsPage() {
                       {togglingId === r.id ? "Saving…" : r.loginOtpRequired ? "On" : "Off"}
                     </button>
                     {r.loginOtpRequired ? (
-                      <select
-                        className="input"
-                        style={{ height: 30, fontSize: 12 }}
+                      <ConnectSelect
+                        size="sm"
                         value={r.loginOtpChannel}
                         disabled={togglingId === r.id}
-                        onChange={(e) => setLoginOtp(r.id, true, e.target.value)}
-                        aria-label="How the code is sent"
-                      >
-                        <option value="EITHER">Text or email</option>
-                        <option value="SMS">Text only</option>
-                        <option value="EMAIL">Email only</option>
-                      </select>
+                        onChange={(v) => setLoginOtp(r.id, true, v)}
+                        ariaLabel="How the code is sent"
+                        options={[
+                          { value: "EITHER", label: "Text or email" },
+                          { value: "SMS", label: "Text only" },
+                          { value: "EMAIL", label: "Email only" },
+                        ]}
+                      />
                     ) : null}
                   </span>
                 ),

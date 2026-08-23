@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import IField, { CARD_TYPE, CVV_TYPE, type ErrorData, type TokenData } from "@cardknox/react-ifields";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiDelete, apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { DataTable } from "../../../../../components/DataTable";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
@@ -1355,15 +1356,12 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
                     Send from number:
                   </label>
                   {cap.fromNumbers && cap.fromNumbers.length > 1 ? (
-                    <select
+                    <ConnectSelect
                       value={fromPhone}
-                      onChange={(e) => setFromPhone(e.target.value)}
-                      style={inputStyle}
-                    >
-                      {cap.fromNumbers.map((n) => (
-                        <option key={n.number} value={n.number}>{n.label}</option>
-                      ))}
-                    </select>
+                      onChange={setFromPhone}
+                      style={{ width: "100%" }}
+                      options={cap.fromNumbers.map((n) => ({ value: n.number, label: n.label }))}
+                    />
                   ) : (
                     <div style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, background: "var(--surface-alt, #f9fafb)", color: "#374151" }}>
                       {cap.fromNumber || "—"} <span style={{ color: "#9ca3af", fontSize: 11 }}>· {cap.provider}</span>
@@ -2174,13 +2172,12 @@ export function ReportsTab() {
         <div className="row-actions" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
             Status filter:
-            <select
+            <ConnectSelect
+              size="sm"
               value={exportStatus}
-              onChange={(e) => setExportStatus(e.target.value)}
-              style={{ fontSize: 13, padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border, #d1d5db)" }}
-            >
-              {INV_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+              onChange={setExportStatus}
+              options={INV_STATUSES.map((s) => ({ value: s, label: s }))}
+            />
           </label>
         </div>
 

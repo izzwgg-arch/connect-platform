@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 
 /**
  * Create a queue from the Queues screen.
@@ -214,11 +215,9 @@ export function NewQueueDialog({
           </Field>
 
           <Field label={t("How should it ring?")}>
-            <select className="qb-input" value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-              {STRATEGIES.map((s) => (
-                <option key={s.value} value={s.value}>{t(s.label)}</option>
-              ))}
-            </select>
+            <ConnectSelect value={strategy} onChange={setStrategy}
+              style={{ width: "100%" }}
+              options={STRATEGIES.map((s) => ({ value: s.value, label: t(s.label) }))} />
           </Field>
 
           <div className="qb-fieldrow">
@@ -240,14 +239,12 @@ export function NewQueueDialog({
             label={t("Where callers go if nobody answers")}
             hint={t("The phone system won't accept a queue without one.")}
           >
-            <select className="qb-input" value={lastDest} onChange={(e) => setLastDest(e.target.value)}>
-              <option value="">{t("Choose someone…")}</option>
-              {people.map((p) => (
-                <option key={p.extension} value={p.extension}>
-                  {p.extension}{p.name ? ` — ${p.name}` : ""}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect value={lastDest} onChange={setLastDest}
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: t("Choose someone…") },
+                ...people.map((p) => ({ value: p.extension, label: `${p.extension}${p.name ? ` — ${p.name}` : ""}` })),
+              ]} />
           </Field>
 
           <button type="button" className="qb-disclosure" onClick={() => setAdvanced((v) => !v)} aria-expanded={advanced}>

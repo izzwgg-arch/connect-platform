@@ -23,6 +23,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 
 /** Registered up front so the whole screen arrives translated at once. */
 const PHRASES = [
@@ -254,12 +255,12 @@ export function NumberStep({
               {annOn && (
                 <>
                   <div className="ns-lbl">{t("Which recording?")}</div>
-                  <select className="ns-sel" value={annRef} onChange={(e) => setAnnRef(e.target.value)}>
-                    <option value="">…</option>
-                    {recordings.map((r) => (
-                      <option key={r.promptRef} value={r.promptRef}>{r.displayName}</option>
-                    ))}
-                  </select>
+                  <ConnectSelect value={annRef} onChange={setAnnRef}
+                    style={{ width: "100%" }}
+                    options={[
+                      { value: "", label: "…" },
+                      ...recordings.map((r) => ({ value: r.promptRef, label: r.displayName })),
+                    ]} />
 
                   <div className="ns-lbl">{t("When should it start?")}</div>
                   <div className="ns-chips">

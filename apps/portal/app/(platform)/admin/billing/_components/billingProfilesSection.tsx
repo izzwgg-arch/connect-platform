@@ -9,6 +9,7 @@
 
 import { useState, useCallback, useRef, type ChangeEvent } from "react";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { dollars, invoiceStatusLabel } from "../../../../../lib/billingUi";
 import { LINE_ITEM_TYPE_LABELS, type EditableLineItem, type LineItemType } from "./invoiceEditor";
@@ -281,18 +282,17 @@ function ProfileDrawer({
 
                 <div className="inv-editor__field" style={{ gridColumn: "1 / -1" }}>
                   <label className="inv-editor__label">Payment method</label>
-                  <select
-                    className="inv-editor__input"
+                  <ConnectSelect
                     value={paymentMethodId}
-                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setPaymentMethodId(e.target.value)}
-                  >
-                    <option value="">— None (manual charge only) —</option>
-                    {paymentMethods.map((pm) => (
-                      <option key={pm.id} value={pm.id}>
-                        {cardLabel(pm)}{pm.isImported ? " (imported)" : ""}{pm.isDefault ? " ★ default" : ""}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setPaymentMethodId}
+                    options={[
+                      { value: "", label: "— None (manual charge only) —" },
+                      ...paymentMethods.map((pm) => ({
+                        value: pm.id,
+                        label: `${cardLabel(pm)}${pm.isImported ? " (imported)" : ""}${pm.isDefault ? " ★ default" : ""}`,
+                      })),
+                    ]}
+                  />
                   {pmData.status === "success" && paymentMethods.length === 0 && (
                     <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ie-text-muted)" }}>
                       No payment methods found. Import cards from Sola first.
@@ -390,16 +390,15 @@ function ProfileDrawer({
                   {lineItems.map((li) => (
                     <tr key={li._key}>
                       <td>
-                        <select
-                          className="inv-editor__input"
-                          style={{ fontSize: 12 }}
+                        <ConnectSelect
+                          size="sm"
                           value={li.type}
-                          onChange={(e: ChangeEvent<HTMLSelectElement>) => updateItem(li._key, "type", e.target.value)}
-                        >
-                          {Object.entries(LINE_ITEM_TYPE_LABELS).map(([k, v]) => (
-                            <option key={k} value={k}>{v}</option>
-                          ))}
-                        </select>
+                          onChange={(v) => updateItem(li._key, "type", v)}
+                          options={Object.entries(LINE_ITEM_TYPE_LABELS).map(([k, v]) => ({
+                            value: k,
+                            label: v,
+                          }))}
+                        />
                       </td>
                       <td>
                         <input

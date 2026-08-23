@@ -15,6 +15,7 @@
 
 import { useState, useCallback, type ChangeEvent } from "react";
 import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import "./invoiceEditorStyles.css";
 
 // ---------------------------------------------------------------------------
@@ -454,21 +455,15 @@ export function InvoiceEditor({ invoice, onSaved, onCancel }: InvoiceEditorProps
                 return (
                   <tr key={li._key}>
                     <td>
-                      <select
+                      <ConnectSelect
                         value={li.type}
                         disabled={isVoid}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                          updateLineItem(li._key, "type", e.target.value as LineItemType)
-                        }
-                      >
-                        {(Object.keys(LINE_ITEM_TYPE_LABELS) as LineItemType[]).map(
-                          (t) => (
-                            <option key={t} value={t}>
-                              {LINE_ITEM_TYPE_LABELS[t]}
-                            </option>
-                          ),
-                        )}
-                      </select>
+                        onChange={(v) => updateLineItem(li._key, "type", v as LineItemType)}
+                        options={(Object.keys(LINE_ITEM_TYPE_LABELS) as LineItemType[]).map((t) => ({
+                          value: t,
+                          label: LINE_ITEM_TYPE_LABELS[t],
+                        }))}
+                      />
                     </td>
                     <td>
                       <input

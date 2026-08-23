@@ -346,25 +346,35 @@ function DesktopSettingsMenu({
           </div>
           <label className="fd-settings-field">
             <span>Microphone</span>
-            <select value={phone.currentMicDeviceId} onChange={(event) => updateMic(event.target.value)}>
-              <option value="">System default microphone</option>
-              {phone.audioInputDevices.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Microphone ${device.deviceId.slice(0, 6)}`}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect
+              size="sm"
+              style={{ width: "100%" }}
+              value={phone.currentMicDeviceId}
+              onChange={(v) => updateMic(v)}
+              options={[
+                { value: "", label: "System default microphone" },
+                ...phone.audioInputDevices.map((device) => ({
+                  value: device.deviceId,
+                  label: device.label || `Microphone ${device.deviceId.slice(0, 6)}`,
+                })),
+              ]}
+            />
           </label>
           <label className="fd-settings-field">
             <span>Speaker / headset output</span>
-            <select value={phone.currentSinkId} onChange={(event) => updateSpeaker(event.target.value)}>
-              <option value="">System default speaker</option>
-              {phone.audioOutputDevices.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Speaker ${device.deviceId.slice(0, 6)}`}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect
+              size="sm"
+              style={{ width: "100%" }}
+              value={phone.currentSinkId}
+              onChange={(v) => updateSpeaker(v)}
+              options={[
+                { value: "", label: "System default speaker" },
+                ...phone.audioOutputDevices.map((device) => ({
+                  value: device.deviceId,
+                  label: device.label || `Speaker ${device.deviceId.slice(0, 6)}`,
+                })),
+              ]}
+            />
           </label>
           <div className="fd-settings-section-label">Startup</div>
           <SettingsRow

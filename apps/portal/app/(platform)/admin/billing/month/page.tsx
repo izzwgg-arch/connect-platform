@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiPost } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { BillingNav, Pill, asList, dateTime, errText, invoiceTone, money, shortDate, useApi } from "../_new/ui";
 import "../customer/customerBilling.css";
 
@@ -380,11 +381,16 @@ function Composer({
         {err && <div className="cbill-banner bad" style={{ margin: "10px 0" }}>{err}</div>}
         <div className="cbill-row">
           <div className="cbill-label"><span className="t">Customer</span></div>
-          <select className="cbill-select" style={{ minWidth: 220 }} value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)} aria-label="Customer">
-            <option value="">Choose a customer…</option>
-            {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <ConnectSelect
+            style={{ minWidth: 220 }}
+            value={tenantId}
+            onChange={setTenantId}
+            ariaLabel="Customer"
+            options={[
+              { value: "", label: "Choose a customer…" },
+              ...tenants.map((t) => ({ value: t.id, label: t.name })),
+            ]}
+          />
         </div>
         <div className="cbill-row">
           <div className="cbill-label">

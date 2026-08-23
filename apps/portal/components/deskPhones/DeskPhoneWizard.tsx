@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { classifyDiscoveredHosts, shouldFingerprint, deviceKindFor, describeKind } from "@connect/shared";
 import { apiGet, apiPost } from "../../services/apiClient";
+import { ConnectSelect } from "../ConnectSelect";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
 import "./deskPhones.css";
 
@@ -516,17 +517,16 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                       <span>{describe(p.model)}</span>
                     </div>
                     {step === "match" ? (
-                      <select
-                        className="dps-sel-ext"
+                      <ConnectSelect
+                        style={{ minWidth: 172 }}
                         value={extensions.find((e) => e.extNumber === p.extNumber)?.id ?? ""}
-                        onChange={(e) => assign(p.id, e.target.value || null)}
-                        aria-label="Who uses this phone"
-                      >
-                        <option value="">Choose a person&hellip;</option>
-                        {extensions.map((e) => (
-                          <option key={e.id} value={e.id}>{e.displayName} &mdash; {e.extNumber}</option>
-                        ))}
-                      </select>
+                        onChange={(v) => assign(p.id, v || null)}
+                        ariaLabel="Who uses this phone"
+                        options={[
+                          { value: "", label: "Choose a person…" },
+                          ...extensions.map((e) => ({ value: e.id, label: `${e.displayName} — ${e.extNumber}` })),
+                        ]}
+                      />
                     ) : (
                       <span className={`dps-pill ${p.needsAttention ? "dps-pill-hm" : "dps-pill-ok"}`}>
                         {p.needsAttention ? "Needs attention" : "Ready"}

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
+import { ConnectSelect } from "../../ConnectSelect";
 import { formatCrmSaveError } from "../crmSaveHelpers";
 import { parseScriptSections, SCRIPT_TEMPLATES, serializeScriptSections } from "./ScriptTemplates";
 import type { Script } from "./scriptTypes";
@@ -407,18 +408,15 @@ function ScriptEditorPanel({
         {mode === "create" ? (
           <label className="flex flex-col gap-2">
             <span className={crm.label}>Template</span>
-            <select
+            <ConnectSelect
+              style={{ width: "100%" }}
               value={selectedTemplate}
-              onChange={(event) => applyTemplate(event.target.value)}
-              className={cn(crm.select, "scripts-editor-input scripts-editor-select")}
-            >
-              <option value="">Start from scratch</option>
-              {SCRIPT_TEMPLATES.map((template) => (
-                <option key={template.key} value={template.key}>
-                  {template.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => applyTemplate(v)}
+              options={[
+                { value: "", label: "Start from scratch" },
+                ...SCRIPT_TEMPLATES.map((template) => ({ value: template.key, label: template.label })),
+              ]}
+            />
           </label>
         ) : null}
 

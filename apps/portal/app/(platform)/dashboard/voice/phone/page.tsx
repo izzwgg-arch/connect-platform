@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "../../../../../components/PageHeader";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { PermissionGate } from "../../../../../components/PermissionGate";
 import { StatusChip } from "../../../../../components/StatusChip";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
@@ -296,17 +297,16 @@ function ActiveCallScreen({
           <span style={{ fontSize: 16 }}>🔊</span>
           <span style={{ fontWeight: 600 }}>Speaker On</span>
           {phone.audioOutputDevices.length > 1 && (
-            <select
-              style={{ marginLeft: "auto", background: "transparent", color: "#a78bfa", border: "none", fontSize: 11, cursor: "pointer" }}
+            <ConnectSelect
+              size="sm"
+              style={{ marginLeft: "auto" }}
               value={phone.currentSinkId}
-              onChange={(e) => phone.setAudioSinkId(e.target.value)}
-            >
-              {phone.audioOutputDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId} style={{ background: "#1a1d2e" }}>
-                  {d.label || `Device ${d.deviceId.slice(0, 8)}`}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => phone.setAudioSinkId(v)}
+              options={phone.audioOutputDevices.map((d) => ({
+                value: d.deviceId,
+                label: d.label || `Device ${d.deviceId.slice(0, 8)}`,
+              }))}
+            />
           )}
         </div>
       )}
@@ -423,18 +423,15 @@ function KeypadScreen({
       {phone.outboundRoutes.length ? (
         <div style={{ display: "grid", gap: 5, padding: 10, borderRadius: 14, background: T.greenSoft, border: `1px solid ${T.green}33` }}>
           <label style={{ color: T.textSec, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1 }}>Outbound</label>
-          <select
-            className="input"
+          <ConnectSelect
+            style={{ width: "100%" }}
             value={phone.selectedOutboundRouteId}
-            onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}
-          >
-            <option value="">No route prefix</option>
-            {phone.outboundRoutes.map((route) => (
-              <option key={route.id} value={route.id}>
-                {route.name}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => phone.setSelectedOutboundRouteId(v)}
+            options={[
+              { value: "", label: "No route prefix" },
+              ...phone.outboundRoutes.map((route) => ({ value: route.id, label: route.name })),
+            ]}
+          />
         </div>
       ) : null}
 

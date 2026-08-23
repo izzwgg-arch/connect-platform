@@ -9,6 +9,7 @@
 
 import { useState, useCallback, useRef, type ChangeEvent } from "react";
 import { apiGet, apiPost } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { LINE_ITEM_TYPE_LABELS, type EditableLineItem, type LineItemType } from "./invoiceEditor";
 import "./invoiceEditorStyles.css";
 
@@ -403,18 +404,14 @@ export function ManualInvoiceDrawer({
                     return (
                       <tr key={li._key}>
                         <td>
-                          <select
+                          <ConnectSelect
                             value={li.type}
-                            onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                              updateItem(li._key, "type", e.target.value as LineItemType)
-                            }
-                          >
-                            {(Object.keys(LINE_ITEM_TYPE_LABELS) as LineItemType[]).map((t) => (
-                              <option key={t} value={t}>
-                                {LINE_ITEM_TYPE_LABELS[t]}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(v) => updateItem(li._key, "type", v as LineItemType)}
+                            options={(Object.keys(LINE_ITEM_TYPE_LABELS) as LineItemType[]).map((t) => ({
+                              value: t,
+                              label: LINE_ITEM_TYPE_LABELS[t],
+                            }))}
+                          />
                         </td>
                         <td>
                           <input
@@ -501,16 +498,14 @@ export function ManualInvoiceDrawer({
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <div className="inv-editor__field">
                   <label className="inv-editor__label">Invoice Status</label>
-                  <select
-                    className="inv-editor__input"
+                  <ConnectSelect
                     value={status}
-                    onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                      setStatus(e.target.value as "DRAFT" | "OPEN")
-                    }
-                  >
-                    <option value="OPEN">Open (send to customer)</option>
-                    <option value="DRAFT">Draft (hold, do not send)</option>
-                  </select>
+                    onChange={(v) => setStatus(v as "DRAFT" | "OPEN")}
+                    options={[
+                      { value: "OPEN", label: "Open (send to customer)" },
+                      { value: "DRAFT", label: "Draft (hold, do not send)" },
+                    ]}
+                  />
                 </div>
 
                 <label

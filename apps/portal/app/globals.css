@@ -12613,10 +12613,13 @@ p {
   min-width: 160px;
 }
 
-/* ?? Native <select> global normalisation ??????????????????????????????????
-   Any <select> that hasn't been replaced with ConnectSelect still needs to
-   look consistent with the design system. We remove browser default
-   appearance and inject a custom chevron via background-image. */
+/* ?? Native <select> global normalisation — SAFETY NET ONLY ????????????????
+   As of 2026-08-23 the whole portal uses ConnectSelect/ConnectMultiSelect
+   (components/ConnectSelect.tsx) — Izzy's platform-wide mandate, enforced by
+   lib/nativeSelectSweep.test.ts, which fails the suite on any native <select>
+   in portal TSX. These rules stay only so a stray native select (third-party
+   markup, or one that slips in before the test catches it) still roughly
+   matches the design system. Never treat this block as licence to add one. */
 select {
   -webkit-appearance: none;
   appearance: none;
@@ -20103,6 +20106,14 @@ table tr:hover {
   display: block;
   padding: 0;
   height: 46px;
+}
+
+/* ConnectSelect inside the billing/pay forms — match the 42px/12px geometry of
+   the sibling inputs so the expiry dropdowns sit flush with the card fields. */
+.billing-form .cs-wrap { width: 100%; }
+.billing-form .cs-trigger {
+  min-height: 42px;
+  border-radius: 12px;
 }
 
 /* Cardknox React iFields (@cardknox/react-ifields) ? avoid iframe scrollbars in admin drawers */

@@ -43,6 +43,7 @@ import { ConvertRecording } from "./ConvertRecording";
 import { MakeTeam } from "./MakeTeam";
 import { NumberStep, fmtUs, type TenantNumber, type NumberPlan, type AnnouncementPlan } from "./NumberStep";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getPortalApiBaseUrl } from "../../../../services/apiClient";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { JewishCalendarCard } from "./JewishCalendar";
 
 interface RouteProfile {
@@ -1311,10 +1312,10 @@ export default function IvrStudioPage() {
         <div>
           <div className="eyebrow">{t("IVR Studio")}</div>
           <div className="menupick">
-            <select className="menusel" value={activeId ?? ""} onChange={(e) => { setEditingDigit(null); setActiveId(e.target.value || null); }}>
-              {profiles.length === 0 && <option value="">No menus yet</option>}
-              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.type === "after_hours" ? " · after hours" : ""}</option>)}
-            </select>
+            <ConnectSelect value={activeId ?? ""} onChange={(v) => { setEditingDigit(null); setActiveId(v || null); }}
+              options={profiles.length === 0
+                ? [{ value: "", label: "No menus yet" }]
+                : profiles.map((p) => ({ value: p.id, label: `${p.name}${p.type === "after_hours" ? " · after hours" : ""}` }))} />
             {active && <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "rename" })}>{t("Rename")}</button>}
             <button className="btn ghost sm" disabled={!canManage} onClick={() => setNamingFor({ mode: "create", forDigit: null })}>+ New menu</button>
             {active && (
@@ -1621,14 +1622,12 @@ export default function IvrStudioPage() {
                       ? `We send them to ${describeDestination({ destinationType: active.timeoutDestinationType || "", destinationRef: active.timeoutDestinationRef }, directory)}`
                       : "We replay the menu, then the call ends"}
                     actions={
-                      <select className="sel" disabled={!canManage || saving}
-                        aria-label={t("How long to wait")}
+                      <ConnectSelect disabled={!canManage || saving}
+                        ariaLabel={t("How long to wait")}
                         value={String(active.timeoutSeconds || 7)}
-                        onChange={(e) => patchProfile({ timeoutSeconds: Number(e.target.value) })}>
-                        {[3, 5, 7, 10, 15, 20, 30].map((s) => (
-                          <option key={s} value={s}>{s} seconds</option>
-                        ))}
-                      </select>
+                        onChange={(v) => patchProfile({ timeoutSeconds: Number(v) })}
+                        style={{ width: "100%" }}
+                        options={[3, 5, 7, 10, 15, 20, 30].map((s) => ({ value: String(s), label: `${s} seconds` }))} />
                     } />
 
                   <Step glyph="⚠️" muted
@@ -1637,14 +1636,12 @@ export default function IvrStudioPage() {
                       ? `After ${active.maxRetries || 3} ${(active.maxRetries || 3) === 1 ? "try" : "tries"} we send them to ${describeDestination({ destinationType: active.invalidDestinationType || "", destinationRef: active.invalidDestinationRef }, directory)}`
                       : `We tell them it wasn't valid and replay the menu, up to ${active.maxRetries || 3} ${(active.maxRetries || 3) === 1 ? "time" : "times"}`}
                     actions={
-                      <select className="sel" disabled={!canManage || saving}
-                        aria-label={t("How many tries")}
+                      <ConnectSelect disabled={!canManage || saving}
+                        ariaLabel={t("How many tries")}
                         value={String(active.maxRetries || 3)}
-                        onChange={(e) => patchProfile({ maxRetries: Number(e.target.value) })}>
-                        {[1, 2, 3, 4, 5].map((n) => (
-                          <option key={n} value={n}>{n} {n === 1 ? "try" : "tries"}</option>
-                        ))}
-                      </select>
+                        onChange={(v) => patchProfile({ maxRetries: Number(v) })}
+                        style={{ width: "100%" }}
+                        options={[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} ${n === 1 ? "try" : "tries"}` }))} />
                     } />
 
                   {/* Dialling an extension straight from the menu. Its own step
@@ -2393,10 +2390,12 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
       <div className="card-b">
         <div className="field" style={{ maxWidth: 280 }}>
           <label>{t("Time zone")}</label>
-          <select className="sel" disabled={disabled} value={draft.timezone} onChange={(e) => setDraft((d) => ({ ...d, timezone: e.target.value }))}>
-            {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz.split("/")[1].replace(/_/g, " ")}</option>)}
-            {!TIMEZONES.includes(draft.timezone) && <option value={draft.timezone}>{draft.timezone}</option>}
-          </select>
+          <ConnectSelect disabled={disabled} value={draft.timezone} onChange={(v) => setDraft((d) => ({ ...d, timezone: v }))}
+            style={{ width: "100%" }}
+            options={[
+              ...TIMEZONES.map((tz) => ({ value: tz, label: tz.split("/")[1].replace(/_/g, " ") })),
+              ...(!TIMEZONES.includes(draft.timezone) ? [{ value: draft.timezone, label: draft.timezone }] : []),
+            ]} />
         </div>
 
         {rightNow && (
@@ -2436,17 +2435,15 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
         <div className="fb">
           <div className="fbx">
             <h3>While you&apos;re open</h3>
-            <select className="sel" disabled={disabled} value={draft.defaultProfileId ?? ""} onChange={(e) => setDraft((d) => ({ ...d, defaultProfileId: e.target.value || null }))}>
-              <option value="">Choose a menu…</option>
-              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <ConnectSelect disabled={disabled} value={draft.defaultProfileId ?? ""} onChange={(v) => setDraft((d) => ({ ...d, defaultProfileId: v || null }))}
+              style={{ width: "100%" }}
+              options={[{ value: "", label: "Choose a menu…" }, ...profiles.map((p) => ({ value: p.id, label: p.name }))]} />
           </div>
           <div className="fbx">
             <h3>When you&apos;re closed</h3>
-            <select className="sel" disabled={disabled} value={draft.afterHoursProfileId ?? ""} onChange={(e) => setDraft((d) => ({ ...d, afterHoursProfileId: e.target.value || null }))}>
-              <option value="">Choose a menu…</option>
-              {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <ConnectSelect disabled={disabled} value={draft.afterHoursProfileId ?? ""} onChange={(v) => setDraft((d) => ({ ...d, afterHoursProfileId: v || null }))}
+              style={{ width: "100%" }}
+              options={[{ value: "", label: "Choose a menu…" }, ...profiles.map((p) => ({ value: p.id, label: p.name }))]} />
             {!profiles.some((p) => p.type === "after_hours") && (
               <button className="btn sm" style={{ marginTop: 9 }} disabled={disabled} onClick={onCreateAfterHours}>+ Make a closed-hours menu</button>
             )}
@@ -2479,11 +2476,10 @@ function HoursCard({ schedule, profiles, disabled, onSave, onCreateAfterHours }:
           {draft.holidayDates.length > 0 && (
             <div className="rowmini" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
               <span className="dimtxt">{t("On those days play")}</span>
-              <select className="sel" disabled={disabled} value={draft.holidayProfileId ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, holidayProfileId: e.target.value || null }))}>
-                <option value="">Same as when you&apos;re closed</option>
-                {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <ConnectSelect disabled={disabled} value={draft.holidayProfileId ?? ""}
+                onChange={(v) => setDraft((d) => ({ ...d, holidayProfileId: v || null }))}
+                style={{ width: "100%" }}
+                options={[{ value: "", label: "Same as when you're closed" }, ...profiles.map((p) => ({ value: p.id, label: p.name }))]} />
             </div>
           )}
         </div>

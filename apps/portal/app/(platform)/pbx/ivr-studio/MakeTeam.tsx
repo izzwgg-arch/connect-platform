@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 
 /** Registered up front so the whole screen arrives translated at once, rather
  *  than switching to Yiddish a phrase at a time as the customer clicks. */
@@ -319,12 +320,12 @@ export function MakeTeam({
         desc={t("Try someone else - an owner or a mobile - before giving up.")}
         onClick={() => setLastDest({ kind: "extension", target: people[0]?.extension ?? "" })} />
       {lastDest && (
-        <select className="mt-in" value={lastDest.target} onChange={(e) => setLastDest({ ...lastDest, target: e.target.value })}>
-          <option value="">{t("Choose...")}</option>
-          {people.map((p) => (
-            <option key={p.extension} value={p.extension}>{p.name || `Extension ${p.extension}`} · {p.extension}</option>
-          ))}
-        </select>
+        <ConnectSelect value={lastDest.target} onChange={(v) => setLastDest({ ...lastDest, target: v })}
+          style={{ width: "100%" }}
+          options={[
+            { value: "", label: t("Choose...") },
+            ...people.map((p) => ({ value: p.extension, label: `${p.name || `Extension ${p.extension}`} · ${p.extension}` })),
+          ]} />
       )}
 
       {isQueue && (

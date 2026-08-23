@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import Link from "next/link";
 import { ListChecks, Plus, Route, Sparkles, Play } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../components/crm";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { deliveryApi, type RunRow } from "../../../../services/deliveryApi";
 
 interface UnassignedOrder {
@@ -147,24 +148,20 @@ export default function TrackingRunsPage() {
                         {o.addrLine1}
                         {o.addrUnit ? ` ${o.addrUnit}` : ""}
                       </div>
-                      <select
-                        className={cn(crm.select, "h-8 py-0 text-xs")}
+                      <ConnectSelect
+                        size="sm"
+                        style={{ width: "100%" }}
                         value=""
                         disabled={rowBusy || runOptions.length === 0}
-                        onChange={(e) => {
-                          const runId = e.target.value;
+                        placeholder={runOptions.length === 0 ? "No run for this store" : rowBusy ? "Adding…" : "Add to run…"}
+                        onChange={(runId) => {
                           if (runId) act(`stop-${o.id}`, () => deliveryApi.addStop(runId, o.id));
                         }}
-                      >
-                        <option value="">
-                          {runOptions.length === 0 ? "No run for this store" : rowBusy ? "Adding…" : "Add to run…"}
-                        </option>
-                        {runOptions.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {(r.driverName || "unassigned") + " · " + r.status.toLowerCase() + " · " + r.stopsTotal + " stops"}
-                          </option>
-                        ))}
-                      </select>
+                        options={runOptions.map((r) => ({
+                          value: r.id,
+                          label: (r.driverName || "unassigned") + " · " + r.status.toLowerCase() + " · " + r.stopsTotal + " stops",
+                        }))}
+                      />
                     </li>
                   );
                 })}

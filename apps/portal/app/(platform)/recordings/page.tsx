@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { CrmRecordingPlayer } from "../../../components/CrmRecordingPlayer";
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
@@ -97,11 +98,16 @@ export default function RecordingsPage() {
           onKeyDown={(e) => { if (e.key === "Enter") setQuery(search.trim()); }}
         />
         <button className="btn ghost" onClick={() => setQuery(search.trim())}>Search</button>
-        <select className="input" value={directionFilter} onChange={(e) => setDirectionFilter(e.target.value as typeof directionFilter)}>
-          <option value="all">All directions</option>
-          <option value="incoming">Inbound</option>
-          <option value="outgoing">Outbound</option>
-        </select>
+        <ConnectSelect
+          size="sm"
+          value={directionFilter}
+          onChange={(v) => setDirectionFilter(v as typeof directionFilter)}
+          options={[
+            { value: "all", label: "All directions" },
+            { value: "incoming", label: "Inbound" },
+            { value: "outgoing", label: "Outbound" },
+          ]}
+        />
       </FilterBar>
 
       {state.status === "loading" ? <LoadingSkeleton rows={6} /> : null}

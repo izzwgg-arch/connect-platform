@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPut } from "../../../../services/apiClient";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 
 type Lang = "en" | "yi";
 type Treatment = "open" | "early" | "closed";
@@ -229,17 +230,19 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
         <div className="jc-row">
           <div className="field">
             <label>Where are you</label>
-            <select className="sel" disabled={disabled} value={draft.communityId ?? ""} onChange={(e) => set("communityId", e.target.value || null)}>
-              <option value="">Choose your community…</option>
-              {data.communities.map((c) => <option key={c.id} value={c.id}>{c.label} — {c.detail}</option>)}
-            </select>
+            <ConnectSelect disabled={disabled} value={draft.communityId ?? ""} onChange={(v) => set("communityId", v || null)}
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "Choose your community…" },
+                ...data.communities.map((c) => ({ value: c.id, label: `${c.label} — ${c.detail}` })),
+              ]} />
             <div className="dimtxt jc-hint">Sets candle lighting and nightfall.</div>
           </div>
           <div className="field">
             <label>Whose times</label>
-            <select className="sel" disabled={disabled} value={draft.nightfallShita} onChange={(e) => set("nightfallShita", e.target.value)}>
-              {data.nightfallShitos.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-            </select>
+            <ConnectSelect disabled={disabled} value={draft.nightfallShita} onChange={(v) => set("nightfallShita", v)}
+              style={{ width: "100%" }}
+              options={data.nightfallShitos.map((s) => ({ value: s.id, label: s.label }))} />
             <div className="dimtxt jc-hint">
               {data.nightfallShitos.find((s) => s.id === draft.nightfallShita)?.detail}
             </div>
@@ -264,29 +267,35 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
         <div className="jc-row">
           <div className="field">
             <label>Close early before Shabbos and yom tov</label>
-            <select className="sel" disabled={disabled} value={String(draft.earlyCloseMinutesBeforeCandles)}
-              onChange={(e) => set("earlyCloseMinutesBeforeCandles", Number(e.target.value))}>
-              <option value="0">Don&rsquo;t close early</option>
-              <option value="30">30 minutes before candle lighting</option>
-              <option value="60">1 hour before candle lighting</option>
-              <option value="120">2 hours before candle lighting</option>
-            </select>
+            <ConnectSelect disabled={disabled} value={String(draft.earlyCloseMinutesBeforeCandles)}
+              onChange={(v) => set("earlyCloseMinutesBeforeCandles", Number(v))}
+              style={{ width: "100%" }}
+              options={[
+                { value: "0", label: "Don’t close early" },
+                { value: "30", label: "30 minutes before candle lighting" },
+                { value: "60", label: "1 hour before candle lighting" },
+                { value: "120", label: "2 hours before candle lighting" },
+              ]} />
           </div>
           <div className="field">
             <label>Chol Hamoed</label>
-            <select className="sel" disabled={disabled} value={draft.cholHamoed} onChange={(e) => set("cholHamoed", e.target.value as Treatment)}>
-              <option value="open">Normal hours</option>
-              <option value="early">Reduced hours</option>
-              <option value="closed">Closed all day</option>
-            </select>
+            <ConnectSelect disabled={disabled} value={draft.cholHamoed} onChange={(v) => set("cholHamoed", v as Treatment)}
+              style={{ width: "100%" }}
+              options={[
+                { value: "open", label: "Normal hours" },
+                { value: "early", label: "Reduced hours" },
+                { value: "closed", label: "Closed all day" },
+              ]} />
           </div>
           <div className="field">
             <label>Fast days</label>
-            <select className="sel" disabled={disabled} value={draft.fastDays} onChange={(e) => set("fastDays", e.target.value as Treatment)}>
-              <option value="open">Normal hours</option>
-              <option value="early">Reduced hours</option>
-              <option value="closed">Closed all day</option>
-            </select>
+            <ConnectSelect disabled={disabled} value={draft.fastDays} onChange={(v) => set("fastDays", v as Treatment)}
+              style={{ width: "100%" }}
+              options={[
+                { value: "open", label: "Normal hours" },
+                { value: "early", label: "Reduced hours" },
+                { value: "closed", label: "Closed all day" },
+              ]} />
           </div>
         </div>
 
@@ -300,20 +309,24 @@ export function JewishCalendarCard({ tenantId, disabled, onSaved }: {
           <div className="jc-row">
             <div className="field">
               <label>Play this instead</label>
-              <select className="sel" disabled={disabled} value={draft.acappellaMohProfileId ?? ""}
-                onChange={(e) => set("acappellaMohProfileId", e.target.value || null)}>
-                <option value="">Leave the hold music alone</option>
-                {data.mohProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <ConnectSelect disabled={disabled} value={draft.acappellaMohProfileId ?? ""}
+                onChange={(v) => set("acappellaMohProfileId", v || null)}
+                style={{ width: "100%" }}
+                options={[
+                  { value: "", label: "Leave the hold music alone" },
+                  ...data.mohProfiles.map((p) => ({ value: p.id, label: p.name })),
+                ]} />
             </div>
             <div className="field">
               <label>Sefirah</label>
-              <select className="sel" disabled={disabled} value={draft.sefirah} onChange={(e) => set("sefirah", e.target.value as CalendarSettings["sefirah"])}>
-                <option value="early">Pesach until Lag BaOmer</option>
-                <option value="late">Rosh Chodesh Iyar until Shavuos</option>
-                <option value="whole">The whole Sefirah</option>
-                <option value="none">Music all through Sefirah</option>
-              </select>
+              <ConnectSelect disabled={disabled} value={draft.sefirah} onChange={(v) => set("sefirah", v as CalendarSettings["sefirah"])}
+                style={{ width: "100%" }}
+                options={[
+                  { value: "early", label: "Pesach until Lag BaOmer" },
+                  { value: "late", label: "Rosh Chodesh Iyar until Shavuos" },
+                  { value: "whole", label: "The whole Sefirah" },
+                  { value: "none", label: "Music all through Sefirah" },
+                ]} />
             </div>
           </div>
           <div className="jc-checks">
@@ -412,12 +425,14 @@ function HolidayList({ tenantId, lang, disabled, tz, overrides, onChange }: {
                   ? `${fmtDay(h.firstDay)} ${fmtTime(h.startsAt, tz) ?? ""} → ${fmtDay(h.lastDay)} ${fmtTime(h.endsAt, tz) ?? ""}`
                   : h.dayCount > 1 ? `${fmtDay(h.firstDay)} → ${fmtDay(h.lastDay)}` : fmtDay(h.firstDay)}
               </div>
-              <select className="sel" disabled={disabled} value={current}
-                onChange={(e) => onChange(h.key, e.target.value as Treatment)}>
-                <option value="closed">Closed all day</option>
-                <option value="early">Reduced hours</option>
-                <option value="open">Normal hours</option>
-              </select>
+              <ConnectSelect disabled={disabled} value={current}
+                onChange={(v) => onChange(h.key, v as Treatment)}
+                style={{ width: "100%" }}
+                options={[
+                  { value: "closed", label: "Closed all day" },
+                  { value: "early", label: "Reduced hours" },
+                  { value: "open", label: "Normal hours" },
+                ]} />
               {overrides[h.key] !== undefined
                 ? <button type="button" className="btn sm" disabled={disabled} onClick={() => onChange(h.key, null)}>Reset</button>
                 : <span className="dimtxt jc-auto">automatic</span>}

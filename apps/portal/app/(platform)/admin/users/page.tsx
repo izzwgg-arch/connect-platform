@@ -873,17 +873,16 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
               {crmEnabled ? (
                 <div style={{ marginTop: 12 }}>
                   <span className="muted" style={{ fontSize: 12 }}>CRM role</span>
-                  <select
-                    className="input"
+                  <ConnectSelect
                     style={{ marginTop: 6, width: "100%" }}
                     value={crmRole}
                     disabled={saving}
-                    onChange={(e) => setCrmRole(e.target.value as "AGENT" | "MANAGER" | "ADMIN")}
-                  >
-                    {Object.entries(CRM_ROLE_LABELS).map(([val, label]) => (
-                      <option key={val} value={val}>{label}</option>
-                    ))}
-                  </select>
+                    onChange={(v) => setCrmRole(v as "AGENT" | "MANAGER" | "ADMIN")}
+                    options={Object.entries(CRM_ROLE_LABELS).map(([val, label]) => ({
+                      value: val,
+                      label,
+                    }))}
+                  />
                 </div>
               ) : null}
             </section>

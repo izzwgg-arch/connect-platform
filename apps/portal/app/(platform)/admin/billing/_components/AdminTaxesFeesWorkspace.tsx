@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { apiPut } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 import {
   buildTelecomFeesPayload,
@@ -221,27 +222,29 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
         <div className="billing-tax-fee-card__fields">
           <label>
             Billing mode
-            <select
+            <ConnectSelect
               value={fee.mode}
-              onChange={(e) => patchFee(key, { mode: e.target.value as "ratePercent" | "amountCents" })}
-            >
-              <option value="ratePercent">Rate %</option>
-              <option value="amountCents">Amount $</option>
-            </select>
+              onChange={(v) => patchFee(key, { mode: v as "ratePercent" | "amountCents" })}
+              options={[
+                { value: "ratePercent", label: "Rate %" },
+                { value: "amountCents", label: "Amount $" },
+              ]}
+            />
           </label>
           <label>
             Basis
-            <select
+            <ConnectSelect
               value={fee.basis}
-              onChange={(e) => patchFee(key, { basis: e.target.value as TelecomFeeBasis })}
-            >
-              <option value="invoice_subtotal">Invoice subtotal</option>
-              <option value="per_extension">Per extension</option>
-              <option value="per_did">Per local DID</option>
-              <option value="per_toll_free_did">Per toll-free DID</option>
-              <option value="per_line">Per line (ext + DIDs)</option>
-              <option value="flat_monthly">Flat monthly</option>
-            </select>
+              onChange={(v) => patchFee(key, { basis: v as TelecomFeeBasis })}
+              options={[
+                { value: "invoice_subtotal", label: "Invoice subtotal" },
+                { value: "per_extension", label: "Per extension" },
+                { value: "per_did", label: "Per local DID" },
+                { value: "per_toll_free_did", label: "Per toll-free DID" },
+                { value: "per_line", label: "Per line (ext + DIDs)" },
+                { value: "flat_monthly", label: "Flat monthly" },
+              ]}
+            />
           </label>
           {isPercent ? (
             <label style={{ gridColumn: "1 / -1" }}>
@@ -326,17 +329,11 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
         <div className="billing-tax-suggestion-panel__body">
           <label className="billing-tax-suggestion-panel__label">
             Jurisdiction template
-            <select
+            <ConnectSelect
               value={selectedTemplateKey}
-              onChange={(e) => setSelectedTemplateKey(e.target.value as JurisdictionKey)}
-              className="billing-tax-suggestion-panel__select"
-            >
-              {JURISDICTION_TEMPLATES.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setSelectedTemplateKey(v as JurisdictionKey)}
+              options={JURISDICTION_TEMPLATES.map((t) => ({ value: t.key, label: t.label }))}
+            />
           </label>
           <button
             type="button"
@@ -368,14 +365,17 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
           <div className="billing-tax-fee-card__fields" style={{ marginTop: 10 }}>
             <label style={{ gridColumn: "1 / -1" }}>
               Tax profile (jurisdiction template)
-              <select value={taxProfileId} onChange={(e) => setTaxProfileId(e.target.value)}>
-                <option value="">No tax profile</option>
-                {detail.taxProfiles.map((profile: { id: string; name: string }) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </option>
-                ))}
-              </select>
+              <ConnectSelect
+                value={taxProfileId}
+                onChange={setTaxProfileId}
+                options={[
+                  { value: "", label: "No tax profile" },
+                  ...detail.taxProfiles.map((profile: { id: string; name: string }) => ({
+                    value: profile.id,
+                    label: profile.name,
+                  })),
+                ]}
+              />
             </label>
           </div>
         </div>
@@ -451,10 +451,15 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
         <div className="billing-tax-fees-advanced__body">
           <label style={{ fontSize: 13 }}>
             Tax calculation provider
-            <select value={providerId} onChange={(e) => setProviderId(e.target.value)} style={{ display: "block", marginTop: 6, width: "100%" }}>
-              <option value="tax_profile_v1">Tax profile (Connect manual rates)</option>
-              <option value="external_telecom_stub">External stub (no tax lines)</option>
-            </select>
+            <ConnectSelect
+              value={providerId}
+              onChange={setProviderId}
+              style={{ marginTop: 6, width: "100%" }}
+              options={[
+                { value: "tax_profile_v1", label: "Tax profile (Connect manual rates)" },
+                { value: "external_telecom_stub", label: "External stub (no tax lines)" },
+              ]}
+            />
           </label>
           {assignedProfile ? (
             <p className="muted" style={{ fontSize: 12, margin: 0, lineHeight: 1.45 }}>

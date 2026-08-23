@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiDelete, apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
@@ -37,6 +38,9 @@ function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: str
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  // Controlled mirror of the old uncontrolled select — ConnectSelect's hidden
+  // input (name="dunningEnabled") keeps the FormData read below working.
+  const [dunningChoice, setDunningChoice] = useState("null");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,6 +50,7 @@ function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: str
         `/admin/billing/platform/tenants/${tenantId}/collections-config`,
       );
       setConfig(r.collections);
+      setDunningChoice(r.collections.dunningEnabled === null ? "null" : String(r.collections.dunningEnabled));
     } catch (err: unknown) {
       setError(billingErrorMessage(err, "Failed to load collections config."));
     } finally {
@@ -94,11 +99,16 @@ function AdminTenantCollectionsConfigForm({ tenantId, onSaved }: { tenantId: str
       >
         <label>
           Dunning / autopay retry
-          <select name="dunningEnabled" defaultValue={config.dunningEnabled === null ? "null" : String(config.dunningEnabled)}>
-            <option value="null">Use global default (inherit autoBillingEnabled)</option>
-            <option value="true">Enabled — retry failed invoices on this tenant</option>
-            <option value="false">Disabled — skip autopay retries for this tenant</option>
-          </select>
+          <ConnectSelect
+            name="dunningEnabled"
+            value={dunningChoice}
+            onChange={setDunningChoice}
+            options={[
+              { value: "null", label: "Use global default (inherit autoBillingEnabled)" },
+              { value: "true", label: "Enabled — retry failed invoices on this tenant" },
+              { value: "false", label: "Disabled — skip autopay retries for this tenant" },
+            ]}
+          />
         </label>
         <label>
           Max retry attempts (blank = global default, currently 3)
@@ -364,20 +374,17 @@ function ScheduledPlanChangeCard({ tenantId, onChanged }: { tenantId: string; on
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
             <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
               New plan
-              <select
+              <ConnectSelect
                 value={selectedPlanId}
-                onChange={(e) => setSelectedPlanId(e.target.value)}
+                onChange={setSelectedPlanId}
                 disabled={saving || schedulablePlans.length === 0}
-                style={{ fontSize: 13, minWidth: 180 }}
-              >
-                {schedulablePlans.length === 0 ? (
-                  <option value="">No active plans</option>
-                ) : (
-                  schedulablePlans.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))
-                )}
-              </select>
+                style={{ minWidth: 180 }}
+                options={
+                  schedulablePlans.length === 0
+                    ? [{ value: "", label: "No active plans" }]
+                    : schedulablePlans.map((p) => ({ value: p.id, label: p.name }))
+                }
+              />
             </label>
             <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
               Effective (1st of month)
@@ -440,20 +447,16 @@ function AdminPreviewPeriodCard({
         Used for <strong>Pricing explanation</strong> and <strong>Invoice preview</strong>. Read-only — nothing is charged from this page.
       </p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <select value={month} onChange={(e) => onMonth(Number(e.target.value))} style={{ fontSize: 13 }}>
-          {MONTHS.map((name, i) => (
-            <option key={i + 1} value={i + 1}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <select value={year} onChange={(e) => onYear(Number(e.target.value))} style={{ fontSize: 13 }}>
-          {yearOptions.map((yOpt) => (
-            <option key={yOpt} value={yOpt}>
-              {yOpt}
-            </option>
-          ))}
-        </select>
+        <ConnectSelect
+          value={String(month)}
+          onChange={(v) => onMonth(Number(v))}
+          options={MONTHS.map((name, i) => ({ value: String(i + 1), label: name }))}
+        />
+        <ConnectSelect
+          value={String(year)}
+          onChange={(v) => onYear(Number(v))}
+          options={yearOptions.map((yOpt) => ({ value: String(yOpt), label: String(yOpt) }))}
+        />
       </div>
     </DetailCard>
   );

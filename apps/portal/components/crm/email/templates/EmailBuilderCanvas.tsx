@@ -151,9 +151,15 @@ export function EmailBuilderCanvas({
             <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 bg-white/95 px-3 py-2 text-slate-600">
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().undo().run()}>↶</button>
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().redo().run()}>↷</button>
-              <select className="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium">
-                <option>Paragraph</option>
-              </select>
+              {/* Non-functional block-style picker (matches the original static control). */}
+              <ConnectSelect
+                size="sm"
+                theme="light"
+                style={{ minWidth: 110 }}
+                value="Paragraph"
+                onChange={() => {}}
+                options={[{ value: "Paragraph", label: "Paragraph" }]}
+              />
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().toggleBold().run()}><Bold className="h-4 w-4" /></button>
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().toggleItalic().run()}><Italic className="h-4 w-4" /></button>
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().toggleUnderline().run()}><UnderlineIcon className="h-4 w-4" /></button>

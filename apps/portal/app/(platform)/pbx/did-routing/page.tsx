@@ -532,30 +532,32 @@ export default function DidRoutingPage() {
                 </td>
                 <td style={{ padding: "10px 14px" }}>
                   {canManage ? (
-                    <select
+                    <ConnectSelect
                       value={m.ivrProfileId ?? ""}
                       disabled={busy === m.id}
-                      onChange={(e) => updateField(m.id, { ivrProfileId: e.target.value || null })}
-                      style={{ ...inputStyle, minWidth: 180 }}
-                    >
-                      <option value="">— No IVR —</option>
-                      {ivrProfiles
-                        .filter((p) => p.id === m.ivrProfileId || true /* show all; API validates tenant */)
-                        .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                      onChange={(v) => updateField(m.id, { ivrProfileId: v || null })}
+                      style={{ minWidth: 180 }}
+                      options={[
+                        { value: "", label: "— No IVR —" },
+                        ...ivrProfiles
+                          .filter((p) => p.id === m.ivrProfileId || true /* show all; API validates tenant */)
+                          .map((p) => ({ value: p.id, label: p.name })),
+                      ]}
+                    />
                   ) : (m.ivrProfile?.name ?? "—")}
                 </td>
                 <td style={{ padding: "10px 14px" }}>
                   {canManage ? (
-                    <select
+                    <ConnectSelect
                       value={m.mohProfileId ?? ""}
                       disabled={busy === m.id}
-                      onChange={(e) => updateField(m.id, { mohProfileId: e.target.value || null })}
-                      style={{ ...inputStyle, minWidth: 180 }}
-                    >
-                      <option value="">— PBX default —</option>
-                      {mohProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                      onChange={(v) => updateField(m.id, { mohProfileId: v || null })}
+                      style={{ minWidth: 180 }}
+                      options={[
+                        { value: "", label: "— PBX default —" },
+                        ...mohProfiles.map((p) => ({ value: p.id, label: p.name })),
+                      ]}
+                    />
                   ) : (m.mohProfile?.name ?? "—")}
                 </td>
                 <td style={{ padding: "10px 14px" }}>

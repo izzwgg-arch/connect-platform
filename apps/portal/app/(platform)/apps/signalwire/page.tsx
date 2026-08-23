@@ -18,6 +18,7 @@
  * created it, and never stored by Loopcom.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { PageHeader } from "../../../../components/PageHeader";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiDelete, apiGet, apiPost, apiPut, ApiError } from "../../../../services/apiClient";
@@ -514,10 +515,15 @@ export default function SignalWirePage() {
             <h2>Numbers <span className="sw-count">{owned.length} on the account</span></h2>
             <p className="sw-sub">Search what SignalWire has, buy one, and it appears below. Buying is real and billed monthly.</p>
             <div className="sw-filters">
-              <select className="sw-input sw-narrow" value={numberType} onChange={(e) => setNumberType(e.target.value as "local" | "toll-free")}>
-                <option value="local">Local</option>
-                <option value="toll-free">Toll-free</option>
-              </select>
+              <ConnectSelect
+                style={{ flex: "0 0 auto", minWidth: 150 }}
+                value={numberType}
+                onChange={(v) => setNumberType(v as "local" | "toll-free")}
+                options={[
+                  { value: "local", label: "Local" },
+                  { value: "toll-free", label: "Toll-free" },
+                ]}
+              />
               <input className="sw-input sw-narrow" placeholder="Area code (845)" value={areaCode} onChange={(e) => setAreaCode(e.target.value.replace(/\D/g, "").slice(0, 3))} />
               <input className="sw-input sw-narrow" placeholder="Contains digits" value={contains} onChange={(e) => setContains(e.target.value.replace(/\D/g, "").slice(0, 7))} />
               <input className="sw-input sw-narrow" placeholder="State (NY)" value={region} onChange={(e) => setRegion(e.target.value.toUpperCase().slice(0, 2))} />
@@ -568,10 +574,14 @@ export default function SignalWirePage() {
                             <span className="sw-dim">{o.callHandler ? `${o.callHandler}${o.callSipEndpointId ? ` (${o.callSipEndpointId.slice(0, 8)}…)` : ""}` : "nothing"}</span>
                             {endpoints.length > 0 && (
                               <div>
-                                <select className="sw-input sw-mini" defaultValue="" onChange={(e) => { if (e.target.value) void ringEndpoint(o, e.target.value); e.target.value = ""; }}>
-                                  <option value="">Ring a SIP endpoint…</option>
-                                  {endpoints.map((ep) => <option key={ep.id} value={ep.id}>{ep.username ?? ep.id}</option>)}
-                                </select>
+                                <ConnectSelect
+                                  size="sm"
+                                  style={{ minWidth: 150, marginTop: 4 }}
+                                  value=""
+                                  placeholder="Ring a SIP endpoint…"
+                                  onChange={(v) => { if (v) void ringEndpoint(o, v); }}
+                                  options={endpoints.map((ep) => ({ value: ep.id, label: ep.username ?? ep.id }))}
+                                />
                               </div>
                             )}
                           </td>
@@ -594,10 +604,15 @@ export default function SignalWirePage() {
               number may be accepted here and then not delivered; the status callback below tells you which. A trial account can only text verified numbers.
             </p>
             <div className="sw-filters">
-              <select className="sw-input sw-narrow" value={smsFrom} onChange={(e) => setSmsFrom(e.target.value)}>
-                <option value="">From…</option>
-                {ownedSorted.map((o) => <option key={o.id} value={o.number}>{o.number}</option>)}
-              </select>
+              <ConnectSelect
+                style={{ flex: "0 0 auto", minWidth: 150 }}
+                value={smsFrom}
+                onChange={setSmsFrom}
+                options={[
+                  { value: "", label: "From…" },
+                  ...ownedSorted.map((o) => ({ value: o.number, label: o.number })),
+                ]}
+              />
               <input className="sw-input sw-narrow" placeholder="To (845…)" value={smsTo} onChange={(e) => setSmsTo(e.target.value)} />
               <input className="sw-input" placeholder="Message" value={smsBody} onChange={(e) => setSmsBody(e.target.value)} />
               <button className="sw-btn primary" disabled={smsSending || !smsFrom || !smsTo || !smsBody.trim()} onClick={sendSms}>{smsSending ? "Sending…" : "Send"}</button>
@@ -622,10 +637,15 @@ export default function SignalWirePage() {
             <h3 className="sw-h3">Create a SIP endpoint (the PBX registers with this)</h3>
             <div className="sw-filters">
               <input className="sw-input sw-narrow" placeholder="Username" value={epUsername} onChange={(e) => setEpUsername(e.target.value)} />
-              <select className="sw-input sw-narrow" value={epSendAs} onChange={(e) => setEpSendAs(e.target.value)}>
-                <option value="">Send as (caller ID)…</option>
-                {ownedSorted.map((o) => <option key={o.id} value={o.number}>{o.number}</option>)}
-              </select>
+              <ConnectSelect
+                style={{ flex: "0 0 auto", minWidth: 150 }}
+                value={epSendAs}
+                onChange={setEpSendAs}
+                options={[
+                  { value: "", label: "Send as (caller ID)…" },
+                  ...ownedSorted.map((o) => ({ value: o.number, label: o.number })),
+                ]}
+              />
               <button className="sw-btn primary" disabled={sipBusy || epUsername.trim().length < 3} onClick={createEndpoint}>{sipBusy ? "Working…" : "Create endpoint"}</button>
             </div>
             {epResult && (
@@ -665,15 +685,25 @@ export default function SignalWirePage() {
 
             <h3 className="sw-h3">Point a number at a gateway or endpoint</h3>
             <div className="sw-filters">
-              <select className="sw-input sw-narrow" value={routeNumberId} onChange={(e) => setRouteNumberId(e.target.value)}>
-                <option value="">Number…</option>
-                {ownedSorted.map((o) => <option key={o.id} value={o.id}>{o.number}</option>)}
-              </select>
-              <select className="sw-input" value={routeResourceId} onChange={(e) => setRouteResourceId(e.target.value)}>
-                <option value="">Ring…</option>
-                {gateways.map((g) => <option key={g.id} value={g.id}>gateway {g.name ?? g.id} → {g.uri}</option>)}
-                {endpoints.map((ep) => <option key={ep.id} value={ep.id}>endpoint {ep.username ?? ep.id}</option>)}
-              </select>
+              <ConnectSelect
+                style={{ flex: "0 0 auto", minWidth: 150 }}
+                value={routeNumberId}
+                onChange={setRouteNumberId}
+                options={[
+                  { value: "", label: "Number…" },
+                  ...ownedSorted.map((o) => ({ value: o.id, label: o.number })),
+                ]}
+              />
+              <ConnectSelect
+                style={{ flex: 1, minWidth: 200 }}
+                value={routeResourceId}
+                onChange={setRouteResourceId}
+                options={[
+                  { value: "", label: "Ring…" },
+                  ...gateways.map((g) => ({ value: g.id, label: `gateway ${g.name ?? g.id} → ${g.uri}` })),
+                  ...endpoints.map((ep) => ({ value: ep.id, label: `endpoint ${ep.username ?? ep.id}` })),
+                ]}
+              />
               <button className="sw-btn primary" disabled={sipBusy || !routeNumberId || !routeResourceId} onClick={assignRoute}>{sipBusy ? "Working…" : "Point it"}</button>
             </div>
           </div>
@@ -699,14 +729,24 @@ export default function SignalWirePage() {
               <>
                 <h3 className="sw-h3">Register on a number</h3>
                 <div className="sw-filters">
-                  <select className="sw-input sw-narrow" value={e911NumberId} onChange={(e) => setE911NumberId(e.target.value)}>
-                    <option value="">Number…</option>
-                    {ownedSorted.map((o) => <option key={o.id} value={o.id}>{o.number}</option>)}
-                  </select>
-                  <select className="sw-input" value={e911AddressId} onChange={(e) => setE911AddressId(e.target.value)}>
-                    <option value="">Address…</option>
-                    {addresses.map((a) => <option key={a.id} value={a.id}>{a.label ?? a.id} — {a.line}</option>)}
-                  </select>
+                  <ConnectSelect
+                    style={{ flex: "0 0 auto", minWidth: 150 }}
+                    value={e911NumberId}
+                    onChange={setE911NumberId}
+                    options={[
+                      { value: "", label: "Number…" },
+                      ...ownedSorted.map((o) => ({ value: o.id, label: o.number })),
+                    ]}
+                  />
+                  <ConnectSelect
+                    style={{ flex: 1, minWidth: 200 }}
+                    value={e911AddressId}
+                    onChange={setE911AddressId}
+                    options={[
+                      { value: "", label: "Address…" },
+                      ...addresses.map((a) => ({ value: a.id, label: `${a.label ?? a.id} — ${a.line}` })),
+                    ]}
+                  />
                   <button className="sw-btn primary" disabled={e911Busy || !e911NumberId || !e911AddressId} onClick={assignE911}>{e911Busy ? "Working…" : "Register E911"}</button>
                 </div>
               </>

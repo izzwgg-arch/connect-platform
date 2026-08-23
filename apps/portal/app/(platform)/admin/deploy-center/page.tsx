@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPost, ApiError } from "../../../../services/apiClient";
 
@@ -219,19 +220,12 @@ function Input({ value, onChange, placeholder, style }: { value: string; onChang
 
 function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
-    <select
+    <ConnectSelect
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      style={{
-        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-        color: C.text, padding: "9px 14px", fontSize: 13, outline: "none",
-        width: "100%", cursor: "pointer",
-      }}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
+      onChange={onChange}
+      options={options}
+      style={{ width: "100%" }}
+    />
   );
 }
 
@@ -765,15 +759,15 @@ function LogDrawer({
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <select
-              value={lines}
-              onChange={(e) => setLines(Number(e.target.value))}
-              style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.textMuted, padding: "5px 10px", fontSize: 11, cursor: "pointer" }}
-            >
-              {[100, 200, 500, 1000].map((n) => (
-                <option key={n} value={n}>{n} lines</option>
-              ))}
-            </select>
+            <ConnectSelect
+              size="sm"
+              value={String(lines)}
+              onChange={(v) => setLines(Number(v))}
+              options={[100, 200, 500, 1000].map((n) => ({
+                value: String(n),
+                label: `${n} lines`,
+              }))}
+            />
             <button
               onClick={copyLog}
               disabled={!logText}

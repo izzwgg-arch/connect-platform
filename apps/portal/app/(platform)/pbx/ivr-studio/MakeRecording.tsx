@@ -32,6 +32,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 
 /** Registered up front so the whole screen arrives translated at once, rather
  *  than switching to Yiddish a phrase at a time as the customer clicks. */
@@ -614,21 +615,19 @@ export function MakeRecording({
                   {pollyLanguages.length > 1 && (
                     <div>
                       <label className="mr-lbl">{t("Language")}</label>
-                      <select className="mr-in" value={pollyLanguage} onChange={(e) => setPollyLanguage(e.target.value)}>
-                        <option value="all">{t("All languages")}</option>
-                        {pollyLanguages.map(([code, label]) => (
-                          <option key={code} value={code}>{label}</option>
-                        ))}
-                      </select>
+                      <ConnectSelect value={pollyLanguage} onChange={setPollyLanguage}
+                        style={{ width: "100%" }}
+                        options={[
+                          { value: "all", label: t("All languages") },
+                          ...pollyLanguages.map(([code, label]) => ({ value: code, label })),
+                        ]} />
                     </div>
                   )}
                   <div>
                     <label className="mr-lbl">{t("Quality")}</label>
-                    <select className="mr-in" value={pollyEngine} onChange={(e) => setPollyEngine(e.target.value)}>
-                      {(polly?.engines ?? []).map((e) => (
-                        <option key={e.id} value={e.id}>{e.label}</option>
-                      ))}
-                    </select>
+                    <ConnectSelect value={pollyEngine} onChange={setPollyEngine}
+                      style={{ width: "100%" }}
+                      options={(polly?.engines ?? []).map((e) => ({ value: e.id, label: e.label }))} />
                   </div>
                 </div>
               )}
@@ -717,11 +716,9 @@ export function MakeRecording({
                         onChange={(v) => setTuning({ ...tuning, style: v })} />
 
                       <label className="mr-lbl">{t("Quality")}</label>
-                      <select className="mr-in" value={model} onChange={(e) => setModel(e.target.value)}>
-                        {(status?.models ?? []).map((m) => (
-                          <option key={m.id} value={m.id}>{m.label} — {m.detail}</option>
-                        ))}
-                      </select>
+                      <ConnectSelect value={model} onChange={setModel}
+                        style={{ width: "100%" }}
+                        options={(status?.models ?? []).map((m) => ({ value: m.id, label: `${m.label} — ${m.detail}` }))} />
                     </>
                   )}
                 </div>

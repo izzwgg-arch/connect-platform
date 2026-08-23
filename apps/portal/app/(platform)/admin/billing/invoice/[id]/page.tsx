@@ -8,6 +8,7 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiDelete, apiPost, apiPut } from "../../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../../components/ConnectSelect";
 import { BillingNav, Pill, asList, dateTime, errText, invoiceTone, longDate, money, useApi } from "../../_new/ui";
 import "../../customer/customerBilling.css";
 
@@ -530,15 +531,20 @@ function OutsidePayment({ invoice, onDone }: { invoice: Invoice; onDone: () => v
           </div>
           <div className="cbill-row">
             <div className="cbill-label"><span className="t">How they paid</span></div>
-            <select className="cbill-select" value={method} onChange={(e) => setMethod(e.target.value)} aria-label="Payment method">
-              <option value="ZELLE">Zelle</option>
-              <option value="CHECK">Cheque</option>
-              <option value="CASH">Cash</option>
-              <option value="QUICKPAY">QuickPay</option>
-              <option value="CARD_EXTERNAL">Card, taken elsewhere</option>
-              <option value="ACH_EXTERNAL">Bank transfer</option>
-              <option value="OTHER">Something else</option>
-            </select>
+            <ConnectSelect
+              value={method}
+              onChange={setMethod}
+              ariaLabel="Payment method"
+              options={[
+                { value: "ZELLE", label: "Zelle" },
+                { value: "CHECK", label: "Cheque" },
+                { value: "CASH", label: "Cash" },
+                { value: "QUICKPAY", label: "QuickPay" },
+                { value: "CARD_EXTERNAL", label: "Card, taken elsewhere" },
+                { value: "ACH_EXTERNAL", label: "Bank transfer" },
+                { value: "OTHER", label: "Something else" },
+              ]}
+            />
           </div>
           <div className="cbill-row">
             <div className="cbill-label"><span className="t">When</span></div>

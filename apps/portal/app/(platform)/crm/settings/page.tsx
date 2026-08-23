@@ -825,10 +825,14 @@ export default function CrmSettingsPage() {
                 <button onClick={analyzeSample} disabled={analyzingSample || !sampleEmail.trim()} style={{ padding: "0.4rem 0.875rem", borderRadius: "0.5rem", background: "var(--accent)", color: "#fff", fontWeight: 700, fontSize: "0.8125rem", border: "none", cursor: analyzingSample ? "not-allowed" : "pointer", opacity: !sampleEmail.trim() ? 0.55 : 1 }}>
                   {analyzingSample ? "Analyzing..." : "Test extraction"}
                 </button>
-                <select value={ruleDraft.mode} onChange={(e) => setRuleDraft((p) => ({ ...p, mode: e.target.value as any }))} style={{ padding: "0.4rem 0.6rem", borderRadius: "0.5rem", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}>
-                  <option value="AUTO_CREATE">Auto-create when confident</option>
-                  <option value="REVIEW_FIRST">Review first</option>
-                </select>
+                <ConnectSelect
+                  value={ruleDraft.mode}
+                  onChange={(v) => setRuleDraft((p) => ({ ...p, mode: v as any }))}
+                  options={[
+                    { value: "AUTO_CREATE", label: "Auto-create when confident" },
+                    { value: "REVIEW_FIRST", label: "Review first" },
+                  ]}
+                />
               </div>
 
               {analysis && (

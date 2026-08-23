@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPut, ApiError, getPortalApiBaseUrl } from "../../../services/apiClient";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { PageHeader } from "../../../components/PageHeader";
 
 /** Reading localStorage throws outright in Safari's "Block All Cookies" mode
@@ -292,16 +293,19 @@ export default function PollyPage() {
 
             <label className="pl-lbl">Region</label>
             <div className="pl-row">
-              <select className="pl-input" value={region} onChange={(e) => setRegion(e.target.value)}>
-                {(state?.regions ?? []).map((r) => (
-                  <option key={r.id} value={r.id}>{r.label} — {r.id}</option>
-                ))}
-                {/* A saved region outside the shortlist must still be selectable,
-                    or opening this page would silently move it on the next save. */}
-                {state?.region && !(state.regions ?? []).some((r) => r.id === state.region) && (
-                  <option value={state.region}>{state.region}</option>
-                )}
-              </select>
+              <ConnectSelect
+                style={{ flex: 1, minWidth: 240 }}
+                value={region}
+                onChange={setRegion}
+                options={[
+                  ...(state?.regions ?? []).map((r) => ({ value: r.id, label: `${r.label} — ${r.id}` })),
+                  // A saved region outside the shortlist must still be selectable,
+                  // or opening this page would silently move it on the next save.
+                  ...(state?.region && !(state.regions ?? []).some((r) => r.id === state.region)
+                    ? [{ value: state.region, label: state.region }]
+                    : []),
+                ]}
+              />
             </div>
             <p className="pl-sub" style={{ marginTop: 8 }}>
               Any region works. Pick the one nearest your phone system for the quickest generation.
@@ -355,18 +359,24 @@ export default function PollyPage() {
               </p>
 
               <div className="pl-filters">
-                <select className="pl-input pl-narrow" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                  <option value="all">All languages</option>
-                  {languages.map(([code, label]) => (
-                    <option key={code} value={code}>{label}</option>
-                  ))}
-                </select>
-                <select className="pl-input pl-narrow" value={engine} onChange={(e) => setEngine(e.target.value)}>
-                  <option value="all">Any quality</option>
-                  {(state.engines ?? []).map((e) => (
-                    <option key={e.id} value={e.id}>{e.label}</option>
-                  ))}
-                </select>
+                <ConnectSelect
+                  style={{ flex: "0 0 auto", minWidth: 170 }}
+                  value={language}
+                  onChange={setLanguage}
+                  options={[
+                    { value: "all", label: "All languages" },
+                    ...languages.map(([code, label]) => ({ value: code, label })),
+                  ]}
+                />
+                <ConnectSelect
+                  style={{ flex: "0 0 auto", minWidth: 170 }}
+                  value={engine}
+                  onChange={setEngine}
+                  options={[
+                    { value: "all", label: "Any quality" },
+                    ...(state.engines ?? []).map((e) => ({ value: e.id, label: e.label })),
+                  ]}
+                />
                 <input
                   className="pl-input"
                   placeholder="Search by name"

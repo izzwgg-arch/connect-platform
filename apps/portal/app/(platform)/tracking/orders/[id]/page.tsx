@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Link2, UserCog, StickyNote, ShieldOff, Copy, Check } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../../components/crm";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { deliveryApi } from "../../../../../services/deliveryApi";
 
 function maskPhone(p?: string | null): string {
@@ -142,17 +143,19 @@ export default function DeliveryOrderDetailPage() {
           {/* Reassign */}
           <CRMCard>
             <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-crm-muted"><UserCog size={12} className="mr-1 inline" />Reassign</h2>
-            <select
-              className={crm.select}
-              defaultValue={order.assignment?.driverId || ""}
+            <ConnectSelect
+              style={{ width: "100%" }}
+              value={order.assignment?.driverId || ""}
               disabled={busy === "reassign"}
-              onChange={(e) => reassign(e.target.value)}
-            >
-              <option value="">Choose a driver…</option>
-              {drivers.map((d) => (
-                <option key={d.id} value={d.id}>{d.userId?.slice(0, 12) || d.id.slice(0, 8)}{d.status ? ` · ${d.status.toLowerCase()}` : ""}</option>
-              ))}
-            </select>
+              onChange={(v) => reassign(v)}
+              options={[
+                { value: "", label: "Choose a driver…" },
+                ...drivers.map((d) => ({
+                  value: d.id,
+                  label: `${d.userId?.slice(0, 12) || d.id.slice(0, 8)}${d.status ? ` · ${d.status.toLowerCase()}` : ""}`,
+                })),
+              ]}
+            />
           </CRMCard>
 
           {/* Internal note */}

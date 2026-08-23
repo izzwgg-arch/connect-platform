@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
-import { ConnectSelect } from "../../../../components/ConnectSelect";
+import { ConnectSelect, ConnectMultiSelect } from "../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { normalizeUsCanadaToE164 } from "@connect/shared";
@@ -632,17 +632,15 @@ function NumberAssignForm({
   return (
     <div className="stack" style={{ minWidth: 200, gap: 6 }}>
       {superOnly && tenants.length > 0 ? (
-        <select
-          className="input"
-          style={{ fontSize: 12 }}
+        <ConnectSelect
+          style={{ width: "100%" }}
           value={tenantId}
-          onChange={(e) => { setTenantId(e.target.value); setExtId(""); setAssignedUserIds([]); }}
-        >
-          <option value="">— unassigned —</option>
-          {tenants.map((t) => (
-            <option key={t.id} value={t.id}>{t.name || t.id}</option>
-          ))}
-        </select>
+          onChange={(v) => { setTenantId(v); setExtId(""); setAssignedUserIds([]); }}
+          options={[
+            { value: "", label: "— unassigned —" },
+            ...tenants.map((t) => ({ value: t.id, label: t.name || t.id })),
+          ]}
+        />
       ) : (
         <input
           className="input"
@@ -688,17 +686,13 @@ function NumberAssignForm({
               { value: "PERSONAL", label: "Personal mailbox per selected user" },
             ]}
           />
-          <select
-            multiple
-            size={Math.min(6, users.length)}
-            style={{ width: "100%", fontSize: 12, borderRadius: 4, border: "1px solid var(--border, #ccc)", padding: 2 }}
-            value={assignedUserIds}
-            onChange={(e) => setAssignedUserIds([...e.target.selectedOptions].map((o) => o.value))}
-          >
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
-            ))}
-          </select>
+          <ConnectMultiSelect
+            style={{ width: "100%" }}
+            values={assignedUserIds}
+            onChange={setAssignedUserIds}
+            placeholder="— all users —"
+            options={users.map((u) => ({ value: u.id, label: u.displayName || u.email }))}
+          />
           {assignedUserIds.length > 0 && (
             <button
               type="button"

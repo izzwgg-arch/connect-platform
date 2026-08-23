@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import IField, { CARD_TYPE, CVV_TYPE, type ErrorData, type TokenData } from "@cardknox/react-ifields";
+import { ConnectSelect } from "../ConnectSelect";
 
 export type CardknoxBillingFields = {
   cardholderName: string;
@@ -93,6 +94,13 @@ export function CardknoxIFieldsForm({
 }: CardknoxIFieldsFormProps) {
   const [ifieldsReady, setIfieldsReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Expiry lives in controlled state: the selects are ConnectSelects whose
+  // hidden inputs feed FormData, and hidden inputs are EXEMPT from browser
+  // `required` validation — so emptiness is checked explicitly below and
+  // surfaced as expiryError instead of relying on reportValidity.
+  const [expMonth, setExpMonth] = useState("");
+  const [expYear, setExpYear] = useState("");
+  const [expiryError, setExpiryError] = useState<string | null>(null);
   const cardFieldRef = useRef<{ getToken?: () => void } | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const pendingRef = useRef<CardknoxBillingFields | null>(null);
@@ -154,10 +162,16 @@ export function CardknoxIFieldsForm({
   }
 
   function validateRequiredBillingFields(form: HTMLFormElement): boolean {
+    // expMonth/expYear are ConnectSelects backed by hidden inputs, which the
+    // browser's constraint validation skips — checked explicitly first.
+    if (!expMonth.trim() || !expYear.trim()) {
+      setExpiryError("Choose the card's expiration month and year.");
+      return false;
+    }
+    setExpiryError(null);
+
     const requiredNames = [
       "cardholderName",
-      "expMonth",
-      "expYear",
       ...(showEmail ? ["billingEmail"] : []),
       ...(showBillingAddress ? ["billingAddress1", "billingCity", "billingState", "billingZip"] : ["billingZip"]),
     ];
@@ -261,22 +275,41 @@ export function CardknoxIFieldsForm({
       <div className="billing-pay-row billing-pay-row--expiration">
         <label>
           Month
-          <select name="expMonth" autoComplete="cc-exp-month" required disabled={disabled || busy} defaultValue="">
-            <option value="" disabled>Month</option>
-            {Array.from({ length: 12 }, (_, idx) => {
+          <ConnectSelect
+            name="expMonth"
+            value={expMonth}
+            onChange={(v) => { setExpMonth(v); setExpiryError(null); }}
+            placeholder="Month"
+            ariaLabel="Expiration month"
+            disabled={disabled || busy}
+            theme={resolvedFieldTheme}
+            style={{ width: "100%" }}
+            options={Array.from({ length: 12 }, (_, idx) => {
               const month = String(idx + 1).padStart(2, "0");
-              return <option key={month} value={month}>{month}</option>;
+              return { value: month, label: month };
             })}
-          </select>
+          />
         </label>
         <label>
           Exp. year
-          <select name="expYear" autoComplete="cc-exp-year" required disabled={disabled || busy} defaultValue="">
-            <option value="" disabled>Year</option>
-            {years.map((year) => <option key={year} value={year}>{year}</option>)}
-          </select>
+          <ConnectSelect
+            name="expYear"
+            value={expYear}
+            onChange={(v) => { setExpYear(v); setExpiryError(null); }}
+            placeholder="Year"
+            ariaLabel="Expiration year"
+            disabled={disabled || busy}
+            theme={resolvedFieldTheme}
+            style={{ width: "100%" }}
+            options={years.map((year) => ({ value: year, label: year }))}
+          />
         </label>
       </div>
+      {expiryError ? (
+        <p className="billing-pay-error" role="alert" style={{ margin: "4px 0 0", fontSize: 12, color: "#dc2626" }}>
+          {expiryError}
+        </p>
+      ) : null}
       {showEmail ? (
         <label className="billing-field-email">
           Billing email

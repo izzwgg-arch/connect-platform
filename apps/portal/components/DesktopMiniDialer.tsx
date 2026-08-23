@@ -37,6 +37,7 @@ import {
   Voicemail,
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
+import { ConnectSelect } from "./ConnectSelect";
 import { useSipPhone } from "../hooks/useSipPhone";
 import { MiniDialerReloadBar } from "./DesktopUpdateNotice";
 import { useTelephonySocket } from "../hooks/useTelephonySocket";
@@ -1048,31 +1049,43 @@ export function DesktopMiniDialer() {
                 </div>
                 <label className="settings-field">
                   <span>Microphone</span>
-                  <select value={phone.currentMicDeviceId} onChange={(e) => updateMicDevice(e.target.value)}>
-                    <option value="">System default microphone</option>
-                    {phone.audioInputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${device.deviceId.slice(0, 6)}`}</option>
-                    ))}
-                  </select>
+                  <ConnectSelect
+                    size="sm"
+                    style={{ width: "100%" }}
+                    value={phone.currentMicDeviceId}
+                    onChange={(v) => updateMicDevice(v)}
+                    options={[
+                      { value: "", label: "System default microphone" },
+                      ...phone.audioInputDevices.map((device) => ({ value: device.deviceId, label: device.label || `Microphone ${device.deviceId.slice(0, 6)}` })),
+                    ]}
+                  />
                 </label>
                 <label className="settings-field">
                   <span>Speaker / headset output</span>
-                  <select value={phone.currentSinkId} onChange={(e) => updateSpeakerDevice(e.target.value)}>
-                    <option value="">System default speaker</option>
-                    {phone.audioOutputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>{device.label || `Speaker ${device.deviceId.slice(0, 6)}`}</option>
-                    ))}
-                  </select>
+                  <ConnectSelect
+                    size="sm"
+                    style={{ width: "100%" }}
+                    value={phone.currentSinkId}
+                    onChange={(v) => updateSpeakerDevice(v)}
+                    options={[
+                      { value: "", label: "System default speaker" },
+                      ...phone.audioOutputDevices.map((device) => ({ value: device.deviceId, label: device.label || `Speaker ${device.deviceId.slice(0, 6)}` })),
+                    ]}
+                  />
                 </label>
                 <div className="settings-section-label">Ringer</div>
                 <label className="settings-field">
                   <span>Ringer output (rings here even during a headset call)</span>
-                  <select value={ringerDeviceId} onChange={(e) => updateRingerDevice(e.target.value)}>
-                    <option value="">System default speaker</option>
-                    {phone.audioOutputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>{device.label || `Speaker ${device.deviceId.slice(0, 6)}`}</option>
-                    ))}
-                  </select>
+                  <ConnectSelect
+                    size="sm"
+                    style={{ width: "100%" }}
+                    value={ringerDeviceId}
+                    onChange={(v) => updateRingerDevice(v)}
+                    options={[
+                      { value: "", label: "System default speaker" },
+                      ...phone.audioOutputDevices.map((device) => ({ value: device.deviceId, label: device.label || `Speaker ${device.deviceId.slice(0, 6)}` })),
+                    ]}
+                  />
                 </label>
                 <label className="settings-field">
                   <span>Ringer volume</span>
@@ -1216,9 +1229,13 @@ export function DesktopMiniDialer() {
           <div className={"screen dialer-pane" + (dialSuggestions.length > 0 ? " with-suggestions" : "")}>
             <input className="number-input" value={phone.dialpadInput} placeholder="Search or dial" onChange={(e) => phone.setDialpadInput(e.target.value.replace(/[^\d*#+]/g, ""))} onKeyDown={(e) => { if (e.key === "Enter") callTarget(phone.dialpadInput); }} />
             {(phone.outboundRoutes.length > 0 || phone.sipAccounts.length > 0) && (
-              <select className="route-select" value={phone.selectedOutboundRouteId} onChange={(e) => phone.setSelectedOutboundRouteId(e.target.value)}>
-                {routeOptions.map((route) => <option key={route.id || "none"} value={route.id} disabled={route.disabled}>{route.name}</option>)}
-              </select>
+              <ConnectSelect
+                size="sm"
+                style={{ width: "100%", marginTop: 8 }}
+                value={phone.selectedOutboundRouteId}
+                onChange={(v) => phone.setSelectedOutboundRouteId(v)}
+                options={routeOptions.map((route) => ({ value: route.id, label: route.name, disabled: route.disabled }))}
+              />
             )}
             {dialSuggestions.length > 0 && (
               <div className="suggestions">

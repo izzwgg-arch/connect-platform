@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiPost } from "../../../../../services/apiClient";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
@@ -120,15 +121,13 @@ function MapTenantDrawer({
               Choose the Connect company that owns this Sola recurring schedule.
               The card token will be imported automatically.
             </p>
-            <select
-              className="input"
+            <ConnectSelect
               value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
+              onChange={setTenantId}
               disabled={busy}
               style={{ marginBottom: 12, width: "100%" }}
-            >
-              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+              options={tenants.map((t) => ({ value: t.id, label: t.name }))}
+            />
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
               <button type="button" className="btn primary" disabled={busy || !tenantId} onClick={() => void confirm()}>
@@ -229,9 +228,12 @@ export function SolaImportsWorkspace() {
           finally { setSyncing(false); }
         })()}>{syncing ? "Syncing… (may take up to a minute)" : "Sync from Sola"}</button>
         <input className="input" placeholder="Search…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
-        <select className="input" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(1); }}>
-          {STATUS_FILTERS.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <ConnectSelect
+          size="sm"
+          value={statusFilter}
+          onChange={(v) => { setStatusFilter(v as typeof statusFilter); setPage(1); }}
+          options={STATUS_FILTERS.map((s) => ({ value: s, label: s }))}
+        />
       </div>
       {syncResult && <p className="muted">{syncResult}</p>}
       {actionError && <ErrorState message={actionError} />}

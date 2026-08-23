@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Settings, ShieldCheck, Bell, CheckCircle2 } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm } from "../../../../components/crm";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { deliveryApi } from "../../../../services/deliveryApi";
 
 // ── Config shape (loose; server is source of truth) ──────────────────────────
@@ -215,17 +216,12 @@ export default function TrackingSettingsPage() {
                 onChange={(v) => set("enabled", v)}
               />
               <Field label="Customer map policy">
-                <select
-                  className={crm.select}
+                <ConnectSelect
+                  style={{ width: "100%" }}
                   value={draft.mapReveal}
-                  onChange={(e) => set("mapReveal", e.target.value as DeliveryConfig["mapReveal"])}
-                >
-                  {MAP_REVEAL_OPTS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => set("mapReveal", v as DeliveryConfig["mapReveal"])}
+                  options={MAP_REVEAL_OPTS}
+                />
               </Field>
               <Field label="Show exact pin when (stops away)">
                 <input
@@ -243,17 +239,12 @@ export default function TrackingSettingsPage() {
                 />
               </Field>
               <Field label="Verification tier">
-                <select
-                  className={crm.select}
+                <ConnectSelect
+                  style={{ width: "100%" }}
                   value={draft.verifyTier}
-                  onChange={(e) => set("verifyTier", e.target.value as DeliveryConfig["verifyTier"])}
-                >
-                  {VERIFY_TIER_OPTS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => set("verifyTier", v as DeliveryConfig["verifyTier"])}
+                  options={VERIFY_TIER_OPTS}
+                />
               </Field>
               <Field label="Location retention (days)">
                 <input
@@ -295,17 +286,12 @@ export default function TrackingSettingsPage() {
                 onChange={(v) => set("notifyApproaching", v)}
               />
               <Field label="Voice ETA mode">
-                <select
-                  className={crm.select}
+                <ConnectSelect
+                  style={{ width: "100%" }}
                   value={draft.voiceMode}
-                  onChange={(e) => set("voiceMode", e.target.value as DeliveryConfig["voiceMode"])}
-                >
-                  {VOICE_MODE_OPTS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => set("voiceMode", v as DeliveryConfig["voiceMode"])}
+                  options={VOICE_MODE_OPTS}
+                />
               </Field>
             </div>
           </CRMCard>

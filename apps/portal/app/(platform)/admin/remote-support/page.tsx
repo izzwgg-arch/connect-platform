@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import {
   RemoteSupportPeer,
@@ -217,14 +218,18 @@ function RemoteSupportConsole() {
 
           <label className="rs-field">
             <span>Who</span>
-            <select value={targetUserId} onChange={(e) => setTargetUserId(e.target.value)}>
-              <option value="">Choose a person…</option>
-              {people.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {[p.firstName, p.lastName].filter(Boolean).join(" ") || p.email}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={targetUserId}
+              onChange={(v) => setTargetUserId(v)}
+              style={{ width: "100%" }}
+              options={[
+                { value: "", label: "Choose a person…" },
+                ...people.map((p) => ({
+                  value: p.id,
+                  label: [p.firstName, p.lastName].filter(Boolean).join(" ") || p.email,
+                })),
+              ]}
+            />
           </label>
 
           <label className="rs-field">

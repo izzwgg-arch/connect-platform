@@ -5,6 +5,7 @@
  * /agent-api/admin/policies (owner JWT), versioned + diff-audited server-side.
  */
 import { useCallback, useEffect, useState } from "react";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 
 type Grant = { mode: "allowed" | "ask_owner" | "blocked"; limits?: Record<string, number>; businessHoursOnly?: boolean };
 type Policy = { tenantId: string; version: number; historyVisible: boolean; channels: string[]; grants: Record<string, Grant>; updatedBy?: string };
@@ -105,11 +106,16 @@ export default function AgentPermissionsPage() {
                 <tr key={c.id} style={{ borderBottom: "1px solid rgba(128,128,128,.15)" }}>
                   <td style={td}>{c.label}</td>
                   <td style={{ ...td, textAlign: "right" }}>
-                    <select value={draft.grants[c.id]?.mode ?? "blocked"} onChange={(e) => setGrant(c.id, e.target.value as Grant["mode"])} style={sel}>
-                      <option value="allowed">Allowed (needs approval)</option>
-                      <option value="ask_owner">Ask owner</option>
-                      <option value="blocked">Blocked</option>
-                    </select>
+                    <ConnectSelect
+                      size="sm"
+                      value={draft.grants[c.id]?.mode ?? "blocked"}
+                      onChange={(v) => setGrant(c.id, v as Grant["mode"])}
+                      options={[
+                        { value: "allowed", label: "Allowed (needs approval)" },
+                        { value: "ask_owner", label: "Ask owner" },
+                        { value: "blocked", label: "Blocked" },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}
@@ -130,6 +136,5 @@ export default function AgentPermissionsPage() {
 const th: React.CSSProperties = { textAlign: "left", fontSize: 11, textTransform: "uppercase", opacity: 0.6, padding: "6px 8px", borderBottom: "1px solid rgba(128,128,128,.3)" };
 const td: React.CSSProperties = { padding: "8px" };
 const inp: React.CSSProperties = { padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13, flex: 1 };
-const sel: React.CSSProperties = { padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", fontSize: 13 };
 const btnBlue: React.CSSProperties = { padding: "8px 16px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600 };
 const btnGhost: React.CSSProperties = { padding: "6px 14px", borderRadius: 8, border: "1px solid rgba(128,128,128,.4)", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 13 };

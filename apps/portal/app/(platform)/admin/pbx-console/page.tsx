@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost, ApiError } from "../../../../services/apiClient";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { PanelForm, type PanelFormData, type PanelEdit } from "./PanelForm";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import "./pbxConsole.css";
 
 /** Which panel module each screen edits, and whether it belongs to a customer. */
@@ -251,10 +252,15 @@ function TenantSwitcher({ tenants, scope, onChange }: { tenants: Tenant[]; scope
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-dim)" }}>
       Customer
-      <select className="pc-ctl" value={scope} onChange={(e) => onChange(e.target.value)} style={{ minWidth: 180 }}>
-        <option value="">All customers</option>
-        {tenants.filter((t) => !t.isMain).map((t) => <option key={t.tenantId} value={t.name}>{t.description}</option>)}
-      </select>
+      <ConnectSelect
+        value={scope}
+        onChange={onChange}
+        style={{ minWidth: 180 }}
+        options={[
+          { value: "", label: "All customers" },
+          ...tenants.filter((t) => !t.isMain).map((t) => ({ value: t.name, label: t.description })),
+        ]}
+      />
     </label>
   );
 }
@@ -354,12 +360,18 @@ function NewTenantDialog({ profiles, onClose, onCreated, push }: {
           </div>
           <div className="pc-f">
             <label htmlFor="nt-prof">Outbound profile <span className="pc-rowsub">(optional)</span></label>
-            <select id="nt-prof" className="pc-ctl" value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-              <option value="">None &mdash; set this up later</option>
-              {profiles.map((p) => (
-                <option key={p.id} value={String(p.id)}>{p.label}{p.inUseBy ? " - used by " + p.inUseBy : ""}</option>
-              ))}
-            </select>
+            <ConnectSelect
+              id="nt-prof"
+              value={profileId}
+              onChange={(v) => setProfileId(v)}
+              options={[
+                { value: "", label: "None — set this up later" },
+                ...profiles.map((p) => ({
+                  value: String(p.id),
+                  label: p.label + (p.inUseBy ? " - used by " + p.inUseBy : ""),
+                })),
+              ]}
+            />
             <div className="pc-help">How their outgoing calls leave the building. Leave this alone unless you know which one they should share.</div>
           </div>
           <div className="pc-note">
@@ -654,17 +666,25 @@ function RouteDialog({ push, onClose, onDone, trunks, edit }: { push: any; onClo
           <div className="pc-f"><label>Caller ID name</label><input className="pc-ctl" value={cidName} onChange={(e) => setCidName(e.target.value)} placeholder="Acme Bakery" /></div>
           <div className="pc-f"><label>Caller ID number</label><input className="pc-ctl pc-mono" value={cidNumber} onChange={(e) => setCidNumber(e.target.value)} placeholder="8455551234" /></div>
           <div className="pc-f"><label>Primary trunk</label>
-            <select className="pc-ctl" value={primary} onChange={(e) => setPrimary(e.target.value)}>
-              <option value="">— pick —</option>
-              {trunks.map((t) => <option key={t.id} value={String(t.id)}>{t.description || `#${t.id}`}</option>)}
-            </select>
+            <ConnectSelect
+              value={primary}
+              onChange={(v) => setPrimary(v)}
+              options={[
+                { value: "", label: "— pick —" },
+                ...trunks.map((t) => ({ value: String(t.id), label: t.description || `#${t.id}` })),
+              ]}
+            />
             <div className="pc-help">Dialed first. Platform rule: the shared primary trunk (&quot;0001&quot;) first, the customer&apos;s own VoIP.ms trunk as backup — carriers filter VoIP.ms-originated calls.</div>
           </div>
           <div className="pc-f"><label>Backup trunk</label>
-            <select className="pc-ctl" value={backup} onChange={(e) => setBackup(e.target.value)}>
-              <option value="">— none —</option>
-              {trunks.map((t) => <option key={t.id} value={String(t.id)}>{t.description || `#${t.id}`}</option>)}
-            </select>
+            <ConnectSelect
+              value={backup}
+              onChange={(v) => setBackup(v)}
+              options={[
+                { value: "", label: "— none —" },
+                ...trunks.map((t) => ({ value: String(t.id), label: t.description || `#${t.id}` })),
+              ]}
+            />
           </div>
         </div>
         <div className="pc-mfoot">
@@ -698,10 +718,14 @@ function NewArsDialog({ push, onClose, onDone, routes }: { push: any; onClose: a
         <div className="pc-mbody">
           <div className="pc-f"><label>Name</label><input className="pc-ctl" value={description} autoFocus onChange={(e) => setDescription(e.target.value)} /><div className="pc-help">This is what a tenant&apos;s outbound profile points at.</div></div>
           <div className="pc-f"><label>Outbound route</label>
-            <select className="pc-ctl" value={routeId} onChange={(e) => setRouteId(e.target.value)}>
-              <option value="">— pick —</option>
-              {routes.map((r) => <option key={r.id} value={String(r.id)}>{r.description || `#${r.id}`}</option>)}
-            </select>
+            <ConnectSelect
+              value={routeId}
+              onChange={(v) => setRouteId(v)}
+              options={[
+                { value: "", label: "— pick —" },
+                ...routes.map((r) => ({ value: String(r.id), label: r.description || `#${r.id}` })),
+              ]}
+            />
           </div>
         </div>
         <div className="pc-mfoot">
@@ -905,20 +929,28 @@ function TeamDialog({ kind, edit, tenants, push, onClose, onDone }: { kind: "rg"
         <div className="pc-mbody" style={{ maxHeight: "62vh", overflowY: "auto" }}>
           {!edit ? (
             <div className="pc-f"><label>Customer</label>
-              <select className="pc-ctl" value={tenantId} onChange={(e) => { setTenantId(e.target.value); setMembers([{ extensionId: "", penalty: "" }]); setDestExt(""); }}>
-                <option value="">— pick —</option>
-                {tenants.filter((t) => t.extensions.length).map((t) => <option key={t.tenantId} value={String(t.tenantId)}>{t.description}</option>)}
-              </select>
+              <ConnectSelect
+                value={tenantId}
+                onChange={(v) => { setTenantId(v); setMembers([{ extensionId: "", penalty: "" }]); setDestExt(""); }}
+                options={[
+                  { value: "", label: "— pick —" },
+                  ...tenants.filter((t) => t.extensions.length).map((t) => ({ value: String(t.tenantId), label: t.description })),
+                ]}
+              />
             </div>
           ) : null}
           {FIELDS.slice(0, edit ? FIELDS.length : kind === "rg" ? 4 : 8).map((f) => (
             <div className="pc-f" key={f.k}>
               <label>{f.label}</label>
               {f.type === "sel" ? (
-                <select className="pc-ctl" value={vals[f.k] ?? ""} onChange={(e) => setVal(f.k, e.target.value)}>
-                  {(vals[f.k] ?? "") === "" ? <option value="">—</option> : null}
-                  {(f.opts || []).map(([v, t]) => <option key={v} value={v}>{t}</option>)}
-                </select>
+                <ConnectSelect
+                  value={vals[f.k] ?? ""}
+                  onChange={(v) => setVal(f.k, v)}
+                  options={[
+                    ...((vals[f.k] ?? "") === "" ? [{ value: "", label: "—" }] : []),
+                    ...(f.opts || []).map(([v, t]) => ({ value: v, label: t })),
+                  ]}
+                />
               ) : (
                 <input className="pc-ctl" value={vals[f.k] ?? ""} onChange={(e) => setVal(f.k, e.target.value)} inputMode={f.type === "num" ? "numeric" : undefined} />
               )}
@@ -934,10 +966,15 @@ function TeamDialog({ kind, edit, tenants, push, onClose, onDone }: { kind: "rg"
           <div className="pc-f"><label>{kind === "rg" ? "Members (ring order)" : "Agents"}</label>
             {members.map((m, i) => (
               <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
-                <select className="pc-ctl" style={{ flex: 1 }} value={m.extensionId} onChange={(e) => setMembers((s) => s.map((x, j) => j === i ? { ...x, extensionId: e.target.value } : x))}>
-                  <option value="">— pick an extension —</option>
-                  {memberOpts.map((x) => <option key={x.id} value={String(x.id)}>{x.number} — {x.name}</option>)}
-                </select>
+                <ConnectSelect
+                  style={{ flex: 1 }}
+                  value={m.extensionId}
+                  onChange={(v) => setMembers((s) => s.map((x, j) => j === i ? { ...x, extensionId: v } : x))}
+                  options={[
+                    { value: "", label: "— pick an extension —" },
+                    ...memberOpts.map((x) => ({ value: String(x.id), label: `${x.number} — ${x.name}` })),
+                  ]}
+                />
                 {kind === "queue" ? <input className="pc-ctl" style={{ width: 110 }} placeholder="penalty" value={m.penalty} onChange={(e) => setMembers((s) => s.map((x, j) => j === i ? { ...x, penalty: e.target.value } : x))} /> : null}
                 <button className="pc-btn pc-btn-sm pc-btn-ghost" onClick={() => setMembers((s) => s.filter((_, j) => j !== i))}>✕</button>
               </div>
@@ -948,14 +985,23 @@ function TeamDialog({ kind, edit, tenants, push, onClose, onDone }: { kind: "rg"
           {!edit ? (
             <div className="pc-f"><label>{kind === "rg" ? "If nobody answers" : "Last destination (required)"}</label>
               <div style={{ display: "flex", gap: 8 }}>
-                <select className="pc-ctl" value={destKind} onChange={(e) => setDestKind(e.target.value as any)}>
-                  <option value="extension">Ring an extension</option>
-                  <option value="voicemail">Voicemail of</option>
-                </select>
-                <select className="pc-ctl" style={{ flex: 1 }} value={destExt} onChange={(e) => setDestExt(e.target.value)}>
-                  <option value="">— pick —</option>
-                  {memberOpts.map((x) => <option key={x.id} value={String(x.id)}>{x.number} — {x.name}</option>)}
-                </select>
+                <ConnectSelect
+                  value={destKind}
+                  onChange={(v) => setDestKind(v as any)}
+                  options={[
+                    { value: "extension", label: "Ring an extension" },
+                    { value: "voicemail", label: "Voicemail of" },
+                  ]}
+                />
+                <ConnectSelect
+                  style={{ flex: 1 }}
+                  value={destExt}
+                  onChange={(v) => setDestExt(v)}
+                  options={[
+                    { value: "", label: "— pick —" },
+                    ...memberOpts.map((x) => ({ value: String(x.id), label: `${x.number} — ${x.name}` })),
+                  ]}
+                />
               </div>
             </div>
           ) : null}
@@ -1129,7 +1175,7 @@ function ExtensionForm({ draft, set, errors, tenants, isNew }: any) {
   return (
     <>
       <div className="pc-sect"><h3>Identity</h3><div className="pc-grid">
-        {isNew && <Field label="Customer" req err={errors.tenantId}><select className={"pc-ctl " + (errors.tenantId ? "bad" : "")} value={draft.tenantId} onChange={(e) => { const t = tenants.find((x: Tenant) => x.tenantId === Number(e.target.value)); set({ tenantId: Number(e.target.value), tenantPath: t?.path }); }}><option value={0}>Pick a customer…</option>{tenants.filter((t: Tenant) => !t.isMain).map((t: Tenant) => <option key={t.tenantId} value={t.tenantId}>{t.description}</option>)}</select></Field>}
+        {isNew && <Field label="Customer" req err={errors.tenantId}><ConnectSelect value={String(draft.tenantId)} onChange={(v) => { const t = tenants.find((x: Tenant) => x.tenantId === Number(v)); set({ tenantId: Number(v), tenantPath: t?.path }); }} options={[{ value: "0", label: "Pick a customer…" }, ...tenants.filter((t: Tenant) => !t.isMain).map((t: Tenant) => ({ value: String(t.tenantId), label: t.description }))]} /></Field>}
         <Field label="Extension" req err={errors.extension} help={isNew ? "Three digits or more. 800s ring groups, 900s queues, 2000s forwards." : "The phone system can't renumber an extension."}>
           <input className={"pc-ctl pc-mono " + (errors.extension ? "bad" : "")} value={draft.extension} disabled={!isNew} onChange={(e) => set({ extension: e.target.value })} /></Field>
         <Field label="Name" req err={errors.name} help="The name Connect shows everywhere, and on emails."><input className={"pc-ctl " + (errors.name ? "bad" : "")} value={draft.name} onChange={(e) => set({ name: e.target.value })} /></Field>

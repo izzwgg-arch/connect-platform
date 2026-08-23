@@ -16,6 +16,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { CalendarClock, Send, X } from "lucide-react";
 import { parseInviteEmails } from "@connect/shared";
 import { apiPost } from "../../../services/apiClient";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import type { MeetingSummary } from "../../../lib/meetings";
 
 type Props = {
@@ -154,13 +155,14 @@ export default function ScheduleMeeting({ t, onScheduled }: Props) {
 
         <label className="mtg-field">
           <span>{t("Length")}</span>
-          <select className="mtg-input" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
-            {LENGTHS.map((m) => (
-              <option key={m} value={m}>
-                {m < 60 ? `${m} ${t("minutes")}` : m === 60 ? `1 ${t("hour")}` : `${m / 60} ${t("hours")}`}
-              </option>
-            ))}
-          </select>
+          <ConnectSelect
+            value={String(minutes)}
+            onChange={(v) => setMinutes(Number(v))}
+            options={LENGTHS.map((m) => ({
+              value: String(m),
+              label: m < 60 ? `${m} ${t("minutes")}` : m === 60 ? `1 ${t("hour")}` : `${m / 60} ${t("hours")}`,
+            }))}
+          />
         </label>
       </div>
 

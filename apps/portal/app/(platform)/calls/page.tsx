@@ -1,5 +1,6 @@
 "use client";
 
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
@@ -1184,29 +1185,31 @@ export default function CallsPage() {
               </div>
               <div className="ch-adv-row">
                 <label className="ch-adv-label">Recording</label>
-                <select
-                  className="calls-filter-select"
+                <ConnectSelect
+                  size="sm"
                   value={hasRecording}
-                  onChange={(e) => setHasRecording(e.target.value as typeof hasRecording)}
-                  aria-label="Recording filter"
-                >
-                  <option value="all">All calls</option>
-                  <option value="yes">Has recording</option>
-                  <option value="no">No recording</option>
-                </select>
+                  onChange={(v) => setHasRecording(v as typeof hasRecording)}
+                  ariaLabel="Recording filter"
+                  options={[
+                    { value: "all", label: "All calls" },
+                    { value: "yes", label: "Has recording" },
+                    { value: "no", label: "No recording" },
+                  ]}
+                />
               </div>
               <div className="ch-adv-row">
                 <label className="ch-adv-label">Per page</label>
-                <select
-                  className="calls-filter-select"
-                  value={pageSize}
-                  onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
-                  aria-label="Page size"
-                >
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                  <option value={200}>200</option>
-                </select>
+                <ConnectSelect
+                  size="sm"
+                  value={String(pageSize)}
+                  onChange={(v) => { setPageSize(Number(v)); setPage(1); }}
+                  ariaLabel="Page size"
+                  options={[
+                    { value: "50", label: "50" },
+                    { value: "100", label: "100" },
+                    { value: "200", label: "200" },
+                  ]}
+                />
               </div>
             </div>
           ) : null}

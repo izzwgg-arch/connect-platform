@@ -14,6 +14,7 @@
  * Connect's tokens, so it reads as part of the app.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ConnectSelect, ConnectMultiSelect } from "../../../../components/ConnectSelect";
 
 export type FormOption = { v: string; t: string };
 export type PanelControl =
@@ -200,19 +201,17 @@ export function PanelForm({
     if (f.type === "multiselect") {
       const sel = multi[f.name] || [];
       return (
-        <select className="pf-ctl" id={id} multiple size={Math.min(6, Math.max(3, (f.options || []).length))}
-          value={sel} disabled={busy}
-          onChange={(e) => setM(f.name, Array.from(e.target.selectedOptions).map((o) => o.value))}>
-          {(f.options || []).map((o, i) => <option key={o.v + i} value={o.v}>{o.t || " "}</option>)}
-        </select>
+        <ConnectMultiSelect id={id} style={{ width: "100%" }}
+          values={sel} disabled={busy}
+          onChange={(vals) => setM(f.name, vals)}
+          options={(f.options || []).map((o) => ({ value: o.v, label: o.t || " " }))} />
       );
     }
     if (f.type === "select") {
       return (
-        <select className="pf-ctl" id={id} value={values[f.name] ?? ""} disabled={busy}
-          onChange={(e) => setV(f.name, e.target.value)}>
-          {(f.options || []).map((o, i) => <option key={o.v + i} value={o.v}>{o.t || " "}</option>)}
-        </select>
+        <ConnectSelect id={id} style={{ width: "100%" }} value={values[f.name] ?? ""} disabled={busy}
+          onChange={(v) => setV(f.name, v)}
+          options={(f.options || []).map((o) => ({ value: o.v, label: o.t || " " }))} />
       );
     }
     if (f.type === "textarea") {
@@ -324,10 +323,9 @@ export function PanelForm({
                                 <span className="pf-track"><span className="pf-knob" /></span>
                               </label>
                             ) : c.type === "select" ? (
-                              <select className="pf-ctl" value={String(v ?? "")} disabled={busy}
-                                onChange={(e) => set(i, s.field, e.target.value)}>
-                                {(c.options || []).map((o, k) => <option key={o.v + k} value={o.v}>{o.t || " "}</option>)}
-                              </select>
+                              <ConnectSelect size="sm" style={{ width: "100%" }} value={String(v ?? "")} disabled={busy}
+                                onChange={(val) => set(i, s.field, val)}
+                                options={(c.options || []).map((o) => ({ value: o.v, label: o.t || " " }))} />
                             ) : (
                               <input className="pf-ctl" type="text" value={String(v ?? "")} disabled={busy}
                                 onChange={(e) => set(i, s.field, e.target.value)} />

@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../../services/apiClient";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { SUPPORT_EMAIL } from "../../../lib/platformIdentity";
 import { NUMBER_SEARCH_FAILED_MESSAGE, numberSearchEmptyMessage } from "../../../lib/numberSearchMessage";
 
@@ -909,17 +910,18 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                     <label className="ob-label">Search by digits</label>
                     <div className="ob-searchbar">
                       {/* Where the digits should sit — VoIP.ms searches all three ways. */}
-                      <select
-                        className="ob-input"
-                        style={{ maxWidth: 140, flexShrink: 0 }}
+                      <ConnectSelect
+                        style={{ width: 140, minWidth: 0, flexShrink: 0 }}
                         value={searchMode}
-                        onChange={(e) => setSearchMode(e.target.value as SearchMode)}
-                        aria-label="Where the digits appear in the number"
-                      >
-                        <option value="starts">Starts with</option>
-                        <option value="contains">Contains</option>
-                        <option value="ends">Ends with</option>
-                      </select>
+                        onChange={(v) => setSearchMode(v as SearchMode)}
+                        ariaLabel="Where the digits appear in the number"
+                        theme={themeLabel}
+                        options={[
+                          { value: "starts", label: "Starts with" },
+                          { value: "contains", label: "Contains" },
+                          { value: "ends", label: "Ends with" },
+                        ]}
+                      />
                       <input className="ob-input" placeholder="e.g. 305" value={numbersQuery}
                         onChange={(e) => setNumbersQuery(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery, { tab: "local", mode: searchMode })} />
@@ -1094,15 +1096,17 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                     <tr className="ob-ext-cell-row">
                       <td colSpan={5}>
                         <div className="ob-ext-cell">
-                          <select
-                            className="ob-input ob-ext-cell-select"
+                          <ConnectSelect
+                            className="ob-ext-cell-select"
                             value={ext.cellMode}
-                            onChange={(e) => updateExt(i, { cellMode: e.target.value as CellMode, cellNumber: e.target.value ? ext.cellNumber : "" })}
-                          >
-                            <option value="">Rings their desk phone &amp; app</option>
-                            <option value="also">Also rings their cell phone</option>
-                            <option value="only">Goes straight to their cell phone</option>
-                          </select>
+                            onChange={(v) => updateExt(i, { cellMode: v as CellMode, cellNumber: v ? ext.cellNumber : "" })}
+                            theme={themeLabel}
+                            options={[
+                              { value: "", label: "Rings their desk phone & app" },
+                              { value: "also", label: "Also rings their cell phone" },
+                              { value: "only", label: "Goes straight to their cell phone" },
+                            ]}
+                          />
                           {ext.cellMode && (
                             <input
                               className="ob-input ob-ext-cell-input"
