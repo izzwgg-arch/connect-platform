@@ -137,7 +137,12 @@ export function SettingsScreen() {
   } = useIncomingNotifications();
 
   const [retryingPushToken, setRetryingPushToken] = useState(false);
-  // Current iOS app icon: null = default (light blue), 'Navy' = the dark one.
+  // Current iOS app icon: null = AUTOMATIC (the primary icon, whose iOS 18
+  // light/dark variants iOS swaps by itself with the phone's appearance);
+  // 'Navy' = pinned to the dark artwork whatever the appearance.
+  // ⛔ A PINNED ALTERNATE OVERRIDES THE AUTOMATIC VARIANTS — which is exactly
+  // why this row must offer the way back, and why its value now reads
+  // "Automatic" rather than "Light blue" (a lie the moment variants shipped).
   const [appIconName, setAppIconName] = useState<string | null>(() => {
     try { return Platform.OS === 'ios' ? getAppIconName() : null; } catch { return null; }
   });
@@ -355,8 +360,8 @@ export function SettingsScreen() {
             <SettingRow
               icon="color-palette-outline"
               label="App icon"
-              subtitle="The icon on your home screen"
-              value={appIconName === 'Navy' ? 'Navy' : 'Light blue'}
+              subtitle={appIconName === 'Navy' ? 'Always the navy icon' : 'Follows your phone’s light or dark mode'}
+              value={appIconName === 'Navy' ? 'Navy' : 'Automatic'}
               iconColor={colors.primary}
               onPress={toggleAppIcon}
             />
