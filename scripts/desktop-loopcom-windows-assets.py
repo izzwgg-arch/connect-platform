@@ -13,25 +13,27 @@ how much of the frame the mark occupies. The 2026-08-20 Android pass generated
 its icons by hand and recorded the scale only in prose; nobody could tell
 afterwards what it had been.
 
-The Windows icon is not the Android icon
-----------------------------------------
-An Android adaptive icon is a 108dp canvas of which only the central 72dp is
-ever shown, so the mark is drawn small (MARK_SCALE 0.70) to keep its outer glow
-clear of the circular mask. Windows applies NO mask - the whole square is shown
-- so the same visual result needs the mark drawn much larger here. The number
-that has to match across the two platforms is the mark's INK width as a
-fraction of what the user actually SEES:
+THE SOURCE IS THE CHOSEN REFINEMENT TILE, VERBATIM
+--------------------------------------------------
+2026-08-22, Izzy delivered "Icon refinement options" (two candidates, navy-2a
+and blue-2b) and picked blue-2b: "use 2b". The icon is therefore that artwork
+- a full-bleed Loopcom-blue tile with the white infinity mark - resized and
+NOTHING ELSE. No plate added, no corners cut, no recolouring: the deliverable
+IS the design, and the last time this repo redrew a delivered asset instead of
+using it, the owner's answer was that he never approved other colours.
 
-    Android:  MARK_SCALE(0.70) x 108/72 x ink-fraction-of-source(0.854) = 0.897
-    Windows:  MARK_INK_W                                                = 0.84
+The master is the 1024px tile from the refinement kit, pinned into git at
+docs/brand/loopcom/icon-refinement-2026-08/new-apps-icons/blue-2b/. It is
+opaque and square edge to edge (checked pixel-by-pixel, not assumed - an
+earlier probe misread the ALPHA channel as "white corners"; the corners are
+brand blue). Windows applies no mask to app icons, so it ships as-is.
 
-i.e. this file's 0.84 is deliberately a hair smaller than Android's effective
-0.897, because Windows has no mask eating the outer glow.
-
-The plate is OPAQUE and that is load-bearing. A transparent glowing-blue mark
-is invisible against a light Windows 11 taskbar, a light Start menu, or a light
-notification toast. The dark plate is the same #0C1218 the Android launcher icon
-uses, so the two fleets show the same icon.
+Because the mark is WHITE ON BLUE rather than strokes on transparency, the
+small sizes fail differently than the old design: downsampling averages the
+white strokes into the blue ground and the mark goes soft. The ≤32px frames
+therefore get a gentle unsharp pass after the resize - measured as the
+difference between a readable 16px taskbar icon and a blue smudge. That is a
+LEGIBILITY aid on the delivered artwork, not a redesign of it.
 
 Requires Pillow: pip install Pillow
 """
@@ -45,7 +47,7 @@ import sys
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageDraw, ImageEnhance
+    from PIL import Image, ImageFilter
 except ImportError:  # pragma: no cover - environment guard
     sys.exit("Pillow is required:  pip install Pillow")
 
@@ -53,17 +55,13 @@ REPO = Path(__file__).resolve().parent.parent
 BRAND = REPO / "docs" / "brand" / "loopcom"
 ASSETS = REPO / "apps" / "desktop" / "assets"
 
-# -- The brand's own tokens (docs/brand/loopcom/README.md) -------------------
-GROUND = (0x0C, 0x12, 0x18)          # == the Android adaptive-icon background
-
-# THE SPACING DECISION - the one place this number lives. It is the mark's INK
-# width as a fraction of the icon square, NOT the source PNG's box width (the
-# brand PNG carries transparent padding; see ink_crop below).
-MARK_INK_W = 0.84
-
-# Windows 11 draws app icons unmasked, but every first-party icon is a rounded
-# square. 0 = a hard square. Expressed as a fraction of the icon's edge.
-CORNER_RADIUS = 0.18
+# The chosen refinement variant. ⛔ ONE name, one place - "use 2b" (Izzy,
+# 2026-08-22). Changing the variant is changing this constant, never editing
+# paths inline, so a future regeneration cannot silently mix variants.
+REFINEMENT_VARIANT = "blue-2b"
+REFINEMENT_MASTER = (
+    BRAND / "icon-refinement-2026-08" / "new-apps-icons" / REFINEMENT_VARIANT / "ios-app-icon-1024.png"
+)
 
 # Every size Windows asks for. 16/24/32 are the taskbar and title bar, 48 is
 # Explorer's medium view, 256 is the Start menu / large tiles / alt-tab.
@@ -72,71 +70,44 @@ ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 # The cross-platform BrowserWindow/tray fallback (macOS/Linux take a PNG).
 GENERIC_PX = 512
 
-# Small-size hinting. The mark is thin bright strokes on a dark plate, so
-# downsampling to 16/24px averages each stroke with the plate and the whole logo
-# goes dim and muddy - it reads as a smudge in the taskbar, which is the ONE
-# size the owner looks at all day. Lifting the mark's luminance before the
-# composite restores it. Measured against 1.0 and 1.7: 1.7 washes the brand blue
-# out to cyan, 1.35 stays on-brand and legible.
-SMALL_SIZE_PX = 32
-SMALL_SIZE_GAIN = 1.35
-
-SUPERSAMPLE = 4  # anti-aliases the corner radius and the mark's thin strokes
+# The sizes at and below which the white-on-blue mark needs help staying
+# crisp after the downsample. Above this, the resize alone is clean.
+SHARPEN_AT_OR_BELOW = 32
 
 _written: list[Path] = []
 _problems: list[str] = []
 
 
-def load_mark() -> Image.Image:
-    """The transparent Loopcom infinity mark, drawn for a dark ground."""
-    p = BRAND / "app-icons" / "android-dark-512.png"
-    if not p.exists():
-        sys.exit("missing brand asset: {}".format(p))
-    return Image.open(p).convert("RGBA")
+def load_tile() -> Image.Image:
+    """The chosen refinement tile, verbatim. Refuses to run without it."""
+    if not REFINEMENT_MASTER.exists():
+        sys.exit("missing brand asset: {}".format(REFINEMENT_MASTER))
+    img = Image.open(REFINEMENT_MASTER).convert("RGBA")
+    if img.size[0] != img.size[1]:
+        sys.exit("refinement master is not square: {}".format(img.size))
+    return img
 
 
-def ink_crop(img: Image.Image, threshold: int = 24) -> Image.Image:
+# ink_crop() was deleted with the move to the refinement tile: the tile is the
+# whole icon, so there is no ink to crop and nothing that function could do but
+# harm. Its getbbox() lesson lives on in the Android generator, which still
+# renders the bare mark.
+
+
+def render_icon(tile: Image.Image, px: int) -> Image.Image:
     """
-    Crop to the mark's visible ink.
+    One square icon: the tile, resized, nothing else.
 
-    NOT Image.getbbox() - the brand PNG carries a scatter of near-zero alpha
-    pixels right out to the edges, so getbbox() returns the whole square and the
-    crop silently does nothing, leaving the mark rendered ~20% small. Proven the
-    hard way in the Android pass; the same source file is used here.
+    ⛔ Each frame is produced INDEPENDENTLY from the 1024 master (never by
+    resizing another frame), and the ≤32px frames get one gentle unsharp pass
+    - white-on-blue averages soft, and a soft 16px taskbar icon reads as a
+    blue smudge. The pass is deliberately mild: radius 1, small percent, so it
+    recovers edges without inventing halos that would read as a redesign.
     """
-    alpha = img.convert("RGBA").split()[-1].point(lambda v: 255 if v >= threshold else 0)
-    box = alpha.getbbox()
-    return img.crop(box) if box else img
-
-
-def hint_small(mark_ink: Image.Image, px: int) -> Image.Image:
-    """Lift the mark's luminance for the sizes that would otherwise go muddy."""
-    if px > SMALL_SIZE_PX:
-        return mark_ink
-    r, g, b, a = mark_ink.split()
-    lift = lambda ch: ImageEnhance.Brightness(ch).enhance(SMALL_SIZE_GAIN)
-    return Image.merge("RGBA", (lift(r), lift(g), lift(b), lift(a)))
-
-
-def render_icon(mark_ink: Image.Image, px: int) -> Image.Image:
-    """One square icon: the ink-cropped mark centred on the rounded dark plate."""
-    mark_ink = hint_small(mark_ink, px)
-    big = px * SUPERSAMPLE
-    plate = Image.new("RGBA", (big, big), GROUND + (255,))
-    if CORNER_RADIUS > 0:
-        mask = Image.new("L", (big, big), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            (0, 0, big - 1, big - 1), radius=round(big * CORNER_RADIUS), fill=255
-        )
-        rounded = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-        rounded.paste(plate, (0, 0), mask)
-        plate = rounded
-
-    w = max(1, round(big * MARK_INK_W))
-    h = max(1, round(w * mark_ink.size[1] / mark_ink.size[0]))
-    scaled = mark_ink.resize((w, h), Image.LANCZOS)
-    plate.alpha_composite(scaled, ((big - w) // 2, (big - h) // 2))
-    return plate.resize((px, px), Image.LANCZOS)
+    out = tile.resize((px, px), Image.LANCZOS)
+    if px <= SHARPEN_AT_OR_BELOW:
+        out = out.filter(ImageFilter.UnsharpMask(radius=1, percent=110, threshold=2))
+    return out
 
 
 def write_ico(images, path: Path, check: bool) -> None:
@@ -214,13 +185,13 @@ def main() -> int:
     ap.add_argument("--preview", type=Path, help="also write a side-by-side preview PNG")
     args = ap.parse_args()
 
-    mark_ink = ink_crop(load_mark())
-    renders = dict((px, render_icon(mark_ink, px)) for px in ICO_SIZES)
+    tile = load_tile()
+    renders = dict((px, render_icon(tile, px)) for px in ICO_SIZES)
 
     write_ico(renders, ASSETS / "icon.ico", args.check)
     for px in ICO_SIZES:
         emit(renders[px], ASSETS / "icon-{}.png".format(px), args.check)
-    emit(render_icon(mark_ink, GENERIC_PX), ASSETS / "icon.png", args.check)
+    emit(render_icon(tile, GENERIC_PX), ASSETS / "icon.png", args.check)
 
     if args.preview and not args.check:
         pad, cell = 16, 240
