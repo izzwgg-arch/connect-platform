@@ -119,7 +119,11 @@
 .dps-pill-ok { background: color-mix(in srgb, var(--success, #34c27b) 17%, transparent); color: var(--dps-ok); }
 .dps-pill-hm { background: color-mix(in srgb, var(--warning, #f0b655) 20%, transparent); color: var(--dps-warn); }
 .dps-pill-no { background: color-mix(in srgb, var(--danger, #ea6068) 17%, transparent); color: var(--dps-danger); }
-.dps-pill-br { background: color-mix(in srgb, var(--accent, #22a8ff) 17%, transparent); color: var(--dps-accent); }
+/* ⛔ INK, not the display accent: measured 4.42 dark / 3.87 light as 11px text on the
+   tinted fill — both under the 4.5 small-text bar. The fill keeps the display colour;
+   only the ink is corrected, per theme. */
+.dps-pill-br { background: color-mix(in srgb, var(--accent, #22a8ff) 17%, transparent); color: #6ec4ff; }
+:root[data-theme="light"] .dps-root .dps-pill-br { color: #124d99; }
 .dps-pill-mu { background: var(--dps-border); color: var(--dps-dim); }
 
 .dps-sel-ext {
