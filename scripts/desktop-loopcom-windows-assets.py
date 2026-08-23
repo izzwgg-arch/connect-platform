@@ -13,27 +13,23 @@ how much of the frame the mark occupies. The 2026-08-20 Android pass generated
 its icons by hand and recorded the scale only in prose; nobody could tell
 afterwards what it had been.
 
-THE SOURCE IS THE CHOSEN REFINEMENT TILE, VERBATIM
---------------------------------------------------
-2026-08-22, Izzy delivered "Icon refinement options" (two candidates, navy-2a
-and blue-2b) and picked blue-2b: "use 2b". The icon is therefore that artwork
-- a full-bleed Loopcom-blue tile with the white infinity mark - resized and
-NOTHING ELSE. No plate added, no corners cut, no recolouring: the deliverable
-IS the design, and the last time this repo redrew a delivered asset instead of
-using it, the owner's answer was that he never approved other colours.
+THE SOURCE IS THE DESIGNER'S OWN WINDOWS FRAMES, VERBATIM
+---------------------------------------------------------
+2026-08-23, after the tile-resize build reached his taskbar, Izzy delivered a
+SECOND kit: per-size icons MADE FOR WINDOWS (loopcom-win-16/32/48/64/256), one
+set per variant, rounded corners with real transparency, each frame hand-tuned
+at its exact size. His words: "the icon is not showing up here … I just made
+two new ones to be made for Windows."
 
-The master is the 1024px tile from the refinement kit, pinned into git at
-docs/brand/loopcom/icon-refinement-2026-08/new-apps-icons/blue-2b/. It is
-opaque and square edge to edge (checked pixel-by-pixel, not assumed - an
-earlier probe misread the ALPHA channel as "white corners"; the corners are
-brand blue). Windows applies no mask to app icons, so it ships as-is.
+So this script no longer resizes anything it can avoid resizing: the five
+designer frames are embedded VERBATIM, and only the two sizes Windows wants
+that the kit does not carry (24 and 128) are synthesised - 24 from the 32,
+128 from the 256, one LANCZOS step each, no sharpening. A designer-tuned 16px
+beats any algorithmic downsample of a 1024 tile; that is the whole reason the
+second kit exists.
 
-Because the mark is WHITE ON BLUE rather than strokes on transparency, the
-small sizes fail differently than the old design: downsampling averages the
-white strokes into the blue ground and the mark goes soft. The ≤32px frames
-therefore get a gentle unsharp pass after the resize - measured as the
-difference between a readable 16px taskbar icon and a blue smudge. That is a
-LEGIBILITY aid on the delivered artwork, not a redesign of it.
+The variant is still "use 2b" (Izzy, 2026-08-22). The navy-2a Windows set is
+pinned beside it in git for the day he changes his mind.
 
 Requires Pillow: pip install Pillow
 """
@@ -47,7 +43,7 @@ import sys
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageFilter
+    from PIL import Image
 except ImportError:  # pragma: no cover - environment guard
     sys.exit("Pillow is required:  pip install Pillow")
 
@@ -59,9 +55,13 @@ ASSETS = REPO / "apps" / "desktop" / "assets"
 # 2026-08-22). Changing the variant is changing this constant, never editing
 # paths inline, so a future regeneration cannot silently mix variants.
 REFINEMENT_VARIANT = "blue-2b"
-REFINEMENT_MASTER = (
-    BRAND / "icon-refinement-2026-08" / "new-apps-icons" / REFINEMENT_VARIANT / "ios-app-icon-1024.png"
+WINDOWS_FRAMES_DIR = (
+    BRAND / "icon-refinement-2026-08" / "new-apps-icons" / REFINEMENT_VARIANT / "windows-app"
 )
+# The sizes the designer supplied. Everything else is synthesised from these.
+DESIGNER_SIZES = [16, 32, 48, 64, 256]
+# size -> the designer frame it is derived from, when the kit lacks it.
+SYNTHESISED_FROM = {24: 32, 128: 256}
 
 # Every size Windows asks for. 16/24/32 are the taskbar and title bar, 48 is
 # Explorer's medium view, 256 is the Start menu / large tiles / alt-tab.
@@ -70,22 +70,23 @@ ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 # The cross-platform BrowserWindow/tray fallback (macOS/Linux take a PNG).
 GENERIC_PX = 512
 
-# The sizes at and below which the white-on-blue mark needs help staying
-# crisp after the downsample. Above this, the resize alone is clean.
-SHARPEN_AT_OR_BELOW = 32
 
 _written: list[Path] = []
 _problems: list[str] = []
 
 
-def load_tile() -> Image.Image:
-    """The chosen refinement tile, verbatim. Refuses to run without it."""
-    if not REFINEMENT_MASTER.exists():
-        sys.exit("missing brand asset: {}".format(REFINEMENT_MASTER))
-    img = Image.open(REFINEMENT_MASTER).convert("RGBA")
-    if img.size[0] != img.size[1]:
-        sys.exit("refinement master is not square: {}".format(img.size))
-    return img
+def load_designer_frames() -> dict:
+    """The designer's per-size Windows frames, verbatim. Refuses to run short."""
+    frames = {}
+    for px in DESIGNER_SIZES:
+        p = WINDOWS_FRAMES_DIR / "loopcom-win-{}.png".format(px)
+        if not p.exists():
+            sys.exit("missing brand asset: {}".format(p))
+        img = Image.open(p).convert("RGBA")
+        if img.size != (px, px):
+            sys.exit("{} is {}x{}, expected {0}px".format(px, *img.size))
+        frames[px] = img
+    return frames
 
 
 # ink_crop() was deleted with the move to the refinement tile: the tile is the
@@ -94,20 +95,19 @@ def load_tile() -> Image.Image:
 # renders the bare mark.
 
 
-def render_icon(tile: Image.Image, px: int) -> Image.Image:
+def render_icon(frames: dict, px: int) -> Image.Image:
     """
-    One square icon: the tile, resized, nothing else.
-
-    ⛔ Each frame is produced INDEPENDENTLY from the 1024 master (never by
-    resizing another frame), and the ≤32px frames get one gentle unsharp pass
-    - white-on-blue averages soft, and a soft 16px taskbar icon reads as a
-    blue smudge. The pass is deliberately mild: radius 1, small percent, so it
-    recovers edges without inventing halos that would read as a redesign.
+    ⛔ A designer frame is returned UNTOUCHED. Only 24 and 128 are synthesised,
+    each one LANCZOS step from the nearest designer frame, with no sharpening -
+    the hand-tuned sizes are the point of the second kit, and any processing on
+    them is a redesign wearing a helpful hat.
     """
-    out = tile.resize((px, px), Image.LANCZOS)
-    if px <= SHARPEN_AT_OR_BELOW:
-        out = out.filter(ImageFilter.UnsharpMask(radius=1, percent=110, threshold=2))
-    return out
+    if px in frames:
+        return frames[px]
+    src = SYNTHESISED_FROM.get(px)
+    if src is None:
+        sys.exit("no designer frame and no synthesis rule for {}px".format(px))
+    return frames[src].resize((px, px), Image.LANCZOS)
 
 
 def write_ico(images, path: Path, check: bool) -> None:
@@ -185,13 +185,15 @@ def main() -> int:
     ap.add_argument("--preview", type=Path, help="also write a side-by-side preview PNG")
     args = ap.parse_args()
 
-    tile = load_tile()
-    renders = dict((px, render_icon(tile, px)) for px in ICO_SIZES)
+    frames = load_designer_frames()
+    renders = dict((px, render_icon(frames, px)) for px in ICO_SIZES)
 
     write_ico(renders, ASSETS / "icon.ico", args.check)
     for px in ICO_SIZES:
         emit(renders[px], ASSETS / "icon-{}.png".format(px), args.check)
-    emit(render_icon(tile, GENERIC_PX), ASSETS / "icon.png", args.check)
+    # ⛔ The generic PNG is the designer 256 AS-IS, not an upscale: a 256 -> 512
+    # blow-up is blur, and every consumer of icon.png scales down anyway.
+    emit(frames[256], ASSETS / "icon.png", args.check)
 
     if args.preview and not args.check:
         pad, cell = 16, 240
