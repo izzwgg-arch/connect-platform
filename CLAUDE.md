@@ -1585,11 +1585,20 @@ also carries `Login and splash mockups.html`), 2026-08-22 in-chat.)
   back to an immediate `set()`. Proven live: toggle in Settings → app stays
   foreground and Registered; icon flips the moment it is backgrounded.
 - ✅✅ **THE SPLASH FOLLOWS THE IN-APP THEME (`185cd7b7`, superseding "brand
-  navy in both themes"), and light mode got its own mark.** Light = light
-  gradient + the Blue 2B ink mark (`assets/loopcom-mark-light.png`,
-  difference-keyed at 1024px from the icon against its reconstructed gradient
-  — the kit's transparent foreground is only 222px of ink, too soft);
-  dark keeps the chrome art. ⛔ The chrome `loopcom-mark.png` was CLEANED: it
+  navy in both themes"), and light mode shows THE ACTUAL LIGHT-MODE LOGO
+  (`52885e85`).** ⛔ A first cut substituted the Blue 2B icon's tick-band mark
+  and Izzy rejected it outright ("It looks horrible. I want it to be the
+  actual logo, just the light mode version. We have a light mode version.
+  Check the files.") — **the kit ships light art:
+  `docs/brand/loopcom/masters/loopcom-logo-light.png`; never swap icon art in
+  for the logo.** No standalone light-infinity file existed, so one was made
+  and filed: `docs/brand/loopcom/derived/loopcom-mark-light.png` (the master's
+  infinity white-keyed to transparency; recipe in the derived/ README —
+  fragments dropped by largest-connected-ink, a plain crop cannot separate
+  them). The app ships a 2× LANCZOS copy as `assets/loopcom-mark-light.png`.
+  ⛔ `app-icons/ios-light-1024.png` looks like the sibling and is NOT it — the
+  pale icon-polarity mark, rejected. Izzy confirmed the master extraction
+  on-device: "that's the one". Dark keeps the chrome art. ⛔ The chrome `loopcom-mark.png` was CLEANED: it
   carried an invisible dark haze (~59% of pixels at alpha 3–70) that composited
   as a grey PLATE on light — keyed out by clearing large CONNECTED faint-dark
   regions only (a global threshold ate holes in the ring). ⛔ The glow pad
