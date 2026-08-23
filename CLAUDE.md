@@ -1393,10 +1393,16 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   dead link** (pre-08-19 fallback links carried `/api` and worked — verified
   from stored May/June rows). ⛔ The 08-19 session verified "changed nothing —
   all six env names unset in the worker" — **its list was missing
-  `PUBLIC_API_URL`, the seventh candidate and the set one.** ⛔ **Fix = env
-  line to `…/api` + worker restart, AND/OR a code guard; NOT DONE — the env
-  file is Izzy's** (AGENTS.md rule 10). ⛔⛔ **The rule: never claim "X never
-  worked" from a failure-only query — count the successes first.**
+  `PUBLIC_API_URL`, the seventh candidate and the set one.** ✅ **FIXED AND
+  DEPLOYED 2026-08-23 under Izzy's live go-ahead**: `.env.platform:34` →
+  `PUBLIC_API_URL=https://app.loopcom.net/api` (backup kept; loopcom hostname
+  verified serving real image bytes first), the derivation guarded in
+  `apps/worker/src/smsPublicApiBase.ts` (`17b20ab3` — a pathless base gets
+  `/api` appended, 10 tests), worker `done 82363a5c` with the resolver probed
+  IN the container printing the loopcom base. ⛔ `PUBLIC_PORTAL_URL` (the
+  platform-wide loopcom cut-over) deliberately NOT touched. ⏳ No picture
+  sent since — that is the acceptance test. ⛔⛔ **The rule: never claim "X
+  never worked" from a failure-only query — count the successes first.**
 - ⛔⛔ **"It answered — I heard her — then it just hung up": HER OWN ANSWER'S
   stop-ringing cancel tore down her live call.** ⛔ The first attribution
   ("she hung up", off the `user_hangup` label) was WRONG — that label only

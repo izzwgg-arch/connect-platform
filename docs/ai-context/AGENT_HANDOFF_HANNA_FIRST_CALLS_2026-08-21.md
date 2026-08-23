@@ -86,15 +86,30 @@ VoIP.ms fetches the portal's **404 HTML** (4.5 KB text/html) → rejects
 Curl both ways: without `/api` → 404; with `/api` → **200 image/png 315,646
 bytes**. Signatures are valid; only the path root is wrong.
 
-**The fix (NOT DONE — either half alone cures it, both are right):**
-1. **Env:** `.env.platform:34` → `PUBLIC_API_URL=https://app.connectcomunications.com/api`
-   + worker restart. Safe for every reader — `canonicalApiBase()`,
-   `billingEmailLifecycle`, `server.ts:30166` all treat the variable as a full
-   API base, and all of them currently read it EMPTY (api container) anyway.
-   ⛔ The env file is Izzy's (AGENTS.md rule 10).
-2. **Code:** guard the worker's `publicBase` so a value equal to the portal
-   origin (no path) gets `/api` appended, with a test — otherwise the same
-   mismatch silently returns. This half is deployable without touching env.
+**✅✅ FIXED, DEPLOYED AND CONTAINER-VERIFIED 2026-08-23 (Izzy's explicit
+go-ahead in chat, incl. "change them to app.loopcom.net"):**
+1. **Env:** `.env.platform:34` is now
+   `PUBLIC_API_URL=https://app.loopcom.net/api` (backup
+   `.env.platform.bak.20260823T012037Z.mms-api-url`). Verified before relying
+   on the hostname: a freshly minted signed link on `app.loopcom.net` serves
+   the real image bytes (200, image/png, 315,646 B). Safe for every reader —
+   `canonicalApiBase()`, `billingEmailLifecycle`, `server.ts:30166` all treat
+   the variable as a full API base, and the api container reads it EMPTY
+   anyway (compose override). ⛔ Deliberately scoped: `PUBLIC_PORTAL_URL` —
+   the platform-wide loopcom cut-over lever — was NOT touched.
+2. **Code (`17b20ab3`):** the derivation lives once in
+   `apps/worker/src/smsPublicApiBase.ts` with the guard — a base whose URL has
+   no path gets `/api` appended. 10 tests incl. a replay of the exact broken
+   production value + a source guard against the inline chain returning;
+   worker suite 119/119, typecheck at its 8-error baseline.
+3. **Worker DEPLOYED** (`done 82363a5c`, 2026-08-23 01:35Z, after waiting out
+   another session's portal-build heavy lock via a log-marker file waiter):
+   0 restarts, 0 error-level lines, `resolveSmsPublicApiBase` grepped in the
+   container, and the probe run INSIDE it prints
+   `resolved publicBase = https://app.loopcom.net/api`.
+⏳ **NOT PROVEN: no picture has been sent since the deploy** — the acceptance
+test is one picture by text arriving as a real MMS (no link), e.g. re-sending
+Hanna's. Watch `voipms_response ok` vs `mms_send_failed` in the worker log.
 
 ⛔ **The rule this earned: when you claim "X never worked", you must have
 counted the successes, not just found failures.** A fallback-only query
@@ -195,8 +210,8 @@ silently wipes the baked edit (36 opus inbound calls, then 32 PCMU).
 
 ## 4. What prevention looks like (decisions are Izzy's)
 
-1. **MMS**: the env fix + worker restart and/or the code guard + test (§2).
-   Cheap, restores a feature that worked until 2026-08-19.
+1. **MMS**: ✅ DONE 2026-08-23 (§2) — env + guard + worker deploy, verified in
+   the container. Awaiting one real picture as the acceptance test.
 2. **Her audio**: one call on Wi-Fi decides it. Clean → it's her cellular
    signal and no code fixes it (the long-term answer is the signal, or the
    approved US media server move shrinking every latency budget). Still bad →
@@ -216,8 +231,8 @@ silently wipes the baked edit (36 opus inbound calls, then 32 PCMU).
 ## 5. Honest gaps
 
 - ⏳ Nobody has run the Wi-Fi control call — that is the acceptance test for §3.
-- ⏳ The MMS fix is not applied; pictures-by-text still fail for everyone
-  until the env line or the worker chain is corrected.
+- ✅ The MMS fix is applied and deployed (2026-08-23); ⏳ no picture has been
+  sent through it yet.
 - ⏳ Her E911 gap and the duplicate-voicemail-email gap from the build handoff
   remain open and unrelated to today.
 - The 39% figure is one sampled interval mid-call (cumulative counters read
