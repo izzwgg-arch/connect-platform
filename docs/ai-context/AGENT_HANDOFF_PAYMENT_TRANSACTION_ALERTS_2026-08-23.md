@@ -128,10 +128,50 @@ domain-verified-≠-mailbox-exists trap for this address.)
   suites 190/190.
 - Both emails were **rendered and read**, not assumed.
 
-## 7. Deploy state
+## 7. Deploy state — verified 2026-08-23
 
-See the CLAUDE.md section for the verified container commit and the live boot
-line.
+`bash scripts/deploy-direct.sh api --branch feat/ivr-migration-takeover`,
+`PAYALERT_DEPLOY_EXIT=0`, `verify: container commit 4eed014c83ff matches target`.
+
+- `app-api-1` `/app/.build-commit` = **`4eed014c`**, `RestartCount 0`, running.
+- Migration applied in the migrate stage (**7.4 s**); read back from the live DB:
+  `alertEmailedAt timestamp NULL`, `alertEmailedStatus text NULL`.
+- Boot line present exactly once:
+  `PAYMENT_TRANSACTION_ALERTS_ARMED intervalMs=60000 bootDelayMs=45000
+  emailTo=izzy@loopcom.net cutoverAt=2026-08-23T21:00:00.000Z`.
+- **0** error-level lines since boot; `/api/health` **200** on both hostnames,
+  portal `/` **200**.
+- Backlog correctly untouched: **0 of 77** transactions stamped, **0**
+  `PAYMENT_TRANSACTION_ALERT` jobs, **0** transactions after the cutover.
+
+### The live proof, without sending anything
+
+The real sweep was driven inside `app-api-1` against the **real database**, with
+`paymentTransaction.updateMany` and `emailJob.create` intercepted and the cutover
+moved back to 2026-08-10. Over two weeks of genuine transactions it built
+**exactly 9 alerts** and wrote nothing:
+
+```
+DRY RESULT: {"considered":9,"emailed":9,"skipped":{},"errors":[]}
+  -> izzy@loopcom.net  Payment approved — $206.96 — Yossis Wood Works
+  -> izzy@loopcom.net  Payment approved — $130.00 — Create A Box
+  -> izzy@loopcom.net  Payment DECLINED — $130.00 — Create A Box
+  -> izzy@loopcom.net  Payment error — $45.00 — TYH Industries
+  -> izzy@loopcom.net  Payment error — $45.00 — TYH Industries
+  -> izzy@loopcom.net  Payment approved — $45.00 — TYH Industries
+  -> izzy@loopcom.net  Payment approved — $46.65 — McNamara Lion
+  -> izzy@loopcom.net  Payment approved — $75.00 — Luxure Management
+  -> izzy@loopcom.net  Payment approved — $155.00 — Trust Bookkeepings
+```
+
+The two TYH errors followed by the $45 approval are the real 2026-08-18 retry —
+proof the ERROR status carries information nobody would otherwise have seen.
+
+⛔ **That read-through / stub-the-writes shape is how to prove a sweep against
+live data:** it exercises the real query, the real decision and the real template
+with zero side effects. Probe script pattern: `docker cp` a `.ts` into
+`/app/apps/api/` (⛔ `/tmp` and `/app` both fail `MODULE_NOT_FOUND`), run it with
+`docker exec -w /app/apps/api app-api-1 npx tsx`, then delete it.
 
 ## 8. ⏳ NOT PROVEN
 

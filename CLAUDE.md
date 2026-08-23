@@ -74,9 +74,13 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 ## ⛔⛔ AGENT HANDOFF — Izzy is emailed on EVERY settled payment now (2026-08-23) — READ FIRST before adding ANY notification to a money or call event, before touching `paymentTransactionAlerts.ts`, or for "I got four emails for one payment" / "I got no email for that charge"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_PAYMENT_TRANSACTION_ALERTS_2026-08-23.md`**
-(`4eed014c` on `feat/ivr-migration-takeover`. api + one migration — deploy state
-at the end of this section. No PBX write, no env change, no portal change, no
-tenant row, and no customer-facing email was changed.)
+(`4eed014c` on `feat/ivr-migration-takeover`. ✅ **api DEPLOYED and
+container-verified 2026-08-23** — `app-api-1` `.build-commit` = `4eed014c`,
+migration applied (7.4 s; both columns present and nullable in the live DB),
+boot line `PAYMENT_TRANSACTION_ALERTS_ARMED` reading `izzy@loopcom.net` /
+60 s / cutover 21:00Z, **0 restarts, 0 error-level lines**, health 200 on both
+hostnames. No PBX write, no env change, no portal change, no tenant row, and no
+customer-facing email was changed.)
 Memory: [[payment-alerts-are-a-sweep-not-a-hook]].
 Izzy, 2026-08-23: *"Every time there is a successful transaction, I should get an
 email to Izzy@loopcom.net, same every time there is a declined transaction."*
@@ -145,8 +149,20 @@ email to Izzy@loopcom.net, same every time there is a declined transaction."*
   by `prisma migrate diff`, two nullable columns, no table rewrite; api typecheck
   **76 = the exact baseline**, none in an edited file; billing suites 190/190;
   and both emails were **rendered and read**.
+- ✅✅ **PROVEN ON REAL PRODUCTION DATA WITHOUT SENDING ANYTHING.** The real sweep
+  was driven inside `app-api-1` against the real database with the claim and the
+  `emailJob.create` intercepted, and an earlier cutover: over the last two weeks
+  of genuine transactions it built **exactly 9 correct alerts** — 6 approved
+  (Yossis $206.96, Create A Box $130, TYH $45, McNamara Lion $46.65, Luxure $75,
+  Trust $155), **1 DECLINED** (Create A Box $130) and **2 errors** (the TYH
+  2026-08-18 pair that preceded its successful retry) — every one addressed to
+  izzy@loopcom.net, with real company names and amounts, **0 errors, nothing
+  written**. ⛔ **That read-through-stub-the-writes shape is the way to prove a
+  sweep on live data**; it exercises the real query, the real decision and the
+  real template without a single side effect.
 - ⏳ **NOT PROVEN: no alert has landed in a human inbox** — no payment has settled
-  since it shipped. **The acceptance test is the next real payment:**
+  since it shipped, and the deliberate replay above wrote nothing on purpose.
+  **The acceptance test is the next real payment:**
   `select "createdAt", status, "toEmail", subject from "EmailJob" where type =
   'PAYMENT_TRANSACTION_ALERT' order by "createdAt" desc limit 5;` — and the
   negatives that matter are **exactly one row per transaction** and a combined
