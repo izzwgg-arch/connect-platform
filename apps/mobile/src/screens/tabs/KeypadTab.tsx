@@ -31,6 +31,7 @@ import type { Contact, CallRecord, OutboundDialRoute, VoiceExtension } from '../
 import { spacing } from '../../theme/spacing';
 import { playDtmfTone } from '../../audio/telephonyAudio';
 import { ensureMicPermissionOrAlert } from '../../sip/permissions';
+import { formatDialDisplay } from './dialDisplay';
 
 const { width, height: screenHeight } = Dimensions.get('window');
 
@@ -508,18 +509,11 @@ export function KeypadTab() {
     await sip.hangup();
   };
 
-  // Format display number nicely
-  const formatDisplay = (n: string): string => {
-    if (!n) return '';
-    // Extension (1–5 digits) — show raw
-    if (n.length <= 5 && /^\d+$/.test(n)) return n;
-    const digits = n.replace(/\D/g, '');
-    if (digits.length <= 3) return digits;
-    if (digits.length <= 6) return `${digits.slice(0, 3)} ${digits.slice(3)}`;
-    if (digits.length <= 10)
-      return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
-    return n;
-  };
+  // Format display number nicely. ⛔ The rule and the reason it exists live in
+  // dialDisplay.ts, next to its tests — the inline version used to strip every
+  // non-digit, so a pressed * / # / + showed NOTHING on screen even though it
+  // really was being dialled.
+  const formatDisplay = formatDialDisplay;
 
   // Live suggestions — contacts and recents matched against the typed number.
   const suggestions = useMemo<Suggestion[]>(() => {
