@@ -603,3 +603,41 @@ test("save_phone only writes the button columns the caller actually supplied", (
     "an unconditional keys= in the SET list blanks buttons on every unrelated edit",
   );
 });
+
+// ── the geo runner validates the firewall AFTER the build (2026-08-22) ──────
+// The 2026-08-19 lockout: build_geo_firewall exited 0 while leaving direct.xml
+// referencing an ipset whose xml it had deleted; firewalld's reload then died
+// and dropped every NEW connection PBX-wide for 37 minutes. Re-arming the geo
+// channel was gated on the runner PROVING the config still loads — these pin
+// each requirement so a "simplification" cannot quietly remove one.
+test("geo runner: reconciles direct.xml match-sets against the ipset xmls after every build", () => {
+  const runner = SCRIPT.slice(SCRIPT.indexOf("cat >/usr/local/sbin/connect-geo-build <<'GEOBUILD'"), SCRIPT.indexOf("\nGEOBUILD\n"));
+  assert.match(runner, /--match-set/, "must collect every --match-set reference in direct.xml");
+  assert.match(runner, /ipsets\/\*\.xml/, "must compare against the ipset xmls on disk");
+  assert.match(runner, /blacklist_us/, "must verify the US is open — Izzy's standing rule");
+  assert.match(runner, /vpbx_white_list/, "must verify the whitelist still runs before the geo chain");
+});
+
+test("geo runner: a failed validation restores the backup, restarts firewalld and reports FAILED", () => {
+  const runner = SCRIPT.slice(SCRIPT.indexOf("cat >/usr/local/sbin/connect-geo-build <<'GEOBUILD'"), SCRIPT.indexOf("\nGEOBUILD\n"));
+  assert.match(runner, /cp -a "\$NEWEST" \/etc\/firewalld\/direct\.xml/, "the backup must be restored on validation failure");
+  assert.match(runner, /systemctl restart firewalld/, "a reload cannot recover a dead firewalld — restart it");
+  assert.match(runner, /CODE=97/, "the failure must travel in result.json's code, never exit 0-and-silent");
+});
+
+test("geo runner: logs to a FILE — journald on the PBX is volatile and erased the last incident's evidence", () => {
+  const runner = SCRIPT.slice(SCRIPT.indexOf("cat >/usr/local/sbin/connect-geo-build <<'GEOBUILD'"), SCRIPT.indexOf("\nGEOBUILD\n"));
+  assert.match(runner, /LOG="\$DIR\/runner\.log"/, "the runner's own log must survive a reboot");
+  assert.match(runner, /VALIDATION FAILED/, "the failure line must be greppable in the file log");
+});
+
+test("⛔ geo runner: re-running the installer must NOT re-arm a disarmed geo channel", () => {
+  // The channel was disarmed after the 2026-08-19 lockout and re-arming is
+  // Izzy's live call only. The installer preserves the state: enable only when
+  // already enabled, or when CONNECT_GEO_ARM=1 is passed on his word.
+  const idx = SCRIPT.indexOf("systemctl enable --now connect-geo-build.path");
+  assert.ok(idx !== -1, "the arm line must still exist for a deliberate arm");
+  const before = SCRIPT.slice(Math.max(0, idx - 400), idx);
+  assert.match(before, /is-enabled connect-geo-build\.path/, "arming must be conditional on the current state");
+  assert.match(before, /CONNECT_GEO_ARM/, "an explicit operator opt-in must be the only other way to arm");
+});

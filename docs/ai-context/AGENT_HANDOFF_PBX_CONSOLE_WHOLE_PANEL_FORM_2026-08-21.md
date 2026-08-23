@@ -342,7 +342,12 @@ panel and diff the post.
 
 ## 8.6 ⛔⛔ THE ONE BUILD LEFT BEFORE DISCONNECTING: the mirror EXTENSION EDIT-WRITER
 
-**This is the next agent's job, and the only thing standing between Izzy and
+> ✅✅ **BUILT AND CLONE-PROVEN 2026-08-22 — see §8.8 below for what shipped,
+> the acceptance record and what is still Izzy's.** The spec below is the
+> original ask, kept for the decision history; every item in it is done except
+> the PBX-side helper install (a Run button) and the prod negative test.
+
+**This was the next agent's job, and the only thing standing between Izzy and
 cancelling the subscription.** §4 proved the free panel refuses an extension
 EDIT over the 12-extension cap, both ways round, and the fleet holds 119.
 Everything else survives the lapse (six modules proven end to end; tenant
@@ -386,3 +391,132 @@ beside the existing `add_extension`:
   smoke kill left `ombu_tenant_settings.trunks="zz"` on clone t2, repaired by
   hand. Never kill the sweep mid-field; if you must, sweep the clone for `zz`
   values after (the harness's own restore verifies otherwise).
+
+---
+
+# §8.8 THE EXTENSION EDIT-WRITER IS BUILT AND CLONE-PROVEN (2026-08-22) — the licence-cancel blocker is closed on the code side
+
+Izzy: *"I want to fix all the gaps that we still have for closing down the
+license."* This section is the record of §8.6's spec being built, proven on the
+unlicensed clone, and wired into the console as the cap fallback.
+
+## What shipped (one commit on `feat/ivr-migration-takeover`)
+
+- **`edit_extension` + `apply_extension_edit_pbx` in
+  `scripts/pbx/mirror/mirror_writes.py`.** The edit UPDATEs the same rows the
+  panel's save writes — whitelisted columns only (`EXTENSION_EDIT_COLUMNS`,
+  `VM_EDIT_COLUMNS`, device secret/description + pjsip dtmf/max_contacts), one
+  transaction, no-op diffs skipped. ⛔ **Renumbering is impossible by
+  construction** (no `extension` column in the whitelist — VitalPBX itself
+  cannot renumber). ⛔ **A rename recomputes `internal_cid` ONLY when the
+  current CID still follows the `"Name" <ext>` pattern** — a hand-tuned CID
+  survives, exactly like the panel form (which re-posts the field untouched).
+  Proven on real data: clone T2 ext 101 carries `"Leah" <101>` against name
+  "Leah Fulop", and the rename left it alone.
+- **The apply is SURGICAL, never a whole-tenant re-render.** It re-renders
+  ONLY the edited extension's pjsip endpoint/auth/aor triples and voicemail
+  line — via `pjsip_device_blocks()` / `voicemail_line()`, **factored out of
+  `render_pjsip_extensions` / `render_voicemail` in `vitalpbx_mirror.py` so
+  the full render and the surgical edit are ONE implementation** (byte-identity
+  of the factoring proven on the clone) — and splices them into the tenant's
+  EXISTING files. ⛔ Why surgical: a full re-render would wipe hand-edited
+  lines on OTHER extensions (the per-endpoint opus overrides) and, per §18 of
+  the licence-exit assessment, the helper cannot reopen a file it already
+  chowned to www-data anyway. The splice writes **tmp + `os.replace` +
+  chown www-data:root** — the helper's proven atomic-writer shape; a plain
+  `open(path, "w")` is Errno 13 for the asterisk-user helper.
+- ⛔⛔ **The AstDB refresh is a BOUNDED key set (`ASTDB_EDIT_KEYS`) that NEVER
+  includes `dial`** — wake-and-wait enrollment rewrites that key and the worker
+  re-asserts it; writing it from rows would silently un-enroll a phone. Also
+  excluded: `context` (cos changes aren't mirror-editable) and the
+  `diversions/*` family (live DND/CF state the assistant writes). A guard test
+  pins both exclusions.
+- **Helper `2026.08.22.1`: `POST /mirror/extension-edit`** (rows → surgical
+  apply → reloads), registered beside the tenant-create endpoint. The helper's
+  audit now **deep-redacts any key named secret/password** — the edit posts
+  device secrets, and audit.jsonl is the wrong place for them.
+- **The console falls back to the mirror on the cap refusal — and ONLY then.**
+  `saveExtensionOrMirror` in `pbxConsoleRoutes.ts` (both extension-save call
+  sites): panel first, always; `isExtensionCapRefusal` (the literal "maximum
+  number of al") gates the fallback; every other failure rethrows untouched.
+  `mapExtensionSaveToMirrorEdit` (pure, in `pbxConsoleWrites.ts`) translates
+  the panel-named save; ⛔ **a field the mirror cannot honour is refused BY
+  NAME in plain English** (409 `mirror-edit-unsupported`), never dropped —
+  device ADD/REMOVE, ring-switch flips, queue membership, cos changes all
+  refuse (over the cap the panel refuses those too; pretending would lie).
+  Unchanged device fields (the console re-sends every device with current
+  values) are dropped as no-ops, which is what makes the ordinary
+  Extensions-screen save work through the fallback. A failed live-apply after
+  a row edit throws loudly (`mirror-edit-apply`) — "saved" while the phone
+  runs old config is the static-file trap.
+- **Installer:** re-embedded helper + `mirror_writes.py` + `vitalpbx_mirror.py`
+  (drift guards green), plus **column-scoped UPDATE grants** for
+  `connect_route_helper` on exactly the whitelists (ombu_extensions,
+  ombu_extensions_vm, ombu_devices secret/description, ombu_pjsip_devices
+  dtmfmode/max_contacts) — nothing wider.
+
+## The acceptance record (unlicensed clone, 2026-08-22)
+
+`scripts/pbx/mirror/edit-extension-accept.py` (a keeper; refuses to run where a
+licence file exists), run inside `vpbx-clone`, tenant 2 ext 101, full output
+`ACCEPTANCE PASS`:
+1. **Factoring byte-identity:** new `render_pjsip_extensions`/`render_voicemail`
+   output identical to the pre-change (HEAD) renderer on real tenant data.
+2. **Edit via the mirror** (name, email, vm password, device secret +
+   description): rows changed, both files patched, **the diff outside the
+   edited extension's blocks is EMPTY** (asserted by stripping the triples/line
+   from before and after and comparing the remainder byte-for-byte).
+3. **Asterisk saw it live:** `pjsip show endpoint T2_101` shows the new
+   callerid after the reload; `database get <hash>/extensions/101 name` shows
+   the new name.
+4. **Revert → files sha256-IDENTICAL to the snapshot** — which also proves the
+   renderer's block format byte-matches what the panel had generated.
+5. The hand-tuned-CID preservation case (above) fell out of real data, not a
+   fixture.
+⛔ Two traps from the run worth carrying: **a failed acceptance leaves the
+clone edited** (the first run died on a wrong assertion of mine AFTER applying
+— the clone was restored from prod's rows, read-only, before the clean run);
+and the wrong assertion itself was the lesson — I asserted the CID follows a
+rename unconditionally, and the CODE was right to refuse.
+
+## Also closed in the same pass: the geo runner validates the firewall
+
+The §17a re-arm requirement is built: `connect-geo-build` (installer heredoc)
+now, after EVERY build, reconciles every `--match-set` in `direct.xml` against
+`/etc/firewalld/ipsets/*.xml`, verifies **the US is open**, verifies the
+whitelist still runs before the geo chain, and checks `firewall-cmd --state`;
+any failure **restores the backup, restarts firewalld, and reports code 97 in
+result.json** — the builder's exit 0 is never trusted again. It logs to
+`geo-build/runner.log` (journald on the PBX is volatile — it erased the last
+incident's evidence). ⛔⛔ **The channel STAYS DISARMED and the installer now
+preserves that**: it re-arms only if the unit was already enabled or
+`CONNECT_GEO_ARM=1` is passed explicitly — re-arming remains Izzy's live
+in-chat call, never an installer side effect. Guard tests pin all of it.
+
+## Proven as
+
+- `apps/api/src/pbxConsole/mirrorExtensionEdit.test.ts` — 15 tests (mapping,
+  refusal shapes, cap-refusal matcher, and source guards on the wiring, the
+  helper registration + version, the no-`dial` AstDB rule, the atomic-write
+  shape and the installer grants). **All 5 wiring guards replayed against
+  `HEAD` and failing there.** Console suites 67/67 total; installer suite
+  **55/55** (drift guards prove the embedded copies are byte-identical);
+  api typecheck 76 = the current tree's baseline (75 + another session's
+  in-flight `server.ts`), **0 in any edited file**; both Python files compile.
+- The clone acceptance above.
+
+## ⏳ What is left, honestly — and whose it is
+
+1. **Install helper `2026.08.22.1` on the PBX** (Izzy's Run button — a PBX
+   write): scp the installer, back up
+   `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py` first, run it,
+   verify `curl 127.0.0.1:8757/health` reads `2026.08.22.1` and the geo line
+   prints "left DISARMED". Until then the api-side fallback answers the
+   honest refusal (the helper 404s the new path — but the fallback can only
+   fire after the licence lapses, so nothing changes today).
+2. **The prod negative test** after the api deploy: Extensions → Edit still
+   saves through the PANEL on production (licence live, cap never fires,
+   `viaMirror: false`).
+3. **The rest of the before-cancelling list** (assessment §13/§21): a real
+   phone registering + calling on a mirror tenant (Loopcom Demo 2 is built and
+   waiting), and ⛔ **rotate the robot panel password** (leaked twice).

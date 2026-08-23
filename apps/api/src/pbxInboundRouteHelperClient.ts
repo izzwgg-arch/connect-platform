@@ -169,6 +169,7 @@ async function callHelper<T>(
     | "/voicemail/greeting/record-call"
     | "/mirror/tenant-create"
     | "/mirror/tenant-render"
+    | "/mirror/extension-edit"
     | "/console/phone-save"
     | "/console/phone-delete"
     | "/console/phone-render"
@@ -623,6 +624,40 @@ export function mirrorRenderPbxTenant(
   tenantId: number | string,
 ): Promise<{ ok: true; tenantId: number; fileCount: number; files: string[]; reloads: Array<{ cmd: string; rc: number }> }> {
   return callHelper(cfg, "/mirror/tenant-render", { tenantId }, 120_000);
+}
+
+/**
+ * Edit an EXISTING extension through the mirror (helper 2026.08.22.1+).
+ *
+ * ⛔ This is the licence-lapse path ONLY: while the licence is live the console
+ * edits extensions through the panel (`saveExtension`, proven on production),
+ * and the routes fall back here exclusively when the panel answers the
+ * 12-extension-cap refusal — the one console operation the free edition
+ * refuses (AGENT_HANDOFF_PBX_CONSOLE_WHOLE_PANEL_FORM_2026-08-21.md §4/§8.6).
+ * The helper UPDATEs the same rows the panel's save writes (whitelisted
+ * columns), splices only that extension's pjsip blocks + voicemail line into
+ * the tenant's existing files, refreshes a bounded AstDB key set and reloads.
+ */
+export type MirrorExtensionEditResponse = {
+  ok: true;
+  tenantId: number;
+  extension: string;
+  extensionId: number;
+  changed: Record<string, unknown>;
+  applied: { files: string[]; astdbKeys: number; reloads: Array<{ cmd: string; rc: number }> } | { error: string };
+};
+
+export function mirrorEditPbxExtension(
+  cfg: PbxRouteHelperConfig,
+  args: {
+    tenantId: number;
+    extension: string;
+    set?: Record<string, string>;
+    vm?: Record<string, string>;
+    devices?: Array<{ device_id: number; secret?: string; description?: string; dtmf?: string; max_contacts?: number }>;
+  },
+): Promise<MirrorExtensionEditResponse> {
+  return callHelper<MirrorExtensionEditResponse>(cfg, "/mirror/extension-edit", args, 120_000);
 }
 
 export function mirrorCreatePbxTenant(

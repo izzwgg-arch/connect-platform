@@ -1472,3 +1472,58 @@ that's in the PBX… on ring groups and queues, completely wired."
 - ⏳ Not proven: nobody has clicked the tab in a browser (the whole console
   still awaits Izzy's first click-through), and no call has flowed through a
   console-made team — the acceptance verified rows and renders, not audio.
+
+## 24. THE GAP-CLOSING PASS (2026-08-22): the extension EDIT-WRITER is built and clone-proven; the geo runner validates; the honest before-cancelling list, restated
+
+Izzy: *"I want to fix all the gaps that we still have for closing down the
+license. Check all the gaps in the MD files."* Full record:
+`AGENT_HANDOFF_PBX_CONSOLE_WHOLE_PANEL_FORM_2026-08-21.md` **§8.8**. One commit
+on `feat/ivr-migration-takeover`.
+
+**Closed on the code side this pass:**
+- ✅ **The §11-correction blocker — the mirror EXTENSION EDIT-WRITER — is
+  BUILT and CLONE-PROVEN.** `edit_extension` + `apply_extension_edit_pbx` in
+  `mirror_writes.py` (whitelisted-column row UPDATEs, surgical per-extension
+  file splice via the renderer's own factored block functions, bounded AstDB
+  refresh that ⛔ never touches `dial`/`context`/diversions), helper
+  `2026.08.22.1` `POST /mirror/extension-edit`, and the console's
+  `saveExtensionOrMirror` fallback that fires ONLY on the panel's cap refusal.
+  Acceptance on the unlicensed clone (t2 ext 101): edit landed live in
+  Asterisk, only the edited extension's blocks moved, and the revert restored
+  the files **sha256-identical** — proving the block format byte-matches the
+  panel's own render. Keeper: `scripts/pbx/mirror/edit-extension-accept.py`.
+- ✅ **The §17a geo re-arm requirement is BUILT** (runner validates the
+  firewalld config after every build — match-set reconcile, US-open check,
+  whitelist ordering, state check; restore + restart + code 97 on failure;
+  file log). ⛔ **The channel stays DISARMED and the installer now preserves
+  that** — arming needs the unit already enabled or an explicit
+  `CONNECT_GEO_ARM=1`, i.e. Izzy's live word, never an installer side effect.
+- ✅ **§8.7's portal verification** — `app-portal-1` `.build-commit a9008ac1`
+  contains `b10151fd` (row editing is live in the shipped portal).
+- ✅ **Free-tier "NOT tested" items from §11, dispositioned:** desk-phone
+  provisioning past the 20 cap — **already beaten** (§17, proven on prod, the
+  console writes rows + VitalPBX's own generator); the manual extension *form*
+  add (`mode=add`) — **N/A, Connect never uses it** (creates go through the
+  CSV import, which works unlicensed, and the console's create path builds
+  devices too); VitalPBX-Connect device add — unused on this fleet (0 devices);
+  "expired vs never-licensed `.lic`" — still untested, accepted risk (EULA
+  says both = Community; the clone models the never-licensed shape).
+
+**⏳ STILL OPEN BEFORE CANCELLING — none of it is code, all of it needs Izzy
+or a real device:**
+1. **Install helper `2026.08.22.1` + the new grants on the PBX** (Run button;
+   backs up the current helper first). The edit fallback is inert until then —
+   harmless today, because it can only fire after the lapse.
+2. **One real phone registers and holds a call on a mirror tenant** — Loopcom
+   Demo 2 (§21) is built with a real number, (845) 305-0012; sign a device in
+   and call it. (Its E911 is unregistered — do that before any real use.)
+3. **Prod negative test** after the api deploy: Extensions → Edit still saves
+   via the PANEL (`viaMirror: false`) while the licence is live.
+4. ⛔ **Rotate the robot panel password** (`lOOPCOMAGENT7548`) — leaked into
+   session transcripts twice (2026-08-19 and 2026-08-21). Panel-side password
+   change + `/etc/connect-robot/credentials.env` on loopcom + api restart.
+5. Re-read §15's **cancel-day checklist** (apt lines + licensing host block —
+   AFTER cancelling, never before).
+6. Small, non-blocking: §8.5's trunk Custom Parameters/Headers tables (no
+   Connect writer and no fleet trunk uses them; close by capturing a real
+   browser session if ever needed).

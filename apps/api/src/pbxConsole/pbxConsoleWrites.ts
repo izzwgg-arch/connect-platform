@@ -293,6 +293,110 @@ export async function saveExtension(
   return { posts, devicesSaved, devicesRemoved };
 }
 
+/* ── the mirror fallback for the 12-extension cap ─────────────────────────────
+ *
+ * ⛔ Over the free tier's cap the panel refuses an extension edit-SAVE outright
+ * (proven on the Community-edition clone 2026-08-21, both request shapes), so
+ * when `saveExtension` comes back with that refusal the routes hand the SAME
+ * save to the PBX helper's /mirror/extension-edit instead. This function is
+ * the translation: panel-named fields → the mirror's whitelisted columns.
+ *
+ * ⛔ A field the mirror cannot honour is REFUSED BY NAME, never dropped — a
+ * save that silently loses a field reads as "the console is broken" weeks
+ * later. Fields that are merely UNCHANGED (the console re-sends every device
+ * with its current values) are dropped as no-ops instead of refused, which is
+ * what makes the ordinary Extensions-screen save work through the fallback.
+ */
+
+/** panel `set` names the mirror edits as the same-named ombu_extensions column */
+const MIRROR_GENERAL_SET = new Set([
+  "name", "email", "language", "ringtime", "features_password",
+  "internal_cid", "external_cid", "emergency_cid",
+]);
+/** panel check names that are yes/no ombu_extensions columns */
+const MIRROR_GENERAL_CHECKS = new Set([
+  "outgoing_rec", "incoming_rec", "internal_rec", "rec_on_demand",
+  "call_waiting", "pinless", "lock", "nospy",
+]);
+
+export type MirrorEditDeviceContext = {
+  deviceId: number;
+  user: string;
+  technology: string;
+  ringDevice: boolean;
+  description: string;
+  number: string | null;
+  dtmf: string | null;
+  maxContacts: number | null;
+};
+
+export type MirrorEditPayload = {
+  set: Record<string, string>;
+  vm: Record<string, string>;
+  devices: Array<{ device_id: number; secret?: string; description?: string; dtmf?: string; max_contacts?: number }>;
+};
+
+const mirrorRefuse = (what: string): never => {
+  throw new PanelStepError(
+    "mirror-edit-unsupported",
+    `The phone system's free edition is refusing this save (its own 12-extension limit), and Connect's fallback can change most extension fields itself — but not ${what}. Nothing was changed.`,
+  );
+};
+
+export function mapExtensionSaveToMirrorEdit(
+  input: ExtensionSaveInput,
+  currentDevices: MirrorEditDeviceContext[],
+): MirrorEditPayload {
+  const set: Record<string, string> = {};
+  const vm: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input.set || {})) {
+    if (v == null) continue;
+    if (MIRROR_GENERAL_SET.has(k)) set[k] = String(v);
+    else if (k === "vm_password" || k === "voicemail_password") vm["password"] = String(v);
+    else mirrorRefuse(`the "${k}" field`);
+  }
+  for (const [k, v] of Object.entries(input.checks || {})) {
+    if (v == null) continue;
+    if (k === "vm_enabled") vm["enabled"] = v ? "yes" : "no";
+    else if (MIRROR_GENERAL_CHECKS.has(k)) set[k] = v ? "yes" : "no";
+    else mirrorRefuse(`the "${k}" option`);
+  }
+  if (Object.keys(input.multi || {}).length) mirrorRefuse("waiting-line membership");
+  if ((input.removeDeviceIds || []).length) mirrorRefuse("removing a device");
+  const devices: MirrorEditPayload["devices"] = [];
+  for (const spec of input.devices || []) {
+    if (!spec.id) mirrorRefuse("adding a device (that is exactly what the free edition caps)");
+    const cur = currentDevices.find((d) => d.deviceId === Number(spec.id));
+    if (!cur) mirrorRefuse(`device #${spec.id}, which is not on this extension`);
+    const c = cur as MirrorEditDeviceContext;
+    if (spec.user != null && spec.user !== c.user) mirrorRefuse("renaming a device");
+    if (spec.ringDevice != null && spec.ringDevice !== c.ringDevice) mirrorRefuse('the "rings this device" switch');
+    if (spec.number != null && String(spec.number).replace(/\D/g, "") !== String(c.number || "").replace(/\D/g, "")) {
+      mirrorRefuse("changing a phone-number device's outside number");
+    }
+    const d: MirrorEditPayload["devices"][number] = { device_id: Number(spec.id) };
+    if (spec.secret) d.secret = spec.secret;
+    if (spec.description != null && spec.description !== c.description) d.description = spec.description;
+    if (c.technology === "pjsip") {
+      if (spec.dtmf != null && spec.dtmf !== "" && spec.dtmf !== (c.dtmf || "")) d.dtmf = spec.dtmf;
+      if (spec.maxContacts != null && String(spec.maxContacts) !== String(c.maxContacts ?? "")) d.max_contacts = Number(spec.maxContacts);
+    } else if ((spec.dtmf != null && spec.dtmf !== (c.dtmf || "")) || spec.maxContacts != null && String(spec.maxContacts) !== String(c.maxContacts ?? "")) {
+      mirrorRefuse(`technical settings on a ${c.technology === "virtual" ? "phone-number" : c.technology} device`);
+    }
+    if (Object.keys(d).length > 1) devices.push(d);
+  }
+  if (!Object.keys(set).length && !Object.keys(vm).length && !devices.length) {
+    // nothing actually changed — tell the caller honestly instead of posting a no-op
+    throw new PanelStepError("mirror-edit-noop", "Nothing in this save differs from what the phone system already has.");
+  }
+  return { set, vm, devices };
+}
+
+/** The panel's own over-cap refusal — the ONE failure the mirror fallback answers. */
+export function isExtensionCapRefusal(e: unknown): boolean {
+  return String((e as any)?.message || "").includes("maximum number of al");
+}
+
 /** Remove one device from an extension (the panel's "unlink device" button). */
 export async function unlinkDevice(s: PanelSession, extId: number | string, deviceId: number): Promise<void> {
   const r = await s.post([["class", "extensions"], ["method", "unlink"], ["mode", "unlink"], ["data", String(deviceId)]]);

@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.19.4"
+VERSION = "2026.08.22.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -208,8 +208,24 @@ def snap_conn():
     """)
     return conn
 
+def redact_secrets(value):
+    """Deep-copy with any key whose name contains secret/password replaced by
+    '***'. The mirror extension edit posts device secrets and voicemail
+    passwords; an audit trail is the wrong place for either (the robot panel
+    password already leaked once through a shell mistake — never again via
+    this file)."""
+    if isinstance(value, dict):
+        return {k: ("***" if any(s in str(k).lower() for s in ("secret", "password")) and v not in (None, "")
+                    else redact_secrets(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_secrets(v) for v in value]
+    return value
+
+
 def audit(action, ok, payload, result=None, error=None):
-    entry = {"ts": utc_now(), "version": VERSION, "action": action, "ok": ok, "payload": payload, "result": result, "error": error}
+    entry = {"ts": utc_now(), "version": VERSION, "action": action, "ok": ok,
+             "payload": redact_secrets(payload), "result": redact_secrets(result), "error": error}
     # Best-effort: audit runs BETWEEN the action and the response, so an OSError
     # here (fd exhaustion, full disk) would report a COMPLETED action as failed
     # to the client — which then retries a write that already happened.
@@ -2664,6 +2680,54 @@ def mirror_tenant_render(body):
             "files": res.get("files"), "reloads": res.get("reloads")}
 
 
+def mirror_extension_edit(body):
+    """Edit an EXISTING extension without the panel (2026-08-22).
+
+    ⛔ WHY THIS EXISTS: over the free tier's 12-extension cap the panel refuses
+    an extension edit-SAVE outright (proven on the Community-edition clone
+    2026-08-21, both request shapes), and the fleet holds 119 extensions — so
+    the day the licence lapses this is the ONLY way an extension changes.
+    While the licence is live the console still edits through the panel; the
+    api falls back here only when the panel answers the cap refusal.
+
+    Two halves, in order: mirror_writes.edit_extension UPDATEs the same rows
+    the panel's save writes (whitelisted columns, one transaction), then
+    apply_extension_edit_pbx splices ONLY this extension's pjsip blocks and
+    voicemail line into the tenant's existing files (tmp + os.replace, the
+    same atomic shape as the helper's other conf writers), refreshes the
+    bounded AstDB key set, and reloads. ⛔ Never a whole-tenant re-render —
+    that would rewrite hand-edited lines on OTHER extensions (the opus
+    overrides) and, as recorded in the licence-exit assessment, a full
+    re-render by this user cannot reopen files it already chowned to www-data.
+    """
+    mw = _load_mirror_writes()
+    tenant_id = require_num("tenantId", body.get("tenantId"))
+    extension = str(body.get("extension") or "").strip()
+    if not re.fullmatch(r"\d{1,6}", extension):
+        raise ValueError("extension must be the extension number")
+    set_fields = body.get("set") or {}
+    vm_fields = body.get("vm") or {}
+    devices = body.get("devices") or []
+    if not isinstance(set_fields, dict) or not isinstance(vm_fields, dict) or not isinstance(devices, list):
+        raise ValueError("set/vm must be objects and devices a list")
+    if not set_fields and not vm_fields and not devices:
+        raise ValueError("nothing to change")
+    conn = db_conn()
+    try:
+        res = mw.edit_extension(conn, int(tenant_id), extension, set=set_fields, vm=vm_fields, devices=devices)
+    finally:
+        conn.close()
+    applied = None
+    try:
+        applied = mw.apply_extension_edit_pbx(_mirror_read_conn(), int(tenant_id), extension)
+    except Exception as exc:
+        # The rows ARE updated; a failed file patch must be visible, not silent —
+        # the caller re-renders or retries rather than believing the phone changed.
+        applied = {"error": str(exc)}
+    return {"ok": True, "tenantId": int(tenant_id), "extension": extension,
+            "extensionId": res.get("extensionId"), "changed": res.get("changed"), "applied": applied}
+
+
 def media_sync_trigger(body):
     reason = str(body.get("reason") or "api")[:200]
     MEDIA_SYNC_TRIGGER_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -4196,6 +4260,7 @@ class Handler(BaseHTTPRequestHandler):
             "/console/geo-set": console_geo_set,
             "/mirror/tenant-create": mirror_tenant_create,
             "/mirror/tenant-render": mirror_tenant_render,
+            "/mirror/extension-edit": mirror_extension_edit,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
             "/voicemail/greeting/get": vm_greeting_status,

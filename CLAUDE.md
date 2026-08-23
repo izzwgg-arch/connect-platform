@@ -543,13 +543,24 @@ with proof outside the license."*
   the panel's JS does something extra on those two tables; no Connect writer has
   ever used them. Close it by capturing a real browser session of a panel-side
   Custom Parameter add.
-- ⛔⛔ **THE ONE BUILD LEFT BEFORE THE LICENCE CAN BE CANCELLED: the mirror
-  EXTENSION EDIT-WRITER** (`edit_extension` in `mirror_writes.py` beside
-  `add_extension`, byte-identical re-render via `vitalpbx_mirror.py`, proven by
-  diff on the clone, then wired as the console's fallback when the panel answers
-  the cap refusal). Full spec in handoff §8.6. **Everything else survives the
-  lapse; do not cancel before this exists and the assessment doc's
-  "before cancelling" list is re-read.**
+- ✅✅ **THE ONE BUILD LEFT IS BUILT AND CLONE-PROVEN (2026-08-22, handoff §8.8):
+  the mirror EXTENSION EDIT-WRITER exists** — `edit_extension` +
+  `apply_extension_edit_pbx` in `mirror_writes.py` (whitelisted-column row
+  UPDATEs; SURGICAL per-extension splice of the pjsip triples + voicemail line
+  via block functions factored out of the byte-identical renderer, tmp+
+  `os.replace`; bounded AstDB refresh that ⛔ NEVER writes `dial` — wake-dial
+  owns that key), helper **`2026.08.22.1`** `POST /mirror/extension-edit`, and
+  `saveExtensionOrMirror` in the console falling back **only on the cap
+  refusal** — panel first, always; unsupported fields refused BY NAME, never
+  dropped. Clone acceptance: edit live in Asterisk, only the edited
+  extension's blocks moved, revert **sha256-identical**
+  (`scripts/pbx/mirror/edit-extension-accept.py`). ⛔ **Cancelling still waits
+  on the §24 list in the assessment doc**: helper `2026.08.22.1` installed on
+  the PBX (Izzy's Run button — until then the fallback is inert, which is
+  harmless while the licence is live), one real phone registering + calling on
+  a mirror tenant (Loopcom Demo 2 is built and waiting), the prod negative
+  test (Extensions → Edit still saves via the panel, `viaMirror: false`), and
+  rotating the robot panel password.
 - ⏳ **NOT PROVEN: nobody has opened the new form in a browser and no write has
   been made from it against PRODUCTION.** Proven as 50 tests, portal typecheck 0,
   api typecheck at its exact 75 baseline, and 6 of 7 modules written and read back
@@ -2999,7 +3010,17 @@ mess up any other tenants."*
 - ⛔⛔ **THE FIRST LIVE GEO BUILD RAN 2026-08-19 17:26 EDT AND LOCKED OUT THE
   PBX — the geo channel is now DISARMED (`connect-geo-build.path` disabled +
   removed from multi-user.target) and MUST STAY DISARMED until the builder bug
-  below has a fix.** Full incident: handoff §17a. Our channel worked exactly as
+  below has a fix.** Full incident: handoff §17a.
+  ✅ **THE FIX IS BUILT (2026-08-22, console handoff §8.8): the runner now
+  validates the firewall AFTER every build** — reconciles every `--match-set`
+  in `direct.xml` against the ipset xmls, verifies the US open + whitelist
+  ordering + `firewall-cmd --state`, and on ANY failure restores the backup,
+  restarts firewalld and reports code 97 in result.json, logging to
+  `geo-build/runner.log` (journald there is volatile). It ships with the next
+  helper install. ⛔ **The channel STAYS DISARMED regardless** — the installer
+  now PRESERVES the disarmed state (re-arms only if already enabled or with an
+  explicit `CONNECT_GEO_ARM=1`), and re-arming remains Izzy's live in-chat
+  call per the standing rule below. Our channel worked exactly as
   designed (flags written, `direct.xml` backed up, builder ran as root,
   `result.json` code 0 in 19 s). The lockout is a **VitalPBX
   `build_geo_firewall` defect: UNBLOCKING a country DELETES its

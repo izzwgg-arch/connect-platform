@@ -516,6 +516,316 @@ def add_extension(conn, tenant_id: int, ext: str, name: str, email: str = "",
 
 
 # --------------------------------------------------------------------------- #
+# edit_extension — the ONE operation the unlicensed panel refuses on an
+# over-cap PBX besides tenant create (proven on the Community-edition clone
+# 2026-08-21: an extension edit-SAVE is refused both ways round — with the
+# device fields it answers "maximum number of allowed extensions", without
+# them the validator crashes). The fleet holds 119 extensions against the free
+# tier's 12, so the day the licence lapses this writer is how an extension is
+# edited. See AGENT_HANDOFF_PBX_CONSOLE_WHOLE_PANEL_FORM_2026-08-21.md §8.6.
+# --------------------------------------------------------------------------- #
+
+# Columns the mirror edit may touch, per table. ⛔ A whitelist ON PURPOSE:
+# anything outside it is REFUSED by name, never silently dropped — a save that
+# quietly loses a field reads as "the console is broken" weeks later.
+EXTENSION_EDIT_COLUMNS = {
+    "name", "email", "language", "ringtime", "call_waiting", "features_password",
+    "music_group_id", "outgoing_rec", "incoming_rec", "internal_rec", "rec_on_demand",
+    "lock", "pinless", "nospy", "internal_cid", "external_cid", "emergency_cid",
+    "notify_missed_calls",
+}
+VM_EDIT_COLUMNS = {
+    "password", "enabled", "attach", "saycid", "sayduration", "envelope",
+    "delete", "hidefromdir", "skip_instructions", "ask_password",
+}
+DEVICE_EDIT_COLUMNS = {"secret", "description"}
+PJSIP_DEVICE_EDIT_COLUMNS = {"dtmfmode", "max_contacts"}
+
+
+def edit_extension(conn, tenant_id: int, extension: str, *,
+                   set: Optional[Dict[str, Any]] = None,
+                   vm: Optional[Dict[str, Any]] = None,
+                   devices: Optional[Sequence[Dict[str, Any]]] = None,
+                   apply: bool = True) -> Dict[str, Any]:
+    """
+    UPDATE the same rows the panel's extension save writes, for an EXISTING
+    extension. Only supplied fields change; everything else is left byte-alone.
+
+    set:     {column: value} against EXTENSION_EDIT_COLUMNS (ombu_extensions)
+    vm:      {column: value} against VM_EDIT_COLUMNS (ombu_extensions_vm)
+    devices: [{"device_id": N, "secret"?, "description"?, "dtmf"?, "max_contacts"?}]
+             — existing devices only; adding/removing a device is NOT an edit
+             and is refused (over the cap the panel refuses a device ADD too,
+             so pretending here would lie).
+
+    ⛔ Renumbering is refused by construction (there is no `extension` column in
+    the whitelist) — VitalPBX itself cannot renumber an extension.
+    ⛔ When `name` changes and `internal_cid` was not explicitly supplied, the
+    internal CID is recomputed the way the panel builds it ("Name" <ext>) — but
+    ONLY when the current CID still follows that pattern, so a hand-tuned CID
+    survives a rename.
+
+    Returns {"changed": {table: {column: newValue}}, "extensionId": id}.
+    Nothing is applied to the running PBX here — call apply_extension_edit_pbx
+    afterwards (the helper endpoint does both).
+    """
+    set = dict(set or {})
+    vm = dict(vm or {})
+    devices = [dict(d) for d in (devices or [])]
+
+    bad = sorted(k for k in set if k not in EXTENSION_EDIT_COLUMNS)
+    bad += sorted("vm.%s" % k for k in vm if k not in VM_EDIT_COLUMNS)
+    if bad:
+        raise ValueError("field(s) not editable through the mirror: %s" % ", ".join(bad))
+
+    row = q1(conn, "select * from ombu_extensions where tenant_id=%s and extension=%s", (tenant_id, str(extension)))
+    if not row:
+        raise ValueError("extension %s not found in tenant %s" % (extension, tenant_id))
+    eid = row["extension_id"]
+    vm_row = q1(conn, "select * from ombu_extensions_vm where extension_id=%s", (eid,))
+    dev_rows = {int(d["device_id"]): d for d in q(conn, "select * from ombu_devices where extension_id=%s", (eid,))}
+
+    # internal_cid follows a rename, the way the panel does it — unless the
+    # current value was hand-tuned away from the '"Name" <ext>' pattern.
+    if "name" in set and "internal_cid" not in set:
+        expected = '"%s" <%s>' % (row.get("name") or "", row["extension"])
+        if (row.get("internal_cid") or "") in ("", expected):
+            set["internal_cid"] = '"%s" <%s>' % (set["name"], row["extension"])
+
+    changed: Dict[str, Dict[str, Any]] = {}
+
+    def diff(table_row, wanted: Dict[str, Any]) -> Dict[str, Any]:
+        out = {}
+        for k, v in wanted.items():
+            cur = table_row.get(k) if table_row else None
+            if str(cur if cur is not None else "") != str(v if v is not None else ""):
+                out[k] = v
+        return out
+
+    ext_changes = diff(row, set)
+    vm_changes = diff(vm_row, vm) if vm else {}
+    if vm and not vm_row:
+        raise ValueError("extension %s has no voicemail row; enable voicemail through the panel first" % extension)
+
+    dev_changes: List[Tuple[int, Dict[str, Any], Dict[str, Any]]] = []  # (device_id, ombu_devices cols, pjsip cols)
+    for spec in devices:
+        did = spec.get("device_id")
+        if not did or int(did) not in dev_rows:
+            raise ValueError("device %r is not an existing device of extension %s — the mirror edits, it never adds" % (did, extension))
+        did = int(did)
+        dcols = {k: spec[k] for k in DEVICE_EDIT_COLUMNS if k in spec and spec[k] is not None}
+        pj_in = {("dtmfmode" if k == "dtmf" else k): spec[k] for k in ("dtmf", "dtmfmode", "max_contacts") if k in spec and spec[k] is not None}
+        bad_dev = sorted(k for k in spec if k not in ("device_id", "dtmf") and k not in DEVICE_EDIT_COLUMNS and k not in PJSIP_DEVICE_EDIT_COLUMNS)
+        if bad_dev:
+            raise ValueError("device field(s) not editable through the mirror: %s" % ", ".join(bad_dev))
+        d_diff = diff(dev_rows[did], dcols)
+        pj_row = q1(conn, "select * from ombu_pjsip_devices where device_id=%s", (did,))
+        pj_diff = diff(pj_row, pj_in) if pj_in else {}
+        if pj_in and not pj_row:
+            raise ValueError("device %s has no pjsip row — dtmf/max_contacts only apply to pjsip devices" % did)
+        if d_diff or pj_diff:
+            dev_changes.append((did, d_diff, pj_diff))
+
+    if not apply:
+        return {"extensionId": eid, "dryRun": True,
+                "changed": {"ombu_extensions": ext_changes, "ombu_extensions_vm": vm_changes,
+                            "devices": [{"deviceId": d, **c, **p} for d, c, p in dev_changes]}}
+
+    # ONE transaction, exactly like Plan.execute
+    try:
+        with conn.cursor() as cur:
+            def upd(table, key_col, key_val, cols: Dict[str, Any]):
+                if not cols:
+                    return
+                sets = ", ".join("`%s`=%%s" % c for c in cols)
+                cur.execute("UPDATE `%s` SET %s WHERE `%s`=%%s" % (table, sets, key_col),
+                            [*cols.values(), key_val])
+            upd("ombu_extensions", "extension_id", eid, ext_changes)
+            upd("ombu_extensions_vm", "extension_id", eid, vm_changes)
+            for did, dcols, pjcols in dev_changes:
+                upd("ombu_devices", "device_id", did, dcols)
+                upd("ombu_pjsip_devices", "device_id", did, pjcols)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    if ext_changes:
+        changed["ombu_extensions"] = ext_changes
+    if vm_changes:
+        changed["ombu_extensions_vm"] = vm_changes
+    if dev_changes:
+        changed["ombu_devices"] = {str(d): {**c, **p} for d, c, p in dev_changes}
+    return {"extensionId": eid, "changed": changed}
+
+
+def _atomic_write_conf(path: str, text: str):
+    """tmp + os.replace in the same directory — the ONLY write shape that works
+    from the helper: the panel owns these files (www-data, ACL mask r--) and the
+    helper runs as asterisk, so open(path, 'w') is Errno 13. os.replace needs
+    only directory write, which asterisk has; ownership is handed back to
+    www-data afterwards (CAP_CHOWN) so the panel can keep managing the file.
+    This is the pattern the helper's three existing tenant-conf writers use."""
+    import tempfile
+    d = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".mirror-edit-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
+    try:
+        import grp
+        import pwd
+        os.chown(path, pwd.getpwnam("www-data").pw_uid, grp.getgrnam("root").gr_gid)
+    except Exception:
+        pass  # dev / clone-outside-helper runs; the ACL default still grants both users
+
+
+def _replace_pjsip_device_triple(text: str, name: str, new_triple: str) -> str:
+    """Replace the endpoint/auth/aor blocks of ONE device in a rendered pjsip
+    file. ⛔ The header match is exact — `[T5_101](p...` never matches
+    `[T5_101_1](p...` because the closing bracket is part of the pattern."""
+    esc = re.escape(name)
+    ep = re.search(r"(?m)^\[%s\]\(p\d+\)\n" % esc, text)
+    if not ep:
+        raise ValueError("device %s has no endpoint block in the pjsip file — re-render the tenant instead" % name)
+    aor = re.search(r"(?m)^\[%s\]\(p\d+-aor\)\n" % esc, text)
+    if not aor or aor.start() < ep.start():
+        raise ValueError("device %s has no aor block after its endpoint — file layout unexpected, refusing to patch" % name)
+    nxt = re.compile(r"(?m)^\[").search(text, aor.end())
+    end = nxt.start() if nxt else len(text)
+    span = text[ep.start():end]
+    # The span may only contain this device's three blocks; anything else means a
+    # hand edit rearranged the file and a blind splice would eat it.
+    headers = re.findall(r"(?m)^\[([^\]]+)\]", span)
+    if sorted(headers) != sorted([name, "auth%s" % name, name]):
+        raise ValueError("unexpected blocks %r around device %s — refusing to patch" % (headers, name))
+    if not new_triple.endswith("\n\n"):
+        new_triple = new_triple.rstrip("\n") + "\n\n"
+    return text[:ep.start()] + new_triple + text[end:]
+
+
+def _replace_voicemail_line(text: str, ext: str, new_line: Optional[str]) -> str:
+    """Replace (or remove, when voicemail is now off) one extension's mailbox line."""
+    pat = re.compile(r"(?m)^%s => .*\n" % re.escape(str(ext)))
+    m = pat.search(text)
+    if new_line is None:
+        return pat.sub("", text, count=1) if m else text
+    if m:
+        return text[:m.start()] + new_line + text[m.end():]
+    # voicemail newly enabled: append (position is cosmetic in voicemail.conf;
+    # VitalPBX's next full regen will re-sort by extension_id)
+    return (text if text.endswith("\n") else text + "\n") + new_line
+
+
+# AstDB keys an EDIT may re-derive from rows. ⛔ Deliberately absent: `dial`
+# (wake-and-wait enrollment rewrites it and the worker re-asserts it — writing
+# it from rows would silently un-enroll a phone), `context` (cos changes are
+# not mirror-editable), the diversions/* family (DND/CF live state written by
+# the assistant), callgroup/pickupgroup and dial_options (not editable here).
+ASTDB_EDIT_KEYS = (
+    ("name", lambda e, vmr: e.get("name") or ""),
+    ("password", lambda e, vmr: str(e.get("features_password") or "")),
+    ("language", lambda e, vmr: e.get("language") or "en"),
+    ("call_waiting", lambda e, vmr: "yes" if e.get("call_waiting") == "yes" else "no"),
+    ("ringtimer", lambda e, vmr: str(e.get("ringtime") or 30)),
+    ("lock", lambda e, vmr: "yes" if e.get("lock") == "yes" else "no"),
+    ("spyb", lambda e, vmr: "yes" if e.get("nospy") == "yes" else "no"),
+    ("pinless", lambda e, vmr: "yes" if e.get("pinless") == "yes" else "no"),
+    ("notify_missed_calls", lambda e, vmr: "yes" if e.get("notify_missed_calls") else "no"),
+    ("vm_password", lambda e, vmr: str((vmr or {}).get("password") or "")),
+    ("vmenabled", lambda e, vmr: ("yes" if (vmr or {}).get("enabled") == "yes" else "no") if vmr else "no"),
+    ("ask_vm_password", lambda e, vmr: "yes" if (vmr or {}).get("ask_password", "yes") == "yes" else "no"),
+    ("skip_vm_instructions", lambda e, vmr: "yes" if (vmr or {}).get("skip_instructions") == "yes" else "no"),
+)
+
+
+def extension_edit_astdb(m, e) -> Dict[str, str]:
+    """The bounded AstDB key set an edit re-asserts, computed from the rows with
+    the SAME derivations render_astdb uses (vitalpbx_mirror is the reference)."""
+    import vitalpbx_mirror as vmr_mod
+    fam = "/%s" % m["hash"]
+    ek = fam + "/extensions/%s/" % e["extension"]
+    vmr = e.get("vm")
+    kv = {ek + key: fn(e, vmr) for key, fn in ASTDB_EDIT_KEYS}
+    kv[ek + "moh"] = vmr_mod.moh_name(m, e.get("music_group_id"))
+    kv[ek + "dictate/email"] = (str(e.get("email") or "")) if e.get("dictate_auto_send") == "yes" else ""
+    return kv
+
+
+def apply_extension_edit_pbx(conn, tenant_id: int, extension: str, *,
+                             target_dir: str = "/etc/asterisk/vitalpbx",
+                             reload: bool = True, astdb: bool = True) -> Dict[str, Any]:
+    """
+    Make an already-row-edited extension LIVE, surgically: re-render THIS
+    extension's pjsip blocks and voicemail line from the current rows (via the
+    byte-identical renderer's own block functions) and splice them into the
+    tenant's EXISTING files, then refresh the bounded AstDB key set and reload.
+
+    ⛔ Surgical on purpose, never a whole-tenant re-render: a full re-render
+    would also rewrite hand-edited lines on OTHER extensions (the per-endpoint
+    opus overrides are the standing example) and, on tenants with queues/IVRs,
+    lines the stretch renderers still approximate. Touch only what the edit
+    touched. Dialplan and hints are untouched by design — no per-extension
+    dialplan block embeds an editable field, and hints only change with device
+    membership, which the mirror edit refuses to change.
+    """
+    import subprocess
+    import vitalpbx_mirror as vm
+    m = vm.load_tenant(conn, tenant_id)
+    e = next((x for x in m["extensions"] if str(x["extension"]) == str(extension)), None)
+    if not e:
+        raise ValueError("extension %s not found in tenant %s" % (extension, tenant_id))
+    t = m["t"]
+    out: Dict[str, Any] = {"files": [], "astdbKeys": 0, "reloads": []}
+
+    pjsip_path = os.path.join(target_dir, "pjsip__50-%d-extensions.conf" % t)
+    with open(pjsip_path, "r", encoding="utf-8") as fh:
+        pjsip_text = fh.read()
+    new_pjsip = pjsip_text
+    for d in e["devices"]:
+        if d["technology"] != "pjsip":
+            continue
+        new_pjsip = _replace_pjsip_device_triple(new_pjsip, "%s%s" % (m["prefix"], d["user"]),
+                                                 vm.pjsip_device_blocks(m, e, d))
+    if new_pjsip != pjsip_text:
+        _atomic_write_conf(pjsip_path, new_pjsip)
+        out["files"].append(os.path.basename(pjsip_path))
+
+    vm_path = os.path.join(target_dir, "voicemail__50-%d-main.conf" % t)
+    if os.path.exists(vm_path):
+        with open(vm_path, "r", encoding="utf-8") as fh:
+            vm_text = fh.read()
+        new_vm = _replace_voicemail_line(vm_text, e["extension"], vm.voicemail_line(m, e))
+        if new_vm != vm_text:
+            _atomic_write_conf(vm_path, new_vm)
+            out["files"].append(os.path.basename(vm_path))
+
+    if astdb:
+        kv = extension_edit_astdb(m, e)
+        for k, v in sorted(kv.items()):
+            fam, key = k[1:].split("/", 1)
+            subprocess.run(["asterisk", "-rx", 'database put %s %s "%s"' % (fam, key, str(v).replace('"', '\\"'))],
+                           capture_output=True, text=True)
+        out["astdbKeys"] = len(kv)
+
+    if reload:
+        cmds = ["module reload res_pjsip.so"]
+        if any(f.startswith("voicemail") for f in out["files"]):
+            cmds.append("voicemail reload")
+        for c in cmds:
+            r = subprocess.run(["asterisk", "-rx", c], capture_output=True, text=True)
+            out["reloads"].append({"cmd": c, "rc": r.returncode})
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # render_and_install
 # --------------------------------------------------------------------------- #
 
@@ -813,6 +1123,16 @@ def main(argv=None):
     e.add_argument("--features-password")
     e.add_argument("--vm-password")
 
+    ed = sub.add_parser("edit-extension", help="UPDATE an existing extension's rows (whitelisted fields) and optionally patch the live files")
+    ed.add_argument("--tenant-id", type=int, required=True)
+    ed.add_argument("--ext", required=True)
+    ed.add_argument("--set", default="{}", help='JSON {column: value} against EXTENSION_EDIT_COLUMNS')
+    ed.add_argument("--vm", default="{}", help='JSON {column: value} against VM_EDIT_COLUMNS')
+    ed.add_argument("--devices", default="[]", help='JSON [{"device_id":N,"secret"?,"description"?,"dtmf"?,"max_contacts"?}]')
+    ed.add_argument("--target-dir", default="", help="with --apply: also surgically patch the tenant files in this dir")
+    ed.add_argument("--no-astdb", action="store_true")
+    ed.add_argument("--no-reload", action="store_true")
+
     d = sub.add_parser("add-did")
     d.add_argument("--tenant-id", type=int, required=True)
     d.add_argument("--did", required=True)
@@ -850,6 +1170,14 @@ def main(argv=None):
                     out["fs"] = apply_tenant_fs(row["path"])
             print(json.dumps(out))
             return
+    elif a.cmd == "edit-extension":
+        res = edit_extension(conn, a.tenant_id, a.ext, set=json.loads(a.set), vm=json.loads(a.vm),
+                             devices=json.loads(a.devices), apply=a.apply)
+        if a.apply and a.target_dir:
+            res["applied"] = apply_extension_edit_pbx(conn, a.tenant_id, a.ext, target_dir=a.target_dir,
+                                                      reload=not a.no_reload, astdb=not a.no_astdb)
+        print(json.dumps(res, indent=2, default=str))
+        return
     elif a.cmd == "add-extension":
         plan = add_extension(conn, a.tenant_id, a.ext, a.name, a.email, a.desk_password, a.webrtc_password,
                              features_password=a.features_password, vm_password=a.vm_password)

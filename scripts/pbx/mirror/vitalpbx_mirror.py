@@ -1056,70 +1056,87 @@ def render_hints(m) -> str:
     return "".join(out) + "\n"
 
 
-def render_pjsip_extensions(m) -> str:
+def pjsip_device_blocks(m, e, d) -> str:
+    """The endpoint/auth/aor triple for ONE pjsip device, exactly as VitalPBX
+    renders it. Factored out of render_pjsip_extensions (2026-08-22) so the
+    surgical extension EDIT (mirror_writes.edit_extension) and the full render
+    share ONE implementation — two copies would drift, and a drifted pjsip
+    block is a phone that silently cannot register."""
     p, t = m["prefix"], m["t"]
-    out = []
     default_park = next((l for l in m["parking"] if l.get("defpark") == "yes"), None)
+    pj = d["pjsip"] or {}
+    prof = "p%s" % d["profile_id"]
+    name = "%s%s" % (p, d["user"])
+    dtmf = {"rfc2833": "auto"}.get(pj.get("dtmfmode"), pj.get("dtmfmode") or "rfc4733")
+    lines = ["[%s](%s)" % (name, prof),
+             "type=endpoint",
+             "auth=auth%s" % name,
+             "identify_by=username,auth_username",
+             "outbound_auth=auth%s" % name,
+             "aors=%s" % name,
+             "deny=%s" % (pj.get("deny") or "0.0.0.0/0"),
+             "contact_deny=%s" % (pj.get("deny") or "0.0.0.0/0"),
+             "permit=%s" % (pj.get("permit") or "0.0.0.0/0"),
+             "contact_permit=%s" % (pj.get("permit") or "0.0.0.0/0"),
+             "dtmf_mode=%s" % dtmf,
+             "message_context=messages",
+             "set_var=DEVICENAME=%s" % name]
+    if default_park:
+        lines.append("set_var=CHANNEL(parkinglot)=parking-%d" % t)
+    lines += ["subscribe_context=%sextension-hints" % p,
+              "language=%s" % (e.get("language") or "en"),
+              "moh_suggest=%s" % moh_name(m, e.get("music_group_id")),
+              "context=%s%s" % (p, cos_context(e)),
+              "mailboxes=%s" % (e.get("mailbox") or ""),
+              "device_state_busy_at=%s" % (e.get("call_limit") or 0),
+              "callerid=%s" % (e.get("internal_cid") or "")]
+    for pg in e["pickup_groups"]:
+        lines.append("named_call_group=%s" % pg["pickup_group_id"])
+        lines.append("named_pickup_group=%s" % pg["pickup_group_id"])
+    if pj.get("codecs"):
+        lines.append("allow=!all,%s" % pj["codecs"])
+    return ("\n".join(lines) + "\n\n"
+            + "[auth%s]\ntype=auth\nauth_type=userpass\nusername=%s\npassword=%s\n\n" % (name, name, d["secret"])
+            + "[%s](%s-aor)\ntype=aor\nmax_contacts=%s\n\n" % (name, prof, pj.get("max_contacts") if pj.get("max_contacts") is not None else 1))
+
+
+def render_pjsip_extensions(m) -> str:
+    out = []
     # VitalPBX writes the endpoint blocks in DEVICE id order across the whole tenant (T11: 102, 105_1, 102_1),
     # not grouped per extension.
     devs = sorted(((d, e) for e in m["extensions"] for d in e["devices"] if d["technology"] == "pjsip"),
                   key=lambda de: de[0]["device_id"])
     for d, e in devs:
-        n = e["extension"]
-        if True:
-            pj = d["pjsip"] or {}
-            prof = "p%s" % d["profile_id"]
-            name = "%s%s" % (p, d["user"])
-            dtmf = {"rfc2833": "auto"}.get(pj.get("dtmfmode"), pj.get("dtmfmode") or "rfc4733")
-            lines = ["[%s](%s)" % (name, prof),
-                     "type=endpoint",
-                     "auth=auth%s" % name,
-                     "identify_by=username,auth_username",
-                     "outbound_auth=auth%s" % name,
-                     "aors=%s" % name,
-                     "deny=%s" % (pj.get("deny") or "0.0.0.0/0"),
-                     "contact_deny=%s" % (pj.get("deny") or "0.0.0.0/0"),
-                     "permit=%s" % (pj.get("permit") or "0.0.0.0/0"),
-                     "contact_permit=%s" % (pj.get("permit") or "0.0.0.0/0"),
-                     "dtmf_mode=%s" % dtmf,
-                     "message_context=messages",
-                     "set_var=DEVICENAME=%s" % name]
-            if default_park:
-                lines.append("set_var=CHANNEL(parkinglot)=parking-%d" % t)
-            lines += ["subscribe_context=%sextension-hints" % p,
-                      "language=%s" % (e.get("language") or "en"),
-                      "moh_suggest=%s" % moh_name(m, e.get("music_group_id")),
-                      "context=%s%s" % (p, cos_context(e)),
-                      "mailboxes=%s" % (e.get("mailbox") or ""),
-                      "device_state_busy_at=%s" % (e.get("call_limit") or 0),
-                      "callerid=%s" % (e.get("internal_cid") or "")]
-            for pg in e["pickup_groups"]:
-                lines.append("named_call_group=%s" % pg["pickup_group_id"])
-                lines.append("named_pickup_group=%s" % pg["pickup_group_id"])
-            if pj.get("codecs"):
-                lines.append("allow=!all,%s" % pj["codecs"])
-            out.append("\n".join(lines) + "\n\n")
-            out.append("[auth%s]\ntype=auth\nauth_type=userpass\nusername=%s\npassword=%s\n\n" % (name, name, d["secret"]))
-            out.append("[%s](%s-aor)\ntype=aor\nmax_contacts=%s\n\n" % (name, prof, pj.get("max_contacts") if pj.get("max_contacts") is not None else 1))
+        out.append(pjsip_device_blocks(m, e, d))
     return "".join(out) + "\n"
 
 
+def voicemail_line(m, e) -> Optional[str]:
+    """One extension's mailbox line (no context header), or None when voicemail
+    is off. Factored out of render_voicemail (2026-08-22) for the same reason as
+    pjsip_device_blocks: the surgical edit and the full render must agree byte
+    for byte."""
+    vm = e["vm"]
+    if not vm or vm.get("enabled") != "yes":
+        return None
+    opts = "attach=%s|saycid=%s|sayduration=%s|envelope=%s|delete=%s|hidefromdir=%s|operator=%s" % (
+        yn(vm["attach"]), yn(vm["saycid"]), yn(vm["sayduration"]), yn(vm["envelope"]),
+        yn(vm["delete"]), yn(vm["hidefromdir"]), "yes" if vm.get("operator_destination_id") else "no")
+    if vm.get("voicemail_timezone_id"):
+        tz = q1(m["conn"], "select * from ombu_voicemail_timezones where voicemail_timezone_id=%s", (vm["voicemail_timezone_id"],))
+        if tz:
+            opts += "|tz=%s" % tz.get("name")
+    opts += "|" + VM_EMAILBODY % dict(hash=m["hash"], ext=e["extension"])
+    return "%s => %s,%s,%s,,%s\n" % (e["extension"], vm["password"], e["name"], e.get("email") or "", opts)
+
+
 def render_voicemail(m) -> str:
-    h = m["hash"]
     boxes = []
     for e in m["extensions"]:
-        vm = e["vm"]
-        if not vm or vm.get("enabled") != "yes":
+        line = voicemail_line(m, e)
+        if line is None:
             continue
-        opts = "attach=%s|saycid=%s|sayduration=%s|envelope=%s|delete=%s|hidefromdir=%s|operator=%s" % (
-            yn(vm["attach"]), yn(vm["saycid"]), yn(vm["sayduration"]), yn(vm["envelope"]),
-            yn(vm["delete"]), yn(vm["hidefromdir"]), "yes" if vm.get("operator_destination_id") else "no")
-        if vm.get("voicemail_timezone_id"):
-            tz = q1(m["conn"], "select * from ombu_voicemail_timezones where voicemail_timezone_id=%s", (vm["voicemail_timezone_id"],))
-            if tz:
-                opts += "|tz=%s" % tz.get("name")
-        opts += "|" + VM_EMAILBODY % dict(hash=h, ext=e["extension"])
-        boxes.append((vm["context"], "%s => %s,%s,%s,,%s\n" % (e["extension"], vm["password"], e["name"], e.get("email") or "", opts)))
+        boxes.append((e["vm"]["context"], line))
     if not boxes:
         return ""
     ctx = boxes[0][0]

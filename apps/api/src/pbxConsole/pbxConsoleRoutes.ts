@@ -22,7 +22,7 @@ import { createQueue, createRingGroup, deleteTeam, type QueueSpec, type RingGrou
 import { resolveMirrorTenantCreator } from "../onboarding/setupOrchestrator";
 import {
   consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
-  resolvePbxRouteHelperConfig,
+  mirrorEditPbxExtension, resolvePbxRouteHelperConfig,
 } from "../pbxInboundRouteHelperClient";
 import { syncExtensionsFromPbx } from "../pbxExtensionSync";
 import { acquireAccount, releaseAccount } from "../onboarding/setupOrchestrator";
@@ -33,6 +33,7 @@ import {
 import {
   applyAndRebake, createExtension, deleteExtension, deleteTenant, editOutboundRoute, editQueue, editRingGroup, panelDelete, rebootPhone,
   saveExtension, savePhone, saveTenant, unlinkDevice, MAIN_TENANT_PATH_DEFAULT,
+  isExtensionCapRefusal, mapExtensionSaveToMirrorEdit,
   type TeamEditInput,
   type DeviceSpec, type ExtensionCreateInput, type ExtensionSaveInput,
 } from "./pbxConsoleWrites";
@@ -109,11 +110,13 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
          and its own validator crashes on `Undefined array key "user"`. Every
          other console module — tenants, trunks, outbound routes, route
          selections, ring groups, queues — saves cleanly unlicensed.
-         Until an extension writer exists in the mirror, this is the honest
-         answer rather than a 500 that reads like Connect broke. */
+         Since 2026-08-22 an extension EDIT falls back to the helper's
+         /mirror/extension-edit (saveExtensionOrMirror), so this refusal only
+         reaches a person when that fallback is unavailable: no helper
+         configured for the PBX, or a CREATE (which the mirror never fakes). */
       match: "maximum number of al",
       message:
-        "The phone system's free edition will not save an extension while it is over its own 12-extension limit — this is the phone system refusing, not Connect. Nothing was changed. Extensions can still be edited from the VitalPBX panel while the licence is active.",
+        "The phone system's free edition will not save an extension while it is over its own 12-extension limit, and the Connect helper that edits around that limit is not reachable on this phone system. Nothing was changed.",
     },
     {
       match: "geo_build_not_permitted",
@@ -124,6 +127,12 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
 
   const fail = (reply: any, e: any) => {
     const msg = e instanceof PanelStepError ? e.message : e?.message || "the phone system rejected the change";
+    /* The mirror fallback's own refusals carry a field-specific plain-English
+       sentence, so they answer with their OWN message rather than a fixed one. */
+    if (e instanceof PanelStepError && (e.step === "mirror-edit-unsupported" || e.step === "mirror-edit-noop")) {
+      log.warn({ err: msg, step: e.step }, "[PBX_CONSOLE] refused");
+      return reply.status(409).send({ error: "pbx_console_refused", detail: msg, reason: e.step });
+    }
     const refusal = REFUSALS.find((r) => String(msg).includes(r.match));
     if (refusal) {
       log.warn({ err: msg, step: e?.step }, "[PBX_CONSOLE] refused");
@@ -144,6 +153,38 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     const cfg = resolvePbxRouteHelperConfig(instance.id);
     if (!cfg) throw new PanelStepError("helper", "the PBX helper is not configured for this phone system, so phones and the geo firewall cannot be changed from here");
     return cfg;
+  };
+
+  /**
+   * Save an extension through the panel; when the free edition's 12-extension
+   * cap refuses the save (the ONE console operation the unlicensed panel
+   * refuses — clone-proven 2026-08-21), hand the SAME save to the helper's
+   * /mirror/extension-edit, which UPDATEs the rows the panel would and splices
+   * only that extension's pjsip blocks + voicemail line into the live files.
+   * ⛔ The panel goes FIRST, always — while the licence is live nothing here
+   * behaves differently, and a test pins that order. A field the mirror cannot
+   * honour is refused by name (mapExtensionSaveToMirrorEdit), never dropped.
+   */
+  const saveExtensionOrMirror = async (
+    s: PanelSession, instance: Instance, ext: ConsoleExtensionRow, extId: number, input: ExtensionSaveInput,
+  ): Promise<{ posts: number; devicesSaved: number; devicesRemoved: number; viaMirror: boolean }> => {
+    try {
+      return { ...(await saveExtension(s, ext.tenantPath, extId, input)), viaMirror: false };
+    } catch (e) {
+      if (!isExtensionCapRefusal(e)) throw e;
+      const cfg = resolvePbxRouteHelperConfig(instance.id);
+      if (!cfg) throw e; // no helper on this PBX — the honest cap refusal stands
+      const mapped = mapExtensionSaveToMirrorEdit(input, ext.devices);
+      log.warn({ ext: ext.extension, tenantId: ext.tenantId }, "[PBX_CONSOLE] panel refused the extension save at the licence cap — editing through the mirror");
+      const r = await mirrorEditPbxExtension(cfg, { tenantId: ext.tenantId, extension: ext.extension, ...mapped });
+      const applyErr = (r.applied as any)?.error;
+      if (applyErr) {
+        /* The rows ARE updated; saying "saved" while the phone still runs the old
+           config would be the static-file trap. Loud, with what to do next. */
+        throw new PanelStepError("mirror-edit-apply", `the change was recorded but making it live on the phone system failed (${applyErr}) — save again, or re-render the customer from the console`);
+      }
+      return { posts: 0, devicesSaved: mapped.devices.length, devicesRemoved: 0, viaMirror: true };
+    }
   };
 
   /* ── the panel form, whole ─────────────────────────────────────────────────
@@ -250,7 +291,7 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
         const ext = info.ok ? info.data : null;
         if (!ext) return reply.status(404).send({ error: "extension_not_found" });
         const out = await withPanel(instance, async (s) => {
-          const r = await saveExtension(s, ext.tenantPath, Number(id), {
+          const r = await saveExtensionOrMirror(s, instance, ext, Number(id), {
             set: b.set as any, checks: b.checks, multi: b.multi, devices: extToDeviceSpecs(ext),
           });
           return { module: mod, id, saved: true, ...r };
@@ -486,7 +527,7 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     // callers who omit devices get the current device set carried, with each device's DB dtmf
     if (!input.devices) input.devices = extToDeviceSpecs(ext);
     try {
-      const out = await withPanel(instance, async (s) => { const r = await saveExtension(s, ext.tenantPath, extensionId, input); return { savedExtensionId: extensionId, ...r }; }, ext.tenantPath);
+      const out = await withPanel(instance, async (s) => { const r = await saveExtensionOrMirror(s, instance, ext, extensionId, input); return { savedExtensionId: extensionId, ...r }; }, ext.tenantPath);
       await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_UPDATED", entityType: "PbxExtension", entityId: `${ext.tenantId}/${ext.extension}`, metadata: { fields: Object.keys(input.set || {}) } });
       await syncConnectExtensions(instance, ext.tenantId).catch(() => {});
       return out;
