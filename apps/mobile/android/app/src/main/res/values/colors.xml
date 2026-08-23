@@ -4,5 +4,8 @@
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#040810</color>
   <color name="activityBackground">#040810</color>
-  <color name="notification_icon_color">#1d4ed8</color>
+  <!-- Tint Android applies to the white notification_icon silhouette (shade header
+       accent). Brand accent per the Signal Core kit — was #1d4ed8, the pre-rebrand
+       Connect blue, until 2026-08-22. -->
+  <color name="notification_icon_color">#22A8FF</color>
 </resources>

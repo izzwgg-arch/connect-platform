@@ -167,15 +167,15 @@ const config: ExpoConfig = {
     // expo-notifications to obtain Expo push tokens on Android.
     // Without this, Firebase fails to initialize ("Default FirebaseApp is not initialized").
     googleServicesFile: './google-services.json',
-    // Adaptive icon: foreground is the icon image, background is the gradient base colour.
-    // This gives proper Android 8+ adaptive icon behaviour (circle, squircle, etc).
+    // Adaptive icon — MUST mirror the shipped native set (Blue 2B from the
+    // icon-refinement kit, Izzy 2026-08-22). android/ is bare so this only
+    // matters on a future prebuild, and a stale entry here would silently
+    // regress the launcher icon that day. Foreground = the infinity+star mark
+    // on transparent; background = the blue GRADIENT image (a flat
+    // backgroundColor cannot represent it — do not swap back to one).
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
-      // ⛔ Must stay in step with @color/iconBackground in
-      // android/app/src/main/res/values/colors.xml. This read #1d4ed8 (the old
-      // Connect blue) until 2026-08-21 while the native res already said
-      // #0C1218 — a prebuild would have silently regressed the launcher icon.
-      backgroundColor: '#0C1218',
+      backgroundImage: './assets/adaptive-icon-background.png',
     },
     minSdkVersion: 24,
       permissions: [
@@ -248,10 +248,13 @@ const config: ExpoConfig = {
     [
       'expo-notifications',
       {
-        // Notification icon shown in the Android status bar — monochrome white PNG.
-        // Falls back to the app icon if this asset doesn't exist.
+        // Notification icon shown in the Android status bar — monochrome white
+        // PNG (the infinity silhouette from the icon-refinement kit; must stay
+        // white-on-transparent, Android renders only the alpha as a tinted
+        // silhouette). Inert on bare android/ — the shipped icon is
+        // res/drawable-*/notification_icon.png — but kept truthful for prebuild.
         icon: './assets/notification-icon.png',
-        color: '#1d4ed8',
+        color: '#22A8FF',
         // Pre-configure the high-importance Telecom/call channel so it exists
         // even before the JS runtime calls setNotificationChannelAsync().
         // This matters for the first push arriving on a fresh install.

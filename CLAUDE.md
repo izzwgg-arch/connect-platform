@@ -1138,6 +1138,57 @@ getting to the login page, or on the login page?"* then *"Do one, two, and three
   line, the remaining lever is the widget MODE (Managed → non-interactive or
   invisible, a Cloudflare dashboard setting), not our code.
 
+## ⛔ AGENT HANDOFF — the Android launcher icon is BLUE 2B from the icon-refinement kit, and the status-bar icon is the infinity silhouette (2026-08-22) — READ FIRST before touching Android launcher/notification icons, before running the icon generator script, or before believing the generator produces what ships
+
+(Committed on `feat/ivr-migration-takeover` alongside the parallel session's `a7eaf8e7`,
+which built the LOGIN and SPLASH to the approved mockups — this section covers only the
+ICON half. **apps/mobile only — no server, no deploy; APK built for verification, NOT
+published.** Izzy picked **Blue 2B** — the detailed infinity-with-star mark on the bright
+blue gradient — from the three options in `Icon refinement options.zip` (now archived at
+`docs/brand/loopcom/icon-refinement-2026-08/Icon refinement options.zip` — the copy that
+also carries `Login and splash mockups.html`), 2026-08-22 in-chat.)
+
+- ⛔⛔ **THE SHIPPED ANDROID LAUNCHER ICONS ARE HAND-PLACED FROM THE KIT, NOT
+  GENERATED — `scripts/mobile-loopcom-android-assets.py` no longer produces what
+  ships.** Its generate mode renders the white-tile wordmark icon (the pre-Blue-2B
+  fleet look) and would REGRESS the launcher if re-run; its `--check` is
+  existence-only and stays green over any bytes. The source of truth is the kit:
+  adaptive fg/bg from `blue-2b/android-adaptive-{foreground,background}-432.png`
+  resized per density, legacy square = `android-app-icon-512.png` resized
+  (proven equivalent to the composite-crop within 2px), round = circle-masked
+  square. All 20 mipmap PNGs replaced; `mipmap-anydpi-v26/*.xml` untouched
+  (they already reference `@mipmap/ic_launcher_background` as an IMAGE).
+- ⛔ **The status-bar notification icon is now `res/drawable-{mdpi..xxxhdpi}/
+  notification_icon.png`** — the kit's monochrome `ic_stat_loopcom` infinity
+  silhouette (24/36/48/72/96) — and **`drawable/notification_icon.xml` (the old
+  stock phone-glyph vector) is DELETED.** The resource NAME is unchanged, so all
+  8 `setSmallIcon(R.drawable.notification_icon)` call sites (missed calls,
+  message/voicemail alerts, in-call FGS) and the 4 AndroidManifest meta-data
+  entries resolve to the PNGs with zero code change. ⛔ **The rule the old
+  vector's comment carried still stands: this icon MUST be white-on-transparent**
+  — Android renders only the alpha as a tinted silhouette; a colored bitmap masks
+  to a blob. And the keep-alive FGS deliberately keeps the separate fully
+  transparent `ic_keepalive_silent` — never point it at the real icon.
+- ✅ **`notification_icon_color` is `#22A8FF` now** (brand accent; was `#1d4ed8`,
+  the pre-rebrand Connect blue, flagged stale since 2026-08-21).
+- ✅ **The Expo config can no longer regress the launcher on a prebuild:**
+  `assets/adaptive-icon.png` = the Blue 2B foreground, new
+  `assets/adaptive-icon-background.png` = the gradient (config uses
+  `backgroundImage` — ⛔ a flat `backgroundColor` cannot represent the gradient,
+  do not swap back), `assets/icon.png` = the Blue 2B 1024,
+  `assets/notification-icon.png` = the white silhouette, plugin color `#22A8FF`.
+  All inert on bare `android/` today; they exist so prebuild-day is not a trap.
+- ⛔ **Notification channel ids untouched** (renaming resets every customer's
+  ringtone — standing rule). Splash/login state after `a7eaf8e7`: splash gated
+  `showSplash = … && !!token` (signed-in only, Izzy re-stated 2026-08-22), login
+  light by default and dark when `systemDark || isDark`, splash stays brand navy
+  in both themes.
+- ⏳ **NOT PROVEN: no phone has the new icons.** Proven as a green
+  `assembleRelease` (which pushes every PNG through aapt), typecheck 0, rendered
+  previews (circle-masked adaptive at 160/48px, round + square 48px, both
+  grounds), and the silhouette composited on dark. **Publishing renames every
+  customer's home-screen icon — Izzy's call, same as the rebrand.**
+
 ## ⛔⛔ AGENT HANDOFF — the Android app is Loopcom now (icon spacing, splash, 31 strings) and it is on NO PHONE (2026-08-21) — READ FIRST before touching the mobile launcher icon or splash, before renaming ANY notification channel id, before publishing an APK, or for "the native splash didn't change"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANDROID_LOOPCOM_REBRAND_2026-08-21.md`**
