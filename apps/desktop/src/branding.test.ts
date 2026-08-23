@@ -134,9 +134,13 @@ test("icon.ico carries every size Windows asks for, and the small frames are NOT
 });
 
 test("the window/tray icon is the .ico on Windows, never the single-resolution .png", () => {
+  // The resolver moved into themeIcon.ts when the icon became theme-aware
+  // (2026-08-23); the property it protects is unchanged — Windows must get the
+  // multi-frame .ico so the 16px tray frame is a designer frame, not a downscale.
+  const theme = fs.readFileSync(path.join(__dirname, "themeIcon.ts"), "utf8").replace(new RegExp(String.fromCharCode(13) + String.fromCharCode(10), "g"), String.fromCharCode(10));
   assert.match(
-    main,
-    /process\.platform === "win32" \? assetPath\("icon\.ico"\) : assetPath\("icon\.png"\)/,
+    theme,
+    /platform === "win32" \? `icon\$\{suffix\}\.ico` : `icon\$\{suffix\}\.png`/,
     "a lone 512px PNG makes Windows downscale one image for the 16px taskbar; the mark is " +
       "thin glowing strokes and turns to a smudge",
   );
@@ -344,4 +348,57 @@ test("every icon asset main.ts references exists", () => {
     assert.ok(fs.existsSync(p), `missing asset ${file}`);
     assert.ok(fs.statSync(p).size > 512, `${file} is suspiciously small`);
   }
+});
+
+/* ── the theme-following icon (2026-08-23) ───────────────────────────────── */
+
+test("dark mode is navy-2a, light mode is blue-2b — Izzy's mapping, verbatim", () => {
+  const { iconFileForTheme } = require("./themeIcon");
+  assert.equal(iconFileForTheme(true, "win32"), "icon-dark.ico");
+  assert.equal(iconFileForTheme(false, "win32"), "icon.ico");
+  assert.equal(iconFileForTheme(true, "darwin"), "icon-dark.png");
+  assert.equal(iconFileForTheme(false, "linux"), "icon.png");
+});
+
+test("the watcher applies once immediately and again on every OS toggle", () => {
+  const { installThemeIconWatcher } = require("./themeIcon");
+  const applied: Array<{ file: string; dark: boolean }> = [];
+  let dark = false;
+  let listener: (() => void) | null = null;
+  installThemeIconWatcher({
+    nativeTheme: {
+      get shouldUseDarkColors() { return dark; },
+      on: (_e: string, l: () => void) => { listener = l; },
+    },
+    applyIcons: (file: string, d: boolean) => applied.push({ file, dark: d }),
+  });
+  assert.equal(applied.length, 1, "the current theme must be applied at install time");
+  assert.equal(applied[0].dark, false);
+  dark = true; listener!();
+  dark = false; listener!();
+  dark = true; listener!();
+  assert.deepEqual(applied.map((a) => a.dark), [false, true, false, true]);
+  assert.ok(applied[1].file.includes("-dark"), "dark did not pick the navy set");
+  assert.ok(!applied[2].file.includes("-dark"), "light picked the wrong set");
+});
+
+test("both variants' assets really exist, every size", () => {
+  // ⛔ A missing dark asset would make the swap a silent no-op: createFromPath on
+  // a missing file yields an EMPTY nativeImage and Electron shows nothing.
+  const assets = path.join(__dirname, "..", "assets");
+  for (const suffix of ["", "-dark"]) {
+    for (const f of [`icon${suffix}.ico`, `icon${suffix}.png`, `icon${suffix}-16.png`, `icon${suffix}-256.png`]) {
+      assert.ok(fs.existsSync(path.join(assets, f)), `missing asset: ${f}`);
+    }
+  }
+});
+
+test("main.ts wires the watcher and resolves the icon per call, never once at boot", () => {
+  const src = stripComments(main);
+  assert.ok(src.includes("installThemeIconWatcher("), "the watcher is not installed");
+  assert.ok(src.includes("iconFileForTheme(nativeTheme.shouldUseDarkColors)"),
+    "iconPath no longer follows the live theme");
+  assert.ok(!/const iconPath = process\.platform/.test(src),
+    "iconPath went back to being resolved once at module load — the swap would be a lie");
+  assert.ok(src.includes("tray.setImage(createAppIcon(16))"), "the tray is not re-imaged on toggle");
 });

@@ -54,10 +54,15 @@ ASSETS = REPO / "apps" / "desktop" / "assets"
 # The chosen refinement variant. ⛔ ONE name, one place - "use 2b" (Izzy,
 # 2026-08-22). Changing the variant is changing this constant, never editing
 # paths inline, so a future regeneration cannot silently mix variants.
-REFINEMENT_VARIANT = "blue-2b"
-WINDOWS_FRAMES_DIR = (
-    BRAND / "icon-refinement-2026-08" / "new-apps-icons" / REFINEMENT_VARIANT / "windows-app"
-)
+# ⛔ TWO VARIANTS SHIP NOW (Izzy, 2026-08-23): "2A would be dark mode. 2B would
+# be the light mode." blue-2b is the BAKED default (the exe icon cannot follow a
+# theme - Windows reads one .ico out of the executable); navy-2a ships beside it
+# as the -dark asset set, and the RUNNING app swaps tray + window icons live via
+# nativeTheme (src/themeIcon.ts).
+VARIANTS = {"blue-2b": "", "navy-2a": "-dark"}
+
+def windows_frames_dir(variant: str) -> Path:
+    return BRAND / "icon-refinement-2026-08" / "new-apps-icons" / variant / "windows-app"
 # The sizes the designer supplied. Everything else is synthesised from these.
 DESIGNER_SIZES = [16, 32, 48, 64, 256]
 # size -> the designer frame it is derived from, when the kit lacks it.
@@ -75,11 +80,11 @@ _written: list[Path] = []
 _problems: list[str] = []
 
 
-def load_designer_frames() -> dict:
+def load_designer_frames(variant: str) -> dict:
     """The designer's per-size Windows frames, verbatim. Refuses to run short."""
     frames = {}
     for px in DESIGNER_SIZES:
-        p = WINDOWS_FRAMES_DIR / "loopcom-win-{}.png".format(px)
+        p = windows_frames_dir(variant) / "loopcom-win-{}.png".format(px)
         if not p.exists():
             sys.exit("missing brand asset: {}".format(p))
         img = Image.open(p).convert("RGBA")
@@ -185,15 +190,15 @@ def main() -> int:
     ap.add_argument("--preview", type=Path, help="also write a side-by-side preview PNG")
     args = ap.parse_args()
 
-    frames = load_designer_frames()
-    renders = dict((px, render_icon(frames, px)) for px in ICO_SIZES)
-
-    write_ico(renders, ASSETS / "icon.ico", args.check)
-    for px in ICO_SIZES:
-        emit(renders[px], ASSETS / "icon-{}.png".format(px), args.check)
-    # ⛔ The generic PNG is the designer 256 AS-IS, not an upscale: a 256 -> 512
-    # blow-up is blur, and every consumer of icon.png scales down anyway.
-    emit(frames[256], ASSETS / "icon.png", args.check)
+    for variant, suffix in VARIANTS.items():
+        frames = load_designer_frames(variant)
+        renders = dict((px, render_icon(frames, px)) for px in ICO_SIZES)
+        write_ico(renders, ASSETS / "icon{}.ico".format(suffix), args.check)
+        for px in ICO_SIZES:
+            emit(renders[px], ASSETS / "icon{}-{}.png".format(suffix, px), args.check)
+        # ⛔ The generic PNG is the designer 256 AS-IS, not an upscale: a 256 -> 512
+        # blow-up is blur, and every consumer of icon.png scales down anyway.
+        emit(frames[256], ASSETS / "icon{}.png".format(suffix), args.check)
 
     if args.preview and not args.check:
         pad, cell = 16, 240

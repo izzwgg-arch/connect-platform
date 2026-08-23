@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
@@ -6,6 +6,7 @@ import { buildWindowsToastXml, type DesktopNotificationPayload } from "./notific
 import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 import { registerPhoneSetup } from "./phoneSetup/mainWiring";
+import { iconFileForTheme, installThemeIconWatcher } from "./themeIcon";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -32,9 +33,12 @@ const assetPath = (file: string) => path.join(__dirname, "..", "assets", file);
 // ⛔ ON WINDOWS THIS MUST BE THE .ico, NOT THE .png. A single-resolution PNG
 // forces Windows to downscale one 512px image for the 16px taskbar and the 32px
 // title bar, and the Loopcom mark is thin glowing strokes — it turns to a smudge.
-// The .ico carries a separately-rendered, luminance-hinted frame per size
-// (scripts/desktop-loopcom-windows-assets.py). macOS/Linux take the PNG.
-const iconPath = process.platform === "win32" ? assetPath("icon.ico") : assetPath("icon.png");
+// ⛔ THEME-AWARE (Izzy, 2026-08-23): dark mode -> navy-2a (icon-dark.*), light
+// mode -> blue-2b (icon.*). The mapping lives in themeIcon.ts; this resolves the
+// CURRENT file every time it is called, so tray and window icons follow the OS
+// toggle instantly. The exe-embedded icon (Start menu, pins) stays blue-2b —
+// Windows reads one .ico out of the executable and no theme-aware form exists.
+const iconPath = (): string => assetPath(iconFileForTheme(nativeTheme.shouldUseDarkColors));
 
 let fullWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -223,11 +227,11 @@ function webPreferences(windowKind: string) {
 }
 
 function createAppIcon(size?: number) {
-  const icon = nativeImage.createFromPath(iconPath);
+  const icon = nativeImage.createFromPath(iconPath());
   // An unreadable/missing icon file yields an EMPTY nativeImage, and Electron
   // silently falls back to its own atom for an empty one — the exact outcome this
   // whole pass exists to end. Say so loudly instead of shipping a blank icon.
-  if (icon.isEmpty()) diag("icon", `icon asset is empty or missing: ${iconPath}`);
+  if (icon.isEmpty()) diag("icon", `icon asset is empty or missing: ${iconPath()}`);
   // Resizing an .ico picks the closest embedded frame, so the 16px tray icon comes
   // from the 16px render rather than a downscaled 256.
   return size ? icon.resize({ width: size, height: size }) : icon;
@@ -273,7 +277,7 @@ function createFullWindow(show = true): BrowserWindow {
     show,
     title: "Loopcom",
     backgroundColor: "#07111f",
-    icon: iconPath,
+    icon: iconPath(),
     webPreferences: webPreferences("full"),
   });
 
@@ -318,7 +322,7 @@ function createMiniWindow(show = true): BrowserWindow {
     resizable: true,
     alwaysOnTop: settings.alwaysOnTop,
     backgroundColor: "#07111f",
-    icon: iconPath,
+    icon: iconPath(),
     webPreferences: webPreferences("mini"),
   });
 
@@ -375,7 +379,7 @@ function createPhoneEngineWindow(): BrowserWindow {
     show: false,
     title: "Loopcom Phone Engine",
     backgroundColor: "#07111f",
-    icon: iconPath,
+    icon: iconPath(),
     webPreferences: webPreferences("phone-engine"),
   });
 
@@ -693,6 +697,26 @@ if (!gotSingleInstanceLock) {
   try { await session.defaultSession.clearCache(); } catch { /* non-fatal */ }
   registerIpc();
   rebuildTray();
+  // ⛔ The icon follows the OS light/dark toggle from this moment on: the watcher
+  // fires once now and again on every nativeTheme "updated", swapping the tray
+  // image and every live window's icon. Instantaneous — Chromium watches the
+  // registry key, no polling, no restart.
+  installThemeIconWatcher({
+    nativeTheme,
+    log: (line) => diag("icon", line),
+    applyIcons: () => {
+      try {
+        if (tray && !tray.isDestroyed()) tray.setImage(createAppIcon(16));
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) continue;
+          const icon = createAppIcon();
+          if (!icon.isEmpty()) win.setIcon(icon);
+        }
+      } catch (err) {
+        diag("icon", `theme icon apply failed: ${String(err)}`);
+      }
+    },
+  });
   // Hold an app-suspension power-save blocker for the app's entire lifetime — not just
   // during calls. A softphone must stay registered to RECEIVE calls, and Modern
   // Standby/EcoQoS otherwise suspends the idle app exactly when it looks least busy.
