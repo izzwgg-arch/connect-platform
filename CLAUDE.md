@@ -1419,10 +1419,20 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   the second she connected (one invite was even ACCEPTED 1.1s earlier and
   overridden — the cancel is a read-then-write race on `findMany(PENDING)`);
   the one answer whose claim landed FIRST was never canceled and survived.
-  Fixes (not built): telephony/api must not cancel the ANSWERING user's own
-  devices (the answering channel `PJSIP/T<t>_<ext>_1` IS the invited app);
-  conditional `updateMany({status:"PENDING"})`; client guard at fire time
-  (TestFlight build).
+  ✅✅ **SERVER FIX BUILT AND DEPLOYED 2026-08-23 (`61c34205`, api
+  `deploy-direct` + telephony queue job `1d784a09`, rolled in a verified
+  0-active-calls window; both containers verified, AMI/ARI reconnected, 0
+  restarts).** Telephony records WHICH channel set `extensionAnsweredAt`
+  (`extensionAnsweredChannel`) and sends `answeredEndpoint` with the
+  answered-stop payload; the api (`mobileRingAnswerPolicy.ts`) marks an
+  invite ACCEPTED with NO push when the answerer is that invite's own app
+  device (`T<t>_<ext>_<n>`), and the cancel write is `updateMany` conditioned
+  on PENDING with a 0-row skip. ⛔ Desk-phone answers (no device suffix)
+  still cancel-push the apps — the original 2026-07-29 feature. 14 tests,
+  all 5 source guards fail against pre-fix HEAD. ⛔ `deploy-direct.sh` does
+  NOT take `telephony` — queue only. ⏳ NOT PROVEN by a live call; the
+  client-side guard (cancel handler re-checks a confirmed session) still
+  rides the next TestFlight build.
 - ⛔ **"Really broken" audio = her Verizon cellular uplink, measured:** mid-call
   her channel read **39% receive loss / ~500ms RTT** while every other channel
   in the same second read 0% / 26–46ms; a call minutes later was 0%/90ms;

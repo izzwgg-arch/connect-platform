@@ -171,17 +171,30 @@ one), (b) a slow claim vs a fast SIP answer (her lossy cellular), and (c) the
 invite still displayed at cancel time. Warm-app users claim first and never
 race.
 
-**The fixes (NOT built — three layers, any one sufficient for her case):**
-- **Server (cheapest, deployable):** telephony knows the ANSWERING channel; when
-  it is `PJSIP/T<t>_<ext>_1` — the invited user's own app endpoint — the
-  answered_elsewhere cancel must exclude that user's devices (or carry the
-  answering endpoint so the api can). Plus the conditional-update race fix.
-- **Client (needs a TestFlight build):** the `INVITE_CANCELED` handler must
-  re-check at fire time whether a CONFIRMED SIP session exists for that
-  call/invite and never `endNativeCall` into it — the exact rule the
-  2026-08-02 deferred-decline fix already established for its own path.
-- **Client:** the buffered-replay answer path must also send the claim
-  (with retry), so the invite stops being PENDING at all.
+**✅✅ THE SERVER FIX IS BUILT AND DEPLOYED (2026-08-23, commit `61c34205`;
+api via deploy-direct, telephony via queue job `1d784a09` in a verified
+0-active-calls window; both containers grepped, AMI/ARI reconnected, 0
+restarts, tenant map refreshed 29 entries).**
+- Telephony: `NormalizedCall.extensionAnsweredChannel` (stamped at all three
+  `extensionAnsweredAt` sites + the merge) → `answeredEndpoint` on the
+  answered-stop payload (`answeredEndpointFromChannel`).
+- api: `mobileRingAnswerPolicy.ts` — an invite whose OWN app device
+  (`T<t>_<ext>_<n>`) answered is marked **ACCEPTED with no push**; a desk
+  answer (no suffix) still cancel-pushes (the 2026-07-29 feature). The cancel
+  write is `updateMany({id, status: "PENDING"})` and a 0-row result (a claim
+  landed mid-sweep) **skips the push** — this half protects calls even
+  against an old telephony build.
+- 14 tests; **all 5 source guards replayed against pre-fix HEAD and fail
+  there**. Typechecks at both baselines (api 76, telephony 41).
+- ⛔ `deploy-direct.sh` does NOT accept `telephony` (api|portal only —
+  refused with "unknown argument"); telephony ships via the deploy QUEUE.
+⏳ **NOT PROVEN by a live call** — acceptance: a cold-start lock-screen
+answer on a slow link stays up (the api log line to watch:
+`mobile-ring-notify: invite fulfilled by its own app — no cancel push`).
+**Client layers still pending a TestFlight build:** the `INVITE_CANCELED`
+handler re-checking a CONFIRMED session at fire time (the 2026-08-02
+deferred-decline rule), and the buffered-replay answer path sending the
+claim.
 
 **The audio half is unchanged from the first report:** during the calls that
 DID survive, her Verizon uplink measured **39% packet loss / ~500ms RTT
