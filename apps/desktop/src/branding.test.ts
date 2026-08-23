@@ -371,6 +371,8 @@ test("the watcher applies once immediately and again on every OS toggle", () => 
       on: (_e: string, l: () => void) => { listener = l; },
     },
     applyIcons: (file: string, d: boolean) => applied.push({ file, dark: d }),
+    // ⛔ a real setInterval here keeps the node:test process alive forever
+    setIntervalFn: () => undefined,
   });
   assert.equal(applied.length, 1, "the current theme must be applied at install time");
   assert.equal(applied[0].dark, false);
@@ -396,9 +398,60 @@ test("both variants' assets really exist, every size", () => {
 test("main.ts wires the watcher and resolves the icon per call, never once at boot", () => {
   const src = stripComments(main);
   assert.ok(src.includes("installThemeIconWatcher("), "the watcher is not installed");
-  assert.ok(src.includes("iconFileForTheme(nativeTheme.shouldUseDarkColors)"),
+  assert.ok(src.includes("iconFileForTheme(resolveDark({ nativeTheme, readSystemDark }))"),
     "iconPath no longer follows the live theme");
   assert.ok(!/const iconPath = process\.platform/.test(src),
     "iconPath went back to being resolved once at module load — the swap would be a lie");
   assert.ok(src.includes("tray.setImage(createAppIcon(16))"), "the tray is not re-imaged on toggle");
+});
+
+test("the tray icon follows the SYSTEM theme, with the app theme as fallback", () => {
+  // ⛔ Found live on Izzy's machine: Windows' custom mode had system/taskbar DARK
+  // and apps LIGHT. nativeTheme reports the APPS value, and keying on it alone put
+  // the light icon on a dark taskbar. The system value wins whenever readable.
+  const { resolveDark } = require("./themeIcon");
+  const nt = (dark: boolean) => ({ shouldUseDarkColors: dark, on: () => {} });
+  assert.equal(resolveDark({ nativeTheme: nt(false), readSystemDark: () => true }), true,
+    "system dark must beat apps light — Izzy's exact machine");
+  assert.equal(resolveDark({ nativeTheme: nt(true), readSystemDark: () => false }), false,
+    "system light must beat apps dark");
+  assert.equal(resolveDark({ nativeTheme: nt(true), readSystemDark: () => null }), true,
+    "an unreadable system value falls back to the app theme");
+  assert.equal(resolveDark({ nativeTheme: nt(false) }), false, "no reader at all still works");
+});
+
+test("a system-only theme change is caught by the poll, which fires no event anywhere", () => {
+  const { installThemeIconWatcher } = require("./themeIcon");
+  const applied: string[] = [];
+  let systemDark = false;
+  let tick: (() => void) | null = null;
+  installThemeIconWatcher({
+    nativeTheme: { shouldUseDarkColors: false, on: () => {} },
+    readSystemDark: () => systemDark,
+    applyIcons: (file: string) => applied.push(file),
+    pollMs: 1,
+    setIntervalFn: (fn: () => void) => { tick = fn; },
+  });
+  assert.equal(applied.length, 1);
+  tick!(); // nothing changed — must NOT re-apply
+  assert.equal(applied.length, 1, "an unchanged poll re-applied the icon");
+  systemDark = true; tick!();
+  assert.equal(applied.length, 2, "the poll missed a system-only change");
+  assert.ok(applied[1].includes("-dark"));
+  systemDark = false; tick!();
+  assert.ok(!applied[2].includes("-dark"));
+});
+
+test("main.ts reads SystemUsesLightTheme with real backslashes in the path", () => {
+  // ⛔ In a JS string the separator must be an ESCAPED backslash (two chars in
+  // source). A single backslash collapses — "HKCU\S..." becomes "HKCUS..." — and
+  // reg query fails on every call; the null fallback then hides it, so the system
+  // theme would silently never win. The source therefore contains the two-char
+  // sequence backslash-backslash between HKCU and SOFTWARE.
+  const bs = String.fromCharCode(92);
+  assert.ok(main.includes("HKCU" + bs + bs + "SOFTWARE"), "the registry path lost its backslashes");
+  assert.ok(main.includes("SystemUsesLightTheme"), "SystemUsesLightTheme query is missing");
+  assert.ok(main.includes("readSystemDark"), "main no longer reads the system theme");
+  assert.ok(main.includes("resolveDark({ nativeTheme, readSystemDark })"),
+    "the window icon resolver no longer follows the system theme");
 });

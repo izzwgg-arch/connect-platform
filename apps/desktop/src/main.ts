@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { buildWindowsToastXml, type DesktopNotificationPayload } from "./notific
 import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 import { registerPhoneSetup } from "./phoneSetup/mainWiring";
-import { iconFileForTheme, installThemeIconWatcher } from "./themeIcon";
+import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -38,7 +39,28 @@ const assetPath = (file: string) => path.join(__dirname, "..", "assets", file);
 // CURRENT file every time it is called, so tray and window icons follow the OS
 // toggle instantly. The exe-embedded icon (Start menu, pins) stays blue-2b —
 // Windows reads one .ico out of the executable and no theme-aware form exists.
-const iconPath = (): string => assetPath(iconFileForTheme(nativeTheme.shouldUseDarkColors));
+/**
+ * ⛔ Windows' SystemUsesLightTheme — the theme of the TASKBAR the icon sits on.
+ * nativeTheme reports the APPS theme, and the two differ under Windows' custom
+ * mode (found live: system dark, apps light showed the wrong icon). Read the
+ * registry directly; null on any failure so the caller falls back to nativeTheme.
+ */
+function readSystemDark(): boolean | null {
+  if (process.platform !== "win32") return null;
+  try {
+    const out = execFileSync("reg", [
+      "query", "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      "/v", "SystemUsesLightTheme",
+    ], { encoding: "utf8", timeout: 3000, windowsHide: true });
+    const m = /SystemUsesLightTheme\s+REG_DWORD\s+0x([0-9a-fA-F]+)/.exec(out);
+    if (!m) return null;
+    return parseInt(m[1], 16) === 0; // 0 = system is dark
+  } catch {
+    return null;
+  }
+}
+
+const iconPath = (): string => assetPath(iconFileForTheme(resolveDark({ nativeTheme, readSystemDark })));
 
 let fullWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -703,6 +725,7 @@ if (!gotSingleInstanceLock) {
   // registry key, no polling, no restart.
   installThemeIconWatcher({
     nativeTheme,
+    readSystemDark,
     log: (line) => diag("icon", line),
     applyIcons: () => {
       try {

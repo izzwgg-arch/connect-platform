@@ -22,9 +22,25 @@ export type ThemeIconDeps = {
     readonly shouldUseDarkColors: boolean;
     on(event: "updated", listener: () => void): unknown;
   };
+  /**
+   * ⛔⛔ THE TASKBAR FOLLOWS THE SYSTEM THEME, NOT THE APP THEME — found live on
+   * Izzy's own machine (2026-08-23), which runs Windows' split mode: system/taskbar
+   * DARK, apps LIGHT. nativeTheme.shouldUseDarkColors reports the APPS value, so
+   * keying on it alone showed the light icon on a dark taskbar. This injected read
+   * returns Windows' SystemUsesLightTheme as a dark-boolean (true = system is
+   * dark), or null when unreadable — and null falls back to the app theme.
+   */
+  readSystemDark?: () => boolean | null;
   /** Re-applies tray + window icons for the CURRENT theme. Injected by main.ts. */
   applyIcons: (file: string, dark: boolean) => void;
   log?: (line: string) => void;
+  /**
+   * ⛔ Windows fires NO event when only the SYSTEM half of a custom theme changes
+   * (nativeTheme watches the apps value), so the system value is re-read on a
+   * gentle poll as well as on every "updated". One registry read per tick.
+   */
+  pollMs?: number;
+  setIntervalFn?: (fn: () => void, ms: number) => unknown;
 };
 
 /**
@@ -44,17 +60,29 @@ export function iconFileForTheme(dark: boolean, platform: NodeJS.Platform = proc
  * Returns the applier so callers (window creation, tray creation, the restore
  * re-assert) can pull the CURRENT icon rather than a remembered one.
  */
+export function resolveDark(deps: Pick<ThemeIconDeps, "nativeTheme" | "readSystemDark">): boolean {
+  // System theme first — that is the surface the icon sits on — app theme as the
+  // fallback when the system value cannot be read.
+  const sys = deps.readSystemDark?.();
+  if (sys === true || sys === false) return sys;
+  return Boolean(deps.nativeTheme.shouldUseDarkColors);
+}
+
 export function installThemeIconWatcher(deps: ThemeIconDeps): { currentIconFile: () => string } {
-  const apply = () => {
-    const dark = Boolean(deps.nativeTheme.shouldUseDarkColors);
+  let last: string | null = null;
+  const apply = (why: string) => {
+    const dark = resolveDark(deps);
     const file = iconFileForTheme(dark);
-    deps.log?.(`theme ${dark ? "dark" : "light"} -> ${file}`);
+    if (file === last) return;
+    last = file;
+    deps.log?.(`theme ${dark ? "dark" : "light"} (${why}) -> ${file}`);
     deps.applyIcons(file, dark);
   };
-  apply();
-  // ⛔ The whole feature is this listener: Windows flips AppsUseLightTheme,
-  // Chromium watches the registry key, "updated" fires, the icons swap — no
-  // polling and no restart.
-  deps.nativeTheme.on("updated", apply);
-  return { currentIconFile: () => iconFileForTheme(Boolean(deps.nativeTheme.shouldUseDarkColors)) };
+  apply("boot");
+  // Fires when the APPS theme (or the whole mode) changes.
+  deps.nativeTheme.on("updated", () => apply("nativeTheme"));
+  // Catches a SYSTEM-only change, which fires no event anywhere.
+  const setIntervalFn = deps.setIntervalFn ?? setInterval;
+  setIntervalFn(() => apply("poll"), deps.pollMs ?? 15_000);
+  return { currentIconFile: () => iconFileForTheme(resolveDark(deps)) };
 }
