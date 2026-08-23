@@ -1470,6 +1470,28 @@ also carries `Login and splash mockups.html`), 2026-08-22 in-chat.)
   renames every customer's home-screen icon AND swaps their launcher component
   (a pinned home shortcut may drop on some launchers when the component
   changes) — Izzy's call.**
+- ⛔⛔ **THE ALIAS FLIP IS DEFERRED TO THE BACKGROUND NOW (`185cd7b7`) — the
+  first build flipped on the toggle and THE APP CLOSED EVERY TIME.** Flipping
+  the enabled launcher alias makes Android remove the app's TASK; DONT_KILL_APP
+  keeps only the process. `ThemeContext` records the wanted icon and applies it
+  when AppState goes 'background' (guarded on `hasActiveSipSession` — never
+  disturb a call), with a boot reconcile for missed flips. ⛔ Never "simplify"
+  back to an immediate `set()`. Proven live: toggle in Settings → app stays
+  foreground and Registered; icon flips the moment it is backgrounded.
+- ✅✅ **THE SPLASH FOLLOWS THE IN-APP THEME (`185cd7b7`, superseding "brand
+  navy in both themes"), and light mode got its own mark.** Light = light
+  gradient + the Blue 2B ink mark (`assets/loopcom-mark-light.png`,
+  difference-keyed at 1024px from the icon against its reconstructed gradient
+  — the kit's transparent foreground is only 222px of ink, too soft);
+  dark keeps the chrome art. ⛔ The chrome `loopcom-mark.png` was CLEANED: it
+  carried an invisible dark haze (~59% of pixels at alpha 3–70) that composited
+  as a grey PLATE on light — keyed out by clearing large CONNECTED faint-dark
+  regions only (a global threshold ate holes in the ring). ⛔ The glow pad
+  ("the ball") and the aurora discs are DELETED — RN has no blur, so the
+  mockup's blurred shapes rendered as hard-edged circles. ⛔ RootNavigator
+  gates the splash on `ThemeContext.ready`; the native pre-JS window follows
+  the SYSTEM theme (`values-night/colors.xml`). Splash screenshots proven
+  clean on-device in BOTH themes.
 
 ## ⛔⛔ AGENT HANDOFF — the Android app is Loopcom now (icon spacing, splash, 31 strings) and it is on NO PHONE (2026-08-21) — READ FIRST before touching the mobile launcher icon or splash, before renaming ANY notification channel id, before publishing an APK, or for "the native splash didn't change"
 
