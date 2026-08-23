@@ -90,6 +90,11 @@ function makeVmPalette(c: AppColors, isDark: boolean) {
     text3: c.textTertiary,
     primary: c.primary,
     primarySoft: c.primaryMuted,
+    // ⛔ Ink for text sitting ON a primary-filled button. NEVER VM.text there:
+    // VM.text is near-black in light mode, which rendered the Refresh /
+    // Clear-filters buttons as dark-on-blue (Izzy 2026-08-23, screenshot).
+    // White reads on the brand blue in BOTH themes.
+    primaryInk: '#ffffff',
     cyan: c.teal,
     cyanSoft: c.tealMuted,
     green: c.success,
@@ -2752,7 +2757,7 @@ function makeStyles(VM: VmPalette) {
     justifyContent: 'center',
   },
   clearButtonText: {
-    color: VM.text,
+    color: VM.primaryInk,
     fontSize: 14,
     fontWeight: '900',
   },
@@ -2834,7 +2839,7 @@ function makeStyles(VM: VmPalette) {
     justifyContent: 'center',
   },
   stateButtonText: {
-    color: VM.text,
+    color: VM.primaryInk,
     fontSize: 14,
     fontWeight: '900',
   },
