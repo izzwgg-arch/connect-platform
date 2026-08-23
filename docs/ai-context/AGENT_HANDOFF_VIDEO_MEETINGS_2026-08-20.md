@@ -509,18 +509,48 @@ needed" line — comes from the shell and is byte-for-byte the approved design.
 - The migration adds only NULLABLE columns, so every existing instant meeting
   stays valid and behaves exactly as before.
 
-### §9.8 ⏳ NOT PROVEN
+### §9.8 ✅ THE ACCEPTANCE TEST WAS RUN — by Izzy, the same day
 
-- **Nobody has received an invitation.** No email has been sent by anything but
-  a test.
-- **Nobody has opened the schedule screen in a browser.**
+⛔⛔ **This section said "nobody has received an invitation" for two days after
+it had stopped being true. A recorded ⏳ is a fact about the PAST; re-verify it
+before repeating it.** Measured read-only 2026-08-23:
+
+| | |
+|---|---|
+| Meeting | `ucb-jatg-up4` "test", created **2026-08-21 17:21:43Z**, scheduled for **17:25Z** (three minutes out) |
+| Invite | 1 row, `emailedAt` set |
+| Email | `MEETING_INVITE` → **`izzwgg@gmail.com`** — Izzy's own address, exactly the recommended test — status **SENT**, `sentAt` **17:21:48Z** |
+
+Five seconds from clicking to sent. So the chain is proven end to end by a real
+person: **screen → route → email builder → EmailJob → outbox → provider
+accepted.** The meeting has since been ended.
+
+**The one-command check, for next time:**
+`select status, "sentAt", "toEmail" from "EmailJob" where type = 'MEETING_INVITE'`
+
+⏳ **What that still does NOT prove:**
+- ⛔ **`SENT` means the provider ACCEPTED it, not that it looked right.**
+  Whether the email rendered properly is known only to whoever opened it.
 - **Outlook is unverified by rendering** — no browser reproduces Word's engine.
-  It is structurally hardened because it reuses the billing shell.
-- **Acceptance:** schedule one meeting, invite **only Izzy's own address**,
-  confirm the email arrives and looks right in a real inbox, then click the
-  button and land in the meeting. ⛔ **The negatives that matter:** a
-  TENANT_ADMIN still gets **403** on `/meetings`, and inviting one extra person
-  afterwards sends **one** email, not the whole list again.
+  It is structurally hardened only because it reuses the billing shell.
+- **Only ONE invitation has ever been sent**, so the negative that matters —
+  inviting one extra person afterwards sends **one** email, not the whole list
+  again — has never been exercised live. It is covered by test, not by use.
+- Only **one** meeting has ever been scheduled.
+
+✅ The TENANT_ADMIN **403** on create, list *and* invite **is** proven live
+(§9.10), against a real customer admin.
+
+### §9.8b ⚠️ Another session converted the Length dropdown (2026-08-23)
+
+`f6c61735` ("every dropdown platform-wide is the modern ConnectSelect") rewrote
+the Length `<select>` in `ScheduleMeeting.tsx` as a `ConnectSelect`, taking
+`String(minutes)` / `Number(v)` across the boundary. It compiles and ships —
+portal `4972f0c8` carries both the schedule strings and the converted control —
+but ⛔ **nobody has picked a length from the new dropdown**, and by that
+section's own rule a converted dropdown is unproven until a human opens it.
+⛔ The `ConnectSelect` panel PORTALS to `<body>`; this screen sits inside the
+platform shell, so it correctly passes no `theme` prop.
 
 ### §9.9 Deliberately not built (Izzy's calls, offered in the mockup)
 

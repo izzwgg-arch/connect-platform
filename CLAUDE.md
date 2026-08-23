@@ -3286,15 +3286,34 @@ has"*, then *"let's do free open source"*, then, on the mockups
   switched. So invoices, receipts, pay links, E911 and now this invite all pay
   81 KB per open instead of 34 KB. **One line, but it moves the bytes of nine
   live customer emails that are asserted byte-for-byte — Izzy's call.**
-- ⏳ **NOT PROVEN: nobody has received an invitation and nobody has opened the
-  schedule screen.** Proven as 48 api + 6 shared tests, all 7 source guards
-  failing against `HEAD`, portal typecheck 0, billing templates 25/25
-  byte-identical. **Acceptance: schedule one meeting, invite ONLY Izzy's own
-  address, check it in a real inbox, then click through into the meeting.**
-  ⛔ **The negatives that matter: a TENANT_ADMIN still gets 403 on `/meetings`,
-  and inviting one more person afterwards sends ONE email, not the whole list
-  again.** ⏳ Deliberately not built: add-to-calendar (.ics), a reminder email,
-  and rescheduling (which needs its own "the time changed" email).
+- ✅✅ **IZZY RAN THE ACCEPTANCE TEST THE SAME DAY AND IT WORKED — 2026-08-21
+  17:21:43Z he scheduled a meeting ("test", code `ucb-jatg-up4`, set for 17:25)
+  and invited his OWN address; the `MEETING_INVITE` job to `izzwgg@gmail.com`
+  reads `SENT` at 17:21:48Z, five seconds later.** So the whole chain is proven
+  by a real person: screen → route → email builder → EmailJob → outbox →
+  provider accepted. ⛔ **`SENT` means the provider TOOK it, not that it looked
+  right** — whether the email rendered correctly in his inbox is still only
+  known to him, and **Outlook remains unverified by rendering** (no browser
+  reproduces Word's engine; it is structurally hardened only because it reuses
+  the billing shell).
+  ⛔⛔ **This bullet said "nobody has received an invitation" for two days after
+  it had stopped being true. A recorded ⏳ is a fact about the PAST — re-verify
+  before repeating it.** The one-command check:
+  `select status, "sentAt", "toEmail" from "EmailJob" where type='MEETING_INVITE'`.
+- ⏳ **Still unproven, and both are cheap:** only **one** invitation has ever
+  been sent, so the negative that matters — **inviting one more person
+  afterwards sends ONE email, not the whole list again** — has never been
+  exercised live; and only one meeting has ever been scheduled. (The
+  TENANT_ADMIN **403** on create/list/invite IS proven, live, against
+  `ezra@connectcomunications.com`.)
+- ⚠️ **`ScheduleMeeting.tsx` was touched by another session's ConnectSelect
+  sweep (`f6c61735`)** — the Length `<select>` is a `ConnectSelect` now. It
+  builds and ships (portal `4972f0c8` carries both the schedule strings and the
+  converted control), but ⛔ **nobody has picked a length from the new dropdown**,
+  and per that section's own rule a converted dropdown is unproven until someone
+  opens it.
+- ⏳ Deliberately not built: add-to-calendar (.ics), a reminder email, and
+  rescheduling (which needs its own "the time changed" email).
 
 ## ⛔⛔ AGENT HANDOFF — the SMS↔email bridge is CODE-COMPLETE: texts email out from sms@loopcom.net and REPLYING to that email texts back, one email thread per phone number (2026-08-20) — READ FIRST before touching `apps/agent/src/notify/smsEmail*`, before pointing anything at the sms@loopcom.net mailbox, or for "I replied to the text email and nothing was sent"
 
