@@ -5971,11 +5971,33 @@ def surgical_pjsip(text: str, prefix: str, ext: str, name: str, mailbox: str, te
     return body + "\n\n" + add + "\n"
 
 
-def surgical_voicemail(text: str, ext: str, name: str, email: str, vm_password: str, tenant_hash: str) -> str:
-    """Append the mailbox line (VitalPBX orders by extension_id, i.e. a new one is last)."""
+def surgical_voicemail(text: str, ext: str, name: str, email: str, vm_password: str, tenant_hash: str,
+                       mailbox: str = "") -> str:
+    """Append the mailbox line (VitalPBX orders by extension_id, i.e. a new one is last).
+
+    ⛔⛔ THE [context] HEADER MUST EXIST OR ASTERISK SILENTLY IGNORES THE WHOLE FILE.
+    A tenant that has never had voicemail enabled on ANY extension has an EMPTY
+    generated file — the VitalPBX header comment and nothing else, with no
+    context line — because the renderer emits a context only for enabled
+    mailboxes. Appending a mailbox line to that file yields a config that LOOKS
+    correct and reloads with rc=0 while loading NO mailbox: `voicemail show users
+    for <ctx>` answers "No such voicemail context", no spool directory is ever
+    created, and the caller simply cannot leave a message. Nothing is logged at
+    any layer, so it is invisible until somebody counts voicemails per tenant.
+
+    Found live 2026-08-23: Fixup Group ext 103 and McNamara Lion ext 101 had been
+    unable to take a voicemail since the day each was created — two months and
+    four months respectively. Neither customer reported it, because it never
+    worked once, so there was no "it stopped" for them to notice.
+    """
     import vitalpbx_mirror as vm
     line = "%s => %s,%s,%s,,attach=yes|saycid=yes|sayduration=yes|envelope=yes|delete=no|hidefromdir=no|operator=no|%s\n" % (
         ext, vm_password, name, email or "", vm.VM_EMAILBODY % dict(hash=tenant_hash, ext=ext))
+    # The context is the half of the mailbox after the "@" (103@fixup_group-voicemail).
+    context = mailbox.split("@", 1)[1] if "@" in (mailbox or "") else ""
+    if context and not re.search(r"(?m)^\[%s\]\s*$" % re.escape(context), text):
+        sep = "" if (not text or text.endswith("\n")) else "\n"
+        return text + sep + "[%s]\n" % context + line
     return text + line
 
 
@@ -6027,7 +6049,8 @@ def insert_extension_surgical(existing: Dict[str, str], tenant_num: int, tenant_
         "hints": surgical_hints(existing["hints"], prefix, ext, [ext, ext + "_1"]),
         "pjsip": surgical_pjsip(existing["pjsip"], prefix, ext, name, mailbox, tenant_num, desk_password,
                                 webrtc_password, language),
-        "voicemail": surgical_voicemail(existing["voicemail"], ext, name, email, vm_password, tenant_hash),
+        "voicemail": surgical_voicemail(existing["voicemail"], ext, name, email, vm_password, tenant_hash,
+                                        mailbox),
     }
     kv = surgical_astdb(prefix, tenant_hash, ext, name, mailbox, features_password, vm_password, language=language)
     return out, kv
