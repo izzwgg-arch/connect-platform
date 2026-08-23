@@ -243,6 +243,35 @@ refinement options. There is a favicon there to put in the browser on top."*
   already flooded the band. **The invariant that actually catches it is the BLUE
   FILL between the ticks surviving (12.22%).** Both guards are now in the script
   and it exits rather than write a broken mark.
+- ⛔⛔ **THE 16px FRAME SHIPPED 0.55px HIGH AND ONLY THE TAB STRIP COULD SHOW IT
+  (2026-08-23, Izzy: *"center align level the favicon with the URL text"*).**
+  `render()` resized the mark and then composited at **`((side - nh) // 2)`** —
+  a floor that is only exact when the leftover gap is EVEN. The mark is 2.22:1,
+  so at 16px it renders **7 tall in a 16 box → a gap of 9 → 4 above / 5 below**.
+  **32 and 48 happened to land on even gaps and were pixel-perfect, which is why
+  the defect was invisible in every frame except the one Chrome actually uses.**
+  Measured, not eyeballed: alpha-weighted centroid **y=7.50 vs a box centre of
+  8.00**, and Chrome's own tab title (**Segoe UI 12px** on Windows) measures
+  **y=8.05** in that same 16px line box — so the mark visibly rode above the text.
+  ✅ **Fix: centre by PADDING AT SOURCE RESOLUTION (794px) and resizing ONCE**, so
+  the residual error is a fraction of a *source* pixel (~0.02px at 16px) instead
+  of half a rendered one. All three frames now measure **0.00px off centre**;
+  16px is 4-above/4-below. ⛔ **It is NOT softer — that was my eyeball and the
+  metrics overturned it:** still a single Lanczos pass, and hard-edge pixels went
+  **40% → 50%**, fully-opaque **40 → 44**, edge contrast unchanged.
+  ⛔ **Two fixes were measured and REJECTED — do not retry them:** shifting down
+  1px lands **0.45px LOW** (the same error mirrored), and forcing an 8px-tall
+  frame centres perfectly but **stretches the mark 11%**, against the
+  edge-to-edge/aspect rule above.
+  ⛔ **`--check` now carries a CENTRING guard (`MAX_CENTRE_OFFSET_PX = 0.06`),
+  and it is a SEPARATE failure from "does not match the kit"** — a frame can be
+  pixel-correct artwork and still be pasted a pixel high, which is exactly how
+  this shipped. **Proven non-vacuous:** replayed against the previous favicon it
+  reports *"the 16px frame sits -0.50px off centre (-3.1% of the icon)"*.
+- ⛔ **The general lesson, and it is why this hid for a day: a rounding bug in a
+  multi-size asset can be correct at most sizes and wrong at the ONE that
+  ships.** Judge every frame independently against the size it is actually used
+  at — do not infer 16 from 32.
 - ✅ **`apple-icon.png` DELIBERATELY KEEPS ITS PLATE** — iOS composites a
   transparent touch icon onto **BLACK**, so the Add-to-Home-Screen icon would
   come out as a mark on a black square. A `--check` guard fails if it ever loses
