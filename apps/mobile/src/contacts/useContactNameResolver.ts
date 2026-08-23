@@ -22,7 +22,10 @@ export function useContactNameResolver(): (number: string | null | undefined) =>
     enabled: Boolean(token),
     queryFn: () => getContacts(token!, ''),
     staleTime: 3 * 60 * 1000,
-    gcTime: 20 * 60 * 1000,
+    // Long gc: evicting the directory after 20 idle minutes forced a full
+    // multi-page re-walk before any name resolved again — worst for the
+    // biggest lists (Relax Tires: 5 pages, several MB, on cellular).
+    gcTime: 24 * 60 * 60 * 1000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
@@ -31,8 +34,14 @@ export function useContactNameResolver(): (number: string | null | undefined) =>
     const map = new Map<string, string>();
     for (const c of contactsQuery.data?.rows ?? []) {
       for (const p of c.phones ?? []) {
-        const key = phoneMatchKey(p.numberRaw);
-        if (key && !map.has(key)) map.set(key, c.displayName);
+        // ⛔ Key on BOTH forms. numberRaw is whatever the phone book or the
+        // human typed ("+1 (845) 555-1234 ext 12" → 13 digits → no key), while
+        // numberNormalized is the server's clean E.164 → always keys. Raw-only
+        // matching is why imported contacts never resolved (Relax Tires,
+        // 4,168 imported contacts, 2026-08-23).
+        for (const key of [phoneMatchKey(p.numberNormalized), phoneMatchKey(p.numberRaw)]) {
+          if (key && !map.has(key)) map.set(key, c.displayName);
+        }
       }
     }
     return map;

@@ -16,7 +16,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { getChatThreads, getVoicemails, mobileQueryKeys } from '../api/client';
+import { getContacts, getChatThreads, getVoicemails, mobileQueryKeys } from '../api/client';
 import { loadRecentsSeen, recentsSeenQueryKey, vmBadgeQueryKey } from './badges';
 import { autoSyncPhoneContacts } from '../contacts/autoSyncPhoneContacts';
 import { TeamTab } from '../screens/tabs/TeamTab';
@@ -350,6 +350,30 @@ function useChatThreadsPreload() {
 }
 
 /**
+ * Warm the contacts directory at startup (2026-08-23). Caller-name resolution
+ * on the ring screen, Recents, ActiveCall and Voicemail is client-side against
+ * this cache — with no warm-up, every cold start showed raw numbers until the
+ * user happened to open a tab that fetches contacts (a 5-page, several-MB walk
+ * for the largest lists). Same shape as useChatThreadsPreload above.
+ */
+function useContactsPreload() {
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!token) return;
+    queryClient
+      .prefetchQuery({
+        queryKey: mobileQueryKeys.contacts(''),
+        queryFn: () => getContacts(token, ''),
+        staleTime: 3 * 60 * 1000,
+        gcTime: 24 * 60 * 60 * 1000,
+      })
+      .catch(() => undefined);
+  }, [token, queryClient]);
+}
+
+/**
  * Silent phone-book → Connect contact delta-sync (Izzy 2026-07-28). Runs on
  * sign-in and every app foreground; no-ops without contacts permission; only
  * imports contacts ADDED after the first baseline run. After an import the
@@ -380,6 +404,7 @@ function usePhoneContactAutoSync() {
 
 export function TabNavigator() {
   useChatThreadsPreload();
+  useContactsPreload();
   usePhoneContactAutoSync();
   // User-chosen startup tab (Settings → Preferences → Launch Screen).
   // initialRouteName is read by react-navigation exactly once at mount, so the

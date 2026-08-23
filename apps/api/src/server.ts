@@ -245,6 +245,7 @@ import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerDeliveryRoutes } from "./delivery/routes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
+import { matchTenantContactByPhone } from "./crm/inboundCallerMatch";
 import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
@@ -4259,7 +4260,12 @@ async function createMissedCallRecordForInvite(invite: any, disposition: "MISSED
         tenantId: invite.tenantId,
         recipientUserId: invite.userId,
         callerNumber: invite.fromNumber || "Unknown caller",
-        callerNameOrNumber: invite.callerName || invite.fromNumber || "Unknown caller",
+        // ⛔ fromDisplay, NOT callerName — CallInvite has no callerName column,
+        // and this callback takes `invite: any`, so the typo compiled and every
+        // invite-driven missed-call alert showed the raw number forever while
+        // the resolved contact name sat unread in fromDisplay (found 2026-08-23,
+        // the Relax Tires "contacts never show" complaint).
+        callerNameOrNumber: invite.fromDisplay || invite.fromNumber || "Unknown caller",
         timestamp: new Date().toISOString(),
       },
     }).catch((err: any) => app.log.warn({ err: err?.message, pbxCallId: invite.pbxCallId }, "missed-call-push: invite path failed"));
@@ -34892,6 +34898,15 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
           source: "fastpath:cdr-ingest",
         }))
       ) {
+        // A saved contact's name beats PBX CNAM on the missed-call alert too
+        // (same rule as the ring path). Indexed lookup, non-fatal on failure.
+        let missedCallerName: string | null = null;
+        try {
+          const m = await matchTenantContactByPhone(tenantPack.tenantId, String(d.fromNumber || ""));
+          missedCallerName = (m?.displayName || "").trim() || null;
+        } catch {
+          /* non-fatal */
+        }
         await sendPushToUserDevices({
           tenantId: tenantPack.tenantId,
           userId: ext.ownerUserId,
@@ -34902,7 +34917,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
             extensionId: ext.id,
             recipientUserId: ext.ownerUserId,
             callerNumber: d.fromNumber || "Unknown caller",
-            callerNameOrNumber: d.fromName || d.fromNumber || "Unknown caller",
+            callerNameOrNumber: missedCallerName || d.fromName || d.fromNumber || "Unknown caller",
             timestamp: new Date().toISOString(),
           },
         }).catch((err: any) => app.log.warn({ err: err?.message, linkedId: d.linkedId }, "missed-call-push: failed"));
@@ -35325,26 +35340,24 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   // incoming-call surface — full-screen, floating notification, lock screen,
   // in-app — because they all render this invite's fromDisplay. Lean lookup:
   // one indexed query on the tenant's contact phone numbers (last-10 match).
+  // ⛔ Uses matchTenantContactByPhone — exact indexed `in` first (incl. the
+  // +E.164 form production actually stores), suffix scan only as a fallback.
+  // The previous inline endsWith query was an un-indexed LIKE '%suffix' scan
+  // of ContactPhone platform-wide on the ring hot path — slowest for exactly
+  // the tenants with the biggest contact lists (Relax Tires, 4,168 contacts,
+  // was the one complaining names never showed).
   let resolvedFromDisplay = cleanedFromDisplay;
+  let ringContactResolved = false;
   try {
-    const digits = String(input.fromNumber || "").replace(/\D/g, "");
-    if (digits.length >= 7) {
-      const cp = await db.contactPhone.findFirst({
-        where: {
-          contact: { tenantId: target.tenantId, active: true, archivedAt: null },
-          numberNormalized: { endsWith: digits.slice(-10) },
-        },
-        include: { contact: { select: { displayName: true, firstName: true, lastName: true, company: true } } },
-      });
-      const c = cp?.contact;
-      const contactName = (c?.displayName || [c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.company || "").trim();
-      if (contactName) {
-        resolvedFromDisplay = contactName;
-        app.log.info(
-          { linkedId: input.linkedId, fromNumber: input.fromNumber },
-          "mobile-ring-notify: caller resolved to tenant contact"
-        );
-      }
+    const match = await matchTenantContactByPhone(target.tenantId, String(input.fromNumber || ""));
+    const contactName = (match?.displayName || "").trim() || (match?.company || "").trim();
+    if (contactName) {
+      resolvedFromDisplay = contactName;
+      ringContactResolved = true;
+      app.log.info(
+        { linkedId: input.linkedId, fromNumber: input.fromNumber, matchSource: match?.matchSource },
+        "mobile-ring-notify: caller resolved to tenant contact"
+      );
     }
   } catch (err: any) {
     app.log.warn({ err: err?.message }, "mobile-ring-notify: contact resolution failed (non-fatal)");
@@ -35376,6 +35389,16 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   });
 
   if (existingInvite && existingInvite.status === "PENDING" && existingInvite.expiresAt > new Date()) {
+    // Keep the resolved contact name even when deduping. The PBX-event and
+    // wake-extension paths create the invite FIRST with raw carrier CNAM, so
+    // returning here used to pin "WIRELESS CALLER"/the bare number onto every
+    // surface that reads the invite — the resolved name was computed and then
+    // thrown away. Cosmetic write, so a failure never blocks the ring path.
+    if (ringContactResolved && resolvedFromDisplay && existingInvite.fromDisplay !== resolvedFromDisplay) {
+      await db.callInvite
+        .update({ where: { id: existingInvite.id }, data: { fromDisplay: resolvedFromDisplay } })
+        .catch(() => undefined);
+    }
     app.log.info({ inviteId: existingInvite.id }, "mobile-ring-notify: invite already active — skipping");
     return { ok: true, deduped: true, inviteId: existingInvite.id };
   }

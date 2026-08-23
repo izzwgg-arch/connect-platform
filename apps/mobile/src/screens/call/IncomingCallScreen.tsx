@@ -30,6 +30,7 @@ import { markCallLatency } from '../../debug/callLatency';
 import { spacing } from '../../theme/spacing';
 import { findCallModalNavigator } from '../../navigation/callStackNav';
 import { normalizeCallerIdentity, callerDisplayLines } from '../../calls/callerIdentity';
+import { useContactNameResolver } from '../../contacts/useContactNameResolver';
 import { useTheme } from '../../context/ThemeContext';
 import { getQuickReplies, canSmsReply, sendQuickReplySms, DEFAULT_QUICK_REPLIES } from '../../calls/quickReplies';
 
@@ -385,9 +386,17 @@ export function IncomingCallScreen() {
   // Normalize the PBX-delivered caller identity so the ring-group prefix,
   // external number, and caller name are kept separate and rendered
   // deterministically (never the prefix alone, never our own extension name).
+  // ⛔ Client-side contact fallback (2026-08-23, the Relax Tires complaint):
+  // the ring screen used to trust the push's fromDisplay ALONE, so any
+  // server-side resolution miss (PBX-event path, wake path, a swallowed
+  // lookup error) rendered the raw number even though the caller sat in the
+  // user's own contacts — while ActiveCall and Recents resolved locally.
+  // A saved contact's name beats carrier CNAM, same rule as the server.
+  const resolveContactName = useContactNameResolver();
+  const localContactName = resolveContactName(displayInvite?.fromNumber);
   const callerIdentity = normalizeCallerIdentity({
     number: displayInvite?.fromNumber,
-    displayName: displayInvite?.fromDisplay,
+    displayName: localContactName || displayInvite?.fromDisplay,
     direction: 'inbound',
     selfNames: selfExtNames,
     selfExtensionNumbers: selfExtNumbers,

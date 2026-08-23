@@ -48,6 +48,15 @@ export function buildPhoneMatchCandidates(raw: string): {
   if (digits) keys.add(digits);
   if (digits.length === 11 && digits.startsWith("1")) keys.add(digits.slice(1));
   if (digits.length === 10) keys.add("1" + digits);
+  // ⛔ ContactPhone.numberNormalized is stored WITH the leading "+" in
+  // production (verified live 2026-08-23: every sampled row reads
+  // "+1XXXXXXXXXX"), so digit-only keys never hit the exact indexed branch
+  // and every lookup silently fell through to the un-indexed endsWith scan.
+  // Adding the +-forms makes the fast `in` match work for both shapes.
+  if (e164Result.ok && e164) keys.add(e164);
+  for (const k of [...keys]) {
+    if (/^1\d{10}$/.test(k)) keys.add("+" + k);
+  }
   const safeSuffix10 =
     digits.length >= 10 ? digits.slice(-10) : null;
   return {

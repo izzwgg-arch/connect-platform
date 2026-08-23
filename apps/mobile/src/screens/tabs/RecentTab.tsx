@@ -376,7 +376,7 @@ export function RecentTab() {
     enabled: Boolean(token),
     queryFn: () => getContacts(token!, ''),
     staleTime: 3 * 60 * 1000,
-    gcTime: 20 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
     // Refetch on mount when stale so a contact added elsewhere (Contacts tab /
     // Add-to-Contacts) — which invalidates this same key — shows its name on the
     // recent-call rows the next time the tab opens, instead of waiting for gc.
@@ -392,8 +392,12 @@ export function RecentTab() {
     const map = new Map<string, string>();
     for (const c of contactsQuery.data?.rows ?? []) {
       for (const p of c.phones ?? []) {
-        const key = phoneMatchKey(p.numberRaw);
-        if (key && !map.has(key)) map.set(key, c.displayName);
+        // ⛔ Both forms — see useContactNameResolver: raw-only keying loses
+        // every imported number whose phone-book formatting defeats
+        // phoneMatchKey; numberNormalized always keys.
+        for (const key of [phoneMatchKey(p.numberNormalized), phoneMatchKey(p.numberRaw)]) {
+          if (key && !map.has(key)) map.set(key, c.displayName);
+        }
       }
     }
     return map;

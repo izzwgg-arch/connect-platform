@@ -498,12 +498,20 @@ export async function getContacts(token: string, query = ""): Promise<ContactsRe
     let next: ContactsResponse;
     try {
       next = await getContactsPage(token, query, cursor);
-    } catch (err) {
-      console.warn(
-        `[contacts] page ${pages + 1} failed after ${rows.length} rows — showing partial directory: ` +
-        (err instanceof Error ? err.message : String(err)),
-      );
-      break;
+    } catch (firstErr) {
+      // One retry per page before giving up: a 4,000-contact directory is a
+      // 5-page walk, and a single flaky-cellular timeout used to silently
+      // drop the whole tail (cached as if complete) — the dropped contacts
+      // are exactly the ones that then "never show up" on calls.
+      try {
+        next = await getContactsPage(token, query, cursor);
+      } catch (err) {
+        console.warn(
+          `[contacts] page ${pages + 1} failed twice after ${rows.length} rows — showing partial directory: ` +
+          (err instanceof Error ? err.message : String(err)),
+        );
+        break;
+      }
     }
     rows.push(...(next.rows ?? []));
     pages++;
