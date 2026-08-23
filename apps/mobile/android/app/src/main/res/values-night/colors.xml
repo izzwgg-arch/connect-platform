@@ -1,1 +1,4 @@
-<resources/>
+<resources>
+  <!-- System-dark phones keep the brand-navy pre-JS window (see values/colors.xml). -->
+  <color name="splashscreen_background">#040810</color>
+</resources>

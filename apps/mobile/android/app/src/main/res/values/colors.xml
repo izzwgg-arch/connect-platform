@@ -1,5 +1,10 @@
 <resources>
-  <color name="splashscreen_background">#040810</color>
+  <!-- The pre-JS window color (drawable/splashscreen.xml). Follows the SYSTEM
+       theme: light here, brand navy in values-night. The in-app splash then
+       follows the IN-APP theme (Izzy 2026-08-23) — the system theme is the
+       best native-side guess since the saved in-app theme isn't readable
+       before JS loads. -->
+  <color name="splashscreen_background">#f2f7fd</color>
   <color name="iconBackground">#FFFFFF</color>
   <color name="colorPrimary">#023c69</color>
   <color name="colorPrimaryDark">#040810</color>

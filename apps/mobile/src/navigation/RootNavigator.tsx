@@ -449,7 +449,7 @@ export function RootNavigator() {
   const navRef = useNavigationContainerRef<any>();
   const { token, isLoading } = useAuth();
   const { callState, callDirection } = useSip();
-  const { colors } = useTheme();
+  const { colors, ready: themeReady } = useTheme();
   const { incomingInvite, incomingCallUiState, answerHandoffInviteIdRef, answerHandoffTick } =
     useIncomingNotifications();
 
@@ -481,7 +481,10 @@ export function RootNavigator() {
   // ⛔ The splash is for a SIGNED-IN launch only. Izzy, 2026-08-21: "splash
   // screen should only show when the app is logged in." Signed out, the app
   // goes straight to the sign-in screen with no splash at all.
-  const showSplash = !splashDone && !hasActiveCallUi && !!token;
+  // ⛔ themeReady: the splash follows the in-app theme now (Izzy 2026-08-23),
+  // so it must not mount until the saved theme has loaded — otherwise a
+  // dark-theme user gets a light first frame.
+  const showSplash = !splashDone && !hasActiveCallUi && !!token && themeReady;
 
   // If an incoming call ever hid the splash before SplashScreen finished its
   // minimum timer, `splashDone` could still be false — when the call ends the
