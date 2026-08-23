@@ -22,7 +22,7 @@ import { createQueue, createRingGroup, deleteTeam, type QueueSpec, type RingGrou
 import { resolveMirrorTenantCreator } from "../onboarding/setupOrchestrator";
 import {
   consoleDeletePhone, consoleGeoSet, consoleGeoState, consoleRenderPhone, consoleSavePhone,
-  mirrorEditPbxExtension, resolvePbxRouteHelperConfig,
+  mirrorAddPbxExtension, mirrorEditPbxExtension, resolvePbxRouteHelperConfig,
 } from "../pbxInboundRouteHelperClient";
 import { syncExtensionsFromPbx } from "../pbxExtensionSync";
 import { acquireAccount, releaseAccount } from "../onboarding/setupOrchestrator";
@@ -512,7 +512,43 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
       await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_CREATED", entityType: "PbxExtension", entityId: `${t.tenantId}/${input.extension}`, metadata: { name: input.name, devices: (input.devices || []).map((d) => d.kind) } });
       await syncConnectExtensions(instance, t.tenantId).catch(() => {});
       return out;
-    } catch (e) { return fail(reply, e); }
+    } catch (e) {
+      /* ⛔ THE SILENT CAP (clone-proven 2026-08-23): the free tier's
+         12-extension limit is PER TENANT, and at the cap the panel's CSV
+         import reports "Import Completed Successfully" while creating NOTHING.
+         createExtension detects that (the extension does not exist after a
+         "successful" import) and throws the distinct step below; the create
+         then goes through the mirror — but ONLY when the tenant really is at
+         the cap. A no-op import on an under-cap tenant is some OTHER fault
+         and must stay loud, not be papered over by the mirror. */
+      if (e instanceof PanelStepError && e.step === "extension-import-capped") {
+        try {
+          const countR = await withRead(instance, (c) => listConsoleExtensions(c, { tenantId: t.tenantId }));
+          const count = countR.ok ? countR.data.length : 0;
+          if (count < 12) throw e; // not the cap — surface the original mystery
+          const cfg = resolvePbxRouteHelperConfig(instance.id);
+          if (!cfg) throw e;
+          const specs = input.devices && input.devices.length ? input.devices : [{ kind: "pjsip" as const }, { kind: "webrtc" as const }];
+          const desk = specs.filter((d) => d.kind === "pjsip");
+          const webrtc = specs.filter((d) => d.kind === "webrtc");
+          if (desk.length !== 1 || webrtc.length !== 1 || specs.length !== 2) {
+            throw new PanelStepError("mirror-edit-unsupported",
+              "This customer is at the phone system's free-edition 12-extension limit, and Connect's fallback adds the standard desk + app pair only — pick that shape, or add the extension before the customer grows past 12.");
+          }
+          log.warn({ ext: input.extension, tenantId: t.tenantId, count }, "[PBX_CONSOLE] import silently capped — creating through the mirror");
+          const r = await mirrorAddPbxExtension(cfg, {
+            tenantId: t.tenantId, extension: input.extension, name: input.name, email: input.email,
+            deskPassword: desk[0].secret, webrtcPassword: webrtc[0].secret, vmPassword: input.vmPassword,
+          });
+          const applyErr = (r.applied as any)?.error;
+          if (applyErr) throw new PanelStepError("mirror-edit-apply", `the extension was recorded but making it live on the phone system failed (${applyErr}) — re-render the customer from the console`);
+          await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_CREATED", entityType: "PbxExtension", entityId: `${t.tenantId}/${input.extension}`, metadata: { name: input.name, viaMirror: true } });
+          await syncConnectExtensions(instance, t.tenantId).catch(() => {});
+          return { extensionId: String(r.extensionId), viaMirror: true };
+        } catch (e2) { return fail(reply, e2); }
+      }
+      return fail(reply, e);
+    }
   });
 
   app.patch("/admin/pbx-console/extensions/:id", async (req: any, reply: any) => {

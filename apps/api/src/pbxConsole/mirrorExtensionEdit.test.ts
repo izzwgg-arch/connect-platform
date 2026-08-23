@@ -49,7 +49,7 @@ test("a changed device secret / dtmf / max_contacts travels; an unchanged one is
   const out = mapExtensionSaveToMirrorEdit({
     set: { name: "x" },
     devices: [
-      { id: 71, kind: "pjsip", secret: "N3wSecret123", dtmf: "auto", maxContacts: 2, ringDevice: true },
+      { id: 71, kind: "pjsip", secret: "N3wSecret123", dtmf: "auto", maxContacts: "2", ringDevice: true },
       { id: 72, kind: "webrtc", dtmf: "rfc2833", ringDevice: true },
     ],
   }, DEVICES);
@@ -149,4 +149,41 @@ test("guard: the installer grants UPDATE for the edit-writer's four tables (colu
   assert.ok(/GRANT UPDATE \(password, enabled,[^)]*\) ON ombutel\.ombu_extensions_vm/.test(inst));
   assert.ok(/GRANT UPDATE \(secret, description\) ON ombutel\.ombu_devices/.test(inst));
   assert.ok(/GRANT UPDATE \(dtmfmode, max_contacts\) ON ombutel\.ombu_pjsip_devices/.test(inst));
+});
+
+/* ── the ADD path (2026-08-23): the per-tenant cap and the silent import ──── */
+
+test("guard: createExtension refuses to trust a 'successful' import the extension did not survive", () => {
+  const writes = stripTs(norm(join(__dirname, "pbxConsoleWrites.ts")));
+  assert.ok(writes.includes('"extension-import-capped"'), "the silent-cap no-op must throw its own step");
+  // the check must come AFTER the import success test and BEFORE the edit-form load
+  const fn = writes.slice(writes.indexOf("export async function createExtension"));
+  const capAt = fn.indexOf("extension-import-capped");
+  const loadAt = fn.indexOf('loadParsedForm(s, "extensions", "edit"');
+  assert.ok(capAt > 0 && loadAt > capAt, "the existence check must gate the rest of the create");
+});
+
+test("guard: the create fallback fires ONLY at the cap and only for the standard desk+app shape", () => {
+  const body = routesSrc.slice(routesSrc.indexOf('app.post("/admin/pbx-console/extensions"'));
+  assert.ok(body.includes("extension-import-capped"), "the route must recognise the silent-cap step");
+  assert.ok(/count < 12\) throw e/.test(body), "an under-cap no-op import is some OTHER fault and must stay loud");
+  assert.ok(body.includes("mirrorAddPbxExtension("), "the over-cap create goes through the mirror add");
+  const capAt = body.indexOf("count < 12");
+  const mirrorAt = body.indexOf("mirrorAddPbxExtension(");
+  assert.ok(capAt > 0 && mirrorAt > capAt, "the cap gate must run before the mirror is called");
+});
+
+test("guard: the helper registers /mirror/extension-add and serialises BOTH mirror appliers under one lock", () => {
+  assert.ok(helperSrc.includes('"/mirror/extension-add": mirror_extension_add'), "route must be registered");
+  const addBody = helperSrc.slice(helperSrc.indexOf("def mirror_extension_add"), helperSrc.indexOf("def mirror_extension_edit"));
+  const editBody = helperSrc.slice(helperSrc.indexOf("def mirror_extension_edit"), helperSrc.indexOf("def media_sync_trigger"));
+  assert.ok(addBody.includes("_MIRROR_APPLY_LOCK"), "the add must hold the apply lock");
+  assert.ok(editBody.includes("_MIRROR_APPLY_LOCK"),
+    "⛔ the edit must hold the same lock — the helper is a ThreadingHTTPServer and two concurrent read-patch-replace passes on one tenant's conf file lose one of them");
+});
+
+test("guard: mirror_writes has the surgical ADD applier and it refuses a duplicate append", () => {
+  assert.ok(mirrorSrc.includes("def apply_extension_add_pbx("), "apply_extension_add_pbx must exist");
+  const fn = mirrorSrc.slice(mirrorSrc.indexOf("def apply_extension_add_pbx"), mirrorSrc.indexOf("# ---------------------------------------------------------------------------", mirrorSrc.indexOf("def apply_extension_add_pbx")));
+  assert.ok(fn.includes("refusing a duplicate append"), "a retry after a half-applied add must not write the blocks twice");
 });

@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import pymysql
 
-VERSION = "2026.08.22.1"
+VERSION = "2026.08.23.1"
 DID_RE = re.compile(r"^\+?\d{7,20}$")
 NUM_RE = re.compile(r"^\d{1,10}$")
 PROMPT_BASE_RE = re.compile(r"^[A-Za-z0-9_\-.]{1,120}$")
@@ -2680,6 +2680,59 @@ def mirror_tenant_render(body):
             "files": res.get("files"), "reloads": res.get("reloads")}
 
 
+# ⛔ ONE mirror file-patch at a time. The helper is a ThreadingHTTPServer, and
+# both extension endpoints do read → patch → os.replace on the SAME per-tenant
+# conf files — two concurrent requests would silently lose one patch (the
+# classic read-modify-write race). These are rare admin operations; full
+# serialisation costs nothing and removes the race outright.
+_MIRROR_APPLY_LOCK = threading.Lock()
+
+
+def mirror_extension_add(body):
+    """Add an extension WITHOUT the panel (2026-08-23).
+
+    ⛔ WHY: the free tier's 12-extension cap is PER TENANT, and at the cap the
+    panel's CSV import answers "Import Completed Successfully" while creating
+    NOTHING (proven on the clone, boundary-exact: t9 accepted its 12th and
+    silently skipped its 13th). Production holds two tenants already over 12,
+    so after the licence lapses this is the only way they gain an extension.
+    The api falls back here only when the import claims success and the
+    extension does not exist.
+
+    Standard desk + WebRTC shape only — the same shape onboarding and the
+    console create. Rows via mirror_writes.add_extension (one transaction),
+    then apply_extension_add_pbx splices the blocks into the tenant's existing
+    files, seeds the AstDB family and reloads."""
+    mw = _load_mirror_writes()
+    tenant_id = require_num("tenantId", body.get("tenantId"))
+    extension = str(body.get("extension") or "").strip()
+    name = str(body.get("name") or "").strip()
+    if not re.fullmatch(r"\d{3,6}", extension):
+        raise ValueError("extension must be three or more digits")
+    if not name:
+        raise ValueError("name required")
+    email = str(body.get("email") or "")
+    with _MIRROR_APPLY_LOCK:
+        conn = db_conn()
+        try:
+            plan = mw.add_extension(conn, int(tenant_id), extension, name, email,
+                                    body.get("deskPassword") or None, body.get("webrtcPassword") or None,
+                                    features_password=body.get("featuresPassword") or None,
+                                    vm_password=body.get("vmPassword") if body.get("vmPassword") is not None else None)
+            ids = plan.execute(conn)
+        finally:
+            conn.close()
+        applied = None
+        try:
+            applied = mw.apply_extension_add_pbx(_mirror_read_conn(), int(tenant_id), extension)
+        except Exception as exc:
+            applied = {"error": str(exc)}
+    return {"ok": True, "tenantId": int(tenant_id), "extension": extension,
+            "extensionId": int(ids.get("extension_id") or 0),
+            "ids": {k: int(v) for k, v in ids.items()},
+            "rows": plan.rows_by_table(), "applied": applied}
+
+
 def mirror_extension_edit(body):
     """Edit an EXISTING extension without the panel (2026-08-22).
 
@@ -2712,18 +2765,19 @@ def mirror_extension_edit(body):
         raise ValueError("set/vm must be objects and devices a list")
     if not set_fields and not vm_fields and not devices:
         raise ValueError("nothing to change")
-    conn = db_conn()
-    try:
-        res = mw.edit_extension(conn, int(tenant_id), extension, set=set_fields, vm=vm_fields, devices=devices)
-    finally:
-        conn.close()
-    applied = None
-    try:
-        applied = mw.apply_extension_edit_pbx(_mirror_read_conn(), int(tenant_id), extension)
-    except Exception as exc:
-        # The rows ARE updated; a failed file patch must be visible, not silent —
-        # the caller re-renders or retries rather than believing the phone changed.
-        applied = {"error": str(exc)}
+    with _MIRROR_APPLY_LOCK:
+        conn = db_conn()
+        try:
+            res = mw.edit_extension(conn, int(tenant_id), extension, set=set_fields, vm=vm_fields, devices=devices)
+        finally:
+            conn.close()
+        applied = None
+        try:
+            applied = mw.apply_extension_edit_pbx(_mirror_read_conn(), int(tenant_id), extension)
+        except Exception as exc:
+            # The rows ARE updated; a failed file patch must be visible, not silent —
+            # the caller re-renders or retries rather than believing the phone changed.
+            applied = {"error": str(exc)}
     return {"ok": True, "tenantId": int(tenant_id), "extension": extension,
             "extensionId": res.get("extensionId"), "changed": res.get("changed"), "applied": applied}
 
@@ -4261,6 +4315,7 @@ class Handler(BaseHTTPRequestHandler):
             "/mirror/tenant-create": mirror_tenant_create,
             "/mirror/tenant-render": mirror_tenant_render,
             "/mirror/extension-edit": mirror_extension_edit,
+            "/mirror/extension-add": mirror_extension_add,
             "/voicemail/spool/list": vm_spool_list_messages,
             "/voicemail/greeting/upload": vm_greeting_upload,
             "/voicemail/greeting/get": vm_greeting_status,

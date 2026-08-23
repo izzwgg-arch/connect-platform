@@ -530,3 +530,130 @@ in-chat call, never an installer side effect. Guard tests pin all of it.
 3. **The rest of the before-cancelling list** (assessment §13/§21): a real
    phone registering + calling on a mirror tenant (Loopcom Demo 2 is built and
    waiting), and ⛔ **rotate the robot panel password** (leaked twice).
+
+---
+
+# §8.9 THE STRESS-AND-ROTATE PASS (2026-08-23): the cap is PER TENANT and the import LIES at it; the ADD path is built; three renderer byte-bugs found; the robot password is ROTATED
+
+Izzy: *"rotate the password and then stress test the fuck out of all this…
+you are absolutely sure that we can create more than 12 extensions outside of
+license, yes?"* The question was answered by measurement, and the measurement
+corrected the record.
+
+## ⛔⛔ THE HEADLINE CORRECTION: the free tier's 12-extension cap is PER TENANT, not PBX-wide — and at the cap the CSV import reports SUCCESS while creating NOTHING
+
+Proven boundary-exact on the unlicensed clone (123 extensions, licence dir
+empty), driving the shipped import shape:
+- t104 (3 exts) → import **lands** (652 created, count 123→124)
+- t9 (11 exts) → the 12th **lands**; the 13th is **silently skipped**
+- t8 (18 exts) / t2 (21 exts) → **silently skipped**
+- every skip answered **"Import Completed Successfully"** — no row, no device,
+  no error in any log. The importer's success note is a lie at the cap; only
+  the extension EXISTING is proof.
+This retires the licence-exit assessment's "12 extensions on the whole PBX"
+reading (§2) and explains every historical data point: ext 199 (t104@2),
+tenant-108 builds (fresh), stress10/20 (fresh tenants ≤10) all sat under a
+PER-TENANT 12. **On production exactly TWO tenants exceed it today: t2 A Plus
+Center (21) and t8 Gesheft (18).** Post-lapse consequences per tenant:
+- **< 12 extensions:** create AND edit both keep working through the panel —
+  re-proven today (create on t104/t9; an edit-save with device fields on t104
+  answered "The data has been updated in the database").
+- **≥ 12:** create silently no-ops, edit is refused — BOTH now fall back to
+  the mirror (below). **Panel DELETE works over the cap** ("The record has
+  been successfully removed", proven on t8), and the panel's regen renders
+  over-cap tenants fine (Apply after the delete produced clean files).
+
+## The ADD path (helper `2026.08.23.1`)
+
+- `apply_extension_add_pbx` in `mirror_writes.py` — the ADD counterpart of the
+  edit applier: appends the new extension's pjsip triples (factored renderer)
+  and voicemail line, inserts the hints line and FW/VMO/confirm dialplan
+  blocks in VitalPBX's own order (`surgical_hints`/`surgical_dialplan`), seeds
+  the AstDB family (`surgical_astdb` — an ADD seeds `dial`; nothing owns it
+  yet), all via tmp+`os.replace`. Refuses a duplicate append.
+- Helper endpoint **`POST /mirror/extension-add`** (standard desk+WebRTC shape
+  only), and ⛔ **`_MIRROR_APPLY_LOCK` serialises BOTH mirror appliers** — the
+  helper is a ThreadingHTTPServer and two concurrent read-patch-replace passes
+  on one tenant's conf file would silently lose one.
+- Console fallback: `createExtension` now throws `extension-import-capped`
+  when a "successful" import produced no extension; the create route falls
+  back to the mirror **only when the tenant really holds ≥ 12** (an under-cap
+  no-op is some OTHER fault and stays loud) and only for the standard
+  desk+app device pair — anything else refuses in plain English.
+- **Clone acceptance on OVER-CAP t8 (18 exts): PASS** — mirror add of ext 660
+  (18 rows / 8 tables), all four files patched, both endpoints + dialplan FW
+  block + hint + 67 AstDB keys live in Asterisk, then cleaned back to
+  byte-identical files and 18 extensions.
+
+## Input hardening (from the fleet census)
+
+Values here land in ASTERISK CONFIG FILES where some characters are
+STRUCTURAL: a comma shifts every voicemail.conf field, `;` starts a comment,
+`"` breaks callerid quoting, a newline forges a config line, `|` is
+voicemail's option separator. `validate_extension_fields()` refuses those (and
+control chars) with per-field shapes for email/vm-password/secrets/dtmf/
+language/CIDs — calibrated against a census of the LIVE fleet first (every
+prod name is plain `[A-Za-z0-9 .'-]`, every vm password digits), so nothing
+legitimate refuses; unicode names stay allowed.
+
+## ⛔ THREE RENDERER BYTE-BUGS the stress run caught — all pre-existing, all invisible on the original fixture tenants
+
+1. **pjsip option order:** the panel writes `allow=` (codecs) right after the
+   parkinglot set_var, and `named_call_group`/`named_pickup_group` after
+   `mailboxes=` — the renderer had both at the end. Invisible on tenants with
+   no pickup groups/codec overrides (T104/105/106, the byte-identity
+   fixtures); a guaranteed restore-diff on T2.
+2. **voicemail `tz=` belongs FIRST** in the option string (`tz=eastern|attach=…`),
+   not appended after `operator=`.
+3. **`tz.get("name")` read a column that does not exist** — the table's column
+   is `tzname` — so the renderer wrote the literal `tz=None` into a live clone
+   file during the 08-22 acceptance. All three fixed; **t2's live pjsip AND
+   voicemail files are now byte-identical to the fixed full render.**
+   ⛔ Also fixed: an EOF edit ate one trailing newline (panel files end
+   `\n\n\n`).
+
+## The stress battery (`scripts/pbx/mirror/stress-extension-edit.py`, keeper)
+
+**62 checks, 0 failures** on the unlicensed clone: 20 edit→revert cycles
+across 6 tenants (t2/t5/t7/t9/t11/t104) with per-cycle sha256 byte-restore;
+15 hostile inputs (config-injection names, SQL shapes, newlines, oversize,
+foreign device ids, renumber attempts) all refused with ZERO bytes written; a
+mixed virtual+pjsip extension round-trips; a no-op edit reports an empty
+change set; missing/truncated block layouts refuse rather than splice.
+⛔ Two ops traps from the runs: **a docker-exec'd harness dies with the ssh
+session** — run long clone jobs `nohup … &` INSIDE the container and poll the
+log; and **a killed run leaves the subject mutated** (t2 105 was left "ZZ Virt
+Probe"; restored from prod's row, read-only). The first stress abort (t2 105
+byte-restore) was the renderer-order bug being caught, not a script fault.
+
+## ✅ THE ROBOT PANEL PASSWORD IS ROTATED (2026-08-23, Izzy's order)
+
+Mechanism: **through the panel itself** (`scripts/pbx/rotate-robot-panel-password.ts`
+— load the users edit form, set `password`, re-post; the panel computes its
+own salted hash. ⛔ `ombu_users.password` is binary(64), NOT bcrypt and NOT
+plain sha512 — tested; never write the hash directly). Rehearsed on the clone
+(set → new works → old fails → restore), then production:
+- New password generated ON loopcom into root-only
+  `/root/robot-panel-password-new-20260823.txt` — **alnum-only on purpose**:
+  the old password's `( * # > ;` are exactly why credentials.env could never
+  be `source`d and leaked twice. The value never entered a transcript.
+- Panel SET OK; **new password logs in; the twice-leaked old password is
+  DEAD** ("User or Password Invalid").
+- `/etc/connect-robot/credentials.env` updated (backup
+  `/root/credentials.env.bak-20260823T0640Z`); prod row snapshot
+  `/root/robot-row-backup-20260823.sql` on the PBX.
+- The CLONE's robot row was rotated to match (its harnesses read
+  credentials.env).
+- ⛔ **The api reads these creds from ENV at container create** (env_file), so
+  the rotation is only complete when the api is recreated — done by the same
+  deploy that ships this pass's code. Until that lands, api-side panel logins
+  fail (rotation ran in the quiet window for exactly this reason).
+
+## Still true / still open
+
+- The §8.8 acceptance list otherwise stands: a real phone on a mirror tenant,
+  and the prod negative test (panel-first edit, `viaMirror: false`).
+- Onboarding's `addExtensionToTenant` does NOT yet fall back on the silent
+  cap no-op — post-lapse it only matters for a growing customer's 13th
+  extension; the console can add it meanwhile. The import's silence is at
+  least DETECTED there (extensionId lookup fails loudly downstream).

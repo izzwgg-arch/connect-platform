@@ -1083,18 +1083,25 @@ def pjsip_device_blocks(m, e, d) -> str:
              "set_var=DEVICENAME=%s" % name]
     if default_park:
         lines.append("set_var=CHANNEL(parkinglot)=parking-%d" % t)
+    # ⛔ ORDER IS BYTE-TRUTH, found by the 2026-08-23 stress restore on T2 ext
+    # 105: the panel writes `allow=` right after the parkinglot set_var, and the
+    # named_call_group/named_pickup_group pair after `mailboxes=` — NOT at the
+    # end, where this renderer had them since it was written. Functionally
+    # identical to Asterisk, invisible on tenants with no pickup groups or
+    # codec overrides (T104/105/106, the original byte-identity fixtures), and
+    # a guaranteed restore-diff on tenants like T2. Never "tidy" this ordering.
+    if pj.get("codecs"):
+        lines.append("allow=!all,%s" % pj["codecs"])
     lines += ["subscribe_context=%sextension-hints" % p,
               "language=%s" % (e.get("language") or "en"),
               "moh_suggest=%s" % moh_name(m, e.get("music_group_id")),
               "context=%s%s" % (p, cos_context(e)),
-              "mailboxes=%s" % (e.get("mailbox") or ""),
-              "device_state_busy_at=%s" % (e.get("call_limit") or 0),
-              "callerid=%s" % (e.get("internal_cid") or "")]
+              "mailboxes=%s" % (e.get("mailbox") or "")]
     for pg in e["pickup_groups"]:
         lines.append("named_call_group=%s" % pg["pickup_group_id"])
         lines.append("named_pickup_group=%s" % pg["pickup_group_id"])
-    if pj.get("codecs"):
-        lines.append("allow=!all,%s" % pj["codecs"])
+    lines += ["device_state_busy_at=%s" % (e.get("call_limit") or 0),
+              "callerid=%s" % (e.get("internal_cid") or "")]
     return ("\n".join(lines) + "\n\n"
             + "[auth%s]\ntype=auth\nauth_type=userpass\nusername=%s\npassword=%s\n\n" % (name, name, d["secret"])
             + "[%s](%s-aor)\ntype=aor\nmax_contacts=%s\n\n" % (name, prof, pj.get("max_contacts") if pj.get("max_contacts") is not None else 1))
@@ -1122,10 +1129,15 @@ def voicemail_line(m, e) -> Optional[str]:
     opts = "attach=%s|saycid=%s|sayduration=%s|envelope=%s|delete=%s|hidefromdir=%s|operator=%s" % (
         yn(vm["attach"]), yn(vm["saycid"]), yn(vm["sayduration"]), yn(vm["envelope"]),
         yn(vm["delete"]), yn(vm["hidefromdir"]), "yes" if vm.get("operator_destination_id") else "no")
+    # ⛔ Two byte-truths from the 2026-08-23 stress pass, both proven against a
+    # panel-written line (T2 ext 103, "tz=eastern|attach=…"): the timezone
+    # option comes FIRST, not appended after operator; and the table's column
+    # is `tzname` — the old `tz.get("name")` read a column that does not exist
+    # and wrote the literal "tz=None" into a live clone file.
     if vm.get("voicemail_timezone_id"):
         tz = q1(m["conn"], "select * from ombu_voicemail_timezones where voicemail_timezone_id=%s", (vm["voicemail_timezone_id"],))
-        if tz:
-            opts += "|tz=%s" % tz.get("name")
+        if tz and tz.get("tzname"):
+            opts = "tz=%s|%s" % (tz["tzname"], opts)
     opts += "|" + VM_EMAILBODY % dict(hash=m["hash"], ext=e["extension"])
     return "%s => %s,%s,%s,,%s\n" % (e["extension"], vm["password"], e["name"], e.get("email") or "", opts)
 

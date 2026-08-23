@@ -170,6 +170,7 @@ async function callHelper<T>(
     | "/mirror/tenant-create"
     | "/mirror/tenant-render"
     | "/mirror/extension-edit"
+    | "/mirror/extension-add"
     | "/console/phone-save"
     | "/console/phone-delete"
     | "/console/phone-render"
@@ -646,6 +647,38 @@ export type MirrorExtensionEditResponse = {
   changed: Record<string, unknown>;
   applied: { files: string[]; astdbKeys: number; reloads: Array<{ cmd: string; rc: number }> } | { error: string };
 };
+
+/**
+ * Add an extension through the mirror (helper 2026.08.23.1+) — the over-cap
+ * CREATE path. ⛔ The free tier's 12-extension limit is PER TENANT, and at the
+ * cap the panel's CSV import reports success while creating nothing; the
+ * console falls back here only when that silent no-op is detected on a tenant
+ * at or over the cap. Standard desk + WebRTC shape only.
+ */
+export type MirrorExtensionAddResponse = {
+  ok: true;
+  tenantId: number;
+  extension: string;
+  extensionId: number;
+  ids?: Record<string, number>;
+  rows: Record<string, number>;
+  applied: { files: string[]; astdbKeys: number; reloads: Array<{ cmd: string; rc: number }> } | { error: string };
+};
+
+export function mirrorAddPbxExtension(
+  cfg: PbxRouteHelperConfig,
+  args: {
+    tenantId: number;
+    extension: string;
+    name: string;
+    email?: string;
+    deskPassword?: string;
+    webrtcPassword?: string;
+    vmPassword?: string;
+  },
+): Promise<MirrorExtensionAddResponse> {
+  return callHelper<MirrorExtensionAddResponse>(cfg, "/mirror/extension-add", args, 120_000);
+}
 
 export function mirrorEditPbxExtension(
   cfg: PbxRouteHelperConfig,

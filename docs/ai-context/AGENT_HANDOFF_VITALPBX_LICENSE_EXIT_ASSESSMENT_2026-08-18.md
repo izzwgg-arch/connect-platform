@@ -1532,3 +1532,18 @@ or a real device:**
 6. Small, non-blocking: §8.5's trunk Custom Parameters/Headers tables (no
    Connect writer and no fleet trunk uses them; close by capturing a real
    browser session if ever needed).
+
+## 25. ⛔⛔ CORRECTION (2026-08-23): the free tier's extension cap is PER TENANT — §2's "12 extensions on the whole PBX" is WRONG, and at the cap the CSV import reports success while creating NOTHING
+
+Proven boundary-exact on the unlicensed clone (console handoff §8.9): a tenant
+with 11 extensions accepts its 12th and SILENTLY skips its 13th — the import
+answers "Import Completed Successfully" with no row, no device, no error
+anywhere. Under-cap tenants create AND edit through the panel unlicensed;
+over-cap tenants (prod today: t2 A Plus Center 21, t8 Gesheft 18) need the
+mirror for BOTH — and both fallbacks now exist (`/mirror/extension-edit` +
+`/mirror/extension-add`, helper 2026.08.23.1, console falls back only on the
+detected cap). Panel DELETE and the panel's regen work over the cap (proven).
+⛔ Never trust the importer's success note — only the extension EXISTING is
+proof. Also in §8.9: three renderer byte-bugs fixed (pjsip option order,
+voicemail tz position, tz=None column bug), the 62-check stress battery, and
+the ROBOT PANEL PASSWORD ROTATION (done — the leaked password is dead).

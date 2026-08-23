@@ -608,14 +608,50 @@ with proof outside the license."*
   ⛔ **The ROBOT IS NOT RETIRED BY THE LICENCE EXIT — asked and answered
   (Izzy, 2026-08-23).** The console's writes deliberately REPLAY THE PANEL
   through the robot for everything the free edition still allows; the mirror
-  covers only what it refuses (tenant create, extension edit, provisioning,
-  geo). Dismantling the robot = re-implementing every panel write + renderer,
-  the 6–10-week route the mirror design was chosen to avoid. The robot stays;
-  its PASSWORD still needs rotating.
+  covers only what it refuses (tenant create, extension edit/add over the cap,
+  provisioning, geo). Dismantling the robot = re-implementing every panel
+  write + renderer, the 6–10-week route the mirror design was chosen to avoid.
+  ⛔⛔ **THE CAP CORRECTION (2026-08-23, boundary-proven on the clone — console
+  handoff §8.9): the free tier's 12-extension cap is PER TENANT, not PBX-wide,
+  and AT the cap the CSV import answers "Import Completed Successfully" while
+  creating NOTHING** — no row, no error, anywhere. Under-cap tenants create
+  AND edit unlicensed through the panel (re-proven); over-cap tenants (prod
+  today: A Plus Center 21, Gesheft 18) need the mirror for both — and both
+  exist now: helper **`2026.08.23.1`** adds `/mirror/extension-add` (standard
+  desk+app shape, `_MIRROR_APPLY_LOCK` serialising both appliers against the
+  read-patch-replace race), and the console's create falls back on the
+  DETECTED silent no-op (`extension-import-capped`) only when the tenant
+  really holds ≥12. Panel DELETE + regen work over the cap (proven).
+  ⛔ **Never trust that importer's success note — only the extension EXISTING
+  is proof.**
+  ✅✅ **STRESS-TESTED (Izzy's order): 62 checks, 0 failures** — 20 edit→revert
+  cycles across 6 clone tenants with per-cycle sha256 byte-restore, 15 hostile
+  config-injection inputs all refused with zero bytes written
+  (`validate_extension_fields` — commas/`;`/`"`/`|`/control chars are
+  STRUCTURAL in Asterisk configs; whitelist calibrated against a live-fleet
+  census so no real name refuses). The run caught **three pre-existing
+  renderer byte-bugs**, all fixed: pjsip option ORDER (codecs after
+  parkinglot, named pickup groups after mailboxes — invisible on the original
+  fixture tenants), voicemail `tz=` belongs FIRST, and `tz.get("name")` read a
+  nonexistent column and wrote literal `tz=None`. t2's live pjsip + voicemail
+  files now byte-equal the fixed renderer.
+  ✅✅ **THE ROBOT PANEL PASSWORD IS ROTATED (2026-08-23, Izzy's order) — the
+  twice-leaked password is DEAD** (verified refused at the prod panel).
+  Mechanism: through the panel's own users form
+  (`scripts/pbx/rotate-robot-panel-password.ts` — ⛔ `ombu_users.password` is
+  binary(64), NOT bcrypt/sha512; never write the hash directly), rehearsed on
+  the clone first. New password is alnum-only ON PURPOSE (the old one's
+  `(*#>;` are why credentials.env could never be `source`d — that trap is
+  dead too) and lives ONLY in root-only files
+  (`/root/robot-panel-password-new-20260823.txt`, backups
+  `/root/credentials.env.bak-20260823T0640Z` on loopcom +
+  `/root/robot-row-backup-20260823.sql` on the PBX) — it never entered a
+  transcript. The clone's robot row was rotated to match. ⛔ The api reads
+  these creds from ENV at container CREATE — the rotation is complete only
+  once the api is recreated (rides this pass's deploy).
   ⛔ **Cancelling still waits on**: one real phone registering + calling on
-  a mirror tenant (Loopcom Demo 2 is built and waiting), the prod negative
-  test (Extensions → Edit still saves via the panel, `viaMirror: false`), and
-  rotating the robot panel password.
+  a mirror tenant (Loopcom Demo 2 is built and waiting), and the prod negative
+  test (Extensions → Edit still saves via the panel, `viaMirror: false`).
 - ⏳ **NOT PROVEN: nobody has opened the new form in a browser and no write has
   been made from it against PRODUCTION.** Proven as 50 tests, portal typecheck 0,
   api typecheck at its exact 75 baseline, and 6 of 7 modules written and read back

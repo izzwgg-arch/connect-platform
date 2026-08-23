@@ -486,6 +486,18 @@ export async function createExtension(
     throw new PanelStepError("extension-import", `ext ${ext}: ${note.replace(/<[^>]+>/g, " ").trim() || "import failed: " + r.text.slice(0, 200)}`);
   }
   const extId = await lookupExtensionIdByNumber(s, ext);
+  /* ⛔ THE SILENT CAP (clone-proven 2026-08-23, boundary-exact): the free
+     tier's 12-extension limit is PER TENANT, and at the cap this import
+     answers "Import Completed Successfully" while creating NOTHING — no row,
+     no device, no error anywhere. A success note is therefore not proof;
+     the extension existing is. The distinct step lets the route fall back
+     to the mirror add instead of reporting a success that never happened. */
+  if (!extId) {
+    throw new PanelStepError(
+      "extension-import-capped",
+      `the phone system reported the import of extension ${ext} as successful but created nothing — its free edition's 12-extension per-customer limit refuses silently`,
+    );
+  }
   log(`extension ${ext} imported (id ${extId})`);
   const { form } = await loadParsedForm(s, "extensions", "edit", extId);
   const baseDev = deviceOptionsOf(form)[0];

@@ -440,6 +440,13 @@ def add_extension(conn, tenant_id: int, ext: str, name: str, email: str = "",
     Values match ombu_extensions 400/402/405 (T104/105/106) column for column.
     """
     plan = Plan()
+    # same hardening as the edit path — these values land in config files
+    validate_extension_fields({"name": name, "email": email},
+                              {"password": vm_password if vm_password is not None else ext},
+                              [{"secret": p} for p in (desk_password, webrtc_password) if p is not None]
+                              + [{"dtmf": desk_dtmf}, {"dtmf": webrtc_dtmf}])
+    if features_password is not None:
+        _refuse_unsafe("features_password", features_password, **_FIELD_RULES["features_password"])
     t = q1(conn, "select * from ombu_tenants where tenant_id=%s", (tenant_id,))
     if not t:
         raise ValueError("tenant %s not found" % tenant_id)
@@ -542,6 +549,77 @@ DEVICE_EDIT_COLUMNS = {"secret", "description"}
 PJSIP_DEVICE_EDIT_COLUMNS = {"dtmfmode", "max_contacts"}
 
 
+# ── input hardening (2026-08-23, from the stress pass) ──────────────────────
+# These values are interpolated into ASTERISK CONFIG FILES, where certain
+# characters are not "odd", they are STRUCTURAL: a comma in a name shifts every
+# field of its voicemail.conf line, a `;` starts an Asterisk comment and eats
+# the rest of the line, a `"` breaks the callerid quoting, a newline forges a
+# whole config line, and `|` is voicemail's own option separator. The fleet was
+# censused first (2026-08-23): every live name is plain ASCII `[A-Za-z0-9 .'-]`,
+# every vm password digits, every email standard — so nothing legitimate is
+# refused, and unicode letters stay ALLOWED (a Yiddish name renders fine).
+_CONF_BREAKING = re.compile(r'[\x00-\x1f\x7f,;"|]')
+_CID_RE = re.compile(r'^$|^"[^",;|\x00-\x1f\x7f]{0,80}" <\d{2,15}>$')
+
+
+def _refuse_unsafe(field: str, value: Any, *, max_len: int = 120, pattern: Optional[re.Pattern] = None,
+                   allow_conf_breaking: bool = False) -> None:
+    if value is None:
+        return
+    s = str(value)
+    if len(s) > max_len:
+        raise ValueError("%s is longer than %d characters" % (field, max_len))
+    if pattern is not None:
+        if not pattern.fullmatch(s):
+            raise ValueError("%s contains characters the phone system's config format cannot carry" % field)
+        return
+    if not allow_conf_breaking and _CONF_BREAKING.search(s):
+        raise ValueError('%s may not contain commas, semicolons, quotes, pipes or control characters — '
+                         "they are structural in the phone system's config files" % field)
+
+
+_YES_NO = re.compile(r"^(yes|no)$")
+_FIELD_RULES: Dict[str, Dict[str, Any]] = {
+    "name": {},
+    "email": {"pattern": re.compile(r"^$|^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$"), "max_len": 120},
+    "language": {"pattern": re.compile(r"^[a-z]{2}(_[A-Z]{2})?$"), "max_len": 6},
+    "ringtime": {"pattern": re.compile(r"^\d{1,4}$"), "max_len": 4},
+    "features_password": {"pattern": re.compile(r"^[A-Za-z0-9]{0,20}$"), "max_len": 20},
+    "music_group_id": {"pattern": re.compile(r"^\d{1,10}$"), "max_len": 10},
+    "internal_cid": {"pattern": _CID_RE, "max_len": 100},
+    "external_cid": {"pattern": _CID_RE, "max_len": 100},
+    "emergency_cid": {"pattern": _CID_RE, "max_len": 100},
+    "call_waiting": {"pattern": _YES_NO}, "outgoing_rec": {"pattern": _YES_NO}, "incoming_rec": {"pattern": _YES_NO},
+    "internal_rec": {"pattern": _YES_NO}, "rec_on_demand": {"pattern": _YES_NO}, "lock": {"pattern": _YES_NO},
+    "pinless": {"pattern": _YES_NO}, "nospy": {"pattern": _YES_NO}, "notify_missed_calls": {"pattern": _YES_NO},
+}
+_VM_FIELD_RULES: Dict[str, Dict[str, Any]] = {
+    "password": {"pattern": re.compile(r"^\d{0,10}$"), "max_len": 10},
+    **{k: {"pattern": _YES_NO} for k in ("enabled", "attach", "saycid", "sayduration", "envelope",
+                                         "delete", "hidefromdir", "skip_instructions", "ask_password")},
+}
+_SECRET_RE = re.compile(r"^[A-Za-z0-9]{8,64}$")
+_DTMF_RE = re.compile(r"^(rfc4733|rfc2833|auto|inband|info)$")
+
+
+def validate_extension_fields(set_fields: Dict[str, Any], vm_fields: Dict[str, Any],
+                              devices: Sequence[Dict[str, Any]]) -> None:
+    for k, v in set_fields.items():
+        _refuse_unsafe(k, v, **_FIELD_RULES.get(k, {}))
+    for k, v in vm_fields.items():
+        _refuse_unsafe("vm.%s" % k, v, **_VM_FIELD_RULES.get(k, {}))
+    for spec in devices:
+        if spec.get("secret") is not None:
+            _refuse_unsafe("device secret", spec["secret"], pattern=_SECRET_RE, max_len=64)
+        if spec.get("description") is not None:
+            _refuse_unsafe("device description", spec["description"], max_len=120)
+        for key in ("dtmf", "dtmfmode"):
+            if spec.get(key) is not None:
+                _refuse_unsafe("device dtmf", spec[key], pattern=_DTMF_RE, max_len=10)
+        if spec.get("max_contacts") is not None and not re.fullmatch(r"\d{1,3}", str(spec["max_contacts"])):
+            raise ValueError("device max_contacts must be a small number")
+
+
 def edit_extension(conn, tenant_id: int, extension: str, *,
                    set: Optional[Dict[str, Any]] = None,
                    vm: Optional[Dict[str, Any]] = None,
@@ -577,6 +655,7 @@ def edit_extension(conn, tenant_id: int, extension: str, *,
     bad += sorted("vm.%s" % k for k in vm if k not in VM_EDIT_COLUMNS)
     if bad:
         raise ValueError("field(s) not editable through the mirror: %s" % ", ".join(bad))
+    validate_extension_fields(set, vm, devices)
 
     row = q1(conn, "select * from ombu_extensions where tenant_id=%s and extension=%s", (tenant_id, str(extension)))
     if not row:
@@ -699,7 +778,15 @@ def _replace_pjsip_device_triple(text: str, name: str, new_triple: str) -> str:
     if not aor or aor.start() < ep.start():
         raise ValueError("device %s has no aor block after its endpoint — file layout unexpected, refusing to patch" % name)
     nxt = re.compile(r"(?m)^\[").search(text, aor.end())
-    end = nxt.start() if nxt else len(text)
+    if nxt:
+        end = nxt.start()
+    else:
+        # last block of the file: the span is the aor BLOCK (through its blank
+        # line), never the raw EOF — the panel's files end "\n\n\n" and eating
+        # the final newline made an EOF edit drift by one byte (stress catch,
+        # 2026-08-23).
+        blk = text.find("\n\n", aor.end())
+        end = blk + 2 if blk != -1 else len(text)
     span = text[ep.start():end]
     # The span may only contain this device's three blocks; anything else means a
     # hand edit rearranged the file and a blind splice would eat it.
@@ -820,6 +907,86 @@ def apply_extension_edit_pbx(conn, tenant_id: int, extension: str, *,
         if any(f.startswith("voicemail") for f in out["files"]):
             cmds.append("voicemail reload")
         for c in cmds:
+            r = subprocess.run(["asterisk", "-rx", c], capture_output=True, text=True)
+            out["reloads"].append({"cmd": c, "rc": r.returncode})
+    return out
+
+
+def apply_extension_add_pbx(conn, tenant_id: int, extension: str, *,
+                            target_dir: str = "/etc/asterisk/vitalpbx",
+                            reload: bool = True, astdb: bool = True) -> Dict[str, Any]:
+    """
+    Make an already-row-added extension LIVE, surgically — the ADD counterpart
+    of apply_extension_edit_pbx, for tenants where the panel's own save path is
+    capped (2026-08-23 finding: the free tier's 12-extension cap is PER TENANT,
+    and at the cap the CSV import answers "Import Completed Successfully" while
+    creating NOTHING — so over-cap tenants need the mirror for adds too).
+
+    Appends the new extension's pjsip endpoint/auth/aor triples (via the
+    factored byte-identical block renderer) and voicemail line, inserts the
+    hints line and the FW/VMO/confirm dialplan blocks in VitalPBX's own order
+    (surgical_hints / surgical_dialplan), seeds the extension's AstDB family
+    (surgical_astdb — an ADD seeds `dial` too; nothing owns it yet), and
+    reloads. All file writes are tmp+os.replace via _atomic_write_conf.
+    """
+    import subprocess
+    import vitalpbx_mirror as vm
+    m = vm.load_tenant(conn, tenant_id)
+    e = next((x for x in m["extensions"] if str(x["extension"]) == str(extension)), None)
+    if not e:
+        raise ValueError("extension %s not found in tenant %s — write the rows first (add_extension)" % (extension, tenant_id))
+    t, prefix = m["t"], m["prefix"]
+    out: Dict[str, Any] = {"files": [], "astdbKeys": 0, "reloads": []}
+
+    def patch(path, fn):
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        new = fn(text)
+        if new != text:
+            _atomic_write_conf(path, new)
+            out["files"].append(os.path.basename(path))
+
+    pj_devs = [d for d in e["devices"] if d["technology"] == "pjsip"]
+    if not pj_devs:
+        raise ValueError("extension %s has no pjsip devices — the mirror add covers the standard desk/WebRTC shape" % extension)
+
+    # pjsip: new devices carry the highest device_ids, so their blocks belong at
+    # the END of the file — exactly where the panel's own regen would put them.
+    def add_pjsip(text: str) -> str:
+        for d in pj_devs:
+            name = "%s%s" % (prefix, d["user"])
+            if re.search(r"(?m)^\[%s\]\(p\d+\)" % re.escape(name), text):
+                raise ValueError("device %s already has a pjsip block — refusing a duplicate append" % name)
+        add = "".join(vm.pjsip_device_blocks(m, e, d) for d in pj_devs)
+        # the panel's files end "\n\n\n": last block + blank line + final newline
+        return text.rstrip("\n") + "\n\n" + add + "\n"
+
+    patch(os.path.join(target_dir, "pjsip__50-%d-extensions.conf" % t), add_pjsip)
+
+    vm_line = vm.voicemail_line(m, e)
+    if vm_line is not None:
+        patch(os.path.join(target_dir, "voicemail__50-%d-main.conf" % t),
+              lambda text: _replace_voicemail_line(text, e["extension"], vm_line))
+
+    patch(os.path.join(target_dir, "extensions__25-%d-hints.conf" % t),
+          lambda text: surgical_hints(text, prefix, e["extension"], [d["user"] for d in pj_devs]))
+    patch(os.path.join(target_dir, "extensions__50-%d-dialplan.conf" % t),
+          lambda text: surgical_dialplan(text, prefix, e["extension"]))
+
+    if astdb:
+        kv = surgical_astdb(prefix, m["hash"], e["extension"], e.get("name") or "",
+                            e.get("mailbox") or "", str(e.get("features_password") or ""),
+                            str((e.get("vm") or {}).get("password") or ""),
+                            language=e.get("language") or "en",
+                            moh=vm.moh_name(m, e.get("music_group_id")))
+        for k, v in sorted(kv.items()):
+            fam, key = k[1:].split("/", 1)
+            subprocess.run(["asterisk", "-rx", 'database put %s %s "%s"' % (fam, key, str(v).replace('"', '\\"'))],
+                           capture_output=True, text=True)
+        out["astdbKeys"] = len(kv)
+
+    if reload:
+        for c in ("module reload res_pjsip.so", "dialplan reload", "voicemail reload"):
             r = subprocess.run(["asterisk", "-rx", c], capture_output=True, text=True)
             out["reloads"].append({"cmd": c, "rc": r.returncode})
     return out
