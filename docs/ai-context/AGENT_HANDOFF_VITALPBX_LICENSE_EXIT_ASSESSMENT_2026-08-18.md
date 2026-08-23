@@ -1511,9 +1511,14 @@ on `feat/ivr-migration-takeover`.
 
 **⏳ STILL OPEN BEFORE CANCELLING — none of it is code, all of it needs Izzy
 or a real device:**
-1. **Install helper `2026.08.22.1` + the new grants on the PBX** (Run button;
-   backs up the current helper first). The edit fallback is inert until then —
-   harmless today, because it can only fire after the lapse.
+1. ✅ **DONE 2026-08-23 (Izzy's in-chat permission): helper `2026.08.22.1` +
+   the UPDATE grants are installed on the PBX and probed live** — geo stayed
+   disarmed, drop-ins intact, the new endpoint answers its validation
+   refusals. (First run aborted on the unquoted-heredoc backtick trap — see
+   console handoff §8.8.) ⛔ **The robot is NOT retired by the licence exit**
+   (Izzy asked 2026-08-23): the console deliberately writes THROUGH the panel
+   for everything the free edition allows; the mirror covers only what it
+   refuses. The robot stays — only its password needs rotating.
 2. **One real phone registers and holds a call on a mirror tenant** — Loopcom
    Demo 2 (§21) is built with a real number, (845) 305-0012; sign a device in
    and call it. (Its E911 is unregistered — do that before any real use.)

@@ -507,13 +507,23 @@ in-chat call, never an installer side effect. Guard tests pin all of it.
 
 ## ⏳ What is left, honestly — and whose it is
 
-1. **Install helper `2026.08.22.1` on the PBX** (Izzy's Run button — a PBX
-   write): scp the installer, back up
-   `/opt/connect-pbx-helper/vitalpbx-inbound-route-helper.py` first, run it,
-   verify `curl 127.0.0.1:8757/health` reads `2026.08.22.1` and the geo line
-   prints "left DISARMED". Until then the api-side fallback answers the
-   honest refusal (the helper 404s the new path — but the fallback can only
-   fire after the licence lapses, so nothing changes today).
+1. ✅ **DONE 2026-08-23 under Izzy's in-chat permission: helper `2026.08.22.1`
+   is INSTALLED on the PBX and probed live.** Backup
+   `/root/helper-backup-20260823T033832Z/`; health reads `2026.08.22.1`; the
+   geo path unit stayed `disabled` (the preserve-disarm branch worked); all
+   three service drop-ins survived; the four UPDATE grants landed
+   (column-scoped, verified via SHOW GRANTS); `/mirror/extension-edit`
+   answered its three validation refusals (bad extension / unknown field /
+   empty edit) with nothing written.
+   ⛔ **The first install run ABORTED and the trap is worth keeping: the grant
+   SQL rides an UNQUOTED heredoc** (`<<SQL`, it interpolates `${MYSQL_PASS}`),
+   so the bare backticks around the reserved column names (`lock`, `delete`)
+   were executed by bash as command substitutions — `lock: command not found`,
+   a mangled GRANT, ERROR 1064, and the `set -euo pipefail` installer died
+   mid-way (helper FILES landed, service NOT restarted, running version still
+   old). Escape backticks as `\`` in that heredoc. Guard-tested.
+   ⛔ The helper's auth header is **`x-connect-pbx-helper-secret`** — probing
+   with any other header name answers 401 and reads like a wrong secret.
 2. **The prod negative test** after the api deploy: Extensions → Edit still
    saves through the PANEL on production (licence live, cap never fires,
    `viaMirror: false`).

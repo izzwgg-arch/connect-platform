@@ -8707,10 +8707,10 @@ GRANT SELECT, INSERT ON ombutel.ombu_settings TO 'connect_route_helper'@'127.0.0
 -- refuses an extension edit-SAVE outright, so /mirror/extension-edit UPDATEs the same rows the
 -- panel's save writes. Column-scoped on purpose — exactly the whitelist in
 -- mirror_writes.py::EXTENSION_EDIT_COLUMNS/VM_EDIT_COLUMNS, nothing wider.
-GRANT UPDATE (name, email, language, ringtime, call_waiting, features_password, outgoing_rec, incoming_rec, internal_rec, rec_on_demand, `lock`, pinless, nospy, internal_cid, external_cid, emergency_cid, notify_missed_calls) ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
-GRANT UPDATE (name, email, language, ringtime, call_waiting, features_password, outgoing_rec, incoming_rec, internal_rec, rec_on_demand, `lock`, pinless, nospy, internal_cid, external_cid, emergency_cid, notify_missed_calls) ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
-GRANT UPDATE (password, enabled, attach, saycid, sayduration, envelope, `delete`, hidefromdir, skip_instructions, ask_password) ON ombutel.ombu_extensions_vm TO 'connect_route_helper'@'localhost';
-GRANT UPDATE (password, enabled, attach, saycid, sayduration, envelope, `delete`, hidefromdir, skip_instructions, ask_password) ON ombutel.ombu_extensions_vm TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (name, email, language, ringtime, call_waiting, features_password, outgoing_rec, incoming_rec, internal_rec, rec_on_demand, \`lock\`, pinless, nospy, internal_cid, external_cid, emergency_cid, notify_missed_calls) ON ombutel.ombu_extensions TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (name, email, language, ringtime, call_waiting, features_password, outgoing_rec, incoming_rec, internal_rec, rec_on_demand, \`lock\`, pinless, nospy, internal_cid, external_cid, emergency_cid, notify_missed_calls) ON ombutel.ombu_extensions TO 'connect_route_helper'@'127.0.0.1';
+GRANT UPDATE (password, enabled, attach, saycid, sayduration, envelope, \`delete\`, hidefromdir, skip_instructions, ask_password) ON ombutel.ombu_extensions_vm TO 'connect_route_helper'@'localhost';
+GRANT UPDATE (password, enabled, attach, saycid, sayduration, envelope, \`delete\`, hidefromdir, skip_instructions, ask_password) ON ombutel.ombu_extensions_vm TO 'connect_route_helper'@'127.0.0.1';
 GRANT UPDATE (secret, description) ON ombutel.ombu_devices TO 'connect_route_helper'@'localhost';
 GRANT UPDATE (secret, description) ON ombutel.ombu_devices TO 'connect_route_helper'@'127.0.0.1';
 GRANT UPDATE (dtmfmode, max_contacts) ON ombutel.ombu_pjsip_devices TO 'connect_route_helper'@'localhost';

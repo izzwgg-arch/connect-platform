@@ -554,10 +554,30 @@ with proof outside the license."*
   refusal** — panel first, always; unsupported fields refused BY NAME, never
   dropped. Clone acceptance: edit live in Asterisk, only the edited
   extension's blocks moved, revert **sha256-identical**
-  (`scripts/pbx/mirror/edit-extension-accept.py`). ⛔ **Cancelling still waits
-  on the §24 list in the assessment doc**: helper `2026.08.22.1` installed on
-  the PBX (Izzy's Run button — until then the fallback is inert, which is
-  harmless while the licence is live), one real phone registering + calling on
+  (`scripts/pbx/mirror/edit-extension-accept.py`).
+  ✅✅ **HELPER `2026.08.22.1` IS INSTALLED ON THE PBX AND PROBED LIVE
+  (2026-08-23, Izzy's in-chat permission)** — files backed up to
+  `/root/helper-backup-20260823T033832Z/` first; health reads `2026.08.22.1`;
+  all four column-scoped UPDATE grants landed; the geo path unit **stayed
+  disabled** (the installer's new preserve-disarm branch worked); all three
+  service drop-ins intact; `/mirror/extension-edit` answers its own
+  validation refusals (bad ext / unknown field / empty edit) with nothing
+  written. ⛔ **The trap that broke the first install run: the installer's
+  grant SQL rides an UNQUOTED heredoc** (it interpolates `${MYSQL_PASS}`), so
+  a bare backtick in SQL (`` `lock` ``, `` `delete` ``) is bash command
+  substitution — `lock: command not found` and a mangled GRANT that aborted
+  the `set -e` installer mid-way (helper files landed, service not restarted).
+  **Escape backticks as `` \` `` in that heredoc**; guard-tested. ⛔ The
+  helper's auth header is **`x-connect-pbx-helper-secret`** — a probe with
+  any other header name reads as 401 and looks like a broken secret.
+  ⛔ **The ROBOT IS NOT RETIRED BY THE LICENCE EXIT — asked and answered
+  (Izzy, 2026-08-23).** The console's writes deliberately REPLAY THE PANEL
+  through the robot for everything the free edition still allows; the mirror
+  covers only what it refuses (tenant create, extension edit, provisioning,
+  geo). Dismantling the robot = re-implementing every panel write + renderer,
+  the 6–10-week route the mirror design was chosen to avoid. The robot stays;
+  its PASSWORD still needs rotating.
+  ⛔ **Cancelling still waits on**: one real phone registering + calling on
   a mirror tenant (Loopcom Demo 2 is built and waiting), the prod negative
   test (Extensions → Edit still saves via the panel, `viaMirror: false`), and
   rotating the robot panel password.
