@@ -204,9 +204,11 @@ with a supervised two-way call test.
   `172.56.161.98` currently reads **Unavail / RTT nan** while the office-tunnel
   contact reads **303.8 ms**. ⛔ Create A Box is still NOT on the 443 SIP route, so
   a `45.14.194.179` contact on this tenant means the office tunnel.
-- ⚠️ Still open and unrelated to today: two voicemails were created by these calls
-  (16:01:27 and 16:02:48) and the `answered_elsewhere` → `INVITE_CANCELED` race in
-  §3 is still able to cancel an invite for a call the app has answered.
+- ✅ **No voicemail was left** — calls 1 and 3 reached the voicemail app (16:01:27 and
+  16:02:48) but **0 `Voicemail` rows exist** for this tenant after 19:30Z, so the caller
+  hung up rather than recording. Nothing is waiting for him.
+- ⚠️ Still open and unrelated to today: the `answered_elsewhere` → `INVITE_CANCELED`
+  race in §3 is still able to cancel an invite for a call the app has answered.
 
 ---
 
